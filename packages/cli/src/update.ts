@@ -5,7 +5,7 @@ import * as os from "os";
 const VERSION = "1.0.82";
 const MEMORY_VERSION = "3";
 const TASK_VERSION = "1";
-const WORK_VERSION = "1";
+const WORK_VERSION = "2";
 const PLAN_VERSION = "1";
 const LATEST_URL = "https://dl.codecast.sh/latest.json";
 const UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours

@@ -271,18 +271,38 @@ const STATE_FILE = path.join(CONFIG_DIR, "daemon.state");
 const LOG_FILE = path.join(CONFIG_DIR, "daemon.log");
 const WATCHDOG_SCRIPT_PATH = path.join(CONFIG_DIR, "watchdog.sh");
 
-const WATCHDOG_SHELL_SCRIPT = `#!/bin/sh
+function shellEscapeForSh(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+function buildWatchdogShellScript(): string {
+  const execPath = process.execPath;
+  const isBinary = !execPath.endsWith("/bun") && !execPath.endsWith("/node") && !execPath.includes("node_modules");
+  const { executablePath, args } = getExecutableInfo("_watchdog");
+  const watchdogCommand = [executablePath, ...args].map(shellEscapeForSh).join(" ");
+
+  if (!isBinary) {
+    return `#!/bin/sh
 LOGFILE="\${HOME}/.codecast/watchdog-shell.log"
 log() { printf '[%s] %s\\n' "\$(date '+%Y-%m-%d %H:%M:%S')" "\$1" >> "\$LOGFILE"; }
 
-CODECAST="\${HOME}/.local/bin/codecast"
-[ ! -x "\$CODECAST" ] && CODECAST="\$(command -v codecast 2>/dev/null || true)"
-if [ -z "\$CODECAST" ] || [ ! -x "\$CODECAST" ]; then
-  log "No codecast binary found, attempting download"
-else
-  "\$CODECAST" -- _watchdog 2>>"\$LOGFILE" && exit 0
-  log "Watchdog failed (exit \$?), checking for update"
+LAUNCHD_UID="gui/\$(id -u)"
+if launchctl print "\$LAUNCHD_UID/sh.codecast.daemon" 2>/dev/null | grep -q 'state = running'; then
+  exit 0
 fi
+
+log "Dev-mode watchdog kickstarting launchd daemon"
+launchctl kickstart -k "\$LAUNCHD_UID/sh.codecast.daemon" >>"\$LOGFILE" 2>&1 || log "Failed to kickstart dev daemon"
+exit 0
+`;
+  }
+
+  return `#!/bin/sh
+LOGFILE="\${HOME}/.codecast/watchdog-shell.log"
+log() { printf '[%s] %s\\n' "\$(date '+%Y-%m-%d %H:%M:%S')" "\$1" >> "\$LOGFILE"; }
+
+${watchdogCommand} 2>>"\$LOGFILE" && exit 0
+log "Watchdog failed (exit \$?), checking for update"
 
 DL_HOST="https://dl.codecast.sh"
 LATEST="\$(curl -fsSL "\$DL_HOST/latest.json" 2>/dev/null)" || { log "Failed to fetch latest.json"; exit 1; }
@@ -310,6 +330,7 @@ log "Installed v\$VERSION, retrying watchdog"
 
 "\$DIR/codecast" -- _watchdog 2>>"\$LOGFILE" || { log "Still failed after update"; exit 1; }
 `;
+}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -851,23 +872,67 @@ function showWelcome(): void {
 
 function getDaemonPid(): number | null {
   if (!fs.existsSync(PID_FILE)) {
-    return null;
+    return getLaunchdDaemonPid();
   }
   const pid = parseInt(fs.readFileSync(PID_FILE, "utf-8").trim(), 10);
   if (isNaN(pid)) {
-    return null;
+    return getLaunchdDaemonPid();
   }
   try {
     process.kill(pid, 0);
     return pid;
   } catch {
     fs.unlinkSync(PID_FILE);
-    return null;
+    return getLaunchdDaemonPid();
   }
 }
 
 function isDaemonRunning(): boolean {
   return getDaemonPid() !== null;
+}
+
+function getMacLaunchdDaemonStatus(): { configured: boolean; state: string | null; pid: number | null } | null {
+  if (process.platform !== "darwin" || !process.getuid) return null;
+
+  const home = process.env.HOME;
+  if (!home) return null;
+
+  const plistPath = path.join(home, "Library", "LaunchAgents", "sh.codecast.daemon.plist");
+  if (!fs.existsSync(plistPath)) {
+    return null;
+  }
+
+  const domain = `gui/${process.getuid!()}/sh.codecast.daemon`;
+  const result = spawnSync("launchctl", ["print", domain], { encoding: "utf-8" });
+  const output = `${result.stdout || ""}\n${result.stderr || ""}`;
+  const stateMatch = output.match(/^\s*state = ([^\n]+)/m);
+  const pidMatch = output.match(/^\s*pid = (\d+)/m);
+
+  return {
+    configured: true,
+    state: stateMatch ? stateMatch[1].trim() : null,
+    pid: pidMatch ? parseInt(pidMatch[1], 10) : null,
+  };
+}
+
+function getLaunchdDaemonPid(): number | null {
+  const status = getMacLaunchdDaemonStatus();
+  if (!status?.pid || Number.isNaN(status.pid)) return null;
+  try {
+    process.kill(status.pid, 0);
+    return status.pid;
+  } catch {
+    return null;
+  }
+}
+
+function kickstartManagedDaemon(): boolean {
+  const status = getMacLaunchdDaemonStatus();
+  if (!status?.configured || !process.getuid) return false;
+
+  const domain = `gui/${process.getuid!()}/sh.codecast.daemon`;
+  const result = spawnSync("launchctl", ["kickstart", "-k", domain], { stdio: "ignore" });
+  return result.status === 0;
 }
 
 function ensureDaemonRunning(): void {
@@ -897,6 +962,10 @@ function ensureDaemonRunning(): void {
 function startDaemonQuiet(): void {
   ensureConfigDir();
   if (isDaemonRunning()) return;
+
+  if (kickstartManagedDaemon()) {
+    return;
+  }
 
   let child;
   const daemonTsPath = path.join(__dirname, "daemon.ts");
@@ -959,6 +1028,7 @@ function getAgentLabel(agentType?: string): string | null {
 
 function showStatus(): void {
   const pid = getDaemonPid();
+  const launchdStatus = getMacLaunchdDaemonStatus();
   const config = readConfig();
   const state = readDaemonState();
 
@@ -1004,9 +1074,14 @@ function showStatus(): void {
       row("File handles", fmt.muted("unavailable"));
     }
   } else {
-    row("Daemon", fmt.muted(icons.cross + " stopped"));
+    const restarting = launchdStatus?.state === "spawn scheduled";
+    row("Daemon", restarting ? fmt.warning("restarting") : fmt.muted(icons.cross + " stopped"));
     if (config?.auth_token) {
-      console.log(`  ${fmt.muted("Run")} ${fmt.cmd("cast start")} ${fmt.muted("to start syncing")}`);
+      if (restarting) {
+        console.log(`  ${fmt.muted("Launchd is restarting the daemon")}`);
+      } else {
+        console.log(`  ${fmt.muted("Run")} ${fmt.cmd("cast start")} ${fmt.muted("to start syncing")}`);
+      }
     }
   }
 
@@ -1605,29 +1680,39 @@ ${TASK_SNIPPET_END}
 
 const WORK_SNIPPET_END = "<!-- /codecast-work -->";
 const WORK_SNIPPET = `
-## Issue Tracking with cast task
+## Tasks & Plans
 
-Use \`cast task\` for work item tracking (tasks, bugs, features). Cloud-persistent via Convex.
+All task and plan creation flows into the same backend — use whichever approach fits the situation:
 
-### Quick Start
+- **CC native \`TaskCreate\`/\`TaskUpdate\`/\`ExitPlanMode\`**: automatically intercepted by the daemon and synced. Use freely for natural session-level decomposition and plan approval flows.
+- **\`cast task\`**: explicit control with richer metadata (priority, type, dependencies, project). Use when a work item needs to persist, be queryable, or be assigned.
+- **\`cast plan\`**: multi-agent orchestration — decompose into tasks, spawn agents in waves, autopilot to completion.
+
+### Tasks
 
 \`\`\`bash
-cast task ready                          # Unblocked tasks ready to work
-cast task create "Title" -t task -p high # Create new task
-cast task start ct-a1b2                  # Claim work (set in_progress)
-cast task done ct-a1b2 -m "Done"        # Mark complete
-cast task context ct-a1b2               # Full context for agents
-cast project ls                         # List projects
-cast doc sync                           # Sync plan files to doc library
+cast task ready                                    # Unblocked tasks ready to work
+cast task create "Title" -t task -p high           # Create task (types: task, bug, feature)
+cast task start ct-a1b2                            # Claim it (set in_progress)
+cast task done ct-a1b2 -m "Done"                  # Mark complete
+cast task comment ct-a1b2 "note" -t progress       # Log progress
+cast task context ct-a1b2                          # Full context for agents
+cast task ls                                       # List tasks
 \`\`\`
 
-### Workflow
+### Plans
 
-1. \`cast task ready\` - Find available work
-2. \`cast task start <short_id>\` - Claim it
-3. Work on implementation
-4. \`cast task comment <short_id> "progress" -t progress\` - Report progress
-5. \`cast task done <short_id>\` - Mark done
+\`\`\`bash
+cast plan create "Title" --goal "..."              # Create a plan
+cast plan ls                                       # List plans
+cast plan show pl-xxxx                             # Plan details
+cast plan bind pl-xxxx                             # Bind current session to plan (injects context)
+cast plan update pl-xxxx -n "note"                 # Log progress
+cast plan decompose pl-xxxx                        # Break plan into granular tasks
+cast plan orchestrate pl-xxxx                      # Spawn parallel agents for open tasks
+cast plan autopilot pl-xxxx                        # Continuous orchestrate → verify loop
+cast plan status pl-xxxx                           # Progress, active agents, blocked tasks
+\`\`\`
 ${WORK_SNIPPET_END}
 `;
 
@@ -4717,7 +4802,7 @@ function installWatchdogScript(): void {
   if (!fs.existsSync(CONFIG_DIR)) {
     fs.mkdirSync(CONFIG_DIR, { recursive: true });
   }
-  fs.writeFileSync(WATCHDOG_SCRIPT_PATH, WATCHDOG_SHELL_SCRIPT, { mode: 0o755 });
+  fs.writeFileSync(WATCHDOG_SCRIPT_PATH, buildWatchdogShellScript(), { mode: 0o755 });
 }
 
 function setupMacOS(disable: boolean): void {
@@ -10749,7 +10834,7 @@ program.hook('preAction', (thisCommand, actionCommand) => {
   if (process.env.DEBUG_CLI) {
     console.error(`[DEBUG] preAction hook: cmd=${cmdName} args=${args}`);
   }
-  const internalCmds = ['start', 'stop', 'daemon', 'codecast', '_daemon', '_watchdog', 'auth', 'login', 'update'];
+  const internalCmds = ['start', 'stop', 'status', 'daemon', 'codecast', '_daemon', '_watchdog', 'auth', 'login', 'update'];
   if (!internalCmds.includes(cmdName)) {
     logCliCommand(cmdName, args);
     ensureDaemonRunning();
