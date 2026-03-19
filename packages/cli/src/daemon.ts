@@ -813,7 +813,17 @@ async function executeRemoteCommand(
           break;
         }
 
-        const castBin = process.argv[0] || "cast";
+        const argv1 = process.argv[1] || "";
+        let castBin: string;
+        if (argv1.endsWith("daemon.ts") || argv1.endsWith("daemon.js")) {
+          const ext = argv1.endsWith(".ts") ? ".ts" : ".js";
+          const indexPath = path.join(path.dirname(argv1), `index${ext}`);
+          castBin = `${process.argv[0]} ${indexPath}`;
+        } else if (argv1 === "_daemon" || !argv1.includes("/")) {
+          castBin = process.execPath;
+        } else {
+          castBin = "cast";
+        }
         const cmdText = `${castBin} workflow run-daemon ${workflowRunId}`;
 
         try {

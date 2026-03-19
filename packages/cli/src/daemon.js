@@ -12616,7 +12616,17 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
           error = "tmux is not installed";
           break;
         }
-        const castBin = process.argv[0] || "cast";
+        const argv1 = process.argv[1] || "";
+        let castBin;
+        if (argv1.endsWith("daemon.ts") || argv1.endsWith("daemon.js")) {
+          const ext = argv1.endsWith(".ts") ? ".ts" : ".js";
+          const indexPath = argv1.slice(0, argv1.lastIndexOf("/") + 1) + `index${ext}`;
+          castBin = `${process.argv[0]} ${indexPath}`;
+        } else if (argv1 === "_daemon" || !argv1.includes("/")) {
+          castBin = process.execPath;
+        } else {
+          castBin = "cast";
+        }
         const cmdText = `${castBin} workflow run-daemon ${workflowRunId}`;
         try {
           tmuxExecSync(["new-session", "-d", "-s", tmuxSession, "-c", projectPath], { timeout: 5000 });
