@@ -1,0 +1,47 @@
+digraph RunDetailPage {
+    graph [goal="Build a dedicated /workflows/runs/[id] permalink page showing full run details: status header, stage-by-stage timeline with session links, gate message history, and respond controls"]
+    rankdir=LR
+
+    start [shape=Mdiamond, label="Start"]
+    exit  [shape=Msquare,  label="Done"]
+
+    implement [
+        label="Implement",
+        prompt="Build a dedicated workflow run detail page at packages/web/app/workflows/runs/[id]/page.tsx.\n\nThe page should:\n- Query the run with api.workflow_runs.get and the workflow with api.workflows.webGet\n- Show a header: workflow name, run status (with color), duration, goal override if set\n- Show a stage timeline: each workflow node in order with its status icon (pending/running/completed/failed), label, duration, and a link to its session if session_id is set\n- Show gate history: when status was paused, show the gate prompt and the gate_response (the user's reply)\n- If run is currently paused at a gate, show the gate prompt and a respond form (textarea + send button using api.workflow_runs.respondToGate mutation)\n- Show fail_reason if present\n- Link back to /workflows\n\nLook at the existing workflows page (packages/web/app/workflows/page.tsx) for patterns - reuse STATUS_STYLES, TYPE_ICONS, formatDuration, WorkflowRun/Workflow interfaces.\n\nImportant:\n- Use 'use client' directive\n- Wrap in AuthGuard and DashboardLayout from existing imports\n- Style with existing sol- CSS variables (sol-bg, sol-text, sol-green, sol-red, sol-cyan, sol-magenta, sol-border, etc)\n- No new dependencies\n- Also update the ActiveRunPanel in workflows/page.tsx to add a link to the run's permalink\n\nDo NOT add comments. Write clean, minimal code.",
+        max_visits=3
+    ]
+
+    typecheck [
+        label="TypeCheck",
+        shape=parallelogram,
+        script="cd /Users/ashot/src/codecast/packages/web && npx tsc --noEmit 2>&1 | grep -v node_modules | grep -E 'error TS' | head -20; exit 0"
+    ]
+
+    fix [
+        label="Fix TypeErrors",
+        prompt="The TypeScript check found errors (shown in context as last_error or typecheck.output). Fix all type errors in the files you created/modified. Do NOT change any other files. Focus only on type correctness.",
+        max_visits=3,
+        retry_target="typecheck"
+    ]
+
+    review [
+        shape=hexagon,
+        label="Review"
+    ]
+
+    polish [
+        label="Polish",
+        prompt="The human reviewer provided feedback (in human.message context). Address every point. Make the UI clean, functional, and consistent with the existing codebase style. Do NOT over-engineer - just address the feedback.",
+        max_visits=2
+    ]
+
+    start -> implement -> typecheck
+
+    typecheck -> review    [condition="outcome = success"]
+    typecheck -> fix       [condition="outcome = failure"]
+    fix       -> typecheck
+
+    review -> exit   [label="[A] Ship"]
+    review -> polish [label="[R] Revise"]
+    polish -> typecheck
+}

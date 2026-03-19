@@ -271,6 +271,9 @@ function ActiveRunPanel({ run, workflow, onClose }: { run: WorkflowRun; workflow
               <Square className="w-3 h-3" />
             </button>
           )}
+          <Link href={`/workflows/runs/${run._id}`} className="p-1 text-sol-text-dim hover:text-sol-cyan transition-colors rounded" title="View run permalink">
+            <ExternalLink className="w-3 h-3" />
+          </Link>
           {run.primary_session_id && (
             <Link href={`/conversation/${run.primary_session_id}`} className="p-1 text-sol-text-dim hover:text-sol-cyan transition-colors rounded" title="View session">
               <ExternalLink className="w-3 h-3" />
