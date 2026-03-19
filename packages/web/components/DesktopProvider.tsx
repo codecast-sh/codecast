@@ -33,7 +33,9 @@ export function DesktopProvider() {
   }, [sessions]);
 
   const notifications = useQuery(api.notifications.list);
-  const seenIdsRef = useRef<Set<string> | null>(null);
+  const mountedAtRef = useRef<number>(Date.now());
+  const seenIdsRef = useRef<Set<string>>(new Set());
+  const initializedRef = useRef(false);
 
   const permissionRequestedRef = useRef(false);
 
@@ -43,8 +45,12 @@ export function DesktopProvider() {
     if (isPalette) return;
     const canNotify = isDesktop() || hasBrowserNotificationPermission();
 
-    if (seenIdsRef.current === null) {
+    if (!initializedRef.current) {
+      // Seed seen set with all notifications that already existed before mount.
+      // We use created_at instead of ID-seeding so that an empty result (unauthenticated
+      // query returning []) doesn't cause all subsequent notifications to appear "new".
       seenIdsRef.current = new Set(notifications.map((n) => n._id));
+      initializedRef.current = true;
       if (!canNotify && !isDesktop() && !permissionRequestedRef.current) {
         permissionRequestedRef.current = true;
         requestNotificationPermission();
@@ -53,7 +59,7 @@ export function DesktopProvider() {
     }
 
     for (const n of notifications) {
-      if (!seenIdsRef.current.has(n._id) && !n.read) {
+      if (!seenIdsRef.current.has(n._id) && !n.read && n.created_at >= mountedAtRef.current) {
         const actor = n.actor?.name || n.actor?.github_username;
         const title = actor ? `${actor}` : "Codecast";
         notifyNative(title, n.message, { conversationId: n.conversation_id });
