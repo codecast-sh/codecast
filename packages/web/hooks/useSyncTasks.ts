@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useState, useCallback } from "react";
 import { useQuery } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, TaskDetail } from "../store/inboxStore";
@@ -8,18 +8,27 @@ import { useConvexSync } from "./useConvexSync";
 const api = _api as any;
 
 export function useSyncTasks(statusFilter?: string) {
+  const [numItems, setNumItems] = useState(300);
   const workspaceArgs = useWorkspaceArgs();
-  const tasks = useQuery(api.tasks.webList,
+  const syncTable = useInboxStore((s) => s.syncTable);
+  const result = useQuery(api.tasks.webList,
     workspaceArgs === "skip" ? "skip" : {
       status: statusFilter || undefined,
       ...workspaceArgs,
+      limit: numItems,
     }
   );
-  const syncTable = useInboxStore((s) => s.syncTable);
 
-  useConvexSync(tasks, useCallback((data: any) => {
-    syncTable("tasks", data as any);
+  useConvexSync(result, useCallback((data: any) => {
+    syncTable("tasks", data.items ?? data);
   }, [syncTable]));
+
+  const hasMore = result?.hasMore ?? false;
+  const loadMore = useCallback(() => {
+    setNumItems(n => n + 300);
+  }, []);
+
+  return { hasMore, loadMore };
 }
 
 export function useSyncTaskDetail(id?: string) {

@@ -336,6 +336,7 @@ interface InboxStoreState {
   injectSession: (session: InboxSession) => void;
   updateSessionProject: (id: string, projectPath: string) => void;
   patchSession: (id: string, fields: Partial<InboxSession>) => void;
+  setConversationAgent: (id: string, agentType: string) => void;
   navigateToSession: (id: string) => void;
   touchMru: (id: string) => void;
   markKilling: (id: string) => void;
@@ -794,6 +795,36 @@ export const useInboxStore = create<InboxStoreState>(
     const { sessions } = get();
     if (!sessions[id]) return;
     set({ sessions: { ...sessions, [id]: { ...sessions[id], ...fields } } });
+  },
+
+  setConversationAgent: (id: string, agentType: string) => {
+    const state = get();
+    const updates: Partial<InboxStoreState> = {};
+
+    if (state.sessions[id]) {
+      updates.sessions = {
+        ...state.sessions,
+        [id]: { ...state.sessions[id], agent_type: agentType },
+      };
+    }
+
+    if (state.conversations[id]) {
+      updates.conversations = {
+        ...state.conversations,
+        [id]: { ...state.conversations[id], agent_type: agentType },
+      };
+    }
+
+    if (state.currentConversation.conversationId === id) {
+      updates.currentConversation = {
+        ...state.currentConversation,
+        agentType,
+      };
+    }
+
+    if (Object.keys(updates).length > 0) {
+      set(updates);
+    }
   },
 
   navigateToSession: (id: string) => {

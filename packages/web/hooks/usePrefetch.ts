@@ -23,7 +23,7 @@ export function usePrefetch() {
   const syncTable = useInboxStore((s) => s.syncTable);
 
   useConvexSync(tasks, useCallback((data: any) => {
-    syncTable("tasks", data as any);
+    syncTable("tasks", (data?.items ?? data) as any);
   }, [syncTable]));
 
   useConvexSync(docsResult, useCallback((data: any) => {
