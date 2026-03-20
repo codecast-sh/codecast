@@ -248,6 +248,7 @@ type ConversationViewProps = {
   fallbackStickyContent?: string | null;
   onBack?: () => void;
   subHeaderContent?: React.ReactNode;
+  headerLeft?: React.ReactNode;
 };
 
 export interface ConversationViewHandle {
@@ -4968,7 +4969,7 @@ function MessageNavigator({ userMessages, onRewind, onFork, onClose, forkPointMa
   );
 }
 
-const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, sessionId, agentType, agentStatus, pendingPermissionsCount, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onSendEscape, onOpenNavigator, onPopulateInput, permissionMode, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch, onGateSend, skills, filePaths, mentionItems }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; sessionId?: string; agentType?: string; agentStatus?: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected"; pendingPermissionsCount?: number; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string) => void) | null>; permissionMode?: string; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void>; onGateSend?: (content: string) => Promise<void>; skills?: SkillItem[]; filePaths?: string[]; mentionItems?: MentionItem[] }) {
+const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, isSessionStarting, sessionId, agentType, agentStatus, pendingPermissionsCount, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onSendEscape, onOpenNavigator, onPopulateInput, permissionMode, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch, onGateSend, skills, filePaths, mentionItems }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; isSessionStarting?: boolean; sessionId?: string; agentType?: string; agentStatus?: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected"; pendingPermissionsCount?: number; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string) => void) | null>; permissionMode?: string; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void>; onGateSend?: (content: string) => Promise<void>; skills?: SkillItem[]; filePaths?: string[]; mentionItems?: MentionItem[] }) {
   const cached = useInboxStore.getState().getDraft(conversationId);
   const [message, setMessage] = useState(() => cached?.draft_message ?? initialDraft ?? "");
   const messageRef = useRef(message);
@@ -5116,6 +5117,8 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
     canQueryServer ? { conversation_id: conversationId as Id<"conversations"> } : "skip"
   );
 
+  const stuckThresholdMs = isSessionStarting ? 25_000 : 15_000;
+
   useWatchEffect(() => {
     if (pendingMessageId) return;
     if (!existingPending) {
@@ -5125,13 +5128,13 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
       return;
     }
     const age = Date.now() - existingPending.created_at;
-    if (age > 15_000) {
+    if (age > stuckThresholdMs) {
       setShowStuckBanner(true);
     } else {
-      const timer = setTimeout(() => setShowStuckBanner(true), 15_000 - age);
+      const timer = setTimeout(() => setShowStuckBanner(true), stuckThresholdMs - age);
       return () => clearTimeout(timer);
     }
-  }, [existingPending, pendingMessageId, isWaitingForResponse]);
+  }, [existingPending, pendingMessageId, isWaitingForResponse, stuckThresholdMs]);
 
   useWatchEffect(() => {
     if (!sentAt || !pendingMessageId) return;
@@ -5149,9 +5152,9 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
       if (messageStatus?.status === "pending") {
         setShowStuckBanner(true);
       }
-    }, 15_000);
+    }, stuckThresholdMs);
     return () => clearTimeout(timer);
-  }, [sentAt, pendingMessageId, messageStatus?.status, conversationId, markAsQueued]);
+  }, [sentAt, pendingMessageId, messageStatus?.status, conversationId, markAsQueued, stuckThresholdMs]);
 
   // Removed: generic 60s timeout was showing "not responding" even when no message was sent.
   // The banner should only show when we sent a message and it wasn't delivered (handled by the effects above).
@@ -5738,15 +5741,27 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
       {lightboxImageIndex === null && <div className="h-16 bg-gradient-to-t from-sol-bg via-sol-bg/80 to-transparent -mt-16 relative" />}
       <div className={`pb-4 pointer-events-auto ${lightboxImageIndex === null ? "bg-sol-bg" : ""}`}>
         <div className="relative">
-          {(isFocused || shortcutTooltip || showStuckBanner || isInactive || isSessionDisconnected || (agentStatus && agentStatus !== "idle") || (!agentStatus && (isWaitingForResponse || isThinking || isConversationLive))) && (
+          {(isFocused || shortcutTooltip || showStuckBanner || isSessionStarting || isInactive || isSessionDisconnected || (agentStatus && agentStatus !== "idle") || (!agentStatus && (isWaitingForResponse || isThinking || isConversationLive))) && (
             <div className={`mx-auto px-4 mb-1 flex justify-between items-center ${isExpanded ? "max-w-4xl" : "max-w-md"} ${lightboxImageIndex !== null ? "hidden" : ""}`}>
               <p className="text-[11px] text-sol-text-dim/70 pl-1">
-                {showStuckBanner && sessionId ? (
+                {isSessionStarting && !showStuckBanner && !agentStatus ? (
+                  <span className="flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-sol-cyan/50 animate-pulse" />
+                    Starting session...
+                  </span>
+                ) : showStuckBanner && sessionId ? (
                   isResuming ? (
-                    <span className="flex items-center gap-1.5 text-sol-orange">
-                      <span className="w-2 h-2 rounded-full bg-sol-orange animate-pulse" />
-                      Resuming session — waiting for daemon to reconnect...
-                    </span>
+                    isSessionStarting ? (
+                      <span className="flex items-center gap-1.5 text-sol-cyan">
+                        <span className="w-2 h-2 rounded-full bg-sol-cyan/50 animate-pulse" />
+                        Starting session — waiting for agent to connect...
+                      </span>
+                    ) : (
+                      <span className="flex items-center gap-1.5 text-sol-orange">
+                        <span className="w-2 h-2 rounded-full bg-sol-orange animate-pulse" />
+                        Resuming session — waiting for daemon to reconnect...
+                      </span>
+                    )
                   ) : (
                     <span className="flex items-center gap-1.5 text-sol-orange">
                       <span className="w-2 h-2 rounded-full bg-sol-orange" />
@@ -6099,7 +6114,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
 const CC_MODE_ORDER = ["default", "plan", "acceptEdits", "bypassPermissions", "dontAsk"];
 
 export const ConversationView = forwardRef<ConversationViewHandle, ConversationViewProps>(
-  function ConversationView({ conversation, commits = [], pullRequests = [], backHref, backLabel = "Back", headerExtra, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, onLoadOlder, onLoadNewer, onJumpToStart, onJumpToEnd, highlightQuery, onClearHighlight, embedded, showMessageInput = true, targetMessageId, isOwner = true, onSendAndAdvance, autoFocusInput, fallbackStickyContent, onBack, subHeaderContent }, ref) {
+  function ConversationView({ conversation, commits = [], pullRequests = [], backHref, backLabel = "Back", headerExtra, headerLeft, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, onLoadOlder, onLoadNewer, onJumpToStart, onJumpToEnd, highlightQuery, onClearHighlight, embedded, showMessageInput = true, targetMessageId, isOwner = true, onSendAndAdvance, autoFocusInput, fallbackStickyContent, onBack, subHeaderContent }, ref) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [userScrolled, _setUserScrolled] = useState(false);
   const userScrolledRef = useRef(false);
@@ -7651,6 +7666,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const isWorking = isSessionConnected && (now - lastActivityAt) < 45 * 1000 && lastMessageRole === "assistant";
   const isConversationLive = isWorking;
   const isSessionDisconnected = !!conversation && conversation.status === "active" && managedSession !== undefined && managedSession.managed === false && !isSessionConnected;
+  const isSessionStarting = !!conversation && conversation.status === "active" && (conversation.message_count ?? 0) === 0 && !managedSession?.managed && (now - (conversation.started_at ?? 0)) < 60_000;
 
   useWatchEffect(() => {
     if (conversation) {
@@ -8008,6 +8024,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         )}
         <div className="px-2 py-0.5 sm:py-1">
           <div className="flex items-center gap-2 min-w-0 select-none">
+            {headerLeft}
             <h1 className="text-xs sm:text-sm font-medium text-sol-text-secondary truncate min-w-0 flex-1 cursor-default" title={conversation?.messages?.[0]?.content ? cleanContent(conversation.messages[0].content)?.slice(0, 200) ?? undefined : undefined}>{truncatedTitle}</h1>
 
             {isSessionDisconnected ? (
@@ -8678,7 +8695,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
               </div>
             )
           )}
-          <MessageInput conversationId={firstActiveForkId || conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={isSessionDisconnected ? undefined : managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={handleForkFromMessage} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onGateSend={workflowRun?.status === "paused" ? handleGateRespond : undefined} skills={sessionSkills} filePaths={sessionFilePaths} mentionItems={mentionItemsRef.current} />
+          <MessageInput conversationId={firstActiveForkId || conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} isSessionStarting={isSessionStarting} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={isSessionDisconnected ? undefined : managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={handleForkFromMessage} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onGateSend={workflowRun?.status === "paused" ? handleGateRespond : undefined} skills={sessionSkills} filePaths={sessionFilePaths} mentionItems={mentionItemsRef.current} />
           {navigatorOpen && navigatorUserMessages && navigatorUserMessages.length > 0 && (
             <MessageNavigator
               userMessages={navigatorUserMessages}

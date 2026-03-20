@@ -22,6 +22,7 @@ interface ConversationDiffLayoutProps {
   conversation: ConversationData;
   embedded?: boolean;
   headerExtra?: React.ReactNode;
+  headerLeft?: React.ReactNode;
   commits?: any[];
   pullRequests?: any[];
   hasMoreAbove?: boolean;
@@ -48,6 +49,7 @@ export function ConversationDiffLayout({
   conversation,
   embedded,
   headerExtra,
+  headerLeft,
   commits,
   pullRequests,
   hasMoreAbove,
@@ -157,6 +159,7 @@ export function ConversationDiffLayout({
     conversation,
     backHref: backHrefProp || "/dashboard",
     headerExtra: combinedHeaderExtra,
+    headerLeft,
     commits: commits || [],
     pullRequests: pullRequests || [],
     hasMoreAbove,

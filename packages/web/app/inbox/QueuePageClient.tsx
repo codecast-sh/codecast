@@ -170,7 +170,6 @@ const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, o
           autoFocusInput
           backHref="/inbox"
           onBack={onBack}
-          fallbackStickyContent={cleanUserMessage(lastUserMessage)}
           targetMessageId={targetMessageId}
           subHeaderContent={<>
             {activePlanId && <PlanContextPanel planId={activePlanId} />}
