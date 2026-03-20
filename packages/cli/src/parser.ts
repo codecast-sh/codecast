@@ -120,7 +120,10 @@ export function extractMessages(entries: ClaudeSessionEntry[]): ParsedMessage[] 
       textContent = entry.message;
     } else {
       // New format: message is an object with role and content
-      role = entry.message.role;
+      // Use entry.type (normalizedType) as authoritative role, not message.role.
+      // message.role can differ from entry.type for subagent instructions
+      // (entry.type="assistant" but message.role="user" for instructions sent to subagents).
+      role = normalizedType;
       const content = entry.message.content;
 
       if (typeof content === "string") {

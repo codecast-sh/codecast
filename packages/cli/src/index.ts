@@ -10,7 +10,7 @@ import { maskToken } from "./redact.js";
 import { AuthServer } from "./authServer.js";
 import { c, fmt, icons } from "./colors.js";
 import { ensureTmux, hasTmux, tryInstallTmux } from "./tmux.js";
-import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getPlanVersion, getWorkflowVersion, ensureCastAlias } from "./update.js";
+import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, ensureCastAlias } from "./update.js";
 import { glob } from "glob";
 import { getPosition, setPosition } from "./positionTracker.js";
 import { getAllSyncRecords, findUnsyncedFiles } from "./syncLedger.js";
@@ -1739,36 +1739,13 @@ cast plan decompose <plan_id>              # Generate tasks from goal
 cast plan orchestrate <plan_id>            # Spawn agents for ready tasks
 cast plan show/status <plan_id>            # Plan details
 cast plan update <plan_id> -n "note"       # Log progress
-cast plan update <plan_id> --body-file f   # Update body from file
+cast plan decide <plan_id> "decision" --rationale "why"
+cast plan done/drop <plan_id>             # Close or abandon a plan
 \`\`\`
 ${WORK_SNIPPET_END}
 `;
 
 const PLAN_SNIPPET_END = "<!-- /codecast-plans -->";
-const PLAN_SNIPPET = `
-## Plans
-
-Use \`cast plan\` to manage multi-session plans. Plans persist across sessions and connect tasks to goals.
-
-\`\`\`bash
-cast plan create "Title" -g "goal" -b "body"        # Create plan with inline body
-cast plan create "Title" --body-file plan.md        # Create plan from file
-cast plan ls                                        # List active plans
-cast plan show <plan_id>                            # Full plan detail
-cast plan bind <plan_id>                            # Bind session to plan
-cast plan unbind <plan_id>                          # Unbind session from plan
-cast plan update <plan_id> --log "progress"         # Log progress
-cast plan update <plan_id> --body-file plan.md      # Update body from file
-cast plan decide <plan_id> "decision" --rationale "why"
-cast plan discover <plan_id> "finding"
-cast plan pointer <plan_id> "label" "path"
-cast plan activate|pause|done|drop <plan_id>        # Status transitions
-cast plan retry <plan_id>                            # Reset stuck tasks to open
-cast task create "Title" --plan <plan_id>            # Create task in plan
-cast task update <id> --plan <plan_id>               # Bind task to plan
-\`\`\`
-${PLAN_SNIPPET_END}
-`;
 
 const WORKFLOW_SNIPPET_END = "<!-- /codecast-workflows -->";
 const WORKFLOW_SNIPPET = `
@@ -1996,55 +1973,6 @@ function installWorkSnippet(update = false): { installed: boolean; updated: bool
   return { installed: anyInstalled, updated: anyUpdated };
 }
 
-function installPlanSnippetToFile(filePath: string, dirPath: string, update: boolean): { installed: boolean; updated: boolean } {
-  if (!fs.existsSync(dirPath)) {
-    fs.mkdirSync(dirPath, { recursive: true });
-  }
-
-  let existing = "";
-  if (fs.existsSync(filePath)) {
-    existing = fs.readFileSync(filePath, "utf-8");
-  }
-
-  const hasPlan = existing.includes("## Plans") && existing.includes(PLAN_SNIPPET_END);
-  if (hasPlan && !update) {
-    return { installed: false, updated: false };
-  }
-
-  if (hasPlan && update) {
-    const planStart = existing.indexOf("## Plans");
-    let planEnd = existing.length;
-
-    const endMarkerIdx = existing.indexOf(PLAN_SNIPPET_END, planStart);
-    if (endMarkerIdx !== -1) {
-      planEnd = endMarkerIdx + PLAN_SNIPPET_END.length;
-      if (existing[planEnd] === "\n") planEnd++;
-    }
-
-    const before = existing.slice(0, planStart);
-    const after = existing.slice(planEnd);
-    existing = before + after;
-    fs.writeFileSync(filePath, existing.trimEnd() + "\n" + PLAN_SNIPPET, { mode: 0o600 });
-    return { installed: true, updated: true };
-  }
-
-  fs.writeFileSync(filePath, existing + PLAN_SNIPPET, { mode: 0o600 });
-  return { installed: true, updated: false };
-}
-
-function installPlanSnippet(update = false): { installed: boolean; updated: boolean } {
-  const targets = getSnippetTargets();
-  let anyInstalled = false;
-  let anyUpdated = false;
-
-  for (const target of targets) {
-    const result = installPlanSnippetToFile(target.filePath, target.dirPath, update);
-    if (result.installed) anyInstalled = true;
-    if (result.updated) anyUpdated = true;
-  }
-
-  return { installed: anyInstalled, updated: anyUpdated };
-}
 
 function installWorkflowSnippetToFile(filePath: string, dirPath: string, update: boolean): { installed: boolean; updated: boolean } {
   if (!fs.existsSync(dirPath)) {
@@ -2119,15 +2047,6 @@ async function promptMemoryEnablement(): Promise<void> {
     if (result.updated) {
       const targets = getSnippetTargets();
       console.log(`Schedule snippet updated to latest version in ${targets.map(t => t.label).join(", ")}.`);
-    }
-  }
-  if (config.plan_enabled && config.plan_version !== getPlanVersion()) {
-    const result = installPlanSnippet(true);
-    config.plan_version = getPlanVersion();
-    writeConfig(config);
-    if (result.updated) {
-      const targets = getSnippetTargets();
-      console.log(`Plan snippet updated to latest version in ${targets.map(t => t.label).join(", ")}.`);
     }
   }
   if (config.workflow_enabled && config.workflow_version !== getWorkflowVersion()) {
@@ -7028,7 +6947,6 @@ program
       if (config.memory_enabled) installMemorySnippet(true);
       if (config.task_enabled) installTaskSnippet(true);
       if (config.work_enabled) installWorkSnippet(true);
-      if (config.plan_enabled) installPlanSnippet(true);
       if (config.workflow_enabled) installWorkflowSnippet(true);
       installSessionRegisterHook();
       installStatusHook();
@@ -9138,36 +9056,6 @@ plan
     console.log(`${c.green}ok${c.reset} Created plan ${c.cyan}${result.short_id}${c.reset} from session`);
   });
 
-plan
-  .command("install")
-  .description("Install plan snippet into agent config (CLAUDE.md, AGENTS.md)")
-  .option("--disable", "Remove plan snippet and disable")
-  .action(async (options: any) => {
-    const config = readConfig() || {};
-
-    if (options.disable) {
-      config.plan_enabled = false;
-      writeConfig(config);
-      console.log("Plan snippet disabled. Run 'cast plan install' to re-enable.");
-      return;
-    }
-
-    const result = installPlanSnippet(true);
-    config.plan_enabled = true;
-    config.plan_version = getPlanVersion();
-    writeConfig(config);
-
-    const targets = getSnippetTargets();
-    const targetList = targets.map(t => t.label).join(", ");
-    if (result.updated) {
-      console.log(`Plan snippet updated in ${targetList}`);
-    } else if (result.installed) {
-      console.log(`Plan snippet installed in ${targetList}`);
-      console.log("Your agents can now manage multi-session plans.");
-    } else {
-      console.log("Plan snippet is up to date.");
-    }
-  });
 
 // --- Plan Orchestration ---
 
@@ -11497,9 +11385,6 @@ checkForUpdates().then(async (available) => {
     }
     if (config?.task_enabled) {
       installTaskSnippet(true);
-    }
-    if (config?.plan_enabled) {
-      installPlanSnippet(true);
     }
     if (config?.workflow_enabled) {
       installWorkflowSnippet(true);
