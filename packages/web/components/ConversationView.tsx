@@ -64,7 +64,7 @@ import { setupDesktopDrag, desktopHeaderClass } from "../lib/desktop";
 import { isInboxRoute } from "../lib/inboxRouting";
 import { MessageNavButton } from "./MessageBrowserPopover";
 import type { MentionItem } from "./editor/MentionList";
-import { CheckSquare, FileText, MessageSquare, Target, User } from "lucide-react";
+import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Hash, FolderOpen } from "lucide-react";
 
 function parseSearchTerms(query: string): string[] {
   const terms: string[] = [];
@@ -247,6 +247,7 @@ type ConversationViewProps = {
   autoFocusInput?: boolean;
   fallbackStickyContent?: string | null;
   onBack?: () => void;
+  subHeaderContent?: React.ReactNode;
 };
 
 export interface ConversationViewHandle {
@@ -446,19 +447,79 @@ function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedW
   onSelectWorkflow: (id: string) => void;
   workflows: Array<{ _id: string; name: string }> | undefined;
 }) {
-  const switchAgent = useMutation(api.conversations.switchSessionAgent);
-  const setConversationAgent = useInboxStore((s) => s.setConversationAgent);
+  const createQuickSession = useMutation(api.conversations.createQuickSession);
+  const killSession = useMutation(api.conversations.killSession);
   const storeSession = useInboxStore((s) => s.sessions[conversation._id]);
-  const resolvedId = storeSession?._id || conversation._id;
   const currentAgent = storeSession?.agent_type || conversation.agent_type || "claude_code";
+  const projectPath = storeSession?.project_path || storeSession?.git_root || conversation.git_root || conversation.project_path;
 
-  const handleAgentSwitch = useCallback((agentType: "claude_code" | "codex" | "cursor" | "gemini") => {
+  const handleAgentSwitch = useCallback(async (agentType: "claude_code" | "codex" | "cursor" | "gemini") => {
     if (agentType === currentAgent) return;
-    setConversationAgent(resolvedId, agentType);
-    if (isConvexId(resolvedId)) {
-      switchAgent({ conversation_id: resolvedId as Id<"conversations">, agent_type: agentType }).catch(() => {});
+    soundNewSession();
+
+    const store = useInboxStore.getState();
+    const oldId = storeSession?._id || conversation._id;
+    const sessionId = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+    const now = Date.now();
+
+    if (isConvexId(oldId)) {
+      store.markKilling(oldId);
     }
-  }, [switchAgent, resolvedId, currentAgent, setConversationAgent]);
+
+    const newSession: InboxSession = {
+      _id: sessionId,
+      session_id: sessionId,
+      title: "New session",
+      updated_at: now,
+      project_path: projectPath || undefined,
+      git_root: projectPath || undefined,
+      agent_type: agentType,
+      message_count: 0,
+      is_idle: true,
+      has_pending: false,
+      last_user_message: null,
+    };
+    const newSessions = { ...store.sessions };
+    delete newSessions[oldId];
+    newSessions[sessionId] = newSession;
+    const newPending = { ...store.pending };
+    delete newPending[`sessions:${sessionId}`];
+    useInboxStore.setState({
+      sessions: newSessions,
+      currentSessionId: sessionId,
+      pending: newPending,
+      viewingDismissedId: null,
+      conversations: {
+        ...store.conversations,
+        [sessionId]: {
+          _id: sessionId, _creationTime: now, user_id: "", agent_type: agentType,
+          session_id: sessionId, project_path: projectPath, git_root: projectPath,
+          started_at: now, updated_at: now, message_count: 0, status: "active",
+          title: "New session", messages: [], user: null,
+          child_conversations: [], child_conversation_map: {},
+          has_more_above: false, oldest_timestamp: null, last_timestamp: null,
+          fork_count: 0, forked_from_details: null, compaction_count: 0,
+          fork_children: [], parent_conversation_id: null,
+        },
+      },
+    });
+
+    try {
+      const conversationId = await createQuickSession({
+        agent_type: agentType,
+        project_path: projectPath || undefined,
+        git_root: projectPath || undefined,
+        session_id: sessionId,
+      });
+      useInboxStore.getState().resolveSessionId(sessionId, conversationId);
+
+      if (isConvexId(oldId)) {
+        killSession({ conversation_id: oldId as Id<"conversations">, mark_completed: true }).catch(() => {});
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to switch agent");
+    }
+  }, [storeSession, conversation._id, killSession, createQuickSession, currentAgent, projectPath]);
 
   const agents = [
     { type: "claude_code" as const, label: "Claude" },
@@ -4945,6 +5006,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
     projectPath?: string;
     goal?: string;
     model?: string;
+    image?: string;
   };
   const [acTrigger, setAcTrigger] = useState<AutocompleteTrigger>(null);
   const [acIndex, setAcIndex] = useState(0);
@@ -4978,6 +5040,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
             type: m.type,
             id: m.id,
             shortId: m.shortId,
+            image: m.image,
           }));
         items.push(...entityMatches);
       }
@@ -5014,19 +5077,12 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
       const after = message.slice(cursorPos);
 
       let inserted: string;
-      if (item.type === "file") {
+      if (item.type === "file" || item.type === "skill") {
         inserted = `@${item.label} `;
-      } else if (item.type === "task") {
-        const parts = [item.status, item.priority && item.priority !== "medium" ? item.priority : null].filter(Boolean).join(", ");
-        inserted = `@${item.shortId || item.label} (${item.label}${parts ? ` -- ${parts}` : ""}. \`cast task ${item.shortId}\` for details) `;
-      } else if (item.type === "doc") {
-        inserted = `@doc:${item.label} (${item.docType || "note"}. \`cast doc read ${item.id?.slice(-6) || ""}\`) `;
-      } else if (item.type === "plan") {
-        inserted = `@${item.shortId || item.label} (${item.label}${item.status ? ` -- ${item.status}` : ""}. \`cast plan show ${item.shortId}\` for details) `;
-      } else if (item.type === "session") {
-        inserted = `@${item.shortId || item.label} (${item.label}. \`cast read ${item.shortId}\` for details) `;
       } else {
-        inserted = `@${item.label} `;
+        const truncTitle = item.label.length > 30 ? item.label.slice(0, 30) + "..." : item.label;
+        const id = item.shortId || "";
+        inserted = id ? `@[${truncTitle} ${id}] ` : `@[${truncTitle}] `;
       }
 
       const newVal = before + inserted + after;
@@ -5787,38 +5843,71 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
               </div>
             </div>
           )}
-          {acTrigger && acItems.length > 0 && (
-            <div ref={acRef} className={`mx-auto px-2 sm:px-4 mb-1 ${isExpanded ? "max-w-4xl" : "max-w-md"}`}>
-              <div className="bg-sol-bg-alt border border-sol-border rounded-lg shadow-xl overflow-hidden max-h-64 overflow-y-auto">
-                {acItems.map((item, i) => {
-                  const Icon = item.type === "task" ? CheckSquare : item.type === "plan" ? Target : item.type === "doc" ? FileText : item.type === "session" ? MessageSquare : item.type === "person" ? User : null;
-                  return (
-                    <button
-                      key={`${item.type}-${item.id || item.label}`}
-                      type="button"
-                      className={`w-full text-left px-3 py-1.5 flex items-center gap-2 text-sm transition-colors ${i === clampedAcIndex ? "bg-sol-blue/15 text-sol-text" : "text-sol-text-dim hover:bg-sol-bg/50"}`}
-                      onMouseEnter={() => setAcIndex(i)}
-                      onMouseDown={(e) => { e.preventDefault(); applyAutocomplete(item); }}
-                    >
-                      {Icon && <Icon size={13} className="shrink-0 text-sol-text-dim/50" />}
-                      <span className="text-sol-cyan font-mono text-xs shrink-0 truncate max-w-[60%]">
-                        {acTrigger.type === "/" ? "/" : "@"}{item.shortId || (item.type === "file" ? (item.label.split("/").pop() || item.label) : item.label)}
-                      </span>
-                      {item.description && (
-                        <span className="text-sol-text-dim/60 text-xs truncate">{item.description}</span>
-                      )}
-                      {item.type === "file" && (
-                        <span className="text-sol-text-dim/40 text-[10px] truncate ml-auto">{item.label.replace(/\/[^/]+$/, "")}</span>
-                      )}
-                      {item.type !== "file" && item.type !== "skill" && (
-                        <span className="text-sol-text-dim/30 text-[10px] ml-auto shrink-0">{item.type}</span>
-                      )}
-                    </button>
-                  );
-                })}
+          {acTrigger && acItems.length > 0 && (() => {
+            const typeConfig: Record<string, { icon: typeof User; color: string; label: string }> = {
+              person: { icon: User, color: "text-sol-green", label: "People" },
+              task: { icon: CheckSquare, color: "text-sol-yellow", label: "Tasks" },
+              doc: { icon: FileText, color: "text-sol-cyan", label: "Docs" },
+              session: { icon: MessageSquare, color: "text-sol-blue", label: "Sessions" },
+              plan: { icon: MapIcon, color: "text-sol-violet", label: "Plans" },
+              file: { icon: FolderOpen, color: "text-sol-base01", label: "Files" },
+              skill: { icon: Hash, color: "text-sol-orange", label: "Commands" },
+            };
+            const grouped: Array<{ type: string; items: typeof acItems; startIdx: number }> = [];
+            let idx = 0;
+            for (const item of acItems) {
+              let group = grouped.find(g => g.type === item.type);
+              if (!group) { group = { type: item.type, items: [], startIdx: idx }; grouped.push(group); }
+              group.items.push(item);
+              idx++;
+            }
+            return (
+              <div ref={acRef} className={`mx-auto px-2 sm:px-4 mb-1 ${isExpanded ? "max-w-4xl" : "max-w-md"}`}>
+                <div className="bg-sol-bg border border-sol-border/50 rounded-lg shadow-xl py-1.5 max-h-[320px] overflow-y-auto">
+                  {grouped.map(group => {
+                    const config = typeConfig[group.type] || typeConfig.doc;
+                    const GIcon = config.icon;
+                    return (
+                      <div key={group.type}>
+                        <div className="px-3 py-1.5 flex items-center gap-1.5">
+                          <GIcon className={`w-3 h-3 ${config.color}`} />
+                          <span className="text-[10px] font-medium uppercase tracking-wider text-sol-text-dim">{config.label}</span>
+                        </div>
+                        {group.items.map((item, i) => {
+                          const globalIdx = group.startIdx + i;
+                          const isSelected = globalIdx === clampedAcIndex;
+                          return (
+                            <button
+                              key={item.id || item.label}
+                              type="button"
+                              onMouseEnter={() => setAcIndex(globalIdx)}
+                              onMouseDown={(e) => { e.preventDefault(); applyAutocomplete(item); }}
+                              className={`w-full text-left px-3 py-1.5 flex items-center gap-2.5 transition-colors ${isSelected ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted hover:bg-sol-bg-alt"}`}
+                            >
+                              {item.image ? (
+                                <img src={item.image} alt="" className="w-5 h-5 rounded-full object-cover flex-shrink-0" />
+                              ) : (
+                                <Hash className={`w-3.5 h-3.5 flex-shrink-0 ${config.color} opacity-60`} />
+                              )}
+                              <span className="text-sm truncate flex-1">
+                                {item.type === "file" ? (item.label.split("/").pop() || item.label) : item.type === "skill" ? `/${item.label}` : item.label}
+                              </span>
+                              {item.type === "file" && (
+                                <span className="text-[11px] text-sol-text-dim font-mono flex-shrink-0 truncate max-w-[50%]">{item.label.replace(/\/[^/]+$/, "")}</span>
+                              )}
+                              {item.type !== "file" && item.description && (
+                                <span className="text-[11px] text-sol-text-dim font-mono flex-shrink-0">{item.description}</span>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
           <form onSubmit={handleSubmit} className={`mx-auto px-2 sm:px-4 transition-all duration-200 ease-out ${isExpanded ? "max-w-4xl" : "max-w-md"}`}>
             <div className={`flex flex-col border px-4 py-2 shadow-lg transition-all duration-200 ${isExpanded ? "rounded-2xl" : "rounded-full"} bg-sol-bg-alt ${isSelectionActive ? "border-sol-cyan/40 ring-1 ring-sol-cyan/20" : "border-sol-border"}`}>
               {isSelectionActive && (
@@ -5963,7 +6052,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
 const CC_MODE_ORDER = ["default", "plan", "acceptEdits", "bypassPermissions", "dontAsk"];
 
 export const ConversationView = forwardRef<ConversationViewHandle, ConversationViewProps>(
-  function ConversationView({ conversation, commits = [], pullRequests = [], backHref, backLabel = "Back", headerExtra, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, onLoadOlder, onLoadNewer, onJumpToStart, onJumpToEnd, highlightQuery, onClearHighlight, embedded, showMessageInput = true, targetMessageId, isOwner = true, onSendAndAdvance, autoFocusInput, fallbackStickyContent, onBack }, ref) {
+  function ConversationView({ conversation, commits = [], pullRequests = [], backHref, backLabel = "Back", headerExtra, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, onLoadOlder, onLoadNewer, onJumpToStart, onJumpToEnd, highlightQuery, onClearHighlight, embedded, showMessageInput = true, targetMessageId, isOwner = true, onSendAndAdvance, autoFocusInput, fallbackStickyContent, onBack, subHeaderContent }, ref) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [userScrolled, _setUserScrolled] = useState(false);
   const userScrolledRef = useRef(false);
@@ -8306,6 +8395,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
             />
           </div>
         )}
+        {subHeaderContent}
       </header>
 
       {stickyMsgVisible && activeStickyMsg && (
