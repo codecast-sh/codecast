@@ -590,13 +590,13 @@ export const webUpdate = mutation({
     if (!userId) throw new Error("Unauthorized");
 
     const doc = await ctx.db.get(args.id);
-    if (!doc || doc.user_id !== userId) throw new Error("Doc not found");
+    if (!doc) throw new Error("Doc not found");
 
     const updates: any = { updated_at: Date.now() };
-    if (args.title) updates.title = args.title;
-    if (args.content) updates.content = args.content;
-    if (args.doc_type) updates.doc_type = args.doc_type;
-    if (args.labels) updates.labels = args.labels;
+    if (args.title !== undefined) updates.title = args.title;
+    if (args.content !== undefined) updates.content = args.content;
+    if (args.doc_type !== undefined) updates.doc_type = args.doc_type;
+    if (args.labels !== undefined) updates.labels = args.labels;
     if (args.pinned !== undefined) updates.pinned = args.pinned;
     if (args.archived !== undefined) updates.archived_at = args.archived ? Date.now() : undefined;
 
@@ -772,15 +772,28 @@ export const mentionSearch = query({
       sublabel?: string;
       image?: string;
       shortId?: string;
+      status?: string;
+      priority?: string;
+      docType?: string;
+      messageCount?: number;
+      projectPath?: string;
+      goal?: string;
+      model?: string;
+      agentType?: string;
+      updatedAt?: number;
+      idleSummary?: string;
     }> = [];
+
+    const perType = Math.max(5, Math.ceil(limit / types.length));
 
     if (types.includes("person") && teamId) {
       const memberships = await ctx.db
         .query("team_memberships")
         .withIndex("by_team_id", (tm) => tm.eq("team_id", teamId))
         .collect();
+      let count = 0;
       for (const m of memberships) {
-        if (results.length >= limit) break;
+        if (count >= perType) break;
         const u = await ctx.db.get(m.user_id);
         if (!u) continue;
         const name = (u.name || "").toLowerCase();
@@ -793,6 +806,7 @@ export const mentionSearch = query({
           sublabel: u.github_username ? `@${u.github_username}` : u.email,
           image: u.image || u.github_avatar_url,
         });
+        count++;
       }
     }
 
@@ -802,22 +816,23 @@ export const mentionSearch = query({
         tasks = await ctx.db
           .query("tasks")
           .withSearchIndex("search_tasks", (s: any) => s.search("title", args.query).eq("user_id", userId))
-          .take(limit);
+          .take(perType);
       } else {
         tasks = await ctx.db
           .query("tasks")
           .withIndex("by_user_id", (t: any) => t.eq("user_id", userId))
           .order("desc")
-          .take(limit);
+          .take(perType);
       }
       for (const task of tasks) {
-        if (results.length >= limit * 2) break;
         results.push({
           id: String(task._id),
           type: "task",
           label: task.title,
           sublabel: task.short_id,
           shortId: task.short_id,
+          status: task.status,
+          priority: (task as any).priority,
         });
       }
     }
@@ -828,22 +843,22 @@ export const mentionSearch = query({
         docs = await ctx.db
           .query("docs")
           .withSearchIndex("search_docs", (s) => s.search("title", args.query).eq("user_id", userId))
-          .take(limit);
+          .take(perType);
       } else {
         docs = await ctx.db
           .query("docs")
           .withIndex("by_user_id", (d) => d.eq("user_id", userId))
           .order("desc")
-          .take(limit);
+          .take(perType);
       }
       for (const doc of docs) {
         if (doc.archived_at) continue;
-        if (results.length >= limit * 2) break;
         results.push({
           id: String(doc._id),
           type: "doc",
           label: doc.title,
           sublabel: doc.doc_type,
+          docType: doc.doc_type,
         });
       }
     }
@@ -853,18 +868,19 @@ export const mentionSearch = query({
         .query("plans")
         .withIndex("by_user_id", (p: any) => p.eq("user_id", userId))
         .order("desc")
-        .take(limit * 3);
+        .take(perType * 3);
       const filtered = q
         ? plans.filter((p: any) => p.title?.toLowerCase().includes(q))
         : plans;
-      for (const plan of filtered.slice(0, limit)) {
-        if (results.length >= limit * 2) break;
+      for (const plan of filtered.slice(0, perType)) {
         results.push({
           id: String(plan._id),
           type: "plan",
           label: plan.title,
           sublabel: plan.short_id,
           shortId: plan.short_id,
+          status: (plan as any).status,
+          goal: (plan as any).goal,
         });
       }
     }
@@ -874,23 +890,31 @@ export const mentionSearch = query({
         .query("conversations")
         .withIndex("by_user_updated", (c: any) => c.eq("user_id", userId))
         .order("desc")
-        .take(limit * 3);
+        .take(perType * 3);
       const filtered = q
-        ? sessions.filter((s: any) => s.title?.toLowerCase().includes(q))
+        ? sessions.filter((s: any) =>
+            s.title?.toLowerCase().includes(q) ||
+            s.idle_summary?.toLowerCase().includes(q))
         : sessions;
-      for (const sess of filtered.slice(0, limit)) {
-        if (results.length >= limit * 2) break;
+      for (const sess of filtered.slice(0, perType)) {
         results.push({
           id: String(sess._id),
           type: "session",
           label: sess.title || "Untitled Session",
-          sublabel: sess.short_id,
+          sublabel: (sess as any).idle_summary?.slice(0, 80) || sess.short_id,
           shortId: sess.short_id,
+          messageCount: sess.message_count,
+          projectPath: sess.project_path,
+          status: sess.status,
+          model: sess.model,
+          agentType: sess.agent_type,
+          updatedAt: sess.updated_at,
+          idleSummary: (sess as any).idle_summary,
         });
       }
     }
 
-    return results.slice(0, limit * 2);
+    return results;
   },
 });
 
