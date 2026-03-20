@@ -4,6 +4,7 @@ import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { createDataContext } from "./data";
+import { nextShortId } from "./counters";
 
 async function recalcPlanProgress(ctx: any, planId: Id<"plans">, updatedTaskId: Id<"tasks">, newStatus: string) {
   const plan = await ctx.db.get(planId);
@@ -30,14 +31,6 @@ async function recalcPlanProgress(ctx: any, planId: Id<"plans">, updatedTaskId: 
   await ctx.db.patch(plan._id, updates);
 }
 
-function generateShortId(): string {
-  const chars = "0123456789abcdefghijklmnopqrstuvwxyz";
-  let id = "ct-";
-  for (let i = 0; i < 4; i++) {
-    id += chars[Math.floor(Math.random() * chars.length)];
-  }
-  return id;
-}
 
 async function canAccessTask(ctx: any, userId: Id<"users">, task: any): Promise<boolean> {
   if (task.user_id === userId) return true;
@@ -83,7 +76,7 @@ export const create = mutation({
 
     const db = await createDataContext(ctx, { userId: auth.userId, project_path: args.project_path });
     const now = Date.now();
-    const short_id = generateShortId();
+    const short_id = await nextShortId(ctx.db, "ct");
 
     let project_id: Id<"projects"> | undefined;
     if (args.project_id) {
@@ -427,6 +420,7 @@ export const update = mutation({
     assignee: v.optional(v.string()),
     labels: v.optional(v.array(v.string())),
     project_id: v.optional(v.string()),
+    plan_id: v.optional(v.string()),
     blocked_by: v.optional(v.array(v.string())),
     blocks: v.optional(v.array(v.string())),
     last_session_summary: v.optional(v.string()),
@@ -463,6 +457,20 @@ export const update = mutation({
     if (args.assignee !== undefined) updates.assignee = args.assignee;
     if (args.labels) updates.labels = args.labels;
     if (args.project_id !== undefined) updates.project_id = args.project_id || undefined;
+    if (args.plan_id) {
+      const plan = await ctx.db
+        .query("plans")
+        .withIndex("by_short_id", (q) => q.eq("short_id", args.plan_id!))
+        .first();
+      if (plan) {
+        updates.plan_id = plan._id;
+        const taskIds = plan.task_ids || [];
+        if (!taskIds.some((id: any) => id === task._id)) {
+          taskIds.push(task._id);
+          await ctx.db.patch(plan._id, { task_ids: taskIds, updated_at: now });
+        }
+      }
+    }
     if (args.blocked_by) updates.blocked_by = args.blocked_by;
     if (args.blocks) updates.blocks = args.blocks;
     if (args.last_session_summary) updates.last_session_summary = args.last_session_summary;
@@ -968,6 +976,7 @@ export const webAddComment = mutation({
     short_id: v.string(),
     text: v.string(),
     comment_type: v.optional(v.string()),
+    image_storage_ids: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -986,6 +995,7 @@ export const webAddComment = mutation({
       author: user?.name || "unknown",
       text: args.text,
       comment_type: (args.comment_type || "note") as any,
+      image_storage_ids: args.image_storage_ids,
       created_at: Date.now(),
     });
 
@@ -1020,6 +1030,7 @@ export const assignToAgent = mutation({
       updated_at: now,
       message_count: 0,
       status: "active",
+      is_private: false,
       active_task_id: task._id,
       title: task.title.slice(0, 80),
     } as any);
@@ -1078,7 +1089,7 @@ export const webCreate = mutation({
     if (!userId) throw new Error("Unauthorized");
 
     const db = await createDataContext(ctx, { userId, workspace: args.workspace, team_id: args.team_id });
-    const short_id = generateShortId();
+    const short_id = await nextShortId(ctx.db, "ct");
 
     let project_id: Id<"projects"> | undefined;
     if (args.project_id) {

@@ -271,6 +271,48 @@ export const deleteComment = mutation({
   },
 });
 
+export const getConversationCommentSummary = query({
+  args: {
+    conversation_id: v.id("conversations"),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation) return [];
+
+    const isOwner = conversation.user_id.toString() === userId.toString();
+    if (!isOwner) {
+      if (!(await canTeamMemberAccess(ctx, userId, conversation))) {
+        return [];
+      }
+    }
+
+    const comments = await ctx.db
+      .query("comments")
+      .withIndex("by_conversation_id", (q) => q.eq("conversation_id", args.conversation_id))
+      .collect();
+
+    const commentsWithUsers = await Promise.all(
+      comments.map(async (comment) => {
+        const user = await ctx.db.get(comment.user_id);
+        return {
+          ...comment,
+          user: {
+            _id: user?._id,
+            name: user?.name,
+            github_username: user?.github_username,
+            github_avatar_url: user?.github_avatar_url,
+          },
+        };
+      })
+    );
+
+    return commentsWithUsers.sort((a, b) => a.created_at - b.created_at);
+  },
+});
+
 export const updateGitHubCommentId = mutation({
   args: {
     comment_id: v.id("comments"),
