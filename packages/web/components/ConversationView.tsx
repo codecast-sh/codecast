@@ -4206,43 +4206,42 @@ function WorkflowEventBlock({ content, workflowRun, onGateChoice, gateResponding
     );
   }
 
-  if (wf === "node_start") {
+  if (wf === "node_start" || wf === "node_done" || wf === "node_failed") {
     const label = event.node_label || event.node_id;
-    return (
-      <div className="my-2 flex items-center gap-2.5 px-3 py-2 rounded-lg bg-sol-bg-alt border border-sol-border/30 text-xs">
-        <span className="w-1.5 h-1.5 rounded-full bg-sol-yellow animate-pulse flex-shrink-0" />
-        <span className="text-sol-text-muted font-medium">{label}</span>
-        <span className="text-sol-text-dim/50 ml-0.5">running…</span>
-      </div>
-    );
-  }
+    const nodeType = event.node_type || "agent";
+    const isDone = wf === "node_done";
+    const isFailed = wf === "node_failed";
+    const isRunning = wf === "node_start";
 
-  if (wf === "node_done") {
-    const label = event.node_label || event.node_id;
-    return (
-      <div className="my-2 flex items-center gap-2.5 px-3 py-2 rounded-lg bg-sol-bg-alt border border-sol-border/30 text-xs group">
-        <svg className="w-3 h-3 text-sol-green flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
-        </svg>
-        <span className="text-sol-text-muted font-medium">{label}</span>
-        {event.session_id && (
-          <Link href={`/conversation/${event.session_id}`} className="ml-auto text-sol-text-dim opacity-0 group-hover:opacity-100 hover:text-sol-cyan transition-all text-[10px]">
-            view →
-          </Link>
-        )}
-      </div>
-    );
-  }
+    const typeColors: Record<string, { bg: string; border: string; text: string }> = {
+      agent:   { bg: "bg-sol-green/20", border: "border-sol-green/50", text: "text-sol-green" },
+      command: { bg: "bg-sol-yellow/20", border: "border-sol-yellow/50", text: "text-sol-yellow" },
+      human:   { bg: "bg-sol-magenta/20", border: "border-sol-magenta/50", text: "text-sol-magenta" },
+      prompt:  { bg: "bg-sol-violet/20", border: "border-sol-violet/50", text: "text-sol-violet" },
+    };
+    const tc = typeColors[nodeType] || typeColors.agent;
 
-  if (wf === "node_failed") {
-    const label = event.node_label || event.node_id;
     return (
-      <div className="my-2 flex items-center gap-2.5 px-3 py-2 rounded-lg bg-sol-red/5 border border-sol-red/20 text-xs">
-        <svg className="w-3 h-3 text-sol-red flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-        </svg>
-        <span className="text-sol-red/80 font-medium">{label}</span>
-        <span className="text-sol-red/50 ml-0.5">failed</span>
+      <div className="my-0.5">
+        <div className="flex items-center gap-1.5 text-xs">
+          {isDone && <span className="text-emerald-400 text-[10px]">{"\u2713"}</span>}
+          {isFailed && <span className="text-sol-red text-[10px]">{"\u2717"}</span>}
+          {isRunning && <span className="w-1.5 h-1.5 rounded-full bg-sol-yellow animate-pulse flex-shrink-0" />}
+          <span className={`px-1 py-0.5 rounded text-[10px] font-medium ${tc.bg} border ${tc.border} ${tc.text}`}>
+            {nodeType}
+          </span>
+          <span className={`text-xs ${isFailed ? "text-sol-red/80" : "text-sol-text-muted"}`}>{label}</span>
+          {isRunning && <span className="text-sol-text-dim/50 text-[10px]">running…</span>}
+          {event.session_id && isDone && (
+            <Link
+              href={`/conversation/${event.session_id}`}
+              onClick={(e) => e.stopPropagation()}
+              className="text-sol-cyan hover:text-sol-cyan text-[10px] font-medium underline underline-offset-2"
+            >
+              view
+            </Link>
+          )}
+        </div>
       </div>
     );
   }

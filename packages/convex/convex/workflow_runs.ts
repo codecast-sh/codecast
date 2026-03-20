@@ -405,16 +405,17 @@ export const updateProgress = mutation({
     if (run.primary_conversation_id && args.node_id !== "start") {
       const primaryConv = await ctx.db.get(run.primary_conversation_id);
       if (primaryConv) {
-        // Look up node label from workflow for richer rendering
         const workflow = run.workflow_id ? await ctx.db.get(run.workflow_id) : null;
-        const nodeLabel = workflow?.nodes?.find((n: any) => n.id === args.node_id)?.label ?? args.node_id;
+        const nodeInfo = workflow?.nodes?.find((n: any) => n.id === args.node_id);
+        const nodeLabel = nodeInfo?.label ?? args.node_id;
+        const nodeType = nodeInfo?.type ?? "agent";
         const wfType = args.node_status === "running" ? "node_start"
           : args.node_status === "completed" ? "node_done"
           : "node_failed";
         await ctx.db.insert("messages", {
           conversation_id: run.primary_conversation_id,
           role: "assistant",
-          content: JSON.stringify({ __wf: wfType, node_id: args.node_id, node_label: nodeLabel, session_id: args.session_id }),
+          content: JSON.stringify({ __wf: wfType, node_id: args.node_id, node_label: nodeLabel, node_type: nodeType, session_id: args.session_id }),
           subtype: "workflow_event",
           timestamp: now,
         });
