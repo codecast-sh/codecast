@@ -28,7 +28,7 @@ const config: Config = {
   				magenta: '#d33682',
   				violet: '#6c71c4',
   				blue: '#268bd2',
-  				cyan: '#2aa198',
+  				cyan: 'rgb(42 161 152 / <alpha-value>)',
   				green: '#859900',
   				bg: 'var(--sol-bg)',
   				'bg-alt': 'var(--sol-bg-alt)',

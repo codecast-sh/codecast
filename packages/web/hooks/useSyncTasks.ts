@@ -1,7 +1,7 @@
 import { useState, useCallback } from "react";
 import { useQuery } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
-import { useInboxStore, TaskDetail } from "../store/inboxStore";
+import { useInboxStore } from "../store/inboxStore";
 import { useWorkspaceArgs } from "./useWorkspaceArgs";
 import { useConvexSync } from "./useConvexSync";
 
@@ -36,9 +36,9 @@ export function useSyncTaskDetail(id?: string) {
     api.taskMining.webGetTaskDetail,
     id ? { id: id as any } : "skip"
   );
-  const syncTaskDetail = useInboxStore((s) => s.syncTaskDetail);
+  const syncTable = useInboxStore((s) => s.syncTable);
 
   useConvexSync(data, useCallback((d: any) => {
-    if (id) syncTaskDetail(id, d as unknown as TaskDetail);
-  }, [id, syncTaskDetail]));
+    if (id && d) syncTable("tasks", [{ ...d, _id: id }]);
+  }, [id, syncTable]));
 }

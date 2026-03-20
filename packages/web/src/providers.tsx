@@ -13,9 +13,15 @@ function PrefsMigration() {
   return null;
 }
 
-const convex = new ConvexReactClient(import.meta.env.VITE_CONVEX_URL || "https://convex.codecast.sh", {
-  unsavedChangesWarning: false,
-});
+const convex: ConvexReactClient =
+  import.meta.hot?.data?.convexClient ??
+  new ConvexReactClient(import.meta.env.VITE_CONVEX_URL || "https://convex.codecast.sh", {
+    unsavedChangesWarning: false,
+  });
+
+if (import.meta.hot) {
+  import.meta.hot.data.convexClient = convex;
+}
 
 export function Providers({ children }: { children: ReactNode }) {
   return (

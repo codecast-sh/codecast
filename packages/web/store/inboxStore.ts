@@ -197,6 +197,9 @@ export type DocItem = {
   source_file?: string;
   labels?: string[];
   pinned?: boolean;
+  plan_id?: string;
+  plan_short_id?: string;
+  plan_status?: string;
   created_at: number;
   updated_at: number;
 };
