@@ -5082,7 +5082,13 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
       } else {
         const truncTitle = item.label.length > 30 ? item.label.slice(0, 30) + "..." : item.label;
         const id = item.shortId || "";
-        inserted = id ? `@[${truncTitle} ${id}] ` : `@[${truncTitle}] `;
+        const castCmd = item.type === "task" ? `cast task context ${id}`
+          : item.type === "plan" ? `cast plan show ${id}`
+          : item.type === "session" ? `cast read ${id}`
+          : item.type === "doc" ? `cast doc read ${id}`
+          : "";
+        const ref = id ? `@[${truncTitle} ${id}]` : `@[${truncTitle}]`;
+        inserted = castCmd ? `${ref} (${castCmd}) ` : `${ref} `;
       }
 
       const newVal = before + inserted + after;
