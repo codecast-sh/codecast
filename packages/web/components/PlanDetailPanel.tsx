@@ -40,13 +40,15 @@ import { PlanGraphView } from "./PlanGraphView";
 
 const api = _api as any;
 
-const STATUS_CONFIG: Record<string, { icon: typeof Circle; label: string; color: string }> = {
-  draft: { icon: Circle, label: "Draft", color: "text-sol-text-dim" },
-  active: { icon: CircleDot, label: "Active", color: "text-sol-cyan" },
-  paused: { icon: PauseCircle, label: "Paused", color: "text-sol-yellow" },
-  done: { icon: CheckCircle2, label: "Done", color: "text-sol-green" },
-  abandoned: { icon: XCircle, label: "Abandoned", color: "text-sol-text-dim" },
+export const PLAN_STATUS_CONFIG: Record<string, { icon: typeof Circle; label: string; color: string; bg: string }> = {
+  draft: { icon: Circle, label: "Draft", color: "text-sol-text-dim", bg: "bg-sol-text-dim/10 border-sol-text-dim/30" },
+  active: { icon: CircleDot, label: "Active", color: "text-sol-cyan", bg: "bg-sol-cyan/10 border-sol-cyan/30" },
+  paused: { icon: PauseCircle, label: "Paused", color: "text-sol-yellow", bg: "bg-sol-yellow/10 border-sol-yellow/30" },
+  done: { icon: CheckCircle2, label: "Done", color: "text-sol-green", bg: "bg-sol-green/10 border-sol-green/30" },
+  abandoned: { icon: XCircle, label: "Abandoned", color: "text-sol-text-dim", bg: "bg-sol-text-dim/10 border-sol-text-dim/30" },
 };
+
+const STATUS_CONFIG = PLAN_STATUS_CONFIG;
 
 const TASK_STATUS_CONFIG: Record<string, { icon: typeof Circle; color: string; label: string }> = {
   open: { icon: Circle, color: "text-sol-blue", label: "Open" },
@@ -104,7 +106,7 @@ const OUTCOME_STYLES: Record<string, { border: string; label: string; badge: str
   unknown: { border: "border-l-sol-text-dim/15", label: "", badge: "" },
 };
 
-function PlanProgressBar({ progress }: { progress: { total: number; done: number; in_progress: number; open: number } }) {
+export function PlanProgressBar({ progress }: { progress: { total: number; done: number; in_progress: number; open: number } }) {
   const { total, done, in_progress, open } = progress;
   const donePct = (done / total) * 100;
   const ipPct = (in_progress / total) * 100;
@@ -163,7 +165,7 @@ function PlanProgressBar({ progress }: { progress: { total: number; done: number
   );
 }
 
-function DriveRoundIndicator({ driveState }: { driveState: { current_round: number; total_rounds: number; rounds: any[] } }) {
+export function DriveRoundIndicator({ driveState }: { driveState: { current_round: number; total_rounds: number; rounds: any[] } }) {
   const { current_round, total_rounds, rounds } = driveState;
   if (total_rounds === 0) return null;
 
@@ -383,7 +385,7 @@ function TaskSessionCards({ sessions }: { sessions: any[] }) {
   );
 }
 
-function OrchestrationHeader({ tasks, sessions }: { tasks: any[]; sessions: any[] }) {
+export function OrchestrationHeader({ tasks, sessions }: { tasks: any[]; sessions: any[] }) {
   const activeAgents = tasks.filter((t: any) => t.activeSession);
   const doneTasks = tasks.filter((t: any) => t.status === "done");
   const blockedTasks = tasks.filter((t: any) => t.execution_status === "blocked" || t.execution_status === "needs_context");
@@ -548,7 +550,7 @@ function InlineEditTitle({ value, onSave, className }: { value: string; onSave: 
   );
 }
 
-function PlanTaskSection({ planShortId, tasks, sessions }: { planShortId: string; tasks: any[]; sessions: any[] }) {
+export function PlanTaskSection({ planShortId, tasks, sessions }: { planShortId: string; tasks: any[]; sessions: any[] }) {
   const [showAdd, setShowAdd] = useState(false);
   const [newTitle, setNewTitle] = useState("");
   const [showDone, setShowDone] = useState(false);
@@ -861,7 +863,7 @@ function PlanTaskSection({ planShortId, tasks, sessions }: { planShortId: string
   );
 }
 
-function OrchestrationTab({ tasks, sessions }: { tasks: any[]; sessions: any[] }) {
+export function OrchestrationTab({ tasks, sessions }: { tasks: any[]; sessions: any[] }) {
   const activeSessions = sessions.filter((s: any) => s.is_active);
   const recentSessions = [...sessions].sort((a: any, b: any) => (b.updated_at || 0) - (a.updated_at || 0));
 
@@ -992,7 +994,7 @@ function OrchestrationTab({ tasks, sessions }: { tasks: any[]; sessions: any[] }
   );
 }
 
-function StartWorkflowButton({ workflowId, planId }: { workflowId: string; planId: string }) {
+export function StartWorkflowButton({ workflowId, planId }: { workflowId: string; planId: string }) {
   const createRun = useMutation(api.workflow_runs.create);
   const [pending, setPending] = useState(false);
 

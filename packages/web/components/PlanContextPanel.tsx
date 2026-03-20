@@ -54,7 +54,7 @@ const PRIORITY_COLOR: Record<string, string> = {
 
 export function PlanContextPanel({ planId }: { planId: Id<"plans"> }) {
   const plan = useQuery(api.plans.webPlanContext, { plan_id: planId });
-  const [expanded, setExpanded] = useState(true);
+  const [expanded, setExpanded] = useState(false);
 
   if (!plan) return null;
 
