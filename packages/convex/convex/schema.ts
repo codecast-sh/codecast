@@ -1041,6 +1041,7 @@ export default defineSchema({
       v.literal("insight"),
       v.literal("import"),
       v.literal("plan_mode"),
+      v.literal("todo_sync"),
     ),
     confidence: v.optional(v.number()),
     promoted: v.optional(v.boolean()),
@@ -1366,6 +1367,7 @@ export default defineSchema({
 
     dismissed: v.optional(v.object({
       desktop_app: v.optional(v.boolean()),
+      has_used_desktop: v.optional(v.boolean()),
       setup_prompt: v.optional(v.number()),
       cli_offline: v.optional(v.number()),
       tmux_missing: v.optional(v.number()),
