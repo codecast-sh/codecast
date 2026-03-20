@@ -107,6 +107,21 @@ Five patterns replace everything else:
 
 All UI state in `packages/web` belongs in `inboxStore` (Zustand global store at `packages/web/store/inboxStore.ts`), not in local component state (`useState`). Before reaching for `useState`, check if the state belongs in `inboxStore` and add it there instead. Local state is only acceptable for purely transient, component-scoped UI concerns (e.g., a controlled input's in-flight value before commit).
 
+### Mutations are local-first via the store
+
+All data mutations (creating, updating, deleting entities) MUST go through `inboxStore` actions, never via direct `useMutation` calls. The pattern:
+
+1. Define an `action()` in `inboxStore.ts` that optimistically mutates the local state
+2. Add a matching handler in `packages/convex/convex/dispatch.ts` to persist the change
+3. The mutative middleware automatically dispatches to Convex after applying the optimistic update
+4. If the server call fails, the middleware rolls back using inverse patches
+
+Example: `pinDoc`, `archiveDoc`, `updateDoc` all follow this pattern. Never use `useMutation(api.*.webUpdate)` directly from components -- that bypasses optimistic updates and creates stale closure bugs with debounced saves.
+
+## Styling: Subdued Text
+
+For subdued/muted text in the UI, use Tailwind grayscale (`text-gray-300`, `text-gray-400`, `text-gray-500`) rather than opacity on theme tokens (`text-sol-text-dim/30`) or `text-black/30`. Theme token opacity modifiers often don't reduce opacity as expected depending on how the CSS variable is defined, and `text-black` won't work in dark themes.
+
 ## Debugging Lessons
 
 ### Convex Auth Issues
