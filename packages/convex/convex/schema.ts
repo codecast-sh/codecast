@@ -852,6 +852,7 @@ export default defineSchema({
     project_id: v.optional(v.id("projects")),
     short_id: v.string(),
     title: v.string(),
+    description: v.optional(v.string()),
     goal: v.optional(v.string()),
     acceptance_criteria: v.optional(v.array(v.string())),
     status: v.union(
@@ -1162,6 +1163,7 @@ export default defineSchema({
       v.literal("review"),
       v.literal("note")
     ),
+    image_storage_ids: v.optional(v.array(v.string())),
     created_at: v.number(),
   })
     .index("by_task_id", ["task_id"]),
@@ -1427,5 +1429,11 @@ export default defineSchema({
   })
     .index("by_user_id", ["user_id"])
     .index("by_team_id", ["team_id"]),
+
+  counters: defineTable({
+    name: v.string(),
+    value: v.number(),
+  })
+    .index("by_name", ["name"]),
 
 });

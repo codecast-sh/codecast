@@ -4,6 +4,7 @@ import { internal } from "./_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id } from "./_generated/dataModel";
 import { createDataContext } from "./data";
+import { nextShortId } from "./counters";
 
 // Called after generateSessionInsight saves a new insight — mines tasks + docs for that conversation
 export const mineConversationAfterInsight = internalAction({
@@ -108,14 +109,6 @@ export const getInsightById = internalQuery({
   },
 });
 
-function generateShortId(prefix = "ct-"): string {
-  const chars = "0123456789abcdefghijklmnopqrstuvwxyz";
-  let id = prefix;
-  for (let i = 0; i < 4; i++) {
-    id += chars[Math.floor(Math.random() * chars.length)];
-  }
-  return id;
-}
 
 function normalizeTitle(title: string): string[] {
   return title
@@ -336,7 +329,7 @@ export const mineTasksFromInsights = internalMutation({
 
         const taskId = await ctx.db.insert("tasks", {
           ...base,
-          short_id: generateShortId(),
+          short_id: await nextShortId(ctx.db, "ct"),
           title,
           description: insight.what_changed || insight.summary,
           task_type: taskType,
@@ -363,7 +356,7 @@ export const mineTasksFromInsights = internalMutation({
           }
           const taskId = await ctx.db.insert("tasks", {
             ...base,
-            short_id: generateShortId(),
+            short_id: await nextShortId(ctx.db, "ct"),
             title: blocker,
             description: `Blocker from: ${insight.goal || insight.summary}`,
             task_type: "bug",
@@ -383,7 +376,7 @@ export const mineTasksFromInsights = internalMutation({
         if (!findSimilarTask(insight.next_action)) {
           const taskId = await ctx.db.insert("tasks", {
             ...base,
-            short_id: generateShortId(),
+            short_id: await nextShortId(ctx.db, "ct"),
             title: insight.next_action,
             description: insight.goal ? `Follow-up from: ${insight.goal}` : undefined,
             task_type: "task",
@@ -427,7 +420,7 @@ export const mineTasksFromInsights = internalMutation({
         const planId = await ctx.db.insert("plans", {
           user_id: args.user_id,
           team_id: args.team_id,
-          short_id: generateShortId("pl-"),
+          short_id: await nextShortId(ctx.db, "pl"),
           title: `${dominantTheme.charAt(0).toUpperCase() + dominantTheme.slice(1)} tasks`,
           goal: `Auto-grouped ${groupedTaskIds.length} related tasks around "${dominantTheme}"`,
           status: "draft",
@@ -1486,9 +1479,36 @@ export const webGetTaskDetail = query({
       if (u) historyUsers.set(uid.toString(), { name: u.name || u.email || "Unknown", image: u.image || u.github_avatar_url });
     }
 
+    const assigneeIds = [...new Set(
+      history.filter(h => h.field === "assignee")
+        .flatMap(h => [h.old_value, h.new_value].filter(Boolean))
+    )];
+    const assigneeNames = new Map<string, { name: string; image?: string }>();
+    for (const aid of assigneeIds) {
+      if (!aid) continue;
+      try {
+        const u = await ctx.db.get(aid as any);
+        if (u) assigneeNames.set(aid, { name: (u as any).name || (u as any).email || "Unknown", image: (u as any).image || (u as any).github_avatar_url });
+      } catch {}
+    }
+
     const enrichedHistory = history.map(h => ({
       ...h,
       actor: h.user_id ? historyUsers.get(h.user_id.toString()) : null,
+      ...(h.field === "assignee" ? {
+        old_value_resolved: h.old_value ? assigneeNames.get(h.old_value) : null,
+        new_value_resolved: h.new_value ? assigneeNames.get(h.new_value) : null,
+      } : {}),
+    }));
+
+    const nameToImage = new Map<string, string>();
+    for (const u of historyUsers.values()) {
+      if (u.image) nameToImage.set(u.name, u.image);
+    }
+    if (creator?.image) nameToImage.set(creator.name, creator.image);
+    const enrichedComments = comments.map(c => ({
+      ...c,
+      author_image: nameToImage.get(c.author) || null,
     }));
 
     let plan = null;
@@ -1500,7 +1520,7 @@ export const webGetTaskDetail = query({
     return {
       ...task,
       assignee_info,
-      comments,
+      comments: enrichedComments,
       linked_conversations: linkedConversations,
       related_docs: relatedDocs,
       source_insight: insight,
