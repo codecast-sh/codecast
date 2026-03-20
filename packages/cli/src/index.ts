@@ -10,7 +10,7 @@ import { maskToken } from "./redact.js";
 import { AuthServer } from "./authServer.js";
 import { c, fmt, icons } from "./colors.js";
 import { ensureTmux, hasTmux, tryInstallTmux } from "./tmux.js";
-import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getPlanVersion, ensureCastAlias } from "./update.js";
+import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getPlanVersion, getWorkflowVersion, ensureCastAlias } from "./update.js";
 import { glob } from "glob";
 import { getPosition, setPosition } from "./positionTracker.js";
 import { getAllSyncRecords, findUnsyncedFiles } from "./syncLedger.js";
@@ -354,6 +354,8 @@ interface Config {
   work_version?: string;
   plan_enabled?: boolean;
   plan_version?: string;
+  workflow_enabled?: boolean;
+  workflow_version?: string;
   claude_args?: string;
   codex_args?: string;
   sync_mode?: "all" | "selected";
@@ -1686,57 +1688,58 @@ ${TASK_SNIPPET_END}
 
 const WORK_SNIPPET_END = "<!-- /codecast-work -->";
 const WORK_SNIPPET = `
-## Tasks, Plans & Workflows
+## Tasks & Plans
 
-Codecast tracks work across three layers. Tasks are the WHAT (specific work items). Plans group tasks with goals. Workflows define the HOW (execution patterns with loops, conditions, and human approval gates). The human monitors everything in the web dashboard — you communicate status through the system, not through chat.
+You operate within a structured work system. Tasks are specific work items with acceptance criteria. Plans group tasks toward a goal. A human monitors progress through a dashboard — communicate status through the system, not through chat.
 
-### Working on a task
+### Orientation
 
-When you receive a task (via prompt, plan context, or \`cast task ready\`):
+Before diving into implementation, understand where your work fits:
+- If bound to a task: you own that task. Read its acceptance criteria carefully. Check sibling tasks to understand what's adjacent and avoid conflicts.
+- If bound to a plan: you coordinate across tasks. Keep the goal coherent as work progresses.
+- If unbound: you're in freeform mode. If the work becomes structured enough to track, suggest creating a task or plan.
 
-1. **Claim it**: \`cast task start <short_id>\` — binds your session to the task, visible in the dashboard
-2. **Implement**: Read acceptance criteria, write code, verify
-3. **Report progress**: \`cast task comment <short_id> "what you did" -t progress\`
-4. **Complete**: \`cast task done <short_id> -m "summary of what you implemented and verified"\`
+When work spans multiple turns or survives compaction, re-read your task or plan context (\`cast task context <id>\` / \`cast plan show <id>\`) to reground yourself. Don't rely on memory of earlier conversation alone.
 
-If you hit problems, use escalation markers so the orchestrator and dashboard can act:
-- **BLOCKED: <reason>** — hard blocker, task gets flagged for human intervention
-- **NEEDS_CONTEXT: <what you need>** — missing information, escalated to the user
-- **DONE_WITH_CONCERNS: <concern>** — completed but with quality worries, marked for review
+### Communicating status
 
-### Plans
+The dashboard is the source of truth. Update it as you work:
+- \`cast task start <id>\` — claim a task, binds your session
+- \`cast task comment <id> "progress" -t progress\` — log what you've done
+- \`cast task done <id> -m "summary"\` — mark complete with what you verified
+- \`cast plan decide <plan_id> "rationale"\` — record decisions that affect the plan
 
-Plans group related tasks with a goal and track progress automatically.
+If blocked, say so explicitly:
+- **BLOCKED: <reason>** — flags for human intervention
+- **NEEDS_CONTEXT: <what>** — escalates to the user
+- **DONE_WITH_CONCERNS: <concern>** — completed but flagged for review
 
-\`\`\`bash
-cast plan create "Title" --goal "..."     # Create a plan
-cast plan bind pl-xxxx                    # Bind session to plan (injects context)
-cast plan decompose pl-xxxx               # AI-generate tasks from the goal
-cast plan orchestrate pl-xxxx             # Spawn agents for ready tasks
-cast plan update pl-xxxx -n "progress"    # Log progress
-cast plan decide pl-xxxx "rationale"      # Log a decision
-\`\`\`
+### Keeping the plan coherent
 
-### Workflows
+You see your slice of the work, but the plan is bigger. If you notice:
+- A task is larger than expected — suggest splitting it
+- Your work creates a dependency for another task — flag it
+- A decision you're making affects the plan's direction — record it with \`cast plan decide\`
+- Acceptance criteria are ambiguous or contradictory — ask before assuming
 
-Workflows are execution graphs (DOT syntax) that define multi-step processes with loops, conditions, and human gates. They bind to tasks or plans.
-
-\`\`\`bash
-cast workflow run flow.cast --task ct-xxxx  # Execute workflow for a task
-cast workflow run flow.cast --plan pl-xxxx  # Execute workflow for a plan
-cast workflow list                          # Available templates
-cast workflow push                          # Push workflow to web UI
-\`\`\`
-
-### Quick reference
+### Commands
 
 \`\`\`bash
 cast task ready                             # Find available work
-cast task start/done/comment <short_id>     # Task lifecycle
+cast task start/done/comment <id>           # Task lifecycle
 cast task create "Title" -t task -p high    # Create task
-cast task context <short_id>                # Full context for agents
-cast plan show/status <short_id>            # Plan details
-cast workflow run <file> --task/--plan      # Execute workflow
+cast task create "Title" --plan <plan_id>   # Create task bound to plan
+cast task update <id> --plan <plan_id>      # Bind existing task to plan
+cast task context <id>                      # Full context (re-read after compaction)
+cast plan create "Title" -g "goal" -b "body"  # Create plan with inline body
+cast plan create "Title" --body-file plan.md  # Create plan from file
+cast plan bind <plan_id>                    # Bind session to plan
+cast plan unbind <plan_id>                  # Unbind session from plan
+cast plan decompose <plan_id>              # Generate tasks from goal
+cast plan orchestrate <plan_id>            # Spawn agents for ready tasks
+cast plan show/status <plan_id>            # Plan details
+cast plan update <plan_id> -n "note"       # Log progress
+cast plan update <plan_id> --body-file f   # Update body from file
 \`\`\`
 ${WORK_SNIPPET_END}
 `;
@@ -1745,23 +1748,60 @@ const PLAN_SNIPPET_END = "<!-- /codecast-plans -->";
 const PLAN_SNIPPET = `
 ## Plans
 
-Use \`codecast plan\` to manage multi-session plans. Plans persist across sessions and connect tasks to goals.
+Use \`cast plan\` to manage multi-session plans. Plans persist across sessions and connect tasks to goals.
 
 \`\`\`bash
-codecast plan create "Title" -g "goal" -a "criterion"  # Create plan
-codecast plan ls                                        # List active plans
-codecast plan show <plan_id>                            # Full plan detail
-codecast plan bind <plan_id>                            # Bind session to plan
-codecast plan unbind                                    # Unbind session
-codecast plan update <plan_id> --log "progress"         # Log progress
-codecast plan decide <plan_id> "decision" --rationale "why"
-codecast plan discover <plan_id> "finding"
-codecast plan pointer <plan_id> "label" "path"
-codecast plan activate|pause|done|drop <plan_id>        # Status transitions
-codecast plan retry <plan_id>                            # Reset stuck tasks to open
-codecast task create "Title" --plan <plan_id>            # Create task in plan
+cast plan create "Title" -g "goal" -b "body"        # Create plan with inline body
+cast plan create "Title" --body-file plan.md        # Create plan from file
+cast plan ls                                        # List active plans
+cast plan show <plan_id>                            # Full plan detail
+cast plan bind <plan_id>                            # Bind session to plan
+cast plan unbind <plan_id>                          # Unbind session from plan
+cast plan update <plan_id> --log "progress"         # Log progress
+cast plan update <plan_id> --body-file plan.md      # Update body from file
+cast plan decide <plan_id> "decision" --rationale "why"
+cast plan discover <plan_id> "finding"
+cast plan pointer <plan_id> "label" "path"
+cast plan activate|pause|done|drop <plan_id>        # Status transitions
+cast plan retry <plan_id>                            # Reset stuck tasks to open
+cast task create "Title" --plan <plan_id>            # Create task in plan
+cast task update <id> --plan <plan_id>               # Bind task to plan
 \`\`\`
 ${PLAN_SNIPPET_END}
+`;
+
+const WORKFLOW_SNIPPET_END = "<!-- /codecast-workflows -->";
+const WORKFLOW_SNIPPET = `
+## Workflows
+
+Workflows are execution graphs (DOT syntax) that define multi-step processes with loops, conditions, and human approval gates. They bind to tasks or plans.
+
+\`\`\`bash
+cast workflow run flow.cast --task ct-xxxx  # Execute workflow for a task
+cast workflow run flow.cast --plan pl-xxxx  # Execute workflow for a plan
+cast workflow list                          # Available templates
+cast workflow push                          # Push workflow to web UI
+\`\`\`
+
+Workflow nodes can be: agent sessions (\`backend=claude\`), shell commands, human approval gates, or conditionals. The web dashboard shows workflow progress and gate buttons.
+
+When collaborating on workflow creation, use DOT syntax:
+\`\`\`dot
+digraph my_flow {
+  graph [goal="$task_title"]
+  start [shape=Mdiamond]
+  implement [label="Implement", backend=claude, prompt="..."]
+  verify [label="Verify", shape=parallelogram, script="npx tsc --noEmit"]
+  review [label="Review", shape=hexagon]
+  exit [shape=Msquare]
+  start -> implement -> verify
+  verify -> review [condition="outcome = success"]
+  verify -> implement [condition="outcome = failure"]
+  review -> exit [label="[A] Approve"]
+  review -> implement [label="[R] Revise"]
+}
+\`\`\`
+${WORKFLOW_SNIPPET_END}
 `;
 
 interface SnippetTarget {
@@ -1913,13 +1953,14 @@ function installWorkSnippetToFile(filePath: string, dirPath: string, update: boo
     existing = fs.readFileSync(filePath, "utf-8");
   }
 
-  const hasWork = (existing.includes("## Issue Tracking with codecast task") || existing.includes("## Issue Tracking with cast task") || existing.includes("## Tasks, Plans & Workflows")) && existing.includes(WORK_SNIPPET_END);
+  const hasWork = (existing.includes("## Issue Tracking with codecast task") || existing.includes("## Issue Tracking with cast task") || existing.includes("## Tasks, Plans & Workflows") || existing.includes("## Tasks & Plans")) && existing.includes(WORK_SNIPPET_END);
   if (hasWork && !update) {
     return { installed: false, updated: false };
   }
 
   if (hasWork && update) {
-    let workStart = existing.indexOf("## Tasks, Plans & Workflows");
+    let workStart = existing.indexOf("## Tasks & Plans");
+    if (workStart === -1) workStart = existing.indexOf("## Tasks, Plans & Workflows");
     if (workStart === -1) workStart = existing.indexOf("## Issue Tracking with codecast task");
     if (workStart === -1) workStart = existing.indexOf("## Issue Tracking with cast task");
     let workEnd = existing.length;
@@ -2005,36 +2046,81 @@ function installPlanSnippet(update = false): { installed: boolean; updated: bool
   return { installed: anyInstalled, updated: anyUpdated };
 }
 
+function installWorkflowSnippetToFile(filePath: string, dirPath: string, update: boolean): { installed: boolean; updated: boolean } {
+  if (!fs.existsSync(dirPath)) {
+    fs.mkdirSync(dirPath, { recursive: true });
+  }
+
+  let existing = "";
+  if (fs.existsSync(filePath)) {
+    existing = fs.readFileSync(filePath, "utf-8");
+  }
+
+  const hasWorkflow = existing.includes("## Workflows") && existing.includes(WORKFLOW_SNIPPET_END);
+  if (hasWorkflow && !update) {
+    return { installed: false, updated: false };
+  }
+
+  if (hasWorkflow && update) {
+    const wfStart = existing.indexOf("## Workflows");
+    let wfEnd = existing.length;
+
+    const endMarkerIdx = existing.indexOf(WORKFLOW_SNIPPET_END, wfStart);
+    if (endMarkerIdx !== -1) {
+      wfEnd = endMarkerIdx + WORKFLOW_SNIPPET_END.length;
+      if (existing[wfEnd] === "\n") wfEnd++;
+    }
+
+    const before = existing.slice(0, wfStart);
+    const after = existing.slice(wfEnd);
+    existing = before + after;
+    fs.writeFileSync(filePath, existing.trimEnd() + "\n" + WORKFLOW_SNIPPET, { mode: 0o600 });
+    return { installed: true, updated: true };
+  }
+
+  fs.writeFileSync(filePath, existing + WORKFLOW_SNIPPET, { mode: 0o600 });
+  return { installed: true, updated: false };
+}
+
+function installWorkflowSnippet(update = false): { installed: boolean; updated: boolean } {
+  const targets = getSnippetTargets();
+  let anyInstalled = false;
+  let anyUpdated = false;
+
+  for (const target of targets) {
+    const result = installWorkflowSnippetToFile(target.filePath, target.dirPath, update);
+    if (result.installed) anyInstalled = true;
+    if (result.updated) anyUpdated = true;
+  }
+
+  return { installed: anyInstalled, updated: anyUpdated };
+}
+
 async function promptMemoryEnablement(): Promise<void> {
   const config = readConfig() || {};
 
-  // Auto-update task snippet if enabled
-  if (config.task_enabled && config.task_version !== getTaskVersion()) {
-    const result = installTaskSnippet(true);
-    config.task_version = getTaskVersion();
-    writeConfig(config);
-    if (result.updated) {
-      const targets = getSnippetTargets();
-      console.log(`Task snippet updated to latest version in ${targets.map(t => t.label).join(", ")}.`);
-    }
-  } else if (config.task_enabled) {
-    installTaskSnippet(false);
-  }
-
-  // Auto-update work snippet if enabled
+  // Auto-update already-enabled snippets
+  // Work snippet is auto-installed with memory; schedule, workflow, plan are opt-in via their install commands
   if (config.work_enabled && config.work_version !== getWorkVersion()) {
-    const result = installWorkSnippet(true);
+    const workResult = installWorkSnippet(true);
     config.work_version = getWorkVersion();
     writeConfig(config);
-    if (result.updated) {
+    if (workResult.updated) {
       const targets = getSnippetTargets();
       console.log(`Work snippet updated to latest version in ${targets.map(t => t.label).join(", ")}.`);
     }
   } else if (config.work_enabled) {
     installWorkSnippet(false);
   }
-
-  // Auto-update plan snippet if enabled
+  if (config.task_enabled && config.task_version !== getTaskVersion()) {
+    const result = installTaskSnippet(true);
+    config.task_version = getTaskVersion();
+    writeConfig(config);
+    if (result.updated) {
+      const targets = getSnippetTargets();
+      console.log(`Schedule snippet updated to latest version in ${targets.map(t => t.label).join(", ")}.`);
+    }
+  }
   if (config.plan_enabled && config.plan_version !== getPlanVersion()) {
     const result = installPlanSnippet(true);
     config.plan_version = getPlanVersion();
@@ -2043,8 +2129,15 @@ async function promptMemoryEnablement(): Promise<void> {
       const targets = getSnippetTargets();
       console.log(`Plan snippet updated to latest version in ${targets.map(t => t.label).join(", ")}.`);
     }
-  } else if (config.plan_enabled) {
-    installPlanSnippet(false);
+  }
+  if (config.workflow_enabled && config.workflow_version !== getWorkflowVersion()) {
+    const result = installWorkflowSnippet(true);
+    config.workflow_version = getWorkflowVersion();
+    writeConfig(config);
+    if (result.updated) {
+      const targets = getSnippetTargets();
+      console.log(`Workflow snippet updated to latest version in ${targets.map(t => t.label).join(", ")}.`);
+    }
   }
 
   if (config.memory_enabled !== undefined && config.memory_version === getMemoryVersion()) {
@@ -2071,8 +2164,11 @@ async function promptMemoryEnablement(): Promise<void> {
     if ((content.includes("codecast search") || content.includes("cast search")) && config.memory_enabled === undefined) {
       config.memory_enabled = true;
       config.memory_version = getMemoryVersion();
+      config.work_enabled = true;
+      config.work_version = getWorkVersion();
       writeConfig(config);
       installMemorySnippet(false);
+      installWorkSnippet(false);
       return;
     }
   }
@@ -2088,6 +2184,7 @@ async function promptMemoryEnablement(): Promise<void> {
 
   if (enableMemory) {
     const result = installMemorySnippet(false);
+    installWorkSnippet(false);
     if (result.installed) {
       const targets = getSnippetTargets();
       console.log(`\nMemory enabled. Added to:`);
@@ -2095,6 +2192,8 @@ async function promptMemoryEnablement(): Promise<void> {
     }
     config.memory_enabled = true;
     config.memory_version = getMemoryVersion();
+    config.work_enabled = true;
+    config.work_version = getWorkVersion();
     writeConfig(config);
     console.log();
   } else {
@@ -5490,13 +5589,35 @@ program
       }
 
       // Remove work snippet
-      let workStart = content.indexOf("## Issue Tracking with cast task");
+      let workStart = content.indexOf("## Tasks & Plans");
+      if (workStart === -1) workStart = content.indexOf("## Tasks, Plans & Workflows");
+      if (workStart === -1) workStart = content.indexOf("## Issue Tracking with cast task");
       if (workStart === -1) workStart = content.indexOf("## Issue Tracking with codecast task");
       if (workStart !== -1 && content.includes(WORK_SNIPPET_END)) {
         const workEndMarker = content.indexOf(WORK_SNIPPET_END, workStart);
         let workEnd = workEndMarker !== -1 ? workEndMarker + WORK_SNIPPET_END.length : content.length;
         if (content[workEnd] === "\n") workEnd++;
         content = content.slice(0, workStart) + content.slice(workEnd);
+        changed = true;
+      }
+
+      // Remove plan snippet
+      const planStart = content.indexOf("## Plans");
+      if (planStart !== -1 && content.includes(PLAN_SNIPPET_END)) {
+        const planEndMarker = content.indexOf(PLAN_SNIPPET_END, planStart);
+        let planEnd = planEndMarker !== -1 ? planEndMarker + PLAN_SNIPPET_END.length : content.length;
+        if (content[planEnd] === "\n") planEnd++;
+        content = content.slice(0, planStart) + content.slice(planEnd);
+        changed = true;
+      }
+
+      // Remove workflow snippet
+      const wfStart = content.indexOf("## Workflows");
+      if (wfStart !== -1 && content.includes(WORKFLOW_SNIPPET_END)) {
+        const wfEndMarker = content.indexOf(WORKFLOW_SNIPPET_END, wfStart);
+        let wfEnd = wfEndMarker !== -1 ? wfEndMarker + WORKFLOW_SNIPPET_END.length : content.length;
+        if (content[wfEnd] === "\n") wfEnd++;
+        content = content.slice(0, wfStart) + content.slice(wfEnd);
         changed = true;
       }
 
@@ -6904,12 +7025,11 @@ program
 
     const success = await performUpdate();
     if (success) {
-      if (config.memory_enabled) {
-        installMemorySnippet(true);
-      }
-      if (config.task_enabled) {
-        installTaskSnippet(true);
-      }
+      if (config.memory_enabled) installMemorySnippet(true);
+      if (config.task_enabled) installTaskSnippet(true);
+      if (config.work_enabled) installWorkSnippet(true);
+      if (config.plan_enabled) installPlanSnippet(true);
+      if (config.workflow_enabled) installWorkflowSnippet(true);
       installSessionRegisterHook();
       installStatusHook();
 
@@ -8046,6 +8166,236 @@ function formatWorkItem(t: any, verbose = false): string {
   return line;
 }
 
+program
+  .command("overview")
+  .alias("ov")
+  .description("Top-down view of all plans and tasks")
+  .option("--plain", "Plain text output (no colors, for injection into agent context)")
+  .option("--all", "Include completed plans/tasks (last 14d)")
+  .action(async (options: any) => {
+    const o = options.plain ? { bold: "", reset: "", dim: "", cyan: "", green: "", yellow: "", red: "", blue: "", magenta: "" } : c;
+
+    const projectPath = getRealCwd();
+    const [plans, tasks] = await Promise.all([
+      cliPost("/cli/plans/list", { include_all: true, project_path: projectPath }),
+      cliPost("/cli/work/list", { limit: 200, project_path: projectPath }),
+    ]);
+
+    const allTasks: any[] = Array.isArray(tasks) ? tasks : [];
+    const allPlans: any[] = Array.isArray(plans) ? plans : [];
+
+    let doneTasks: any[] = [];
+    if (options.all) {
+      doneTasks = (await cliPost("/cli/work/list", { limit: 50, project_path: projectPath, status: "done" })) || [];
+    }
+
+    const now = Date.now();
+    const FOURTEEN_DAYS = 14 * 24 * 60 * 60 * 1000;
+
+    // Read agent-status files for live session state
+    const agentStatusDir = path.join(os.homedir(), ".codecast", "agent-status");
+    const sessionStates = new Map<string, { status: string; ts: number }>();
+    try {
+      if (fs.existsSync(agentStatusDir)) {
+        for (const f of fs.readdirSync(agentStatusDir)) {
+          if (!f.endsWith(".json")) continue;
+          try {
+            const data = JSON.parse(fs.readFileSync(path.join(agentStatusDir, f), "utf-8"));
+            const sessionId = f.replace(".json", "");
+            if (data.status && data.ts && (now / 1000 - data.ts) < 3600) {
+              sessionStates.set(sessionId, { status: data.status, ts: data.ts });
+            }
+          } catch {}
+        }
+      }
+    } catch {}
+
+    // Index tasks by plan_id
+    const tasksByPlanId = new Map<string, any[]>();
+    const unplannedTasks: any[] = [];
+    for (const t of allTasks) {
+      if (t.plan_id) {
+        const list = tasksByPlanId.get(t.plan_id) || [];
+        list.push(t);
+        tasksByPlanId.set(t.plan_id, list);
+      } else {
+        unplannedTasks.push(t);
+      }
+    }
+
+    // Partition plans — suppress stale active plans (no tasks, no recent activity)
+    const ONE_DAY = 24 * 60 * 60 * 1000;
+    const isLively = (p: any): boolean => {
+      const hasTasks = tasksByPlanId.has(p._id) && (tasksByPlanId.get(p._id)?.length || 0) > 0;
+      if (hasTasks) return true;
+      // Empty plans only show if very recently touched (likely being set up)
+      return p.updated_at && (now - p.updated_at) < ONE_DAY;
+    };
+    const activePlans = allPlans
+      .filter((p: any) => p.status === "active" || p.status === "paused")
+      .filter((p: any) => options.all || isLively(p));
+    const stalePlanCount = allPlans
+      .filter((p: any) => (p.status === "active" || p.status === "paused") && !isLively(p)).length;
+    const draftPlans = allPlans.filter((p: any) => p.status === "draft")
+      .filter((p: any) => options.all || isLively(p));
+    const recentDonePlans = allPlans.filter((p: any) =>
+      (p.status === "done" || p.status === "abandoned") && p.updated_at && (now - p.updated_at) < FOURTEEN_DAYS
+    );
+
+    // Sort helpers
+    const statusOrder: Record<string, number> = { in_progress: 0, in_review: 1, open: 2, backlog: 3, done: 4, dropped: 5 };
+    const sortTasks = (arr: any[]) => arr.sort((a: any, b: any) => {
+      const aBlocked = a.blocked_by?.length > 0;
+      const bBlocked = b.blocked_by?.length > 0;
+      if (aBlocked !== bBlocked) return aBlocked ? 1 : -1;
+      return (statusOrder[a.status] ?? 99) - (statusOrder[b.status] ?? 99);
+    });
+
+    const taskIcon = (t: any): string => {
+      if (t.status === "done") return `${o.green}✓${o.reset}`;
+      if (t.status === "dropped") return `${o.dim}✕${o.reset}`;
+      if (t.blocked_by?.length > 0) return `${o.dim}◌${o.reset}`;
+      if (t.status === "in_progress") return `${o.yellow}●${o.reset}`;
+      if (t.status === "in_review") return `${o.magenta}◈${o.reset}`;
+      return `○`;
+    };
+
+    // Session annotation for a task
+    const sessionTag = (t: any): string => {
+      const sid = t.agent_session_id;
+      if (!sid) return "";
+      const state = sessionStates.get(sid);
+      const liveTag = state ? ` [${state.status}]` : "";
+      const summary = t.last_session_summary ? `: ${t.last_session_summary.slice(0, 60)}` : "";
+      if (options.plain) return `  <- session ${sid.slice(0, 8)}${liveTag}${summary}`;
+      return `  ${o.dim}<- ${sid.slice(0, 8)}${liveTag}${summary}${o.reset}`;
+    };
+
+    const lines: string[] = [];
+
+    if (activePlans.length === 0 && draftPlans.length === 0 && unplannedTasks.length === 0 && recentDonePlans.length === 0) {
+      lines.push(options.plain ? "No active plans or tasks." : `${o.dim}No active plans or tasks.${o.reset}`);
+      console.log(lines.join("\n"));
+      return;
+    }
+
+    // Active plans
+    if (activePlans.length > 0) {
+      lines.push(`${o.bold}ACTIVE PLANS${o.reset}`);
+      for (const p of activePlans) {
+        const planTasks = sortTasks(tasksByPlanId.get(p._id) || []);
+        const total = p.task_total || planTasks.length;
+        const done = p.task_done || planTasks.filter((t: any) => t.status === "done").length;
+        const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+        const statusTag = p.status === "paused" ? ` ${o.yellow}paused${o.reset}` : "";
+        const age = p.updated_at ? formatAge(now - p.updated_at) : "";
+
+        if (options.plain) {
+          lines.push(`  ${PLAN_STATUS_ICONS[p.status] || "?"} ${p.short_id}  ${p.title}  ${done}/${total} tasks  ${pct}%${p.status === "paused" ? " (paused)" : ""}  updated ${age}`);
+        } else {
+          const barWidth = 20;
+          const filled = Math.round(barWidth * pct / 100);
+          const bar = `${o.green}${"█".repeat(filled)}${o.dim}${"░".repeat(barWidth - filled)}${o.reset}`;
+          lines.push(`  ${PLAN_STATUS_ICONS[p.status] || "?"} ${o.cyan}${p.short_id}${o.reset}  ${o.bold}${p.title}${o.reset}  ${done}/${total} tasks  ${bar} ${pct}%${statusTag}  ${o.dim}${age}${o.reset}`);
+        }
+
+        for (const t of planTasks) {
+          const icon = taskIcon(t);
+          const blocked = t.blocked_by?.length > 0 ? (options.plain ? ` (blocked by ${t.blocked_by.join(", ")})` : ` ${o.dim}blocked by ${t.blocked_by.join(", ")}${o.reset}`) : "";
+          const concern = t.execution_status === "done_with_concerns" ? (options.plain ? " [concerns]" : ` ${o.yellow}!${o.reset}`) : "";
+          const session = sessionTag(t);
+          if (options.plain) {
+            lines.push(`    ${icon} ${t.short_id}  ${t.title}  ${t.status}${blocked}${concern}${session}`);
+          } else {
+            lines.push(`    ${icon} ${o.cyan}${t.short_id}${o.reset}  ${t.title}  ${o.dim}${t.status}${o.reset}${blocked}${concern}${session}`);
+          }
+        }
+        lines.push("");
+      }
+    }
+
+    // Draft plans (compact)
+    if (draftPlans.length > 0) {
+      lines.push(`${o.bold}DRAFTS${o.reset}`);
+      for (const p of draftPlans) {
+        if (options.plain) {
+          lines.push(`  ○ ${p.short_id}  ${p.title}`);
+        } else {
+          lines.push(`  ○ ${o.cyan}${p.short_id}${o.reset}  ${o.dim}${p.title}${o.reset}`);
+        }
+      }
+      lines.push("");
+    }
+
+    // Unplanned tasks
+    if (unplannedTasks.length > 0) {
+      const sorted = sortTasks(unplannedTasks);
+      lines.push(`${o.bold}UNPLANNED TASKS${o.reset}`);
+      for (const t of sorted) {
+        const icon = taskIcon(t);
+        const pri = t.priority && t.priority !== "none" && t.priority !== "medium" ? `  ${t.priority}` : "";
+        const session = sessionTag(t);
+        if (options.plain) {
+          lines.push(`  ${icon} ${t.short_id}  ${t.title}${pri}  ${t.status}${session}`);
+        } else {
+          const priColor = PRIORITY_COLORS[t.priority] || "";
+          lines.push(`  ${icon} ${o.cyan}${t.short_id}${o.reset}  ${t.title}${pri ? `  ${priColor}${t.priority}${o.reset}` : ""}  ${o.dim}${t.status}${o.reset}${session}`);
+        }
+      }
+      lines.push("");
+    }
+
+    // Recently completed
+    if (recentDonePlans.length > 0 || (options.all && doneTasks.length > 0)) {
+      const recentDoneTasksFiltered = doneTasks.filter((t: any) => !t.plan_id && t.updated_at && (now - t.updated_at) < FOURTEEN_DAYS);
+      if (recentDonePlans.length > 0 || recentDoneTasksFiltered.length > 0) {
+        lines.push(`${o.dim}RECENTLY COMPLETED${o.reset}`);
+        for (const p of recentDonePlans.slice(0, 5)) {
+          const age = formatAge(now - p.updated_at);
+          if (options.plain) {
+            lines.push(`  ✓ ${p.short_id}  ${p.title}  ${p.task_done || "?"}/${p.task_total || "?"} tasks  done ${age}`);
+          } else {
+            lines.push(`  ${o.green}✓${o.reset} ${o.cyan}${p.short_id}${o.reset}  ${o.dim}${p.title}  ${p.task_done || "?"}/${p.task_total || "?"} tasks  done ${age}${o.reset}`);
+          }
+        }
+        for (const t of recentDoneTasksFiltered.slice(0, 5)) {
+          const age = formatAge(now - t.updated_at);
+          if (options.plain) {
+            lines.push(`  ✓ ${t.short_id}  ${t.title}  done ${age}`);
+          } else {
+            lines.push(`  ${o.green}✓${o.reset} ${o.cyan}${t.short_id}${o.reset}  ${o.dim}${t.title}  done ${age}${o.reset}`);
+          }
+        }
+        lines.push("");
+      }
+    }
+
+    // Summary line
+    const totalPlans = activePlans.length + draftPlans.length;
+    const inProgress = allTasks.filter((t: any) => t.status === "in_progress").length;
+    const ready = allTasks.filter((t: any) => (t.status === "open" || t.status === "backlog") && (!t.blocked_by || t.blocked_by.length === 0)).length;
+    const blocked = allTasks.filter((t: any) => t.blocked_by?.length > 0 && t.status !== "done" && t.status !== "dropped").length;
+    const doneCount = allTasks.filter((t: any) => t.status === "done").length;
+    const staleNote = stalePlanCount > 0 ? ` (${stalePlanCount} stale plans hidden, use --all)` : "";
+
+    if (options.plain) {
+      lines.push(`${totalPlans} plans · ${allTasks.length} tasks (${inProgress} active, ${ready} ready, ${blocked} blocked, ${doneCount} done)${staleNote}`);
+    } else {
+      lines.push(`${o.dim}${totalPlans} plans · ${allTasks.length} tasks (${o.yellow}${inProgress} active${o.dim}, ${o.blue}${ready} ready${o.dim}, ${blocked} blocked, ${o.green}${doneCount} done${o.dim})${staleNote}${o.reset}`);
+    }
+
+    console.log(lines.join("\n"));
+  });
+
+function formatAge(ms: number): string {
+  const mins = Math.floor(ms / 60000);
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  return `${days}d ago`;
+}
+
 const work = program
   .command("task")
   .alias("t")
@@ -8118,7 +8468,8 @@ work
   .command("show")
   .description("Show task details")
   .argument("<short_id>", "Task short ID (e.g., ct-a1b2)")
-  .action(async (shortId: string) => {
+  .option("-c, --comments", "Show all comments")
+  .action(async (shortId: string, options: any) => {
     const result = await cliPost("/cli/work/get", { short_id: shortId });
     if (!result) {
       console.error("Task not found");
@@ -8126,18 +8477,47 @@ work
     }
     const t = result;
     const icon = STATUS_ICONS[t.status] || "?";
+    const pcolor = PRIORITY_COLORS[t.priority] || "";
+    const pri = pcolor ? `${pcolor}${t.priority}${c.reset}` : t.priority;
     console.log(`\n  ${icon} ${c.bold}${t.title}${c.reset}`);
-    console.log(`  ${c.cyan}${t.short_id}${c.reset} | ${t.status} | ${t.priority} | ${t.task_type}`);
+    console.log(`  ${c.cyan}${t.short_id}${c.reset} | ${t.status} | ${pri} | ${t.task_type}`);
+    if (t.execution_status && t.execution_status !== t.status) {
+      console.log(`  ${c.dim}Execution: ${t.execution_status}${c.reset}`);
+    }
     if (t.description) console.log(`\n  ${t.description}`);
+    if (t.acceptance_criteria?.length) {
+      console.log(`\n  ${c.bold}Acceptance Criteria${c.reset}`);
+      for (const ac of t.acceptance_criteria) {
+        console.log(`  ${c.dim}-${c.reset} ${ac}`);
+      }
+    }
+    if (t.steps?.length) {
+      console.log(`\n  ${c.bold}Steps${c.reset}`);
+      for (const s of t.steps) {
+        const check = s.done ? `${c.green}●${c.reset}` : `${c.dim}○${c.reset}`;
+        console.log(`  ${check} ${s.title}`);
+      }
+    }
     if (t.labels?.length) console.log(`  ${c.dim}Labels: ${t.labels.join(", ")}${c.reset}`);
     if (t.assignee) console.log(`  ${c.dim}Assignee: ${t.assignee}${c.reset}`);
     if (t.blocked_by?.length) console.log(`  ${c.red}Blocked by: ${t.blocked_by.join(", ")}${c.reset}`);
     if (t.blocks?.length) console.log(`  ${c.dim}Blocks: ${t.blocks.join(", ")}${c.reset}`);
+    if (t.execution_concerns) console.log(`  ${c.yellow}Concerns: ${t.execution_concerns}${c.reset}`);
     if (t.comments?.length) {
-      console.log(`\n  ${c.bold}Comments (${t.comments.length})${c.reset}`);
-      for (const cm of t.comments.slice(-5)) {
+      const COMMENT_TYPE_ICONS: Record<string, string> = {
+        progress: `${c.blue}↳${c.reset}`,
+        blocker: `${c.red}!${c.reset}`,
+        review: `${c.magenta}◇${c.reset}`,
+        note: `${c.dim}·${c.reset}`,
+      };
+      const showAll = options.comments;
+      const comments = showAll ? t.comments : t.comments.slice(-5);
+      const truncated = !showAll && t.comments.length > 5;
+      console.log(`\n  ${c.bold}Comments (${t.comments.length})${c.reset}${truncated ? ` ${c.dim}showing last 5, use -c for all${c.reset}` : ""}`);
+      for (const cm of comments) {
         const ago = formatMs(Date.now() - cm.created_at);
-        console.log(`  ${c.dim}${cm.author} (${ago} ago):${c.reset} ${cm.text}`);
+        const typeIcon = COMMENT_TYPE_ICONS[cm.comment_type] || COMMENT_TYPE_ICONS.note;
+        console.log(`  ${typeIcon} ${c.dim}${cm.author} (${ago} ago):${c.reset} ${cm.text}`);
       }
     }
     console.log();
@@ -8210,6 +8590,7 @@ work
   .option("--assignee <name>", "New assignee")
   .option("--labels <labels>", "Comma-separated labels")
   .option("--project <id>", "Project ID")
+  .option("--plan <plan_id>", "Plan short ID to associate this task with")
   .action(async (shortId: string, options: any) => {
     const body: Record<string, any> = { short_id: shortId };
     if (options.status) body.status = options.status;
@@ -8219,6 +8600,7 @@ work
     if (options.assignee !== undefined) body.assignee = options.assignee;
     if (options.labels) body.labels = options.labels.split(",").map((s: string) => s.trim());
     if (options.project !== undefined) body.project_id = options.project;
+    if (options.plan) body.plan_id = options.plan;
     await cliPost("/cli/work/update", body);
     console.log(`${c.green}ok${c.reset} Updated ${c.cyan}${shortId}${c.reset}`);
   });
@@ -8401,6 +8783,8 @@ plan
   .description("Create a new plan")
   .argument("<title>", "Plan title")
   .option("-g, --goal <text>", "Plan goal")
+  .option("-b, --body <text>", "Plan body (short text)")
+  .option("--body-file <path>", "Plan body from file (for longer content)")
   .option("-a, --acceptance <criteria>", "Acceptance criterion (repeatable)", (val: string, prev: string[]) => prev.concat([val]), [] as string[])
   .option("--from-session", "Promote from current session")
   .option("--project <id>", "Project ID")
@@ -8409,6 +8793,12 @@ plan
   .action(async (title: string, options: any) => {
     const body: Record<string, any> = { title };
     if (options.goal) body.goal = options.goal;
+    if (options.bodyFile) {
+      const fs = await import("fs");
+      body.body = fs.readFileSync(options.bodyFile, "utf-8");
+    } else if (options.body) {
+      body.body = options.body;
+    }
     if (options.acceptance?.length) body.acceptance_criteria = options.acceptance;
     if (options.project) body.project_id = options.project;
     if (options.modelStylesheet) body.model_stylesheet = options.modelStylesheet;
@@ -8516,6 +8906,7 @@ plan
     const progress = p.task_total ? `${p.task_done}/${p.task_total} tasks done` : "no tasks";
     console.log(`\n  ${icon} ${c.bold}${p.title}${c.reset}`);
     console.log(`  ${c.cyan}${p.short_id}${c.reset} | ${p.status} | ${progress}`);
+    if (p.doc_content) console.log(`\n  ${p.doc_content}`);
     if (p.goal) console.log(`\n  ${c.bold}Goal:${c.reset} ${p.goal}`);
     if (p.acceptance_criteria?.length) {
       console.log(`\n  ${c.bold}Acceptance Criteria:${c.reset}`);
@@ -8572,7 +8963,7 @@ plan
     console.log(`${c.green}ok${c.reset} Session bound to plan ${c.cyan}${planId}${c.reset}`);
     // Inject plan context into project directory
     try {
-      const snippetResult = await cliPost("/cli/plans/snippet", { short_id: planId });
+      const snippetResult = await cliPost("/cli/plans/snippet", { plan_short_id: planId });
       if (snippetResult?.snippet) {
         const fs = await import("fs");
         const path = await import("path");
@@ -8590,14 +8981,10 @@ plan
 plan
   .command("unbind")
   .description("Unbind current session from its plan")
-  .action(async () => {
-    const sessionId = detectCurrentSessionId();
-    if (!sessionId) {
-      console.error("Could not detect current session. Set CLAUDE_CODE_SESSION_ID or run from within a Claude Code session.");
-      process.exit(1);
-    }
-    await cliPost("/cli/plans/unbind", { session_id: sessionId });
-    console.log(`${c.green}ok${c.reset} Session unbound from plan`);
+  .argument("<plan_id>", "Plan short ID")
+  .action(async (planId: string) => {
+    await cliPost("/cli/plans/unbind", { short_id: planId });
+    console.log(`${c.green}ok${c.reset} Session unbound from plan ${c.cyan}${planId}${c.reset}`);
   });
 
 plan
@@ -8607,6 +8994,8 @@ plan
   .option("--log <entry>", "Add progress log entry")
   .option("--goal <text>", "Update goal")
   .option("--title <text>", "Update title")
+  .option("-b, --body <text>", "Update body (short text)")
+  .option("--body-file <path>", "Update body from file (for longer content)")
   .action(async (planId: string, options: any) => {
     const sessionId = detectCurrentSessionId();
     if (options.log) {
@@ -8615,15 +9004,23 @@ plan
       await cliPost("/cli/plans/log", body);
       console.log(`${c.green}ok${c.reset} Progress logged to ${c.cyan}${planId}${c.reset}`);
     }
-    if (options.goal || options.title) {
+    let bodyContent: string | undefined;
+    if (options.bodyFile) {
+      const fs = await import("fs");
+      bodyContent = fs.readFileSync(options.bodyFile, "utf-8");
+    } else if (options.body) {
+      bodyContent = options.body;
+    }
+    if (options.goal || options.title || bodyContent !== undefined) {
       const body: Record<string, any> = { short_id: planId };
       if (options.goal) body.goal = options.goal;
       if (options.title) body.title = options.title;
+      if (bodyContent !== undefined) body.body = bodyContent;
       await cliPost("/cli/plans/update", body);
       console.log(`${c.green}ok${c.reset} Updated plan ${c.cyan}${planId}${c.reset}`);
     }
-    if (!options.log && !options.goal && !options.title) {
-      console.error("Specify --log, --goal, or --title");
+    if (!options.log && !options.goal && !options.title && bodyContent === undefined) {
+      console.error("Specify --log, --goal, --title, --body, or --body-file");
       process.exit(1);
     }
   });
@@ -8751,7 +9148,7 @@ plan
     if (options.disable) {
       config.plan_enabled = false;
       writeConfig(config);
-      console.log("Plan snippet disabled. Run 'codecast plan install' to re-enable.");
+      console.log("Plan snippet disabled. Run 'cast plan install' to re-enable.");
       return;
     }
 
@@ -11051,6 +11448,37 @@ workflow
     console.log(`View at: https://codecast.sh/workflows`);
   });
 
+workflow
+  .command("install")
+  .description("Install workflow snippet into agent config (CLAUDE.md, AGENTS.md)")
+  .option("--disable", "Remove workflow snippet and disable")
+  .action(async (options: any) => {
+    const config = readConfig() || {};
+
+    if (options.disable) {
+      config.workflow_enabled = false;
+      writeConfig(config);
+      console.log("Workflow snippet disabled. Run 'cast workflow install' to re-enable.");
+      return;
+    }
+
+    const result = installWorkflowSnippet(true);
+    config.workflow_enabled = true;
+    config.workflow_version = getWorkflowVersion();
+    writeConfig(config);
+
+    const targets = getSnippetTargets();
+    const targetList = targets.map(t => t.label).join(", ");
+    if (result.updated) {
+      console.log(`Workflow snippet updated in ${targetList}`);
+    } else if (result.installed) {
+      console.log(`Workflow snippet installed in ${targetList}`);
+      console.log("Your agents can now use DOT-based workflow templates.");
+    } else {
+      console.log("Workflow snippet is up to date.");
+    }
+  });
+
 // Check for updates in background (non-blocking)
 checkForUpdates().then(async (available) => {
   if (!available) return;
@@ -11072,6 +11500,9 @@ checkForUpdates().then(async (available) => {
     }
     if (config?.plan_enabled) {
       installPlanSnippet(true);
+    }
+    if (config?.workflow_enabled) {
+      installWorkflowSnippet(true);
     }
     installSessionRegisterHook();
     installStatusHook();
