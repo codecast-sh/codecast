@@ -1239,6 +1239,31 @@ export default defineSchema({
       filterFields: ["user_id"],
     }),
 
+  doc_snapshots: defineTable({
+    id: v.string(),
+    version: v.number(),
+    content: v.string(),
+  }).index("id_version", ["id", "version"]),
+
+  doc_deltas: defineTable({
+    id: v.string(),
+    version: v.number(),
+    clientId: v.union(v.string(), v.number()),
+    steps: v.array(v.string()),
+  }).index("id_version", ["id", "version"]),
+
+  doc_presence: defineTable({
+    doc_id: v.string(),
+    user_id: v.id("users"),
+    user_name: v.string(),
+    user_color: v.string(),
+    cursor_pos: v.optional(v.number()),
+    anchor_pos: v.optional(v.number()),
+    updated_at: v.number(),
+  })
+    .index("by_doc", ["doc_id"])
+    .index("by_user_doc", ["user_id", "doc_id"]),
+
   workflows: defineTable({
     user_id: v.id("users"),
     team_id: v.optional(v.id("teams")),
@@ -1278,7 +1303,7 @@ export default defineSchema({
 
   workflow_runs: defineTable({
     user_id: v.id("users"),
-    workflow_id: v.id("workflows"),
+    workflow_id: v.optional(v.id("workflows")),
     task_id: v.optional(v.id("tasks")),
     plan_id: v.optional(v.id("plans")),
     status: v.union(v.literal("pending"), v.literal("running"), v.literal("paused"), v.literal("completed"), v.literal("failed")),

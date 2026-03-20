@@ -1913,13 +1913,15 @@ function installWorkSnippetToFile(filePath: string, dirPath: string, update: boo
     existing = fs.readFileSync(filePath, "utf-8");
   }
 
-  const hasWork = (existing.includes("## Issue Tracking with codecast task") || existing.includes("## Issue Tracking with cast task")) && existing.includes(WORK_SNIPPET_END);
+  const hasWork = (existing.includes("## Issue Tracking with codecast task") || existing.includes("## Issue Tracking with cast task") || existing.includes("## Tasks, Plans & Workflows")) && existing.includes(WORK_SNIPPET_END);
   if (hasWork && !update) {
     return { installed: false, updated: false };
   }
 
   if (hasWork && update) {
-    const workStart = existing.indexOf("## Issue Tracking with codecast task");
+    let workStart = existing.indexOf("## Tasks, Plans & Workflows");
+    if (workStart === -1) workStart = existing.indexOf("## Issue Tracking with codecast task");
+    if (workStart === -1) workStart = existing.indexOf("## Issue Tracking with cast task");
     let workEnd = existing.length;
 
     const endMarkerIdx = existing.indexOf(WORK_SNIPPET_END, workStart);
@@ -10735,11 +10737,16 @@ workflow
 
     const graph = parseWorkflowFile(filePath);
 
+    const { siteUrl, apiToken } = getCliEndpoint();
+    const projectPath = process.cwd();
+
     const runOpts: any = {
       goalOverride: options.goal,
       dryRun: options.dryRun,
       autoApprove: options.autoApprove,
-      cwd: path.dirname(filePath),
+      cwd: projectPath,
+      convexSiteUrl: siteUrl,
+      apiToken,
     };
 
     if (options.task) {
@@ -10754,6 +10761,52 @@ workflow
       if (!plan) { console.error(`Plan not found: ${options.plan}`); process.exit(1); }
       runOpts.planId = plan.short_id;
       if (!runOpts.goalOverride) runOpts.goalOverride = plan.goal || plan.title;
+    }
+
+    if (!options.dryRun && apiToken) {
+      // Push workflow to Convex so the web UI can render it
+      const source = fs.readFileSync(filePath, "utf-8");
+      const slug = graph.name.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+      const nodes = [...graph.nodes.values()].map((n: any) => ({
+        id: n.id, label: n.label, shape: n.shape, type: n.type,
+        ...(n.prompt ? { prompt: n.prompt } : {}),
+        ...(n.script ? { script: n.script } : {}),
+        ...(n.model ? { model: n.model } : {}),
+        ...(n.backend ? { backend: n.backend } : {}),
+        ...(n.reasoning_effort ? { reasoning_effort: n.reasoning_effort } : {}),
+        ...(n.max_visits !== undefined ? { max_visits: n.max_visits } : {}),
+        ...(n.max_retries !== undefined ? { max_retries: n.max_retries } : {}),
+        ...(n.retry_target ? { retry_target: n.retry_target } : {}),
+        ...(n.goal_gate !== undefined ? { goal_gate: n.goal_gate } : {}),
+      }));
+      const edges = graph.edges.map((e: any) => ({
+        from: e.from, to: e.to,
+        ...(e.label ? { label: e.label } : {}),
+        ...(e.condition ? { condition: e.condition } : {}),
+      }));
+
+      try {
+        const pushResult = await cliPost("/cli/workflows/upsert", {
+          name: graph.name, slug, goal: graph.goal, source,
+          nodes, edges, model_stylesheet: graph.model_stylesheet,
+        });
+        const workflowId = pushResult?.id;
+
+        const createResult = await cliPost("/cli/workflow-runs/create", {
+          workflow_name: graph.name,
+          workflow_goal: graph.goal,
+          workflow_id: workflowId,
+          task_id: runOpts.taskId,
+          plan_id: runOpts.planId,
+          goal_override: runOpts.goalOverride,
+          project_path: projectPath,
+        });
+        if (createResult?.run_id) {
+          runOpts.runId = createResult.run_id;
+        }
+      } catch (err: any) {
+        console.error(`Warning: failed to register workflow run: ${err.message}`);
+      }
     }
 
     await runWorkflow(graph, runOpts);
@@ -10780,6 +10833,10 @@ workflow
       process.exit(1);
     }
     const { run, workflow: wf } = data;
+    if (!wf.nodes?.length) {
+      console.error("Workflow has no nodes — cannot execute. Was the workflow pushed to Convex?");
+      process.exit(1);
+    }
     const { runWorkflow } = await import("./workflow/runner.js");
     const nodesMap = new Map<string, any>();
     for (const n of wf.nodes) nodesMap.set(n.id, n);
@@ -10797,6 +10854,8 @@ workflow
       apiToken: config.auth_token,
       goalOverride: run.goal_override,
       cwd: projectPath,
+      taskId: run.task_short_id,
+      planId: run.plan_short_id,
     });
   });
 
