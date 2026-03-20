@@ -314,12 +314,10 @@ function CursorOverlay({ presences }: { presences: PresenceEntry[] }) {
 function EditorInner({
   docId,
   editable,
-  className,
   presences,
 }: {
   docId: string;
   editable: boolean;
-  className: string;
   presences: PresenceEntry[];
 }) {
   const { editor } = useCurrentEditor();
@@ -352,13 +350,10 @@ function EditorInner({
   if (!editor) return null;
 
   return (
-    <div className={`doc-editor ${className}`} style={{ position: "relative" }}>
+    <>
       {editable && <BubbleToolbar editor={editor} />}
-      <div style={{ position: "relative" }}>
-        <div className="doc-editor-content focus:outline-none" />
-        <CursorOverlay presences={presences} />
-      </div>
-    </div>
+      <CursorOverlay presences={presences} />
+    </>
   );
 }
 
@@ -417,22 +412,23 @@ export function CollabDocEditor({
   const allExtensions = [...extensionsRef.current, sync.extension];
 
   return (
-    <EditorProvider
-      content={sync.initialContent}
-      extensions={allExtensions}
-      editable={editable}
-      editorProps={{
-        attributes: {
-          class: "doc-editor-content focus:outline-none",
-        },
-      }}
-    >
-      <EditorInner
-        docId={docId}
+    <div className={`doc-editor ${className}`} style={{ position: "relative" }}>
+      <EditorProvider
+        content={sync.initialContent}
+        extensions={allExtensions}
         editable={editable}
-        className={className}
-        presences={presences}
-      />
-    </EditorProvider>
+        editorProps={{
+          attributes: {
+            class: "doc-editor-content focus:outline-none",
+          },
+        }}
+      >
+        <EditorInner
+          docId={docId}
+          editable={editable}
+          presences={presences}
+        />
+      </EditorProvider>
+    </div>
   );
 }

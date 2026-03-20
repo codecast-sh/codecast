@@ -1,7 +1,7 @@
 .doc-editor {
   font-family: var(--font-mono), monospace;
   font-size: 14px;
-  line-height: 1.7;
+  line-height: 1.8;
   color: var(--sol-text-muted);
 }
 
@@ -20,8 +20,8 @@
   font-size: 1.5em;
   font-weight: 700;
   color: var(--sol-text);
-  margin-top: 1.5em;
-  margin-bottom: 0.5em;
+  margin-top: 2em;
+  margin-bottom: 0.6em;
   line-height: 1.3;
 }
 
@@ -33,23 +33,25 @@
   font-size: 1.2em;
   font-weight: 600;
   color: var(--sol-text);
-  margin-top: 1.4em;
-  margin-bottom: 0.4em;
+  margin-top: 1.8em;
+  margin-bottom: 0.5em;
   line-height: 1.3;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid color-mix(in srgb, var(--sol-border) 40%, transparent);
 }
 
 .doc-editor .tiptap h3 {
-  font-size: 1em;
+  font-size: 1.05em;
   font-weight: 600;
-  color: var(--sol-text-muted);
-  margin-top: 1.2em;
-  margin-bottom: 0.3em;
+  color: var(--sol-text);
+  margin-top: 1.5em;
+  margin-bottom: 0.4em;
   line-height: 1.4;
 }
 
 /* Paragraphs */
 .doc-editor .tiptap p {
-  margin-bottom: 0.6em;
+  margin-bottom: 1em;
 }
 
 .doc-editor .tiptap p.is-editor-empty:first-child::before {
@@ -65,17 +67,17 @@
 .doc-editor .tiptap ul {
   list-style-type: disc;
   padding-left: 1.5em;
-  margin: 0.5em 0;
+  margin: 0.8em 0;
 }
 
 .doc-editor .tiptap ol {
   list-style-type: decimal;
   padding-left: 1.5em;
-  margin: 0.5em 0;
+  margin: 0.8em 0;
 }
 
 .doc-editor .tiptap li {
-  margin: 0.15em 0;
+  margin: 0.3em 0;
 }
 
 .doc-editor .tiptap li::marker {
@@ -146,19 +148,37 @@
 }
 
 .doc-editor .tiptap pre {
-  background: var(--sol-bg-alt);
-  border: 1px solid var(--sol-border);
-  border-radius: 6px;
-  padding: 0.8em 1em;
-  margin: 0.8em 0;
+  position: relative;
+  background: none;
+  border: none;
+  border-radius: 0;
+  padding: 0.5em 0 0.5em 1em;
+  margin: 1.2em 0;
   overflow-x: auto;
   font-size: 0.85em;
   line-height: 1.6;
 }
 
+.doc-editor .tiptap pre::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 4px;
+  bottom: 4px;
+  width: 2px;
+  border-radius: 1px;
+  background: linear-gradient(
+    to bottom,
+    var(--sol-cyan) 0%,
+    var(--sol-blue) 40%,
+    var(--sol-violet) 100%
+  );
+  opacity: 0.35;
+}
+
 .doc-editor .tiptap pre code {
   background: none;
-  color: var(--sol-text-muted);
+  color: var(--sol-text-secondary, var(--sol-text-muted));
   padding: 0;
   border-radius: 0;
   font-size: inherit;
@@ -168,7 +188,7 @@
 .doc-editor .tiptap blockquote {
   border-left: 3px solid var(--sol-border);
   padding-left: 1em;
-  margin: 0.8em 0;
+  margin: 1.2em 0;
   color: var(--sol-text-dim);
   font-style: italic;
 }
@@ -177,7 +197,7 @@
 .doc-editor .tiptap hr {
   border: none;
   border-top: 1px solid var(--sol-border);
-  margin: 1.5em 0;
+  margin: 2em 0;
   opacity: 0.4;
 }
 
@@ -477,26 +497,6 @@
   font-weight: 600;
   color: var(--sol-text);
 }
-
-/* Syntax highlighting for code blocks */
-.doc-editor .hljs-keyword { color: #859900; }
-.doc-editor .hljs-string { color: #2aa198; }
-.doc-editor .hljs-number { color: #d33682; }
-.doc-editor .hljs-comment { color: #586e75; font-style: italic; }
-.doc-editor .hljs-function { color: #268bd2; }
-.doc-editor .hljs-title { color: #268bd2; }
-.doc-editor .hljs-built_in { color: #b58900; }
-.doc-editor .hljs-type { color: #b58900; }
-.doc-editor .hljs-attr { color: #b58900; }
-.doc-editor .hljs-params { color: var(--sol-text-muted); }
-.doc-editor .hljs-literal { color: #cb4b16; }
-.doc-editor .hljs-meta { color: #cb4b16; }
-.doc-editor .hljs-regexp { color: #dc322f; }
-.doc-editor .hljs-symbol { color: #6c71c4; }
-.doc-editor .hljs-variable { color: #cb4b16; }
-.doc-editor .hljs-template-variable { color: #cb4b16; }
-.doc-editor .hljs-addition { color: #859900; }
-.doc-editor .hljs-deletion { color: #dc322f; }
 
 /* Compact mode for inline/modal usage */
 .doc-editor-compact .doc-editor-content {
