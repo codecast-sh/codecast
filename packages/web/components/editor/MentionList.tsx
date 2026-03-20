@@ -4,8 +4,16 @@ import {
   FileText,
   CheckSquare,
   MessageSquare,
-  Map,
-  Hash,
+  Target,
+  Circle,
+  CircleDot,
+  CheckCircle2,
+  CircleDotDashed,
+  XCircle,
+  ArrowUp,
+  ArrowDown,
+  Minus,
+  AlertTriangle,
 } from "lucide-react";
 
 export type MentionItem = {
@@ -15,6 +23,16 @@ export type MentionItem = {
   sublabel?: string;
   image?: string;
   shortId?: string;
+  status?: string;
+  priority?: string;
+  docType?: string;
+  messageCount?: number;
+  projectPath?: string;
+  goal?: string;
+  model?: string;
+  agentType?: string;
+  updatedAt?: number;
+  idleSummary?: string;
 };
 
 const TYPE_CONFIG: Record<string, { icon: typeof User; color: string; label: string }> = {
@@ -22,12 +40,136 @@ const TYPE_CONFIG: Record<string, { icon: typeof User; color: string; label: str
   task: { icon: CheckSquare, color: "text-sol-yellow", label: "Tasks" },
   doc: { icon: FileText, color: "text-sol-cyan", label: "Docs" },
   session: { icon: MessageSquare, color: "text-sol-blue", label: "Sessions" },
-  plan: { icon: Map, color: "text-sol-violet", label: "Plans" },
+  plan: { icon: Target, color: "text-sol-violet", label: "Plans" },
+};
+
+const STATUS_ICONS: Record<string, typeof Circle> = {
+  draft: CircleDotDashed,
+  open: Circle,
+  in_progress: CircleDot,
+  in_review: CircleDot,
+  done: CheckCircle2,
+  dropped: XCircle,
+};
+
+const STATUS_COLORS: Record<string, string> = {
+  draft: "text-sol-text-dim",
+  open: "text-sol-blue",
+  in_progress: "text-sol-yellow",
+  in_review: "text-sol-violet",
+  done: "text-sol-green",
+  dropped: "text-sol-text-dim",
+};
+
+const PRIORITY_ICONS: Record<string, typeof Minus> = {
+  urgent: AlertTriangle,
+  high: ArrowUp,
+  medium: Minus,
+  low: ArrowDown,
+};
+
+const PRIORITY_COLORS: Record<string, string> = {
+  urgent: "text-sol-red",
+  high: "text-sol-orange",
+  medium: "text-sol-text-dim",
+  low: "text-sol-text-dim",
+};
+
+const DOC_TYPE_COLORS: Record<string, string> = {
+  plan: "text-sol-blue bg-sol-blue/10",
+  design: "text-sol-violet bg-sol-violet/10",
+  spec: "text-sol-cyan bg-sol-cyan/10",
+  investigation: "text-sol-yellow bg-sol-yellow/10",
+  handoff: "text-sol-orange bg-sol-orange/10",
+  note: "text-sol-text-muted bg-sol-text-muted/10",
 };
 
 interface MentionListProps {
   items: MentionItem[];
   command: (item: MentionItem) => void;
+}
+
+function abbrevModel(model?: string | null): string | null {
+  if (!model) return null;
+  if (model.includes("opus")) return "Opus";
+  if (model.includes("sonnet")) return "Sonnet";
+  if (model.includes("haiku")) return "Haiku";
+  return null;
+}
+
+function ItemIcon({ item, config }: { item: MentionItem; config: typeof TYPE_CONFIG[string] }) {
+  if (item.image) {
+    return <img src={item.image} alt="" className="w-6 h-6 rounded-full object-cover flex-shrink-0" />;
+  }
+
+  if (item.type === "task" && item.status) {
+    const StatusIcon = STATUS_ICONS[item.status] || Circle;
+    const statusColor = STATUS_COLORS[item.status] || "text-sol-text-dim";
+    return <StatusIcon className={`w-4 h-4 flex-shrink-0 ${statusColor}`} />;
+  }
+
+  const Icon = config.icon;
+  return <Icon className={`w-4 h-4 flex-shrink-0 ${config.color} opacity-70`} />;
+}
+
+function ItemMeta({ item }: { item: MentionItem }) {
+  if (item.type === "task") {
+    const showPriority = item.priority && item.priority !== "medium" && item.priority !== "none";
+    const PIcon = showPriority ? PRIORITY_ICONS[item.priority!] || Minus : null;
+    const pColor = showPriority ? PRIORITY_COLORS[item.priority!] || "" : "";
+    return (
+      <div className="flex items-center gap-2 mt-0.5 pl-[26px]">
+        {item.status && (
+          <span className={`text-[10px] ${STATUS_COLORS[item.status] || "text-sol-text-dim"}`}>
+            {item.status.replace(/_/g, " ")}
+          </span>
+        )}
+        {PIcon && (
+          <PIcon className={`w-3 h-3 ${pColor}`} />
+        )}
+      </div>
+    );
+  }
+
+  if (item.type === "doc") {
+    const dt = item.docType || item.sublabel || "note";
+    const dtColor = DOC_TYPE_COLORS[dt] || DOC_TYPE_COLORS.note;
+    return (
+      <div className="flex items-center gap-2 mt-0.5 pl-[26px]">
+        <span className={`text-[10px] px-1.5 py-0 rounded ${dtColor}`}>{dt}</span>
+      </div>
+    );
+  }
+
+  if (item.type === "session") {
+    const project = item.projectPath ? item.projectPath.split("/").pop() : null;
+    const model = abbrevModel(item.model);
+    const parts = [
+      item.messageCount != null ? `${item.messageCount} msgs` : null,
+      model,
+      project,
+    ].filter(Boolean);
+    return (
+      <div className="flex items-center gap-1.5 mt-0.5 pl-[26px] flex-wrap">
+        {item.status === "active" && (
+          <span className="w-1.5 h-1.5 rounded-full bg-sol-green flex-shrink-0" />
+        )}
+        {parts.map((p, i) => (
+          <span key={i} className="text-[10px] text-sol-text-dim font-mono">{p}</span>
+        ))}
+      </div>
+    );
+  }
+
+  if (item.type === "plan" && item.goal) {
+    return (
+      <div className="mt-0.5 pl-[26px]">
+        <span className="text-[10px] text-sol-text-dim line-clamp-1">{item.goal}</span>
+      </div>
+    );
+  }
+
+  return null;
 }
 
 export const MentionList = forwardRef<any, MentionListProps>(
@@ -84,7 +226,7 @@ export const MentionList = forwardRef<any, MentionListProps>(
     return (
       <div
         ref={containerRef}
-        className="bg-sol-bg border border-sol-border/50 rounded-lg shadow-xl py-1.5 min-w-[280px] max-h-[320px] overflow-y-auto"
+        className="bg-sol-bg border border-sol-border/50 rounded-lg shadow-xl py-1.5 min-w-[320px] max-w-[420px] max-h-[400px] overflow-y-auto"
       >
         {grouped.map((group) => {
           const config = TYPE_CONFIG[group.type] || TYPE_CONFIG.doc;
@@ -100,32 +242,36 @@ export const MentionList = forwardRef<any, MentionListProps>(
               {group.items.map((item: MentionItem, i: number) => {
                 const globalIdx = group.startIdx + i;
                 const isSelected = globalIdx === selectedIndex;
+                const hasMeta = (item.type === "task" && item.status) ||
+                  (item.type === "doc") ||
+                  (item.type === "session" && (item.messageCount != null || item.projectPath)) ||
+                  (item.type === "plan" && item.goal);
                 return (
                   <button
                     key={item.id}
                     onClick={() => selectItem(globalIdx)}
                     onMouseEnter={() => setSelectedIndex(globalIdx)}
-                    className={`w-full text-left px-3 py-1.5 flex items-center gap-2.5 transition-colors ${
+                    className={`w-full text-left px-3 ${hasMeta ? "py-2" : "py-1.5"} transition-colors ${
                       isSelected
                         ? "bg-sol-bg-highlight text-sol-text"
                         : "text-sol-text-muted hover:bg-sol-bg-alt"
                     }`}
                   >
-                    {item.image ? (
-                      <img
-                        src={item.image}
-                        alt=""
-                        className="w-5 h-5 rounded-full object-cover flex-shrink-0"
-                      />
-                    ) : (
-                      <Hash className={`w-3.5 h-3.5 flex-shrink-0 ${config.color} opacity-60`} />
-                    )}
-                    <span className="text-sm truncate flex-1">{item.label}</span>
-                    {item.sublabel && (
-                      <span className="text-[11px] text-sol-text-dim font-mono flex-shrink-0">
-                        {item.sublabel}
-                      </span>
-                    )}
+                    <div className="flex items-center gap-2.5">
+                      <ItemIcon item={item} config={config} />
+                      <span className="text-sm truncate flex-1">{item.label}</span>
+                      {item.shortId && (
+                        <span className="text-[10px] text-sol-text-dim font-mono flex-shrink-0">
+                          {item.shortId}
+                        </span>
+                      )}
+                      {!item.shortId && item.sublabel && item.type === "person" && (
+                        <span className="text-[11px] text-sol-text-dim font-mono flex-shrink-0">
+                          {item.sublabel}
+                        </span>
+                      )}
+                    </div>
+                    <ItemMeta item={item} />
                   </button>
                 );
               })}

@@ -46,6 +46,7 @@ export const SlashCommandExtension = Extension.create({
                 interactive: true,
                 trigger: "manual",
                 placement: "bottom-start",
+                zIndex: 10002,
               });
             },
             onUpdate(props: any) {
