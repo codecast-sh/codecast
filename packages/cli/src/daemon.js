@@ -10899,7 +10899,7 @@ async function handlePermissionRequest(syncService2, conversationId, sessionId, 
 import * as fs10 from "fs";
 import * as path10 from "path";
 import * as os from "os";
-var VERSION = "1.0.84";
+var VERSION = "1.0.85";
 var LATEST_URL = "https://dl.codecast.sh/latest.json";
 var UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000;
 var CONFIG_DIR3 = process.env.HOME + "/.codecast";
@@ -15425,12 +15425,17 @@ function parseInteractivePrompt(text) {
   const options = [];
   let firstOptionIdx = -1;
   let gapCount = 0;
+  let hasCursorIndicator = false;
   for (let i = 0;i < lines.length; i++) {
     const m = lines[i].match(optionPattern);
     if (m) {
       if (firstOptionIdx < 0)
         firstOptionIdx = i;
+      if (/^\s*[❯>]\s*\d/.test(lines[i]))
+        hasCursorIndicator = true;
       const label = m[2].replace(/\s*[✓✗✔☑]\s*/g, "").trim();
+      if (label.length > 80)
+        continue;
       const description = m[3]?.trim() || undefined;
       if (label)
         options.push({ label, description });
@@ -15447,6 +15452,10 @@ function parseInteractivePrompt(text) {
     }
   }
   if (options.length < 2 || firstOptionIdx < 0)
+    return null;
+  const tail = lines.slice(firstOptionIdx).join("\n");
+  const hasFooter = /enter to confirm|esc to exit|↑.*↓|←.*→|arrow keys/i.test(tail);
+  if (!hasCursorIndicator && !hasFooter)
     return null;
   const headerLines = lines.slice(Math.max(0, firstOptionIdx - 5), firstOptionIdx).map((l) => l.trim()).filter((l) => l.length > 0 && !/^[❯>]/.test(l) && !/^[─━═─\-_]{5,}$/.test(l));
   const question = headerLines[0] || "Select an option";
@@ -17963,6 +17972,32 @@ async function main() {
     pollDaemonCommands().catch(() => {
     });
   }, 1e4);
+  const notifiedPlanWorkflows = new Set;
+  async function checkPlanAutoDispatch() {
+    if (!config.auth_token)
+      return;
+    const siteUrl = (config.convex_url || "").replace(".cloud", ".site");
+    try {
+      const resp = await fetch(`${siteUrl}/cli/plans/list`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ api_token: config.auth_token, status: "active" })
+      });
+      const data = await resp.json();
+      const plans = Array.isArray(data) ? data : data?.plans || [];
+      for (const plan of plans) {
+        if (plan.workflow_id && !plan.workflow_run_id && !notifiedPlanWorkflows.has(plan.short_id)) {
+          notifiedPlanWorkflows.add(plan.short_id);
+          log(`[AUTO-DISPATCH] Plan ${plan.short_id} has workflow ready — start from web UI or: cast workflow run --plan ${plan.short_id}`);
+        }
+      }
+    } catch {
+    }
+  }
+  setInterval(() => {
+    checkPlanAutoDispatch().catch(() => {
+    });
+  }, 60000);
   sendHeartbeat().catch(() => {
   });
   const taskScheduler = new TaskScheduler({

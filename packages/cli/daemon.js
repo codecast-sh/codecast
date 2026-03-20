@@ -14839,12 +14839,17 @@ function parseInteractivePrompt(text) {
   const options = [];
   let firstOptionIdx = -1;
   let gapCount = 0;
+  let hasCursorIndicator = false;
   for (let i = 0;i < lines.length; i++) {
     const m = lines[i].match(optionPattern);
     if (m) {
       if (firstOptionIdx < 0)
         firstOptionIdx = i;
+      if (/^\s*[\u276F>]\s*\d/.test(lines[i]))
+        hasCursorIndicator = true;
       const label = m[2].replace(/\s*[\u2713\u2717\u2714\u2611]\s*/g, "").trim();
+      if (label.length > 80)
+        continue;
       const description = m[3]?.trim() || undefined;
       if (label)
         options.push({ label, description });
@@ -14861,6 +14866,10 @@ function parseInteractivePrompt(text) {
     }
   }
   if (options.length < 2 || firstOptionIdx < 0)
+    return null;
+  const tail = lines.slice(firstOptionIdx).join("\n");
+  const hasFooter = /enter to confirm|esc to exit|\u2191.*\u2193|\u2190.*\u2192|arrow keys/i.test(tail);
+  if (!hasCursorIndicator && !hasFooter)
     return null;
   const headerLines = lines.slice(Math.max(0, firstOptionIdx - 5), firstOptionIdx).map((l) => l.trim()).filter((l) => l.length > 0 && !/^[\u276F>]/.test(l) && !/^[\u2500\u2501\u2550\u2500\-_]{5,}$/.test(l));
   const question = headerLines[0] || "Select an option";

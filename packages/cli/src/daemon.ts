@@ -321,6 +321,8 @@ const lastErrorNotification = new Map<string, number>();
 const lastWorkingStatusSent = new Map<string, number>();
 const WORKING_STATUS_THROTTLE_MS = 10_000;
 const lastSentAgentStatus = new Map<string, AgentStatus>();
+const workingPhaseStart = new Map<string, number>();
+const MIN_WORKING_DURATION_FOR_NOTIF_MS = 10_000;
 
 type AgentStatus = "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "stopped";
 type PermissionMode = "default" | "plan" | "acceptEdits" | "bypassPermissions" | "dontAsk";
@@ -344,17 +346,34 @@ function sendAgentStatus(
     const last = lastWorkingStatusSent.get(sessionId) ?? 0;
     if (Date.now() - last < WORKING_STATUS_THROTTLE_MS) return;
   }
-  if (status === "working") lastWorkingStatusSent.set(sessionId, Date.now());
+  if (status === "working") {
+    lastWorkingStatusSent.set(sessionId, Date.now());
+    if (!workingPhaseStart.has(sessionId)) {
+      workingPhaseStart.set(sessionId, Date.now());
+    }
+  }
   lastSentAgentStatus.set(sessionId, status);
   syncService.updateSessionAgentStatus(conversationId, status, clientTs, permissionMode).catch((err) => { log(`[sendAgentStatus] error: ${err?.message || err}`); });
-  if (isTransition && status === "idle" && idleMessage) {
-    syncService.createSessionNotification({
-      conversation_id: conversationId,
-      type: "session_idle",
-      title: "Claude done",
-      message: idleMessage,
-    }).catch(() => {});
-    log(`Sent idle notification for session ${sessionId.slice(0, 8)}`);
+  if (status === "idle" && idleMessage) {
+    const workStart = workingPhaseStart.get(sessionId);
+    workingPhaseStart.delete(sessionId);
+    if (workStart) {
+      const workingDuration = Date.now() - workStart;
+      if (workingDuration >= MIN_WORKING_DURATION_FOR_NOTIF_MS) {
+        syncService.createSessionNotification({
+          conversation_id: conversationId,
+          type: "session_idle",
+          title: "Claude done",
+          message: idleMessage,
+        }).catch(() => {});
+        log(`Sent idle notification for session ${sessionId.slice(0, 8)} (worked ${Math.round(workingDuration / 1000)}s)`);
+      } else {
+        log(`Skipped idle notification for session ${sessionId.slice(0, 8)} (worked only ${Math.round(workingDuration / 1000)}s < ${MIN_WORKING_DURATION_FOR_NOTIF_MS / 1000}s)`);
+      }
+    }
+  }
+  if (status === "stopped") {
+    workingPhaseStart.delete(sessionId);
   }
 }
 
@@ -2701,40 +2720,43 @@ async function processSessionFile(
         const existingTimer = idleTimers.get(sessionId);
         if (existingTimer) clearTimeout(existingTimer);
 
-        const hookEntry = lastHookStatus.get(sessionId);
-        const hookIsRecent = hookEntry && (Date.now() / 1000 - hookEntry.ts) < 30;
-        if (!hookIsRecent) {
-          sendAgentStatus(syncService, conversationId, sessionId, "working");
-        }
-
-        const hasPendingToolCalls = (lastAssistantMessage.toolCalls?.length ?? 0) > 0 &&
-          !messages.some(m => m.role === "assistant" && (m.toolResults?.length ?? 0) > 0 &&
-            m.timestamp >= lastAssistantMessage.timestamp);
-
         if (wasInterrupted) {
           idleTimers.delete(sessionId);
           lastIdleNotifiedSize.set(sessionId, stats.size);
-        } else if (hasPendingToolCalls) {
-          idleTimers.delete(sessionId);
-        } else if (lastAssistantMessage.stopReason === "end_turn") {
-          idleTimers.delete(sessionId);
-          const capturedSize = stats.size;
-          if (capturedSize !== lastIdleNotifiedSize.get(sessionId)) {
-            lastIdleNotifiedSize.set(sessionId, capturedSize);
-            const preview = truncateForNotification(lastAssistantMessage.content);
-            sendAgentStatus(syncService, conversationId, sessionId, "idle", undefined, undefined, preview);
-          }
+          sendAgentStatus(syncService, conversationId, sessionId, "idle");
         } else {
-          const capturedSize = stats.size;
-          const capturedConvId = conversationId;
+          const hookEntry = lastHookStatus.get(sessionId);
+          const hookIsRecent = hookEntry && (Date.now() / 1000 - hookEntry.ts) < 30;
+          if (!hookIsRecent) {
+            sendAgentStatus(syncService, conversationId, sessionId, "working");
+          }
 
-          if (capturedSize !== lastIdleNotifiedSize.get(sessionId)) {
-            lastIdleNotifiedSize.set(sessionId, capturedSize);
-            idleTimers.set(sessionId, setTimeout(() => {
-              idleTimers.delete(sessionId);
+          const hasPendingToolCalls = (lastAssistantMessage.toolCalls?.length ?? 0) > 0 &&
+            !messages.some(m => m.role === "assistant" && (m.toolResults?.length ?? 0) > 0 &&
+              m.timestamp >= lastAssistantMessage.timestamp);
+
+          if (hasPendingToolCalls) {
+            idleTimers.delete(sessionId);
+          } else if (lastAssistantMessage.stopReason === "end_turn") {
+            idleTimers.delete(sessionId);
+            const capturedSize = stats.size;
+            if (capturedSize !== lastIdleNotifiedSize.get(sessionId)) {
+              lastIdleNotifiedSize.set(sessionId, capturedSize);
               const preview = truncateForNotification(lastAssistantMessage.content);
-              sendAgentStatus(syncService, capturedConvId, sessionId, "idle", undefined, undefined, preview);
-            }, IDLE_DEBOUNCE_MS));
+              sendAgentStatus(syncService, conversationId, sessionId, "idle", undefined, undefined, preview);
+            }
+          } else {
+            const capturedSize = stats.size;
+            const capturedConvId = conversationId;
+
+            if (capturedSize !== lastIdleNotifiedSize.get(sessionId)) {
+              lastIdleNotifiedSize.set(sessionId, capturedSize);
+              idleTimers.set(sessionId, setTimeout(() => {
+                idleTimers.delete(sessionId);
+                const preview = truncateForNotification(lastAssistantMessage.content);
+                sendAgentStatus(syncService, capturedConvId, sessionId, "idle", undefined, undefined, preview);
+              }, IDLE_DEBOUNCE_MS));
+            }
           }
         }
       }
@@ -3943,12 +3965,15 @@ function parseInteractivePrompt(text: string): InteractivePrompt | null {
   const options: Array<{ label: string; description?: string }> = [];
   let firstOptionIdx = -1;
   let gapCount = 0;
+  let hasCursorIndicator = false;
 
   for (let i = 0; i < lines.length; i++) {
     const m = lines[i].match(optionPattern);
     if (m) {
       if (firstOptionIdx < 0) firstOptionIdx = i;
+      if (/^\s*[❯>]\s*\d/.test(lines[i])) hasCursorIndicator = true;
       const label = m[2].replace(/\s*[✓✗✔☑]\s*/g, "").trim();
+      if (label.length > 80) continue;
       const description = m[3]?.trim() || undefined;
       if (label) options.push({ label, description });
       gapCount = 0;
@@ -3964,6 +3989,10 @@ function parseInteractivePrompt(text: string): InteractivePrompt | null {
   }
 
   if (options.length < 2 || firstOptionIdx < 0) return null;
+
+  const tail = lines.slice(firstOptionIdx).join("\n");
+  const hasFooter = /enter to confirm|esc to exit|↑.*↓|←.*→|arrow keys/i.test(tail);
+  if (!hasCursorIndicator && !hasFooter) return null;
 
   const headerLines = lines.slice(Math.max(0, firstOptionIdx - 5), firstOptionIdx)
     .map(l => l.trim())
@@ -7017,6 +7046,15 @@ async function main(): Promise<void> {
   });
   statusWatcher.on("add", handleStatusFile).on("change", handleStatusFile);
 
+  // Process existing status files on startup (chokidar ignoreInitial skips them)
+  try {
+    for (const file of fs.readdirSync(AGENT_STATUS_DIR)) {
+      if (file.endsWith(".json")) {
+        handleStatusFile(path.join(AGENT_STATUS_DIR, file));
+      }
+    }
+  } catch {}
+
   function handleStatusFile(filePath: string) {
     try {
       const basename = path.basename(filePath, ".json");
@@ -7061,12 +7099,16 @@ async function main(): Promise<void> {
         }
       }
 
-      if (data.status === "permission_blocked" && statusChanged && !permissionRecordPending.has(sessionId)) {
+      if (data.status === "permission_blocked" && !permissionRecordPending.has(sessionId)) {
         permissionRecordPending.add(sessionId);
         permissionJustResolved.add(sessionId);
         const transcriptPath = data.transcript_path || findTranscriptForSession(sessionId);
-        const toolInfo = extractPendingToolUseFromTranscript(transcriptPath || "");
-        const toolName = toolInfo?.tool_name || extractToolFromMessage(data.message || "");
+
+        // Prefer tool name from hook message (direct from PermissionRequest event) over transcript extraction
+        // Transcript can return stale tool_use entries (e.g. ExitPlanMode) that don't match the actual permission
+        const hookToolName = data.message?.split(/[:\s]/)[0] || null;
+        const toolInfo = !hookToolName ? extractPendingToolUseFromTranscript(transcriptPath || "") : null;
+        const toolName = hookToolName || toolInfo?.tool_name || extractToolFromMessage(data.message || "");
         const preview = toolInfo?.arguments_preview || data.message || "";
 
         const SKIP_TOOLS = new Set(["AskUserQuestion", "EnterPlanMode", "ExitPlanMode", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet"]);
@@ -7112,6 +7154,7 @@ async function main(): Promise<void> {
               log(`Permission handling error: ${err instanceof Error ? err.message : String(err)}`);
             });
         } else {
+          log(`Skipped permission record for ${toolName || "unknown"} (SKIP_TOOLS) session ${sessionId.slice(0, 8)}`);
           permissionRecordPending.delete(sessionId);
         }
       }
