@@ -78,6 +78,7 @@ export type InboxSession = {
   worktree_branch?: string | null;
   workflow_run_id?: string | null;
   is_workflow_primary?: boolean;
+  workflow_run_status?: string | null;
 };
 
 export type Message = {
@@ -385,29 +386,40 @@ interface InboxStoreState {
   recentProjects: Array<{ path: string; count: number; lastActive: number }>;
   setRecentProjects: (projects: Array<{ path: string; count: number; lastActive: number }>) => void;
 
+  // -- Sidebar nav expanded sections --
+  sidebarNavExpanded: Record<string, boolean>;
+  toggleSidebarNav: (section: string) => void;
+
   // -- Task / Doc / Plan state --
   tasks: Record<string, TaskItem>;
   docs: Record<string, DocItem>;
   plans: Record<string, PlanItem>;
   docProjectPaths: string[];
-  taskDetails: Record<string, TaskDetail>;
   docDetails: Record<string, DocDetail>;
   taskFilter: { status: string };
   docFilter: { type: string; query: string; project: string; scope: string };
   planFilter: { status: string };
 
-  // -- Task / Doc / Plan detail sync --
-  syncTaskDetail: (id: string, detail: TaskDetail) => void;
+  // -- Doc detail sync --
   syncDocDetail: (id: string, detail: DocDetail) => void;
   setTaskFilter: (filter: Partial<{ status: string }>) => void;
   setDocFilter: (filter: Partial<{ type: string; query: string; project: string; scope: string }>) => void;
   setPlanFilter: (filter: Partial<{ status: string }>) => void;
+
+  // -- Side panel --
+  sidePanelSessionId: string | null;
+  sidePanelOpen: boolean;
+  openSidePanel: (sessionId: string) => void;
+  closeSidePanel: () => void;
+  clearSidePanelSession: () => void;
+  toggleSidePanel: () => void;
 
   // -- Task / Doc mutations (action + side effect) --
   updateTaskStatus: (shortId: string, status: string) => Promise<any>;
   updateTask: (shortId: string, fields: { status?: string; priority?: string; title?: string; description?: string; labels?: string[] }) => Promise<any>;
   createTask: (opts: { title: string; description?: string; task_type?: string; priority?: string; status?: string; project_id?: string; labels?: string[] }) => Promise<any>;
   addTaskComment: (shortId: string, text: string, commentType?: string) => Promise<any>;
+  updateDoc: (id: string, fields: { content?: string; title?: string; doc_type?: string; labels?: string[] }) => void;
   pinDoc: (id: string, pinned: boolean) => Promise<any>;
   archiveDoc: (id: string) => Promise<any>;
 
@@ -673,7 +685,7 @@ export const useInboxStore = create<InboxStoreState>(
 
   syncRecord: (tableName: string, id: string, record: any) => {
     set((s: InboxStoreState) => ({
-      [tableName]: { ...(s as any)[tableName], [id]: record },
+      [tableName]: { ...(s as any)[tableName], [id]: { ...(s as any)[tableName]?.[id], ...record } },
     }));
   },
 
@@ -1129,25 +1141,20 @@ export const useInboxStore = create<InboxStoreState>(
   // TASK / DOC STATE
   // =====================
 
+  sidebarNavExpanded: {},
+  toggleSidebarNav: (section: string) => set((s: any) => ({
+    sidebarNavExpanded: { ...s.sidebarNavExpanded, [section]: !s.sidebarNavExpanded[section] },
+  })),
+
   tasks: {},
   docs: {},
   plans: {},
-  taskDetails: {},
   docDetails: {},
   taskFilter: { status: "" },
   docFilter: { type: "", query: "", project: "", scope: "" },
   planFilter: { status: "" },
   docProjectPaths: [],
 
-  syncTaskDetail: (id: string, detail: TaskDetail) => {
-    set((s: InboxStoreState) => {
-      const existing = s.tasks[id];
-      const merged = existing ? { ...existing, ...detail } : detail;
-      return {
-        taskDetails: { ...s.taskDetails, [id]: merged },
-      };
-    });
-  },
 
   syncDocDetail: (id: string, detail: DocDetail) => {
     set((s: InboxStoreState) => ({
@@ -1185,26 +1192,12 @@ export const useInboxStore = create<InboxStoreState>(
         type: "field", field: "status", value: status, expiresAt: Date.now() + 15_000,
       };
     }
-    for (const detail of Object.values(this.taskDetails)) {
-      if ((detail as TaskDetail).short_id === shortId) {
-        (detail as TaskDetail).status = status;
-        (detail as TaskDetail).updated_at = Date.now();
-        if (status === "done" || status === "dropped") {
-          (detail as TaskDetail).closed_at = Date.now();
-        }
-      }
-    }
   }),
 
   updateTask: action(function (this: Draft, shortId: string, fields: Record<string, any>) {
     const task = Object.values(this.tasks).find((t: any) => t.short_id === shortId) as TaskItem | undefined;
     if (task) {
       Object.assign(task, fields, { updated_at: Date.now() });
-    }
-    for (const detail of Object.values(this.taskDetails)) {
-      if ((detail as TaskDetail).short_id === shortId) {
-        Object.assign(detail as TaskDetail, fields, { updated_at: Date.now() });
-      }
     }
   }),
 
@@ -1227,16 +1220,33 @@ export const useInboxStore = create<InboxStoreState>(
   }),
 
   addTaskComment: action(function (this: Draft, shortId: string, text: string, commentType?: string) {
-    for (const detail of Object.values(this.taskDetails)) {
-      if ((detail as TaskDetail).short_id === shortId && (detail as TaskDetail).comments) {
-        (detail as TaskDetail).comments!.push({
-          _id: `temp_${Date.now()}`,
-          author: "You",
-          text,
-          comment_type: commentType || "note",
-          created_at: Date.now(),
-        });
-      }
+    const task = Object.values(this.tasks).find((t: any) => t.short_id === shortId) as any;
+    if (task?.comments) {
+      task.comments.push({
+        _id: `temp_${Date.now()}`,
+        author: "You",
+        text,
+        comment_type: commentType || "note",
+        created_at: Date.now(),
+      });
+    }
+  }),
+
+  updateDoc: action(function (this: Draft, id: string, fields: { content?: string; title?: string; doc_type?: string; labels?: string[] }) {
+    const now = Date.now();
+    if (this.docs[id]) {
+      if (fields.content !== undefined) this.docs[id].content = fields.content;
+      if (fields.title !== undefined) this.docs[id].title = fields.title;
+      if (fields.doc_type !== undefined) (this.docs[id] as any).doc_type = fields.doc_type;
+      if (fields.labels !== undefined) (this.docs[id] as any).labels = fields.labels;
+      this.docs[id].updated_at = now;
+    }
+    if (this.docDetails[id]) {
+      if (fields.content !== undefined) this.docDetails[id].content = fields.content;
+      if (fields.title !== undefined) this.docDetails[id].title = fields.title;
+      if (fields.doc_type !== undefined) (this.docDetails[id] as any).doc_type = fields.doc_type;
+      if (fields.labels !== undefined) (this.docDetails[id] as any).labels = fields.labels;
+      this.docDetails[id].updated_at = now;
     }
   }),
 
@@ -1249,6 +1259,34 @@ export const useInboxStore = create<InboxStoreState>(
     delete this.docs[id];
     delete this.docDetails[id];
   }),
+
+  // =====================
+  // SIDE PANEL
+  // =====================
+
+  sidePanelSessionId: null,
+  sidePanelOpen: false,
+
+  openSidePanel: (sessionId: string) => {
+    set({ sidePanelSessionId: sessionId, sidePanelOpen: true });
+  },
+
+  closeSidePanel: () => {
+    set({ sidePanelSessionId: null, sidePanelOpen: false });
+  },
+
+  clearSidePanelSession: () => {
+    set({ sidePanelSessionId: null });
+  },
+
+  toggleSidePanel: () => {
+    const { sidePanelOpen } = get();
+    if (sidePanelOpen) {
+      set({ sidePanelSessionId: null, sidePanelOpen: false });
+    } else {
+      set({ sidePanelOpen: true });
+    }
+  },
 
   // =====================
   // SELECTORS

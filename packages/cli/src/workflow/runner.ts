@@ -358,8 +358,21 @@ async function executeRemoteHumanGate(
   // Always store the human's message as context for the next agent
   context["human.message"] = response;
 
-  const match = choices.find(ch => ch.key.toUpperCase() === response.toUpperCase());
+  // Match: exact key, OR message starts with "key:" / "key " / "[key]" prefix
+  const trimmed = response.trim();
+  const match = choices.find(ch => {
+    const k = ch.key.toUpperCase();
+    const r = trimmed.toUpperCase();
+    return r === k
+      || r.startsWith(k + ":")
+      || r.startsWith(k + " ")
+      || r.startsWith(`[${k}]`);
+  });
+
   if (match) {
+    // Strip the key prefix from the message so the agent gets clean instructions
+    const stripped = trimmed.replace(new RegExp(`^\\[?${match.key}\\]?[:\\s]*`, "i"), "").trim();
+    if (stripped) context["human.message"] = stripped;
     context["human.gate.selected"] = match.key;
     context["human.gate.label"] = match.label;
     context["human.gate.target"] = match.target;
@@ -367,7 +380,7 @@ async function executeRemoteHumanGate(
     return match.key.toLowerCase();
   }
 
-  // Free-form text — route via unconditional edges (success path)
+  // Pure free-form — route via success path (unconditional edges)
   console.log(`  ${c.green}✓ received message (free-form)${c.reset}`);
   return "success";
 }

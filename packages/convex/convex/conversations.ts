@@ -5361,6 +5361,12 @@ export const listIdleSessions = query({
         if (t) active_task = { _id: t._id, short_id: t.short_id, title: t.title, status: t.status };
       }
 
+      let workflow_run_status: string | null = null;
+      if (conv.workflow_run_id) {
+        const run = await ctx.db.get(conv.workflow_run_id);
+        if (run) workflow_run_status = run.status;
+      }
+
       results.push({
         _id: conv._id,
         session_id: conv.session_id,
@@ -5390,6 +5396,7 @@ export const listIdleSessions = query({
         worktree_branch: conv.worktree_branch,
         workflow_run_id: conv.workflow_run_id || null,
         is_workflow_primary: conv.is_workflow_primary || false,
+        workflow_run_status,
       });
     }
 
