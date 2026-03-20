@@ -14,6 +14,7 @@
   "dependencies": {
     "@codecast/shared": "workspace:*",
     "@convex-dev/auth": "^0.0.79",
+    "@convex-dev/prosemirror-sync": "^0.2.3",
     "@hono/node-server": "^1.19.11",
     "@radix-ui/react-accordion": "^1.2.12",
     "@radix-ui/react-avatar": "^1.1.11",

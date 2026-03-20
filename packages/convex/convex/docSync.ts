@@ -1,0 +1,347 @@
+import { mutation, query } from "./_generated/server";
+import { v } from "convex/values";
+import { getAuthUserId } from "@convex-dev/auth/server";
+import { Id } from "./_generated/dataModel";
+
+const MAX_DELTA_FETCH = 100;
+const MAX_SNAPSHOT_FETCH = 10;
+
+const vClientId = v.union(v.string(), v.number());
+
+async function requireAuth(ctx: any): Promise<Id<"users">> {
+  const userId = await getAuthUserId(ctx);
+  if (!userId) throw new Error("Not authenticated");
+  return userId;
+}
+
+export const getSnapshot = query({
+  args: { id: v.string(), version: v.optional(v.number()) },
+  returns: v.union(
+    v.object({ content: v.null() }),
+    v.object({ content: v.string(), version: v.number() }),
+  ),
+  handler: async (ctx, args) => {
+    await requireAuth(ctx);
+    const snapshot = await ctx.db
+      .query("doc_snapshots")
+      .withIndex("id_version", (q: any) =>
+        q.eq("id", args.id).lte("version", args.version ?? Infinity),
+      )
+      .order("desc")
+      .first();
+    if (!snapshot) return { content: null };
+    return { content: snapshot.content, version: snapshot.version };
+  },
+});
+
+export const submitSnapshot = mutation({
+  args: {
+    id: v.string(),
+    version: v.number(),
+    content: v.string(),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const userId = await requireAuth(ctx);
+    const existing = await ctx.db
+      .query("doc_snapshots")
+      .withIndex("id_version", (q: any) =>
+        q.eq("id", args.id).eq("version", args.version),
+      )
+      .first();
+    if (existing) {
+      if (existing.content === args.content) return;
+      throw new Error(`Snapshot ${args.id} at version ${args.version} already exists with different content`);
+    }
+    await ctx.db.insert("doc_snapshots", {
+      id: args.id,
+      version: args.version,
+      content: args.content,
+    });
+    if (args.version > 1) {
+      const oldSnapshots = await ctx.db
+        .query("doc_snapshots")
+        .withIndex("id_version", (q: any) =>
+          q.eq("id", args.id).gt("version", 1).lt("version", args.version),
+        )
+        .take(MAX_SNAPSHOT_FETCH);
+      await Promise.all(oldSnapshots.map((doc: any) => ctx.db.delete(doc._id)));
+    }
+    try {
+      const doc = await ctx.db.get(args.id as Id<"docs">);
+      if (doc) {
+        const parsed = JSON.parse(args.content);
+        const text = extractText(parsed);
+        await ctx.db.patch(doc._id, { content: text, updated_at: Date.now() });
+
+        const newMentions = extractPersonMentionIds(parsed);
+        if (newMentions.size > 0) {
+          let oldMentions = new Set<string>();
+          if (args.version > 1) {
+            const prevSnapshot = await ctx.db
+              .query("doc_snapshots")
+              .withIndex("id_version", (q: any) =>
+                q.eq("id", args.id).lt("version", args.version),
+              )
+              .order("desc")
+              .first();
+            if (prevSnapshot) {
+              try {
+                oldMentions = extractPersonMentionIds(JSON.parse(prevSnapshot.content));
+              } catch {}
+            }
+          }
+          const added = [...newMentions].filter((id) => !oldMentions.has(id));
+          if (added.length > 0) {
+            const actor = await ctx.db.get(userId);
+            const actorName = actor?.name || actor?.email || "Someone";
+            const docTitle = doc.title || "a document";
+            for (const mentionedId of added) {
+              if (mentionedId === userId.toString()) continue;
+              try {
+                await ctx.db.insert("notifications", {
+                  recipient_user_id: mentionedId as Id<"users">,
+                  type: "mention" as const,
+                  actor_user_id: userId,
+                  conversation_id: doc.conversation_id,
+                  message: `${actorName} mentioned you in "${docTitle}"`,
+                  read: false,
+                  created_at: Date.now(),
+                });
+              } catch {}
+            }
+          }
+        }
+      }
+    } catch {}
+  },
+});
+
+function extractText(node: any): string {
+  if (node.type === "text") return node.text || "";
+  if (node.type === "hardBreak") return "\n";
+  if (node.type === "horizontalRule") return "\n---\n\n";
+  if (!node.content) return "";
+  const children = node.content.map(extractText).join("");
+  switch (node.type) {
+    case "heading":
+      return "#".repeat(node.attrs?.level || 1) + " " + children + "\n\n";
+    case "paragraph":
+      return children + "\n\n";
+    case "bulletList":
+    case "orderedList":
+    case "taskList":
+      return children + "\n";
+    case "listItem":
+    case "taskItem":
+      return "- " + children.trim() + "\n";
+    case "blockquote":
+      return "> " + children.trim() + "\n\n";
+    case "codeBlock":
+      return "```\n" + children + "\n```\n\n";
+    case "tableRow":
+      return node.content.map(extractText).join(" | ") + "\n";
+    case "tableCell":
+    case "tableHeader":
+      return children.trim();
+    default:
+      return children;
+  }
+}
+
+function extractPersonMentionIds(node: any): Set<string> {
+  const ids = new Set<string>();
+  if (node.type === "mention" && node.attrs?.type === "person" && node.attrs?.id) {
+    ids.add(node.attrs.id);
+  }
+  if (node.content) {
+    for (const child of node.content) {
+      for (const id of extractPersonMentionIds(child)) ids.add(id);
+    }
+  }
+  return ids;
+}
+
+export const latestVersion = query({
+  args: { id: v.string() },
+  returns: v.union(v.null(), v.number()),
+  handler: async (ctx, args) => {
+    await requireAuth(ctx);
+    const latestDelta = await ctx.db
+      .query("doc_deltas")
+      .withIndex("id_version", (q: any) => q.eq("id", args.id))
+      .order("desc")
+      .first();
+    if (latestDelta) return latestDelta.version;
+    const latestSnapshot = await ctx.db
+      .query("doc_snapshots")
+      .withIndex("id_version", (q: any) => q.eq("id", args.id))
+      .order("desc")
+      .first();
+    return latestSnapshot?.version ?? null;
+  },
+});
+
+export const getSteps = query({
+  args: { id: v.string(), version: v.number() },
+  returns: v.object({
+    steps: v.array(v.string()),
+    clientIds: v.array(vClientId),
+    version: v.number(),
+  }),
+  handler: async (ctx, args) => {
+    await requireAuth(ctx);
+    const deltas = await ctx.db
+      .query("doc_deltas")
+      .withIndex("id_version", (q: any) =>
+        q.eq("id", args.id).gt("version", args.version),
+      )
+      .take(MAX_DELTA_FETCH);
+    const steps: string[] = [];
+    const clientIds: (string | number)[] = [];
+    if (deltas.length > 0) {
+      const firstDelta = deltas[0];
+      const startOffset = firstDelta.version - firstDelta.steps.length;
+      if (startOffset < args.version) {
+        const sliced = firstDelta.steps.slice(args.version - startOffset);
+        for (const step of sliced) { steps.push(step); clientIds.push(firstDelta.clientId); }
+        for (let i = 1; i < deltas.length; i++) {
+          for (const step of deltas[i].steps) { steps.push(step); clientIds.push(deltas[i].clientId); }
+        }
+      } else {
+        for (const delta of deltas) {
+          for (const step of delta.steps) { steps.push(step); clientIds.push(delta.clientId); }
+        }
+      }
+    }
+    return { steps, clientIds, version: args.version + steps.length };
+  },
+});
+
+export const submitSteps = mutation({
+  args: {
+    id: v.string(),
+    version: v.number(),
+    clientId: vClientId,
+    steps: v.array(v.string()),
+  },
+  returns: v.union(
+    v.object({
+      status: v.literal("needs-rebase"),
+      clientIds: v.array(vClientId),
+      steps: v.array(v.string()),
+    }),
+    v.object({ status: v.literal("synced") }),
+  ),
+  handler: async (ctx, args) => {
+    await requireAuth(ctx);
+    const changes = await ctx.db
+      .query("doc_deltas")
+      .withIndex("id_version", (q: any) =>
+        q.eq("id", args.id).gt("version", args.version),
+      )
+      .take(MAX_DELTA_FETCH);
+    if (changes.length > 0) {
+      const steps: string[] = [];
+      const clientIds: (string | number)[] = [];
+      for (const delta of changes) {
+        for (const step of delta.steps) { steps.push(step); clientIds.push(delta.clientId); }
+      }
+      return { status: "needs-rebase" as const, clientIds, steps };
+    }
+    await ctx.db.insert("doc_deltas", {
+      id: args.id,
+      version: args.version + args.steps.length,
+      clientId: args.clientId,
+      steps: args.steps,
+    });
+    return { status: "synced" as const };
+  },
+});
+
+// --- Presence ---
+
+const PRESENCE_COLORS = [
+  "#e06c75", "#61afef", "#c678dd", "#98c379", "#e5c07b",
+  "#56b6c2", "#be5046", "#d19a66",
+];
+
+export const updatePresence = mutation({
+  args: {
+    doc_id: v.string(),
+    cursor_pos: v.optional(v.number()),
+    anchor_pos: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireAuth(ctx);
+    const user = await ctx.db.get(userId);
+    if (!user) return;
+    const existing = await ctx.db
+      .query("doc_presence")
+      .withIndex("by_user_doc", (q: any) => q.eq("user_id", userId).eq("doc_id", args.doc_id))
+      .first();
+    const name = user.name || user.email || "Anonymous";
+    const color = PRESENCE_COLORS[name.charCodeAt(0) % PRESENCE_COLORS.length];
+    if (existing) {
+      await ctx.db.patch(existing._id, {
+        cursor_pos: args.cursor_pos,
+        anchor_pos: args.anchor_pos,
+        user_name: name,
+        user_color: color,
+        updated_at: Date.now(),
+      });
+    } else {
+      await ctx.db.insert("doc_presence", {
+        doc_id: args.doc_id,
+        user_id: userId,
+        user_name: name,
+        user_color: color,
+        cursor_pos: args.cursor_pos,
+        anchor_pos: args.anchor_pos,
+        updated_at: Date.now(),
+      });
+    }
+  },
+});
+
+export const removePresence = mutation({
+  args: { doc_id: v.string() },
+  handler: async (ctx, args) => {
+    const userId = await requireAuth(ctx);
+    const existing = await ctx.db
+      .query("doc_presence")
+      .withIndex("by_user_doc", (q: any) => q.eq("user_id", userId).eq("doc_id", args.doc_id))
+      .first();
+    if (existing) await ctx.db.delete(existing._id);
+  },
+});
+
+export const getPresence = query({
+  args: { doc_id: v.string() },
+  returns: v.array(v.object({
+    user_id: v.id("users"),
+    user_name: v.string(),
+    user_color: v.string(),
+    cursor_pos: v.optional(v.number()),
+    anchor_pos: v.optional(v.number()),
+    updated_at: v.number(),
+  })),
+  handler: async (ctx, args) => {
+    const userId = await requireAuth(ctx);
+    const staleThreshold = Date.now() - 30_000;
+    const presences = await ctx.db
+      .query("doc_presence")
+      .withIndex("by_doc", (q: any) => q.eq("doc_id", args.doc_id))
+      .collect();
+    return presences
+      .filter((p: any) => p.user_id !== userId && p.updated_at > staleThreshold)
+      .map((p: any) => ({
+        user_id: p.user_id,
+        user_name: p.user_name,
+        user_color: p.user_color,
+        cursor_pos: p.cursor_pos,
+        anchor_pos: p.anchor_pos,
+        updated_at: p.updated_at,
+      }));
+  },
+});

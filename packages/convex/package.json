@@ -9,6 +9,7 @@
   "dependencies": {
     "@auth/core": "^0.37.2",
     "@convex-dev/auth": "^0.0.79",
+    "@convex-dev/prosemirror-sync": "^0.2.3",
     "convex": "^1.31.6",
     "oslo": "^1.2.1",
     "resend": "^6.6.0"
