@@ -599,6 +599,8 @@ function isAutostartEnabled(): boolean {
   return false;
 }
 
+const processedPollCommandIds = new Set<string>();
+
 async function pollDaemonCommands(): Promise<void> {
   const config = readConfig();
   if (!config?.auth_token || !config?.convex_url) return;
@@ -621,6 +623,8 @@ async function pollDaemonCommands(): Promise<void> {
     if (data.commands && data.commands.length > 0) {
       log(`[POLL] Received ${data.commands.length} command(s): ${data.commands.map((c: any) => c.command).join(", ")}`);
       for (const cmd of data.commands) {
+        if (processedPollCommandIds.has(cmd.id)) continue;
+        processedPollCommandIds.add(cmd.id);
         await executeRemoteCommand(cmd.id, cmd.command, config, cmd.args);
       }
     }
@@ -658,6 +662,8 @@ async function sendHeartbeat(): Promise<void> {
     if (data.commands && data.commands.length > 0) {
       log(`Received ${data.commands.length} remote command(s)`);
       for (const cmd of data.commands) {
+        if (processedPollCommandIds.has(cmd.id)) continue;
+        processedPollCommandIds.add(cmd.id);
         await executeRemoteCommand(cmd.id, cmd.command, config, cmd.args);
       }
     }
@@ -2735,7 +2741,10 @@ async function processSessionFile(
             !messages.some(m => m.role === "assistant" && (m.toolResults?.length ?? 0) > 0 &&
               m.timestamp >= lastAssistantMessage.timestamp);
 
-          if (hasPendingToolCalls) {
+          const hookSaysActive = hookIsRecent && hookEntry &&
+            (hookEntry.status === "working" || hookEntry.status === "thinking" || hookEntry.status === "compacting");
+
+          if (hasPendingToolCalls || hookSaysActive) {
             idleTimers.delete(sessionId);
           } else if (lastAssistantMessage.stopReason === "end_turn") {
             idleTimers.delete(sessionId);
@@ -7824,11 +7833,12 @@ async function main(): Promise<void> {
           log(`Command subscription update: ${commands.length} pending command(s)`);
 
           for (const cmd of commands) {
-            if (processedCommandIds.has(cmd.id)) {
+            if (processedCommandIds.has(cmd.id) || processedPollCommandIds.has(cmd.id)) {
               continue;
             }
 
             processedCommandIds.add(cmd.id);
+            processedPollCommandIds.add(cmd.id);
             log(`[SUBSCRIPTION] Executing command: ${cmd.command} (${cmd.id})`);
             await executeRemoteCommand(cmd.id, cmd.command, config, cmd.args);
           }
