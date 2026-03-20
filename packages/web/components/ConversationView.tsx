@@ -63,6 +63,8 @@ import { getApplyPatchInput, parseApplyPatchSections } from "../lib/applyPatchPa
 import { setupDesktopDrag, desktopHeaderClass } from "../lib/desktop";
 import { isInboxRoute } from "../lib/inboxRouting";
 import { MessageNavButton } from "./MessageBrowserPopover";
+import type { MentionItem } from "./editor/MentionList";
+import { CheckSquare, FileText, MessageSquare, Target, User } from "lucide-react";
 
 function parseSearchTerms(query: string): string[] {
   const terms: string[] = [];
@@ -4905,7 +4907,7 @@ function MessageNavigator({ userMessages, onRewind, onFork, onClose, forkPointMa
   );
 }
 
-const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, sessionId, agentType, agentStatus, pendingPermissionsCount, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onSendEscape, onOpenNavigator, onPopulateInput, permissionMode, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch, onGateSend, skills, filePaths }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; sessionId?: string; agentType?: string; agentStatus?: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected"; pendingPermissionsCount?: number; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string) => void) | null>; permissionMode?: string; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void>; onGateSend?: (content: string) => Promise<void>; skills?: SkillItem[]; filePaths?: string[] }) {
+const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, sessionId, agentType, agentStatus, pendingPermissionsCount, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onSendEscape, onOpenNavigator, onPopulateInput, permissionMode, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch, onGateSend, skills, filePaths, mentionItems }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; sessionId?: string; agentType?: string; agentStatus?: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected"; pendingPermissionsCount?: number; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string) => void) | null>; permissionMode?: string; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void>; onGateSend?: (content: string) => Promise<void>; skills?: SkillItem[]; filePaths?: string[]; mentionItems?: MentionItem[] }) {
   const cached = useInboxStore.getState().getDraft(conversationId);
   const [message, setMessage] = useState(() => cached?.draft_message ?? initialDraft ?? "");
   const messageRef = useRef(message);
@@ -4930,11 +4932,25 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
   const sentContentRef = useRef<string | null>(null);
 
   type AutocompleteTrigger = { type: "/" | "@"; startPos: number } | null;
+  type AcItem = {
+    label: string;
+    description?: string;
+    type: string;
+    id?: string;
+    shortId?: string;
+    status?: string;
+    priority?: string;
+    docType?: string;
+    messageCount?: number;
+    projectPath?: string;
+    goal?: string;
+    model?: string;
+  };
   const [acTrigger, setAcTrigger] = useState<AutocompleteTrigger>(null);
   const [acIndex, setAcIndex] = useState(0);
   const acRef = useRef<HTMLDivElement>(null);
 
-  const acItems = useMemo(() => {
+  const acItems: AcItem[] = useMemo(() => {
     if (!acTrigger) return [];
     const rawQuery = message.slice(acTrigger.startPos + 1);
     const query = (acTrigger.type === "@" ? rawQuery.match(/^[\w./\\-]*/)?.[0] ?? "" : rawQuery).toLowerCase();
@@ -4942,23 +4958,47 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
       return (skills || [])
         .filter(s => s.name.toLowerCase().includes(query))
         .slice(0, 8)
-        .map(s => ({ label: s.name, description: s.description, type: "skill" as const }));
+        .map(s => ({ label: s.name, description: s.description, type: "skill" as string }));
     }
     if (acTrigger.type === "@") {
-      return (filePaths || [])
+      const items: AcItem[] = [];
+
+      if (mentionItems?.length) {
+        const entityMatches = mentionItems
+          .filter(m => {
+            if (!query) return true;
+            return m.label.toLowerCase().includes(query) ||
+              (m.shortId && m.shortId.toLowerCase().includes(query)) ||
+              (m.sublabel && m.sublabel.toLowerCase().includes(query));
+          })
+          .slice(0, 8)
+          .map(m => ({
+            label: m.label,
+            description: m.sublabel,
+            type: m.type,
+            id: m.id,
+            shortId: m.shortId,
+          }));
+        items.push(...entityMatches);
+      }
+
+      const fileMatches = (filePaths || [])
         .filter(p => {
           const name = p.split("/").pop() || p;
           return name.toLowerCase().includes(query) || p.toLowerCase().includes(query);
         })
-        .slice(0, 8)
-        .map(p => ({ label: p, description: undefined, type: "file" as const }));
+        .slice(0, 4)
+        .map(p => ({ label: p, description: undefined, type: "file" as string }));
+      items.push(...fileMatches);
+
+      return items;
     }
     return [];
-  }, [acTrigger, message, skills, filePaths]);
+  }, [acTrigger, message, skills, filePaths, mentionItems]);
 
   const clampedAcIndex = acItems.length > 0 ? Math.min(acIndex, acItems.length - 1) : 0;
 
-  const applyAutocomplete = useCallback((item: { label: string; type: "skill" | "file" }) => {
+  const applyAutocomplete = useCallback((item: AcItem) => {
     if (!acTrigger) return;
     if (acTrigger.type === "/") {
       const newVal = `/${item.label} `;
@@ -4972,7 +5012,23 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
       const before = message.slice(0, acTrigger.startPos);
       const cursorPos = textareaRef.current?.selectionStart ?? message.length;
       const after = message.slice(cursorPos);
-      const inserted = `@${item.label} `;
+
+      let inserted: string;
+      if (item.type === "file") {
+        inserted = `@${item.label} `;
+      } else if (item.type === "task") {
+        const parts = [item.status, item.priority && item.priority !== "medium" ? item.priority : null].filter(Boolean).join(", ");
+        inserted = `@${item.shortId || item.label} (${item.label}${parts ? ` -- ${parts}` : ""}. \`cast task ${item.shortId}\` for details) `;
+      } else if (item.type === "doc") {
+        inserted = `@doc:${item.label} (${item.docType || "note"}. \`cast doc read ${item.id?.slice(-6) || ""}\`) `;
+      } else if (item.type === "plan") {
+        inserted = `@${item.shortId || item.label} (${item.label}${item.status ? ` -- ${item.status}` : ""}. \`cast plan show ${item.shortId}\` for details) `;
+      } else if (item.type === "session") {
+        inserted = `@${item.shortId || item.label} (${item.label}. \`cast read ${item.shortId}\` for details) `;
+      } else {
+        inserted = `@${item.label} `;
+      }
+
       const newVal = before + inserted + after;
       setMessage(newVal);
       const newCursor = before.length + inserted.length;
@@ -5189,7 +5245,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
       const cursorPos = textareaRef.current?.selectionStart ?? val.length;
       const textBefore = val.slice(0, cursorPos);
       const atMatch = textBefore.match(/@([\w./\\-]*)$/);
-      if (atMatch && (filePaths?.length ?? 0) > 0) {
+      if (atMatch && ((filePaths?.length ?? 0) > 0 || (mentionItems?.length ?? 0) > 0)) {
         setAcTrigger({ type: "@", startPos: cursorPos - atMatch[0].length });
         setAcIndex(0);
       } else {
@@ -5205,7 +5261,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
         useInboxStore.getState().setDraft(conversationId, { ...existing, draft_message: val || null });
       }
     }, 300);
-  }, [conversationId, skills, filePaths]);
+  }, [conversationId, skills, filePaths, mentionItems]);
 
   const isSelectionActive = !!(selectedMessageContent && selectedMessageUuid);
   const savedDraftRef = useRef<string | null>(null);
@@ -5734,25 +5790,32 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
           {acTrigger && acItems.length > 0 && (
             <div ref={acRef} className={`mx-auto px-2 sm:px-4 mb-1 ${isExpanded ? "max-w-4xl" : "max-w-md"}`}>
               <div className="bg-sol-bg-alt border border-sol-border rounded-lg shadow-xl overflow-hidden max-h-64 overflow-y-auto">
-                {acItems.map((item, i) => (
-                  <button
-                    key={item.label}
-                    type="button"
-                    className={`w-full text-left px-3 py-1.5 flex items-baseline gap-2 text-sm transition-colors ${i === clampedAcIndex ? "bg-sol-blue/15 text-sol-text" : "text-sol-text-dim hover:bg-sol-bg/50"}`}
-                    onMouseEnter={() => setAcIndex(i)}
-                    onMouseDown={(e) => { e.preventDefault(); applyAutocomplete(item); }}
-                  >
-                    <span className="text-sol-cyan font-mono text-xs shrink-0">
-                      {acTrigger.type === "/" ? "/" : "@"}{item.type === "file" ? (item.label.split("/").pop() || item.label) : item.label}
-                    </span>
-                    {item.description && (
-                      <span className="text-sol-text-dim/60 text-xs truncate">{item.description}</span>
-                    )}
-                    {item.type === "file" && (
-                      <span className="text-sol-text-dim/40 text-[10px] truncate ml-auto">{item.label.replace(/\/[^/]+$/, "")}</span>
-                    )}
-                  </button>
-                ))}
+                {acItems.map((item, i) => {
+                  const Icon = item.type === "task" ? CheckSquare : item.type === "plan" ? Target : item.type === "doc" ? FileText : item.type === "session" ? MessageSquare : item.type === "person" ? User : null;
+                  return (
+                    <button
+                      key={`${item.type}-${item.id || item.label}`}
+                      type="button"
+                      className={`w-full text-left px-3 py-1.5 flex items-center gap-2 text-sm transition-colors ${i === clampedAcIndex ? "bg-sol-blue/15 text-sol-text" : "text-sol-text-dim hover:bg-sol-bg/50"}`}
+                      onMouseEnter={() => setAcIndex(i)}
+                      onMouseDown={(e) => { e.preventDefault(); applyAutocomplete(item); }}
+                    >
+                      {Icon && <Icon size={13} className="shrink-0 text-sol-text-dim/50" />}
+                      <span className="text-sol-cyan font-mono text-xs shrink-0 truncate max-w-[60%]">
+                        {acTrigger.type === "/" ? "/" : "@"}{item.shortId || (item.type === "file" ? (item.label.split("/").pop() || item.label) : item.label)}
+                      </span>
+                      {item.description && (
+                        <span className="text-sol-text-dim/60 text-xs truncate">{item.description}</span>
+                      )}
+                      {item.type === "file" && (
+                        <span className="text-sol-text-dim/40 text-[10px] truncate ml-auto">{item.label.replace(/\/[^/]+$/, "")}</span>
+                      )}
+                      {item.type !== "file" && item.type !== "skill" && (
+                        <span className="text-sol-text-dim/30 text-[10px] ml-auto shrink-0">{item.type}</span>
+                      )}
+                    </button>
+                  );
+                })}
               </div>
             </div>
           )}
@@ -6414,6 +6477,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     if (!conversation?.messages) return [];
     return extractFilePaths(conversation.messages);
   }, [conversation?.messages]);
+
+  const mentionResults = useQuery(api.docs.mentionSearch, { query: "", limit: 20 });
+  const mentionItemsRef = useRef<MentionItem[]>([]);
+  if (mentionResults) mentionItemsRef.current = mentionResults;
 
   const isWaitingForResponse = useMemo(() => {
     if (!conversation || conversation.status !== "active" || timeline.length === 0 || hasMoreBelow) return false;
@@ -8481,7 +8548,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
               </div>
             )
           )}
-          <MessageInput conversationId={firstActiveForkId || conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={isSessionDisconnected ? undefined : managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={handleForkFromMessage} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onGateSend={workflowRun?.status === "paused" ? handleGateRespond : undefined} skills={sessionSkills} filePaths={sessionFilePaths} />
+          <MessageInput conversationId={firstActiveForkId || conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={isSessionDisconnected ? undefined : managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={handleForkFromMessage} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onGateSend={workflowRun?.status === "paused" ? handleGateRespond : undefined} skills={sessionSkills} filePaths={sessionFilePaths} mentionItems={mentionItemsRef.current} />
           {navigatorOpen && navigatorUserMessages && navigatorUserMessages.length > 0 && (
             <MessageNavigator
               userMessages={navigatorUserMessages}
