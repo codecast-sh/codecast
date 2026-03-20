@@ -28,7 +28,7 @@ import { NewSessionModal } from "./ConversationList";
 import { useInboxStore } from "../store/inboxStore";
 import { usePrefetch } from "../hooks/usePrefetch";
 import { desktopHeaderClass, setupDesktopDrag, isElectron } from "../lib/desktop";
-import { GlobalSessionPanel, CollapsedSessionRail } from "./GlobalSessionPanel";
+import { CollapsedSessionRail, SessionListSidebar, ConversationColumn } from "./GlobalSessionPanel";
 import { isInboxRoute as isInboxRoutePath, isInboxSessionView } from "../lib/inboxRouting";
 
 interface DashboardLayoutProps {
@@ -99,9 +99,11 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
   const isFullWidthPage = isOnConversationPage || isOnCommitPage || isOnPRPage || isOnInboxPage || isOnTasksPage || isOnWorkflowsPage || isOnPlansPage || isOnDocsPage;
 
   const sidePanelOpen = useInboxStore(s => s.sidePanelOpen);
+  const sidePanelSessionId = useInboxStore(s => s.sidePanelSessionId);
   const toggleSidePanel = useInboxStore(s => s.toggleSidePanel);
-  const showSessionPanel = sidePanelOpen && !isOnInboxPage;
   const showCollapsedRail = !sidePanelOpen && !isOnInboxPage && !isMobile && !isZenMode;
+  const showSessionList = sidePanelOpen && !isOnInboxPage && !isMobile && !isZenMode;
+  const showConversationColumn = !!sidePanelSessionId && !isOnInboxPage && !isMobile;
 
   useMountEffect(() => {
     setIsMobile(window.innerWidth < 768);
@@ -334,35 +336,20 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
       {/* Content area with sidebar and main */}
       <div className="flex-1 min-h-0">
         {hideSidebar || isZenMode || sidebarCollapsed || isMobile ? (
-          showSessionPanel ? (
-            <Group orientation="horizontal" className="h-full" defaultLayout={{ "main-content": 60, "session-panel": 40 }}>
-              <Panel id="main-content" minSize="30%">
-                {isFullWidthPage ? (
-                  <div className="h-full">{children}</div>
-                ) : (
-                  <div data-main-scroll className="h-full overflow-y-auto px-3 sm:px-6 lg:px-8 py-4">
-                    <div className="max-w-4xl mx-auto h-full">{children}</div>
-                  </div>
-                )}
-              </Panel>
-              <Separator className="relative z-10 w-px bg-black/10 cursor-col-resize before:absolute before:inset-y-0 before:-left-[2px] before:-right-[2px] before:content-[''] before:transition-colors before:duration-150 hover:before:bg-sol-cyan data-[resize-handle-active]:before:bg-sol-cyan" />
-              <Panel id="session-panel" minSize="20%" maxSize="60%" defaultSize="40%" collapsible collapsedSize="0%">
-                <GlobalSessionPanel />
-              </Panel>
-            </Group>
-          ) : isFullWidthPage ? (
-            <div className="h-full flex">
-              <div className="flex-1 min-w-0 h-full">{children}</div>
-              {showCollapsedRail && <CollapsedSessionRail />}
+          <div className="h-full flex">
+            <div className="flex-1 min-w-0 h-full">
+              {isFullWidthPage ? (
+                <div className="h-full">{children}</div>
+              ) : (
+                <div data-main-scroll className="h-full overflow-y-auto px-3 sm:px-6 lg:px-8 py-4">
+                  <div className="max-w-4xl mx-auto h-full">{children}</div>
+                </div>
+              )}
             </div>
-          ) : (
-            <div className="h-full flex">
-              <div data-main-scroll className="flex-1 min-w-0 h-full overflow-y-auto px-3 sm:px-6 lg:px-8 py-4">
-                <div className="max-w-4xl mx-auto h-full">{children}</div>
-              </div>
-              {showCollapsedRail && <CollapsedSessionRail />}
-            </div>
-          )
+            {showConversationColumn && <ConversationColumn />}
+            {showSessionList && <SessionListSidebar />}
+            {showCollapsedRail && <CollapsedSessionRail />}
+          </div>
         ) : (
           <Group
             orientation="horizontal"
@@ -384,35 +371,20 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
             </Panel>
             <Separator className="relative z-10 w-px bg-black/10 cursor-col-resize before:absolute before:inset-y-0 before:-left-[2px] before:-right-[2px] before:content-[''] before:transition-colors before:duration-150 hover:before:bg-sol-cyan data-[resize-handle-active]:before:bg-sol-cyan" />
             <Panel id="main" minSize="30%">
-              {showSessionPanel ? (
-                <Group orientation="horizontal" className="h-full" defaultLayout={{ "main-content": 60, "session-panel": 40 }}>
-                  <Panel id="main-content" minSize="30%">
-                    {isFullWidthPage ? (
-                      <div className="h-full">{children}</div>
-                    ) : (
-                      <div data-main-scroll className="h-full overflow-y-auto px-4 sm:px-6 lg:px-8 py-4">
-                        <div className="max-w-4xl mx-auto h-full">{children}</div>
-                      </div>
-                    )}
-                  </Panel>
-                  <Separator className="relative z-10 w-px bg-black/10 cursor-col-resize before:absolute before:inset-y-0 before:-left-[2px] before:-right-[2px] before:content-[''] before:transition-colors before:duration-150 hover:before:bg-sol-cyan data-[resize-handle-active]:before:bg-sol-cyan" />
-                  <Panel id="session-panel" minSize="20%" maxSize="60%" defaultSize="40%" collapsible collapsedSize="0%">
-                    <GlobalSessionPanel />
-                  </Panel>
-                </Group>
-              ) : isFullWidthPage ? (
-                <div className="h-full flex">
-                  <div className="flex-1 min-w-0 h-full">{children}</div>
-                  {showCollapsedRail && <CollapsedSessionRail />}
+              <div className="h-full flex">
+                <div className="flex-1 min-w-0 h-full">
+                  {isFullWidthPage ? (
+                    <div className="h-full">{children}</div>
+                  ) : (
+                    <div data-main-scroll className="h-full overflow-y-auto px-4 sm:px-6 lg:px-8 py-4">
+                      <div className="max-w-4xl mx-auto h-full">{children}</div>
+                    </div>
+                  )}
                 </div>
-              ) : (
-                <div className="h-full flex">
-                  <div data-main-scroll className="flex-1 min-w-0 h-full overflow-y-auto px-4 sm:px-6 lg:px-8 py-4">
-                    <div className="max-w-4xl mx-auto h-full">{children}</div>
-                  </div>
-                  {showCollapsedRail && <CollapsedSessionRail />}
-                </div>
-              )}
+                {showConversationColumn && <ConversationColumn />}
+                {showSessionList && <SessionListSidebar />}
+                {showCollapsedRail && <CollapsedSessionRail />}
+              </div>
             </Panel>
           </Group>
         )}

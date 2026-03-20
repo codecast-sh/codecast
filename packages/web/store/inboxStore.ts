@@ -416,6 +416,7 @@ interface InboxStoreState {
   closeSidePanel: () => void;
   clearSidePanelSession: () => void;
   toggleSidePanel: () => void;
+  selectPanelSession: (sessionId: string | null) => void;
 
   // -- Task / Doc mutations (action + side effect) --
   updateTaskStatus: (shortId: string, status: string) => Promise<any>;
@@ -1285,10 +1286,14 @@ export const useInboxStore = create<InboxStoreState>(
   toggleSidePanel: () => {
     const { sidePanelOpen } = get();
     if (sidePanelOpen) {
-      set({ sidePanelSessionId: null, sidePanelOpen: false });
+      set({ sidePanelOpen: false });
     } else {
       set({ sidePanelOpen: true });
     }
+  },
+
+  selectPanelSession: (sessionId: string | null) => {
+    set({ sidePanelSessionId: sessionId });
   },
 
   // =====================

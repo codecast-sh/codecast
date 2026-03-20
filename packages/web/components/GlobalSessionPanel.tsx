@@ -15,7 +15,7 @@ import { PlanContextPanel } from "./PlanContextPanel";
 import { WorkflowContextPanel } from "./WorkflowContextPanel";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { X, Maximize2, ArrowLeft } from "lucide-react";
+import { X, Maximize2, ArrowLeft, ChevronsLeft, ChevronsRight } from "lucide-react";
 
 const NOISE_PREFIXES = ["[Request interrupted", "This session is being continued", "Your task is to create a detailed summary", "Please continue the conversation", "<task-notification>", "Implement the following plan"];
 
@@ -59,7 +59,7 @@ export function getProjectName(gitRoot?: string, projectPath?: string): string {
 
 // -- InboxConversation (shared) --
 
-export const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, onSendAndAdvance, lastUserMessage, sessionError, onBack, targetMessageId, backHref }: { sessionId: string; isIdle: boolean; onSendAndAdvance: () => void; lastUserMessage?: string | null; sessionError?: string; onBack?: () => void; targetMessageId?: string; backHref?: string }) {
+export const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, onSendAndAdvance, lastUserMessage, sessionError, onBack, targetMessageId, backHref, onExpandToMain }: { sessionId: string; isIdle: boolean; onSendAndAdvance: () => void; lastUserMessage?: string | null; sessionError?: string; onBack?: () => void; targetMessageId?: string; backHref?: string; onExpandToMain?: () => void }) {
   const {
     conversation,
     hasMoreAbove,
@@ -191,6 +191,11 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
           conversation={conversation as ConversationData}
           embedded
           headerExtra={shareControls}
+          headerLeft={onExpandToMain ? (
+            <button onClick={onExpandToMain} className="p-0.5 rounded text-sol-text-dim hover:text-sol-cyan transition-colors flex-shrink-0" title="Go to inbox">
+              <ChevronsLeft className="w-4 h-4" />
+            </button>
+          ) : undefined}
           hasMoreAbove={hasMoreAbove}
           hasMoreBelow={hasMoreBelow}
           isLoadingOlder={isLoadingOlder}
@@ -611,7 +616,7 @@ export function SessionListPanel({
 
 export function CollapsedSessionRail() {
   const sessions = useInboxStore((s) => s.sessions);
-  const openSidePanel = useInboxStore((s) => s.openSidePanel);
+  const selectPanelSession = useInboxStore((s) => s.selectPanelSession);
   const toggleSidePanel = useInboxStore((s) => s.toggleSidePanel);
 
   useSyncInboxSessions(false);
@@ -652,7 +657,7 @@ export function CollapsedSessionRail() {
                       <button
                         className={`w-1.5 h-1.5 rounded-full flex-shrink-0 transition-all hover:scale-[2] cursor-pointer ${status.pulse ? "animate-pulse" : ""}`}
                         style={{ backgroundColor: status.bg }}
-                        onClick={(e) => { e.stopPropagation(); openSidePanel(s._id); }}
+                        onClick={(e) => { e.stopPropagation(); selectPanelSession(s._id); }}
                       />
                     </TooltipTrigger>
                     <TooltipContent side="left">{cleanTitle(s.title || "New Session")}</TooltipContent>
@@ -670,6 +675,68 @@ export function CollapsedSessionRail() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// -- SessionListSidebar (expanded session list column) --
+
+export function SessionListSidebar() {
+  const toggleSidePanel = useInboxStore(s => s.toggleSidePanel);
+  const selectPanelSession = useInboxStore(s => s.selectPanelSession);
+  const sidePanelSessionId = useInboxStore(s => s.sidePanelSessionId);
+
+  useSyncInboxSessions(false);
+
+  return (
+    <div className="w-[280px] h-full flex-shrink-0 flex flex-col bg-sol-bg-alt border-l border-sol-border/30">
+      <div className="flex-1 min-h-0">
+        <SessionListPanel
+          onSessionSelect={(id) => selectPanelSession(id)}
+          activeSessionId={sidePanelSessionId}
+          compact
+        />
+      </div>
+      <div className="flex-shrink-0 border-t border-sol-border/30 flex justify-center py-1">
+        <button
+          onClick={toggleSidePanel}
+          className="p-1 rounded text-sol-text-dim/40 hover:text-sol-text-dim transition-colors"
+          title="Collapse to rail"
+        >
+          <ChevronsRight className="w-3.5 h-3.5" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// -- ConversationColumn (independent conversation view column) --
+
+export function ConversationColumn() {
+  const sidePanelSessionId = useInboxStore(s => s.sidePanelSessionId);
+  const sessions = useInboxStore(s => s.sessions);
+  const selectPanelSession = useInboxStore(s => s.selectPanelSession);
+  const router = useRouter();
+
+  const session = sidePanelSessionId ? sessions[sidePanelSessionId] : null;
+  if (!session || !sidePanelSessionId) return null;
+
+  const handleExpandToMain = () => {
+    selectPanelSession(null);
+    router.push("/inbox");
+  };
+
+  return (
+    <div className="h-full border-l border-sol-border/30 min-w-[300px] flex-1">
+      <InboxConversation
+        key={sidePanelSessionId}
+        sessionId={sidePanelSessionId}
+        isIdle={session.is_idle}
+        onSendAndAdvance={() => {}}
+        lastUserMessage={session.last_user_message}
+        sessionError={session.session_error}
+        onExpandToMain={handleExpandToMain}
+      />
     </div>
   );
 }
