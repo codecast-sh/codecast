@@ -455,10 +455,33 @@ export const webList = query({
       if (u) userMap.set(uid, { name: u.name, image: u.image || (u as any).github_avatar_url });
     }
 
+    const planIds = new Set<string>();
+    const docIdsNeedingPlan: string[] = [];
+    for (const d of result) {
+      if (d.plan_id) planIds.add(String(d.plan_id));
+      else if (d.doc_type === "plan") docIdsNeedingPlan.push(d._id as string);
+    }
+    const planMap = new Map<string, { short_id: string; status: string }>();
+    for (const pid of planIds) {
+      const p = await ctx.db.get(pid as Id<"plans">);
+      if (p) planMap.set(pid, { short_id: (p as any).short_id, status: (p as any).status });
+    }
+    const docToPlanMap = new Map<string, { short_id: string; status: string }>();
+    for (const docId of docIdsNeedingPlan) {
+      const p = await ctx.db.query("plans").withIndex("by_doc_id", (q: any) => q.eq("doc_id", docId)).first();
+      if (p) {
+        docToPlanMap.set(docId, { short_id: p.short_id, status: p.status as string });
+      }
+    }
+
     const withAuthors = result.map(extractPlanTitle).map((d: any) => {
       const author = d.user_id ? userMap.get(String(d.user_id)) : undefined;
-      if (author) return { ...d, author_name: author.name, author_image: author.image };
-      return d;
+      const plan = d.plan_id ? planMap.get(String(d.plan_id)) : (docToPlanMap.get(d._id as string) || undefined);
+      return {
+        ...d,
+        ...(author ? { author_name: author.name, author_image: author.image } : {}),
+        ...(plan ? { plan_short_id: plan.short_id, plan_status: plan.status } : {}),
+      };
     });
 
     return { docs: withAuthors, projectPaths };
@@ -761,7 +784,14 @@ export const mentionSearch = query({
     if (!userId) return [];
 
     const user = await ctx.db.get(userId);
-    const teamId = user?.active_team_id;
+    let teamId = user?.active_team_id || (user as any)?.team_id;
+    if (!teamId) {
+      const membership = await ctx.db
+        .query("team_memberships")
+        .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+        .first();
+      if (membership) teamId = membership.team_id;
+    }
     const q = args.query.toLowerCase();
     const limit = args.limit || 10;
     const types = args.types || ["person", "doc", "task", "session", "plan"];
@@ -1229,5 +1259,46 @@ export const linkPlanToSessions = internalMutation({
       }
     }
     return { updated };
+  },
+});
+
+export const webPromoteToPlan = mutation({
+  args: { doc_id: v.id("docs") },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Unauthorized");
+    const doc = await ctx.db.get(args.doc_id);
+    if (!doc || doc.user_id !== userId) throw new Error("Doc not found");
+
+    if (doc.plan_id) {
+      const existing = await ctx.db.get(doc.plan_id);
+      if (existing) return { plan_id: doc.plan_id, short_id: (existing as any).short_id };
+    }
+
+    const { nextShortId } = await import("./counters");
+    const short_id = await nextShortId(ctx.db, "pl");
+    const now = Date.now();
+    const planId = await ctx.db.insert("plans", {
+      user_id: doc.user_id,
+      team_id: doc.team_id,
+      project_id: doc.project_id,
+      short_id,
+      title: doc.title,
+      status: "draft" as const,
+      source: "promoted" as const,
+      owner_id: userId,
+      doc_id: args.doc_id,
+      task_ids: [],
+      progress: { total: 0, done: 0, in_progress: 0, open: 0 },
+      progress_log: [],
+      decision_log: [],
+      discoveries: [],
+      context_pointers: [],
+      session_ids: [],
+      created_at: now,
+      updated_at: now,
+    });
+    await ctx.db.patch(args.doc_id, { plan_id: planId, doc_type: "plan" as const });
+    return { plan_id: planId, short_id };
   },
 });

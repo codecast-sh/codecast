@@ -4,6 +4,7 @@ import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { createDataContext } from "./data";
+import { nextShortId } from "./counters";
 
 async function recalcProgress(ctx: any, taskIds: Id<"tasks">[]) {
   let total = 0, done = 0, in_progress = 0, open = 0;
@@ -35,14 +36,6 @@ async function recalcProgress(ctx: any, taskIds: Id<"tasks">[]) {
   };
 }
 
-function generateShortId(): string {
-  const chars = "0123456789abcdefghijklmnopqrstuvwxyz";
-  let id = "pl-";
-  for (let i = 0; i < 4; i++) {
-    id += chars[Math.floor(Math.random() * chars.length)];
-  }
-  return id;
-}
 
 async function canAccessPlan(ctx: any, userId: Id<"users">, plan: any): Promise<boolean> {
   if (plan.user_id === userId) return true;
@@ -60,6 +53,7 @@ export const create = mutation({
   args: {
     api_token: v.string(),
     title: v.string(),
+    body: v.optional(v.string()),
     goal: v.optional(v.string()),
     acceptance_criteria: v.optional(v.array(v.string())),
     status: v.optional(v.string()),
@@ -77,7 +71,7 @@ export const create = mutation({
     if (!auth) throw new Error("Unauthorized");
 
     const db = await createDataContext(ctx, { userId: auth.userId, project_path: args.project_path });
-    const short_id = generateShortId();
+    const short_id = await nextShortId(ctx.db, "pl");
 
     let project_id: Id<"projects"> | undefined;
     if (args.project_id) {
@@ -120,7 +114,17 @@ export const create = mutation({
       join_k: args.join_k,
     });
 
-    return { id, short_id };
+    const docId = await db.insert("docs", {
+      title: args.title,
+      content: args.body || "",
+      doc_type: "plan",
+      source: "human",
+      plan_id: id,
+      project_id,
+    });
+    await ctx.db.patch(id, { doc_id: docId });
+
+    return { id, short_id, doc_id: docId };
   },
 });
 
@@ -139,7 +143,7 @@ export const createFromTemplate = mutation({
     if (!template) throw new Error("Template not found");
 
     const now = Date.now();
-    const short_id = `pl-${Math.random().toString(36).slice(2, 6)}`;
+    const short_id = await nextShortId(ctx.db, "pl");
     const title = args.title || template.name;
 
     const planId = await ctx.db.insert("plans", {
@@ -161,7 +165,7 @@ export const createFromTemplate = mutation({
 
     for (let i = 0; i < template.task_templates.length; i++) {
       const tt = template.task_templates[i];
-      const taskShortId = `ct-${Math.random().toString(36).slice(2, 6)}`;
+      const taskShortId = await nextShortId(ctx.db, "ct");
       taskShortIds.push(taskShortId);
 
       const blockedBy: string[] = [];
@@ -212,7 +216,7 @@ export const fork = mutation({
     if (!source) throw new Error("Source plan not found");
 
     const now = Date.now();
-    const short_id = `pl-${Math.random().toString(36).slice(2, 6)}`;
+    const short_id = await nextShortId(ctx.db, "pl");
 
     const sourceTasks: any[] = [];
     for (const tid of source.task_ids || []) {
@@ -239,7 +243,7 @@ export const fork = mutation({
     const taskIds: Id<"tasks">[] = [];
 
     for (const st of sourceTasks) {
-      const newShortId = `ct-${Math.random().toString(36).slice(2, 6)}`;
+      const newShortId = await nextShortId(ctx.db, "ct");
       oldToNew.set(st.short_id, newShortId);
     }
 
@@ -276,6 +280,7 @@ export const update = mutation({
     api_token: v.string(),
     short_id: v.string(),
     title: v.optional(v.string()),
+    body: v.optional(v.string()),
     goal: v.optional(v.string()),
     acceptance_criteria: v.optional(v.array(v.string())),
     status: v.optional(v.string()),
@@ -300,7 +305,8 @@ export const update = mutation({
 
     if (!(await canAccessPlan(ctx, auth.userId, plan))) throw new Error("Plan not found");
 
-    const updates: any = { updated_at: Date.now() };
+    const now = Date.now();
+    const updates: any = { updated_at: now };
     if (args.title) updates.title = args.title;
     if (args.goal !== undefined) updates.goal = args.goal;
     if (args.acceptance_criteria) updates.acceptance_criteria = args.acceptance_criteria;
@@ -314,6 +320,26 @@ export const update = mutation({
       const taskDocIds = args.task_ids.map(id => id as Id<"tasks">);
       updates.task_ids = taskDocIds;
       updates.progress = await recalcProgress(ctx, taskDocIds);
+    }
+
+    if (args.body !== undefined) {
+      if (plan.doc_id) {
+        await ctx.db.patch(plan.doc_id, { content: args.body, updated_at: now });
+        if (args.title) {
+          await ctx.db.patch(plan.doc_id, { title: args.title });
+        }
+      } else {
+        const db = await createDataContext(ctx, { userId: auth.userId });
+        const docId = await db.insert("docs", {
+          title: args.title || plan.title,
+          content: args.body,
+          doc_type: "plan",
+          source: "human",
+          plan_id: plan._id,
+          project_id: plan.project_id,
+        });
+        updates.doc_id = docId;
+      }
     }
 
     await ctx.db.patch(plan._id, updates);
@@ -701,7 +727,13 @@ export const get = query({
       }
     }
 
-    return { ...plan, tasks };
+    let doc_content: string | undefined;
+    if (plan.doc_id) {
+      const doc = await ctx.db.get(plan.doc_id);
+      if (doc) doc_content = doc.content;
+    }
+
+    return { ...plan, tasks, doc_content };
   },
 });
 
@@ -845,7 +877,7 @@ export const list = query({
     }
 
     plans.sort((a: any, b: any) => (b.updated_at || 0) - (a.updated_at || 0));
-    return plans.slice(0, args.limit || 50);
+    return plans.slice(0, args.limit || 500);
   },
 });
 
@@ -873,6 +905,10 @@ export const snippet = query({
 
     const lines: string[] = [];
     lines.push(`Plan: ${plan.title} (${plan.short_id}) [${plan.status}]`);
+    if (plan.doc_id) {
+      const doc = await ctx.db.get(plan.doc_id);
+      if (doc?.content) lines.push(`Body: ${doc.content.slice(0, 2000)}`);
+    }
     if (plan.goal) lines.push(`Goal: ${plan.goal}`);
 
     if (plan.acceptance_criteria?.length) {
@@ -935,6 +971,7 @@ export const snippet = query({
 export const webCreate = mutation({
   args: {
     title: v.string(),
+    body: v.optional(v.string()),
     goal: v.optional(v.string()),
     acceptance_criteria: v.optional(v.array(v.string())),
     status: v.optional(v.string()),
@@ -952,7 +989,7 @@ export const webCreate = mutation({
     if (!userId) throw new Error("Unauthorized");
 
     const db = await createDataContext(ctx, { userId, workspace: args.workspace as any, team_id: args.team_id });
-    const short_id = generateShortId();
+    const short_id = await nextShortId(ctx.db, "pl");
 
     let project_id: Id<"projects"> | undefined;
     if (args.project_id) {
@@ -985,7 +1022,17 @@ export const webCreate = mutation({
       join_k: args.join_k,
     });
 
-    return { id, short_id };
+    const docId = await db.insert("docs", {
+      title: args.title,
+      content: args.body || "",
+      doc_type: "plan",
+      source: "human",
+      plan_id: id,
+      project_id,
+    });
+    await ctx.db.patch(id, { doc_id: docId });
+
+    return { id, short_id, doc_id: docId };
   },
 });
 
@@ -1011,7 +1058,7 @@ export const webPromoteSession = mutation({
     }
 
     const db = await createDataContext(ctx, { userId, workspace: args.workspace as any, team_id: args.team_id });
-    const short_id = generateShortId();
+    const short_id = await nextShortId(ctx.db, "pl");
 
     const title = args.title || conv.title || "Untitled Plan";
 
@@ -1034,9 +1081,19 @@ export const webPromoteSession = mutation({
       created_from_conversation_id: args.conversation_id,
     });
 
+    const docId = await db.insert("docs", {
+      title,
+      content: "",
+      doc_type: "plan",
+      source: "human",
+      plan_id: id,
+      project_id: (conv as any).project_id,
+    });
+    await ctx.db.patch(id, { doc_id: docId });
+
     await ctx.db.patch(args.conversation_id, { active_plan_id: id });
 
-    return { id, short_id, already_exists: false };
+    return { id, short_id, doc_id: docId, already_exists: false };
   },
 });
 
@@ -1076,6 +1133,10 @@ export const webUpdate = mutation({
       const taskDocIds = args.task_ids.map(id => id as Id<"tasks">);
       updates.task_ids = taskDocIds;
       updates.progress = await recalcProgress(ctx, taskDocIds);
+    }
+
+    if (args.title && plan.doc_id) {
+      await ctx.db.patch(plan.doc_id, { title: args.title, updated_at: Date.now() });
     }
 
     await ctx.db.patch(plan._id, updates);
@@ -1141,12 +1202,10 @@ export const webGet = query({
     }
 
     let doc_content: string | undefined;
-    let doc_title: string | undefined;
     if (plan.doc_id) {
       const doc = await ctx.db.get(plan.doc_id);
       if (doc) {
         doc_content = doc.content;
-        doc_title = doc.title;
       }
     }
 
@@ -1181,9 +1240,36 @@ export const webGet = query({
       tasks,
       sessions,
       doc_content,
-      doc_title,
       author: author ? { name: author.name, image: author.image } : null,
     };
+  },
+});
+
+export const ensureDoc = mutation({
+  args: { plan_id: v.id("plans") },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Unauthorized");
+
+    const plan = await ctx.db.get(args.plan_id);
+    if (!plan) throw new Error("Plan not found");
+    if (plan.doc_id) return { doc_id: plan.doc_id, created: false };
+
+    const now = Date.now();
+    const docId = await ctx.db.insert("docs", {
+      title: plan.title,
+      content: "",
+      doc_type: "plan" as any,
+      source: "human" as any,
+      plan_id: plan._id,
+      project_id: plan.project_id,
+      user_id: plan.user_id,
+      team_id: (plan as any).team_id,
+      created_at: now,
+      updated_at: now,
+    });
+    await ctx.db.patch(plan._id, { doc_id: docId });
+    return { doc_id: docId, created: true };
   },
 });
 
@@ -1263,7 +1349,7 @@ export const webList = query({
     }
 
     plans.sort((a: any, b: any) => (b.updated_at || 0) - (a.updated_at || 0));
-    return plans.slice(0, args.limit || 50);
+    return plans.slice(0, args.limit || 500);
   },
 });
 
@@ -1289,7 +1375,7 @@ export const webTeamList = query({
       plans = plans.filter((p: any) => p.status !== "done" && p.status !== "abandoned");
     }
 
-    return plans.slice(0, args.limit || 100);
+    return plans.slice(0, args.limit || 500);
   },
 });
 

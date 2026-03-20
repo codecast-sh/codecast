@@ -411,4 +411,15 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     if (doc.user_id !== userId && doc.team_id !== teamId) throw new Error("Not authorized");
     await ctx.db.patch(doc._id, { archived_at: Date.now(), updated_at: Date.now() });
   },
+
+  updateDoc: async (ctx, userId, [docId, fields]: [string, { content?: string; title?: string; doc_type?: string; labels?: string[] }]) => {
+    const doc = await ctx.db.get(docId as Id<"docs">);
+    if (!doc) throw new Error("Doc not found");
+    const updates: any = { updated_at: Date.now() };
+    if (fields.content !== undefined) updates.content = fields.content;
+    if (fields.title !== undefined) updates.title = fields.title;
+    if (fields.doc_type !== undefined) updates.doc_type = fields.doc_type;
+    if (fields.labels !== undefined) updates.labels = fields.labels;
+    await ctx.db.patch(doc._id, updates);
+  },
 };
