@@ -39,7 +39,7 @@ import {
   DropdownMenuSubContent,
 } from "./ui/dropdown-menu";
 import { TooltipProvider } from "./ui/tooltip";
-import { useMutation, useQuery } from "convex/react";
+import { useMutation, useQuery, useConvex } from "convex/react";
 import { api as _typedApi } from "@codecast/convex/convex/_generated/api";
 const api = _typedApi as any;
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
@@ -5181,6 +5181,45 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
   const lightboxSwipe = useSwipeToDismiss(dismissLightbox);
   const sendMessage = useMutation(api.pendingMessages.sendMessageToSession);
   const generateUploadUrl = useMutation(api.images.generateUploadUrl);
+  const convex = useConvex();
+
+  const expandMentionsInMessage = useCallback(async (text: string): Promise<string> => {
+    const mentionRegex = /@\[([^\]]*?)\s+(ct-\w+|pl-\w+|jx\w+)\](?:\s*\([^)]*\))?/g;
+    const docMentionRegex = /@\[([^\]]*?)\](?:\s*\(cast doc read (\w+)\))?/g;
+    const mentions: Array<{ type: string; shortId?: string; id?: string; fullMatch: string }> = [];
+    let match: RegExpExecArray | null;
+    const textCopy = text;
+    mentionRegex.lastIndex = 0;
+    while ((match = mentionRegex.exec(textCopy)) !== null) {
+      const id = match[2];
+      const type = id.startsWith("ct-") ? "task" : id.startsWith("pl-") ? "plan" : "session";
+      mentions.push({ type, shortId: id, fullMatch: match[0] });
+    }
+    docMentionRegex.lastIndex = 0;
+    while ((match = docMentionRegex.exec(textCopy)) !== null) {
+      if (match![2] && !mentions.some(m => m.fullMatch === match![0])) {
+        mentions.push({ type: "doc", id: match![2], fullMatch: match![0] });
+      }
+    }
+    if (mentions.length === 0) return text;
+    try {
+      const expanded = await convex.query(api.docs.expandMentions, {
+        mentions: mentions.map(m => ({ type: m.type, shortId: m.shortId, id: m.id })),
+      });
+      let result = text;
+      for (const m of mentions) {
+        const exp = expanded.find((e: any) =>
+          (m.shortId && e.shortId === m.shortId) || (m.id && e.id === m.id)
+        );
+        if (exp?.markdown) {
+          result = result.replace(m.fullMatch, m.fullMatch + exp.markdown);
+        }
+      }
+      return result;
+    } catch {
+      return text;
+    }
+  }, [convex]);
   pastedImagesRef.current = pastedImages;
 
   const waitForConvexId = useCallback(async (id: string): Promise<string> => {
@@ -5540,11 +5579,13 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
     requestAnimationFrame(() => textareaRef.current?.focus());
     onMessageSent?.();
 
+    const expandedContent = await expandMentionsInMessage(trimmed);
+
     try {
       const resolvedId = canQueryServer ? conversationId : await waitForConvexId(conversationId);
       const msgId = await sendMessage({
         conversation_id: resolvedId as Id<"conversations">,
-        content: trimmed,
+        content: expandedContent,
         image_storage_ids: storageIds.length > 0 ? storageIds : undefined,
         client_id: clientId,
       });

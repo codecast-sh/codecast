@@ -918,6 +918,113 @@ export const mentionSearch = query({
   },
 });
 
+export const expandMentions = query({
+  args: {
+    mentions: v.array(v.object({
+      type: v.string(),
+      shortId: v.optional(v.string()),
+      id: v.optional(v.string()),
+    })),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+
+    const results: Array<{ type: string; shortId?: string; id?: string; markdown: string }> = [];
+
+    for (const mention of args.mentions) {
+      try {
+        if (mention.type === "task" && mention.shortId) {
+          const task = await ctx.db.query("tasks")
+            .filter((q: any) => q.eq(q.field("short_id"), mention.shortId))
+            .first();
+          if (task && task.user_id === userId) {
+            const comments = await ctx.db.query("task_comments")
+              .withIndex("by_task_id", (c: any) => c.eq("task_id", task._id))
+              .order("desc")
+              .take(5);
+            let md = `\n\n---\n**Task: ${task.title}** \`${task.short_id}\`\n`;
+            md += `Status: ${task.status || "open"} | Priority: ${(task as any).priority || "medium"}\n`;
+            if ((task as any).body) md += `\n${(task as any).body}\n`;
+            if (comments.length > 0) {
+              md += `\nRecent activity:\n`;
+              for (const c of comments.slice(0, 3)) {
+                const preview = (c as any).content?.slice(0, 150) || "";
+                md += `- ${preview}${(c as any).content?.length > 150 ? "..." : ""}\n`;
+              }
+            }
+            md += `\n\`cast task context ${task.short_id}\` for full details\n---\n`;
+            results.push({ type: "task", shortId: mention.shortId, markdown: md });
+          }
+        } else if (mention.type === "plan" && mention.shortId) {
+          const plan = await ctx.db.query("plans")
+            .filter((q: any) => q.eq(q.field("short_id"), mention.shortId))
+            .first();
+          if (plan && (plan as any).user_id === userId) {
+            let md = `\n\n---\n**Plan: ${(plan as any).title}** \`${(plan as any).short_id}\`\n`;
+            md += `Status: ${(plan as any).status || "draft"}`;
+            if ((plan as any).goal) md += ` | Goal: ${(plan as any).goal}`;
+            md += `\n`;
+            const taskIds = (plan as any).task_ids || [];
+            if (taskIds.length > 0) {
+              md += `\nTasks (${taskIds.length}):\n`;
+              for (const tid of taskIds.slice(0, 10)) {
+                const t = await ctx.db.get(tid);
+                if (t) md += `- [${(t as any).status || "open"}] ${(t as any).title} \`${(t as any).short_id}\`\n`;
+              }
+            }
+            if ((plan as any).progress_log?.length) {
+              md += `\nRecent progress:\n`;
+              for (const entry of (plan as any).progress_log.slice(-3)) {
+                md += `- ${entry.content?.slice(0, 120) || entry.note || ""}${entry.content?.length > 120 ? "..." : ""}\n`;
+              }
+            }
+            md += `\n\`cast plan show ${(plan as any).short_id}\` for full details\n---\n`;
+            results.push({ type: "plan", shortId: mention.shortId, markdown: md });
+          }
+        } else if (mention.type === "session" && mention.shortId) {
+          const sess = await ctx.db.query("conversations")
+            .filter((q: any) => q.eq(q.field("short_id"), mention.shortId))
+            .first();
+          if (sess && sess.user_id === userId) {
+            let md = `\n\n---\n**Session: ${sess.title || "Untitled"}** \`${(sess as any).short_id}\`\n`;
+            md += `${(sess as any).message_count || 0} messages | ${(sess as any).project_path || ""}\n`;
+            if ((sess as any).idle_summary) md += `\nSummary: ${(sess as any).idle_summary}\n`;
+            const messages = await ctx.db.query("messages")
+              .withIndex("by_conversation_id", (m: any) => m.eq("conversation_id", sess._id))
+              .order("asc")
+              .take(20);
+            const userMsgs = messages.filter((m: any) => m.role === "user").slice(0, 5);
+            if (userMsgs.length > 0) {
+              md += `\nKey messages:\n`;
+              for (const m of userMsgs) {
+                const preview = (m as any).content?.slice(0, 200) || "";
+                md += `- ${preview}${(m as any).content?.length > 200 ? "..." : ""}\n`;
+              }
+            }
+            md += `\n\`cast read ${(sess as any).short_id}\` for full conversation\n---\n`;
+            results.push({ type: "session", shortId: mention.shortId, markdown: md });
+          }
+        } else if (mention.type === "doc" && mention.id) {
+          const doc = await ctx.db.get(mention.id as Id<"docs">);
+          if (doc && doc.user_id === userId) {
+            let md = `\n\n---\n**Doc: ${doc.title}** (${doc.doc_type || "note"})\n`;
+            if (doc.content) {
+              const contentPreview = doc.content.slice(0, 1500);
+              md += `\n${contentPreview}${doc.content.length > 1500 ? "\n\n..." : ""}\n`;
+            }
+            md += `\n\`cast doc read ${String(doc._id).slice(-6)}\` for full document\n---\n`;
+            results.push({ type: "doc", id: mention.id, markdown: md });
+          }
+        } else if (mention.type === "person") {
+          results.push({ type: "person", shortId: mention.shortId, id: mention.id, markdown: "" });
+        }
+      } catch {}
+    }
+    return results;
+  },
+});
+
 export const webCreate = mutation({
   args: {
     title: v.string(),
