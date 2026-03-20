@@ -420,10 +420,11 @@ function buildNodePrompt(
   }
 
   if (node.prompt) {
-    // Expand $goal and context variables
+    // Expand $goal and context variables. Unfilled vars are removed (not left as $var).
     const expanded = node.prompt.replace(/\$(\w+)/g, (_, key) => {
       if (key === "goal") return goal;
-      return context[key] || `$${key}`;
+      if (key === "human_message") return context["human.message"] || "";
+      return context[key] || "";
     });
     parts.push(`# Task: ${node.label}\n${expanded}`);
   } else {

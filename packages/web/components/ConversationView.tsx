@@ -4207,25 +4207,27 @@ function WorkflowEventBlock({ content, workflowRun, onGateChoice, gateResponding
   }
 
   if (wf === "node_start") {
+    const label = event.node_label || event.node_id;
     return (
-      <div className="my-1.5 flex items-center gap-2.5 px-3 py-1.5 rounded bg-sol-yellow/8 border border-sol-yellow/20 text-xs">
+      <div className="my-2 flex items-center gap-2.5 px-3 py-2 rounded-lg bg-sol-bg-alt border border-sol-border/30 text-xs">
         <span className="w-1.5 h-1.5 rounded-full bg-sol-yellow animate-pulse flex-shrink-0" />
-        <span className="text-sol-text-dim font-mono">{event.node_id}</span>
-        <span className="text-sol-text-dim/60">running…</span>
+        <span className="text-sol-text-muted font-medium">{label}</span>
+        <span className="text-sol-text-dim/50 ml-0.5">running…</span>
       </div>
     );
   }
 
   if (wf === "node_done") {
+    const label = event.node_label || event.node_id;
     return (
-      <div className="my-1.5 flex items-center gap-2 px-3 py-1.5 rounded bg-sol-green/8 border border-sol-green/20 text-xs">
+      <div className="my-2 flex items-center gap-2.5 px-3 py-2 rounded-lg bg-sol-bg-alt border border-sol-border/30 text-xs group">
         <svg className="w-3 h-3 text-sol-green flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
         </svg>
-        <span className="text-sol-text-dim font-mono">{event.node_id}</span>
+        <span className="text-sol-text-muted font-medium">{label}</span>
         {event.session_id && (
-          <Link href={`/conversation/${event.session_id}`} className="ml-auto text-sol-cyan/70 hover:text-sol-cyan transition-colors">
-            view session →
+          <Link href={`/conversation/${event.session_id}`} className="ml-auto text-sol-text-dim opacity-0 group-hover:opacity-100 hover:text-sol-cyan transition-all text-[10px]">
+            view →
           </Link>
         )}
       </div>
@@ -4233,13 +4235,14 @@ function WorkflowEventBlock({ content, workflowRun, onGateChoice, gateResponding
   }
 
   if (wf === "node_failed") {
+    const label = event.node_label || event.node_id;
     return (
-      <div className="my-1.5 flex items-center gap-2 px-3 py-1.5 rounded bg-red-500/8 border border-red-500/20 text-xs">
-        <svg className="w-3 h-3 text-red-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <div className="my-2 flex items-center gap-2.5 px-3 py-2 rounded-lg bg-sol-red/5 border border-sol-red/20 text-xs">
+        <svg className="w-3 h-3 text-sol-red flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
         </svg>
-        <span className="text-sol-text-dim font-mono">{event.node_id}</span>
-        <span className="text-red-400/70">failed</span>
+        <span className="text-sol-red/80 font-medium">{label}</span>
+        <span className="text-sol-red/50 ml-0.5">failed</span>
       </div>
     );
   }
@@ -6008,6 +6011,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         workflow_id: selectedWorkflowId,
         goal_override: goal || undefined,
         project_path: conversation?.project_path || undefined,
+        existing_conversation_id: conversation?._id as any,
       });
       toast.success("Workflow started");
       setShowWorkflow(false);
@@ -6015,7 +6019,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to start workflow");
     }
-  }, [selectedWorkflowId, createWorkflowRun, conversation?.project_path]);
+  }, [selectedWorkflowId, createWorkflowRun, conversation?.project_path, conversation?._id]);
 
   const [optimisticMode, setOptimisticMode] = useState<string | null>(null);
   const optimisticTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
