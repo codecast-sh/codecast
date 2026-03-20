@@ -1,0 +1,47 @@
+digraph GateBadge {
+    graph [goal="Add a visual 'gate waiting' indicator on workflow primary conversations in the inbox session list so users can see at a glance when a workflow needs their input"]
+    rankdir=LR
+
+    start [shape=Mdiamond, label="Start"]
+    exit  [shape=Msquare,  label="Done"]
+
+    implement [
+        label="Implement",
+        prompt="Add a visual indicator to inbox session cards for workflow conversations that are paused at a gate.\n\nResearch first:\n1. Look at packages/web/components/GlobalSessionPanel.tsx - the SessionCard component renders individual sessions in the inbox sidebar\n2. Look at packages/web/store/inboxStore.ts - understand the InboxSession type and what fields are available\n3. Look at packages/web/hooks/useSyncInboxSessions.ts - understand how sessions get their data from Convex\n4. Look at packages/convex/convex/conversations.ts listIdleSessions query - see what fields are returned\n\nWhat to build:\n- When a session has `is_workflow_primary: true` AND its associated workflow_run has `status: 'paused'`, show a small pulsing indicator in the session card in the inbox sidebar\n- The indicator should be visually distinct - something like a small magenta/pink pulsing dot or a 'Gate' chip\n- It should be subtle but noticeable - positioned near the session title or status area\n- The session card already shows various status indicators - add this as a new one for workflow gate state\n\nImplementation approach:\n- The InboxSession in the store likely has a `workflow_run_id` or similar field from the conversations table\n- You may need to add `workflow_run_status` or similar to the data returned by listIdleSessions so the inbox knows the run is paused\n- OR you can use the existing `is_workflow_primary` flag and fetch run status separately via a hook\n- Keep it simple - the cleanest approach is to add the gate status to the conversation data in listIdleSessions\n\nDo NOT add comments. Minimal code only.",
+        max_visits=3
+    ]
+
+    typecheck [
+        label="TypeCheck",
+        shape=parallelogram,
+        script="cd /Users/ashot/src/codecast/packages/web && npx tsc --noEmit 2>&1 | grep -v node_modules | grep 'error TS' | head -20; exit 0"
+    ]
+
+    fix [
+        label="Fix TypeErrors",
+        prompt="Fix all TypeScript errors shown in context. Only touch the files you created or modified.",
+        max_visits=3,
+        retry_target="typecheck"
+    ]
+
+    review [
+        shape=hexagon,
+        label="Review"
+    ]
+
+    polish [
+        label="Polish",
+        prompt="Address the human's feedback from human.message context. Make the changes they asked for, nothing more.",
+        max_visits=2
+    ]
+
+    start -> implement -> typecheck
+
+    typecheck -> review    [condition="outcome = success"]
+    typecheck -> fix       [condition="outcome = failure"]
+    fix       -> typecheck
+
+    review -> exit   [label="[A] Ship"]
+    review -> polish [label="[R] Revise"]
+    polish -> typecheck
+}
