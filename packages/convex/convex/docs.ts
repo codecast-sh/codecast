@@ -942,80 +942,188 @@ export const expandMentions = query({
             const comments = await ctx.db.query("task_comments")
               .withIndex("by_task_id", (c: any) => c.eq("task_id", task._id))
               .order("desc")
-              .take(5);
-            let md = `\n\n---\n**Task: ${task.title}** \`${task.short_id}\`\n`;
-            md += `Status: ${task.status || "open"} | Priority: ${(task as any).priority || "medium"}\n`;
-            if ((task as any).body) md += `\n${(task as any).body}\n`;
+              .take(10);
+            let md = `\n\n---\n### Task: ${task.title}\n`;
+            md += `\`${task.short_id}\` | Status: **${task.status || "open"}** | Priority: **${(task as any).priority || "medium"}**\n`;
+            if ((task as any).labels?.length) md += `Labels: ${(task as any).labels.join(", ")}\n`;
+            md += `\n`;
+            if ((task as any).body) {
+              md += `#### Description\n\n${(task as any).body}\n\n`;
+            }
+            if ((task as any).acceptance_criteria) {
+              md += `#### Acceptance Criteria\n\n${(task as any).acceptance_criteria}\n\n`;
+            }
+            // Linked sessions
+            const linkedConvs = await ctx.db.query("conversations")
+              .withIndex("by_user_updated", (c: any) => c.eq("user_id", userId))
+              .order("desc")
+              .take(100);
+            const taskSessions = linkedConvs.filter((c: any) => String(c.active_task_id) === String(task._id)).slice(0, 5);
+            if (taskSessions.length > 0) {
+              md += `#### Linked Sessions\n\n`;
+              for (const s of taskSessions) {
+                md += `- **${s.title || "Untitled"}** \`${(s as any).short_id}\` (${(s as any).message_count || 0} msgs)`;
+                if ((s as any).idle_summary) md += ` — ${(s as any).idle_summary.slice(0, 200)}`;
+                md += `\n`;
+              }
+              md += `\n`;
+            }
             if (comments.length > 0) {
-              md += `\nRecent activity:\n`;
-              for (const c of comments.slice(0, 3)) {
-                const preview = (c as any).content?.slice(0, 150) || "";
-                md += `- ${preview}${(c as any).content?.length > 150 ? "..." : ""}\n`;
+              md += `#### Activity Log (${comments.length} recent)\n\n`;
+              for (const c of comments.reverse()) {
+                const content = (c as any).content || "";
+                const ts = new Date((c as any)._creationTime).toISOString().slice(0, 16).replace("T", " ");
+                const tag = (c as any).comment_type ? `[${(c as any).comment_type}]` : "";
+                md += `**${ts}** ${tag}\n${content.slice(0, 500)}${content.length > 500 ? "..." : ""}\n\n`;
               }
             }
-            md += `\n\`cast task context ${task.short_id}\` for full details\n---\n`;
+            md += `> \`cast task context ${task.short_id}\` for full context including all sessions and docs\n---\n`;
             results.push({ type: "task", shortId: mention.shortId, markdown: md });
           }
+
         } else if (mention.type === "plan" && mention.shortId) {
           const plan = await ctx.db.query("plans")
             .filter((q: any) => q.eq(q.field("short_id"), mention.shortId))
             .first();
           if (plan && (plan as any).user_id === userId) {
-            let md = `\n\n---\n**Plan: ${(plan as any).title}** \`${(plan as any).short_id}\`\n`;
-            md += `Status: ${(plan as any).status || "draft"}`;
-            if ((plan as any).goal) md += ` | Goal: ${(plan as any).goal}`;
-            md += `\n`;
+            let md = `\n\n---\n### Plan: ${(plan as any).title}\n`;
+            md += `\`${(plan as any).short_id}\` | Status: **${(plan as any).status || "draft"}**\n\n`;
+            if ((plan as any).goal) {
+              md += `#### Goal\n\n${(plan as any).goal}\n\n`;
+            }
+            if ((plan as any).acceptance_criteria) {
+              md += `#### Acceptance Criteria\n\n${(plan as any).acceptance_criteria}\n\n`;
+            }
             const taskIds = (plan as any).task_ids || [];
             if (taskIds.length > 0) {
-              md += `\nTasks (${taskIds.length}):\n`;
-              for (const tid of taskIds.slice(0, 10)) {
+              let doneCount = 0, ipCount = 0, openCount = 0;
+              md += `#### Tasks (${taskIds.length})\n\n`;
+              for (const tid of taskIds.slice(0, 20)) {
                 const t = await ctx.db.get(tid);
-                if (t) md += `- [${(t as any).status || "open"}] ${(t as any).title} \`${(t as any).short_id}\`\n`;
+                if (!t) continue;
+                const st = (t as any).status || "open";
+                if (st === "done") doneCount++;
+                else if (st === "in_progress") ipCount++;
+                else openCount++;
+                const icon = st === "done" ? "[x]" : st === "in_progress" ? "[~]" : "[ ]";
+                md += `- ${icon} **${(t as any).title}** \`${(t as any).short_id}\` — ${st}`;
+                if ((t as any).priority && (t as any).priority !== "medium") md += ` (${(t as any).priority})`;
+                md += `\n`;
+                if ((t as any).body) {
+                  const bodyPreview = (t as any).body.slice(0, 200);
+                  md += `  ${bodyPreview}${(t as any).body.length > 200 ? "..." : ""}\n`;
+                }
               }
+              md += `\nProgress: ${doneCount}/${taskIds.length} done, ${ipCount} in progress, ${openCount} open\n\n`;
             }
+            // Decisions
+            if ((plan as any).decisions?.length) {
+              md += `#### Decisions\n\n`;
+              for (const d of (plan as any).decisions.slice(-5)) {
+                md += `- **${d.title || "Decision"}**: ${d.reason || d.content || ""}\n`;
+              }
+              md += `\n`;
+            }
+            // Progress log
             if ((plan as any).progress_log?.length) {
-              md += `\nRecent progress:\n`;
-              for (const entry of (plan as any).progress_log.slice(-3)) {
-                md += `- ${entry.content?.slice(0, 120) || entry.note || ""}${entry.content?.length > 120 ? "..." : ""}\n`;
+              md += `#### Progress Log (recent)\n\n`;
+              for (const entry of (plan as any).progress_log.slice(-5)) {
+                const ts = entry.timestamp ? new Date(entry.timestamp).toISOString().slice(0, 16).replace("T", " ") : "";
+                md += `**${ts}** ${entry.content || entry.note || ""}\n\n`;
               }
             }
-            md += `\n\`cast plan show ${(plan as any).short_id}\` for full details\n---\n`;
+            // Linked doc content
+            if ((plan as any).doc_id) {
+              const doc = await ctx.db.get((plan as any).doc_id);
+              if (doc && (doc as any).content) {
+                md += `#### Plan Document\n\n${(doc as any).content.slice(0, 3000)}${(doc as any).content.length > 3000 ? "\n\n..." : ""}\n\n`;
+              }
+            }
+            md += `> \`cast plan show ${(plan as any).short_id}\` for full plan with all task details\n---\n`;
             results.push({ type: "plan", shortId: mention.shortId, markdown: md });
           }
+
         } else if (mention.type === "session" && mention.shortId) {
           const sess = await ctx.db.query("conversations")
             .filter((q: any) => q.eq(q.field("short_id"), mention.shortId))
             .first();
           if (sess && sess.user_id === userId) {
-            let md = `\n\n---\n**Session: ${sess.title || "Untitled"}** \`${(sess as any).short_id}\`\n`;
-            md += `${(sess as any).message_count || 0} messages | ${(sess as any).project_path || ""}\n`;
-            if ((sess as any).idle_summary) md += `\nSummary: ${(sess as any).idle_summary}\n`;
+            let md = `\n\n---\n### Session: ${sess.title || "Untitled"}\n`;
+            md += `\`${(sess as any).short_id}\` | ${(sess as any).message_count || 0} messages | ${sess.status || "active"}`;
+            if ((sess as any).project_path) md += ` | ${(sess as any).project_path}`;
+            if ((sess as any).agent_type) md += ` | Agent: ${(sess as any).agent_type}`;
+            md += `\n\n`;
+            if ((sess as any).idle_summary) {
+              md += `#### Summary\n\n${(sess as any).idle_summary}\n\n`;
+            }
+            // Fetch messages — get a mix of user and assistant
             const messages = await ctx.db.query("messages")
               .withIndex("by_conversation_id", (m: any) => m.eq("conversation_id", sess._id))
               .order("asc")
-              .take(20);
-            const userMsgs = messages.filter((m: any) => m.role === "user").slice(0, 5);
-            if (userMsgs.length > 0) {
-              md += `\nKey messages:\n`;
-              for (const m of userMsgs) {
-                const preview = (m as any).content?.slice(0, 200) || "";
-                md += `- ${preview}${(m as any).content?.length > 200 ? "..." : ""}\n`;
+              .take(50);
+            const significant = messages.filter((m: any) =>
+              m.role === "user" || (m.role === "assistant" && (m.content?.length || 0) > 100)
+            );
+            if (significant.length > 0) {
+              md += `#### Conversation Highlights\n\n`;
+              // First user message in full
+              const firstUser = significant.find((m: any) => m.role === "user");
+              if (firstUser) {
+                md += `**User** (initial):\n${(firstUser as any).content?.slice(0, 800) || ""}${((firstUser as any).content?.length || 0) > 800 ? "..." : ""}\n\n`;
+              }
+              // Last few exchanges
+              const recent = significant.slice(-8);
+              for (const m of recent) {
+                if (m === firstUser) continue;
+                const role = (m as any).role === "user" ? "**User**" : "**Assistant**";
+                const content = (m as any).content || "";
+                const limit = (m as any).role === "user" ? 500 : 800;
+                md += `${role}:\n${content.slice(0, limit)}${content.length > limit ? "..." : ""}\n\n`;
               }
             }
-            md += `\n\`cast read ${(sess as any).short_id}\` for full conversation\n---\n`;
+            // Active task/plan context
+            if ((sess as any).active_task_id) {
+              const t = await ctx.db.get((sess as any).active_task_id);
+              if (t) md += `Active task: **${(t as any).title}** \`${(t as any).short_id}\`\n\n`;
+            }
+            if ((sess as any).active_plan_id) {
+              const p = await ctx.db.get((sess as any).active_plan_id);
+              if (p) md += `Active plan: **${(p as any).title}** \`${(p as any).short_id}\`\n\n`;
+            }
+            md += `> \`cast read ${(sess as any).short_id}\` for full conversation transcript\n---\n`;
             results.push({ type: "session", shortId: mention.shortId, markdown: md });
           }
+
         } else if (mention.type === "doc" && mention.id) {
           const doc = await ctx.db.get(mention.id as Id<"docs">);
           if (doc && doc.user_id === userId) {
-            let md = `\n\n---\n**Doc: ${doc.title}** (${doc.doc_type || "note"})\n`;
+            let md = `\n\n---\n### Doc: ${doc.title}\n`;
+            md += `Type: ${doc.doc_type || "note"}`;
+            if ((doc as any).labels?.length) md += ` | Labels: ${(doc as any).labels.join(", ")}`;
+            md += `\n\n`;
             if (doc.content) {
-              const contentPreview = doc.content.slice(0, 1500);
-              md += `\n${contentPreview}${doc.content.length > 1500 ? "\n\n..." : ""}\n`;
+              const contentLimit = 4000;
+              md += doc.content.slice(0, contentLimit);
+              if (doc.content.length > contentLimit) md += `\n\n... (${Math.round(doc.content.length / 1000)}k chars total)`;
+              md += `\n\n`;
             }
-            md += `\n\`cast doc read ${String(doc._id).slice(-6)}\` for full document\n---\n`;
+            // Related conversations
+            const linkedConvs = await ctx.db.query("conversations")
+              .withIndex("by_user_updated", (c: any) => c.eq("user_id", userId))
+              .order("desc")
+              .take(50);
+            const docSessions = linkedConvs.filter((c: any) => String((c as any).active_doc_id) === String(doc._id)).slice(0, 3);
+            if (docSessions.length > 0) {
+              md += `#### Related Sessions\n\n`;
+              for (const s of docSessions) {
+                md += `- **${s.title || "Untitled"}** \`${(s as any).short_id}\` (${(s as any).message_count || 0} msgs)\n`;
+              }
+              md += `\n`;
+            }
+            md += `> \`cast doc read ${String(doc._id).slice(-6)}\` for full document\n---\n`;
             results.push({ type: "doc", id: mention.id, markdown: md });
           }
+
         } else if (mention.type === "person") {
           results.push({ type: "person", shortId: mention.shortId, id: mention.id, markdown: "" });
         }
