@@ -56,15 +56,17 @@ export function useConversationMessages(
   // --- Mode: target vs normal ---
   const [targetMode, setTargetMode] = useState(hasTarget);
   const [trackedConvId, setTrackedConvId] = useState(conversationId);
+  const [jumpTimestamp, setJumpTimestamp] = useState<number | null>(null);
 
   if (trackedConvId !== conversationId) {
     setTrackedConvId(conversationId);
     setTargetMode(!!(targetMessageId || cleanedHighlightQuery));
+    setJumpTimestamp(null);
   }
 
   // Derive targetMode from hasTarget (deleted the useEffect, using render-time sync)
   if (hasTarget && !targetMode) setTargetMode(true);
-  if (!hasTarget && targetMode) setTargetMode(false);
+  if (!hasTarget && jumpTimestamp === null && targetMode) setTargetMode(false);
 
   // =============================================
   // NORMAL MODE: Convex paginated subscription (background sync)
@@ -122,8 +124,13 @@ export function useConversationMessages(
 
   const aroundData = useQuery(
     api.conversations.getMessagesAroundTimestamp,
-    canQuery && targetMode && targetTimestampReady && !targetInitializedRef.current
-      ? { conversation_id: convId, center_timestamp: effectiveTargetTimestamp!, limit_before: 50, limit_after: 50 }
+    canQuery && targetMode && !targetInitializedRef.current && (targetTimestampReady || jumpTimestamp !== null)
+      ? {
+          conversation_id: convId,
+          center_timestamp: jumpTimestamp ?? effectiveTargetTimestamp!,
+          limit_before: jumpTimestamp !== null ? 0 : 50,
+          limit_after: jumpTimestamp !== null ? 100 : 50,
+        }
       : "skip"
   );
 
@@ -257,21 +264,28 @@ export function useConversationMessages(
   }, [targetMode, targetAroundData, targetHasMoreBelow, targetIsLoadingNewer]);
 
   const jumpToStart = useCallback(() => {
-    if (targetMode) {
-      setTargetIsLoadingOlder(true);
-      setTargetLoadOlderTs(0);
-    } else if (paginationStatus === "CanLoadMore") {
-      loadMore(10000);
-    }
-  }, [targetMode, paginationStatus, loadMore]);
+    targetInitializedRef.current = false;
+    setTargetAroundData(null);
+    setJumpTimestamp(0);
+    setTargetMode(true);
+    setTargetHasMoreAbove(false);
+    setTargetHasMoreBelow(true);
+    setTargetLoadOlderTs(undefined);
+    setTargetLoadNewerTs(undefined);
+    setTargetIsLoadingOlder(false);
+    setTargetIsLoadingNewer(false);
+  }, []);
 
   const jumpToEnd = useCallback(() => {
-    if (targetMode) {
-      setTargetMode(false);
-      targetInitializedRef.current = false;
-      setTargetAroundData(null);
-    }
-  }, [targetMode]);
+    setTargetMode(false);
+    targetInitializedRef.current = false;
+    setTargetAroundData(null);
+    setJumpTimestamp(null);
+    setTargetLoadOlderTs(undefined);
+    setTargetLoadNewerTs(undefined);
+    setTargetIsLoadingOlder(false);
+    setTargetIsLoadingNewer(false);
+  }, []);
 
   // =============================================
   // Compaction count + loaded_start_index
