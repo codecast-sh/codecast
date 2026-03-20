@@ -1,22 +1,21 @@
-import { useCallback, useState, useRef } from "react";
+"use client";
+import { useCallback, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useInboxStore, DocDetail } from "../../../store/inboxStore";
 import { useSyncDocDetail } from "../../../hooks/useSyncDocs";
-import { useMutation, useQuery } from "convex/react";
+import { useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { AuthGuard } from "../../../components/AuthGuard";
 import { DashboardLayout } from "../../../components/DashboardLayout";
+import { DocumentDetailLayout } from "../../../components/DocumentDetailLayout";
 import { Badge } from "../../../components/ui/badge";
-import { DocEditor } from "../../../components/editor/DocEditor";
-import type { MentionItem } from "../../../components/editor/MentionList";
 import "../../../components/editor/editor.css";
 import {
-  ArrowLeft,
   Pin,
   Archive,
   Clock,
   MessageSquare,
-  ExternalLink,
+  PanelRight,
   Circle,
   CircleDot,
   CheckCircle2,
@@ -26,13 +25,10 @@ import {
   ArrowUp,
   ArrowDown,
   Minus,
-  Edit3,
-  Eye,
-  Save,
   Tag,
-  MoreHorizontal,
 } from "lucide-react";
 import Link from "next/link";
+import { toast } from "sonner";
 
 const api = _api as any;
 
@@ -127,60 +123,18 @@ export default function DocDetailPage() {
   const detail = useInboxStore((s) => s.docDetails[id]) as DocDetail | undefined;
   const listItem = useInboxStore((s) => s.docs[id]);
   const data = detail || (listItem as DocDetail | undefined);
+  const updateDoc = useInboxStore((s) => s.updateDoc);
   const pinDoc = useInboxStore((s) => s.pinDoc);
   const archiveDoc = useInboxStore((s) => s.archiveDoc);
+  const openSidePanel = useInboxStore((s) => s.openSidePanel);
+  const promoteToPlan = useMutation(api.docs.webPromoteToPlan);
 
-  const webUpdate = useMutation(api.docs.webUpdate);
-  const mentionResults = useQuery(api.docs.mentionSearch, { query: "", limit: 20 });
-  const mentionResultsRef = useRef<MentionItem[]>([]);
-  if (mentionResults) mentionResultsRef.current = mentionResults;
-
-  const [isEditing, setIsEditing] = useState(true);
-  const [editTitle, setEditTitle] = useState<string | null>(null);
-  const [saveStatus, setSaveStatus] = useState<"saved" | "saving" | "idle">("idle");
-  const [showMeta, setShowMeta] = useState(false);
-  const saveTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
-
-  const handleContentUpdate = useCallback(
-    (markdown: string) => {
+  const handleTitleChange = useCallback(
+    (title: string) => {
       if (!data) return;
-      setSaveStatus("saving");
-      webUpdate({ id: data._id as any, content: markdown })
-        .then(() => {
-          setSaveStatus("saved");
-          if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-          saveTimerRef.current = setTimeout(() => setSaveStatus("idle"), 2000);
-        })
-        .catch(() => setSaveStatus("idle"));
+      updateDoc(data._id, { title });
     },
-    [data, webUpdate]
-  );
-
-  const handleTitleBlur = useCallback(() => {
-    if (!data || editTitle === null || editTitle === data.title) return;
-    webUpdate({ id: data._id as any, title: editTitle });
-  }, [data, editTitle, webUpdate]);
-
-  const handleTitleKeyDown = useCallback((e: React.KeyboardEvent) => {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      (e.target as HTMLElement).blur();
-    }
-  }, []);
-
-  const handleMentionQuery = useCallback(
-    async (query: string): Promise<MentionItem[]> => {
-      const results = mentionResultsRef.current;
-      if (!results.length) return [];
-      const q = query.toLowerCase();
-      if (!q) return results;
-      return results.filter(
-        (r: MentionItem) =>
-          r.label.toLowerCase().includes(q) ||
-          (r.sublabel && r.sublabel.toLowerCase().includes(q))
-      );
-    },
-    []
+    [data, updateDoc]
   );
 
   const handlePin = useCallback(async () => {
@@ -195,11 +149,19 @@ export default function DocDetailPage() {
   }, [data, archiveDoc, router]);
 
   const handleTypeChange = useCallback(
-    (newType: string) => {
+    async (newType: string) => {
       if (!data) return;
-      webUpdate({ id: data._id as any, doc_type: newType });
+      if (newType === "plan" && !(data as any).plan_id) {
+        const result = await promoteToPlan({ doc_id: data._id as any });
+        if (result?.short_id) {
+          toast.success("Promoted to plan");
+          router.push(`/plans/${result.short_id}`);
+          return;
+        }
+      }
+      updateDoc(data._id, { doc_type: newType });
     },
-    [data, webUpdate]
+    [data, updateDoc, promoteToPlan, router]
   );
 
   if (!data) {
@@ -217,7 +179,6 @@ export default function DocDetailPage() {
   const doc = data;
   const conversation = data.conversation;
   const relatedTasks = data.related_tasks || [];
-  const displayTitle = editTitle ?? (doc as any).display_title ?? doc.title;
   const hasRelatedContent =
     (doc as any).active_plan ||
     ((doc as any).related_conversations?.length > 0 || conversation) ||
@@ -226,39 +187,21 @@ export default function DocDetailPage() {
   return (
     <AuthGuard>
       <DashboardLayout>
-        <div className="flex flex-col h-full">
-          {/* Thin top bar */}
-          <div className="flex items-center justify-between px-6 py-2 border-b border-sol-border/10 flex-shrink-0">
-            <div className="flex items-center gap-3">
-              <Link
-                href="/docs"
-                className="text-sol-text-dim hover:text-sol-cyan transition-colors"
-              >
-                <ArrowLeft className="w-4 h-4" />
-              </Link>
+        <DocumentDetailLayout
+          docId={doc._id}
+          title={(doc as any).display_title ?? doc.title}
+          markdownContent={doc.content}
+          onTitleChange={handleTitleChange}
+          backHref="/docs"
+          placeholder="Start typing or insert using /"
+          topBarLeft={
+            <>
               <DocTypeSelector value={doc.doc_type} onChange={handleTypeChange} />
               {doc.pinned && <Pin className="w-3 h-3 text-sol-yellow" />}
-              {saveStatus === "saving" && (
-                <span className="text-[11px] text-sol-text-dim animate-pulse">Saving...</span>
-              )}
-              {saveStatus === "saved" && (
-                <span className="text-[11px] text-sol-green flex items-center gap-1">
-                  <Save className="w-3 h-3" /> Saved
-                </span>
-              )}
-            </div>
-            <div className="flex items-center gap-1">
-              <button
-                onClick={() => setIsEditing(!isEditing)}
-                className={`p-1.5 rounded-md text-xs flex items-center gap-1 transition-colors ${
-                  isEditing
-                    ? "text-sol-cyan"
-                    : "text-sol-text-dim hover:text-sol-text"
-                }`}
-                title={isEditing ? "Switch to view mode" : "Switch to edit mode"}
-              >
-                {isEditing ? <Edit3 className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-              </button>
+            </>
+          }
+          topBarRight={
+            <>
               <button
                 onClick={handlePin}
                 className={`p-1.5 rounded-md transition-colors ${doc.pinned ? "text-sol-yellow" : "text-sol-text-dim hover:text-sol-yellow"}`}
@@ -267,197 +210,148 @@ export default function DocDetailPage() {
                 <Pin className="w-3.5 h-3.5" />
               </button>
               <button
-                onClick={() => setShowMeta(!showMeta)}
-                className="p-1.5 rounded-md text-sol-text-dim hover:text-sol-text transition-colors"
-                title="Document info"
-              >
-                <MoreHorizontal className="w-3.5 h-3.5" />
-              </button>
-              <button
                 onClick={handleArchive}
                 className="p-1.5 rounded-md text-sol-text-dim hover:text-sol-red transition-colors"
                 title="Archive"
               >
                 <Archive className="w-3.5 h-3.5" />
               </button>
-            </div>
-          </div>
-
-          {/* Meta drawer - slides down when toggled */}
-          {showMeta && (
-            <div className="px-10 py-3 border-b border-sol-border/10 flex-shrink-0 max-w-3xl mx-auto w-full">
-              <div className="flex items-center gap-4 text-xs text-sol-text-dim flex-wrap">
-                {(doc as any).author_image && (
-                  <span className="flex items-center gap-1.5">
-                    <img
-                      src={(doc as any).author_image}
-                      alt={(doc as any).author_name || ""}
-                      className="w-4 h-4 rounded-full object-cover"
-                    />
-                    <span className="text-sol-text-muted">{(doc as any).author_name}</span>
-                  </span>
-                )}
-                <span className="flex items-center gap-1">
-                  <Clock className="w-3 h-3" />
-                  {formatDate(doc.created_at)}
+            </>
+          }
+          metaContent={
+            <div className="flex items-center gap-4 text-xs text-sol-text-dim flex-wrap">
+              {(doc as any).author_image && (
+                <span className="flex items-center gap-1.5">
+                  <img
+                    src={(doc as any).author_image}
+                    alt={(doc as any).author_name || ""}
+                    className="w-4 h-4 rounded-full object-cover"
+                  />
+                  <span className="text-sol-text-muted">{(doc as any).author_name}</span>
                 </span>
-                {doc.updated_at !== doc.created_at && (
-                  <span>Updated {formatDate(doc.updated_at)}</span>
-                )}
-                {doc.labels && doc.labels.length > 0 && (
-                  <span className="flex items-center gap-1.5">
-                    <Tag className="w-3 h-3" />
-                    {doc.labels.map((l: string) => (
-                      <Badge
-                        key={l}
-                        variant="outline"
-                        className="text-[10px] border-sol-border/50 text-sol-text-muted"
-                      >
-                        {l}
-                      </Badge>
-                    ))}
-                  </span>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* Main content area - scrollable, full height */}
-          <div className="flex-1 overflow-y-auto">
-            <div className="max-w-3xl mx-auto px-10 pt-10 pb-32">
-              {/* Title */}
-              {isEditing ? (
-                <input
-                  type="text"
-                  value={displayTitle}
-                  onChange={(e) => setEditTitle(e.target.value)}
-                  onBlur={handleTitleBlur}
-                  onKeyDown={handleTitleKeyDown}
-                  className="text-3xl font-bold text-sol-text leading-tight bg-transparent border-none outline-none w-full placeholder:text-sol-text-dim/40 mb-1"
-                  placeholder="Untitled"
-                />
-              ) : (
-                <h1 className="text-3xl font-bold text-sol-text leading-tight mb-1">
-                  {displayTitle || "Untitled"}
-                </h1>
               )}
-
-              {/* Editor - no wrapper, directly on the page */}
-              <div className="mt-4">
-                <DocEditor
-                  key={doc._id}
-                  content={doc.content}
-                  onUpdate={handleContentUpdate}
-                  onMentionQuery={handleMentionQuery}
-                  editable={isEditing}
-                  placeholder="Start typing or insert using /"
-                />
-              </div>
-
-              {/* Related content - shown below editor, less prominent */}
-              {hasRelatedContent && (
-                <div className="mt-16 pt-8 border-t border-sol-border/15">
-                  {/* Plan */}
-                  {(doc as any).active_plan && (
-                    <div className="mb-8">
-                      <h2 className="text-xs font-medium text-sol-text-dim uppercase tracking-wider mb-3">
-                        Plan
-                      </h2>
-                      <Link
-                        href={`/plans/${(doc as any).active_plan._id}`}
-                        className="flex items-center gap-2.5 px-4 py-3 border border-sol-border/20 rounded-lg hover:bg-sol-bg-alt/50 transition-colors group"
-                      >
-                        <CircleDot className="w-4 h-4 text-sol-cyan flex-shrink-0" />
-                        <span className="text-sm font-medium text-sol-text group-hover:text-sol-cyan transition-colors">
-                          {(doc as any).active_plan.title}
-                        </span>
-                        <Badge
-                          variant="outline"
-                          className="text-[10px] px-1.5 py-0 text-sol-cyan border-sol-cyan/30 ml-auto"
-                        >
-                          {(doc as any).active_plan.status}
-                        </Badge>
-                      </Link>
-                    </div>
-                  )}
-
-                  {/* Sessions */}
-                  {((doc as any).related_conversations?.length > 0 || conversation) && (
-                    <div className="mb-8">
-                      <h2 className="text-xs font-medium text-sol-text-dim uppercase tracking-wider mb-3">
-                        Sessions
-                      </h2>
-                      <div className="border border-sol-border/20 rounded-lg divide-y divide-sol-border/10 overflow-hidden">
-                        {((doc as any).related_conversations ||
-                          (conversation ? [conversation] : [])
-                        ).map((conv: any) => (
-                          <Link
-                            key={conv._id || conv.session_id}
-                            href={`/conversation/${conv.session_id || conv.short_id}`}
-                            className="flex items-center gap-3 px-4 py-3 hover:bg-sol-bg-alt/50 transition-colors group"
-                          >
-                            <MessageSquare className="w-4 h-4 text-sol-text-dim flex-shrink-0" />
-                            <span className="flex-1 text-sm text-sol-text truncate group-hover:text-sol-cyan">
-                              {conv.title || "Untitled Session"}
-                            </span>
-                            {conv.project_path && (
-                              <span className="text-[10px] font-mono text-sol-text-dim truncate max-w-[200px]">
-                                {conv.project_path.split("/").slice(-2).join("/")}
-                              </span>
-                            )}
-                            <span className="text-xs text-sol-text-dim tabular-nums flex-shrink-0">
-                              {conv.message_count && `${conv.message_count} msgs`}
-                            </span>
-                            <ExternalLink className="w-3 h-3 text-sol-text-dim opacity-0 group-hover:opacity-100 flex-shrink-0" />
-                          </Link>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Related Tasks */}
-                  {relatedTasks.length > 0 && (
-                    <div className="mb-8">
-                      <h2 className="text-xs font-medium text-sol-text-dim uppercase tracking-wider mb-3">
-                        Related Tasks
-                      </h2>
-                      <div className="border border-sol-border/20 rounded-lg divide-y divide-sol-border/10 overflow-hidden">
-                        {relatedTasks.map((task: any) => {
-                          const status = STATUS_CONFIG[task.status] || STATUS_CONFIG.open;
-                          const priority = PRIORITY_CONFIG[task.priority] || PRIORITY_CONFIG.medium;
-                          const StatusIcon = status.icon;
-                          const PriorityIcon = priority.icon;
-                          return (
-                            <Link
-                              key={task._id}
-                              href={`/tasks/${task._id}`}
-                              className="flex items-center gap-3 px-4 py-3 hover:bg-sol-bg-alt/50 transition-colors"
-                            >
-                              <StatusIcon className={`w-4 h-4 flex-shrink-0 ${status.color}`} />
-                              <span className="text-xs font-mono text-sol-text-dim w-16 flex-shrink-0">
-                                {task.short_id}
-                              </span>
-                              <span className="flex-1 text-sm text-sol-text truncate">
-                                {task.title}
-                              </span>
-                              <Badge
-                                variant="outline"
-                                className={`text-[10px] px-1.5 py-0 ${status.color} border-current/30`}
-                              >
-                                {status.label}
-                              </Badge>
-                              <PriorityIcon className={`w-3.5 h-3.5 flex-shrink-0 ${priority.color}`} />
-                            </Link>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
+              <span className="flex items-center gap-1">
+                <Clock className="w-3 h-3" />
+                {formatDate(doc.created_at)}
+              </span>
+              {doc.updated_at !== doc.created_at && (
+                <span>Updated {formatDate(doc.updated_at)}</span>
+              )}
+              {doc.labels && doc.labels.length > 0 && (
+                <span className="flex items-center gap-1.5">
+                  <Tag className="w-3 h-3" />
+                  {doc.labels.map((l: string) => (
+                    <Badge
+                      key={l}
+                      variant="outline"
+                      className="text-[10px] border-sol-border/50 text-sol-text-muted"
+                    >
+                      {l}
+                    </Badge>
+                  ))}
+                </span>
+              )}
+            </div>
+          }
+        >
+          {hasRelatedContent && (
+            <>
+              {(doc as any).active_plan && (
+                <div className="mb-8">
+                  <h2 className="text-xs font-medium text-sol-text-dim uppercase tracking-wider mb-3">
+                    Plan
+                  </h2>
+                  <Link
+                    href={`/plans/${(doc as any).active_plan._id}`}
+                    className="flex items-center gap-2.5 px-4 py-3 border border-sol-border/20 rounded-lg hover:bg-sol-bg-alt/50 transition-colors group"
+                  >
+                    <CircleDot className="w-4 h-4 text-sol-cyan flex-shrink-0" />
+                    <span className="text-sm font-medium text-sol-text group-hover:text-sol-cyan transition-colors">
+                      {(doc as any).active_plan.title}
+                    </span>
+                    <Badge
+                      variant="outline"
+                      className="text-[10px] px-1.5 py-0 text-sol-cyan border-sol-cyan/30 ml-auto"
+                    >
+                      {(doc as any).active_plan.status}
+                    </Badge>
+                  </Link>
                 </div>
               )}
-            </div>
-          </div>
-        </div>
+
+              {((doc as any).related_conversations?.length > 0 || conversation) && (
+                <div className="mb-8">
+                  <h2 className="text-xs font-medium text-sol-text-dim uppercase tracking-wider mb-3">
+                    Sessions
+                  </h2>
+                  <div className="border border-sol-border/20 rounded-lg divide-y divide-sol-border/10 overflow-hidden">
+                    {((doc as any).related_conversations ||
+                      (conversation ? [conversation] : [])
+                    ).map((conv: any) => (
+                      <button
+                        key={conv._id || conv.session_id}
+                        onClick={() => openSidePanel(conv._id)}
+                        className="flex items-center gap-3 px-4 py-3 hover:bg-sol-bg-alt/50 transition-colors group w-full text-left"
+                      >
+                        <MessageSquare className="w-4 h-4 text-sol-text-dim flex-shrink-0" />
+                        <span className="flex-1 text-sm text-sol-text truncate group-hover:text-sol-cyan">
+                          {conv.title || "Untitled Session"}
+                        </span>
+                        {conv.project_path && (
+                          <span className="text-[10px] font-mono text-sol-text-dim truncate max-w-[200px]">
+                            {conv.project_path.split("/").slice(-2).join("/")}
+                          </span>
+                        )}
+                        <span className="text-xs text-sol-text-dim tabular-nums flex-shrink-0">
+                          {conv.message_count && `${conv.message_count} msgs`}
+                        </span>
+                        <PanelRight className="w-3 h-3 text-sol-text-dim opacity-0 group-hover:opacity-100 flex-shrink-0" />
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {relatedTasks.length > 0 && (
+                <div className="mb-8">
+                  <h2 className="text-xs font-medium text-sol-text-dim uppercase tracking-wider mb-3">
+                    Related Tasks
+                  </h2>
+                  <div className="border border-sol-border/20 rounded-lg divide-y divide-sol-border/10 overflow-hidden">
+                    {relatedTasks.map((task: any) => {
+                      const status = STATUS_CONFIG[task.status] || STATUS_CONFIG.open;
+                      const priority = PRIORITY_CONFIG[task.priority] || PRIORITY_CONFIG.medium;
+                      const StatusIcon = status.icon;
+                      const PriorityIcon = priority.icon;
+                      return (
+                        <Link
+                          key={task._id}
+                          href={`/tasks/${task._id}`}
+                          className="flex items-center gap-3 px-4 py-3 hover:bg-sol-bg-alt/50 transition-colors"
+                        >
+                          <StatusIcon className={`w-4 h-4 flex-shrink-0 ${status.color}`} />
+                          <span className="text-xs font-mono text-sol-text-dim w-16 flex-shrink-0">
+                            {task.short_id}
+                          </span>
+                          <span className="flex-1 text-sm text-sol-text truncate">
+                            {task.title}
+                          </span>
+                          <Badge
+                            variant="outline"
+                            className={`text-[10px] px-1.5 py-0 ${status.color} border-current/30`}
+                          >
+                            {status.label}
+                          </Badge>
+                          <PriorityIcon className={`w-3.5 h-3.5 flex-shrink-0 ${priority.color}`} />
+                        </Link>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </DocumentDetailLayout>
       </DashboardLayout>
     </AuthGuard>
   );

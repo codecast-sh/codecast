@@ -1,7 +1,7 @@
 "use client";
 import { useState, useCallback, useRef, useMemo, Fragment } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useQuery, useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
@@ -10,7 +10,7 @@ import { useSyncTasks, useSyncTaskDetail } from "../../hooks/useSyncTasks";
 import { useWorkspaceArgs } from "../../hooks/useWorkspaceArgs";
 
 import { TaskCommandPalette } from "../../components/TaskCommandPalette";
-import { AssigneeSelect } from "../../components/AssigneeSelect";
+import { CreateTaskModal } from "../../components/CreateTaskModal";
 
 const api = _api as any;
 import { AuthGuard } from "../../components/AuthGuard";
@@ -39,10 +39,11 @@ import {
   ShieldCheck,
   ChevronDown,
   Tag,
-  Search,
   LayoutGrid,
   List,
   EyeOff,
+  SlidersHorizontal,
+  User,
 } from "lucide-react";
 
 type TaskStatus = "backlog" | "open" | "in_progress" | "in_review" | "done" | "dropped";
@@ -140,10 +141,12 @@ function TaskRow({
       onClick={onClick}
       onContextMenu={onContextMenu}
       className={`w-full flex items-center gap-3 px-4 py-2.5 transition-colors text-left group border-b border-sol-border/30 cursor-pointer select-none ${
-        isFocused
-          ? "bg-sol-cyan/8 border-l-[3px] border-l-sol-cyan"
-          : "hover:bg-sol-bg-alt/50 border-l-[3px] border-l-transparent"
-      } ${isSelected ? "bg-sol-cyan/5" : ""}`}
+        isSelected
+          ? "bg-sol-cyan/10 border-l-[3px] border-l-sol-cyan/60"
+          : isFocused
+            ? "bg-sol-cyan/15 border-l-[3px] border-l-sol-cyan"
+            : "hover:bg-sol-bg-alt/50 border-l-[3px] border-l-transparent"
+      }`}
     >
       <button
         onClick={(e) => { e.stopPropagation(); onSelect(); }}
@@ -259,289 +262,6 @@ function TaskRow({
 }
 
 
-const CREATE_STATUS_OPTIONS = [
-  { key: "open", label: "Open", icon: Circle, color: "text-sol-blue" },
-  { key: "backlog", label: "Backlog", icon: CircleDotDashed, color: "text-sol-text-dim" },
-  { key: "in_progress", label: "In Progress", icon: CircleDot, color: "text-sol-yellow" },
-];
-
-const CREATE_PRIORITY_OPTIONS = [
-  { key: "urgent", label: "Urgent", icon: AlertTriangle, color: "text-sol-red" },
-  { key: "high", label: "High", icon: ArrowUp, color: "text-sol-orange" },
-  { key: "medium", label: "Medium", icon: Minus, color: "text-sol-text-muted" },
-  { key: "low", label: "Low", icon: ArrowDown, color: "text-sol-text-dim" },
-];
-
-function PropertyChip<T extends string>({
-  value,
-  options,
-  onChange,
-}: {
-  value: T;
-  options: { key: T; label: string; icon: any; color?: string }[];
-  onChange: (v: T) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  const current = options.find((o) => o.key === value) || options[0];
-  const Icon = current.icon;
-
-  useWatchEffect(() => {
-    if (!open) return;
-    const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [open]);
-
-  return (
-    <div ref={ref} className="relative">
-      <button
-        type="button"
-        onClick={() => setOpen(!open)}
-        className="flex items-center gap-1.5 px-2 py-1 rounded-md text-xs border border-sol-border/30 hover:border-sol-border/60 text-sol-text-muted hover:text-sol-text transition-colors"
-      >
-        <Icon className={`w-3.5 h-3.5 ${current.color || ""}`} />
-        <span>{current.label}</span>
-        <ChevronDown className="w-3 h-3 opacity-60" />
-      </button>
-      {open && (
-        <div className="absolute top-full left-0 mt-1 w-40 bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[60] py-1">
-          {options.map((opt) => {
-            const OptIcon = opt.icon;
-            return (
-              <button
-                key={opt.key}
-                onClick={() => { onChange(opt.key); setOpen(false); }}
-                className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs transition-colors ${
-                  opt.key === value ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted hover:bg-sol-bg-alt"
-                }`}
-              >
-                <OptIcon className={`w-3.5 h-3.5 ${opt.color || ""}`} />
-                <span className="flex-1 text-left">{opt.label}</span>
-                {opt.key === value && <Check className="w-3 h-3 text-sol-cyan" />}
-              </button>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function LabelsChip({ value, onChange }: { value: string[]; onChange: (v: string[]) => void }) {
-  const [open, setOpen] = useState(false);
-  const [search, setSearch] = useState("");
-  const ref = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  useWatchEffect(() => {
-    if (!open) return;
-    setTimeout(() => inputRef.current?.focus(), 0);
-    const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [open]);
-
-  const filtered = [...new Set([...DEFAULT_LABELS, ...value])]
-    .filter((l) => !search.trim() || l.toLowerCase().includes(search.toLowerCase()));
-
-  const canCreate = search.trim() && !filtered.some((l) => l.toLowerCase() === search.trim().toLowerCase());
-
-  const toggle = (label: string) => {
-    onChange(value.includes(label) ? value.filter((l) => l !== label) : [...value, label]);
-  };
-
-  const createAndAdd = () => {
-    const name = search.trim().toLowerCase();
-    if (name && !value.includes(name)) {
-      onChange([...value, name]);
-    }
-    setSearch("");
-  };
-
-  return (
-    <div ref={ref} className="relative">
-      <button
-        type="button"
-        onClick={() => setOpen(!open)}
-        className={`flex items-center gap-1.5 px-2 py-1 rounded-md text-xs transition-colors border ${
-          value.length > 0
-            ? "border-sol-border/60 bg-sol-bg-alt text-sol-text"
-            : "border-sol-border/30 hover:border-sol-border/60 text-sol-text-dim hover:text-sol-text"
-        }`}
-      >
-        <Tag className="w-3.5 h-3.5" />
-        {value.length > 0 ? (
-          <span>{value.length === 1 ? value[0] : `${value.length} labels`}</span>
-        ) : (
-          <span>Labels</span>
-        )}
-        <ChevronDown className="w-3 h-3 opacity-60" />
-      </button>
-      {open && (
-        <div className="absolute top-full left-0 mt-1 w-48 bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[60] overflow-hidden">
-          <div className="flex items-center gap-2 px-3 py-2 border-b border-sol-border/30">
-            <Search className="w-3.5 h-3.5 text-sol-text-dim flex-shrink-0" />
-            <input
-              ref={inputRef}
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Type to search or create..."
-              className="flex-1 text-xs bg-transparent text-sol-text placeholder:text-sol-text-dim outline-none"
-              onKeyDown={(e) => {
-                if (e.key === "Escape") setOpen(false);
-                if (e.key === "Enter" && canCreate) { e.preventDefault(); createAndAdd(); }
-              }}
-            />
-          </div>
-          <div className="py-1 max-h-48 overflow-y-auto">
-            {canCreate && (
-              <button
-                onClick={createAndAdd}
-                className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-sol-cyan hover:bg-sol-bg-alt transition-colors"
-              >
-                <Plus className="w-3 h-3 flex-shrink-0" />
-                <span className="flex-1 text-left">Create "{search.trim()}"</span>
-              </button>
-            )}
-            {filtered.map((label) => {
-              const color = getLabelColor(label);
-              return (
-                <button
-                  key={label}
-                  onClick={() => toggle(label)}
-                  className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs transition-colors ${
-                    value.includes(label) ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted hover:bg-sol-bg-alt"
-                  }`}
-                >
-                  <span className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${color.dot}`} />
-                  <span className="flex-1 text-left">{label}</span>
-                  {value.includes(label) && <Check className="w-3.5 h-3.5 text-sol-cyan flex-shrink-0" />}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function CreateTaskModal({ onClose, teamMembers, currentUser }: { onClose: () => void; teamMembers?: any[] | null; currentUser?: any }) {
-  const createTask = useInboxStore((s) => s.createTask);
-  const webCreate = useMutation(api.tasks.webCreate);
-  const workspaceArgs = useWorkspaceArgs();
-
-  const [title, setTitle] = useState("");
-  const [description, setDescription] = useState("");
-  const [priority, setPriority] = useState<string>("medium");
-  const [status, setStatus] = useState<string>("open");
-  const [assignee, setAssignee] = useState<string | null>(null);
-  const [assigneeInfo, setAssigneeInfo] = useState<{ name: string; image?: string } | null>(null);
-  const [labels, setLabels] = useState<string[]>([]);
-  const [createMore, setCreateMore] = useState(false);
-
-  const titleRef = useRef<HTMLInputElement>(null);
-
-  const handleSubmit = useCallback(async () => {
-    if (!title.trim()) return;
-    const opts: any = {
-      title: title.trim(),
-      description: description.trim() || undefined,
-      task_type: "task",
-      priority,
-      status,
-      assignee: assignee || undefined,
-      labels: labels.length > 0 ? labels : undefined,
-    };
-    createTask(opts);
-    try {
-      const wsArgs = workspaceArgs === "skip" ? {} : workspaceArgs;
-      await webCreate({ ...opts, ...wsArgs });
-      toast.success(`Created: ${title.trim()}`);
-    } catch (e: any) {
-      console.error("Task creation failed:", e);
-      toast.error(`Failed to create task: ${e?.message || "Unknown error"}`);
-    }
-    if (createMore) {
-      setTitle("");
-      setDescription("");
-      setTimeout(() => titleRef.current?.focus(), 0);
-    } else {
-      onClose();
-    }
-  }, [title, description, priority, status, assignee, labels, createMore, createTask, webCreate, onClose]);
-
-  return (
-    <div
-      className="fixed inset-0 bg-black/50 z-50 flex items-start justify-center pt-[12vh]"
-      onClick={onClose}
-    >
-      <div
-        className="bg-sol-bg border border-sol-border rounded-xl shadow-2xl w-full max-w-[540px]"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="px-5 pt-5 pb-2">
-          <input
-            ref={titleRef}
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            placeholder="Task title"
-            autoFocus
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSubmit(); }
-              if (e.key === "Escape") onClose();
-            }}
-            className="w-full text-base font-medium text-sol-text placeholder:text-sol-text-dim/50 bg-transparent outline-none"
-          />
-          <textarea
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            placeholder="Add description..."
-            rows={3}
-            onKeyDown={(e) => { if (e.key === "Escape") onClose(); }}
-            className="w-full mt-2 text-sm text-sol-text-muted placeholder:text-sol-text-dim/40 bg-transparent outline-none resize-none"
-          />
-        </div>
-
-        <div className="flex items-center gap-1.5 px-4 py-3 border-t border-sol-border/20 flex-wrap">
-          <PropertyChip value={status as any} options={CREATE_STATUS_OPTIONS as any} onChange={(v) => setStatus(v)} />
-          <PropertyChip value={priority as any} options={CREATE_PRIORITY_OPTIONS as any} onChange={(v) => setPriority(v)} />
-          <LabelsChip value={labels} onChange={setLabels} />
-          <AssigneeSelect
-            value={assignee}
-            valueInfo={assigneeInfo}
-            onChange={(id, info) => { setAssignee(id); setAssigneeInfo(info); }}
-            teamMembers={teamMembers}
-            currentUser={currentUser}
-          />
-          <div className="flex-1" />
-          <label className="flex items-center gap-1.5 text-xs text-sol-text-dim cursor-pointer select-none hover:text-sol-text transition-colors">
-            <input
-              type="checkbox"
-              checked={createMore}
-              onChange={(e) => setCreateMore(e.target.checked)}
-              className="w-3 h-3 accent-[var(--sol-cyan)]"
-            />
-            Create more
-          </label>
-          <button
-            onClick={handleSubmit}
-            disabled={!title.trim()}
-            className="px-3 py-1.5 text-xs rounded-lg bg-sol-cyan text-sol-bg font-medium hover:opacity-90 disabled:opacity-40 transition-opacity"
-          >
-            Create
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function ExecutionDetails({ data }: { data: any }) {
   const hasExecution = data.execution_status || data.steps?.length || data.acceptance_criteria?.length ||
     data.files_changed?.length || data.execution_concerns || data.estimated_minutes != null || data.actual_minutes != null;
@@ -638,9 +358,7 @@ function ExecutionDetails({ data }: { data: any }) {
 
 function TaskPreviewPanel({ taskId, onClose, onOpen }: { taskId: string; onClose: () => void; onOpen: () => void }) {
   useSyncTaskDetail(taskId);
-  const detail = useInboxStore((s) => s.taskDetails[taskId]);
-  const listItem = useInboxStore((s) => s.tasks[taskId]);
-  const data = detail || listItem;
+  const data = useInboxStore((s) => s.tasks[taskId]);
 
   if (!data) return null;
 
@@ -700,13 +418,13 @@ function TaskPreviewPanel({ taskId, onClose, onOpen }: { taskId: string; onClose
           </div>
         )}
         <ExecutionDetails data={data} />
-        {(detail as any)?.comments && (detail as any).comments.length > 0 && (
+        {(data as any)?.comments && (data as any).comments.length > 0 && (
           <div className="border-t border-sol-border/20 pt-3">
             <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide mb-2">
-              Comments ({(detail as any).comments.length})
+              Comments ({(data as any).comments.length})
             </div>
             <div className="space-y-2">
-              {(detail as any).comments.slice(0, 5).map((c: any) => (
+              {(data as any).comments.slice(0, 5).map((c: any) => (
                 <div key={c._id} className="text-xs p-2 rounded bg-sol-bg-alt/30 border border-sol-border/20">
                   <div className="flex items-center gap-1.5 mb-1">
                     <span className="font-medium text-sol-text">{c.author}</span>
@@ -966,9 +684,97 @@ function KanbanView({
   );
 }
 
+function FilterDropdown({
+  label,
+  icon,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  icon: React.ReactNode;
+  value: string;
+  options: { key: string; label: string; icon?: any; color?: string }[];
+  onChange: (v: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const active = options.find((o) => o.key === value);
+
+  useWatchEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen(!open)}
+        className={`flex items-center gap-1.5 text-xs px-2 py-1 rounded-md border transition-colors ${
+          value
+            ? "border-sol-cyan/30 text-sol-cyan bg-sol-cyan/5"
+            : "border-sol-border/30 text-sol-text-dim hover:text-sol-text hover:border-sol-border/60"
+        }`}
+      >
+        {icon}
+        <span>{active && value ? active.label : label}</span>
+        <ChevronDown className="w-3 h-3 opacity-60" />
+      </button>
+      {open && (
+        <div className="absolute top-full left-0 mt-1 w-44 bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[60] py-1 max-h-64 overflow-y-auto">
+          {options.map((opt) => {
+            const OptIcon = opt.icon;
+            return (
+              <button
+                key={opt.key}
+                onClick={() => { onChange(opt.key); setOpen(false); }}
+                className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs transition-colors ${
+                  opt.key === value ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted hover:bg-sol-bg-alt"
+                }`}
+              >
+                {OptIcon && <OptIcon className={`w-3.5 h-3.5 ${opt.color || ""}`} />}
+                <span className="flex-1 text-left">{opt.label}</span>
+                {opt.key === value && <Check className="w-3 h-3 text-sol-cyan" />}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function useTaskUrlState() {
+  const searchParams = useSearchParams();
+  const router = useRouter();
+
+  const status = searchParams.get("status") || "";
+  const view = (searchParams.get("view") || "list") as "list" | "kanban";
+  const sort = (searchParams.get("sort") || "status") as "status" | "priority" | "created" | "updated";
+  const priority = searchParams.get("priority") || "";
+  const label = searchParams.get("label") || "";
+  const assignee = searchParams.get("assignee") || "";
+
+  const setParam = useCallback((updates: Record<string, string>) => {
+    const params = new URLSearchParams(searchParams.toString());
+    for (const [k, v] of Object.entries(updates)) {
+      if (v) params.set(k, v);
+      else params.delete(k);
+    }
+    const qs = params.toString();
+    router.replace(qs ? `/tasks?${qs}` : "/tasks");
+  }, [searchParams, router]);
+
+  return { status, view, sort, priority, label, assignee, setParam };
+}
+
 export default function TasksPage() {
   const router = useRouter();
-  const statusFilter = useInboxStore((s) => s.taskFilter.status);
+  const { status: urlStatus, view: viewMode, sort: sortBy, priority: priorityFilter, label: labelFilter, assignee: assigneeFilter, setParam } = useTaskUrlState();
   const setTaskFilter = useInboxStore((s) => s.setTaskFilter);
   const tasks = useInboxStore((s) => s.tasks);
   const [showCreate, setShowCreate] = useState(false);
@@ -979,11 +785,20 @@ export default function TasksPage() {
   const [showHelp, setShowHelp] = useState(false);
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [previewTaskId, setPreviewTaskId] = useState<string | null>(null);
+  const [showFilters, setShowFilters] = useState(!!(priorityFilter || labelFilter || assigneeFilter));
 
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
-  const [sortBy, setSortBy] = useState<"status" | "priority" | "created" | "updated">("status");
-  const [viewMode, setViewMode] = useState<"list" | "kanban">("list");
   const [hiddenStatuses, setHiddenStatuses] = useState<Set<string>>(new Set(["dropped"]));
+
+  const statusFilter = urlStatus;
+  const setStatusFilter = useCallback((s: string) => {
+    setTaskFilter({ status: s });
+    setParam({ status: s });
+  }, [setTaskFilter, setParam]);
+  const setViewMode = useCallback((v: "list" | "kanban") => setParam({ view: v === "list" ? "" : v }), [setParam]);
+  const setSortBy = useCallback((s: string) => setParam({ sort: s === "status" ? "" : s }), [setParam]);
+
+  useWatchEffect(() => { setTaskFilter({ status: urlStatus }); }, [urlStatus]);
 
   const { hasMore, loadMore } = useSyncTasks(statusFilter || undefined);
   const currentUser = useQuery(api.users.getCurrentUser);
@@ -994,16 +809,31 @@ export default function TasksPage() {
 
   const tasksList = useMemo(() => Object.values(tasks), [tasks]);
 
+  const allLabels = useMemo(() => {
+    const set = new Set<string>(DEFAULT_LABELS);
+    for (const t of tasksList) t.labels?.forEach((l: string) => set.add(l));
+    return [...set].sort();
+  }, [tasksList]);
+
+  const filteredTasks = useMemo(() => {
+    let list = tasksList;
+    if (priorityFilter) list = list.filter((t) => t.priority === priorityFilter);
+    if (labelFilter) list = list.filter((t) => t.labels?.includes(labelFilter));
+    if (assigneeFilter === "_unassigned") list = list.filter((t) => !t.assignee);
+    else if (assigneeFilter) list = list.filter((t) => t.assignee === assigneeFilter);
+    return list;
+  }, [tasksList, priorityFilter, labelFilter, assigneeFilter]);
+
   const flatTasks = useMemo(() => {
     if (sortBy !== "status") {
-      const sorted = [...tasksList];
+      const sorted = [...filteredTasks];
       if (sortBy === "priority") sorted.sort((a, b) => (PRIORITY_ORDER[a.priority] ?? 3) - (PRIORITY_ORDER[b.priority] ?? 3));
       else if (sortBy === "created") sorted.sort((a, b) => b.created_at - a.created_at);
       else if (sortBy === "updated") sorted.sort((a, b) => b.updated_at - a.updated_at);
       return sorted;
     }
-    if (statusFilter) return tasksList;
-    const grouped = tasksList.reduce((acc: Record<string, TaskItem[]>, t) => {
+    if (statusFilter) return filteredTasks;
+    const grouped = filteredTasks.reduce((acc: Record<string, TaskItem[]>, t) => {
       const s = t.status as string;
       if (!acc[s]) acc[s] = [];
       acc[s].push(t);
@@ -1012,7 +842,7 @@ export default function TasksPage() {
     return STATUS_ORDER.flatMap((s) =>
       collapsedGroups.has(s) ? [] : (grouped[s] || [])
     );
-  }, [tasksList, statusFilter, collapsedGroups, sortBy]);
+  }, [filteredTasks, statusFilter, collapsedGroups, sortBy]);
 
   const focusedTask = flatTasks[focusIndex] || null;
 
@@ -1221,7 +1051,7 @@ export default function TasksPage() {
       const filterKeys: Record<string, string> = { "1": "", "2": "backlog", "3": "open", "4": "in_progress", "5": "done" };
       if (filterKeys[e.key] !== undefined && !e.metaKey && !e.ctrlKey && !e.shiftKey) {
         stop();
-        setTaskFilter({ status: filterKeys[e.key] });
+        setStatusFilter(filterKeys[e.key]);
         setFocusIndex(0);
         return;
       }
@@ -1229,7 +1059,7 @@ export default function TasksPage() {
 
     window.addEventListener("keydown", handler, true);
     return () => window.removeEventListener("keydown", handler, true);
-  }, [showCreate, showHelp, cmdOpen, editingTaskId, flatTasks, focusedTask, focusIndex, selectedIds, previewTaskId, openCmdPalette, toggleSelect, setTaskFilter, router]);
+  }, [showCreate, showHelp, cmdOpen, editingTaskId, flatTasks, focusedTask, focusIndex, selectedIds, previewTaskId, openCmdPalette, toggleSelect, setStatusFilter, router]);
 
   useWatchEffect(() => {
     if (focusIndex >= flatTasks.length && flatTasks.length > 0) {
@@ -1243,7 +1073,7 @@ export default function TasksPage() {
     }
   }, [focusIndex]);
 
-  const grouped = tasksList.reduce((acc: Record<string, TaskItem[]>, t) => {
+  const grouped = filteredTasks.reduce((acc: Record<string, TaskItem[]>, t) => {
     const s = t.status as string;
     if (!acc[s]) acc[s] = [];
     acc[s].push(t);
@@ -1271,7 +1101,7 @@ export default function TasksPage() {
               <h1 className="text-lg font-semibold text-sol-text tracking-tight">Tasks</h1>
               <div className="flex gap-1">
                 <button
-                  onClick={() => setTaskFilter({ status: "" })}
+                  onClick={() => setStatusFilter("")}
                   className={`text-xs px-2.5 py-1 rounded-md transition-colors flex items-center gap-1.5 ${
                     !statusFilter ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"
                   }`}
@@ -1282,7 +1112,7 @@ export default function TasksPage() {
                 {(["backlog", "open", "in_progress", "done"] as const).map((s) => (
                   <button
                     key={s}
-                    onClick={() => setTaskFilter({ status: s })}
+                    onClick={() => setStatusFilter(s)}
                     className={`text-xs px-2.5 py-1 rounded-md transition-colors flex items-center gap-1.5 ${
                       statusFilter === s ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"
                     }`}
@@ -1294,6 +1124,21 @@ export default function TasksPage() {
               </div>
             </div>
             <div className="flex items-center gap-2">
+              <button
+                onClick={() => setShowFilters((f) => !f)}
+                className={`flex items-center gap-1.5 text-xs px-2 py-1.5 rounded-md border transition-colors ${
+                  showFilters || priorityFilter || labelFilter || assigneeFilter
+                    ? "border-sol-cyan/40 text-sol-cyan bg-sol-cyan/5"
+                    : "border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-border"
+                }`}
+                title="Toggle filters"
+              >
+                <SlidersHorizontal className="w-3 h-3" />
+                Filter
+                {(priorityFilter || labelFilter || assigneeFilter) && (
+                  <span className="w-1.5 h-1.5 rounded-full bg-sol-cyan" />
+                )}
+              </button>
               {viewMode === "list" && (
                 <select
                   value={sortBy}
@@ -1306,7 +1151,6 @@ export default function TasksPage() {
                   <option value="created">Sort by created</option>
                 </select>
               )}
-              {/* View toggle */}
               <div className="flex items-center rounded-md border border-sol-border/40 overflow-hidden">
                 <button
                   onClick={() => setViewMode("list")}
@@ -1342,6 +1186,53 @@ export default function TasksPage() {
               </button>
             </div>
           </div>
+
+          {showFilters && (
+            <div className="flex items-center gap-3 px-6 py-2.5 border-b border-sol-border/20 bg-sol-bg-alt/20">
+              <FilterDropdown
+                label="Priority"
+                icon={<ArrowUp className="w-3 h-3" />}
+                value={priorityFilter}
+                options={[
+                  { key: "", label: "Any" },
+                  { key: "urgent", label: "Urgent", icon: AlertTriangle, color: "text-sol-red" },
+                  { key: "high", label: "High", icon: ArrowUp, color: "text-sol-orange" },
+                  { key: "medium", label: "Medium", icon: Minus, color: "text-sol-text-muted" },
+                  { key: "low", label: "Low", icon: ArrowDown, color: "text-sol-text-dim" },
+                ]}
+                onChange={(v) => setParam({ priority: v })}
+              />
+              <FilterDropdown
+                label="Label"
+                icon={<Tag className="w-3 h-3" />}
+                value={labelFilter}
+                options={[
+                  { key: "", label: "Any" },
+                  ...allLabels.map((l) => ({ key: l, label: l })),
+                ]}
+                onChange={(v) => setParam({ label: v })}
+              />
+              <FilterDropdown
+                label="Assignee"
+                icon={<User className="w-3 h-3" />}
+                value={assigneeFilter}
+                options={[
+                  { key: "", label: "Anyone" },
+                  { key: "_unassigned", label: "Unassigned" },
+                  ...(teamMembers || []).map((m: any) => ({ key: m._id, label: m.name || m.email })),
+                ]}
+                onChange={(v) => setParam({ assignee: v })}
+              />
+              {(priorityFilter || labelFilter || assigneeFilter) && (
+                <button
+                  onClick={() => setParam({ priority: "", label: "", assignee: "" })}
+                  className="text-[10px] text-sol-text-dim hover:text-sol-text ml-1 flex items-center gap-1 transition-colors"
+                >
+                  <X className="w-3 h-3" /> Clear
+                </button>
+              )}
+            </div>
+          )}
 
           {viewMode === "kanban" ? (
             <KanbanView

@@ -276,7 +276,9 @@ export default function DocsPage() {
                   <div key={group.key}>
                     <DateSeparator label={group.key} />
                     {group.docs.map((d) => (
-                      <DocCard key={d._id} doc={d} onClick={() => router.push(`/docs/${d._id}`)} />
+                      <DocCard key={d._id} doc={d} onClick={() => router.push(
+                        (d as any).plan_short_id ? `/plans/${(d as any).plan_short_id}` : `/docs/${d._id}`
+                      )} />
                     ))}
                   </div>
                 ))}

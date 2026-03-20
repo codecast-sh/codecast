@@ -568,7 +568,7 @@ function FileDiffContent({
 
   return (
     <div className="h-full overflow-y-auto overflow-x-hidden">
-      <div className="sticky top-0 z-10 bg-sol-bg/95 backdrop-blur-sm border-b border-sol-border/30 px-3 py-1 flex items-center justify-between">
+      <div className="sticky top-0 z-10 bg-sol-bg-alt/40 backdrop-blur-sm border-b border-sol-border/30 px-3 py-1 flex items-center justify-between">
         <div className="flex items-center gap-1.5 min-w-0">
           {onToggleSidebar && (
             <button
@@ -632,7 +632,7 @@ function UnifiedDiffView({
 
         return (
           <div key={file.filename} className="overflow-hidden" id={`file-${index}`}>
-            <div className="sticky top-0 z-10 bg-sol-bg/95 backdrop-blur-sm px-3 py-1 flex items-center justify-between border-b border-sol-border/30">
+            <div className="sticky top-0 z-10 bg-sol-bg-alt backdrop-blur-sm px-3 py-1 flex items-center justify-between border-b border-sol-border/30">
               <div className="flex items-center gap-1.5 min-w-0">
                 <span className={cn("text-[10px] font-bold shrink-0", status.color)}>
                   {status.label}

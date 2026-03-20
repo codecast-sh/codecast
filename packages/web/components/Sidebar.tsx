@@ -4,14 +4,21 @@ import { useState, useMemo, useCallback, useRef } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { toast } from "sonner";
 import { useQuery, useMutation } from "convex/react";
-import { api } from "@codecast/convex/convex/_generated/api";
+import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { cleanTitle } from "../lib/conversationProcessor";
 import { shouldShowSession } from "../lib/sessionFilters";
 import { useInboxStore } from "../store/inboxStore";
 import { useCurrentUser } from "../hooks/useCurrentUser";
+import { useWorkspaceArgs } from "../hooks/useWorkspaceArgs";
 import { TeamIcon } from "./TeamIcon";
 import { isDesktop } from "../lib/desktop";
+import { CreateTaskModal } from "./CreateTaskModal";
+import { CreateDocModal } from "./CreateDocModal";
+
+type CreateModalType = "task" | "plan" | "doc" | null;
+
+const api = _api as any;
 
 interface SidebarProps {
   filter?: "my" | "team";
@@ -200,6 +207,124 @@ function RecentSessions({
   );
 }
 
+const TASK_STATUS_ICONS: Record<string, { color: string; label: string }> = {
+  open: { color: "text-sol-blue", label: "Open" },
+  in_progress: { color: "text-sol-yellow", label: "In Progress" },
+  in_review: { color: "text-sol-violet", label: "In Review" },
+  backlog: { color: "text-sol-text-dim", label: "Backlog" },
+  done: { color: "text-sol-green", label: "Done" },
+  dropped: { color: "text-sol-text-dim", label: "Dropped" },
+};
+
+const PLAN_STATUS_ICONS: Record<string, { color: string; label: string }> = {
+  active: { color: "text-sol-cyan", label: "Active" },
+  draft: { color: "text-sol-text-dim", label: "Draft" },
+  paused: { color: "text-sol-yellow", label: "Paused" },
+  done: { color: "text-sol-green", label: "Done" },
+  abandoned: { color: "text-sol-text-dim", label: "Abandoned" },
+};
+
+const DOC_TYPE_COLORS: Record<string, string> = {
+  plan: "text-sol-blue",
+  design: "text-sol-violet",
+  spec: "text-sol-cyan",
+  investigation: "text-sol-yellow",
+  handoff: "text-sol-orange",
+  note: "text-sol-text-muted",
+};
+
+function ExpandableNavSection({
+  label,
+  href,
+  isActive,
+  isNarrow,
+  icon,
+  items,
+  onMobileClose,
+  onAdd,
+}: {
+  label: string;
+  href: string;
+  isActive: boolean;
+  isNarrow: boolean;
+  icon: React.ReactNode;
+  items?: { _id: string; title: string; status?: string; statusColor?: string; subtitle?: string; itemHref?: string }[];
+  onMobileClose?: () => void;
+  onAdd?: () => void;
+}) {
+  const expanded = useInboxStore((s) => s.sidebarNavExpanded[label] ?? false);
+  const toggle = useInboxStore((s) => s.toggleSidebarNav);
+  const hasItems = items && items.length > 0;
+
+  return (
+    <div>
+      <div className={`group/nav flex items-center transition-colors motion-reduce:transition-none ${
+        isActive
+          ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
+          : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60"
+      }`}>
+        <Link
+          href={href}
+          onClick={onMobileClose}
+          className={`flex-1 flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-4 py-2.5 min-w-0`}
+          title={label}
+        >
+          {icon}
+          {!isNarrow && <span>{label}</span>}
+        </Link>
+        {!isNarrow && (
+          <div className="flex items-center flex-shrink-0">
+            {onAdd && (
+              <button
+                onClick={(e) => { e.preventDefault(); e.stopPropagation(); onAdd(); }}
+                className="p-1 opacity-0 group-hover/nav:opacity-60 hover:!opacity-100 text-sol-text-dim hover:text-sol-text transition-all"
+                title={`New ${label.toLowerCase().replace(/s$/, '')}`}
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                  <path strokeLinecap="round" d="M12 5v14m-7-7h14" />
+                </svg>
+              </button>
+            )}
+            {hasItems && (
+              <button
+                onClick={(e) => { e.stopPropagation(); toggle(label); }}
+                className="px-2 py-2.5 text-sol-text-dim hover:text-sol-text transition-colors"
+              >
+                <svg
+                  className={`w-3 h-3 transition-transform ${expanded ? "rotate-90" : ""}`}
+                  fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                </svg>
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+      {!isNarrow && expanded && hasItems && (
+        <div className="py-0.5">
+          {items!.map((item) => (
+            <Link
+              key={item._id}
+              href={item.itemHref || `${href}/${item._id}`}
+              onClick={onMobileClose}
+              className="flex items-center gap-2 pl-10 pr-3 py-1 text-sm text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/40 transition-colors"
+            >
+              {item.statusColor && (
+                <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${item.statusColor}`} style={{ backgroundColor: 'currentColor' }} />
+              )}
+              <span className="truncate flex-1">{item.title || "Untitled"}</span>
+              {item.subtitle && (
+                <span className={`text-[10px] flex-shrink-0 ${item.statusColor || "text-sol-text-dim"}`}>{item.subtitle}</span>
+              )}
+            </Link>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen = false, onMobileClose, isNarrow = false }: SidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
@@ -222,7 +347,42 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
     activeTeamId ? { teamId: activeTeamId } : "skip"
   );
   const toggleFavorite = useMutation(api.conversations.toggleFavorite);
+  const [createModal, setCreateModal] = useState<CreateModalType>(null);
   const activeSessions = useQuery(api.conversations.listIdleSessions, {});
+  const workspaceArgs = useWorkspaceArgs();
+  const sidebarTasks = useQuery(api.tasks.webList,
+    workspaceArgs === "skip" ? "skip" : { ...workspaceArgs, limit: 15 }
+  );
+  const sidebarDocs = useQuery(api.docs.webList,
+    workspaceArgs === "skip" ? "skip" : { ...workspaceArgs, limit: 15 }
+  );
+
+  const taskItems = useMemo(() => {
+    const raw = sidebarTasks?.items ?? sidebarTasks ?? [];
+    return (raw as any[])
+      .filter((t: any) => t.status !== "done" && t.status !== "dropped")
+      .slice(0, 10)
+      .map((t: any) => ({
+        _id: t._id,
+        title: t.title,
+        statusColor: TASK_STATUS_ICONS[t.status]?.color || "text-sol-text-dim",
+      }));
+  }, [sidebarTasks]);
+
+  const docItems = useMemo(() => {
+    const raw = sidebarDocs?.docs ?? sidebarDocs ?? [];
+    return (raw as any[])
+      .slice(0, 15)
+      .map((d: any) => ({
+        _id: d._id,
+        title: d.title,
+        statusColor: d.plan_short_id
+          ? (PLAN_STATUS_ICONS[d.plan_status]?.color || "text-sol-cyan")
+          : (DOC_TYPE_COLORS[d.doc_type] || "text-sol-text-dim"),
+        subtitle: d.plan_short_id ? d.plan_status : d.doc_type,
+        itemHref: d.plan_short_id ? `/plans/${d.plan_short_id}` : undefined,
+      }));
+  }, [sidebarDocs]);
   const needsInputCount = activeSessions?.filter((s: any) => s.is_idle && s.message_count > 0).length ?? 0;
   const openNewSession = useInboxStore((s) => s.openNewSession);
   const hasUsedDesktop = useInboxStore((s) => s.clientState.dismissed?.has_used_desktop ?? false);
@@ -340,62 +500,6 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
               </>
             )}
           </button>
-          <Link
-            href="/tasks"
-            className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-4 py-2.5 transition-colors motion-reduce:transition-none ${
-              isTasks
-                ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
-                : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60"
-            }`}
-            title="Tasks"
-          >
-            <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
-            </svg>
-            {!isNarrow && <span>Tasks</span>}
-          </Link>
-          <Link
-            href="/plans"
-            className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-4 py-2.5 transition-colors motion-reduce:transition-none ${
-              isPlans
-                ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
-                : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60"
-            }`}
-            title="Plans"
-          >
-            <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3.75 12h16.5m-16.5 3.75h16.5M3.75 19.5h16.5M5.625 4.5h12.75a1.875 1.875 0 010 3.75H5.625a1.875 1.875 0 010-3.75z" />
-            </svg>
-            {!isNarrow && <span>Plans</span>}
-          </Link>
-          <Link
-            href="/workflows"
-            className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-4 py-2.5 transition-colors motion-reduce:transition-none ${
-              isWorkflows
-                ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
-                : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60"
-            }`}
-            title="Workflows"
-          >
-            <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7.5 21L3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5" />
-            </svg>
-            {!isNarrow && <span>Workflows</span>}
-          </Link>
-          <Link
-            href="/docs"
-            className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-4 py-2.5 transition-colors motion-reduce:transition-none ${
-              isDocs
-                ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
-                : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60"
-            }`}
-            title="Documents"
-          >
-            <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-            </svg>
-            {!isNarrow && <span>Docs</span>}
-          </Link>
           {(activeTeamId || (teams && teams.length > 0)) && (
             <Link
               href="/team/activity"
@@ -427,6 +531,48 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
               )}
             </Link>
           )}
+          <ExpandableNavSection
+            label="Tasks"
+            href="/tasks"
+            isActive={isTasks}
+            isNarrow={isNarrow}
+            onMobileClose={onMobileClose}
+            items={taskItems}
+            onAdd={() => setCreateModal("task")}
+            icon={
+              <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+              </svg>
+            }
+          />
+          <ExpandableNavSection
+            label="Docs"
+            href="/docs"
+            isActive={isDocs || isPlans}
+            isNarrow={isNarrow}
+            onMobileClose={onMobileClose}
+            items={docItems}
+            onAdd={() => setCreateModal("doc")}
+            icon={
+              <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+            }
+          />
+          <Link
+            href="/workflows"
+            className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-4 py-2.5 transition-colors motion-reduce:transition-none ${
+              isWorkflows
+                ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
+                : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60"
+            }`}
+            title="Workflows"
+          >
+            <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7.5 21L3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5" />
+            </svg>
+            {!isNarrow && <span>Workflows</span>}
+          </Link>
           {isAdmin && (
             <Link
               href="/admin/daemon-logs"
@@ -611,6 +757,15 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
           </svg>
           <span>Get Desktop App</span>
         </a>
+      )}
+      {createModal === "task" && (
+        <CreateTaskModal onClose={() => setCreateModal(null)} />
+      )}
+      {createModal === "plan" && (
+        <CreateDocModal onClose={() => setCreateModal(null)} initialType="plan" />
+      )}
+      {createModal === "doc" && (
+        <CreateDocModal onClose={() => setCreateModal(null)} />
       )}
     </nav>
   );

@@ -8008,13 +8008,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         )}
         <div className="px-2 py-0.5 sm:py-1">
           <div className="flex items-center gap-2 min-w-0 select-none">
-            <Link
-              href={backHref}
-              onClick={onBack ? (e: React.MouseEvent) => { e.preventDefault(); onBack(); } : undefined}
-              className="text-sol-text-dim hover:text-sol-text-secondary transition-colors text-sm sm:text-xs flex-shrink-0 p-1 -m-1 sm:p-0 sm:m-0"
-            >
-              &larr;
-            </Link>
             <h1 className="text-xs sm:text-sm font-medium text-sol-text-secondary truncate min-w-0 flex-1 cursor-default" title={conversation?.messages?.[0]?.content ? cleanContent(conversation.messages[0].content)?.slice(0, 200) ?? undefined : undefined}>{truncatedTitle}</h1>
 
             {isSessionDisconnected ? (

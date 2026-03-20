@@ -4,7 +4,6 @@ import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useEventListener } from "../hooks/useEventListener";
 import { useConvexSync } from "../hooks/useConvexSync";
 import { usePathname, useRouter } from "next/navigation";
-import Link from "next/link";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Panel, Group, Separator } from "react-resizable-panels";
@@ -16,19 +15,20 @@ import { ThemeToggle } from "./ThemeToggle";
 import { NotificationBell } from "./NotificationBell";
 import { TeamAvatarBar } from "./TeamAvatarBar";
 import { TeamSwitcher } from "./TeamSwitcher";
-import { Logo } from "./Logo";
 import { soundNewSession } from "../lib/sounds";
-import { Plus } from "lucide-react";
+import { Plus, PanelLeft, PanelRight } from "lucide-react";
 import { nanoid } from "nanoid";
 import { SetupPromptBanner } from "./SetupPromptBanner";
 import { DesktopAppBanner } from "./DesktopAppBanner";
 import { CliOfflineBanner } from "./CliOfflineBanner";
 import { TmuxMissingBanner } from "./TmuxMissingBanner";
 import { ElectronUpdateBanner } from "./ElectronUpdateBanner";
+import { FindBar } from "./FindBar";
 import { NewSessionModal } from "./ConversationList";
 import { useInboxStore } from "../store/inboxStore";
 import { usePrefetch } from "../hooks/usePrefetch";
 import { desktopHeaderClass, setupDesktopDrag, isElectron } from "../lib/desktop";
+import { GlobalSessionPanel, CollapsedSessionRail } from "./GlobalSessionPanel";
 import { isInboxRoute as isInboxRoutePath, isInboxSessionView } from "../lib/inboxRouting";
 
 interface DashboardLayoutProps {
@@ -45,6 +45,7 @@ const DEFAULT_LAYOUT = { sidebar: 25, main: 75 };
 export function DashboardLayout({ children, filter, onFilterChange, directoryFilter, onDirectoryFilterChange, hideSidebar }: DashboardLayoutProps) {
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const isZenMode = useInboxStore(s => s.clientState.ui?.zen_mode ?? false);
+  const sidebarCollapsed = useInboxStore(s => s.clientState.ui?.sidebar_collapsed ?? false);
   const rawLayout = useInboxStore(s => s.clientState.layouts?.dashboard ?? DEFAULT_LAYOUT);
   const layout = {
     sidebar: Math.max(10, Math.min(50, rawLayout.sidebar ?? 25)),
@@ -61,6 +62,8 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
   const currentConvContext = useInboxStore((s) => s.currentConversation);
   const [desktopClass, setDesktopClass] = useState("");
   const [isDesktopApp, setIsDesktopApp] = useState(false);
+  const [zoomHeight, setZoomHeight] = useState("100vh");
+  const zoomRef = useRef(1);
   const headerRef = useRef<HTMLElement>(null);
   usePrefetch();
 
@@ -94,6 +97,11 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
   const isOnPlansPage = pathname === "/plans" || (pathname?.startsWith("/plans/") ?? false);
   const isOnDocsPage = pathname === "/docs" || (pathname?.startsWith("/docs/") ?? false);
   const isFullWidthPage = isOnConversationPage || isOnCommitPage || isOnPRPage || isOnInboxPage || isOnTasksPage || isOnWorkflowsPage || isOnPlansPage || isOnDocsPage;
+
+  const sidePanelOpen = useInboxStore(s => s.sidePanelOpen);
+  const toggleSidePanel = useInboxStore(s => s.toggleSidePanel);
+  const showSessionPanel = sidePanelOpen && !isOnInboxPage;
+  const showCollapsedRail = !sidePanelOpen && !isOnInboxPage && !isMobile && !isZenMode;
 
   useMountEffect(() => {
     setIsMobile(window.innerWidth < 768);
@@ -169,38 +177,76 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
       if (store.showMySessions) {
         store.setShowMySessions(false);
       }
-      if (directoryFilter || currentConvContext.projectPath || currentConvContext.gitRoot) {
-        handleQuickCreate();
-      } else {
-        openNewSession({
-          source: isOnInboxPage ? "inbox" : "sessions",
+      if (!isInboxRoute) {
+        soundNewSession();
+        const path = directoryFilter || currentConvContext.projectPath || currentConvContext.gitRoot;
+        const agentType = (currentConvContext.agentType || "claude_code") as "claude_code" | "codex" | "cursor" | "gemini";
+        const sid = nanoid(10);
+        const now = Date.now();
+        store.setConversationMeta(sid, {
+          _id: sid, _creationTime: now, user_id: "", agent_type: agentType,
+          session_id: sid, project_path: path, git_root: currentConvContext.gitRoot || path,
+          started_at: now, updated_at: now, message_count: 0, status: "active",
+          title: "New session", messages: [],
         });
+        store.createSession({
+          agent_type: agentType,
+          project_path: path,
+          git_root: currentConvContext.gitRoot || path,
+          session_id: sid,
+        });
+        router.push(`/conversation/${sid}?focus=1`);
+      } else {
+        handleQuickCreate();
       }
     }
     if (e.key.toLowerCase() === "n" && e.ctrlKey && !e.metaKey && !e.altKey && e.shiftKey) {
       e.preventDefault();
       handleQuickCreateIsolated();
     }
+    if (isDesktopApp && (e.metaKey || e.ctrlKey) && !e.altKey) {
+      const applyZoom = (z: number) => {
+        const r = Math.round(z * 10) / 10;
+        zoomRef.current = r;
+        document.documentElement.style.zoom = String(r);
+        setZoomHeight(`calc(100vh / ${r})`);
+      };
+      if (e.key === "=" || e.key === "+") {
+        e.preventDefault();
+        applyZoom(Math.min(zoomRef.current + 0.1, 2));
+      } else if (e.key === "-" && !e.shiftKey) {
+        e.preventDefault();
+        applyZoom(Math.max(zoomRef.current - 0.1, 0.5));
+      } else if (e.key === "0") {
+        e.preventDefault();
+        applyZoom(1);
+      }
+    }
   });
 
   return (
-    <div className="h-screen bg-sol-bg flex flex-col overflow-hidden">
+    <div className="bg-sol-bg flex flex-col overflow-hidden" style={{ height: zoomHeight }}>
       {/* Header spans full width */}
       <header ref={headerRef} className={`flex-shrink-0 border-b border-black/10 bg-sol-bg z-[100] ${desktopClass} ${isZenMode ? "hidden" : ""} relative`}>
         {typeof window !== "undefined" && window.location.hostname.includes("local.") && (
           <div className="absolute top-0 left-0 w-0 h-0 border-t-[20px] border-r-[20px] border-t-emerald-500 border-r-transparent z-30" />
         )}
-        <div className="px-2 sm:px-4 py-1.5 sm:py-3 flex items-center gap-1.5 sm:gap-3">
-          {/* Left section: Logo + toggle */}
-          <div className="flex items-center gap-1.5 flex-shrink-0">
-            <Link href="/"><span className="hidden sm:contents"><Logo size="md" showText={true} /></span></Link>
-            <Link href="/"><span className="sm:hidden"><Logo size="md" showText={false} /></span></Link>
+        <div className="px-2 sm:px-3 py-1 sm:py-1.5 flex items-center gap-1.5 sm:gap-3">
+          {/* Left section: Sidebar toggle + nav */}
+          <div className="flex items-center gap-1 flex-shrink-0">
+            <button
+              onClick={() => updateUI({ sidebar_collapsed: !sidebarCollapsed })}
+              className="hidden md:flex items-center p-1.5 rounded-md text-sol-text-dim/60 hover:text-sol-text-muted transition-colors"
+              title={sidebarCollapsed ? "Show sidebar" : "Hide sidebar"}
+            >
+              <PanelLeft className="w-[18px] h-[18px]" />
+            </button>
             {isDesktopApp && (
               <div className="flex items-center gap-0.5">
                 <button
                   onClick={() => window.history.back()}
                   className="p-1.5 text-sol-text-muted hover:text-sol-text transition-colors rounded hover:bg-sol-bg-alt"
-                  title="Back (⌘[)"
+                  title="Back"
                   aria-label="Go back"
                 >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
@@ -210,7 +256,7 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
                 <button
                   onClick={() => window.history.forward()}
                   className="p-1.5 text-sol-text-muted hover:text-sol-text transition-colors rounded hover:bg-sol-bg-alt"
-                  title="Forward (⌘])"
+                  title="Forward"
                   aria-label="Go forward"
                 >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
@@ -264,6 +310,17 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
             <ThemeToggle />
             <NotificationBell />
             <UserMenu />
+            <button
+              onClick={toggleSidePanel}
+              className={`hidden md:flex items-center p-1.5 rounded-md transition-colors ${
+                sidePanelOpen
+                  ? "text-sol-cyan"
+                  : "text-sol-text-dim/60 hover:text-sol-text-muted"
+              }`}
+              title="Toggle sessions panel"
+            >
+              <PanelRight className="w-[18px] h-[18px]" />
+            </button>
           </div>
         </div>
       </header>
@@ -276,16 +333,34 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
 
       {/* Content area with sidebar and main */}
       <div className="flex-1 min-h-0">
-        {hideSidebar || isZenMode || isMobile ? (
-          isFullWidthPage ? (
-            <div className="h-full">
-              {children}
+        {hideSidebar || isZenMode || sidebarCollapsed || isMobile ? (
+          showSessionPanel ? (
+            <Group orientation="horizontal" className="h-full" defaultLayout={{ "main-content": 60, "session-panel": 40 }}>
+              <Panel id="main-content" minSize="30%">
+                {isFullWidthPage ? (
+                  <div className="h-full">{children}</div>
+                ) : (
+                  <div data-main-scroll className="h-full overflow-y-auto px-3 sm:px-6 lg:px-8 py-4">
+                    <div className="max-w-4xl mx-auto h-full">{children}</div>
+                  </div>
+                )}
+              </Panel>
+              <Separator className="relative z-10 w-px bg-black/10 cursor-col-resize before:absolute before:inset-y-0 before:-left-[2px] before:-right-[2px] before:content-[''] before:transition-colors before:duration-150 hover:before:bg-sol-cyan data-[resize-handle-active]:before:bg-sol-cyan" />
+              <Panel id="session-panel" minSize="20%" maxSize="60%" defaultSize="40%" collapsible collapsedSize="0%">
+                <GlobalSessionPanel />
+              </Panel>
+            </Group>
+          ) : isFullWidthPage ? (
+            <div className="h-full flex">
+              <div className="flex-1 min-w-0 h-full">{children}</div>
+              {showCollapsedRail && <CollapsedSessionRail />}
             </div>
           ) : (
-            <div data-main-scroll className="h-full overflow-y-auto px-3 sm:px-6 lg:px-8 py-4">
-              <div className="max-w-4xl mx-auto h-full">
-                {children}
+            <div className="h-full flex">
+              <div data-main-scroll className="flex-1 min-w-0 h-full overflow-y-auto px-3 sm:px-6 lg:px-8 py-4">
+                <div className="max-w-4xl mx-auto h-full">{children}</div>
               </div>
+              {showCollapsedRail && <CollapsedSessionRail />}
             </div>
           )
         ) : (
@@ -309,15 +384,33 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
             </Panel>
             <Separator className="relative z-10 w-px bg-black/10 cursor-col-resize before:absolute before:inset-y-0 before:-left-[2px] before:-right-[2px] before:content-[''] before:transition-colors before:duration-150 hover:before:bg-sol-cyan data-[resize-handle-active]:before:bg-sol-cyan" />
             <Panel id="main" minSize="30%">
-              {isFullWidthPage ? (
-                <div className="h-full">
-                  {children}
+              {showSessionPanel ? (
+                <Group orientation="horizontal" className="h-full" defaultLayout={{ "main-content": 60, "session-panel": 40 }}>
+                  <Panel id="main-content" minSize="30%">
+                    {isFullWidthPage ? (
+                      <div className="h-full">{children}</div>
+                    ) : (
+                      <div data-main-scroll className="h-full overflow-y-auto px-4 sm:px-6 lg:px-8 py-4">
+                        <div className="max-w-4xl mx-auto h-full">{children}</div>
+                      </div>
+                    )}
+                  </Panel>
+                  <Separator className="relative z-10 w-px bg-black/10 cursor-col-resize before:absolute before:inset-y-0 before:-left-[2px] before:-right-[2px] before:content-[''] before:transition-colors before:duration-150 hover:before:bg-sol-cyan data-[resize-handle-active]:before:bg-sol-cyan" />
+                  <Panel id="session-panel" minSize="20%" maxSize="60%" defaultSize="40%" collapsible collapsedSize="0%">
+                    <GlobalSessionPanel />
+                  </Panel>
+                </Group>
+              ) : isFullWidthPage ? (
+                <div className="h-full flex">
+                  <div className="flex-1 min-w-0 h-full">{children}</div>
+                  {showCollapsedRail && <CollapsedSessionRail />}
                 </div>
               ) : (
-                <div data-main-scroll className="h-full overflow-y-auto px-4 sm:px-6 lg:px-8 py-4">
-                  <div className="max-w-4xl mx-auto h-full">
-                    {children}
+                <div className="h-full flex">
+                  <div data-main-scroll className="flex-1 min-w-0 h-full overflow-y-auto px-4 sm:px-6 lg:px-8 py-4">
+                    <div className="max-w-4xl mx-auto h-full">{children}</div>
                   </div>
+                  {showCollapsedRail && <CollapsedSessionRail />}
                 </div>
               )}
             </Panel>
@@ -345,6 +438,7 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
         </>
       )}
       <CommandPalette />
+      <FindBar />
       <NewSessionModal isOpen={newSessionOpen} onClose={closeNewSession} />
     </div>
   );

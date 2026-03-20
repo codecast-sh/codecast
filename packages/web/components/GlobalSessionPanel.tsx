@@ -13,8 +13,9 @@ import { cleanTitle } from "../lib/conversationProcessor";
 import { SharePopover } from "./SharePopover";
 import { PlanContextPanel } from "./PlanContextPanel";
 import { WorkflowContextPanel } from "./WorkflowContextPanel";
+import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { X, PanelRightOpen } from "lucide-react";
+import { X, Maximize2, ArrowLeft } from "lucide-react";
 
 const NOISE_PREFIXES = ["[Request interrupted", "This session is being continued", "Your task is to create a detailed summary", "Please continue the conversation", "<task-notification>", "Implement the following plan"];
 
@@ -149,7 +150,6 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
 
   const activePlanId = (conversation as any)?.active_plan_id;
   const workflowRunId = (conversation as any)?.workflow_run_id;
-  const hasContext = activePlanId || workflowRunId;
 
   return (
     <div className="relative h-full flex flex-col">
@@ -186,13 +186,7 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
           </button>
         </div>
       )}
-      {activePlanId && (
-        <PlanContextPanel planId={activePlanId} />
-      )}
-      {workflowRunId && (
-        <WorkflowContextPanel workflowRunId={workflowRunId} />
-      )}
-      <div className={hasContext ? "flex-1 min-h-0" : "h-full"}>
+      <div className="h-full">
         <ConversationDiffLayout
           conversation={conversation as ConversationData}
           embedded
@@ -212,6 +206,10 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
           onBack={onBack}
           fallbackStickyContent={cleanUserMessage(lastUserMessage)}
           targetMessageId={targetMessageId}
+          subHeaderContent={<>
+            {activePlanId && <PlanContextPanel planId={activePlanId} />}
+            {workflowRunId && <WorkflowContextPanel workflowRunId={workflowRunId} />}
+          </>}
         />
       </div>
     </div>
@@ -609,6 +607,73 @@ export function SessionListPanel({
   );
 }
 
+// -- CollapsedSessionRail --
+
+export function CollapsedSessionRail() {
+  const sessions = useInboxStore((s) => s.sessions);
+  const openSidePanel = useInboxStore((s) => s.openSidePanel);
+  const toggleSidePanel = useInboxStore((s) => s.toggleSidePanel);
+
+  useSyncInboxSessions(false);
+
+  const sorted = useMemo(() => sortSessions(sessions), [sessions]);
+
+  const getStatusStyle = (s: InboxSession): { bg: string; pulse: boolean } => {
+    if (s.session_error) return { bg: "#dc322f", pulse: false };
+    if (s.is_unresponsive) return { bg: "#cb4b16", pulse: false };
+    if (s.is_pinned && s.is_idle) return { bg: "#d33682", pulse: false };
+    if (!s.is_idle && s.message_count > 0) return { bg: "#859900", pulse: true };
+    if (s.is_idle && s.message_count > 0) return { bg: "#b58900", pulse: false };
+    return { bg: "rgba(38, 139, 210, 0.4)", pulse: false };
+  };
+
+  const pinned = sorted.filter((s) => s.is_pinned);
+  const needsInput = sorted.filter((s) => s.is_idle && s.message_count > 0 && !s.is_pinned);
+  const working = sorted.filter((s) => !s.is_idle && s.message_count > 0 && !s.is_pinned);
+  const newSessions = sorted.filter((s) => s.message_count === 0 && !s.is_pinned);
+
+  const groups = [pinned, needsInput, working, newSessions].filter((g) => g.length > 0);
+  const needsInputCount = needsInput.length;
+
+  return (
+    <div
+      className="w-[30px] h-full flex-shrink-0 bg-sol-bg-alt/30 border-l border-sol-border/20 hover:bg-sol-bg-alt/60 transition-colors cursor-pointer flex flex-col"
+      onClick={toggleSidePanel}
+    >
+      <TooltipProvider delayDuration={150}>
+        <div className="flex flex-col items-center gap-[6px] pt-3">
+          {groups.map((group, gi) => (
+            <div key={gi} className={`flex flex-col items-center gap-[6px] ${gi > 0 ? "mt-2" : ""}`}>
+              {group.map((s) => {
+                const status = getStatusStyle(s);
+                return (
+                  <Tooltip key={s._id}>
+                    <TooltipTrigger asChild>
+                      <button
+                        className={`w-1.5 h-1.5 rounded-full flex-shrink-0 transition-all hover:scale-[2] cursor-pointer ${status.pulse ? "animate-pulse" : ""}`}
+                        style={{ backgroundColor: status.bg }}
+                        onClick={(e) => { e.stopPropagation(); openSidePanel(s._id); }}
+                      />
+                    </TooltipTrigger>
+                    <TooltipContent side="left">{cleanTitle(s.title || "New Session")}</TooltipContent>
+                  </Tooltip>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+      </TooltipProvider>
+      {needsInputCount > 0 && (
+        <div className="mt-auto mb-3 flex justify-center">
+          <div className="w-3.5 h-3.5 rounded-full flex items-center justify-center" style={{ backgroundColor: "#b58900" }}>
+            <span className="text-[8px] font-bold text-sol-bg leading-none">{needsInputCount}</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // -- GlobalSessionPanel (the main component for DashboardLayout) --
 
 export function GlobalSessionPanel() {
@@ -618,6 +683,7 @@ export function GlobalSessionPanel() {
   const closeSidePanel = useInboxStore((s) => s.closeSidePanel);
   const clearSidePanelSession = useInboxStore((s) => s.clearSidePanelSession);
   const sessions = useInboxStore((s) => s.sessions);
+  const router = useRouter();
 
   useSyncInboxSessions(false);
 
@@ -631,22 +697,43 @@ export function GlobalSessionPanel() {
     clearSidePanelSession();
   }, [clearSidePanelSession]);
 
+  const handleExpand = useCallback(() => {
+    if (!sidePanelSessionId) return;
+    closeSidePanel();
+    router.push(`/conversation/${sidePanelSessionId}`);
+  }, [sidePanelSessionId, closeSidePanel, router]);
+
   if (!sidePanelOpen) return null;
 
   return (
     <div className="h-full flex flex-col bg-sol-bg-alt border-l border-sol-border/30">
-      <div className="flex-shrink-0 flex items-center justify-between px-3 py-2 border-b border-sol-border/50">
-        <span className="text-xs font-medium text-sol-text-dim uppercase tracking-wide">
-          {session ? cleanTitle(session.title || "Session") : "Sessions"}
-        </span>
-        <div className="flex items-center gap-1">
-          {session && (
+      <div className="flex-shrink-0 flex items-center justify-between px-3 py-1.5 border-b border-sol-border/50">
+        {session ? (
+          <div className="flex items-center gap-1.5 min-w-0">
             <button
               onClick={handleBack}
-              className="p-1 rounded text-sol-text-dim hover:text-sol-text transition-colors"
+              className="p-0.5 rounded text-sol-text-dim hover:text-sol-text transition-colors flex-shrink-0"
               title="Back to session list"
             >
-              <PanelRightOpen className="w-3.5 h-3.5" />
+              <ArrowLeft className="w-3.5 h-3.5" />
+            </button>
+            <span className="text-xs font-medium text-sol-text-muted truncate">
+              {cleanTitle(session.title || "Session")}
+            </span>
+          </div>
+        ) : (
+          <span className="text-xs font-medium text-sol-text-dim uppercase tracking-wide">
+            Sessions
+          </span>
+        )}
+        <div className="flex items-center gap-0.5 flex-shrink-0">
+          {session && (
+            <button
+              onClick={handleExpand}
+              className="p-1 rounded text-sol-text-dim hover:text-sol-text transition-colors"
+              title="Open full conversation"
+            >
+              <Maximize2 className="w-3 h-3" />
             </button>
           )}
           <button

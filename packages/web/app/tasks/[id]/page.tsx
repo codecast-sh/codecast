@@ -9,6 +9,8 @@ import { useSyncTaskDetail } from "../../../hooks/useSyncTasks";
 import { TaskCommandPalette } from "../../../components/TaskCommandPalette";
 import { WorkflowContextPanel } from "../../../components/WorkflowContextPanel";
 import { MarkdownRenderer } from "../../../components/tools/MarkdownRenderer";
+import { DocEditor } from "../../../components/editor/DocEditor";
+import "../../../components/editor/editor.css";
 import { toast } from "sonner";
 import { AuthGuard } from "../../../components/AuthGuard";
 import { DashboardLayout } from "../../../components/DashboardLayout";
@@ -19,7 +21,6 @@ import { TaskStatusBadge } from "../../../components/TaskStatusBadge";
 import { getLabelColor } from "../../../lib/labelColors";
 import Link from "next/link";
 import {
-  ArrowLeft,
   Circle,
   CircleDot,
   CircleDotDashed,
@@ -32,7 +33,7 @@ import {
   MessageSquare,
   FolderGit2,
   FileText,
-  ExternalLink,
+  PanelRight,
   Clock,
   Zap,
   Bot,
@@ -42,6 +43,7 @@ import {
   FileCode,
   ListChecks,
   ShieldCheck,
+  ImagePlus,
 } from "lucide-react";
 
 const STATUS_OPTIONS = [
@@ -182,11 +184,12 @@ function SessionCard({ session }: { session: any }) {
   const isActive = session.is_active;
   const outcome = session.outcome_type ? OUTCOME_STYLES[session.outcome_type] : null;
   const projectName = session.project_path?.split("/").pop();
+  const openSidePanel = useInboxStore((s) => s.openSidePanel);
 
   return (
-    <Link
-      href={`/conversation/${session.session_id || session._id}`}
-      className={`block px-4 py-3 hover:bg-sol-bg-alt/50 transition-colors ${isActive ? "border-l-2 border-emerald-400" : ""}`}
+    <button
+      onClick={() => openSidePanel(session._id)}
+      className={`block w-full text-left px-4 py-3 hover:bg-sol-bg-alt/50 transition-colors ${isActive ? "border-l-2 border-emerald-400" : ""}`}
     >
       <div className="flex items-start gap-3">
         <div className="flex-1 min-w-0">
@@ -236,7 +239,7 @@ function SessionCard({ session }: { session: any }) {
               {outcome.label}
             </span>
           )}
-          <ExternalLink className="w-3.5 h-3.5 text-sol-text-dim" />
+          <PanelRight className="w-3.5 h-3.5 text-sol-text-dim" />
         </div>
       </div>
       {isActive && session.recent_messages && session.recent_messages.length > 0 && (
@@ -251,40 +254,62 @@ function SessionCard({ session }: { session: any }) {
           ))}
         </div>
       )}
-    </Link>
+    </button>
+  );
+}
+
+function UserBadge({ name, image }: { name: string; image?: string }) {
+  return (
+    <span className="inline-flex items-center gap-1.5 flex-shrink-0">
+      <Avatar name={name} image={image} />
+      <span className="text-xs text-sol-text font-medium">{name.split(" ")[0]}</span>
+    </span>
   );
 }
 
 function HistoryItem({ entry }: { entry: any }) {
   const statusCfg = entry.field === "status" ? STATUS_MAP[entry.new_value] : null;
   return (
-    <div className="flex items-center gap-2 text-xs text-sol-text-dim py-1.5">
+    <div className="flex items-center gap-2 text-[11px] py-1 min-w-0">
       {entry.actor ? (
-        <Avatar name={entry.actor.name} image={entry.actor.image} />
+        <UserBadge name={entry.actor.name} image={entry.actor.image} />
       ) : (
-        <div className="w-5 h-5 rounded-full flex-shrink-0 bg-sol-bg-highlight border border-sol-border/50 flex items-center justify-center">
-          <Bot className="w-3 h-3 text-sol-text-dim" />
-        </div>
+        <span className="inline-flex items-center gap-1.5 flex-shrink-0">
+          <div className="w-5 h-5 rounded-full flex-shrink-0 bg-sol-bg-highlight border border-sol-border/50 flex items-center justify-center">
+            <Bot className="w-3 h-3 text-sol-text-dim" />
+          </div>
+          <span className="text-sol-text font-medium">System</span>
+        </span>
       )}
-      <span className="text-sol-text-muted">{entry.actor?.name || "System"}</span>
       {entry.action === "created" ? (
-        <span>created this task</span>
+        <span className="text-gray-400">created this task</span>
       ) : entry.field === "status" && statusCfg ? (
         <>
-          <span>changed status to</span>
-          <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${statusCfg.color} border-current/30`}>
+          <span className="text-gray-400">changed status to</span>
+          <Badge variant="outline" className={`text-[10px] px-1.5 py-0 opacity-50 ${statusCfg.color} border-current/30`}>
             {statusCfg.label}
           </Badge>
         </>
+      ) : entry.field === "assignee" ? (
+        <>
+          <span className="text-gray-400">assigned to</span>
+          {entry.new_value_resolved ? (
+            <UserBadge name={entry.new_value_resolved.name} image={entry.new_value_resolved.image} />
+          ) : entry.new_value ? (
+            <code className="text-[10px] px-1.5 py-0.5 rounded bg-sol-bg-highlight text-gray-500 font-mono">{entry.new_value.slice(0, 8)}...</code>
+          ) : (
+            <span className="text-gray-400 italic">nobody</span>
+          )}
+        </>
       ) : (
         <>
-          <span>changed {entry.field}</span>
-          {entry.old_value && <span className="line-through opacity-60">{entry.old_value}</span>}
-          <span>&rarr;</span>
-          <span className="text-sol-text-muted">{entry.new_value}</span>
+          <span className="text-gray-400">changed {entry.field}</span>
+          {entry.old_value && <span className="text-gray-300 line-through">{entry.old_value}</span>}
+          <span className="text-gray-300">&rarr;</span>
+          <span className="text-gray-500">{entry.new_value}</span>
         </>
       )}
-      <span className="ml-auto flex-shrink-0">{formatRelative(entry.created_at)}</span>
+      <span className="ml-auto flex-shrink-0 text-gray-300">{formatRelative(entry.created_at)}</span>
     </div>
   );
 }
@@ -391,9 +416,7 @@ export default function TaskDetailPage() {
 
   useSyncTaskDetail(id);
 
-  const detail = useInboxStore((s) => s.taskDetails[id]) as TaskDetail | undefined;
-  const listItem = useInboxStore((s) => s.tasks[id]);
-  const data = detail || (listItem as TaskDetail | undefined);
+  const data = useInboxStore((s) => s.tasks[id]) as TaskDetail | undefined;
   const updateTask = useInboxStore((s) => s.updateTask);
   const webUpdate = useMutation(api.tasks.webUpdate);
   const webAddComment = useMutation(api.tasks.webAddComment);
@@ -403,12 +426,13 @@ export default function TaskDetailPage() {
   const teamMembers = useQuery(api.teams.getTeamMembers, effectiveTeamId ? { team_id: effectiveTeamId } : "skip");
   const [comment, setComment] = useState("");
   const [submittingComment, setSubmittingComment] = useState(false);
+  const [commentImages, setCommentImages] = useState<Array<{ file: File; previewUrl: string; storageId?: string; uploading: boolean }>>([]);
+  const [isDragging, setIsDragging] = useState(false);
+  const dragCounterRef = useRef(0);
+  const generateUploadUrl = useMutation(api.images.generateUploadUrl);
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
   const titleRef = useRef<HTMLInputElement>(null);
-  const [editingDesc, setEditingDesc] = useState(false);
-  const [descDraft, setDescDraft] = useState("");
-  const descRef = useRef<HTMLTextAreaElement>(null);
   const commentRef = useRef<HTMLTextAreaElement>(null);
   const [cmdOpen, setCmdOpen] = useState(false);
   const [cmdMode, setCmdMode] = useState<"root" | "status" | "priority" | "labels" | "assign">("root");
@@ -422,20 +446,61 @@ export default function TaskDetailPage() {
     } catch {}
   }, [data?.short_id, updateTask, webUpdate]);
 
+  const uploadCommentImage = useCallback(async (file: File) => {
+    const previewUrl = URL.createObjectURL(file);
+    setCommentImages(prev => [...prev, { file, previewUrl, uploading: true }]);
+    try {
+      const uploadUrl = await generateUploadUrl({});
+      const result = await fetch(uploadUrl, { method: "POST", headers: { "Content-Type": file.type }, body: file });
+      const { storageId } = await result.json();
+      setCommentImages(prev => prev.map(img => img.previewUrl === previewUrl ? { ...img, storageId, uploading: false } : img));
+    } catch {
+      toast.error("Failed to upload image");
+      URL.revokeObjectURL(previewUrl);
+      setCommentImages(prev => prev.filter(img => img.previewUrl !== previewUrl));
+    }
+  }, [generateUploadUrl]);
+
+  const clearCommentImage = useCallback((idx: number) => {
+    setCommentImages(prev => {
+      const img = prev[idx];
+      if (img) URL.revokeObjectURL(img.previewUrl);
+      return prev.filter((_, i) => i !== idx);
+    });
+  }, []);
+
+  const handleCommentPaste = useCallback((e: React.ClipboardEvent) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].type.startsWith("image/")) {
+        e.preventDefault();
+        const file = items[i].getAsFile();
+        if (file) uploadCommentImage(file);
+      }
+    }
+  }, [uploadCommentImage]);
+
   const handleAddComment = useCallback(async () => {
-    if (!comment.trim() || !data?.short_id || submittingComment) return;
-    const text = comment.trim();
+    const hasText = comment.trim().length > 0;
+    const hasImages = commentImages.some(i => i.storageId);
+    if ((!hasText && !hasImages) || !data?.short_id || submittingComment) return;
+    const anyUploading = commentImages.some(i => i.uploading);
+    if (anyUploading) { toast.error("Wait for images to finish uploading"); return; }
+    const text = comment.trim() || "(image)";
+    const imageIds = commentImages.filter(i => i.storageId).map(i => i.storageId!);
     setComment("");
+    setCommentImages([]);
     setSubmittingComment(true);
     try {
-      await webAddComment({ short_id: data.short_id, text, comment_type: "note" });
+      await webAddComment({ short_id: data.short_id, text, comment_type: "note", image_storage_ids: imageIds.length > 0 ? imageIds : undefined });
     } catch {
       setComment(text);
       toast.error("Failed to add comment");
     } finally {
       setSubmittingComment(false);
     }
-  }, [comment, data?.short_id, submittingComment, webAddComment]);
+  }, [comment, commentImages, data?.short_id, submittingComment, webAddComment]);
 
   const startEditTitle = useCallback(() => {
     if (!data) return;
@@ -451,19 +516,6 @@ export default function TaskDetailPage() {
     }
   }, [titleDraft, data?.title, handleUpdate]);
 
-  const startEditDesc = useCallback(() => {
-    setDescDraft(data?.description || "");
-    setEditingDesc(true);
-    setTimeout(() => descRef.current?.focus(), 0);
-  }, [data?.description]);
-
-  const commitDesc = useCallback(() => {
-    setEditingDesc(false);
-    const trimmed = descDraft.trim();
-    if (trimmed !== (data?.description || "")) {
-      handleUpdate({ description: trimmed });
-    }
-  }, [descDraft, data?.description, handleUpdate]);
 
   const openCmd = useCallback((mode: "root" | "status" | "priority" | "labels" | "assign") => {
     setCmdMode(mode);
@@ -535,14 +587,24 @@ export default function TaskDetailPage() {
   return (
     <AuthGuard>
       <DashboardLayout>
-        <div className="h-full flex flex-col">
+        <div
+          className="h-full flex flex-col relative"
+          onDragEnter={(e) => { e.preventDefault(); dragCounterRef.current++; setIsDragging(true); }}
+          onDragOver={(e) => { e.preventDefault(); }}
+          onDragLeave={(e) => { e.preventDefault(); dragCounterRef.current--; if (dragCounterRef.current <= 0) { dragCounterRef.current = 0; setIsDragging(false); } }}
+          onDrop={(e) => { e.preventDefault(); dragCounterRef.current = 0; setIsDragging(false); const files = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith("image/")); files.forEach(f => uploadCommentImage(f)); }}
+        >
+        {isDragging && (
+          <div className="absolute inset-0 z-50 flex items-center justify-center bg-sol-bg/80 border-2 border-dashed border-sol-cyan rounded-xl pointer-events-none">
+            <p className="text-sol-cyan text-sm font-medium">Drop images to attach</p>
+          </div>
+        )}
         <div className="flex-1 overflow-y-auto">
         <div className="max-w-4xl mx-auto px-6 py-6">
           <Link
             href="/tasks"
             className="inline-flex items-center gap-1.5 text-sm text-sol-text-dim hover:text-sol-cyan transition-colors mb-4"
           >
-            <ArrowLeft className="w-4 h-4" />
             Tasks
           </Link>
 
@@ -583,7 +645,7 @@ export default function TaskDetailPage() {
           </div>
 
           {/* Properties sidebar-style row (Linear pattern) */}
-          <div className="border border-sol-border/30 rounded-lg bg-sol-bg-alt/20 mb-6">
+          <div className="border-t border-b border-sol-border/30 mb-6">
             <div className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-0.5 px-4 py-3 text-xs">
               <span className="text-sol-text-dim py-1">Status</span>
               <Dropdown value={data.status} options={STATUS_OPTIONS} onChange={(v) => handleUpdate({ status: v })} shortcutHint="s to cycle" />
@@ -681,42 +743,19 @@ export default function TaskDetailPage() {
           )}
 
           {/* Description */}
-          {editingDesc ? (
-            <div className="mb-6">
-              <textarea
-                ref={descRef}
-                value={descDraft}
-                onChange={(e) => setDescDraft(e.target.value)}
-                onBlur={commitDesc}
-                onKeyDown={(e) => {
-                  if (e.key === "Escape") { setEditingDesc(false); }
-                  if (e.key === "Enter" && e.metaKey) { commitDesc(); }
-                }}
-                placeholder="Add a description..."
-                rows={4}
-                className="w-full text-sm px-4 py-3 rounded-lg bg-sol-bg border border-sol-border/50 text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:border-sol-cyan resize-y min-h-[80px]"
-              />
-              <div className="flex justify-end gap-2 mt-1.5">
-                <span className="text-[10px] text-sol-text-dim self-center mr-auto">Markdown supported</span>
-                <button onClick={() => setEditingDesc(false)} className="text-xs text-sol-text-dim hover:text-sol-text px-2 py-1">Cancel</button>
-                <button onClick={commitDesc} className="text-xs px-3 py-1 rounded-md bg-sol-cyan text-sol-bg hover:opacity-90">Save</button>
-              </div>
-            </div>
-          ) : data.description ? (
-            <div
-              className="mb-6 cursor-text group"
-              onClick={startEditDesc}
-            >
-              <MarkdownRenderer content={data.description} className="text-sm text-sol-text-muted leading-relaxed prose-sm prose-invert max-w-none group-hover:text-sol-text transition-colors" />
-            </div>
-          ) : (
-            <div
-              className="mb-6 cursor-text text-sm text-sol-text-dim hover:text-sol-text-muted transition-colors"
-              onClick={startEditDesc}
-            >
-              Add a description...
-            </div>
-          )}
+          <div className="mb-6">
+            <DocEditor
+              key={`desc-${data._id}`}
+              content={data.description || ""}
+              onUpdate={(md) => {
+                if (md.trim() !== (data.description || "").trim()) {
+                  handleUpdate({ description: md });
+                }
+              }}
+              editable={true}
+              placeholder="Add a description..."
+            />
+          </div>
 
           {/* Workflow Progress */}
           {data.workflow_run_id && (
@@ -823,19 +862,16 @@ export default function TaskDetailPage() {
                   item.type === "history" ? (
                     <HistoryItem key={item.data._id} entry={item.data} />
                   ) : (
-                    <div key={item.data._id} className="py-2 flex gap-2.5">
-                      <div className="w-5 h-5 rounded-full flex-shrink-0 bg-sol-bg-highlight border border-sol-border/50 flex items-center justify-center mt-0.5">
-                        <MessageSquare className="w-3 h-3 text-sol-text-dim" />
+                    <div key={item.data._id} className="py-2.5">
+                      <div className="flex items-center gap-2 mb-1.5">
+                        <UserBadge name={item.data.author} image={item.data.author_image} />
+                        {item.data.comment_type !== "note" && (
+                          <Badge variant="outline" className="text-[10px] px-1">{item.data.comment_type}</Badge>
+                        )}
+                        <span className="text-[11px] text-gray-400">{formatRelative(item.data.created_at)}</span>
                       </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 mb-0.5">
-                          <span className="text-xs font-medium text-sol-text-muted">{item.data.author}</span>
-                          {item.data.comment_type !== "note" && (
-                            <Badge variant="outline" className="text-[10px] px-1">{item.data.comment_type}</Badge>
-                          )}
-                          <span className="text-[11px] text-sol-text-dim">{formatRelative(item.data.created_at)}</span>
-                        </div>
-                        <MarkdownRenderer content={item.data.text} className="text-sm text-sol-text-muted prose-sm prose-invert max-w-none" />
+                      <div className="ml-[26px] border-l-2 border-sol-border/30 pl-3">
+                        <MarkdownRenderer content={item.data.text} className="text-sm text-sol-text prose-sm prose-invert max-w-none" />
                       </div>
                     </div>
                   )
@@ -844,28 +880,63 @@ export default function TaskDetailPage() {
           </div>
 
           {/* Comment input */}
-          <div className="relative mb-2">
-            <textarea
-              ref={commentRef}
-              value={comment}
-              onChange={(e) => setComment(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  handleAddComment();
-                }
-              }}
-              placeholder="Leave a comment..."
-              rows={2}
-              className="w-full text-sm pl-4 pr-12 py-3 rounded-lg bg-sol-bg border border-sol-border/30 text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:border-sol-border/60 resize-none"
-            />
-            <button
-              onClick={handleAddComment}
-              disabled={!comment.trim() || submittingComment}
-              className="absolute right-2.5 bottom-2.5 w-7 h-7 flex items-center justify-center rounded-md bg-sol-cyan text-sol-bg hover:opacity-90 disabled:opacity-30 transition-opacity"
-            >
-              <ArrowUp className="w-4 h-4" />
-            </button>
+          <div className="mb-2">
+            <div className="flex flex-col border px-4 py-2 rounded-2xl bg-sol-bg-alt border-sol-border shadow-lg">
+              {commentImages.length > 0 && (
+                <div className="flex items-center gap-2 pb-2 mb-2 border-b border-sol-border/50 flex-wrap">
+                  {commentImages.map((img, idx) => (
+                    <div key={idx} className="relative group cursor-pointer">
+                      <div className="relative h-16 w-16 rounded-lg overflow-hidden bg-sol-bg shrink-0">
+                        <img src={img.previewUrl} alt="Attached" className="h-full w-full object-cover" />
+                        {img.uploading && (
+                          <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
+                            <svg className="w-5 h-5 animate-spin text-white" fill="none" viewBox="0 0 24 24">
+                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                            </svg>
+                          </div>
+                        )}
+                      </div>
+                      <button type="button" onClick={() => clearCommentImage(idx)} className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-sol-bg-alt border border-sol-border flex items-center justify-center text-sol-text-dim hover:text-sol-text transition-colors opacity-0 group-hover:opacity-100">
+                        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="flex items-end gap-2">
+                <label className="shrink-0 cursor-pointer text-sol-text-dim hover:text-sol-text transition-colors py-1 flex items-center">
+                  <ImagePlus className="w-4 h-4" />
+                  <input type="file" accept="image/*" multiple className="hidden" onChange={(e) => { Array.from(e.target.files || []).forEach(f => uploadCommentImage(f)); e.target.value = ""; }} />
+                </label>
+                <textarea
+                  ref={commentRef}
+                  value={comment}
+                  onChange={(e) => setComment(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      handleAddComment();
+                    }
+                  }}
+                  onPaste={handleCommentPaste}
+                  placeholder="Leave a comment..."
+                  rows={1}
+                  className="flex-1 bg-transparent text-sm placeholder:text-sol-text-dim focus:outline-none resize-none overflow-hidden leading-relaxed py-1 text-sol-text"
+                />
+                <div className="shrink-0">
+                  <button
+                    onClick={handleAddComment}
+                    disabled={(!comment.trim() && !commentImages.some(i => i.storageId)) || submittingComment}
+                    className={`w-8 h-8 rounded-full transition-colors flex items-center justify-center border ${(!comment.trim() && !commentImages.some(i => i.storageId)) || submittingComment ? "border-sol-border/30 text-sol-text-dim/25 cursor-not-allowed" : "border-sol-blue/50 bg-sol-blue/20 text-sol-blue hover:bg-sol-blue/30 hover:border-sol-blue"}`}
+                  >
+                    <ArrowUp className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
 
         </div>

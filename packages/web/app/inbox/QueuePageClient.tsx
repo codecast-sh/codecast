@@ -23,46 +23,7 @@ import { TaskStatusBadge } from "../../components/TaskStatusBadge";
 import { PlanContextPanel } from "../../components/PlanContextPanel";
 import { WorkflowContextPanel } from "../../components/WorkflowContextPanel";
 import { toast } from "sonner";
-
-const NOISE_PREFIXES = ["[Request interrupted", "This session is being continued", "Your task is to create a detailed summary", "Please continue the conversation", "<task-notification>", "Implement the following plan"];
-
-const NOISE_PATTERNS = [
-  /toolu_[A-Za-z0-9_-]+/,
-  /\/private\/tmp\/claude/,
-  /\/tmp\/claude-\d+\//,
-  /\.output<\/out/,
-  /tasks\/[a-z0-9]+\.output/,
-];
-
-function cleanUserMessage(raw: string | null | undefined): string | null {
-  if (!raw) return null;
-  const cleaned = raw
-    .replace(/<task-notification>[\s\S]*?<\/task-notification>/g, "")
-    .replace(/\[Image[:\s][^\]]*\]/gi, "")
-    .replace(/<image\b[^>]*\/?>\s*(?:<\/image>)?/gi, "")
-    .replace(/<[^>]+>/g, "")
-    .trim();
-  if (!cleaned) return null;
-  if (NOISE_PREFIXES.some(p => cleaned.startsWith(p))) return null;
-  if (NOISE_PATTERNS.some(p => p.test(cleaned))) return null;
-  return cleaned;
-}
-
-function formatIdleDuration(updatedAt: number): string {
-  const diff = Date.now() - updatedAt;
-  const minutes = Math.floor(diff / 60000);
-  if (minutes < 1) return "<1m";
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h`;
-  return `${Math.floor(hours / 24)}d`;
-}
-
-function getProjectName(gitRoot?: string, projectPath?: string): string {
-  const path = gitRoot || projectPath;
-  if (!path) return "unknown";
-  return path.split("/").filter(Boolean).pop() || "unknown";
-}
+import { cleanUserMessage, formatIdleDuration, getProjectName } from "../../components/GlobalSessionPanel";
 
 const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, onSendAndAdvance, lastUserMessage, sessionError, onBack, targetMessageId }: { sessionId: string; isIdle: boolean; onSendAndAdvance: () => void; lastUserMessage?: string | null; sessionError?: string; onBack?: () => void; targetMessageId?: string }) {
   const {
@@ -155,7 +116,6 @@ const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, o
 
   const activePlanId = (conversation as any)?.active_plan_id;
   const workflowRunId = (conversation as any)?.workflow_run_id;
-  const hasContext = activePlanId || workflowRunId;
 
   return (
     <div className="relative h-full flex flex-col">
@@ -192,13 +152,7 @@ const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, o
           </button>
         </div>
       )}
-      {activePlanId && (
-        <PlanContextPanel planId={activePlanId} />
-      )}
-      {workflowRunId && (
-        <WorkflowContextPanel workflowRunId={workflowRunId} />
-      )}
-      <div className={hasContext ? "flex-1 min-h-0" : "h-full"}>
+      <div className="h-full">
         <ConversationDiffLayout
           conversation={conversation as ConversationData}
           embedded
@@ -218,6 +172,10 @@ const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, o
           onBack={onBack}
           fallbackStickyContent={cleanUserMessage(lastUserMessage)}
           targetMessageId={targetMessageId}
+          subHeaderContent={<>
+            {activePlanId && <PlanContextPanel planId={activePlanId} />}
+            {workflowRunId && <WorkflowContextPanel workflowRunId={workflowRunId} />}
+          </>}
         />
       </div>
     </div>
@@ -745,7 +703,8 @@ function InboxSessionPanel({
   }, [sessions, setCurrentSession, showMySessions, setShowMySessions]);
 
   const pinned = sortedSessions.filter((s) => s.is_pinned);
-  const newSessions = sortedSessions.filter((s) => s.message_count === 0 && !s.is_pinned);
+  const newSessions = sortedSessions.filter((s) => s.message_count === 0 && !s.is_pinned)
+    .sort((a, b) => (a.is_connected ? 1 : 0) - (b.is_connected ? 1 : 0));
   const needsInput = sortedSessions.filter((s) => s.is_idle && s.message_count > 0 && !s.is_pinned);
   const working = sortedSessions.filter((s) => !s.is_idle && s.message_count > 0 && !s.is_pinned);
 
@@ -909,6 +868,15 @@ export function QueuePageClient({ initialSessionId }: { initialSessionId?: strin
   const searchParams = useSearchParams();
   const router = useRouter();
 
+  const sidePanelOpen = useInboxStore((s) => s.sidePanelOpen);
+
+  // Auto-open session panel when entering inbox
+  useMountEffect(() => {
+    if (!useInboxStore.getState().sidePanelOpen) {
+      useInboxStore.setState({ sidePanelOpen: true });
+    }
+  });
+
   // Redirect old /inbox?s=XXX URLs to /conversation/XXX
   useMountEffect(() => {
     const sessionId = searchParams.get("s");
@@ -1056,10 +1024,15 @@ export function QueuePageClient({ initialSessionId }: { initialSessionId?: strin
 
   const handleDeferAndAdvance = useCallback(() => {
     if (currentSessionId) {
+      const idleSessions = sortedSessions.filter((s) => s.is_idle && !s.is_pinned);
+      const idx = idleSessions.findIndex((s) => s._id === currentSessionId);
+      const next = idleSessions[idx + 1] ?? idleSessions.find((s) => s._id !== currentSessionId);
       deferSession(currentSessionId);
-      advanceToNext();
+      if (next) {
+        setCurrentSession(next._id);
+      }
     }
-  }, [currentSessionId, deferSession, advanceToNext]);
+  }, [currentSessionId, sortedSessions, deferSession, setCurrentSession]);
 
   const handlePinCurrent = useCallback(() => {
     if (currentSessionId) pinSession(currentSessionId);
@@ -1294,7 +1267,7 @@ export function QueuePageClient({ initialSessionId }: { initialSessionId?: strin
             </>
           )}
         </div>
-      ) : (
+      ) : sidePanelOpen ? (
         <Group orientation="horizontal" className="flex-1 min-h-0" defaultLayout={inboxLayout} onLayoutChange={handleInboxLayoutChange}>
           <Panel id="inbox-main" defaultSize="76%" minSize="30%">
             {inboxContent}
@@ -1304,6 +1277,10 @@ export function QueuePageClient({ initialSessionId }: { initialSessionId?: strin
             <InboxSessionPanel showAll={showAll} onToggleShowAll={toggleShowAll} dismissedSessions={Object.values(dismissedSessions)} />
           </Panel>
         </Group>
+      ) : (
+        <div className="flex-1 min-h-0">
+          {inboxContent}
+        </div>
       )}
       {showShortcuts && !isMobileInbox && (
         <div className="flex-shrink-0 px-3 py-1.5 border-t border-sol-border/50 bg-sol-bg-alt/40 flex items-center gap-4 text-[10px] text-sol-text-dim">

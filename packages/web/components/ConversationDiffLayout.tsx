@@ -41,6 +41,7 @@ interface ConversationDiffLayoutProps {
   backHref?: string;
   fallbackStickyContent?: string | null;
   onBack?: () => void;
+  subHeaderContent?: React.ReactNode;
 }
 
 export function ConversationDiffLayout({
@@ -66,6 +67,7 @@ export function ConversationDiffLayout({
   backHref: backHrefProp,
   fallbackStickyContent,
   onBack,
+  subHeaderContent,
 }: ConversationDiffLayoutProps) {
   const heightClass = embedded ? "h-full" : "h-screen";
   const [isMobile, setIsMobile] = useState(false);
@@ -174,6 +176,7 @@ export function ConversationDiffLayout({
     autoFocusInput,
     fallbackStickyContent,
     onBack,
+    subHeaderContent,
   };
 
   // Mobile: tabs layout
