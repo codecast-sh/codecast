@@ -4,6 +4,7 @@ import { useLayoutEffect, useRef, useState, useMemo, useImperativeHandle, forwar
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useEventListener } from "../hooks/useEventListener";
 import { useWatchEffect } from "../hooks/useWatchEffect";
+import { useShortcutContext, useShortcutAction } from "../shortcuts";
 import { useConvexSync } from "../hooks/useConvexSync";
 import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
@@ -28,6 +29,7 @@ import { extractFileChanges } from "../lib/fileChangeExtractor";
 import { CommitCard } from "./CommitCard";
 import { PRCard } from "./PRCard";
 import { DiffView } from "./DiffView";
+import { AgentTypeIcon, formatAgentType } from "./AgentTypeIcon";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -50,8 +52,11 @@ import { MarkdownRenderer, isMarkdownFile, isPlanFile, CollapsibleImage } from "
 import { useImageGallery, ImageGalleryProvider } from "./ImageGallery";
 import { MessageSharePopover } from "./MessageSharePopover";
 import { PlanBadge, TaskBadge } from "./PlanTaskHoverCard";
+import { EntityIdPill, isEntityId } from "./EntityIdPill";
+import { remarkEntityIds } from "../lib/remarkEntityIds";
 import { ConversationTree } from "./ConversationTree";
 import { useInboxStore, isConvexId, type ForkChild, type InboxSession } from "../store/inboxStore";
+import { useSlideOutStore } from "../store/slideOutStore";
 import { soundNewSession, soundSend } from "../lib/sounds";
 import { useForkNavigationStore } from "../store/forkNavigationStore";
 import { buildCompositeTimeline } from "../lib/compositeTimeline";
@@ -65,6 +70,23 @@ import { isInboxRoute } from "../lib/inboxRouting";
 import { MessageNavButton } from "./MessageBrowserPopover";
 import type { MentionItem } from "./editor/MentionList";
 import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Hash, FolderOpen } from "lucide-react";
+
+function EntityAwareCode({ children, className, ...props }: any) {
+  const text = String(children);
+  if (!className && isEntityId(text)) {
+    return <EntityIdPill shortId={text} />;
+  }
+  return <code className={className} {...props}>{children}</code>;
+}
+
+function EntityAwareLink({ href, children, ...props }: any) {
+  if (href?.startsWith("entity://")) {
+    return <EntityIdPill shortId={href.slice(9)} />;
+  }
+  return <a href={href} {...props}>{children}</a>;
+}
+
+const entityRemarkPlugins = [remarkGfm, remarkEntityIds];
 
 function parseSearchTerms(query: string): string[] {
   const terms: string[] = [];
@@ -168,6 +190,7 @@ export type ConversationData = {
     agent_type?: string;
   }>;
   main_message_counts_by_fork?: Record<string, number>;
+  available_skills?: string | null;
 };
 
 type CommitFile = {
@@ -250,6 +273,7 @@ type ConversationViewProps = {
   subHeaderContent?: React.ReactNode;
   headerLeft?: React.ReactNode;
   headerEnd?: React.ReactNode;
+  hideHeader?: boolean;
 };
 
 export interface ConversationViewHandle {
@@ -371,7 +395,7 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
 
   return (
     <TooltipProvider delayDuration={200}>
-    <div className="flex flex-col items-center gap-3 mt-16">
+    <div className="flex flex-col items-center gap-3">
         <div className="flex items-center gap-2 text-sol-text-muted text-xs cursor-default" title={currentPath || undefined}>
           <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
@@ -667,6 +691,52 @@ function stripAnsiCodes(s: string): string {
   return s.replace(/\x1b\[[0-9;]*m/g, '');
 }
 
+const ANSI_COLORS: Record<number, string> = {
+  30: '#073642', 31: '#dc322f', 32: '#859900', 33: '#b58900',
+  34: '#268bd2', 35: '#d33682', 36: '#2aa198', 37: '#eee8d5',
+  90: '#586e75', 91: '#cb4b16', 92: '#859900', 93: '#b58900',
+  94: '#268bd2', 95: '#6c71c4', 96: '#2aa198', 97: '#fdf6e3',
+};
+
+function renderAnsi(text: string): React.ReactNode {
+  const parts: React.ReactNode[] = [];
+  const regex = /\x1b\[([0-9;]*)m/g;
+  let lastIndex = 0;
+  let currentColor: string | null = null;
+  let bold = false;
+
+  let match;
+  while ((match = regex.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      const segment = text.slice(lastIndex, match.index);
+      if (currentColor || bold) {
+        parts.push(<span key={parts.length} style={{ color: currentColor || undefined, fontWeight: bold ? 700 : undefined }}>{segment}</span>);
+      } else {
+        parts.push(segment);
+      }
+    }
+    lastIndex = regex.lastIndex;
+
+    const codes = match[1].split(';').map(Number);
+    for (const code of codes) {
+      if (code === 0) { currentColor = null; bold = false; }
+      else if (code === 1) { bold = true; }
+      else if (ANSI_COLORS[code]) { currentColor = ANSI_COLORS[code]; }
+    }
+  }
+
+  if (lastIndex < text.length) {
+    const segment = text.slice(lastIndex);
+    if (currentColor || bold) {
+      parts.push(<span key={parts.length} style={{ color: currentColor || undefined, fontWeight: bold ? 700 : undefined }}>{segment}</span>);
+    } else {
+      parts.push(segment);
+    }
+  }
+
+  return parts.length > 0 ? parts : text;
+}
+
 function stripSystemTags(content: string): string {
   return content
     .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '')
@@ -769,6 +839,18 @@ function ApiErrorCard({ error, compact = false }: { error: ParsedApiError; compa
 
 function truncateStr(s: string, max: number): string {
   return s.length > max ? s.slice(0, max) + "..." : s;
+}
+
+function parseCastCommand(tool: ToolCall): { category: string; subcommand: string; args: string; fullCmd: string } | null {
+  const isBash = tool.name === "Bash" || tool.name === "shell_command" || tool.name === "shell" || tool.name === "exec_command" || tool.name === "container.exec";
+  if (!isBash) return null;
+  try {
+    const input = JSON.parse(tool.input);
+    const cmd = String(input.command || input.cmd || "").trim();
+    const match = cmd.match(/^cast\s+(\w[\w-]*)(?:\s+(\w[\w-]*))?(?:\s+([\s\S]*))?$/);
+    if (!match) return null;
+    return { category: match[1], subcommand: match[2] || "", args: (match[3] || "").trim(), fullCmd: cmd };
+  } catch { return null; }
 }
 
 function shortenUrl(url: string): string {
@@ -987,45 +1069,6 @@ function assistantLabel(agentType?: string): string {
   return "Claude";
 }
 
-function AgentTypeIcon({ agentType }: { agentType: string }) {
-  if (agentType === "claude_code") {
-    return (
-      <svg className="w-3 h-3 text-amber-400" viewBox="0 0 24 24" fill="currentColor">
-        <path d="M17.3041 3.541h-3.6718l6.696 16.918H24L17.3041 3.541Zm-10.6082 0L0 20.459h3.7442l1.3693-3.5527h7.0052l1.3693 3.5528h3.7442L10.5363 3.5409H6.696Zm-.3712 10.2232 2.2914-5.9456 2.2914 5.9456H6.3247Z" />
-      </svg>
-    );
-  } else if (agentType === "codex" || agentType === "codex_cli") {
-    return (
-      <span className="w-3 h-3 rounded-[3px] bg-[#0f0f0f] inline-flex items-center justify-center shrink-0">
-        <svg className="w-2 h-2 text-white" viewBox="0 0 24 24" fill="currentColor">
-          <path d="M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364 15.1192 7.2a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.407-.667zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654l2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997-2.6067-1.4997Z" />
-        </svg>
-      </span>
-    );
-  } else if (agentType === "cursor") {
-    return (
-      <svg className="w-3 h-3 text-blue-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-        <path d="M4 4l16 6-8 2-2 8z"/>
-      </svg>
-    );
-  } else if (agentType === "gemini") {
-    return (
-      <svg className="w-3 h-3 text-blue-400" viewBox="0 0 28 28" fill="currentColor">
-        <path d="M12 0C12 0 12 6.268 8.134 10.134C4.268 14 0 14 0 14C0 14 6.268 14 10.134 17.866C14 21.732 14 28 14 28C14 28 14 21.732 17.866 17.866C21.732 14 28 14 28 14C28 14 21.732 14 17.866 10.134C14 6.268 14 0 14 0" />
-      </svg>
-    );
-  }
-  return null;
-}
-
-function formatAgentType(agentType?: string): string {
-  if (!agentType) return "Unknown";
-  if (agentType === "claude_code") return "Claude Code";
-  if (agentType === "codex") return "Codex";
-  if (agentType === "cursor") return "Cursor";
-  if (agentType === "gemini") return "Gemini";
-  return agentType;
-}
 
 function formatModel(model?: string): string {
   if (!model) return "";
@@ -1161,6 +1204,7 @@ function TaskToolBlock({ tool, result, childConversationId, childConversations }
   const runInBackground = Boolean(parsedInput.run_in_background);
 
   const resolvedChildId = childConversationId || findMatchingChild(prompt, childConversations);
+  const router = useRouter();
 
   const subagentColors: Record<string, { bg: string; border: string; text: string }> = {
     Explore: { bg: "bg-sol-green/20", border: "border-sol-green/50", text: "text-sol-green" },
@@ -1185,7 +1229,10 @@ function TaskToolBlock({ tool, result, childConversationId, childConversations }
   if (isCompleted && spawnInfo) {
     return (
       <div className="my-0.5">
-        <div className="flex items-center gap-1.5 text-xs">
+        <div
+          className={`flex items-center gap-1.5 text-xs${resolvedChildId ? " cursor-pointer rounded px-1.5 py-1 -mx-1 hover:bg-sol-bg-highlight/50 transition-colors" : ""}`}
+          onClick={resolvedChildId ? () => router.push(`/conversation/${resolvedChildId}`) : undefined}
+        >
           <span className="text-emerald-400 text-[10px]">{"\u2713"}</span>
           <span className={`font-mono text-xs ${colors.text}`}>Task</span>
           <span className={`px-1 py-0.5 rounded text-[10px] font-medium ${colors.bg} border ${colors.border} ${colors.text}`}>
@@ -1198,13 +1245,12 @@ function TaskToolBlock({ tool, result, childConversationId, childConversations }
           )}
           {description && <span className="text-sol-text-dim truncate flex-1">{description}</span>}
           {resolvedChildId && (
-            <Link
-              href={`/conversation/${resolvedChildId}`}
-              onClick={(e) => e.stopPropagation()}
-              className="text-sol-cyan hover:text-sol-cyan text-[10px] font-medium underline underline-offset-2"
-            >
-              view
-            </Link>
+            <span className={`ml-auto flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-medium ${colors.text} ${colors.bg} border ${colors.border}`}>
+              open
+              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+              </svg>
+            </span>
           )}
         </div>
       </div>
@@ -1216,7 +1262,7 @@ function TaskToolBlock({ tool, result, childConversationId, childConversations }
       <div className={`my-3 rounded-lg ${result?.is_error ? "bg-sol-red/10 border-sol-red/30" : `${colors.bg} ${colors.border}`} border`}>
         <div
           className="px-3 py-2 flex items-center gap-2 cursor-pointer hover:bg-sol-bg-highlight/50 transition-colors"
-          onClick={() => setExpanded(!expanded)}
+          onClick={() => resolvedChildId ? router.push(`/conversation/${resolvedChildId}`) : setExpanded(!expanded)}
         >
           <span className={`text-[10px] ${result?.is_error ? "text-sol-red" : "text-emerald-400"}`}>
             {result?.is_error ? "\u2717" : "\u2713"}
@@ -1232,18 +1278,18 @@ function TaskToolBlock({ tool, result, childConversationId, childConversations }
               {description}
             </span>
           )}
-          {resolvedChildId && (
-            <Link
-              href={`/conversation/${resolvedChildId}`}
-              onClick={(e) => e.stopPropagation()}
-              className="text-sol-cyan hover:text-sol-cyan text-[10px] font-medium underline underline-offset-2"
-            >
-              view
-            </Link>
+          {resolvedChildId ? (
+            <span className={`ml-auto flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium ${colors.text} ${colors.bg} border ${colors.border}`}>
+              open
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+              </svg>
+            </span>
+          ) : (
+            <span className="text-sol-text-dim text-[10px] ml-auto">
+              {expanded ? "collapse" : "expand"}
+            </span>
           )}
-          <span className="text-sol-text-dim text-[10px] ml-auto">
-            {expanded ? "collapse" : "expand"}
-          </span>
         </div>
 
         {resultSummary && !expanded && (
@@ -1286,7 +1332,7 @@ function TaskToolBlock({ tool, result, childConversationId, childConversations }
     <div className={`my-3 rounded-lg ${colors.bg} border ${colors.border}`}>
       <div
         className="px-3 py-2 flex items-center gap-2 cursor-pointer hover:bg-sol-bg-highlight/50 transition-colors"
-        onClick={() => setExpanded(!expanded)}
+        onClick={() => resolvedChildId ? router.push(`/conversation/${resolvedChildId}`) : setExpanded(!expanded)}
       >
         <span className={`w-2.5 h-2.5 rounded-full border border-current border-t-transparent animate-spin ${colors.text} opacity-60`} />
         <span className={`font-mono text-xs font-semibold ${colors.text}`}>
@@ -1313,18 +1359,18 @@ function TaskToolBlock({ tool, result, childConversationId, childConversations }
         {runInBackground && (
           <span className="text-sol-text-dim text-[10px]">background</span>
         )}
-        {resolvedChildId && (
-          <Link
-            href={`/conversation/${resolvedChildId}`}
-            onClick={(e) => e.stopPropagation()}
-            className="text-sol-cyan hover:text-sol-cyan text-[10px] font-medium underline underline-offset-2"
-          >
-            view
-          </Link>
+        {resolvedChildId ? (
+          <span className={`ml-auto flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium ${colors.text} ${colors.bg} border ${colors.border}`}>
+            open
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+            </svg>
+          </span>
+        ) : (
+          <span className="text-sol-text-dim text-[10px] ml-auto">
+            {expanded ? "collapse" : "expand"}
+          </span>
         )}
-        <span className="text-sol-text-dim text-[10px] ml-auto">
-          {expanded ? "collapse" : "expand"}
-        </span>
       </div>
 
       <div className="px-3 pb-2">
@@ -2034,7 +2080,7 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
               </div>
               {processedContent && processedContent.trim() ? (
                 <pre className={`p-1.5 sm:p-2 text-[11px] sm:text-xs font-mono overflow-x-auto whitespace-pre-wrap ${result?.is_error ? "text-sol-red" : "text-sol-text-secondary"}`}>
-                  {processedContent}
+                  {renderAnsi(processedContent)}
                 </pre>
               ) : (
                 <div className="p-2 text-xs text-sol-text-dim">No output</div>
@@ -2093,7 +2139,7 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
                 </div>
               ) : isMarkdownResult ? (
                 <div className="p-2 prose prose-invert prose-sm max-w-none text-xs">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} /> }}>{processedContent}</ReactMarkdown>
+                  <ReactMarkdown remarkPlugins={entityRemarkPlugins} components={{ code: EntityAwareCode, a: EntityAwareLink, img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} /> }}>{processedContent}</ReactMarkdown>
                 </div>
               ) : (
                 <>
@@ -2103,7 +2149,7 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
                     </div>
                   )}
                   <pre className={`p-2 text-xs font-mono overflow-x-auto whitespace-pre-wrap ${result?.is_error ? "text-sol-red" : "text-sol-text-secondary"}`}>
-                    {processedContent}
+                    {renderAnsi(processedContent)}
                   </pre>
                 </>
               )}
@@ -2171,7 +2217,8 @@ function TodoWriteBlock({ tool }: { tool: ToolCall }) {
   );
 }
 
-function TaskListBlock({ tool, result }: { tool: ToolCall; result?: ToolResult }) {
+function TaskListBlock({ tool, result, taskRecordMap }: { tool: ToolCall; result?: ToolResult; taskRecordMap?: TaskRecordMaps }) {
+  const openSlideOut = useSlideOutStore((s) => s.open);
   if (!result) return null;
   const lines = result.content.split("\n");
   const items: Array<{ id: string; status: string; subject: string; owner?: string; blockedBy?: string[] }> = [];
@@ -2202,8 +2249,14 @@ function TaskListBlock({ tool, result }: { tool: ToolCall; result?: ToolResult }
       <div className="ml-3.5 mt-1 space-y-0.5">
         {items.map(task => {
           const isBlocked = task.blockedBy && task.blockedBy.length > 0;
+          const matched = taskRecordMap?.byTitle[task.subject] || taskRecordMap?.byLocalId[task.id];
+          const clickable = !!matched;
           return (
-            <div key={task.id} className={`flex items-start gap-2 text-sm ${isBlocked ? "opacity-50" : ""}`}>
+            <div
+              key={task.id}
+              className={`flex items-start gap-2 text-sm ${isBlocked ? "opacity-50" : ""}${clickable ? " cursor-pointer rounded px-1.5 py-0.5 -mx-1 hover:bg-sol-bg-highlight/50 transition-colors" : ""}`}
+              onClick={clickable ? () => openSlideOut("task", matched.short_id) : undefined}
+            >
               {task.status === "completed" ? (
                 <svg className="w-4 h-4 text-emerald-500 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
@@ -2247,9 +2300,13 @@ function TaskListBlock({ tool, result }: { tool: ToolCall; result?: ToolResult }
   );
 }
 
-function TaskCreateUpdateBlock({ tool, result, taskSubjectMap }: { tool: ToolCall; result?: ToolResult; taskSubjectMap?: Record<string, string> }) {
+type TaskRecord = { _id: string; short_id: string; title: string; status: string };
+type TaskRecordMaps = { byTitle: Record<string, TaskRecord>; byLocalId: Record<string, TaskRecord> };
+
+function TaskCreateUpdateBlock({ tool, result, taskSubjectMap, taskRecordMap }: { tool: ToolCall; result?: ToolResult; taskSubjectMap?: Record<string, string>; taskRecordMap?: TaskRecordMaps }) {
   let parsedInput: Record<string, any> = {};
   try { parsedInput = JSON.parse(tool.input); } catch {}
+  const openSlideOut = useSlideOutStore((s) => s.open);
 
   const isCreate = tool.name === "TaskCreate";
   const subject = parsedInput.subject;
@@ -2265,12 +2322,27 @@ function TaskCreateUpdateBlock({ tool, result, taskSubjectMap }: { tool: ToolCal
   }
 
   const resolvedSubject = subject || (taskId && taskSubjectMap?.[taskId]);
+  const matchedTask = resolvedSubject
+    ? taskRecordMap?.byTitle[String(resolvedSubject)]
+    : taskId
+    ? taskRecordMap?.byLocalId[String(taskId)]
+    : undefined;
+  const isClickable = !!matchedTask;
 
-  if (!isCreate && resolvedSubject) {
+  const handleClick = () => {
+    if (matchedTask) openSlideOut("task", matchedTask.short_id);
+  };
+
+  const displaySubject = resolvedSubject || matchedTask?.title;
+
+  if (!isCreate && displaySubject) {
     return (
       <div className="my-0.5">
-        <div className="flex items-center gap-1.5 text-xs">
-          <span className="text-sol-text-muted">{String(resolvedSubject).slice(0, 60)}</span>
+        <div
+          className={`flex items-center gap-1.5 text-xs${isClickable ? " cursor-pointer rounded px-1.5 py-0.5 -mx-1 hover:bg-sol-bg-highlight/50 transition-colors" : ""}`}
+          onClick={isClickable ? handleClick : undefined}
+        >
+          <span className="text-sol-text-muted">{String(displaySubject).slice(0, 60)}</span>
           {status && (
             <span className={`px-1 py-0.5 rounded text-[10px] font-mono ${
               status === "completed" ? "bg-emerald-500/15 text-emerald-400" :
@@ -2289,7 +2361,10 @@ function TaskCreateUpdateBlock({ tool, result, taskSubjectMap }: { tool: ToolCal
 
   return (
     <div className="my-0.5">
-      <div className="flex items-center gap-1.5 text-xs">
+      <div
+        className={`flex items-center gap-1.5 text-xs${isClickable ? " cursor-pointer rounded px-1.5 py-0.5 -mx-1 hover:bg-sol-bg-highlight/50 transition-colors" : ""}`}
+        onClick={isClickable ? handleClick : undefined}
+      >
         <span className="font-mono text-emerald-500/80">{tool.name}</span>
         {isCreate ? (
           <>
@@ -2314,6 +2389,334 @@ function TaskCreateUpdateBlock({ tool, result, taskSubjectMap }: { tool: ToolCal
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+const CAST_STATUS_COLORS: Record<string, { bg: string; text: string }> = {
+  draft: { bg: "bg-gray-500/10", text: "text-gray-400" },
+  open: { bg: "bg-sol-blue/10", text: "text-sol-blue" },
+  backlog: { bg: "bg-gray-500/10", text: "text-gray-400" },
+  in_progress: { bg: "bg-sol-yellow/10", text: "text-sol-yellow" },
+  in_review: { bg: "bg-sol-violet/10", text: "text-sol-violet" },
+  done: { bg: "bg-emerald-500/10", text: "text-emerald-400" },
+  dropped: { bg: "bg-gray-500/10", text: "text-gray-400" },
+  active: { bg: "bg-emerald-500/10", text: "text-emerald-400" },
+  paused: { bg: "bg-gray-500/10", text: "text-gray-400" },
+  abandoned: { bg: "bg-red-500/10", text: "text-red-400" },
+};
+
+function DocTitleLink({ convexId }: { convexId: string }) {
+  const router = useRouter();
+  const doc = useQuery(api.docs.webGet, { id: convexId });
+  if (!doc) return <span className="text-sol-text-dim font-mono">{convexId.slice(0, 12)}...</span>;
+  return (
+    <button
+      onClick={(e) => { e.stopPropagation(); router.push(`/docs/${doc._id}`); }}
+      className="text-sol-blue hover:underline truncate max-w-[250px] text-left"
+    >
+      {(doc as any).display_title || doc.title}
+    </button>
+  );
+}
+
+function CastEntityCard({ type, shortId, convexId }: { type: "task" | "plan" | "doc"; shortId?: string; convexId?: string }) {
+  const openSlideOut = useSlideOutStore((s) => s.open);
+  const router = useRouter();
+  const task = useQuery(api.tasks.webGet, type === "task" && shortId ? { short_id: shortId } : "skip");
+  const plan = useQuery(api.plans.webGet, type === "plan" && shortId ? { short_id: shortId } : "skip");
+  const doc = useQuery(api.docs.webGet, type === "doc" && convexId ? { id: convexId } : "skip");
+  const entity = type === "task" ? task : type === "plan" ? plan : doc;
+
+  if (!entity) {
+    if (shortId) return <EntityIdPill shortId={shortId} />;
+    return null;
+  }
+
+  const handleClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (type === "doc") {
+      router.push(`/docs/${entity._id}`);
+    } else {
+      openSlideOut(type as "task" | "plan", entity._id);
+    }
+  };
+
+  const status = entity.status || (type === "doc" ? null : "open");
+  const sc = status ? (CAST_STATUS_COLORS[status] || CAST_STATUS_COLORS.open) : null;
+  const age = Date.now() - (entity.updated_at || (entity as any)._creationTime || Date.now());
+  const ageStr = age < 3600000 ? `${Math.max(1, Math.round(age / 60000))}m`
+    : age < 86400000 ? `${Math.round(age / 3600000)}h`
+    : `${Math.round(age / 86400000)}d`;
+
+  const borderColor = type === "plan" ? "border-sol-cyan/20 bg-sol-cyan/5 hover:bg-sol-cyan/10"
+    : type === "task" ? "border-sol-yellow/20 bg-sol-yellow/5 hover:bg-sol-yellow/10"
+    : "border-sol-blue/20 bg-sol-blue/5 hover:bg-sol-blue/10";
+
+  const DOC_TYPE_LABELS: Record<string, { label: string; color: string }> = {
+    plan: { label: "Plan", color: "text-sol-cyan" },
+    design: { label: "Design", color: "text-sol-violet" },
+    spec: { label: "Spec", color: "text-sol-blue" },
+    investigation: { label: "Investigation", color: "text-sol-orange" },
+    handoff: { label: "Handoff", color: "text-sol-magenta" },
+    note: { label: "Note", color: "text-sol-text-dim" },
+  };
+
+  const docPreview = type === "doc" && (entity as any).content
+    ? (entity as any).content.replace(/^#[^\n]*\n*/m, "").replace(/\\n/g, " ").replace(/[#*_`>\[\]]/g, "").replace(/\s+/g, " ").trim().slice(0, 120)
+    : "";
+
+  return (
+    <button onClick={handleClick} className={`mt-1 w-full max-w-md text-left rounded-lg border transition-colors cursor-pointer ${borderColor}`}>
+      <div className="px-3 py-2">
+        <div className="flex items-center gap-2 min-w-0">
+          {sc && (
+            <span className={`px-1.5 py-0 rounded text-[10px] font-mono ${sc.bg} ${sc.text}`}>
+              {status!.replace(/_/g, " ")}
+            </span>
+          )}
+          {type === "doc" && (entity as any).doc_type && (
+            <span className={`text-[10px] font-medium ${DOC_TYPE_LABELS[(entity as any).doc_type]?.color || "text-sol-text-dim"}`}>
+              {DOC_TYPE_LABELS[(entity as any).doc_type]?.label || (entity as any).doc_type}
+            </span>
+          )}
+          {shortId && <span className="text-[10px] font-mono text-sol-text-dim">{shortId}</span>}
+          <span className="flex-1 text-sm text-sol-text truncate">
+            {(entity as any).display_title || entity.title}
+          </span>
+          <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{ageStr}</span>
+        </div>
+        {type === "plan" && (entity as any).progress && (
+          <div className="flex items-center gap-2 mt-1.5">
+            <div className="flex-1 h-1 rounded-full bg-sol-bg-highlight overflow-hidden max-w-[200px]">
+              <div
+                className="h-full rounded-full bg-emerald-500/70 transition-all"
+                style={{ width: `${(entity as any).progress.total > 0 ? Math.round(((entity as any).progress.done / (entity as any).progress.total) * 100) : 0}%` }}
+              />
+            </div>
+            <span className="text-[10px] text-sol-text-dim font-mono">
+              {(entity as any).progress.done}/{(entity as any).progress.total}
+            </span>
+          </div>
+        )}
+        {type === "task" && (
+          <div className="flex items-center gap-1.5 mt-1">
+            {(entity as any).priority && (entity as any).priority !== "medium" && (
+              <span className={`text-[10px] px-1 py-0 rounded font-mono ${
+                (entity as any).priority === "high" || (entity as any).priority === "critical"
+                  ? "bg-red-500/10 text-red-400"
+                  : "bg-gray-500/10 text-gray-400"
+              }`}>{(entity as any).priority}</span>
+            )}
+            {(entity as any).labels?.map((l: string) => (
+              <span key={l} className="text-[10px] px-1.5 py-0 rounded-full bg-sol-bg-highlight text-sol-text-dim">{l}</span>
+            ))}
+          </div>
+        )}
+        {type === "doc" && docPreview && (
+          <p className="text-[11px] text-sol-text-muted/70 mt-1 truncate">{docPreview}</p>
+        )}
+      </div>
+    </button>
+  );
+}
+
+function CastCommandBlock({ tool, result }: { tool: ToolCall; result?: ToolResult }) {
+  const [expanded, setExpanded] = useState(false);
+  const cast = parseCastCommand(tool)!;
+  const { category, subcommand, args } = cast;
+  const output = result?.content || "";
+  const isError = result?.is_error;
+
+  const cat = category === "t" ? "task" : category === "p" ? "plan" : category === "d" ? "doc" : category === "sched" ? "schedule" : category;
+  const isCreate = subcommand === "create" || subcommand === "add";
+
+  const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "");
+  const entityIds = useMemo(() => {
+    const ids: string[] = [];
+    const patterns = [/\b(ct-[a-z0-9]+)\b/gi, /\b(pl-[a-z0-9]+)\b/gi];
+    const sources = [args, stripAnsi(output)];
+    for (const src of sources) {
+      for (const pattern of patterns) {
+        let m;
+        while ((m = pattern.exec(src)) !== null) {
+          if (!ids.includes(m[1].toLowerCase())) ids.push(m[1].toLowerCase());
+        }
+      }
+    }
+    return ids;
+  }, [args, output]);
+
+  const docConvexId = useMemo(() => {
+    if (cat !== "doc") return null;
+    const fa = args?.match(/^"([^"]*)"/) || args?.match(/^'([^']*)'/) || args?.match(/^(\S+)/);
+    const firstA = fa ? fa[1] : "";
+    if (!isCreate && firstA && /^[a-z0-9]{20,}$/i.test(firstA)) return firstA;
+    if (isCreate && output) {
+      const clean = stripAnsi(output);
+      const m = clean.match(/Created\s+\w+\s+([a-z0-9]{20,})/i) || clean.match(/\b([a-z0-9]{20,})\b/i);
+      return m ? m[1] : null;
+    }
+    return null;
+  }, [cat, isCreate, output, args]);
+
+  const isEntityCommand = ((cat === "task" || cat === "plan") && isCreate && entityIds.length > 0) || (cat === "doc" && !!docConvexId);
+
+  const getCategoryConfig = () => {
+    switch (cat) {
+      case "task": return {
+        color: "text-sol-yellow/80",
+        icon: <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" /></svg>
+      };
+      case "plan": return {
+        color: "text-sol-cyan/80",
+        icon: <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><circle cx="12" cy="12" r="10" /><circle cx="12" cy="12" r="6" /><circle cx="12" cy="12" r="2" /></svg>
+      };
+      case "doc": return {
+        color: "text-sol-blue/80",
+        icon: <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+      };
+      case "search": return {
+        color: "text-sol-violet/80",
+        icon: <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+      };
+      case "feed": return {
+        color: "text-sol-green/80",
+        icon: <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" /></svg>
+      };
+      case "schedule": return {
+        color: "text-sol-orange/80",
+        icon: <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><circle cx="12" cy="12" r="10" /><path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6l4 2" /></svg>
+      };
+      case "diff": case "summary": case "handoff": case "context": case "ask": return {
+        color: "text-sol-magenta/80",
+        icon: <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" /></svg>
+      };
+      default: return {
+        color: "text-sol-text-dim",
+        icon: <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+      };
+    }
+  };
+
+  const config = getCategoryConfig();
+
+  const firstArg = useMemo(() => {
+    if (!args) return "";
+    const m = args.match(/^"([^"]*)"/) || args.match(/^'([^']*)'/) || args.match(/^(\S+)/);
+    return m ? m[1] : "";
+  }, [args]);
+
+  const renderSummary = () => {
+    const isShow = subcommand === "show" || subcommand === "status" || subcommand === "context";
+    const isGet = subcommand === "get";
+    const isList = subcommand === "ls" || subcommand === "list";
+    const isSearch = subcommand === "search" || cat === "search";
+    const isStatusChange = ["start", "done", "drop", "pause", "activate", "bind", "unbind"].includes(subcommand);
+    const isIdCommand = ["edit", "get", "show", "status", "context", "comment", "start", "done", "drop", "pause", "activate", "bind", "unbind", "update", "decide", "discover", "pointer", "decompose", "orchestrate", "autopilot", "wave", "progress", "agents", "kill", "retry"].includes(subcommand);
+
+    const statusColors: Record<string, string> = {
+      start: "bg-amber-500/15 text-amber-400",
+      done: "bg-emerald-500/15 text-emerald-400",
+      drop: "bg-red-500/15 text-red-400",
+      pause: "bg-gray-500/15 text-gray-400",
+      activate: "bg-emerald-500/15 text-emerald-400",
+      bind: "bg-sol-cyan/15 text-sol-cyan",
+      unbind: "bg-gray-500/15 text-gray-400",
+    };
+
+    const outputLines = output.trim().split("\n").filter(l => l.trim()).length;
+
+    if (isEntityCommand && entityIds.length > 0) return null;
+
+    if (cat === "doc" && docConvexId) {
+      return (
+        <>
+          <DocTitleLink convexId={docConvexId} />
+          {isError && <span className="text-sol-red/80 text-[10px]">(error)</span>}
+        </>
+      );
+    }
+
+    return (
+      <>
+        {entityIds.map(id => (
+          <EntityIdPill key={id} shortId={id} />
+        ))}
+
+        {isCreate && !entityIds.length && firstArg && (
+          <span className="text-sol-text-muted truncate">{truncateStr(firstArg, 50)}</span>
+        )}
+
+        {(isShow || isGet) && !entityIds.length && firstArg && (
+          <span className="text-sol-text-dim font-mono">{firstArg}</span>
+        )}
+
+        {isIdCommand && !isShow && !isGet && !isStatusChange && !entityIds.length && firstArg && (
+          <span className="text-sol-text-dim font-mono">{firstArg}</span>
+        )}
+
+        {isStatusChange && (
+          <span className={`px-1 py-0.5 rounded text-[10px] font-mono ${statusColors[subcommand] || "bg-gray-500/15 text-gray-400"}`}>
+            {subcommand}
+          </span>
+        )}
+
+        {isList && output && (
+          <span className="text-sol-text-dim font-mono">({outputLines} items)</span>
+        )}
+
+        {isSearch && firstArg && (
+          <span className="text-sol-text-muted italic truncate">"{truncateStr(firstArg, 40)}"</span>
+        )}
+
+        {isError && <span className="text-sol-red/80 text-[10px]">(error)</span>}
+
+        {!isList && !isError && !isEntityCommand && output && outputLines > 1 && (
+          <span className="text-sol-text-dim font-mono">({outputLines} lines)</span>
+        )}
+      </>
+    );
+  };
+
+  const subLabel = subcommand ? subcommand.replace(/-/g, " ") : "";
+
+  return (
+    <div className="my-0.5">
+      <div
+        className="flex items-center gap-1.5 text-xs cursor-pointer group"
+        onClick={() => setExpanded(!expanded)}
+      >
+        <span className={`flex items-center gap-1 font-mono flex-shrink-0 ${config.color}`}>
+          {config.icon}
+          <span className="group-hover:underline">{cat}{subLabel ? ` ${subLabel}` : ""}</span>
+        </span>
+        {renderSummary()}
+      </div>
+
+      {isEntityCommand && entityIds.length > 0 && entityIds.map(id => (
+        <CastEntityCard
+          key={id}
+          type={id.startsWith("pl-") ? "plan" : "task"}
+          shortId={id}
+        />
+      ))}
+
+      {isEntityCommand && cat === "doc" && docConvexId && isCreate && (
+        <CastEntityCard type="doc" convexId={docConvexId} />
+      )}
+
+      {expanded && cat === "doc" && docConvexId && !isCreate && (
+        <CastEntityCard type="doc" convexId={docConvexId} />
+      )}
+
+      {expanded && output && (
+        <div className="mt-1 rounded border border-sol-border/30 bg-sol-bg-alt max-h-80 overflow-auto">
+          <pre className={`p-1.5 sm:p-2 text-[11px] sm:text-xs font-mono overflow-x-auto whitespace-pre-wrap ${isError ? "text-sol-red" : "text-sol-text-secondary"}`}>
+            {renderAnsi(output)}
+          </pre>
+        </div>
+      )}
     </div>
   );
 }
@@ -2453,7 +2856,7 @@ function PlanModeBlock({ tool, result, onSendMessage }: { tool: ToolCall; result
 }
 
 function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall; result?: ToolResult; onSendMessage?: (content: string) => void }) {
-  let parsedInput: { questions?: Array<{ question: string; header?: string; options: Array<{ label: string; description?: string }>; multiSelect?: boolean }>; answers?: Record<string, string> } = {};
+  let parsedInput: { questions?: Array<{ question: string; header?: string; options: Array<{ label: string; description?: string }>; multiSelect?: boolean; isConfirmation?: boolean }>; answers?: Record<string, string> } = {};
   try { parsedInput = JSON.parse(tool.input); } catch {}
   const [sent, setSent] = useState(false);
   const [selections, setSelections] = useState<Record<number, { key: string; label: string; text?: string }>>({});
@@ -2464,6 +2867,7 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
   if (questions.length === 0) return null;
 
   const isMultiQuestion = questions.length > 1;
+  const isConfirmation = questions[0]?.isConfirmation;
 
   let answers: Record<string, string> = {};
   if (parsedInput.answers && typeof parsedInput.answers === "object") {
@@ -2539,11 +2943,12 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
                     key={j}
                     onClick={() => {
                       setOtherOpen(prev => ({ ...prev, [i]: false }));
+                      const pollKey = isConfirmation ? (j === 0 ? "Enter" : "Escape") : String(j + 1);
                       if (isMultiQuestion) {
-                        setSelections(prev => ({ ...prev, [i]: { key: String(j + 1), label: cleanLabel } }));
+                        setSelections(prev => ({ ...prev, [i]: { key: pollKey, label: cleanLabel } }));
                       } else {
                         setSent(true);
-                        onSendMessage!(JSON.stringify({ __cc_poll: true, keys: [String(j + 1)], display: cleanLabel }));
+                        onSendMessage!(JSON.stringify({ __cc_poll: true, keys: [pollKey], display: cleanLabel }));
                       }
                     }}
                     className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border transition-colors cursor-pointer ${
@@ -2886,9 +3291,11 @@ function SkillExpansionBlock({ content, timestamp, cmdName, collapsed }: { conte
       {expanded && (
         <div className="mt-1 rounded-md bg-sol-bg-alt/25 border border-sol-border/20 p-3 text-xs text-sol-text-muted overflow-y-auto leading-relaxed prose prose-invert prose-sm max-w-none">
           <ReactMarkdown
-            remarkPlugins={[remarkGfm]}
+            remarkPlugins={entityRemarkPlugins}
             rehypePlugins={[rehypeHighlight]}
             components={{
+              code: EntityAwareCode,
+              a: EntityAwareLink,
               img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} />,
               pre: ({ node, children, ...props }) => {
                 const codeElement = node?.children?.[0];
@@ -3072,8 +3479,10 @@ function InsightCard({ label, content }: { label: string; content: string }) {
         <span className="text-xs font-semibold tracking-wide uppercase text-sol-violet">{label}</span>
       </div>
       <div className="px-4 py-3 text-sm text-sol-text-secondary leading-relaxed prose prose-invert prose-sm max-w-none">
-        <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}
+        <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={[rehypeHighlight]}
           components={{
+            code: EntityAwareCode,
+            a: EntityAwareLink,
             pre: ({ node, children, ...props }) => {
               const codeElement = node?.children?.[0];
               if (codeElement && codeElement.type === 'element' && codeElement.tagName === 'code') {
@@ -3471,8 +3880,8 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
                 {tmParts.map((part, i) => part.type === 'teammate' ? (
                   <TeammateMessageCard key={i} teammateId={part.teammateId} color={part.color} summary={part.summary} content={part.content} />
                 ) : hasRichMarkdown(part.content) ? (
-                  <ReactMarkdown key={i} remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}
-                    components={{ img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} />, pre: ({ node, children, ...props }) => {
+                  <ReactMarkdown key={i} remarkPlugins={entityRemarkPlugins} rehypePlugins={[rehypeHighlight]}
+                    components={{ code: EntityAwareCode, a: EntityAwareLink, img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} />, pre: ({ node, children, ...props }) => {
                       const codeElement = node?.children?.[0];
                       if (codeElement && codeElement.type === 'element' && codeElement.tagName === 'code') {
                         const className = codeElement.properties?.className as string[] | undefined;
@@ -3495,8 +3904,8 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
                 {parts.map((part, i) => part.type === 'skill' ? (
                   <SkillCard key={i} name={part.skillName} description={part.skillDesc} path={part.skillPath} />
                 ) : isMarkdown || hasRichMarkdown(part.content) ? (
-                  <ReactMarkdown key={i} remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}
-                    components={{ img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} />, pre: ({ node, children, ...props }) => {
+                  <ReactMarkdown key={i} remarkPlugins={entityRemarkPlugins} rehypePlugins={[rehypeHighlight]}
+                    components={{ code: EntityAwareCode, a: EntityAwareLink, img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} />, pre: ({ node, children, ...props }) => {
                       const codeElement = node?.children?.[0];
                       if (codeElement && codeElement.type === 'element' && codeElement.tagName === 'code') {
                         const className = codeElement.properties?.className as string[] | undefined;
@@ -3513,9 +3922,11 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
           }
           return isMarkdown ? (
             <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
+              remarkPlugins={entityRemarkPlugins}
               rehypePlugins={[rehypeHighlight]}
               components={{
+                code: EntityAwareCode,
+                a: EntityAwareLink,
                 img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} />,
                 pre: ({ node, children, ...props }) => {
                   const codeElement = node?.children?.[0];
@@ -3601,9 +4012,11 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
             <div className={isMarkdown ? "prose prose-invert prose-sm max-w-none text-sol-text" : "text-sol-text text-sm whitespace-pre-wrap"}>
               {isMarkdown ? (
                 <ReactMarkdown
-                  remarkPlugins={[remarkGfm]}
+                  remarkPlugins={entityRemarkPlugins}
                   rehypePlugins={[rehypeHighlight]}
                   components={{
+                    code: EntityAwareCode,
+                    a: EntityAwareLink,
                     img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} />,
                     pre: ({ node, children, ...props }) => {
                       const codeElement = node?.children?.[0];
@@ -3673,6 +4086,7 @@ function AssistantBlock({
   onStartShareSelection,
   agentType,
   taskSubjectMap,
+  taskRecordMap,
   onForkFromMessage,
   forkChildren,
   onBranchSwitch,
@@ -3712,6 +4126,7 @@ function AssistantBlock({
   onStartShareSelection?: (messageId: string) => void;
   agentType?: string;
   taskSubjectMap?: Record<string, string>;
+  taskRecordMap?: TaskRecordMaps;
   onForkFromMessage?: (messageUuid: string) => void;
   forkChildren?: Array<{ _id: string; title: string; short_id?: string; started_at?: number; username?: string; message_count?: number; agent_type?: string }>;
   onBranchSwitch?: (convId: string | null) => void;
@@ -3839,7 +4254,7 @@ function AssistantBlock({
   return (
     <div id={`msg-${messageId}`} className={`group relative scroll-mt-20 ${collapsed ? "mb-1" : onlyToolCalls ? "mb-1" : "mb-6"} transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg p-2 -m-2 message-highlight" : ""} ${shareSelectionMode ? "cursor-pointer" : ""} ${isSelectedForShare ? "bg-sol-cyan/10 rounded-lg p-2 -m-2 border-2 border-sol-cyan ring-2 ring-sol-cyan/30" : ""}`} onClick={shareSelectionMode ? onToggleShareSelection : undefined} title={!shouldShowHeader ? formatRelativeTime(timestamp) : undefined}>
       {(hasContent || hasToolCalls) && (
-        <div className={`absolute ${hasPlanWrite && onlyToolCalls ? "-top-6" : "-top-2"} right-0 transition-opacity flex gap-0.5 z-10 bg-sol-bg rounded shadow-md px-0.5 ${shareSelectionMode ? "opacity-0 pointer-events-none" : "opacity-0 group-hover:opacity-100"}`}>
+        <div className={`absolute ${hasPlanWrite && onlyToolCalls ? "-top-6" : onlyToolCalls ? "top-1" : "-top-2"} right-0 transition-opacity flex gap-0.5 z-10 bg-sol-bg rounded shadow-md px-0.5 ${shareSelectionMode ? "opacity-0 pointer-events-none" : "opacity-0 group-hover:opacity-100"}`}>
           {onStartShareSelection && (
             <button
               onClick={() => onStartShareSelection(messageId)}
@@ -3953,9 +4368,9 @@ function AssistantBlock({
           ) : tc.name === "AskUserQuestion" ? (
             <AskUserQuestionBlock key={tc.id} tool={tc} result={toolResultMap[tc.id]} onSendMessage={onSendInlineMessage} />
           ) : tc.name === "TaskList" ? (
-            <TaskListBlock key={tc.id} tool={tc} result={toolResultMap[tc.id]} />
+            <TaskListBlock key={tc.id} tool={tc} result={toolResultMap[tc.id]} taskRecordMap={taskRecordMap} />
           ) : tc.name === "TaskCreate" || tc.name === "TaskUpdate" || tc.name === "TaskGet" ? (
-            <TaskCreateUpdateBlock key={tc.id} tool={tc} result={toolResultMap[tc.id]} taskSubjectMap={taskSubjectMap} />
+            <TaskCreateUpdateBlock key={tc.id} tool={tc} result={toolResultMap[tc.id]} taskSubjectMap={taskSubjectMap} taskRecordMap={taskRecordMap} />
           ) : tc.name === "SendMessage" ? (
             <SendMessageBlock key={tc.id} tool={tc} agentNameToChildMap={agentNameToChildMap} />
           ) : tc.name === "TeamCreate" || tc.name === "TeamDelete" ? (
@@ -3964,6 +4379,8 @@ function AssistantBlock({
             <SkillBlock key={tc.id} tool={tc} />
           ) : tc.name === "EnterPlanMode" || tc.name === "ExitPlanMode" ? (
             <PlanModeBlock key={tc.id} tool={tc} result={toolResultMap[tc.id]} onSendMessage={onSendInlineMessage} />
+          ) : parseCastCommand(tc) ? (
+            <CastCommandBlock key={tc.id} tool={tc} result={toolResultMap[tc.id]} />
           ) : (
             <ToolBlock
               key={tc.id}
@@ -4009,9 +4426,11 @@ function AssistantBlock({
                       ) : (
                         <ReactMarkdown
                           key={i}
-                          remarkPlugins={[remarkGfm]}
+                          remarkPlugins={entityRemarkPlugins}
                           rehypePlugins={[rehypeHighlight]}
                           components={{
+                            code: EntityAwareCode,
+                            a: EntityAwareLink,
                             img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} />,
                             pre: ({ node, children, ...props }) => {
                               const codeElement = node?.children?.[0];
@@ -4029,9 +4448,11 @@ function AssistantBlock({
                     </div>
                   ) : (
                     <ReactMarkdown
-                      remarkPlugins={[remarkGfm]}
+                      remarkPlugins={entityRemarkPlugins}
                       rehypePlugins={[rehypeHighlight]}
                       components={{
+                        code: EntityAwareCode,
+                        a: EntityAwareLink,
                         img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} />,
                         pre: ({ node, children, ...props }) => {
                           const codeElement = node?.children?.[0];
@@ -4104,9 +4525,11 @@ function AssistantBlock({
                   <ApiErrorCard error={parsedApiError} />
                 ) : (
                   <ReactMarkdown
-                    remarkPlugins={[remarkGfm]}
+                    remarkPlugins={entityRemarkPlugins}
                     rehypePlugins={[rehypeHighlight]}
                     components={{
+                      code: EntityAwareCode,
+                      a: EntityAwareLink,
                       img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} />,
                       pre: ({ node, children, ...props }) => {
                         const codeElement = node?.children?.[0];
@@ -4375,7 +4798,7 @@ function CompactionSummaryBlock({ content }: { content: string }) {
       </button>
       {isExpanded && (
         <div className="mt-2 px-3 py-2 bg-sol-bg-alt/20 border-l-2 border-amber-500/30 text-xs prose prose-invert prose-sm max-w-none">
-          <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} /> }}>
+          <ReactMarkdown remarkPlugins={entityRemarkPlugins} components={{ code: EntityAwareCode, a: EntityAwareLink, img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} /> }}>
             {content}
           </ReactMarkdown>
         </div>
@@ -4514,9 +4937,11 @@ function PlanBlock({ content, timestamp, collapsed, messageId, conversationId, o
           style={!isExpanded && isOverflowing ? { maxHeight: PLAN_MAX_HEIGHT, overflow: 'hidden' } : undefined}
         >
           <ReactMarkdown
-            remarkPlugins={[remarkGfm]}
+            remarkPlugins={entityRemarkPlugins}
             rehypePlugins={[rehypeHighlight]}
             components={{
+              code: EntityAwareCode,
+              a: EntityAwareLink,
               img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} />,
               pre: ({ node, children, ...props }) => {
                 const codeElement = node?.children?.[0];
@@ -4578,9 +5003,11 @@ function PlanBlock({ content, timestamp, collapsed, messageId, conversationId, o
             </div>
             <div className="prose prose-invert prose-sm max-w-none text-sol-text">
               <ReactMarkdown
-                remarkPlugins={[remarkGfm]}
+                remarkPlugins={entityRemarkPlugins}
                 rehypePlugins={[rehypeHighlight]}
                 components={{
+                  code: EntityAwareCode,
+                  a: EntityAwareLink,
                   img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} />,
                   pre: ({ node, children, ...props }) => {
                     const codeElement = node?.children?.[0];
@@ -4973,7 +5400,7 @@ function MessageNavigator({ userMessages, onRewind, onFork, onClose, forkPointMa
   );
 }
 
-const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, isSessionStarting, sessionId, agentType, agentStatus, pendingPermissionsCount, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onSendEscape, onOpenNavigator, onPopulateInput, permissionMode, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch, onGateSend, skills, filePaths, mentionItems }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; isSessionStarting?: boolean; sessionId?: string; agentType?: string; agentStatus?: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected"; pendingPermissionsCount?: number; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string) => void) | null>; permissionMode?: string; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void>; onGateSend?: (content: string) => Promise<void>; skills?: SkillItem[]; filePaths?: string[]; mentionItems?: MentionItem[] }) {
+const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, isSessionStarting, isSessionReady, sessionId, agentType, agentStatus, pendingPermissionsCount, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onSendEscape, onOpenNavigator, onPopulateInput, permissionMode, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch, onGateSend, skills, filePaths, mentionItems }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; isSessionStarting?: boolean; isSessionReady?: boolean; sessionId?: string; agentType?: string; agentStatus?: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected"; pendingPermissionsCount?: number; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string) => void) | null>; permissionMode?: string; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void>; onGateSend?: (content: string) => Promise<void>; skills?: SkillItem[]; filePaths?: string[]; mentionItems?: MentionItem[] }) {
   const cached = useInboxStore.getState().getDraft(conversationId);
   const [message, setMessage] = useState(() => cached?.draft_message ?? initialDraft ?? "");
   const messageRef = useRef(message);
@@ -5024,7 +5451,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
     if (acTrigger.type === "/") {
       return (skills || [])
         .filter(s => s.name.toLowerCase().includes(query))
-        .slice(0, 8)
+        .slice(0, 30)
         .map(s => ({ label: s.name, description: s.description, type: "skill" as string }));
     }
     if (acTrigger.type === "@") {
@@ -5396,8 +5823,15 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
   }, [selectedMessageContent, selectedMessageUuid]);
 
   const isInactive = status && status !== "active" && !pendingMessageId;
-  const hasContent = message.trim().length > 0 || pastedImages.length > 0;
-  const isExpanded = !!onSendAndAdvance || isFocused || message.length > 0 || pastedImages.length > 0;
+  const [queuedMessages, setQueuedMessages] = useState<string[]>([]);
+  const [selectedQueueIndex, setSelectedQueueIndex] = useState<number | null>(null);
+  const setSessionHasQueuedMessages = useInboxStore((s) => s.setSessionHasQueuedMessages);
+  useWatchEffect(() => {
+    setSessionHasQueuedMessages(conversationId, queuedMessages.length > 0);
+    return () => setSessionHasQueuedMessages(conversationId, false);
+  }, [conversationId, queuedMessages.length, setSessionHasQueuedMessages]);
+  const hasContent = message.trim().length > 0 || pastedImages.length > 0 || queuedMessages.length > 0;
+  const isExpanded = !!onSendAndAdvance || isFocused || message.length > 0 || pastedImages.length > 0 || queuedMessages.length > 0;
 
   const resetTextareaHeight = () => {
     if (textareaRef.current) {
@@ -5581,6 +6015,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
     const clientId = addOptimistic(conversationId, trimmed, optimisticImages.length > 0 ? optimisticImages : undefined);
     soundSend();
     setMessage("");
+    setSelectedQueueIndex(null);
     clearAllImages();
     updateDraft("", null);
     requestAnimationFrame(() => textareaRef.current?.focus());
@@ -5605,6 +6040,39 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
     }
   };
 
+  const queueDrainingRef = useRef(false);
+  useWatchEffect(() => {
+    if (queuedMessages.length === 0 || queueDrainingRef.current) return;
+    const isIdle = agentStatus === "idle" || (!agentStatus && !isWaitingForResponse && !isThinking && !isConversationLive && !isSessionStarting);
+    if (!isIdle) return;
+    queueDrainingRef.current = true;
+    const next = queuedMessages[0];
+    setQueuedMessages(prev => prev.slice(1));
+    setSelectedQueueIndex(null);
+    const clientId = addOptimistic(conversationId, next);
+    soundSend();
+    onMessageSent?.();
+    (async () => {
+      try {
+        const expanded = await expandMentionsInMessage(next);
+        const resolvedId = canQueryServer ? conversationId : await waitForConvexId(conversationId);
+        const msgId = await sendMessage({
+          conversation_id: resolvedId as Id<"conversations">,
+          content: expanded,
+          client_id: clientId,
+        });
+        setPendingMessageId(msgId);
+        setSentAt(Date.now());
+        sentContentRef.current = next;
+        setShowStuckBanner(false);
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "Failed to send queued message");
+      } finally {
+        queueDrainingRef.current = false;
+      }
+    })();
+  }, [queuedMessages, agentStatus, isWaitingForResponse, isThinking, isConversationLive, isSessionStarting, conversationId, canQueryServer]);
+
   const flashModeLabel = useCallback(() => {
     setShowModeLabel(true);
     if (modeLabelTimerRef.current) clearTimeout(modeLabelTimerRef.current);
@@ -5615,12 +6083,12 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
     if (acTrigger && acItems.length > 0) {
       if (e.key === "ArrowDown") {
         e.preventDefault();
-        setAcIndex(i => (i + 1) % acItems.length);
+        setAcIndex(i => Math.min(i + 1, acItems.length - 1));
         return;
       }
       if (e.key === "ArrowUp") {
         e.preventDefault();
-        setAcIndex(i => (i - 1 + acItems.length) % acItems.length);
+        setAcIndex(i => Math.max(i - 1, 0));
         return;
       }
       if (e.key === "Tab" && !e.shiftKey) {
@@ -5701,11 +6169,69 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
       }
     }
 
+    if (selectedQueueIndex !== null && queuedMessages.length > 0) {
+      if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
+        e.preventDefault();
+        setSelectedQueueIndex(Math.max(0, selectedQueueIndex - 1));
+        return;
+      }
+      if (e.key === "ArrowRight" || e.key === "ArrowDown") {
+        e.preventDefault();
+        if (selectedQueueIndex < queuedMessages.length - 1) {
+          setSelectedQueueIndex(selectedQueueIndex + 1);
+        } else {
+          setSelectedQueueIndex(null);
+          textareaRef.current?.focus();
+        }
+        return;
+      }
+      if (e.key === "Backspace" || e.key === "Delete") {
+        e.preventDefault();
+        setQueuedMessages(prev => prev.filter((_, i) => i !== selectedQueueIndex));
+        const newLen = queuedMessages.length - 1;
+        if (newLen === 0) {
+          setSelectedQueueIndex(null);
+          textareaRef.current?.focus();
+        } else {
+          setSelectedQueueIndex(Math.min(selectedQueueIndex, newLen - 1));
+        }
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        setSelectedQueueIndex(null);
+        textareaRef.current?.focus();
+        return;
+      }
+      if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+        e.preventDefault();
+        const text = queuedMessages[selectedQueueIndex];
+        setQueuedMessages(prev => prev.filter((_, i) => i !== selectedQueueIndex));
+        setSelectedQueueIndex(null);
+        setMessage(text);
+        requestAnimationFrame(() => textareaRef.current?.focus());
+        return;
+      }
+      if (e.key.length === 1 && !e.metaKey && !e.ctrlKey) {
+        setSelectedQueueIndex(null);
+      }
+    }
+
     if (e.key === "ArrowUp" && pastedImages.length > 0) {
       const textarea = textareaRef.current;
       if (textarea && textarea.selectionStart === 0 && textarea.selectionEnd === 0) {
         e.preventDefault();
         setSelectedImageIndex(pastedImages.length - 1);
+        return;
+      }
+    }
+
+    if (e.key === "ArrowUp" && queuedMessages.length > 0 && selectedImageIndex === null) {
+      const textarea = textareaRef.current;
+      if (textarea && textarea.selectionStart === 0 && textarea.selectionEnd === 0) {
+        e.preventDefault();
+        setSelectedQueueIndex(queuedMessages.length - 1);
         return;
       }
     }
@@ -5717,13 +6243,26 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
       if (escapeTimerRef.current) {
         clearTimeout(escapeTimerRef.current);
         escapeTimerRef.current = null;
-        if (hasText) { setMessage(""); } else { onOpenNavigator?.(); }
+        if (hasText) { setMessage(""); } else if (queuedMessages.length > 0) { setQueuedMessages([]); setSelectedQueueIndex(null); } else { onOpenNavigator?.(); }
       } else {
         if (hasText) {
+          escapeTimerRef.current = setTimeout(() => { escapeTimerRef.current = null; }, 250);
+        } else if (queuedMessages.length > 0) {
           escapeTimerRef.current = setTimeout(() => { escapeTimerRef.current = null; }, 250);
         } else {
           escapeTimerRef.current = setTimeout(() => { escapeTimerRef.current = null; onSendEscape?.(); }, 250);
         }
+      }
+      return;
+    }
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
+      e.preventDefault();
+      const text = message.trim();
+      if (text) {
+        setQueuedMessages(prev => [...prev, text]);
+        setMessage("");
+        updateDraft("", null);
+        setSelectedQueueIndex(null);
       }
       return;
     }
@@ -5745,13 +6284,18 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
       {lightboxImageIndex === null && <div className="h-16 bg-gradient-to-t from-sol-bg via-sol-bg/80 to-transparent -mt-16 relative" />}
       <div className={`pb-4 pointer-events-auto ${lightboxImageIndex === null ? "bg-sol-bg" : ""}`}>
         <div className="relative">
-          {(isFocused || shortcutTooltip || showStuckBanner || isSessionStarting || isInactive || isSessionDisconnected || (agentStatus && agentStatus !== "idle") || (!agentStatus && (isWaitingForResponse || isThinking || isConversationLive))) && (
+          {(isFocused || shortcutTooltip || showStuckBanner || isSessionStarting || isSessionReady || isInactive || isSessionDisconnected || (agentStatus && agentStatus !== "idle") || (!agentStatus && (isWaitingForResponse || isThinking || isConversationLive))) && (
             <div className={`mx-auto px-4 mb-1 flex justify-between items-center ${isExpanded ? "max-w-4xl" : "max-w-md"} ${lightboxImageIndex !== null ? "hidden" : ""}`}>
               <p className="text-[11px] text-sol-text-dim/70 pl-1">
                 {isSessionStarting && !showStuckBanner && !agentStatus ? (
                   <span className="flex items-center gap-1.5">
                     <span className="w-2 h-2 rounded-full bg-sol-cyan/50 animate-pulse" />
                     Starting session...
+                  </span>
+                ) : isSessionReady && !showStuckBanner && (!agentStatus || agentStatus === "idle" || agentStatus === "connected") ? (
+                  <span className="flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                    Ready
                   </span>
                 ) : showStuckBanner && sessionId ? (
                   isResuming ? (
@@ -5805,6 +6349,11 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
                   <span className="flex items-center gap-1.5">
                     <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
                     Working
+                  </span>
+                ) : agentStatus === "idle" && queuedMessages.length > 0 ? (
+                  <span className="flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-sol-cyan/50 animate-pulse" />
+                    Sending queued ({queuedMessages.length})...
                   </span>
                 ) : agentStatus === "idle" ? (
                   "\u00A0"
@@ -5946,6 +6495,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
                             <button
                               key={item.id || item.label}
                               type="button"
+                              ref={isSelected ? (el) => { el?.scrollIntoView({ block: "nearest" }); } : undefined}
                               onMouseEnter={() => setAcIndex(globalIdx)}
                               onMouseDown={(e) => { e.preventDefault(); applyAutocomplete(item); }}
                               className={`w-full text-left px-3 py-1.5 flex items-center gap-2.5 transition-colors ${isSelected ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted hover:bg-sol-bg-alt"}`}
@@ -5955,14 +6505,14 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
                               ) : (
                                 <Hash className={`w-3.5 h-3.5 flex-shrink-0 ${config.color} opacity-60`} />
                               )}
-                              <span className="text-sm truncate flex-1">
+                              <span className="text-sm flex-shrink-0">
                                 {item.type === "file" ? (item.label.split("/").pop() || item.label) : item.type === "skill" ? `/${item.label}` : item.label}
                               </span>
                               {item.type === "file" && (
                                 <span className="text-[11px] text-sol-text-dim font-mono flex-shrink-0 truncate max-w-[50%]">{item.label.replace(/\/[^/]+$/, "")}</span>
                               )}
                               {item.type !== "file" && item.description && (
-                                <span className="text-[11px] text-sol-text-dim font-mono flex-shrink-0">{item.description}</span>
+                                <span className="text-[11px] text-sol-text-dim font-mono truncate">{item.description}</span>
                               )}
                             </button>
                           );
@@ -5981,6 +6531,49 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
                   <span className="font-medium">Rewriting message</span>
                   <span className="text-sol-text-dim">Enter to fork &amp; send</span>
                   <span className="text-sol-text-dim">Esc to cancel</span>
+                </div>
+              )}
+              {queuedMessages.length > 0 && (
+                <div className="flex flex-col gap-1 pb-2 mb-2 border-b border-sol-border/50">
+                  {queuedMessages.map((qMsg, idx) => (
+                    <div
+                      key={idx}
+                      className={`group flex items-center gap-1.5 px-2 py-1 rounded text-[11px] cursor-pointer transition-colors ${
+                        selectedQueueIndex === idx
+                          ? "bg-sol-blue/15 border border-sol-blue/40 text-sol-text"
+                          : "bg-sol-bg/50 border border-sol-border/30 text-sol-text-secondary hover:border-sol-border/60"
+                      }`}
+                      onClick={() => {
+                        setSelectedQueueIndex(selectedQueueIndex === idx ? null : idx);
+                        textareaRef.current?.focus();
+                      }}
+                    >
+                      <span className="text-sol-text-dim text-[9px] font-mono shrink-0">{idx + 1}</span>
+                      <span className="truncate flex-1 font-mono">{qMsg}</span>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setQueuedMessages(prev => prev.filter((_, i) => i !== idx));
+                          if (selectedQueueIndex === idx) setSelectedQueueIndex(null);
+                          else if (selectedQueueIndex !== null && selectedQueueIndex > idx) setSelectedQueueIndex(selectedQueueIndex - 1);
+                        }}
+                        className="shrink-0 w-4 h-4 flex items-center justify-center rounded text-sol-text-dim hover:text-sol-text opacity-0 group-hover:opacity-100 transition-opacity"
+                      >
+                        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </button>
+                    </div>
+                  ))}
+                  {selectedQueueIndex !== null && (
+                    <span className="text-[9px] text-sol-text-dim flex items-center gap-2 pl-1">
+                      <span><kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/50 text-sol-text-secondary font-mono text-[8px]">&uarr;&darr;</kbd> navigate</span>
+                      <span><kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/50 text-sol-text-secondary font-mono text-[8px]">Del</kbd> remove</span>
+                      <span><kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/50 text-sol-text-secondary font-mono text-[8px]">Enter</kbd> edit</span>
+                      <span><kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/50 text-sol-text-secondary font-mono text-[8px]">Esc</kbd> deselect</span>
+                    </span>
+                  )}
                 </div>
               )}
               {pastedImages.length > 0 && (
@@ -6086,6 +6679,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
             <ShortcutHint keys={["Cmd", "Shift", "L"]} label="Copy link" />
             <div className="border-t border-sol-border/20 my-1.5" />
             <ShortcutHint keys={["Shift", "Enter"]} label="New line" />
+            <ShortcutHint keys={["Ctrl", "Enter"]} label="Queue message" />
             <ShortcutHint keys={["Alt", "Enter"]} label="Reply and advance" />
             <ShortcutHint keys={["Enter"]} label="Send message" />
           </div>
@@ -6118,7 +6712,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
 const CC_MODE_ORDER = ["default", "plan", "acceptEdits", "bypassPermissions", "dontAsk"];
 
 export const ConversationView = forwardRef<ConversationViewHandle, ConversationViewProps>(
-  function ConversationView({ conversation, commits = [], pullRequests = [], backHref, backLabel = "Back", headerExtra, headerLeft, headerEnd, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, onLoadOlder, onLoadNewer, onJumpToStart, onJumpToEnd, highlightQuery, onClearHighlight, embedded, showMessageInput = true, targetMessageId, isOwner = true, onSendAndAdvance, autoFocusInput, fallbackStickyContent, onBack, subHeaderContent }, ref) {
+  function ConversationView({ conversation, commits = [], pullRequests = [], backHref, backLabel = "Back", headerExtra, headerLeft, headerEnd, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, onLoadOlder, onLoadNewer, onJumpToStart, onJumpToEnd, highlightQuery, onClearHighlight, embedded, showMessageInput = true, targetMessageId, isOwner = true, onSendAndAdvance, autoFocusInput, fallbackStickyContent, onBack, subHeaderContent, hideHeader }, ref) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [userScrolled, _setUserScrolled] = useState(false);
   const userScrolledRef = useRef(false);
@@ -6624,9 +7218,12 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   }, [timeline, conversation?.agent_type]);
 
   const sessionSkills = useMemo(() => {
+    if (conversation?.available_skills) {
+      try { return JSON.parse(conversation.available_skills) as Array<{ name: string; description: string }>; } catch {}
+    }
     if (!conversation?.messages) return [];
     return extractSkillsFromMessages(conversation.messages);
-  }, [conversation?.messages]);
+  }, [conversation?.available_skills, conversation?.messages]);
 
   const sessionFilePaths = useMemo(() => {
     if (!conversation?.messages) return [];
@@ -7111,29 +7708,18 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     [activeBranches]
   );
 
-  // t key for tree panel (when not in selection mode)
-  useWatchEffect(() => {
+  useShortcutContext('conversation');
+  useShortcutAction('conv.toggleTree', useCallback(() => {
     if (!isOwner) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key !== 't') return;
-      if (forkSelectionIdx !== null) return;
-      const target = e.target as HTMLElement;
-      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) return;
-      const hasForks = (conversation?.fork_children && conversation.fork_children.length > 0) || conversation?.forked_from;
-      if (!hasForks) return;
-      e.preventDefault();
-      toggleTreePanel();
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [isOwner, forkSelectionIdx, toggleTreePanel, conversation?.fork_children, conversation?.forked_from]);
+    if (forkSelectionIdx !== null) return;
+    const hasForks = (conversation?.fork_children && conversation.fork_children.length > 0) || conversation?.forked_from;
+    if (!hasForks) return;
+    toggleTreePanel();
+  }, [isOwner, forkSelectionIdx, toggleTreePanel, conversation?.fork_children, conversation?.forked_from]));
 
-  useEventListener('keydown', (e: KeyboardEvent) => {
-    if (e.code === 'KeyL' && e.shiftKey && e.metaKey && !e.altKey && !e.ctrlKey) {
-      e.preventDefault();
-      copyToClipboard(window.location.href).then(() => toast.success("Link copied!"));
-    }
-  });
+  useShortcutAction('conv.copyLink', useCallback(() => {
+    copyToClipboard(window.location.href).then(() => toast.success("Link copied!"));
+  }, []));
 
   useMountEffect(() => {
     const el = headerRef.current;
@@ -7671,7 +8257,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const isWorking = isSessionConnected && (now - lastActivityAt) < 45 * 1000 && lastMessageRole === "assistant";
   const isConversationLive = isWorking;
   const isSessionDisconnected = !!conversation && conversation.status === "active" && managedSession !== undefined && managedSession.managed === false && !isSessionConnected;
-  const isSessionStarting = !!conversation && conversation.status === "active" && (conversation.message_count ?? 0) === 0 && !managedSession?.managed && (now - (conversation.started_at ?? 0)) < 60_000;
+  const sessionAge = now - (conversation?.started_at ?? 0);
+  const isNewEmptySession = !!conversation && conversation.status === "active" && (conversation.message_count ?? 0) === 0;
+  const isSessionStarting = isNewEmptySession && !managedSession?.managed && sessionAge < 10_000;
+  const isSessionReady = isNewEmptySession && !isSessionStarting && (managedSession?.managed === true || sessionAge >= 10_000) && sessionAge < 120_000;
 
   useWatchEffect(() => {
     if (conversation) {
@@ -7753,6 +8342,27 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     }
     return idMap;
   }, [conversation?.messages]);
+
+  const conversationTasks = useQuery(
+    api.tasks.webListByConversation,
+    conversation?._id && isConvexId(conversation._id) ? { conversationId: conversation._id } : "skip"
+  );
+
+  const taskRecordMap = useMemo(() => {
+    const byTitle: Record<string, TaskRecord> = {};
+    const byLocalId: Record<string, TaskRecord> = {};
+    if (conversationTasks) {
+      for (const t of conversationTasks) {
+        byTitle[t.title] = t;
+      }
+    }
+    if (taskSubjectMap) {
+      for (const [localId, title] of Object.entries(taskSubjectMap)) {
+        if (byTitle[title]) byLocalId[localId] = byTitle[title];
+      }
+    }
+    return { byTitle, byLocalId };
+  }, [conversationTasks, taskSubjectMap]);
 
   const getPreviousNonToolResultMessage = (index: number): Message | null => {
     for (let i = index - 1; i >= 0; i--) {
@@ -7995,6 +8605,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           onStartShareSelection={handleStartShareSelection}
           agentType={conversation?.agent_type}
           taskSubjectMap={taskSubjectMap}
+          taskRecordMap={taskRecordMap}
           onForkFromMessage={handleForkFromMessage}
           forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined}
           onBranchSwitch={msg.message_uuid ? (convId) => handleBranchSwitch(msg.message_uuid!, convId) : undefined}
@@ -8023,7 +8634,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           </div>
         </div>
       )}
-      <header ref={headerRef} className={`border-b border-black/10 bg-sol-bg-alt shrink-0 relative ${embedded ? "sticky top-0 z-20 bg-sol-bg-alt" : ""} ${!embedded || isZenMode ? deskClass : ""} ${isImageLightboxActive ? "invisible" : ""}`}>
+      <header ref={headerRef} className={`border-b border-black/10 bg-sol-bg-alt shrink-0 relative ${embedded ? "sticky top-0 z-20 bg-sol-bg-alt" : ""} ${!embedded || isZenMode ? deskClass : ""} ${isImageLightboxActive ? "invisible" : ""} ${hideHeader ? "hidden" : ""}`}>
         {typeof window !== "undefined" && window.location.hostname.includes("local.") && useInboxStore.getState().clientState.ui?.zen_mode && (
           <div className="absolute top-0 left-0 w-0 h-0 border-t-[20px] border-r-[20px] border-t-emerald-500 border-r-transparent z-30" />
         )}
@@ -8510,7 +9121,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       <div ref={containerRef} className="flex-1 min-h-0 overflow-y-auto" style={{ overflowAnchor: "none" }}>
         <div className="flex flex-col">
         {(!conversation || timeline.length === 0) ? (
-          <div className="flex-1 flex flex-col items-center justify-center gap-3">
+          <div className={`flex-1 flex flex-col items-center gap-3 ${hideHeader ? "justify-start pt-6" : "justify-start pt-16"}`}>
             {conversation && (conversation.project_path || conversation.git_root) && (
               <ProjectSwitcher conversation={conversation} />
             )}
@@ -8701,7 +9312,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
               </div>
             )
           )}
-          <MessageInput conversationId={firstActiveForkId || conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} isSessionStarting={isSessionStarting} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={isSessionDisconnected ? undefined : managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={handleForkFromMessage} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onGateSend={workflowRun?.status === "paused" ? handleGateRespond : undefined} skills={sessionSkills} filePaths={sessionFilePaths} mentionItems={mentionItemsRef.current} />
+          <MessageInput conversationId={firstActiveForkId || conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} isSessionStarting={isSessionStarting} isSessionReady={isSessionReady} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={isSessionDisconnected ? undefined : managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={handleForkFromMessage} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onGateSend={workflowRun?.status === "paused" ? handleGateRespond : undefined} skills={sessionSkills} filePaths={sessionFilePaths} mentionItems={mentionItemsRef.current} />
           {navigatorOpen && navigatorUserMessages && navigatorUserMessages.length > 0 && (
             <MessageNavigator
               userMessages={navigatorUserMessages}
