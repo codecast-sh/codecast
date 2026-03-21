@@ -195,10 +195,11 @@ else
   cd ../..
   echo "$LAST_DESKTOP_UPDATE" > "$LAST_DESKTOP_MARKER"
 
-  ROUTE_FILE="packages/web/app/download/mac/route.ts"
-  if [ -f "$ROUTE_FILE" ]; then
-    sed -i '' "s|Codecast-.*-arm64.dmg|Codecast-${ELECTRON_VERSION}-arm64.dmg|" "$ROUTE_FILE"
-    sed -i '' "s/const VERSION = \".*\"/const VERSION = \"$ELECTRON_VERSION\"/" "$ROUTE_FILE"
+  SERVER_FILE="packages/web/server/index.ts"
+  if [ -f "$SERVER_FILE" ]; then
+    sed -i '' "s/const LATEST_DESKTOP_VERSION = \".*\"/const LATEST_DESKTOP_VERSION = \"$ELECTRON_VERSION\"/" "$SERVER_FILE"
+    sed -i '' "s|const MAC_DMG_URL = \"https://dl.codecast.sh/Codecast-.*-arm64.dmg\"|const MAC_DMG_URL = \"https://dl.codecast.sh/Codecast-${ELECTRON_VERSION}-arm64.dmg\"|" "$SERVER_FILE"
+    sed -i '' "s/const MAC_DMG_VERSION = \".*\"/const MAC_DMG_VERSION = \"$ELECTRON_VERSION\"/" "$SERVER_FILE"
   fi
   echo "   ✓ Desktop app v$ELECTRON_VERSION deployed to dl.codecast.sh/$DMG_NAME"
 fi
