@@ -1,4 +1,4 @@
-import { ReactNode, useState, useCallback, useRef } from "react";
+import { ReactNode, useState, useCallback, useRef, useMemo } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useEventListener } from "../hooks/useEventListener";
@@ -26,10 +26,13 @@ import { TmuxMissingBanner } from "./TmuxMissingBanner";
 import { ElectronUpdateBanner } from "./ElectronUpdateBanner";
 import { FindBar } from "./FindBar";
 import { NewSessionModal } from "./ConversationList";
-import { useInboxStore, sortSessions } from "../store/inboxStore";
+import { CreatePalette } from "./CreatePalette";
+import { useInboxStore } from "../store/inboxStore";
+import { useShortcutAction, useShortcutContext, useGlobalShortcutActions } from "../shortcuts";
 import { usePrefetch } from "../hooks/usePrefetch";
 import { desktopHeaderClass, setupDesktopDrag, isElectron } from "../lib/desktop";
-import { CollapsedSessionRail, SessionListSidebar, ConversationColumn } from "./GlobalSessionPanel";
+import { CollapsedSessionRail, SessionListPanel, ConversationColumn } from "./GlobalSessionPanel";
+import { useSyncInboxSessions } from "../hooks/useSyncInboxSessions";
 import { isInboxRoute as isInboxRoutePath, isInboxSessionView } from "../lib/inboxRouting";
 
 interface DashboardLayoutProps {
@@ -42,8 +45,13 @@ interface DashboardLayoutProps {
 }
 
 const DEFAULT_LAYOUT = { sidebar: 25, main: 75 };
+const separatorClass = "relative z-10 w-px bg-black/10 cursor-col-resize before:absolute before:inset-y-0 before:-left-[2px] before:-right-[2px] before:content-[''] before:transition-colors before:duration-150 hover:before:bg-sol-cyan data-[resize-handle-active]:before:bg-sol-cyan";
 
-export function DashboardLayout({ children, filter, onFilterChange, directoryFilter, onDirectoryFilterChange, hideSidebar }: DashboardLayoutProps) {
+export function DashboardLayout(props: DashboardLayoutProps) {
+  return <DashboardLayoutInner {...props} />;
+}
+
+function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilter, onDirectoryFilterChange, hideSidebar }: DashboardLayoutProps) {
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const isZenMode = useInboxStore(s => s.clientState.ui?.zen_mode ?? false);
   const sidebarCollapsed = useInboxStore(s => s.clientState.ui?.sidebar_collapsed ?? false);
@@ -68,6 +76,7 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
   const headerRef = useRef<HTMLElement>(null);
   const prevWasInboxRef = useRef(false);
   usePrefetch();
+  useSyncInboxSessions();
 
   const serverClientState = useQuery(api.client_state.get, {});
   const createQuickSession = useMutation(api.conversations.createQuickSession);
@@ -103,6 +112,7 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
   const sidePanelOpen = useInboxStore(s => s.sidePanelOpen);
   const sidePanelSessionId = useInboxStore(s => s.sidePanelSessionId);
   const toggleSidePanel = useInboxStore(s => s.toggleSidePanel);
+  const selectPanelSession = useInboxStore(s => s.selectPanelSession);
   const showCollapsedRail = !sidePanelOpen && !isOnInboxPage && !isMobile && !isZenMode;
   const showSessionList = sidePanelOpen && !isOnInboxPage && !isMobile && !isZenMode;
   const showConversationColumn = !!sidePanelSessionId && !isOnInboxPage && !isMobile;
@@ -119,13 +129,15 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
     const wasInbox = prevWasInboxRef.current;
     prevWasInboxRef.current = isOnInboxPage;
     if (wasInbox && !isOnInboxPage) {
-      useInboxStore.getState().clearSidePanelSession();
+      const store = useInboxStore.getState();
+      const current = store.currentSessionId;
+      if (current) {
+        store.selectPanelSession(current);
+      } else {
+        store.clearSidePanelSession();
+      }
     }
   }, [isOnInboxPage]);
-
-  const handleLayoutChange = (newLayout: { [key: string]: number }) => {
-    updateLayout("dashboard", { sidebar: newLayout.sidebar || 25, main: newLayout.main || 75 });
-  };
 
   const handleQuickCreate = useCallback(() => {
     soundNewSession();
@@ -174,120 +186,106 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
     }
   }, [currentConvContext, directoryFilter, router, isInboxRoute, createQuickSession, openNewSession]);
 
-  useEventListener("keydown", (e: KeyboardEvent) => {
-    if (e.key === "." && e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
-      e.preventDefault();
-      updateUI({ zen_mode: !isZenMode });
+  useGlobalShortcutActions();
+  useShortcutContext('desktop', isDesktopApp);
+
+  useShortcutAction('session.create', useCallback(() => {
+    const store = useInboxStore.getState();
+    if (isOnInboxPage) {
+      handleQuickCreate();
+    } else {
+      if (store.showMySessions) store.setShowMySessions(false);
+      soundNewSession();
+      const path = directoryFilter || currentConvContext.projectPath || currentConvContext.gitRoot;
+      const agentType = (currentConvContext.agentType || "claude_code") as "claude_code" | "codex" | "cursor" | "gemini";
+      const sid = nanoid(10);
+      const now = Date.now();
+      store.setConversationMeta(sid, {
+        _id: sid, _creationTime: now, user_id: "", agent_type: agentType,
+        session_id: sid, project_path: path, git_root: currentConvContext.gitRoot || path,
+        started_at: now, updated_at: now, message_count: 0, status: "active",
+        title: "New session", messages: [],
+      });
+      store.createSession({
+        agent_type: agentType, project_path: path,
+        git_root: currentConvContext.gitRoot || path, session_id: sid,
+      });
+      useInboxStore.setState({ sidePanelSessionId: sid, sidePanelOpen: false });
     }
-    if (e.key === "1" && e.metaKey && e.shiftKey && e.altKey) {
-      e.preventDefault();
-      router.push("/inbox");
-    }
-    if (e.key === "n" && e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
-      e.preventDefault();
-      const store = useInboxStore.getState();
-      if (store.showMySessions) {
-        store.setShowMySessions(false);
-      }
-      if (!isInboxRoute) {
-        soundNewSession();
-        const path = directoryFilter || currentConvContext.projectPath || currentConvContext.gitRoot;
-        const agentType = (currentConvContext.agentType || "claude_code") as "claude_code" | "codex" | "cursor" | "gemini";
-        const sid = nanoid(10);
-        const now = Date.now();
-        store.setConversationMeta(sid, {
-          _id: sid, _creationTime: now, user_id: "", agent_type: agentType,
-          session_id: sid, project_path: path, git_root: currentConvContext.gitRoot || path,
-          started_at: now, updated_at: now, message_count: 0, status: "active",
-          title: "New session", messages: [],
-        });
-        store.createSession({
-          agent_type: agentType,
-          project_path: path,
-          git_root: currentConvContext.gitRoot || path,
-          session_id: sid,
-        });
-        useInboxStore.setState({ sidePanelSessionId: sid, sidePanelOpen: false });
-      } else {
-        handleQuickCreate();
-      }
-    }
-    if (e.key.toLowerCase() === "n" && e.ctrlKey && !e.metaKey && !e.altKey && e.shiftKey) {
-      e.preventDefault();
-      handleQuickCreateIsolated();
-    }
-    if (!isOnInboxPage && e.ctrlKey && !e.metaKey && !e.altKey) {
-      const store = useInboxStore.getState();
-      const sorted = sortSessions(store.sessions);
-      const currentId = store.sidePanelSessionId;
-      if (e.key === "j") {
-        e.preventDefault();
-        if (sorted.length === 0) return;
-        const idx = sorted.findIndex(s => s._id === currentId);
-        store.selectPanelSession(sorted[(idx + 1) % sorted.length]._id);
-        return;
-      }
-      if (e.key === "k") {
-        e.preventDefault();
-        if (sorted.length === 0) return;
-        const idx = sorted.findIndex(s => s._id === currentId);
-        store.selectPanelSession(sorted[(idx - 1 + sorted.length) % sorted.length]._id);
-        return;
-      }
-      if (e.key === "i") {
-        e.preventDefault();
-        const first = sorted.find(s => s.is_idle && s.message_count > 0 && !s.is_pinned);
-        if (first) store.selectPanelSession(first._id);
-        return;
-      }
-      if (e.key === "Backspace") {
-        e.preventDefault();
-        if (currentId) store.stashSession(currentId);
-        return;
-      }
-      if (e.shiftKey && e.key === "P") {
-        e.preventDefault();
-        if (currentId) store.pinSession(currentId);
-        return;
-      }
-      if (!e.shiftKey && e.key === "p") {
-        e.preventDefault();
-        const first = sorted.find(s => s.is_pinned);
-        if (first) store.selectPanelSession(first._id);
-        return;
-      }
-    }
-    if (!isOnInboxPage && e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && e.key === "Backspace") {
-      e.preventDefault();
-      const store = useInboxStore.getState();
-      const currentId = store.sidePanelSessionId;
-      if (currentId) {
-        const sorted = sortSessions(store.sessions);
-        const idx = sorted.findIndex(s => s._id === currentId);
-        const next = sorted[idx + 1] ?? sorted.find(s => s._id !== currentId);
-        store.deferSession(currentId);
-        if (next) store.selectPanelSession(next._id);
-      }
-    }
-    if (isDesktopApp && (e.metaKey || e.ctrlKey) && !e.altKey) {
-      const applyZoom = (z: number) => {
-        const r = Math.round(z * 10) / 10;
-        zoomRef.current = r;
-        document.documentElement.style.zoom = String(r);
-        setZoomHeight(`calc(100vh / ${r})`);
-      };
-      if (e.key === "=" || e.key === "+") {
-        e.preventDefault();
-        applyZoom(Math.min(zoomRef.current + 0.1, 2));
-      } else if (e.key === "-" && !e.shiftKey) {
-        e.preventDefault();
-        applyZoom(Math.max(zoomRef.current - 0.1, 0.5));
-      } else if (e.key === "0") {
-        e.preventDefault();
-        applyZoom(1);
-      }
-    }
-  });
+  }, [isOnInboxPage, directoryFilter, currentConvContext, handleQuickCreate]));
+
+  useShortcutAction('session.createIsolated', useCallback(() => {
+    handleQuickCreateIsolated();
+  }, [handleQuickCreateIsolated]));
+
+  useShortcutAction('zoom.in', useCallback(() => {
+    const r = Math.round(Math.min(zoomRef.current + 0.1, 2) * 10) / 10;
+    zoomRef.current = r;
+    document.documentElement.style.zoom = String(r);
+    setZoomHeight(`calc(100vh / ${r})`);
+  }, []));
+
+  useShortcutAction('zoom.out', useCallback(() => {
+    const r = Math.round(Math.max(zoomRef.current - 0.1, 0.5) * 10) / 10;
+    zoomRef.current = r;
+    document.documentElement.style.zoom = String(r);
+    setZoomHeight(`calc(100vh / ${r})`);
+  }, []));
+
+  useShortcutAction('zoom.reset', useCallback(() => {
+    zoomRef.current = 1;
+    document.documentElement.style.zoom = '1';
+    setZoomHeight('100vh');
+  }, []));
+
+  const handleLayoutChange = (newLayout: { [key: string]: number }) => {
+    updateLayout("dashboard", { sidebar: newLayout.sidebar || 25, main: newLayout.main || 75 });
+  };
+
+  const pageContent = isFullWidthPage ? (
+    <div className="h-full">{children}</div>
+  ) : (
+    <div data-main-scroll className="h-full overflow-y-auto px-3 sm:px-6 lg:px-8 py-4">
+      <div className="max-w-4xl mx-auto h-full">{children}</div>
+    </div>
+  );
+
+  const conversationPanel = useMemo(() => (
+    <Panel id="conversation-column" minSize="20%" maxSize="70%" defaultSize="40%">
+      <ErrorBoundary name="ConversationColumn" level="panel"><ConversationColumn /></ErrorBoundary>
+    </Panel>
+  ), []);
+
+  const mainContent = showConversationColumn ? (
+    <Group orientation="horizontal" className="h-full" defaultLayout={{ "main-content": 60, "conversation-column": 40 }}>
+      <Panel id="main-content" minSize="20%">{pageContent}</Panel>
+      <Separator className={separatorClass} />
+      {conversationPanel}
+    </Group>
+  ) : pageContent;
+
+  const rightArea = showSessionList ? (
+    <Group orientation="horizontal" className="h-full" defaultLayout={{ "right-content": 70, "session-list": 30 }}>
+      <Panel id="right-content" minSize="30%"><div className="h-full">{mainContent}</div></Panel>
+      <Separator className={separatorClass} />
+      <Panel id="session-list" minSize="15%" maxSize="50%" defaultSize="30%">
+        <ErrorBoundary name="SessionList" level="panel">
+          <div className="w-full h-full border-l border-sol-border/30">
+            <SessionListPanel
+              onSessionSelect={selectPanelSession}
+              activeSessionId={sidePanelSessionId}
+              onCollapse={toggleSidePanel}
+            />
+          </div>
+        </ErrorBoundary>
+      </Panel>
+    </Group>
+  ) : (
+    <div className="h-full flex">
+      <div className="flex-1 min-w-0 h-full">{mainContent}</div>
+      {showCollapsedRail && <ErrorBoundary name="SessionRail" level="inline"><CollapsedSessionRail /></ErrorBoundary>}
+    </div>
+  );
 
   return (
     <div className="bg-sol-bg flex flex-col overflow-hidden" style={{ height: zoomHeight }}>
@@ -411,37 +409,7 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
       {/* Content area with sidebar and main */}
       <div className="flex-1 min-h-0">
         {hideSidebar || isZenMode || sidebarCollapsed || isMobile ? (
-          <div className="h-full flex">
-            {showConversationColumn ? (
-              <Group orientation="horizontal" className="h-full flex-1 min-w-0" defaultLayout={{ "main-content": 60, "conversation-column": 40 }}>
-                <Panel id="main-content" minSize="20%">
-                  {isFullWidthPage ? (
-                    <div className="h-full">{children}</div>
-                  ) : (
-                    <div data-main-scroll className="h-full overflow-y-auto px-3 sm:px-6 lg:px-8 py-4">
-                      <div className="max-w-4xl mx-auto h-full">{children}</div>
-                    </div>
-                  )}
-                </Panel>
-                <Separator className="relative z-10 w-px bg-black/10 cursor-col-resize before:absolute before:inset-y-0 before:-left-[2px] before:-right-[2px] before:content-[''] before:transition-colors before:duration-150 hover:before:bg-sol-cyan data-[resize-handle-active]:before:bg-sol-cyan" />
-                <Panel id="conversation-column" minSize="20%" maxSize="70%" defaultSize="40%">
-                  <ErrorBoundary name="ConversationColumn" level="panel"><ConversationColumn /></ErrorBoundary>
-                </Panel>
-              </Group>
-            ) : (
-              <div className="flex-1 min-w-0 h-full">
-                {isFullWidthPage ? (
-                  <div className="h-full">{children}</div>
-                ) : (
-                  <div data-main-scroll className="h-full overflow-y-auto px-3 sm:px-6 lg:px-8 py-4">
-                    <div className="max-w-4xl mx-auto h-full">{children}</div>
-                  </div>
-                )}
-              </div>
-            )}
-            {showSessionList && <ErrorBoundary name="SessionList" level="panel"><SessionListSidebar /></ErrorBoundary>}
-            {showCollapsedRail && <ErrorBoundary name="SessionRail" level="inline"><CollapsedSessionRail /></ErrorBoundary>}
-          </div>
+          <div className="h-full">{rightArea}</div>
         ) : (
           <Group
             orientation="horizontal"
@@ -463,40 +431,8 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
                 </ErrorBoundary>
               </div>
             </Panel>
-            <Separator className="relative z-10 w-px bg-black/10 cursor-col-resize before:absolute before:inset-y-0 before:-left-[2px] before:-right-[2px] before:content-[''] before:transition-colors before:duration-150 hover:before:bg-sol-cyan data-[resize-handle-active]:before:bg-sol-cyan" />
-            <Panel id="main" minSize="30%">
-              <div className="h-full flex">
-                {showConversationColumn ? (
-                  <Group orientation="horizontal" className="h-full flex-1 min-w-0" defaultLayout={{ "main-content": 60, "conversation-column": 40 }}>
-                    <Panel id="main-content" minSize="20%">
-                      {isFullWidthPage ? (
-                        <div className="h-full">{children}</div>
-                      ) : (
-                        <div data-main-scroll className="h-full overflow-y-auto px-4 sm:px-6 lg:px-8 py-4">
-                          <div className="max-w-4xl mx-auto h-full">{children}</div>
-                        </div>
-                      )}
-                    </Panel>
-                    <Separator className="relative z-10 w-px bg-black/10 cursor-col-resize before:absolute before:inset-y-0 before:-left-[2px] before:-right-[2px] before:content-[''] before:transition-colors before:duration-150 hover:before:bg-sol-cyan data-[resize-handle-active]:before:bg-sol-cyan" />
-                    <Panel id="conversation-column" minSize="20%" maxSize="70%" defaultSize="40%">
-                      <ErrorBoundary name="ConversationColumn" level="panel"><ConversationColumn /></ErrorBoundary>
-                    </Panel>
-                  </Group>
-                ) : (
-                  <div className="flex-1 min-w-0 h-full">
-                    {isFullWidthPage ? (
-                      <div className="h-full">{children}</div>
-                    ) : (
-                      <div data-main-scroll className="h-full overflow-y-auto px-4 sm:px-6 lg:px-8 py-4">
-                        <div className="max-w-4xl mx-auto h-full">{children}</div>
-                      </div>
-                    )}
-                  </div>
-                )}
-                {showSessionList && <ErrorBoundary name="SessionList" level="panel"><SessionListSidebar /></ErrorBoundary>}
-                {showCollapsedRail && <ErrorBoundary name="SessionRail" level="inline"><CollapsedSessionRail /></ErrorBoundary>}
-              </div>
-            </Panel>
+            <Separator className={separatorClass} />
+            <Panel id="main" minSize="30%">{rightArea}</Panel>
           </Group>
         )}
       </div>
@@ -529,6 +465,9 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
         <FindBar />
       </ErrorBoundary>
       <NewSessionModal isOpen={newSessionOpen} onClose={closeNewSession} />
+      <ErrorBoundary name="CreatePalette" level="inline">
+        <CreatePalette />
+      </ErrorBoundary>
     </div>
   );
 }

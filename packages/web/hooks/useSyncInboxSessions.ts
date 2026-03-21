@@ -20,7 +20,8 @@ function deepMerge(target: any, source: any): any {
   return result;
 }
 
-export function useSyncInboxSessions(showAll: boolean) {
+export function useSyncInboxSessions() {
+  const showAll = useInboxStore((s) => s.showAllSessions);
   const activeSessions = useQuery(api.conversations.listIdleSessions, { show_all: showAll });
   const dismissedQuery = useQuery(api.conversations.listDismissedSessions, {});
   const clientState = useQuery(api.client_state.get, {});
@@ -51,9 +52,10 @@ export function useSyncInboxSessions(showAll: boolean) {
   useConvexSync(activeSessions, useCallback((sessions: any) => {
     const prev = prevIdleMapRef.current;
     if (prev) {
+      const queued = useInboxStore.getState().sessionsWithQueuedMessages;
       for (const s of sessions) {
         const id = s._id.toString();
-        if (s.is_idle && prev.has(id) && !prev.get(id) && (s as any).message_count > 0) {
+        if (s.is_idle && prev.has(id) && !prev.get(id) && (s as any).message_count > 0 && !queued.has(id)) {
           soundIdle();
           break;
         }

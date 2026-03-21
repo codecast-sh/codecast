@@ -262,8 +262,8 @@ function PlanSessionCard({ session: s }: { session: any }) {
             <span className="text-[8px] text-sol-green/60 font-medium uppercase tracking-wider">live</span>
           </span>
         )}
-        {project && (
-          <span className="font-mono rounded px-1 py-px shrink-0 text-[9px] bg-sol-bg-alt text-sol-text-dim/50">
+        {project && project !== "unknown" && (
+          <span className="font-mono rounded px-1 py-px shrink-0 text-[9px] bg-sol-bg-alt text-gray-500 dark:text-gray-400">
             {project}
           </span>
         )}
@@ -273,16 +273,16 @@ function PlanSessionCard({ session: s }: { session: any }) {
             {outcome.label}
           </span>
         )}
-        <span className="font-mono text-sol-text-dim/35 tabular-nums shrink-0 whitespace-nowrap text-[10px]">
+        <span className="font-mono text-gray-400 dark:text-gray-500 tabular-nums shrink-0 whitespace-nowrap text-[10px]">
           {time}
         </span>
       </div>
       {s.headline && (
-        <p className="mt-0.5 text-[12px] text-sol-text-muted/60 leading-snug truncate">
+        <p className="mt-0.5 text-[12px] text-gray-500 dark:text-gray-400 leading-snug truncate">
           {s.headline}
         </p>
       )}
-      <div className="mt-0.5 flex items-center gap-2 text-[10px] text-sol-text-dim/30 font-mono">
+      <div className="mt-0.5 flex items-center gap-2 text-[10px] text-gray-400 dark:text-gray-500 font-mono">
         {duration && <span>{duration}</span>}
         {msgCount > 0 && <span>{msgCount} msgs</span>}
         {s.git_branch && s.git_branch !== "main" && s.git_branch !== "master" && (
@@ -378,7 +378,7 @@ function TaskSessionCards({ sessions }: { sessions: any[] }) {
           {s.message_count > 0 && (
             <span className="text-[10px] text-sol-text-dim/30 font-mono tabular-nums">{s.message_count} msgs</span>
           )}
-          <span className="text-[10px] text-sol-text-dim/30 font-mono tabular-nums">{getRelativeTime(s.updated_at || s.started_at)}</span>
+          <span className="text-[10px] text-gray-400 dark:text-gray-500 font-mono tabular-nums">{getRelativeTime(s.updated_at || s.started_at)}</span>
         </Link>
       ))}
     </div>
@@ -404,8 +404,8 @@ export function OrchestrationHeader({ tasks, sessions }: { tasks: any[]; session
     <div className={`mb-5 rounded-lg border overflow-hidden ${hasActiveWork ? "border-emerald-500/30 bg-emerald-950/10" : "border-sol-border/20 bg-sol-bg-alt/20"}`}>
       <div className="px-4 py-3">
         <div className="flex items-center gap-3 mb-2.5">
-          <Zap className={`w-4 h-4 ${hasActiveWork ? "text-emerald-400" : "text-sol-text-dim"}`} />
-          <span className={`text-xs font-semibold uppercase tracking-wider ${hasActiveWork ? "text-emerald-400" : "text-sol-text-dim"}`}>
+          <Zap className={`w-4 h-4 ${hasActiveWork ? "text-emerald-600 dark:text-emerald-400" : "text-sol-text-dim"}`} />
+          <span className={`text-xs font-semibold uppercase tracking-wider ${hasActiveWork ? "text-emerald-600 dark:text-emerald-400" : "text-sol-text-dim"}`}>
             {hasActiveWork ? "Live Orchestration" : "Orchestration"}
           </span>
           {hasActiveWork && <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />}
@@ -415,7 +415,7 @@ export function OrchestrationHeader({ tasks, sessions }: { tasks: any[]; session
           <div>
             <div className="text-[10px] text-sol-text-dim uppercase tracking-wider mb-0.5">Agents</div>
             <div className="flex items-center gap-1.5">
-              <span className={`text-lg font-semibold tabular-nums ${activeAgents.length > 0 ? "text-emerald-400" : "text-sol-text-dim"}`}>
+              <span className={`text-lg font-semibold tabular-nums ${activeAgents.length > 0 ? "text-emerald-600 dark:text-emerald-400" : "text-sol-text-dim"}`}>
                 {activeAgents.length}
               </span>
               <span className="text-[10px] text-sol-text-dim">
@@ -489,10 +489,10 @@ export function OrchestrationHeader({ tasks, sessions }: { tasks: any[]; session
               >
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse flex-shrink-0" />
                 <span className="text-xs font-mono text-sol-text-dim">{t.short_id}</span>
-                <span className="text-xs text-emerald-300/80 truncate max-w-[200px] group-hover/agent:text-emerald-200 transition-colors">
+                <span className="text-xs text-emerald-700 dark:text-emerald-300/80 truncate max-w-[200px] group-hover/agent:text-emerald-800 dark:group-hover/agent:text-emerald-200 transition-colors">
                   {t.title}
                 </span>
-                <ExternalLink className="w-2.5 h-2.5 text-emerald-400/40 group-hover/agent:text-emerald-400/80 transition-colors flex-shrink-0" />
+                <ExternalLink className="w-2.5 h-2.5 text-emerald-500 dark:text-emerald-400/40 group-hover/agent:text-emerald-600 dark:group-hover/agent:text-emerald-400/80 transition-colors flex-shrink-0" />
               </Link>
             ))}
           </div>
@@ -753,7 +753,7 @@ export function PlanTaskSection({ planShortId, tasks, sessions }: { planShortId:
                   <Link
                     href={`/conversation/${task.activeSession.session_id}`}
                     onClick={(e: React.MouseEvent) => e.stopPropagation()}
-                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 text-[10px] hover:bg-emerald-500/25 transition-colors flex-shrink-0"
+                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 text-[10px] hover:bg-emerald-500/25 transition-colors flex-shrink-0"
                   >
                     <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
                     live
@@ -763,7 +763,7 @@ export function PlanTaskSection({ planShortId, tasks, sessions }: { planShortId:
                   <TaskStatusBadge status={task.execution_status} type="execution" className="flex-shrink-0" />
                 )}
                 {taskSessions.length > 0 && !task.activeSession && (
-                  <span className="text-[10px] text-sol-text-dim/40 flex-shrink-0 font-mono">
+                  <span className="text-[10px] text-gray-400 dark:text-gray-500 flex-shrink-0 font-mono">
                     {taskSessions.length} sess
                   </span>
                 )}
@@ -778,7 +778,7 @@ export function PlanTaskSection({ planShortId, tasks, sessions }: { planShortId:
                 )}
                 {hasDetail && (
                   <button onClick={() => setExpandedTask(isExpanded ? null : task._id)}>
-                    <ChevronRight className={`w-3 h-3 text-sol-text-dim/30 transition-transform ${isExpanded ? "rotate-90" : ""}`} />
+                    <ChevronRight className={`w-3 h-3 text-gray-400 dark:text-gray-500 transition-transform ${isExpanded ? "rotate-90" : ""}`} />
                   </button>
                 )}
               </div>
@@ -821,7 +821,7 @@ export function PlanTaskSection({ planShortId, tasks, sessions }: { planShortId:
                     <span className="text-xs font-mono text-sol-text-dim">{task.short_id}</span>
                     <span className="text-sm text-sol-text-muted line-through truncate">{task.title}</span>
                     {taskSessions.length > 0 && (
-                      <span className="text-[10px] text-sol-text-dim/40 flex-shrink-0 font-mono ml-auto">
+                      <span className="text-[10px] text-gray-400 dark:text-gray-500 flex-shrink-0 font-mono ml-auto">
                         {taskSessions.length} sess
                       </span>
                     )}
@@ -876,9 +876,9 @@ export function OrchestrationTab({ tasks, sessions }: { tasks: any[]; sessions: 
       {activeSessions.length > 0 && (
         <div>
           <h2 className="flex items-center gap-2 text-sm font-medium text-sol-text mb-3">
-            <Activity className="w-4 h-4 text-emerald-400" />
+            <Activity className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
             Active Sessions
-            <span className="text-xs text-emerald-400/60 font-normal">({activeSessions.length})</span>
+            <span className="text-xs text-emerald-600/70 dark:text-emerald-400/60 font-normal">({activeSessions.length})</span>
           </h2>
           <div className="space-y-1.5">
             {activeSessions.map((s: any) => (
@@ -889,23 +889,23 @@ export function OrchestrationTab({ tasks, sessions }: { tasks: any[]; sessions: 
               >
                 <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse flex-shrink-0" />
                 <div className="flex-1 min-w-0">
-                  <span className="text-sm text-sol-text group-hover/as:text-emerald-300 transition-colors truncate block">
+                  <span className="text-sm text-sol-text group-hover/as:text-emerald-700 dark:group-hover/as:text-emerald-300 transition-colors truncate block">
                     {s.title || "Untitled session"}
                   </span>
-                  <div className="flex items-center gap-2 mt-0.5 text-[10px] text-sol-text-dim/40 font-mono">
+                  <div className="flex items-center gap-2 mt-0.5 text-[10px] text-gray-500 dark:text-gray-500 font-mono">
                     {s.message_count > 0 && <span>{s.message_count} msgs</span>}
                     {s.project_path && (
                       <span>{s.project_path.split("/").filter(Boolean).pop()}</span>
                     )}
                     {s.git_branch && s.git_branch !== "main" && (
-                      <span className="text-emerald-400/30">{s.git_branch}</span>
+                      <span className="text-emerald-600/50 dark:text-emerald-400/30">{s.git_branch}</span>
                     )}
                   </div>
                 </div>
-                <span className="text-[10px] text-sol-text-dim/30 font-mono tabular-nums flex-shrink-0">
+                <span className="text-[10px] text-gray-400 dark:text-gray-500 font-mono tabular-nums flex-shrink-0">
                   {getRelativeTime(s.updated_at || s.started_at)}
                 </span>
-                <ExternalLink className="w-3 h-3 text-sol-text-dim/20 group-hover/as:text-emerald-400/60 transition-colors flex-shrink-0" />
+                <ExternalLink className="w-3 h-3 text-gray-300 dark:text-gray-600 group-hover/as:text-emerald-600 dark:group-hover/as:text-emerald-400/60 transition-colors flex-shrink-0" />
               </Link>
             ))}
           </div>
@@ -924,7 +924,7 @@ export function OrchestrationTab({ tasks, sessions }: { tasks: any[]; sessions: 
           </div>
         ) : (
           <div className="relative">
-            <div className="absolute left-[18px] top-3 bottom-3 w-px bg-sol-border/15" />
+            <div className="absolute left-[18px] top-3 bottom-3 w-px bg-sol-border/30" />
             <div className="space-y-0">
               {taskTimeline.map((task: any) => {
                 const tc = TASK_STATUS_CONFIG[task.status] || TASK_STATUS_CONFIG.open;
@@ -952,20 +952,20 @@ export function OrchestrationTab({ tasks, sessions }: { tasks: any[]; sessions: 
                         {task.activeSession && (
                           <Link
                             href={`/conversation/${task.activeSession.session_id}`}
-                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 text-[10px] hover:bg-emerald-500/25 transition-colors"
+                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 text-[10px] hover:bg-emerald-500/25 transition-colors"
                           >
                             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
                             live
                           </Link>
                         )}
                         {task.actual_minutes && (
-                          <span className="text-[10px] text-sol-text-dim/40 font-mono">
+                          <span className="text-[10px] text-gray-400 dark:text-gray-500 font-mono">
                             {task.actual_minutes}m
                           </span>
                         )}
                       </div>
                     </div>
-                    <span className="text-[10px] text-sol-text-dim/30 font-mono tabular-nums whitespace-nowrap flex-shrink-0 mt-0.5">
+                    <span className="text-[10px] text-gray-400 dark:text-gray-500 font-mono tabular-nums whitespace-nowrap flex-shrink-0 mt-0.5">
                       {time}
                     </span>
                   </div>
@@ -1129,7 +1129,7 @@ export function PlanDetailPanel({ planId }: { planId: string }) {
                 : "text-sol-text-dim border-transparent hover:text-sol-text-muted"
             }`}
           >
-            <Zap className={`w-3.5 h-3.5 ${hasActiveSessions ? "text-emerald-400" : ""}`} />
+            <Zap className={`w-3.5 h-3.5 ${hasActiveSessions ? "text-emerald-600 dark:text-emerald-400" : ""}`} />
             Orchestration
             {hasActiveSessions && (
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />

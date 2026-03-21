@@ -2,6 +2,7 @@ import { useState, useCallback, useRef, memo, useMemo } from "react";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useEventListener } from "../../hooks/useEventListener";
+import { useShortcutContext, useShortcutAction } from "../../shortcuts";
 import { useQuery, useMutation } from "convex/react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { Panel, Group, Separator } from "react-resizable-panels";
@@ -12,7 +13,6 @@ import { ConversationDiffLayout } from "../../components/ConversationDiffLayout"
 import { ConversationData } from "../../components/ConversationView";
 import { useConversationMessages } from "../../hooks/useConversationMessages";
 import { useInboxStore, InboxSession, isConvexId, sortSessions } from "../../store/inboxStore";
-import { useSyncInboxSessions } from "../../hooks/useSyncInboxSessions";
 import { useSessionSwitcher } from "../../hooks/useSessionSwitcher";
 import { SessionSwitcher } from "../../components/SessionSwitcher";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "../../components/ui/tooltip";
@@ -23,7 +23,7 @@ import { TaskStatusBadge } from "../../components/TaskStatusBadge";
 import { PlanContextPanel } from "../../components/PlanContextPanel";
 import { WorkflowContextPanel } from "../../components/WorkflowContextPanel";
 import { toast } from "sonner";
-import { cleanUserMessage, formatIdleDuration, getProjectName } from "../../components/GlobalSessionPanel";
+import { cleanUserMessage, formatIdleDuration, getProjectName, DraftPlansSection, SessionListPanel } from "../../components/GlobalSessionPanel";
 
 const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, onSendAndAdvance, lastUserMessage, sessionError, onBack, targetMessageId }: { sessionId: string; isIdle: boolean; onSendAndAdvance: () => void; lastUserMessage?: string | null; sessionError?: string; onBack?: () => void; targetMessageId?: string }) {
   const {
@@ -186,6 +186,102 @@ function Prefetch({ sessionId }: { sessionId: string }) {
   return null;
 }
 
+function InboxPlanView({ planId }: { planId: string }) {
+  const plan = useQuery(api.plans.webGet, { id: planId });
+  const router = useRouter();
+
+  if (plan === undefined) {
+    return (
+      <div className="h-full flex items-center justify-center text-sol-text-dim">
+        <div className="flex items-center gap-2">
+          <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+          </svg>
+          <span className="text-sm">Loading plan...</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (plan === null) {
+    return (
+      <div className="h-full flex items-center justify-center text-sol-text-dim text-sm">
+        Plan not found
+      </div>
+    );
+  }
+
+  const hasTasks = (plan.tasks || []).length > 0;
+  const progress = plan.progress;
+
+  return (
+    <div className="h-full overflow-y-auto" data-main-scroll>
+      <div className="max-w-4xl mx-auto px-6 py-6">
+        <div className="flex items-center gap-3 mb-1">
+          <span className={`text-xs px-2 py-0.5 rounded-md border ${
+            plan.status === "active" ? "text-sol-green border-sol-green/30 bg-sol-green/10"
+            : plan.status === "completed" ? "text-sol-cyan border-sol-cyan/30 bg-sol-cyan/10"
+            : "text-sol-text-dim border-sol-border/40 bg-sol-bg-alt"
+          }`}>
+            {plan.status}
+          </span>
+          <span className="text-[10px] text-sol-text-dim font-mono">{plan.short_id}</span>
+          <button
+            onClick={() => router.push(`/plans/${plan._id}`)}
+            className="ml-auto text-xs text-sol-text-dim hover:text-sol-cyan transition-colors"
+          >
+            Open full view
+          </button>
+        </div>
+        <h1 className="text-xl font-semibold text-sol-text mb-3">{plan.title}</h1>
+
+        {plan.goal && (
+          <p className="text-sm text-sol-text-muted mb-4 leading-relaxed">{plan.goal}</p>
+        )}
+
+        {progress && progress.total > 0 && (
+          <div className="mb-4">
+            <div className="flex items-center gap-2 text-xs text-sol-text-dim mb-1">
+              <span>{progress.done}/{progress.total} tasks</span>
+              <span>{Math.round((progress.done / progress.total) * 100)}%</span>
+            </div>
+            <div className="w-full h-1.5 bg-sol-bg-alt rounded-full overflow-hidden">
+              <div
+                className="h-full bg-sol-cyan rounded-full transition-all"
+                style={{ width: `${(progress.done / progress.total) * 100}%` }}
+              />
+            </div>
+          </div>
+        )}
+
+        {hasTasks && (
+          <div className="space-y-2">
+            {(plan.tasks as any[]).map((task: any) => (
+              <div key={task.short_id} className="flex items-center gap-2 px-3 py-2 rounded border border-sol-border/20 bg-sol-bg-alt/40">
+                <span className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                  task.status === "done" ? "bg-sol-green"
+                  : task.status === "in_progress" ? "bg-sol-cyan"
+                  : task.status === "blocked" ? "bg-sol-red"
+                  : "bg-sol-text-dim/30"
+                }`} />
+                <span className="text-sm text-sol-text truncate flex-1">{task.title}</span>
+                <span className="text-[10px] text-sol-text-dim capitalize">{task.status?.replace("_", " ")}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {plan.doc_content && (
+          <div className="mt-4 prose prose-sm prose-invert max-w-none text-sol-text-muted">
+            <pre className="whitespace-pre-wrap text-sm">{plan.doc_content}</pre>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function SessionCard({
   session,
   isActive,
@@ -266,6 +362,109 @@ function SessionCard({
     }
   }, [session._id, displayTitle, generateUploadUrl, sendMessage]);
 
+  if (isSubagent) {
+    return (
+      <div
+        onDragEnter={handleFileDragEnter}
+        onDragOver={handleFileDragOver}
+        onDragLeave={handleFileDragLeave}
+        onDrop={handleFileDrop}
+        className={`relative group transition-colors overflow-hidden ${isDragOver ? "ring-1 ring-inset ring-violet-400/40 bg-violet-500/10" : ""} ${
+          isActive
+            ? "bg-violet-500/[0.08] border-l-2 border-l-violet-400/60"
+            : isWorking
+              ? "hover:bg-violet-500/[0.06] border-l border-l-violet-400/25"
+              : isDismissed
+                ? "opacity-40 hover:opacity-60 hover:bg-violet-500/[0.04]"
+                : "hover:bg-violet-500/[0.06] border-l border-l-violet-500/15"
+        }`}
+      >
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={() => onSelect(globalIndex)}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(globalIndex); } }}
+          className="w-full text-left cursor-pointer px-2 py-1"
+        >
+          <div className="flex items-center gap-1.5">
+            <svg className="w-3 h-3 text-violet-400/60 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 4v12h12" />
+              <path strokeLinecap="round" strokeLinejoin="round" d="M14 12l4 4-4 4" />
+            </svg>
+            <span className={`truncate text-xs leading-tight flex-1 ${
+              isActive ? "text-violet-300 font-medium" : "text-gray-400 font-normal"
+            }`}>
+              {isSlashCommand ? <span className="font-mono text-violet-400/80">{displayTitle}</span> : displayTitle}
+            </span>
+            <div className="flex items-center gap-1 flex-shrink-0">
+              {session.session_error && (
+                <span className="w-1.5 h-1.5 rounded-full bg-sol-red" title={session.session_error} />
+              )}
+              {session.is_unresponsive && !session.session_error && (
+                <span className="w-1.5 h-1.5 rounded-full bg-sol-orange" title="Session unresponsive" />
+              )}
+              {session.has_pending && !session.is_unresponsive && (
+                <span className="w-1.5 h-1.5 rounded-full bg-sol-yellow animate-pulse" title="Message pending" />
+              )}
+              {isWorking && (
+                <span className="relative flex h-1.5 w-1.5" title="Working">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-violet-400 opacity-75" />
+                  <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-violet-400" />
+                </span>
+              )}
+              {!isWorking && !isDismissed && session.is_idle && !session.is_connected && !session.session_error && !session.is_unresponsive && !session.has_pending && session.message_count > 0 && (
+                <span className="w-1.5 h-1.5 rounded-full bg-gray-500/40 ring-1 ring-gray-500/20" title="Session ended" />
+              )}
+              {session.message_count > 0 && (
+                <span className="text-[9px] text-gray-500 tabular-nums">{session.message_count}</span>
+              )}
+              <span className="text-[9px] text-gray-500 tabular-nums">
+                {formatIdleDuration(session.updated_at)}
+              </span>
+            </div>
+          </div>
+          {cleanedUserMsg && (
+            <div className="text-[10px] text-gray-500 mt-0.5 truncate leading-snug pl-[18px]">
+              <span className="text-gray-600 mr-0.5">&gt;</span>
+              {cleanedUserMsg}
+            </div>
+          )}
+          {session.active_task && (
+            <div className="flex items-center gap-1 mt-0.5 pl-[18px]">
+              <span className="inline-flex items-center px-1 py-0 rounded text-[9px] font-medium bg-violet-900/20 text-violet-400/70 border border-violet-600/20 max-w-[160px] truncate" title={session.active_task.title}>
+                {session.active_task.title}
+              </span>
+            </div>
+          )}
+        </div>
+        {(onDismiss || onDefer || onPin) && (
+          <div className={`absolute top-0 bottom-0 right-0 flex items-center py-1 opacity-0 group-hover:opacity-100 transition-opacity pl-8 pr-2 bg-gradient-to-r from-transparent to-sol-bg-alt`}>
+            {onDismiss && (
+              <button
+                onClick={(e) => { e.stopPropagation(); onDismiss(session._id); }}
+                className="p-0.5 rounded text-gray-500 hover:text-sol-red transition-colors"
+              >
+                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            )}
+          </div>
+        )}
+        {onRestore && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onRestore(session._id); }}
+            className="absolute top-1 right-1.5 p-0.5 rounded text-gray-500 hover:text-violet-400 opacity-0 group-hover:opacity-100 transition-opacity"
+          >
+            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17L7 7M7 7h6M7 7v6" />
+            </svg>
+          </button>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div
       onDragEnter={handleFileDragEnter}
@@ -274,20 +473,12 @@ function SessionCard({
       onDrop={handleFileDrop}
       className={`relative group border-b border-sol-border/30 transition-colors overflow-hidden ${isDragOver ? "ring-1 ring-inset ring-sol-cyan bg-sol-cyan/10" : ""} ${
         isActive
-          ? isSubagent
-            ? "bg-sol-cyan/10 border-l-2 border-l-violet-500/50 opacity-70"
-            : "bg-sol-cyan/15 border-l-[3px] border-l-sol-cyan shadow-[inset_0_0_16px_rgba(42,161,152,0.12)]"
-          : isWorking && isSubagent
-            ? "bg-sol-bg-alt/30 border-l border-l-violet-500/30 hover:bg-sol-bg-alt/50 opacity-55 hover:opacity-70"
-            : isWorking
-              ? "bg-sol-green/[0.04] border-l-2 border-l-sol-green/40 hover:bg-sol-green/[0.08]"
-              : isDismissed && isSubagent
-                ? "opacity-35 hover:opacity-50 hover:bg-sol-bg-alt/50 border-l border-l-violet-500/15"
-                : isDismissed
-                  ? "opacity-60 hover:opacity-80 hover:bg-sol-bg-alt/80"
-                  : isSubagent
-                    ? "opacity-50 hover:opacity-65 hover:bg-sol-bg-alt/50 border-l border-l-violet-500/20"
-                    : "hover:bg-sol-bg-alt/80"
+          ? "bg-sol-cyan/15 border-l-[3px] border-l-sol-cyan shadow-[inset_0_0_16px_rgba(42,161,152,0.12)]"
+          : isWorking
+            ? "bg-sol-green/[0.04] border-l-2 border-l-sol-green/40 hover:bg-sol-green/[0.08]"
+            : isDismissed
+              ? "opacity-60 hover:opacity-80 hover:bg-sol-bg-alt/80"
+              : "hover:bg-sol-bg-alt/80"
       }`}
     >
       <div
@@ -295,14 +486,10 @@ function SessionCard({
         tabIndex={0}
         onClick={() => onSelect(globalIndex)}
         onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(globalIndex); } }}
-        className={`w-full text-left cursor-pointer ${
-          isSubagent ? "px-2 py-1" : "px-2.5 sm:px-3 py-1.5 sm:py-2"
-        }`}
+        className="w-full text-left cursor-pointer px-2.5 sm:px-3 py-1.5 sm:py-2"
       >
         <div className={`truncate leading-tight ${
-          isSubagent
-            ? "text-xs text-sol-text-dim/70 font-normal"
-            : isActive ? "text-sm text-sol-text font-semibold" : isWorking ? "text-sm text-sol-text font-medium" : isDismissed ? "text-sm text-sol-text-muted" : "text-sm text-sol-text"
+          isActive ? "text-sm text-sol-text font-semibold" : isWorking ? "text-sm text-sol-text font-medium" : isDismissed ? "text-sm text-sol-text-muted" : "text-sm text-sol-text"
         }`}>
           {isSlashCommand ? <span className="font-mono text-sol-cyan">{displayTitle}</span> : displayTitle}
         </div>
@@ -338,9 +525,11 @@ function SessionCard({
           )
         )}
         <div className="flex items-center gap-1.5 mt-1">
-          <span className={`text-[10px] truncate ${
-            isWorking ? "font-medium text-sol-green/70" : "font-medium text-sol-cyan/70"
-          }`}>{project}</span>
+          {project !== "unknown" && (
+            <span className={`text-[10px] truncate ${
+              isWorking ? "font-medium text-sol-green/70" : "font-medium text-sol-cyan/70"
+            }`}>{project}</span>
+          )}
           {session.worktree_name && (
             <span className="text-[9px] text-sol-cyan font-mono truncate max-w-[80px]" title={session.worktree_branch || session.worktree_name}>
               {session.worktree_name}
@@ -352,11 +541,6 @@ function SessionCard({
             </span>
           )}
           <div className="flex items-center gap-1.5 flex-shrink-0 ml-auto">
-            {isSubagent && (
-              <span className="inline-flex items-center px-1 py-0 rounded text-[9px] font-medium bg-violet-900/30 text-violet-400/70 border border-violet-600/30">
-                sub
-              </span>
-            )}
             {session.active_plan && (
               <span className="inline-flex items-center gap-0.5 px-1 py-0 rounded text-[9px] font-medium bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20 max-w-[120px] truncate" title={session.active_plan.title}>
                 {session.active_plan.title}
@@ -497,370 +681,14 @@ function SessionCard({
   );
 }
 
-function NeedsAttentionSection() {
-  const blockedTasks = useQuery(api.tasks.webList, { execution_status: "blocked", limit: 20 });
-  const needsContextTasks = useQuery(api.tasks.webList, { execution_status: "needs_context", limit: 20 });
-  const updateTask = useMutation(api.tasks.webUpdate);
-  const [collapsed, setCollapsed] = useState(false);
+// InboxSessionPanel and NeedsAttentionSection moved to GlobalSessionPanel.tsx as shared SessionListPanel
 
-  const tasks = useMemo(() => {
-    const all = [...(blockedTasks?.items || []), ...(needsContextTasks?.items || [])];
-    const seen = new Set<string>();
-    return all.filter(t => {
-      if (seen.has(t.short_id)) return false;
-      seen.add(t.short_id);
-      return true;
-    });
-  }, [blockedTasks, needsContextTasks]);
-
-  if (tasks.length === 0) return null;
-
-  const handleRetry = async (shortId: string) => {
-    try {
-      await updateTask({ short_id: shortId, execution_status: "", status: "open" });
-      toast.success("Task reset for retry");
-    } catch {
-      toast.error("Failed to reset task");
-    }
-  };
-
-  return (
-    <div className="border-b border-sol-red/20">
-      <button
-        onClick={() => setCollapsed(!collapsed)}
-        className="w-full px-3 py-1.5 bg-sol-red/[0.06] border-b border-sol-red/15 flex items-center justify-between"
-      >
-        <span className="text-[10px] font-semibold uppercase tracking-wider text-sol-red">
-          Needs Attention ({tasks.length})
-        </span>
-        <svg
-          className={`w-3 h-3 text-sol-red/60 transition-transform ${collapsed ? "" : "rotate-180"}`}
-          fill="none" stroke="currentColor" viewBox="0 0 24 24"
-        >
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-        </svg>
-      </button>
-      {!collapsed && tasks.map((task: any) => (
-        <div
-          key={task.short_id}
-          className="group px-3 py-2 border-b border-sol-border/20 bg-sol-red/[0.03] hover:bg-sol-red/[0.06] transition-colors"
-        >
-          <div className="flex items-start gap-2">
-            <div className="flex-1 min-w-0">
-              <div className="text-sm text-sol-text truncate leading-tight">{task.title}</div>
-              <div className="flex items-center gap-1.5 mt-1">
-                <span className="text-[10px] text-sol-text-dim font-mono">{task.short_id}</span>
-                <TaskStatusBadge status={task.execution_status || "blocked"} type="execution" size="sm" />
-                {task.plan && (
-                  <span className="text-[10px] text-sol-cyan/70 truncate max-w-[100px]" title={task.plan.title}>
-                    {task.plan.title}
-                  </span>
-                )}
-              </div>
-            </div>
-            <button
-              onClick={() => handleRetry(task.short_id)}
-              className="flex-shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium text-sol-orange border border-sol-orange/30 bg-sol-orange/10 hover:bg-sol-orange/20 transition-colors opacity-0 group-hover:opacity-100"
-            >
-              Retry
-            </button>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function DraftPlansSection() {
-  const draftPlans = useQuery(api.plans.webList, { status: "draft", limit: 20 });
-  const updatePlan = useMutation(api.plans.webUpdate);
-  const [collapsed, setCollapsed] = useState(false);
-  const router = useRouter();
-
-  if (!draftPlans || draftPlans.length === 0) return null;
-
-  const handleActivate = async (shortId: string) => {
-    try {
-      await updatePlan({ short_id: shortId, status: "active" });
-      toast.success("Plan activated");
-    } catch {
-      toast.error("Failed to activate plan");
-    }
-  };
-
-  const handleDismiss = async (shortId: string) => {
-    try {
-      await updatePlan({ short_id: shortId, status: "abandoned" });
-      toast.success("Plan dismissed");
-    } catch {
-      toast.error("Failed to dismiss plan");
-    }
-  };
-
-  return (
-    <div className="border-b border-sol-border/30">
-      <button
-        onClick={() => setCollapsed(!collapsed)}
-        className="w-full px-3 py-1.5 bg-sol-bg border-b border-sol-border/30 flex items-center justify-between"
-      >
-        <span className="text-[10px] font-semibold uppercase tracking-wider text-sol-text-dim/70">
-          Draft Plans ({draftPlans.length})
-        </span>
-        <svg
-          className={`w-3 h-3 text-sol-text-dim/40 transition-transform ${collapsed ? "" : "rotate-180"}`}
-          fill="none" stroke="currentColor" viewBox="0 0 24 24"
-        >
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-        </svg>
-      </button>
-      {!collapsed && draftPlans.map((plan: any) => (
-        <div
-          key={plan.short_id}
-          className="group px-3 py-2 border-b border-sol-border/15 hover:bg-sol-bg-alt/60 transition-colors opacity-70 hover:opacity-100"
-        >
-          <div className="text-sm text-sol-text-muted truncate leading-tight">{plan.title}</div>
-          <div className="flex items-center gap-1.5 mt-1">
-            <span className="text-[10px] text-sol-text-dim font-mono">{plan.short_id}</span>
-            <span className="text-[10px] text-sol-text-dim/60 capitalize">{plan.source}</span>
-            {plan.progress && (
-              <span className="text-[10px] text-sol-text-dim tabular-nums">
-                {plan.progress.total} task{plan.progress.total !== 1 ? "s" : ""}
-              </span>
-            )}
-            {plan._creationTime && (
-              <span className="text-[10px] text-sol-text-dim tabular-nums">
-                {formatIdleDuration(plan._creationTime)}
-              </span>
-            )}
-          </div>
-          <div className="flex items-center gap-1 mt-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
-            <button
-              onClick={() => handleActivate(plan.short_id)}
-              className="px-1.5 py-0.5 rounded text-[10px] font-medium text-sol-green border border-sol-green/30 bg-sol-green/10 hover:bg-sol-green/20 transition-colors"
-            >
-              Activate
-            </button>
-            <button
-              onClick={() => handleDismiss(plan.short_id)}
-              className="px-1.5 py-0.5 rounded text-[10px] font-medium text-sol-text-dim border border-sol-border/40 hover:border-sol-red/30 hover:text-sol-red hover:bg-sol-red/10 transition-colors"
-            >
-              Dismiss
-            </button>
-            <button
-              onClick={() => router.push(`/plans/${plan._id}`)}
-              className="px-1.5 py-0.5 rounded text-[10px] font-medium text-sol-text-dim border border-sol-border/40 hover:border-sol-cyan/30 hover:text-sol-cyan hover:bg-sol-cyan/10 transition-colors"
-            >
-              Edit
-            </button>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function InboxSessionPanel({
-  showAll,
-  onToggleShowAll,
-  dismissedSessions,
-}: {
-  showAll: boolean;
-  onToggleShowAll: () => void;
-  dismissedSessions: InboxSession[];
-}) {
-  const sessions = useInboxStore((s) => s.sessions);
-  const sortedSessions = useMemo(() => sortSessions(sessions), [sessions]);
-  const currentSessionId = useInboxStore((s) => s.currentSessionId);
-  const stashSession = useInboxStore((s) => s.stashSession);
-  const deferSession = useInboxStore((s) => s.deferSession);
-  const pinSession = useInboxStore((s) => s.pinSession);
-  const unstashSession = useInboxStore((s) => s.unstashSession);
-  const showDismissed = useInboxStore((s) => s.showDismissed);
-  const setShowDismissed = useInboxStore((s) => s.setShowDismissed);
-  const viewingDismissedId = useInboxStore((s) => s.viewingDismissedId);
-
-  const setCurrentSession = useInboxStore((s) => s.setCurrentSession);
-  const showMySessions = useInboxStore((s) => s.showMySessions);
-  const setShowMySessions = useInboxStore((s) => s.setShowMySessions);
-
-  const handleSelectSession = useCallback((session: InboxSession) => {
-    if (sessions[session._id]) {
-      setCurrentSession(session._id);
-      if (showMySessions) setShowMySessions(false);
-    } else {
-      useInboxStore.setState({ pendingNavigateId: session._id, showMySessions: false });
-    }
-  }, [sessions, setCurrentSession, showMySessions, setShowMySessions]);
-
-  const handleNavigateToSession = useCallback((targetId: string) => {
-    if (sessions[targetId]) {
-      setCurrentSession(targetId);
-      if (showMySessions) setShowMySessions(false);
-    } else {
-      useInboxStore.setState({ pendingNavigateId: targetId, showMySessions: false });
-    }
-  }, [sessions, setCurrentSession, showMySessions, setShowMySessions]);
-
-  const pinned = sortedSessions.filter((s) => s.is_pinned);
-  const newSessions = sortedSessions.filter((s) => s.message_count === 0 && !s.is_pinned)
-    .sort((a, b) => (a.is_connected ? 1 : 0) - (b.is_connected ? 1 : 0));
-  const needsInput = sortedSessions.filter((s) => s.is_idle && s.message_count > 0 && !s.is_pinned);
-  const working = sortedSessions.filter((s) => !s.is_idle && s.message_count > 0 && !s.is_pinned);
-
-  return (
-    <div className="h-full w-full flex flex-col bg-sol-bg-alt overflow-hidden">
-      <div className="px-3 py-2 border-b border-sol-border/50 flex-shrink-0">
-        <div className="flex items-center justify-between">
-          <span className="text-xs font-medium text-sol-text-dim uppercase tracking-wide">
-            {sortedSessions.length} Session{sortedSessions.length !== 1 ? "s" : ""}
-          </span>
-          <button
-            onClick={onToggleShowAll}
-            className="text-[10px] text-sol-text-dim hover:text-sol-cyan transition-colors"
-          >
-            {showAll ? "Recent only" : "Show all"}
-          </button>
-        </div>
-      </div>
-      <div className="flex-1 overflow-y-auto scrollbar-auto">
-        <NeedsAttentionSection />
-        <DraftPlansSection />
-        {pinned.length > 0 && (
-          <div>
-            <div className="px-3 py-1.5 bg-sol-bg border-b border-sol-border/30">
-              <span className="text-[10px] font-semibold uppercase tracking-wider text-sol-magenta">
-                Pinned ({pinned.length})
-              </span>
-            </div>
-            {pinned.map((session) => (
-              <SessionCard
-                key={session._id}
-                session={session}
-                isActive={!viewingDismissedId && session._id === currentSessionId}
-                globalIndex={0}
-                onSelect={() => handleSelectSession(session)}
-                onDismiss={stashSession}
-                onDefer={deferSession}
-                onPin={pinSession}
-                onNavigateToSession={handleNavigateToSession}
-              />
-            ))}
-          </div>
-        )}
-
-        {newSessions.length > 0 && (
-          <div>
-            <div className="px-3 py-1.5 bg-sol-bg border-b border-sol-border/30">
-              <span className="text-[10px] font-semibold uppercase tracking-wider text-sol-blue">
-                New ({newSessions.length})
-              </span>
-            </div>
-            {newSessions.map((session) => (
-              <SessionCard
-                key={session._id}
-                session={session}
-                isActive={!viewingDismissedId && session._id === currentSessionId}
-                globalIndex={0}
-                onSelect={() => handleSelectSession(session)}
-                onDismiss={stashSession}
-                onDefer={deferSession}
-                onPin={pinSession}
-                onNavigateToSession={handleNavigateToSession}
-              />
-            ))}
-          </div>
-        )}
-
-        {needsInput.length > 0 && (
-          <div>
-            <div className="px-3 py-1.5 bg-sol-bg border-b border-sol-border/30">
-              <span className="text-[10px] font-semibold uppercase tracking-wider text-sol-yellow">
-                Needs Input ({needsInput.length})
-              </span>
-            </div>
-            {needsInput.map((session) => (
-              <SessionCard
-                key={session._id}
-                session={session}
-                isActive={!viewingDismissedId && session._id === currentSessionId}
-                globalIndex={0}
-                onSelect={() => handleSelectSession(session)}
-                onDismiss={stashSession}
-                onDefer={deferSession}
-                onPin={pinSession}
-                onNavigateToSession={handleNavigateToSession}
-              />
-            ))}
-          </div>
-        )}
-
-        {working.length > 0 && (
-          <div>
-            <div className="px-3 py-1.5 bg-sol-bg border-b border-sol-border/30">
-              <span className="text-[10px] font-semibold uppercase tracking-wider text-sol-green">
-                Working ({working.length})
-              </span>
-            </div>
-            {working.map((session) => (
-              <SessionCard
-                key={session._id}
-                session={session}
-                isActive={!viewingDismissedId && session._id === currentSessionId}
-                globalIndex={0}
-                onSelect={() => handleSelectSession(session)}
-                onDismiss={stashSession}
-                onDefer={deferSession}
-                onPin={pinSession}
-                onNavigateToSession={handleNavigateToSession}
-                variant="working"
-              />
-            ))}
-          </div>
-        )}
-
-        {sortedSessions.length === 0 && (
-          <div className="px-3 py-8 text-center text-sm text-sol-text-dim">
-            No active sessions
-          </div>
-        )}
-
-        <div className="border-t border-sol-border/30">
-          <button
-            onClick={() => setShowDismissed(!showDismissed)}
-            className="w-full px-3 py-2 flex items-center justify-between text-[10px] font-semibold uppercase tracking-wider text-sol-text-dim hover:text-sol-text-muted transition-colors"
-          >
-            <span>
-              Dismissed{dismissedSessions.length > 0 ? ` (${dismissedSessions.length})` : ""}
-            </span>
-            <svg
-              className={`w-3 h-3 transition-transform ${showDismissed ? "rotate-180" : ""}`}
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-            </svg>
-          </button>
-          {showDismissed && dismissedSessions.length > 0 && (
-            <div className="border-t border-sol-border/20">
-              {dismissedSessions.map((session) => (
-                <SessionCard
-                  key={session._id}
-                  session={session}
-                  isActive={viewingDismissedId === session._id}
-                  globalIndex={-1}
-                  onSelect={() => handleSelectSession(session)}
-                  onRestore={(id) => unstashSession(id)}
-                  onNavigateToSession={handleNavigateToSession}
-                  variant="dismissed"
-                />
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
+function InboxShortcuts({ toggleShortcuts }: { toggleShortcuts: () => void }) {
+  useShortcutContext('inbox');
+  useShortcutAction('ui.toggleShortcutsHelp', useCallback(() => {
+    toggleShortcuts();
+  }, [toggleShortcuts]));
+  return null;
 }
 
 export function QueuePageClient({ initialSessionId }: { initialSessionId?: string } = {}) {
@@ -883,18 +711,17 @@ export function QueuePageClient({ initialSessionId }: { initialSessionId?: strin
   });
 
   const [isMac] = useState(() => typeof navigator !== "undefined" && navigator.platform.toUpperCase().includes("MAC"));
-  const [showAll, setShowAll] = useState(false);
-  const { activeSessions } = useSyncInboxSessions(showAll);
   const sessions = useInboxStore((s) => s.sessions);
+  const clientStateInitialized = useInboxStore((s) => s.clientStateInitialized);
   const dismissedSessions = useInboxStore((s) => s.dismissedSessions);
   const currentSessionId = useInboxStore((s) => s.currentSessionId);
   const advanceToNext = useInboxStore((s) => s.advanceToNext);
-  const navigateUp = useInboxStore((s) => s.navigateUp);
-  const navigateDown = useInboxStore((s) => s.navigateDown);
   const stashSession = useInboxStore((s) => s.stashSession);
   const deferSession = useInboxStore((s) => s.deferSession);
   const pinSession = useInboxStore((s) => s.pinSession);
   const setCurrentSession = useInboxStore((s) => s.setCurrentSession);
+  const selectedPlanId = useInboxStore((s) => s.selectedPlanId);
+  const setSelectedPlan = useInboxStore((s) => s.setSelectedPlan);
   const viewingDismissedId = useInboxStore((s) => s.viewingDismissedId);
   const setViewingDismissedId = useInboxStore((s) => s.setViewingDismissedId);
   const touchMru = useInboxStore((s) => s.touchMru);
@@ -941,7 +768,7 @@ export function QueuePageClient({ initialSessionId }: { initialSessionId?: strin
   const paramSessionId = searchParams.get("s") || initialSessionId || null;
   useWatchEffect(() => {
     if (!paramSessionId || paramSessionId === lastAppliedParamId.current) return;
-    if (Object.keys(sessions).length === 0 && activeSessions === undefined) return;
+    if (Object.keys(sessions).length === 0 && !clientStateInitialized) return;
     lastAppliedParamId.current = paramSessionId;
     if (sessions[paramSessionId]) {
       setCurrentSession(paramSessionId);
@@ -950,7 +777,7 @@ export function QueuePageClient({ initialSessionId }: { initialSessionId?: strin
     } else {
       setPendingInjectId(paramSessionId);
     }
-  }, [paramSessionId, sessions, setCurrentSession, activeSessions]);
+  }, [paramSessionId, sessions, setCurrentSession, clientStateInitialized]);
 
   // Once we have the conversation data, inject it into the queue
   useWatchEffect(() => {
@@ -1017,33 +844,28 @@ export function QueuePageClient({ initialSessionId }: { initialSessionId?: strin
   const prevSessionRef = useRef(currentSessionId);
   prevSessionRef.current = currentSessionId;
 
-  const handleDismissCurrent = useCallback(() => {
-    if (currentSessionId) handleDismiss(currentSessionId);
-  }, [currentSessionId, handleDismiss]);
-
-  const handleDeferAndAdvance = useCallback(() => {
-    if (currentSessionId) {
-      const idleSessions = sortedSessions.filter((s) => s.is_idle && !s.is_pinned);
-      const idx = idleSessions.findIndex((s) => s._id === currentSessionId);
-      const next = idleSessions[idx + 1] ?? idleSessions.find((s) => s._id !== currentSessionId);
-      deferSession(currentSessionId);
-      if (next) {
-        setCurrentSession(next._id);
-      }
-    }
-  }, [currentSessionId, sortedSessions, deferSession, setCurrentSession]);
-
-  const handlePinCurrent = useCallback(() => {
-    if (currentSessionId) pinSession(currentSessionId);
-  }, [currentSessionId, pinSession]);
 
   const handleSendAndAdvance = useCallback(() => {
     advanceToNext();
   }, [advanceToNext]);
 
-  const toggleShowAll = useCallback(() => {
-    setShowAll((v) => !v);
-  }, []);
+  const handleSessionSelect = useCallback((id: string) => {
+    if (sessions[id]) {
+      setCurrentSession(id);
+      if (showMySessions) setShowMySessions(false);
+    } else if (dismissedSessions[id]) {
+      setViewingDismissedId(id);
+      if (showMySessions) setShowMySessions(false);
+    } else {
+      useInboxStore.setState({ pendingNavigateId: id, showMySessions: false });
+    }
+  }, [sessions, dismissedSessions, setCurrentSession, setViewingDismissedId, showMySessions, setShowMySessions]);
+
+  const handlePlanSelect = useCallback((planId: string) => {
+    setSelectedPlan(planId);
+    if (showMySessions) setShowMySessions(false);
+    window.history.replaceState({ planId }, "", `/plans/${planId}`);
+  }, [setSelectedPlan, showMySessions, setShowMySessions]);
 
   const viewingDismissedSession = viewingDismissedId
     ? dismissedSessions[viewingDismissedId] ?? null
@@ -1100,63 +922,6 @@ export function QueuePageClient({ initialSessionId }: { initialSessionId?: strin
     }
   });
 
-  useEventListener("keydown", (e: KeyboardEvent) => {
-      const tag = (e.target as HTMLElement)?.tagName;
-      if (e.key === "?" && !e.ctrlKey && !e.altKey && !e.metaKey && tag !== "INPUT" && tag !== "TEXTAREA" && !(e.target as HTMLElement)?.isContentEditable) {
-        e.preventDefault();
-        toggleShortcuts();
-        return;
-      }
-      if (e.ctrlKey && e.key === "j") {
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        navigateDown();
-        return;
-      }
-      if (e.ctrlKey && e.key === "k") {
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        navigateUp();
-        return;
-      }
-      if (e.ctrlKey && e.key === "Backspace") {
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        handleDismissCurrent();
-        return;
-      }
-      if (e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && e.key === "Backspace") {
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        handleDeferAndAdvance();
-        return;
-      }
-      if (e.ctrlKey && e.key === "i") {
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        const firstNeedsInput = sortedSessions.find((s) => s.is_idle && s.message_count > 0 && !s.is_pinned);
-        if (firstNeedsInput) {
-          setCurrentSession(firstNeedsInput._id);
-        }
-        return;
-      }
-      const isMac = navigator.platform.toUpperCase().includes("MAC");
-      if ((isMac ? e.ctrlKey && !e.shiftKey && e.key === "p" : e.altKey && !e.shiftKey && e.key === "p")) {
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        const firstPinned = sortedSessions.find((s) => s.is_pinned);
-        if (firstPinned) {
-          setCurrentSession(firstPinned._id);
-        }
-        return;
-      }
-      if (e.ctrlKey && e.shiftKey && e.key === "P") {
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        handlePinCurrent();
-        return;
-      }
-  }, undefined, { capture: true });
 
   const prefetchIds: string[] = [];
   const seen = new Set<string>();
@@ -1195,6 +960,8 @@ export function QueuePageClient({ initialSessionId }: { initialSessionId?: strin
             <ActivityFeed mode="personal" compact onNavigate={handleNavigateToConversation} />
           </div>
         </div>
+      ) : selectedPlanId ? (
+        <InboxPlanView key={selectedPlanId} planId={selectedPlanId} />
       ) : viewingDismissedSession ? (
         <InboxConversation
           key={viewingDismissedSession._id}
@@ -1238,6 +1005,7 @@ export function QueuePageClient({ initialSessionId }: { initialSessionId?: strin
 
   return (
     <DashboardLayout>
+      <InboxShortcuts toggleShortcuts={toggleShortcuts} />
       {switcherState.open && (
         <SessionSwitcher
           sessions={switcherState.mruSessions}
@@ -1261,7 +1029,7 @@ export function QueuePageClient({ initialSessionId }: { initialSessionId?: strin
             <>
               <div className="fixed inset-0 z-40 bg-black/50" onClick={() => setMobileSessionsOpen(false)} />
               <div className="fixed inset-y-0 right-0 z-50 w-[80vw] max-w-xs shadow-xl animate-slide-in-right">
-                <InboxSessionPanel showAll={showAll} onToggleShowAll={toggleShowAll} dismissedSessions={Object.values(dismissedSessions)} />
+                <SessionListPanel onSessionSelect={handleSessionSelect} onPlanSelect={handlePlanSelect} activeSessionId={viewingDismissedId ?? currentSessionId} activePlanId={selectedPlanId} />
               </div>
             </>
           )}
@@ -1273,7 +1041,7 @@ export function QueuePageClient({ initialSessionId }: { initialSessionId?: strin
           </Panel>
           <Separator className="relative z-10 w-px bg-black/10 cursor-col-resize before:absolute before:inset-y-0 before:-left-[2px] before:-right-[2px] before:content-[''] before:transition-colors before:duration-150 hover:before:bg-sol-cyan data-[resize-handle-active]:before:bg-sol-cyan" />
           <Panel id="inbox-sidebar" defaultSize="24%" minSize="0%" maxSize="45%" collapsible collapsedSize="0%">
-            <InboxSessionPanel showAll={showAll} onToggleShowAll={toggleShowAll} dismissedSessions={Object.values(dismissedSessions)} />
+            <SessionListPanel onSessionSelect={handleSessionSelect} onPlanSelect={handlePlanSelect} activeSessionId={viewingDismissedId ?? currentSessionId} activePlanId={selectedPlanId} />
           </Panel>
         </Group>
       ) : (

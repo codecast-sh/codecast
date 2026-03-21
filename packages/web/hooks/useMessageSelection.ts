@@ -1,6 +1,6 @@
 import { useCallback } from "react";
 import { useForkNavigationStore } from "../store/forkNavigationStore";
-import { useEventListener } from "./useEventListener";
+import { useShortcutAction } from "../shortcuts";
 
 type TimelineItem = {
   type: string;
@@ -63,58 +63,59 @@ export function useMessageSelection({
     }
   }, [timeline, virtualizer, setSelectedIndex, onSelectMessage]);
 
-  useEventListener("keydown", (e: KeyboardEvent) => {
-    if (!enabled) return;
+  useShortcutAction('msg.clearSelection', useCallback((): boolean | void => {
+    if (!enabled || selectedIndex === null) return false;
+    selectAndNotify(null);
+  }, [enabled, selectedIndex, selectAndNotify]));
 
-    if (e.key === "Escape" && selectedIndex !== null) {
-      e.preventDefault();
-      e.stopImmediatePropagation();
+  useShortcutAction('msg.next', useCallback((): boolean | void => {
+    if (!enabled || isInputFocused()) return false;
+    const indices = getUserMessageIndices();
+    if (indices.length === 0) return false;
+    if (selectedIndex === null) {
+      selectAndNotify(indices[indices.length - 1]);
+      return;
+    }
+    const currentPos = indices.indexOf(selectedIndex);
+    if (currentPos === -1) {
+      const closest = indices.reduce((best, idx) =>
+        Math.abs(idx - selectedIndex) < Math.abs(best - selectedIndex) ? idx : best
+      );
+      selectAndNotify(closest);
+      return;
+    }
+    const next = currentPos < indices.length - 1 ? indices[currentPos + 1] : selectedIndex;
+    selectAndNotify(next);
+  }, [enabled, selectedIndex, getUserMessageIndices, selectAndNotify]));
+
+  useShortcutAction('msg.prev', useCallback((): boolean | void => {
+    if (!enabled || isInputFocused()) return false;
+    const indices = getUserMessageIndices();
+    if (indices.length === 0) return false;
+    if (selectedIndex === null) {
+      selectAndNotify(indices[indices.length - 1]);
+      return;
+    }
+    const currentPos = indices.indexOf(selectedIndex);
+    if (currentPos === -1) {
+      const closest = indices.reduce((best, idx) =>
+        Math.abs(idx - selectedIndex) < Math.abs(best - selectedIndex) ? idx : best
+      );
+      selectAndNotify(closest);
+      return;
+    }
+    const next = currentPos > 0 ? indices[currentPos - 1] : selectedIndex;
+    selectAndNotify(next);
+  }, [enabled, selectedIndex, getUserMessageIndices, selectAndNotify]));
+
+  useShortcutAction('msg.fork', useCallback((): boolean | void => {
+    if (!enabled || selectedIndex === null) return false;
+    const item = timeline[selectedIndex];
+    if (item?.type === "message" && item.data.message_uuid && onForkFromMessage) {
       selectAndNotify(null);
-      return;
+      onForkFromMessage(item.data.message_uuid);
     }
-
-    if (e.altKey && (e.code === "KeyJ" || e.code === "KeyK")) {
-      if (isInputFocused()) return;
-      e.preventDefault();
-      e.stopImmediatePropagation();
-      const indices = getUserMessageIndices();
-      if (indices.length === 0) return;
-
-      if (selectedIndex === null) {
-        selectAndNotify(indices[indices.length - 1]);
-        return;
-      }
-
-      const currentPos = indices.indexOf(selectedIndex);
-      if (currentPos === -1) {
-        const closest = indices.reduce((best, idx) =>
-          Math.abs(idx - selectedIndex) < Math.abs(best - selectedIndex) ? idx : best
-        );
-        selectAndNotify(closest);
-        return;
-      }
-
-      if (e.code === "KeyK") {
-        const next = currentPos > 0 ? indices[currentPos - 1] : selectedIndex;
-        selectAndNotify(next);
-      } else {
-        const next = currentPos < indices.length - 1 ? indices[currentPos + 1] : selectedIndex;
-        selectAndNotify(next);
-      }
-      return;
-    }
-
-    if (e.altKey && e.code === "KeyF" && selectedIndex !== null) {
-      e.preventDefault();
-      e.stopImmediatePropagation();
-      const item = timeline[selectedIndex];
-      if (item?.type === "message" && item.data.message_uuid && onForkFromMessage) {
-        selectAndNotify(null);
-        onForkFromMessage(item.data.message_uuid);
-      }
-      return;
-    }
-  }, undefined, { capture: true });
+  }, [enabled, selectedIndex, timeline, onForkFromMessage, selectAndNotify]));
 
   return { selectedIndex };
 }

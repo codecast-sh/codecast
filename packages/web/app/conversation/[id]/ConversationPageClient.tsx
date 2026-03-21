@@ -1,9 +1,9 @@
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
-import { useEventListener } from "../../../hooks/useEventListener";
+import { useShortcutContext, useShortcutAction } from "../../../shortcuts";
 import { DashboardLayout } from "../../../components/DashboardLayout";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { ConversationView, ConversationData } from "../../../components/ConversationView";
@@ -162,16 +162,10 @@ function OwnerView({
     return `${window.location.origin}/conversation/${id}`;
   };
 
-  useEventListener("keydown", (e: KeyboardEvent) => {
-    if (e.key === "d" && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
-      const target = e.target as HTMLElement;
-      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) {
-        return;
-      }
-      e.preventDefault();
-      toggleDiffPanel();
-    }
-  });
+  useShortcutContext('conversation');
+  useShortcutAction('conv.toggleDiff', useCallback(() => {
+    toggleDiffPanel();
+  }, [toggleDiffPanel]));
 
   const shareControls = conversation && isOwner ? (
     <SharePopover

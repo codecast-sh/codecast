@@ -1,13 +1,12 @@
-import { useState, useCallback, useRef, memo, useMemo } from "react";
+import React, { useState, useCallback, useRef, memo, useMemo } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
-import { useMutation } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { ConversationDiffLayout } from "./ConversationDiffLayout";
 import { ConversationData } from "./ConversationView";
 import { useConversationMessages } from "../hooks/useConversationMessages";
 import { useInboxStore, InboxSession, isConvexId, sortSessions } from "../store/inboxStore";
-import { useSyncInboxSessions } from "../hooks/useSyncInboxSessions";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "./ui/tooltip";
 import { cleanTitle } from "../lib/conversationProcessor";
 import { SharePopover } from "./SharePopover";
@@ -16,6 +15,7 @@ import { WorkflowContextPanel } from "./WorkflowContextPanel";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { X, Maximize2, ArrowLeft, ChevronsLeft, ChevronsRight } from "lucide-react";
+import { TaskStatusBadge } from "./TaskStatusBadge";
 
 const NOISE_PREFIXES = ["[Request interrupted", "This session is being continued", "Your task is to create a detailed summary", "Please continue the conversation", "<task-notification>", "Implement the following plan"];
 
@@ -254,7 +254,7 @@ export function SessionCard({
   const project = getProjectName(session.git_root, session.project_path);
   const isWorking = variant === "working";
   const isDismissed = variant === "dismissed";
-  const isSubagent = !!session.is_subagent || !!session.worktree_name;
+  const isSubagent = !!session.is_subagent || !!session.parent_conversation_id || !!session.worktree_name;
   const displayTitle = cleanTitle(session.title || "New Session");
   const isSlashCommand = displayTitle.startsWith("/");
   const cleanedUserMsg = cleanUserMessage(session.last_user_message);
@@ -308,6 +308,109 @@ export function SessionCard({
     }
   }, [session._id, displayTitle, generateUploadUrl, sendMessage]);
 
+  if (isSubagent) {
+    return (
+      <div
+        onDragEnter={handleFileDragEnter}
+        onDragOver={handleFileDragOver}
+        onDragLeave={handleFileDragLeave}
+        onDrop={handleFileDrop}
+        className={`relative group transition-colors overflow-hidden ${isDragOver ? "ring-1 ring-inset ring-violet-400/40 bg-violet-500/10" : ""} ${
+          isActive
+            ? "bg-violet-500/[0.08] border-l-2 border-l-violet-400/60"
+            : isWorking
+              ? "hover:bg-violet-500/[0.06] border-l border-l-violet-400/25"
+              : isDismissed
+                ? "opacity-40 hover:opacity-60 hover:bg-violet-500/[0.04]"
+                : "hover:bg-violet-500/[0.06] border-l border-l-violet-500/15"
+        }`}
+      >
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={() => onSelect(globalIndex)}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(globalIndex); } }}
+          className="w-full text-left cursor-pointer px-2 py-1"
+        >
+          <div className="flex items-center gap-1.5">
+            <svg className="w-3 h-3 text-violet-400/60 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 4v12h12" />
+              <path strokeLinecap="round" strokeLinejoin="round" d="M14 12l4 4-4 4" />
+            </svg>
+            <span className={`truncate text-xs leading-tight flex-1 ${
+              isActive ? "text-violet-300 font-medium" : "text-gray-400 font-normal"
+            }`}>
+              {isSlashCommand ? <span className="font-mono text-violet-400/80">{displayTitle}</span> : displayTitle}
+            </span>
+            <div className="flex items-center gap-1 flex-shrink-0">
+              {session.session_error && (
+                <span className="w-1.5 h-1.5 rounded-full bg-sol-red" title={session.session_error} />
+              )}
+              {session.is_unresponsive && !session.session_error && (
+                <span className="w-1.5 h-1.5 rounded-full bg-sol-orange" title="Session unresponsive" />
+              )}
+              {session.has_pending && !session.is_unresponsive && (
+                <span className="w-1.5 h-1.5 rounded-full bg-sol-yellow animate-pulse" title="Message pending" />
+              )}
+              {!session.is_idle && !session.session_error && !session.is_unresponsive && !session.has_pending && (
+                <span className="relative flex h-1.5 w-1.5" title="Live">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                  <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-400" />
+                </span>
+              )}
+              {session.is_idle && !session.session_error && !session.is_unresponsive && !session.has_pending && session.message_count > 0 && (
+                <span className="w-1.5 h-1.5 rounded-full bg-gray-500/40 ring-1 ring-gray-500/20" title="Session ended" />
+              )}
+              {session.message_count > 0 && (
+                <span className="text-[9px] text-gray-500 tabular-nums">{session.message_count}</span>
+              )}
+              <span className="text-[9px] text-gray-500 tabular-nums">
+                {formatIdleDuration(session.updated_at)}
+              </span>
+            </div>
+          </div>
+          {cleanedUserMsg && (
+            <div className="text-[10px] text-gray-500 mt-0.5 truncate leading-snug pl-[18px]">
+              <span className="text-gray-600 mr-0.5">&gt;</span>
+              {cleanedUserMsg}
+            </div>
+          )}
+          {session.active_task && (
+            <div className="flex items-center gap-1 mt-0.5 pl-[18px]">
+              <span className="inline-flex items-center px-1 py-0 rounded text-[9px] font-medium bg-violet-900/20 text-violet-400/70 border border-violet-600/20 max-w-[160px] truncate" title={session.active_task.title}>
+                {session.active_task.title}
+              </span>
+            </div>
+          )}
+        </div>
+        {(onDismiss || onDefer || onPin) && (
+          <div className={`absolute top-0 bottom-0 right-0 flex items-center py-1 opacity-0 group-hover:opacity-100 transition-opacity pl-8 pr-2 bg-gradient-to-r from-transparent to-sol-bg-alt`}>
+            {onDismiss && (
+              <button
+                onClick={(e) => { e.stopPropagation(); onDismiss(session._id); }}
+                className="p-0.5 rounded text-gray-500 hover:text-sol-red transition-colors"
+              >
+                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            )}
+          </div>
+        )}
+        {onRestore && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onRestore(session._id); }}
+            className="absolute top-1 right-1.5 p-0.5 rounded text-gray-500 hover:text-violet-400 opacity-0 group-hover:opacity-100 transition-opacity"
+          >
+            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17L7 7M7 7h6M7 7v6" />
+            </svg>
+          </button>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div
       onDragEnter={handleFileDragEnter}
@@ -316,20 +419,12 @@ export function SessionCard({
       onDrop={handleFileDrop}
       className={`relative group border-b border-sol-border/30 transition-colors overflow-hidden ${isDragOver ? "ring-1 ring-inset ring-sol-cyan bg-sol-cyan/10" : ""} ${
         isActive
-          ? isSubagent
-            ? "bg-sol-cyan/10 border-l-2 border-l-violet-500/50 opacity-70"
-            : "bg-sol-cyan/15 border-l-[3px] border-l-sol-cyan shadow-[inset_0_0_16px_rgba(42,161,152,0.12)]"
-          : isWorking && isSubagent
-            ? "bg-sol-bg-alt/30 border-l border-l-violet-500/30 hover:bg-sol-bg-alt/50 opacity-55 hover:opacity-70"
-            : isWorking
-              ? "bg-sol-green/[0.04] border-l-2 border-l-sol-green/40 hover:bg-sol-green/[0.08]"
-              : isDismissed && isSubagent
-                ? "opacity-35 hover:opacity-50 hover:bg-sol-bg-alt/50 border-l border-l-violet-500/15"
-                : isDismissed
-                  ? "opacity-60 hover:opacity-80 hover:bg-sol-bg-alt/80"
-                  : isSubagent
-                    ? "opacity-50 hover:opacity-65 hover:bg-sol-bg-alt/50 border-l border-l-violet-500/20"
-                    : "hover:bg-sol-bg-alt/80"
+          ? "bg-sol-cyan/15 border-l-[3px] border-l-sol-cyan shadow-[inset_0_0_16px_rgba(42,161,152,0.12)]"
+          : isWorking
+            ? "bg-sol-green/[0.04] border-l-2 border-l-sol-green/40 hover:bg-sol-green/[0.08]"
+            : isDismissed
+              ? "opacity-60 hover:opacity-80 hover:bg-sol-bg-alt/80"
+              : "hover:bg-sol-bg-alt/80"
       }`}
     >
       <div
@@ -337,14 +432,10 @@ export function SessionCard({
         tabIndex={0}
         onClick={() => onSelect(globalIndex)}
         onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(globalIndex); } }}
-        className={`w-full text-left cursor-pointer ${
-          isSubagent ? "px-2 py-1" : "px-2.5 sm:px-3 py-1.5 sm:py-2"
-        }`}
+        className="w-full text-left cursor-pointer px-2.5 sm:px-3 py-1.5 sm:py-2"
       >
         <div className={`truncate leading-tight ${
-          isSubagent
-            ? "text-xs text-sol-text-dim/70 font-normal"
-            : isActive ? "text-sm text-sol-text font-semibold" : isWorking ? "text-sm text-sol-text font-medium" : isDismissed ? "text-sm text-sol-text-muted" : "text-sm text-sol-text"
+          isActive ? "text-sm text-sol-text font-semibold" : isWorking ? "text-sm text-sol-text font-medium" : isDismissed ? "text-sm text-sol-text-muted" : "text-sm text-sol-text"
         }`}>
           {isSlashCommand ? <span className="font-mono text-sol-cyan">{displayTitle}</span> : displayTitle}
         </div>
@@ -380,9 +471,11 @@ export function SessionCard({
           )
         )}
         <div className="flex items-center gap-1.5 mt-1">
-          <span className={`text-[10px] truncate ${
-            isWorking ? "font-medium text-sol-green/70" : "font-medium text-sol-cyan/70"
-          }`}>{project}</span>
+          {project !== "unknown" && (
+            <span className={`text-[10px] truncate ${
+              isWorking ? "font-medium text-sol-green/70" : "font-medium text-sol-cyan/70"
+            }`}>{project}</span>
+          )}
           {session.worktree_name && (
             <span className="text-[9px] text-sol-cyan font-mono truncate max-w-[80px]" title={session.worktree_branch || session.worktree_name}>
               {session.worktree_name}
@@ -394,11 +487,6 @@ export function SessionCard({
             </span>
           )}
           <div className="flex items-center gap-1.5 flex-shrink-0 ml-auto">
-            {isSubagent && (
-              <span className="inline-flex items-center px-1 py-0 rounded text-[9px] font-medium bg-violet-900/30 text-violet-400/70 border border-violet-600/30">
-                sub
-              </span>
-            )}
             {session.active_plan && (
               <span className="inline-flex items-center gap-0.5 px-1 py-0 rounded text-[9px] font-medium bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20 max-w-[120px] truncate" title={session.active_plan.title}>
                 {session.active_plan.title}
@@ -547,20 +635,209 @@ export function SessionCard({
 
 // -- SessionListPanel (shared) --
 
+function NeedsAttentionSection() {
+  const blockedTasks = useQuery(api.tasks.webList, { execution_status: "blocked", limit: 20 });
+  const needsContextTasks = useQuery(api.tasks.webList, { execution_status: "needs_context", limit: 20 });
+  const updateTask = useMutation(api.tasks.webUpdate);
+  const [collapsed, setCollapsed] = useState(false);
+
+  const tasks = useMemo(() => {
+    const blockedItems = blockedTasks && "items" in blockedTasks ? blockedTasks.items : [];
+    const needsContextItems = needsContextTasks && "items" in needsContextTasks ? needsContextTasks.items : [];
+    const all = [...blockedItems, ...needsContextItems] as any[];
+    const seen = new Set<string>();
+    return all.filter(t => {
+      if (seen.has(t.short_id)) return false;
+      seen.add(t.short_id);
+      return true;
+    });
+  }, [blockedTasks, needsContextTasks]);
+
+  if (tasks.length === 0) return null;
+
+  const handleRetry = async (shortId: string) => {
+    try {
+      await updateTask({ short_id: shortId, execution_status: "", status: "open" });
+      toast.success("Task reset for retry");
+    } catch {
+      toast.error("Failed to reset task");
+    }
+  };
+
+  return (
+    <div className="border-b border-sol-red/20">
+      <button
+        onClick={() => setCollapsed(!collapsed)}
+        className="w-full px-3 py-1.5 bg-sol-red/[0.06] border-b border-sol-red/15 flex items-center justify-between"
+      >
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-sol-red">
+          Needs Attention ({tasks.length})
+        </span>
+        <svg
+          className={`w-3 h-3 text-sol-red/60 transition-transform ${collapsed ? "" : "rotate-180"}`}
+          fill="none" stroke="currentColor" viewBox="0 0 24 24"
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+      {!collapsed && tasks.map((task: any) => (
+        <div
+          key={task.short_id}
+          className="group px-3 py-2 border-b border-sol-border/20 bg-sol-red/[0.03] hover:bg-sol-red/[0.06] transition-colors"
+        >
+          <div className="flex items-start gap-2">
+            <div className="flex-1 min-w-0">
+              <div className="text-sm text-sol-text truncate leading-tight">{task.title}</div>
+              <div className="flex items-center gap-1.5 mt-1">
+                <span className="text-[10px] text-sol-text-dim font-mono">{task.short_id}</span>
+                <TaskStatusBadge status={task.execution_status || "blocked"} type="execution" size="sm" />
+                {task.plan && (
+                  <span className="text-[10px] text-sol-cyan/70 truncate max-w-[100px]" title={task.plan.title}>
+                    {task.plan.title}
+                  </span>
+                )}
+              </div>
+            </div>
+            <button
+              onClick={() => handleRetry(task.short_id)}
+              className="flex-shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium text-sol-orange border border-sol-orange/30 bg-sol-orange/10 hover:bg-sol-orange/20 transition-colors opacity-0 group-hover:opacity-100"
+            >
+              Retry
+            </button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export function DraftPlansSection({ onPlanSelect, activePlanId }: { onPlanSelect?: (id: string) => void; activePlanId?: string | null }) {
+  const draftPlans = useQuery(api.plans.webList, { status: "draft", limit: 20 });
+  const updatePlan = useMutation(api.plans.webUpdate);
+  const [collapsed, setCollapsed] = useState(false);
+  const router = useRouter();
+
+  if (!draftPlans || draftPlans.length === 0) return null;
+
+  const handleActivate = async (shortId: string) => {
+    try {
+      await updatePlan({ short_id: shortId, status: "active" });
+      toast.success("Plan activated");
+    } catch {
+      toast.error("Failed to activate plan");
+    }
+  };
+
+  const handleDismiss = async (shortId: string) => {
+    try {
+      await updatePlan({ short_id: shortId, status: "abandoned" });
+      toast.success("Plan dismissed");
+    } catch {
+      toast.error("Failed to dismiss plan");
+    }
+  };
+
+  const handleClick = (plan: any) => {
+    if (onPlanSelect) {
+      onPlanSelect(plan._id);
+    } else {
+      router.push(`/plans/${plan._id}`);
+    }
+  };
+
+  return (
+    <div className="border-b border-sol-border/30">
+      <button
+        onClick={() => setCollapsed(!collapsed)}
+        className="w-full px-3 py-1.5 bg-sol-bg border-b border-sol-border/30 flex items-center justify-between"
+      >
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-sol-text-dim/70">
+          Draft Plans ({draftPlans.length})
+        </span>
+        <svg
+          className={`w-3 h-3 text-sol-text-dim/40 transition-transform ${collapsed ? "" : "rotate-180"}`}
+          fill="none" stroke="currentColor" viewBox="0 0 24 24"
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+      {!collapsed && draftPlans.map((plan: any) => {
+        const isActive = activePlanId === plan._id;
+        return (
+          <div
+            key={plan.short_id}
+            onClick={() => handleClick(plan)}
+            className={`group px-3 py-2 border-b border-sol-border/15 transition-colors cursor-pointer ${
+              isActive
+                ? "bg-sol-cyan/[0.08] border-l-2 border-l-sol-cyan/60 opacity-100"
+                : "hover:bg-sol-bg-alt/60 opacity-70 hover:opacity-100"
+            }`}
+          >
+            <div className={`text-sm truncate leading-tight ${isActive ? "text-sol-text font-medium" : "text-sol-text-muted"}`}>{plan.title}</div>
+            <div className="flex items-center gap-1.5 mt-1">
+              <span className="text-[10px] text-sol-text-dim font-mono">{plan.short_id}</span>
+              <span className="text-[10px] text-sol-text-dim/60 capitalize">{plan.source}</span>
+              {plan.progress && (
+                <span className="text-[10px] text-sol-text-dim tabular-nums">
+                  {plan.progress.total} task{plan.progress.total !== 1 ? "s" : ""}
+                </span>
+              )}
+              {plan._creationTime && (
+                <span className="text-[10px] text-sol-text-dim tabular-nums">
+                  {formatIdleDuration(plan._creationTime)}
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-1 mt-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+              <button
+                onClick={(e) => { e.stopPropagation(); handleActivate(plan.short_id); }}
+                className="px-1.5 py-0.5 rounded text-[10px] font-medium text-sol-green border border-sol-green/30 bg-sol-green/10 hover:bg-sol-green/20 transition-colors"
+              >
+                Activate
+              </button>
+              <button
+                onClick={(e) => { e.stopPropagation(); handleDismiss(plan.short_id); }}
+                className="px-1.5 py-0.5 rounded text-[10px] font-medium text-sol-text-dim border border-sol-border/40 hover:border-sol-red/30 hover:text-sol-red hover:bg-sol-red/10 transition-colors"
+              >
+                Dismiss
+              </button>
+              <button
+                onClick={(e) => { e.stopPropagation(); router.push(`/plans/${plan._id}`); }}
+                className="px-1.5 py-0.5 rounded text-[10px] font-medium text-sol-text-dim border border-sol-border/40 hover:border-sol-cyan/30 hover:text-sol-cyan hover:bg-sol-cyan/10 transition-colors"
+              >
+                Open
+              </button>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export function SessionListPanel({
   onSessionSelect,
+  onPlanSelect,
   activeSessionId,
-  compact,
+  activePlanId,
+  onCollapse,
 }: {
   onSessionSelect?: (id: string) => void;
+  onPlanSelect?: (id: string) => void;
   activeSessionId?: string | null;
-  compact?: boolean;
+  activePlanId?: string | null;
+  onCollapse?: () => void;
 }) {
+  const showAll = useInboxStore((s) => s.showAllSessions);
+  const toggleShowAll = useInboxStore((s) => s.toggleShowAllSessions);
   const sessions = useInboxStore((s) => s.sessions);
   const sortedSessions = useMemo(() => sortSessions(sessions), [sessions]);
   const stashSession = useInboxStore((s) => s.stashSession);
   const deferSession = useInboxStore((s) => s.deferSession);
   const pinSession = useInboxStore((s) => s.pinSession);
+  const unstashSession = useInboxStore((s) => s.unstashSession);
+  const dismissedSessions = useInboxStore((s) => s.dismissedSessions);
+  const dismissedList = useMemo(() => Object.values(dismissedSessions), [dismissedSessions]);
 
   const handleSelect = useCallback((session: InboxSession) => {
     if (onSessionSelect) {
@@ -568,41 +845,116 @@ export function SessionListPanel({
     }
   }, [onSessionSelect]);
 
-  const pinned = sortedSessions.filter((s) => s.is_pinned);
-  const newSessions = sortedSessions.filter((s) => s.message_count === 0 && !s.is_pinned)
+  const isSub = (s: InboxSession) => !!s.is_subagent || !!s.parent_conversation_id || !!s.worktree_name;
+  const allParentIds = new Set(sortedSessions.filter((s) => !isSub(s)).map((s) => s._id));
+  const globalSubByParent = new Map<string, InboxSession[]>();
+  for (const s of sortedSessions) {
+    if (isSub(s) && s.parent_conversation_id && allParentIds.has(s.parent_conversation_id)) {
+      if (!globalSubByParent.has(s.parent_conversation_id)) globalSubByParent.set(s.parent_conversation_id, []);
+      globalSubByParent.get(s.parent_conversation_id)!.push(s);
+    }
+  }
+  for (const subs of globalSubByParent.values()) {
+    subs.sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
+  }
+  const subsWithParent = new Set(Array.from(globalSubByParent.values()).flat().map((s) => s._id));
+
+  const sessionsWithQueuedMessages = useInboxStore((s) => s.sessionsWithQueuedMessages);
+  const pinned = sortedSessions.filter((s) => s.is_pinned && !subsWithParent.has(s._id));
+  const newSessions = sortedSessions.filter((s) => s.message_count === 0 && !s.is_pinned && !subsWithParent.has(s._id))
     .sort((a, b) => (a.is_connected ? 1 : 0) - (b.is_connected ? 1 : 0));
-  const needsInput = sortedSessions.filter((s) => s.is_idle && s.message_count > 0 && !s.is_pinned);
-  const working = sortedSessions.filter((s) => !s.is_idle && s.message_count > 0 && !s.is_pinned);
+  const needsInput = sortedSessions.filter((s) => s.is_idle && s.message_count > 0 && !s.is_pinned && !sessionsWithQueuedMessages.has(s._id) && !subsWithParent.has(s._id));
+  const working = sortedSessions.filter((s) => (!s.is_idle || sessionsWithQueuedMessages.has(s._id)) && s.message_count > 0 && !s.is_pinned && !subsWithParent.has(s._id));
+
+  const collapsedSections = useInboxStore((s) => s.collapsedSections);
+  const toggleSection = useInboxStore((s) => s.toggleCollapsedSection);
+  const [expandedSubSessions, setExpandedSubSessions] = useState<Record<string, boolean>>({});
 
   const renderSection = (label: string, items: InboxSession[], color: string, sectionVariant?: "working") => {
     if (items.length === 0) return null;
+    const key = label.toLowerCase().replace(/\s+/g, "_");
+    const collapsed = !!collapsedSections[key];
     return (
       <div>
-        <div className="px-3 py-1.5 bg-sol-bg border-b border-sol-border/30">
+        <button
+          onClick={() => toggleSection(key)}
+          className="w-full px-3 py-1.5 bg-sol-bg border-b border-sol-border/30 flex items-center justify-between"
+        >
           <span className={`text-[10px] font-semibold uppercase tracking-wider ${color}`}>
             {label} ({items.length})
           </span>
-        </div>
-        {items.map((session) => (
-          <SessionCard
-            key={session._id}
-            session={session}
-            isActive={session._id === activeSessionId}
-            globalIndex={0}
-            onSelect={() => handleSelect(session)}
-            onDismiss={compact ? undefined : stashSession}
-            onDefer={compact ? undefined : deferSession}
-            onPin={compact ? undefined : pinSession}
-            variant={sectionVariant || "default"}
-          />
-        ))}
+          <svg className={`w-3 h-3 transition-transform ${color} ${collapsed ? "" : "rotate-180"}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+          </svg>
+        </button>
+        {!collapsed && <>
+          {items.map((session) => {
+            const subs = globalSubByParent.get(session._id) || [];
+            const subsExpanded = !!expandedSubSessions[session._id];
+            const visibleSubs = subs.length <= 2 ? subs : subsExpanded ? subs : subs.slice(0, 2);
+            const hiddenCount = subs.length - visibleSubs.length;
+            return (
+              <React.Fragment key={session._id}>
+                <SessionCard
+                  session={session}
+                  isActive={session._id === activeSessionId}
+                  globalIndex={0}
+                  onSelect={() => handleSelect(session)}
+                  onDismiss={stashSession}
+                  onDefer={deferSession}
+                  onPin={pinSession}
+                  variant={sectionVariant || "default"}
+                />
+                {visibleSubs.map((sub) => (
+                  <SessionCard
+                    key={sub._id}
+                    session={sub}
+                    isActive={sub._id === activeSessionId}
+                    globalIndex={0}
+                    onSelect={() => handleSelect(sub)}
+                    onDismiss={stashSession}
+                    variant={sectionVariant || "default"}
+                  />
+                ))}
+                {hiddenCount > 0 && (
+                  <button
+                    onClick={() => setExpandedSubSessions((prev) => ({ ...prev, [session._id]: true }))}
+                    className="w-full px-2 py-0.5 text-[10px] text-gray-500 hover:text-violet-400 transition-colors text-left pl-[26px]"
+                  >
+                    +{hiddenCount} more sub-session{hiddenCount > 1 ? "s" : ""}
+                  </button>
+                )}
+                {subsExpanded && subs.length > 2 && (
+                  <button
+                    onClick={() => setExpandedSubSessions((prev) => ({ ...prev, [session._id]: false }))}
+                    className="w-full px-2 py-0.5 text-[10px] text-gray-500 hover:text-violet-400 transition-colors text-left pl-[26px]"
+                  >
+                    collapse
+                  </button>
+                )}
+              </React.Fragment>
+            );
+          })}
+        </>}
       </div>
     );
   };
 
   return (
     <div className="h-full w-full flex flex-col bg-sol-bg-alt overflow-hidden">
+      <div className="px-3 py-2 border-b border-sol-border/50 flex-shrink-0">
+        <div className="flex items-center justify-between">
+          <span className="text-xs font-medium text-sol-text-dim uppercase tracking-wide">
+            {sortedSessions.length} Session{sortedSessions.length !== 1 ? "s" : ""}
+          </span>
+          <button onClick={toggleShowAll} className="text-[10px] text-sol-text-dim hover:text-sol-cyan transition-colors">
+            {showAll ? "Recent only" : "Show all"}
+          </button>
+        </div>
+      </div>
       <div className="flex-1 overflow-y-auto scrollbar-auto">
+        <NeedsAttentionSection />
+        <DraftPlansSection onPlanSelect={onPlanSelect} activePlanId={activePlanId} />
         {renderSection("Pinned", pinned, "text-sol-magenta")}
         {renderSection("New", newSessions, "text-sol-blue")}
         {renderSection("Needs Input", needsInput, "text-sol-yellow")}
@@ -612,7 +964,89 @@ export function SessionListPanel({
             No active sessions
           </div>
         )}
+        <div className="border-t border-sol-border/30">
+          <button
+            onClick={() => toggleSection("dismissed")}
+            className="w-full px-3 py-1.5 bg-sol-bg border-b border-sol-border/30 flex items-center justify-between"
+          >
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-sol-text-dim">
+              Dismissed{dismissedList.length > 0 ? ` (${dismissedList.length})` : ""}
+            </span>
+            <svg className={`w-3 h-3 transition-transform text-sol-text-dim ${collapsedSections.dismissed ? "" : "rotate-180"}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
+          {!collapsedSections.dismissed && dismissedList.length > 0 && (() => {
+            const isSubDismissed = (s: InboxSession) => !!s.is_subagent || !!s.worktree_name;
+            const parents = dismissedList.filter((s) => !isSubDismissed(s));
+            const subMap = new Map<string, InboxSession[]>();
+            const orphans: InboxSession[] = [];
+            for (const s of dismissedList) {
+              if (isSubDismissed(s)) {
+                const pid = s.parent_conversation_id;
+                if (pid && dismissedList.some((p) => p._id === pid)) {
+                  if (!subMap.has(pid)) subMap.set(pid, []);
+                  subMap.get(pid)!.push(s);
+                } else {
+                  orphans.push(s);
+                }
+              }
+            }
+            for (const subs of subMap.values()) {
+              subs.sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
+            }
+            return (
+            <div>
+              {parents.map((session) => (
+                <React.Fragment key={session._id}>
+                  <SessionCard
+                    session={session}
+                    isActive={session._id === activeSessionId}
+                    globalIndex={-1}
+                    onSelect={() => handleSelect(session)}
+                    onRestore={(id) => unstashSession(id)}
+                    variant="dismissed"
+                  />
+                  {subMap.get(session._id)?.map((sub) => (
+                    <SessionCard
+                      key={sub._id}
+                      session={sub}
+                      isActive={sub._id === activeSessionId}
+                      globalIndex={-1}
+                      onSelect={() => handleSelect(sub)}
+                      onRestore={(id) => unstashSession(id)}
+                      variant="dismissed"
+                    />
+                  ))}
+                </React.Fragment>
+              ))}
+              {orphans.map((session) => (
+                <SessionCard
+                  key={session._id}
+                  session={session}
+                  isActive={session._id === activeSessionId}
+                  globalIndex={-1}
+                  onSelect={() => handleSelect(session)}
+                  onRestore={(id) => unstashSession(id)}
+                  variant="dismissed"
+                />
+              ))}
+            </div>
+            );
+          })()}
+        </div>
       </div>
+      {onCollapse && (
+        <div className="flex-shrink-0 border-t border-sol-border/30 flex justify-center py-1">
+          <button
+            onClick={onCollapse}
+            className="p-1 rounded text-sol-text-dim/40 hover:text-sol-text-dim transition-colors"
+            title="Collapse to rail"
+          >
+            <ChevronsRight className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -623,8 +1057,6 @@ export function CollapsedSessionRail() {
   const sessions = useInboxStore((s) => s.sessions);
   const selectPanelSession = useInboxStore((s) => s.selectPanelSession);
   const toggleSidePanel = useInboxStore((s) => s.toggleSidePanel);
-
-  useSyncInboxSessions(false);
 
   const sorted = useMemo(() => sortSessions(sessions), [sessions]);
 
@@ -638,8 +1070,9 @@ export function CollapsedSessionRail() {
   };
 
   const pinned = sorted.filter((s) => s.is_pinned);
-  const needsInput = sorted.filter((s) => s.is_idle && s.message_count > 0 && !s.is_pinned);
-  const working = sorted.filter((s) => !s.is_idle && s.message_count > 0 && !s.is_pinned);
+  const queuedSet = useInboxStore((s) => s.sessionsWithQueuedMessages);
+  const needsInput = sorted.filter((s) => s.is_idle && s.message_count > 0 && !s.is_pinned && !queuedSet.has(s._id));
+  const working = sorted.filter((s) => (!s.is_idle || queuedSet.has(s._id)) && s.message_count > 0 && !s.is_pinned);
   const newSessions = sorted.filter((s) => s.message_count === 0 && !s.is_pinned);
 
   const groups = [pinned, needsInput, working, newSessions].filter((g) => g.length > 0);
@@ -674,106 +1107,44 @@ export function CollapsedSessionRail() {
         </div>
       </TooltipProvider>
       {needsInputCount > 0 && (
-        <div className="mt-auto mb-3 flex justify-center">
+        <div className="mt-auto mb-1 flex justify-center">
           <div className="w-3.5 h-3.5 rounded-full flex items-center justify-center" style={{ backgroundColor: "#b58900" }}>
             <span className="text-[8px] font-bold text-sol-bg leading-none">{needsInputCount}</span>
           </div>
         </div>
       )}
-    </div>
-  );
-}
-
-// -- SessionListSidebar (expanded session list column) --
-
-export function SessionListSidebar() {
-  const toggleSidePanel = useInboxStore(s => s.toggleSidePanel);
-  const selectPanelSession = useInboxStore(s => s.selectPanelSession);
-  const sidePanelSessionId = useInboxStore(s => s.sidePanelSessionId);
-
-  useSyncInboxSessions(false);
-
-  return (
-    <div className="w-[280px] h-full flex-shrink-0 flex flex-col bg-sol-bg-alt border-l border-sol-border/30">
-      <div className="flex-1 min-h-0">
-        <SessionListPanel
-          onSessionSelect={(id) => selectPanelSession(id)}
-          activeSessionId={sidePanelSessionId}
-          compact
-        />
-      </div>
-      <div className="flex-shrink-0 border-t border-sol-border/30 flex justify-center py-1">
+      <div className={`${needsInputCount > 0 ? "" : "mt-auto"} mb-2 flex justify-center`}>
         <button
-          onClick={toggleSidePanel}
-          className="p-1 rounded text-sol-text-dim/40 hover:text-sol-text-dim transition-colors"
-          title="Collapse to rail"
+          onClick={(e) => { e.stopPropagation(); toggleSidePanel(); }}
+          className="p-0.5 rounded text-sol-text-dim/30 hover:text-sol-text-dim transition-colors"
+          title="Expand session list"
         >
-          <ChevronsRight className="w-3.5 h-3.5" />
+          <ChevronsLeft className="w-3.5 h-3.5" />
         </button>
       </div>
     </div>
   );
 }
 
-// -- ConversationColumn (independent conversation view column) --
+// -- ConversationColumn (session panel for non-inbox pages) --
 
-export function ConversationColumn() {
+export const ConversationColumn = memo(function ConversationColumn() {
   const sidePanelSessionId = useInboxStore(s => s.sidePanelSessionId);
   const sessions = useInboxStore(s => s.sessions);
+  const dismissedSessions = useInboxStore(s => s.dismissedSessions);
   const selectPanelSession = useInboxStore(s => s.selectPanelSession);
+  const closeSidePanel = useInboxStore(s => s.closeSidePanel);
   const router = useRouter();
 
-  const session = sidePanelSessionId ? sessions[sidePanelSessionId] : null;
-  console.log('[ConvoCol]', { sidePanelSessionId, hasSession: !!session, sessionKeys: Object.keys(sessions).length });
-  if (!session || !sidePanelSessionId) return null;
-
-  const handleExpandToMain = () => {
-    selectPanelSession(null);
-    router.push("/inbox");
-  };
-
-  const handleClose = () => {
-    selectPanelSession(null);
-  };
-
-  return (
-    <div className="h-full">
-      <InboxConversation
-        key={sidePanelSessionId}
-        sessionId={sidePanelSessionId}
-        isIdle={session.is_idle}
-        onSendAndAdvance={() => {}}
-        lastUserMessage={session.last_user_message}
-        sessionError={session.session_error}
-        onExpandToMain={handleExpandToMain}
-        onClose={handleClose}
-      />
-    </div>
-  );
-}
-
-// -- GlobalSessionPanel (the main component for DashboardLayout) --
-
-export function GlobalSessionPanel() {
-  const sidePanelOpen = useInboxStore((s) => s.sidePanelOpen);
-  const sidePanelSessionId = useInboxStore((s) => s.sidePanelSessionId);
-  const openSidePanel = useInboxStore((s) => s.openSidePanel);
-  const closeSidePanel = useInboxStore((s) => s.closeSidePanel);
-  const clearSidePanelSession = useInboxStore((s) => s.clearSidePanelSession);
-  const sessions = useInboxStore((s) => s.sessions);
-  const router = useRouter();
-
-  useSyncInboxSessions(false);
-
-  const session = sidePanelSessionId ? sessions[sidePanelSessionId] : null;
+  const session = sidePanelSessionId ? (sessions[sidePanelSessionId] ?? dismissedSessions[sidePanelSessionId] ?? null) : null;
 
   const handleSessionSelect = useCallback((id: string) => {
-    openSidePanel(id);
-  }, [openSidePanel]);
+    selectPanelSession(id);
+  }, [selectPanelSession]);
 
   const handleBack = useCallback(() => {
-    clearSidePanelSession();
-  }, [clearSidePanelSession]);
+    selectPanelSession(null);
+  }, [selectPanelSession]);
 
   const handleExpand = useCallback(() => {
     if (!sidePanelSessionId) return;
@@ -781,66 +1152,62 @@ export function GlobalSessionPanel() {
     router.push(`/conversation/${sidePanelSessionId}`);
   }, [sidePanelSessionId, closeSidePanel, router]);
 
-  if (!sidePanelOpen) return null;
+  const handleClose = useCallback(() => {
+    selectPanelSession(null);
+  }, [selectPanelSession]);
 
   return (
-    <div className="h-full flex flex-col bg-sol-bg-alt border-l border-sol-border/30">
-      <div className="flex-shrink-0 flex items-center justify-between px-3 py-1.5 border-b border-sol-border/50">
-        {session ? (
-          <div className="flex items-center gap-1.5 min-w-0">
-            <button
-              onClick={handleBack}
-              className="p-0.5 rounded text-sol-text-dim hover:text-sol-text transition-colors flex-shrink-0"
-              title="Back to session list"
-            >
-              <ArrowLeft className="w-3.5 h-3.5" />
-            </button>
-            <span className="text-xs font-medium text-sol-text-muted truncate">
-              {cleanTitle(session.title || "Session")}
-            </span>
+    <div className="h-full flex flex-col">
+      {session && sidePanelSessionId ? (
+        <>
+          <div className="flex-shrink-0 flex items-center justify-between px-3 py-1.5 border-b border-sol-border/50">
+            <div className="flex items-center gap-1.5 min-w-0">
+              <button
+                onClick={handleBack}
+                className="p-0.5 rounded text-sol-text-dim hover:text-sol-text transition-colors flex-shrink-0"
+                title="Back to session list"
+              >
+                <ArrowLeft className="w-3.5 h-3.5" />
+              </button>
+              <span className="text-xs font-medium text-sol-text-muted truncate">
+                {cleanTitle(session.title || "Session")}
+              </span>
+            </div>
+            <div className="flex items-center gap-0.5 flex-shrink-0">
+              <button
+                onClick={handleExpand}
+                className="p-1 rounded text-sol-text-dim hover:text-sol-text transition-colors"
+                title="Open full conversation"
+              >
+                <Maximize2 className="w-3 h-3" />
+              </button>
+              <button
+                onClick={handleClose}
+                className="p-1 rounded text-sol-text-dim hover:text-sol-text transition-colors"
+                title="Close panel"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
           </div>
-        ) : (
-          <span className="text-xs font-medium text-sol-text-dim uppercase tracking-wide">
-            Sessions
-          </span>
-        )}
-        <div className="flex items-center gap-0.5 flex-shrink-0">
-          {session && (
-            <button
-              onClick={handleExpand}
-              className="p-1 rounded text-sol-text-dim hover:text-sol-text transition-colors"
-              title="Open full conversation"
-            >
-              <Maximize2 className="w-3 h-3" />
-            </button>
-          )}
-          <button
-            onClick={closeSidePanel}
-            className="p-1 rounded text-sol-text-dim hover:text-sol-text transition-colors"
-            title="Close panel"
-          >
-            <X className="w-3.5 h-3.5" />
-          </button>
-        </div>
-      </div>
-      <div className="flex-1 min-h-0">
-        {session && sidePanelSessionId ? (
-          <InboxConversation
-            key={sidePanelSessionId}
-            sessionId={sidePanelSessionId}
-            isIdle={session.is_idle}
-            onSendAndAdvance={() => {}}
-            lastUserMessage={session.last_user_message}
-            sessionError={session.session_error}
-            onBack={handleBack}
-          />
-        ) : (
-          <SessionListPanel
-            onSessionSelect={handleSessionSelect}
-            activeSessionId={sidePanelSessionId}
-          />
-        )}
-      </div>
+          <div className="flex-1 min-h-0">
+            <InboxConversation
+              key={sidePanelSessionId}
+              sessionId={sidePanelSessionId}
+              isIdle={session.is_idle}
+              onSendAndAdvance={() => {}}
+              lastUserMessage={session.last_user_message}
+              sessionError={session.session_error}
+              onBack={handleBack}
+            />
+          </div>
+        </>
+      ) : (
+        <SessionListPanel
+          onSessionSelect={handleSessionSelect}
+          activeSessionId={sidePanelSessionId}
+        />
+      )}
     </div>
   );
-}
+});

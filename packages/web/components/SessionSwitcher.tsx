@@ -75,9 +75,11 @@ export function SessionSwitcher({
                   <div className={`text-sm truncate ${isSelected ? "text-sol-text font-medium" : "text-sol-text/80"}`}>
                     {title}
                   </div>
-                  <div className="text-[11px] text-sol-cyan/70 truncate">
-                    {project}
-                  </div>
+                  {project !== "unknown" && (
+                    <div className="text-[11px] text-sol-cyan/70 truncate">
+                      {project}
+                    </div>
+                  )}
                 </div>
                 {i === 0 && (
                   <span className="text-[10px] text-sol-text-dim/50 flex-shrink-0">

@@ -164,6 +164,7 @@ export type TaskItem = {
   creator?: { name: string; image?: string };
   plan?: PlanRef;
   activeSession?: { session_id: string; title?: string; agent_status?: string; agent_type?: string } | null;
+  source_agent_type?: string | null;
   steps?: TaskStep[];
   acceptance_criteria?: string[];
   execution_status?: TaskExecutionStatus;
@@ -210,6 +211,16 @@ export type DocDetail = DocItem & {
   related_sessions?: any[];
 };
 
+export type TaskViewPrefs = {
+  status?: string;
+  view?: "list" | "kanban";
+  sort?: string;
+  priority?: string;
+  label?: string;
+  assignee?: string;
+  hide_agent?: boolean;
+};
+
 export type ClientUI = {
   theme?: "light" | "dark";
   sidebar_collapsed?: boolean;
@@ -221,6 +232,7 @@ export type ClientUI = {
   active_filter?: "my" | "team";
   inbox_shortcuts_hidden?: boolean;
   sounds_enabled?: boolean;
+  task_view?: TaskViewPrefs;
 };
 
 export type ClientLayouts = {
@@ -279,12 +291,17 @@ interface InboxStoreState {
   dismissedSessions: Record<string, InboxSession>;
   pending: Record<string, PendingEntry>;
   currentSessionId: string | null;
+  selectedPlanId: string | null;
   showDismissed: boolean;
+  collapsedSections: Record<string, boolean>;
   viewingDismissedId: string | null;
   pendingNavigateId: string | null;
+  renamingSessionId: string | null;
   pendingScrollToMessageId: string | null;
   showMySessions: boolean;
   setShowMySessions: (show: boolean) => void;
+  showAllSessions: boolean;
+  toggleShowAllSessions: () => void;
   mruStack: string[];
 
   messages: Record<string, Message[]>;
@@ -305,6 +322,11 @@ interface InboxStoreState {
   openNewSession: (ctx?: SessionContext) => void;
   closeNewSession: () => void;
 
+  // -- Compose palette --
+  composePalette: { isOpen: boolean; initialMessage: string };
+  openComposePalette: (initialMessage?: string) => void;
+  closeComposePalette: () => void;
+
   // -- Fork navigation --
   activeBranches: Record<string, string>;
   optimisticForkChildren: ForkChild[];
@@ -318,6 +340,7 @@ interface InboxStoreState {
   unstashSession: (id: string) => void;
   deferSession: (id: string) => void;
   pinSession: (id: string) => void;
+  renameSession: (id: string, title: string) => void;
   switchProject: (convId: string, path: string) => void;
   sendMessage: (convId: string, content: string, imageIds?: string[], images?: Array<{ media_type: string; storage_id?: string }>) => Promise<any>;
   resumeSession: (convId: string) => Promise<any>;
@@ -337,8 +360,10 @@ interface InboxStoreState {
   navigateUp: () => void;
   navigateDown: () => void;
   setCurrentSession: (id: string) => void;
+  setSelectedPlan: (id: string | null) => void;
   clearSelection: () => void;
   setShowDismissed: (show: boolean) => void;
+  toggleCollapsedSection: (key: string) => void;
   setViewingDismissedId: (id: string | null) => void;
   getCurrentSession: () => InboxSession | null;
   injectSession: (session: InboxSession) => void;
@@ -409,6 +434,10 @@ interface InboxStoreState {
   setDocFilter: (filter: Partial<{ type: string; query: string; project: string; scope: string }>) => void;
   setPlanFilter: (filter: Partial<{ status: string }>) => void;
 
+  // -- Message queue --
+  sessionsWithQueuedMessages: Set<string>;
+  setSessionHasQueuedMessages: (sessionId: string, hasQueued: boolean) => void;
+
   // -- Side panel --
   sidePanelSessionId: string | null;
   sidePanelOpen: boolean;
@@ -455,12 +484,17 @@ export const useInboxStore = create<InboxStoreState>(
   dismissedSessions: {},
   pending: {},
   currentSessionId: null,
+  selectedPlanId: null,
   showDismissed: false,
+  collapsedSections: {},
   viewingDismissedId: null,
   pendingNavigateId: null,
+  renamingSessionId: null,
   pendingScrollToMessageId: null,
   showMySessions: false,
   setShowMySessions: (show: boolean) => set({ showMySessions: show }),
+  showAllSessions: false,
+  toggleShowAllSessions: () => set({ showAllSessions: !get().showAllSessions }),
   mruStack: [],
 
   messages: {},
@@ -483,6 +517,16 @@ export const useInboxStore = create<InboxStoreState>(
 
   closeNewSession: () => {
     set({ newSession: { isOpen: false, context: {} } });
+  },
+
+  composePalette: { isOpen: false, initialMessage: "" },
+
+  openComposePalette: (initialMessage?: string) => {
+    set({ composePalette: { isOpen: true, initialMessage: initialMessage || "" } });
+  },
+
+  closeComposePalette: () => {
+    set({ composePalette: { isOpen: false, initialMessage: "" } });
   },
 
   activeBranches: {},
@@ -516,9 +560,11 @@ export const useInboxStore = create<InboxStoreState>(
       pending: newPending,
       conversations: newConversations,
       currentSessionId: newSessionId,
+      clientState: { ...state.clientState, current_conversation_id: newSessionId ?? undefined },
     });
     get()._dispatch("patch", [], {
       conversations: { [id]: { inbox_dismissed_at: Date.now(), ...(wasPinned ? { inbox_pinned_at: null } : {}) } },
+      client_state: { _: { current_conversation_id: newSessionId ?? null } },
     }).catch(() => {});
   },
 
@@ -533,6 +579,7 @@ export const useInboxStore = create<InboxStoreState>(
     }
     this.currentSessionId = id;
     this.viewingDismissedId = null;
+    this.clientState.current_conversation_id = id;
   }),
 
   deferSession: (id: string) => {
@@ -571,6 +618,22 @@ export const useInboxStore = create<InboxStoreState>(
     set({ sessions: newSessions, conversations: newConversations, pending: newPending });
     get()._dispatch("patch", [], {
       conversations: { [id]: { inbox_pinned_at: pinnedAt } },
+    }).catch(() => {});
+  },
+
+  renameSession: (id: string, title: string) => {
+    const state = get();
+    const newSessions = { ...state.sessions };
+    if (newSessions[id]) {
+      newSessions[id] = { ...newSessions[id], title };
+    }
+    const newConversations = { ...state.conversations };
+    if (newConversations[id]) {
+      newConversations[id] = { ...newConversations[id], title };
+    }
+    set({ sessions: newSessions, conversations: newConversations });
+    get()._dispatch("patch", [], {
+      conversations: { [id]: { title } },
     }).catch(() => {});
   },
 
@@ -623,6 +686,7 @@ export const useInboxStore = create<InboxStoreState>(
     } as InboxSession;
     this.currentSessionId = sessionId;
     this.viewingDismissedId = null;
+    this.clientState.current_conversation_id = sessionId;
   }),
 
   updateClientUI: action(function (this: Draft, partial: Partial<ClientUI>) {
@@ -673,9 +737,11 @@ export const useInboxStore = create<InboxStoreState>(
           newConversations[s._id] = { _id: s._id };
         }
       }
-      if (!state.currentSessionId && !state.showMySessions && Object.keys(table).length > 0) {
+      if (!state.currentSessionId && !state.showMySessions && Object.keys(table).length > 0 && state.clientStateInitialized) {
+        const persisted = state.clientState.current_conversation_id;
         const sorted = sortSessions(table as Record<string, InboxSession>);
-        set({ sessions: table, pending, conversations: newConversations, currentSessionId: sorted[0]?._id ?? null });
+        const restoreId = (persisted && table[persisted]) ? persisted : (sorted[0]?._id ?? null);
+        set({ sessions: table, pending, conversations: newConversations, currentSessionId: restoreId });
       } else {
         set({ sessions: table, pending, conversations: newConversations });
       }
@@ -713,7 +779,16 @@ export const useInboxStore = create<InboxStoreState>(
       } : undefined),
       dismissed: { ...prev.dismissed, ...serverState.dismissed },
     };
-    set({ clientState: cs, clientStateInitialized: true });
+    const updates: any = { clientState: cs, clientStateInitialized: true };
+    if (!initialized && serverState.current_conversation_id && !get().currentSessionId) {
+      const sessions = get().sessions;
+      if (sessions[serverState.current_conversation_id]) {
+        updates.currentSessionId = serverState.current_conversation_id;
+      } else {
+        updates.pendingNavigateId = serverState.current_conversation_id;
+      }
+    }
+    set(updates);
   },
 
   addPending: (key: string, entry: PendingEntry) => {
@@ -731,7 +806,7 @@ export const useInboxStore = create<InboxStoreState>(
   },
 
   sortedSessions: () => {
-    return sortSessions(get().sessions);
+    return sortSessions(get().sessions).filter((s: InboxSession) => !s.is_subagent && !s.parent_conversation_id);
   },
 
   // =====================
@@ -745,7 +820,7 @@ export const useInboxStore = create<InboxStoreState>(
     const currentIdleIdx = idleSessions.findIndex((s: InboxSession) => s._id === currentId);
     const nextIdle = idleSessions[currentIdleIdx + 1] || idleSessions[0];
     if (nextIdle && nextIdle._id !== currentId) {
-      set({ currentSessionId: nextIdle._id });
+      get().setCurrentSession(nextIdle._id);
     }
   },
 
@@ -755,7 +830,7 @@ export const useInboxStore = create<InboxStoreState>(
     const currentId = get().currentSessionId;
     const idx = sorted.findIndex((s: InboxSession) => s._id === currentId);
     const newIdx = (idx - 1 + sorted.length) % sorted.length;
-    set({ currentSessionId: sorted[newIdx]._id });
+    get().setCurrentSession(sorted[newIdx]._id);
   },
 
   navigateDown: () => {
@@ -764,19 +839,36 @@ export const useInboxStore = create<InboxStoreState>(
     const currentId = get().currentSessionId;
     const idx = sorted.findIndex((s: InboxSession) => s._id === currentId);
     const newIdx = (idx + 1) % sorted.length;
-    set({ currentSessionId: sorted[newIdx]._id });
+    get().setCurrentSession(sorted[newIdx]._id);
   },
 
-  setCurrentSession: (id: string) => {
-    set({ currentSessionId: id, viewingDismissedId: null });
-  },
+  setCurrentSession: action(function (this: Draft, id: string) {
+    this.currentSessionId = id;
+    this.selectedPlanId = null;
+    this.viewingDismissedId = null;
+    this.clientState.current_conversation_id = id;
+  }),
 
-  clearSelection: () => {
-    set({ currentSessionId: null, viewingDismissedId: null });
-  },
+  setSelectedPlan: action(function (this: Draft, id: string | null) {
+    this.selectedPlanId = id;
+    this.currentSessionId = null;
+    this.viewingDismissedId = null;
+  }),
+
+  clearSelection: action(function (this: Draft) {
+    this.currentSessionId = null;
+    this.selectedPlanId = null;
+    this.viewingDismissedId = null;
+    this.clientState.current_conversation_id = undefined;
+  }),
 
   setShowDismissed: (show: boolean) => {
     set({ showDismissed: show });
+  },
+
+  toggleCollapsedSection: (key: string) => {
+    const current = get().collapsedSections;
+    set({ collapsedSections: { ...current, [key]: !current[key] } });
   },
 
   setViewingDismissedId: (id: string | null) => {
@@ -802,6 +894,7 @@ export const useInboxStore = create<InboxStoreState>(
       currentSessionId: session._id,
       pending: newPending,
       viewingDismissedId: null,
+      clientState: { ...state.clientState, current_conversation_id: session._id },
     });
   },
 
@@ -857,7 +950,7 @@ export const useInboxStore = create<InboxStoreState>(
       set({ pending: newPending });
     }
     if (state.sessions[id]) {
-      set({ currentSessionId: id, viewingDismissedId: null });
+      get().setCurrentSession(id);
     } else {
       set({ pendingNavigateId: id, viewingDismissedId: null });
     }
@@ -880,7 +973,17 @@ export const useInboxStore = create<InboxStoreState>(
       const sorted = sortSessions(newSessions);
       newSessionId = sorted.find((s) => !s.is_pinned)?._id ?? sorted[0]?._id ?? null;
     }
-    set({ sessions: newSessions, pending: newPending, currentSessionId: newSessionId });
+    set({
+      sessions: newSessions,
+      pending: newPending,
+      currentSessionId: newSessionId,
+      clientState: { ...state.clientState, current_conversation_id: newSessionId ?? undefined },
+    });
+    if (state.currentSessionId === id) {
+      get()._dispatch("patch", [], {
+        client_state: { _: { current_conversation_id: newSessionId ?? null } },
+      }).catch(() => {});
+    }
   },
 
 
@@ -1070,7 +1173,11 @@ export const useInboxStore = create<InboxStoreState>(
       delete (updates.conversations as any)[sessionId];
     }
 
-    if (state.currentSessionId === sessionId) updates.currentSessionId = convexId;
+    if (state.currentSessionId === sessionId) {
+      updates.currentSessionId = convexId;
+      updates.clientState = { ...state.clientState, current_conversation_id: convexId };
+    }
+    if (state.sidePanelSessionId === sessionId) updates.sidePanelSessionId = convexId;
     if (Object.keys(updates).length > 0) set(updates);
   },
 
@@ -1265,6 +1372,18 @@ export const useInboxStore = create<InboxStoreState>(
   }),
 
   // =====================
+  // MESSAGE QUEUE
+  // =====================
+
+  sessionsWithQueuedMessages: new Set<string>(),
+  setSessionHasQueuedMessages: (sessionId: string, hasQueued: boolean) => {
+    const prev = get().sessionsWithQueuedMessages;
+    const next = new Set(prev);
+    if (hasQueued) next.add(sessionId);
+    else next.delete(sessionId);
+    set({ sessionsWithQueuedMessages: next });
+  },
+
   // SIDE PANEL
   // =====================
 

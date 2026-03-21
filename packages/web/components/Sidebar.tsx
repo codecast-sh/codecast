@@ -341,7 +341,7 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
   const [currentTime, setCurrentTime] = useState(Date.now());
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id) as Id<"teams"> | undefined;
   const teams = useQuery(api.teams.getUserTeams);
-  const activeTeam = teams?.find(t => t?._id === activeTeamId);
+  const activeTeam = teams?.find((t: any) => t?._id === activeTeamId);
   const teamUnreadCount = useQuery(
     api.conversations.getTeamUnreadCount,
     activeTeamId ? { teamId: activeTeamId } : "skip"
@@ -361,13 +361,14 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
     const raw = sidebarTasks?.items ?? sidebarTasks ?? [];
     return (raw as any[])
       .filter((t: any) => t.status !== "done" && t.status !== "dropped")
+      .filter((t: any) => !directoryFilter || !t.project_path || t.project_path.startsWith(directoryFilter))
       .slice(0, 10)
       .map((t: any) => ({
         _id: t._id,
         title: t.title,
         statusColor: TASK_STATUS_ICONS[t.status]?.color || "text-sol-text-dim",
       }));
-  }, [sidebarTasks]);
+  }, [sidebarTasks, directoryFilter]);
 
   const docItems = useMemo(() => {
     const raw = sidebarDocs?.docs ?? sidebarDocs ?? [];
@@ -383,7 +384,8 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
         itemHref: d.plan_short_id ? `/plans/${d.plan_short_id}` : undefined,
       }));
   }, [sidebarDocs]);
-  const needsInputCount = activeSessions?.filter((s: any) => s.is_idle && s.message_count > 0).length ?? 0;
+  const sessionsWithQueuedMessages = useInboxStore((s) => s.sessionsWithQueuedMessages);
+  const needsInputCount = activeSessions?.filter((s: any) => s.is_idle && s.message_count > 0 && !sessionsWithQueuedMessages.has(s._id)).length ?? 0;
   const openNewSession = useInboxStore((s) => s.openNewSession);
   const hasUsedDesktop = useInboxStore((s) => s.clientState.dismissed?.has_used_desktop ?? false);
 
@@ -421,7 +423,7 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
   type ConversationItem = NonNullable<typeof conversations>[number];
 
   const filteredConversations = useMemo(() =>
-    conversations?.filter(c => shouldShowSession(c)) ?? [],
+    conversations?.filter((c: ConversationItem) => shouldShowSession(c)) ?? [],
     [conversations]
   );
 
@@ -470,12 +472,12 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
   }, [filteredConversations]);
 
 
-  const groupedSessions = filteredConversations.reduce<Record<string, ConversationItem[]>>((acc, conv) => {
+  const groupedSessions = filteredConversations.reduce((acc: Record<string, ConversationItem[]>, conv: ConversationItem) => {
     const group = getDateGroup(conv.updated_at, currentTime);
     if (!acc[group]) acc[group] = [];
     acc[group].push(conv);
     return acc;
-  }, {});
+  }, {} as Record<string, ConversationItem[]>);
 
   const sidebarContent = (
     <>
@@ -628,7 +630,7 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
               Favorites
             </div>
             <div className="space-y-0.5">
-              {favorites.slice(0, 5).map((fav) => (
+              {favorites.slice(0, 5).map((fav: any) => (
                 <div key={fav._id} className="flex items-center group">
                   <Link
                     href={`/conversation/${fav._id}`}
@@ -668,7 +670,7 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
               Bookmarks
             </div>
             <div className="space-y-0.5">
-              {bookmarks.slice(0, 8).map((bookmark) => (
+              {bookmarks.slice(0, 8).map((bookmark: any) => (
                 <div
                   key={bookmark._id}
                   className="flex items-center gap-2 px-4 py-1.5 text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60 transition-colors group cursor-pointer"

@@ -7,6 +7,7 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { Toaster } from "@/components/ui/sonner";
 import { DesktopProvider } from "@/components/DesktopProvider";
 import { SlideOutProvider } from "@/components/SlideOutProvider";
+import { ShortcutProvider } from "@/shortcuts";
 import { useLocalStorageMigration } from "@/hooks/useLocalStorageMigration";
 
 function PrefsMigration() {
@@ -28,6 +29,7 @@ export function Providers({ children }: { children: ReactNode }) {
   return (
     <ConvexAuthProvider client={convex}>
       <ThemeProvider>
+        <ShortcutProvider>
         <NavigationProgress />
         {children}
         <ErrorBoundary name="DesktopProvider" level="inline">
@@ -38,6 +40,7 @@ export function Providers({ children }: { children: ReactNode }) {
         </ErrorBoundary>
         <PrefsMigration />
         <Toaster position="bottom-right" />
+        </ShortcutProvider>
       </ThemeProvider>
     </ConvexAuthProvider>
   );

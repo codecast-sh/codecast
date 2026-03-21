@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useEventListener } from "../hooks/useEventListener";
-import { isElectron } from "../lib/desktop";
+import { useShortcutAction } from "../shortcuts";
 import { X, ChevronUp, ChevronDown } from "lucide-react";
 
 const HIGHLIGHT_NAME = "find-results";
@@ -93,19 +93,17 @@ export function FindBar() {
     clearHighlights();
   }, [clearHighlights]);
 
-  useEventListener("keydown", (e: KeyboardEvent) => {
-    if (!isElectron()) return;
-    if (e.key === "f" && (e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey) {
-      e.preventDefault();
-      if (visible) {
-        inputRef.current?.focus();
-        inputRef.current?.select();
-      } else {
-        setVisible(true);
-        setTimeout(() => inputRef.current?.focus(), 0);
-      }
-      return;
+  useShortcutAction('find.toggle', useCallback(() => {
+    if (visible) {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    } else {
+      setVisible(true);
+      setTimeout(() => inputRef.current?.focus(), 0);
     }
+  }, [visible]));
+
+  useEventListener("keydown", (e: KeyboardEvent) => {
     if (!visible) return;
     if (e.key === "Escape") {
       e.preventDefault();

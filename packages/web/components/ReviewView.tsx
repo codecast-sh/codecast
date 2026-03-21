@@ -1,7 +1,7 @@
 import { useState, useCallback } from "react";
 import { useAction } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { useEventListener } from "../hooks/useEventListener";
+import { useShortcutContext, useShortcutAction } from "../shortcuts";
 
 interface FileDiff {
   path: string;
@@ -87,35 +87,33 @@ export function ReviewView({ prId }: { prId: string }) {
 
   const currentFile = mockDiffs[currentFileIndex];
 
-  const handleKeyPress = useCallback(
-    (e: KeyboardEvent) => {
-      if (commentDraft) return;
+  useShortcutContext('review');
 
-      if (e.key === "j") {
-        e.preventDefault();
-        setCurrentFileIndex((prev) => Math.min(prev + 1, mockDiffs.length - 1));
-      } else if (e.key === "k") {
-        e.preventDefault();
-        setCurrentFileIndex((prev) => Math.max(prev - 1, 0));
-      } else if (e.key === "c" && !e.metaKey && !e.ctrlKey) {
-        e.preventDefault();
-        const firstLine = currentFile.changes.find((c) => c.newLine);
-        if (firstLine?.newLine) {
-          setCommentDraft({
-            filePath: currentFile.path,
-            lineNumber: firstLine.newLine,
-            content: "",
-          });
-        }
-      } else if (e.key === "?") {
-        e.preventDefault();
-        setShowShortcuts((prev) => !prev);
-      }
-    },
-    [currentFile, commentDraft, mockDiffs.length]
-  );
+  useShortcutAction('review.nextFile', useCallback(() => {
+    if (commentDraft) return false;
+    setCurrentFileIndex((prev) => Math.min(prev + 1, mockDiffs.length - 1));
+  }, [commentDraft, mockDiffs.length]));
 
-  useEventListener("keydown", handleKeyPress);
+  useShortcutAction('review.prevFile', useCallback(() => {
+    if (commentDraft) return false;
+    setCurrentFileIndex((prev) => Math.max(prev - 1, 0));
+  }, [commentDraft]));
+
+  useShortcutAction('review.comment', useCallback(() => {
+    if (commentDraft) return false;
+    const firstLine = currentFile.changes.find((c) => c.newLine);
+    if (firstLine?.newLine) {
+      setCommentDraft({
+        filePath: currentFile.path,
+        lineNumber: firstLine.newLine,
+        content: "",
+      });
+    }
+  }, [currentFile, commentDraft]));
+
+  useShortcutAction('ui.toggleShortcutsHelp', useCallback(() => {
+    setShowShortcuts((prev) => !prev);
+  }, []));
 
   const handleLineClick = (lineNumber: number | undefined) => {
     if (!lineNumber) return;

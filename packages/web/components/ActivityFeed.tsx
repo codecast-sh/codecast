@@ -399,7 +399,7 @@ function SessionCardInner({ item, compact, showActor, onNavigate, projectColor }
             <span className="text-[8px] text-sol-green/60 font-medium uppercase tracking-wider">live</span>
           </span>
         )}
-        {project && (
+        {project && project !== "unknown" && (
           <span className={`font-mono rounded px-1 py-px shrink-0 text-[9px] ${projectColor || "bg-sol-bg-alt text-sol-text-dim/50"}`}>
             {project}
           </span>
@@ -422,7 +422,7 @@ function SessionCardInner({ item, compact, showActor, onNavigate, projectColor }
 
       {/* Row 2: expanded detail / hover bullets / headline */}
       {expanded ? (
-        <div className={`mt-1.5 space-y-1.5 ${showActor ? "ml-[26px]" : ""} text-[11px]`} onClick={(e) => e.stopPropagation()}>
+        <div className={`mt-1.5 space-y-1.5 ${showActor ? "ml-[26px]" : ""} text-[11px] cursor-pointer`} onClick={(e) => { e.stopPropagation(); handleNav(); }}>
           {item.outcome_type === "blocked" && item.blockers && (
             <div>
               <span className="text-sol-red/60 font-medium">Blocked: </span>
