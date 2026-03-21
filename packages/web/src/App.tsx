@@ -1,9 +1,10 @@
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, ReactNode } from "react";
 import { Routes, Route } from "react-router";
 import { Providers } from "./providers";
 import { MarketingLayout } from "./layouts/MarketingLayout";
 import { PaletteLayout } from "./layouts/PaletteLayout";
 import { SettingsLayout } from "./layouts/SettingsLayout";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 
 const Landing = lazy(() => import("@/app/(marketing)/page"));
 const About = lazy(() => import("@/app/(marketing)/about/page"));
@@ -72,95 +73,101 @@ const SettingsTeamJoin = lazy(() => import("@/app/settings/team/join/page"));
 const SettingsIntegrationsGithub = lazy(() => import("@/app/settings/integrations/github-app/page"));
 const SettingsDesktop = lazy(() => import("@/app/settings/desktop/page"));
 
+function E({ name, children }: { name: string; children: ReactNode }) {
+  return <ErrorBoundary name={name}>{children}</ErrorBoundary>;
+}
+
 export function App() {
   return (
     <Providers>
-      <Suspense>
-        <Routes>
-          {/* Marketing - light mode layout */}
-          <Route element={<MarketingLayout />}>
-            <Route index element={<Landing />} />
-            <Route path="about" element={<About />} />
-            <Route path="features" element={<Features />} />
-            <Route path="documentation" element={<Documentation />} />
-            <Route path="privacy" element={<Privacy />} />
-            <Route path="security" element={<Security />} />
-            <Route path="support" element={<Support />} />
-            <Route path="terms" element={<Terms />} />
-          </Route>
+      <ErrorBoundary name="App" level="page">
+        <Suspense>
+          <Routes>
+            {/* Marketing - light mode layout */}
+            <Route element={<MarketingLayout />}>
+              <Route index element={<E name="Landing"><Landing /></E>} />
+              <Route path="about" element={<E name="About"><About /></E>} />
+              <Route path="features" element={<E name="Features"><Features /></E>} />
+              <Route path="documentation" element={<E name="Documentation"><Documentation /></E>} />
+              <Route path="privacy" element={<E name="Privacy"><Privacy /></E>} />
+              <Route path="security" element={<E name="Security"><Security /></E>} />
+              <Route path="support" element={<E name="Support"><Support /></E>} />
+              <Route path="terms" element={<E name="Terms"><Terms /></E>} />
+            </Route>
 
-          {/* Auth */}
-          <Route path="login" element={<Login />} />
-          <Route path="signup" element={<Signup />} />
-          <Route path="forgot-password" element={<ForgotPassword />} />
-          <Route path="reset-password" element={<ResetPassword />} />
-          <Route path="auth/cli" element={<AuthCli />} />
-          <Route path="join/:code" element={<JoinTeam />} />
+            {/* Auth */}
+            <Route path="login" element={<E name="Login"><Login /></E>} />
+            <Route path="signup" element={<E name="Signup"><Signup /></E>} />
+            <Route path="forgot-password" element={<E name="ForgotPassword"><ForgotPassword /></E>} />
+            <Route path="reset-password" element={<E name="ResetPassword"><ResetPassword /></E>} />
+            <Route path="auth/cli" element={<E name="AuthCli"><AuthCli /></E>} />
+            <Route path="join/:code" element={<E name="JoinTeam"><JoinTeam /></E>} />
 
-          {/* App */}
-          <Route path="dashboard" element={<Dashboard />} />
-          <Route path="inbox" element={<Inbox />} />
-          <Route path="feed" element={<Feed />} />
-          <Route path="search" element={<Search />} />
-          <Route path="explore" element={<Explore />} />
-          <Route path="timeline" element={<Timeline />} />
-          <Route path="notifications" element={<Notifications />} />
+            {/* App */}
+            <Route path="dashboard" element={<E name="Dashboard"><Dashboard /></E>} />
+            <Route path="inbox" element={<E name="Inbox"><Inbox /></E>} />
+            <Route path="feed" element={<E name="Feed"><Feed /></E>} />
+            <Route path="search" element={<E name="Search"><Search /></E>} />
+            <Route path="explore" element={<E name="Explore"><Explore /></E>} />
+            <Route path="timeline" element={<E name="Timeline"><Timeline /></E>} />
+            <Route path="notifications" element={<E name="Notifications"><Notifications /></E>} />
 
-          {/* Conversations & sharing */}
-          <Route path="conversation/:id" element={<Conversation />} />
-          <Route path="conversation/:id/diff" element={<ConversationDiff />} />
-          <Route path="share/:token" element={<Share />} />
-          <Route path="share/message/:token" element={<ShareMessage />} />
+            {/* Conversations & sharing */}
+            <Route path="conversation/:id" element={<E name="Conversation"><Conversation /></E>} />
+            <Route path="conversation/:id/diff" element={<E name="ConversationDiff"><ConversationDiff /></E>} />
+            <Route path="share/:token" element={<E name="Share"><Share /></E>} />
+            <Route path="share/message/:token" element={<E name="ShareMessage"><ShareMessage /></E>} />
 
-          {/* Code review */}
-          <Route path="commit/:owner/:repo/:sha" element={<CommitView />} />
-          <Route path="pr/:owner/:repo/:number" element={<PrView />} />
-          <Route path="review/:id" element={<ReviewView />} />
-          <Route path="review/batch" element={<ReviewBatch />} />
+            {/* Code review */}
+            <Route path="commit/:owner/:repo/:sha" element={<E name="CommitView"><CommitView /></E>} />
+            <Route path="pr/:owner/:repo/:number" element={<E name="PrView"><PrView /></E>} />
+            <Route path="review/:id" element={<E name="ReviewView"><ReviewView /></E>} />
+            <Route path="review/batch" element={<E name="ReviewBatch"><ReviewBatch /></E>} />
 
-          {/* Docs, plans, tasks */}
-          <Route path="docs" element={<Docs />} />
-          <Route path="docs/:id" element={<DocDetail />} />
-          <Route path="plans" element={<Plans />} />
-          <Route path="plans/:id" element={<PlanDetail />} />
-          <Route path="tasks" element={<Tasks />} />
-          <Route path="tasks/:id" element={<TaskDetail />} />
-          <Route path="workflows" element={<Workflows />} />
+            {/* Docs, plans, tasks */}
+            <Route path="docs" element={<E name="Docs"><Docs /></E>} />
+            <Route path="docs/:id" element={<E name="DocDetail"><DocDetail /></E>} />
+            <Route path="plans" element={<E name="Plans"><Plans /></E>} />
+            <Route path="plans/:id" element={<E name="PlanDetail"><PlanDetail /></E>} />
+            <Route path="tasks" element={<E name="Tasks"><Tasks /></E>} />
+            <Route path="tasks/:id" element={<E name="TaskDetail"><TaskDetail /></E>} />
+            <Route path="workflows" element={<E name="Workflows"><Workflows /></E>} />
 
-          {/* Team */}
-          <Route path="team" element={<Team />} />
-          <Route path="team/activity" element={<TeamActivity />} />
-          <Route path="team/:username" element={<TeamMember />} />
+            {/* Team */}
+            <Route path="team" element={<E name="Team"><Team /></E>} />
+            <Route path="team/activity" element={<E name="TeamActivity"><TeamActivity /></E>} />
+            <Route path="team/:username" element={<E name="TeamMember"><TeamMember /></E>} />
 
-          {/* Misc */}
-          <Route path="orchestration" element={<Orchestration />} />
-          <Route path="roadmap" element={<Roadmap />} />
-          <Route path="cli" element={<Cli />} />
-          <Route path="admin/daemon-logs" element={<AdminDaemonLogs />} />
-          <Route path="config" element={<ConfigPage />} />
+            {/* Misc */}
+            <Route path="orchestration" element={<E name="Orchestration"><Orchestration /></E>} />
+            <Route path="roadmap" element={<E name="Roadmap"><Roadmap /></E>} />
+            <Route path="cli" element={<E name="Cli"><Cli /></E>} />
+            <Route path="admin/daemon-logs" element={<E name="AdminDaemonLogs"><AdminDaemonLogs /></E>} />
+            <Route path="config" element={<E name="ConfigPage"><ConfigPage /></E>} />
 
-          {/* Palette - transparent bg */}
-          <Route element={<PaletteLayout />}>
-            <Route path="palette" element={<Palette />} />
-          </Route>
+            {/* Palette - transparent bg */}
+            <Route element={<PaletteLayout />}>
+              <Route path="palette" element={<E name="Palette"><Palette /></E>} />
+            </Route>
 
-          {/* Settings - shared sidebar layout */}
-          <Route path="settings" element={<SettingsLayout />}>
-            <Route index element={<Settings />} />
-            <Route path="cli" element={<SettingsCli />} />
-            <Route path="agents" element={<SettingsAgents />} />
-            <Route path="sync" element={<SettingsSync />} />
-            <Route path="profile" element={<SettingsProfile />} />
-            <Route path="accounts" element={<SettingsAccounts />} />
-            <Route path="accounts/link-github" element={<SettingsAccountsLinkGithub />} />
-            <Route path="team" element={<SettingsTeam />} />
-            <Route path="team/create" element={<SettingsTeamCreate />} />
-            <Route path="team/join" element={<SettingsTeamJoin />} />
-            <Route path="integrations/github-app" element={<SettingsIntegrationsGithub />} />
-            <Route path="desktop" element={<SettingsDesktop />} />
-          </Route>
-        </Routes>
-      </Suspense>
+            {/* Settings - shared sidebar layout */}
+            <Route path="settings" element={<SettingsLayout />}>
+              <Route index element={<E name="Settings"><Settings /></E>} />
+              <Route path="cli" element={<E name="SettingsCli"><SettingsCli /></E>} />
+              <Route path="agents" element={<E name="SettingsAgents"><SettingsAgents /></E>} />
+              <Route path="sync" element={<E name="SettingsSync"><SettingsSync /></E>} />
+              <Route path="profile" element={<E name="SettingsProfile"><SettingsProfile /></E>} />
+              <Route path="accounts" element={<E name="SettingsAccounts"><SettingsAccounts /></E>} />
+              <Route path="accounts/link-github" element={<E name="SettingsLinkGithub"><SettingsAccountsLinkGithub /></E>} />
+              <Route path="team" element={<E name="SettingsTeam"><SettingsTeam /></E>} />
+              <Route path="team/create" element={<E name="SettingsTeamCreate"><SettingsTeamCreate /></E>} />
+              <Route path="team/join" element={<E name="SettingsTeamJoin"><SettingsTeamJoin /></E>} />
+              <Route path="integrations/github-app" element={<E name="SettingsIntegrations"><SettingsIntegrationsGithub /></E>} />
+              <Route path="desktop" element={<E name="SettingsDesktop"><SettingsDesktop /></E>} />
+            </Route>
+          </Routes>
+        </Suspense>
+      </ErrorBoundary>
     </Providers>
   );
 }

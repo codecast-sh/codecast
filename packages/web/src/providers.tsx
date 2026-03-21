@@ -3,6 +3,7 @@ import { ConvexAuthProvider } from "@convex-dev/auth/react";
 import { ReactNode } from "react";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import { NavigationProgress } from "@/components/NavigationProgress";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { Toaster } from "@/components/ui/sonner";
 import { DesktopProvider } from "@/components/DesktopProvider";
 import { SlideOutProvider } from "@/components/SlideOutProvider";
@@ -29,8 +30,12 @@ export function Providers({ children }: { children: ReactNode }) {
       <ThemeProvider>
         <NavigationProgress />
         {children}
-        <DesktopProvider />
-        <SlideOutProvider />
+        <ErrorBoundary name="DesktopProvider" level="inline">
+          <DesktopProvider />
+        </ErrorBoundary>
+        <ErrorBoundary name="SlideOut" level="inline">
+          <SlideOutProvider />
+        </ErrorBoundary>
         <PrefsMigration />
         <Toaster position="bottom-right" />
       </ThemeProvider>

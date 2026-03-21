@@ -15,6 +15,7 @@ import { ThemeToggle } from "./ThemeToggle";
 import { NotificationBell } from "./NotificationBell";
 import { TeamAvatarBar } from "./TeamAvatarBar";
 import { TeamSwitcher } from "./TeamSwitcher";
+import { ErrorBoundary } from "./ErrorBoundary";
 import { soundNewSession } from "../lib/sounds";
 import { Plus, PanelLeft, PanelRight } from "lucide-react";
 import { nanoid } from "nanoid";
@@ -25,7 +26,7 @@ import { TmuxMissingBanner } from "./TmuxMissingBanner";
 import { ElectronUpdateBanner } from "./ElectronUpdateBanner";
 import { FindBar } from "./FindBar";
 import { NewSessionModal } from "./ConversationList";
-import { useInboxStore } from "../store/inboxStore";
+import { useInboxStore, sortSessions } from "../store/inboxStore";
 import { usePrefetch } from "../hooks/usePrefetch";
 import { desktopHeaderClass, setupDesktopDrag, isElectron } from "../lib/desktop";
 import { CollapsedSessionRail, SessionListSidebar, ConversationColumn } from "./GlobalSessionPanel";
@@ -65,6 +66,7 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
   const [zoomHeight, setZoomHeight] = useState("100vh");
   const zoomRef = useRef(1);
   const headerRef = useRef<HTMLElement>(null);
+  const prevWasInboxRef = useRef(false);
   usePrefetch();
 
   const serverClientState = useQuery(api.client_state.get, {});
@@ -112,6 +114,14 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
   useEventListener("resize", () => {
     setIsMobile(window.innerWidth < 768);
   });
+
+  useWatchEffect(() => {
+    const wasInbox = prevWasInboxRef.current;
+    prevWasInboxRef.current = isOnInboxPage;
+    if (wasInbox && !isOnInboxPage) {
+      useInboxStore.getState().clearSidePanelSession();
+    }
+  }, [isOnInboxPage]);
 
   const handleLayoutChange = (newLayout: { [key: string]: number }) => {
     updateLayout("dashboard", { sidebar: newLayout.sidebar || 25, main: newLayout.main || 75 });
@@ -197,7 +207,7 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
           git_root: currentConvContext.gitRoot || path,
           session_id: sid,
         });
-        router.push(`/conversation/${sid}?focus=1`);
+        useInboxStore.setState({ sidePanelSessionId: sid, sidePanelOpen: false });
       } else {
         handleQuickCreate();
       }
@@ -205,6 +215,59 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
     if (e.key.toLowerCase() === "n" && e.ctrlKey && !e.metaKey && !e.altKey && e.shiftKey) {
       e.preventDefault();
       handleQuickCreateIsolated();
+    }
+    if (!isOnInboxPage && e.ctrlKey && !e.metaKey && !e.altKey) {
+      const store = useInboxStore.getState();
+      const sorted = sortSessions(store.sessions);
+      const currentId = store.sidePanelSessionId;
+      if (e.key === "j") {
+        e.preventDefault();
+        if (sorted.length === 0) return;
+        const idx = sorted.findIndex(s => s._id === currentId);
+        store.selectPanelSession(sorted[(idx + 1) % sorted.length]._id);
+        return;
+      }
+      if (e.key === "k") {
+        e.preventDefault();
+        if (sorted.length === 0) return;
+        const idx = sorted.findIndex(s => s._id === currentId);
+        store.selectPanelSession(sorted[(idx - 1 + sorted.length) % sorted.length]._id);
+        return;
+      }
+      if (e.key === "i") {
+        e.preventDefault();
+        const first = sorted.find(s => s.is_idle && s.message_count > 0 && !s.is_pinned);
+        if (first) store.selectPanelSession(first._id);
+        return;
+      }
+      if (e.key === "Backspace") {
+        e.preventDefault();
+        if (currentId) store.stashSession(currentId);
+        return;
+      }
+      if (e.shiftKey && e.key === "P") {
+        e.preventDefault();
+        if (currentId) store.pinSession(currentId);
+        return;
+      }
+      if (!e.shiftKey && e.key === "p") {
+        e.preventDefault();
+        const first = sorted.find(s => s.is_pinned);
+        if (first) store.selectPanelSession(first._id);
+        return;
+      }
+    }
+    if (!isOnInboxPage && e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && e.key === "Backspace") {
+      e.preventDefault();
+      const store = useInboxStore.getState();
+      const currentId = store.sidePanelSessionId;
+      if (currentId) {
+        const sorted = sortSessions(store.sessions);
+        const idx = sorted.findIndex(s => s._id === currentId);
+        const next = sorted[idx + 1] ?? sorted.find(s => s._id !== currentId);
+        store.deferSession(currentId);
+        if (next) store.selectPanelSession(next._id);
+      }
     }
     if (isDesktopApp && (e.metaKey || e.ctrlKey) && !e.altKey) {
       const applyZoom = (z: number) => {
@@ -283,14 +346,20 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
           {/* Center section: Search */}
           <div className="hidden sm:flex flex-1 justify-center min-w-0">
             <div className="w-full max-w-md">
-              <GlobalSearch />
+              <ErrorBoundary name="GlobalSearch" level="inline">
+                <GlobalSearch />
+              </ErrorBoundary>
             </div>
           </div>
 
           {/* Team switcher and avatars */}
           <div className="hidden sm:flex items-center gap-2">
-            <TeamSwitcher />
-            <TeamAvatarBar />
+            <ErrorBoundary name="TeamSwitcher" level="inline">
+              <TeamSwitcher />
+            </ErrorBoundary>
+            <ErrorBoundary name="TeamAvatarBar" level="inline">
+              <TeamAvatarBar />
+            </ErrorBoundary>
           </div>
 
           {/* Right section: Actions */}
@@ -310,8 +379,12 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
               New
             </button>
             <ThemeToggle />
-            <NotificationBell />
-            <UserMenu />
+            <ErrorBoundary name="NotificationBell" level="inline">
+              <NotificationBell />
+            </ErrorBoundary>
+            <ErrorBoundary name="UserMenu" level="inline">
+              <UserMenu />
+            </ErrorBoundary>
             <button
               onClick={toggleSidePanel}
               className={`hidden md:flex items-center p-1.5 rounded-md transition-colors ${
@@ -327,28 +400,47 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
         </div>
       </header>
 
-      <ElectronUpdateBanner />
-      <DesktopAppBanner />
-      <SetupPromptBanner />
-      <CliOfflineBanner />
-      <TmuxMissingBanner />
+      <ErrorBoundary name="Banners" level="inline">
+        <ElectronUpdateBanner />
+        <DesktopAppBanner />
+        <SetupPromptBanner />
+        <CliOfflineBanner />
+        <TmuxMissingBanner />
+      </ErrorBoundary>
 
       {/* Content area with sidebar and main */}
       <div className="flex-1 min-h-0">
         {hideSidebar || isZenMode || sidebarCollapsed || isMobile ? (
           <div className="h-full flex">
-            <div className="flex-1 min-w-0 h-full">
-              {isFullWidthPage ? (
-                <div className="h-full">{children}</div>
-              ) : (
-                <div data-main-scroll className="h-full overflow-y-auto px-3 sm:px-6 lg:px-8 py-4">
-                  <div className="max-w-4xl mx-auto h-full">{children}</div>
-                </div>
-              )}
-            </div>
-            {showConversationColumn && <ConversationColumn />}
-            {showSessionList && <SessionListSidebar />}
-            {showCollapsedRail && <CollapsedSessionRail />}
+            {showConversationColumn ? (
+              <Group orientation="horizontal" className="h-full flex-1 min-w-0" defaultLayout={{ "main-content": 60, "conversation-column": 40 }}>
+                <Panel id="main-content" minSize="20%">
+                  {isFullWidthPage ? (
+                    <div className="h-full">{children}</div>
+                  ) : (
+                    <div data-main-scroll className="h-full overflow-y-auto px-3 sm:px-6 lg:px-8 py-4">
+                      <div className="max-w-4xl mx-auto h-full">{children}</div>
+                    </div>
+                  )}
+                </Panel>
+                <Separator className="relative z-10 w-px bg-black/10 cursor-col-resize before:absolute before:inset-y-0 before:-left-[2px] before:-right-[2px] before:content-[''] before:transition-colors before:duration-150 hover:before:bg-sol-cyan data-[resize-handle-active]:before:bg-sol-cyan" />
+                <Panel id="conversation-column" minSize="20%" maxSize="70%" defaultSize="40%">
+                  <ErrorBoundary name="ConversationColumn" level="panel"><ConversationColumn /></ErrorBoundary>
+                </Panel>
+              </Group>
+            ) : (
+              <div className="flex-1 min-w-0 h-full">
+                {isFullWidthPage ? (
+                  <div className="h-full">{children}</div>
+                ) : (
+                  <div data-main-scroll className="h-full overflow-y-auto px-3 sm:px-6 lg:px-8 py-4">
+                    <div className="max-w-4xl mx-auto h-full">{children}</div>
+                  </div>
+                )}
+              </div>
+            )}
+            {showSessionList && <ErrorBoundary name="SessionList" level="panel"><SessionListSidebar /></ErrorBoundary>}
+            {showCollapsedRail && <ErrorBoundary name="SessionRail" level="inline"><CollapsedSessionRail /></ErrorBoundary>}
           </div>
         ) : (
           <Group
@@ -359,31 +451,50 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
           >
             <Panel id="sidebar" minSize="0%" maxSize="50%">
               <div className="h-full bg-sol-bg-alt overflow-auto">
-                <Sidebar
-                  filter={filter}
-                  onFilterChange={onFilterChange}
-                  directoryFilter={directoryFilter}
-                  onDirectoryFilterChange={onDirectoryFilterChange}
-                  isMobileOpen={isMobileSidebarOpen}
-                  onMobileClose={() => setIsMobileSidebarOpen(false)}
-                />
+                <ErrorBoundary name="Sidebar" level="panel">
+                  <Sidebar
+                    filter={filter}
+                    onFilterChange={onFilterChange}
+                    directoryFilter={directoryFilter}
+                    onDirectoryFilterChange={onDirectoryFilterChange}
+                    isMobileOpen={isMobileSidebarOpen}
+                    onMobileClose={() => setIsMobileSidebarOpen(false)}
+                  />
+                </ErrorBoundary>
               </div>
             </Panel>
             <Separator className="relative z-10 w-px bg-black/10 cursor-col-resize before:absolute before:inset-y-0 before:-left-[2px] before:-right-[2px] before:content-[''] before:transition-colors before:duration-150 hover:before:bg-sol-cyan data-[resize-handle-active]:before:bg-sol-cyan" />
             <Panel id="main" minSize="30%">
               <div className="h-full flex">
-                <div className="flex-1 min-w-0 h-full">
-                  {isFullWidthPage ? (
-                    <div className="h-full">{children}</div>
-                  ) : (
-                    <div data-main-scroll className="h-full overflow-y-auto px-4 sm:px-6 lg:px-8 py-4">
-                      <div className="max-w-4xl mx-auto h-full">{children}</div>
-                    </div>
-                  )}
-                </div>
-                {showConversationColumn && <ConversationColumn />}
-                {showSessionList && <SessionListSidebar />}
-                {showCollapsedRail && <CollapsedSessionRail />}
+                {showConversationColumn ? (
+                  <Group orientation="horizontal" className="h-full flex-1 min-w-0" defaultLayout={{ "main-content": 60, "conversation-column": 40 }}>
+                    <Panel id="main-content" minSize="20%">
+                      {isFullWidthPage ? (
+                        <div className="h-full">{children}</div>
+                      ) : (
+                        <div data-main-scroll className="h-full overflow-y-auto px-4 sm:px-6 lg:px-8 py-4">
+                          <div className="max-w-4xl mx-auto h-full">{children}</div>
+                        </div>
+                      )}
+                    </Panel>
+                    <Separator className="relative z-10 w-px bg-black/10 cursor-col-resize before:absolute before:inset-y-0 before:-left-[2px] before:-right-[2px] before:content-[''] before:transition-colors before:duration-150 hover:before:bg-sol-cyan data-[resize-handle-active]:before:bg-sol-cyan" />
+                    <Panel id="conversation-column" minSize="20%" maxSize="70%" defaultSize="40%">
+                      <ErrorBoundary name="ConversationColumn" level="panel"><ConversationColumn /></ErrorBoundary>
+                    </Panel>
+                  </Group>
+                ) : (
+                  <div className="flex-1 min-w-0 h-full">
+                    {isFullWidthPage ? (
+                      <div className="h-full">{children}</div>
+                    ) : (
+                      <div data-main-scroll className="h-full overflow-y-auto px-4 sm:px-6 lg:px-8 py-4">
+                        <div className="max-w-4xl mx-auto h-full">{children}</div>
+                      </div>
+                    )}
+                  </div>
+                )}
+                {showSessionList && <ErrorBoundary name="SessionList" level="panel"><SessionListSidebar /></ErrorBoundary>}
+                {showCollapsedRail && <ErrorBoundary name="SessionRail" level="inline"><CollapsedSessionRail /></ErrorBoundary>}
               </div>
             </Panel>
           </Group>
@@ -398,19 +509,25 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
             onClick={() => setIsMobileSidebarOpen(false)}
           />
           <div className="md:hidden fixed inset-y-0 left-0 z-50 w-[85vw] max-w-sm shadow-xl animate-slide-in-left">
-            <Sidebar
-              filter={filter}
-              onFilterChange={onFilterChange}
-              directoryFilter={directoryFilter}
-              onDirectoryFilterChange={onDirectoryFilterChange}
-              isMobileOpen={isMobileSidebarOpen}
-              onMobileClose={() => setIsMobileSidebarOpen(false)}
-            />
+            <ErrorBoundary name="Sidebar" level="panel">
+              <Sidebar
+                filter={filter}
+                onFilterChange={onFilterChange}
+                directoryFilter={directoryFilter}
+                onDirectoryFilterChange={onDirectoryFilterChange}
+                isMobileOpen={isMobileSidebarOpen}
+                onMobileClose={() => setIsMobileSidebarOpen(false)}
+              />
+            </ErrorBoundary>
           </div>
         </>
       )}
-      <CommandPalette />
-      <FindBar />
+      <ErrorBoundary name="CommandPalette" level="inline">
+        <CommandPalette />
+      </ErrorBoundary>
+      <ErrorBoundary name="FindBar" level="inline">
+        <FindBar />
+      </ErrorBoundary>
       <NewSessionModal isOpen={newSessionOpen} onClose={closeNewSession} />
     </div>
   );

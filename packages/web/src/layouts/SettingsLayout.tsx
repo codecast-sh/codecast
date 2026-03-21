@@ -2,6 +2,7 @@ import { Outlet } from "react-router";
 import { usePathname, useRouter } from "next/navigation";
 import { AuthGuard } from "@/components/AuthGuard";
 import { DashboardLayout } from "@/components/DashboardLayout";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { Button } from "@/components/ui/button";
 import {
   Terminal, Bot, RefreshCw, User, KeyRound, Users, Plug, Monitor,
@@ -43,7 +44,9 @@ export function SettingsLayout() {
 
           <div className="flex gap-8">
             <div className="flex-1 min-w-0">
-              <Outlet />
+              <ErrorBoundary name="SettingsPage" level="panel">
+                <Outlet />
+              </ErrorBoundary>
             </div>
 
             <nav className="w-44 flex-shrink-0">
