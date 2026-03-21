@@ -2733,9 +2733,6 @@ async function processSessionFile(
         } else {
           const hookEntry = lastHookStatus.get(sessionId);
           const hookIsRecent = hookEntry && (Date.now() / 1000 - hookEntry.ts) < 30;
-          if (!hookIsRecent) {
-            sendAgentStatus(syncService, conversationId, sessionId, "working");
-          }
 
           const hasPendingToolCalls = (lastAssistantMessage.toolCalls?.length ?? 0) > 0 &&
             !messages.some(m => m.role === "assistant" && (m.toolResults?.length ?? 0) > 0 &&
@@ -2745,6 +2742,9 @@ async function processSessionFile(
             (hookEntry.status === "working" || hookEntry.status === "thinking" || hookEntry.status === "compacting");
 
           if (hasPendingToolCalls || hookSaysActive) {
+            if (!hookIsRecent) {
+              sendAgentStatus(syncService, conversationId, sessionId, "working");
+            }
             idleTimers.delete(sessionId);
           } else if (lastAssistantMessage.stopReason === "end_turn") {
             idleTimers.delete(sessionId);
@@ -2755,6 +2755,9 @@ async function processSessionFile(
               sendAgentStatus(syncService, conversationId, sessionId, "idle", undefined, undefined, preview);
             }
           } else {
+            if (!hookIsRecent) {
+              sendAgentStatus(syncService, conversationId, sessionId, "working");
+            }
             const capturedSize = stats.size;
             const capturedConvId = conversationId;
 
@@ -4115,13 +4118,15 @@ async function injectViaTmuxInner(target: string, content: string): Promise<void
   if (poll) {
     const steps: Array<{ key: string; text?: string }> = poll.steps || (poll.keys || []).map(k => ({ key: k }));
     for (const step of steps) {
-      await tmuxExec(["send-keys", "-t", target, step.key]);
-      await new Promise(resolve => setTimeout(resolve, 500));
       if (step.text) {
-        await new Promise(resolve => setTimeout(resolve, 300));
+        await tmuxExec(["send-keys", "-t", target, "Escape"]);
+        await new Promise(resolve => setTimeout(resolve, 500));
         await tmuxExec(["send-keys", "-t", target, "-l", step.text]);
         await new Promise(resolve => setTimeout(resolve, 150));
         await tmuxExec(["send-keys", "-t", target, "Enter"]);
+        await new Promise(resolve => setTimeout(resolve, 500));
+      } else {
+        await tmuxExec(["send-keys", "-t", target, step.key]);
         await new Promise(resolve => setTimeout(resolve, 500));
       }
     }
@@ -4250,24 +4255,30 @@ function buildAppleScript(
     let stepActions: string;
     if (isIterm) {
       stepActions = steps.map((step, i) => {
-        const lines = [`            tell s to write text "${step.key}" without newline`];
+        const lines: string[] = [];
         if (step.text) {
-          const escapedText = step.text.replace(/"/g, '\\"');
+          lines.push(`            tell s to write text (ASCII character 27)`);
           lines.push("            delay 0.5");
+          const escapedText = step.text.replace(/"/g, '\\"');
           lines.push(`            tell s to write text "${escapedText}" without newline`);
           lines.push("            delay 0.15");
           lines.push(`            tell s to write text ""`);
+        } else {
+          lines.push(`            tell s to write text "${step.key}" without newline`);
         }
         if (i < steps.length - 1) lines.push("            delay 0.5");
         return lines.join("\n");
       }).join("\n");
     } else {
       stepActions = steps.map((step, i) => {
-        const lines = [`          do script "${step.key}" in t`];
+        const lines: string[] = [];
         if (step.text) {
-          const escapedText = step.text.replace(/"/g, '\\"');
+          lines.push(`          do script (ASCII character 27) in t`);
           lines.push("          delay 0.5");
+          const escapedText = step.text.replace(/"/g, '\\"');
           lines.push(`          do script "${escapedText}" in t`);
+        } else {
+          lines.push(`          do script "${step.key}" in t`);
         }
         if (i < steps.length - 1) lines.push("          delay 0.5");
         return lines.join("\n");

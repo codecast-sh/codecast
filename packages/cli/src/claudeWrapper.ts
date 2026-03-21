@@ -80,10 +80,10 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function parsePollMessage(content: string): { keys: string[]; text?: string; display?: string } | null {
+function parsePollMessage(content: string): { keys?: string[]; steps?: Array<{ key: string; text?: string }>; text?: string; display?: string } | null {
   try {
     const parsed = JSON.parse(content);
-    if (parsed.__cc_poll && Array.isArray(parsed.keys)) return parsed;
+    if (parsed.__cc_poll && (Array.isArray(parsed.keys) || Array.isArray(parsed.steps))) return parsed;
   } catch {}
   return null;
 }
@@ -182,9 +182,20 @@ export async function runClaudeWrapper(args: string[]): Promise<void> {
             try {
               const poll = parsePollMessage(msg.content);
               if (poll) {
-                for (const key of poll.keys) {
-                  execSync(`tmux send-keys -t '${tmuxSessionName}' '${key}'`, { stdio: "ignore" });
-                  await sleep(500);
+                const steps: Array<{ key: string; text?: string }> = poll.steps || (poll.keys || []).map(k => ({ key: k }));
+                for (const step of steps) {
+                  if (step.text) {
+                    execSync(`tmux send-keys -t '${tmuxSessionName}' Escape`, { stdio: "ignore" });
+                    await sleep(500);
+                    const escapedText = step.text.replace(/'/g, "'\\''");
+                    execSync(`tmux send-keys -t '${tmuxSessionName}' -l '${escapedText}'`, { stdio: "ignore" });
+                    await sleep(150);
+                    execSync(`tmux send-keys -t '${tmuxSessionName}' Enter`, { stdio: "ignore" });
+                    await sleep(500);
+                  } else {
+                    execSync(`tmux send-keys -t '${tmuxSessionName}' '${step.key}'`, { stdio: "ignore" });
+                    await sleep(500);
+                  }
                 }
                 if (poll.text) {
                   await sleep(300);
@@ -318,9 +329,20 @@ export async function runClaudeWrapper(args: string[]): Promise<void> {
       try {
         const poll = parsePollMessage(content);
         if (poll) {
-          for (const key of poll.keys) {
-            execSync(`tmux send-keys -t ${tmuxPane} '${key}'`, { stdio: "ignore" });
-            await sleep(500);
+          const steps: Array<{ key: string; text?: string }> = poll.steps || (poll.keys || []).map(k => ({ key: k }));
+          for (const step of steps) {
+            if (step.text) {
+              execSync(`tmux send-keys -t ${tmuxPane} Escape`, { stdio: "ignore" });
+              await sleep(500);
+              const escapedText = step.text.replace(/'/g, "'\\''");
+              execSync(`tmux send-keys -t ${tmuxPane} -l '${escapedText}'`, { stdio: "ignore" });
+              await sleep(150);
+              execSync(`tmux send-keys -t ${tmuxPane} Enter`, { stdio: "ignore" });
+              await sleep(500);
+            } else {
+              execSync(`tmux send-keys -t ${tmuxPane} '${step.key}'`, { stdio: "ignore" });
+              await sleep(500);
+            }
           }
           if (poll.text) {
             await sleep(300);

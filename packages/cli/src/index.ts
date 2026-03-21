@@ -951,12 +951,18 @@ function ensureDaemonRunning(): void {
       const runningVersion = fs.existsSync(VERSION_FILE)
         ? fs.readFileSync(VERSION_FILE, "utf-8").trim()
         : null;
-      if (runningVersion && runningVersion !== getVersion()) {
-        const pid = getDaemonPid();
-        if (pid) {
-          try { process.kill(pid, "SIGTERM"); } catch {}
-          try { fs.unlinkSync(PID_FILE); } catch {}
-          startDaemonQuiet();
+      const cliVersion = getVersion();
+      if (runningVersion && runningVersion !== cliVersion) {
+        const running = runningVersion.split(".").map(Number);
+        const cli = cliVersion.split(".").map(Number);
+        const cliIsNewer = cli[0] > running[0] || (cli[0] === running[0] && (cli[1] > running[1] || (cli[1] === running[1] && cli[2] > running[2])));
+        if (cliIsNewer) {
+          const pid = getDaemonPid();
+          if (pid) {
+            try { process.kill(pid, "SIGTERM"); } catch {}
+            try { fs.unlinkSync(PID_FILE); } catch {}
+            startDaemonQuiet();
+          }
         }
       }
     } catch {}

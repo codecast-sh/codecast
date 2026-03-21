@@ -1,37 +1,5 @@
 #!/usr/bin/env node
-import { createRequire } from "node:module";
-var __create = Object.create;
-var __getProtoOf = Object.getPrototypeOf;
 var __defProp = Object.defineProperty;
-var __getOwnPropNames = Object.getOwnPropertyNames;
-var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
-var __hasOwnProp = Object.prototype.hasOwnProperty;
-var __toESM = (mod, isNodeMode, target) => {
-  target = mod != null ? __create(__getProtoOf(mod)) : {};
-  const to = isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target;
-  for (let key of __getOwnPropNames(mod))
-    if (!__hasOwnProp.call(to, key))
-      __defProp(to, key, {
-        get: () => mod[key],
-        enumerable: true
-      });
-  return to;
-};
-var __moduleCache = /* @__PURE__ */ new WeakMap;
-var __toCommonJS = (from) => {
-  var entry = __moduleCache.get(from), desc;
-  if (entry)
-    return entry;
-  entry = __defProp({}, "__esModule", { value: true });
-  if (from && typeof from === "object" || typeof from === "function")
-    __getOwnPropNames(from).map((key) => !__hasOwnProp.call(entry, key) && __defProp(entry, key, {
-      get: () => from[key],
-      enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable
-    }));
-  __moduleCache.set(from, entry);
-  return entry;
-};
-var __commonJS = (cb, mod) => () => (mod || cb((mod = { exports: {} }).exports, mod), mod.exports);
 var __export = (target, all) => {
   for (var name in all)
     __defProp(target, name, {
@@ -41,7539 +9,6 @@ var __export = (target, all) => {
       set: (newValue) => all[name] = () => newValue
     });
 };
-var __esm = (fn, res) => () => (fn && (res = fn(fn = 0)), res);
-var __require = /* @__PURE__ */ createRequire(import.meta.url);
-
-// src/parser.ts
-var exports_parser = {};
-__export(exports_parser, {
-  parseSessionLine: () => parseSessionLine,
-  parseSessionFile: () => parseSessionFile,
-  parseLines: () => parseLines,
-  parseLine: () => parseLine,
-  parseGeminiSessionFile: () => parseGeminiSessionFile,
-  parseCursorTranscriptFile: () => parseCursorTranscriptFile,
-  parseCursorPrompts: () => parseCursorPrompts,
-  parseCodexSessionFile: () => parseCodexSessionFile,
-  parseCodexLines: () => parseCodexLines,
-  parseCodexLine: () => parseCodexLine,
-  extractSummaryTitle: () => extractSummaryTitle,
-  extractSlug: () => extractSlug,
-  extractParentUuid: () => extractParentUuid,
-  extractMessages: () => extractMessages,
-  extractGeminiStartTime: () => extractGeminiStartTime,
-  extractGeminiSessionId: () => extractGeminiSessionId,
-  extractGeminiProjectHash: () => extractGeminiProjectHash,
-  extractCwd: () => extractCwd,
-  extractCodexSessionId: () => extractCodexSessionId,
-  extractCodexCwd: () => extractCodexCwd,
-  detectCliFlags: () => detectCliFlags
-});
-function parseSessionLine(line) {
-  if (!line.trim())
-    return null;
-  try {
-    return JSON.parse(line);
-  } catch (err) {
-    const preview = line.length > 100 ? line.slice(0, 100) + "..." : line;
-    console.warn(`[parser] Failed to parse session line: ${err instanceof Error ? err.message : String(err)}`);
-    console.warn(`[parser] Line content: ${preview}`);
-    return null;
-  }
-}
-function extractMessages(entries) {
-  const messages = [];
-  for (const entry of entries) {
-    const timestamp = entry.timestamp ? new Date(entry.timestamp).getTime() : Date.now();
-    if (entry.type === "system") {
-      if (entry.content && entry.subtype) {
-        messages.push({
-          uuid: entry.uuid,
-          role: "system",
-          content: entry.content,
-          timestamp,
-          subtype: entry.subtype
-        });
-      }
-      continue;
-    }
-    if (entry.type === "queue-operation" && entry.operation === "enqueue" && entry.content) {
-      messages.push({
-        uuid: entry.uuid,
-        role: "user",
-        content: entry.content,
-        timestamp
-      });
-      continue;
-    }
-    if (entry.isMeta || entry.isCompactSummary || entry.isVisibleInTranscriptOnly)
-      continue;
-    const normalizedType = entry.type === "human" ? "user" : entry.type;
-    if (normalizedType !== "user" && normalizedType !== "assistant")
-      continue;
-    if (!entry.message)
-      continue;
-    let role;
-    let textContent = "";
-    let thinking = "";
-    const toolCalls = [];
-    const toolResults = [];
-    const images = [];
-    if (typeof entry.message === "string") {
-      role = normalizedType;
-      textContent = entry.message;
-    } else {
-      role = normalizedType;
-      const content = entry.message.content;
-      if (typeof content === "string") {
-        textContent = content;
-      } else if (Array.isArray(content)) {
-        for (const block of content) {
-          if (block.type === "text") {
-            textContent += block.text;
-          } else if (block.type === "thinking") {
-            thinking += block.thinking;
-          } else if (block.type === "tool_use") {
-            toolCalls.push({ id: block.id, name: block.name, input: block.input });
-          } else if (block.type === "tool_result") {
-            let toolResultContent = block.content;
-            if (Array.isArray(block.content)) {
-              const contentArray = block.content;
-              toolResultContent = contentArray.filter((c) => c.type === "text" && c.text).map((c) => c.text).join("");
-              for (const item of contentArray) {
-                if (item.type === "image" && item.source) {
-                  images.push({
-                    mediaType: item.source.media_type,
-                    data: item.source.data,
-                    toolUseId: block.tool_use_id
-                  });
-                }
-              }
-            }
-            toolResults.push({
-              toolUseId: block.tool_use_id,
-              content: toolResultContent,
-              isError: block.is_error
-            });
-          } else if (block.type === "image") {
-            images.push({
-              mediaType: block.source.media_type,
-              data: block.source.data
-            });
-          }
-        }
-      }
-    }
-    if (textContent || thinking || toolCalls.length > 0 || toolResults.length > 0 || images.length > 0) {
-      const stopReason = typeof entry.message === "object" && entry.message.stop_reason ? entry.message.stop_reason : undefined;
-      messages.push({
-        uuid: entry.uuid,
-        role,
-        content: textContent,
-        timestamp,
-        thinking: thinking || undefined,
-        toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
-        toolResults: toolResults.length > 0 ? toolResults : undefined,
-        images: images.length > 0 ? images : undefined,
-        stopReason
-      });
-    }
-  }
-  return messages;
-}
-function parseSessionFile(content) {
-  const lines = content.split(`
-`);
-  const entries = lines.map(parseSessionLine).filter((e) => e !== null);
-  return extractMessages(entries);
-}
-function extractSlug(content) {
-  const lines = content.split(`
-`);
-  for (const line of lines) {
-    const entry = parseSessionLine(line);
-    if (entry?.slug) {
-      return entry.slug;
-    }
-  }
-  return;
-}
-function extractParentUuid(content) {
-  const lines = content.split(`
-`);
-  for (const line of lines) {
-    const entry = parseSessionLine(line);
-    if (entry?.type === "user") {
-      return entry.parentUuid || undefined;
-    }
-  }
-  return;
-}
-function extractSummaryTitle(content) {
-  const lines = content.split(`
-`);
-  for (const line of lines) {
-    const entry = parseSessionLine(line);
-    if (entry?.type === "summary" && entry?.summary) {
-      return entry.summary;
-    }
-  }
-  return;
-}
-function extractCwd(content) {
-  const lines = content.split(`
-`);
-  for (const line of lines) {
-    const entry = parseSessionLine(line);
-    if (entry?.cwd) {
-      return entry.cwd;
-    }
-  }
-  return;
-}
-function detectCliFlags(content) {
-  const flags = [];
-  const firstUserLine = content.split(`
-`).find((l) => l.includes('"type":"user"'));
-  if (firstUserLine) {
-    try {
-      const parsed = JSON.parse(firstUserLine);
-      if (parsed.permissionMode === "bypassPermissions") {
-        flags.push("--dangerously-skip-permissions");
-      }
-    } catch {
-    }
-  }
-  if (content.includes("mcp__claude-in-chrome__") || content.includes('"claude-in-chrome"')) {
-    flags.push("--chrome");
-  }
-  return flags.length > 0 ? flags.join(" ") : null;
-}
-function parseLine(line) {
-  if (!line.trim())
-    return null;
-  try {
-    return JSON.parse(line);
-  } catch (err) {
-    const preview = line.length > 100 ? line.slice(0, 100) + "..." : line;
-    console.warn(`[parser] Failed to parse line: ${err instanceof Error ? err.message : String(err)}`);
-    console.warn(`[parser] Line content: ${preview}`);
-    return null;
-  }
-}
-function parseLines(content) {
-  return content.split(`
-`).map(parseLine).filter((m) => m !== null);
-}
-function parseCodexLine(line) {
-  if (!line.trim())
-    return null;
-  try {
-    return JSON.parse(line);
-  } catch (err) {
-    const preview = line.length > 100 ? line.slice(0, 100) + "..." : line;
-    console.warn(`[parser] Failed to parse codex line: ${err instanceof Error ? err.message : String(err)}`);
-    console.warn(`[parser] Line content: ${preview}`);
-    return null;
-  }
-}
-function parseCodexLines(content) {
-  return content.split(`
-`).map(parseCodexLine).filter((m) => m !== null);
-}
-function sanitizeCodexText(content) {
-  return content.replace(/<image\b[^>]*\/?>\s*(?:<\/image>)?/gi, "").replace(/\n{3,}/g, `
-
-`);
-}
-function parseCodexImageItem(item) {
-  if (typeof item.image_data === "string" && typeof item.media_type === "string") {
-    return {
-      mediaType: item.media_type,
-      data: item.image_data
-    };
-  }
-  const imageUrl = typeof item.image_url === "string" ? item.image_url : typeof item.url === "string" ? item.url : undefined;
-  if (!imageUrl)
-    return null;
-  const match = imageUrl.match(/^data:([^;,]+);base64,([\s\S]+)$/i);
-  if (!match)
-    return null;
-  return {
-    mediaType: match[1],
-    data: match[2]
-  };
-}
-function extractCodexTextAndImages(content) {
-  if (typeof content === "string") {
-    return { text: sanitizeCodexText(content), images: [] };
-  }
-  if (!Array.isArray(content)) {
-    return { text: "", images: [] };
-  }
-  const textParts = [];
-  const images = [];
-  for (const item of content) {
-    if (item.type === "input_text" || item.type === "output_text" || item.type === "text") {
-      if (typeof item.text === "string" && item.text.length > 0) {
-        textParts.push(item.text);
-      }
-      continue;
-    }
-    if (item.type === "input_image" || item.type === "output_image" || item.type === "image") {
-      const parsedImage = parseCodexImageItem(item);
-      if (parsedImage) {
-        images.push(parsedImage);
-      }
-    }
-  }
-  return {
-    text: sanitizeCodexText(textParts.join(`
-`)),
-    images
-  };
-}
-function parseCodexSessionFile(content) {
-  const lines = content.split(`
-`);
-  const messages = [];
-  let currentAssistantContent = "";
-  let currentAssistantThinking = "";
-  let currentToolCalls = [];
-  let currentToolResults = [];
-  let currentAssistantImages = [];
-  let lastTimestamp = Date.now();
-  const flushAssistantMessage = () => {
-    if (currentAssistantContent || currentAssistantThinking || currentToolCalls.length > 0 || currentToolResults.length > 0 || currentAssistantImages.length > 0) {
-      messages.push({
-        role: "assistant",
-        content: currentAssistantContent.trim(),
-        timestamp: lastTimestamp,
-        thinking: currentAssistantThinking.trim() || undefined,
-        toolCalls: currentToolCalls.length > 0 ? [...currentToolCalls] : undefined,
-        toolResults: currentToolResults.length > 0 ? [...currentToolResults] : undefined,
-        images: currentAssistantImages.length > 0 ? [...currentAssistantImages] : undefined
-      });
-      currentAssistantContent = "";
-      currentAssistantThinking = "";
-      currentToolCalls = [];
-      currentToolResults = [];
-      currentAssistantImages = [];
-    }
-  };
-  for (const line of lines) {
-    if (!line.trim())
-      continue;
-    let entry;
-    try {
-      entry = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    if (entry.type !== "response_item")
-      continue;
-    const payload = entry.payload;
-    const timestamp = entry.timestamp ? new Date(entry.timestamp).getTime() : Date.now();
-    lastTimestamp = timestamp;
-    if (payload.type === "message") {
-      const role = payload.role;
-      if (role === "developer" || role === "system")
-        continue;
-      const { text, images } = extractCodexTextAndImages(payload.content);
-      const trimmedText = text.trim();
-      if (role === "user") {
-        flushAssistantMessage();
-        const isSystemContext = trimmedText.startsWith("<environment_context>") || trimmedText.startsWith("<INSTRUCTIONS>") || trimmedText.startsWith("# AGENTS.md instructions") || trimmedText.startsWith("<permissions") || trimmedText.startsWith("<collaboration_mode>") || trimmedText.startsWith("<app-context>");
-        if ((trimmedText || images.length > 0) && !isSystemContext) {
-          messages.push({
-            role: "user",
-            content: trimmedText,
-            timestamp,
-            images: images.length > 0 ? images : undefined
-          });
-        }
-      } else if (role === "assistant") {
-        if (trimmedText) {
-          currentAssistantContent += (currentAssistantContent ? `
-` : "") + trimmedText;
-        }
-        if (images.length > 0) {
-          currentAssistantImages.push(...images);
-        }
-      }
-    } else if (payload.type === "reasoning") {
-      const contentArray = Array.isArray(payload.content) ? payload.content : [];
-      const summaryArray = Array.isArray(payload.summary) ? payload.summary : [];
-      const thinkingText = contentArray.length > 0 ? contentArray.map((c) => c.text || "").join(`
-`) : summaryArray.map((c) => c.text || "").join(`
-`);
-      if (thinkingText) {
-        currentAssistantThinking += (currentAssistantThinking ? `
-` : "") + thinkingText;
-      }
-    } else if (payload.type === "function_call") {
-      let args = {};
-      if (payload.arguments) {
-        try {
-          const parsed = JSON.parse(payload.arguments);
-          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-            args = parsed;
-          } else if (typeof parsed === "string" && parsed.trim()) {
-            args = { input: parsed };
-          } else if (payload.arguments.trim()) {
-            args = { input: payload.arguments };
-          }
-        } catch {
-          if (payload.arguments.trim()) {
-            args = { input: payload.arguments };
-          }
-        }
-      }
-      currentToolCalls.push({
-        id: payload.call_id || "",
-        name: payload.name || "",
-        input: args
-      });
-    } else if (payload.type === "function_call_output") {
-      const outputParsed = extractCodexTextAndImages(payload.output);
-      currentToolResults.push({
-        toolUseId: payload.call_id || "",
-        content: typeof payload.output === "string" ? payload.output : outputParsed.text
-      });
-      if (outputParsed.images.length > 0) {
-        currentAssistantImages.push(...outputParsed.images.map((img) => ({
-          mediaType: img.mediaType,
-          data: img.data,
-          toolUseId: payload.call_id || undefined
-        })));
-      }
-    } else if (payload.type === "custom_tool_call") {
-      currentToolCalls.push({
-        id: payload.call_id || "",
-        name: payload.name || "",
-        input: payload.input ? { input: payload.input } : {}
-      });
-    } else if (payload.type === "custom_tool_call_output") {
-      const outputParsed = extractCodexTextAndImages(payload.output);
-      currentToolResults.push({
-        toolUseId: payload.call_id || "",
-        content: typeof payload.output === "string" ? payload.output : outputParsed.text
-      });
-      if (outputParsed.images.length > 0) {
-        currentAssistantImages.push(...outputParsed.images.map((img) => ({
-          mediaType: img.mediaType,
-          data: img.data,
-          toolUseId: payload.call_id || undefined
-        })));
-      }
-    }
-  }
-  flushAssistantMessage();
-  return messages;
-}
-function extractCodexCwd(content) {
-  const lines = content.split(`
-`);
-  for (const line of lines) {
-    if (!line.trim())
-      continue;
-    try {
-      const entry = JSON.parse(line);
-      if (entry.type === "session_meta" && entry.payload?.cwd) {
-        return entry.payload.cwd;
-      }
-    } catch {
-    }
-  }
-  return;
-}
-function extractCodexSessionId(content) {
-  const lines = content.split(`
-`);
-  for (const line of lines) {
-    if (!line.trim())
-      continue;
-    try {
-      const entry = JSON.parse(line);
-      if (entry.type === "session_meta" && entry.payload?.id) {
-        return entry.payload.id;
-      }
-    } catch {
-    }
-  }
-  return;
-}
-function parseTimestamp(value) {
-  if (!value)
-    return Date.now();
-  if (typeof value === "number") {
-    if (value < 10000000000) {
-      return value * 1000;
-    }
-    return value;
-  }
-  if (typeof value === "string") {
-    const parsed = new Date(value).getTime();
-    if (!isNaN(parsed)) {
-      return parsed;
-    }
-    const num = parseInt(value, 10);
-    if (!isNaN(num)) {
-      return num < 10000000000 ? num * 1000 : num;
-    }
-  }
-  return Date.now();
-}
-function parseCursorPrompts(dbValue) {
-  try {
-    const data = JSON.parse(dbValue);
-    const messages = [];
-    if (!Array.isArray(data)) {
-      return messages;
-    }
-    for (const item of data) {
-      if (!item || typeof item !== "object")
-        continue;
-      const timestamp = parseTimestamp(item.timestamp || item.createdAt || item.created_at);
-      const role = item.role === "user" ? "user" : "assistant";
-      const content = typeof item.text === "string" ? item.text : "";
-      if (content) {
-        messages.push({
-          role,
-          content,
-          timestamp
-        });
-      }
-    }
-    return messages;
-  } catch {
-    return [];
-  }
-}
-function parseCursorTranscriptFile(content) {
-  const messages = [];
-  const lines = content.split(`
-`);
-  let currentRole = null;
-  let buffer = [];
-  const flush = () => {
-    if (!currentRole) {
-      buffer = [];
-      return;
-    }
-    const raw = buffer.join(`
-`).trim();
-    buffer = [];
-    if (!raw) {
-      return;
-    }
-    let contentText = raw;
-    let thinking;
-    if (currentRole === "user") {
-      const match = raw.match(/<user_query>([\s\S]*?)<\/user_query>/i);
-      if (match) {
-        contentText = match[1].trim();
-      }
-    }
-    if (currentRole === "assistant") {
-      const thinkMatches = raw.match(/<think>([\s\S]*?)<\/think>/gi);
-      if (thinkMatches) {
-        const extracted = thinkMatches.map((m) => m.replace(/<\/?think>/gi, "").trim()).filter(Boolean).join(`
-`);
-        thinking = extracted || undefined;
-        contentText = raw.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
-      }
-    }
-    if (!contentText) {
-      return;
-    }
-    messages.push({
-      role: currentRole,
-      content: contentText,
-      thinking,
-      timestamp: Date.now()
-    });
-  };
-  for (const line of lines) {
-    const trimmed = line.trim().toLowerCase();
-    if (trimmed === "user:" || trimmed === "assistant:" || trimmed === "system:") {
-      flush();
-      currentRole = trimmed.slice(0, -1);
-      continue;
-    }
-    buffer.push(line);
-  }
-  flush();
-  return messages;
-}
-function parseGeminiSessionFile(content) {
-  let session;
-  try {
-    session = JSON.parse(content);
-  } catch {
-    return [];
-  }
-  if (!session.messages || !Array.isArray(session.messages)) {
-    return [];
-  }
-  const messages = [];
-  for (const msg of session.messages) {
-    if (msg.type === "info")
-      continue;
-    const timestamp = msg.timestamp ? new Date(msg.timestamp).getTime() : Date.now();
-    let role;
-    let textContent = "";
-    if (msg.type === "user") {
-      role = "user";
-      if (Array.isArray(msg.content)) {
-        textContent = msg.content.map((c) => c.text).join(`
-`);
-      } else if (typeof msg.content === "string") {
-        textContent = msg.content;
-      }
-    } else if (msg.type === "gemini") {
-      role = "assistant";
-      if (typeof msg.content === "string") {
-        textContent = msg.content;
-      } else if (Array.isArray(msg.content)) {
-        textContent = msg.content.map((c) => c.text).join(`
-`);
-      }
-    } else {
-      continue;
-    }
-    let thinking;
-    if (msg.thoughts && msg.thoughts.length > 0) {
-      thinking = msg.thoughts.map((t) => t.subject ? `${t.subject}: ${t.description}` : t.description).join(`
-
-`);
-    }
-    if (textContent || thinking) {
-      messages.push({
-        uuid: msg.id,
-        role,
-        content: textContent,
-        timestamp,
-        thinking: thinking || undefined
-      });
-    }
-  }
-  return messages;
-}
-function extractGeminiSessionId(content) {
-  try {
-    const session = JSON.parse(content);
-    return session.sessionId;
-  } catch {
-    return;
-  }
-}
-function extractGeminiProjectHash(content) {
-  try {
-    const session = JSON.parse(content);
-    return session.projectHash;
-  } catch {
-    return;
-  }
-}
-function extractGeminiStartTime(content) {
-  try {
-    const session = JSON.parse(content);
-    if (session.startTime) {
-      return new Date(session.startTime).getTime();
-    }
-  } catch {
-  }
-  return;
-}
-
-// node_modules/convex/dist/esm/index.js
-var version = "1.31.2";
-
-// node_modules/convex/dist/esm/values/base64.js
-var exports_base64 = {};
-__export(exports_base64, {
-  toByteArray: () => toByteArray,
-  fromByteArrayUrlSafeNoPadding: () => fromByteArrayUrlSafeNoPadding,
-  fromByteArray: () => fromByteArray,
-  byteLength: () => byteLength
-});
-function getLens(b64) {
-  var len = b64.length;
-  if (len % 4 > 0) {
-    throw new Error("Invalid string. Length must be a multiple of 4");
-  }
-  var validLen = b64.indexOf("=");
-  if (validLen === -1)
-    validLen = len;
-  var placeHoldersLen = validLen === len ? 0 : 4 - validLen % 4;
-  return [validLen, placeHoldersLen];
-}
-function byteLength(b64) {
-  var lens = getLens(b64);
-  var validLen = lens[0];
-  var placeHoldersLen = lens[1];
-  return (validLen + placeHoldersLen) * 3 / 4 - placeHoldersLen;
-}
-function _byteLength(_b64, validLen, placeHoldersLen) {
-  return (validLen + placeHoldersLen) * 3 / 4 - placeHoldersLen;
-}
-function toByteArray(b64) {
-  var tmp;
-  var lens = getLens(b64);
-  var validLen = lens[0];
-  var placeHoldersLen = lens[1];
-  var arr = new Arr(_byteLength(b64, validLen, placeHoldersLen));
-  var curByte = 0;
-  var len = placeHoldersLen > 0 ? validLen - 4 : validLen;
-  var i;
-  for (i = 0;i < len; i += 4) {
-    tmp = revLookup[b64.charCodeAt(i)] << 18 | revLookup[b64.charCodeAt(i + 1)] << 12 | revLookup[b64.charCodeAt(i + 2)] << 6 | revLookup[b64.charCodeAt(i + 3)];
-    arr[curByte++] = tmp >> 16 & 255;
-    arr[curByte++] = tmp >> 8 & 255;
-    arr[curByte++] = tmp & 255;
-  }
-  if (placeHoldersLen === 2) {
-    tmp = revLookup[b64.charCodeAt(i)] << 2 | revLookup[b64.charCodeAt(i + 1)] >> 4;
-    arr[curByte++] = tmp & 255;
-  }
-  if (placeHoldersLen === 1) {
-    tmp = revLookup[b64.charCodeAt(i)] << 10 | revLookup[b64.charCodeAt(i + 1)] << 4 | revLookup[b64.charCodeAt(i + 2)] >> 2;
-    arr[curByte++] = tmp >> 8 & 255;
-    arr[curByte++] = tmp & 255;
-  }
-  return arr;
-}
-function tripletToBase64(num) {
-  return lookup[num >> 18 & 63] + lookup[num >> 12 & 63] + lookup[num >> 6 & 63] + lookup[num & 63];
-}
-function encodeChunk(uint8, start, end) {
-  var tmp;
-  var output = [];
-  for (var i = start;i < end; i += 3) {
-    tmp = (uint8[i] << 16 & 16711680) + (uint8[i + 1] << 8 & 65280) + (uint8[i + 2] & 255);
-    output.push(tripletToBase64(tmp));
-  }
-  return output.join("");
-}
-function fromByteArray(uint8) {
-  var tmp;
-  var len = uint8.length;
-  var extraBytes = len % 3;
-  var parts = [];
-  var maxChunkLength = 16383;
-  for (var i = 0, len2 = len - extraBytes;i < len2; i += maxChunkLength) {
-    parts.push(encodeChunk(uint8, i, i + maxChunkLength > len2 ? len2 : i + maxChunkLength));
-  }
-  if (extraBytes === 1) {
-    tmp = uint8[len - 1];
-    parts.push(lookup[tmp >> 2] + lookup[tmp << 4 & 63] + "==");
-  } else if (extraBytes === 2) {
-    tmp = (uint8[len - 2] << 8) + uint8[len - 1];
-    parts.push(lookup[tmp >> 10] + lookup[tmp >> 4 & 63] + lookup[tmp << 2 & 63] + "=");
-  }
-  return parts.join("");
-}
-function fromByteArrayUrlSafeNoPadding(uint8) {
-  return fromByteArray(uint8).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
-}
-var lookup, revLookup, Arr, code = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/", i, len;
-var init_base64 = __esm(() => {
-  lookup = [];
-  revLookup = [];
-  Arr = Uint8Array;
-  for (i = 0, len = code.length;i < len; ++i) {
-    lookup[i] = code[i];
-    revLookup[code.charCodeAt(i)] = i;
-  }
-  revLookup[45] = 62;
-  revLookup[95] = 63;
-});
-
-// node_modules/convex/dist/esm/common/index.js
-function parseArgs(args) {
-  if (args === undefined) {
-    return {};
-  }
-  if (!isSimpleObject(args)) {
-    throw new Error(`The arguments to a Convex function must be an object. Received: ${args}`);
-  }
-  return args;
-}
-function validateDeploymentUrl(deploymentUrl) {
-  if (typeof deploymentUrl === "undefined") {
-    throw new Error(`Client created with undefined deployment address. If you used an environment variable, check that it's set.`);
-  }
-  if (typeof deploymentUrl !== "string") {
-    throw new Error(`Invalid deployment address: found ${deploymentUrl}".`);
-  }
-  if (!(deploymentUrl.startsWith("http:") || deploymentUrl.startsWith("https:"))) {
-    throw new Error(`Invalid deployment address: Must start with "https://" or "http://". Found "${deploymentUrl}".`);
-  }
-  try {
-    new URL(deploymentUrl);
-  } catch {
-    throw new Error(`Invalid deployment address: "${deploymentUrl}" is not a valid URL. If you believe this URL is correct, use the \`skipConvexDeploymentUrlCheck\` option to bypass this.`);
-  }
-  if (deploymentUrl.endsWith(".convex.site")) {
-    throw new Error(`Invalid deployment address: "${deploymentUrl}" ends with .convex.site, which is used for HTTP Actions. Convex deployment URLs typically end with .convex.cloud? If you believe this URL is correct, use the \`skipConvexDeploymentUrlCheck\` option to bypass this.`);
-  }
-}
-function isSimpleObject(value) {
-  const isObject = typeof value === "object";
-  const prototype = Object.getPrototypeOf(value);
-  const isSimple = prototype === null || prototype === Object.prototype || prototype?.constructor?.name === "Object";
-  return isObject && isSimple;
-}
-
-// node_modules/convex/dist/esm/values/value.js
-function isSpecial(n) {
-  return Number.isNaN(n) || !Number.isFinite(n) || Object.is(n, -0);
-}
-function slowBigIntToBase64(value) {
-  if (value < ZERO) {
-    value -= MIN_INT64 + MIN_INT64;
-  }
-  let hex = value.toString(16);
-  if (hex.length % 2 === 1)
-    hex = "0" + hex;
-  const bytes = new Uint8Array(new ArrayBuffer(8));
-  let i = 0;
-  for (const hexByte of hex.match(/.{2}/g).reverse()) {
-    bytes.set([parseInt(hexByte, 16)], i++);
-    value >>= EIGHT;
-  }
-  return fromByteArray(bytes);
-}
-function slowBase64ToBigInt(encoded) {
-  const integerBytes = toByteArray(encoded);
-  if (integerBytes.byteLength !== 8) {
-    throw new Error(`Received ${integerBytes.byteLength} bytes, expected 8 for $integer`);
-  }
-  let value = ZERO;
-  let power = ZERO;
-  for (const byte of integerBytes) {
-    value += BigInt(byte) * TWOFIFTYSIX ** power;
-    power++;
-  }
-  if (value > MAX_INT64) {
-    value += MIN_INT64 + MIN_INT64;
-  }
-  return value;
-}
-function modernBigIntToBase64(value) {
-  if (value < MIN_INT64 || MAX_INT64 < value) {
-    throw new Error(`BigInt ${value} does not fit into a 64-bit signed integer.`);
-  }
-  const buffer = new ArrayBuffer(8);
-  new DataView(buffer).setBigInt64(0, value, true);
-  return fromByteArray(new Uint8Array(buffer));
-}
-function modernBase64ToBigInt(encoded) {
-  const integerBytes = toByteArray(encoded);
-  if (integerBytes.byteLength !== 8) {
-    throw new Error(`Received ${integerBytes.byteLength} bytes, expected 8 for $integer`);
-  }
-  const intBytesView = new DataView(integerBytes.buffer);
-  return intBytesView.getBigInt64(0, true);
-}
-function validateObjectField(k) {
-  if (k.length > MAX_IDENTIFIER_LEN) {
-    throw new Error(`Field name ${k} exceeds maximum field name length ${MAX_IDENTIFIER_LEN}.`);
-  }
-  if (k.startsWith("$")) {
-    throw new Error(`Field name ${k} starts with a '$', which is reserved.`);
-  }
-  for (let i = 0;i < k.length; i += 1) {
-    const charCode = k.charCodeAt(i);
-    if (charCode < 32 || charCode >= 127) {
-      throw new Error(`Field name ${k} has invalid character '${k[i]}': Field names can only contain non-control ASCII characters`);
-    }
-  }
-}
-function jsonToConvex(value) {
-  if (value === null) {
-    return value;
-  }
-  if (typeof value === "boolean") {
-    return value;
-  }
-  if (typeof value === "number") {
-    return value;
-  }
-  if (typeof value === "string") {
-    return value;
-  }
-  if (Array.isArray(value)) {
-    return value.map((value2) => jsonToConvex(value2));
-  }
-  if (typeof value !== "object") {
-    throw new Error(`Unexpected type of ${value}`);
-  }
-  const entries = Object.entries(value);
-  if (entries.length === 1) {
-    const key = entries[0][0];
-    if (key === "$bytes") {
-      if (typeof value.$bytes !== "string") {
-        throw new Error(`Malformed $bytes field on ${value}`);
-      }
-      return toByteArray(value.$bytes).buffer;
-    }
-    if (key === "$integer") {
-      if (typeof value.$integer !== "string") {
-        throw new Error(`Malformed $integer field on ${value}`);
-      }
-      return base64ToBigInt(value.$integer);
-    }
-    if (key === "$float") {
-      if (typeof value.$float !== "string") {
-        throw new Error(`Malformed $float field on ${value}`);
-      }
-      const floatBytes = toByteArray(value.$float);
-      if (floatBytes.byteLength !== 8) {
-        throw new Error(`Received ${floatBytes.byteLength} bytes, expected 8 for $float`);
-      }
-      const floatBytesView = new DataView(floatBytes.buffer);
-      const float = floatBytesView.getFloat64(0, LITTLE_ENDIAN);
-      if (!isSpecial(float)) {
-        throw new Error(`Float ${float} should be encoded as a number`);
-      }
-      return float;
-    }
-    if (key === "$set") {
-      throw new Error(`Received a Set which is no longer supported as a Convex type.`);
-    }
-    if (key === "$map") {
-      throw new Error(`Received a Map which is no longer supported as a Convex type.`);
-    }
-  }
-  const out = {};
-  for (const [k, v] of Object.entries(value)) {
-    validateObjectField(k);
-    out[k] = jsonToConvex(v);
-  }
-  return out;
-}
-function stringifyValueForError(value) {
-  const str = JSON.stringify(value, (_key, value2) => {
-    if (value2 === undefined) {
-      return "undefined";
-    }
-    if (typeof value2 === "bigint") {
-      return `${value2.toString()}n`;
-    }
-    return value2;
-  });
-  if (str.length > MAX_VALUE_FOR_ERROR_LEN) {
-    const rest = "[...truncated]";
-    let truncateAt = MAX_VALUE_FOR_ERROR_LEN - rest.length;
-    const codePoint = str.codePointAt(truncateAt - 1);
-    if (codePoint !== undefined && codePoint > 65535) {
-      truncateAt -= 1;
-    }
-    return str.substring(0, truncateAt) + rest;
-  }
-  return str;
-}
-function convexToJsonInternal(value, originalValue, context, includeTopLevelUndefined) {
-  if (value === undefined) {
-    const contextText = context && ` (present at path ${context} in original object ${stringifyValueForError(originalValue)})`;
-    throw new Error(`undefined is not a valid Convex value${contextText}. To learn about Convex's supported types, see https://docs.convex.dev/using/types.`);
-  }
-  if (value === null) {
-    return value;
-  }
-  if (typeof value === "bigint") {
-    if (value < MIN_INT64 || MAX_INT64 < value) {
-      throw new Error(`BigInt ${value} does not fit into a 64-bit signed integer.`);
-    }
-    return { $integer: bigIntToBase64(value) };
-  }
-  if (typeof value === "number") {
-    if (isSpecial(value)) {
-      const buffer = new ArrayBuffer(8);
-      new DataView(buffer).setFloat64(0, value, LITTLE_ENDIAN);
-      return { $float: fromByteArray(new Uint8Array(buffer)) };
-    } else {
-      return value;
-    }
-  }
-  if (typeof value === "boolean") {
-    return value;
-  }
-  if (typeof value === "string") {
-    return value;
-  }
-  if (value instanceof ArrayBuffer) {
-    return { $bytes: fromByteArray(new Uint8Array(value)) };
-  }
-  if (Array.isArray(value)) {
-    return value.map((value2, i) => convexToJsonInternal(value2, originalValue, context + `[${i}]`, false));
-  }
-  if (value instanceof Set) {
-    throw new Error(errorMessageForUnsupportedType(context, "Set", [...value], originalValue));
-  }
-  if (value instanceof Map) {
-    throw new Error(errorMessageForUnsupportedType(context, "Map", [...value], originalValue));
-  }
-  if (!isSimpleObject(value)) {
-    const theType = value?.constructor?.name;
-    const typeName = theType ? `${theType} ` : "";
-    throw new Error(errorMessageForUnsupportedType(context, typeName, value, originalValue));
-  }
-  const out = {};
-  const entries = Object.entries(value);
-  entries.sort(([k1, _v1], [k2, _v2]) => k1 === k2 ? 0 : k1 < k2 ? -1 : 1);
-  for (const [k, v] of entries) {
-    if (v !== undefined) {
-      validateObjectField(k);
-      out[k] = convexToJsonInternal(v, originalValue, context + `.${k}`, false);
-    } else if (includeTopLevelUndefined) {
-      validateObjectField(k);
-      out[k] = convexOrUndefinedToJsonInternal(v, originalValue, context + `.${k}`);
-    }
-  }
-  return out;
-}
-function errorMessageForUnsupportedType(context, typeName, value, originalValue) {
-  if (context) {
-    return `${typeName}${stringifyValueForError(value)} is not a supported Convex type (present at path ${context} in original object ${stringifyValueForError(originalValue)}). To learn about Convex's supported types, see https://docs.convex.dev/using/types.`;
-  } else {
-    return `${typeName}${stringifyValueForError(value)} is not a supported Convex type.`;
-  }
-}
-function convexOrUndefinedToJsonInternal(value, originalValue, context) {
-  if (value === undefined) {
-    return { $undefined: null };
-  } else {
-    if (originalValue === undefined) {
-      throw new Error(`Programming error. Current value is ${stringifyValueForError(value)} but original value is undefined`);
-    }
-    return convexToJsonInternal(value, originalValue, context, false);
-  }
-}
-function convexToJson(value) {
-  return convexToJsonInternal(value, value, "", false);
-}
-var LITTLE_ENDIAN = true, MIN_INT64, MAX_INT64, ZERO, EIGHT, TWOFIFTYSIX, bigIntToBase64, base64ToBigInt, MAX_IDENTIFIER_LEN = 1024, MAX_VALUE_FOR_ERROR_LEN = 16384;
-var init_value = __esm(() => {
-  init_base64();
-  MIN_INT64 = BigInt("-9223372036854775808");
-  MAX_INT64 = BigInt("9223372036854775807");
-  ZERO = BigInt("0");
-  EIGHT = BigInt("8");
-  TWOFIFTYSIX = BigInt("256");
-  bigIntToBase64 = DataView.prototype.setBigInt64 ? modernBigIntToBase64 : slowBigIntToBase64;
-  base64ToBigInt = DataView.prototype.getBigInt64 ? modernBase64ToBigInt : slowBase64ToBigInt;
-});
-
-// node_modules/convex/dist/esm/values/errors.js
-var __defProp2, __defNormalProp = (obj, key, value) => (key in obj) ? __defProp2(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value, __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value), _a, _b, IDENTIFYING_FIELD, ConvexError;
-var init_errors = __esm(() => {
-  init_value();
-  __defProp2 = Object.defineProperty;
-  IDENTIFYING_FIELD = Symbol.for("ConvexError");
-  ConvexError = class ConvexError extends (_b = Error, _a = IDENTIFYING_FIELD, _b) {
-    constructor(data) {
-      super(typeof data === "string" ? data : stringifyValueForError(data));
-      __publicField(this, "name", "ConvexError");
-      __publicField(this, "data");
-      __publicField(this, _a, true);
-      this.data = data;
-    }
-  };
-});
-
-// node_modules/convex/dist/esm/values/index.js
-var init_values = __esm(() => {
-  init_value();
-  init_base64();
-  init_errors();
-});
-
-// node_modules/convex/dist/esm/browser/logging.js
-function prefix_for_source(source) {
-  switch (source) {
-    case "query":
-      return "Q";
-    case "mutation":
-      return "M";
-    case "action":
-      return "A";
-    case "any":
-      return "?";
-  }
-}
-
-class DefaultLogger {
-  constructor(options) {
-    __publicField2(this, "_onLogLineFuncs");
-    __publicField2(this, "_verbose");
-    this._onLogLineFuncs = {};
-    this._verbose = options.verbose;
-  }
-  addLogLineListener(func) {
-    let id = Math.random().toString(36).substring(2, 15);
-    for (let i = 0;i < 10; i++) {
-      if (this._onLogLineFuncs[id] === undefined) {
-        break;
-      }
-      id = Math.random().toString(36).substring(2, 15);
-    }
-    this._onLogLineFuncs[id] = func;
-    return () => {
-      delete this._onLogLineFuncs[id];
-    };
-  }
-  logVerbose(...args) {
-    if (this._verbose) {
-      for (const func of Object.values(this._onLogLineFuncs)) {
-        func("debug", `${(/* @__PURE__ */ new Date()).toISOString()}`, ...args);
-      }
-    }
-  }
-  log(...args) {
-    for (const func of Object.values(this._onLogLineFuncs)) {
-      func("info", ...args);
-    }
-  }
-  warn(...args) {
-    for (const func of Object.values(this._onLogLineFuncs)) {
-      func("warn", ...args);
-    }
-  }
-  error(...args) {
-    for (const func of Object.values(this._onLogLineFuncs)) {
-      func("error", ...args);
-    }
-  }
-}
-function instantiateDefaultLogger(options) {
-  const logger = new DefaultLogger(options);
-  logger.addLogLineListener((level, ...args) => {
-    switch (level) {
-      case "debug":
-        console.debug(...args);
-        break;
-      case "info":
-        console.log(...args);
-        break;
-      case "warn":
-        console.warn(...args);
-        break;
-      case "error":
-        console.error(...args);
-        break;
-      default: {
-        console.log(...args);
-      }
-    }
-  });
-  return logger;
-}
-function instantiateNoopLogger(options) {
-  return new DefaultLogger(options);
-}
-function logForFunction(logger, type, source, udfPath, message) {
-  const prefix = prefix_for_source(source);
-  if (typeof message === "object") {
-    message = `ConvexError ${JSON.stringify(message.errorData, null, 2)}`;
-  }
-  if (type === "info") {
-    const match = message.match(/^\[.*?\] /);
-    if (match === null) {
-      logger.error(`[CONVEX ${prefix}(${udfPath})] Could not parse console.log`);
-      return;
-    }
-    const level = message.slice(1, match[0].length - 2);
-    const args = message.slice(match[0].length);
-    logger.log(`%c[CONVEX ${prefix}(${udfPath})] [${level}]`, INFO_COLOR, args);
-  } else {
-    logger.error(`[CONVEX ${prefix}(${udfPath})] ${message}`);
-  }
-}
-function logFatalError(logger, message) {
-  const errorMessage = `[CONVEX FATAL ERROR] ${message}`;
-  logger.error(errorMessage);
-  return new Error(errorMessage);
-}
-function createHybridErrorStacktrace(source, udfPath, result) {
-  const prefix = prefix_for_source(source);
-  return `[CONVEX ${prefix}(${udfPath})] ${result.errorMessage}
-  Called by client`;
-}
-function forwardData(result, error) {
-  error.data = result.errorData;
-  return error;
-}
-var __defProp3, __defNormalProp2 = (obj, key, value) => (key in obj) ? __defProp3(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value, __publicField2 = (obj, key, value) => __defNormalProp2(obj, typeof key !== "symbol" ? key + "" : key, value), INFO_COLOR = "color:rgb(0, 145, 255)";
-var init_logging = __esm(() => {
-  __defProp3 = Object.defineProperty;
-});
-
-// node_modules/convex/dist/esm/browser/sync/udf_path_utils.js
-function canonicalizeUdfPath(udfPath) {
-  const pieces = udfPath.split(":");
-  let moduleName;
-  let functionName;
-  if (pieces.length === 1) {
-    moduleName = pieces[0];
-    functionName = "default";
-  } else {
-    moduleName = pieces.slice(0, pieces.length - 1).join(":");
-    functionName = pieces[pieces.length - 1];
-  }
-  if (moduleName.endsWith(".js")) {
-    moduleName = moduleName.slice(0, -3);
-  }
-  return `${moduleName}:${functionName}`;
-}
-function serializePathAndArgs(udfPath, args) {
-  return JSON.stringify({
-    udfPath: canonicalizeUdfPath(udfPath),
-    args: convexToJson(args)
-  });
-}
-function serializePaginatedPathAndArgs(udfPath, args, options) {
-  const { initialNumItems, id } = options;
-  const result = JSON.stringify({
-    type: "paginated",
-    udfPath: canonicalizeUdfPath(udfPath),
-    args: convexToJson(args),
-    options: convexToJson({ initialNumItems, id })
-  });
-  return result;
-}
-function serializedQueryTokenIsPaginated(token) {
-  return JSON.parse(token).type === "paginated";
-}
-var init_udf_path_utils = __esm(() => {
-  init_values();
-});
-
-// node_modules/convex/dist/esm/browser/sync/local_state.js
-class LocalSyncState {
-  constructor() {
-    __publicField3(this, "nextQueryId");
-    __publicField3(this, "querySetVersion");
-    __publicField3(this, "querySet");
-    __publicField3(this, "queryIdToToken");
-    __publicField3(this, "identityVersion");
-    __publicField3(this, "auth");
-    __publicField3(this, "outstandingQueriesOlderThanRestart");
-    __publicField3(this, "outstandingAuthOlderThanRestart");
-    __publicField3(this, "paused");
-    __publicField3(this, "pendingQuerySetModifications");
-    this.nextQueryId = 0;
-    this.querySetVersion = 0;
-    this.identityVersion = 0;
-    this.querySet = /* @__PURE__ */ new Map;
-    this.queryIdToToken = /* @__PURE__ */ new Map;
-    this.outstandingQueriesOlderThanRestart = /* @__PURE__ */ new Set;
-    this.outstandingAuthOlderThanRestart = false;
-    this.paused = false;
-    this.pendingQuerySetModifications = /* @__PURE__ */ new Map;
-  }
-  hasSyncedPastLastReconnect() {
-    return this.outstandingQueriesOlderThanRestart.size === 0 && !this.outstandingAuthOlderThanRestart;
-  }
-  markAuthCompletion() {
-    this.outstandingAuthOlderThanRestart = false;
-  }
-  subscribe(udfPath, args, journal, componentPath) {
-    const canonicalizedUdfPath = canonicalizeUdfPath(udfPath);
-    const queryToken = serializePathAndArgs(canonicalizedUdfPath, args);
-    const existingEntry = this.querySet.get(queryToken);
-    if (existingEntry !== undefined) {
-      existingEntry.numSubscribers += 1;
-      return {
-        queryToken,
-        modification: null,
-        unsubscribe: () => this.removeSubscriber(queryToken)
-      };
-    } else {
-      const queryId = this.nextQueryId++;
-      const query = {
-        id: queryId,
-        canonicalizedUdfPath,
-        args,
-        numSubscribers: 1,
-        journal,
-        componentPath
-      };
-      this.querySet.set(queryToken, query);
-      this.queryIdToToken.set(queryId, queryToken);
-      const baseVersion = this.querySetVersion;
-      const newVersion = this.querySetVersion + 1;
-      const add = {
-        type: "Add",
-        queryId,
-        udfPath: canonicalizedUdfPath,
-        args: [convexToJson(args)],
-        journal,
-        componentPath
-      };
-      if (this.paused) {
-        this.pendingQuerySetModifications.set(queryId, add);
-      } else {
-        this.querySetVersion = newVersion;
-      }
-      const modification = {
-        type: "ModifyQuerySet",
-        baseVersion,
-        newVersion,
-        modifications: [add]
-      };
-      return {
-        queryToken,
-        modification,
-        unsubscribe: () => this.removeSubscriber(queryToken)
-      };
-    }
-  }
-  transition(transition) {
-    for (const modification of transition.modifications) {
-      switch (modification.type) {
-        case "QueryUpdated":
-        case "QueryFailed": {
-          this.outstandingQueriesOlderThanRestart.delete(modification.queryId);
-          const journal = modification.journal;
-          if (journal !== undefined) {
-            const queryToken = this.queryIdToToken.get(modification.queryId);
-            if (queryToken !== undefined) {
-              this.querySet.get(queryToken).journal = journal;
-            }
-          }
-          break;
-        }
-        case "QueryRemoved": {
-          this.outstandingQueriesOlderThanRestart.delete(modification.queryId);
-          break;
-        }
-        default: {
-          throw new Error(`Invalid modification ${modification.type}`);
-        }
-      }
-    }
-  }
-  queryId(udfPath, args) {
-    const canonicalizedUdfPath = canonicalizeUdfPath(udfPath);
-    const queryToken = serializePathAndArgs(canonicalizedUdfPath, args);
-    const existingEntry = this.querySet.get(queryToken);
-    if (existingEntry !== undefined) {
-      return existingEntry.id;
-    }
-    return null;
-  }
-  isCurrentOrNewerAuthVersion(version2) {
-    return version2 >= this.identityVersion;
-  }
-  getAuth() {
-    return this.auth;
-  }
-  setAuth(value) {
-    this.auth = {
-      tokenType: "User",
-      value
-    };
-    const baseVersion = this.identityVersion;
-    if (!this.paused) {
-      this.identityVersion = baseVersion + 1;
-    }
-    return {
-      type: "Authenticate",
-      baseVersion,
-      ...this.auth
-    };
-  }
-  setAdminAuth(value, actingAs) {
-    const auth = {
-      tokenType: "Admin",
-      value,
-      impersonating: actingAs
-    };
-    this.auth = auth;
-    const baseVersion = this.identityVersion;
-    if (!this.paused) {
-      this.identityVersion = baseVersion + 1;
-    }
-    return {
-      type: "Authenticate",
-      baseVersion,
-      ...auth
-    };
-  }
-  clearAuth() {
-    this.auth = undefined;
-    this.markAuthCompletion();
-    const baseVersion = this.identityVersion;
-    if (!this.paused) {
-      this.identityVersion = baseVersion + 1;
-    }
-    return {
-      type: "Authenticate",
-      tokenType: "None",
-      baseVersion
-    };
-  }
-  hasAuth() {
-    return !!this.auth;
-  }
-  isNewAuth(value) {
-    return this.auth?.value !== value;
-  }
-  queryPath(queryId) {
-    const pathAndArgs = this.queryIdToToken.get(queryId);
-    if (pathAndArgs) {
-      return this.querySet.get(pathAndArgs).canonicalizedUdfPath;
-    }
-    return null;
-  }
-  queryArgs(queryId) {
-    const pathAndArgs = this.queryIdToToken.get(queryId);
-    if (pathAndArgs) {
-      return this.querySet.get(pathAndArgs).args;
-    }
-    return null;
-  }
-  queryToken(queryId) {
-    return this.queryIdToToken.get(queryId) ?? null;
-  }
-  queryJournal(queryToken) {
-    return this.querySet.get(queryToken)?.journal;
-  }
-  restart(oldRemoteQueryResults) {
-    this.unpause();
-    this.outstandingQueriesOlderThanRestart.clear();
-    const modifications = [];
-    for (const localQuery of this.querySet.values()) {
-      const add = {
-        type: "Add",
-        queryId: localQuery.id,
-        udfPath: localQuery.canonicalizedUdfPath,
-        args: [convexToJson(localQuery.args)],
-        journal: localQuery.journal,
-        componentPath: localQuery.componentPath
-      };
-      modifications.push(add);
-      if (!oldRemoteQueryResults.has(localQuery.id)) {
-        this.outstandingQueriesOlderThanRestart.add(localQuery.id);
-      }
-    }
-    this.querySetVersion = 1;
-    const querySet = {
-      type: "ModifyQuerySet",
-      baseVersion: 0,
-      newVersion: 1,
-      modifications
-    };
-    if (!this.auth) {
-      this.identityVersion = 0;
-      return [querySet, undefined];
-    }
-    this.outstandingAuthOlderThanRestart = true;
-    const authenticate = {
-      type: "Authenticate",
-      baseVersion: 0,
-      ...this.auth
-    };
-    this.identityVersion = 1;
-    return [querySet, authenticate];
-  }
-  pause() {
-    this.paused = true;
-  }
-  resume() {
-    const querySet = this.pendingQuerySetModifications.size > 0 ? {
-      type: "ModifyQuerySet",
-      baseVersion: this.querySetVersion,
-      newVersion: ++this.querySetVersion,
-      modifications: Array.from(this.pendingQuerySetModifications.values())
-    } : undefined;
-    const authenticate = this.auth !== undefined ? {
-      type: "Authenticate",
-      baseVersion: this.identityVersion++,
-      ...this.auth
-    } : undefined;
-    this.unpause();
-    return [querySet, authenticate];
-  }
-  unpause() {
-    this.paused = false;
-    this.pendingQuerySetModifications.clear();
-  }
-  removeSubscriber(queryToken) {
-    const localQuery = this.querySet.get(queryToken);
-    if (localQuery.numSubscribers > 1) {
-      localQuery.numSubscribers -= 1;
-      return null;
-    } else {
-      this.querySet.delete(queryToken);
-      this.queryIdToToken.delete(localQuery.id);
-      this.outstandingQueriesOlderThanRestart.delete(localQuery.id);
-      const baseVersion = this.querySetVersion;
-      const newVersion = this.querySetVersion + 1;
-      const remove = {
-        type: "Remove",
-        queryId: localQuery.id
-      };
-      if (this.paused) {
-        if (this.pendingQuerySetModifications.has(localQuery.id)) {
-          this.pendingQuerySetModifications.delete(localQuery.id);
-        } else {
-          this.pendingQuerySetModifications.set(localQuery.id, remove);
-        }
-      } else {
-        this.querySetVersion = newVersion;
-      }
-      return {
-        type: "ModifyQuerySet",
-        baseVersion,
-        newVersion,
-        modifications: [remove]
-      };
-    }
-  }
-}
-var __defProp4, __defNormalProp3 = (obj, key, value) => (key in obj) ? __defProp4(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value, __publicField3 = (obj, key, value) => __defNormalProp3(obj, typeof key !== "symbol" ? key + "" : key, value);
-var init_local_state = __esm(() => {
-  init_values();
-  init_udf_path_utils();
-  __defProp4 = Object.defineProperty;
-});
-
-// node_modules/convex/dist/esm/browser/sync/request_manager.js
-class RequestManager {
-  constructor(logger, markConnectionStateDirty) {
-    this.logger = logger;
-    this.markConnectionStateDirty = markConnectionStateDirty;
-    __publicField4(this, "inflightRequests");
-    __publicField4(this, "requestsOlderThanRestart");
-    __publicField4(this, "inflightMutationsCount", 0);
-    __publicField4(this, "inflightActionsCount", 0);
-    this.inflightRequests = /* @__PURE__ */ new Map;
-    this.requestsOlderThanRestart = /* @__PURE__ */ new Set;
-  }
-  request(message, sent) {
-    const result = new Promise((resolve3) => {
-      const status = sent ? "Requested" : "NotSent";
-      this.inflightRequests.set(message.requestId, {
-        message,
-        status: { status, requestedAt: /* @__PURE__ */ new Date, onResult: resolve3 }
-      });
-      if (message.type === "Mutation") {
-        this.inflightMutationsCount++;
-      } else if (message.type === "Action") {
-        this.inflightActionsCount++;
-      }
-    });
-    this.markConnectionStateDirty();
-    return result;
-  }
-  onResponse(response) {
-    const requestInfo = this.inflightRequests.get(response.requestId);
-    if (requestInfo === undefined) {
-      return null;
-    }
-    if (requestInfo.status.status === "Completed") {
-      return null;
-    }
-    const udfType = requestInfo.message.type === "Mutation" ? "mutation" : "action";
-    const udfPath = requestInfo.message.udfPath;
-    for (const line of response.logLines) {
-      logForFunction(this.logger, "info", udfType, udfPath, line);
-    }
-    const status = requestInfo.status;
-    let result;
-    let onResolve;
-    if (response.success) {
-      result = {
-        success: true,
-        logLines: response.logLines,
-        value: jsonToConvex(response.result)
-      };
-      onResolve = () => status.onResult(result);
-    } else {
-      const errorMessage = response.result;
-      const { errorData } = response;
-      logForFunction(this.logger, "error", udfType, udfPath, errorMessage);
-      result = {
-        success: false,
-        errorMessage,
-        errorData: errorData !== undefined ? jsonToConvex(errorData) : undefined,
-        logLines: response.logLines
-      };
-      onResolve = () => status.onResult(result);
-    }
-    if (response.type === "ActionResponse" || !response.success) {
-      onResolve();
-      this.inflightRequests.delete(response.requestId);
-      this.requestsOlderThanRestart.delete(response.requestId);
-      if (requestInfo.message.type === "Action") {
-        this.inflightActionsCount--;
-      } else if (requestInfo.message.type === "Mutation") {
-        this.inflightMutationsCount--;
-      }
-      this.markConnectionStateDirty();
-      return { requestId: response.requestId, result };
-    }
-    requestInfo.status = {
-      status: "Completed",
-      result,
-      ts: response.ts,
-      onResolve
-    };
-    return null;
-  }
-  removeCompleted(ts) {
-    const completeRequests = /* @__PURE__ */ new Map;
-    for (const [requestId, requestInfo] of this.inflightRequests.entries()) {
-      const status = requestInfo.status;
-      if (status.status === "Completed" && status.ts.lessThanOrEqual(ts)) {
-        status.onResolve();
-        completeRequests.set(requestId, status.result);
-        if (requestInfo.message.type === "Mutation") {
-          this.inflightMutationsCount--;
-        } else if (requestInfo.message.type === "Action") {
-          this.inflightActionsCount--;
-        }
-        this.inflightRequests.delete(requestId);
-        this.requestsOlderThanRestart.delete(requestId);
-      }
-    }
-    if (completeRequests.size > 0) {
-      this.markConnectionStateDirty();
-    }
-    return completeRequests;
-  }
-  restart() {
-    this.requestsOlderThanRestart = new Set(this.inflightRequests.keys());
-    const allMessages = [];
-    for (const [requestId, value] of this.inflightRequests) {
-      if (value.status.status === "NotSent") {
-        value.status.status = "Requested";
-        allMessages.push(value.message);
-        continue;
-      }
-      if (value.message.type === "Mutation") {
-        allMessages.push(value.message);
-      } else if (value.message.type === "Action") {
-        this.inflightRequests.delete(requestId);
-        this.requestsOlderThanRestart.delete(requestId);
-        this.inflightActionsCount--;
-        if (value.status.status === "Completed") {
-          throw new Error("Action should never be in 'Completed' state");
-        }
-        value.status.onResult({
-          success: false,
-          errorMessage: "Connection lost while action was in flight",
-          logLines: []
-        });
-      }
-    }
-    this.markConnectionStateDirty();
-    return allMessages;
-  }
-  resume() {
-    const allMessages = [];
-    for (const [, value] of this.inflightRequests) {
-      if (value.status.status === "NotSent") {
-        value.status.status = "Requested";
-        allMessages.push(value.message);
-        continue;
-      }
-    }
-    return allMessages;
-  }
-  hasIncompleteRequests() {
-    for (const requestInfo of this.inflightRequests.values()) {
-      if (requestInfo.status.status === "Requested") {
-        return true;
-      }
-    }
-    return false;
-  }
-  hasInflightRequests() {
-    return this.inflightRequests.size > 0;
-  }
-  hasSyncedPastLastReconnect() {
-    return this.requestsOlderThanRestart.size === 0;
-  }
-  timeOfOldestInflightRequest() {
-    if (this.inflightRequests.size === 0) {
-      return null;
-    }
-    let oldestInflightRequest = Date.now();
-    for (const request of this.inflightRequests.values()) {
-      if (request.status.status !== "Completed") {
-        if (request.status.requestedAt.getTime() < oldestInflightRequest) {
-          oldestInflightRequest = request.status.requestedAt.getTime();
-        }
-      }
-    }
-    return new Date(oldestInflightRequest);
-  }
-  inflightMutations() {
-    return this.inflightMutationsCount;
-  }
-  inflightActions() {
-    return this.inflightActionsCount;
-  }
-}
-var __defProp5, __defNormalProp4 = (obj, key, value) => (key in obj) ? __defProp5(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value, __publicField4 = (obj, key, value) => __defNormalProp4(obj, typeof key !== "symbol" ? key + "" : key, value);
-var init_request_manager = __esm(() => {
-  init_values();
-  init_logging();
-  __defProp5 = Object.defineProperty;
-});
-
-// node_modules/convex/dist/esm/server/functionName.js
-var functionName;
-var init_functionName = __esm(() => {
-  functionName = Symbol.for("functionName");
-});
-
-// node_modules/convex/dist/esm/server/components/paths.js
-function extractReferencePath(reference) {
-  return reference[toReferencePath] ?? null;
-}
-function isFunctionHandle(s) {
-  return s.startsWith("function://");
-}
-function getFunctionAddress(functionReference) {
-  let functionAddress;
-  if (typeof functionReference === "string") {
-    if (isFunctionHandle(functionReference)) {
-      functionAddress = { functionHandle: functionReference };
-    } else {
-      functionAddress = { name: functionReference };
-    }
-  } else if (functionReference[functionName]) {
-    functionAddress = { name: functionReference[functionName] };
-  } else {
-    const referencePath = extractReferencePath(functionReference);
-    if (!referencePath) {
-      throw new Error(`${functionReference} is not a functionReference`);
-    }
-    functionAddress = { reference: referencePath };
-  }
-  return functionAddress;
-}
-var toReferencePath;
-var init_paths = __esm(() => {
-  init_functionName();
-  toReferencePath = Symbol.for("toReferencePath");
-});
-
-// node_modules/convex/dist/esm/server/api.js
-function getFunctionName(functionReference) {
-  const address = getFunctionAddress(functionReference);
-  if (address.name === undefined) {
-    if (address.functionHandle !== undefined) {
-      throw new Error(`Expected function reference like "api.file.func" or "internal.file.func", but received function handle ${address.functionHandle}`);
-    } else if (address.reference !== undefined) {
-      throw new Error(`Expected function reference in the current component like "api.file.func" or "internal.file.func", but received reference ${address.reference}`);
-    }
-    throw new Error(`Expected function reference like "api.file.func" or "internal.file.func", but received ${JSON.stringify(address)}`);
-  }
-  if (typeof functionReference === "string")
-    return functionReference;
-  const name = functionReference[functionName];
-  if (!name) {
-    throw new Error(`${functionReference} is not a functionReference`);
-  }
-  return name;
-}
-function createApi(pathParts = []) {
-  const handler = {
-    get(_, prop) {
-      if (typeof prop === "string") {
-        const newParts = [...pathParts, prop];
-        return createApi(newParts);
-      } else if (prop === functionName) {
-        if (pathParts.length < 2) {
-          const found = ["api", ...pathParts].join(".");
-          throw new Error(`API path is expected to be of the form \`api.moduleName.functionName\`. Found: \`${found}\``);
-        }
-        const path9 = pathParts.slice(0, -1).join("/");
-        const exportName = pathParts[pathParts.length - 1];
-        if (exportName === "default") {
-          return path9;
-        } else {
-          return path9 + ":" + exportName;
-        }
-      } else if (prop === Symbol.toStringTag) {
-        return "FunctionReference";
-      } else {
-        return;
-      }
-    }
-  };
-  return new Proxy({}, handler);
-}
-var anyApi;
-var init_api = __esm(() => {
-  init_functionName();
-  init_paths();
-  anyApi = createApi();
-});
-
-// node_modules/convex/dist/esm/browser/sync/optimistic_updates_impl.js
-class OptimisticLocalStoreImpl {
-  constructor(queryResults) {
-    __publicField5(this, "queryResults");
-    __publicField5(this, "modifiedQueries");
-    this.queryResults = queryResults;
-    this.modifiedQueries = [];
-  }
-  getQuery(query, ...args) {
-    const queryArgs = parseArgs(args[0]);
-    const name = getFunctionName(query);
-    const queryResult = this.queryResults.get(serializePathAndArgs(name, queryArgs));
-    if (queryResult === undefined) {
-      return;
-    }
-    return OptimisticLocalStoreImpl.queryValue(queryResult.result);
-  }
-  getAllQueries(query) {
-    const queriesWithName = [];
-    const name = getFunctionName(query);
-    for (const queryResult of this.queryResults.values()) {
-      if (queryResult.udfPath === canonicalizeUdfPath(name)) {
-        queriesWithName.push({
-          args: queryResult.args,
-          value: OptimisticLocalStoreImpl.queryValue(queryResult.result)
-        });
-      }
-    }
-    return queriesWithName;
-  }
-  setQuery(queryReference, args, value) {
-    const queryArgs = parseArgs(args);
-    const name = getFunctionName(queryReference);
-    const queryToken = serializePathAndArgs(name, queryArgs);
-    let result;
-    if (value === undefined) {
-      result = undefined;
-    } else {
-      result = {
-        success: true,
-        value,
-        logLines: []
-      };
-    }
-    const query = {
-      udfPath: name,
-      args: queryArgs,
-      result
-    };
-    this.queryResults.set(queryToken, query);
-    this.modifiedQueries.push(queryToken);
-  }
-  static queryValue(result) {
-    if (result === undefined) {
-      return;
-    } else if (result.success) {
-      return result.value;
-    } else {
-      return;
-    }
-  }
-}
-
-class OptimisticQueryResults {
-  constructor() {
-    __publicField5(this, "queryResults");
-    __publicField5(this, "optimisticUpdates");
-    this.queryResults = /* @__PURE__ */ new Map;
-    this.optimisticUpdates = [];
-  }
-  ingestQueryResultsFromServer(serverQueryResults, optimisticUpdatesToDrop) {
-    this.optimisticUpdates = this.optimisticUpdates.filter((updateAndId) => {
-      return !optimisticUpdatesToDrop.has(updateAndId.mutationId);
-    });
-    const oldQueryResults = this.queryResults;
-    this.queryResults = new Map(serverQueryResults);
-    const localStore = new OptimisticLocalStoreImpl(this.queryResults);
-    for (const updateAndId of this.optimisticUpdates) {
-      updateAndId.update(localStore);
-    }
-    const changedQueries = [];
-    for (const [queryToken, query] of this.queryResults) {
-      const oldQuery = oldQueryResults.get(queryToken);
-      if (oldQuery === undefined || oldQuery.result !== query.result) {
-        changedQueries.push(queryToken);
-      }
-    }
-    return changedQueries;
-  }
-  applyOptimisticUpdate(update, mutationId) {
-    this.optimisticUpdates.push({
-      update,
-      mutationId
-    });
-    const localStore = new OptimisticLocalStoreImpl(this.queryResults);
-    update(localStore);
-    return localStore.modifiedQueries;
-  }
-  rawQueryResult(queryToken) {
-    const query = this.queryResults.get(queryToken);
-    if (query === undefined) {
-      return;
-    }
-    return query.result;
-  }
-  queryResult(queryToken) {
-    const query = this.queryResults.get(queryToken);
-    if (query === undefined) {
-      return;
-    }
-    const result = query.result;
-    if (result === undefined) {
-      return;
-    } else if (result.success) {
-      return result.value;
-    } else {
-      if (result.errorData !== undefined) {
-        throw forwardData(result, new ConvexError(createHybridErrorStacktrace("query", query.udfPath, result)));
-      }
-      throw new Error(createHybridErrorStacktrace("query", query.udfPath, result));
-    }
-  }
-  hasQueryResult(queryToken) {
-    return this.queryResults.get(queryToken) !== undefined;
-  }
-  queryLogs(queryToken) {
-    const query = this.queryResults.get(queryToken);
-    return query?.result?.logLines;
-  }
-}
-var __defProp6, __defNormalProp5 = (obj, key, value) => (key in obj) ? __defProp6(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value, __publicField5 = (obj, key, value) => __defNormalProp5(obj, typeof key !== "symbol" ? key + "" : key, value);
-var init_optimistic_updates_impl = __esm(() => {
-  init_api();
-  init_logging();
-  init_udf_path_utils();
-  init_errors();
-  __defProp6 = Object.defineProperty;
-});
-
-// node_modules/convex/dist/esm/vendor/long.js
-class Long {
-  constructor(low, high) {
-    __publicField6(this, "low");
-    __publicField6(this, "high");
-    __publicField6(this, "__isUnsignedLong__");
-    this.low = low | 0;
-    this.high = high | 0;
-    this.__isUnsignedLong__ = true;
-  }
-  static isLong(obj) {
-    return (obj && obj.__isUnsignedLong__) === true;
-  }
-  static fromBytesLE(bytes) {
-    return new Long(bytes[0] | bytes[1] << 8 | bytes[2] << 16 | bytes[3] << 24, bytes[4] | bytes[5] << 8 | bytes[6] << 16 | bytes[7] << 24);
-  }
-  toBytesLE() {
-    const hi = this.high;
-    const lo = this.low;
-    return [
-      lo & 255,
-      lo >>> 8 & 255,
-      lo >>> 16 & 255,
-      lo >>> 24,
-      hi & 255,
-      hi >>> 8 & 255,
-      hi >>> 16 & 255,
-      hi >>> 24
-    ];
-  }
-  static fromNumber(value) {
-    if (isNaN(value))
-      return UZERO;
-    if (value < 0)
-      return UZERO;
-    if (value >= TWO_PWR_64_DBL)
-      return MAX_UNSIGNED_VALUE;
-    return new Long(value % TWO_PWR_32_DBL | 0, value / TWO_PWR_32_DBL | 0);
-  }
-  toString() {
-    return (BigInt(this.high) * BigInt(TWO_PWR_32_DBL) + BigInt(this.low)).toString();
-  }
-  equals(other) {
-    if (!Long.isLong(other))
-      other = Long.fromValue(other);
-    if (this.high >>> 31 === 1 && other.high >>> 31 === 1)
-      return false;
-    return this.high === other.high && this.low === other.low;
-  }
-  notEquals(other) {
-    return !this.equals(other);
-  }
-  comp(other) {
-    if (!Long.isLong(other))
-      other = Long.fromValue(other);
-    if (this.equals(other))
-      return 0;
-    return other.high >>> 0 > this.high >>> 0 || other.high === this.high && other.low >>> 0 > this.low >>> 0 ? -1 : 1;
-  }
-  lessThanOrEqual(other) {
-    return this.comp(other) <= 0;
-  }
-  static fromValue(val) {
-    if (typeof val === "number")
-      return Long.fromNumber(val);
-    return new Long(val.low, val.high);
-  }
-}
-var __defProp7, __defNormalProp6 = (obj, key, value) => (key in obj) ? __defProp7(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value, __publicField6 = (obj, key, value) => __defNormalProp6(obj, typeof key !== "symbol" ? key + "" : key, value), UZERO, TWO_PWR_16_DBL, TWO_PWR_32_DBL, TWO_PWR_64_DBL, MAX_UNSIGNED_VALUE;
-var init_long = __esm(() => {
-  __defProp7 = Object.defineProperty;
-  UZERO = new Long(0, 0);
-  TWO_PWR_16_DBL = 1 << 16;
-  TWO_PWR_32_DBL = TWO_PWR_16_DBL * TWO_PWR_16_DBL;
-  TWO_PWR_64_DBL = TWO_PWR_32_DBL * TWO_PWR_32_DBL;
-  MAX_UNSIGNED_VALUE = new Long(4294967295 | 0, 4294967295 | 0);
-});
-
-// node_modules/convex/dist/esm/browser/sync/remote_query_set.js
-class RemoteQuerySet {
-  constructor(queryPath, logger) {
-    __publicField7(this, "version");
-    __publicField7(this, "remoteQuerySet");
-    __publicField7(this, "queryPath");
-    __publicField7(this, "logger");
-    this.version = { querySet: 0, ts: Long.fromNumber(0), identity: 0 };
-    this.remoteQuerySet = /* @__PURE__ */ new Map;
-    this.queryPath = queryPath;
-    this.logger = logger;
-  }
-  transition(transition) {
-    const start = transition.startVersion;
-    if (this.version.querySet !== start.querySet || this.version.ts.notEquals(start.ts) || this.version.identity !== start.identity) {
-      throw new Error(`Invalid start version: ${start.ts.toString()}:${start.querySet}:${start.identity}, transitioning from ${this.version.ts.toString()}:${this.version.querySet}:${this.version.identity}`);
-    }
-    for (const modification of transition.modifications) {
-      switch (modification.type) {
-        case "QueryUpdated": {
-          const queryPath = this.queryPath(modification.queryId);
-          if (queryPath) {
-            for (const line of modification.logLines) {
-              logForFunction(this.logger, "info", "query", queryPath, line);
-            }
-          }
-          const value = jsonToConvex(modification.value ?? null);
-          this.remoteQuerySet.set(modification.queryId, {
-            success: true,
-            value,
-            logLines: modification.logLines
-          });
-          break;
-        }
-        case "QueryFailed": {
-          const queryPath = this.queryPath(modification.queryId);
-          if (queryPath) {
-            for (const line of modification.logLines) {
-              logForFunction(this.logger, "info", "query", queryPath, line);
-            }
-          }
-          const { errorData } = modification;
-          this.remoteQuerySet.set(modification.queryId, {
-            success: false,
-            errorMessage: modification.errorMessage,
-            errorData: errorData !== undefined ? jsonToConvex(errorData) : undefined,
-            logLines: modification.logLines
-          });
-          break;
-        }
-        case "QueryRemoved": {
-          this.remoteQuerySet.delete(modification.queryId);
-          break;
-        }
-        default: {
-          throw new Error(`Invalid modification ${modification.type}`);
-        }
-      }
-    }
-    this.version = transition.endVersion;
-  }
-  remoteQueryResults() {
-    return this.remoteQuerySet;
-  }
-  timestamp() {
-    return this.version.ts;
-  }
-}
-var __defProp8, __defNormalProp7 = (obj, key, value) => (key in obj) ? __defProp8(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value, __publicField7 = (obj, key, value) => __defNormalProp7(obj, typeof key !== "symbol" ? key + "" : key, value);
-var init_remote_query_set = __esm(() => {
-  init_values();
-  init_long();
-  init_logging();
-  __defProp8 = Object.defineProperty;
-});
-
-// node_modules/convex/dist/esm/browser/sync/protocol.js
-function u64ToLong(encoded) {
-  const integerBytes = exports_base64.toByteArray(encoded);
-  return Long.fromBytesLE(Array.from(integerBytes));
-}
-function longToU64(raw) {
-  const integerBytes = new Uint8Array(raw.toBytesLE());
-  return exports_base64.fromByteArray(integerBytes);
-}
-function parseServerMessage(encoded) {
-  switch (encoded.type) {
-    case "FatalError":
-    case "AuthError":
-    case "ActionResponse":
-    case "TransitionChunk":
-    case "Ping": {
-      return { ...encoded };
-    }
-    case "MutationResponse": {
-      if (encoded.success) {
-        return { ...encoded, ts: u64ToLong(encoded.ts) };
-      } else {
-        return { ...encoded };
-      }
-    }
-    case "Transition": {
-      return {
-        ...encoded,
-        startVersion: {
-          ...encoded.startVersion,
-          ts: u64ToLong(encoded.startVersion.ts)
-        },
-        endVersion: {
-          ...encoded.endVersion,
-          ts: u64ToLong(encoded.endVersion.ts)
-        }
-      };
-    }
-    default: {
-    }
-  }
-  return;
-}
-function encodeClientMessage(message) {
-  switch (message.type) {
-    case "Authenticate":
-    case "ModifyQuerySet":
-    case "Mutation":
-    case "Action":
-    case "Event": {
-      return { ...message };
-    }
-    case "Connect": {
-      if (message.maxObservedTimestamp !== undefined) {
-        return {
-          ...message,
-          maxObservedTimestamp: longToU64(message.maxObservedTimestamp)
-        };
-      } else {
-        return { ...message, maxObservedTimestamp: undefined };
-      }
-    }
-    default: {
-    }
-  }
-  return;
-}
-var init_protocol = __esm(() => {
-  init_values();
-  init_long();
-});
-
-// node_modules/convex/dist/esm/browser/sync/web_socket_manager.js
-function monotonicMillis() {
-  if (firstTime === undefined) {
-    firstTime = Date.now();
-  }
-  if (typeof performance === "undefined" || !performance.now) {
-    return Date.now();
-  }
-  return Math.round(firstTime + performance.now());
-}
-function prettyNow() {
-  return `t=${Math.round((monotonicMillis() - firstTime) / 100) / 10}s`;
-}
-function classifyDisconnectError(s) {
-  if (s === undefined)
-    return "Unknown";
-  for (const prefix of Object.keys(serverDisconnectErrors)) {
-    if (s.startsWith(prefix)) {
-      return prefix;
-    }
-  }
-  return "Unknown";
-}
-
-class WebSocketManager {
-  constructor(uri, callbacks, webSocketConstructor, logger, markConnectionStateDirty, debug) {
-    this.markConnectionStateDirty = markConnectionStateDirty;
-    this.debug = debug;
-    __publicField8(this, "socket");
-    __publicField8(this, "connectionCount");
-    __publicField8(this, "_hasEverConnected", false);
-    __publicField8(this, "lastCloseReason");
-    __publicField8(this, "transitionChunkBuffer", null);
-    __publicField8(this, "defaultInitialBackoff");
-    __publicField8(this, "maxBackoff");
-    __publicField8(this, "retries");
-    __publicField8(this, "serverInactivityThreshold");
-    __publicField8(this, "reconnectDueToServerInactivityTimeout");
-    __publicField8(this, "uri");
-    __publicField8(this, "onOpen");
-    __publicField8(this, "onResume");
-    __publicField8(this, "onMessage");
-    __publicField8(this, "webSocketConstructor");
-    __publicField8(this, "logger");
-    __publicField8(this, "onServerDisconnectError");
-    this.webSocketConstructor = webSocketConstructor;
-    this.socket = { state: "disconnected" };
-    this.connectionCount = 0;
-    this.lastCloseReason = "InitialConnect";
-    this.defaultInitialBackoff = 1000;
-    this.maxBackoff = 16000;
-    this.retries = 0;
-    this.serverInactivityThreshold = 60000;
-    this.reconnectDueToServerInactivityTimeout = null;
-    this.uri = uri;
-    this.onOpen = callbacks.onOpen;
-    this.onResume = callbacks.onResume;
-    this.onMessage = callbacks.onMessage;
-    this.onServerDisconnectError = callbacks.onServerDisconnectError;
-    this.logger = logger;
-    this.connect();
-  }
-  setSocketState(state) {
-    this.socket = state;
-    this._logVerbose(`socket state changed: ${this.socket.state}, paused: ${"paused" in this.socket ? this.socket.paused : undefined}`);
-    this.markConnectionStateDirty();
-  }
-  assembleTransition(chunk) {
-    if (chunk.partNumber < 0 || chunk.partNumber >= chunk.totalParts || chunk.totalParts === 0 || this.transitionChunkBuffer && (this.transitionChunkBuffer.totalParts !== chunk.totalParts || this.transitionChunkBuffer.transitionId !== chunk.transitionId)) {
-      this.transitionChunkBuffer = null;
-      throw new Error("Invalid TransitionChunk");
-    }
-    if (this.transitionChunkBuffer === null) {
-      this.transitionChunkBuffer = {
-        chunks: [],
-        totalParts: chunk.totalParts,
-        transitionId: chunk.transitionId
-      };
-    }
-    if (chunk.partNumber !== this.transitionChunkBuffer.chunks.length) {
-      const expectedLength = this.transitionChunkBuffer.chunks.length;
-      this.transitionChunkBuffer = null;
-      throw new Error(`TransitionChunk received out of order: expected part ${expectedLength}, got ${chunk.partNumber}`);
-    }
-    this.transitionChunkBuffer.chunks.push(chunk.chunk);
-    if (this.transitionChunkBuffer.chunks.length === chunk.totalParts) {
-      const fullJson = this.transitionChunkBuffer.chunks.join("");
-      this.transitionChunkBuffer = null;
-      const transition = parseServerMessage(JSON.parse(fullJson));
-      if (transition.type !== "Transition") {
-        throw new Error(`Expected Transition, got ${transition.type} after assembling chunks`);
-      }
-      return transition;
-    }
-    return null;
-  }
-  connect() {
-    if (this.socket.state === "terminated") {
-      return;
-    }
-    if (this.socket.state !== "disconnected" && this.socket.state !== "stopped") {
-      throw new Error("Didn't start connection from disconnected state: " + this.socket.state);
-    }
-    const ws = new this.webSocketConstructor(this.uri);
-    this._logVerbose("constructed WebSocket");
-    this.setSocketState({
-      state: "connecting",
-      ws,
-      paused: "no"
-    });
-    this.resetServerInactivityTimeout();
-    ws.onopen = () => {
-      this.logger.logVerbose("begin ws.onopen");
-      if (this.socket.state !== "connecting") {
-        throw new Error("onopen called with socket not in connecting state");
-      }
-      this.setSocketState({
-        state: "ready",
-        ws,
-        paused: this.socket.paused === "yes" ? "uninitialized" : "no"
-      });
-      this.resetServerInactivityTimeout();
-      if (this.socket.paused === "no") {
-        this._hasEverConnected = true;
-        this.onOpen({
-          connectionCount: this.connectionCount,
-          lastCloseReason: this.lastCloseReason,
-          clientTs: monotonicMillis()
-        });
-      }
-      if (this.lastCloseReason !== "InitialConnect") {
-        if (this.lastCloseReason) {
-          this.logger.log("WebSocket reconnected at", prettyNow(), "after disconnect due to", this.lastCloseReason);
-        } else {
-          this.logger.log("WebSocket reconnected at", prettyNow());
-        }
-      }
-      this.connectionCount += 1;
-      this.lastCloseReason = null;
-    };
-    ws.onerror = (error) => {
-      this.transitionChunkBuffer = null;
-      const message = error.message;
-      if (message) {
-        this.logger.log(`WebSocket error message: ${message}`);
-      }
-    };
-    ws.onmessage = (message) => {
-      this.resetServerInactivityTimeout();
-      const messageLength = message.data.length;
-      let serverMessage = parseServerMessage(JSON.parse(message.data));
-      this._logVerbose(`received ws message with type ${serverMessage.type}`);
-      if (serverMessage.type === "Ping") {
-        return;
-      }
-      if (serverMessage.type === "TransitionChunk") {
-        const transition = this.assembleTransition(serverMessage);
-        if (!transition) {
-          return;
-        }
-        serverMessage = transition;
-        this._logVerbose(`assembled full ws message of type ${serverMessage.type}`);
-      }
-      if (this.transitionChunkBuffer !== null) {
-        this.transitionChunkBuffer = null;
-        this.logger.log(`Received unexpected ${serverMessage.type} while buffering TransitionChunks`);
-      }
-      if (serverMessage.type === "Transition") {
-        this.reportLargeTransition({
-          messageLength,
-          transition: serverMessage
-        });
-      }
-      const response = this.onMessage(serverMessage);
-      if (response.hasSyncedPastLastReconnect) {
-        this.retries = 0;
-        this.markConnectionStateDirty();
-      }
-    };
-    ws.onclose = (event) => {
-      this._logVerbose("begin ws.onclose");
-      this.transitionChunkBuffer = null;
-      if (this.lastCloseReason === null) {
-        this.lastCloseReason = event.reason || `closed with code ${event.code}`;
-      }
-      if (event.code !== CLOSE_NORMAL && event.code !== CLOSE_GOING_AWAY && event.code !== CLOSE_NO_STATUS && event.code !== CLOSE_NOT_FOUND) {
-        let msg = `WebSocket closed with code ${event.code}`;
-        if (event.reason) {
-          msg += `: ${event.reason}`;
-        }
-        this.logger.log(msg);
-        if (this.onServerDisconnectError && event.reason) {
-          this.onServerDisconnectError(msg);
-        }
-      }
-      const reason = classifyDisconnectError(event.reason);
-      this.scheduleReconnect(reason);
-      return;
-    };
-  }
-  socketState() {
-    return this.socket.state;
-  }
-  sendMessage(message) {
-    const messageForLog = {
-      type: message.type,
-      ...message.type === "Authenticate" && message.tokenType === "User" ? {
-        value: `...${message.value.slice(-7)}`
-      } : {}
-    };
-    if (this.socket.state === "ready" && this.socket.paused === "no") {
-      const encodedMessage = encodeClientMessage(message);
-      const request = JSON.stringify(encodedMessage);
-      let sent = false;
-      try {
-        this.socket.ws.send(request);
-        sent = true;
-      } catch (error) {
-        this.logger.log(`Failed to send message on WebSocket, reconnecting: ${error}`);
-        this.closeAndReconnect("FailedToSendMessage");
-      }
-      this._logVerbose(`${sent ? "sent" : "failed to send"} message with type ${message.type}: ${JSON.stringify(messageForLog)}`);
-      return true;
-    }
-    this._logVerbose(`message not sent (socket state: ${this.socket.state}, paused: ${"paused" in this.socket ? this.socket.paused : undefined}): ${JSON.stringify(messageForLog)}`);
-    return false;
-  }
-  resetServerInactivityTimeout() {
-    if (this.socket.state === "terminated") {
-      return;
-    }
-    if (this.reconnectDueToServerInactivityTimeout !== null) {
-      clearTimeout(this.reconnectDueToServerInactivityTimeout);
-      this.reconnectDueToServerInactivityTimeout = null;
-    }
-    this.reconnectDueToServerInactivityTimeout = setTimeout(() => {
-      this.closeAndReconnect("InactiveServer");
-    }, this.serverInactivityThreshold);
-  }
-  scheduleReconnect(reason) {
-    this.socket = { state: "disconnected" };
-    const backoff = this.nextBackoff(reason);
-    this.markConnectionStateDirty();
-    this.logger.log(`Attempting reconnect in ${Math.round(backoff)}ms`);
-    setTimeout(() => this.connect(), backoff);
-  }
-  closeAndReconnect(closeReason) {
-    this._logVerbose(`begin closeAndReconnect with reason ${closeReason}`);
-    switch (this.socket.state) {
-      case "disconnected":
-      case "terminated":
-      case "stopped":
-        return;
-      case "connecting":
-      case "ready": {
-        this.lastCloseReason = closeReason;
-        this.close();
-        this.scheduleReconnect("client");
-        return;
-      }
-      default: {
-        this.socket;
-      }
-    }
-  }
-  close() {
-    this.transitionChunkBuffer = null;
-    switch (this.socket.state) {
-      case "disconnected":
-      case "terminated":
-      case "stopped":
-        return Promise.resolve();
-      case "connecting": {
-        const ws = this.socket.ws;
-        ws.onmessage = (_message) => {
-          this._logVerbose("Ignoring message received after close");
-        };
-        return new Promise((r) => {
-          ws.onclose = () => {
-            this._logVerbose("Closed after connecting");
-            r();
-          };
-          ws.onopen = () => {
-            this._logVerbose("Opened after connecting");
-            ws.close();
-          };
-        });
-      }
-      case "ready": {
-        this._logVerbose("ws.close called");
-        const ws = this.socket.ws;
-        ws.onmessage = (_message) => {
-          this._logVerbose("Ignoring message received after close");
-        };
-        const result = new Promise((r) => {
-          ws.onclose = () => {
-            r();
-          };
-        });
-        ws.close();
-        return result;
-      }
-      default: {
-        this.socket;
-        return Promise.resolve();
-      }
-    }
-  }
-  terminate() {
-    if (this.reconnectDueToServerInactivityTimeout) {
-      clearTimeout(this.reconnectDueToServerInactivityTimeout);
-    }
-    switch (this.socket.state) {
-      case "terminated":
-      case "stopped":
-      case "disconnected":
-      case "connecting":
-      case "ready": {
-        const result = this.close();
-        this.setSocketState({ state: "terminated" });
-        return result;
-      }
-      default: {
-        this.socket;
-        throw new Error(`Invalid websocket state: ${this.socket.state}`);
-      }
-    }
-  }
-  stop() {
-    switch (this.socket.state) {
-      case "terminated":
-        return Promise.resolve();
-      case "connecting":
-      case "stopped":
-      case "disconnected":
-      case "ready": {
-        const result = this.close();
-        this.socket = { state: "stopped" };
-        return result;
-      }
-      default: {
-        this.socket;
-        return Promise.resolve();
-      }
-    }
-  }
-  tryRestart() {
-    switch (this.socket.state) {
-      case "stopped":
-        break;
-      case "terminated":
-      case "connecting":
-      case "ready":
-      case "disconnected":
-        this.logger.logVerbose("Restart called without stopping first");
-        return;
-      default: {
-        this.socket;
-      }
-    }
-    this.connect();
-  }
-  pause() {
-    switch (this.socket.state) {
-      case "disconnected":
-      case "stopped":
-      case "terminated":
-        return;
-      case "connecting":
-      case "ready": {
-        this.socket = { ...this.socket, paused: "yes" };
-        return;
-      }
-      default: {
-        this.socket;
-        return;
-      }
-    }
-  }
-  resume() {
-    switch (this.socket.state) {
-      case "connecting":
-        this.socket = { ...this.socket, paused: "no" };
-        return;
-      case "ready":
-        if (this.socket.paused === "uninitialized") {
-          this.socket = { ...this.socket, paused: "no" };
-          this.onOpen({
-            connectionCount: this.connectionCount,
-            lastCloseReason: this.lastCloseReason,
-            clientTs: monotonicMillis()
-          });
-        } else if (this.socket.paused === "yes") {
-          this.socket = { ...this.socket, paused: "no" };
-          this.onResume();
-        }
-        return;
-      case "terminated":
-      case "stopped":
-      case "disconnected":
-        return;
-      default: {
-        this.socket;
-      }
-    }
-    this.connect();
-  }
-  connectionState() {
-    return {
-      isConnected: this.socket.state === "ready",
-      hasEverConnected: this._hasEverConnected,
-      connectionCount: this.connectionCount,
-      connectionRetries: this.retries
-    };
-  }
-  _logVerbose(message) {
-    this.logger.logVerbose(message);
-  }
-  nextBackoff(reason) {
-    const initialBackoff = reason === "client" ? 100 : reason === "Unknown" ? this.defaultInitialBackoff : serverDisconnectErrors[reason].timeout;
-    const baseBackoff = initialBackoff * Math.pow(2, this.retries);
-    this.retries += 1;
-    const actualBackoff = Math.min(baseBackoff, this.maxBackoff);
-    const jitter = actualBackoff * (Math.random() - 0.5);
-    return actualBackoff + jitter;
-  }
-  reportLargeTransition({
-    transition,
-    messageLength
-  }) {
-    if (transition.clientClockSkew === undefined || transition.serverTs === undefined) {
-      return;
-    }
-    const transitionTransitTime = monotonicMillis() - transition.clientClockSkew - transition.serverTs / 1e6;
-    const prettyTransitionTime = `${Math.round(transitionTransitTime)}ms`;
-    const prettyMessageMB = `${Math.round(messageLength / 1e4) / 100}MB`;
-    const bytesPerSecond = messageLength / (transitionTransitTime / 1000);
-    const prettyBytesPerSecond = `${Math.round(bytesPerSecond / 1e4) / 100}MB per second`;
-    this._logVerbose(`received ${prettyMessageMB} transition in ${prettyTransitionTime} at ${prettyBytesPerSecond}`);
-    if (messageLength > 20000000) {
-      this.logger.log(`received query results totaling more that 20MB (${prettyMessageMB}) which will take a long time to download on slower connections`);
-    } else if (transitionTransitTime > 20000) {
-      this.logger.log(`received query results totaling ${prettyMessageMB} which took more than 20s to arrive (${prettyTransitionTime})`);
-    }
-    if (this.debug) {
-      this.sendMessage({
-        type: "Event",
-        eventType: "ClientReceivedTransition",
-        event: { transitionTransitTime, messageLength }
-      });
-    }
-  }
-}
-var __defProp9, __defNormalProp8 = (obj, key, value) => (key in obj) ? __defProp9(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value, __publicField8 = (obj, key, value) => __defNormalProp8(obj, typeof key !== "symbol" ? key + "" : key, value), CLOSE_NORMAL = 1000, CLOSE_GOING_AWAY = 1001, CLOSE_NO_STATUS = 1005, CLOSE_NOT_FOUND = 4040, firstTime, serverDisconnectErrors;
-var init_web_socket_manager = __esm(() => {
-  init_protocol();
-  __defProp9 = Object.defineProperty;
-  serverDisconnectErrors = {
-    InternalServerError: { timeout: 1000 },
-    SubscriptionsWorkerFullError: { timeout: 3000 },
-    TooManyConcurrentRequests: { timeout: 3000 },
-    CommitterFullError: { timeout: 3000 },
-    AwsTooManyRequestsException: { timeout: 3000 },
-    ExecuteFullError: { timeout: 3000 },
-    SystemTimeoutError: { timeout: 3000 },
-    ExpiredInQueue: { timeout: 3000 },
-    VectorIndexesUnavailable: { timeout: 1000 },
-    SearchIndexesUnavailable: { timeout: 1000 },
-    TableSummariesUnavailable: { timeout: 1000 },
-    VectorIndexTooLarge: { timeout: 3000 },
-    SearchIndexTooLarge: { timeout: 3000 },
-    TooManyWritesInTimePeriod: { timeout: 3000 }
-  };
-});
-
-// node_modules/convex/dist/esm/browser/sync/session.js
-function newSessionId() {
-  return uuidv4();
-}
-function uuidv4() {
-  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
-    const r = Math.random() * 16 | 0, v = c === "x" ? r : r & 3 | 8;
-    return v.toString(16);
-  });
-}
-
-// node_modules/convex/dist/esm/vendor/jwt-decode/index.js
-function b64DecodeUnicode(str) {
-  return decodeURIComponent(atob(str).replace(/(.)/g, (_m, p) => {
-    let code2 = p.charCodeAt(0).toString(16).toUpperCase();
-    if (code2.length < 2) {
-      code2 = "0" + code2;
-    }
-    return "%" + code2;
-  }));
-}
-function base64UrlDecode(str) {
-  let output = str.replace(/-/g, "+").replace(/_/g, "/");
-  switch (output.length % 4) {
-    case 0:
-      break;
-    case 2:
-      output += "==";
-      break;
-    case 3:
-      output += "=";
-      break;
-    default:
-      throw new Error("base64 string is not of the correct length");
-  }
-  try {
-    return b64DecodeUnicode(output);
-  } catch {
-    return atob(output);
-  }
-}
-function jwtDecode(token, options) {
-  if (typeof token !== "string") {
-    throw new InvalidTokenError("Invalid token specified: must be a string");
-  }
-  options || (options = {});
-  const pos = options.header === true ? 0 : 1;
-  const part = token.split(".")[pos];
-  if (typeof part !== "string") {
-    throw new InvalidTokenError(`Invalid token specified: missing part #${pos + 1}`);
-  }
-  let decoded;
-  try {
-    decoded = base64UrlDecode(part);
-  } catch (e) {
-    throw new InvalidTokenError(`Invalid token specified: invalid base64 for part #${pos + 1} (${e.message})`);
-  }
-  try {
-    return JSON.parse(decoded);
-  } catch (e) {
-    throw new InvalidTokenError(`Invalid token specified: invalid json for part #${pos + 1} (${e.message})`);
-  }
-}
-var InvalidTokenError;
-var init_jwt_decode = __esm(() => {
-  InvalidTokenError = class InvalidTokenError extends Error {
-  };
-  InvalidTokenError.prototype.name = "InvalidTokenError";
-});
-
-// node_modules/convex/dist/esm/browser/sync/authentication_manager.js
-class AuthenticationManager {
-  constructor(syncState, callbacks, config) {
-    __publicField9(this, "authState", { state: "noAuth" });
-    __publicField9(this, "configVersion", 0);
-    __publicField9(this, "syncState");
-    __publicField9(this, "authenticate");
-    __publicField9(this, "stopSocket");
-    __publicField9(this, "tryRestartSocket");
-    __publicField9(this, "pauseSocket");
-    __publicField9(this, "resumeSocket");
-    __publicField9(this, "clearAuth");
-    __publicField9(this, "logger");
-    __publicField9(this, "refreshTokenLeewaySeconds");
-    __publicField9(this, "tokenConfirmationAttempts", 0);
-    this.syncState = syncState;
-    this.authenticate = callbacks.authenticate;
-    this.stopSocket = callbacks.stopSocket;
-    this.tryRestartSocket = callbacks.tryRestartSocket;
-    this.pauseSocket = callbacks.pauseSocket;
-    this.resumeSocket = callbacks.resumeSocket;
-    this.clearAuth = callbacks.clearAuth;
-    this.logger = config.logger;
-    this.refreshTokenLeewaySeconds = config.refreshTokenLeewaySeconds;
-  }
-  async setConfig(fetchToken, onChange) {
-    this.resetAuthState();
-    this._logVerbose("pausing WS for auth token fetch");
-    this.pauseSocket();
-    const token = await this.fetchTokenAndGuardAgainstRace(fetchToken, {
-      forceRefreshToken: false
-    });
-    if (token.isFromOutdatedConfig) {
-      return;
-    }
-    if (token.value) {
-      this.setAuthState({
-        state: "waitingForServerConfirmationOfCachedToken",
-        config: { fetchToken, onAuthChange: onChange },
-        hasRetried: false
-      });
-      this.authenticate(token.value);
-    } else {
-      this.setAuthState({
-        state: "initialRefetch",
-        config: { fetchToken, onAuthChange: onChange }
-      });
-      await this.refetchToken();
-    }
-    this._logVerbose("resuming WS after auth token fetch");
-    this.resumeSocket();
-  }
-  onTransition(serverMessage) {
-    if (!this.syncState.isCurrentOrNewerAuthVersion(serverMessage.endVersion.identity)) {
-      return;
-    }
-    if (serverMessage.endVersion.identity <= serverMessage.startVersion.identity) {
-      return;
-    }
-    if (this.authState.state === "waitingForServerConfirmationOfCachedToken") {
-      this._logVerbose("server confirmed auth token is valid");
-      this.refetchToken();
-      this.authState.config.onAuthChange(true);
-      return;
-    }
-    if (this.authState.state === "waitingForServerConfirmationOfFreshToken") {
-      this._logVerbose("server confirmed new auth token is valid");
-      this.scheduleTokenRefetch(this.authState.token);
-      this.tokenConfirmationAttempts = 0;
-      if (!this.authState.hadAuth) {
-        this.authState.config.onAuthChange(true);
-      }
-    }
-  }
-  onAuthError(serverMessage) {
-    if (serverMessage.authUpdateAttempted === false && (this.authState.state === "waitingForServerConfirmationOfFreshToken" || this.authState.state === "waitingForServerConfirmationOfCachedToken")) {
-      this._logVerbose("ignoring non-auth token expired error");
-      return;
-    }
-    const { baseVersion } = serverMessage;
-    if (!this.syncState.isCurrentOrNewerAuthVersion(baseVersion + 1)) {
-      this._logVerbose("ignoring auth error for previous auth attempt");
-      return;
-    }
-    this.tryToReauthenticate(serverMessage);
-    return;
-  }
-  async tryToReauthenticate(serverMessage) {
-    this._logVerbose(`attempting to reauthenticate: ${serverMessage.error}`);
-    if (this.authState.state === "noAuth" || this.authState.state === "waitingForServerConfirmationOfFreshToken" && this.tokenConfirmationAttempts >= MAX_TOKEN_CONFIRMATION_ATTEMPTS) {
-      this.logger.error(`Failed to authenticate: "${serverMessage.error}", check your server auth config`);
-      if (this.syncState.hasAuth()) {
-        this.syncState.clearAuth();
-      }
-      if (this.authState.state !== "noAuth") {
-        this.setAndReportAuthFailed(this.authState.config.onAuthChange);
-      }
-      return;
-    }
-    if (this.authState.state === "waitingForServerConfirmationOfFreshToken") {
-      this.tokenConfirmationAttempts++;
-      this._logVerbose(`retrying reauthentication, ${MAX_TOKEN_CONFIRMATION_ATTEMPTS - this.tokenConfirmationAttempts} attempts remaining`);
-    }
-    await this.stopSocket();
-    const token = await this.fetchTokenAndGuardAgainstRace(this.authState.config.fetchToken, {
-      forceRefreshToken: true
-    });
-    if (token.isFromOutdatedConfig) {
-      return;
-    }
-    if (token.value && this.syncState.isNewAuth(token.value)) {
-      this.authenticate(token.value);
-      this.setAuthState({
-        state: "waitingForServerConfirmationOfFreshToken",
-        config: this.authState.config,
-        token: token.value,
-        hadAuth: this.authState.state === "notRefetching" || this.authState.state === "waitingForScheduledRefetch"
-      });
-    } else {
-      this._logVerbose("reauthentication failed, could not fetch a new token");
-      if (this.syncState.hasAuth()) {
-        this.syncState.clearAuth();
-      }
-      this.setAndReportAuthFailed(this.authState.config.onAuthChange);
-    }
-    this.tryRestartSocket();
-  }
-  async refetchToken() {
-    if (this.authState.state === "noAuth") {
-      return;
-    }
-    this._logVerbose("refetching auth token");
-    const token = await this.fetchTokenAndGuardAgainstRace(this.authState.config.fetchToken, {
-      forceRefreshToken: true
-    });
-    if (token.isFromOutdatedConfig) {
-      return;
-    }
-    if (token.value) {
-      if (this.syncState.isNewAuth(token.value)) {
-        this.setAuthState({
-          state: "waitingForServerConfirmationOfFreshToken",
-          hadAuth: this.syncState.hasAuth(),
-          token: token.value,
-          config: this.authState.config
-        });
-        this.authenticate(token.value);
-      } else {
-        this.setAuthState({
-          state: "notRefetching",
-          config: this.authState.config
-        });
-      }
-    } else {
-      this._logVerbose("refetching token failed");
-      if (this.syncState.hasAuth()) {
-        this.clearAuth();
-      }
-      this.setAndReportAuthFailed(this.authState.config.onAuthChange);
-    }
-    this._logVerbose("restarting WS after auth token fetch (if currently stopped)");
-    this.tryRestartSocket();
-  }
-  scheduleTokenRefetch(token) {
-    if (this.authState.state === "noAuth") {
-      return;
-    }
-    const decodedToken = this.decodeToken(token);
-    if (!decodedToken) {
-      this.logger.error("Auth token is not a valid JWT, cannot refetch the token");
-      return;
-    }
-    const { iat, exp } = decodedToken;
-    if (!iat || !exp) {
-      this.logger.error("Auth token does not have required fields, cannot refetch the token");
-      return;
-    }
-    const tokenValiditySeconds = exp - iat;
-    if (tokenValiditySeconds <= 2) {
-      this.logger.error("Auth token does not live long enough, cannot refetch the token");
-      return;
-    }
-    let delay = Math.min(MAXIMUM_REFRESH_DELAY, (tokenValiditySeconds - this.refreshTokenLeewaySeconds) * 1000);
-    if (delay <= 0) {
-      this.logger.warn(`Refetching auth token immediately, configured leeway ${this.refreshTokenLeewaySeconds}s is larger than the token's lifetime ${tokenValiditySeconds}s`);
-      delay = 0;
-    }
-    const refetchTokenTimeoutId = setTimeout(() => {
-      this._logVerbose("running scheduled token refetch");
-      this.refetchToken();
-    }, delay);
-    this.setAuthState({
-      state: "waitingForScheduledRefetch",
-      refetchTokenTimeoutId,
-      config: this.authState.config
-    });
-    this._logVerbose(`scheduled preemptive auth token refetching in ${delay}ms`);
-  }
-  async fetchTokenAndGuardAgainstRace(fetchToken, fetchArgs) {
-    const originalConfigVersion = ++this.configVersion;
-    this._logVerbose(`fetching token with config version ${originalConfigVersion}`);
-    const token = await fetchToken(fetchArgs);
-    if (this.configVersion !== originalConfigVersion) {
-      this._logVerbose(`stale config version, expected ${originalConfigVersion}, got ${this.configVersion}`);
-      return { isFromOutdatedConfig: true };
-    }
-    return { isFromOutdatedConfig: false, value: token };
-  }
-  stop() {
-    this.resetAuthState();
-    this.configVersion++;
-    this._logVerbose(`config version bumped to ${this.configVersion}`);
-  }
-  setAndReportAuthFailed(onAuthChange) {
-    onAuthChange(false);
-    this.resetAuthState();
-  }
-  resetAuthState() {
-    this.setAuthState({ state: "noAuth" });
-  }
-  setAuthState(newAuth) {
-    const authStateForLog = newAuth.state === "waitingForServerConfirmationOfFreshToken" ? {
-      hadAuth: newAuth.hadAuth,
-      state: newAuth.state,
-      token: `...${newAuth.token.slice(-7)}`
-    } : { state: newAuth.state };
-    this._logVerbose(`setting auth state to ${JSON.stringify(authStateForLog)}`);
-    switch (newAuth.state) {
-      case "waitingForScheduledRefetch":
-      case "notRefetching":
-      case "noAuth":
-        this.tokenConfirmationAttempts = 0;
-        break;
-      case "waitingForServerConfirmationOfFreshToken":
-      case "waitingForServerConfirmationOfCachedToken":
-      case "initialRefetch":
-        break;
-      default: {
-      }
-    }
-    if (this.authState.state === "waitingForScheduledRefetch") {
-      clearTimeout(this.authState.refetchTokenTimeoutId);
-      this.syncState.markAuthCompletion();
-    }
-    this.authState = newAuth;
-  }
-  decodeToken(token) {
-    try {
-      return jwtDecode(token);
-    } catch (e) {
-      this._logVerbose(`Error decoding token: ${e instanceof Error ? e.message : "Unknown error"}`);
-      return null;
-    }
-  }
-  _logVerbose(message) {
-    this.logger.logVerbose(`${message} [v${this.configVersion}]`);
-  }
-}
-var __defProp10, __defNormalProp9 = (obj, key, value) => (key in obj) ? __defProp10(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value, __publicField9 = (obj, key, value) => __defNormalProp9(obj, typeof key !== "symbol" ? key + "" : key, value), MAXIMUM_REFRESH_DELAY, MAX_TOKEN_CONFIRMATION_ATTEMPTS = 2;
-var init_authentication_manager = __esm(() => {
-  init_jwt_decode();
-  __defProp10 = Object.defineProperty;
-  MAXIMUM_REFRESH_DELAY = 20 * 24 * 60 * 60 * 1000;
-});
-
-// node_modules/convex/dist/esm/browser/sync/metrics.js
-function mark(name, sessionId) {
-  const detail = { sessionId };
-  if (typeof performance === "undefined" || !performance.mark)
-    return;
-  performance.mark(name, { detail });
-}
-function performanceMarkToJson(mark2) {
-  let name = mark2.name.slice("convex".length);
-  name = name.charAt(0).toLowerCase() + name.slice(1);
-  return {
-    name,
-    startTime: mark2.startTime
-  };
-}
-function getMarksReport(sessionId) {
-  if (typeof performance === "undefined" || !performance.getEntriesByName) {
-    return [];
-  }
-  const allMarks = [];
-  for (const name of markNames) {
-    const marks = performance.getEntriesByName(name).filter((entry) => entry.entryType === "mark").filter((mark2) => mark2.detail.sessionId === sessionId);
-    allMarks.push(...marks);
-  }
-  return allMarks.map(performanceMarkToJson);
-}
-var markNames;
-var init_metrics = __esm(() => {
-  markNames = [
-    "convexClientConstructed",
-    "convexWebSocketOpen",
-    "convexFirstMessageReceived"
-  ];
-});
-
-// node_modules/convex/dist/esm/browser/sync/client.js
-class BaseConvexClient {
-  constructor(address, onTransition, options) {
-    __publicField10(this, "address");
-    __publicField10(this, "state");
-    __publicField10(this, "requestManager");
-    __publicField10(this, "webSocketManager");
-    __publicField10(this, "authenticationManager");
-    __publicField10(this, "remoteQuerySet");
-    __publicField10(this, "optimisticQueryResults");
-    __publicField10(this, "_transitionHandlerCounter", 0);
-    __publicField10(this, "_nextRequestId");
-    __publicField10(this, "_onTransitionFns", /* @__PURE__ */ new Map);
-    __publicField10(this, "_sessionId");
-    __publicField10(this, "firstMessageReceived", false);
-    __publicField10(this, "debug");
-    __publicField10(this, "logger");
-    __publicField10(this, "maxObservedTimestamp");
-    __publicField10(this, "connectionStateSubscribers", /* @__PURE__ */ new Map);
-    __publicField10(this, "nextConnectionStateSubscriberId", 0);
-    __publicField10(this, "_lastPublishedConnectionState");
-    __publicField10(this, "markConnectionStateDirty", () => {
-      Promise.resolve().then(() => {
-        const curConnectionState = this.connectionState();
-        if (JSON.stringify(curConnectionState) !== JSON.stringify(this._lastPublishedConnectionState)) {
-          this._lastPublishedConnectionState = curConnectionState;
-          for (const cb of this.connectionStateSubscribers.values()) {
-            cb(curConnectionState);
-          }
-        }
-      });
-    });
-    __publicField10(this, "mark", (name) => {
-      if (this.debug) {
-        mark(name, this.sessionId);
-      }
-    });
-    if (typeof address === "object") {
-      throw new Error("Passing a ClientConfig object is no longer supported. Pass the URL of the Convex deployment as a string directly.");
-    }
-    if (options?.skipConvexDeploymentUrlCheck !== true) {
-      validateDeploymentUrl(address);
-    }
-    options = { ...options };
-    const authRefreshTokenLeewaySeconds = options.authRefreshTokenLeewaySeconds ?? 2;
-    let webSocketConstructor = options.webSocketConstructor;
-    if (!webSocketConstructor && typeof WebSocket === "undefined") {
-      throw new Error("No WebSocket global variable defined! To use Convex in an environment without WebSocket try the HTTP client: https://docs.convex.dev/api/classes/browser.ConvexHttpClient");
-    }
-    webSocketConstructor = webSocketConstructor || WebSocket;
-    this.debug = options.reportDebugInfoToConvex ?? false;
-    this.address = address;
-    this.logger = options.logger === false ? instantiateNoopLogger({ verbose: options.verbose ?? false }) : options.logger !== true && options.logger ? options.logger : instantiateDefaultLogger({ verbose: options.verbose ?? false });
-    const i = address.search("://");
-    if (i === -1) {
-      throw new Error("Provided address was not an absolute URL.");
-    }
-    const origin = address.substring(i + 3);
-    const protocol = address.substring(0, i);
-    let wsProtocol;
-    if (protocol === "http") {
-      wsProtocol = "ws";
-    } else if (protocol === "https") {
-      wsProtocol = "wss";
-    } else {
-      throw new Error(`Unknown parent protocol ${protocol}`);
-    }
-    const wsUri = `${wsProtocol}://${origin}/api/${version}/sync`;
-    this.state = new LocalSyncState;
-    this.remoteQuerySet = new RemoteQuerySet((queryId) => this.state.queryPath(queryId), this.logger);
-    this.requestManager = new RequestManager(this.logger, this.markConnectionStateDirty);
-    const pauseSocket = () => {
-      this.webSocketManager.pause();
-      this.state.pause();
-    };
-    this.authenticationManager = new AuthenticationManager(this.state, {
-      authenticate: (token) => {
-        const message = this.state.setAuth(token);
-        this.webSocketManager.sendMessage(message);
-        return message.baseVersion;
-      },
-      stopSocket: () => this.webSocketManager.stop(),
-      tryRestartSocket: () => this.webSocketManager.tryRestart(),
-      pauseSocket,
-      resumeSocket: () => this.webSocketManager.resume(),
-      clearAuth: () => {
-        this.clearAuth();
-      }
-    }, {
-      logger: this.logger,
-      refreshTokenLeewaySeconds: authRefreshTokenLeewaySeconds
-    });
-    this.optimisticQueryResults = new OptimisticQueryResults;
-    this.addOnTransitionHandler((transition) => {
-      onTransition(transition.queries.map((q) => q.token));
-    });
-    this._nextRequestId = 0;
-    this._sessionId = newSessionId();
-    const { unsavedChangesWarning } = options;
-    if (typeof window === "undefined" || typeof window.addEventListener === "undefined") {
-      if (unsavedChangesWarning === true) {
-        throw new Error("unsavedChangesWarning requested, but window.addEventListener not found! Remove {unsavedChangesWarning: true} from Convex client options.");
-      }
-    } else if (unsavedChangesWarning !== false) {
-      window.addEventListener("beforeunload", (e) => {
-        if (this.requestManager.hasIncompleteRequests()) {
-          e.preventDefault();
-          const confirmationMessage = "Are you sure you want to leave? Your changes may not be saved.";
-          (e || window.event).returnValue = confirmationMessage;
-          return confirmationMessage;
-        }
-      });
-    }
-    this.webSocketManager = new WebSocketManager(wsUri, {
-      onOpen: (reconnectMetadata) => {
-        this.mark("convexWebSocketOpen");
-        this.webSocketManager.sendMessage({
-          ...reconnectMetadata,
-          type: "Connect",
-          sessionId: this._sessionId,
-          maxObservedTimestamp: this.maxObservedTimestamp
-        });
-        const oldRemoteQueryResults = new Set(this.remoteQuerySet.remoteQueryResults().keys());
-        this.remoteQuerySet = new RemoteQuerySet((queryId) => this.state.queryPath(queryId), this.logger);
-        const [querySetModification, authModification] = this.state.restart(oldRemoteQueryResults);
-        if (authModification) {
-          this.webSocketManager.sendMessage(authModification);
-        }
-        this.webSocketManager.sendMessage(querySetModification);
-        for (const message of this.requestManager.restart()) {
-          this.webSocketManager.sendMessage(message);
-        }
-      },
-      onResume: () => {
-        const [querySetModification, authModification] = this.state.resume();
-        if (authModification) {
-          this.webSocketManager.sendMessage(authModification);
-        }
-        if (querySetModification) {
-          this.webSocketManager.sendMessage(querySetModification);
-        }
-        for (const message of this.requestManager.resume()) {
-          this.webSocketManager.sendMessage(message);
-        }
-      },
-      onMessage: (serverMessage) => {
-        if (!this.firstMessageReceived) {
-          this.firstMessageReceived = true;
-          this.mark("convexFirstMessageReceived");
-          this.reportMarks();
-        }
-        switch (serverMessage.type) {
-          case "Transition": {
-            this.observedTimestamp(serverMessage.endVersion.ts);
-            this.authenticationManager.onTransition(serverMessage);
-            this.remoteQuerySet.transition(serverMessage);
-            this.state.transition(serverMessage);
-            const completedRequests = this.requestManager.removeCompleted(this.remoteQuerySet.timestamp());
-            this.notifyOnQueryResultChanges(completedRequests);
-            break;
-          }
-          case "MutationResponse": {
-            if (serverMessage.success) {
-              this.observedTimestamp(serverMessage.ts);
-            }
-            const completedMutationInfo = this.requestManager.onResponse(serverMessage);
-            if (completedMutationInfo !== null) {
-              this.notifyOnQueryResultChanges(/* @__PURE__ */ new Map([
-                [
-                  completedMutationInfo.requestId,
-                  completedMutationInfo.result
-                ]
-              ]));
-            }
-            break;
-          }
-          case "ActionResponse": {
-            this.requestManager.onResponse(serverMessage);
-            break;
-          }
-          case "AuthError": {
-            this.authenticationManager.onAuthError(serverMessage);
-            break;
-          }
-          case "FatalError": {
-            const error = logFatalError(this.logger, serverMessage.error);
-            this.webSocketManager.terminate();
-            throw error;
-          }
-          default: {
-          }
-        }
-        return {
-          hasSyncedPastLastReconnect: this.hasSyncedPastLastReconnect()
-        };
-      },
-      onServerDisconnectError: options.onServerDisconnectError
-    }, webSocketConstructor, this.logger, this.markConnectionStateDirty, this.debug);
-    this.mark("convexClientConstructed");
-    if (options.expectAuth) {
-      pauseSocket();
-    }
-  }
-  hasSyncedPastLastReconnect() {
-    const hasSyncedPastLastReconnect = this.requestManager.hasSyncedPastLastReconnect() || this.state.hasSyncedPastLastReconnect();
-    return hasSyncedPastLastReconnect;
-  }
-  observedTimestamp(observedTs) {
-    if (this.maxObservedTimestamp === undefined || this.maxObservedTimestamp.lessThanOrEqual(observedTs)) {
-      this.maxObservedTimestamp = observedTs;
-    }
-  }
-  getMaxObservedTimestamp() {
-    return this.maxObservedTimestamp;
-  }
-  notifyOnQueryResultChanges(completedRequests) {
-    const remoteQueryResults = this.remoteQuerySet.remoteQueryResults();
-    const queryTokenToValue = /* @__PURE__ */ new Map;
-    for (const [queryId, result] of remoteQueryResults) {
-      const queryToken = this.state.queryToken(queryId);
-      if (queryToken !== null) {
-        const query = {
-          result,
-          udfPath: this.state.queryPath(queryId),
-          args: this.state.queryArgs(queryId)
-        };
-        queryTokenToValue.set(queryToken, query);
-      }
-    }
-    const changedQueryTokens = this.optimisticQueryResults.ingestQueryResultsFromServer(queryTokenToValue, new Set(completedRequests.keys()));
-    this.handleTransition({
-      queries: changedQueryTokens.map((token) => {
-        const optimisticResult = this.optimisticQueryResults.rawQueryResult(token);
-        return {
-          token,
-          modification: {
-            kind: "Updated",
-            result: optimisticResult
-          }
-        };
-      }),
-      reflectedMutations: Array.from(completedRequests).map(([requestId, result]) => ({
-        requestId,
-        result
-      })),
-      timestamp: this.remoteQuerySet.timestamp()
-    });
-  }
-  handleTransition(transition) {
-    for (const fn of this._onTransitionFns.values()) {
-      fn(transition);
-    }
-  }
-  addOnTransitionHandler(fn) {
-    const id = this._transitionHandlerCounter++;
-    this._onTransitionFns.set(id, fn);
-    return () => this._onTransitionFns.delete(id);
-  }
-  getCurrentAuthClaims() {
-    const authToken = this.state.getAuth();
-    let decoded = {};
-    if (authToken && authToken.tokenType === "User") {
-      try {
-        decoded = authToken ? jwtDecode(authToken.value) : {};
-      } catch {
-        decoded = {};
-      }
-    } else {
-      return;
-    }
-    return { token: authToken.value, decoded };
-  }
-  setAuth(fetchToken, onChange) {
-    this.authenticationManager.setConfig(fetchToken, onChange);
-  }
-  hasAuth() {
-    return this.state.hasAuth();
-  }
-  setAdminAuth(value, fakeUserIdentity) {
-    const message = this.state.setAdminAuth(value, fakeUserIdentity);
-    this.webSocketManager.sendMessage(message);
-  }
-  clearAuth() {
-    const message = this.state.clearAuth();
-    this.webSocketManager.sendMessage(message);
-  }
-  subscribe(name, args, options) {
-    const argsObject = parseArgs(args);
-    const { modification, queryToken, unsubscribe } = this.state.subscribe(name, argsObject, options?.journal, options?.componentPath);
-    if (modification !== null) {
-      this.webSocketManager.sendMessage(modification);
-    }
-    return {
-      queryToken,
-      unsubscribe: () => {
-        const modification2 = unsubscribe();
-        if (modification2) {
-          this.webSocketManager.sendMessage(modification2);
-        }
-      }
-    };
-  }
-  localQueryResult(udfPath, args) {
-    const argsObject = parseArgs(args);
-    const queryToken = serializePathAndArgs(udfPath, argsObject);
-    return this.optimisticQueryResults.queryResult(queryToken);
-  }
-  localQueryResultByToken(queryToken) {
-    return this.optimisticQueryResults.queryResult(queryToken);
-  }
-  hasLocalQueryResultByToken(queryToken) {
-    return this.optimisticQueryResults.hasQueryResult(queryToken);
-  }
-  localQueryLogs(udfPath, args) {
-    const argsObject = parseArgs(args);
-    const queryToken = serializePathAndArgs(udfPath, argsObject);
-    return this.optimisticQueryResults.queryLogs(queryToken);
-  }
-  queryJournal(name, args) {
-    const argsObject = parseArgs(args);
-    const queryToken = serializePathAndArgs(name, argsObject);
-    return this.state.queryJournal(queryToken);
-  }
-  connectionState() {
-    const wsConnectionState = this.webSocketManager.connectionState();
-    return {
-      hasInflightRequests: this.requestManager.hasInflightRequests(),
-      isWebSocketConnected: wsConnectionState.isConnected,
-      hasEverConnected: wsConnectionState.hasEverConnected,
-      connectionCount: wsConnectionState.connectionCount,
-      connectionRetries: wsConnectionState.connectionRetries,
-      timeOfOldestInflightRequest: this.requestManager.timeOfOldestInflightRequest(),
-      inflightMutations: this.requestManager.inflightMutations(),
-      inflightActions: this.requestManager.inflightActions()
-    };
-  }
-  subscribeToConnectionState(cb) {
-    const id = this.nextConnectionStateSubscriberId++;
-    this.connectionStateSubscribers.set(id, cb);
-    return () => {
-      this.connectionStateSubscribers.delete(id);
-    };
-  }
-  async mutation(name, args, options) {
-    const result = await this.mutationInternal(name, args, options);
-    if (!result.success) {
-      if (result.errorData !== undefined) {
-        throw forwardData(result, new ConvexError(createHybridErrorStacktrace("mutation", name, result)));
-      }
-      throw new Error(createHybridErrorStacktrace("mutation", name, result));
-    }
-    return result.value;
-  }
-  async mutationInternal(udfPath, args, options, componentPath) {
-    const { mutationPromise } = this.enqueueMutation(udfPath, args, options, componentPath);
-    return mutationPromise;
-  }
-  enqueueMutation(udfPath, args, options, componentPath) {
-    const mutationArgs = parseArgs(args);
-    this.tryReportLongDisconnect();
-    const requestId = this.nextRequestId;
-    this._nextRequestId++;
-    if (options !== undefined) {
-      const optimisticUpdate = options.optimisticUpdate;
-      if (optimisticUpdate !== undefined) {
-        const wrappedUpdate = (localQueryStore) => {
-          const result = optimisticUpdate(localQueryStore, mutationArgs);
-          if (result instanceof Promise) {
-            this.logger.warn("Optimistic update handler returned a Promise. Optimistic updates should be synchronous.");
-          }
-        };
-        const changedQueryTokens = this.optimisticQueryResults.applyOptimisticUpdate(wrappedUpdate, requestId);
-        const changedQueries = changedQueryTokens.map((token) => {
-          const localResult = this.localQueryResultByToken(token);
-          return {
-            token,
-            modification: {
-              kind: "Updated",
-              result: localResult === undefined ? undefined : {
-                success: true,
-                value: localResult,
-                logLines: []
-              }
-            }
-          };
-        });
-        this.handleTransition({
-          queries: changedQueries,
-          reflectedMutations: [],
-          timestamp: this.remoteQuerySet.timestamp()
-        });
-      }
-    }
-    const message = {
-      type: "Mutation",
-      requestId,
-      udfPath,
-      componentPath,
-      args: [convexToJson(mutationArgs)]
-    };
-    const mightBeSent = this.webSocketManager.sendMessage(message);
-    const mutationPromise = this.requestManager.request(message, mightBeSent);
-    return {
-      requestId,
-      mutationPromise
-    };
-  }
-  async action(name, args) {
-    const result = await this.actionInternal(name, args);
-    if (!result.success) {
-      if (result.errorData !== undefined) {
-        throw forwardData(result, new ConvexError(createHybridErrorStacktrace("action", name, result)));
-      }
-      throw new Error(createHybridErrorStacktrace("action", name, result));
-    }
-    return result.value;
-  }
-  async actionInternal(udfPath, args, componentPath) {
-    const actionArgs = parseArgs(args);
-    const requestId = this.nextRequestId;
-    this._nextRequestId++;
-    this.tryReportLongDisconnect();
-    const message = {
-      type: "Action",
-      requestId,
-      udfPath,
-      componentPath,
-      args: [convexToJson(actionArgs)]
-    };
-    const mightBeSent = this.webSocketManager.sendMessage(message);
-    return this.requestManager.request(message, mightBeSent);
-  }
-  async close() {
-    this.authenticationManager.stop();
-    return this.webSocketManager.terminate();
-  }
-  get url() {
-    return this.address;
-  }
-  get nextRequestId() {
-    return this._nextRequestId;
-  }
-  get sessionId() {
-    return this._sessionId;
-  }
-  reportMarks() {
-    if (this.debug) {
-      const report = getMarksReport(this.sessionId);
-      this.webSocketManager.sendMessage({
-        type: "Event",
-        eventType: "ClientConnect",
-        event: report
-      });
-    }
-  }
-  tryReportLongDisconnect() {
-    if (!this.debug) {
-      return;
-    }
-    const timeOfOldestRequest = this.connectionState().timeOfOldestInflightRequest;
-    if (timeOfOldestRequest === null || Date.now() - timeOfOldestRequest.getTime() <= 60 * 1000) {
-      return;
-    }
-    const endpoint = `${this.address}/api/debug_event`;
-    fetch(endpoint, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Convex-Client": `npm-${version}`
-      },
-      body: JSON.stringify({ event: "LongWebsocketDisconnect" })
-    }).then((response) => {
-      if (!response.ok) {
-        this.logger.warn("Analytics request failed with response:", response.body);
-      }
-    }).catch((error) => {
-      this.logger.warn("Analytics response failed with error:", error);
-    });
-  }
-}
-var __defProp11, __defNormalProp10 = (obj, key, value) => (key in obj) ? __defProp11(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value, __publicField10 = (obj, key, value) => __defNormalProp10(obj, typeof key !== "symbol" ? key + "" : key, value);
-var init_client = __esm(() => {
-  init_values();
-  init_logging();
-  init_local_state();
-  init_request_manager();
-  init_optimistic_updates_impl();
-  init_remote_query_set();
-  init_udf_path_utils();
-  init_web_socket_manager();
-  init_authentication_manager();
-  init_metrics();
-  init_errors();
-  init_jwt_decode();
-  __defProp11 = Object.defineProperty;
-});
-
-// node_modules/convex/dist/esm/browser/http_client.js
-class ConvexHttpClient {
-  constructor(address, options) {
-    __publicField11(this, "address");
-    __publicField11(this, "auth");
-    __publicField11(this, "adminAuth");
-    __publicField11(this, "encodedTsPromise");
-    __publicField11(this, "debug");
-    __publicField11(this, "fetchOptions");
-    __publicField11(this, "fetch");
-    __publicField11(this, "logger");
-    __publicField11(this, "mutationQueue", []);
-    __publicField11(this, "isProcessingQueue", false);
-    if (typeof options === "boolean") {
-      throw new Error("skipConvexDeploymentUrlCheck as the second argument is no longer supported. Please pass an options object, `{ skipConvexDeploymentUrlCheck: true }`.");
-    }
-    const opts = options ?? {};
-    if (opts.skipConvexDeploymentUrlCheck !== true) {
-      validateDeploymentUrl(address);
-    }
-    this.logger = options?.logger === false ? instantiateNoopLogger({ verbose: false }) : options?.logger !== true && options?.logger ? options.logger : instantiateDefaultLogger({ verbose: false });
-    this.address = address;
-    this.debug = true;
-    this.auth = undefined;
-    this.adminAuth = undefined;
-    this.fetch = options?.fetch;
-    if (options?.auth) {
-      this.setAuth(options.auth);
-    }
-  }
-  backendUrl() {
-    return `${this.address}/api`;
-  }
-  get url() {
-    return this.address;
-  }
-  setAuth(value) {
-    this.clearAuth();
-    this.auth = value;
-  }
-  setAdminAuth(token, actingAsIdentity) {
-    this.clearAuth();
-    if (actingAsIdentity !== undefined) {
-      const bytes = new TextEncoder().encode(JSON.stringify(actingAsIdentity));
-      const actingAsIdentityEncoded = btoa(String.fromCodePoint(...bytes));
-      this.adminAuth = `${token}:${actingAsIdentityEncoded}`;
-    } else {
-      this.adminAuth = token;
-    }
-  }
-  clearAuth() {
-    this.auth = undefined;
-    this.adminAuth = undefined;
-  }
-  setDebug(debug) {
-    this.debug = debug;
-  }
-  setFetchOptions(fetchOptions) {
-    this.fetchOptions = fetchOptions;
-  }
-  async consistentQuery(query, ...args) {
-    const queryArgs = parseArgs(args[0]);
-    const timestampPromise = this.getTimestamp();
-    return await this.queryInner(query, queryArgs, { timestampPromise });
-  }
-  async getTimestamp() {
-    if (this.encodedTsPromise) {
-      return this.encodedTsPromise;
-    }
-    return this.encodedTsPromise = this.getTimestampInner();
-  }
-  async getTimestampInner() {
-    const localFetch = this.fetch || specifiedFetch || fetch;
-    const headers = {
-      "Content-Type": "application/json",
-      "Convex-Client": `npm-${version}`
-    };
-    const response = await localFetch(`${this.address}/api/query_ts`, {
-      ...this.fetchOptions,
-      method: "POST",
-      headers
-    });
-    if (!response.ok) {
-      throw new Error(await response.text());
-    }
-    const { ts } = await response.json();
-    return ts;
-  }
-  async query(query, ...args) {
-    const queryArgs = parseArgs(args[0]);
-    return await this.queryInner(query, queryArgs, {});
-  }
-  async queryInner(query, queryArgs, options) {
-    const name = getFunctionName(query);
-    const args = [convexToJson(queryArgs)];
-    const headers = {
-      "Content-Type": "application/json",
-      "Convex-Client": `npm-${version}`
-    };
-    if (this.adminAuth) {
-      headers["Authorization"] = `Convex ${this.adminAuth}`;
-    } else if (this.auth) {
-      headers["Authorization"] = `Bearer ${this.auth}`;
-    }
-    const localFetch = this.fetch || specifiedFetch || fetch;
-    const timestamp = options.timestampPromise ? await options.timestampPromise : undefined;
-    const body = JSON.stringify({
-      path: name,
-      format: "convex_encoded_json",
-      args,
-      ...timestamp ? { ts: timestamp } : {}
-    });
-    const endpoint = timestamp ? `${this.address}/api/query_at_ts` : `${this.address}/api/query`;
-    const response = await localFetch(endpoint, {
-      ...this.fetchOptions,
-      body,
-      method: "POST",
-      headers
-    });
-    if (!response.ok && response.status !== STATUS_CODE_UDF_FAILED) {
-      throw new Error(await response.text());
-    }
-    const respJSON = await response.json();
-    if (this.debug) {
-      for (const line of respJSON.logLines ?? []) {
-        logForFunction(this.logger, "info", "query", name, line);
-      }
-    }
-    switch (respJSON.status) {
-      case "success":
-        return jsonToConvex(respJSON.value);
-      case "error":
-        if (respJSON.errorData !== undefined) {
-          throw forwardErrorData(respJSON.errorData, new ConvexError(respJSON.errorMessage));
-        }
-        throw new Error(respJSON.errorMessage);
-      default:
-        throw new Error(`Invalid response: ${JSON.stringify(respJSON)}`);
-    }
-  }
-  async mutationInner(mutation, mutationArgs) {
-    const name = getFunctionName(mutation);
-    const body = JSON.stringify({
-      path: name,
-      format: "convex_encoded_json",
-      args: [convexToJson(mutationArgs)]
-    });
-    const headers = {
-      "Content-Type": "application/json",
-      "Convex-Client": `npm-${version}`
-    };
-    if (this.adminAuth) {
-      headers["Authorization"] = `Convex ${this.adminAuth}`;
-    } else if (this.auth) {
-      headers["Authorization"] = `Bearer ${this.auth}`;
-    }
-    const localFetch = this.fetch || specifiedFetch || fetch;
-    const response = await localFetch(`${this.address}/api/mutation`, {
-      ...this.fetchOptions,
-      body,
-      method: "POST",
-      headers
-    });
-    if (!response.ok && response.status !== STATUS_CODE_UDF_FAILED) {
-      throw new Error(await response.text());
-    }
-    const respJSON = await response.json();
-    if (this.debug) {
-      for (const line of respJSON.logLines ?? []) {
-        logForFunction(this.logger, "info", "mutation", name, line);
-      }
-    }
-    switch (respJSON.status) {
-      case "success":
-        return jsonToConvex(respJSON.value);
-      case "error":
-        if (respJSON.errorData !== undefined) {
-          throw forwardErrorData(respJSON.errorData, new ConvexError(respJSON.errorMessage));
-        }
-        throw new Error(respJSON.errorMessage);
-      default:
-        throw new Error(`Invalid response: ${JSON.stringify(respJSON)}`);
-    }
-  }
-  async processMutationQueue() {
-    if (this.isProcessingQueue) {
-      return;
-    }
-    this.isProcessingQueue = true;
-    while (this.mutationQueue.length > 0) {
-      const { mutation, args, resolve: resolve3, reject } = this.mutationQueue.shift();
-      try {
-        const result = await this.mutationInner(mutation, args);
-        resolve3(result);
-      } catch (error) {
-        reject(error);
-      }
-    }
-    this.isProcessingQueue = false;
-  }
-  enqueueMutation(mutation, args) {
-    return new Promise((resolve3, reject) => {
-      this.mutationQueue.push({ mutation, args, resolve: resolve3, reject });
-      this.processMutationQueue();
-    });
-  }
-  async mutation(mutation, ...args) {
-    const [fnArgs, options] = args;
-    const mutationArgs = parseArgs(fnArgs);
-    const queued = !options?.skipQueue;
-    if (queued) {
-      return await this.enqueueMutation(mutation, mutationArgs);
-    } else {
-      return await this.mutationInner(mutation, mutationArgs);
-    }
-  }
-  async action(action, ...args) {
-    const actionArgs = parseArgs(args[0]);
-    const name = getFunctionName(action);
-    const body = JSON.stringify({
-      path: name,
-      format: "convex_encoded_json",
-      args: [convexToJson(actionArgs)]
-    });
-    const headers = {
-      "Content-Type": "application/json",
-      "Convex-Client": `npm-${version}`
-    };
-    if (this.adminAuth) {
-      headers["Authorization"] = `Convex ${this.adminAuth}`;
-    } else if (this.auth) {
-      headers["Authorization"] = `Bearer ${this.auth}`;
-    }
-    const localFetch = this.fetch || specifiedFetch || fetch;
-    const response = await localFetch(`${this.address}/api/action`, {
-      ...this.fetchOptions,
-      body,
-      method: "POST",
-      headers
-    });
-    if (!response.ok && response.status !== STATUS_CODE_UDF_FAILED) {
-      throw new Error(await response.text());
-    }
-    const respJSON = await response.json();
-    if (this.debug) {
-      for (const line of respJSON.logLines ?? []) {
-        logForFunction(this.logger, "info", "action", name, line);
-      }
-    }
-    switch (respJSON.status) {
-      case "success":
-        return jsonToConvex(respJSON.value);
-      case "error":
-        if (respJSON.errorData !== undefined) {
-          throw forwardErrorData(respJSON.errorData, new ConvexError(respJSON.errorMessage));
-        }
-        throw new Error(respJSON.errorMessage);
-      default:
-        throw new Error(`Invalid response: ${JSON.stringify(respJSON)}`);
-    }
-  }
-  async function(anyFunction, componentPath, ...args) {
-    const functionArgs = parseArgs(args[0]);
-    const name = typeof anyFunction === "string" ? anyFunction : getFunctionName(anyFunction);
-    const body = JSON.stringify({
-      componentPath,
-      path: name,
-      format: "convex_encoded_json",
-      args: convexToJson(functionArgs)
-    });
-    const headers = {
-      "Content-Type": "application/json",
-      "Convex-Client": `npm-${version}`
-    };
-    if (this.adminAuth) {
-      headers["Authorization"] = `Convex ${this.adminAuth}`;
-    } else if (this.auth) {
-      headers["Authorization"] = `Bearer ${this.auth}`;
-    }
-    const localFetch = this.fetch || specifiedFetch || fetch;
-    const response = await localFetch(`${this.address}/api/function`, {
-      ...this.fetchOptions,
-      body,
-      method: "POST",
-      headers
-    });
-    if (!response.ok && response.status !== STATUS_CODE_UDF_FAILED) {
-      throw new Error(await response.text());
-    }
-    const respJSON = await response.json();
-    if (this.debug) {
-      for (const line of respJSON.logLines ?? []) {
-        logForFunction(this.logger, "info", "any", name, line);
-      }
-    }
-    switch (respJSON.status) {
-      case "success":
-        return jsonToConvex(respJSON.value);
-      case "error":
-        if (respJSON.errorData !== undefined) {
-          throw forwardErrorData(respJSON.errorData, new ConvexError(respJSON.errorMessage));
-        }
-        throw new Error(respJSON.errorMessage);
-      default:
-        throw new Error(`Invalid response: ${JSON.stringify(respJSON)}`);
-    }
-  }
-}
-function forwardErrorData(errorData, error) {
-  error.data = jsonToConvex(errorData);
-  return error;
-}
-var __defProp12, __defNormalProp11 = (obj, key, value) => (key in obj) ? __defProp12(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value, __publicField11 = (obj, key, value) => __defNormalProp11(obj, typeof key !== "symbol" ? key + "" : key, value), STATUS_CODE_UDF_FAILED = 560, specifiedFetch = undefined;
-var init_http_client = __esm(() => {
-  init_api();
-  init_values();
-  init_logging();
-  __defProp12 = Object.defineProperty;
-});
-
-// node_modules/convex/dist/esm/browser/index.js
-var init_browser = __esm(() => {
-  init_client();
-});
-
-// node_modules/convex/dist/esm/browser/sync/pagination.js
-function asPaginationResult(value) {
-  if (typeof value !== "object" || value === null || !Array.isArray(value.page) || typeof value.isDone !== "boolean" || typeof value.continueCursor !== "string") {
-    throw new Error(`Not a valid paginated query result: ${value?.toString()}`);
-  }
-  return value;
-}
-
-// node_modules/convex/dist/esm/browser/sync/paginated_query_client.js
-class PaginatedQueryClient {
-  constructor(client, onTransition) {
-    this.client = client;
-    this.onTransition = onTransition;
-    __publicField12(this, "paginatedQuerySet", /* @__PURE__ */ new Map);
-    __publicField12(this, "lastTransitionTs");
-    this.lastTransitionTs = Long.fromNumber(0);
-    this.client.addOnTransitionHandler((transition) => this.onBaseTransition(transition));
-  }
-  subscribe(name, args, options) {
-    const canonicalizedUdfPath = canonicalizeUdfPath(name);
-    const token = serializePaginatedPathAndArgs(canonicalizedUdfPath, args, options);
-    const unsubscribe = () => this.removePaginatedQuerySubscriber(token);
-    const existingEntry = this.paginatedQuerySet.get(token);
-    if (existingEntry) {
-      existingEntry.numSubscribers += 1;
-      return {
-        paginatedQueryToken: token,
-        unsubscribe
-      };
-    }
-    this.paginatedQuerySet.set(token, {
-      token,
-      canonicalizedUdfPath,
-      args,
-      numSubscribers: 1,
-      options: { initialNumItems: options.initialNumItems },
-      nextPageKey: 0,
-      pageKeys: [],
-      pageKeyToQuery: /* @__PURE__ */ new Map,
-      ongoingSplits: /* @__PURE__ */ new Map,
-      skip: false,
-      id: options.id
-    });
-    this.addPageToPaginatedQuery(token, null, options.initialNumItems);
-    return {
-      paginatedQueryToken: token,
-      unsubscribe
-    };
-  }
-  localQueryResult(name, args, options) {
-    const canonicalizedUdfPath = canonicalizeUdfPath(name);
-    const token = serializePaginatedPathAndArgs(canonicalizedUdfPath, args, options);
-    return this.localQueryResultByToken(token);
-  }
-  localQueryResultByToken(token) {
-    const paginatedQuery = this.paginatedQuerySet.get(token);
-    if (!paginatedQuery) {
-      return;
-    }
-    const activePages = this.activePageQueryTokens(paginatedQuery);
-    if (activePages.length === 0) {
-      return {
-        results: [],
-        status: "LoadingFirstPage",
-        loadMore: (numItems) => {
-          return this.loadMoreOfPaginatedQuery(token, numItems);
-        }
-      };
-    }
-    let allResults = [];
-    let hasUndefined = false;
-    let isDone = false;
-    for (const pageToken of activePages) {
-      const result = this.client.localQueryResultByToken(pageToken);
-      if (result === undefined) {
-        hasUndefined = true;
-        isDone = false;
-        continue;
-      }
-      const paginationResult = asPaginationResult(result);
-      allResults = allResults.concat(paginationResult.page);
-      isDone = !!paginationResult.isDone;
-    }
-    let status;
-    if (hasUndefined) {
-      status = allResults.length === 0 ? "LoadingFirstPage" : "LoadingMore";
-    } else if (isDone) {
-      status = "Exhausted";
-    } else {
-      status = "CanLoadMore";
-    }
-    return {
-      results: allResults,
-      status,
-      loadMore: (numItems) => {
-        return this.loadMoreOfPaginatedQuery(token, numItems);
-      }
-    };
-  }
-  onBaseTransition(transition) {
-    const changedBaseTokens = transition.queries.map((q) => q.token);
-    const changed = this.queriesContainingTokens(changedBaseTokens);
-    let paginatedQueries = [];
-    if (changed.length > 0) {
-      this.processPaginatedQuerySplits(changed, (token) => this.client.localQueryResultByToken(token));
-      paginatedQueries = changed.map((token) => ({
-        token,
-        modification: {
-          kind: "Updated",
-          result: this.localQueryResultByToken(token)
-        }
-      }));
-    }
-    const extendedTransition = {
-      ...transition,
-      paginatedQueries
-    };
-    this.onTransition(extendedTransition);
-  }
-  loadMoreOfPaginatedQuery(token, numItems) {
-    this.mustGetPaginatedQuery(token);
-    const lastPageToken = this.queryTokenForLastPageOfPaginatedQuery(token);
-    const lastPageResult = this.client.localQueryResultByToken(lastPageToken);
-    if (!lastPageResult) {
-      return false;
-    }
-    const paginationResult = asPaginationResult(lastPageResult);
-    if (paginationResult.isDone) {
-      return false;
-    }
-    this.addPageToPaginatedQuery(token, paginationResult.continueCursor, numItems);
-    const loadMoreTransition = {
-      timestamp: this.lastTransitionTs,
-      reflectedMutations: [],
-      queries: [],
-      paginatedQueries: [
-        {
-          token,
-          modification: {
-            kind: "Updated",
-            result: this.localQueryResultByToken(token)
-          }
-        }
-      ]
-    };
-    this.onTransition(loadMoreTransition);
-    return true;
-  }
-  queriesContainingTokens(queryTokens) {
-    if (queryTokens.length === 0) {
-      return [];
-    }
-    const changed = [];
-    const queryTokenSet = new Set(queryTokens);
-    for (const [paginatedToken, paginatedQuery] of this.paginatedQuerySet) {
-      for (const pageToken of this.allQueryTokens(paginatedQuery)) {
-        if (queryTokenSet.has(pageToken)) {
-          changed.push(paginatedToken);
-          break;
-        }
-      }
-    }
-    return changed;
-  }
-  processPaginatedQuerySplits(changed, getResult) {
-    for (const paginatedQueryToken of changed) {
-      const paginatedQuery = this.mustGetPaginatedQuery(paginatedQueryToken);
-      const { ongoingSplits, pageKeyToQuery, pageKeys } = paginatedQuery;
-      for (const [pageKey, [splitKey1, splitKey2]] of ongoingSplits) {
-        const bothNewPagesLoaded = getResult(pageKeyToQuery.get(splitKey1).queryToken) !== undefined && getResult(pageKeyToQuery.get(splitKey2).queryToken) !== undefined;
-        if (bothNewPagesLoaded) {
-          this.completePaginatedQuerySplit(paginatedQuery, pageKey, splitKey1, splitKey2);
-        }
-      }
-      for (const pageKey of pageKeys) {
-        if (ongoingSplits.has(pageKey)) {
-          continue;
-        }
-        const pageToken = pageKeyToQuery.get(pageKey).queryToken;
-        const pageResult = getResult(pageToken);
-        if (!pageResult) {
-          continue;
-        }
-        const result = asPaginationResult(pageResult);
-        const shouldSplit = result.splitCursor && (result.pageStatus === "SplitRecommended" || result.pageStatus === "SplitRequired" || result.page.length > paginatedQuery.options.initialNumItems * 2);
-        if (shouldSplit) {
-          this.splitPaginatedQueryPage(paginatedQuery, pageKey, result.splitCursor, result.continueCursor);
-        }
-      }
-    }
-  }
-  splitPaginatedQueryPage(paginatedQuery, pageKey, splitCursor, continueCursor) {
-    const splitKey1 = paginatedQuery.nextPageKey++;
-    const splitKey2 = paginatedQuery.nextPageKey++;
-    const paginationOpts = {
-      cursor: continueCursor,
-      numItems: paginatedQuery.options.initialNumItems,
-      id: paginatedQuery.id
-    };
-    const firstSubscription = this.client.subscribe(paginatedQuery.canonicalizedUdfPath, {
-      ...paginatedQuery.args,
-      paginationOpts: {
-        ...paginationOpts,
-        cursor: null,
-        endCursor: splitCursor
-      }
-    });
-    paginatedQuery.pageKeyToQuery.set(splitKey1, firstSubscription);
-    const secondSubscription = this.client.subscribe(paginatedQuery.canonicalizedUdfPath, {
-      ...paginatedQuery.args,
-      paginationOpts: {
-        ...paginationOpts,
-        cursor: splitCursor,
-        endCursor: continueCursor
-      }
-    });
-    paginatedQuery.pageKeyToQuery.set(splitKey2, secondSubscription);
-    paginatedQuery.ongoingSplits.set(pageKey, [splitKey1, splitKey2]);
-  }
-  addPageToPaginatedQuery(token, continueCursor, numItems) {
-    const paginatedQuery = this.mustGetPaginatedQuery(token);
-    const pageKey = paginatedQuery.nextPageKey++;
-    const paginationOpts = {
-      cursor: continueCursor,
-      numItems,
-      id: paginatedQuery.id
-    };
-    const pageArgs = {
-      ...paginatedQuery.args,
-      paginationOpts
-    };
-    const subscription = this.client.subscribe(paginatedQuery.canonicalizedUdfPath, pageArgs);
-    paginatedQuery.pageKeys.push(pageKey);
-    paginatedQuery.pageKeyToQuery.set(pageKey, subscription);
-    return subscription;
-  }
-  removePaginatedQuerySubscriber(token) {
-    const paginatedQuery = this.paginatedQuerySet.get(token);
-    if (!paginatedQuery) {
-      return;
-    }
-    paginatedQuery.numSubscribers -= 1;
-    if (paginatedQuery.numSubscribers > 0) {
-      return;
-    }
-    for (const subscription of paginatedQuery.pageKeyToQuery.values()) {
-      subscription.unsubscribe();
-    }
-    this.paginatedQuerySet.delete(token);
-  }
-  completePaginatedQuerySplit(paginatedQuery, pageKey, splitKey1, splitKey2) {
-    const originalQuery = paginatedQuery.pageKeyToQuery.get(pageKey);
-    paginatedQuery.pageKeyToQuery.delete(pageKey);
-    const pageIndex = paginatedQuery.pageKeys.indexOf(pageKey);
-    paginatedQuery.pageKeys.splice(pageIndex, 1, splitKey1, splitKey2);
-    paginatedQuery.ongoingSplits.delete(pageKey);
-    originalQuery.unsubscribe();
-  }
-  activePageQueryTokens(paginatedQuery) {
-    return paginatedQuery.pageKeys.map((pageKey) => paginatedQuery.pageKeyToQuery.get(pageKey).queryToken);
-  }
-  allQueryTokens(paginatedQuery) {
-    return Array.from(paginatedQuery.pageKeyToQuery.values()).map((sub) => sub.queryToken);
-  }
-  queryTokenForLastPageOfPaginatedQuery(token) {
-    const paginatedQuery = this.mustGetPaginatedQuery(token);
-    const lastPageKey = paginatedQuery.pageKeys[paginatedQuery.pageKeys.length - 1];
-    if (lastPageKey === undefined) {
-      throw new Error(`No pages for paginated query ${token}`);
-    }
-    return paginatedQuery.pageKeyToQuery.get(lastPageKey).queryToken;
-  }
-  mustGetPaginatedQuery(token) {
-    const paginatedQuery = this.paginatedQuerySet.get(token);
-    if (!paginatedQuery) {
-      throw new Error("paginated query no longer exists for token " + token);
-    }
-    return paginatedQuery;
-  }
-}
-var __defProp13, __defNormalProp12 = (obj, key, value) => (key in obj) ? __defProp13(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value, __publicField12 = (obj, key, value) => __defNormalProp12(obj, typeof key !== "symbol" ? key + "" : key, value);
-var init_paginated_query_client = __esm(() => {
-  init_udf_path_utils();
-  init_long();
-  __defProp13 = Object.defineProperty;
-});
-
-// node_modules/convex/dist/esm/browser/simple_client.js
-function setDefaultWebSocketConstructor(ws) {
-  defaultWebSocketConstructor = ws;
-}
-
-class ConvexClient {
-  constructor(address, options = {}) {
-    __publicField13(this, "listeners");
-    __publicField13(this, "_client");
-    __publicField13(this, "_paginatedClient");
-    __publicField13(this, "callNewListenersWithCurrentValuesTimer");
-    __publicField13(this, "_closed");
-    __publicField13(this, "_disabled");
-    if (options.skipConvexDeploymentUrlCheck !== true) {
-      validateDeploymentUrl(address);
-    }
-    const { disabled, ...baseOptions } = options;
-    this._closed = false;
-    this._disabled = !!disabled;
-    if (defaultWebSocketConstructor && !("webSocketConstructor" in baseOptions) && typeof WebSocket === "undefined") {
-      baseOptions.webSocketConstructor = defaultWebSocketConstructor;
-    }
-    if (typeof window === "undefined" && !("unsavedChangesWarning" in baseOptions)) {
-      baseOptions.unsavedChangesWarning = false;
-    }
-    if (!this.disabled) {
-      this._client = new BaseConvexClient(address, () => {
-      }, baseOptions);
-      this._paginatedClient = new PaginatedQueryClient(this._client, (transition) => this._transition(transition));
-    }
-    this.listeners = /* @__PURE__ */ new Set;
-  }
-  get closed() {
-    return this._closed;
-  }
-  get client() {
-    if (this._client)
-      return this._client;
-    throw new Error("ConvexClient is disabled");
-  }
-  get paginatedClient() {
-    if (this._paginatedClient)
-      return this._paginatedClient;
-    throw new Error("ConvexClient is disabled");
-  }
-  get disabled() {
-    return this._disabled;
-  }
-  onUpdate(query, args, callback, onError) {
-    if (this.disabled) {
-      return this.createDisabledUnsubscribe();
-    }
-    const { queryToken, unsubscribe } = this.client.subscribe(getFunctionName(query), args);
-    const queryInfo = {
-      queryToken,
-      callback,
-      onError,
-      unsubscribe,
-      hasEverRun: false,
-      query,
-      args,
-      paginationOptions: undefined
-    };
-    this.listeners.add(queryInfo);
-    if (this.queryResultReady(queryToken) && this.callNewListenersWithCurrentValuesTimer === undefined) {
-      this.callNewListenersWithCurrentValuesTimer = setTimeout(() => this.callNewListenersWithCurrentValues(), 0);
-    }
-    const unsubscribeProps = {
-      unsubscribe: () => {
-        if (this.closed) {
-          return;
-        }
-        this.listeners.delete(queryInfo);
-        unsubscribe();
-      },
-      getCurrentValue: () => this.client.localQueryResultByToken(queryToken),
-      getQueryLogs: () => this.client.localQueryLogs(queryToken)
-    };
-    const ret = unsubscribeProps.unsubscribe;
-    Object.assign(ret, unsubscribeProps);
-    return ret;
-  }
-  onPaginatedUpdate_experimental(query, args, options, callback, onError) {
-    if (this.disabled) {
-      return this.createDisabledUnsubscribe();
-    }
-    const paginationOptions = {
-      initialNumItems: options.initialNumItems,
-      id: -1
-    };
-    const { paginatedQueryToken, unsubscribe } = this.paginatedClient.subscribe(getFunctionName(query), args, paginationOptions);
-    const queryInfo = {
-      queryToken: paginatedQueryToken,
-      callback,
-      onError,
-      unsubscribe,
-      hasEverRun: false,
-      query,
-      args,
-      paginationOptions
-    };
-    this.listeners.add(queryInfo);
-    if (!!this.paginatedClient.localQueryResultByToken(paginatedQueryToken) && this.callNewListenersWithCurrentValuesTimer === undefined) {
-      this.callNewListenersWithCurrentValuesTimer = setTimeout(() => this.callNewListenersWithCurrentValues(), 0);
-    }
-    const unsubscribeProps = {
-      unsubscribe: () => {
-        if (this.closed) {
-          return;
-        }
-        this.listeners.delete(queryInfo);
-        unsubscribe();
-      },
-      getCurrentValue: () => {
-        const result = this.paginatedClient.localQueryResult(getFunctionName(query), args, paginationOptions);
-        return result;
-      },
-      getQueryLogs: () => []
-    };
-    const ret = unsubscribeProps.unsubscribe;
-    Object.assign(ret, unsubscribeProps);
-    return ret;
-  }
-  callNewListenersWithCurrentValues() {
-    this.callNewListenersWithCurrentValuesTimer = undefined;
-    this._transition({ queries: [], paginatedQueries: [] }, true);
-  }
-  queryResultReady(queryToken) {
-    return this.client.hasLocalQueryResultByToken(queryToken);
-  }
-  createDisabledUnsubscribe() {
-    const disabledUnsubscribe = () => {
-    };
-    const unsubscribeProps = {
-      unsubscribe: disabledUnsubscribe,
-      getCurrentValue: () => {
-        return;
-      },
-      getQueryLogs: () => {
-        return;
-      }
-    };
-    Object.assign(disabledUnsubscribe, unsubscribeProps);
-    return disabledUnsubscribe;
-  }
-  async close() {
-    if (this.disabled)
-      return;
-    this.listeners.clear();
-    this._closed = true;
-    if (this._paginatedClient) {
-      this._paginatedClient = undefined;
-    }
-    return this.client.close();
-  }
-  getAuth() {
-    if (this.disabled)
-      return;
-    return this.client.getCurrentAuthClaims();
-  }
-  setAuth(fetchToken, onChange) {
-    if (this.disabled)
-      return;
-    this.client.setAuth(fetchToken, onChange ?? (() => {
-    }));
-  }
-  setAdminAuth(token, identity) {
-    if (this.closed) {
-      throw new Error("ConvexClient has already been closed.");
-    }
-    if (this.disabled)
-      return;
-    this.client.setAdminAuth(token, identity);
-  }
-  _transition({
-    queries,
-    paginatedQueries
-  }, callNewListeners = false) {
-    const updatedQueries = [
-      ...queries.map((q) => q.token),
-      ...paginatedQueries.map((q) => q.token)
-    ];
-    for (const queryInfo of this.listeners) {
-      const { callback, queryToken, onError, hasEverRun } = queryInfo;
-      const isPaginatedQuery = serializedQueryTokenIsPaginated(queryToken);
-      const hasResultReady = isPaginatedQuery ? !!this.paginatedClient.localQueryResultByToken(queryToken) : this.client.hasLocalQueryResultByToken(queryToken);
-      if (updatedQueries.includes(queryToken) || callNewListeners && !hasEverRun && hasResultReady) {
-        queryInfo.hasEverRun = true;
-        let newValue;
-        try {
-          if (isPaginatedQuery) {
-            newValue = this.paginatedClient.localQueryResultByToken(queryToken);
-          } else {
-            newValue = this.client.localQueryResultByToken(queryToken);
-          }
-        } catch (error) {
-          if (!(error instanceof Error))
-            throw error;
-          if (onError) {
-            onError(error, "Second argument to onUpdate onError is reserved for later use");
-          } else {
-            Promise.reject(error);
-          }
-          continue;
-        }
-        callback(newValue, "Second argument to onUpdate callback is reserved for later use");
-      }
-    }
-  }
-  async mutation(mutation, args, options) {
-    if (this.disabled)
-      throw new Error("ConvexClient is disabled");
-    return await this.client.mutation(getFunctionName(mutation), args, options);
-  }
-  async action(action, args) {
-    if (this.disabled)
-      throw new Error("ConvexClient is disabled");
-    return await this.client.action(getFunctionName(action), args);
-  }
-  async query(query, args) {
-    if (this.disabled)
-      throw new Error("ConvexClient is disabled");
-    const value = this.client.localQueryResult(getFunctionName(query), args);
-    if (value !== undefined)
-      return Promise.resolve(value);
-    return new Promise((resolve3, reject) => {
-      const { unsubscribe } = this.onUpdate(query, args, (value2) => {
-        unsubscribe();
-        resolve3(value2);
-      }, (e) => {
-        unsubscribe();
-        reject(e);
-      });
-    });
-  }
-  connectionState() {
-    if (this.disabled)
-      throw new Error("ConvexClient is disabled");
-    return this.client.connectionState();
-  }
-  subscribeToConnectionState(cb) {
-    if (this.disabled)
-      return () => {
-      };
-    return this.client.subscribeToConnectionState(cb);
-  }
-}
-var __defProp14, __defNormalProp13 = (obj, key, value) => (key in obj) ? __defProp14(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value, __publicField13 = (obj, key, value) => __defNormalProp13(obj, typeof key !== "symbol" ? key + "" : key, value), defaultWebSocketConstructor;
-var init_simple_client = __esm(() => {
-  init_browser();
-  init_api();
-  init_paginated_query_client();
-  init_udf_path_utils();
-  __defProp14 = Object.defineProperty;
-});
-
-// node_modules/convex/dist/esm/browser/simple_client-node.js
-import { createRequire as createRequire2 } from "module";
-import { resolve as nodePathResolve } from "path";
-var __dirname = "/Users/ashot/src/codecast/packages/cli/node_modules/convex/dist/esm/browser", require2, __create2, __defProp15, __getOwnPropDesc2, __getOwnPropNames2, __getProtoOf2, __hasOwnProp2, __require2, __commonJS2 = (cb, mod) => function __require2() {
-  return mod || (0, cb[__getOwnPropNames2(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
-}, __copyProps = (to, from, except, desc) => {
-  if (from && typeof from === "object" || typeof from === "function") {
-    for (let key of __getOwnPropNames2(from))
-      if (!__hasOwnProp2.call(to, key) && key !== except)
-        __defProp15(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc2(from, key)) || desc.enumerable });
-  }
-  return to;
-}, __toESM2 = (mod, isNodeMode, target) => (target = mod != null ? __create2(__getProtoOf2(mod)) : {}, __copyProps(isNodeMode || !mod || !mod.__esModule ? __defProp15(target, "default", { value: mod, enumerable: true }) : target, mod)), require_stream, require_constants, require_node_gyp_build, require_node_gyp_build2, require_fallback, require_bufferutil, require_buffer_util, require_limiter, require_permessage_deflate, require_validation, require_receiver, require_sender, require_event_target, require_extension, require_websocket, require_subprotocol, require_websocket_server, import_stream, import_receiver, import_sender, import_websocket, import_websocket_server, wrapper_default, nodeWebSocket;
-var init_simple_client_node = __esm(() => {
-  init_simple_client();
-  require2 = createRequire2(nodePathResolve("."));
-  __create2 = Object.create;
-  __defProp15 = Object.defineProperty;
-  __getOwnPropDesc2 = Object.getOwnPropertyDescriptor;
-  __getOwnPropNames2 = Object.getOwnPropertyNames;
-  __getProtoOf2 = Object.getPrototypeOf;
-  __hasOwnProp2 = Object.prototype.hasOwnProperty;
-  __require2 = /* @__PURE__ */ ((x) => typeof require2 !== "undefined" ? require2 : typeof Proxy !== "undefined" ? new Proxy(x, {
-    get: (a, b) => (typeof require2 !== "undefined" ? require2 : a)[b]
-  }) : x)(function(x) {
-    if (typeof require2 !== "undefined")
-      return require2.apply(this, arguments);
-    throw Error('Dynamic require of "' + x + '" is not supported');
-  });
-  require_stream = __commonJS2({
-    "../common/temp/node_modules/.pnpm/ws@8.18.0_bufferutil@4.0.9/node_modules/ws/lib/stream.js"(exports, module) {
-      var { Duplex } = __require2("stream");
-      function emitClose(stream) {
-        stream.emit("close");
-      }
-      function duplexOnEnd() {
-        if (!this.destroyed && this._writableState.finished) {
-          this.destroy();
-        }
-      }
-      function duplexOnError(err) {
-        this.removeListener("error", duplexOnError);
-        this.destroy();
-        if (this.listenerCount("error") === 0) {
-          this.emit("error", err);
-        }
-      }
-      function createWebSocketStream2(ws, options) {
-        let terminateOnDestroy = true;
-        const duplex = new Duplex({
-          ...options,
-          autoDestroy: false,
-          emitClose: false,
-          objectMode: false,
-          writableObjectMode: false
-        });
-        ws.on("message", function message(msg, isBinary) {
-          const data = !isBinary && duplex._readableState.objectMode ? msg.toString() : msg;
-          if (!duplex.push(data))
-            ws.pause();
-        });
-        ws.once("error", function error(err) {
-          if (duplex.destroyed)
-            return;
-          terminateOnDestroy = false;
-          duplex.destroy(err);
-        });
-        ws.once("close", function close() {
-          if (duplex.destroyed)
-            return;
-          duplex.push(null);
-        });
-        duplex._destroy = function(err, callback) {
-          if (ws.readyState === ws.CLOSED) {
-            callback(err);
-            process.nextTick(emitClose, duplex);
-            return;
-          }
-          let called = false;
-          ws.once("error", function error(err2) {
-            called = true;
-            callback(err2);
-          });
-          ws.once("close", function close() {
-            if (!called)
-              callback(err);
-            process.nextTick(emitClose, duplex);
-          });
-          if (terminateOnDestroy)
-            ws.terminate();
-        };
-        duplex._final = function(callback) {
-          if (ws.readyState === ws.CONNECTING) {
-            ws.once("open", function open() {
-              duplex._final(callback);
-            });
-            return;
-          }
-          if (ws._socket === null)
-            return;
-          if (ws._socket._writableState.finished) {
-            callback();
-            if (duplex._readableState.endEmitted)
-              duplex.destroy();
-          } else {
-            ws._socket.once("finish", function finish() {
-              callback();
-            });
-            ws.close();
-          }
-        };
-        duplex._read = function() {
-          if (ws.isPaused)
-            ws.resume();
-        };
-        duplex._write = function(chunk, encoding, callback) {
-          if (ws.readyState === ws.CONNECTING) {
-            ws.once("open", function open() {
-              duplex._write(chunk, encoding, callback);
-            });
-            return;
-          }
-          ws.send(chunk, callback);
-        };
-        duplex.on("end", duplexOnEnd);
-        duplex.on("error", duplexOnError);
-        return duplex;
-      }
-      module.exports = createWebSocketStream2;
-    }
-  });
-  require_constants = __commonJS2({
-    "../common/temp/node_modules/.pnpm/ws@8.18.0_bufferutil@4.0.9/node_modules/ws/lib/constants.js"(exports, module) {
-      var BINARY_TYPES = ["nodebuffer", "arraybuffer", "fragments"];
-      var hasBlob = typeof Blob !== "undefined";
-      if (hasBlob)
-        BINARY_TYPES.push("blob");
-      module.exports = {
-        BINARY_TYPES,
-        EMPTY_BUFFER: Buffer.alloc(0),
-        GUID: "258EAFA5-E914-47DA-95CA-C5AB0DC85B11",
-        hasBlob,
-        kForOnEventAttribute: Symbol("kIsForOnEventAttribute"),
-        kListener: Symbol("kListener"),
-        kStatusCode: Symbol("status-code"),
-        kWebSocket: Symbol("websocket"),
-        NOOP: () => {
-        }
-      };
-    }
-  });
-  require_node_gyp_build = __commonJS2({
-    "../common/temp/node_modules/.pnpm/node-gyp-build@4.8.4/node_modules/node-gyp-build/node-gyp-build.js"(exports, module) {
-      var fs9 = __require2("fs");
-      var path9 = __require2("path");
-      var os = __require2("os");
-      var runtimeRequire = typeof __webpack_require__ === "function" ? __non_webpack_require__ : __require2;
-      var vars = process.config && process.config.variables || {};
-      var prebuildsOnly = !!process.env.PREBUILDS_ONLY;
-      var abi = process.versions.modules;
-      var runtime = isElectron() ? "electron" : isNwjs() ? "node-webkit" : "node";
-      var arch = process.env.npm_config_arch || os.arch();
-      var platform = process.env.npm_config_platform || os.platform();
-      var libc = process.env.LIBC || (isAlpine(platform) ? "musl" : "glibc");
-      var armv = process.env.ARM_VERSION || (arch === "arm64" ? "8" : vars.arm_version) || "";
-      var uv = (process.versions.uv || "").split(".")[0];
-      module.exports = load;
-      function load(dir) {
-        return runtimeRequire(load.resolve(dir));
-      }
-      load.resolve = load.path = function(dir) {
-        dir = path9.resolve(dir || ".");
-        try {
-          var name = runtimeRequire(path9.join(dir, "package.json")).name.toUpperCase().replace(/-/g, "_");
-          if (process.env[name + "_PREBUILD"])
-            dir = process.env[name + "_PREBUILD"];
-        } catch (err) {
-        }
-        if (!prebuildsOnly) {
-          var release = getFirst(path9.join(dir, "build/Release"), matchBuild);
-          if (release)
-            return release;
-          var debug = getFirst(path9.join(dir, "build/Debug"), matchBuild);
-          if (debug)
-            return debug;
-        }
-        var prebuild = resolve3(dir);
-        if (prebuild)
-          return prebuild;
-        var nearby = resolve3(path9.dirname(process.execPath));
-        if (nearby)
-          return nearby;
-        var target = [
-          "platform=" + platform,
-          "arch=" + arch,
-          "runtime=" + runtime,
-          "abi=" + abi,
-          "uv=" + uv,
-          armv ? "armv=" + armv : "",
-          "libc=" + libc,
-          "node=" + process.versions.node,
-          process.versions.electron ? "electron=" + process.versions.electron : "",
-          typeof __webpack_require__ === "function" ? "webpack=true" : ""
-        ].filter(Boolean).join(" ");
-        throw new Error("No native build was found for " + target + `
-    loaded from: ` + dir + `
-`);
-        function resolve3(dir2) {
-          var tuples = readdirSync7(path9.join(dir2, "prebuilds")).map(parseTuple);
-          var tuple = tuples.filter(matchTuple(platform, arch)).sort(compareTuples)[0];
-          if (!tuple)
-            return;
-          var prebuilds = path9.join(dir2, "prebuilds", tuple.name);
-          var parsed = readdirSync7(prebuilds).map(parseTags);
-          var candidates = parsed.filter(matchTags(runtime, abi));
-          var winner = candidates.sort(compareTags(runtime))[0];
-          if (winner)
-            return path9.join(prebuilds, winner.file);
-        }
-      };
-      function readdirSync7(dir) {
-        try {
-          return fs9.readdirSync(dir);
-        } catch (err) {
-          return [];
-        }
-      }
-      function getFirst(dir, filter) {
-        var files = readdirSync7(dir).filter(filter);
-        return files[0] && path9.join(dir, files[0]);
-      }
-      function matchBuild(name) {
-        return /\.node$/.test(name);
-      }
-      function parseTuple(name) {
-        var arr = name.split("-");
-        if (arr.length !== 2)
-          return;
-        var platform2 = arr[0];
-        var architectures = arr[1].split("+");
-        if (!platform2)
-          return;
-        if (!architectures.length)
-          return;
-        if (!architectures.every(Boolean))
-          return;
-        return { name, platform: platform2, architectures };
-      }
-      function matchTuple(platform2, arch2) {
-        return function(tuple) {
-          if (tuple == null)
-            return false;
-          if (tuple.platform !== platform2)
-            return false;
-          return tuple.architectures.includes(arch2);
-        };
-      }
-      function compareTuples(a, b) {
-        return a.architectures.length - b.architectures.length;
-      }
-      function parseTags(file) {
-        var arr = file.split(".");
-        var extension = arr.pop();
-        var tags = { file, specificity: 0 };
-        if (extension !== "node")
-          return;
-        for (var i = 0;i < arr.length; i++) {
-          var tag = arr[i];
-          if (tag === "node" || tag === "electron" || tag === "node-webkit") {
-            tags.runtime = tag;
-          } else if (tag === "napi") {
-            tags.napi = true;
-          } else if (tag.slice(0, 3) === "abi") {
-            tags.abi = tag.slice(3);
-          } else if (tag.slice(0, 2) === "uv") {
-            tags.uv = tag.slice(2);
-          } else if (tag.slice(0, 4) === "armv") {
-            tags.armv = tag.slice(4);
-          } else if (tag === "glibc" || tag === "musl") {
-            tags.libc = tag;
-          } else {
-            continue;
-          }
-          tags.specificity++;
-        }
-        return tags;
-      }
-      function matchTags(runtime2, abi2) {
-        return function(tags) {
-          if (tags == null)
-            return false;
-          if (tags.runtime && tags.runtime !== runtime2 && !runtimeAgnostic(tags))
-            return false;
-          if (tags.abi && tags.abi !== abi2 && !tags.napi)
-            return false;
-          if (tags.uv && tags.uv !== uv)
-            return false;
-          if (tags.armv && tags.armv !== armv)
-            return false;
-          if (tags.libc && tags.libc !== libc)
-            return false;
-          return true;
-        };
-      }
-      function runtimeAgnostic(tags) {
-        return tags.runtime === "node" && tags.napi;
-      }
-      function compareTags(runtime2) {
-        return function(a, b) {
-          if (a.runtime !== b.runtime) {
-            return a.runtime === runtime2 ? -1 : 1;
-          } else if (a.abi !== b.abi) {
-            return a.abi ? -1 : 1;
-          } else if (a.specificity !== b.specificity) {
-            return a.specificity > b.specificity ? -1 : 1;
-          } else {
-            return 0;
-          }
-        };
-      }
-      function isNwjs() {
-        return !!(process.versions && process.versions.nw);
-      }
-      function isElectron() {
-        if (process.versions && process.versions.electron)
-          return true;
-        if (process.env.ELECTRON_RUN_AS_NODE)
-          return true;
-        return typeof window !== "undefined" && window.process && window.process.type === "renderer";
-      }
-      function isAlpine(platform2) {
-        return platform2 === "linux" && fs9.existsSync("/etc/alpine-release");
-      }
-      load.parseTags = parseTags;
-      load.matchTags = matchTags;
-      load.compareTags = compareTags;
-      load.parseTuple = parseTuple;
-      load.matchTuple = matchTuple;
-      load.compareTuples = compareTuples;
-    }
-  });
-  require_node_gyp_build2 = __commonJS2({
-    "../common/temp/node_modules/.pnpm/node-gyp-build@4.8.4/node_modules/node-gyp-build/index.js"(exports, module) {
-      var runtimeRequire = typeof __webpack_require__ === "function" ? __non_webpack_require__ : __require2;
-      if (typeof runtimeRequire.addon === "function") {
-        module.exports = runtimeRequire.addon.bind(runtimeRequire);
-      } else {
-        module.exports = require_node_gyp_build();
-      }
-    }
-  });
-  require_fallback = __commonJS2({
-    "../common/temp/node_modules/.pnpm/bufferutil@4.0.9/node_modules/bufferutil/fallback.js"(exports, module) {
-      var mask = (source, mask2, output, offset, length) => {
-        for (var i = 0;i < length; i++) {
-          output[offset + i] = source[i] ^ mask2[i & 3];
-        }
-      };
-      var unmask = (buffer, mask2) => {
-        const length = buffer.length;
-        for (var i = 0;i < length; i++) {
-          buffer[i] ^= mask2[i & 3];
-        }
-      };
-      module.exports = { mask, unmask };
-    }
-  });
-  require_bufferutil = __commonJS2({
-    "../common/temp/node_modules/.pnpm/bufferutil@4.0.9/node_modules/bufferutil/index.js"(exports, module) {
-      try {
-        module.exports = require_node_gyp_build2()(__dirname);
-      } catch (e) {
-        module.exports = require_fallback();
-      }
-    }
-  });
-  require_buffer_util = __commonJS2({
-    "../common/temp/node_modules/.pnpm/ws@8.18.0_bufferutil@4.0.9/node_modules/ws/lib/buffer-util.js"(exports, module) {
-      var { EMPTY_BUFFER } = require_constants();
-      var FastBuffer = Buffer[Symbol.species];
-      function concat(list, totalLength) {
-        if (list.length === 0)
-          return EMPTY_BUFFER;
-        if (list.length === 1)
-          return list[0];
-        const target = Buffer.allocUnsafe(totalLength);
-        let offset = 0;
-        for (let i = 0;i < list.length; i++) {
-          const buf = list[i];
-          target.set(buf, offset);
-          offset += buf.length;
-        }
-        if (offset < totalLength) {
-          return new FastBuffer(target.buffer, target.byteOffset, offset);
-        }
-        return target;
-      }
-      function _mask(source, mask, output, offset, length) {
-        for (let i = 0;i < length; i++) {
-          output[offset + i] = source[i] ^ mask[i & 3];
-        }
-      }
-      function _unmask(buffer, mask) {
-        for (let i = 0;i < buffer.length; i++) {
-          buffer[i] ^= mask[i & 3];
-        }
-      }
-      function toArrayBuffer(buf) {
-        if (buf.length === buf.buffer.byteLength) {
-          return buf.buffer;
-        }
-        return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.length);
-      }
-      function toBuffer(data) {
-        toBuffer.readOnly = true;
-        if (Buffer.isBuffer(data))
-          return data;
-        let buf;
-        if (data instanceof ArrayBuffer) {
-          buf = new FastBuffer(data);
-        } else if (ArrayBuffer.isView(data)) {
-          buf = new FastBuffer(data.buffer, data.byteOffset, data.byteLength);
-        } else {
-          buf = Buffer.from(data);
-          toBuffer.readOnly = false;
-        }
-        return buf;
-      }
-      module.exports = {
-        concat,
-        mask: _mask,
-        toArrayBuffer,
-        toBuffer,
-        unmask: _unmask
-      };
-      if (!process.env.WS_NO_BUFFER_UTIL) {
-        try {
-          const bufferUtil = require_bufferutil();
-          module.exports.mask = function(source, mask, output, offset, length) {
-            if (length < 48)
-              _mask(source, mask, output, offset, length);
-            else
-              bufferUtil.mask(source, mask, output, offset, length);
-          };
-          module.exports.unmask = function(buffer, mask) {
-            if (buffer.length < 32)
-              _unmask(buffer, mask);
-            else
-              bufferUtil.unmask(buffer, mask);
-          };
-        } catch (e) {
-        }
-      }
-    }
-  });
-  require_limiter = __commonJS2({
-    "../common/temp/node_modules/.pnpm/ws@8.18.0_bufferutil@4.0.9/node_modules/ws/lib/limiter.js"(exports, module) {
-      var kDone = Symbol("kDone");
-      var kRun = Symbol("kRun");
-      var Limiter = class {
-        constructor(concurrency) {
-          this[kDone] = () => {
-            this.pending--;
-            this[kRun]();
-          };
-          this.concurrency = concurrency || Infinity;
-          this.jobs = [];
-          this.pending = 0;
-        }
-        add(job) {
-          this.jobs.push(job);
-          this[kRun]();
-        }
-        [kRun]() {
-          if (this.pending === this.concurrency)
-            return;
-          if (this.jobs.length) {
-            const job = this.jobs.shift();
-            this.pending++;
-            job(this[kDone]);
-          }
-        }
-      };
-      module.exports = Limiter;
-    }
-  });
-  require_permessage_deflate = __commonJS2({
-    "../common/temp/node_modules/.pnpm/ws@8.18.0_bufferutil@4.0.9/node_modules/ws/lib/permessage-deflate.js"(exports, module) {
-      var zlib = __require2("zlib");
-      var bufferUtil = require_buffer_util();
-      var Limiter = require_limiter();
-      var { kStatusCode } = require_constants();
-      var FastBuffer = Buffer[Symbol.species];
-      var TRAILER = Buffer.from([0, 0, 255, 255]);
-      var kPerMessageDeflate = Symbol("permessage-deflate");
-      var kTotalLength = Symbol("total-length");
-      var kCallback = Symbol("callback");
-      var kBuffers = Symbol("buffers");
-      var kError = Symbol("error");
-      var zlibLimiter;
-      var PerMessageDeflate = class {
-        constructor(options, isServer, maxPayload) {
-          this._maxPayload = maxPayload | 0;
-          this._options = options || {};
-          this._threshold = this._options.threshold !== undefined ? this._options.threshold : 1024;
-          this._isServer = !!isServer;
-          this._deflate = null;
-          this._inflate = null;
-          this.params = null;
-          if (!zlibLimiter) {
-            const concurrency = this._options.concurrencyLimit !== undefined ? this._options.concurrencyLimit : 10;
-            zlibLimiter = new Limiter(concurrency);
-          }
-        }
-        static get extensionName() {
-          return "permessage-deflate";
-        }
-        offer() {
-          const params = {};
-          if (this._options.serverNoContextTakeover) {
-            params.server_no_context_takeover = true;
-          }
-          if (this._options.clientNoContextTakeover) {
-            params.client_no_context_takeover = true;
-          }
-          if (this._options.serverMaxWindowBits) {
-            params.server_max_window_bits = this._options.serverMaxWindowBits;
-          }
-          if (this._options.clientMaxWindowBits) {
-            params.client_max_window_bits = this._options.clientMaxWindowBits;
-          } else if (this._options.clientMaxWindowBits == null) {
-            params.client_max_window_bits = true;
-          }
-          return params;
-        }
-        accept(configurations) {
-          configurations = this.normalizeParams(configurations);
-          this.params = this._isServer ? this.acceptAsServer(configurations) : this.acceptAsClient(configurations);
-          return this.params;
-        }
-        cleanup() {
-          if (this._inflate) {
-            this._inflate.close();
-            this._inflate = null;
-          }
-          if (this._deflate) {
-            const callback = this._deflate[kCallback];
-            this._deflate.close();
-            this._deflate = null;
-            if (callback) {
-              callback(new Error("The deflate stream was closed while data was being processed"));
-            }
-          }
-        }
-        acceptAsServer(offers) {
-          const opts = this._options;
-          const accepted = offers.find((params) => {
-            if (opts.serverNoContextTakeover === false && params.server_no_context_takeover || params.server_max_window_bits && (opts.serverMaxWindowBits === false || typeof opts.serverMaxWindowBits === "number" && opts.serverMaxWindowBits > params.server_max_window_bits) || typeof opts.clientMaxWindowBits === "number" && !params.client_max_window_bits) {
-              return false;
-            }
-            return true;
-          });
-          if (!accepted) {
-            throw new Error("None of the extension offers can be accepted");
-          }
-          if (opts.serverNoContextTakeover) {
-            accepted.server_no_context_takeover = true;
-          }
-          if (opts.clientNoContextTakeover) {
-            accepted.client_no_context_takeover = true;
-          }
-          if (typeof opts.serverMaxWindowBits === "number") {
-            accepted.server_max_window_bits = opts.serverMaxWindowBits;
-          }
-          if (typeof opts.clientMaxWindowBits === "number") {
-            accepted.client_max_window_bits = opts.clientMaxWindowBits;
-          } else if (accepted.client_max_window_bits === true || opts.clientMaxWindowBits === false) {
-            delete accepted.client_max_window_bits;
-          }
-          return accepted;
-        }
-        acceptAsClient(response) {
-          const params = response[0];
-          if (this._options.clientNoContextTakeover === false && params.client_no_context_takeover) {
-            throw new Error('Unexpected parameter "client_no_context_takeover"');
-          }
-          if (!params.client_max_window_bits) {
-            if (typeof this._options.clientMaxWindowBits === "number") {
-              params.client_max_window_bits = this._options.clientMaxWindowBits;
-            }
-          } else if (this._options.clientMaxWindowBits === false || typeof this._options.clientMaxWindowBits === "number" && params.client_max_window_bits > this._options.clientMaxWindowBits) {
-            throw new Error('Unexpected or invalid parameter "client_max_window_bits"');
-          }
-          return params;
-        }
-        normalizeParams(configurations) {
-          configurations.forEach((params) => {
-            Object.keys(params).forEach((key) => {
-              let value = params[key];
-              if (value.length > 1) {
-                throw new Error(`Parameter "${key}" must have only a single value`);
-              }
-              value = value[0];
-              if (key === "client_max_window_bits") {
-                if (value !== true) {
-                  const num = +value;
-                  if (!Number.isInteger(num) || num < 8 || num > 15) {
-                    throw new TypeError(`Invalid value for parameter "${key}": ${value}`);
-                  }
-                  value = num;
-                } else if (!this._isServer) {
-                  throw new TypeError(`Invalid value for parameter "${key}": ${value}`);
-                }
-              } else if (key === "server_max_window_bits") {
-                const num = +value;
-                if (!Number.isInteger(num) || num < 8 || num > 15) {
-                  throw new TypeError(`Invalid value for parameter "${key}": ${value}`);
-                }
-                value = num;
-              } else if (key === "client_no_context_takeover" || key === "server_no_context_takeover") {
-                if (value !== true) {
-                  throw new TypeError(`Invalid value for parameter "${key}": ${value}`);
-                }
-              } else {
-                throw new Error(`Unknown parameter "${key}"`);
-              }
-              params[key] = value;
-            });
-          });
-          return configurations;
-        }
-        decompress(data, fin, callback) {
-          zlibLimiter.add((done) => {
-            this._decompress(data, fin, (err, result) => {
-              done();
-              callback(err, result);
-            });
-          });
-        }
-        compress(data, fin, callback) {
-          zlibLimiter.add((done) => {
-            this._compress(data, fin, (err, result) => {
-              done();
-              callback(err, result);
-            });
-          });
-        }
-        _decompress(data, fin, callback) {
-          const endpoint = this._isServer ? "client" : "server";
-          if (!this._inflate) {
-            const key = `${endpoint}_max_window_bits`;
-            const windowBits = typeof this.params[key] !== "number" ? zlib.Z_DEFAULT_WINDOWBITS : this.params[key];
-            this._inflate = zlib.createInflateRaw({
-              ...this._options.zlibInflateOptions,
-              windowBits
-            });
-            this._inflate[kPerMessageDeflate] = this;
-            this._inflate[kTotalLength] = 0;
-            this._inflate[kBuffers] = [];
-            this._inflate.on("error", inflateOnError);
-            this._inflate.on("data", inflateOnData);
-          }
-          this._inflate[kCallback] = callback;
-          this._inflate.write(data);
-          if (fin)
-            this._inflate.write(TRAILER);
-          this._inflate.flush(() => {
-            const err = this._inflate[kError];
-            if (err) {
-              this._inflate.close();
-              this._inflate = null;
-              callback(err);
-              return;
-            }
-            const data2 = bufferUtil.concat(this._inflate[kBuffers], this._inflate[kTotalLength]);
-            if (this._inflate._readableState.endEmitted) {
-              this._inflate.close();
-              this._inflate = null;
-            } else {
-              this._inflate[kTotalLength] = 0;
-              this._inflate[kBuffers] = [];
-              if (fin && this.params[`${endpoint}_no_context_takeover`]) {
-                this._inflate.reset();
-              }
-            }
-            callback(null, data2);
-          });
-        }
-        _compress(data, fin, callback) {
-          const endpoint = this._isServer ? "server" : "client";
-          if (!this._deflate) {
-            const key = `${endpoint}_max_window_bits`;
-            const windowBits = typeof this.params[key] !== "number" ? zlib.Z_DEFAULT_WINDOWBITS : this.params[key];
-            this._deflate = zlib.createDeflateRaw({
-              ...this._options.zlibDeflateOptions,
-              windowBits
-            });
-            this._deflate[kTotalLength] = 0;
-            this._deflate[kBuffers] = [];
-            this._deflate.on("data", deflateOnData);
-          }
-          this._deflate[kCallback] = callback;
-          this._deflate.write(data);
-          this._deflate.flush(zlib.Z_SYNC_FLUSH, () => {
-            if (!this._deflate) {
-              return;
-            }
-            let data2 = bufferUtil.concat(this._deflate[kBuffers], this._deflate[kTotalLength]);
-            if (fin) {
-              data2 = new FastBuffer(data2.buffer, data2.byteOffset, data2.length - 4);
-            }
-            this._deflate[kCallback] = null;
-            this._deflate[kTotalLength] = 0;
-            this._deflate[kBuffers] = [];
-            if (fin && this.params[`${endpoint}_no_context_takeover`]) {
-              this._deflate.reset();
-            }
-            callback(null, data2);
-          });
-        }
-      };
-      module.exports = PerMessageDeflate;
-      function deflateOnData(chunk) {
-        this[kBuffers].push(chunk);
-        this[kTotalLength] += chunk.length;
-      }
-      function inflateOnData(chunk) {
-        this[kTotalLength] += chunk.length;
-        if (this[kPerMessageDeflate]._maxPayload < 1 || this[kTotalLength] <= this[kPerMessageDeflate]._maxPayload) {
-          this[kBuffers].push(chunk);
-          return;
-        }
-        this[kError] = new RangeError("Max payload size exceeded");
-        this[kError].code = "WS_ERR_UNSUPPORTED_MESSAGE_LENGTH";
-        this[kError][kStatusCode] = 1009;
-        this.removeListener("data", inflateOnData);
-        this.reset();
-      }
-      function inflateOnError(err) {
-        this[kPerMessageDeflate]._inflate = null;
-        err[kStatusCode] = 1007;
-        this[kCallback](err);
-      }
-    }
-  });
-  require_validation = __commonJS2({
-    "../common/temp/node_modules/.pnpm/ws@8.18.0_bufferutil@4.0.9/node_modules/ws/lib/validation.js"(exports, module) {
-      var { isUtf8 } = __require2("buffer");
-      var { hasBlob } = require_constants();
-      var tokenChars = [
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        1,
-        0,
-        1,
-        1,
-        1,
-        1,
-        1,
-        0,
-        0,
-        1,
-        1,
-        0,
-        1,
-        1,
-        0,
-        1,
-        1,
-        1,
-        1,
-        1,
-        1,
-        1,
-        1,
-        1,
-        1,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        1,
-        1,
-        1,
-        1,
-        1,
-        1,
-        1,
-        1,
-        1,
-        1,
-        1,
-        1,
-        1,
-        1,
-        1,
-        1,
-        1,
-        1,
-        1,
-        1,
-        1,
-        1,
-        1,
-        1,
-        1,
-        1,
-        0,
-        0,
-        0,
-        1,
-        1,
-        1,
-        1,
-        1,
-        1,
-        1,
-        1,
-        1,
-        1,
-        1,
-        1,
-        1,
-        1,
-        1,
-        1,
-        1,
-        1,
-        1,
-        1,
-        1,
-        1,
-        1,
-        1,
-        1,
-        1,
-        1,
-        1,
-        1,
-        0,
-        1,
-        0,
-        1,
-        0
-      ];
-      function isValidStatusCode(code2) {
-        return code2 >= 1000 && code2 <= 1014 && code2 !== 1004 && code2 !== 1005 && code2 !== 1006 || code2 >= 3000 && code2 <= 4999;
-      }
-      function _isValidUTF8(buf) {
-        const len = buf.length;
-        let i = 0;
-        while (i < len) {
-          if ((buf[i] & 128) === 0) {
-            i++;
-          } else if ((buf[i] & 224) === 192) {
-            if (i + 1 === len || (buf[i + 1] & 192) !== 128 || (buf[i] & 254) === 192) {
-              return false;
-            }
-            i += 2;
-          } else if ((buf[i] & 240) === 224) {
-            if (i + 2 >= len || (buf[i + 1] & 192) !== 128 || (buf[i + 2] & 192) !== 128 || buf[i] === 224 && (buf[i + 1] & 224) === 128 || buf[i] === 237 && (buf[i + 1] & 224) === 160) {
-              return false;
-            }
-            i += 3;
-          } else if ((buf[i] & 248) === 240) {
-            if (i + 3 >= len || (buf[i + 1] & 192) !== 128 || (buf[i + 2] & 192) !== 128 || (buf[i + 3] & 192) !== 128 || buf[i] === 240 && (buf[i + 1] & 240) === 128 || buf[i] === 244 && buf[i + 1] > 143 || buf[i] > 244) {
-              return false;
-            }
-            i += 4;
-          } else {
-            return false;
-          }
-        }
-        return true;
-      }
-      function isBlob(value) {
-        return hasBlob && typeof value === "object" && typeof value.arrayBuffer === "function" && typeof value.type === "string" && typeof value.stream === "function" && (value[Symbol.toStringTag] === "Blob" || value[Symbol.toStringTag] === "File");
-      }
-      module.exports = {
-        isBlob,
-        isValidStatusCode,
-        isValidUTF8: _isValidUTF8,
-        tokenChars
-      };
-      if (isUtf8) {
-        module.exports.isValidUTF8 = function(buf) {
-          return buf.length < 24 ? _isValidUTF8(buf) : isUtf8(buf);
-        };
-      } else if (!process.env.WS_NO_UTF_8_VALIDATE) {
-        try {
-          const isValidUTF8 = __require2("utf-8-validate");
-          module.exports.isValidUTF8 = function(buf) {
-            return buf.length < 32 ? _isValidUTF8(buf) : isValidUTF8(buf);
-          };
-        } catch (e) {
-        }
-      }
-    }
-  });
-  require_receiver = __commonJS2({
-    "../common/temp/node_modules/.pnpm/ws@8.18.0_bufferutil@4.0.9/node_modules/ws/lib/receiver.js"(exports, module) {
-      var { Writable } = __require2("stream");
-      var PerMessageDeflate = require_permessage_deflate();
-      var {
-        BINARY_TYPES,
-        EMPTY_BUFFER,
-        kStatusCode,
-        kWebSocket
-      } = require_constants();
-      var { concat, toArrayBuffer, unmask } = require_buffer_util();
-      var { isValidStatusCode, isValidUTF8 } = require_validation();
-      var FastBuffer = Buffer[Symbol.species];
-      var GET_INFO = 0;
-      var GET_PAYLOAD_LENGTH_16 = 1;
-      var GET_PAYLOAD_LENGTH_64 = 2;
-      var GET_MASK = 3;
-      var GET_DATA = 4;
-      var INFLATING = 5;
-      var DEFER_EVENT = 6;
-      var Receiver2 = class extends Writable {
-        constructor(options = {}) {
-          super();
-          this._allowSynchronousEvents = options.allowSynchronousEvents !== undefined ? options.allowSynchronousEvents : true;
-          this._binaryType = options.binaryType || BINARY_TYPES[0];
-          this._extensions = options.extensions || {};
-          this._isServer = !!options.isServer;
-          this._maxPayload = options.maxPayload | 0;
-          this._skipUTF8Validation = !!options.skipUTF8Validation;
-          this[kWebSocket] = undefined;
-          this._bufferedBytes = 0;
-          this._buffers = [];
-          this._compressed = false;
-          this._payloadLength = 0;
-          this._mask = undefined;
-          this._fragmented = 0;
-          this._masked = false;
-          this._fin = false;
-          this._opcode = 0;
-          this._totalPayloadLength = 0;
-          this._messageLength = 0;
-          this._fragments = [];
-          this._errored = false;
-          this._loop = false;
-          this._state = GET_INFO;
-        }
-        _write(chunk, encoding, cb) {
-          if (this._opcode === 8 && this._state == GET_INFO)
-            return cb();
-          this._bufferedBytes += chunk.length;
-          this._buffers.push(chunk);
-          this.startLoop(cb);
-        }
-        consume(n) {
-          this._bufferedBytes -= n;
-          if (n === this._buffers[0].length)
-            return this._buffers.shift();
-          if (n < this._buffers[0].length) {
-            const buf = this._buffers[0];
-            this._buffers[0] = new FastBuffer(buf.buffer, buf.byteOffset + n, buf.length - n);
-            return new FastBuffer(buf.buffer, buf.byteOffset, n);
-          }
-          const dst = Buffer.allocUnsafe(n);
-          do {
-            const buf = this._buffers[0];
-            const offset = dst.length - n;
-            if (n >= buf.length) {
-              dst.set(this._buffers.shift(), offset);
-            } else {
-              dst.set(new Uint8Array(buf.buffer, buf.byteOffset, n), offset);
-              this._buffers[0] = new FastBuffer(buf.buffer, buf.byteOffset + n, buf.length - n);
-            }
-            n -= buf.length;
-          } while (n > 0);
-          return dst;
-        }
-        startLoop(cb) {
-          this._loop = true;
-          do {
-            switch (this._state) {
-              case GET_INFO:
-                this.getInfo(cb);
-                break;
-              case GET_PAYLOAD_LENGTH_16:
-                this.getPayloadLength16(cb);
-                break;
-              case GET_PAYLOAD_LENGTH_64:
-                this.getPayloadLength64(cb);
-                break;
-              case GET_MASK:
-                this.getMask();
-                break;
-              case GET_DATA:
-                this.getData(cb);
-                break;
-              case INFLATING:
-              case DEFER_EVENT:
-                this._loop = false;
-                return;
-            }
-          } while (this._loop);
-          if (!this._errored)
-            cb();
-        }
-        getInfo(cb) {
-          if (this._bufferedBytes < 2) {
-            this._loop = false;
-            return;
-          }
-          const buf = this.consume(2);
-          if ((buf[0] & 48) !== 0) {
-            const error = this.createError(RangeError, "RSV2 and RSV3 must be clear", true, 1002, "WS_ERR_UNEXPECTED_RSV_2_3");
-            cb(error);
-            return;
-          }
-          const compressed = (buf[0] & 64) === 64;
-          if (compressed && !this._extensions[PerMessageDeflate.extensionName]) {
-            const error = this.createError(RangeError, "RSV1 must be clear", true, 1002, "WS_ERR_UNEXPECTED_RSV_1");
-            cb(error);
-            return;
-          }
-          this._fin = (buf[0] & 128) === 128;
-          this._opcode = buf[0] & 15;
-          this._payloadLength = buf[1] & 127;
-          if (this._opcode === 0) {
-            if (compressed) {
-              const error = this.createError(RangeError, "RSV1 must be clear", true, 1002, "WS_ERR_UNEXPECTED_RSV_1");
-              cb(error);
-              return;
-            }
-            if (!this._fragmented) {
-              const error = this.createError(RangeError, "invalid opcode 0", true, 1002, "WS_ERR_INVALID_OPCODE");
-              cb(error);
-              return;
-            }
-            this._opcode = this._fragmented;
-          } else if (this._opcode === 1 || this._opcode === 2) {
-            if (this._fragmented) {
-              const error = this.createError(RangeError, `invalid opcode ${this._opcode}`, true, 1002, "WS_ERR_INVALID_OPCODE");
-              cb(error);
-              return;
-            }
-            this._compressed = compressed;
-          } else if (this._opcode > 7 && this._opcode < 11) {
-            if (!this._fin) {
-              const error = this.createError(RangeError, "FIN must be set", true, 1002, "WS_ERR_EXPECTED_FIN");
-              cb(error);
-              return;
-            }
-            if (compressed) {
-              const error = this.createError(RangeError, "RSV1 must be clear", true, 1002, "WS_ERR_UNEXPECTED_RSV_1");
-              cb(error);
-              return;
-            }
-            if (this._payloadLength > 125 || this._opcode === 8 && this._payloadLength === 1) {
-              const error = this.createError(RangeError, `invalid payload length ${this._payloadLength}`, true, 1002, "WS_ERR_INVALID_CONTROL_PAYLOAD_LENGTH");
-              cb(error);
-              return;
-            }
-          } else {
-            const error = this.createError(RangeError, `invalid opcode ${this._opcode}`, true, 1002, "WS_ERR_INVALID_OPCODE");
-            cb(error);
-            return;
-          }
-          if (!this._fin && !this._fragmented)
-            this._fragmented = this._opcode;
-          this._masked = (buf[1] & 128) === 128;
-          if (this._isServer) {
-            if (!this._masked) {
-              const error = this.createError(RangeError, "MASK must be set", true, 1002, "WS_ERR_EXPECTED_MASK");
-              cb(error);
-              return;
-            }
-          } else if (this._masked) {
-            const error = this.createError(RangeError, "MASK must be clear", true, 1002, "WS_ERR_UNEXPECTED_MASK");
-            cb(error);
-            return;
-          }
-          if (this._payloadLength === 126)
-            this._state = GET_PAYLOAD_LENGTH_16;
-          else if (this._payloadLength === 127)
-            this._state = GET_PAYLOAD_LENGTH_64;
-          else
-            this.haveLength(cb);
-        }
-        getPayloadLength16(cb) {
-          if (this._bufferedBytes < 2) {
-            this._loop = false;
-            return;
-          }
-          this._payloadLength = this.consume(2).readUInt16BE(0);
-          this.haveLength(cb);
-        }
-        getPayloadLength64(cb) {
-          if (this._bufferedBytes < 8) {
-            this._loop = false;
-            return;
-          }
-          const buf = this.consume(8);
-          const num = buf.readUInt32BE(0);
-          if (num > Math.pow(2, 53 - 32) - 1) {
-            const error = this.createError(RangeError, "Unsupported WebSocket frame: payload length > 2^53 - 1", false, 1009, "WS_ERR_UNSUPPORTED_DATA_PAYLOAD_LENGTH");
-            cb(error);
-            return;
-          }
-          this._payloadLength = num * Math.pow(2, 32) + buf.readUInt32BE(4);
-          this.haveLength(cb);
-        }
-        haveLength(cb) {
-          if (this._payloadLength && this._opcode < 8) {
-            this._totalPayloadLength += this._payloadLength;
-            if (this._totalPayloadLength > this._maxPayload && this._maxPayload > 0) {
-              const error = this.createError(RangeError, "Max payload size exceeded", false, 1009, "WS_ERR_UNSUPPORTED_MESSAGE_LENGTH");
-              cb(error);
-              return;
-            }
-          }
-          if (this._masked)
-            this._state = GET_MASK;
-          else
-            this._state = GET_DATA;
-        }
-        getMask() {
-          if (this._bufferedBytes < 4) {
-            this._loop = false;
-            return;
-          }
-          this._mask = this.consume(4);
-          this._state = GET_DATA;
-        }
-        getData(cb) {
-          let data = EMPTY_BUFFER;
-          if (this._payloadLength) {
-            if (this._bufferedBytes < this._payloadLength) {
-              this._loop = false;
-              return;
-            }
-            data = this.consume(this._payloadLength);
-            if (this._masked && (this._mask[0] | this._mask[1] | this._mask[2] | this._mask[3]) !== 0) {
-              unmask(data, this._mask);
-            }
-          }
-          if (this._opcode > 7) {
-            this.controlMessage(data, cb);
-            return;
-          }
-          if (this._compressed) {
-            this._state = INFLATING;
-            this.decompress(data, cb);
-            return;
-          }
-          if (data.length) {
-            this._messageLength = this._totalPayloadLength;
-            this._fragments.push(data);
-          }
-          this.dataMessage(cb);
-        }
-        decompress(data, cb) {
-          const perMessageDeflate = this._extensions[PerMessageDeflate.extensionName];
-          perMessageDeflate.decompress(data, this._fin, (err, buf) => {
-            if (err)
-              return cb(err);
-            if (buf.length) {
-              this._messageLength += buf.length;
-              if (this._messageLength > this._maxPayload && this._maxPayload > 0) {
-                const error = this.createError(RangeError, "Max payload size exceeded", false, 1009, "WS_ERR_UNSUPPORTED_MESSAGE_LENGTH");
-                cb(error);
-                return;
-              }
-              this._fragments.push(buf);
-            }
-            this.dataMessage(cb);
-            if (this._state === GET_INFO)
-              this.startLoop(cb);
-          });
-        }
-        dataMessage(cb) {
-          if (!this._fin) {
-            this._state = GET_INFO;
-            return;
-          }
-          const messageLength = this._messageLength;
-          const fragments = this._fragments;
-          this._totalPayloadLength = 0;
-          this._messageLength = 0;
-          this._fragmented = 0;
-          this._fragments = [];
-          if (this._opcode === 2) {
-            let data;
-            if (this._binaryType === "nodebuffer") {
-              data = concat(fragments, messageLength);
-            } else if (this._binaryType === "arraybuffer") {
-              data = toArrayBuffer(concat(fragments, messageLength));
-            } else if (this._binaryType === "blob") {
-              data = new Blob(fragments);
-            } else {
-              data = fragments;
-            }
-            if (this._allowSynchronousEvents) {
-              this.emit("message", data, true);
-              this._state = GET_INFO;
-            } else {
-              this._state = DEFER_EVENT;
-              setImmediate(() => {
-                this.emit("message", data, true);
-                this._state = GET_INFO;
-                this.startLoop(cb);
-              });
-            }
-          } else {
-            const buf = concat(fragments, messageLength);
-            if (!this._skipUTF8Validation && !isValidUTF8(buf)) {
-              const error = this.createError(Error, "invalid UTF-8 sequence", true, 1007, "WS_ERR_INVALID_UTF8");
-              cb(error);
-              return;
-            }
-            if (this._state === INFLATING || this._allowSynchronousEvents) {
-              this.emit("message", buf, false);
-              this._state = GET_INFO;
-            } else {
-              this._state = DEFER_EVENT;
-              setImmediate(() => {
-                this.emit("message", buf, false);
-                this._state = GET_INFO;
-                this.startLoop(cb);
-              });
-            }
-          }
-        }
-        controlMessage(data, cb) {
-          if (this._opcode === 8) {
-            if (data.length === 0) {
-              this._loop = false;
-              this.emit("conclude", 1005, EMPTY_BUFFER);
-              this.end();
-            } else {
-              const code2 = data.readUInt16BE(0);
-              if (!isValidStatusCode(code2)) {
-                const error = this.createError(RangeError, `invalid status code ${code2}`, true, 1002, "WS_ERR_INVALID_CLOSE_CODE");
-                cb(error);
-                return;
-              }
-              const buf = new FastBuffer(data.buffer, data.byteOffset + 2, data.length - 2);
-              if (!this._skipUTF8Validation && !isValidUTF8(buf)) {
-                const error = this.createError(Error, "invalid UTF-8 sequence", true, 1007, "WS_ERR_INVALID_UTF8");
-                cb(error);
-                return;
-              }
-              this._loop = false;
-              this.emit("conclude", code2, buf);
-              this.end();
-            }
-            this._state = GET_INFO;
-            return;
-          }
-          if (this._allowSynchronousEvents) {
-            this.emit(this._opcode === 9 ? "ping" : "pong", data);
-            this._state = GET_INFO;
-          } else {
-            this._state = DEFER_EVENT;
-            setImmediate(() => {
-              this.emit(this._opcode === 9 ? "ping" : "pong", data);
-              this._state = GET_INFO;
-              this.startLoop(cb);
-            });
-          }
-        }
-        createError(ErrorCtor, message, prefix, statusCode, errorCode) {
-          this._loop = false;
-          this._errored = true;
-          const err = new ErrorCtor(prefix ? `Invalid WebSocket frame: ${message}` : message);
-          Error.captureStackTrace(err, this.createError);
-          err.code = errorCode;
-          err[kStatusCode] = statusCode;
-          return err;
-        }
-      };
-      module.exports = Receiver2;
-    }
-  });
-  require_sender = __commonJS2({
-    "../common/temp/node_modules/.pnpm/ws@8.18.0_bufferutil@4.0.9/node_modules/ws/lib/sender.js"(exports, module) {
-      var { Duplex } = __require2("stream");
-      var { randomFillSync } = __require2("crypto");
-      var PerMessageDeflate = require_permessage_deflate();
-      var { EMPTY_BUFFER, kWebSocket, NOOP } = require_constants();
-      var { isBlob, isValidStatusCode } = require_validation();
-      var { mask: applyMask, toBuffer } = require_buffer_util();
-      var kByteLength = Symbol("kByteLength");
-      var maskBuffer = Buffer.alloc(4);
-      var RANDOM_POOL_SIZE = 8 * 1024;
-      var randomPool;
-      var randomPoolPointer = RANDOM_POOL_SIZE;
-      var DEFAULT = 0;
-      var DEFLATING = 1;
-      var GET_BLOB_DATA = 2;
-      var Sender2 = class _Sender {
-        constructor(socket, extensions, generateMask) {
-          this._extensions = extensions || {};
-          if (generateMask) {
-            this._generateMask = generateMask;
-            this._maskBuffer = Buffer.alloc(4);
-          }
-          this._socket = socket;
-          this._firstFragment = true;
-          this._compress = false;
-          this._bufferedBytes = 0;
-          this._queue = [];
-          this._state = DEFAULT;
-          this.onerror = NOOP;
-          this[kWebSocket] = undefined;
-        }
-        static frame(data, options) {
-          let mask;
-          let merge = false;
-          let offset = 2;
-          let skipMasking = false;
-          if (options.mask) {
-            mask = options.maskBuffer || maskBuffer;
-            if (options.generateMask) {
-              options.generateMask(mask);
-            } else {
-              if (randomPoolPointer === RANDOM_POOL_SIZE) {
-                if (randomPool === undefined) {
-                  randomPool = Buffer.alloc(RANDOM_POOL_SIZE);
-                }
-                randomFillSync(randomPool, 0, RANDOM_POOL_SIZE);
-                randomPoolPointer = 0;
-              }
-              mask[0] = randomPool[randomPoolPointer++];
-              mask[1] = randomPool[randomPoolPointer++];
-              mask[2] = randomPool[randomPoolPointer++];
-              mask[3] = randomPool[randomPoolPointer++];
-            }
-            skipMasking = (mask[0] | mask[1] | mask[2] | mask[3]) === 0;
-            offset = 6;
-          }
-          let dataLength;
-          if (typeof data === "string") {
-            if ((!options.mask || skipMasking) && options[kByteLength] !== undefined) {
-              dataLength = options[kByteLength];
-            } else {
-              data = Buffer.from(data);
-              dataLength = data.length;
-            }
-          } else {
-            dataLength = data.length;
-            merge = options.mask && options.readOnly && !skipMasking;
-          }
-          let payloadLength = dataLength;
-          if (dataLength >= 65536) {
-            offset += 8;
-            payloadLength = 127;
-          } else if (dataLength > 125) {
-            offset += 2;
-            payloadLength = 126;
-          }
-          const target = Buffer.allocUnsafe(merge ? dataLength + offset : offset);
-          target[0] = options.fin ? options.opcode | 128 : options.opcode;
-          if (options.rsv1)
-            target[0] |= 64;
-          target[1] = payloadLength;
-          if (payloadLength === 126) {
-            target.writeUInt16BE(dataLength, 2);
-          } else if (payloadLength === 127) {
-            target[2] = target[3] = 0;
-            target.writeUIntBE(dataLength, 4, 6);
-          }
-          if (!options.mask)
-            return [target, data];
-          target[1] |= 128;
-          target[offset - 4] = mask[0];
-          target[offset - 3] = mask[1];
-          target[offset - 2] = mask[2];
-          target[offset - 1] = mask[3];
-          if (skipMasking)
-            return [target, data];
-          if (merge) {
-            applyMask(data, mask, target, offset, dataLength);
-            return [target];
-          }
-          applyMask(data, mask, data, 0, dataLength);
-          return [target, data];
-        }
-        close(code2, data, mask, cb) {
-          let buf;
-          if (code2 === undefined) {
-            buf = EMPTY_BUFFER;
-          } else if (typeof code2 !== "number" || !isValidStatusCode(code2)) {
-            throw new TypeError("First argument must be a valid error code number");
-          } else if (data === undefined || !data.length) {
-            buf = Buffer.allocUnsafe(2);
-            buf.writeUInt16BE(code2, 0);
-          } else {
-            const length = Buffer.byteLength(data);
-            if (length > 123) {
-              throw new RangeError("The message must not be greater than 123 bytes");
-            }
-            buf = Buffer.allocUnsafe(2 + length);
-            buf.writeUInt16BE(code2, 0);
-            if (typeof data === "string") {
-              buf.write(data, 2);
-            } else {
-              buf.set(data, 2);
-            }
-          }
-          const options = {
-            [kByteLength]: buf.length,
-            fin: true,
-            generateMask: this._generateMask,
-            mask,
-            maskBuffer: this._maskBuffer,
-            opcode: 8,
-            readOnly: false,
-            rsv1: false
-          };
-          if (this._state !== DEFAULT) {
-            this.enqueue([this.dispatch, buf, false, options, cb]);
-          } else {
-            this.sendFrame(_Sender.frame(buf, options), cb);
-          }
-        }
-        ping(data, mask, cb) {
-          let byteLength2;
-          let readOnly;
-          if (typeof data === "string") {
-            byteLength2 = Buffer.byteLength(data);
-            readOnly = false;
-          } else if (isBlob(data)) {
-            byteLength2 = data.size;
-            readOnly = false;
-          } else {
-            data = toBuffer(data);
-            byteLength2 = data.length;
-            readOnly = toBuffer.readOnly;
-          }
-          if (byteLength2 > 125) {
-            throw new RangeError("The data size must not be greater than 125 bytes");
-          }
-          const options = {
-            [kByteLength]: byteLength2,
-            fin: true,
-            generateMask: this._generateMask,
-            mask,
-            maskBuffer: this._maskBuffer,
-            opcode: 9,
-            readOnly,
-            rsv1: false
-          };
-          if (isBlob(data)) {
-            if (this._state !== DEFAULT) {
-              this.enqueue([this.getBlobData, data, false, options, cb]);
-            } else {
-              this.getBlobData(data, false, options, cb);
-            }
-          } else if (this._state !== DEFAULT) {
-            this.enqueue([this.dispatch, data, false, options, cb]);
-          } else {
-            this.sendFrame(_Sender.frame(data, options), cb);
-          }
-        }
-        pong(data, mask, cb) {
-          let byteLength2;
-          let readOnly;
-          if (typeof data === "string") {
-            byteLength2 = Buffer.byteLength(data);
-            readOnly = false;
-          } else if (isBlob(data)) {
-            byteLength2 = data.size;
-            readOnly = false;
-          } else {
-            data = toBuffer(data);
-            byteLength2 = data.length;
-            readOnly = toBuffer.readOnly;
-          }
-          if (byteLength2 > 125) {
-            throw new RangeError("The data size must not be greater than 125 bytes");
-          }
-          const options = {
-            [kByteLength]: byteLength2,
-            fin: true,
-            generateMask: this._generateMask,
-            mask,
-            maskBuffer: this._maskBuffer,
-            opcode: 10,
-            readOnly,
-            rsv1: false
-          };
-          if (isBlob(data)) {
-            if (this._state !== DEFAULT) {
-              this.enqueue([this.getBlobData, data, false, options, cb]);
-            } else {
-              this.getBlobData(data, false, options, cb);
-            }
-          } else if (this._state !== DEFAULT) {
-            this.enqueue([this.dispatch, data, false, options, cb]);
-          } else {
-            this.sendFrame(_Sender.frame(data, options), cb);
-          }
-        }
-        send(data, options, cb) {
-          const perMessageDeflate = this._extensions[PerMessageDeflate.extensionName];
-          let opcode = options.binary ? 2 : 1;
-          let rsv1 = options.compress;
-          let byteLength2;
-          let readOnly;
-          if (typeof data === "string") {
-            byteLength2 = Buffer.byteLength(data);
-            readOnly = false;
-          } else if (isBlob(data)) {
-            byteLength2 = data.size;
-            readOnly = false;
-          } else {
-            data = toBuffer(data);
-            byteLength2 = data.length;
-            readOnly = toBuffer.readOnly;
-          }
-          if (this._firstFragment) {
-            this._firstFragment = false;
-            if (rsv1 && perMessageDeflate && perMessageDeflate.params[perMessageDeflate._isServer ? "server_no_context_takeover" : "client_no_context_takeover"]) {
-              rsv1 = byteLength2 >= perMessageDeflate._threshold;
-            }
-            this._compress = rsv1;
-          } else {
-            rsv1 = false;
-            opcode = 0;
-          }
-          if (options.fin)
-            this._firstFragment = true;
-          const opts = {
-            [kByteLength]: byteLength2,
-            fin: options.fin,
-            generateMask: this._generateMask,
-            mask: options.mask,
-            maskBuffer: this._maskBuffer,
-            opcode,
-            readOnly,
-            rsv1
-          };
-          if (isBlob(data)) {
-            if (this._state !== DEFAULT) {
-              this.enqueue([this.getBlobData, data, this._compress, opts, cb]);
-            } else {
-              this.getBlobData(data, this._compress, opts, cb);
-            }
-          } else if (this._state !== DEFAULT) {
-            this.enqueue([this.dispatch, data, this._compress, opts, cb]);
-          } else {
-            this.dispatch(data, this._compress, opts, cb);
-          }
-        }
-        getBlobData(blob, compress, options, cb) {
-          this._bufferedBytes += options[kByteLength];
-          this._state = GET_BLOB_DATA;
-          blob.arrayBuffer().then((arrayBuffer) => {
-            if (this._socket.destroyed) {
-              const err = new Error("The socket was closed while the blob was being read");
-              process.nextTick(callCallbacks, this, err, cb);
-              return;
-            }
-            this._bufferedBytes -= options[kByteLength];
-            const data = toBuffer(arrayBuffer);
-            if (!compress) {
-              this._state = DEFAULT;
-              this.sendFrame(_Sender.frame(data, options), cb);
-              this.dequeue();
-            } else {
-              this.dispatch(data, compress, options, cb);
-            }
-          }).catch((err) => {
-            process.nextTick(onError, this, err, cb);
-          });
-        }
-        dispatch(data, compress, options, cb) {
-          if (!compress) {
-            this.sendFrame(_Sender.frame(data, options), cb);
-            return;
-          }
-          const perMessageDeflate = this._extensions[PerMessageDeflate.extensionName];
-          this._bufferedBytes += options[kByteLength];
-          this._state = DEFLATING;
-          perMessageDeflate.compress(data, options.fin, (_, buf) => {
-            if (this._socket.destroyed) {
-              const err = new Error("The socket was closed while data was being compressed");
-              callCallbacks(this, err, cb);
-              return;
-            }
-            this._bufferedBytes -= options[kByteLength];
-            this._state = DEFAULT;
-            options.readOnly = false;
-            this.sendFrame(_Sender.frame(buf, options), cb);
-            this.dequeue();
-          });
-        }
-        dequeue() {
-          while (this._state === DEFAULT && this._queue.length) {
-            const params = this._queue.shift();
-            this._bufferedBytes -= params[3][kByteLength];
-            Reflect.apply(params[0], this, params.slice(1));
-          }
-        }
-        enqueue(params) {
-          this._bufferedBytes += params[3][kByteLength];
-          this._queue.push(params);
-        }
-        sendFrame(list, cb) {
-          if (list.length === 2) {
-            this._socket.cork();
-            this._socket.write(list[0]);
-            this._socket.write(list[1], cb);
-            this._socket.uncork();
-          } else {
-            this._socket.write(list[0], cb);
-          }
-        }
-      };
-      module.exports = Sender2;
-      function callCallbacks(sender, err, cb) {
-        if (typeof cb === "function")
-          cb(err);
-        for (let i = 0;i < sender._queue.length; i++) {
-          const params = sender._queue[i];
-          const callback = params[params.length - 1];
-          if (typeof callback === "function")
-            callback(err);
-        }
-      }
-      function onError(sender, err, cb) {
-        callCallbacks(sender, err, cb);
-        sender.onerror(err);
-      }
-    }
-  });
-  require_event_target = __commonJS2({
-    "../common/temp/node_modules/.pnpm/ws@8.18.0_bufferutil@4.0.9/node_modules/ws/lib/event-target.js"(exports, module) {
-      var { kForOnEventAttribute, kListener } = require_constants();
-      var kCode = Symbol("kCode");
-      var kData = Symbol("kData");
-      var kError = Symbol("kError");
-      var kMessage = Symbol("kMessage");
-      var kReason = Symbol("kReason");
-      var kTarget = Symbol("kTarget");
-      var kType = Symbol("kType");
-      var kWasClean = Symbol("kWasClean");
-      var Event = class {
-        constructor(type) {
-          this[kTarget] = null;
-          this[kType] = type;
-        }
-        get target() {
-          return this[kTarget];
-        }
-        get type() {
-          return this[kType];
-        }
-      };
-      Object.defineProperty(Event.prototype, "target", { enumerable: true });
-      Object.defineProperty(Event.prototype, "type", { enumerable: true });
-      var CloseEvent = class extends Event {
-        constructor(type, options = {}) {
-          super(type);
-          this[kCode] = options.code === undefined ? 0 : options.code;
-          this[kReason] = options.reason === undefined ? "" : options.reason;
-          this[kWasClean] = options.wasClean === undefined ? false : options.wasClean;
-        }
-        get code() {
-          return this[kCode];
-        }
-        get reason() {
-          return this[kReason];
-        }
-        get wasClean() {
-          return this[kWasClean];
-        }
-      };
-      Object.defineProperty(CloseEvent.prototype, "code", { enumerable: true });
-      Object.defineProperty(CloseEvent.prototype, "reason", { enumerable: true });
-      Object.defineProperty(CloseEvent.prototype, "wasClean", { enumerable: true });
-      var ErrorEvent = class extends Event {
-        constructor(type, options = {}) {
-          super(type);
-          this[kError] = options.error === undefined ? null : options.error;
-          this[kMessage] = options.message === undefined ? "" : options.message;
-        }
-        get error() {
-          return this[kError];
-        }
-        get message() {
-          return this[kMessage];
-        }
-      };
-      Object.defineProperty(ErrorEvent.prototype, "error", { enumerable: true });
-      Object.defineProperty(ErrorEvent.prototype, "message", { enumerable: true });
-      var MessageEvent = class extends Event {
-        constructor(type, options = {}) {
-          super(type);
-          this[kData] = options.data === undefined ? null : options.data;
-        }
-        get data() {
-          return this[kData];
-        }
-      };
-      Object.defineProperty(MessageEvent.prototype, "data", { enumerable: true });
-      var EventTarget = {
-        addEventListener(type, handler, options = {}) {
-          for (const listener of this.listeners(type)) {
-            if (!options[kForOnEventAttribute] && listener[kListener] === handler && !listener[kForOnEventAttribute]) {
-              return;
-            }
-          }
-          let wrapper;
-          if (type === "message") {
-            wrapper = function onMessage(data, isBinary) {
-              const event = new MessageEvent("message", {
-                data: isBinary ? data : data.toString()
-              });
-              event[kTarget] = this;
-              callListener(handler, this, event);
-            };
-          } else if (type === "close") {
-            wrapper = function onClose(code2, message) {
-              const event = new CloseEvent("close", {
-                code: code2,
-                reason: message.toString(),
-                wasClean: this._closeFrameReceived && this._closeFrameSent
-              });
-              event[kTarget] = this;
-              callListener(handler, this, event);
-            };
-          } else if (type === "error") {
-            wrapper = function onError(error) {
-              const event = new ErrorEvent("error", {
-                error,
-                message: error.message
-              });
-              event[kTarget] = this;
-              callListener(handler, this, event);
-            };
-          } else if (type === "open") {
-            wrapper = function onOpen() {
-              const event = new Event("open");
-              event[kTarget] = this;
-              callListener(handler, this, event);
-            };
-          } else {
-            return;
-          }
-          wrapper[kForOnEventAttribute] = !!options[kForOnEventAttribute];
-          wrapper[kListener] = handler;
-          if (options.once) {
-            this.once(type, wrapper);
-          } else {
-            this.on(type, wrapper);
-          }
-        },
-        removeEventListener(type, handler) {
-          for (const listener of this.listeners(type)) {
-            if (listener[kListener] === handler && !listener[kForOnEventAttribute]) {
-              this.removeListener(type, listener);
-              break;
-            }
-          }
-        }
-      };
-      module.exports = {
-        CloseEvent,
-        ErrorEvent,
-        Event,
-        EventTarget,
-        MessageEvent
-      };
-      function callListener(listener, thisArg, event) {
-        if (typeof listener === "object" && listener.handleEvent) {
-          listener.handleEvent.call(listener, event);
-        } else {
-          listener.call(thisArg, event);
-        }
-      }
-    }
-  });
-  require_extension = __commonJS2({
-    "../common/temp/node_modules/.pnpm/ws@8.18.0_bufferutil@4.0.9/node_modules/ws/lib/extension.js"(exports, module) {
-      var { tokenChars } = require_validation();
-      function push(dest, name, elem) {
-        if (dest[name] === undefined)
-          dest[name] = [elem];
-        else
-          dest[name].push(elem);
-      }
-      function parse(header) {
-        const offers = /* @__PURE__ */ Object.create(null);
-        let params = /* @__PURE__ */ Object.create(null);
-        let mustUnescape = false;
-        let isEscaping = false;
-        let inQuotes = false;
-        let extensionName;
-        let paramName;
-        let start = -1;
-        let code2 = -1;
-        let end = -1;
-        let i = 0;
-        for (;i < header.length; i++) {
-          code2 = header.charCodeAt(i);
-          if (extensionName === undefined) {
-            if (end === -1 && tokenChars[code2] === 1) {
-              if (start === -1)
-                start = i;
-            } else if (i !== 0 && (code2 === 32 || code2 === 9)) {
-              if (end === -1 && start !== -1)
-                end = i;
-            } else if (code2 === 59 || code2 === 44) {
-              if (start === -1) {
-                throw new SyntaxError(`Unexpected character at index ${i}`);
-              }
-              if (end === -1)
-                end = i;
-              const name = header.slice(start, end);
-              if (code2 === 44) {
-                push(offers, name, params);
-                params = /* @__PURE__ */ Object.create(null);
-              } else {
-                extensionName = name;
-              }
-              start = end = -1;
-            } else {
-              throw new SyntaxError(`Unexpected character at index ${i}`);
-            }
-          } else if (paramName === undefined) {
-            if (end === -1 && tokenChars[code2] === 1) {
-              if (start === -1)
-                start = i;
-            } else if (code2 === 32 || code2 === 9) {
-              if (end === -1 && start !== -1)
-                end = i;
-            } else if (code2 === 59 || code2 === 44) {
-              if (start === -1) {
-                throw new SyntaxError(`Unexpected character at index ${i}`);
-              }
-              if (end === -1)
-                end = i;
-              push(params, header.slice(start, end), true);
-              if (code2 === 44) {
-                push(offers, extensionName, params);
-                params = /* @__PURE__ */ Object.create(null);
-                extensionName = undefined;
-              }
-              start = end = -1;
-            } else if (code2 === 61 && start !== -1 && end === -1) {
-              paramName = header.slice(start, i);
-              start = end = -1;
-            } else {
-              throw new SyntaxError(`Unexpected character at index ${i}`);
-            }
-          } else {
-            if (isEscaping) {
-              if (tokenChars[code2] !== 1) {
-                throw new SyntaxError(`Unexpected character at index ${i}`);
-              }
-              if (start === -1)
-                start = i;
-              else if (!mustUnescape)
-                mustUnescape = true;
-              isEscaping = false;
-            } else if (inQuotes) {
-              if (tokenChars[code2] === 1) {
-                if (start === -1)
-                  start = i;
-              } else if (code2 === 34 && start !== -1) {
-                inQuotes = false;
-                end = i;
-              } else if (code2 === 92) {
-                isEscaping = true;
-              } else {
-                throw new SyntaxError(`Unexpected character at index ${i}`);
-              }
-            } else if (code2 === 34 && header.charCodeAt(i - 1) === 61) {
-              inQuotes = true;
-            } else if (end === -1 && tokenChars[code2] === 1) {
-              if (start === -1)
-                start = i;
-            } else if (start !== -1 && (code2 === 32 || code2 === 9)) {
-              if (end === -1)
-                end = i;
-            } else if (code2 === 59 || code2 === 44) {
-              if (start === -1) {
-                throw new SyntaxError(`Unexpected character at index ${i}`);
-              }
-              if (end === -1)
-                end = i;
-              let value = header.slice(start, end);
-              if (mustUnescape) {
-                value = value.replace(/\\/g, "");
-                mustUnescape = false;
-              }
-              push(params, paramName, value);
-              if (code2 === 44) {
-                push(offers, extensionName, params);
-                params = /* @__PURE__ */ Object.create(null);
-                extensionName = undefined;
-              }
-              paramName = undefined;
-              start = end = -1;
-            } else {
-              throw new SyntaxError(`Unexpected character at index ${i}`);
-            }
-          }
-        }
-        if (start === -1 || inQuotes || code2 === 32 || code2 === 9) {
-          throw new SyntaxError("Unexpected end of input");
-        }
-        if (end === -1)
-          end = i;
-        const token = header.slice(start, end);
-        if (extensionName === undefined) {
-          push(offers, token, params);
-        } else {
-          if (paramName === undefined) {
-            push(params, token, true);
-          } else if (mustUnescape) {
-            push(params, paramName, token.replace(/\\/g, ""));
-          } else {
-            push(params, paramName, token);
-          }
-          push(offers, extensionName, params);
-        }
-        return offers;
-      }
-      function format(extensions) {
-        return Object.keys(extensions).map((extension) => {
-          let configurations = extensions[extension];
-          if (!Array.isArray(configurations))
-            configurations = [configurations];
-          return configurations.map((params) => {
-            return [extension].concat(Object.keys(params).map((k) => {
-              let values = params[k];
-              if (!Array.isArray(values))
-                values = [values];
-              return values.map((v) => v === true ? k : `${k}=${v}`).join("; ");
-            })).join("; ");
-          }).join(", ");
-        }).join(", ");
-      }
-      module.exports = { format, parse };
-    }
-  });
-  require_websocket = __commonJS2({
-    "../common/temp/node_modules/.pnpm/ws@8.18.0_bufferutil@4.0.9/node_modules/ws/lib/websocket.js"(exports, module) {
-      var EventEmitter8 = __require2("events");
-      var https = __require2("https");
-      var http = __require2("http");
-      var net = __require2("net");
-      var tls = __require2("tls");
-      var { randomBytes, createHash } = __require2("crypto");
-      var { Duplex, Readable: Readable2 } = __require2("stream");
-      var { URL: URL2 } = __require2("url");
-      var PerMessageDeflate = require_permessage_deflate();
-      var Receiver2 = require_receiver();
-      var Sender2 = require_sender();
-      var { isBlob } = require_validation();
-      var {
-        BINARY_TYPES,
-        EMPTY_BUFFER,
-        GUID,
-        kForOnEventAttribute,
-        kListener,
-        kStatusCode,
-        kWebSocket,
-        NOOP
-      } = require_constants();
-      var {
-        EventTarget: { addEventListener, removeEventListener }
-      } = require_event_target();
-      var { format, parse } = require_extension();
-      var { toBuffer } = require_buffer_util();
-      var closeTimeout = 30 * 1000;
-      var kAborted = Symbol("kAborted");
-      var protocolVersions = [8, 13];
-      var readyStates = ["CONNECTING", "OPEN", "CLOSING", "CLOSED"];
-      var subprotocolRegex = /^[!#$%&'*+\-.0-9A-Z^_`|a-z~]+$/;
-      var WebSocket2 = class _WebSocket extends EventEmitter8 {
-        constructor(address, protocols, options) {
-          super();
-          this._binaryType = BINARY_TYPES[0];
-          this._closeCode = 1006;
-          this._closeFrameReceived = false;
-          this._closeFrameSent = false;
-          this._closeMessage = EMPTY_BUFFER;
-          this._closeTimer = null;
-          this._errorEmitted = false;
-          this._extensions = {};
-          this._paused = false;
-          this._protocol = "";
-          this._readyState = _WebSocket.CONNECTING;
-          this._receiver = null;
-          this._sender = null;
-          this._socket = null;
-          if (address !== null) {
-            this._bufferedAmount = 0;
-            this._isServer = false;
-            this._redirects = 0;
-            if (protocols === undefined) {
-              protocols = [];
-            } else if (!Array.isArray(protocols)) {
-              if (typeof protocols === "object" && protocols !== null) {
-                options = protocols;
-                protocols = [];
-              } else {
-                protocols = [protocols];
-              }
-            }
-            initAsClient(this, address, protocols, options);
-          } else {
-            this._autoPong = options.autoPong;
-            this._isServer = true;
-          }
-        }
-        get binaryType() {
-          return this._binaryType;
-        }
-        set binaryType(type) {
-          if (!BINARY_TYPES.includes(type))
-            return;
-          this._binaryType = type;
-          if (this._receiver)
-            this._receiver._binaryType = type;
-        }
-        get bufferedAmount() {
-          if (!this._socket)
-            return this._bufferedAmount;
-          return this._socket._writableState.length + this._sender._bufferedBytes;
-        }
-        get extensions() {
-          return Object.keys(this._extensions).join();
-        }
-        get isPaused() {
-          return this._paused;
-        }
-        get onclose() {
-          return null;
-        }
-        get onerror() {
-          return null;
-        }
-        get onopen() {
-          return null;
-        }
-        get onmessage() {
-          return null;
-        }
-        get protocol() {
-          return this._protocol;
-        }
-        get readyState() {
-          return this._readyState;
-        }
-        get url() {
-          return this._url;
-        }
-        setSocket(socket, head, options) {
-          const receiver = new Receiver2({
-            allowSynchronousEvents: options.allowSynchronousEvents,
-            binaryType: this.binaryType,
-            extensions: this._extensions,
-            isServer: this._isServer,
-            maxPayload: options.maxPayload,
-            skipUTF8Validation: options.skipUTF8Validation
-          });
-          const sender = new Sender2(socket, this._extensions, options.generateMask);
-          this._receiver = receiver;
-          this._sender = sender;
-          this._socket = socket;
-          receiver[kWebSocket] = this;
-          sender[kWebSocket] = this;
-          socket[kWebSocket] = this;
-          receiver.on("conclude", receiverOnConclude);
-          receiver.on("drain", receiverOnDrain);
-          receiver.on("error", receiverOnError);
-          receiver.on("message", receiverOnMessage);
-          receiver.on("ping", receiverOnPing);
-          receiver.on("pong", receiverOnPong);
-          sender.onerror = senderOnError;
-          if (socket.setTimeout)
-            socket.setTimeout(0);
-          if (socket.setNoDelay)
-            socket.setNoDelay();
-          if (head.length > 0)
-            socket.unshift(head);
-          socket.on("close", socketOnClose);
-          socket.on("data", socketOnData);
-          socket.on("end", socketOnEnd);
-          socket.on("error", socketOnError);
-          this._readyState = _WebSocket.OPEN;
-          this.emit("open");
-        }
-        emitClose() {
-          if (!this._socket) {
-            this._readyState = _WebSocket.CLOSED;
-            this.emit("close", this._closeCode, this._closeMessage);
-            return;
-          }
-          if (this._extensions[PerMessageDeflate.extensionName]) {
-            this._extensions[PerMessageDeflate.extensionName].cleanup();
-          }
-          this._receiver.removeAllListeners();
-          this._readyState = _WebSocket.CLOSED;
-          this.emit("close", this._closeCode, this._closeMessage);
-        }
-        close(code2, data) {
-          if (this.readyState === _WebSocket.CLOSED)
-            return;
-          if (this.readyState === _WebSocket.CONNECTING) {
-            const msg = "WebSocket was closed before the connection was established";
-            abortHandshake(this, this._req, msg);
-            return;
-          }
-          if (this.readyState === _WebSocket.CLOSING) {
-            if (this._closeFrameSent && (this._closeFrameReceived || this._receiver._writableState.errorEmitted)) {
-              this._socket.end();
-            }
-            return;
-          }
-          this._readyState = _WebSocket.CLOSING;
-          this._sender.close(code2, data, !this._isServer, (err) => {
-            if (err)
-              return;
-            this._closeFrameSent = true;
-            if (this._closeFrameReceived || this._receiver._writableState.errorEmitted) {
-              this._socket.end();
-            }
-          });
-          setCloseTimer(this);
-        }
-        pause() {
-          if (this.readyState === _WebSocket.CONNECTING || this.readyState === _WebSocket.CLOSED) {
-            return;
-          }
-          this._paused = true;
-          this._socket.pause();
-        }
-        ping(data, mask, cb) {
-          if (this.readyState === _WebSocket.CONNECTING) {
-            throw new Error("WebSocket is not open: readyState 0 (CONNECTING)");
-          }
-          if (typeof data === "function") {
-            cb = data;
-            data = mask = undefined;
-          } else if (typeof mask === "function") {
-            cb = mask;
-            mask = undefined;
-          }
-          if (typeof data === "number")
-            data = data.toString();
-          if (this.readyState !== _WebSocket.OPEN) {
-            sendAfterClose(this, data, cb);
-            return;
-          }
-          if (mask === undefined)
-            mask = !this._isServer;
-          this._sender.ping(data || EMPTY_BUFFER, mask, cb);
-        }
-        pong(data, mask, cb) {
-          if (this.readyState === _WebSocket.CONNECTING) {
-            throw new Error("WebSocket is not open: readyState 0 (CONNECTING)");
-          }
-          if (typeof data === "function") {
-            cb = data;
-            data = mask = undefined;
-          } else if (typeof mask === "function") {
-            cb = mask;
-            mask = undefined;
-          }
-          if (typeof data === "number")
-            data = data.toString();
-          if (this.readyState !== _WebSocket.OPEN) {
-            sendAfterClose(this, data, cb);
-            return;
-          }
-          if (mask === undefined)
-            mask = !this._isServer;
-          this._sender.pong(data || EMPTY_BUFFER, mask, cb);
-        }
-        resume() {
-          if (this.readyState === _WebSocket.CONNECTING || this.readyState === _WebSocket.CLOSED) {
-            return;
-          }
-          this._paused = false;
-          if (!this._receiver._writableState.needDrain)
-            this._socket.resume();
-        }
-        send(data, options, cb) {
-          if (this.readyState === _WebSocket.CONNECTING) {
-            throw new Error("WebSocket is not open: readyState 0 (CONNECTING)");
-          }
-          if (typeof options === "function") {
-            cb = options;
-            options = {};
-          }
-          if (typeof data === "number")
-            data = data.toString();
-          if (this.readyState !== _WebSocket.OPEN) {
-            sendAfterClose(this, data, cb);
-            return;
-          }
-          const opts = {
-            binary: typeof data !== "string",
-            mask: !this._isServer,
-            compress: true,
-            fin: true,
-            ...options
-          };
-          if (!this._extensions[PerMessageDeflate.extensionName]) {
-            opts.compress = false;
-          }
-          this._sender.send(data || EMPTY_BUFFER, opts, cb);
-        }
-        terminate() {
-          if (this.readyState === _WebSocket.CLOSED)
-            return;
-          if (this.readyState === _WebSocket.CONNECTING) {
-            const msg = "WebSocket was closed before the connection was established";
-            abortHandshake(this, this._req, msg);
-            return;
-          }
-          if (this._socket) {
-            this._readyState = _WebSocket.CLOSING;
-            this._socket.destroy();
-          }
-        }
-      };
-      Object.defineProperty(WebSocket2, "CONNECTING", {
-        enumerable: true,
-        value: readyStates.indexOf("CONNECTING")
-      });
-      Object.defineProperty(WebSocket2.prototype, "CONNECTING", {
-        enumerable: true,
-        value: readyStates.indexOf("CONNECTING")
-      });
-      Object.defineProperty(WebSocket2, "OPEN", {
-        enumerable: true,
-        value: readyStates.indexOf("OPEN")
-      });
-      Object.defineProperty(WebSocket2.prototype, "OPEN", {
-        enumerable: true,
-        value: readyStates.indexOf("OPEN")
-      });
-      Object.defineProperty(WebSocket2, "CLOSING", {
-        enumerable: true,
-        value: readyStates.indexOf("CLOSING")
-      });
-      Object.defineProperty(WebSocket2.prototype, "CLOSING", {
-        enumerable: true,
-        value: readyStates.indexOf("CLOSING")
-      });
-      Object.defineProperty(WebSocket2, "CLOSED", {
-        enumerable: true,
-        value: readyStates.indexOf("CLOSED")
-      });
-      Object.defineProperty(WebSocket2.prototype, "CLOSED", {
-        enumerable: true,
-        value: readyStates.indexOf("CLOSED")
-      });
-      [
-        "binaryType",
-        "bufferedAmount",
-        "extensions",
-        "isPaused",
-        "protocol",
-        "readyState",
-        "url"
-      ].forEach((property) => {
-        Object.defineProperty(WebSocket2.prototype, property, { enumerable: true });
-      });
-      ["open", "error", "close", "message"].forEach((method) => {
-        Object.defineProperty(WebSocket2.prototype, `on${method}`, {
-          enumerable: true,
-          get() {
-            for (const listener of this.listeners(method)) {
-              if (listener[kForOnEventAttribute])
-                return listener[kListener];
-            }
-            return null;
-          },
-          set(handler) {
-            for (const listener of this.listeners(method)) {
-              if (listener[kForOnEventAttribute]) {
-                this.removeListener(method, listener);
-                break;
-              }
-            }
-            if (typeof handler !== "function")
-              return;
-            this.addEventListener(method, handler, {
-              [kForOnEventAttribute]: true
-            });
-          }
-        });
-      });
-      WebSocket2.prototype.addEventListener = addEventListener;
-      WebSocket2.prototype.removeEventListener = removeEventListener;
-      module.exports = WebSocket2;
-      function initAsClient(websocket, address, protocols, options) {
-        const opts = {
-          allowSynchronousEvents: true,
-          autoPong: true,
-          protocolVersion: protocolVersions[1],
-          maxPayload: 100 * 1024 * 1024,
-          skipUTF8Validation: false,
-          perMessageDeflate: true,
-          followRedirects: false,
-          maxRedirects: 10,
-          ...options,
-          socketPath: undefined,
-          hostname: undefined,
-          protocol: undefined,
-          timeout: undefined,
-          method: "GET",
-          host: undefined,
-          path: undefined,
-          port: undefined
-        };
-        websocket._autoPong = opts.autoPong;
-        if (!protocolVersions.includes(opts.protocolVersion)) {
-          throw new RangeError(`Unsupported protocol version: ${opts.protocolVersion} (supported versions: ${protocolVersions.join(", ")})`);
-        }
-        let parsedUrl;
-        if (address instanceof URL2) {
-          parsedUrl = address;
-        } else {
-          try {
-            parsedUrl = new URL2(address);
-          } catch (e) {
-            throw new SyntaxError(`Invalid URL: ${address}`);
-          }
-        }
-        if (parsedUrl.protocol === "http:") {
-          parsedUrl.protocol = "ws:";
-        } else if (parsedUrl.protocol === "https:") {
-          parsedUrl.protocol = "wss:";
-        }
-        websocket._url = parsedUrl.href;
-        const isSecure = parsedUrl.protocol === "wss:";
-        const isIpcUrl = parsedUrl.protocol === "ws+unix:";
-        let invalidUrlMessage;
-        if (parsedUrl.protocol !== "ws:" && !isSecure && !isIpcUrl) {
-          invalidUrlMessage = `The URL's protocol must be one of "ws:", "wss:", "http:", "https", or "ws+unix:"`;
-        } else if (isIpcUrl && !parsedUrl.pathname) {
-          invalidUrlMessage = "The URL's pathname is empty";
-        } else if (parsedUrl.hash) {
-          invalidUrlMessage = "The URL contains a fragment identifier";
-        }
-        if (invalidUrlMessage) {
-          const err = new SyntaxError(invalidUrlMessage);
-          if (websocket._redirects === 0) {
-            throw err;
-          } else {
-            emitErrorAndClose(websocket, err);
-            return;
-          }
-        }
-        const defaultPort = isSecure ? 443 : 80;
-        const key = randomBytes(16).toString("base64");
-        const request = isSecure ? https.request : http.request;
-        const protocolSet = /* @__PURE__ */ new Set;
-        let perMessageDeflate;
-        opts.createConnection = opts.createConnection || (isSecure ? tlsConnect : netConnect);
-        opts.defaultPort = opts.defaultPort || defaultPort;
-        opts.port = parsedUrl.port || defaultPort;
-        opts.host = parsedUrl.hostname.startsWith("[") ? parsedUrl.hostname.slice(1, -1) : parsedUrl.hostname;
-        opts.headers = {
-          ...opts.headers,
-          "Sec-WebSocket-Version": opts.protocolVersion,
-          "Sec-WebSocket-Key": key,
-          Connection: "Upgrade",
-          Upgrade: "websocket"
-        };
-        opts.path = parsedUrl.pathname + parsedUrl.search;
-        opts.timeout = opts.handshakeTimeout;
-        if (opts.perMessageDeflate) {
-          perMessageDeflate = new PerMessageDeflate(opts.perMessageDeflate !== true ? opts.perMessageDeflate : {}, false, opts.maxPayload);
-          opts.headers["Sec-WebSocket-Extensions"] = format({
-            [PerMessageDeflate.extensionName]: perMessageDeflate.offer()
-          });
-        }
-        if (protocols.length) {
-          for (const protocol of protocols) {
-            if (typeof protocol !== "string" || !subprotocolRegex.test(protocol) || protocolSet.has(protocol)) {
-              throw new SyntaxError("An invalid or duplicated subprotocol was specified");
-            }
-            protocolSet.add(protocol);
-          }
-          opts.headers["Sec-WebSocket-Protocol"] = protocols.join(",");
-        }
-        if (opts.origin) {
-          if (opts.protocolVersion < 13) {
-            opts.headers["Sec-WebSocket-Origin"] = opts.origin;
-          } else {
-            opts.headers.Origin = opts.origin;
-          }
-        }
-        if (parsedUrl.username || parsedUrl.password) {
-          opts.auth = `${parsedUrl.username}:${parsedUrl.password}`;
-        }
-        if (isIpcUrl) {
-          const parts = opts.path.split(":");
-          opts.socketPath = parts[0];
-          opts.path = parts[1];
-        }
-        let req;
-        if (opts.followRedirects) {
-          if (websocket._redirects === 0) {
-            websocket._originalIpc = isIpcUrl;
-            websocket._originalSecure = isSecure;
-            websocket._originalHostOrSocketPath = isIpcUrl ? opts.socketPath : parsedUrl.host;
-            const headers = options && options.headers;
-            options = { ...options, headers: {} };
-            if (headers) {
-              for (const [key2, value] of Object.entries(headers)) {
-                options.headers[key2.toLowerCase()] = value;
-              }
-            }
-          } else if (websocket.listenerCount("redirect") === 0) {
-            const isSameHost = isIpcUrl ? websocket._originalIpc ? opts.socketPath === websocket._originalHostOrSocketPath : false : websocket._originalIpc ? false : parsedUrl.host === websocket._originalHostOrSocketPath;
-            if (!isSameHost || websocket._originalSecure && !isSecure) {
-              delete opts.headers.authorization;
-              delete opts.headers.cookie;
-              if (!isSameHost)
-                delete opts.headers.host;
-              opts.auth = undefined;
-            }
-          }
-          if (opts.auth && !options.headers.authorization) {
-            options.headers.authorization = "Basic " + Buffer.from(opts.auth).toString("base64");
-          }
-          req = websocket._req = request(opts);
-          if (websocket._redirects) {
-            websocket.emit("redirect", websocket.url, req);
-          }
-        } else {
-          req = websocket._req = request(opts);
-        }
-        if (opts.timeout) {
-          req.on("timeout", () => {
-            abortHandshake(websocket, req, "Opening handshake has timed out");
-          });
-        }
-        req.on("error", (err) => {
-          if (req === null || req[kAborted])
-            return;
-          req = websocket._req = null;
-          emitErrorAndClose(websocket, err);
-        });
-        req.on("response", (res) => {
-          const location = res.headers.location;
-          const statusCode = res.statusCode;
-          if (location && opts.followRedirects && statusCode >= 300 && statusCode < 400) {
-            if (++websocket._redirects > opts.maxRedirects) {
-              abortHandshake(websocket, req, "Maximum redirects exceeded");
-              return;
-            }
-            req.abort();
-            let addr;
-            try {
-              addr = new URL2(location, address);
-            } catch (e) {
-              const err = new SyntaxError(`Invalid URL: ${location}`);
-              emitErrorAndClose(websocket, err);
-              return;
-            }
-            initAsClient(websocket, addr, protocols, options);
-          } else if (!websocket.emit("unexpected-response", req, res)) {
-            abortHandshake(websocket, req, `Unexpected server response: ${res.statusCode}`);
-          }
-        });
-        req.on("upgrade", (res, socket, head) => {
-          websocket.emit("upgrade", res);
-          if (websocket.readyState !== WebSocket2.CONNECTING)
-            return;
-          req = websocket._req = null;
-          const upgrade = res.headers.upgrade;
-          if (upgrade === undefined || upgrade.toLowerCase() !== "websocket") {
-            abortHandshake(websocket, socket, "Invalid Upgrade header");
-            return;
-          }
-          const digest = createHash("sha1").update(key + GUID).digest("base64");
-          if (res.headers["sec-websocket-accept"] !== digest) {
-            abortHandshake(websocket, socket, "Invalid Sec-WebSocket-Accept header");
-            return;
-          }
-          const serverProt = res.headers["sec-websocket-protocol"];
-          let protError;
-          if (serverProt !== undefined) {
-            if (!protocolSet.size) {
-              protError = "Server sent a subprotocol but none was requested";
-            } else if (!protocolSet.has(serverProt)) {
-              protError = "Server sent an invalid subprotocol";
-            }
-          } else if (protocolSet.size) {
-            protError = "Server sent no subprotocol";
-          }
-          if (protError) {
-            abortHandshake(websocket, socket, protError);
-            return;
-          }
-          if (serverProt)
-            websocket._protocol = serverProt;
-          const secWebSocketExtensions = res.headers["sec-websocket-extensions"];
-          if (secWebSocketExtensions !== undefined) {
-            if (!perMessageDeflate) {
-              const message = "Server sent a Sec-WebSocket-Extensions header but no extension was requested";
-              abortHandshake(websocket, socket, message);
-              return;
-            }
-            let extensions;
-            try {
-              extensions = parse(secWebSocketExtensions);
-            } catch (err) {
-              const message = "Invalid Sec-WebSocket-Extensions header";
-              abortHandshake(websocket, socket, message);
-              return;
-            }
-            const extensionNames = Object.keys(extensions);
-            if (extensionNames.length !== 1 || extensionNames[0] !== PerMessageDeflate.extensionName) {
-              const message = "Server indicated an extension that was not requested";
-              abortHandshake(websocket, socket, message);
-              return;
-            }
-            try {
-              perMessageDeflate.accept(extensions[PerMessageDeflate.extensionName]);
-            } catch (err) {
-              const message = "Invalid Sec-WebSocket-Extensions header";
-              abortHandshake(websocket, socket, message);
-              return;
-            }
-            websocket._extensions[PerMessageDeflate.extensionName] = perMessageDeflate;
-          }
-          websocket.setSocket(socket, head, {
-            allowSynchronousEvents: opts.allowSynchronousEvents,
-            generateMask: opts.generateMask,
-            maxPayload: opts.maxPayload,
-            skipUTF8Validation: opts.skipUTF8Validation
-          });
-        });
-        if (opts.finishRequest) {
-          opts.finishRequest(req, websocket);
-        } else {
-          req.end();
-        }
-      }
-      function emitErrorAndClose(websocket, err) {
-        websocket._readyState = WebSocket2.CLOSING;
-        websocket._errorEmitted = true;
-        websocket.emit("error", err);
-        websocket.emitClose();
-      }
-      function netConnect(options) {
-        options.path = options.socketPath;
-        return net.connect(options);
-      }
-      function tlsConnect(options) {
-        options.path = undefined;
-        if (!options.servername && options.servername !== "") {
-          options.servername = net.isIP(options.host) ? "" : options.host;
-        }
-        return tls.connect(options);
-      }
-      function abortHandshake(websocket, stream, message) {
-        websocket._readyState = WebSocket2.CLOSING;
-        const err = new Error(message);
-        Error.captureStackTrace(err, abortHandshake);
-        if (stream.setHeader) {
-          stream[kAborted] = true;
-          stream.abort();
-          if (stream.socket && !stream.socket.destroyed) {
-            stream.socket.destroy();
-          }
-          process.nextTick(emitErrorAndClose, websocket, err);
-        } else {
-          stream.destroy(err);
-          stream.once("error", websocket.emit.bind(websocket, "error"));
-          stream.once("close", websocket.emitClose.bind(websocket));
-        }
-      }
-      function sendAfterClose(websocket, data, cb) {
-        if (data) {
-          const length = isBlob(data) ? data.size : toBuffer(data).length;
-          if (websocket._socket)
-            websocket._sender._bufferedBytes += length;
-          else
-            websocket._bufferedAmount += length;
-        }
-        if (cb) {
-          const err = new Error(`WebSocket is not open: readyState ${websocket.readyState} (${readyStates[websocket.readyState]})`);
-          process.nextTick(cb, err);
-        }
-      }
-      function receiverOnConclude(code2, reason) {
-        const websocket = this[kWebSocket];
-        websocket._closeFrameReceived = true;
-        websocket._closeMessage = reason;
-        websocket._closeCode = code2;
-        if (websocket._socket[kWebSocket] === undefined)
-          return;
-        websocket._socket.removeListener("data", socketOnData);
-        process.nextTick(resume, websocket._socket);
-        if (code2 === 1005)
-          websocket.close();
-        else
-          websocket.close(code2, reason);
-      }
-      function receiverOnDrain() {
-        const websocket = this[kWebSocket];
-        if (!websocket.isPaused)
-          websocket._socket.resume();
-      }
-      function receiverOnError(err) {
-        const websocket = this[kWebSocket];
-        if (websocket._socket[kWebSocket] !== undefined) {
-          websocket._socket.removeListener("data", socketOnData);
-          process.nextTick(resume, websocket._socket);
-          websocket.close(err[kStatusCode]);
-        }
-        if (!websocket._errorEmitted) {
-          websocket._errorEmitted = true;
-          websocket.emit("error", err);
-        }
-      }
-      function receiverOnFinish() {
-        this[kWebSocket].emitClose();
-      }
-      function receiverOnMessage(data, isBinary) {
-        this[kWebSocket].emit("message", data, isBinary);
-      }
-      function receiverOnPing(data) {
-        const websocket = this[kWebSocket];
-        if (websocket._autoPong)
-          websocket.pong(data, !this._isServer, NOOP);
-        websocket.emit("ping", data);
-      }
-      function receiverOnPong(data) {
-        this[kWebSocket].emit("pong", data);
-      }
-      function resume(stream) {
-        stream.resume();
-      }
-      function senderOnError(err) {
-        const websocket = this[kWebSocket];
-        if (websocket.readyState === WebSocket2.CLOSED)
-          return;
-        if (websocket.readyState === WebSocket2.OPEN) {
-          websocket._readyState = WebSocket2.CLOSING;
-          setCloseTimer(websocket);
-        }
-        this._socket.end();
-        if (!websocket._errorEmitted) {
-          websocket._errorEmitted = true;
-          websocket.emit("error", err);
-        }
-      }
-      function setCloseTimer(websocket) {
-        websocket._closeTimer = setTimeout(websocket._socket.destroy.bind(websocket._socket), closeTimeout);
-      }
-      function socketOnClose() {
-        const websocket = this[kWebSocket];
-        this.removeListener("close", socketOnClose);
-        this.removeListener("data", socketOnData);
-        this.removeListener("end", socketOnEnd);
-        websocket._readyState = WebSocket2.CLOSING;
-        let chunk;
-        if (!this._readableState.endEmitted && !websocket._closeFrameReceived && !websocket._receiver._writableState.errorEmitted && (chunk = websocket._socket.read()) !== null) {
-          websocket._receiver.write(chunk);
-        }
-        websocket._receiver.end();
-        this[kWebSocket] = undefined;
-        clearTimeout(websocket._closeTimer);
-        if (websocket._receiver._writableState.finished || websocket._receiver._writableState.errorEmitted) {
-          websocket.emitClose();
-        } else {
-          websocket._receiver.on("error", receiverOnFinish);
-          websocket._receiver.on("finish", receiverOnFinish);
-        }
-      }
-      function socketOnData(chunk) {
-        if (!this[kWebSocket]._receiver.write(chunk)) {
-          this.pause();
-        }
-      }
-      function socketOnEnd() {
-        const websocket = this[kWebSocket];
-        websocket._readyState = WebSocket2.CLOSING;
-        websocket._receiver.end();
-        this.end();
-      }
-      function socketOnError() {
-        const websocket = this[kWebSocket];
-        this.removeListener("error", socketOnError);
-        this.on("error", NOOP);
-        if (websocket) {
-          websocket._readyState = WebSocket2.CLOSING;
-          this.destroy();
-        }
-      }
-    }
-  });
-  require_subprotocol = __commonJS2({
-    "../common/temp/node_modules/.pnpm/ws@8.18.0_bufferutil@4.0.9/node_modules/ws/lib/subprotocol.js"(exports, module) {
-      var { tokenChars } = require_validation();
-      function parse(header) {
-        const protocols = /* @__PURE__ */ new Set;
-        let start = -1;
-        let end = -1;
-        let i = 0;
-        for (i;i < header.length; i++) {
-          const code2 = header.charCodeAt(i);
-          if (end === -1 && tokenChars[code2] === 1) {
-            if (start === -1)
-              start = i;
-          } else if (i !== 0 && (code2 === 32 || code2 === 9)) {
-            if (end === -1 && start !== -1)
-              end = i;
-          } else if (code2 === 44) {
-            if (start === -1) {
-              throw new SyntaxError(`Unexpected character at index ${i}`);
-            }
-            if (end === -1)
-              end = i;
-            const protocol2 = header.slice(start, end);
-            if (protocols.has(protocol2)) {
-              throw new SyntaxError(`The "${protocol2}" subprotocol is duplicated`);
-            }
-            protocols.add(protocol2);
-            start = end = -1;
-          } else {
-            throw new SyntaxError(`Unexpected character at index ${i}`);
-          }
-        }
-        if (start === -1 || end !== -1) {
-          throw new SyntaxError("Unexpected end of input");
-        }
-        const protocol = header.slice(start, i);
-        if (protocols.has(protocol)) {
-          throw new SyntaxError(`The "${protocol}" subprotocol is duplicated`);
-        }
-        protocols.add(protocol);
-        return protocols;
-      }
-      module.exports = { parse };
-    }
-  });
-  require_websocket_server = __commonJS2({
-    "../common/temp/node_modules/.pnpm/ws@8.18.0_bufferutil@4.0.9/node_modules/ws/lib/websocket-server.js"(exports, module) {
-      var EventEmitter8 = __require2("events");
-      var http = __require2("http");
-      var { Duplex } = __require2("stream");
-      var { createHash } = __require2("crypto");
-      var extension = require_extension();
-      var PerMessageDeflate = require_permessage_deflate();
-      var subprotocol = require_subprotocol();
-      var WebSocket2 = require_websocket();
-      var { GUID, kWebSocket } = require_constants();
-      var keyRegex = /^[+/0-9A-Za-z]{22}==$/;
-      var RUNNING = 0;
-      var CLOSING = 1;
-      var CLOSED = 2;
-      var WebSocketServer2 = class extends EventEmitter8 {
-        constructor(options, callback) {
-          super();
-          options = {
-            allowSynchronousEvents: true,
-            autoPong: true,
-            maxPayload: 100 * 1024 * 1024,
-            skipUTF8Validation: false,
-            perMessageDeflate: false,
-            handleProtocols: null,
-            clientTracking: true,
-            verifyClient: null,
-            noServer: false,
-            backlog: null,
-            server: null,
-            host: null,
-            path: null,
-            port: null,
-            WebSocket: WebSocket2,
-            ...options
-          };
-          if (options.port == null && !options.server && !options.noServer || options.port != null && (options.server || options.noServer) || options.server && options.noServer) {
-            throw new TypeError('One and only one of the "port", "server", or "noServer" options must be specified');
-          }
-          if (options.port != null) {
-            this._server = http.createServer((req, res) => {
-              const body = http.STATUS_CODES[426];
-              res.writeHead(426, {
-                "Content-Length": body.length,
-                "Content-Type": "text/plain"
-              });
-              res.end(body);
-            });
-            this._server.listen(options.port, options.host, options.backlog, callback);
-          } else if (options.server) {
-            this._server = options.server;
-          }
-          if (this._server) {
-            const emitConnection = this.emit.bind(this, "connection");
-            this._removeListeners = addListeners(this._server, {
-              listening: this.emit.bind(this, "listening"),
-              error: this.emit.bind(this, "error"),
-              upgrade: (req, socket, head) => {
-                this.handleUpgrade(req, socket, head, emitConnection);
-              }
-            });
-          }
-          if (options.perMessageDeflate === true)
-            options.perMessageDeflate = {};
-          if (options.clientTracking) {
-            this.clients = /* @__PURE__ */ new Set;
-            this._shouldEmitClose = false;
-          }
-          this.options = options;
-          this._state = RUNNING;
-        }
-        address() {
-          if (this.options.noServer) {
-            throw new Error('The server is operating in "noServer" mode');
-          }
-          if (!this._server)
-            return null;
-          return this._server.address();
-        }
-        close(cb) {
-          if (this._state === CLOSED) {
-            if (cb) {
-              this.once("close", () => {
-                cb(new Error("The server is not running"));
-              });
-            }
-            process.nextTick(emitClose, this);
-            return;
-          }
-          if (cb)
-            this.once("close", cb);
-          if (this._state === CLOSING)
-            return;
-          this._state = CLOSING;
-          if (this.options.noServer || this.options.server) {
-            if (this._server) {
-              this._removeListeners();
-              this._removeListeners = this._server = null;
-            }
-            if (this.clients) {
-              if (!this.clients.size) {
-                process.nextTick(emitClose, this);
-              } else {
-                this._shouldEmitClose = true;
-              }
-            } else {
-              process.nextTick(emitClose, this);
-            }
-          } else {
-            const server = this._server;
-            this._removeListeners();
-            this._removeListeners = this._server = null;
-            server.close(() => {
-              emitClose(this);
-            });
-          }
-        }
-        shouldHandle(req) {
-          if (this.options.path) {
-            const index = req.url.indexOf("?");
-            const pathname = index !== -1 ? req.url.slice(0, index) : req.url;
-            if (pathname !== this.options.path)
-              return false;
-          }
-          return true;
-        }
-        handleUpgrade(req, socket, head, cb) {
-          socket.on("error", socketOnError);
-          const key = req.headers["sec-websocket-key"];
-          const upgrade = req.headers.upgrade;
-          const version2 = +req.headers["sec-websocket-version"];
-          if (req.method !== "GET") {
-            const message = "Invalid HTTP method";
-            abortHandshakeOrEmitwsClientError(this, req, socket, 405, message);
-            return;
-          }
-          if (upgrade === undefined || upgrade.toLowerCase() !== "websocket") {
-            const message = "Invalid Upgrade header";
-            abortHandshakeOrEmitwsClientError(this, req, socket, 400, message);
-            return;
-          }
-          if (key === undefined || !keyRegex.test(key)) {
-            const message = "Missing or invalid Sec-WebSocket-Key header";
-            abortHandshakeOrEmitwsClientError(this, req, socket, 400, message);
-            return;
-          }
-          if (version2 !== 8 && version2 !== 13) {
-            const message = "Missing or invalid Sec-WebSocket-Version header";
-            abortHandshakeOrEmitwsClientError(this, req, socket, 400, message);
-            return;
-          }
-          if (!this.shouldHandle(req)) {
-            abortHandshake(socket, 400);
-            return;
-          }
-          const secWebSocketProtocol = req.headers["sec-websocket-protocol"];
-          let protocols = /* @__PURE__ */ new Set;
-          if (secWebSocketProtocol !== undefined) {
-            try {
-              protocols = subprotocol.parse(secWebSocketProtocol);
-            } catch (err) {
-              const message = "Invalid Sec-WebSocket-Protocol header";
-              abortHandshakeOrEmitwsClientError(this, req, socket, 400, message);
-              return;
-            }
-          }
-          const secWebSocketExtensions = req.headers["sec-websocket-extensions"];
-          const extensions = {};
-          if (this.options.perMessageDeflate && secWebSocketExtensions !== undefined) {
-            const perMessageDeflate = new PerMessageDeflate(this.options.perMessageDeflate, true, this.options.maxPayload);
-            try {
-              const offers = extension.parse(secWebSocketExtensions);
-              if (offers[PerMessageDeflate.extensionName]) {
-                perMessageDeflate.accept(offers[PerMessageDeflate.extensionName]);
-                extensions[PerMessageDeflate.extensionName] = perMessageDeflate;
-              }
-            } catch (err) {
-              const message = "Invalid or unacceptable Sec-WebSocket-Extensions header";
-              abortHandshakeOrEmitwsClientError(this, req, socket, 400, message);
-              return;
-            }
-          }
-          if (this.options.verifyClient) {
-            const info = {
-              origin: req.headers[`${version2 === 8 ? "sec-websocket-origin" : "origin"}`],
-              secure: !!(req.socket.authorized || req.socket.encrypted),
-              req
-            };
-            if (this.options.verifyClient.length === 2) {
-              this.options.verifyClient(info, (verified, code2, message, headers) => {
-                if (!verified) {
-                  return abortHandshake(socket, code2 || 401, message, headers);
-                }
-                this.completeUpgrade(extensions, key, protocols, req, socket, head, cb);
-              });
-              return;
-            }
-            if (!this.options.verifyClient(info))
-              return abortHandshake(socket, 401);
-          }
-          this.completeUpgrade(extensions, key, protocols, req, socket, head, cb);
-        }
-        completeUpgrade(extensions, key, protocols, req, socket, head, cb) {
-          if (!socket.readable || !socket.writable)
-            return socket.destroy();
-          if (socket[kWebSocket]) {
-            throw new Error("server.handleUpgrade() was called more than once with the same socket, possibly due to a misconfiguration");
-          }
-          if (this._state > RUNNING)
-            return abortHandshake(socket, 503);
-          const digest = createHash("sha1").update(key + GUID).digest("base64");
-          const headers = [
-            "HTTP/1.1 101 Switching Protocols",
-            "Upgrade: websocket",
-            "Connection: Upgrade",
-            `Sec-WebSocket-Accept: ${digest}`
-          ];
-          const ws = new this.options.WebSocket(null, undefined, this.options);
-          if (protocols.size) {
-            const protocol = this.options.handleProtocols ? this.options.handleProtocols(protocols, req) : protocols.values().next().value;
-            if (protocol) {
-              headers.push(`Sec-WebSocket-Protocol: ${protocol}`);
-              ws._protocol = protocol;
-            }
-          }
-          if (extensions[PerMessageDeflate.extensionName]) {
-            const params = extensions[PerMessageDeflate.extensionName].params;
-            const value = extension.format({
-              [PerMessageDeflate.extensionName]: [params]
-            });
-            headers.push(`Sec-WebSocket-Extensions: ${value}`);
-            ws._extensions = extensions;
-          }
-          this.emit("headers", headers, req);
-          socket.write(headers.concat(`\r
-`).join(`\r
-`));
-          socket.removeListener("error", socketOnError);
-          ws.setSocket(socket, head, {
-            allowSynchronousEvents: this.options.allowSynchronousEvents,
-            maxPayload: this.options.maxPayload,
-            skipUTF8Validation: this.options.skipUTF8Validation
-          });
-          if (this.clients) {
-            this.clients.add(ws);
-            ws.on("close", () => {
-              this.clients.delete(ws);
-              if (this._shouldEmitClose && !this.clients.size) {
-                process.nextTick(emitClose, this);
-              }
-            });
-          }
-          cb(ws, req);
-        }
-      };
-      module.exports = WebSocketServer2;
-      function addListeners(server, map) {
-        for (const event of Object.keys(map))
-          server.on(event, map[event]);
-        return function removeListeners() {
-          for (const event of Object.keys(map)) {
-            server.removeListener(event, map[event]);
-          }
-        };
-      }
-      function emitClose(server) {
-        server._state = CLOSED;
-        server.emit("close");
-      }
-      function socketOnError() {
-        this.destroy();
-      }
-      function abortHandshake(socket, code2, message, headers) {
-        message = message || http.STATUS_CODES[code2];
-        headers = {
-          Connection: "close",
-          "Content-Type": "text/html",
-          "Content-Length": Buffer.byteLength(message),
-          ...headers
-        };
-        socket.once("finish", socket.destroy);
-        socket.end(`HTTP/1.1 ${code2} ${http.STATUS_CODES[code2]}\r
-` + Object.keys(headers).map((h) => `${h}: ${headers[h]}`).join(`\r
-`) + `\r
-\r
-` + message);
-      }
-      function abortHandshakeOrEmitwsClientError(server, req, socket, code2, message) {
-        if (server.listenerCount("wsClientError")) {
-          const err = new Error(message);
-          Error.captureStackTrace(err, abortHandshakeOrEmitwsClientError);
-          server.emit("wsClientError", err, socket, req);
-        } else {
-          abortHandshake(socket, code2, message);
-        }
-      }
-    }
-  });
-  import_stream = __toESM2(require_stream(), 1);
-  import_receiver = __toESM2(require_receiver(), 1);
-  import_sender = __toESM2(require_sender(), 1);
-  import_websocket = __toESM2(require_websocket(), 1);
-  import_websocket_server = __toESM2(require_websocket_server(), 1);
-  wrapper_default = import_websocket.default;
-  nodeWebSocket = wrapper_default;
-  setDefaultWebSocketConstructor(nodeWebSocket);
-});
-
-// node_modules/convex/dist/esm/browser/index-node.js
-var exports_index_node = {};
-__export(exports_index_node, {
-  ConvexHttpClient: () => ConvexHttpClient,
-  ConvexClient: () => ConvexClient,
-  BaseConvexClient: () => BaseConvexClient
-});
-var init_index_node = __esm(() => {
-  init_client();
-  init_simple_client_node();
-  init_http_client();
-});
-
-// src/tmux.ts
-import { execSync, spawnSync } from "child_process";
-function hasTmux() {
-  if (_hasTmux === null) {
-    try {
-      execSync("tmux -V", { stdio: "ignore", timeout: 2000, env: { ...process.env, PATH: ENRICHED_PATH } });
-      _hasTmux = true;
-    } catch {
-      return false;
-    }
-  }
-  return _hasTmux;
-}
-function resetTmuxCache() {
-  _hasTmux = null;
-}
-function installCommand() {
-  if (process.platform === "darwin") {
-    try {
-      execSync("command -v brew", { stdio: "ignore", timeout: 2000 });
-      return "brew install tmux";
-    } catch {
-      return null;
-    }
-  }
-  if (process.platform === "linux") {
-    for (const [bin, cmd] of [
-      ["apt-get", "sudo apt-get install -y tmux"],
-      ["dnf", "sudo dnf install -y tmux"],
-      ["yum", "sudo yum install -y tmux"],
-      ["pacman", "sudo pacman -S --noconfirm tmux"],
-      ["apk", "sudo apk add tmux"]
-    ]) {
-      try {
-        execSync(`command -v ${bin}`, { stdio: "ignore", timeout: 2000 });
-        return cmd;
-      } catch {
-      }
-    }
-  }
-  return null;
-}
-function tryInstallTmux() {
-  const cmd = installCommand();
-  if (!cmd)
-    return false;
-  console.log(`Installing tmux: ${cmd}`);
-  const result = spawnSync("sh", ["-c", cmd], {
-    stdio: "inherit",
-    timeout: 120000,
-    env: { ...process.env, PATH: ENRICHED_PATH }
-  });
-  if (result.status === 0) {
-    resetTmuxCache();
-    if (hasTmux()) {
-      console.log("tmux installed successfully.");
-      return true;
-    }
-  }
-  return false;
-}
-function ensureTmux() {
-  if (hasTmux())
-    return true;
-  console.log("tmux is required but not installed.");
-  const cmd = installCommand();
-  if (cmd) {
-    console.log(`Install it with: ${cmd}`);
-  } else if (process.platform === "darwin") {
-    console.log("Install Homebrew (https://brew.sh) then run: brew install tmux");
-  } else {
-    console.log("Install tmux using your system package manager.");
-  }
-  return false;
-}
-var ENRICHED_PATH, _hasTmux = null;
-var init_tmux = __esm(() => {
-  ENRICHED_PATH = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
-});
 
 // src/daemon.ts
 import * as fs14 from "fs";
@@ -9795,6 +2230,505 @@ class GeminiWatcher extends EventEmitter7 {
     return "";
   }
 }
+
+// src/parser.ts
+function parseSessionLine(line) {
+  if (!line.trim())
+    return null;
+  try {
+    return JSON.parse(line);
+  } catch (err) {
+    const preview = line.length > 100 ? line.slice(0, 100) + "..." : line;
+    console.warn(`[parser] Failed to parse session line: ${err instanceof Error ? err.message : String(err)}`);
+    console.warn(`[parser] Line content: ${preview}`);
+    return null;
+  }
+}
+function extractMessages(entries) {
+  const messages = [];
+  for (const entry of entries) {
+    const timestamp = entry.timestamp ? new Date(entry.timestamp).getTime() : Date.now();
+    if (entry.type === "system") {
+      if (entry.content && entry.subtype) {
+        messages.push({
+          uuid: entry.uuid,
+          role: "system",
+          content: entry.content,
+          timestamp,
+          subtype: entry.subtype
+        });
+      }
+      continue;
+    }
+    if (entry.type === "queue-operation" && entry.operation === "enqueue" && entry.content) {
+      messages.push({
+        uuid: entry.uuid,
+        role: "user",
+        content: entry.content,
+        timestamp
+      });
+      continue;
+    }
+    if (entry.isMeta || entry.isCompactSummary || entry.isVisibleInTranscriptOnly)
+      continue;
+    const normalizedType = entry.type === "human" ? "user" : entry.type;
+    if (normalizedType !== "user" && normalizedType !== "assistant")
+      continue;
+    if (!entry.message)
+      continue;
+    let role;
+    let textContent = "";
+    let thinking = "";
+    const toolCalls = [];
+    const toolResults = [];
+    const images = [];
+    if (typeof entry.message === "string") {
+      role = normalizedType;
+      textContent = entry.message;
+    } else {
+      role = normalizedType;
+      const content = entry.message.content;
+      if (typeof content === "string") {
+        textContent = content;
+      } else if (Array.isArray(content)) {
+        for (const block of content) {
+          if (block.type === "text") {
+            textContent += block.text;
+          } else if (block.type === "thinking") {
+            thinking += block.thinking;
+          } else if (block.type === "tool_use") {
+            toolCalls.push({ id: block.id, name: block.name, input: block.input });
+          } else if (block.type === "tool_result") {
+            let toolResultContent = block.content;
+            if (Array.isArray(block.content)) {
+              const contentArray = block.content;
+              toolResultContent = contentArray.filter((c) => c.type === "text" && c.text).map((c) => c.text).join("");
+              for (const item of contentArray) {
+                if (item.type === "image" && item.source) {
+                  images.push({
+                    mediaType: item.source.media_type,
+                    data: item.source.data,
+                    toolUseId: block.tool_use_id
+                  });
+                }
+              }
+            }
+            toolResults.push({
+              toolUseId: block.tool_use_id,
+              content: toolResultContent,
+              isError: block.is_error
+            });
+          } else if (block.type === "image") {
+            images.push({
+              mediaType: block.source.media_type,
+              data: block.source.data
+            });
+          }
+        }
+      }
+    }
+    if (textContent || thinking || toolCalls.length > 0 || toolResults.length > 0 || images.length > 0) {
+      const stopReason = typeof entry.message === "object" && entry.message.stop_reason ? entry.message.stop_reason : undefined;
+      messages.push({
+        uuid: entry.uuid,
+        role,
+        content: textContent,
+        timestamp,
+        thinking: thinking || undefined,
+        toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+        toolResults: toolResults.length > 0 ? toolResults : undefined,
+        images: images.length > 0 ? images : undefined,
+        stopReason
+      });
+    }
+  }
+  return messages;
+}
+function parseSessionFile(content) {
+  const lines = content.split(`
+`);
+  const entries = lines.map(parseSessionLine).filter((e) => e !== null);
+  return extractMessages(entries);
+}
+function extractSlug(content) {
+  const lines = content.split(`
+`);
+  for (const line of lines) {
+    const entry = parseSessionLine(line);
+    if (entry?.slug) {
+      return entry.slug;
+    }
+  }
+  return;
+}
+function extractParentUuid(content) {
+  const lines = content.split(`
+`);
+  for (const line of lines) {
+    const entry = parseSessionLine(line);
+    if (entry?.type === "user") {
+      return entry.parentUuid || undefined;
+    }
+  }
+  return;
+}
+function extractSummaryTitle(content) {
+  const lines = content.split(`
+`);
+  for (const line of lines) {
+    const entry = parseSessionLine(line);
+    if (entry?.type === "summary" && entry?.summary) {
+      return entry.summary;
+    }
+  }
+  return;
+}
+function extractCwd(content) {
+  const lines = content.split(`
+`);
+  for (const line of lines) {
+    const entry = parseSessionLine(line);
+    if (entry?.cwd) {
+      return entry.cwd;
+    }
+  }
+  return;
+}
+function detectCliFlags(content) {
+  const flags = [];
+  const firstUserLine = content.split(`
+`).find((l) => l.includes('"type":"user"'));
+  if (firstUserLine) {
+    try {
+      const parsed = JSON.parse(firstUserLine);
+      if (parsed.permissionMode === "bypassPermissions") {
+        flags.push("--dangerously-skip-permissions");
+      }
+    } catch {
+    }
+  }
+  if (content.includes("mcp__claude-in-chrome__") || content.includes('"claude-in-chrome"')) {
+    flags.push("--chrome");
+  }
+  return flags.length > 0 ? flags.join(" ") : null;
+}
+function sanitizeCodexText(content) {
+  return content.replace(/<image\b[^>]*\/?>\s*(?:<\/image>)?/gi, "").replace(/\n{3,}/g, `
+
+`);
+}
+function parseCodexImageItem(item) {
+  if (typeof item.image_data === "string" && typeof item.media_type === "string") {
+    return {
+      mediaType: item.media_type,
+      data: item.image_data
+    };
+  }
+  const imageUrl = typeof item.image_url === "string" ? item.image_url : typeof item.url === "string" ? item.url : undefined;
+  if (!imageUrl)
+    return null;
+  const match = imageUrl.match(/^data:([^;,]+);base64,([\s\S]+)$/i);
+  if (!match)
+    return null;
+  return {
+    mediaType: match[1],
+    data: match[2]
+  };
+}
+function extractCodexTextAndImages(content) {
+  if (typeof content === "string") {
+    return { text: sanitizeCodexText(content), images: [] };
+  }
+  if (!Array.isArray(content)) {
+    return { text: "", images: [] };
+  }
+  const textParts = [];
+  const images = [];
+  for (const item of content) {
+    if (item.type === "input_text" || item.type === "output_text" || item.type === "text") {
+      if (typeof item.text === "string" && item.text.length > 0) {
+        textParts.push(item.text);
+      }
+      continue;
+    }
+    if (item.type === "input_image" || item.type === "output_image" || item.type === "image") {
+      const parsedImage = parseCodexImageItem(item);
+      if (parsedImage) {
+        images.push(parsedImage);
+      }
+    }
+  }
+  return {
+    text: sanitizeCodexText(textParts.join(`
+`)),
+    images
+  };
+}
+function parseCodexSessionFile(content) {
+  const lines = content.split(`
+`);
+  const messages = [];
+  let currentAssistantContent = "";
+  let currentAssistantThinking = "";
+  let currentToolCalls = [];
+  let currentToolResults = [];
+  let currentAssistantImages = [];
+  let lastTimestamp = Date.now();
+  const flushAssistantMessage = () => {
+    if (currentAssistantContent || currentAssistantThinking || currentToolCalls.length > 0 || currentToolResults.length > 0 || currentAssistantImages.length > 0) {
+      messages.push({
+        role: "assistant",
+        content: currentAssistantContent.trim(),
+        timestamp: lastTimestamp,
+        thinking: currentAssistantThinking.trim() || undefined,
+        toolCalls: currentToolCalls.length > 0 ? [...currentToolCalls] : undefined,
+        toolResults: currentToolResults.length > 0 ? [...currentToolResults] : undefined,
+        images: currentAssistantImages.length > 0 ? [...currentAssistantImages] : undefined
+      });
+      currentAssistantContent = "";
+      currentAssistantThinking = "";
+      currentToolCalls = [];
+      currentToolResults = [];
+      currentAssistantImages = [];
+    }
+  };
+  for (const line of lines) {
+    if (!line.trim())
+      continue;
+    let entry;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (entry.type !== "response_item")
+      continue;
+    const payload = entry.payload;
+    const timestamp = entry.timestamp ? new Date(entry.timestamp).getTime() : Date.now();
+    lastTimestamp = timestamp;
+    if (payload.type === "message") {
+      const role = payload.role;
+      if (role === "developer" || role === "system")
+        continue;
+      const { text, images } = extractCodexTextAndImages(payload.content);
+      const trimmedText = text.trim();
+      if (role === "user") {
+        flushAssistantMessage();
+        const isSystemContext = trimmedText.startsWith("<environment_context>") || trimmedText.startsWith("<INSTRUCTIONS>") || trimmedText.startsWith("# AGENTS.md instructions") || trimmedText.startsWith("<permissions") || trimmedText.startsWith("<collaboration_mode>") || trimmedText.startsWith("<app-context>");
+        if ((trimmedText || images.length > 0) && !isSystemContext) {
+          messages.push({
+            role: "user",
+            content: trimmedText,
+            timestamp,
+            images: images.length > 0 ? images : undefined
+          });
+        }
+      } else if (role === "assistant") {
+        if (trimmedText) {
+          currentAssistantContent += (currentAssistantContent ? `
+` : "") + trimmedText;
+        }
+        if (images.length > 0) {
+          currentAssistantImages.push(...images);
+        }
+      }
+    } else if (payload.type === "reasoning") {
+      const contentArray = Array.isArray(payload.content) ? payload.content : [];
+      const summaryArray = Array.isArray(payload.summary) ? payload.summary : [];
+      const thinkingText = contentArray.length > 0 ? contentArray.map((c) => c.text || "").join(`
+`) : summaryArray.map((c) => c.text || "").join(`
+`);
+      if (thinkingText) {
+        currentAssistantThinking += (currentAssistantThinking ? `
+` : "") + thinkingText;
+      }
+    } else if (payload.type === "function_call") {
+      let args = {};
+      if (payload.arguments) {
+        try {
+          const parsed = JSON.parse(payload.arguments);
+          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+            args = parsed;
+          } else if (typeof parsed === "string" && parsed.trim()) {
+            args = { input: parsed };
+          } else if (payload.arguments.trim()) {
+            args = { input: payload.arguments };
+          }
+        } catch {
+          if (payload.arguments.trim()) {
+            args = { input: payload.arguments };
+          }
+        }
+      }
+      currentToolCalls.push({
+        id: payload.call_id || "",
+        name: payload.name || "",
+        input: args
+      });
+    } else if (payload.type === "function_call_output") {
+      const outputParsed = extractCodexTextAndImages(payload.output);
+      currentToolResults.push({
+        toolUseId: payload.call_id || "",
+        content: typeof payload.output === "string" ? payload.output : outputParsed.text
+      });
+      if (outputParsed.images.length > 0) {
+        currentAssistantImages.push(...outputParsed.images.map((img) => ({
+          mediaType: img.mediaType,
+          data: img.data,
+          toolUseId: payload.call_id || undefined
+        })));
+      }
+    } else if (payload.type === "custom_tool_call") {
+      currentToolCalls.push({
+        id: payload.call_id || "",
+        name: payload.name || "",
+        input: payload.input ? { input: payload.input } : {}
+      });
+    } else if (payload.type === "custom_tool_call_output") {
+      const outputParsed = extractCodexTextAndImages(payload.output);
+      currentToolResults.push({
+        toolUseId: payload.call_id || "",
+        content: typeof payload.output === "string" ? payload.output : outputParsed.text
+      });
+      if (outputParsed.images.length > 0) {
+        currentAssistantImages.push(...outputParsed.images.map((img) => ({
+          mediaType: img.mediaType,
+          data: img.data,
+          toolUseId: payload.call_id || undefined
+        })));
+      }
+    }
+  }
+  flushAssistantMessage();
+  return messages;
+}
+function extractCodexCwd(content) {
+  const lines = content.split(`
+`);
+  for (const line of lines) {
+    if (!line.trim())
+      continue;
+    try {
+      const entry = JSON.parse(line);
+      if (entry.type === "session_meta" && entry.payload?.cwd) {
+        return entry.payload.cwd;
+      }
+    } catch {
+    }
+  }
+  return;
+}
+function parseCursorTranscriptFile(content) {
+  const messages = [];
+  const lines = content.split(`
+`);
+  let currentRole = null;
+  let buffer = [];
+  const flush = () => {
+    if (!currentRole) {
+      buffer = [];
+      return;
+    }
+    const raw = buffer.join(`
+`).trim();
+    buffer = [];
+    if (!raw) {
+      return;
+    }
+    let contentText = raw;
+    let thinking;
+    if (currentRole === "user") {
+      const match = raw.match(/<user_query>([\s\S]*?)<\/user_query>/i);
+      if (match) {
+        contentText = match[1].trim();
+      }
+    }
+    if (currentRole === "assistant") {
+      const thinkMatches = raw.match(/<think>([\s\S]*?)<\/think>/gi);
+      if (thinkMatches) {
+        const extracted = thinkMatches.map((m) => m.replace(/<\/?think>/gi, "").trim()).filter(Boolean).join(`
+`);
+        thinking = extracted || undefined;
+        contentText = raw.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+      }
+    }
+    if (!contentText) {
+      return;
+    }
+    messages.push({
+      role: currentRole,
+      content: contentText,
+      thinking,
+      timestamp: Date.now()
+    });
+  };
+  for (const line of lines) {
+    const trimmed = line.trim().toLowerCase();
+    if (trimmed === "user:" || trimmed === "assistant:" || trimmed === "system:") {
+      flush();
+      currentRole = trimmed.slice(0, -1);
+      continue;
+    }
+    buffer.push(line);
+  }
+  flush();
+  return messages;
+}
+function parseGeminiSessionFile(content) {
+  let session;
+  try {
+    session = JSON.parse(content);
+  } catch {
+    return [];
+  }
+  if (!session.messages || !Array.isArray(session.messages)) {
+    return [];
+  }
+  const messages = [];
+  for (const msg of session.messages) {
+    if (msg.type === "info")
+      continue;
+    const timestamp = msg.timestamp ? new Date(msg.timestamp).getTime() : Date.now();
+    let role;
+    let textContent = "";
+    if (msg.type === "user") {
+      role = "user";
+      if (Array.isArray(msg.content)) {
+        textContent = msg.content.map((c) => c.text).join(`
+`);
+      } else if (typeof msg.content === "string") {
+        textContent = msg.content;
+      }
+    } else if (msg.type === "gemini") {
+      role = "assistant";
+      if (typeof msg.content === "string") {
+        textContent = msg.content;
+      } else if (Array.isArray(msg.content)) {
+        textContent = msg.content.map((c) => c.text).join(`
+`);
+      }
+    } else {
+      continue;
+    }
+    let thinking;
+    if (msg.thoughts && msg.thoughts.length > 0) {
+      thinking = msg.thoughts.map((t) => t.subject ? `${t.subject}: ${t.description}` : t.description).join(`
+
+`);
+    }
+    if (textContent || thinking) {
+      messages.push({
+        uuid: msg.id,
+        role,
+        content: textContent,
+        timestamp,
+        thinking: thinking || undefined
+      });
+    }
+  }
+  return messages;
+}
+
 // src/cursorProcessor.ts
 import { Database as Database2 } from "bun:sqlite";
 function extractTextFromInitText(initText) {
@@ -9989,9 +2923,6 @@ function markSynced(filePath, position, messageCount, conversationId) {
     conversationId
   });
 }
-function getAllSyncRecords() {
-  return loadLedger();
-}
 function findUnsyncedFiles(baseDir, maxAgeMs = 7 * 24 * 60 * 60 * 1000) {
   const ledger = loadLedger();
   const positions = loadPositions2();
@@ -10036,9 +2967,6734 @@ function findUnsyncedFiles(baseDir, maxAgeMs = 7 * 24 * 60 * 60 * 1000) {
   return unsynced;
 }
 
-// src/syncService.ts
-init_index_node();
+// node_modules/convex/dist/esm/index.js
+var version = "1.31.2";
 
+// node_modules/convex/dist/esm/values/base64.js
+var exports_base64 = {};
+__export(exports_base64, {
+  toByteArray: () => toByteArray,
+  fromByteArrayUrlSafeNoPadding: () => fromByteArrayUrlSafeNoPadding,
+  fromByteArray: () => fromByteArray,
+  byteLength: () => byteLength
+});
+var lookup = [];
+var revLookup = [];
+var Arr = Uint8Array;
+var code = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+for (i = 0, len = code.length;i < len; ++i) {
+  lookup[i] = code[i];
+  revLookup[code.charCodeAt(i)] = i;
+}
+var i;
+var len;
+revLookup[45] = 62;
+revLookup[95] = 63;
+function getLens(b64) {
+  var len = b64.length;
+  if (len % 4 > 0) {
+    throw new Error("Invalid string. Length must be a multiple of 4");
+  }
+  var validLen = b64.indexOf("=");
+  if (validLen === -1)
+    validLen = len;
+  var placeHoldersLen = validLen === len ? 0 : 4 - validLen % 4;
+  return [validLen, placeHoldersLen];
+}
+function byteLength(b64) {
+  var lens = getLens(b64);
+  var validLen = lens[0];
+  var placeHoldersLen = lens[1];
+  return (validLen + placeHoldersLen) * 3 / 4 - placeHoldersLen;
+}
+function _byteLength(_b64, validLen, placeHoldersLen) {
+  return (validLen + placeHoldersLen) * 3 / 4 - placeHoldersLen;
+}
+function toByteArray(b64) {
+  var tmp;
+  var lens = getLens(b64);
+  var validLen = lens[0];
+  var placeHoldersLen = lens[1];
+  var arr = new Arr(_byteLength(b64, validLen, placeHoldersLen));
+  var curByte = 0;
+  var len = placeHoldersLen > 0 ? validLen - 4 : validLen;
+  var i;
+  for (i = 0;i < len; i += 4) {
+    tmp = revLookup[b64.charCodeAt(i)] << 18 | revLookup[b64.charCodeAt(i + 1)] << 12 | revLookup[b64.charCodeAt(i + 2)] << 6 | revLookup[b64.charCodeAt(i + 3)];
+    arr[curByte++] = tmp >> 16 & 255;
+    arr[curByte++] = tmp >> 8 & 255;
+    arr[curByte++] = tmp & 255;
+  }
+  if (placeHoldersLen === 2) {
+    tmp = revLookup[b64.charCodeAt(i)] << 2 | revLookup[b64.charCodeAt(i + 1)] >> 4;
+    arr[curByte++] = tmp & 255;
+  }
+  if (placeHoldersLen === 1) {
+    tmp = revLookup[b64.charCodeAt(i)] << 10 | revLookup[b64.charCodeAt(i + 1)] << 4 | revLookup[b64.charCodeAt(i + 2)] >> 2;
+    arr[curByte++] = tmp >> 8 & 255;
+    arr[curByte++] = tmp & 255;
+  }
+  return arr;
+}
+function tripletToBase64(num) {
+  return lookup[num >> 18 & 63] + lookup[num >> 12 & 63] + lookup[num >> 6 & 63] + lookup[num & 63];
+}
+function encodeChunk(uint8, start, end) {
+  var tmp;
+  var output = [];
+  for (var i = start;i < end; i += 3) {
+    tmp = (uint8[i] << 16 & 16711680) + (uint8[i + 1] << 8 & 65280) + (uint8[i + 2] & 255);
+    output.push(tripletToBase64(tmp));
+  }
+  return output.join("");
+}
+function fromByteArray(uint8) {
+  var tmp;
+  var len = uint8.length;
+  var extraBytes = len % 3;
+  var parts = [];
+  var maxChunkLength = 16383;
+  for (var i = 0, len2 = len - extraBytes;i < len2; i += maxChunkLength) {
+    parts.push(encodeChunk(uint8, i, i + maxChunkLength > len2 ? len2 : i + maxChunkLength));
+  }
+  if (extraBytes === 1) {
+    tmp = uint8[len - 1];
+    parts.push(lookup[tmp >> 2] + lookup[tmp << 4 & 63] + "==");
+  } else if (extraBytes === 2) {
+    tmp = (uint8[len - 2] << 8) + uint8[len - 1];
+    parts.push(lookup[tmp >> 10] + lookup[tmp >> 4 & 63] + lookup[tmp << 2 & 63] + "=");
+  }
+  return parts.join("");
+}
+function fromByteArrayUrlSafeNoPadding(uint8) {
+  return fromByteArray(uint8).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
+}
+
+// node_modules/convex/dist/esm/common/index.js
+function parseArgs(args) {
+  if (args === undefined) {
+    return {};
+  }
+  if (!isSimpleObject(args)) {
+    throw new Error(`The arguments to a Convex function must be an object. Received: ${args}`);
+  }
+  return args;
+}
+function validateDeploymentUrl(deploymentUrl) {
+  if (typeof deploymentUrl === "undefined") {
+    throw new Error(`Client created with undefined deployment address. If you used an environment variable, check that it's set.`);
+  }
+  if (typeof deploymentUrl !== "string") {
+    throw new Error(`Invalid deployment address: found ${deploymentUrl}".`);
+  }
+  if (!(deploymentUrl.startsWith("http:") || deploymentUrl.startsWith("https:"))) {
+    throw new Error(`Invalid deployment address: Must start with "https://" or "http://". Found "${deploymentUrl}".`);
+  }
+  try {
+    new URL(deploymentUrl);
+  } catch {
+    throw new Error(`Invalid deployment address: "${deploymentUrl}" is not a valid URL. If you believe this URL is correct, use the \`skipConvexDeploymentUrlCheck\` option to bypass this.`);
+  }
+  if (deploymentUrl.endsWith(".convex.site")) {
+    throw new Error(`Invalid deployment address: "${deploymentUrl}" ends with .convex.site, which is used for HTTP Actions. Convex deployment URLs typically end with .convex.cloud? If you believe this URL is correct, use the \`skipConvexDeploymentUrlCheck\` option to bypass this.`);
+  }
+}
+function isSimpleObject(value) {
+  const isObject = typeof value === "object";
+  const prototype = Object.getPrototypeOf(value);
+  const isSimple = prototype === null || prototype === Object.prototype || prototype?.constructor?.name === "Object";
+  return isObject && isSimple;
+}
+
+// node_modules/convex/dist/esm/values/value.js
+var LITTLE_ENDIAN = true;
+var MIN_INT64 = BigInt("-9223372036854775808");
+var MAX_INT64 = BigInt("9223372036854775807");
+var ZERO = BigInt("0");
+var EIGHT = BigInt("8");
+var TWOFIFTYSIX = BigInt("256");
+function isSpecial(n) {
+  return Number.isNaN(n) || !Number.isFinite(n) || Object.is(n, -0);
+}
+function slowBigIntToBase64(value) {
+  if (value < ZERO) {
+    value -= MIN_INT64 + MIN_INT64;
+  }
+  let hex = value.toString(16);
+  if (hex.length % 2 === 1)
+    hex = "0" + hex;
+  const bytes = new Uint8Array(new ArrayBuffer(8));
+  let i = 0;
+  for (const hexByte of hex.match(/.{2}/g).reverse()) {
+    bytes.set([parseInt(hexByte, 16)], i++);
+    value >>= EIGHT;
+  }
+  return fromByteArray(bytes);
+}
+function slowBase64ToBigInt(encoded) {
+  const integerBytes = toByteArray(encoded);
+  if (integerBytes.byteLength !== 8) {
+    throw new Error(`Received ${integerBytes.byteLength} bytes, expected 8 for $integer`);
+  }
+  let value = ZERO;
+  let power = ZERO;
+  for (const byte of integerBytes) {
+    value += BigInt(byte) * TWOFIFTYSIX ** power;
+    power++;
+  }
+  if (value > MAX_INT64) {
+    value += MIN_INT64 + MIN_INT64;
+  }
+  return value;
+}
+function modernBigIntToBase64(value) {
+  if (value < MIN_INT64 || MAX_INT64 < value) {
+    throw new Error(`BigInt ${value} does not fit into a 64-bit signed integer.`);
+  }
+  const buffer = new ArrayBuffer(8);
+  new DataView(buffer).setBigInt64(0, value, true);
+  return fromByteArray(new Uint8Array(buffer));
+}
+function modernBase64ToBigInt(encoded) {
+  const integerBytes = toByteArray(encoded);
+  if (integerBytes.byteLength !== 8) {
+    throw new Error(`Received ${integerBytes.byteLength} bytes, expected 8 for $integer`);
+  }
+  const intBytesView = new DataView(integerBytes.buffer);
+  return intBytesView.getBigInt64(0, true);
+}
+var bigIntToBase64 = DataView.prototype.setBigInt64 ? modernBigIntToBase64 : slowBigIntToBase64;
+var base64ToBigInt = DataView.prototype.getBigInt64 ? modernBase64ToBigInt : slowBase64ToBigInt;
+var MAX_IDENTIFIER_LEN = 1024;
+function validateObjectField(k) {
+  if (k.length > MAX_IDENTIFIER_LEN) {
+    throw new Error(`Field name ${k} exceeds maximum field name length ${MAX_IDENTIFIER_LEN}.`);
+  }
+  if (k.startsWith("$")) {
+    throw new Error(`Field name ${k} starts with a '$', which is reserved.`);
+  }
+  for (let i = 0;i < k.length; i += 1) {
+    const charCode = k.charCodeAt(i);
+    if (charCode < 32 || charCode >= 127) {
+      throw new Error(`Field name ${k} has invalid character '${k[i]}': Field names can only contain non-control ASCII characters`);
+    }
+  }
+}
+function jsonToConvex(value) {
+  if (value === null) {
+    return value;
+  }
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "number") {
+    return value;
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((value2) => jsonToConvex(value2));
+  }
+  if (typeof value !== "object") {
+    throw new Error(`Unexpected type of ${value}`);
+  }
+  const entries = Object.entries(value);
+  if (entries.length === 1) {
+    const key = entries[0][0];
+    if (key === "$bytes") {
+      if (typeof value.$bytes !== "string") {
+        throw new Error(`Malformed $bytes field on ${value}`);
+      }
+      return toByteArray(value.$bytes).buffer;
+    }
+    if (key === "$integer") {
+      if (typeof value.$integer !== "string") {
+        throw new Error(`Malformed $integer field on ${value}`);
+      }
+      return base64ToBigInt(value.$integer);
+    }
+    if (key === "$float") {
+      if (typeof value.$float !== "string") {
+        throw new Error(`Malformed $float field on ${value}`);
+      }
+      const floatBytes = toByteArray(value.$float);
+      if (floatBytes.byteLength !== 8) {
+        throw new Error(`Received ${floatBytes.byteLength} bytes, expected 8 for $float`);
+      }
+      const floatBytesView = new DataView(floatBytes.buffer);
+      const float = floatBytesView.getFloat64(0, LITTLE_ENDIAN);
+      if (!isSpecial(float)) {
+        throw new Error(`Float ${float} should be encoded as a number`);
+      }
+      return float;
+    }
+    if (key === "$set") {
+      throw new Error(`Received a Set which is no longer supported as a Convex type.`);
+    }
+    if (key === "$map") {
+      throw new Error(`Received a Map which is no longer supported as a Convex type.`);
+    }
+  }
+  const out = {};
+  for (const [k, v] of Object.entries(value)) {
+    validateObjectField(k);
+    out[k] = jsonToConvex(v);
+  }
+  return out;
+}
+var MAX_VALUE_FOR_ERROR_LEN = 16384;
+function stringifyValueForError(value) {
+  const str = JSON.stringify(value, (_key, value2) => {
+    if (value2 === undefined) {
+      return "undefined";
+    }
+    if (typeof value2 === "bigint") {
+      return `${value2.toString()}n`;
+    }
+    return value2;
+  });
+  if (str.length > MAX_VALUE_FOR_ERROR_LEN) {
+    const rest = "[...truncated]";
+    let truncateAt = MAX_VALUE_FOR_ERROR_LEN - rest.length;
+    const codePoint = str.codePointAt(truncateAt - 1);
+    if (codePoint !== undefined && codePoint > 65535) {
+      truncateAt -= 1;
+    }
+    return str.substring(0, truncateAt) + rest;
+  }
+  return str;
+}
+function convexToJsonInternal(value, originalValue, context, includeTopLevelUndefined) {
+  if (value === undefined) {
+    const contextText = context && ` (present at path ${context} in original object ${stringifyValueForError(originalValue)})`;
+    throw new Error(`undefined is not a valid Convex value${contextText}. To learn about Convex's supported types, see https://docs.convex.dev/using/types.`);
+  }
+  if (value === null) {
+    return value;
+  }
+  if (typeof value === "bigint") {
+    if (value < MIN_INT64 || MAX_INT64 < value) {
+      throw new Error(`BigInt ${value} does not fit into a 64-bit signed integer.`);
+    }
+    return { $integer: bigIntToBase64(value) };
+  }
+  if (typeof value === "number") {
+    if (isSpecial(value)) {
+      const buffer = new ArrayBuffer(8);
+      new DataView(buffer).setFloat64(0, value, LITTLE_ENDIAN);
+      return { $float: fromByteArray(new Uint8Array(buffer)) };
+    } else {
+      return value;
+    }
+  }
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  if (value instanceof ArrayBuffer) {
+    return { $bytes: fromByteArray(new Uint8Array(value)) };
+  }
+  if (Array.isArray(value)) {
+    return value.map((value2, i) => convexToJsonInternal(value2, originalValue, context + `[${i}]`, false));
+  }
+  if (value instanceof Set) {
+    throw new Error(errorMessageForUnsupportedType(context, "Set", [...value], originalValue));
+  }
+  if (value instanceof Map) {
+    throw new Error(errorMessageForUnsupportedType(context, "Map", [...value], originalValue));
+  }
+  if (!isSimpleObject(value)) {
+    const theType = value?.constructor?.name;
+    const typeName = theType ? `${theType} ` : "";
+    throw new Error(errorMessageForUnsupportedType(context, typeName, value, originalValue));
+  }
+  const out = {};
+  const entries = Object.entries(value);
+  entries.sort(([k1, _v1], [k2, _v2]) => k1 === k2 ? 0 : k1 < k2 ? -1 : 1);
+  for (const [k, v] of entries) {
+    if (v !== undefined) {
+      validateObjectField(k);
+      out[k] = convexToJsonInternal(v, originalValue, context + `.${k}`, false);
+    } else if (includeTopLevelUndefined) {
+      validateObjectField(k);
+      out[k] = convexOrUndefinedToJsonInternal(v, originalValue, context + `.${k}`);
+    }
+  }
+  return out;
+}
+function errorMessageForUnsupportedType(context, typeName, value, originalValue) {
+  if (context) {
+    return `${typeName}${stringifyValueForError(value)} is not a supported Convex type (present at path ${context} in original object ${stringifyValueForError(originalValue)}). To learn about Convex's supported types, see https://docs.convex.dev/using/types.`;
+  } else {
+    return `${typeName}${stringifyValueForError(value)} is not a supported Convex type.`;
+  }
+}
+function convexOrUndefinedToJsonInternal(value, originalValue, context) {
+  if (value === undefined) {
+    return { $undefined: null };
+  } else {
+    if (originalValue === undefined) {
+      throw new Error(`Programming error. Current value is ${stringifyValueForError(value)} but original value is undefined`);
+    }
+    return convexToJsonInternal(value, originalValue, context, false);
+  }
+}
+function convexToJson(value) {
+  return convexToJsonInternal(value, value, "", false);
+}
+// node_modules/convex/dist/esm/values/errors.js
+var __defProp2 = Object.defineProperty;
+var __defNormalProp = (obj, key, value) => (key in obj) ? __defProp2(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
+var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
+var _a;
+var _b;
+var IDENTIFYING_FIELD = Symbol.for("ConvexError");
+
+class ConvexError extends (_b = Error, _a = IDENTIFYING_FIELD, _b) {
+  constructor(data) {
+    super(typeof data === "string" ? data : stringifyValueForError(data));
+    __publicField(this, "name", "ConvexError");
+    __publicField(this, "data");
+    __publicField(this, _a, true);
+    this.data = data;
+  }
+}
+// node_modules/convex/dist/esm/browser/logging.js
+var __defProp3 = Object.defineProperty;
+var __defNormalProp2 = (obj, key, value) => (key in obj) ? __defProp3(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
+var __publicField2 = (obj, key, value) => __defNormalProp2(obj, typeof key !== "symbol" ? key + "" : key, value);
+var INFO_COLOR = "color:rgb(0, 145, 255)";
+function prefix_for_source(source) {
+  switch (source) {
+    case "query":
+      return "Q";
+    case "mutation":
+      return "M";
+    case "action":
+      return "A";
+    case "any":
+      return "?";
+  }
+}
+
+class DefaultLogger {
+  constructor(options) {
+    __publicField2(this, "_onLogLineFuncs");
+    __publicField2(this, "_verbose");
+    this._onLogLineFuncs = {};
+    this._verbose = options.verbose;
+  }
+  addLogLineListener(func) {
+    let id = Math.random().toString(36).substring(2, 15);
+    for (let i = 0;i < 10; i++) {
+      if (this._onLogLineFuncs[id] === undefined) {
+        break;
+      }
+      id = Math.random().toString(36).substring(2, 15);
+    }
+    this._onLogLineFuncs[id] = func;
+    return () => {
+      delete this._onLogLineFuncs[id];
+    };
+  }
+  logVerbose(...args) {
+    if (this._verbose) {
+      for (const func of Object.values(this._onLogLineFuncs)) {
+        func("debug", `${(/* @__PURE__ */ new Date()).toISOString()}`, ...args);
+      }
+    }
+  }
+  log(...args) {
+    for (const func of Object.values(this._onLogLineFuncs)) {
+      func("info", ...args);
+    }
+  }
+  warn(...args) {
+    for (const func of Object.values(this._onLogLineFuncs)) {
+      func("warn", ...args);
+    }
+  }
+  error(...args) {
+    for (const func of Object.values(this._onLogLineFuncs)) {
+      func("error", ...args);
+    }
+  }
+}
+function instantiateDefaultLogger(options) {
+  const logger = new DefaultLogger(options);
+  logger.addLogLineListener((level, ...args) => {
+    switch (level) {
+      case "debug":
+        console.debug(...args);
+        break;
+      case "info":
+        console.log(...args);
+        break;
+      case "warn":
+        console.warn(...args);
+        break;
+      case "error":
+        console.error(...args);
+        break;
+      default: {
+        console.log(...args);
+      }
+    }
+  });
+  return logger;
+}
+function instantiateNoopLogger(options) {
+  return new DefaultLogger(options);
+}
+function logForFunction(logger, type, source, udfPath, message) {
+  const prefix = prefix_for_source(source);
+  if (typeof message === "object") {
+    message = `ConvexError ${JSON.stringify(message.errorData, null, 2)}`;
+  }
+  if (type === "info") {
+    const match = message.match(/^\[.*?\] /);
+    if (match === null) {
+      logger.error(`[CONVEX ${prefix}(${udfPath})] Could not parse console.log`);
+      return;
+    }
+    const level = message.slice(1, match[0].length - 2);
+    const args = message.slice(match[0].length);
+    logger.log(`%c[CONVEX ${prefix}(${udfPath})] [${level}]`, INFO_COLOR, args);
+  } else {
+    logger.error(`[CONVEX ${prefix}(${udfPath})] ${message}`);
+  }
+}
+function logFatalError(logger, message) {
+  const errorMessage = `[CONVEX FATAL ERROR] ${message}`;
+  logger.error(errorMessage);
+  return new Error(errorMessage);
+}
+function createHybridErrorStacktrace(source, udfPath, result) {
+  const prefix = prefix_for_source(source);
+  return `[CONVEX ${prefix}(${udfPath})] ${result.errorMessage}
+  Called by client`;
+}
+function forwardData(result, error) {
+  error.data = result.errorData;
+  return error;
+}
+
+// node_modules/convex/dist/esm/browser/sync/udf_path_utils.js
+function canonicalizeUdfPath(udfPath) {
+  const pieces = udfPath.split(":");
+  let moduleName;
+  let functionName;
+  if (pieces.length === 1) {
+    moduleName = pieces[0];
+    functionName = "default";
+  } else {
+    moduleName = pieces.slice(0, pieces.length - 1).join(":");
+    functionName = pieces[pieces.length - 1];
+  }
+  if (moduleName.endsWith(".js")) {
+    moduleName = moduleName.slice(0, -3);
+  }
+  return `${moduleName}:${functionName}`;
+}
+function serializePathAndArgs(udfPath, args) {
+  return JSON.stringify({
+    udfPath: canonicalizeUdfPath(udfPath),
+    args: convexToJson(args)
+  });
+}
+function serializePaginatedPathAndArgs(udfPath, args, options) {
+  const { initialNumItems, id } = options;
+  const result = JSON.stringify({
+    type: "paginated",
+    udfPath: canonicalizeUdfPath(udfPath),
+    args: convexToJson(args),
+    options: convexToJson({ initialNumItems, id })
+  });
+  return result;
+}
+function serializedQueryTokenIsPaginated(token) {
+  return JSON.parse(token).type === "paginated";
+}
+
+// node_modules/convex/dist/esm/browser/sync/local_state.js
+var __defProp4 = Object.defineProperty;
+var __defNormalProp3 = (obj, key, value) => (key in obj) ? __defProp4(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
+var __publicField3 = (obj, key, value) => __defNormalProp3(obj, typeof key !== "symbol" ? key + "" : key, value);
+
+class LocalSyncState {
+  constructor() {
+    __publicField3(this, "nextQueryId");
+    __publicField3(this, "querySetVersion");
+    __publicField3(this, "querySet");
+    __publicField3(this, "queryIdToToken");
+    __publicField3(this, "identityVersion");
+    __publicField3(this, "auth");
+    __publicField3(this, "outstandingQueriesOlderThanRestart");
+    __publicField3(this, "outstandingAuthOlderThanRestart");
+    __publicField3(this, "paused");
+    __publicField3(this, "pendingQuerySetModifications");
+    this.nextQueryId = 0;
+    this.querySetVersion = 0;
+    this.identityVersion = 0;
+    this.querySet = /* @__PURE__ */ new Map;
+    this.queryIdToToken = /* @__PURE__ */ new Map;
+    this.outstandingQueriesOlderThanRestart = /* @__PURE__ */ new Set;
+    this.outstandingAuthOlderThanRestart = false;
+    this.paused = false;
+    this.pendingQuerySetModifications = /* @__PURE__ */ new Map;
+  }
+  hasSyncedPastLastReconnect() {
+    return this.outstandingQueriesOlderThanRestart.size === 0 && !this.outstandingAuthOlderThanRestart;
+  }
+  markAuthCompletion() {
+    this.outstandingAuthOlderThanRestart = false;
+  }
+  subscribe(udfPath, args, journal, componentPath) {
+    const canonicalizedUdfPath = canonicalizeUdfPath(udfPath);
+    const queryToken = serializePathAndArgs(canonicalizedUdfPath, args);
+    const existingEntry = this.querySet.get(queryToken);
+    if (existingEntry !== undefined) {
+      existingEntry.numSubscribers += 1;
+      return {
+        queryToken,
+        modification: null,
+        unsubscribe: () => this.removeSubscriber(queryToken)
+      };
+    } else {
+      const queryId = this.nextQueryId++;
+      const query = {
+        id: queryId,
+        canonicalizedUdfPath,
+        args,
+        numSubscribers: 1,
+        journal,
+        componentPath
+      };
+      this.querySet.set(queryToken, query);
+      this.queryIdToToken.set(queryId, queryToken);
+      const baseVersion = this.querySetVersion;
+      const newVersion = this.querySetVersion + 1;
+      const add = {
+        type: "Add",
+        queryId,
+        udfPath: canonicalizedUdfPath,
+        args: [convexToJson(args)],
+        journal,
+        componentPath
+      };
+      if (this.paused) {
+        this.pendingQuerySetModifications.set(queryId, add);
+      } else {
+        this.querySetVersion = newVersion;
+      }
+      const modification = {
+        type: "ModifyQuerySet",
+        baseVersion,
+        newVersion,
+        modifications: [add]
+      };
+      return {
+        queryToken,
+        modification,
+        unsubscribe: () => this.removeSubscriber(queryToken)
+      };
+    }
+  }
+  transition(transition) {
+    for (const modification of transition.modifications) {
+      switch (modification.type) {
+        case "QueryUpdated":
+        case "QueryFailed": {
+          this.outstandingQueriesOlderThanRestart.delete(modification.queryId);
+          const journal = modification.journal;
+          if (journal !== undefined) {
+            const queryToken = this.queryIdToToken.get(modification.queryId);
+            if (queryToken !== undefined) {
+              this.querySet.get(queryToken).journal = journal;
+            }
+          }
+          break;
+        }
+        case "QueryRemoved": {
+          this.outstandingQueriesOlderThanRestart.delete(modification.queryId);
+          break;
+        }
+        default: {
+          throw new Error(`Invalid modification ${modification.type}`);
+        }
+      }
+    }
+  }
+  queryId(udfPath, args) {
+    const canonicalizedUdfPath = canonicalizeUdfPath(udfPath);
+    const queryToken = serializePathAndArgs(canonicalizedUdfPath, args);
+    const existingEntry = this.querySet.get(queryToken);
+    if (existingEntry !== undefined) {
+      return existingEntry.id;
+    }
+    return null;
+  }
+  isCurrentOrNewerAuthVersion(version2) {
+    return version2 >= this.identityVersion;
+  }
+  getAuth() {
+    return this.auth;
+  }
+  setAuth(value) {
+    this.auth = {
+      tokenType: "User",
+      value
+    };
+    const baseVersion = this.identityVersion;
+    if (!this.paused) {
+      this.identityVersion = baseVersion + 1;
+    }
+    return {
+      type: "Authenticate",
+      baseVersion,
+      ...this.auth
+    };
+  }
+  setAdminAuth(value, actingAs) {
+    const auth = {
+      tokenType: "Admin",
+      value,
+      impersonating: actingAs
+    };
+    this.auth = auth;
+    const baseVersion = this.identityVersion;
+    if (!this.paused) {
+      this.identityVersion = baseVersion + 1;
+    }
+    return {
+      type: "Authenticate",
+      baseVersion,
+      ...auth
+    };
+  }
+  clearAuth() {
+    this.auth = undefined;
+    this.markAuthCompletion();
+    const baseVersion = this.identityVersion;
+    if (!this.paused) {
+      this.identityVersion = baseVersion + 1;
+    }
+    return {
+      type: "Authenticate",
+      tokenType: "None",
+      baseVersion
+    };
+  }
+  hasAuth() {
+    return !!this.auth;
+  }
+  isNewAuth(value) {
+    return this.auth?.value !== value;
+  }
+  queryPath(queryId) {
+    const pathAndArgs = this.queryIdToToken.get(queryId);
+    if (pathAndArgs) {
+      return this.querySet.get(pathAndArgs).canonicalizedUdfPath;
+    }
+    return null;
+  }
+  queryArgs(queryId) {
+    const pathAndArgs = this.queryIdToToken.get(queryId);
+    if (pathAndArgs) {
+      return this.querySet.get(pathAndArgs).args;
+    }
+    return null;
+  }
+  queryToken(queryId) {
+    return this.queryIdToToken.get(queryId) ?? null;
+  }
+  queryJournal(queryToken) {
+    return this.querySet.get(queryToken)?.journal;
+  }
+  restart(oldRemoteQueryResults) {
+    this.unpause();
+    this.outstandingQueriesOlderThanRestart.clear();
+    const modifications = [];
+    for (const localQuery of this.querySet.values()) {
+      const add = {
+        type: "Add",
+        queryId: localQuery.id,
+        udfPath: localQuery.canonicalizedUdfPath,
+        args: [convexToJson(localQuery.args)],
+        journal: localQuery.journal,
+        componentPath: localQuery.componentPath
+      };
+      modifications.push(add);
+      if (!oldRemoteQueryResults.has(localQuery.id)) {
+        this.outstandingQueriesOlderThanRestart.add(localQuery.id);
+      }
+    }
+    this.querySetVersion = 1;
+    const querySet = {
+      type: "ModifyQuerySet",
+      baseVersion: 0,
+      newVersion: 1,
+      modifications
+    };
+    if (!this.auth) {
+      this.identityVersion = 0;
+      return [querySet, undefined];
+    }
+    this.outstandingAuthOlderThanRestart = true;
+    const authenticate = {
+      type: "Authenticate",
+      baseVersion: 0,
+      ...this.auth
+    };
+    this.identityVersion = 1;
+    return [querySet, authenticate];
+  }
+  pause() {
+    this.paused = true;
+  }
+  resume() {
+    const querySet = this.pendingQuerySetModifications.size > 0 ? {
+      type: "ModifyQuerySet",
+      baseVersion: this.querySetVersion,
+      newVersion: ++this.querySetVersion,
+      modifications: Array.from(this.pendingQuerySetModifications.values())
+    } : undefined;
+    const authenticate = this.auth !== undefined ? {
+      type: "Authenticate",
+      baseVersion: this.identityVersion++,
+      ...this.auth
+    } : undefined;
+    this.unpause();
+    return [querySet, authenticate];
+  }
+  unpause() {
+    this.paused = false;
+    this.pendingQuerySetModifications.clear();
+  }
+  removeSubscriber(queryToken) {
+    const localQuery = this.querySet.get(queryToken);
+    if (localQuery.numSubscribers > 1) {
+      localQuery.numSubscribers -= 1;
+      return null;
+    } else {
+      this.querySet.delete(queryToken);
+      this.queryIdToToken.delete(localQuery.id);
+      this.outstandingQueriesOlderThanRestart.delete(localQuery.id);
+      const baseVersion = this.querySetVersion;
+      const newVersion = this.querySetVersion + 1;
+      const remove = {
+        type: "Remove",
+        queryId: localQuery.id
+      };
+      if (this.paused) {
+        if (this.pendingQuerySetModifications.has(localQuery.id)) {
+          this.pendingQuerySetModifications.delete(localQuery.id);
+        } else {
+          this.pendingQuerySetModifications.set(localQuery.id, remove);
+        }
+      } else {
+        this.querySetVersion = newVersion;
+      }
+      return {
+        type: "ModifyQuerySet",
+        baseVersion,
+        newVersion,
+        modifications: [remove]
+      };
+    }
+  }
+}
+
+// node_modules/convex/dist/esm/browser/sync/request_manager.js
+var __defProp5 = Object.defineProperty;
+var __defNormalProp4 = (obj, key, value) => (key in obj) ? __defProp5(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
+var __publicField4 = (obj, key, value) => __defNormalProp4(obj, typeof key !== "symbol" ? key + "" : key, value);
+
+class RequestManager {
+  constructor(logger, markConnectionStateDirty) {
+    this.logger = logger;
+    this.markConnectionStateDirty = markConnectionStateDirty;
+    __publicField4(this, "inflightRequests");
+    __publicField4(this, "requestsOlderThanRestart");
+    __publicField4(this, "inflightMutationsCount", 0);
+    __publicField4(this, "inflightActionsCount", 0);
+    this.inflightRequests = /* @__PURE__ */ new Map;
+    this.requestsOlderThanRestart = /* @__PURE__ */ new Set;
+  }
+  request(message, sent) {
+    const result = new Promise((resolve3) => {
+      const status = sent ? "Requested" : "NotSent";
+      this.inflightRequests.set(message.requestId, {
+        message,
+        status: { status, requestedAt: /* @__PURE__ */ new Date, onResult: resolve3 }
+      });
+      if (message.type === "Mutation") {
+        this.inflightMutationsCount++;
+      } else if (message.type === "Action") {
+        this.inflightActionsCount++;
+      }
+    });
+    this.markConnectionStateDirty();
+    return result;
+  }
+  onResponse(response) {
+    const requestInfo = this.inflightRequests.get(response.requestId);
+    if (requestInfo === undefined) {
+      return null;
+    }
+    if (requestInfo.status.status === "Completed") {
+      return null;
+    }
+    const udfType = requestInfo.message.type === "Mutation" ? "mutation" : "action";
+    const udfPath = requestInfo.message.udfPath;
+    for (const line of response.logLines) {
+      logForFunction(this.logger, "info", udfType, udfPath, line);
+    }
+    const status = requestInfo.status;
+    let result;
+    let onResolve;
+    if (response.success) {
+      result = {
+        success: true,
+        logLines: response.logLines,
+        value: jsonToConvex(response.result)
+      };
+      onResolve = () => status.onResult(result);
+    } else {
+      const errorMessage = response.result;
+      const { errorData } = response;
+      logForFunction(this.logger, "error", udfType, udfPath, errorMessage);
+      result = {
+        success: false,
+        errorMessage,
+        errorData: errorData !== undefined ? jsonToConvex(errorData) : undefined,
+        logLines: response.logLines
+      };
+      onResolve = () => status.onResult(result);
+    }
+    if (response.type === "ActionResponse" || !response.success) {
+      onResolve();
+      this.inflightRequests.delete(response.requestId);
+      this.requestsOlderThanRestart.delete(response.requestId);
+      if (requestInfo.message.type === "Action") {
+        this.inflightActionsCount--;
+      } else if (requestInfo.message.type === "Mutation") {
+        this.inflightMutationsCount--;
+      }
+      this.markConnectionStateDirty();
+      return { requestId: response.requestId, result };
+    }
+    requestInfo.status = {
+      status: "Completed",
+      result,
+      ts: response.ts,
+      onResolve
+    };
+    return null;
+  }
+  removeCompleted(ts) {
+    const completeRequests = /* @__PURE__ */ new Map;
+    for (const [requestId, requestInfo] of this.inflightRequests.entries()) {
+      const status = requestInfo.status;
+      if (status.status === "Completed" && status.ts.lessThanOrEqual(ts)) {
+        status.onResolve();
+        completeRequests.set(requestId, status.result);
+        if (requestInfo.message.type === "Mutation") {
+          this.inflightMutationsCount--;
+        } else if (requestInfo.message.type === "Action") {
+          this.inflightActionsCount--;
+        }
+        this.inflightRequests.delete(requestId);
+        this.requestsOlderThanRestart.delete(requestId);
+      }
+    }
+    if (completeRequests.size > 0) {
+      this.markConnectionStateDirty();
+    }
+    return completeRequests;
+  }
+  restart() {
+    this.requestsOlderThanRestart = new Set(this.inflightRequests.keys());
+    const allMessages = [];
+    for (const [requestId, value] of this.inflightRequests) {
+      if (value.status.status === "NotSent") {
+        value.status.status = "Requested";
+        allMessages.push(value.message);
+        continue;
+      }
+      if (value.message.type === "Mutation") {
+        allMessages.push(value.message);
+      } else if (value.message.type === "Action") {
+        this.inflightRequests.delete(requestId);
+        this.requestsOlderThanRestart.delete(requestId);
+        this.inflightActionsCount--;
+        if (value.status.status === "Completed") {
+          throw new Error("Action should never be in 'Completed' state");
+        }
+        value.status.onResult({
+          success: false,
+          errorMessage: "Connection lost while action was in flight",
+          logLines: []
+        });
+      }
+    }
+    this.markConnectionStateDirty();
+    return allMessages;
+  }
+  resume() {
+    const allMessages = [];
+    for (const [, value] of this.inflightRequests) {
+      if (value.status.status === "NotSent") {
+        value.status.status = "Requested";
+        allMessages.push(value.message);
+        continue;
+      }
+    }
+    return allMessages;
+  }
+  hasIncompleteRequests() {
+    for (const requestInfo of this.inflightRequests.values()) {
+      if (requestInfo.status.status === "Requested") {
+        return true;
+      }
+    }
+    return false;
+  }
+  hasInflightRequests() {
+    return this.inflightRequests.size > 0;
+  }
+  hasSyncedPastLastReconnect() {
+    return this.requestsOlderThanRestart.size === 0;
+  }
+  timeOfOldestInflightRequest() {
+    if (this.inflightRequests.size === 0) {
+      return null;
+    }
+    let oldestInflightRequest = Date.now();
+    for (const request of this.inflightRequests.values()) {
+      if (request.status.status !== "Completed") {
+        if (request.status.requestedAt.getTime() < oldestInflightRequest) {
+          oldestInflightRequest = request.status.requestedAt.getTime();
+        }
+      }
+    }
+    return new Date(oldestInflightRequest);
+  }
+  inflightMutations() {
+    return this.inflightMutationsCount;
+  }
+  inflightActions() {
+    return this.inflightActionsCount;
+  }
+}
+
+// node_modules/convex/dist/esm/server/functionName.js
+var functionName = Symbol.for("functionName");
+
+// node_modules/convex/dist/esm/server/components/paths.js
+var toReferencePath = Symbol.for("toReferencePath");
+function extractReferencePath(reference) {
+  return reference[toReferencePath] ?? null;
+}
+function isFunctionHandle(s) {
+  return s.startsWith("function://");
+}
+function getFunctionAddress(functionReference) {
+  let functionAddress;
+  if (typeof functionReference === "string") {
+    if (isFunctionHandle(functionReference)) {
+      functionAddress = { functionHandle: functionReference };
+    } else {
+      functionAddress = { name: functionReference };
+    }
+  } else if (functionReference[functionName]) {
+    functionAddress = { name: functionReference[functionName] };
+  } else {
+    const referencePath = extractReferencePath(functionReference);
+    if (!referencePath) {
+      throw new Error(`${functionReference} is not a functionReference`);
+    }
+    functionAddress = { reference: referencePath };
+  }
+  return functionAddress;
+}
+
+// node_modules/convex/dist/esm/server/api.js
+function getFunctionName(functionReference) {
+  const address = getFunctionAddress(functionReference);
+  if (address.name === undefined) {
+    if (address.functionHandle !== undefined) {
+      throw new Error(`Expected function reference like "api.file.func" or "internal.file.func", but received function handle ${address.functionHandle}`);
+    } else if (address.reference !== undefined) {
+      throw new Error(`Expected function reference in the current component like "api.file.func" or "internal.file.func", but received reference ${address.reference}`);
+    }
+    throw new Error(`Expected function reference like "api.file.func" or "internal.file.func", but received ${JSON.stringify(address)}`);
+  }
+  if (typeof functionReference === "string")
+    return functionReference;
+  const name = functionReference[functionName];
+  if (!name) {
+    throw new Error(`${functionReference} is not a functionReference`);
+  }
+  return name;
+}
+function createApi(pathParts = []) {
+  const handler = {
+    get(_, prop) {
+      if (typeof prop === "string") {
+        const newParts = [...pathParts, prop];
+        return createApi(newParts);
+      } else if (prop === functionName) {
+        if (pathParts.length < 2) {
+          const found = ["api", ...pathParts].join(".");
+          throw new Error(`API path is expected to be of the form \`api.moduleName.functionName\`. Found: \`${found}\``);
+        }
+        const path9 = pathParts.slice(0, -1).join("/");
+        const exportName = pathParts[pathParts.length - 1];
+        if (exportName === "default") {
+          return path9;
+        } else {
+          return path9 + ":" + exportName;
+        }
+      } else if (prop === Symbol.toStringTag) {
+        return "FunctionReference";
+      } else {
+        return;
+      }
+    }
+  };
+  return new Proxy({}, handler);
+}
+var anyApi = createApi();
+
+// node_modules/convex/dist/esm/browser/sync/optimistic_updates_impl.js
+var __defProp6 = Object.defineProperty;
+var __defNormalProp5 = (obj, key, value) => (key in obj) ? __defProp6(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
+var __publicField5 = (obj, key, value) => __defNormalProp5(obj, typeof key !== "symbol" ? key + "" : key, value);
+
+class OptimisticLocalStoreImpl {
+  constructor(queryResults) {
+    __publicField5(this, "queryResults");
+    __publicField5(this, "modifiedQueries");
+    this.queryResults = queryResults;
+    this.modifiedQueries = [];
+  }
+  getQuery(query, ...args) {
+    const queryArgs = parseArgs(args[0]);
+    const name = getFunctionName(query);
+    const queryResult = this.queryResults.get(serializePathAndArgs(name, queryArgs));
+    if (queryResult === undefined) {
+      return;
+    }
+    return OptimisticLocalStoreImpl.queryValue(queryResult.result);
+  }
+  getAllQueries(query) {
+    const queriesWithName = [];
+    const name = getFunctionName(query);
+    for (const queryResult of this.queryResults.values()) {
+      if (queryResult.udfPath === canonicalizeUdfPath(name)) {
+        queriesWithName.push({
+          args: queryResult.args,
+          value: OptimisticLocalStoreImpl.queryValue(queryResult.result)
+        });
+      }
+    }
+    return queriesWithName;
+  }
+  setQuery(queryReference, args, value) {
+    const queryArgs = parseArgs(args);
+    const name = getFunctionName(queryReference);
+    const queryToken = serializePathAndArgs(name, queryArgs);
+    let result;
+    if (value === undefined) {
+      result = undefined;
+    } else {
+      result = {
+        success: true,
+        value,
+        logLines: []
+      };
+    }
+    const query = {
+      udfPath: name,
+      args: queryArgs,
+      result
+    };
+    this.queryResults.set(queryToken, query);
+    this.modifiedQueries.push(queryToken);
+  }
+  static queryValue(result) {
+    if (result === undefined) {
+      return;
+    } else if (result.success) {
+      return result.value;
+    } else {
+      return;
+    }
+  }
+}
+
+class OptimisticQueryResults {
+  constructor() {
+    __publicField5(this, "queryResults");
+    __publicField5(this, "optimisticUpdates");
+    this.queryResults = /* @__PURE__ */ new Map;
+    this.optimisticUpdates = [];
+  }
+  ingestQueryResultsFromServer(serverQueryResults, optimisticUpdatesToDrop) {
+    this.optimisticUpdates = this.optimisticUpdates.filter((updateAndId) => {
+      return !optimisticUpdatesToDrop.has(updateAndId.mutationId);
+    });
+    const oldQueryResults = this.queryResults;
+    this.queryResults = new Map(serverQueryResults);
+    const localStore = new OptimisticLocalStoreImpl(this.queryResults);
+    for (const updateAndId of this.optimisticUpdates) {
+      updateAndId.update(localStore);
+    }
+    const changedQueries = [];
+    for (const [queryToken, query] of this.queryResults) {
+      const oldQuery = oldQueryResults.get(queryToken);
+      if (oldQuery === undefined || oldQuery.result !== query.result) {
+        changedQueries.push(queryToken);
+      }
+    }
+    return changedQueries;
+  }
+  applyOptimisticUpdate(update, mutationId) {
+    this.optimisticUpdates.push({
+      update,
+      mutationId
+    });
+    const localStore = new OptimisticLocalStoreImpl(this.queryResults);
+    update(localStore);
+    return localStore.modifiedQueries;
+  }
+  rawQueryResult(queryToken) {
+    const query = this.queryResults.get(queryToken);
+    if (query === undefined) {
+      return;
+    }
+    return query.result;
+  }
+  queryResult(queryToken) {
+    const query = this.queryResults.get(queryToken);
+    if (query === undefined) {
+      return;
+    }
+    const result = query.result;
+    if (result === undefined) {
+      return;
+    } else if (result.success) {
+      return result.value;
+    } else {
+      if (result.errorData !== undefined) {
+        throw forwardData(result, new ConvexError(createHybridErrorStacktrace("query", query.udfPath, result)));
+      }
+      throw new Error(createHybridErrorStacktrace("query", query.udfPath, result));
+    }
+  }
+  hasQueryResult(queryToken) {
+    return this.queryResults.get(queryToken) !== undefined;
+  }
+  queryLogs(queryToken) {
+    const query = this.queryResults.get(queryToken);
+    return query?.result?.logLines;
+  }
+}
+
+// node_modules/convex/dist/esm/vendor/long.js
+var __defProp7 = Object.defineProperty;
+var __defNormalProp6 = (obj, key, value) => (key in obj) ? __defProp7(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
+var __publicField6 = (obj, key, value) => __defNormalProp6(obj, typeof key !== "symbol" ? key + "" : key, value);
+
+class Long {
+  constructor(low, high) {
+    __publicField6(this, "low");
+    __publicField6(this, "high");
+    __publicField6(this, "__isUnsignedLong__");
+    this.low = low | 0;
+    this.high = high | 0;
+    this.__isUnsignedLong__ = true;
+  }
+  static isLong(obj) {
+    return (obj && obj.__isUnsignedLong__) === true;
+  }
+  static fromBytesLE(bytes) {
+    return new Long(bytes[0] | bytes[1] << 8 | bytes[2] << 16 | bytes[3] << 24, bytes[4] | bytes[5] << 8 | bytes[6] << 16 | bytes[7] << 24);
+  }
+  toBytesLE() {
+    const hi = this.high;
+    const lo = this.low;
+    return [
+      lo & 255,
+      lo >>> 8 & 255,
+      lo >>> 16 & 255,
+      lo >>> 24,
+      hi & 255,
+      hi >>> 8 & 255,
+      hi >>> 16 & 255,
+      hi >>> 24
+    ];
+  }
+  static fromNumber(value) {
+    if (isNaN(value))
+      return UZERO;
+    if (value < 0)
+      return UZERO;
+    if (value >= TWO_PWR_64_DBL)
+      return MAX_UNSIGNED_VALUE;
+    return new Long(value % TWO_PWR_32_DBL | 0, value / TWO_PWR_32_DBL | 0);
+  }
+  toString() {
+    return (BigInt(this.high) * BigInt(TWO_PWR_32_DBL) + BigInt(this.low)).toString();
+  }
+  equals(other) {
+    if (!Long.isLong(other))
+      other = Long.fromValue(other);
+    if (this.high >>> 31 === 1 && other.high >>> 31 === 1)
+      return false;
+    return this.high === other.high && this.low === other.low;
+  }
+  notEquals(other) {
+    return !this.equals(other);
+  }
+  comp(other) {
+    if (!Long.isLong(other))
+      other = Long.fromValue(other);
+    if (this.equals(other))
+      return 0;
+    return other.high >>> 0 > this.high >>> 0 || other.high === this.high && other.low >>> 0 > this.low >>> 0 ? -1 : 1;
+  }
+  lessThanOrEqual(other) {
+    return this.comp(other) <= 0;
+  }
+  static fromValue(val) {
+    if (typeof val === "number")
+      return Long.fromNumber(val);
+    return new Long(val.low, val.high);
+  }
+}
+var UZERO = new Long(0, 0);
+var TWO_PWR_16_DBL = 1 << 16;
+var TWO_PWR_32_DBL = TWO_PWR_16_DBL * TWO_PWR_16_DBL;
+var TWO_PWR_64_DBL = TWO_PWR_32_DBL * TWO_PWR_32_DBL;
+var MAX_UNSIGNED_VALUE = new Long(4294967295 | 0, 4294967295 | 0);
+
+// node_modules/convex/dist/esm/browser/sync/remote_query_set.js
+var __defProp8 = Object.defineProperty;
+var __defNormalProp7 = (obj, key, value) => (key in obj) ? __defProp8(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
+var __publicField7 = (obj, key, value) => __defNormalProp7(obj, typeof key !== "symbol" ? key + "" : key, value);
+
+class RemoteQuerySet {
+  constructor(queryPath, logger) {
+    __publicField7(this, "version");
+    __publicField7(this, "remoteQuerySet");
+    __publicField7(this, "queryPath");
+    __publicField7(this, "logger");
+    this.version = { querySet: 0, ts: Long.fromNumber(0), identity: 0 };
+    this.remoteQuerySet = /* @__PURE__ */ new Map;
+    this.queryPath = queryPath;
+    this.logger = logger;
+  }
+  transition(transition) {
+    const start = transition.startVersion;
+    if (this.version.querySet !== start.querySet || this.version.ts.notEquals(start.ts) || this.version.identity !== start.identity) {
+      throw new Error(`Invalid start version: ${start.ts.toString()}:${start.querySet}:${start.identity}, transitioning from ${this.version.ts.toString()}:${this.version.querySet}:${this.version.identity}`);
+    }
+    for (const modification of transition.modifications) {
+      switch (modification.type) {
+        case "QueryUpdated": {
+          const queryPath = this.queryPath(modification.queryId);
+          if (queryPath) {
+            for (const line of modification.logLines) {
+              logForFunction(this.logger, "info", "query", queryPath, line);
+            }
+          }
+          const value = jsonToConvex(modification.value ?? null);
+          this.remoteQuerySet.set(modification.queryId, {
+            success: true,
+            value,
+            logLines: modification.logLines
+          });
+          break;
+        }
+        case "QueryFailed": {
+          const queryPath = this.queryPath(modification.queryId);
+          if (queryPath) {
+            for (const line of modification.logLines) {
+              logForFunction(this.logger, "info", "query", queryPath, line);
+            }
+          }
+          const { errorData } = modification;
+          this.remoteQuerySet.set(modification.queryId, {
+            success: false,
+            errorMessage: modification.errorMessage,
+            errorData: errorData !== undefined ? jsonToConvex(errorData) : undefined,
+            logLines: modification.logLines
+          });
+          break;
+        }
+        case "QueryRemoved": {
+          this.remoteQuerySet.delete(modification.queryId);
+          break;
+        }
+        default: {
+          throw new Error(`Invalid modification ${modification.type}`);
+        }
+      }
+    }
+    this.version = transition.endVersion;
+  }
+  remoteQueryResults() {
+    return this.remoteQuerySet;
+  }
+  timestamp() {
+    return this.version.ts;
+  }
+}
+
+// node_modules/convex/dist/esm/browser/sync/protocol.js
+function u64ToLong(encoded) {
+  const integerBytes = exports_base64.toByteArray(encoded);
+  return Long.fromBytesLE(Array.from(integerBytes));
+}
+function longToU64(raw) {
+  const integerBytes = new Uint8Array(raw.toBytesLE());
+  return exports_base64.fromByteArray(integerBytes);
+}
+function parseServerMessage(encoded) {
+  switch (encoded.type) {
+    case "FatalError":
+    case "AuthError":
+    case "ActionResponse":
+    case "TransitionChunk":
+    case "Ping": {
+      return { ...encoded };
+    }
+    case "MutationResponse": {
+      if (encoded.success) {
+        return { ...encoded, ts: u64ToLong(encoded.ts) };
+      } else {
+        return { ...encoded };
+      }
+    }
+    case "Transition": {
+      return {
+        ...encoded,
+        startVersion: {
+          ...encoded.startVersion,
+          ts: u64ToLong(encoded.startVersion.ts)
+        },
+        endVersion: {
+          ...encoded.endVersion,
+          ts: u64ToLong(encoded.endVersion.ts)
+        }
+      };
+    }
+    default: {
+    }
+  }
+  return;
+}
+function encodeClientMessage(message) {
+  switch (message.type) {
+    case "Authenticate":
+    case "ModifyQuerySet":
+    case "Mutation":
+    case "Action":
+    case "Event": {
+      return { ...message };
+    }
+    case "Connect": {
+      if (message.maxObservedTimestamp !== undefined) {
+        return {
+          ...message,
+          maxObservedTimestamp: longToU64(message.maxObservedTimestamp)
+        };
+      } else {
+        return { ...message, maxObservedTimestamp: undefined };
+      }
+    }
+    default: {
+    }
+  }
+  return;
+}
+
+// node_modules/convex/dist/esm/browser/sync/web_socket_manager.js
+var __defProp9 = Object.defineProperty;
+var __defNormalProp8 = (obj, key, value) => (key in obj) ? __defProp9(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
+var __publicField8 = (obj, key, value) => __defNormalProp8(obj, typeof key !== "symbol" ? key + "" : key, value);
+var CLOSE_NORMAL = 1000;
+var CLOSE_GOING_AWAY = 1001;
+var CLOSE_NO_STATUS = 1005;
+var CLOSE_NOT_FOUND = 4040;
+var firstTime;
+function monotonicMillis() {
+  if (firstTime === undefined) {
+    firstTime = Date.now();
+  }
+  if (typeof performance === "undefined" || !performance.now) {
+    return Date.now();
+  }
+  return Math.round(firstTime + performance.now());
+}
+function prettyNow() {
+  return `t=${Math.round((monotonicMillis() - firstTime) / 100) / 10}s`;
+}
+var serverDisconnectErrors = {
+  InternalServerError: { timeout: 1000 },
+  SubscriptionsWorkerFullError: { timeout: 3000 },
+  TooManyConcurrentRequests: { timeout: 3000 },
+  CommitterFullError: { timeout: 3000 },
+  AwsTooManyRequestsException: { timeout: 3000 },
+  ExecuteFullError: { timeout: 3000 },
+  SystemTimeoutError: { timeout: 3000 },
+  ExpiredInQueue: { timeout: 3000 },
+  VectorIndexesUnavailable: { timeout: 1000 },
+  SearchIndexesUnavailable: { timeout: 1000 },
+  TableSummariesUnavailable: { timeout: 1000 },
+  VectorIndexTooLarge: { timeout: 3000 },
+  SearchIndexTooLarge: { timeout: 3000 },
+  TooManyWritesInTimePeriod: { timeout: 3000 }
+};
+function classifyDisconnectError(s) {
+  if (s === undefined)
+    return "Unknown";
+  for (const prefix of Object.keys(serverDisconnectErrors)) {
+    if (s.startsWith(prefix)) {
+      return prefix;
+    }
+  }
+  return "Unknown";
+}
+
+class WebSocketManager {
+  constructor(uri, callbacks, webSocketConstructor, logger, markConnectionStateDirty, debug) {
+    this.markConnectionStateDirty = markConnectionStateDirty;
+    this.debug = debug;
+    __publicField8(this, "socket");
+    __publicField8(this, "connectionCount");
+    __publicField8(this, "_hasEverConnected", false);
+    __publicField8(this, "lastCloseReason");
+    __publicField8(this, "transitionChunkBuffer", null);
+    __publicField8(this, "defaultInitialBackoff");
+    __publicField8(this, "maxBackoff");
+    __publicField8(this, "retries");
+    __publicField8(this, "serverInactivityThreshold");
+    __publicField8(this, "reconnectDueToServerInactivityTimeout");
+    __publicField8(this, "uri");
+    __publicField8(this, "onOpen");
+    __publicField8(this, "onResume");
+    __publicField8(this, "onMessage");
+    __publicField8(this, "webSocketConstructor");
+    __publicField8(this, "logger");
+    __publicField8(this, "onServerDisconnectError");
+    this.webSocketConstructor = webSocketConstructor;
+    this.socket = { state: "disconnected" };
+    this.connectionCount = 0;
+    this.lastCloseReason = "InitialConnect";
+    this.defaultInitialBackoff = 1000;
+    this.maxBackoff = 16000;
+    this.retries = 0;
+    this.serverInactivityThreshold = 60000;
+    this.reconnectDueToServerInactivityTimeout = null;
+    this.uri = uri;
+    this.onOpen = callbacks.onOpen;
+    this.onResume = callbacks.onResume;
+    this.onMessage = callbacks.onMessage;
+    this.onServerDisconnectError = callbacks.onServerDisconnectError;
+    this.logger = logger;
+    this.connect();
+  }
+  setSocketState(state) {
+    this.socket = state;
+    this._logVerbose(`socket state changed: ${this.socket.state}, paused: ${"paused" in this.socket ? this.socket.paused : undefined}`);
+    this.markConnectionStateDirty();
+  }
+  assembleTransition(chunk) {
+    if (chunk.partNumber < 0 || chunk.partNumber >= chunk.totalParts || chunk.totalParts === 0 || this.transitionChunkBuffer && (this.transitionChunkBuffer.totalParts !== chunk.totalParts || this.transitionChunkBuffer.transitionId !== chunk.transitionId)) {
+      this.transitionChunkBuffer = null;
+      throw new Error("Invalid TransitionChunk");
+    }
+    if (this.transitionChunkBuffer === null) {
+      this.transitionChunkBuffer = {
+        chunks: [],
+        totalParts: chunk.totalParts,
+        transitionId: chunk.transitionId
+      };
+    }
+    if (chunk.partNumber !== this.transitionChunkBuffer.chunks.length) {
+      const expectedLength = this.transitionChunkBuffer.chunks.length;
+      this.transitionChunkBuffer = null;
+      throw new Error(`TransitionChunk received out of order: expected part ${expectedLength}, got ${chunk.partNumber}`);
+    }
+    this.transitionChunkBuffer.chunks.push(chunk.chunk);
+    if (this.transitionChunkBuffer.chunks.length === chunk.totalParts) {
+      const fullJson = this.transitionChunkBuffer.chunks.join("");
+      this.transitionChunkBuffer = null;
+      const transition = parseServerMessage(JSON.parse(fullJson));
+      if (transition.type !== "Transition") {
+        throw new Error(`Expected Transition, got ${transition.type} after assembling chunks`);
+      }
+      return transition;
+    }
+    return null;
+  }
+  connect() {
+    if (this.socket.state === "terminated") {
+      return;
+    }
+    if (this.socket.state !== "disconnected" && this.socket.state !== "stopped") {
+      throw new Error("Didn't start connection from disconnected state: " + this.socket.state);
+    }
+    const ws = new this.webSocketConstructor(this.uri);
+    this._logVerbose("constructed WebSocket");
+    this.setSocketState({
+      state: "connecting",
+      ws,
+      paused: "no"
+    });
+    this.resetServerInactivityTimeout();
+    ws.onopen = () => {
+      this.logger.logVerbose("begin ws.onopen");
+      if (this.socket.state !== "connecting") {
+        throw new Error("onopen called with socket not in connecting state");
+      }
+      this.setSocketState({
+        state: "ready",
+        ws,
+        paused: this.socket.paused === "yes" ? "uninitialized" : "no"
+      });
+      this.resetServerInactivityTimeout();
+      if (this.socket.paused === "no") {
+        this._hasEverConnected = true;
+        this.onOpen({
+          connectionCount: this.connectionCount,
+          lastCloseReason: this.lastCloseReason,
+          clientTs: monotonicMillis()
+        });
+      }
+      if (this.lastCloseReason !== "InitialConnect") {
+        if (this.lastCloseReason) {
+          this.logger.log("WebSocket reconnected at", prettyNow(), "after disconnect due to", this.lastCloseReason);
+        } else {
+          this.logger.log("WebSocket reconnected at", prettyNow());
+        }
+      }
+      this.connectionCount += 1;
+      this.lastCloseReason = null;
+    };
+    ws.onerror = (error) => {
+      this.transitionChunkBuffer = null;
+      const message = error.message;
+      if (message) {
+        this.logger.log(`WebSocket error message: ${message}`);
+      }
+    };
+    ws.onmessage = (message) => {
+      this.resetServerInactivityTimeout();
+      const messageLength = message.data.length;
+      let serverMessage = parseServerMessage(JSON.parse(message.data));
+      this._logVerbose(`received ws message with type ${serverMessage.type}`);
+      if (serverMessage.type === "Ping") {
+        return;
+      }
+      if (serverMessage.type === "TransitionChunk") {
+        const transition = this.assembleTransition(serverMessage);
+        if (!transition) {
+          return;
+        }
+        serverMessage = transition;
+        this._logVerbose(`assembled full ws message of type ${serverMessage.type}`);
+      }
+      if (this.transitionChunkBuffer !== null) {
+        this.transitionChunkBuffer = null;
+        this.logger.log(`Received unexpected ${serverMessage.type} while buffering TransitionChunks`);
+      }
+      if (serverMessage.type === "Transition") {
+        this.reportLargeTransition({
+          messageLength,
+          transition: serverMessage
+        });
+      }
+      const response = this.onMessage(serverMessage);
+      if (response.hasSyncedPastLastReconnect) {
+        this.retries = 0;
+        this.markConnectionStateDirty();
+      }
+    };
+    ws.onclose = (event) => {
+      this._logVerbose("begin ws.onclose");
+      this.transitionChunkBuffer = null;
+      if (this.lastCloseReason === null) {
+        this.lastCloseReason = event.reason || `closed with code ${event.code}`;
+      }
+      if (event.code !== CLOSE_NORMAL && event.code !== CLOSE_GOING_AWAY && event.code !== CLOSE_NO_STATUS && event.code !== CLOSE_NOT_FOUND) {
+        let msg = `WebSocket closed with code ${event.code}`;
+        if (event.reason) {
+          msg += `: ${event.reason}`;
+        }
+        this.logger.log(msg);
+        if (this.onServerDisconnectError && event.reason) {
+          this.onServerDisconnectError(msg);
+        }
+      }
+      const reason = classifyDisconnectError(event.reason);
+      this.scheduleReconnect(reason);
+      return;
+    };
+  }
+  socketState() {
+    return this.socket.state;
+  }
+  sendMessage(message) {
+    const messageForLog = {
+      type: message.type,
+      ...message.type === "Authenticate" && message.tokenType === "User" ? {
+        value: `...${message.value.slice(-7)}`
+      } : {}
+    };
+    if (this.socket.state === "ready" && this.socket.paused === "no") {
+      const encodedMessage = encodeClientMessage(message);
+      const request = JSON.stringify(encodedMessage);
+      let sent = false;
+      try {
+        this.socket.ws.send(request);
+        sent = true;
+      } catch (error) {
+        this.logger.log(`Failed to send message on WebSocket, reconnecting: ${error}`);
+        this.closeAndReconnect("FailedToSendMessage");
+      }
+      this._logVerbose(`${sent ? "sent" : "failed to send"} message with type ${message.type}: ${JSON.stringify(messageForLog)}`);
+      return true;
+    }
+    this._logVerbose(`message not sent (socket state: ${this.socket.state}, paused: ${"paused" in this.socket ? this.socket.paused : undefined}): ${JSON.stringify(messageForLog)}`);
+    return false;
+  }
+  resetServerInactivityTimeout() {
+    if (this.socket.state === "terminated") {
+      return;
+    }
+    if (this.reconnectDueToServerInactivityTimeout !== null) {
+      clearTimeout(this.reconnectDueToServerInactivityTimeout);
+      this.reconnectDueToServerInactivityTimeout = null;
+    }
+    this.reconnectDueToServerInactivityTimeout = setTimeout(() => {
+      this.closeAndReconnect("InactiveServer");
+    }, this.serverInactivityThreshold);
+  }
+  scheduleReconnect(reason) {
+    this.socket = { state: "disconnected" };
+    const backoff = this.nextBackoff(reason);
+    this.markConnectionStateDirty();
+    this.logger.log(`Attempting reconnect in ${Math.round(backoff)}ms`);
+    setTimeout(() => this.connect(), backoff);
+  }
+  closeAndReconnect(closeReason) {
+    this._logVerbose(`begin closeAndReconnect with reason ${closeReason}`);
+    switch (this.socket.state) {
+      case "disconnected":
+      case "terminated":
+      case "stopped":
+        return;
+      case "connecting":
+      case "ready": {
+        this.lastCloseReason = closeReason;
+        this.close();
+        this.scheduleReconnect("client");
+        return;
+      }
+      default: {
+        this.socket;
+      }
+    }
+  }
+  close() {
+    this.transitionChunkBuffer = null;
+    switch (this.socket.state) {
+      case "disconnected":
+      case "terminated":
+      case "stopped":
+        return Promise.resolve();
+      case "connecting": {
+        const ws = this.socket.ws;
+        ws.onmessage = (_message) => {
+          this._logVerbose("Ignoring message received after close");
+        };
+        return new Promise((r) => {
+          ws.onclose = () => {
+            this._logVerbose("Closed after connecting");
+            r();
+          };
+          ws.onopen = () => {
+            this._logVerbose("Opened after connecting");
+            ws.close();
+          };
+        });
+      }
+      case "ready": {
+        this._logVerbose("ws.close called");
+        const ws = this.socket.ws;
+        ws.onmessage = (_message) => {
+          this._logVerbose("Ignoring message received after close");
+        };
+        const result = new Promise((r) => {
+          ws.onclose = () => {
+            r();
+          };
+        });
+        ws.close();
+        return result;
+      }
+      default: {
+        this.socket;
+        return Promise.resolve();
+      }
+    }
+  }
+  terminate() {
+    if (this.reconnectDueToServerInactivityTimeout) {
+      clearTimeout(this.reconnectDueToServerInactivityTimeout);
+    }
+    switch (this.socket.state) {
+      case "terminated":
+      case "stopped":
+      case "disconnected":
+      case "connecting":
+      case "ready": {
+        const result = this.close();
+        this.setSocketState({ state: "terminated" });
+        return result;
+      }
+      default: {
+        this.socket;
+        throw new Error(`Invalid websocket state: ${this.socket.state}`);
+      }
+    }
+  }
+  stop() {
+    switch (this.socket.state) {
+      case "terminated":
+        return Promise.resolve();
+      case "connecting":
+      case "stopped":
+      case "disconnected":
+      case "ready": {
+        const result = this.close();
+        this.socket = { state: "stopped" };
+        return result;
+      }
+      default: {
+        this.socket;
+        return Promise.resolve();
+      }
+    }
+  }
+  tryRestart() {
+    switch (this.socket.state) {
+      case "stopped":
+        break;
+      case "terminated":
+      case "connecting":
+      case "ready":
+      case "disconnected":
+        this.logger.logVerbose("Restart called without stopping first");
+        return;
+      default: {
+        this.socket;
+      }
+    }
+    this.connect();
+  }
+  pause() {
+    switch (this.socket.state) {
+      case "disconnected":
+      case "stopped":
+      case "terminated":
+        return;
+      case "connecting":
+      case "ready": {
+        this.socket = { ...this.socket, paused: "yes" };
+        return;
+      }
+      default: {
+        this.socket;
+        return;
+      }
+    }
+  }
+  resume() {
+    switch (this.socket.state) {
+      case "connecting":
+        this.socket = { ...this.socket, paused: "no" };
+        return;
+      case "ready":
+        if (this.socket.paused === "uninitialized") {
+          this.socket = { ...this.socket, paused: "no" };
+          this.onOpen({
+            connectionCount: this.connectionCount,
+            lastCloseReason: this.lastCloseReason,
+            clientTs: monotonicMillis()
+          });
+        } else if (this.socket.paused === "yes") {
+          this.socket = { ...this.socket, paused: "no" };
+          this.onResume();
+        }
+        return;
+      case "terminated":
+      case "stopped":
+      case "disconnected":
+        return;
+      default: {
+        this.socket;
+      }
+    }
+    this.connect();
+  }
+  connectionState() {
+    return {
+      isConnected: this.socket.state === "ready",
+      hasEverConnected: this._hasEverConnected,
+      connectionCount: this.connectionCount,
+      connectionRetries: this.retries
+    };
+  }
+  _logVerbose(message) {
+    this.logger.logVerbose(message);
+  }
+  nextBackoff(reason) {
+    const initialBackoff = reason === "client" ? 100 : reason === "Unknown" ? this.defaultInitialBackoff : serverDisconnectErrors[reason].timeout;
+    const baseBackoff = initialBackoff * Math.pow(2, this.retries);
+    this.retries += 1;
+    const actualBackoff = Math.min(baseBackoff, this.maxBackoff);
+    const jitter = actualBackoff * (Math.random() - 0.5);
+    return actualBackoff + jitter;
+  }
+  reportLargeTransition({
+    transition,
+    messageLength
+  }) {
+    if (transition.clientClockSkew === undefined || transition.serverTs === undefined) {
+      return;
+    }
+    const transitionTransitTime = monotonicMillis() - transition.clientClockSkew - transition.serverTs / 1e6;
+    const prettyTransitionTime = `${Math.round(transitionTransitTime)}ms`;
+    const prettyMessageMB = `${Math.round(messageLength / 1e4) / 100}MB`;
+    const bytesPerSecond = messageLength / (transitionTransitTime / 1000);
+    const prettyBytesPerSecond = `${Math.round(bytesPerSecond / 1e4) / 100}MB per second`;
+    this._logVerbose(`received ${prettyMessageMB} transition in ${prettyTransitionTime} at ${prettyBytesPerSecond}`);
+    if (messageLength > 20000000) {
+      this.logger.log(`received query results totaling more that 20MB (${prettyMessageMB}) which will take a long time to download on slower connections`);
+    } else if (transitionTransitTime > 20000) {
+      this.logger.log(`received query results totaling ${prettyMessageMB} which took more than 20s to arrive (${prettyTransitionTime})`);
+    }
+    if (this.debug) {
+      this.sendMessage({
+        type: "Event",
+        eventType: "ClientReceivedTransition",
+        event: { transitionTransitTime, messageLength }
+      });
+    }
+  }
+}
+
+// node_modules/convex/dist/esm/browser/sync/session.js
+function newSessionId() {
+  return uuidv4();
+}
+function uuidv4() {
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+    const r = Math.random() * 16 | 0, v = c === "x" ? r : r & 3 | 8;
+    return v.toString(16);
+  });
+}
+
+// node_modules/convex/dist/esm/vendor/jwt-decode/index.js
+class InvalidTokenError extends Error {
+}
+InvalidTokenError.prototype.name = "InvalidTokenError";
+function b64DecodeUnicode(str) {
+  return decodeURIComponent(atob(str).replace(/(.)/g, (_m, p) => {
+    let code2 = p.charCodeAt(0).toString(16).toUpperCase();
+    if (code2.length < 2) {
+      code2 = "0" + code2;
+    }
+    return "%" + code2;
+  }));
+}
+function base64UrlDecode(str) {
+  let output = str.replace(/-/g, "+").replace(/_/g, "/");
+  switch (output.length % 4) {
+    case 0:
+      break;
+    case 2:
+      output += "==";
+      break;
+    case 3:
+      output += "=";
+      break;
+    default:
+      throw new Error("base64 string is not of the correct length");
+  }
+  try {
+    return b64DecodeUnicode(output);
+  } catch {
+    return atob(output);
+  }
+}
+function jwtDecode(token, options) {
+  if (typeof token !== "string") {
+    throw new InvalidTokenError("Invalid token specified: must be a string");
+  }
+  options || (options = {});
+  const pos = options.header === true ? 0 : 1;
+  const part = token.split(".")[pos];
+  if (typeof part !== "string") {
+    throw new InvalidTokenError(`Invalid token specified: missing part #${pos + 1}`);
+  }
+  let decoded;
+  try {
+    decoded = base64UrlDecode(part);
+  } catch (e) {
+    throw new InvalidTokenError(`Invalid token specified: invalid base64 for part #${pos + 1} (${e.message})`);
+  }
+  try {
+    return JSON.parse(decoded);
+  } catch (e) {
+    throw new InvalidTokenError(`Invalid token specified: invalid json for part #${pos + 1} (${e.message})`);
+  }
+}
+
+// node_modules/convex/dist/esm/browser/sync/authentication_manager.js
+var __defProp10 = Object.defineProperty;
+var __defNormalProp9 = (obj, key, value) => (key in obj) ? __defProp10(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
+var __publicField9 = (obj, key, value) => __defNormalProp9(obj, typeof key !== "symbol" ? key + "" : key, value);
+var MAXIMUM_REFRESH_DELAY = 20 * 24 * 60 * 60 * 1000;
+var MAX_TOKEN_CONFIRMATION_ATTEMPTS = 2;
+
+class AuthenticationManager {
+  constructor(syncState, callbacks, config) {
+    __publicField9(this, "authState", { state: "noAuth" });
+    __publicField9(this, "configVersion", 0);
+    __publicField9(this, "syncState");
+    __publicField9(this, "authenticate");
+    __publicField9(this, "stopSocket");
+    __publicField9(this, "tryRestartSocket");
+    __publicField9(this, "pauseSocket");
+    __publicField9(this, "resumeSocket");
+    __publicField9(this, "clearAuth");
+    __publicField9(this, "logger");
+    __publicField9(this, "refreshTokenLeewaySeconds");
+    __publicField9(this, "tokenConfirmationAttempts", 0);
+    this.syncState = syncState;
+    this.authenticate = callbacks.authenticate;
+    this.stopSocket = callbacks.stopSocket;
+    this.tryRestartSocket = callbacks.tryRestartSocket;
+    this.pauseSocket = callbacks.pauseSocket;
+    this.resumeSocket = callbacks.resumeSocket;
+    this.clearAuth = callbacks.clearAuth;
+    this.logger = config.logger;
+    this.refreshTokenLeewaySeconds = config.refreshTokenLeewaySeconds;
+  }
+  async setConfig(fetchToken, onChange) {
+    this.resetAuthState();
+    this._logVerbose("pausing WS for auth token fetch");
+    this.pauseSocket();
+    const token = await this.fetchTokenAndGuardAgainstRace(fetchToken, {
+      forceRefreshToken: false
+    });
+    if (token.isFromOutdatedConfig) {
+      return;
+    }
+    if (token.value) {
+      this.setAuthState({
+        state: "waitingForServerConfirmationOfCachedToken",
+        config: { fetchToken, onAuthChange: onChange },
+        hasRetried: false
+      });
+      this.authenticate(token.value);
+    } else {
+      this.setAuthState({
+        state: "initialRefetch",
+        config: { fetchToken, onAuthChange: onChange }
+      });
+      await this.refetchToken();
+    }
+    this._logVerbose("resuming WS after auth token fetch");
+    this.resumeSocket();
+  }
+  onTransition(serverMessage) {
+    if (!this.syncState.isCurrentOrNewerAuthVersion(serverMessage.endVersion.identity)) {
+      return;
+    }
+    if (serverMessage.endVersion.identity <= serverMessage.startVersion.identity) {
+      return;
+    }
+    if (this.authState.state === "waitingForServerConfirmationOfCachedToken") {
+      this._logVerbose("server confirmed auth token is valid");
+      this.refetchToken();
+      this.authState.config.onAuthChange(true);
+      return;
+    }
+    if (this.authState.state === "waitingForServerConfirmationOfFreshToken") {
+      this._logVerbose("server confirmed new auth token is valid");
+      this.scheduleTokenRefetch(this.authState.token);
+      this.tokenConfirmationAttempts = 0;
+      if (!this.authState.hadAuth) {
+        this.authState.config.onAuthChange(true);
+      }
+    }
+  }
+  onAuthError(serverMessage) {
+    if (serverMessage.authUpdateAttempted === false && (this.authState.state === "waitingForServerConfirmationOfFreshToken" || this.authState.state === "waitingForServerConfirmationOfCachedToken")) {
+      this._logVerbose("ignoring non-auth token expired error");
+      return;
+    }
+    const { baseVersion } = serverMessage;
+    if (!this.syncState.isCurrentOrNewerAuthVersion(baseVersion + 1)) {
+      this._logVerbose("ignoring auth error for previous auth attempt");
+      return;
+    }
+    this.tryToReauthenticate(serverMessage);
+    return;
+  }
+  async tryToReauthenticate(serverMessage) {
+    this._logVerbose(`attempting to reauthenticate: ${serverMessage.error}`);
+    if (this.authState.state === "noAuth" || this.authState.state === "waitingForServerConfirmationOfFreshToken" && this.tokenConfirmationAttempts >= MAX_TOKEN_CONFIRMATION_ATTEMPTS) {
+      this.logger.error(`Failed to authenticate: "${serverMessage.error}", check your server auth config`);
+      if (this.syncState.hasAuth()) {
+        this.syncState.clearAuth();
+      }
+      if (this.authState.state !== "noAuth") {
+        this.setAndReportAuthFailed(this.authState.config.onAuthChange);
+      }
+      return;
+    }
+    if (this.authState.state === "waitingForServerConfirmationOfFreshToken") {
+      this.tokenConfirmationAttempts++;
+      this._logVerbose(`retrying reauthentication, ${MAX_TOKEN_CONFIRMATION_ATTEMPTS - this.tokenConfirmationAttempts} attempts remaining`);
+    }
+    await this.stopSocket();
+    const token = await this.fetchTokenAndGuardAgainstRace(this.authState.config.fetchToken, {
+      forceRefreshToken: true
+    });
+    if (token.isFromOutdatedConfig) {
+      return;
+    }
+    if (token.value && this.syncState.isNewAuth(token.value)) {
+      this.authenticate(token.value);
+      this.setAuthState({
+        state: "waitingForServerConfirmationOfFreshToken",
+        config: this.authState.config,
+        token: token.value,
+        hadAuth: this.authState.state === "notRefetching" || this.authState.state === "waitingForScheduledRefetch"
+      });
+    } else {
+      this._logVerbose("reauthentication failed, could not fetch a new token");
+      if (this.syncState.hasAuth()) {
+        this.syncState.clearAuth();
+      }
+      this.setAndReportAuthFailed(this.authState.config.onAuthChange);
+    }
+    this.tryRestartSocket();
+  }
+  async refetchToken() {
+    if (this.authState.state === "noAuth") {
+      return;
+    }
+    this._logVerbose("refetching auth token");
+    const token = await this.fetchTokenAndGuardAgainstRace(this.authState.config.fetchToken, {
+      forceRefreshToken: true
+    });
+    if (token.isFromOutdatedConfig) {
+      return;
+    }
+    if (token.value) {
+      if (this.syncState.isNewAuth(token.value)) {
+        this.setAuthState({
+          state: "waitingForServerConfirmationOfFreshToken",
+          hadAuth: this.syncState.hasAuth(),
+          token: token.value,
+          config: this.authState.config
+        });
+        this.authenticate(token.value);
+      } else {
+        this.setAuthState({
+          state: "notRefetching",
+          config: this.authState.config
+        });
+      }
+    } else {
+      this._logVerbose("refetching token failed");
+      if (this.syncState.hasAuth()) {
+        this.clearAuth();
+      }
+      this.setAndReportAuthFailed(this.authState.config.onAuthChange);
+    }
+    this._logVerbose("restarting WS after auth token fetch (if currently stopped)");
+    this.tryRestartSocket();
+  }
+  scheduleTokenRefetch(token) {
+    if (this.authState.state === "noAuth") {
+      return;
+    }
+    const decodedToken = this.decodeToken(token);
+    if (!decodedToken) {
+      this.logger.error("Auth token is not a valid JWT, cannot refetch the token");
+      return;
+    }
+    const { iat, exp } = decodedToken;
+    if (!iat || !exp) {
+      this.logger.error("Auth token does not have required fields, cannot refetch the token");
+      return;
+    }
+    const tokenValiditySeconds = exp - iat;
+    if (tokenValiditySeconds <= 2) {
+      this.logger.error("Auth token does not live long enough, cannot refetch the token");
+      return;
+    }
+    let delay = Math.min(MAXIMUM_REFRESH_DELAY, (tokenValiditySeconds - this.refreshTokenLeewaySeconds) * 1000);
+    if (delay <= 0) {
+      this.logger.warn(`Refetching auth token immediately, configured leeway ${this.refreshTokenLeewaySeconds}s is larger than the token's lifetime ${tokenValiditySeconds}s`);
+      delay = 0;
+    }
+    const refetchTokenTimeoutId = setTimeout(() => {
+      this._logVerbose("running scheduled token refetch");
+      this.refetchToken();
+    }, delay);
+    this.setAuthState({
+      state: "waitingForScheduledRefetch",
+      refetchTokenTimeoutId,
+      config: this.authState.config
+    });
+    this._logVerbose(`scheduled preemptive auth token refetching in ${delay}ms`);
+  }
+  async fetchTokenAndGuardAgainstRace(fetchToken, fetchArgs) {
+    const originalConfigVersion = ++this.configVersion;
+    this._logVerbose(`fetching token with config version ${originalConfigVersion}`);
+    const token = await fetchToken(fetchArgs);
+    if (this.configVersion !== originalConfigVersion) {
+      this._logVerbose(`stale config version, expected ${originalConfigVersion}, got ${this.configVersion}`);
+      return { isFromOutdatedConfig: true };
+    }
+    return { isFromOutdatedConfig: false, value: token };
+  }
+  stop() {
+    this.resetAuthState();
+    this.configVersion++;
+    this._logVerbose(`config version bumped to ${this.configVersion}`);
+  }
+  setAndReportAuthFailed(onAuthChange) {
+    onAuthChange(false);
+    this.resetAuthState();
+  }
+  resetAuthState() {
+    this.setAuthState({ state: "noAuth" });
+  }
+  setAuthState(newAuth) {
+    const authStateForLog = newAuth.state === "waitingForServerConfirmationOfFreshToken" ? {
+      hadAuth: newAuth.hadAuth,
+      state: newAuth.state,
+      token: `...${newAuth.token.slice(-7)}`
+    } : { state: newAuth.state };
+    this._logVerbose(`setting auth state to ${JSON.stringify(authStateForLog)}`);
+    switch (newAuth.state) {
+      case "waitingForScheduledRefetch":
+      case "notRefetching":
+      case "noAuth":
+        this.tokenConfirmationAttempts = 0;
+        break;
+      case "waitingForServerConfirmationOfFreshToken":
+      case "waitingForServerConfirmationOfCachedToken":
+      case "initialRefetch":
+        break;
+      default: {
+      }
+    }
+    if (this.authState.state === "waitingForScheduledRefetch") {
+      clearTimeout(this.authState.refetchTokenTimeoutId);
+      this.syncState.markAuthCompletion();
+    }
+    this.authState = newAuth;
+  }
+  decodeToken(token) {
+    try {
+      return jwtDecode(token);
+    } catch (e) {
+      this._logVerbose(`Error decoding token: ${e instanceof Error ? e.message : "Unknown error"}`);
+      return null;
+    }
+  }
+  _logVerbose(message) {
+    this.logger.logVerbose(`${message} [v${this.configVersion}]`);
+  }
+}
+
+// node_modules/convex/dist/esm/browser/sync/metrics.js
+var markNames = [
+  "convexClientConstructed",
+  "convexWebSocketOpen",
+  "convexFirstMessageReceived"
+];
+function mark(name, sessionId) {
+  const detail = { sessionId };
+  if (typeof performance === "undefined" || !performance.mark)
+    return;
+  performance.mark(name, { detail });
+}
+function performanceMarkToJson(mark2) {
+  let name = mark2.name.slice("convex".length);
+  name = name.charAt(0).toLowerCase() + name.slice(1);
+  return {
+    name,
+    startTime: mark2.startTime
+  };
+}
+function getMarksReport(sessionId) {
+  if (typeof performance === "undefined" || !performance.getEntriesByName) {
+    return [];
+  }
+  const allMarks = [];
+  for (const name of markNames) {
+    const marks = performance.getEntriesByName(name).filter((entry) => entry.entryType === "mark").filter((mark2) => mark2.detail.sessionId === sessionId);
+    allMarks.push(...marks);
+  }
+  return allMarks.map(performanceMarkToJson);
+}
+
+// node_modules/convex/dist/esm/browser/sync/client.js
+var __defProp11 = Object.defineProperty;
+var __defNormalProp10 = (obj, key, value) => (key in obj) ? __defProp11(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
+var __publicField10 = (obj, key, value) => __defNormalProp10(obj, typeof key !== "symbol" ? key + "" : key, value);
+
+class BaseConvexClient {
+  constructor(address, onTransition, options) {
+    __publicField10(this, "address");
+    __publicField10(this, "state");
+    __publicField10(this, "requestManager");
+    __publicField10(this, "webSocketManager");
+    __publicField10(this, "authenticationManager");
+    __publicField10(this, "remoteQuerySet");
+    __publicField10(this, "optimisticQueryResults");
+    __publicField10(this, "_transitionHandlerCounter", 0);
+    __publicField10(this, "_nextRequestId");
+    __publicField10(this, "_onTransitionFns", /* @__PURE__ */ new Map);
+    __publicField10(this, "_sessionId");
+    __publicField10(this, "firstMessageReceived", false);
+    __publicField10(this, "debug");
+    __publicField10(this, "logger");
+    __publicField10(this, "maxObservedTimestamp");
+    __publicField10(this, "connectionStateSubscribers", /* @__PURE__ */ new Map);
+    __publicField10(this, "nextConnectionStateSubscriberId", 0);
+    __publicField10(this, "_lastPublishedConnectionState");
+    __publicField10(this, "markConnectionStateDirty", () => {
+      Promise.resolve().then(() => {
+        const curConnectionState = this.connectionState();
+        if (JSON.stringify(curConnectionState) !== JSON.stringify(this._lastPublishedConnectionState)) {
+          this._lastPublishedConnectionState = curConnectionState;
+          for (const cb of this.connectionStateSubscribers.values()) {
+            cb(curConnectionState);
+          }
+        }
+      });
+    });
+    __publicField10(this, "mark", (name) => {
+      if (this.debug) {
+        mark(name, this.sessionId);
+      }
+    });
+    if (typeof address === "object") {
+      throw new Error("Passing a ClientConfig object is no longer supported. Pass the URL of the Convex deployment as a string directly.");
+    }
+    if (options?.skipConvexDeploymentUrlCheck !== true) {
+      validateDeploymentUrl(address);
+    }
+    options = { ...options };
+    const authRefreshTokenLeewaySeconds = options.authRefreshTokenLeewaySeconds ?? 2;
+    let webSocketConstructor = options.webSocketConstructor;
+    if (!webSocketConstructor && typeof WebSocket === "undefined") {
+      throw new Error("No WebSocket global variable defined! To use Convex in an environment without WebSocket try the HTTP client: https://docs.convex.dev/api/classes/browser.ConvexHttpClient");
+    }
+    webSocketConstructor = webSocketConstructor || WebSocket;
+    this.debug = options.reportDebugInfoToConvex ?? false;
+    this.address = address;
+    this.logger = options.logger === false ? instantiateNoopLogger({ verbose: options.verbose ?? false }) : options.logger !== true && options.logger ? options.logger : instantiateDefaultLogger({ verbose: options.verbose ?? false });
+    const i = address.search("://");
+    if (i === -1) {
+      throw new Error("Provided address was not an absolute URL.");
+    }
+    const origin = address.substring(i + 3);
+    const protocol = address.substring(0, i);
+    let wsProtocol;
+    if (protocol === "http") {
+      wsProtocol = "ws";
+    } else if (protocol === "https") {
+      wsProtocol = "wss";
+    } else {
+      throw new Error(`Unknown parent protocol ${protocol}`);
+    }
+    const wsUri = `${wsProtocol}://${origin}/api/${version}/sync`;
+    this.state = new LocalSyncState;
+    this.remoteQuerySet = new RemoteQuerySet((queryId) => this.state.queryPath(queryId), this.logger);
+    this.requestManager = new RequestManager(this.logger, this.markConnectionStateDirty);
+    const pauseSocket = () => {
+      this.webSocketManager.pause();
+      this.state.pause();
+    };
+    this.authenticationManager = new AuthenticationManager(this.state, {
+      authenticate: (token) => {
+        const message = this.state.setAuth(token);
+        this.webSocketManager.sendMessage(message);
+        return message.baseVersion;
+      },
+      stopSocket: () => this.webSocketManager.stop(),
+      tryRestartSocket: () => this.webSocketManager.tryRestart(),
+      pauseSocket,
+      resumeSocket: () => this.webSocketManager.resume(),
+      clearAuth: () => {
+        this.clearAuth();
+      }
+    }, {
+      logger: this.logger,
+      refreshTokenLeewaySeconds: authRefreshTokenLeewaySeconds
+    });
+    this.optimisticQueryResults = new OptimisticQueryResults;
+    this.addOnTransitionHandler((transition) => {
+      onTransition(transition.queries.map((q) => q.token));
+    });
+    this._nextRequestId = 0;
+    this._sessionId = newSessionId();
+    const { unsavedChangesWarning } = options;
+    if (typeof window === "undefined" || typeof window.addEventListener === "undefined") {
+      if (unsavedChangesWarning === true) {
+        throw new Error("unsavedChangesWarning requested, but window.addEventListener not found! Remove {unsavedChangesWarning: true} from Convex client options.");
+      }
+    } else if (unsavedChangesWarning !== false) {
+      window.addEventListener("beforeunload", (e) => {
+        if (this.requestManager.hasIncompleteRequests()) {
+          e.preventDefault();
+          const confirmationMessage = "Are you sure you want to leave? Your changes may not be saved.";
+          (e || window.event).returnValue = confirmationMessage;
+          return confirmationMessage;
+        }
+      });
+    }
+    this.webSocketManager = new WebSocketManager(wsUri, {
+      onOpen: (reconnectMetadata) => {
+        this.mark("convexWebSocketOpen");
+        this.webSocketManager.sendMessage({
+          ...reconnectMetadata,
+          type: "Connect",
+          sessionId: this._sessionId,
+          maxObservedTimestamp: this.maxObservedTimestamp
+        });
+        const oldRemoteQueryResults = new Set(this.remoteQuerySet.remoteQueryResults().keys());
+        this.remoteQuerySet = new RemoteQuerySet((queryId) => this.state.queryPath(queryId), this.logger);
+        const [querySetModification, authModification] = this.state.restart(oldRemoteQueryResults);
+        if (authModification) {
+          this.webSocketManager.sendMessage(authModification);
+        }
+        this.webSocketManager.sendMessage(querySetModification);
+        for (const message of this.requestManager.restart()) {
+          this.webSocketManager.sendMessage(message);
+        }
+      },
+      onResume: () => {
+        const [querySetModification, authModification] = this.state.resume();
+        if (authModification) {
+          this.webSocketManager.sendMessage(authModification);
+        }
+        if (querySetModification) {
+          this.webSocketManager.sendMessage(querySetModification);
+        }
+        for (const message of this.requestManager.resume()) {
+          this.webSocketManager.sendMessage(message);
+        }
+      },
+      onMessage: (serverMessage) => {
+        if (!this.firstMessageReceived) {
+          this.firstMessageReceived = true;
+          this.mark("convexFirstMessageReceived");
+          this.reportMarks();
+        }
+        switch (serverMessage.type) {
+          case "Transition": {
+            this.observedTimestamp(serverMessage.endVersion.ts);
+            this.authenticationManager.onTransition(serverMessage);
+            this.remoteQuerySet.transition(serverMessage);
+            this.state.transition(serverMessage);
+            const completedRequests = this.requestManager.removeCompleted(this.remoteQuerySet.timestamp());
+            this.notifyOnQueryResultChanges(completedRequests);
+            break;
+          }
+          case "MutationResponse": {
+            if (serverMessage.success) {
+              this.observedTimestamp(serverMessage.ts);
+            }
+            const completedMutationInfo = this.requestManager.onResponse(serverMessage);
+            if (completedMutationInfo !== null) {
+              this.notifyOnQueryResultChanges(/* @__PURE__ */ new Map([
+                [
+                  completedMutationInfo.requestId,
+                  completedMutationInfo.result
+                ]
+              ]));
+            }
+            break;
+          }
+          case "ActionResponse": {
+            this.requestManager.onResponse(serverMessage);
+            break;
+          }
+          case "AuthError": {
+            this.authenticationManager.onAuthError(serverMessage);
+            break;
+          }
+          case "FatalError": {
+            const error = logFatalError(this.logger, serverMessage.error);
+            this.webSocketManager.terminate();
+            throw error;
+          }
+          default: {
+          }
+        }
+        return {
+          hasSyncedPastLastReconnect: this.hasSyncedPastLastReconnect()
+        };
+      },
+      onServerDisconnectError: options.onServerDisconnectError
+    }, webSocketConstructor, this.logger, this.markConnectionStateDirty, this.debug);
+    this.mark("convexClientConstructed");
+    if (options.expectAuth) {
+      pauseSocket();
+    }
+  }
+  hasSyncedPastLastReconnect() {
+    const hasSyncedPastLastReconnect = this.requestManager.hasSyncedPastLastReconnect() || this.state.hasSyncedPastLastReconnect();
+    return hasSyncedPastLastReconnect;
+  }
+  observedTimestamp(observedTs) {
+    if (this.maxObservedTimestamp === undefined || this.maxObservedTimestamp.lessThanOrEqual(observedTs)) {
+      this.maxObservedTimestamp = observedTs;
+    }
+  }
+  getMaxObservedTimestamp() {
+    return this.maxObservedTimestamp;
+  }
+  notifyOnQueryResultChanges(completedRequests) {
+    const remoteQueryResults = this.remoteQuerySet.remoteQueryResults();
+    const queryTokenToValue = /* @__PURE__ */ new Map;
+    for (const [queryId, result] of remoteQueryResults) {
+      const queryToken = this.state.queryToken(queryId);
+      if (queryToken !== null) {
+        const query = {
+          result,
+          udfPath: this.state.queryPath(queryId),
+          args: this.state.queryArgs(queryId)
+        };
+        queryTokenToValue.set(queryToken, query);
+      }
+    }
+    const changedQueryTokens = this.optimisticQueryResults.ingestQueryResultsFromServer(queryTokenToValue, new Set(completedRequests.keys()));
+    this.handleTransition({
+      queries: changedQueryTokens.map((token) => {
+        const optimisticResult = this.optimisticQueryResults.rawQueryResult(token);
+        return {
+          token,
+          modification: {
+            kind: "Updated",
+            result: optimisticResult
+          }
+        };
+      }),
+      reflectedMutations: Array.from(completedRequests).map(([requestId, result]) => ({
+        requestId,
+        result
+      })),
+      timestamp: this.remoteQuerySet.timestamp()
+    });
+  }
+  handleTransition(transition) {
+    for (const fn of this._onTransitionFns.values()) {
+      fn(transition);
+    }
+  }
+  addOnTransitionHandler(fn) {
+    const id = this._transitionHandlerCounter++;
+    this._onTransitionFns.set(id, fn);
+    return () => this._onTransitionFns.delete(id);
+  }
+  getCurrentAuthClaims() {
+    const authToken = this.state.getAuth();
+    let decoded = {};
+    if (authToken && authToken.tokenType === "User") {
+      try {
+        decoded = authToken ? jwtDecode(authToken.value) : {};
+      } catch {
+        decoded = {};
+      }
+    } else {
+      return;
+    }
+    return { token: authToken.value, decoded };
+  }
+  setAuth(fetchToken, onChange) {
+    this.authenticationManager.setConfig(fetchToken, onChange);
+  }
+  hasAuth() {
+    return this.state.hasAuth();
+  }
+  setAdminAuth(value, fakeUserIdentity) {
+    const message = this.state.setAdminAuth(value, fakeUserIdentity);
+    this.webSocketManager.sendMessage(message);
+  }
+  clearAuth() {
+    const message = this.state.clearAuth();
+    this.webSocketManager.sendMessage(message);
+  }
+  subscribe(name, args, options) {
+    const argsObject = parseArgs(args);
+    const { modification, queryToken, unsubscribe } = this.state.subscribe(name, argsObject, options?.journal, options?.componentPath);
+    if (modification !== null) {
+      this.webSocketManager.sendMessage(modification);
+    }
+    return {
+      queryToken,
+      unsubscribe: () => {
+        const modification2 = unsubscribe();
+        if (modification2) {
+          this.webSocketManager.sendMessage(modification2);
+        }
+      }
+    };
+  }
+  localQueryResult(udfPath, args) {
+    const argsObject = parseArgs(args);
+    const queryToken = serializePathAndArgs(udfPath, argsObject);
+    return this.optimisticQueryResults.queryResult(queryToken);
+  }
+  localQueryResultByToken(queryToken) {
+    return this.optimisticQueryResults.queryResult(queryToken);
+  }
+  hasLocalQueryResultByToken(queryToken) {
+    return this.optimisticQueryResults.hasQueryResult(queryToken);
+  }
+  localQueryLogs(udfPath, args) {
+    const argsObject = parseArgs(args);
+    const queryToken = serializePathAndArgs(udfPath, argsObject);
+    return this.optimisticQueryResults.queryLogs(queryToken);
+  }
+  queryJournal(name, args) {
+    const argsObject = parseArgs(args);
+    const queryToken = serializePathAndArgs(name, argsObject);
+    return this.state.queryJournal(queryToken);
+  }
+  connectionState() {
+    const wsConnectionState = this.webSocketManager.connectionState();
+    return {
+      hasInflightRequests: this.requestManager.hasInflightRequests(),
+      isWebSocketConnected: wsConnectionState.isConnected,
+      hasEverConnected: wsConnectionState.hasEverConnected,
+      connectionCount: wsConnectionState.connectionCount,
+      connectionRetries: wsConnectionState.connectionRetries,
+      timeOfOldestInflightRequest: this.requestManager.timeOfOldestInflightRequest(),
+      inflightMutations: this.requestManager.inflightMutations(),
+      inflightActions: this.requestManager.inflightActions()
+    };
+  }
+  subscribeToConnectionState(cb) {
+    const id = this.nextConnectionStateSubscriberId++;
+    this.connectionStateSubscribers.set(id, cb);
+    return () => {
+      this.connectionStateSubscribers.delete(id);
+    };
+  }
+  async mutation(name, args, options) {
+    const result = await this.mutationInternal(name, args, options);
+    if (!result.success) {
+      if (result.errorData !== undefined) {
+        throw forwardData(result, new ConvexError(createHybridErrorStacktrace("mutation", name, result)));
+      }
+      throw new Error(createHybridErrorStacktrace("mutation", name, result));
+    }
+    return result.value;
+  }
+  async mutationInternal(udfPath, args, options, componentPath) {
+    const { mutationPromise } = this.enqueueMutation(udfPath, args, options, componentPath);
+    return mutationPromise;
+  }
+  enqueueMutation(udfPath, args, options, componentPath) {
+    const mutationArgs = parseArgs(args);
+    this.tryReportLongDisconnect();
+    const requestId = this.nextRequestId;
+    this._nextRequestId++;
+    if (options !== undefined) {
+      const optimisticUpdate = options.optimisticUpdate;
+      if (optimisticUpdate !== undefined) {
+        const wrappedUpdate = (localQueryStore) => {
+          const result = optimisticUpdate(localQueryStore, mutationArgs);
+          if (result instanceof Promise) {
+            this.logger.warn("Optimistic update handler returned a Promise. Optimistic updates should be synchronous.");
+          }
+        };
+        const changedQueryTokens = this.optimisticQueryResults.applyOptimisticUpdate(wrappedUpdate, requestId);
+        const changedQueries = changedQueryTokens.map((token) => {
+          const localResult = this.localQueryResultByToken(token);
+          return {
+            token,
+            modification: {
+              kind: "Updated",
+              result: localResult === undefined ? undefined : {
+                success: true,
+                value: localResult,
+                logLines: []
+              }
+            }
+          };
+        });
+        this.handleTransition({
+          queries: changedQueries,
+          reflectedMutations: [],
+          timestamp: this.remoteQuerySet.timestamp()
+        });
+      }
+    }
+    const message = {
+      type: "Mutation",
+      requestId,
+      udfPath,
+      componentPath,
+      args: [convexToJson(mutationArgs)]
+    };
+    const mightBeSent = this.webSocketManager.sendMessage(message);
+    const mutationPromise = this.requestManager.request(message, mightBeSent);
+    return {
+      requestId,
+      mutationPromise
+    };
+  }
+  async action(name, args) {
+    const result = await this.actionInternal(name, args);
+    if (!result.success) {
+      if (result.errorData !== undefined) {
+        throw forwardData(result, new ConvexError(createHybridErrorStacktrace("action", name, result)));
+      }
+      throw new Error(createHybridErrorStacktrace("action", name, result));
+    }
+    return result.value;
+  }
+  async actionInternal(udfPath, args, componentPath) {
+    const actionArgs = parseArgs(args);
+    const requestId = this.nextRequestId;
+    this._nextRequestId++;
+    this.tryReportLongDisconnect();
+    const message = {
+      type: "Action",
+      requestId,
+      udfPath,
+      componentPath,
+      args: [convexToJson(actionArgs)]
+    };
+    const mightBeSent = this.webSocketManager.sendMessage(message);
+    return this.requestManager.request(message, mightBeSent);
+  }
+  async close() {
+    this.authenticationManager.stop();
+    return this.webSocketManager.terminate();
+  }
+  get url() {
+    return this.address;
+  }
+  get nextRequestId() {
+    return this._nextRequestId;
+  }
+  get sessionId() {
+    return this._sessionId;
+  }
+  reportMarks() {
+    if (this.debug) {
+      const report = getMarksReport(this.sessionId);
+      this.webSocketManager.sendMessage({
+        type: "Event",
+        eventType: "ClientConnect",
+        event: report
+      });
+    }
+  }
+  tryReportLongDisconnect() {
+    if (!this.debug) {
+      return;
+    }
+    const timeOfOldestRequest = this.connectionState().timeOfOldestInflightRequest;
+    if (timeOfOldestRequest === null || Date.now() - timeOfOldestRequest.getTime() <= 60 * 1000) {
+      return;
+    }
+    const endpoint = `${this.address}/api/debug_event`;
+    fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Convex-Client": `npm-${version}`
+      },
+      body: JSON.stringify({ event: "LongWebsocketDisconnect" })
+    }).then((response) => {
+      if (!response.ok) {
+        this.logger.warn("Analytics request failed with response:", response.body);
+      }
+    }).catch((error) => {
+      this.logger.warn("Analytics response failed with error:", error);
+    });
+  }
+}
+
+// node_modules/convex/dist/esm/browser/simple_client-node.js
+import { createRequire } from "module";
+import { resolve as nodePathResolve } from "path";
+// node_modules/convex/dist/esm/browser/http_client.js
+var __defProp12 = Object.defineProperty;
+var __defNormalProp11 = (obj, key, value) => (key in obj) ? __defProp12(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
+var __publicField11 = (obj, key, value) => __defNormalProp11(obj, typeof key !== "symbol" ? key + "" : key, value);
+var STATUS_CODE_UDF_FAILED = 560;
+var specifiedFetch = undefined;
+class ConvexHttpClient {
+  constructor(address, options) {
+    __publicField11(this, "address");
+    __publicField11(this, "auth");
+    __publicField11(this, "adminAuth");
+    __publicField11(this, "encodedTsPromise");
+    __publicField11(this, "debug");
+    __publicField11(this, "fetchOptions");
+    __publicField11(this, "fetch");
+    __publicField11(this, "logger");
+    __publicField11(this, "mutationQueue", []);
+    __publicField11(this, "isProcessingQueue", false);
+    if (typeof options === "boolean") {
+      throw new Error("skipConvexDeploymentUrlCheck as the second argument is no longer supported. Please pass an options object, `{ skipConvexDeploymentUrlCheck: true }`.");
+    }
+    const opts = options ?? {};
+    if (opts.skipConvexDeploymentUrlCheck !== true) {
+      validateDeploymentUrl(address);
+    }
+    this.logger = options?.logger === false ? instantiateNoopLogger({ verbose: false }) : options?.logger !== true && options?.logger ? options.logger : instantiateDefaultLogger({ verbose: false });
+    this.address = address;
+    this.debug = true;
+    this.auth = undefined;
+    this.adminAuth = undefined;
+    this.fetch = options?.fetch;
+    if (options?.auth) {
+      this.setAuth(options.auth);
+    }
+  }
+  backendUrl() {
+    return `${this.address}/api`;
+  }
+  get url() {
+    return this.address;
+  }
+  setAuth(value) {
+    this.clearAuth();
+    this.auth = value;
+  }
+  setAdminAuth(token, actingAsIdentity) {
+    this.clearAuth();
+    if (actingAsIdentity !== undefined) {
+      const bytes = new TextEncoder().encode(JSON.stringify(actingAsIdentity));
+      const actingAsIdentityEncoded = btoa(String.fromCodePoint(...bytes));
+      this.adminAuth = `${token}:${actingAsIdentityEncoded}`;
+    } else {
+      this.adminAuth = token;
+    }
+  }
+  clearAuth() {
+    this.auth = undefined;
+    this.adminAuth = undefined;
+  }
+  setDebug(debug) {
+    this.debug = debug;
+  }
+  setFetchOptions(fetchOptions) {
+    this.fetchOptions = fetchOptions;
+  }
+  async consistentQuery(query, ...args) {
+    const queryArgs = parseArgs(args[0]);
+    const timestampPromise = this.getTimestamp();
+    return await this.queryInner(query, queryArgs, { timestampPromise });
+  }
+  async getTimestamp() {
+    if (this.encodedTsPromise) {
+      return this.encodedTsPromise;
+    }
+    return this.encodedTsPromise = this.getTimestampInner();
+  }
+  async getTimestampInner() {
+    const localFetch = this.fetch || specifiedFetch || fetch;
+    const headers = {
+      "Content-Type": "application/json",
+      "Convex-Client": `npm-${version}`
+    };
+    const response = await localFetch(`${this.address}/api/query_ts`, {
+      ...this.fetchOptions,
+      method: "POST",
+      headers
+    });
+    if (!response.ok) {
+      throw new Error(await response.text());
+    }
+    const { ts } = await response.json();
+    return ts;
+  }
+  async query(query, ...args) {
+    const queryArgs = parseArgs(args[0]);
+    return await this.queryInner(query, queryArgs, {});
+  }
+  async queryInner(query, queryArgs, options) {
+    const name = getFunctionName(query);
+    const args = [convexToJson(queryArgs)];
+    const headers = {
+      "Content-Type": "application/json",
+      "Convex-Client": `npm-${version}`
+    };
+    if (this.adminAuth) {
+      headers["Authorization"] = `Convex ${this.adminAuth}`;
+    } else if (this.auth) {
+      headers["Authorization"] = `Bearer ${this.auth}`;
+    }
+    const localFetch = this.fetch || specifiedFetch || fetch;
+    const timestamp = options.timestampPromise ? await options.timestampPromise : undefined;
+    const body = JSON.stringify({
+      path: name,
+      format: "convex_encoded_json",
+      args,
+      ...timestamp ? { ts: timestamp } : {}
+    });
+    const endpoint = timestamp ? `${this.address}/api/query_at_ts` : `${this.address}/api/query`;
+    const response = await localFetch(endpoint, {
+      ...this.fetchOptions,
+      body,
+      method: "POST",
+      headers
+    });
+    if (!response.ok && response.status !== STATUS_CODE_UDF_FAILED) {
+      throw new Error(await response.text());
+    }
+    const respJSON = await response.json();
+    if (this.debug) {
+      for (const line of respJSON.logLines ?? []) {
+        logForFunction(this.logger, "info", "query", name, line);
+      }
+    }
+    switch (respJSON.status) {
+      case "success":
+        return jsonToConvex(respJSON.value);
+      case "error":
+        if (respJSON.errorData !== undefined) {
+          throw forwardErrorData(respJSON.errorData, new ConvexError(respJSON.errorMessage));
+        }
+        throw new Error(respJSON.errorMessage);
+      default:
+        throw new Error(`Invalid response: ${JSON.stringify(respJSON)}`);
+    }
+  }
+  async mutationInner(mutation, mutationArgs) {
+    const name = getFunctionName(mutation);
+    const body = JSON.stringify({
+      path: name,
+      format: "convex_encoded_json",
+      args: [convexToJson(mutationArgs)]
+    });
+    const headers = {
+      "Content-Type": "application/json",
+      "Convex-Client": `npm-${version}`
+    };
+    if (this.adminAuth) {
+      headers["Authorization"] = `Convex ${this.adminAuth}`;
+    } else if (this.auth) {
+      headers["Authorization"] = `Bearer ${this.auth}`;
+    }
+    const localFetch = this.fetch || specifiedFetch || fetch;
+    const response = await localFetch(`${this.address}/api/mutation`, {
+      ...this.fetchOptions,
+      body,
+      method: "POST",
+      headers
+    });
+    if (!response.ok && response.status !== STATUS_CODE_UDF_FAILED) {
+      throw new Error(await response.text());
+    }
+    const respJSON = await response.json();
+    if (this.debug) {
+      for (const line of respJSON.logLines ?? []) {
+        logForFunction(this.logger, "info", "mutation", name, line);
+      }
+    }
+    switch (respJSON.status) {
+      case "success":
+        return jsonToConvex(respJSON.value);
+      case "error":
+        if (respJSON.errorData !== undefined) {
+          throw forwardErrorData(respJSON.errorData, new ConvexError(respJSON.errorMessage));
+        }
+        throw new Error(respJSON.errorMessage);
+      default:
+        throw new Error(`Invalid response: ${JSON.stringify(respJSON)}`);
+    }
+  }
+  async processMutationQueue() {
+    if (this.isProcessingQueue) {
+      return;
+    }
+    this.isProcessingQueue = true;
+    while (this.mutationQueue.length > 0) {
+      const { mutation, args, resolve: resolve3, reject } = this.mutationQueue.shift();
+      try {
+        const result = await this.mutationInner(mutation, args);
+        resolve3(result);
+      } catch (error) {
+        reject(error);
+      }
+    }
+    this.isProcessingQueue = false;
+  }
+  enqueueMutation(mutation, args) {
+    return new Promise((resolve3, reject) => {
+      this.mutationQueue.push({ mutation, args, resolve: resolve3, reject });
+      this.processMutationQueue();
+    });
+  }
+  async mutation(mutation, ...args) {
+    const [fnArgs, options] = args;
+    const mutationArgs = parseArgs(fnArgs);
+    const queued = !options?.skipQueue;
+    if (queued) {
+      return await this.enqueueMutation(mutation, mutationArgs);
+    } else {
+      return await this.mutationInner(mutation, mutationArgs);
+    }
+  }
+  async action(action, ...args) {
+    const actionArgs = parseArgs(args[0]);
+    const name = getFunctionName(action);
+    const body = JSON.stringify({
+      path: name,
+      format: "convex_encoded_json",
+      args: [convexToJson(actionArgs)]
+    });
+    const headers = {
+      "Content-Type": "application/json",
+      "Convex-Client": `npm-${version}`
+    };
+    if (this.adminAuth) {
+      headers["Authorization"] = `Convex ${this.adminAuth}`;
+    } else if (this.auth) {
+      headers["Authorization"] = `Bearer ${this.auth}`;
+    }
+    const localFetch = this.fetch || specifiedFetch || fetch;
+    const response = await localFetch(`${this.address}/api/action`, {
+      ...this.fetchOptions,
+      body,
+      method: "POST",
+      headers
+    });
+    if (!response.ok && response.status !== STATUS_CODE_UDF_FAILED) {
+      throw new Error(await response.text());
+    }
+    const respJSON = await response.json();
+    if (this.debug) {
+      for (const line of respJSON.logLines ?? []) {
+        logForFunction(this.logger, "info", "action", name, line);
+      }
+    }
+    switch (respJSON.status) {
+      case "success":
+        return jsonToConvex(respJSON.value);
+      case "error":
+        if (respJSON.errorData !== undefined) {
+          throw forwardErrorData(respJSON.errorData, new ConvexError(respJSON.errorMessage));
+        }
+        throw new Error(respJSON.errorMessage);
+      default:
+        throw new Error(`Invalid response: ${JSON.stringify(respJSON)}`);
+    }
+  }
+  async function(anyFunction, componentPath, ...args) {
+    const functionArgs = parseArgs(args[0]);
+    const name = typeof anyFunction === "string" ? anyFunction : getFunctionName(anyFunction);
+    const body = JSON.stringify({
+      componentPath,
+      path: name,
+      format: "convex_encoded_json",
+      args: convexToJson(functionArgs)
+    });
+    const headers = {
+      "Content-Type": "application/json",
+      "Convex-Client": `npm-${version}`
+    };
+    if (this.adminAuth) {
+      headers["Authorization"] = `Convex ${this.adminAuth}`;
+    } else if (this.auth) {
+      headers["Authorization"] = `Bearer ${this.auth}`;
+    }
+    const localFetch = this.fetch || specifiedFetch || fetch;
+    const response = await localFetch(`${this.address}/api/function`, {
+      ...this.fetchOptions,
+      body,
+      method: "POST",
+      headers
+    });
+    if (!response.ok && response.status !== STATUS_CODE_UDF_FAILED) {
+      throw new Error(await response.text());
+    }
+    const respJSON = await response.json();
+    if (this.debug) {
+      for (const line of respJSON.logLines ?? []) {
+        logForFunction(this.logger, "info", "any", name, line);
+      }
+    }
+    switch (respJSON.status) {
+      case "success":
+        return jsonToConvex(respJSON.value);
+      case "error":
+        if (respJSON.errorData !== undefined) {
+          throw forwardErrorData(respJSON.errorData, new ConvexError(respJSON.errorMessage));
+        }
+        throw new Error(respJSON.errorMessage);
+      default:
+        throw new Error(`Invalid response: ${JSON.stringify(respJSON)}`);
+    }
+  }
+}
+function forwardErrorData(errorData, error) {
+  error.data = jsonToConvex(errorData);
+  return error;
+}
+
+// node_modules/convex/dist/esm/browser/sync/pagination.js
+function asPaginationResult(value) {
+  if (typeof value !== "object" || value === null || !Array.isArray(value.page) || typeof value.isDone !== "boolean" || typeof value.continueCursor !== "string") {
+    throw new Error(`Not a valid paginated query result: ${value?.toString()}`);
+  }
+  return value;
+}
+
+// node_modules/convex/dist/esm/browser/sync/paginated_query_client.js
+var __defProp13 = Object.defineProperty;
+var __defNormalProp12 = (obj, key, value) => (key in obj) ? __defProp13(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
+var __publicField12 = (obj, key, value) => __defNormalProp12(obj, typeof key !== "symbol" ? key + "" : key, value);
+
+class PaginatedQueryClient {
+  constructor(client, onTransition) {
+    this.client = client;
+    this.onTransition = onTransition;
+    __publicField12(this, "paginatedQuerySet", /* @__PURE__ */ new Map);
+    __publicField12(this, "lastTransitionTs");
+    this.lastTransitionTs = Long.fromNumber(0);
+    this.client.addOnTransitionHandler((transition) => this.onBaseTransition(transition));
+  }
+  subscribe(name, args, options) {
+    const canonicalizedUdfPath = canonicalizeUdfPath(name);
+    const token = serializePaginatedPathAndArgs(canonicalizedUdfPath, args, options);
+    const unsubscribe = () => this.removePaginatedQuerySubscriber(token);
+    const existingEntry = this.paginatedQuerySet.get(token);
+    if (existingEntry) {
+      existingEntry.numSubscribers += 1;
+      return {
+        paginatedQueryToken: token,
+        unsubscribe
+      };
+    }
+    this.paginatedQuerySet.set(token, {
+      token,
+      canonicalizedUdfPath,
+      args,
+      numSubscribers: 1,
+      options: { initialNumItems: options.initialNumItems },
+      nextPageKey: 0,
+      pageKeys: [],
+      pageKeyToQuery: /* @__PURE__ */ new Map,
+      ongoingSplits: /* @__PURE__ */ new Map,
+      skip: false,
+      id: options.id
+    });
+    this.addPageToPaginatedQuery(token, null, options.initialNumItems);
+    return {
+      paginatedQueryToken: token,
+      unsubscribe
+    };
+  }
+  localQueryResult(name, args, options) {
+    const canonicalizedUdfPath = canonicalizeUdfPath(name);
+    const token = serializePaginatedPathAndArgs(canonicalizedUdfPath, args, options);
+    return this.localQueryResultByToken(token);
+  }
+  localQueryResultByToken(token) {
+    const paginatedQuery = this.paginatedQuerySet.get(token);
+    if (!paginatedQuery) {
+      return;
+    }
+    const activePages = this.activePageQueryTokens(paginatedQuery);
+    if (activePages.length === 0) {
+      return {
+        results: [],
+        status: "LoadingFirstPage",
+        loadMore: (numItems) => {
+          return this.loadMoreOfPaginatedQuery(token, numItems);
+        }
+      };
+    }
+    let allResults = [];
+    let hasUndefined = false;
+    let isDone = false;
+    for (const pageToken of activePages) {
+      const result = this.client.localQueryResultByToken(pageToken);
+      if (result === undefined) {
+        hasUndefined = true;
+        isDone = false;
+        continue;
+      }
+      const paginationResult = asPaginationResult(result);
+      allResults = allResults.concat(paginationResult.page);
+      isDone = !!paginationResult.isDone;
+    }
+    let status;
+    if (hasUndefined) {
+      status = allResults.length === 0 ? "LoadingFirstPage" : "LoadingMore";
+    } else if (isDone) {
+      status = "Exhausted";
+    } else {
+      status = "CanLoadMore";
+    }
+    return {
+      results: allResults,
+      status,
+      loadMore: (numItems) => {
+        return this.loadMoreOfPaginatedQuery(token, numItems);
+      }
+    };
+  }
+  onBaseTransition(transition) {
+    const changedBaseTokens = transition.queries.map((q) => q.token);
+    const changed = this.queriesContainingTokens(changedBaseTokens);
+    let paginatedQueries = [];
+    if (changed.length > 0) {
+      this.processPaginatedQuerySplits(changed, (token) => this.client.localQueryResultByToken(token));
+      paginatedQueries = changed.map((token) => ({
+        token,
+        modification: {
+          kind: "Updated",
+          result: this.localQueryResultByToken(token)
+        }
+      }));
+    }
+    const extendedTransition = {
+      ...transition,
+      paginatedQueries
+    };
+    this.onTransition(extendedTransition);
+  }
+  loadMoreOfPaginatedQuery(token, numItems) {
+    this.mustGetPaginatedQuery(token);
+    const lastPageToken = this.queryTokenForLastPageOfPaginatedQuery(token);
+    const lastPageResult = this.client.localQueryResultByToken(lastPageToken);
+    if (!lastPageResult) {
+      return false;
+    }
+    const paginationResult = asPaginationResult(lastPageResult);
+    if (paginationResult.isDone) {
+      return false;
+    }
+    this.addPageToPaginatedQuery(token, paginationResult.continueCursor, numItems);
+    const loadMoreTransition = {
+      timestamp: this.lastTransitionTs,
+      reflectedMutations: [],
+      queries: [],
+      paginatedQueries: [
+        {
+          token,
+          modification: {
+            kind: "Updated",
+            result: this.localQueryResultByToken(token)
+          }
+        }
+      ]
+    };
+    this.onTransition(loadMoreTransition);
+    return true;
+  }
+  queriesContainingTokens(queryTokens) {
+    if (queryTokens.length === 0) {
+      return [];
+    }
+    const changed = [];
+    const queryTokenSet = new Set(queryTokens);
+    for (const [paginatedToken, paginatedQuery] of this.paginatedQuerySet) {
+      for (const pageToken of this.allQueryTokens(paginatedQuery)) {
+        if (queryTokenSet.has(pageToken)) {
+          changed.push(paginatedToken);
+          break;
+        }
+      }
+    }
+    return changed;
+  }
+  processPaginatedQuerySplits(changed, getResult) {
+    for (const paginatedQueryToken of changed) {
+      const paginatedQuery = this.mustGetPaginatedQuery(paginatedQueryToken);
+      const { ongoingSplits, pageKeyToQuery, pageKeys } = paginatedQuery;
+      for (const [pageKey, [splitKey1, splitKey2]] of ongoingSplits) {
+        const bothNewPagesLoaded = getResult(pageKeyToQuery.get(splitKey1).queryToken) !== undefined && getResult(pageKeyToQuery.get(splitKey2).queryToken) !== undefined;
+        if (bothNewPagesLoaded) {
+          this.completePaginatedQuerySplit(paginatedQuery, pageKey, splitKey1, splitKey2);
+        }
+      }
+      for (const pageKey of pageKeys) {
+        if (ongoingSplits.has(pageKey)) {
+          continue;
+        }
+        const pageToken = pageKeyToQuery.get(pageKey).queryToken;
+        const pageResult = getResult(pageToken);
+        if (!pageResult) {
+          continue;
+        }
+        const result = asPaginationResult(pageResult);
+        const shouldSplit = result.splitCursor && (result.pageStatus === "SplitRecommended" || result.pageStatus === "SplitRequired" || result.page.length > paginatedQuery.options.initialNumItems * 2);
+        if (shouldSplit) {
+          this.splitPaginatedQueryPage(paginatedQuery, pageKey, result.splitCursor, result.continueCursor);
+        }
+      }
+    }
+  }
+  splitPaginatedQueryPage(paginatedQuery, pageKey, splitCursor, continueCursor) {
+    const splitKey1 = paginatedQuery.nextPageKey++;
+    const splitKey2 = paginatedQuery.nextPageKey++;
+    const paginationOpts = {
+      cursor: continueCursor,
+      numItems: paginatedQuery.options.initialNumItems,
+      id: paginatedQuery.id
+    };
+    const firstSubscription = this.client.subscribe(paginatedQuery.canonicalizedUdfPath, {
+      ...paginatedQuery.args,
+      paginationOpts: {
+        ...paginationOpts,
+        cursor: null,
+        endCursor: splitCursor
+      }
+    });
+    paginatedQuery.pageKeyToQuery.set(splitKey1, firstSubscription);
+    const secondSubscription = this.client.subscribe(paginatedQuery.canonicalizedUdfPath, {
+      ...paginatedQuery.args,
+      paginationOpts: {
+        ...paginationOpts,
+        cursor: splitCursor,
+        endCursor: continueCursor
+      }
+    });
+    paginatedQuery.pageKeyToQuery.set(splitKey2, secondSubscription);
+    paginatedQuery.ongoingSplits.set(pageKey, [splitKey1, splitKey2]);
+  }
+  addPageToPaginatedQuery(token, continueCursor, numItems) {
+    const paginatedQuery = this.mustGetPaginatedQuery(token);
+    const pageKey = paginatedQuery.nextPageKey++;
+    const paginationOpts = {
+      cursor: continueCursor,
+      numItems,
+      id: paginatedQuery.id
+    };
+    const pageArgs = {
+      ...paginatedQuery.args,
+      paginationOpts
+    };
+    const subscription = this.client.subscribe(paginatedQuery.canonicalizedUdfPath, pageArgs);
+    paginatedQuery.pageKeys.push(pageKey);
+    paginatedQuery.pageKeyToQuery.set(pageKey, subscription);
+    return subscription;
+  }
+  removePaginatedQuerySubscriber(token) {
+    const paginatedQuery = this.paginatedQuerySet.get(token);
+    if (!paginatedQuery) {
+      return;
+    }
+    paginatedQuery.numSubscribers -= 1;
+    if (paginatedQuery.numSubscribers > 0) {
+      return;
+    }
+    for (const subscription of paginatedQuery.pageKeyToQuery.values()) {
+      subscription.unsubscribe();
+    }
+    this.paginatedQuerySet.delete(token);
+  }
+  completePaginatedQuerySplit(paginatedQuery, pageKey, splitKey1, splitKey2) {
+    const originalQuery = paginatedQuery.pageKeyToQuery.get(pageKey);
+    paginatedQuery.pageKeyToQuery.delete(pageKey);
+    const pageIndex = paginatedQuery.pageKeys.indexOf(pageKey);
+    paginatedQuery.pageKeys.splice(pageIndex, 1, splitKey1, splitKey2);
+    paginatedQuery.ongoingSplits.delete(pageKey);
+    originalQuery.unsubscribe();
+  }
+  activePageQueryTokens(paginatedQuery) {
+    return paginatedQuery.pageKeys.map((pageKey) => paginatedQuery.pageKeyToQuery.get(pageKey).queryToken);
+  }
+  allQueryTokens(paginatedQuery) {
+    return Array.from(paginatedQuery.pageKeyToQuery.values()).map((sub) => sub.queryToken);
+  }
+  queryTokenForLastPageOfPaginatedQuery(token) {
+    const paginatedQuery = this.mustGetPaginatedQuery(token);
+    const lastPageKey = paginatedQuery.pageKeys[paginatedQuery.pageKeys.length - 1];
+    if (lastPageKey === undefined) {
+      throw new Error(`No pages for paginated query ${token}`);
+    }
+    return paginatedQuery.pageKeyToQuery.get(lastPageKey).queryToken;
+  }
+  mustGetPaginatedQuery(token) {
+    const paginatedQuery = this.paginatedQuerySet.get(token);
+    if (!paginatedQuery) {
+      throw new Error("paginated query no longer exists for token " + token);
+    }
+    return paginatedQuery;
+  }
+}
+
+// node_modules/convex/dist/esm/browser/simple_client.js
+var __defProp14 = Object.defineProperty;
+var __defNormalProp13 = (obj, key, value) => (key in obj) ? __defProp14(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
+var __publicField13 = (obj, key, value) => __defNormalProp13(obj, typeof key !== "symbol" ? key + "" : key, value);
+var defaultWebSocketConstructor;
+function setDefaultWebSocketConstructor(ws) {
+  defaultWebSocketConstructor = ws;
+}
+
+class ConvexClient {
+  constructor(address, options = {}) {
+    __publicField13(this, "listeners");
+    __publicField13(this, "_client");
+    __publicField13(this, "_paginatedClient");
+    __publicField13(this, "callNewListenersWithCurrentValuesTimer");
+    __publicField13(this, "_closed");
+    __publicField13(this, "_disabled");
+    if (options.skipConvexDeploymentUrlCheck !== true) {
+      validateDeploymentUrl(address);
+    }
+    const { disabled, ...baseOptions } = options;
+    this._closed = false;
+    this._disabled = !!disabled;
+    if (defaultWebSocketConstructor && !("webSocketConstructor" in baseOptions) && typeof WebSocket === "undefined") {
+      baseOptions.webSocketConstructor = defaultWebSocketConstructor;
+    }
+    if (typeof window === "undefined" && !("unsavedChangesWarning" in baseOptions)) {
+      baseOptions.unsavedChangesWarning = false;
+    }
+    if (!this.disabled) {
+      this._client = new BaseConvexClient(address, () => {
+      }, baseOptions);
+      this._paginatedClient = new PaginatedQueryClient(this._client, (transition) => this._transition(transition));
+    }
+    this.listeners = /* @__PURE__ */ new Set;
+  }
+  get closed() {
+    return this._closed;
+  }
+  get client() {
+    if (this._client)
+      return this._client;
+    throw new Error("ConvexClient is disabled");
+  }
+  get paginatedClient() {
+    if (this._paginatedClient)
+      return this._paginatedClient;
+    throw new Error("ConvexClient is disabled");
+  }
+  get disabled() {
+    return this._disabled;
+  }
+  onUpdate(query, args, callback, onError) {
+    if (this.disabled) {
+      return this.createDisabledUnsubscribe();
+    }
+    const { queryToken, unsubscribe } = this.client.subscribe(getFunctionName(query), args);
+    const queryInfo = {
+      queryToken,
+      callback,
+      onError,
+      unsubscribe,
+      hasEverRun: false,
+      query,
+      args,
+      paginationOptions: undefined
+    };
+    this.listeners.add(queryInfo);
+    if (this.queryResultReady(queryToken) && this.callNewListenersWithCurrentValuesTimer === undefined) {
+      this.callNewListenersWithCurrentValuesTimer = setTimeout(() => this.callNewListenersWithCurrentValues(), 0);
+    }
+    const unsubscribeProps = {
+      unsubscribe: () => {
+        if (this.closed) {
+          return;
+        }
+        this.listeners.delete(queryInfo);
+        unsubscribe();
+      },
+      getCurrentValue: () => this.client.localQueryResultByToken(queryToken),
+      getQueryLogs: () => this.client.localQueryLogs(queryToken)
+    };
+    const ret = unsubscribeProps.unsubscribe;
+    Object.assign(ret, unsubscribeProps);
+    return ret;
+  }
+  onPaginatedUpdate_experimental(query, args, options, callback, onError) {
+    if (this.disabled) {
+      return this.createDisabledUnsubscribe();
+    }
+    const paginationOptions = {
+      initialNumItems: options.initialNumItems,
+      id: -1
+    };
+    const { paginatedQueryToken, unsubscribe } = this.paginatedClient.subscribe(getFunctionName(query), args, paginationOptions);
+    const queryInfo = {
+      queryToken: paginatedQueryToken,
+      callback,
+      onError,
+      unsubscribe,
+      hasEverRun: false,
+      query,
+      args,
+      paginationOptions
+    };
+    this.listeners.add(queryInfo);
+    if (!!this.paginatedClient.localQueryResultByToken(paginatedQueryToken) && this.callNewListenersWithCurrentValuesTimer === undefined) {
+      this.callNewListenersWithCurrentValuesTimer = setTimeout(() => this.callNewListenersWithCurrentValues(), 0);
+    }
+    const unsubscribeProps = {
+      unsubscribe: () => {
+        if (this.closed) {
+          return;
+        }
+        this.listeners.delete(queryInfo);
+        unsubscribe();
+      },
+      getCurrentValue: () => {
+        const result = this.paginatedClient.localQueryResult(getFunctionName(query), args, paginationOptions);
+        return result;
+      },
+      getQueryLogs: () => []
+    };
+    const ret = unsubscribeProps.unsubscribe;
+    Object.assign(ret, unsubscribeProps);
+    return ret;
+  }
+  callNewListenersWithCurrentValues() {
+    this.callNewListenersWithCurrentValuesTimer = undefined;
+    this._transition({ queries: [], paginatedQueries: [] }, true);
+  }
+  queryResultReady(queryToken) {
+    return this.client.hasLocalQueryResultByToken(queryToken);
+  }
+  createDisabledUnsubscribe() {
+    const disabledUnsubscribe = () => {
+    };
+    const unsubscribeProps = {
+      unsubscribe: disabledUnsubscribe,
+      getCurrentValue: () => {
+        return;
+      },
+      getQueryLogs: () => {
+        return;
+      }
+    };
+    Object.assign(disabledUnsubscribe, unsubscribeProps);
+    return disabledUnsubscribe;
+  }
+  async close() {
+    if (this.disabled)
+      return;
+    this.listeners.clear();
+    this._closed = true;
+    if (this._paginatedClient) {
+      this._paginatedClient = undefined;
+    }
+    return this.client.close();
+  }
+  getAuth() {
+    if (this.disabled)
+      return;
+    return this.client.getCurrentAuthClaims();
+  }
+  setAuth(fetchToken, onChange) {
+    if (this.disabled)
+      return;
+    this.client.setAuth(fetchToken, onChange ?? (() => {
+    }));
+  }
+  setAdminAuth(token, identity) {
+    if (this.closed) {
+      throw new Error("ConvexClient has already been closed.");
+    }
+    if (this.disabled)
+      return;
+    this.client.setAdminAuth(token, identity);
+  }
+  _transition({
+    queries,
+    paginatedQueries
+  }, callNewListeners = false) {
+    const updatedQueries = [
+      ...queries.map((q) => q.token),
+      ...paginatedQueries.map((q) => q.token)
+    ];
+    for (const queryInfo of this.listeners) {
+      const { callback, queryToken, onError, hasEverRun } = queryInfo;
+      const isPaginatedQuery = serializedQueryTokenIsPaginated(queryToken);
+      const hasResultReady = isPaginatedQuery ? !!this.paginatedClient.localQueryResultByToken(queryToken) : this.client.hasLocalQueryResultByToken(queryToken);
+      if (updatedQueries.includes(queryToken) || callNewListeners && !hasEverRun && hasResultReady) {
+        queryInfo.hasEverRun = true;
+        let newValue;
+        try {
+          if (isPaginatedQuery) {
+            newValue = this.paginatedClient.localQueryResultByToken(queryToken);
+          } else {
+            newValue = this.client.localQueryResultByToken(queryToken);
+          }
+        } catch (error) {
+          if (!(error instanceof Error))
+            throw error;
+          if (onError) {
+            onError(error, "Second argument to onUpdate onError is reserved for later use");
+          } else {
+            Promise.reject(error);
+          }
+          continue;
+        }
+        callback(newValue, "Second argument to onUpdate callback is reserved for later use");
+      }
+    }
+  }
+  async mutation(mutation, args, options) {
+    if (this.disabled)
+      throw new Error("ConvexClient is disabled");
+    return await this.client.mutation(getFunctionName(mutation), args, options);
+  }
+  async action(action, args) {
+    if (this.disabled)
+      throw new Error("ConvexClient is disabled");
+    return await this.client.action(getFunctionName(action), args);
+  }
+  async query(query, args) {
+    if (this.disabled)
+      throw new Error("ConvexClient is disabled");
+    const value = this.client.localQueryResult(getFunctionName(query), args);
+    if (value !== undefined)
+      return Promise.resolve(value);
+    return new Promise((resolve3, reject) => {
+      const { unsubscribe } = this.onUpdate(query, args, (value2) => {
+        unsubscribe();
+        resolve3(value2);
+      }, (e) => {
+        unsubscribe();
+        reject(e);
+      });
+    });
+  }
+  connectionState() {
+    if (this.disabled)
+      throw new Error("ConvexClient is disabled");
+    return this.client.connectionState();
+  }
+  subscribeToConnectionState(cb) {
+    if (this.disabled)
+      return () => {
+      };
+    return this.client.subscribeToConnectionState(cb);
+  }
+}
+
+// node_modules/convex/dist/esm/browser/simple_client-node.js
+var __dirname = "/Users/ashot/src/codecast/packages/cli/node_modules/convex/dist/esm/browser";
+var require2 = createRequire(nodePathResolve("."));
+var __create = Object.create;
+var __defProp15 = Object.defineProperty;
+var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
+var __getOwnPropNames = Object.getOwnPropertyNames;
+var __getProtoOf = Object.getPrototypeOf;
+var __hasOwnProp = Object.prototype.hasOwnProperty;
+var __require = /* @__PURE__ */ ((x) => typeof require2 !== "undefined" ? require2 : typeof Proxy !== "undefined" ? new Proxy(x, {
+  get: (a, b) => (typeof require2 !== "undefined" ? require2 : a)[b]
+}) : x)(function(x) {
+  if (typeof require2 !== "undefined")
+    return require2.apply(this, arguments);
+  throw Error('Dynamic require of "' + x + '" is not supported');
+});
+var __commonJS = (cb, mod) => function __require2() {
+  return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
+};
+var __copyProps = (to, from, except, desc) => {
+  if (from && typeof from === "object" || typeof from === "function") {
+    for (let key of __getOwnPropNames(from))
+      if (!__hasOwnProp.call(to, key) && key !== except)
+        __defProp15(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
+  }
+  return to;
+};
+var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(isNodeMode || !mod || !mod.__esModule ? __defProp15(target, "default", { value: mod, enumerable: true }) : target, mod));
+var require_stream = __commonJS({
+  "../common/temp/node_modules/.pnpm/ws@8.18.0_bufferutil@4.0.9/node_modules/ws/lib/stream.js"(exports, module) {
+    var { Duplex } = __require("stream");
+    function emitClose(stream) {
+      stream.emit("close");
+    }
+    function duplexOnEnd() {
+      if (!this.destroyed && this._writableState.finished) {
+        this.destroy();
+      }
+    }
+    function duplexOnError(err) {
+      this.removeListener("error", duplexOnError);
+      this.destroy();
+      if (this.listenerCount("error") === 0) {
+        this.emit("error", err);
+      }
+    }
+    function createWebSocketStream2(ws, options) {
+      let terminateOnDestroy = true;
+      const duplex = new Duplex({
+        ...options,
+        autoDestroy: false,
+        emitClose: false,
+        objectMode: false,
+        writableObjectMode: false
+      });
+      ws.on("message", function message(msg, isBinary) {
+        const data = !isBinary && duplex._readableState.objectMode ? msg.toString() : msg;
+        if (!duplex.push(data))
+          ws.pause();
+      });
+      ws.once("error", function error(err) {
+        if (duplex.destroyed)
+          return;
+        terminateOnDestroy = false;
+        duplex.destroy(err);
+      });
+      ws.once("close", function close() {
+        if (duplex.destroyed)
+          return;
+        duplex.push(null);
+      });
+      duplex._destroy = function(err, callback) {
+        if (ws.readyState === ws.CLOSED) {
+          callback(err);
+          process.nextTick(emitClose, duplex);
+          return;
+        }
+        let called = false;
+        ws.once("error", function error(err2) {
+          called = true;
+          callback(err2);
+        });
+        ws.once("close", function close() {
+          if (!called)
+            callback(err);
+          process.nextTick(emitClose, duplex);
+        });
+        if (terminateOnDestroy)
+          ws.terminate();
+      };
+      duplex._final = function(callback) {
+        if (ws.readyState === ws.CONNECTING) {
+          ws.once("open", function open() {
+            duplex._final(callback);
+          });
+          return;
+        }
+        if (ws._socket === null)
+          return;
+        if (ws._socket._writableState.finished) {
+          callback();
+          if (duplex._readableState.endEmitted)
+            duplex.destroy();
+        } else {
+          ws._socket.once("finish", function finish() {
+            callback();
+          });
+          ws.close();
+        }
+      };
+      duplex._read = function() {
+        if (ws.isPaused)
+          ws.resume();
+      };
+      duplex._write = function(chunk, encoding, callback) {
+        if (ws.readyState === ws.CONNECTING) {
+          ws.once("open", function open() {
+            duplex._write(chunk, encoding, callback);
+          });
+          return;
+        }
+        ws.send(chunk, callback);
+      };
+      duplex.on("end", duplexOnEnd);
+      duplex.on("error", duplexOnError);
+      return duplex;
+    }
+    module.exports = createWebSocketStream2;
+  }
+});
+var require_constants = __commonJS({
+  "../common/temp/node_modules/.pnpm/ws@8.18.0_bufferutil@4.0.9/node_modules/ws/lib/constants.js"(exports, module) {
+    var BINARY_TYPES = ["nodebuffer", "arraybuffer", "fragments"];
+    var hasBlob = typeof Blob !== "undefined";
+    if (hasBlob)
+      BINARY_TYPES.push("blob");
+    module.exports = {
+      BINARY_TYPES,
+      EMPTY_BUFFER: Buffer.alloc(0),
+      GUID: "258EAFA5-E914-47DA-95CA-C5AB0DC85B11",
+      hasBlob,
+      kForOnEventAttribute: Symbol("kIsForOnEventAttribute"),
+      kListener: Symbol("kListener"),
+      kStatusCode: Symbol("status-code"),
+      kWebSocket: Symbol("websocket"),
+      NOOP: () => {
+      }
+    };
+  }
+});
+var require_node_gyp_build = __commonJS({
+  "../common/temp/node_modules/.pnpm/node-gyp-build@4.8.4/node_modules/node-gyp-build/node-gyp-build.js"(exports, module) {
+    var fs9 = __require("fs");
+    var path9 = __require("path");
+    var os = __require("os");
+    var runtimeRequire = typeof __webpack_require__ === "function" ? __non_webpack_require__ : __require;
+    var vars = process.config && process.config.variables || {};
+    var prebuildsOnly = !!process.env.PREBUILDS_ONLY;
+    var abi = process.versions.modules;
+    var runtime = isElectron() ? "electron" : isNwjs() ? "node-webkit" : "node";
+    var arch = process.env.npm_config_arch || os.arch();
+    var platform = process.env.npm_config_platform || os.platform();
+    var libc = process.env.LIBC || (isAlpine(platform) ? "musl" : "glibc");
+    var armv = process.env.ARM_VERSION || (arch === "arm64" ? "8" : vars.arm_version) || "";
+    var uv = (process.versions.uv || "").split(".")[0];
+    module.exports = load;
+    function load(dir) {
+      return runtimeRequire(load.resolve(dir));
+    }
+    load.resolve = load.path = function(dir) {
+      dir = path9.resolve(dir || ".");
+      try {
+        var name = runtimeRequire(path9.join(dir, "package.json")).name.toUpperCase().replace(/-/g, "_");
+        if (process.env[name + "_PREBUILD"])
+          dir = process.env[name + "_PREBUILD"];
+      } catch (err) {
+      }
+      if (!prebuildsOnly) {
+        var release = getFirst(path9.join(dir, "build/Release"), matchBuild);
+        if (release)
+          return release;
+        var debug = getFirst(path9.join(dir, "build/Debug"), matchBuild);
+        if (debug)
+          return debug;
+      }
+      var prebuild = resolve3(dir);
+      if (prebuild)
+        return prebuild;
+      var nearby = resolve3(path9.dirname(process.execPath));
+      if (nearby)
+        return nearby;
+      var target = [
+        "platform=" + platform,
+        "arch=" + arch,
+        "runtime=" + runtime,
+        "abi=" + abi,
+        "uv=" + uv,
+        armv ? "armv=" + armv : "",
+        "libc=" + libc,
+        "node=" + process.versions.node,
+        process.versions.electron ? "electron=" + process.versions.electron : "",
+        typeof __webpack_require__ === "function" ? "webpack=true" : ""
+      ].filter(Boolean).join(" ");
+      throw new Error("No native build was found for " + target + `
+    loaded from: ` + dir + `
+`);
+      function resolve3(dir2) {
+        var tuples = readdirSync7(path9.join(dir2, "prebuilds")).map(parseTuple);
+        var tuple = tuples.filter(matchTuple(platform, arch)).sort(compareTuples)[0];
+        if (!tuple)
+          return;
+        var prebuilds = path9.join(dir2, "prebuilds", tuple.name);
+        var parsed = readdirSync7(prebuilds).map(parseTags);
+        var candidates = parsed.filter(matchTags(runtime, abi));
+        var winner = candidates.sort(compareTags(runtime))[0];
+        if (winner)
+          return path9.join(prebuilds, winner.file);
+      }
+    };
+    function readdirSync7(dir) {
+      try {
+        return fs9.readdirSync(dir);
+      } catch (err) {
+        return [];
+      }
+    }
+    function getFirst(dir, filter) {
+      var files = readdirSync7(dir).filter(filter);
+      return files[0] && path9.join(dir, files[0]);
+    }
+    function matchBuild(name) {
+      return /\.node$/.test(name);
+    }
+    function parseTuple(name) {
+      var arr = name.split("-");
+      if (arr.length !== 2)
+        return;
+      var platform2 = arr[0];
+      var architectures = arr[1].split("+");
+      if (!platform2)
+        return;
+      if (!architectures.length)
+        return;
+      if (!architectures.every(Boolean))
+        return;
+      return { name, platform: platform2, architectures };
+    }
+    function matchTuple(platform2, arch2) {
+      return function(tuple) {
+        if (tuple == null)
+          return false;
+        if (tuple.platform !== platform2)
+          return false;
+        return tuple.architectures.includes(arch2);
+      };
+    }
+    function compareTuples(a, b) {
+      return a.architectures.length - b.architectures.length;
+    }
+    function parseTags(file) {
+      var arr = file.split(".");
+      var extension = arr.pop();
+      var tags = { file, specificity: 0 };
+      if (extension !== "node")
+        return;
+      for (var i = 0;i < arr.length; i++) {
+        var tag = arr[i];
+        if (tag === "node" || tag === "electron" || tag === "node-webkit") {
+          tags.runtime = tag;
+        } else if (tag === "napi") {
+          tags.napi = true;
+        } else if (tag.slice(0, 3) === "abi") {
+          tags.abi = tag.slice(3);
+        } else if (tag.slice(0, 2) === "uv") {
+          tags.uv = tag.slice(2);
+        } else if (tag.slice(0, 4) === "armv") {
+          tags.armv = tag.slice(4);
+        } else if (tag === "glibc" || tag === "musl") {
+          tags.libc = tag;
+        } else {
+          continue;
+        }
+        tags.specificity++;
+      }
+      return tags;
+    }
+    function matchTags(runtime2, abi2) {
+      return function(tags) {
+        if (tags == null)
+          return false;
+        if (tags.runtime && tags.runtime !== runtime2 && !runtimeAgnostic(tags))
+          return false;
+        if (tags.abi && tags.abi !== abi2 && !tags.napi)
+          return false;
+        if (tags.uv && tags.uv !== uv)
+          return false;
+        if (tags.armv && tags.armv !== armv)
+          return false;
+        if (tags.libc && tags.libc !== libc)
+          return false;
+        return true;
+      };
+    }
+    function runtimeAgnostic(tags) {
+      return tags.runtime === "node" && tags.napi;
+    }
+    function compareTags(runtime2) {
+      return function(a, b) {
+        if (a.runtime !== b.runtime) {
+          return a.runtime === runtime2 ? -1 : 1;
+        } else if (a.abi !== b.abi) {
+          return a.abi ? -1 : 1;
+        } else if (a.specificity !== b.specificity) {
+          return a.specificity > b.specificity ? -1 : 1;
+        } else {
+          return 0;
+        }
+      };
+    }
+    function isNwjs() {
+      return !!(process.versions && process.versions.nw);
+    }
+    function isElectron() {
+      if (process.versions && process.versions.electron)
+        return true;
+      if (process.env.ELECTRON_RUN_AS_NODE)
+        return true;
+      return typeof window !== "undefined" && window.process && window.process.type === "renderer";
+    }
+    function isAlpine(platform2) {
+      return platform2 === "linux" && fs9.existsSync("/etc/alpine-release");
+    }
+    load.parseTags = parseTags;
+    load.matchTags = matchTags;
+    load.compareTags = compareTags;
+    load.parseTuple = parseTuple;
+    load.matchTuple = matchTuple;
+    load.compareTuples = compareTuples;
+  }
+});
+var require_node_gyp_build2 = __commonJS({
+  "../common/temp/node_modules/.pnpm/node-gyp-build@4.8.4/node_modules/node-gyp-build/index.js"(exports, module) {
+    var runtimeRequire = typeof __webpack_require__ === "function" ? __non_webpack_require__ : __require;
+    if (typeof runtimeRequire.addon === "function") {
+      module.exports = runtimeRequire.addon.bind(runtimeRequire);
+    } else {
+      module.exports = require_node_gyp_build();
+    }
+  }
+});
+var require_fallback = __commonJS({
+  "../common/temp/node_modules/.pnpm/bufferutil@4.0.9/node_modules/bufferutil/fallback.js"(exports, module) {
+    var mask = (source, mask2, output, offset, length) => {
+      for (var i = 0;i < length; i++) {
+        output[offset + i] = source[i] ^ mask2[i & 3];
+      }
+    };
+    var unmask = (buffer, mask2) => {
+      const length = buffer.length;
+      for (var i = 0;i < length; i++) {
+        buffer[i] ^= mask2[i & 3];
+      }
+    };
+    module.exports = { mask, unmask };
+  }
+});
+var require_bufferutil = __commonJS({
+  "../common/temp/node_modules/.pnpm/bufferutil@4.0.9/node_modules/bufferutil/index.js"(exports, module) {
+    try {
+      module.exports = require_node_gyp_build2()(__dirname);
+    } catch (e) {
+      module.exports = require_fallback();
+    }
+  }
+});
+var require_buffer_util = __commonJS({
+  "../common/temp/node_modules/.pnpm/ws@8.18.0_bufferutil@4.0.9/node_modules/ws/lib/buffer-util.js"(exports, module) {
+    var { EMPTY_BUFFER } = require_constants();
+    var FastBuffer = Buffer[Symbol.species];
+    function concat(list, totalLength) {
+      if (list.length === 0)
+        return EMPTY_BUFFER;
+      if (list.length === 1)
+        return list[0];
+      const target = Buffer.allocUnsafe(totalLength);
+      let offset = 0;
+      for (let i = 0;i < list.length; i++) {
+        const buf = list[i];
+        target.set(buf, offset);
+        offset += buf.length;
+      }
+      if (offset < totalLength) {
+        return new FastBuffer(target.buffer, target.byteOffset, offset);
+      }
+      return target;
+    }
+    function _mask(source, mask, output, offset, length) {
+      for (let i = 0;i < length; i++) {
+        output[offset + i] = source[i] ^ mask[i & 3];
+      }
+    }
+    function _unmask(buffer, mask) {
+      for (let i = 0;i < buffer.length; i++) {
+        buffer[i] ^= mask[i & 3];
+      }
+    }
+    function toArrayBuffer(buf) {
+      if (buf.length === buf.buffer.byteLength) {
+        return buf.buffer;
+      }
+      return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.length);
+    }
+    function toBuffer(data) {
+      toBuffer.readOnly = true;
+      if (Buffer.isBuffer(data))
+        return data;
+      let buf;
+      if (data instanceof ArrayBuffer) {
+        buf = new FastBuffer(data);
+      } else if (ArrayBuffer.isView(data)) {
+        buf = new FastBuffer(data.buffer, data.byteOffset, data.byteLength);
+      } else {
+        buf = Buffer.from(data);
+        toBuffer.readOnly = false;
+      }
+      return buf;
+    }
+    module.exports = {
+      concat,
+      mask: _mask,
+      toArrayBuffer,
+      toBuffer,
+      unmask: _unmask
+    };
+    if (!process.env.WS_NO_BUFFER_UTIL) {
+      try {
+        const bufferUtil = require_bufferutil();
+        module.exports.mask = function(source, mask, output, offset, length) {
+          if (length < 48)
+            _mask(source, mask, output, offset, length);
+          else
+            bufferUtil.mask(source, mask, output, offset, length);
+        };
+        module.exports.unmask = function(buffer, mask) {
+          if (buffer.length < 32)
+            _unmask(buffer, mask);
+          else
+            bufferUtil.unmask(buffer, mask);
+        };
+      } catch (e) {
+      }
+    }
+  }
+});
+var require_limiter = __commonJS({
+  "../common/temp/node_modules/.pnpm/ws@8.18.0_bufferutil@4.0.9/node_modules/ws/lib/limiter.js"(exports, module) {
+    var kDone = Symbol("kDone");
+    var kRun = Symbol("kRun");
+    var Limiter = class {
+      constructor(concurrency) {
+        this[kDone] = () => {
+          this.pending--;
+          this[kRun]();
+        };
+        this.concurrency = concurrency || Infinity;
+        this.jobs = [];
+        this.pending = 0;
+      }
+      add(job) {
+        this.jobs.push(job);
+        this[kRun]();
+      }
+      [kRun]() {
+        if (this.pending === this.concurrency)
+          return;
+        if (this.jobs.length) {
+          const job = this.jobs.shift();
+          this.pending++;
+          job(this[kDone]);
+        }
+      }
+    };
+    module.exports = Limiter;
+  }
+});
+var require_permessage_deflate = __commonJS({
+  "../common/temp/node_modules/.pnpm/ws@8.18.0_bufferutil@4.0.9/node_modules/ws/lib/permessage-deflate.js"(exports, module) {
+    var zlib = __require("zlib");
+    var bufferUtil = require_buffer_util();
+    var Limiter = require_limiter();
+    var { kStatusCode } = require_constants();
+    var FastBuffer = Buffer[Symbol.species];
+    var TRAILER = Buffer.from([0, 0, 255, 255]);
+    var kPerMessageDeflate = Symbol("permessage-deflate");
+    var kTotalLength = Symbol("total-length");
+    var kCallback = Symbol("callback");
+    var kBuffers = Symbol("buffers");
+    var kError = Symbol("error");
+    var zlibLimiter;
+    var PerMessageDeflate = class {
+      constructor(options, isServer, maxPayload) {
+        this._maxPayload = maxPayload | 0;
+        this._options = options || {};
+        this._threshold = this._options.threshold !== undefined ? this._options.threshold : 1024;
+        this._isServer = !!isServer;
+        this._deflate = null;
+        this._inflate = null;
+        this.params = null;
+        if (!zlibLimiter) {
+          const concurrency = this._options.concurrencyLimit !== undefined ? this._options.concurrencyLimit : 10;
+          zlibLimiter = new Limiter(concurrency);
+        }
+      }
+      static get extensionName() {
+        return "permessage-deflate";
+      }
+      offer() {
+        const params = {};
+        if (this._options.serverNoContextTakeover) {
+          params.server_no_context_takeover = true;
+        }
+        if (this._options.clientNoContextTakeover) {
+          params.client_no_context_takeover = true;
+        }
+        if (this._options.serverMaxWindowBits) {
+          params.server_max_window_bits = this._options.serverMaxWindowBits;
+        }
+        if (this._options.clientMaxWindowBits) {
+          params.client_max_window_bits = this._options.clientMaxWindowBits;
+        } else if (this._options.clientMaxWindowBits == null) {
+          params.client_max_window_bits = true;
+        }
+        return params;
+      }
+      accept(configurations) {
+        configurations = this.normalizeParams(configurations);
+        this.params = this._isServer ? this.acceptAsServer(configurations) : this.acceptAsClient(configurations);
+        return this.params;
+      }
+      cleanup() {
+        if (this._inflate) {
+          this._inflate.close();
+          this._inflate = null;
+        }
+        if (this._deflate) {
+          const callback = this._deflate[kCallback];
+          this._deflate.close();
+          this._deflate = null;
+          if (callback) {
+            callback(new Error("The deflate stream was closed while data was being processed"));
+          }
+        }
+      }
+      acceptAsServer(offers) {
+        const opts = this._options;
+        const accepted = offers.find((params) => {
+          if (opts.serverNoContextTakeover === false && params.server_no_context_takeover || params.server_max_window_bits && (opts.serverMaxWindowBits === false || typeof opts.serverMaxWindowBits === "number" && opts.serverMaxWindowBits > params.server_max_window_bits) || typeof opts.clientMaxWindowBits === "number" && !params.client_max_window_bits) {
+            return false;
+          }
+          return true;
+        });
+        if (!accepted) {
+          throw new Error("None of the extension offers can be accepted");
+        }
+        if (opts.serverNoContextTakeover) {
+          accepted.server_no_context_takeover = true;
+        }
+        if (opts.clientNoContextTakeover) {
+          accepted.client_no_context_takeover = true;
+        }
+        if (typeof opts.serverMaxWindowBits === "number") {
+          accepted.server_max_window_bits = opts.serverMaxWindowBits;
+        }
+        if (typeof opts.clientMaxWindowBits === "number") {
+          accepted.client_max_window_bits = opts.clientMaxWindowBits;
+        } else if (accepted.client_max_window_bits === true || opts.clientMaxWindowBits === false) {
+          delete accepted.client_max_window_bits;
+        }
+        return accepted;
+      }
+      acceptAsClient(response) {
+        const params = response[0];
+        if (this._options.clientNoContextTakeover === false && params.client_no_context_takeover) {
+          throw new Error('Unexpected parameter "client_no_context_takeover"');
+        }
+        if (!params.client_max_window_bits) {
+          if (typeof this._options.clientMaxWindowBits === "number") {
+            params.client_max_window_bits = this._options.clientMaxWindowBits;
+          }
+        } else if (this._options.clientMaxWindowBits === false || typeof this._options.clientMaxWindowBits === "number" && params.client_max_window_bits > this._options.clientMaxWindowBits) {
+          throw new Error('Unexpected or invalid parameter "client_max_window_bits"');
+        }
+        return params;
+      }
+      normalizeParams(configurations) {
+        configurations.forEach((params) => {
+          Object.keys(params).forEach((key) => {
+            let value = params[key];
+            if (value.length > 1) {
+              throw new Error(`Parameter "${key}" must have only a single value`);
+            }
+            value = value[0];
+            if (key === "client_max_window_bits") {
+              if (value !== true) {
+                const num = +value;
+                if (!Number.isInteger(num) || num < 8 || num > 15) {
+                  throw new TypeError(`Invalid value for parameter "${key}": ${value}`);
+                }
+                value = num;
+              } else if (!this._isServer) {
+                throw new TypeError(`Invalid value for parameter "${key}": ${value}`);
+              }
+            } else if (key === "server_max_window_bits") {
+              const num = +value;
+              if (!Number.isInteger(num) || num < 8 || num > 15) {
+                throw new TypeError(`Invalid value for parameter "${key}": ${value}`);
+              }
+              value = num;
+            } else if (key === "client_no_context_takeover" || key === "server_no_context_takeover") {
+              if (value !== true) {
+                throw new TypeError(`Invalid value for parameter "${key}": ${value}`);
+              }
+            } else {
+              throw new Error(`Unknown parameter "${key}"`);
+            }
+            params[key] = value;
+          });
+        });
+        return configurations;
+      }
+      decompress(data, fin, callback) {
+        zlibLimiter.add((done) => {
+          this._decompress(data, fin, (err, result) => {
+            done();
+            callback(err, result);
+          });
+        });
+      }
+      compress(data, fin, callback) {
+        zlibLimiter.add((done) => {
+          this._compress(data, fin, (err, result) => {
+            done();
+            callback(err, result);
+          });
+        });
+      }
+      _decompress(data, fin, callback) {
+        const endpoint = this._isServer ? "client" : "server";
+        if (!this._inflate) {
+          const key = `${endpoint}_max_window_bits`;
+          const windowBits = typeof this.params[key] !== "number" ? zlib.Z_DEFAULT_WINDOWBITS : this.params[key];
+          this._inflate = zlib.createInflateRaw({
+            ...this._options.zlibInflateOptions,
+            windowBits
+          });
+          this._inflate[kPerMessageDeflate] = this;
+          this._inflate[kTotalLength] = 0;
+          this._inflate[kBuffers] = [];
+          this._inflate.on("error", inflateOnError);
+          this._inflate.on("data", inflateOnData);
+        }
+        this._inflate[kCallback] = callback;
+        this._inflate.write(data);
+        if (fin)
+          this._inflate.write(TRAILER);
+        this._inflate.flush(() => {
+          const err = this._inflate[kError];
+          if (err) {
+            this._inflate.close();
+            this._inflate = null;
+            callback(err);
+            return;
+          }
+          const data2 = bufferUtil.concat(this._inflate[kBuffers], this._inflate[kTotalLength]);
+          if (this._inflate._readableState.endEmitted) {
+            this._inflate.close();
+            this._inflate = null;
+          } else {
+            this._inflate[kTotalLength] = 0;
+            this._inflate[kBuffers] = [];
+            if (fin && this.params[`${endpoint}_no_context_takeover`]) {
+              this._inflate.reset();
+            }
+          }
+          callback(null, data2);
+        });
+      }
+      _compress(data, fin, callback) {
+        const endpoint = this._isServer ? "server" : "client";
+        if (!this._deflate) {
+          const key = `${endpoint}_max_window_bits`;
+          const windowBits = typeof this.params[key] !== "number" ? zlib.Z_DEFAULT_WINDOWBITS : this.params[key];
+          this._deflate = zlib.createDeflateRaw({
+            ...this._options.zlibDeflateOptions,
+            windowBits
+          });
+          this._deflate[kTotalLength] = 0;
+          this._deflate[kBuffers] = [];
+          this._deflate.on("data", deflateOnData);
+        }
+        this._deflate[kCallback] = callback;
+        this._deflate.write(data);
+        this._deflate.flush(zlib.Z_SYNC_FLUSH, () => {
+          if (!this._deflate) {
+            return;
+          }
+          let data2 = bufferUtil.concat(this._deflate[kBuffers], this._deflate[kTotalLength]);
+          if (fin) {
+            data2 = new FastBuffer(data2.buffer, data2.byteOffset, data2.length - 4);
+          }
+          this._deflate[kCallback] = null;
+          this._deflate[kTotalLength] = 0;
+          this._deflate[kBuffers] = [];
+          if (fin && this.params[`${endpoint}_no_context_takeover`]) {
+            this._deflate.reset();
+          }
+          callback(null, data2);
+        });
+      }
+    };
+    module.exports = PerMessageDeflate;
+    function deflateOnData(chunk) {
+      this[kBuffers].push(chunk);
+      this[kTotalLength] += chunk.length;
+    }
+    function inflateOnData(chunk) {
+      this[kTotalLength] += chunk.length;
+      if (this[kPerMessageDeflate]._maxPayload < 1 || this[kTotalLength] <= this[kPerMessageDeflate]._maxPayload) {
+        this[kBuffers].push(chunk);
+        return;
+      }
+      this[kError] = new RangeError("Max payload size exceeded");
+      this[kError].code = "WS_ERR_UNSUPPORTED_MESSAGE_LENGTH";
+      this[kError][kStatusCode] = 1009;
+      this.removeListener("data", inflateOnData);
+      this.reset();
+    }
+    function inflateOnError(err) {
+      this[kPerMessageDeflate]._inflate = null;
+      err[kStatusCode] = 1007;
+      this[kCallback](err);
+    }
+  }
+});
+var require_validation = __commonJS({
+  "../common/temp/node_modules/.pnpm/ws@8.18.0_bufferutil@4.0.9/node_modules/ws/lib/validation.js"(exports, module) {
+    var { isUtf8 } = __require("buffer");
+    var { hasBlob } = require_constants();
+    var tokenChars = [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      1,
+      0,
+      1,
+      1,
+      1,
+      1,
+      1,
+      0,
+      0,
+      1,
+      1,
+      0,
+      1,
+      1,
+      0,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      0,
+      0,
+      0,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0
+    ];
+    function isValidStatusCode(code2) {
+      return code2 >= 1000 && code2 <= 1014 && code2 !== 1004 && code2 !== 1005 && code2 !== 1006 || code2 >= 3000 && code2 <= 4999;
+    }
+    function _isValidUTF8(buf) {
+      const len = buf.length;
+      let i = 0;
+      while (i < len) {
+        if ((buf[i] & 128) === 0) {
+          i++;
+        } else if ((buf[i] & 224) === 192) {
+          if (i + 1 === len || (buf[i + 1] & 192) !== 128 || (buf[i] & 254) === 192) {
+            return false;
+          }
+          i += 2;
+        } else if ((buf[i] & 240) === 224) {
+          if (i + 2 >= len || (buf[i + 1] & 192) !== 128 || (buf[i + 2] & 192) !== 128 || buf[i] === 224 && (buf[i + 1] & 224) === 128 || buf[i] === 237 && (buf[i + 1] & 224) === 160) {
+            return false;
+          }
+          i += 3;
+        } else if ((buf[i] & 248) === 240) {
+          if (i + 3 >= len || (buf[i + 1] & 192) !== 128 || (buf[i + 2] & 192) !== 128 || (buf[i + 3] & 192) !== 128 || buf[i] === 240 && (buf[i + 1] & 240) === 128 || buf[i] === 244 && buf[i + 1] > 143 || buf[i] > 244) {
+            return false;
+          }
+          i += 4;
+        } else {
+          return false;
+        }
+      }
+      return true;
+    }
+    function isBlob(value) {
+      return hasBlob && typeof value === "object" && typeof value.arrayBuffer === "function" && typeof value.type === "string" && typeof value.stream === "function" && (value[Symbol.toStringTag] === "Blob" || value[Symbol.toStringTag] === "File");
+    }
+    module.exports = {
+      isBlob,
+      isValidStatusCode,
+      isValidUTF8: _isValidUTF8,
+      tokenChars
+    };
+    if (isUtf8) {
+      module.exports.isValidUTF8 = function(buf) {
+        return buf.length < 24 ? _isValidUTF8(buf) : isUtf8(buf);
+      };
+    } else if (!process.env.WS_NO_UTF_8_VALIDATE) {
+      try {
+        const isValidUTF8 = __require("utf-8-validate");
+        module.exports.isValidUTF8 = function(buf) {
+          return buf.length < 32 ? _isValidUTF8(buf) : isValidUTF8(buf);
+        };
+      } catch (e) {
+      }
+    }
+  }
+});
+var require_receiver = __commonJS({
+  "../common/temp/node_modules/.pnpm/ws@8.18.0_bufferutil@4.0.9/node_modules/ws/lib/receiver.js"(exports, module) {
+    var { Writable } = __require("stream");
+    var PerMessageDeflate = require_permessage_deflate();
+    var {
+      BINARY_TYPES,
+      EMPTY_BUFFER,
+      kStatusCode,
+      kWebSocket
+    } = require_constants();
+    var { concat, toArrayBuffer, unmask } = require_buffer_util();
+    var { isValidStatusCode, isValidUTF8 } = require_validation();
+    var FastBuffer = Buffer[Symbol.species];
+    var GET_INFO = 0;
+    var GET_PAYLOAD_LENGTH_16 = 1;
+    var GET_PAYLOAD_LENGTH_64 = 2;
+    var GET_MASK = 3;
+    var GET_DATA = 4;
+    var INFLATING = 5;
+    var DEFER_EVENT = 6;
+    var Receiver2 = class extends Writable {
+      constructor(options = {}) {
+        super();
+        this._allowSynchronousEvents = options.allowSynchronousEvents !== undefined ? options.allowSynchronousEvents : true;
+        this._binaryType = options.binaryType || BINARY_TYPES[0];
+        this._extensions = options.extensions || {};
+        this._isServer = !!options.isServer;
+        this._maxPayload = options.maxPayload | 0;
+        this._skipUTF8Validation = !!options.skipUTF8Validation;
+        this[kWebSocket] = undefined;
+        this._bufferedBytes = 0;
+        this._buffers = [];
+        this._compressed = false;
+        this._payloadLength = 0;
+        this._mask = undefined;
+        this._fragmented = 0;
+        this._masked = false;
+        this._fin = false;
+        this._opcode = 0;
+        this._totalPayloadLength = 0;
+        this._messageLength = 0;
+        this._fragments = [];
+        this._errored = false;
+        this._loop = false;
+        this._state = GET_INFO;
+      }
+      _write(chunk, encoding, cb) {
+        if (this._opcode === 8 && this._state == GET_INFO)
+          return cb();
+        this._bufferedBytes += chunk.length;
+        this._buffers.push(chunk);
+        this.startLoop(cb);
+      }
+      consume(n) {
+        this._bufferedBytes -= n;
+        if (n === this._buffers[0].length)
+          return this._buffers.shift();
+        if (n < this._buffers[0].length) {
+          const buf = this._buffers[0];
+          this._buffers[0] = new FastBuffer(buf.buffer, buf.byteOffset + n, buf.length - n);
+          return new FastBuffer(buf.buffer, buf.byteOffset, n);
+        }
+        const dst = Buffer.allocUnsafe(n);
+        do {
+          const buf = this._buffers[0];
+          const offset = dst.length - n;
+          if (n >= buf.length) {
+            dst.set(this._buffers.shift(), offset);
+          } else {
+            dst.set(new Uint8Array(buf.buffer, buf.byteOffset, n), offset);
+            this._buffers[0] = new FastBuffer(buf.buffer, buf.byteOffset + n, buf.length - n);
+          }
+          n -= buf.length;
+        } while (n > 0);
+        return dst;
+      }
+      startLoop(cb) {
+        this._loop = true;
+        do {
+          switch (this._state) {
+            case GET_INFO:
+              this.getInfo(cb);
+              break;
+            case GET_PAYLOAD_LENGTH_16:
+              this.getPayloadLength16(cb);
+              break;
+            case GET_PAYLOAD_LENGTH_64:
+              this.getPayloadLength64(cb);
+              break;
+            case GET_MASK:
+              this.getMask();
+              break;
+            case GET_DATA:
+              this.getData(cb);
+              break;
+            case INFLATING:
+            case DEFER_EVENT:
+              this._loop = false;
+              return;
+          }
+        } while (this._loop);
+        if (!this._errored)
+          cb();
+      }
+      getInfo(cb) {
+        if (this._bufferedBytes < 2) {
+          this._loop = false;
+          return;
+        }
+        const buf = this.consume(2);
+        if ((buf[0] & 48) !== 0) {
+          const error = this.createError(RangeError, "RSV2 and RSV3 must be clear", true, 1002, "WS_ERR_UNEXPECTED_RSV_2_3");
+          cb(error);
+          return;
+        }
+        const compressed = (buf[0] & 64) === 64;
+        if (compressed && !this._extensions[PerMessageDeflate.extensionName]) {
+          const error = this.createError(RangeError, "RSV1 must be clear", true, 1002, "WS_ERR_UNEXPECTED_RSV_1");
+          cb(error);
+          return;
+        }
+        this._fin = (buf[0] & 128) === 128;
+        this._opcode = buf[0] & 15;
+        this._payloadLength = buf[1] & 127;
+        if (this._opcode === 0) {
+          if (compressed) {
+            const error = this.createError(RangeError, "RSV1 must be clear", true, 1002, "WS_ERR_UNEXPECTED_RSV_1");
+            cb(error);
+            return;
+          }
+          if (!this._fragmented) {
+            const error = this.createError(RangeError, "invalid opcode 0", true, 1002, "WS_ERR_INVALID_OPCODE");
+            cb(error);
+            return;
+          }
+          this._opcode = this._fragmented;
+        } else if (this._opcode === 1 || this._opcode === 2) {
+          if (this._fragmented) {
+            const error = this.createError(RangeError, `invalid opcode ${this._opcode}`, true, 1002, "WS_ERR_INVALID_OPCODE");
+            cb(error);
+            return;
+          }
+          this._compressed = compressed;
+        } else if (this._opcode > 7 && this._opcode < 11) {
+          if (!this._fin) {
+            const error = this.createError(RangeError, "FIN must be set", true, 1002, "WS_ERR_EXPECTED_FIN");
+            cb(error);
+            return;
+          }
+          if (compressed) {
+            const error = this.createError(RangeError, "RSV1 must be clear", true, 1002, "WS_ERR_UNEXPECTED_RSV_1");
+            cb(error);
+            return;
+          }
+          if (this._payloadLength > 125 || this._opcode === 8 && this._payloadLength === 1) {
+            const error = this.createError(RangeError, `invalid payload length ${this._payloadLength}`, true, 1002, "WS_ERR_INVALID_CONTROL_PAYLOAD_LENGTH");
+            cb(error);
+            return;
+          }
+        } else {
+          const error = this.createError(RangeError, `invalid opcode ${this._opcode}`, true, 1002, "WS_ERR_INVALID_OPCODE");
+          cb(error);
+          return;
+        }
+        if (!this._fin && !this._fragmented)
+          this._fragmented = this._opcode;
+        this._masked = (buf[1] & 128) === 128;
+        if (this._isServer) {
+          if (!this._masked) {
+            const error = this.createError(RangeError, "MASK must be set", true, 1002, "WS_ERR_EXPECTED_MASK");
+            cb(error);
+            return;
+          }
+        } else if (this._masked) {
+          const error = this.createError(RangeError, "MASK must be clear", true, 1002, "WS_ERR_UNEXPECTED_MASK");
+          cb(error);
+          return;
+        }
+        if (this._payloadLength === 126)
+          this._state = GET_PAYLOAD_LENGTH_16;
+        else if (this._payloadLength === 127)
+          this._state = GET_PAYLOAD_LENGTH_64;
+        else
+          this.haveLength(cb);
+      }
+      getPayloadLength16(cb) {
+        if (this._bufferedBytes < 2) {
+          this._loop = false;
+          return;
+        }
+        this._payloadLength = this.consume(2).readUInt16BE(0);
+        this.haveLength(cb);
+      }
+      getPayloadLength64(cb) {
+        if (this._bufferedBytes < 8) {
+          this._loop = false;
+          return;
+        }
+        const buf = this.consume(8);
+        const num = buf.readUInt32BE(0);
+        if (num > Math.pow(2, 53 - 32) - 1) {
+          const error = this.createError(RangeError, "Unsupported WebSocket frame: payload length > 2^53 - 1", false, 1009, "WS_ERR_UNSUPPORTED_DATA_PAYLOAD_LENGTH");
+          cb(error);
+          return;
+        }
+        this._payloadLength = num * Math.pow(2, 32) + buf.readUInt32BE(4);
+        this.haveLength(cb);
+      }
+      haveLength(cb) {
+        if (this._payloadLength && this._opcode < 8) {
+          this._totalPayloadLength += this._payloadLength;
+          if (this._totalPayloadLength > this._maxPayload && this._maxPayload > 0) {
+            const error = this.createError(RangeError, "Max payload size exceeded", false, 1009, "WS_ERR_UNSUPPORTED_MESSAGE_LENGTH");
+            cb(error);
+            return;
+          }
+        }
+        if (this._masked)
+          this._state = GET_MASK;
+        else
+          this._state = GET_DATA;
+      }
+      getMask() {
+        if (this._bufferedBytes < 4) {
+          this._loop = false;
+          return;
+        }
+        this._mask = this.consume(4);
+        this._state = GET_DATA;
+      }
+      getData(cb) {
+        let data = EMPTY_BUFFER;
+        if (this._payloadLength) {
+          if (this._bufferedBytes < this._payloadLength) {
+            this._loop = false;
+            return;
+          }
+          data = this.consume(this._payloadLength);
+          if (this._masked && (this._mask[0] | this._mask[1] | this._mask[2] | this._mask[3]) !== 0) {
+            unmask(data, this._mask);
+          }
+        }
+        if (this._opcode > 7) {
+          this.controlMessage(data, cb);
+          return;
+        }
+        if (this._compressed) {
+          this._state = INFLATING;
+          this.decompress(data, cb);
+          return;
+        }
+        if (data.length) {
+          this._messageLength = this._totalPayloadLength;
+          this._fragments.push(data);
+        }
+        this.dataMessage(cb);
+      }
+      decompress(data, cb) {
+        const perMessageDeflate = this._extensions[PerMessageDeflate.extensionName];
+        perMessageDeflate.decompress(data, this._fin, (err, buf) => {
+          if (err)
+            return cb(err);
+          if (buf.length) {
+            this._messageLength += buf.length;
+            if (this._messageLength > this._maxPayload && this._maxPayload > 0) {
+              const error = this.createError(RangeError, "Max payload size exceeded", false, 1009, "WS_ERR_UNSUPPORTED_MESSAGE_LENGTH");
+              cb(error);
+              return;
+            }
+            this._fragments.push(buf);
+          }
+          this.dataMessage(cb);
+          if (this._state === GET_INFO)
+            this.startLoop(cb);
+        });
+      }
+      dataMessage(cb) {
+        if (!this._fin) {
+          this._state = GET_INFO;
+          return;
+        }
+        const messageLength = this._messageLength;
+        const fragments = this._fragments;
+        this._totalPayloadLength = 0;
+        this._messageLength = 0;
+        this._fragmented = 0;
+        this._fragments = [];
+        if (this._opcode === 2) {
+          let data;
+          if (this._binaryType === "nodebuffer") {
+            data = concat(fragments, messageLength);
+          } else if (this._binaryType === "arraybuffer") {
+            data = toArrayBuffer(concat(fragments, messageLength));
+          } else if (this._binaryType === "blob") {
+            data = new Blob(fragments);
+          } else {
+            data = fragments;
+          }
+          if (this._allowSynchronousEvents) {
+            this.emit("message", data, true);
+            this._state = GET_INFO;
+          } else {
+            this._state = DEFER_EVENT;
+            setImmediate(() => {
+              this.emit("message", data, true);
+              this._state = GET_INFO;
+              this.startLoop(cb);
+            });
+          }
+        } else {
+          const buf = concat(fragments, messageLength);
+          if (!this._skipUTF8Validation && !isValidUTF8(buf)) {
+            const error = this.createError(Error, "invalid UTF-8 sequence", true, 1007, "WS_ERR_INVALID_UTF8");
+            cb(error);
+            return;
+          }
+          if (this._state === INFLATING || this._allowSynchronousEvents) {
+            this.emit("message", buf, false);
+            this._state = GET_INFO;
+          } else {
+            this._state = DEFER_EVENT;
+            setImmediate(() => {
+              this.emit("message", buf, false);
+              this._state = GET_INFO;
+              this.startLoop(cb);
+            });
+          }
+        }
+      }
+      controlMessage(data, cb) {
+        if (this._opcode === 8) {
+          if (data.length === 0) {
+            this._loop = false;
+            this.emit("conclude", 1005, EMPTY_BUFFER);
+            this.end();
+          } else {
+            const code2 = data.readUInt16BE(0);
+            if (!isValidStatusCode(code2)) {
+              const error = this.createError(RangeError, `invalid status code ${code2}`, true, 1002, "WS_ERR_INVALID_CLOSE_CODE");
+              cb(error);
+              return;
+            }
+            const buf = new FastBuffer(data.buffer, data.byteOffset + 2, data.length - 2);
+            if (!this._skipUTF8Validation && !isValidUTF8(buf)) {
+              const error = this.createError(Error, "invalid UTF-8 sequence", true, 1007, "WS_ERR_INVALID_UTF8");
+              cb(error);
+              return;
+            }
+            this._loop = false;
+            this.emit("conclude", code2, buf);
+            this.end();
+          }
+          this._state = GET_INFO;
+          return;
+        }
+        if (this._allowSynchronousEvents) {
+          this.emit(this._opcode === 9 ? "ping" : "pong", data);
+          this._state = GET_INFO;
+        } else {
+          this._state = DEFER_EVENT;
+          setImmediate(() => {
+            this.emit(this._opcode === 9 ? "ping" : "pong", data);
+            this._state = GET_INFO;
+            this.startLoop(cb);
+          });
+        }
+      }
+      createError(ErrorCtor, message, prefix, statusCode, errorCode) {
+        this._loop = false;
+        this._errored = true;
+        const err = new ErrorCtor(prefix ? `Invalid WebSocket frame: ${message}` : message);
+        Error.captureStackTrace(err, this.createError);
+        err.code = errorCode;
+        err[kStatusCode] = statusCode;
+        return err;
+      }
+    };
+    module.exports = Receiver2;
+  }
+});
+var require_sender = __commonJS({
+  "../common/temp/node_modules/.pnpm/ws@8.18.0_bufferutil@4.0.9/node_modules/ws/lib/sender.js"(exports, module) {
+    var { Duplex } = __require("stream");
+    var { randomFillSync } = __require("crypto");
+    var PerMessageDeflate = require_permessage_deflate();
+    var { EMPTY_BUFFER, kWebSocket, NOOP } = require_constants();
+    var { isBlob, isValidStatusCode } = require_validation();
+    var { mask: applyMask, toBuffer } = require_buffer_util();
+    var kByteLength = Symbol("kByteLength");
+    var maskBuffer = Buffer.alloc(4);
+    var RANDOM_POOL_SIZE = 8 * 1024;
+    var randomPool;
+    var randomPoolPointer = RANDOM_POOL_SIZE;
+    var DEFAULT = 0;
+    var DEFLATING = 1;
+    var GET_BLOB_DATA = 2;
+    var Sender2 = class _Sender {
+      constructor(socket, extensions, generateMask) {
+        this._extensions = extensions || {};
+        if (generateMask) {
+          this._generateMask = generateMask;
+          this._maskBuffer = Buffer.alloc(4);
+        }
+        this._socket = socket;
+        this._firstFragment = true;
+        this._compress = false;
+        this._bufferedBytes = 0;
+        this._queue = [];
+        this._state = DEFAULT;
+        this.onerror = NOOP;
+        this[kWebSocket] = undefined;
+      }
+      static frame(data, options) {
+        let mask;
+        let merge = false;
+        let offset = 2;
+        let skipMasking = false;
+        if (options.mask) {
+          mask = options.maskBuffer || maskBuffer;
+          if (options.generateMask) {
+            options.generateMask(mask);
+          } else {
+            if (randomPoolPointer === RANDOM_POOL_SIZE) {
+              if (randomPool === undefined) {
+                randomPool = Buffer.alloc(RANDOM_POOL_SIZE);
+              }
+              randomFillSync(randomPool, 0, RANDOM_POOL_SIZE);
+              randomPoolPointer = 0;
+            }
+            mask[0] = randomPool[randomPoolPointer++];
+            mask[1] = randomPool[randomPoolPointer++];
+            mask[2] = randomPool[randomPoolPointer++];
+            mask[3] = randomPool[randomPoolPointer++];
+          }
+          skipMasking = (mask[0] | mask[1] | mask[2] | mask[3]) === 0;
+          offset = 6;
+        }
+        let dataLength;
+        if (typeof data === "string") {
+          if ((!options.mask || skipMasking) && options[kByteLength] !== undefined) {
+            dataLength = options[kByteLength];
+          } else {
+            data = Buffer.from(data);
+            dataLength = data.length;
+          }
+        } else {
+          dataLength = data.length;
+          merge = options.mask && options.readOnly && !skipMasking;
+        }
+        let payloadLength = dataLength;
+        if (dataLength >= 65536) {
+          offset += 8;
+          payloadLength = 127;
+        } else if (dataLength > 125) {
+          offset += 2;
+          payloadLength = 126;
+        }
+        const target = Buffer.allocUnsafe(merge ? dataLength + offset : offset);
+        target[0] = options.fin ? options.opcode | 128 : options.opcode;
+        if (options.rsv1)
+          target[0] |= 64;
+        target[1] = payloadLength;
+        if (payloadLength === 126) {
+          target.writeUInt16BE(dataLength, 2);
+        } else if (payloadLength === 127) {
+          target[2] = target[3] = 0;
+          target.writeUIntBE(dataLength, 4, 6);
+        }
+        if (!options.mask)
+          return [target, data];
+        target[1] |= 128;
+        target[offset - 4] = mask[0];
+        target[offset - 3] = mask[1];
+        target[offset - 2] = mask[2];
+        target[offset - 1] = mask[3];
+        if (skipMasking)
+          return [target, data];
+        if (merge) {
+          applyMask(data, mask, target, offset, dataLength);
+          return [target];
+        }
+        applyMask(data, mask, data, 0, dataLength);
+        return [target, data];
+      }
+      close(code2, data, mask, cb) {
+        let buf;
+        if (code2 === undefined) {
+          buf = EMPTY_BUFFER;
+        } else if (typeof code2 !== "number" || !isValidStatusCode(code2)) {
+          throw new TypeError("First argument must be a valid error code number");
+        } else if (data === undefined || !data.length) {
+          buf = Buffer.allocUnsafe(2);
+          buf.writeUInt16BE(code2, 0);
+        } else {
+          const length = Buffer.byteLength(data);
+          if (length > 123) {
+            throw new RangeError("The message must not be greater than 123 bytes");
+          }
+          buf = Buffer.allocUnsafe(2 + length);
+          buf.writeUInt16BE(code2, 0);
+          if (typeof data === "string") {
+            buf.write(data, 2);
+          } else {
+            buf.set(data, 2);
+          }
+        }
+        const options = {
+          [kByteLength]: buf.length,
+          fin: true,
+          generateMask: this._generateMask,
+          mask,
+          maskBuffer: this._maskBuffer,
+          opcode: 8,
+          readOnly: false,
+          rsv1: false
+        };
+        if (this._state !== DEFAULT) {
+          this.enqueue([this.dispatch, buf, false, options, cb]);
+        } else {
+          this.sendFrame(_Sender.frame(buf, options), cb);
+        }
+      }
+      ping(data, mask, cb) {
+        let byteLength2;
+        let readOnly;
+        if (typeof data === "string") {
+          byteLength2 = Buffer.byteLength(data);
+          readOnly = false;
+        } else if (isBlob(data)) {
+          byteLength2 = data.size;
+          readOnly = false;
+        } else {
+          data = toBuffer(data);
+          byteLength2 = data.length;
+          readOnly = toBuffer.readOnly;
+        }
+        if (byteLength2 > 125) {
+          throw new RangeError("The data size must not be greater than 125 bytes");
+        }
+        const options = {
+          [kByteLength]: byteLength2,
+          fin: true,
+          generateMask: this._generateMask,
+          mask,
+          maskBuffer: this._maskBuffer,
+          opcode: 9,
+          readOnly,
+          rsv1: false
+        };
+        if (isBlob(data)) {
+          if (this._state !== DEFAULT) {
+            this.enqueue([this.getBlobData, data, false, options, cb]);
+          } else {
+            this.getBlobData(data, false, options, cb);
+          }
+        } else if (this._state !== DEFAULT) {
+          this.enqueue([this.dispatch, data, false, options, cb]);
+        } else {
+          this.sendFrame(_Sender.frame(data, options), cb);
+        }
+      }
+      pong(data, mask, cb) {
+        let byteLength2;
+        let readOnly;
+        if (typeof data === "string") {
+          byteLength2 = Buffer.byteLength(data);
+          readOnly = false;
+        } else if (isBlob(data)) {
+          byteLength2 = data.size;
+          readOnly = false;
+        } else {
+          data = toBuffer(data);
+          byteLength2 = data.length;
+          readOnly = toBuffer.readOnly;
+        }
+        if (byteLength2 > 125) {
+          throw new RangeError("The data size must not be greater than 125 bytes");
+        }
+        const options = {
+          [kByteLength]: byteLength2,
+          fin: true,
+          generateMask: this._generateMask,
+          mask,
+          maskBuffer: this._maskBuffer,
+          opcode: 10,
+          readOnly,
+          rsv1: false
+        };
+        if (isBlob(data)) {
+          if (this._state !== DEFAULT) {
+            this.enqueue([this.getBlobData, data, false, options, cb]);
+          } else {
+            this.getBlobData(data, false, options, cb);
+          }
+        } else if (this._state !== DEFAULT) {
+          this.enqueue([this.dispatch, data, false, options, cb]);
+        } else {
+          this.sendFrame(_Sender.frame(data, options), cb);
+        }
+      }
+      send(data, options, cb) {
+        const perMessageDeflate = this._extensions[PerMessageDeflate.extensionName];
+        let opcode = options.binary ? 2 : 1;
+        let rsv1 = options.compress;
+        let byteLength2;
+        let readOnly;
+        if (typeof data === "string") {
+          byteLength2 = Buffer.byteLength(data);
+          readOnly = false;
+        } else if (isBlob(data)) {
+          byteLength2 = data.size;
+          readOnly = false;
+        } else {
+          data = toBuffer(data);
+          byteLength2 = data.length;
+          readOnly = toBuffer.readOnly;
+        }
+        if (this._firstFragment) {
+          this._firstFragment = false;
+          if (rsv1 && perMessageDeflate && perMessageDeflate.params[perMessageDeflate._isServer ? "server_no_context_takeover" : "client_no_context_takeover"]) {
+            rsv1 = byteLength2 >= perMessageDeflate._threshold;
+          }
+          this._compress = rsv1;
+        } else {
+          rsv1 = false;
+          opcode = 0;
+        }
+        if (options.fin)
+          this._firstFragment = true;
+        const opts = {
+          [kByteLength]: byteLength2,
+          fin: options.fin,
+          generateMask: this._generateMask,
+          mask: options.mask,
+          maskBuffer: this._maskBuffer,
+          opcode,
+          readOnly,
+          rsv1
+        };
+        if (isBlob(data)) {
+          if (this._state !== DEFAULT) {
+            this.enqueue([this.getBlobData, data, this._compress, opts, cb]);
+          } else {
+            this.getBlobData(data, this._compress, opts, cb);
+          }
+        } else if (this._state !== DEFAULT) {
+          this.enqueue([this.dispatch, data, this._compress, opts, cb]);
+        } else {
+          this.dispatch(data, this._compress, opts, cb);
+        }
+      }
+      getBlobData(blob, compress, options, cb) {
+        this._bufferedBytes += options[kByteLength];
+        this._state = GET_BLOB_DATA;
+        blob.arrayBuffer().then((arrayBuffer) => {
+          if (this._socket.destroyed) {
+            const err = new Error("The socket was closed while the blob was being read");
+            process.nextTick(callCallbacks, this, err, cb);
+            return;
+          }
+          this._bufferedBytes -= options[kByteLength];
+          const data = toBuffer(arrayBuffer);
+          if (!compress) {
+            this._state = DEFAULT;
+            this.sendFrame(_Sender.frame(data, options), cb);
+            this.dequeue();
+          } else {
+            this.dispatch(data, compress, options, cb);
+          }
+        }).catch((err) => {
+          process.nextTick(onError, this, err, cb);
+        });
+      }
+      dispatch(data, compress, options, cb) {
+        if (!compress) {
+          this.sendFrame(_Sender.frame(data, options), cb);
+          return;
+        }
+        const perMessageDeflate = this._extensions[PerMessageDeflate.extensionName];
+        this._bufferedBytes += options[kByteLength];
+        this._state = DEFLATING;
+        perMessageDeflate.compress(data, options.fin, (_, buf) => {
+          if (this._socket.destroyed) {
+            const err = new Error("The socket was closed while data was being compressed");
+            callCallbacks(this, err, cb);
+            return;
+          }
+          this._bufferedBytes -= options[kByteLength];
+          this._state = DEFAULT;
+          options.readOnly = false;
+          this.sendFrame(_Sender.frame(buf, options), cb);
+          this.dequeue();
+        });
+      }
+      dequeue() {
+        while (this._state === DEFAULT && this._queue.length) {
+          const params = this._queue.shift();
+          this._bufferedBytes -= params[3][kByteLength];
+          Reflect.apply(params[0], this, params.slice(1));
+        }
+      }
+      enqueue(params) {
+        this._bufferedBytes += params[3][kByteLength];
+        this._queue.push(params);
+      }
+      sendFrame(list, cb) {
+        if (list.length === 2) {
+          this._socket.cork();
+          this._socket.write(list[0]);
+          this._socket.write(list[1], cb);
+          this._socket.uncork();
+        } else {
+          this._socket.write(list[0], cb);
+        }
+      }
+    };
+    module.exports = Sender2;
+    function callCallbacks(sender, err, cb) {
+      if (typeof cb === "function")
+        cb(err);
+      for (let i = 0;i < sender._queue.length; i++) {
+        const params = sender._queue[i];
+        const callback = params[params.length - 1];
+        if (typeof callback === "function")
+          callback(err);
+      }
+    }
+    function onError(sender, err, cb) {
+      callCallbacks(sender, err, cb);
+      sender.onerror(err);
+    }
+  }
+});
+var require_event_target = __commonJS({
+  "../common/temp/node_modules/.pnpm/ws@8.18.0_bufferutil@4.0.9/node_modules/ws/lib/event-target.js"(exports, module) {
+    var { kForOnEventAttribute, kListener } = require_constants();
+    var kCode = Symbol("kCode");
+    var kData = Symbol("kData");
+    var kError = Symbol("kError");
+    var kMessage = Symbol("kMessage");
+    var kReason = Symbol("kReason");
+    var kTarget = Symbol("kTarget");
+    var kType = Symbol("kType");
+    var kWasClean = Symbol("kWasClean");
+    var Event = class {
+      constructor(type) {
+        this[kTarget] = null;
+        this[kType] = type;
+      }
+      get target() {
+        return this[kTarget];
+      }
+      get type() {
+        return this[kType];
+      }
+    };
+    Object.defineProperty(Event.prototype, "target", { enumerable: true });
+    Object.defineProperty(Event.prototype, "type", { enumerable: true });
+    var CloseEvent = class extends Event {
+      constructor(type, options = {}) {
+        super(type);
+        this[kCode] = options.code === undefined ? 0 : options.code;
+        this[kReason] = options.reason === undefined ? "" : options.reason;
+        this[kWasClean] = options.wasClean === undefined ? false : options.wasClean;
+      }
+      get code() {
+        return this[kCode];
+      }
+      get reason() {
+        return this[kReason];
+      }
+      get wasClean() {
+        return this[kWasClean];
+      }
+    };
+    Object.defineProperty(CloseEvent.prototype, "code", { enumerable: true });
+    Object.defineProperty(CloseEvent.prototype, "reason", { enumerable: true });
+    Object.defineProperty(CloseEvent.prototype, "wasClean", { enumerable: true });
+    var ErrorEvent = class extends Event {
+      constructor(type, options = {}) {
+        super(type);
+        this[kError] = options.error === undefined ? null : options.error;
+        this[kMessage] = options.message === undefined ? "" : options.message;
+      }
+      get error() {
+        return this[kError];
+      }
+      get message() {
+        return this[kMessage];
+      }
+    };
+    Object.defineProperty(ErrorEvent.prototype, "error", { enumerable: true });
+    Object.defineProperty(ErrorEvent.prototype, "message", { enumerable: true });
+    var MessageEvent = class extends Event {
+      constructor(type, options = {}) {
+        super(type);
+        this[kData] = options.data === undefined ? null : options.data;
+      }
+      get data() {
+        return this[kData];
+      }
+    };
+    Object.defineProperty(MessageEvent.prototype, "data", { enumerable: true });
+    var EventTarget = {
+      addEventListener(type, handler, options = {}) {
+        for (const listener of this.listeners(type)) {
+          if (!options[kForOnEventAttribute] && listener[kListener] === handler && !listener[kForOnEventAttribute]) {
+            return;
+          }
+        }
+        let wrapper;
+        if (type === "message") {
+          wrapper = function onMessage(data, isBinary) {
+            const event = new MessageEvent("message", {
+              data: isBinary ? data : data.toString()
+            });
+            event[kTarget] = this;
+            callListener(handler, this, event);
+          };
+        } else if (type === "close") {
+          wrapper = function onClose(code2, message) {
+            const event = new CloseEvent("close", {
+              code: code2,
+              reason: message.toString(),
+              wasClean: this._closeFrameReceived && this._closeFrameSent
+            });
+            event[kTarget] = this;
+            callListener(handler, this, event);
+          };
+        } else if (type === "error") {
+          wrapper = function onError(error) {
+            const event = new ErrorEvent("error", {
+              error,
+              message: error.message
+            });
+            event[kTarget] = this;
+            callListener(handler, this, event);
+          };
+        } else if (type === "open") {
+          wrapper = function onOpen() {
+            const event = new Event("open");
+            event[kTarget] = this;
+            callListener(handler, this, event);
+          };
+        } else {
+          return;
+        }
+        wrapper[kForOnEventAttribute] = !!options[kForOnEventAttribute];
+        wrapper[kListener] = handler;
+        if (options.once) {
+          this.once(type, wrapper);
+        } else {
+          this.on(type, wrapper);
+        }
+      },
+      removeEventListener(type, handler) {
+        for (const listener of this.listeners(type)) {
+          if (listener[kListener] === handler && !listener[kForOnEventAttribute]) {
+            this.removeListener(type, listener);
+            break;
+          }
+        }
+      }
+    };
+    module.exports = {
+      CloseEvent,
+      ErrorEvent,
+      Event,
+      EventTarget,
+      MessageEvent
+    };
+    function callListener(listener, thisArg, event) {
+      if (typeof listener === "object" && listener.handleEvent) {
+        listener.handleEvent.call(listener, event);
+      } else {
+        listener.call(thisArg, event);
+      }
+    }
+  }
+});
+var require_extension = __commonJS({
+  "../common/temp/node_modules/.pnpm/ws@8.18.0_bufferutil@4.0.9/node_modules/ws/lib/extension.js"(exports, module) {
+    var { tokenChars } = require_validation();
+    function push(dest, name, elem) {
+      if (dest[name] === undefined)
+        dest[name] = [elem];
+      else
+        dest[name].push(elem);
+    }
+    function parse(header) {
+      const offers = /* @__PURE__ */ Object.create(null);
+      let params = /* @__PURE__ */ Object.create(null);
+      let mustUnescape = false;
+      let isEscaping = false;
+      let inQuotes = false;
+      let extensionName;
+      let paramName;
+      let start = -1;
+      let code2 = -1;
+      let end = -1;
+      let i = 0;
+      for (;i < header.length; i++) {
+        code2 = header.charCodeAt(i);
+        if (extensionName === undefined) {
+          if (end === -1 && tokenChars[code2] === 1) {
+            if (start === -1)
+              start = i;
+          } else if (i !== 0 && (code2 === 32 || code2 === 9)) {
+            if (end === -1 && start !== -1)
+              end = i;
+          } else if (code2 === 59 || code2 === 44) {
+            if (start === -1) {
+              throw new SyntaxError(`Unexpected character at index ${i}`);
+            }
+            if (end === -1)
+              end = i;
+            const name = header.slice(start, end);
+            if (code2 === 44) {
+              push(offers, name, params);
+              params = /* @__PURE__ */ Object.create(null);
+            } else {
+              extensionName = name;
+            }
+            start = end = -1;
+          } else {
+            throw new SyntaxError(`Unexpected character at index ${i}`);
+          }
+        } else if (paramName === undefined) {
+          if (end === -1 && tokenChars[code2] === 1) {
+            if (start === -1)
+              start = i;
+          } else if (code2 === 32 || code2 === 9) {
+            if (end === -1 && start !== -1)
+              end = i;
+          } else if (code2 === 59 || code2 === 44) {
+            if (start === -1) {
+              throw new SyntaxError(`Unexpected character at index ${i}`);
+            }
+            if (end === -1)
+              end = i;
+            push(params, header.slice(start, end), true);
+            if (code2 === 44) {
+              push(offers, extensionName, params);
+              params = /* @__PURE__ */ Object.create(null);
+              extensionName = undefined;
+            }
+            start = end = -1;
+          } else if (code2 === 61 && start !== -1 && end === -1) {
+            paramName = header.slice(start, i);
+            start = end = -1;
+          } else {
+            throw new SyntaxError(`Unexpected character at index ${i}`);
+          }
+        } else {
+          if (isEscaping) {
+            if (tokenChars[code2] !== 1) {
+              throw new SyntaxError(`Unexpected character at index ${i}`);
+            }
+            if (start === -1)
+              start = i;
+            else if (!mustUnescape)
+              mustUnescape = true;
+            isEscaping = false;
+          } else if (inQuotes) {
+            if (tokenChars[code2] === 1) {
+              if (start === -1)
+                start = i;
+            } else if (code2 === 34 && start !== -1) {
+              inQuotes = false;
+              end = i;
+            } else if (code2 === 92) {
+              isEscaping = true;
+            } else {
+              throw new SyntaxError(`Unexpected character at index ${i}`);
+            }
+          } else if (code2 === 34 && header.charCodeAt(i - 1) === 61) {
+            inQuotes = true;
+          } else if (end === -1 && tokenChars[code2] === 1) {
+            if (start === -1)
+              start = i;
+          } else if (start !== -1 && (code2 === 32 || code2 === 9)) {
+            if (end === -1)
+              end = i;
+          } else if (code2 === 59 || code2 === 44) {
+            if (start === -1) {
+              throw new SyntaxError(`Unexpected character at index ${i}`);
+            }
+            if (end === -1)
+              end = i;
+            let value = header.slice(start, end);
+            if (mustUnescape) {
+              value = value.replace(/\\/g, "");
+              mustUnescape = false;
+            }
+            push(params, paramName, value);
+            if (code2 === 44) {
+              push(offers, extensionName, params);
+              params = /* @__PURE__ */ Object.create(null);
+              extensionName = undefined;
+            }
+            paramName = undefined;
+            start = end = -1;
+          } else {
+            throw new SyntaxError(`Unexpected character at index ${i}`);
+          }
+        }
+      }
+      if (start === -1 || inQuotes || code2 === 32 || code2 === 9) {
+        throw new SyntaxError("Unexpected end of input");
+      }
+      if (end === -1)
+        end = i;
+      const token = header.slice(start, end);
+      if (extensionName === undefined) {
+        push(offers, token, params);
+      } else {
+        if (paramName === undefined) {
+          push(params, token, true);
+        } else if (mustUnescape) {
+          push(params, paramName, token.replace(/\\/g, ""));
+        } else {
+          push(params, paramName, token);
+        }
+        push(offers, extensionName, params);
+      }
+      return offers;
+    }
+    function format(extensions) {
+      return Object.keys(extensions).map((extension) => {
+        let configurations = extensions[extension];
+        if (!Array.isArray(configurations))
+          configurations = [configurations];
+        return configurations.map((params) => {
+          return [extension].concat(Object.keys(params).map((k) => {
+            let values = params[k];
+            if (!Array.isArray(values))
+              values = [values];
+            return values.map((v) => v === true ? k : `${k}=${v}`).join("; ");
+          })).join("; ");
+        }).join(", ");
+      }).join(", ");
+    }
+    module.exports = { format, parse };
+  }
+});
+var require_websocket = __commonJS({
+  "../common/temp/node_modules/.pnpm/ws@8.18.0_bufferutil@4.0.9/node_modules/ws/lib/websocket.js"(exports, module) {
+    var EventEmitter8 = __require("events");
+    var https = __require("https");
+    var http = __require("http");
+    var net = __require("net");
+    var tls = __require("tls");
+    var { randomBytes, createHash } = __require("crypto");
+    var { Duplex, Readable: Readable2 } = __require("stream");
+    var { URL: URL2 } = __require("url");
+    var PerMessageDeflate = require_permessage_deflate();
+    var Receiver2 = require_receiver();
+    var Sender2 = require_sender();
+    var { isBlob } = require_validation();
+    var {
+      BINARY_TYPES,
+      EMPTY_BUFFER,
+      GUID,
+      kForOnEventAttribute,
+      kListener,
+      kStatusCode,
+      kWebSocket,
+      NOOP
+    } = require_constants();
+    var {
+      EventTarget: { addEventListener, removeEventListener }
+    } = require_event_target();
+    var { format, parse } = require_extension();
+    var { toBuffer } = require_buffer_util();
+    var closeTimeout = 30 * 1000;
+    var kAborted = Symbol("kAborted");
+    var protocolVersions = [8, 13];
+    var readyStates = ["CONNECTING", "OPEN", "CLOSING", "CLOSED"];
+    var subprotocolRegex = /^[!#$%&'*+\-.0-9A-Z^_`|a-z~]+$/;
+    var WebSocket2 = class _WebSocket extends EventEmitter8 {
+      constructor(address, protocols, options) {
+        super();
+        this._binaryType = BINARY_TYPES[0];
+        this._closeCode = 1006;
+        this._closeFrameReceived = false;
+        this._closeFrameSent = false;
+        this._closeMessage = EMPTY_BUFFER;
+        this._closeTimer = null;
+        this._errorEmitted = false;
+        this._extensions = {};
+        this._paused = false;
+        this._protocol = "";
+        this._readyState = _WebSocket.CONNECTING;
+        this._receiver = null;
+        this._sender = null;
+        this._socket = null;
+        if (address !== null) {
+          this._bufferedAmount = 0;
+          this._isServer = false;
+          this._redirects = 0;
+          if (protocols === undefined) {
+            protocols = [];
+          } else if (!Array.isArray(protocols)) {
+            if (typeof protocols === "object" && protocols !== null) {
+              options = protocols;
+              protocols = [];
+            } else {
+              protocols = [protocols];
+            }
+          }
+          initAsClient(this, address, protocols, options);
+        } else {
+          this._autoPong = options.autoPong;
+          this._isServer = true;
+        }
+      }
+      get binaryType() {
+        return this._binaryType;
+      }
+      set binaryType(type) {
+        if (!BINARY_TYPES.includes(type))
+          return;
+        this._binaryType = type;
+        if (this._receiver)
+          this._receiver._binaryType = type;
+      }
+      get bufferedAmount() {
+        if (!this._socket)
+          return this._bufferedAmount;
+        return this._socket._writableState.length + this._sender._bufferedBytes;
+      }
+      get extensions() {
+        return Object.keys(this._extensions).join();
+      }
+      get isPaused() {
+        return this._paused;
+      }
+      get onclose() {
+        return null;
+      }
+      get onerror() {
+        return null;
+      }
+      get onopen() {
+        return null;
+      }
+      get onmessage() {
+        return null;
+      }
+      get protocol() {
+        return this._protocol;
+      }
+      get readyState() {
+        return this._readyState;
+      }
+      get url() {
+        return this._url;
+      }
+      setSocket(socket, head, options) {
+        const receiver = new Receiver2({
+          allowSynchronousEvents: options.allowSynchronousEvents,
+          binaryType: this.binaryType,
+          extensions: this._extensions,
+          isServer: this._isServer,
+          maxPayload: options.maxPayload,
+          skipUTF8Validation: options.skipUTF8Validation
+        });
+        const sender = new Sender2(socket, this._extensions, options.generateMask);
+        this._receiver = receiver;
+        this._sender = sender;
+        this._socket = socket;
+        receiver[kWebSocket] = this;
+        sender[kWebSocket] = this;
+        socket[kWebSocket] = this;
+        receiver.on("conclude", receiverOnConclude);
+        receiver.on("drain", receiverOnDrain);
+        receiver.on("error", receiverOnError);
+        receiver.on("message", receiverOnMessage);
+        receiver.on("ping", receiverOnPing);
+        receiver.on("pong", receiverOnPong);
+        sender.onerror = senderOnError;
+        if (socket.setTimeout)
+          socket.setTimeout(0);
+        if (socket.setNoDelay)
+          socket.setNoDelay();
+        if (head.length > 0)
+          socket.unshift(head);
+        socket.on("close", socketOnClose);
+        socket.on("data", socketOnData);
+        socket.on("end", socketOnEnd);
+        socket.on("error", socketOnError);
+        this._readyState = _WebSocket.OPEN;
+        this.emit("open");
+      }
+      emitClose() {
+        if (!this._socket) {
+          this._readyState = _WebSocket.CLOSED;
+          this.emit("close", this._closeCode, this._closeMessage);
+          return;
+        }
+        if (this._extensions[PerMessageDeflate.extensionName]) {
+          this._extensions[PerMessageDeflate.extensionName].cleanup();
+        }
+        this._receiver.removeAllListeners();
+        this._readyState = _WebSocket.CLOSED;
+        this.emit("close", this._closeCode, this._closeMessage);
+      }
+      close(code2, data) {
+        if (this.readyState === _WebSocket.CLOSED)
+          return;
+        if (this.readyState === _WebSocket.CONNECTING) {
+          const msg = "WebSocket was closed before the connection was established";
+          abortHandshake(this, this._req, msg);
+          return;
+        }
+        if (this.readyState === _WebSocket.CLOSING) {
+          if (this._closeFrameSent && (this._closeFrameReceived || this._receiver._writableState.errorEmitted)) {
+            this._socket.end();
+          }
+          return;
+        }
+        this._readyState = _WebSocket.CLOSING;
+        this._sender.close(code2, data, !this._isServer, (err) => {
+          if (err)
+            return;
+          this._closeFrameSent = true;
+          if (this._closeFrameReceived || this._receiver._writableState.errorEmitted) {
+            this._socket.end();
+          }
+        });
+        setCloseTimer(this);
+      }
+      pause() {
+        if (this.readyState === _WebSocket.CONNECTING || this.readyState === _WebSocket.CLOSED) {
+          return;
+        }
+        this._paused = true;
+        this._socket.pause();
+      }
+      ping(data, mask, cb) {
+        if (this.readyState === _WebSocket.CONNECTING) {
+          throw new Error("WebSocket is not open: readyState 0 (CONNECTING)");
+        }
+        if (typeof data === "function") {
+          cb = data;
+          data = mask = undefined;
+        } else if (typeof mask === "function") {
+          cb = mask;
+          mask = undefined;
+        }
+        if (typeof data === "number")
+          data = data.toString();
+        if (this.readyState !== _WebSocket.OPEN) {
+          sendAfterClose(this, data, cb);
+          return;
+        }
+        if (mask === undefined)
+          mask = !this._isServer;
+        this._sender.ping(data || EMPTY_BUFFER, mask, cb);
+      }
+      pong(data, mask, cb) {
+        if (this.readyState === _WebSocket.CONNECTING) {
+          throw new Error("WebSocket is not open: readyState 0 (CONNECTING)");
+        }
+        if (typeof data === "function") {
+          cb = data;
+          data = mask = undefined;
+        } else if (typeof mask === "function") {
+          cb = mask;
+          mask = undefined;
+        }
+        if (typeof data === "number")
+          data = data.toString();
+        if (this.readyState !== _WebSocket.OPEN) {
+          sendAfterClose(this, data, cb);
+          return;
+        }
+        if (mask === undefined)
+          mask = !this._isServer;
+        this._sender.pong(data || EMPTY_BUFFER, mask, cb);
+      }
+      resume() {
+        if (this.readyState === _WebSocket.CONNECTING || this.readyState === _WebSocket.CLOSED) {
+          return;
+        }
+        this._paused = false;
+        if (!this._receiver._writableState.needDrain)
+          this._socket.resume();
+      }
+      send(data, options, cb) {
+        if (this.readyState === _WebSocket.CONNECTING) {
+          throw new Error("WebSocket is not open: readyState 0 (CONNECTING)");
+        }
+        if (typeof options === "function") {
+          cb = options;
+          options = {};
+        }
+        if (typeof data === "number")
+          data = data.toString();
+        if (this.readyState !== _WebSocket.OPEN) {
+          sendAfterClose(this, data, cb);
+          return;
+        }
+        const opts = {
+          binary: typeof data !== "string",
+          mask: !this._isServer,
+          compress: true,
+          fin: true,
+          ...options
+        };
+        if (!this._extensions[PerMessageDeflate.extensionName]) {
+          opts.compress = false;
+        }
+        this._sender.send(data || EMPTY_BUFFER, opts, cb);
+      }
+      terminate() {
+        if (this.readyState === _WebSocket.CLOSED)
+          return;
+        if (this.readyState === _WebSocket.CONNECTING) {
+          const msg = "WebSocket was closed before the connection was established";
+          abortHandshake(this, this._req, msg);
+          return;
+        }
+        if (this._socket) {
+          this._readyState = _WebSocket.CLOSING;
+          this._socket.destroy();
+        }
+      }
+    };
+    Object.defineProperty(WebSocket2, "CONNECTING", {
+      enumerable: true,
+      value: readyStates.indexOf("CONNECTING")
+    });
+    Object.defineProperty(WebSocket2.prototype, "CONNECTING", {
+      enumerable: true,
+      value: readyStates.indexOf("CONNECTING")
+    });
+    Object.defineProperty(WebSocket2, "OPEN", {
+      enumerable: true,
+      value: readyStates.indexOf("OPEN")
+    });
+    Object.defineProperty(WebSocket2.prototype, "OPEN", {
+      enumerable: true,
+      value: readyStates.indexOf("OPEN")
+    });
+    Object.defineProperty(WebSocket2, "CLOSING", {
+      enumerable: true,
+      value: readyStates.indexOf("CLOSING")
+    });
+    Object.defineProperty(WebSocket2.prototype, "CLOSING", {
+      enumerable: true,
+      value: readyStates.indexOf("CLOSING")
+    });
+    Object.defineProperty(WebSocket2, "CLOSED", {
+      enumerable: true,
+      value: readyStates.indexOf("CLOSED")
+    });
+    Object.defineProperty(WebSocket2.prototype, "CLOSED", {
+      enumerable: true,
+      value: readyStates.indexOf("CLOSED")
+    });
+    [
+      "binaryType",
+      "bufferedAmount",
+      "extensions",
+      "isPaused",
+      "protocol",
+      "readyState",
+      "url"
+    ].forEach((property) => {
+      Object.defineProperty(WebSocket2.prototype, property, { enumerable: true });
+    });
+    ["open", "error", "close", "message"].forEach((method) => {
+      Object.defineProperty(WebSocket2.prototype, `on${method}`, {
+        enumerable: true,
+        get() {
+          for (const listener of this.listeners(method)) {
+            if (listener[kForOnEventAttribute])
+              return listener[kListener];
+          }
+          return null;
+        },
+        set(handler) {
+          for (const listener of this.listeners(method)) {
+            if (listener[kForOnEventAttribute]) {
+              this.removeListener(method, listener);
+              break;
+            }
+          }
+          if (typeof handler !== "function")
+            return;
+          this.addEventListener(method, handler, {
+            [kForOnEventAttribute]: true
+          });
+        }
+      });
+    });
+    WebSocket2.prototype.addEventListener = addEventListener;
+    WebSocket2.prototype.removeEventListener = removeEventListener;
+    module.exports = WebSocket2;
+    function initAsClient(websocket, address, protocols, options) {
+      const opts = {
+        allowSynchronousEvents: true,
+        autoPong: true,
+        protocolVersion: protocolVersions[1],
+        maxPayload: 100 * 1024 * 1024,
+        skipUTF8Validation: false,
+        perMessageDeflate: true,
+        followRedirects: false,
+        maxRedirects: 10,
+        ...options,
+        socketPath: undefined,
+        hostname: undefined,
+        protocol: undefined,
+        timeout: undefined,
+        method: "GET",
+        host: undefined,
+        path: undefined,
+        port: undefined
+      };
+      websocket._autoPong = opts.autoPong;
+      if (!protocolVersions.includes(opts.protocolVersion)) {
+        throw new RangeError(`Unsupported protocol version: ${opts.protocolVersion} (supported versions: ${protocolVersions.join(", ")})`);
+      }
+      let parsedUrl;
+      if (address instanceof URL2) {
+        parsedUrl = address;
+      } else {
+        try {
+          parsedUrl = new URL2(address);
+        } catch (e) {
+          throw new SyntaxError(`Invalid URL: ${address}`);
+        }
+      }
+      if (parsedUrl.protocol === "http:") {
+        parsedUrl.protocol = "ws:";
+      } else if (parsedUrl.protocol === "https:") {
+        parsedUrl.protocol = "wss:";
+      }
+      websocket._url = parsedUrl.href;
+      const isSecure = parsedUrl.protocol === "wss:";
+      const isIpcUrl = parsedUrl.protocol === "ws+unix:";
+      let invalidUrlMessage;
+      if (parsedUrl.protocol !== "ws:" && !isSecure && !isIpcUrl) {
+        invalidUrlMessage = `The URL's protocol must be one of "ws:", "wss:", "http:", "https", or "ws+unix:"`;
+      } else if (isIpcUrl && !parsedUrl.pathname) {
+        invalidUrlMessage = "The URL's pathname is empty";
+      } else if (parsedUrl.hash) {
+        invalidUrlMessage = "The URL contains a fragment identifier";
+      }
+      if (invalidUrlMessage) {
+        const err = new SyntaxError(invalidUrlMessage);
+        if (websocket._redirects === 0) {
+          throw err;
+        } else {
+          emitErrorAndClose(websocket, err);
+          return;
+        }
+      }
+      const defaultPort = isSecure ? 443 : 80;
+      const key = randomBytes(16).toString("base64");
+      const request = isSecure ? https.request : http.request;
+      const protocolSet = /* @__PURE__ */ new Set;
+      let perMessageDeflate;
+      opts.createConnection = opts.createConnection || (isSecure ? tlsConnect : netConnect);
+      opts.defaultPort = opts.defaultPort || defaultPort;
+      opts.port = parsedUrl.port || defaultPort;
+      opts.host = parsedUrl.hostname.startsWith("[") ? parsedUrl.hostname.slice(1, -1) : parsedUrl.hostname;
+      opts.headers = {
+        ...opts.headers,
+        "Sec-WebSocket-Version": opts.protocolVersion,
+        "Sec-WebSocket-Key": key,
+        Connection: "Upgrade",
+        Upgrade: "websocket"
+      };
+      opts.path = parsedUrl.pathname + parsedUrl.search;
+      opts.timeout = opts.handshakeTimeout;
+      if (opts.perMessageDeflate) {
+        perMessageDeflate = new PerMessageDeflate(opts.perMessageDeflate !== true ? opts.perMessageDeflate : {}, false, opts.maxPayload);
+        opts.headers["Sec-WebSocket-Extensions"] = format({
+          [PerMessageDeflate.extensionName]: perMessageDeflate.offer()
+        });
+      }
+      if (protocols.length) {
+        for (const protocol of protocols) {
+          if (typeof protocol !== "string" || !subprotocolRegex.test(protocol) || protocolSet.has(protocol)) {
+            throw new SyntaxError("An invalid or duplicated subprotocol was specified");
+          }
+          protocolSet.add(protocol);
+        }
+        opts.headers["Sec-WebSocket-Protocol"] = protocols.join(",");
+      }
+      if (opts.origin) {
+        if (opts.protocolVersion < 13) {
+          opts.headers["Sec-WebSocket-Origin"] = opts.origin;
+        } else {
+          opts.headers.Origin = opts.origin;
+        }
+      }
+      if (parsedUrl.username || parsedUrl.password) {
+        opts.auth = `${parsedUrl.username}:${parsedUrl.password}`;
+      }
+      if (isIpcUrl) {
+        const parts = opts.path.split(":");
+        opts.socketPath = parts[0];
+        opts.path = parts[1];
+      }
+      let req;
+      if (opts.followRedirects) {
+        if (websocket._redirects === 0) {
+          websocket._originalIpc = isIpcUrl;
+          websocket._originalSecure = isSecure;
+          websocket._originalHostOrSocketPath = isIpcUrl ? opts.socketPath : parsedUrl.host;
+          const headers = options && options.headers;
+          options = { ...options, headers: {} };
+          if (headers) {
+            for (const [key2, value] of Object.entries(headers)) {
+              options.headers[key2.toLowerCase()] = value;
+            }
+          }
+        } else if (websocket.listenerCount("redirect") === 0) {
+          const isSameHost = isIpcUrl ? websocket._originalIpc ? opts.socketPath === websocket._originalHostOrSocketPath : false : websocket._originalIpc ? false : parsedUrl.host === websocket._originalHostOrSocketPath;
+          if (!isSameHost || websocket._originalSecure && !isSecure) {
+            delete opts.headers.authorization;
+            delete opts.headers.cookie;
+            if (!isSameHost)
+              delete opts.headers.host;
+            opts.auth = undefined;
+          }
+        }
+        if (opts.auth && !options.headers.authorization) {
+          options.headers.authorization = "Basic " + Buffer.from(opts.auth).toString("base64");
+        }
+        req = websocket._req = request(opts);
+        if (websocket._redirects) {
+          websocket.emit("redirect", websocket.url, req);
+        }
+      } else {
+        req = websocket._req = request(opts);
+      }
+      if (opts.timeout) {
+        req.on("timeout", () => {
+          abortHandshake(websocket, req, "Opening handshake has timed out");
+        });
+      }
+      req.on("error", (err) => {
+        if (req === null || req[kAborted])
+          return;
+        req = websocket._req = null;
+        emitErrorAndClose(websocket, err);
+      });
+      req.on("response", (res) => {
+        const location = res.headers.location;
+        const statusCode = res.statusCode;
+        if (location && opts.followRedirects && statusCode >= 300 && statusCode < 400) {
+          if (++websocket._redirects > opts.maxRedirects) {
+            abortHandshake(websocket, req, "Maximum redirects exceeded");
+            return;
+          }
+          req.abort();
+          let addr;
+          try {
+            addr = new URL2(location, address);
+          } catch (e) {
+            const err = new SyntaxError(`Invalid URL: ${location}`);
+            emitErrorAndClose(websocket, err);
+            return;
+          }
+          initAsClient(websocket, addr, protocols, options);
+        } else if (!websocket.emit("unexpected-response", req, res)) {
+          abortHandshake(websocket, req, `Unexpected server response: ${res.statusCode}`);
+        }
+      });
+      req.on("upgrade", (res, socket, head) => {
+        websocket.emit("upgrade", res);
+        if (websocket.readyState !== WebSocket2.CONNECTING)
+          return;
+        req = websocket._req = null;
+        const upgrade = res.headers.upgrade;
+        if (upgrade === undefined || upgrade.toLowerCase() !== "websocket") {
+          abortHandshake(websocket, socket, "Invalid Upgrade header");
+          return;
+        }
+        const digest = createHash("sha1").update(key + GUID).digest("base64");
+        if (res.headers["sec-websocket-accept"] !== digest) {
+          abortHandshake(websocket, socket, "Invalid Sec-WebSocket-Accept header");
+          return;
+        }
+        const serverProt = res.headers["sec-websocket-protocol"];
+        let protError;
+        if (serverProt !== undefined) {
+          if (!protocolSet.size) {
+            protError = "Server sent a subprotocol but none was requested";
+          } else if (!protocolSet.has(serverProt)) {
+            protError = "Server sent an invalid subprotocol";
+          }
+        } else if (protocolSet.size) {
+          protError = "Server sent no subprotocol";
+        }
+        if (protError) {
+          abortHandshake(websocket, socket, protError);
+          return;
+        }
+        if (serverProt)
+          websocket._protocol = serverProt;
+        const secWebSocketExtensions = res.headers["sec-websocket-extensions"];
+        if (secWebSocketExtensions !== undefined) {
+          if (!perMessageDeflate) {
+            const message = "Server sent a Sec-WebSocket-Extensions header but no extension was requested";
+            abortHandshake(websocket, socket, message);
+            return;
+          }
+          let extensions;
+          try {
+            extensions = parse(secWebSocketExtensions);
+          } catch (err) {
+            const message = "Invalid Sec-WebSocket-Extensions header";
+            abortHandshake(websocket, socket, message);
+            return;
+          }
+          const extensionNames = Object.keys(extensions);
+          if (extensionNames.length !== 1 || extensionNames[0] !== PerMessageDeflate.extensionName) {
+            const message = "Server indicated an extension that was not requested";
+            abortHandshake(websocket, socket, message);
+            return;
+          }
+          try {
+            perMessageDeflate.accept(extensions[PerMessageDeflate.extensionName]);
+          } catch (err) {
+            const message = "Invalid Sec-WebSocket-Extensions header";
+            abortHandshake(websocket, socket, message);
+            return;
+          }
+          websocket._extensions[PerMessageDeflate.extensionName] = perMessageDeflate;
+        }
+        websocket.setSocket(socket, head, {
+          allowSynchronousEvents: opts.allowSynchronousEvents,
+          generateMask: opts.generateMask,
+          maxPayload: opts.maxPayload,
+          skipUTF8Validation: opts.skipUTF8Validation
+        });
+      });
+      if (opts.finishRequest) {
+        opts.finishRequest(req, websocket);
+      } else {
+        req.end();
+      }
+    }
+    function emitErrorAndClose(websocket, err) {
+      websocket._readyState = WebSocket2.CLOSING;
+      websocket._errorEmitted = true;
+      websocket.emit("error", err);
+      websocket.emitClose();
+    }
+    function netConnect(options) {
+      options.path = options.socketPath;
+      return net.connect(options);
+    }
+    function tlsConnect(options) {
+      options.path = undefined;
+      if (!options.servername && options.servername !== "") {
+        options.servername = net.isIP(options.host) ? "" : options.host;
+      }
+      return tls.connect(options);
+    }
+    function abortHandshake(websocket, stream, message) {
+      websocket._readyState = WebSocket2.CLOSING;
+      const err = new Error(message);
+      Error.captureStackTrace(err, abortHandshake);
+      if (stream.setHeader) {
+        stream[kAborted] = true;
+        stream.abort();
+        if (stream.socket && !stream.socket.destroyed) {
+          stream.socket.destroy();
+        }
+        process.nextTick(emitErrorAndClose, websocket, err);
+      } else {
+        stream.destroy(err);
+        stream.once("error", websocket.emit.bind(websocket, "error"));
+        stream.once("close", websocket.emitClose.bind(websocket));
+      }
+    }
+    function sendAfterClose(websocket, data, cb) {
+      if (data) {
+        const length = isBlob(data) ? data.size : toBuffer(data).length;
+        if (websocket._socket)
+          websocket._sender._bufferedBytes += length;
+        else
+          websocket._bufferedAmount += length;
+      }
+      if (cb) {
+        const err = new Error(`WebSocket is not open: readyState ${websocket.readyState} (${readyStates[websocket.readyState]})`);
+        process.nextTick(cb, err);
+      }
+    }
+    function receiverOnConclude(code2, reason) {
+      const websocket = this[kWebSocket];
+      websocket._closeFrameReceived = true;
+      websocket._closeMessage = reason;
+      websocket._closeCode = code2;
+      if (websocket._socket[kWebSocket] === undefined)
+        return;
+      websocket._socket.removeListener("data", socketOnData);
+      process.nextTick(resume, websocket._socket);
+      if (code2 === 1005)
+        websocket.close();
+      else
+        websocket.close(code2, reason);
+    }
+    function receiverOnDrain() {
+      const websocket = this[kWebSocket];
+      if (!websocket.isPaused)
+        websocket._socket.resume();
+    }
+    function receiverOnError(err) {
+      const websocket = this[kWebSocket];
+      if (websocket._socket[kWebSocket] !== undefined) {
+        websocket._socket.removeListener("data", socketOnData);
+        process.nextTick(resume, websocket._socket);
+        websocket.close(err[kStatusCode]);
+      }
+      if (!websocket._errorEmitted) {
+        websocket._errorEmitted = true;
+        websocket.emit("error", err);
+      }
+    }
+    function receiverOnFinish() {
+      this[kWebSocket].emitClose();
+    }
+    function receiverOnMessage(data, isBinary) {
+      this[kWebSocket].emit("message", data, isBinary);
+    }
+    function receiverOnPing(data) {
+      const websocket = this[kWebSocket];
+      if (websocket._autoPong)
+        websocket.pong(data, !this._isServer, NOOP);
+      websocket.emit("ping", data);
+    }
+    function receiverOnPong(data) {
+      this[kWebSocket].emit("pong", data);
+    }
+    function resume(stream) {
+      stream.resume();
+    }
+    function senderOnError(err) {
+      const websocket = this[kWebSocket];
+      if (websocket.readyState === WebSocket2.CLOSED)
+        return;
+      if (websocket.readyState === WebSocket2.OPEN) {
+        websocket._readyState = WebSocket2.CLOSING;
+        setCloseTimer(websocket);
+      }
+      this._socket.end();
+      if (!websocket._errorEmitted) {
+        websocket._errorEmitted = true;
+        websocket.emit("error", err);
+      }
+    }
+    function setCloseTimer(websocket) {
+      websocket._closeTimer = setTimeout(websocket._socket.destroy.bind(websocket._socket), closeTimeout);
+    }
+    function socketOnClose() {
+      const websocket = this[kWebSocket];
+      this.removeListener("close", socketOnClose);
+      this.removeListener("data", socketOnData);
+      this.removeListener("end", socketOnEnd);
+      websocket._readyState = WebSocket2.CLOSING;
+      let chunk;
+      if (!this._readableState.endEmitted && !websocket._closeFrameReceived && !websocket._receiver._writableState.errorEmitted && (chunk = websocket._socket.read()) !== null) {
+        websocket._receiver.write(chunk);
+      }
+      websocket._receiver.end();
+      this[kWebSocket] = undefined;
+      clearTimeout(websocket._closeTimer);
+      if (websocket._receiver._writableState.finished || websocket._receiver._writableState.errorEmitted) {
+        websocket.emitClose();
+      } else {
+        websocket._receiver.on("error", receiverOnFinish);
+        websocket._receiver.on("finish", receiverOnFinish);
+      }
+    }
+    function socketOnData(chunk) {
+      if (!this[kWebSocket]._receiver.write(chunk)) {
+        this.pause();
+      }
+    }
+    function socketOnEnd() {
+      const websocket = this[kWebSocket];
+      websocket._readyState = WebSocket2.CLOSING;
+      websocket._receiver.end();
+      this.end();
+    }
+    function socketOnError() {
+      const websocket = this[kWebSocket];
+      this.removeListener("error", socketOnError);
+      this.on("error", NOOP);
+      if (websocket) {
+        websocket._readyState = WebSocket2.CLOSING;
+        this.destroy();
+      }
+    }
+  }
+});
+var require_subprotocol = __commonJS({
+  "../common/temp/node_modules/.pnpm/ws@8.18.0_bufferutil@4.0.9/node_modules/ws/lib/subprotocol.js"(exports, module) {
+    var { tokenChars } = require_validation();
+    function parse(header) {
+      const protocols = /* @__PURE__ */ new Set;
+      let start = -1;
+      let end = -1;
+      let i = 0;
+      for (i;i < header.length; i++) {
+        const code2 = header.charCodeAt(i);
+        if (end === -1 && tokenChars[code2] === 1) {
+          if (start === -1)
+            start = i;
+        } else if (i !== 0 && (code2 === 32 || code2 === 9)) {
+          if (end === -1 && start !== -1)
+            end = i;
+        } else if (code2 === 44) {
+          if (start === -1) {
+            throw new SyntaxError(`Unexpected character at index ${i}`);
+          }
+          if (end === -1)
+            end = i;
+          const protocol2 = header.slice(start, end);
+          if (protocols.has(protocol2)) {
+            throw new SyntaxError(`The "${protocol2}" subprotocol is duplicated`);
+          }
+          protocols.add(protocol2);
+          start = end = -1;
+        } else {
+          throw new SyntaxError(`Unexpected character at index ${i}`);
+        }
+      }
+      if (start === -1 || end !== -1) {
+        throw new SyntaxError("Unexpected end of input");
+      }
+      const protocol = header.slice(start, i);
+      if (protocols.has(protocol)) {
+        throw new SyntaxError(`The "${protocol}" subprotocol is duplicated`);
+      }
+      protocols.add(protocol);
+      return protocols;
+    }
+    module.exports = { parse };
+  }
+});
+var require_websocket_server = __commonJS({
+  "../common/temp/node_modules/.pnpm/ws@8.18.0_bufferutil@4.0.9/node_modules/ws/lib/websocket-server.js"(exports, module) {
+    var EventEmitter8 = __require("events");
+    var http = __require("http");
+    var { Duplex } = __require("stream");
+    var { createHash } = __require("crypto");
+    var extension = require_extension();
+    var PerMessageDeflate = require_permessage_deflate();
+    var subprotocol = require_subprotocol();
+    var WebSocket2 = require_websocket();
+    var { GUID, kWebSocket } = require_constants();
+    var keyRegex = /^[+/0-9A-Za-z]{22}==$/;
+    var RUNNING = 0;
+    var CLOSING = 1;
+    var CLOSED = 2;
+    var WebSocketServer2 = class extends EventEmitter8 {
+      constructor(options, callback) {
+        super();
+        options = {
+          allowSynchronousEvents: true,
+          autoPong: true,
+          maxPayload: 100 * 1024 * 1024,
+          skipUTF8Validation: false,
+          perMessageDeflate: false,
+          handleProtocols: null,
+          clientTracking: true,
+          verifyClient: null,
+          noServer: false,
+          backlog: null,
+          server: null,
+          host: null,
+          path: null,
+          port: null,
+          WebSocket: WebSocket2,
+          ...options
+        };
+        if (options.port == null && !options.server && !options.noServer || options.port != null && (options.server || options.noServer) || options.server && options.noServer) {
+          throw new TypeError('One and only one of the "port", "server", or "noServer" options must be specified');
+        }
+        if (options.port != null) {
+          this._server = http.createServer((req, res) => {
+            const body = http.STATUS_CODES[426];
+            res.writeHead(426, {
+              "Content-Length": body.length,
+              "Content-Type": "text/plain"
+            });
+            res.end(body);
+          });
+          this._server.listen(options.port, options.host, options.backlog, callback);
+        } else if (options.server) {
+          this._server = options.server;
+        }
+        if (this._server) {
+          const emitConnection = this.emit.bind(this, "connection");
+          this._removeListeners = addListeners(this._server, {
+            listening: this.emit.bind(this, "listening"),
+            error: this.emit.bind(this, "error"),
+            upgrade: (req, socket, head) => {
+              this.handleUpgrade(req, socket, head, emitConnection);
+            }
+          });
+        }
+        if (options.perMessageDeflate === true)
+          options.perMessageDeflate = {};
+        if (options.clientTracking) {
+          this.clients = /* @__PURE__ */ new Set;
+          this._shouldEmitClose = false;
+        }
+        this.options = options;
+        this._state = RUNNING;
+      }
+      address() {
+        if (this.options.noServer) {
+          throw new Error('The server is operating in "noServer" mode');
+        }
+        if (!this._server)
+          return null;
+        return this._server.address();
+      }
+      close(cb) {
+        if (this._state === CLOSED) {
+          if (cb) {
+            this.once("close", () => {
+              cb(new Error("The server is not running"));
+            });
+          }
+          process.nextTick(emitClose, this);
+          return;
+        }
+        if (cb)
+          this.once("close", cb);
+        if (this._state === CLOSING)
+          return;
+        this._state = CLOSING;
+        if (this.options.noServer || this.options.server) {
+          if (this._server) {
+            this._removeListeners();
+            this._removeListeners = this._server = null;
+          }
+          if (this.clients) {
+            if (!this.clients.size) {
+              process.nextTick(emitClose, this);
+            } else {
+              this._shouldEmitClose = true;
+            }
+          } else {
+            process.nextTick(emitClose, this);
+          }
+        } else {
+          const server = this._server;
+          this._removeListeners();
+          this._removeListeners = this._server = null;
+          server.close(() => {
+            emitClose(this);
+          });
+        }
+      }
+      shouldHandle(req) {
+        if (this.options.path) {
+          const index = req.url.indexOf("?");
+          const pathname = index !== -1 ? req.url.slice(0, index) : req.url;
+          if (pathname !== this.options.path)
+            return false;
+        }
+        return true;
+      }
+      handleUpgrade(req, socket, head, cb) {
+        socket.on("error", socketOnError);
+        const key = req.headers["sec-websocket-key"];
+        const upgrade = req.headers.upgrade;
+        const version2 = +req.headers["sec-websocket-version"];
+        if (req.method !== "GET") {
+          const message = "Invalid HTTP method";
+          abortHandshakeOrEmitwsClientError(this, req, socket, 405, message);
+          return;
+        }
+        if (upgrade === undefined || upgrade.toLowerCase() !== "websocket") {
+          const message = "Invalid Upgrade header";
+          abortHandshakeOrEmitwsClientError(this, req, socket, 400, message);
+          return;
+        }
+        if (key === undefined || !keyRegex.test(key)) {
+          const message = "Missing or invalid Sec-WebSocket-Key header";
+          abortHandshakeOrEmitwsClientError(this, req, socket, 400, message);
+          return;
+        }
+        if (version2 !== 8 && version2 !== 13) {
+          const message = "Missing or invalid Sec-WebSocket-Version header";
+          abortHandshakeOrEmitwsClientError(this, req, socket, 400, message);
+          return;
+        }
+        if (!this.shouldHandle(req)) {
+          abortHandshake(socket, 400);
+          return;
+        }
+        const secWebSocketProtocol = req.headers["sec-websocket-protocol"];
+        let protocols = /* @__PURE__ */ new Set;
+        if (secWebSocketProtocol !== undefined) {
+          try {
+            protocols = subprotocol.parse(secWebSocketProtocol);
+          } catch (err) {
+            const message = "Invalid Sec-WebSocket-Protocol header";
+            abortHandshakeOrEmitwsClientError(this, req, socket, 400, message);
+            return;
+          }
+        }
+        const secWebSocketExtensions = req.headers["sec-websocket-extensions"];
+        const extensions = {};
+        if (this.options.perMessageDeflate && secWebSocketExtensions !== undefined) {
+          const perMessageDeflate = new PerMessageDeflate(this.options.perMessageDeflate, true, this.options.maxPayload);
+          try {
+            const offers = extension.parse(secWebSocketExtensions);
+            if (offers[PerMessageDeflate.extensionName]) {
+              perMessageDeflate.accept(offers[PerMessageDeflate.extensionName]);
+              extensions[PerMessageDeflate.extensionName] = perMessageDeflate;
+            }
+          } catch (err) {
+            const message = "Invalid or unacceptable Sec-WebSocket-Extensions header";
+            abortHandshakeOrEmitwsClientError(this, req, socket, 400, message);
+            return;
+          }
+        }
+        if (this.options.verifyClient) {
+          const info = {
+            origin: req.headers[`${version2 === 8 ? "sec-websocket-origin" : "origin"}`],
+            secure: !!(req.socket.authorized || req.socket.encrypted),
+            req
+          };
+          if (this.options.verifyClient.length === 2) {
+            this.options.verifyClient(info, (verified, code2, message, headers) => {
+              if (!verified) {
+                return abortHandshake(socket, code2 || 401, message, headers);
+              }
+              this.completeUpgrade(extensions, key, protocols, req, socket, head, cb);
+            });
+            return;
+          }
+          if (!this.options.verifyClient(info))
+            return abortHandshake(socket, 401);
+        }
+        this.completeUpgrade(extensions, key, protocols, req, socket, head, cb);
+      }
+      completeUpgrade(extensions, key, protocols, req, socket, head, cb) {
+        if (!socket.readable || !socket.writable)
+          return socket.destroy();
+        if (socket[kWebSocket]) {
+          throw new Error("server.handleUpgrade() was called more than once with the same socket, possibly due to a misconfiguration");
+        }
+        if (this._state > RUNNING)
+          return abortHandshake(socket, 503);
+        const digest = createHash("sha1").update(key + GUID).digest("base64");
+        const headers = [
+          "HTTP/1.1 101 Switching Protocols",
+          "Upgrade: websocket",
+          "Connection: Upgrade",
+          `Sec-WebSocket-Accept: ${digest}`
+        ];
+        const ws = new this.options.WebSocket(null, undefined, this.options);
+        if (protocols.size) {
+          const protocol = this.options.handleProtocols ? this.options.handleProtocols(protocols, req) : protocols.values().next().value;
+          if (protocol) {
+            headers.push(`Sec-WebSocket-Protocol: ${protocol}`);
+            ws._protocol = protocol;
+          }
+        }
+        if (extensions[PerMessageDeflate.extensionName]) {
+          const params = extensions[PerMessageDeflate.extensionName].params;
+          const value = extension.format({
+            [PerMessageDeflate.extensionName]: [params]
+          });
+          headers.push(`Sec-WebSocket-Extensions: ${value}`);
+          ws._extensions = extensions;
+        }
+        this.emit("headers", headers, req);
+        socket.write(headers.concat(`\r
+`).join(`\r
+`));
+        socket.removeListener("error", socketOnError);
+        ws.setSocket(socket, head, {
+          allowSynchronousEvents: this.options.allowSynchronousEvents,
+          maxPayload: this.options.maxPayload,
+          skipUTF8Validation: this.options.skipUTF8Validation
+        });
+        if (this.clients) {
+          this.clients.add(ws);
+          ws.on("close", () => {
+            this.clients.delete(ws);
+            if (this._shouldEmitClose && !this.clients.size) {
+              process.nextTick(emitClose, this);
+            }
+          });
+        }
+        cb(ws, req);
+      }
+    };
+    module.exports = WebSocketServer2;
+    function addListeners(server, map) {
+      for (const event of Object.keys(map))
+        server.on(event, map[event]);
+      return function removeListeners() {
+        for (const event of Object.keys(map)) {
+          server.removeListener(event, map[event]);
+        }
+      };
+    }
+    function emitClose(server) {
+      server._state = CLOSED;
+      server.emit("close");
+    }
+    function socketOnError() {
+      this.destroy();
+    }
+    function abortHandshake(socket, code2, message, headers) {
+      message = message || http.STATUS_CODES[code2];
+      headers = {
+        Connection: "close",
+        "Content-Type": "text/html",
+        "Content-Length": Buffer.byteLength(message),
+        ...headers
+      };
+      socket.once("finish", socket.destroy);
+      socket.end(`HTTP/1.1 ${code2} ${http.STATUS_CODES[code2]}\r
+` + Object.keys(headers).map((h) => `${h}: ${headers[h]}`).join(`\r
+`) + `\r
+\r
+` + message);
+    }
+    function abortHandshakeOrEmitwsClientError(server, req, socket, code2, message) {
+      if (server.listenerCount("wsClientError")) {
+        const err = new Error(message);
+        Error.captureStackTrace(err, abortHandshakeOrEmitwsClientError);
+        server.emit("wsClientError", err, socket, req);
+      } else {
+        abortHandshake(socket, code2, message);
+      }
+    }
+  }
+});
+var import_stream = __toESM(require_stream(), 1);
+var import_receiver = __toESM(require_receiver(), 1);
+var import_sender = __toESM(require_sender(), 1);
+var import_websocket = __toESM(require_websocket(), 1);
+var import_websocket_server = __toESM(require_websocket_server(), 1);
+var wrapper_default = import_websocket.default;
+var nodeWebSocket = wrapper_default;
+setDefaultWebSocketConstructor(nodeWebSocket);
 // src/redact.ts
 var API_KEY_PATTERNS = [
   /sk-[a-zA-Z0-9]{20,}/g,
@@ -11244,10 +10900,6 @@ import * as fs10 from "fs";
 import * as path10 from "path";
 import * as os from "os";
 var VERSION = "1.0.86";
-var MEMORY_VERSION = "3";
-var TASK_VERSION = "1";
-var WORK_VERSION = "4";
-var WORKFLOW_VERSION = "1";
 var LATEST_URL = "https://dl.codecast.sh/latest.json";
 var UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000;
 var CONFIG_DIR3 = process.env.HOME + "/.codecast";
@@ -11287,63 +10939,8 @@ function writeUpdateState(state) {
   } catch {
   }
 }
-function compareVersions(a, b) {
-  const partsA = a.split(".").map(Number);
-  const partsB = b.split(".").map(Number);
-  for (let i = 0;i < Math.max(partsA.length, partsB.length); i++) {
-    const numA = partsA[i] || 0;
-    const numB = partsB[i] || 0;
-    if (numA > numB)
-      return 1;
-    if (numA < numB)
-      return -1;
-  }
-  return 0;
-}
 function getVersion() {
   return VERSION;
-}
-function getMemoryVersion() {
-  return MEMORY_VERSION;
-}
-function getTaskVersion() {
-  return TASK_VERSION;
-}
-function getWorkVersion() {
-  return WORK_VERSION;
-}
-function getWorkflowVersion() {
-  return WORKFLOW_VERSION;
-}
-async function checkForUpdates(force = false) {
-  const state = readUpdateState();
-  const now = Date.now();
-  if (!force && state.lastCheck) {
-    const lastCheck = new Date(state.lastCheck).getTime();
-    if (now - lastCheck < UPDATE_CHECK_INTERVAL) {
-      if (state.availableVersion && compareVersions(state.availableVersion, VERSION) > 0) {
-        return state.availableVersion;
-      }
-      return null;
-    }
-  }
-  try {
-    const response = await fetch(LATEST_URL);
-    if (!response.ok)
-      return null;
-    const latest = await response.json();
-    state.lastCheck = new Date().toISOString();
-    if (compareVersions(latest.version, VERSION) > 0) {
-      state.availableVersion = latest.version;
-      writeUpdateState(state);
-      return latest.version;
-    }
-    state.availableVersion = undefined;
-    writeUpdateState(state);
-    return null;
-  } catch {
-    return null;
-  }
 }
 function isDevMode() {
   const exe = process.execPath.toLowerCase();
@@ -11428,35 +11025,17 @@ function ensureCastAlias() {
   } catch {
   }
 }
-function showUpdateNotice(availableVersion) {
-  console.log(`
-  Update available: v${VERSION} -> v${availableVersion}`);
-  console.log(`  Run 'cast update' to update
-`);
-}
 
 // src/reconciliation.ts
 import * as fs11 from "fs";
 import * as path11 from "path";
 var CONFIG_DIR4 = process.env.HOME + "/.codecast";
 var RECONCILIATION_FILE = path11.join(CONFIG_DIR4, "last-reconciliation.json");
-function loadLastReconciliation() {
-  try {
-    if (fs11.existsSync(RECONCILIATION_FILE)) {
-      return JSON.parse(fs11.readFileSync(RECONCILIATION_FILE, "utf-8"));
-    }
-  } catch {
-  }
-  return null;
-}
 function saveLastReconciliation(data) {
   try {
     fs11.writeFileSync(RECONCILIATION_FILE, JSON.stringify(data, null, 2));
   } catch {
   }
-}
-function getLastReconciliation() {
-  return loadLastReconciliation();
 }
 function countMessagesInFile(filePath) {
   try {
@@ -11588,11 +11167,28 @@ async function repairDiscrepancies(discrepancies, log) {
 }
 
 // src/taskScheduler.ts
-init_tmux();
 import { exec } from "child_process";
 import { promisify } from "util";
 import * as fs12 from "fs";
 import * as crypto3 from "crypto";
+
+// src/tmux.ts
+import { execSync, spawnSync } from "child_process";
+var ENRICHED_PATH = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
+var _hasTmux = null;
+function hasTmux() {
+  if (_hasTmux === null) {
+    try {
+      execSync("tmux -V", { stdio: "ignore", timeout: 2000, env: { ...process.env, PATH: ENRICHED_PATH } });
+      _hasTmux = true;
+    } catch {
+      return false;
+    }
+  }
+  return _hasTmux;
+}
+
+// src/taskScheduler.ts
 var _execAsync = promisify(exec);
 var execAsync = (cmd, opts) => _execAsync(cmd, { timeout: 1e4, ...opts });
 var POLL_INTERVAL_MS2 = 30000;
@@ -11817,9 +11413,6 @@ function formatTimeAgo(ms) {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
-// src/daemon.ts
-init_tmux();
-
 // src/jsonlGenerator.ts
 import * as fs13 from "fs";
 import * as path12 from "path";
@@ -11849,12 +11442,6 @@ function estimateTokensForMessage(msg) {
     }
   }
   return tokens;
-}
-function estimateClaudeImportTokens(data) {
-  let total = 0;
-  for (const msg of data.messages)
-    total += estimateTokensForMessage(msg);
-  return Math.ceil(total * 1.1);
 }
 function chooseClaudeTailMessagesForTokenBudget(data, budgetTokens) {
   if (budgetTokens <= 0)
@@ -14787,12 +14374,12 @@ ${snippet}
         } else {
           const hookEntry = lastHookStatus.get(sessionId);
           const hookIsRecent = hookEntry && Date.now() / 1000 - hookEntry.ts < 30;
-          if (!hookIsRecent) {
-            sendAgentStatus(syncService2, conversationId, sessionId, "working");
-          }
           const hasPendingToolCalls = (lastAssistantMessage.toolCalls?.length ?? 0) > 0 && !messages.some((m) => m.role === "assistant" && (m.toolResults?.length ?? 0) > 0 && m.timestamp >= lastAssistantMessage.timestamp);
           const hookSaysActive = hookIsRecent && hookEntry && (hookEntry.status === "working" || hookEntry.status === "thinking" || hookEntry.status === "compacting");
           if (hasPendingToolCalls || hookSaysActive) {
+            if (!hookIsRecent) {
+              sendAgentStatus(syncService2, conversationId, sessionId, "working");
+            }
             idleTimers.delete(sessionId);
           } else if (lastAssistantMessage.stopReason === "end_turn") {
             idleTimers.delete(sessionId);
@@ -14803,6 +14390,9 @@ ${snippet}
               sendAgentStatus(syncService2, conversationId, sessionId, "idle", undefined, undefined, preview);
             }
           } else {
+            if (!hookIsRecent) {
+              sendAgentStatus(syncService2, conversationId, sessionId, "working");
+            }
             const capturedSize = stats.size;
             const capturedConvId = conversationId;
             if (capturedSize !== lastIdleNotifiedSize.get(sessionId)) {
@@ -17971,7 +17561,7 @@ function findStaleCursorTranscriptFiles(maxAgeMs = 7 * 24 * 60 * 60 * 1000) {
   scanDir(cursorProjectsDir);
   return staleFiles;
 }
-function compareVersions2(a, b) {
+function compareVersions(a, b) {
   const partsA = a.split(".").map(Number);
   const partsB = b.split(".").map(Number);
   for (let i = 0;i < Math.max(partsA.length, partsB.length); i++) {
@@ -17990,7 +17580,7 @@ async function checkForForcedUpdate(syncService2) {
     if (!minVersion)
       return false;
     const currentVersion = getVersion();
-    if (compareVersions2(currentVersion, minVersion) < 0) {
+    if (compareVersions(currentVersion, minVersion) < 0) {
       logLifecycle("forced_update_start", `current=${currentVersion} min=${minVersion}`);
       await flushRemoteLogs();
       const success = await performUpdate();
@@ -19375,7 +18965,7 @@ async function runWatchdog() {
     }).catch(() => {
     });
   };
-  if (minCliVersion && compareVersions2(version2, minCliVersion) < 0) {
+  if (minCliVersion && compareVersions(version2, minCliVersion) < 0) {
     logLine(`Binary outdated: current=${version2} min=${minCliVersion}, updating...`);
     await sendWatchdogLog("info", `[LIFECYCLE] watchdog_update_start: current=${version2} min=${minCliVersion}`);
     const success = await performUpdate();
@@ -19401,7 +18991,7 @@ async function runWatchdog() {
     try {
       const state = readDaemonState();
       const daemonVersion2 = state.runtimeVersion;
-      const needsKill = daemonVersion2 ? compareVersions2(daemonVersion2, version2) < 0 : !!(minCliVersion && compareVersions2(version2, minCliVersion) >= 0);
+      const needsKill = daemonVersion2 ? compareVersions(daemonVersion2, version2) < 0 : !!(minCliVersion && compareVersions(version2, minCliVersion) >= 0);
       if (needsKill) {
         logLine(`Daemon running v${daemonVersion2 || "unknown"} but binary is v${version2}, killing to upgrade`);
         await sendWatchdogLog("info", `[LIFECYCLE] watchdog_version_mismatch: daemon=${daemonVersion2 || "unknown"} binary=${version2}, killing`);
