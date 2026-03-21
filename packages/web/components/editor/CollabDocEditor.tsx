@@ -7,12 +7,10 @@ import {
 } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
-import LinkExtension from "@tiptap/extension-link";
 import TaskList from "@tiptap/extension-task-list";
 import TaskItem from "@tiptap/extension-task-item";
 import Mention from "@tiptap/extension-mention";
 import Typography from "@tiptap/extension-typography";
-import UnderlineExtension from "@tiptap/extension-underline";
 import Highlight from "@tiptap/extension-highlight";
 import ImageExtension from "@tiptap/extension-image";
 import CodeBlockLowlight from "@tiptap/extension-code-block-lowlight";
@@ -46,6 +44,7 @@ interface CollabDocEditorProps {
   editable?: boolean;
   className?: string;
   placeholder?: string;
+  getMarkdownRef?: React.MutableRefObject<(() => string) | null>;
 }
 
 const MENTION_ROUTE_MAP: Record<string, string> = {
@@ -115,12 +114,12 @@ function buildExtensions(onMentionQuery: MentionQueryFn, placeholder: string) {
     StarterKit.configure({
       codeBlock: false,
       heading: { levels: [1, 2, 3] },
+      link: {
+        openOnClick: true,
+        HTMLAttributes: { class: "editor-link" },
+      },
     }),
     Placeholder.configure({ placeholder }),
-    LinkExtension.configure({
-      openOnClick: true,
-      HTMLAttributes: { class: "editor-link" },
-    }),
     TaskList,
     TaskItem.configure({ nested: true }),
     Mention.extend({
@@ -234,7 +233,6 @@ function buildExtensions(onMentionQuery: MentionQueryFn, placeholder: string) {
     }),
     SlashCommandExtension,
     Typography,
-    UnderlineExtension,
     Highlight.configure({ HTMLAttributes: { class: "editor-highlight" } }),
     ImageExtension.configure({ HTMLAttributes: { class: "editor-image" } }),
     CodeBlockLowlight.configure({ lowlight }),
@@ -315,12 +313,18 @@ function EditorInner({
   docId,
   editable,
   presences,
+  getMarkdownRef,
 }: {
   docId: string;
   editable: boolean;
   presences: PresenceEntry[];
+  getMarkdownRef?: React.MutableRefObject<(() => string) | null>;
 }) {
   const { editor } = useCurrentEditor();
+
+  if (getMarkdownRef && editor && !editor.isDestroyed) {
+    getMarkdownRef.current = () => (editor.storage as any).markdown.getMarkdown();
+  }
   const updatePresence = useMutation(api.docSync.updatePresence);
   const removePresence = useMutation(api.docSync.removePresence);
   const presenceTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -375,6 +379,7 @@ export function CollabDocEditor({
   editable = true,
   className = "",
   placeholder = "Start writing, use / for commands, @ to mention...",
+  getMarkdownRef,
 }: CollabDocEditorProps) {
   const syncApi = api.docSync as unknown as SyncApi;
   const sync = useTiptapSync(syncApi, docId);
@@ -427,6 +432,7 @@ export function CollabDocEditor({
           docId={docId}
           editable={editable}
           presences={presences}
+          getMarkdownRef={getMarkdownRef}
         />
       </EditorProvider>
     </div>

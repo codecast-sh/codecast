@@ -1,5 +1,6 @@
 import { useState, useCallback, useMemo } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
+import { useShortcutAction } from "../shortcuts";
 import { useRouter, usePathname } from "next/navigation";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
@@ -82,7 +83,7 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
   const { conversations: recentConversations } =
     useQuery(api.conversations.listConversations, {
       filter: "my",
-      limit: 200,
+      limit: 1000,
       include_message_previews: false,
     }) ?? { conversations: [] };
 
@@ -101,13 +102,14 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
       .map(([path]) => path);
   }, [recentConversations]);
 
+  useShortcutAction('palette.toggle', useCallback(() => {
+    if (standalone) return;
+    setOpen((prev) => !prev);
+  }, [standalone]));
+
   useWatchEffect(() => {
     if (standalone) return;
     const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
-        e.preventDefault();
-        setOpen((prev) => !prev);
-      }
       if (e.key === "Escape" && open) {
         e.preventDefault();
         setOpen(false);
@@ -200,8 +202,6 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
   const showProjects = projects.length > 0;
   const showRecent = recentConversations && recentConversations.length > 0;
 
-  if (!open && !standalone) return null;
-
   const groupClass = "px-1.5 [&_[cmdk-group-heading]]:px-2.5 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-widest [&_[cmdk-group-heading]]:text-sol-text-dim/70";
   const itemClass = "flex items-center gap-3 px-2.5 py-2 mx-1 rounded-lg text-sm text-sol-text-muted cursor-pointer transition-colors data-[selected=true]:bg-sol-cyan/10 data-[selected=true]:text-sol-text";
 
@@ -232,29 +232,15 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
       </div>
 
       <CommandPrimitive.List className="max-h-[min(60vh,480px)] overflow-y-auto overscroll-contain py-1.5 scroll-smooth">
-        <CommandPrimitive.Empty className="py-10 text-center text-sm text-sol-text-dim">
-          No results found.
-        </CommandPrimitive.Empty>
-
-        <CommandPrimitive.Group heading="Pages" className={groupClass}>
-          {NAV_PAGES.map((page) => (
-            <CommandPrimitive.Item
-              key={page.path + page.label}
-              value={`${page.label} ${page.keywords}`}
-              onSelect={() => navigate(page.path)}
-              className={itemClass}
-            >
-              <span className="text-sol-text-dim data-[selected=true]:text-sol-cyan flex-shrink-0">
-                <NavIcon type={page.icon} />
-              </span>
-              <span className="truncate">{page.label}</span>
-            </CommandPrimitive.Item>
-          ))}
-        </CommandPrimitive.Group>
+        {!query.trim() && (
+          <CommandPrimitive.Empty className="py-6 text-center text-sm text-sol-text-dim">
+            No results found.
+          </CommandPrimitive.Empty>
+        )}
 
         {showFavorites && (
           <CommandPrimitive.Group heading="Favorites" className={groupClass}>
-            {(query ? favorites! : favorites!.slice(0, 5)).map((fav) => (
+            {(query ? favorites! : favorites!.slice(0, 5)).map((fav: any) => (
               <CommandPrimitive.Item
                 key={`fav-${fav._id}`}
                 value={`favorite ${cleanTitle(fav.title || fav.session_id || "")}|||${fav._id}`}
@@ -273,7 +259,7 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
 
         {showBookmarks && (
           <CommandPrimitive.Group heading="Bookmarks" className={groupClass}>
-            {(query ? bookmarks! : bookmarks!.slice(0, 6)).map((bm) => (
+            {(query ? bookmarks! : bookmarks!.slice(0, 6)).map((bm: any) => (
               <CommandPrimitive.Item
                 key={`bm-${bm._id}`}
                 value={`bookmark ${bm.message_preview || bm.conversation_title || ""}|||${bm._id}`}
@@ -288,6 +274,41 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
             ))}
           </CommandPrimitive.Group>
         )}
+
+        {showRecent && (
+          <CommandPrimitive.Group heading="Recent Sessions" className={groupClass}>
+            {(query ? recentConversations! : recentConversations!.slice(0, 30)).map((conv: any) => (
+              <CommandPrimitive.Item
+                key={`recent-${conv._id}`}
+                value={`session ${cleanTitle(conv.title || "")} ${conv.project_path || ""}|||${conv._id}`}
+                onSelect={() => navigateToSession(conv)}
+                className={`${itemClass} group`}
+              >
+                <span className="text-sol-text-dim flex-shrink-0">
+                  <NavIcon type="session" />
+                </span>
+                <span className="truncate flex-1">{cleanTitle(conv.title || "Untitled")}</span>
+                <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{timeAgo(conv.updated_at)}</span>
+              </CommandPrimitive.Item>
+            ))}
+          </CommandPrimitive.Group>
+        )}
+
+        <CommandPrimitive.Group heading="Pages" className={groupClass}>
+          {NAV_PAGES.map((page) => (
+            <CommandPrimitive.Item
+              key={page.path + page.label}
+              value={`${page.label} ${page.keywords}`}
+              onSelect={() => navigate(page.path)}
+              className={itemClass}
+            >
+              <span className="text-sol-text-dim data-[selected=true]:text-sol-cyan flex-shrink-0">
+                <NavIcon type={page.icon} />
+              </span>
+              <span className="truncate">{page.label}</span>
+            </CommandPrimitive.Item>
+          ))}
+        </CommandPrimitive.Group>
 
         {showProjects && (
           <CommandPrimitive.Group heading="Projects" className={groupClass}>
@@ -308,24 +329,29 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
           </CommandPrimitive.Group>
         )}
 
-        {showRecent && (
-          <CommandPrimitive.Group heading="Recent Sessions" className={groupClass}>
-            {(query ? recentConversations! : recentConversations!.slice(0, 20)).map((conv) => (
-              <CommandPrimitive.Item
-                key={`recent-${conv._id}`}
-                value={`session ${cleanTitle(conv.title || "")} ${conv.project_path || ""}|||${conv._id}`}
-                onSelect={() => navigateToSession(conv)}
-                className={`${itemClass} group`}
-              >
-                <span className="text-sol-text-dim flex-shrink-0">
-                  <NavIcon type="session" />
-                </span>
-                <span className="truncate flex-1">{cleanTitle(conv.title || "Untitled")}</span>
-                <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{timeAgo(conv.updated_at)}</span>
-              </CommandPrimitive.Item>
-            ))}
-          </CommandPrimitive.Group>
-        )}
+        <CommandPrimitive.Group forceMount className={groupClass}>
+          {query.trim() && (
+            <CommandPrimitive.Item
+              value={`__compose__ ${query}`}
+              onSelect={() => {
+                if (standalone && isElectron()) {
+                  (window.__CODECAST_ELECTRON__ as any).paletteCompose(query.trim());
+                } else {
+                  setOpen(false);
+                  useInboxStore.getState().openComposePalette(query.trim());
+                }
+              }}
+              className={itemClass}
+            >
+              <span className="text-sol-yellow flex-shrink-0">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4v16m8-8H4" />
+                </svg>
+              </span>
+              <span className="truncate">New session: &ldquo;{query.trim().length > 40 ? query.trim().slice(0, 40) + "..." : query.trim()}&rdquo;</span>
+            </CommandPrimitive.Item>
+          )}
+        </CommandPrimitive.Group>
       </CommandPrimitive.List>
 
       <div className="px-3 py-2 border-t border-sol-border/60 flex items-center justify-between text-[10px] text-sol-text-dim bg-sol-bg-alt/40">
@@ -353,6 +379,8 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
   if (standalone) {
     return paletteContent;
   }
+
+  if (!open) return null;
 
   return (
     <div className="fixed inset-0 z-[9999]">

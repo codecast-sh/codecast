@@ -86,6 +86,17 @@ function EntityAwareLink({ href, children, ...props }: any) {
   return <a href={href} {...props}>{children}</a>;
 }
 
+function renderMarkdownPre(node: any, children: any, props: any) {
+  const codeElement = node?.children?.[0];
+  if (codeElement && codeElement.type === "element" && codeElement.tagName === "code") {
+    const className = codeElement.properties?.className as string[] | undefined;
+    const language = className?.find((cls) => cls.startsWith("language-"))?.replace("language-", "");
+    const code = extractTextFromHast(codeElement);
+    if (code) return <CodeBlock code={code} language={language} />;
+  }
+  return <pre {...(props as any)}>{children as any}</pre>;
+}
+
 const entityRemarkPlugins = [remarkGfm, remarkEntityIds];
 
 function parseSearchTerms(query: string): string[] {
@@ -934,7 +945,13 @@ function classifyUserMessage(
   }
   const t = content.trim();
   if (!stripSystemTags(t).trim()) return { kind: 'noise' };
-  if (isCommandMessage(t)) return { kind: 'command' };
+  if (isCommandMessage(t)) {
+    if (isSkillExpansion(t)) {
+      const cmdMatch = t.match(/<command-(?:name|message)>([^<]*)<\/command-(?:name|message)>/);
+      return { kind: 'skill_expansion', cmdName: cmdMatch?.[1]?.replace(/^\//, "") };
+    }
+    return { kind: 'command' };
+  }
   if (agentType === "codex" && isCodexTurnAbortedMessage(t)) return { kind: 'interrupt', tone: 'amber' };
   if (isInterruptMessage(t)) return { kind: 'interrupt', tone: 'sky' };
   if (isSkillExpansion(t)) return { kind: 'skill_expansion' };
@@ -1244,14 +1261,6 @@ function TaskToolBlock({ tool, result, childConversationId, childConversations }
             </span>
           )}
           {description && <span className="text-sol-text-dim truncate flex-1">{description}</span>}
-          {resolvedChildId && (
-            <span className={`ml-auto flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-medium ${colors.text} ${colors.bg} border ${colors.border}`}>
-              open
-              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-              </svg>
-            </span>
-          )}
         </div>
       </div>
     );
@@ -1262,7 +1271,7 @@ function TaskToolBlock({ tool, result, childConversationId, childConversations }
       <div className={`my-3 rounded-lg ${result?.is_error ? "bg-sol-red/10 border-sol-red/30" : `${colors.bg} ${colors.border}`} border`}>
         <div
           className="px-3 py-2 flex items-center gap-2 cursor-pointer hover:bg-sol-bg-highlight/50 transition-colors"
-          onClick={() => resolvedChildId ? router.push(`/conversation/${resolvedChildId}`) : setExpanded(!expanded)}
+          onClick={() => setExpanded(!expanded)}
         >
           <span className={`text-[10px] ${result?.is_error ? "text-sol-red" : "text-emerald-400"}`}>
             {result?.is_error ? "\u2717" : "\u2713"}
@@ -1278,49 +1287,50 @@ function TaskToolBlock({ tool, result, childConversationId, childConversations }
               {description}
             </span>
           )}
-          {resolvedChildId ? (
-            <span className={`ml-auto flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium ${colors.text} ${colors.bg} border ${colors.border}`}>
+          <span className="text-sol-text-dim text-[10px] ml-auto">
+            {expanded ? "collapse" : "expand"}
+          </span>
+        </div>
+
+        {expanded && (
+          <>
+            {prompt && (
+              <div className="border-t border-sol-border/30 px-3 py-2">
+                <div className="text-[10px] text-sol-text-dim mb-1">Prompt</div>
+                <div className="text-sol-text-dim text-xs font-mono whitespace-pre-wrap break-words leading-relaxed max-h-40 overflow-y-auto">
+                  {prompt}
+                </div>
+              </div>
+            )}
+            {result && (
+              <div className="border-t border-sol-border/30 px-3 py-2">
+                <div className="text-[10px] text-sol-text-dim mb-1">Result</div>
+                <div className={`text-xs max-h-96 overflow-y-auto ${
+                  result.is_error ? "text-sol-red font-mono whitespace-pre-wrap" : "text-sol-text-secondary prose prose-sm prose-invert max-w-none [&_pre]:bg-sol-bg/50 [&_pre]:border [&_pre]:border-sol-border/30 [&_pre]:rounded [&_pre]:text-[11px] [&_code]:text-[11px] [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0 [&_h1]:text-sm [&_h2]:text-xs [&_h3]:text-xs [&_h1]:mt-2 [&_h2]:mt-2 [&_h3]:mt-1"
+                }`}>
+                  {result.is_error ? result.content : (
+                    <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={[rehypeHighlight]} components={{ code: EntityAwareCode, a: EntityAwareLink }}>
+                      {result.content}
+                    </ReactMarkdown>
+                  )}
+                </div>
+              </div>
+            )}
+          </>
+        )}
+
+        {resolvedChildId && (
+          <div className="border-t border-sol-border/30 px-2 py-1.5 flex justify-end">
+            <span
+              className={`flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium cursor-pointer hover:brightness-125 transition ${colors.text} ${colors.bg} border ${colors.border}`}
+              onClick={(e) => { e.stopPropagation(); router.push(`/conversation/${resolvedChildId}`); }}
+            >
               open
               <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
               </svg>
             </span>
-          ) : (
-            <span className="text-sol-text-dim text-[10px] ml-auto">
-              {expanded ? "collapse" : "expand"}
-            </span>
-          )}
-        </div>
-
-        {resultSummary && !expanded && (
-          <div className="px-3 pb-2">
-            <pre className={`text-xs font-mono whitespace-pre-wrap break-words leading-relaxed ${
-              result?.is_error ? "text-sol-red/80" : "text-sol-text-secondary"
-            }`}>
-              {resultSummary}
-            </pre>
           </div>
-        )}
-
-        {expanded && (
-          <>
-            <div className="border-t border-sol-border/30 px-3 py-2">
-              <div className="text-[10px] text-sol-text-dim mb-1">Prompt</div>
-              <div className="text-sol-text-dim text-xs font-mono whitespace-pre-wrap break-words leading-relaxed max-h-40 overflow-y-auto">
-                {prompt}
-              </div>
-            </div>
-            {result && (
-              <div className="border-t border-sol-border/30 px-3 py-2">
-                <div className="text-[10px] text-sol-text-dim mb-1">Result</div>
-                <pre className={`text-xs font-mono whitespace-pre-wrap overflow-x-auto max-h-60 overflow-y-auto ${
-                  result.is_error ? "text-sol-red" : "text-sol-text-secondary"
-                }`}>
-                  {result.content}
-                </pre>
-              </div>
-            )}
-          </>
         )}
       </div>
     );
@@ -1332,7 +1342,7 @@ function TaskToolBlock({ tool, result, childConversationId, childConversations }
     <div className={`my-3 rounded-lg ${colors.bg} border ${colors.border}`}>
       <div
         className="px-3 py-2 flex items-center gap-2 cursor-pointer hover:bg-sol-bg-highlight/50 transition-colors"
-        onClick={() => resolvedChildId ? router.push(`/conversation/${resolvedChildId}`) : setExpanded(!expanded)}
+        onClick={() => setExpanded(!expanded)}
       >
         <span className={`w-2.5 h-2.5 rounded-full border border-current border-t-transparent animate-spin ${colors.text} opacity-60`} />
         <span className={`font-mono text-xs font-semibold ${colors.text}`}>
@@ -1359,18 +1369,9 @@ function TaskToolBlock({ tool, result, childConversationId, childConversations }
         {runInBackground && (
           <span className="text-sol-text-dim text-[10px]">background</span>
         )}
-        {resolvedChildId ? (
-          <span className={`ml-auto flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium ${colors.text} ${colors.bg} border ${colors.border}`}>
-            open
-            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-            </svg>
-          </span>
-        ) : (
-          <span className="text-sol-text-dim text-[10px] ml-auto">
-            {expanded ? "collapse" : "expand"}
-          </span>
-        )}
+        <span className="text-sol-text-dim text-[10px] ml-auto">
+          {expanded ? "collapse" : "expand"}
+        </span>
       </div>
 
       <div className="px-3 pb-2">
@@ -1386,6 +1387,20 @@ function TaskToolBlock({ tool, result, childConversationId, childConversations }
           </button>
         )}
       </div>
+
+      {resolvedChildId && (
+        <div className="border-t border-sol-border/30 px-2 py-1.5 flex justify-end">
+          <span
+            className={`flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium cursor-pointer hover:brightness-125 transition ${colors.text} ${colors.bg} border ${colors.border}`}
+            onClick={(e) => { e.stopPropagation(); router.push(`/conversation/${resolvedChildId}`); }}
+          >
+            open
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+            </svg>
+          </span>
+        </div>
+      )}
     </div>
   );
 }
@@ -3297,16 +3312,7 @@ function SkillExpansionBlock({ content, timestamp, cmdName, collapsed }: { conte
               code: EntityAwareCode,
               a: EntityAwareLink,
               img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} />,
-              pre: ({ node, children, ...props }) => {
-                const codeElement = node?.children?.[0];
-                if (codeElement && codeElement.type === 'element' && codeElement.tagName === 'code') {
-                  const className = codeElement.properties?.className as string[] | undefined;
-                  const language = className?.find((cls) => cls.startsWith('language-'))?.replace('language-', '');
-                  const code = extractTextFromHast(codeElement);
-                  if (code) return <CodeBlock code={code} language={language} />;
-                }
-                return <pre {...props}>{children}</pre>;
-              },
+              pre: ({ node, children, ...props }) => renderMarkdownPre(node, children, props),
             }}
           >{content
             .replace(/<command-name>[^<]*<\/command-name>\s*/g, "")
@@ -3389,14 +3395,43 @@ const taskStatusConfig: Record<string, { icon: string; color: string; bg: string
   running: { icon: '\u25B6', color: 'text-sol-blue', bg: 'bg-sol-blue/10 border-sol-blue/20' },
 };
 
-function TaskNotificationLine({ content, timestamp }: { content: string; timestamp: number }) {
+function TaskNotificationLine({ content, timestamp, agentNameToChildMap, childConversations }: { content: string; timestamp: number; agentNameToChildMap?: Record<string, string>; childConversations?: Array<{ _id: string; title: string; is_subagent?: boolean; first_message_preview?: string }> }) {
   const parsed = parseTaskNotification(content);
+  const router = useRouter();
   if (!parsed) return null;
   const cfg = taskStatusConfig[parsed.status] || taskStatusConfig.killed;
+
+  let childId: string | undefined;
+  const nameMatch = parsed.summary.match(/['\u201c\u201d"](.*?)['\u201c\u201d"]/);
+  const agentName = nameMatch?.[1];
+  if (agentName && agentNameToChildMap?.[agentName]) {
+    childId = agentNameToChildMap[agentName];
+  }
+  if (!childId && agentName && childConversations) {
+    const lowerName = agentName.toLowerCase();
+    const nameWords = lowerName.split(/\s+/).filter(w => w.length > 2);
+    childId = childConversations.find(c => {
+      if (!c.is_subagent || !c.title) return false;
+      const lowerTitle = c.title.toLowerCase();
+      if (lowerTitle.includes(lowerName) || lowerName.includes(lowerTitle)) return true;
+      const titleWords = lowerTitle.split(/\s+/).filter(w => w.length > 2);
+      const matchCount = nameWords.filter(w => titleWords.some(tw => tw.startsWith(w) || w.startsWith(tw))).length;
+      return matchCount >= Math.min(nameWords.length, titleWords.length) - 1 && matchCount >= 2;
+    })?._id;
+  }
+
   return (
-    <div className={`mb-2 px-3 py-2 flex items-center gap-2.5 text-xs border rounded ${cfg.bg}`}>
+    <div
+      className={`mb-2 px-3 py-2 flex items-center gap-2.5 text-xs border rounded ${cfg.bg}${childId ? " cursor-pointer hover:brightness-125 transition-all" : ""}`}
+      onClick={childId ? () => router.push(`/conversation/${childId}`) : undefined}
+    >
       <span className={`font-mono text-sm leading-none shrink-0 ${cfg.color}`}>{cfg.icon}</span>
       <span className="text-sol-text-muted min-w-0 truncate">{parsed.summary}</span>
+      {childId && (
+        <svg className={`w-3 h-3 shrink-0 ${cfg.color}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+        </svg>
+      )}
       <span className="text-sol-text-dim font-mono text-[10px] ml-auto shrink-0">{parsed.taskId}</span>
       <span className="text-sol-text-dim shrink-0 whitespace-nowrap" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
     </div>
@@ -3483,16 +3518,7 @@ function InsightCard({ label, content }: { label: string; content: string }) {
           components={{
             code: EntityAwareCode,
             a: EntityAwareLink,
-            pre: ({ node, children, ...props }) => {
-              const codeElement = node?.children?.[0];
-              if (codeElement && codeElement.type === 'element' && codeElement.tagName === 'code') {
-                const className = codeElement.properties?.className as string[] | undefined;
-                const language = className?.find((cls) => cls.startsWith('language-'))?.replace('language-', '');
-                const code = extractTextFromHast(codeElement);
-                if (code) return <CodeBlock code={code} language={language} />;
-              }
-              return <pre {...props}>{children}</pre>;
-            },
+            pre: ({ node, children, ...props }) => renderMarkdownPre(node, children, props),
           }}
         >{content}</ReactMarkdown>
       </div>
@@ -3881,16 +3907,7 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
                   <TeammateMessageCard key={i} teammateId={part.teammateId} color={part.color} summary={part.summary} content={part.content} />
                 ) : hasRichMarkdown(part.content) ? (
                   <ReactMarkdown key={i} remarkPlugins={entityRemarkPlugins} rehypePlugins={[rehypeHighlight]}
-                    components={{ code: EntityAwareCode, a: EntityAwareLink, img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} />, pre: ({ node, children, ...props }) => {
-                      const codeElement = node?.children?.[0];
-                      if (codeElement && codeElement.type === 'element' && codeElement.tagName === 'code') {
-                        const className = codeElement.properties?.className as string[] | undefined;
-                        const language = className?.find((cls) => cls.startsWith('language-'))?.replace('language-', '');
-                        const code = extractTextFromHast(codeElement);
-                        if (code) return <CodeBlock code={code} language={language} />;
-                      }
-                      return <pre {...props}>{children}</pre>;
-                    }}}
+                    components={{ code: EntityAwareCode, a: EntityAwareLink, img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} />, pre: ({ node, children, ...props }) => renderMarkdownPre(node, children, props) }}
                   >{part.content}</ReactMarkdown>
                 ) : <span key={i} className="whitespace-pre-wrap">{part.content}</span>)}
               </div>
@@ -3905,16 +3922,7 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
                   <SkillCard key={i} name={part.skillName} description={part.skillDesc} path={part.skillPath} />
                 ) : isMarkdown || hasRichMarkdown(part.content) ? (
                   <ReactMarkdown key={i} remarkPlugins={entityRemarkPlugins} rehypePlugins={[rehypeHighlight]}
-                    components={{ code: EntityAwareCode, a: EntityAwareLink, img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} />, pre: ({ node, children, ...props }) => {
-                      const codeElement = node?.children?.[0];
-                      if (codeElement && codeElement.type === 'element' && codeElement.tagName === 'code') {
-                        const className = codeElement.properties?.className as string[] | undefined;
-                        const language = className?.find((cls) => cls.startsWith('language-'))?.replace('language-', '');
-                        const code = extractTextFromHast(codeElement);
-                        if (code) return <CodeBlock code={code} language={language} />;
-                      }
-                      return <pre {...props}>{children}</pre>;
-                    }}}
+                    components={{ code: EntityAwareCode, a: EntityAwareLink, img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} />, pre: ({ node, children, ...props }) => renderMarkdownPre(node, children, props) }}
                   >{part.content}</ReactMarkdown>
                 ) : <span key={i}>{part.content}</span>)}
               </div>
@@ -3928,16 +3936,7 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
                 code: EntityAwareCode,
                 a: EntityAwareLink,
                 img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} />,
-                pre: ({ node, children, ...props }) => {
-                  const codeElement = node?.children?.[0];
-                  if (codeElement && codeElement.type === 'element' && codeElement.tagName === 'code') {
-                    const className = codeElement.properties?.className as string[] | undefined;
-                    const language = className?.find((cls) => cls.startsWith('language-'))?.replace('language-', '');
-                    const code = extractTextFromHast(codeElement);
-                    if (code) return <CodeBlock code={code} language={language} />;
-                  }
-                  return <pre {...props}>{children}</pre>;
-                },
+                pre: ({ node, children, ...props }) => renderMarkdownPre(node, children, props),
               }}
             >{displayContent}</ReactMarkdown>
           ) : displayContent;
@@ -4028,7 +4027,7 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
                           return <CodeBlock code={code} language={language} />;
                         }
                       }
-                      return <pre {...props}>{children}</pre>;
+                      return <pre {...(props as any)}>{children as any}</pre>;
                     },
                   }}
                 >
@@ -4432,16 +4431,7 @@ function AssistantBlock({
                             code: EntityAwareCode,
                             a: EntityAwareLink,
                             img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} />,
-                            pre: ({ node, children, ...props }) => {
-                              const codeElement = node?.children?.[0];
-                              if (codeElement && codeElement.type === 'element' && codeElement.tagName === 'code') {
-                                const className = codeElement.properties?.className as string[] | undefined;
-                                const language = className?.find((cls) => cls.startsWith('language-'))?.replace('language-', '');
-                                const code = extractTextFromHast(codeElement);
-                                if (code) return <CodeBlock code={code} language={language} />;
-                              }
-                              return <pre {...props}>{children}</pre>;
-                            },
+                            pre: ({ node, children, ...props }) => renderMarkdownPre(node, children, props),
                           }}
                         >{part.content}</ReactMarkdown>
                       ))}
@@ -4454,16 +4444,7 @@ function AssistantBlock({
                         code: EntityAwareCode,
                         a: EntityAwareLink,
                         img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} />,
-                        pre: ({ node, children, ...props }) => {
-                          const codeElement = node?.children?.[0];
-                          if (codeElement && codeElement.type === 'element' && codeElement.tagName === 'code') {
-                            const className = codeElement.properties?.className as string[] | undefined;
-                            const language = className?.find((cls) => cls.startsWith('language-'))?.replace('language-', '');
-                            const code = extractTextFromHast(codeElement);
-                            if (code) return <CodeBlock code={code} language={language} />;
-                          }
-                          return <pre {...props}>{children}</pre>;
-                        },
+                        pre: ({ node, children, ...props }) => renderMarkdownPre(node, children, props),
                       }}
                     >
                       {displayContent}
@@ -4541,7 +4522,7 @@ function AssistantBlock({
                             return <CodeBlock code={code} language={language} />;
                           }
                         }
-                        return <pre {...props}>{children}</pre>;
+                        return <pre {...(props as any)}>{children as any}</pre>;
                       },
                     }}
                   >
@@ -4943,18 +4924,7 @@ function PlanBlock({ content, timestamp, collapsed, messageId, conversationId, o
               code: EntityAwareCode,
               a: EntityAwareLink,
               img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} />,
-              pre: ({ node, children, ...props }) => {
-                const codeElement = node?.children?.[0];
-                if (codeElement && codeElement.type === 'element' && codeElement.tagName === 'code') {
-                  const className = codeElement.properties?.className as string[] | undefined;
-                  const language = className?.find((cls) => cls.startsWith('language-'))?.replace('language-', '');
-                  const code = extractTextFromHast(codeElement);
-                  if (code) {
-                    return <CodeBlock code={code} language={language} />;
-                  }
-                }
-                return <pre {...props}>{children}</pre>;
-              },
+              pre: ({ node, children, ...props }) => renderMarkdownPre(node, children, props),
             }}
           >
             {content}
@@ -5009,18 +4979,7 @@ function PlanBlock({ content, timestamp, collapsed, messageId, conversationId, o
                   code: EntityAwareCode,
                   a: EntityAwareLink,
                   img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} />,
-                  pre: ({ node, children, ...props }) => {
-                    const codeElement = node?.children?.[0];
-                    if (codeElement && codeElement.type === 'element' && codeElement.tagName === 'code') {
-                      const className = codeElement.properties?.className as string[] | undefined;
-                      const language = className?.find((cls) => cls.startsWith('language-'))?.replace('language-', '');
-                      const code = extractTextFromHast(codeElement);
-                      if (code) {
-                        return <CodeBlock code={code} language={language} />;
-                      }
-                    }
-                    return <pre {...props}>{children}</pre>;
-                  },
+                  pre: ({ node, children, ...props }) => renderMarkdownPre(node, children, props),
                 }}
               >
                 {content}
@@ -6723,6 +6682,16 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const [showThinking, setShowThinking] = useState(false);
   const [expandedSequences, setExpandedSequences] = useState<Set<string>>(new Set());
   const [diffExpanded, setDiffExpanded] = useState(false);
+  const renamingSessionId = useInboxStore((s) => s.renamingSessionId);
+  const isRenaming = renamingSessionId === conversation?._id;
+  const [renameDraft, setRenameDraft] = useState("");
+  const renameInputRef = useRef<HTMLInputElement>(null);
+  useWatchEffect(() => {
+    if (isRenaming) {
+      setRenameDraft(cleanTitle(conversation?.title || ""));
+      setTimeout(() => renameInputRef.current?.select(), 0);
+    }
+  }, [isRenaming]);
   const [commentMessageId, setCommentMessageId] = useState<Id<"messages"> | null>(null);
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const [allMatchingMessageIds, setAllMatchingMessageIds] = useState<string[]>([]);
@@ -7213,6 +7182,21 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         break;
       }
       map.set(msg._id, classifyUserMessage(msg, conversation?.agent_type, immediatePrev, contextPrev));
+    }
+    let prevUserMsgId: string | null = null;
+    for (let i = 0; i < timeline.length; i++) {
+      const item = timeline[i];
+      if (item.type !== 'message') continue;
+      const msg = item.data as Message;
+      if (msg.role !== 'user') continue;
+      const kind = map.get(msg._id);
+      if (kind?.kind === 'skill_expansion' && prevUserMsgId) {
+        const prevKind = map.get(prevUserMsgId);
+        if (prevKind?.kind === 'command') {
+          map.set(prevUserMsgId, { kind: 'noise' });
+        }
+      }
+      prevUserMsgId = msg._id;
     }
     return map;
   }, [timeline, conversation?.agent_type]);
@@ -8449,7 +8433,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           return <SkillExpansionBlock key={msg._id} content={msg.content!} timestamp={msg.timestamp} cmdName={kind.cmdName} collapsed={collapsed} />;
         case 'task_notification':
           if (collapsed) return null;
-          return <TaskNotificationLine key={msg._id} content={msg.content!} timestamp={msg.timestamp} />;
+          return <TaskNotificationLine key={msg._id} content={msg.content!} timestamp={msg.timestamp} agentNameToChildMap={agentNameToChildMap} childConversations={conversation?.child_conversations} />;
         case 'task_prompt':
           return null;
         case 'compaction_summary':
@@ -8641,7 +8625,33 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         <div className="px-2 py-0.5 sm:py-1">
           <div className="flex items-center gap-2 min-w-0 select-none">
             {headerLeft}
-            <h1 className="text-xs sm:text-sm font-medium text-sol-text-secondary truncate min-w-0 flex-1 cursor-default" title={conversation?.messages?.[0]?.content ? cleanContent(conversation.messages[0].content)?.slice(0, 200) ?? undefined : undefined}>{truncatedTitle}</h1>
+            {isRenaming ? (
+              <input
+                ref={renameInputRef}
+                value={renameDraft}
+                onChange={(e) => setRenameDraft(e.target.value)}
+                onBlur={() => {
+                  const trimmed = renameDraft.trim();
+                  if (trimmed && trimmed !== cleanTitle(conversation?.title || "")) {
+                    useInboxStore.getState().renameSession(conversation!._id, trimmed);
+                  }
+                  useInboxStore.setState({ renamingSessionId: null });
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") { e.currentTarget.blur(); }
+                  if (e.key === "Escape") { useInboxStore.setState({ renamingSessionId: null }); }
+                }}
+                className="text-xs sm:text-sm font-medium text-sol-text-secondary min-w-0 flex-1 bg-transparent border-b border-sol-cyan focus:outline-none"
+              />
+            ) : (
+              <h1
+                className="text-xs sm:text-sm font-medium text-sol-text-secondary truncate min-w-0 flex-1 cursor-default"
+                title={conversation?.messages?.[0]?.content ? cleanContent(conversation.messages[0].content)?.slice(0, 200) ?? undefined : undefined}
+                onDoubleClick={() => { if (isOwner) useInboxStore.setState({ renamingSessionId: conversation!._id }); }}
+              >
+                {truncatedTitle}
+              </h1>
+            )}
 
             {isSessionDisconnected ? (
               <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] flex-shrink-0 bg-sol-text-dim/5 text-sol-text-dim/50 border border-sol-text-dim/10">
@@ -8867,6 +8877,15 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                       </svg>
                       Copy all messages
                     </DropdownMenuItem>
+                    {isOwner && (
+                      <DropdownMenuItem onSelect={() => setTimeout(() => useInboxStore.setState({ renamingSessionId: conversation._id }))}>
+                        <svg className="w-3 h-3 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                        </svg>
+                        Rename
+                        <kbd className="ml-auto text-[9px] text-sol-text-dim bg-sol-bg-alt border border-sol-border rounded px-1 py-0.5">⌃⇧E</kbd>
+                      </DropdownMenuItem>
+                    )}
                     {conversation?.session_id && (
                       <>
                         <DropdownMenuItem onSelect={() => setTimeout(() => handleCopyResumeCommand("claude"))}>

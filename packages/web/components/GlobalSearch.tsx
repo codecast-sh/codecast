@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useEventListener } from "../hooks/useEventListener";
+import { useShortcutAction } from "../shortcuts";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useRouter } from "next/navigation";
@@ -138,12 +139,12 @@ export function GlobalSearch() {
     return date.toLocaleDateString([], { month: "short", day: "numeric" }) + ` ${timeStr}`;
   };
 
+  useShortcutAction('search.open', useCallback(() => {
+    setIsOpen(true);
+    setTimeout(() => inputRef.current?.focus(), 0);
+  }, []));
+
   useEventListener("keydown", (e: KeyboardEvent) => {
-    if ((e.metaKey || e.ctrlKey) && e.key === "/") {
-      e.preventDefault();
-      setIsOpen(true);
-      setTimeout(() => inputRef.current?.focus(), 0);
-    }
     if (e.key === "Escape") {
       setIsOpen(false);
       setQuery("");
@@ -324,7 +325,7 @@ export function GlobalSearch() {
                       className="px-1.5 py-0.5 bg-sol-bg rounded border border-sol-border text-sol-text-secondary cursor-pointer focus:outline-none focus:ring-1 focus:ring-amber-500/50"
                     >
                       <option value="">All teams</option>
-                      {userTeams.map((team) => (
+                      {userTeams.map((team: any) => (
                         <option key={team?._id} value={team?._id}>
                           {team?.name}
                         </option>

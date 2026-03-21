@@ -174,6 +174,7 @@ export default function PlanDetailPage() {
           onTitleChange={handleTitleChange}
           backHref="/plans"
           placeholder="Write plan details, notes, or documentation..."
+          contextType="plan"
           topBarLeft={
             <>
               <PlanStatusSelector value={plan.status} onChange={handleStatusChange} />
@@ -271,7 +272,7 @@ export default function PlanDetailPage() {
                       : "text-sol-text-dim border-transparent hover:text-sol-text-muted"
                   }`}
                 >
-                  <Icon className={`w-3.5 h-3.5 ${key === "orchestration" && hasActiveSessions ? "text-emerald-400" : ""}`} />
+                  <Icon className={`w-3.5 h-3.5 ${key === "orchestration" && hasActiveSessions ? "text-emerald-600 dark:text-emerald-400" : ""}`} />
                   {label}
                   {key === "orchestration" && hasActiveSessions && (
                     <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />

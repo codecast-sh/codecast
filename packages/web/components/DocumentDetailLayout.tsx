@@ -1,10 +1,13 @@
 "use client";
-import { useState } from "react";
+import { useRef, useState, useCallback } from "react";
 import { CollabDocEditor } from "./editor/CollabDocEditor";
 import { useMentionQuery } from "../hooks/useMentionQuery";
 import { ErrorBoundary } from "./ErrorBoundary";
+import { ContextChatInput } from "./ContextChatInput";
 import { ArrowLeft, Edit3, Eye, MoreHorizontal, Copy, Check } from "lucide-react";
 import Link from "next/link";
+import { copyToClipboard } from "../lib/utils";
+import { toast } from "sonner";
 
 interface DocumentDetailLayoutProps {
   docId: string;
@@ -18,6 +21,7 @@ interface DocumentDetailLayoutProps {
   topBarRight?: React.ReactNode;
   metaContent?: React.ReactNode;
   children?: React.ReactNode;
+  contextType?: string;
 }
 
 export function DocumentDetailLayout({
@@ -32,17 +36,28 @@ export function DocumentDetailLayout({
   topBarRight,
   metaContent,
   children,
+  contextType = "doc",
 }: DocumentDetailLayoutProps) {
   const [isEditing, setIsEditing] = useState(initialEditable);
   const [showMeta, setShowMeta] = useState(false);
   const [copied, setCopied] = useState(false);
   const handleMentionQuery = useMentionQuery();
+  const getMarkdownRef = useRef<(() => string) | null>(null);
+  const getContextBody = useCallback(
+    () => getMarkdownRef.current?.() ?? markdownContent,
+    [markdownContent]
+  );
 
   const handleCopyMarkdown = () => {
-    const full = title ? `# ${title}\n\n${markdownContent}` : markdownContent;
-    navigator.clipboard.writeText(full);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    const md = getMarkdownRef.current?.() ?? markdownContent;
+    const full = title ? `# ${title}\n\n${md}` : md;
+    copyToClipboard(full)
+      .then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+        toast.success("Copied!");
+      })
+      .catch(() => toast.error("Failed to copy"));
   };
 
   return (
@@ -96,7 +111,8 @@ export function DocumentDetailLayout({
       )}
 
       <div className="flex-1 overflow-y-auto">
-        <div className="max-w-5xl mx-auto px-10 pt-10 pb-32">
+        <div className="flex flex-col min-h-full">
+        <div className="flex-1 max-w-5xl mx-auto px-10 pt-10 pb-8 w-full">
           <h1
             contentEditable={isEditing}
             suppressContentEditableWarning
@@ -119,6 +135,7 @@ export function DocumentDetailLayout({
                 onMentionQuery={handleMentionQuery}
                 editable={isEditing}
                 placeholder={placeholder}
+                getMarkdownRef={getMarkdownRef}
               />
             </ErrorBoundary>
           </div>
@@ -128,6 +145,12 @@ export function DocumentDetailLayout({
               {children}
             </div>
           )}
+        </div>
+        <ContextChatInput
+          contextType={contextType}
+          contextTitle={title || "Untitled"}
+          getContextBody={getContextBody}
+        />
         </div>
       </div>
     </div>

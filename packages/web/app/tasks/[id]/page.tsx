@@ -6,6 +6,7 @@ import { useMutation, useQuery } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, TaskDetail, TaskItem } from "../../../store/inboxStore";
 import { useSyncTaskDetail } from "../../../hooks/useSyncTasks";
+import { useMentionQuery } from "../../../hooks/useMentionQuery";
 import { TaskCommandPalette } from "../../../components/TaskCommandPalette";
 import { WorkflowContextPanel } from "../../../components/WorkflowContextPanel";
 import { MarkdownRenderer } from "../../../components/tools/MarkdownRenderer";
@@ -14,6 +15,7 @@ import "../../../components/editor/editor.css";
 import { toast } from "sonner";
 import { AuthGuard } from "../../../components/AuthGuard";
 import { DashboardLayout } from "../../../components/DashboardLayout";
+import { ContextChatInput } from "../../../components/ContextChatInput";
 
 const api = _api as any;
 import { Badge } from "../../../components/ui/badge";
@@ -410,6 +412,7 @@ function ExecutionDetailsSection({ data }: { data: any }) {
 }
 
 export default function TaskDetailPage() {
+  const handleMentionQuery = useMentionQuery();
   const params = useParams();
   const router = useRouter();
   const id = params.id as string;
@@ -501,6 +504,17 @@ export default function TaskDetailPage() {
       setSubmittingComment(false);
     }
   }, [comment, commentImages, data?.short_id, submittingComment, webAddComment]);
+
+  const getTaskContextBody = useCallback(() => {
+    if (!data) return "";
+    const parts: string[] = [];
+    if (data.short_id) parts.push(`ID: ${data.short_id}`);
+    if (data.status) parts.push(`Status: ${data.status}`);
+    if (data.priority) parts.push(`Priority: ${data.priority}`);
+    if (data.description) parts.push(`\n${data.description}`);
+    if ((data as any).acceptance_criteria?.length) parts.push(`\nAcceptance Criteria:\n${(data as any).acceptance_criteria.map((c: string) => `- ${c}`).join("\n")}`);
+    return parts.join("\n");
+  }, [data]);
 
   const startEditTitle = useCallback(() => {
     if (!data) return;
@@ -600,7 +614,8 @@ export default function TaskDetailPage() {
           </div>
         )}
         <div className="flex-1 overflow-y-auto">
-        <div className="max-w-4xl mx-auto px-6 py-6">
+        <div className="flex flex-col min-h-full">
+        <div className="flex-1 max-w-4xl mx-auto px-6 py-6 w-full">
           <Link
             href="/tasks"
             className="inline-flex items-center gap-1.5 text-sm text-sol-text-dim hover:text-sol-cyan transition-colors mb-4"
@@ -752,6 +767,7 @@ export default function TaskDetailPage() {
                   handleUpdate({ description: md });
                 }
               }}
+              onMentionQuery={handleMentionQuery}
               editable={true}
               placeholder="Add a description..."
             />
@@ -939,6 +955,12 @@ export default function TaskDetailPage() {
             </div>
           </div>
 
+        </div>
+        <ContextChatInput
+          contextType="task"
+          contextTitle={data.title}
+          getContextBody={getTaskContextBody}
+        />
         </div>
         </div>
 

@@ -1,11 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import Link from "next/link";
 import { useQuery, useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { AuthGuard } from "../../components/AuthGuard";
 import { DashboardLayout } from "../../components/DashboardLayout";
+import { ContextChatInput } from "../../components/ContextChatInput";
 import { WorkflowGraphView, type WFNode, type WFEdge } from "../../components/WorkflowGraphView";
 import { GitBranch, Clock, ChevronRight, X, Terminal, Bot, User, Zap, GitFork, Merge, Play, Pause, CheckCircle, XCircle, Loader2, ExternalLink, Square, Timer, AlertCircle } from "lucide-react";
 
@@ -452,6 +453,14 @@ function WorkflowsContent() {
 
   const selected = workflows?.find(w => w._id === selectedId) ?? (workflows?.[0] ?? null);
 
+  const getWorkflowContextBody = useCallback(() => {
+    if (!selected) return "";
+    const parts = [`Workflow: ${selected.name}`];
+    if (selected.goal) parts.push(`Goal: ${selected.goal}`);
+    parts.push(`Nodes: ${selected.nodes.map((n: WFNode) => `${n.id} (${n.type}: ${n.label})`).join(", ")}`);
+    return parts.join("\n");
+  }, [selected]);
+
   const activeRun = useQuery(
     api.workflow_runs.get,
     activeRunId ? { id: activeRunId } : "skip"
@@ -591,6 +600,12 @@ function WorkflowsContent() {
                 />
               )}
             </div>
+
+            <ContextChatInput
+              contextType="workflow"
+              contextTitle={selected.name}
+              getContextBody={getWorkflowContextBody}
+            />
           </>
         )}
       </div>
