@@ -138,6 +138,7 @@ export const create = mutation({
       thread_id: args.thread_id,
       fidelity: args.fidelity,
       condition: args.condition,
+      project_path: args.project_path,
     } as any);
 
     if (plan_id) {
@@ -210,15 +211,15 @@ export const snippet = query({
 
     const tasks = await db.query("tasks").collect();
 
-    const activeTasks = tasks.filter(t =>
+    const activeTasks = tasks.filter((t: any) =>
       (t.status === "open" || t.status === "in_progress" || t.status === "in_review") &&
       (t.source !== "insight" || t.promoted === true)
     );
 
-    const userIds = [...new Set(activeTasks.map(t => t.user_id))];
+    const userIds = [...new Set(activeTasks.map((t: any) => t.user_id as Id<"users">))] as Id<"users">[];
     const userMap = new Map<string, string>();
     for (const uid of userIds) {
-      const u = await ctx.db.get(uid);
+      const u = await ctx.db.get(uid) as any;
       if (u) userMap.set(uid.toString(), u.name || u.email || "unknown");
     }
 
@@ -233,9 +234,9 @@ export const snippet = query({
         const allDocs = await db.query("docs").collect();
 
         sessionPlans = allDocs
-          .filter(d => !d.archived_at && (d.conversation_id === conv._id || d.project_path === conv.project_path))
+          .filter((d: any) => !d.archived_at && (d.conversation_id === conv._id || d.project_path === conv.project_path))
           .slice(0, 5)
-          .map(d => ({ title: d.title, doc_type: d.doc_type, content: (d.content || "").slice(0, 500) }));
+          .map((d: any) => ({ title: d.title, doc_type: d.doc_type, content: (d.content || "").slice(0, 500) }));
 
         if (conv.active_plan_id) {
           const plan = await ctx.db.get(conv.active_plan_id);
@@ -261,8 +262,8 @@ export const snippet = query({
 
     const lines: string[] = [];
     if (activeTasks.length > 0) {
-      const inProgress = activeTasks.filter(t => t.status === "in_progress");
-      const open = activeTasks.filter(t => t.status === "open");
+      const inProgress = activeTasks.filter((t: any) => t.status === "in_progress");
+      const open = activeTasks.filter((t: any) => t.status === "open");
 
       if (inProgress.length > 0) {
         lines.push("In Progress:");
@@ -849,14 +850,44 @@ export const webList = query({
       }
     }
 
+    const sourceConvIds = new Set<string>();
+    for (const t of result) {
+      if (t.created_from_conversation) {
+        sourceConvIds.add(t.created_from_conversation.toString());
+      }
+    }
+    const sourceAgentMap = new Map<string, string>();
+    for (const cid of sourceConvIds) {
+      try {
+        const c = await ctx.db.get(cid as Id<"conversations">);
+        if (c?.agent_type) sourceAgentMap.set(cid, c.agent_type);
+      } catch {}
+    }
+
     const items = result.map(t => ({
       ...t,
       creator: userMap.get(t.user_id.toString()) || null,
       assignee_info: t.assignee ? userMap.get(t.assignee.toString()) || null : null,
       plan: t.plan_id ? planMap.get(t.plan_id.toString()) || null : null,
       activeSession: activeTaskMap.get(t._id.toString()) || null,
+      source_agent_type: t.created_from_conversation ? sourceAgentMap.get(t.created_from_conversation.toString()) || null : null,
     }));
     return { items, hasMore };
+  },
+});
+
+export const webListByConversation = query({
+  args: { conversationId: v.id("conversations") },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+    const tasks = await ctx.db
+      .query("tasks")
+      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+      .collect();
+    return tasks
+      .filter((t: any) => t.conversation_ids?.includes(args.conversationId))
+      .map((t: any) => ({ _id: t._id.toString(), short_id: t.short_id, title: t.title, status: t.status }));
   },
 });
 
@@ -1174,17 +1205,17 @@ export const webTeamList = query({
     let tasks = await db.query("tasks").collect();
 
     if (args.status) {
-      tasks = tasks.filter(t => t.status === args.status);
+      tasks = tasks.filter((t: any) => t.status === args.status);
     } else {
-      tasks = tasks.filter(t => t.status !== "done" && t.status !== "dropped");
+      tasks = tasks.filter((t: any) => t.status !== "done" && t.status !== "dropped");
     }
 
     if (args.execution_status) {
-      tasks = tasks.filter(t => (t as any).execution_status === args.execution_status);
+      tasks = tasks.filter((t: any) => (t as any).execution_status === args.execution_status);
     }
 
     if (args.promoted_only) {
-      tasks = tasks.filter(t => t.source !== "insight" || t.promoted === true);
+      tasks = tasks.filter((t: any) => t.source !== "insight" || t.promoted === true);
     }
 
     return tasks.slice(0, args.limit || 300);
@@ -1760,15 +1791,15 @@ export const getDependencyChain = query({
     collectDescendants(args.short_id);
 
     const chainIds = new Set([...ancestors, args.short_id, ...descendants]);
-    const chainTasks = allTasks.filter(t => chainIds.has(t.short_id));
+    const chainTasks = allTasks.filter((t: any) => chainIds.has(t.short_id));
 
     const { sorted, cycles } = getTopologicalOrder(chainTasks);
     const criticalPath = getCriticalPath(chainTasks);
 
     return {
       task: root,
-      ancestors: allTasks.filter(t => ancestors.has(t.short_id)),
-      descendants: allTasks.filter(t => descendants.has(t.short_id)),
+      ancestors: allTasks.filter((t: any) => ancestors.has(t.short_id)),
+      descendants: allTasks.filter((t: any) => descendants.has(t.short_id)),
       topological_order: sorted,
       critical_path: criticalPath,
       cycles,

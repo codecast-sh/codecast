@@ -78,26 +78,28 @@ function findCurrentSessionFromProcess(projectRoot: string): string | null {
 
     while (pid > 1) {
       try {
-        const result = execSync(`ps -o ppid=,args= -p ${pid}`, {
+        const result = execSync(`ps -o ppid=,comm=,args= -p ${pid}`, {
           encoding: "utf-8",
           stdio: ["pipe", "pipe", "ignore"],
         }).trim();
 
-        const match = result.match(/^\s*(\d+)\s+(.*)$/);
+        const match = result.match(/^\s*(\d+)\s+(\S+)\s+(.*)$/);
         if (!match) {
           if (debug) console.error(`[DEBUG] No match for pid ${pid}, breaking`);
           break;
         }
 
         const ppid = parseInt(match[1]);
-        const args = match[2];
+        const comm = match[2];
+        const args = match[3];
 
-        if (debug) console.error(`[DEBUG] PID ${pid}: ${args.slice(0, 60)}...`);
+        if (debug) console.error(`[DEBUG] PID ${pid}: comm=${comm} args=${args.slice(0, 60)}...`);
 
-        if (args.includes("claude")) {
+        const bin = comm.split("/").pop() || "";
+        if (["claude", "codex", "gemini-cli", "opencode"].includes(bin)) {
           claudePid = pid;
           claudeArgs = args;
-          if (debug) console.error(`[DEBUG] Found Claude at PID ${pid}`);
+          if (debug) console.error(`[DEBUG] Found ${bin} at PID ${pid}`);
           break;
         }
 
@@ -113,10 +115,11 @@ function findCurrentSessionFromProcess(projectRoot: string): string | null {
       return null;
     }
 
-    // Check if Claude was started with --resume <session_id>
-    const resumeMatch = claudeArgs.match(/--resume\s+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
-    if (resumeMatch) {
-      return resumeMatch[1];
+    // Check for session ID in args: --resume, --session, -s (various agent CLIs)
+    const sessionMatch = claudeArgs.match(/(?:--resume|--session|-s)\s+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i)
+      || claudeArgs.match(/(?:--resume|--session|-s)\s+([a-z0-9_-]{10,})/i);
+    if (sessionMatch) {
+      return sessionMatch[1];
     }
 
     // Get Claude process start time
@@ -253,11 +256,9 @@ function detectCurrentSessionId(): string | null {
     const activeSessions = files.filter(f => now - f.mtime < ACTIVE_THRESHOLD);
     if (activeSessions.length === 1) {
       return path.basename(activeSessions[0].name, ".jsonl");
-    } else if (activeSessions.length > 1) {
-      return path.basename(activeSessions[0].name, ".jsonl");
-    } else {
-      return path.basename(files[0].name, ".jsonl");
     }
+    // Multiple active sessions or no active sessions -- ambiguous, don't guess
+    return null;
   } catch {
     return null;
   }
@@ -1747,6 +1748,12 @@ cast plan show/status <plan_id>            # Plan details
 cast plan update <plan_id> -n "note"       # Log progress
 cast plan decide <plan_id> "decision" --rationale "why"
 cast plan done/drop <plan_id>             # Close or abandon a plan
+cast doc create "Title" [-c content] [-t type]  # Create doc (note, plan, insight, decision, runbook)
+cast doc ls [-t type] [-n limit]           # List docs
+cast doc get <id>                          # Show doc content
+cast doc edit <id> --old "..." --new "..." # Patch doc content (find & replace)
+cast doc edit <id> --content "..." --title "..."  # Full update
+cast doc search <query>                    # Search docs by title
 \`\`\`
 ${WORK_SNIPPET_END}
 `;
@@ -8353,7 +8360,10 @@ work
     if (options.plan) body.plan_id = options.plan;
 
     const sessionId = detectCurrentSessionId();
-    if (sessionId) body.conversation_id = sessionId;
+    if (sessionId) {
+      body.conversation_id = sessionId;
+      body.source = "agent";
+    }
     body.project_path = getRealCwd();
 
     const result = await cliPost("/cli/work/create", body);
@@ -8697,6 +8707,140 @@ function formatPlanItem(p: any): string {
   return `  ${icon} ${c.cyan}${p.short_id}${c.reset} ${p.title} ${c.dim}${p.status}${progress}${c.reset}`;
 }
 
+// ── Docs ──────────────────────────────────────────────────
+
+const DOC_TYPE_ICONS: Record<string, string> = {
+  note: "N", plan: "P", insight: "I", decision: "D", runbook: "R",
+};
+
+const doc = program
+  .command("doc")
+  .alias("d")
+  .description("Create and edit documents");
+
+doc
+  .command("create")
+  .description("Create a new document")
+  .argument("<title>", "Document title")
+  .option("-c, --content <text>", "Document content (markdown)")
+  .option("--content-file <path>", "Read content from file")
+  .option("-t, --type <type>", "Document type (note, plan, insight, decision, runbook)", "note")
+  .option("-l, --labels <labels>", "Comma-separated labels")
+  .option("--project <id>", "Project ID")
+  .action(async (title: string, options: any) => {
+    const body: Record<string, any> = { title };
+    if (options.contentFile) {
+      const fs = await import("fs");
+      body.content = fs.readFileSync(options.contentFile, "utf-8");
+    } else if (options.content) {
+      body.content = options.content.replace(/\\n/g, "\n").replace(/\\t/g, "\t");
+    } else {
+      body.content = `# ${title}\n`;
+    }
+    body.doc_type = options.type;
+    if (options.labels) body.labels = options.labels.split(",").map((s: string) => s.trim());
+    body.project_path = getRealCwd();
+    if (options.project) body.project_id = options.project;
+
+    const sessionId = detectCurrentSessionId();
+    if (sessionId) body.conversation_id = sessionId;
+    body.source = "agent";
+
+    const result = await cliPost("/cli/docs/create", body);
+    const id = result.id || result._id;
+    console.log(`${c.green}ok${c.reset} Created ${options.type} ${c.cyan}${id}${c.reset}: ${title}`);
+    if (result.plan_short_id) {
+      console.log(`  Plan: ${c.cyan}${result.plan_short_id}${c.reset}`);
+    }
+  });
+
+doc
+  .command("ls")
+  .description("List documents")
+  .option("-t, --type <type>", "Filter by type (note, plan, insight, decision, runbook)")
+  .option("--project <id>", "Filter by project")
+  .option("-n, --limit <n>", "Max results", "20")
+  .action(async (options: any) => {
+    const body: Record<string, any> = { limit: parseInt(options.limit) };
+    if (options.type) body.doc_type = options.type;
+    if (options.project) body.project_id = options.project;
+    const docs = await cliPost("/cli/docs/list", body);
+    if (!docs?.length) { console.log("No documents found."); return; }
+    for (const d of docs) {
+      const icon = DOC_TYPE_ICONS[d.doc_type] || "?";
+      const pinned = d.pinned ? " *" : "";
+      const age = formatAge(Date.now() - d.updated_at);
+      console.log(`  ${c.dim}[${icon}]${c.reset} ${c.cyan}${d._id}${c.reset} ${d.title}${pinned} ${c.dim}${age}${c.reset}`);
+    }
+  });
+
+doc
+  .command("get")
+  .description("Show a document's content")
+  .argument("<id>", "Document ID")
+  .action(async (id: string) => {
+    const result = await cliPost("/cli/docs/get", { id });
+    if (!result) { console.error("Doc not found"); process.exit(1); }
+    console.log(`${c.bold}${result.title}${c.reset} ${c.dim}[${result.doc_type}]${c.reset}`);
+    if (result.labels?.length) console.log(`Labels: ${result.labels.join(", ")}`);
+    console.log("");
+    console.log(result.content || "(empty)");
+  });
+
+doc
+  .command("edit")
+  .description("Patch a document's content (find & replace)")
+  .argument("<id>", "Document ID")
+  .option("--old <text>", "Text to find in the document")
+  .option("--new <text>", "Replacement text")
+  .option("--content <text>", "Full content replacement")
+  .option("--content-file <path>", "Full content from file")
+  .option("--title <text>", "Update title")
+  .option("-t, --type <type>", "Change document type")
+  .action(async (id: string, options: any) => {
+    if (options.old && options.new !== undefined) {
+      const result = await cliPost("/cli/docs/patch", {
+        id, old_string: options.old, new_string: options.new,
+      });
+      console.log(`${c.green}ok${c.reset} Patched doc ${c.cyan}${id}${c.reset} (${result.length} chars)`);
+    } else {
+      const body: Record<string, any> = { id };
+      if (options.contentFile) {
+        const fs = await import("fs");
+        body.content = fs.readFileSync(options.contentFile, "utf-8");
+      } else if (options.content) {
+        body.content = options.content;
+      }
+      if (options.title) body.title = options.title;
+      if (options.type) body.doc_type = options.type;
+      if (!body.content && !body.title && !body.doc_type) {
+        console.error("Provide --old/--new for patch, or --content/--title/--type for full update");
+        process.exit(1);
+      }
+      await cliPost("/cli/docs/update", body);
+      console.log(`${c.green}ok${c.reset} Updated doc ${c.cyan}${id}${c.reset}`);
+    }
+  });
+
+doc
+  .command("search")
+  .description("Search documents by title")
+  .argument("<query>", "Search query")
+  .option("-t, --type <type>", "Filter by type")
+  .option("-n, --limit <n>", "Max results", "10")
+  .action(async (query: string, options: any) => {
+    const body: Record<string, any> = { query, limit: parseInt(options.limit) };
+    if (options.type) body.doc_type = options.type;
+    const docs = await cliPost("/cli/docs/search", body);
+    if (!docs?.length) { console.log("No matches."); return; }
+    for (const d of docs) {
+      const icon = DOC_TYPE_ICONS[d.doc_type] || "?";
+      console.log(`  ${c.dim}[${icon}]${c.reset} ${c.cyan}${d._id}${c.reset} ${d.title}`);
+    }
+  });
+
+// ── Plans ─────────────────────────────────────────────────
+
 const plan = program
   .command("plan")
   .alias("p")
@@ -8779,6 +8923,7 @@ plan
           plan_id: result.short_id, labels: t.labels,
           blocked_by: blockedBy?.length ? blockedBy : undefined,
           project_path: getRealCwd(),
+          source: "agent",
         });
         shortIdMap.set(t.title, taskResult.short_id);
         console.log(`  ${c.green}+${c.reset} ${c.cyan}${taskResult.short_id}${c.reset}: ${t.title}`);
@@ -9388,6 +9533,7 @@ Output valid JSON array of task objects. Nothing else.`;
             priority: task.priority || "medium",
             plan_id: planId,
             project_path: getRealCwd(),
+            source: "agent",
             ...(task.estimated_minutes && { estimated_minutes: task.estimated_minutes }),
             ...(task.acceptance_criteria?.length && { acceptance_criteria: task.acceptance_criteria }),
             ...(task.steps?.length && { steps: task.steps }),
@@ -10783,6 +10929,7 @@ plan
         priority: t.priority || "medium",
         plan_id: planResult.short_id,
         project_path: getRealCwd(),
+        source: "agent",
       };
       if (t.blocked_by?.length) {
         const resolvedDeps = t.blocked_by.map(dep => titleToShortId[dep] || dep).filter(Boolean);

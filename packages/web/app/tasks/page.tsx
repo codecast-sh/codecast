@@ -18,6 +18,7 @@ import { DashboardLayout } from "../../components/DashboardLayout";
 import { TaskStatusBadge } from "../../components/TaskStatusBadge";
 import { toast } from "sonner";
 import { getLabelColor, DEFAULT_LABELS } from "../../lib/labelColors";
+import { AgentTypeIcon, formatAgentType } from "../../components/AgentTypeIcon";
 import {
   Plus,
   Circle,
@@ -44,6 +45,7 @@ import {
   EyeOff,
   SlidersHorizontal,
   User,
+  Bot,
 } from "lucide-react";
 
 type TaskStatus = "backlog" | "open" | "in_progress" | "in_review" | "done" | "dropped";
@@ -185,6 +187,15 @@ function TaskRow({
         />
       ) : (
         <span className="flex-1 text-sm text-sol-text truncate">{task.title}</span>
+      )}
+      {task.source !== "human" && (
+        task.source_agent_type ? (
+          <span className="flex-shrink-0 opacity-60" title={`Created by ${formatAgentType(task.source_agent_type)}`}>
+            <AgentTypeIcon agentType={task.source_agent_type} className="w-3.5 h-3.5" />
+          </span>
+        ) : (
+          <span className="flex-shrink-0" title={`${task.source} created`}><Bot className="w-3.5 h-3.5 text-sol-text-dim/60" /></span>
+        )
       )}
       {(task as any).activeSession && (() => {
         const { session_id, agent_status, agent_type, title } = (task as any).activeSession;
@@ -751,30 +762,53 @@ function FilterDropdown({
 function useTaskUrlState() {
   const searchParams = useSearchParams();
   const router = useRouter();
+  const taskView = useInboxStore((s) => s.clientState.ui?.task_view);
+  const updateClientUI = useInboxStore((s) => s.updateClientUI);
 
-  const status = searchParams.get("status") || "";
-  const view = (searchParams.get("view") || "list") as "list" | "kanban";
-  const sort = (searchParams.get("sort") || "status") as "status" | "priority" | "created" | "updated";
-  const priority = searchParams.get("priority") || "";
-  const label = searchParams.get("label") || "";
-  const assignee = searchParams.get("assignee") || "";
+  const hasUrlParams = searchParams.toString().length > 0;
+
+  const status = hasUrlParams
+    ? (searchParams.get("status") || "")
+    : (taskView?.status ?? "");
+  const view = hasUrlParams
+    ? ((searchParams.get("view") || "list") as "list" | "kanban")
+    : (taskView?.view ?? "list");
+  const sort = hasUrlParams
+    ? ((searchParams.get("sort") || "status") as "status" | "priority" | "created" | "updated" | "plan")
+    : ((taskView?.sort || "status") as "status" | "priority" | "created" | "updated" | "plan");
+  const priority = hasUrlParams
+    ? (searchParams.get("priority") || "")
+    : (taskView?.priority ?? "");
+  const label = hasUrlParams
+    ? (searchParams.get("label") || "")
+    : (taskView?.label ?? "");
+  const assignee = hasUrlParams
+    ? (searchParams.get("assignee") || "")
+    : (taskView?.assignee ?? "");
+  const hideAgent = hasUrlParams
+    ? (searchParams.get("hideAgent") === "1")
+    : (taskView?.hide_agent ?? false);
 
   const setParam = useCallback((updates: Record<string, string>) => {
     const params = new URLSearchParams(searchParams.toString());
+    const prefs: Record<string, any> = {};
     for (const [k, v] of Object.entries(updates)) {
       if (v) params.set(k, v);
       else params.delete(k);
+      if (k === "hideAgent") prefs.hide_agent = v === "1";
+      else prefs[k] = v || undefined;
     }
+    updateClientUI({ task_view: { ...taskView, ...prefs } });
     const qs = params.toString();
     router.replace(qs ? `/tasks?${qs}` : "/tasks");
-  }, [searchParams, router]);
+  }, [searchParams, router, taskView, updateClientUI]);
 
-  return { status, view, sort, priority, label, assignee, setParam };
+  return { status, view, sort, priority, label, assignee, hideAgent, setParam };
 }
 
 export default function TasksPage() {
   const router = useRouter();
-  const { status: urlStatus, view: viewMode, sort: sortBy, priority: priorityFilter, label: labelFilter, assignee: assigneeFilter, setParam } = useTaskUrlState();
+  const { status: urlStatus, view: viewMode, sort: sortBy, priority: priorityFilter, label: labelFilter, assignee: assigneeFilter, hideAgent: hideAgentTasks, setParam } = useTaskUrlState();
   const setTaskFilter = useInboxStore((s) => s.setTaskFilter);
   const tasks = useInboxStore((s) => s.tasks);
   const [showCreate, setShowCreate] = useState(false);
@@ -785,7 +819,7 @@ export default function TasksPage() {
   const [showHelp, setShowHelp] = useState(false);
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [previewTaskId, setPreviewTaskId] = useState<string | null>(null);
-  const [showFilters, setShowFilters] = useState(!!(priorityFilter || labelFilter || assigneeFilter));
+  const [showFilters, setShowFilters] = useState(!!(priorityFilter || labelFilter || assigneeFilter || hideAgentTasks));
 
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const [hiddenStatuses, setHiddenStatuses] = useState<Set<string>>(new Set(["dropped"]));
@@ -817,14 +851,54 @@ export default function TasksPage() {
 
   const filteredTasks = useMemo(() => {
     let list = tasksList;
+    if (hideAgentTasks) list = list.filter((t) => t.source === "human");
     if (priorityFilter) list = list.filter((t) => t.priority === priorityFilter);
     if (labelFilter) list = list.filter((t) => t.labels?.includes(labelFilter));
     if (assigneeFilter === "_unassigned") list = list.filter((t) => !t.assignee);
     else if (assigneeFilter) list = list.filter((t) => t.assignee === assigneeFilter);
     return list;
-  }, [tasksList, priorityFilter, labelFilter, assigneeFilter]);
+  }, [tasksList, priorityFilter, labelFilter, assigneeFilter, hideAgentTasks]);
+
+  const sortWithinGroup = useCallback((tasks: TaskItem[]) => {
+    return [...tasks].sort((a, b) => {
+      const pd = (PRIORITY_ORDER[a.priority] ?? 3) - (PRIORITY_ORDER[b.priority] ?? 3);
+      if (pd !== 0) return pd;
+      const statusIdx = (s: string) => STATUS_ORDER.indexOf(s as TaskStatus);
+      return statusIdx(a.status) - statusIdx(b.status);
+    });
+  }, []);
+
+  const planGroups = useMemo(() => {
+    if (sortBy !== "plan") return null;
+    const byPlan: Record<string, { plan: TaskItem["plan"]; tasks: TaskItem[] }> = {};
+    const unplanned: TaskItem[] = [];
+    for (const t of filteredTasks) {
+      if (t.plan) {
+        const key = t.plan._id;
+        if (!byPlan[key]) byPlan[key] = { plan: t.plan, tasks: [] };
+        byPlan[key].tasks.push(t);
+      } else {
+        unplanned.push(t);
+      }
+    }
+    const ordered = Object.values(byPlan)
+      .sort((a, b) => (a.plan!.title || "").localeCompare(b.plan!.title || ""));
+    if (unplanned.length > 0) {
+      ordered.push({ plan: undefined, tasks: unplanned });
+    }
+    for (const g of ordered) {
+      g.tasks = sortWithinGroup(g.tasks);
+    }
+    return ordered;
+  }, [filteredTasks, sortBy, sortWithinGroup]);
 
   const flatTasks = useMemo(() => {
+    if (sortBy === "plan" && planGroups) {
+      return planGroups.flatMap((g) => {
+        const key = g.plan?._id || "__unplanned";
+        return collapsedGroups.has(key) ? [] : g.tasks;
+      });
+    }
     if (sortBy !== "status") {
       const sorted = [...filteredTasks];
       if (sortBy === "priority") sorted.sort((a, b) => (PRIORITY_ORDER[a.priority] ?? 3) - (PRIORITY_ORDER[b.priority] ?? 3));
@@ -842,7 +916,7 @@ export default function TasksPage() {
     return STATUS_ORDER.flatMap((s) =>
       collapsedGroups.has(s) ? [] : (grouped[s] || [])
     );
-  }, [filteredTasks, statusFilter, collapsedGroups, sortBy]);
+  }, [filteredTasks, statusFilter, collapsedGroups, sortBy, planGroups]);
 
   const focusedTask = flatTasks[focusIndex] || null;
 
@@ -1125,6 +1199,17 @@ export default function TasksPage() {
             </div>
             <div className="flex items-center gap-2">
               <button
+                onClick={() => setParam({ hideAgent: hideAgentTasks ? "" : "1" })}
+                className={`flex items-center gap-1.5 text-xs px-2 py-1.5 rounded-md border transition-colors ${
+                  hideAgentTasks
+                    ? "border-sol-orange/40 text-sol-orange bg-sol-orange/10"
+                    : "border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-border"
+                }`}
+                title={hideAgentTasks ? "Showing human tasks only -- click to include agent tasks" : "Hide agent-created tasks"}
+              >
+                <Bot className="w-3.5 h-3.5" />
+              </button>
+              <button
                 onClick={() => setShowFilters((f) => !f)}
                 className={`flex items-center gap-1.5 text-xs px-2 py-1.5 rounded-md border transition-colors ${
                   showFilters || priorityFilter || labelFilter || assigneeFilter
@@ -1146,6 +1231,7 @@ export default function TasksPage() {
                   className="text-xs px-2 py-1 rounded-md bg-sol-bg-alt border border-sol-border/40 text-sol-text-dim focus:outline-none focus:border-sol-cyan cursor-pointer"
                 >
                   <option value="status">Group by status</option>
+                  <option value="plan">Group by plan</option>
                   <option value="priority">Sort by priority</option>
                   <option value="updated">Sort by updated</option>
                   <option value="created">Sort by created</option>
@@ -1270,6 +1356,66 @@ export default function TasksPage() {
                   Create your first task
                 </button>
               </div>
+            ) : sortBy === "plan" && planGroups ? (
+              (() => {
+                let idx = 0;
+                return planGroups.map((g) => {
+                  const key = g.plan?._id || "__unplanned";
+                  const isCollapsed = collapsedGroups.has(key);
+                  const startIdx = idx;
+                  idx += isCollapsed ? 0 : g.tasks.length;
+                  return (
+                    <div key={key}>
+                      <div className="w-full flex items-center gap-2 px-4 py-2 bg-sol-bg-alt/30 border-b border-sol-border/20">
+                        <button
+                          onClick={() => toggleGroup(key)}
+                          className="flex items-center gap-2 flex-1 hover:bg-sol-bg-alt/50 transition-colors text-left"
+                        >
+                          <svg className={`w-3 h-3 text-sol-text-dim transition-transform ${isCollapsed ? "" : "rotate-90"}`} fill="currentColor" viewBox="0 0 20 20">
+                            <path d="M6 4l8 6-8 6V4z" />
+                          </svg>
+                          <span className="text-xs font-medium text-sol-text-dim uppercase tracking-wide">
+                            {g.plan?.title || "Unplanned"}
+                          </span>
+                          <span className="text-xs text-sol-text-dim">({g.tasks.length})</span>
+                          {g.plan && (
+                            <span className={`text-[10px] px-1.5 py-0 rounded border ${
+                              g.plan.status === "active" ? "border-sol-green/30 text-sol-green" : "border-sol-border/30 text-sol-text-dim"
+                            }`}>
+                              {g.plan.status}
+                            </span>
+                          )}
+                        </button>
+                        {g.plan && (
+                          <Link
+                            href={`/plans/${g.plan._id}`}
+                            onClick={(e) => e.stopPropagation()}
+                            className="text-[10px] text-sol-cyan hover:underline flex-shrink-0"
+                          >
+                            View plan
+                          </Link>
+                        )}
+                      </div>
+                      {!isCollapsed && g.tasks.map((t, gi) => (
+                        <TaskRow
+                          key={t._id}
+                          task={t}
+                          isFocused={focusIndex === startIdx + gi}
+                          isSelected={selectedIds.has(t._id)}
+                          isEditing={editingTaskId === t._id}
+                          onSelect={() => toggleSelect(t._id)}
+                          onClick={() => router.push(`/tasks/${t._id}`)}
+                          onStatusClick={() => openCmdForTask(t, "status")}
+                          onPriorityClick={() => openCmdForTask(t, "priority")}
+                          onContextMenu={(e) => handleContextMenu(e, t)}
+                          onTitleEdit={(title) => handleTitleEdit(t, title)}
+                          onEditDone={() => setEditingTaskId(null)}
+                        />
+                      ))}
+                    </div>
+                  );
+                });
+              })()
             ) : (statusFilter || sortBy !== "status") ? (
               <div>
                 {flatTasks.map((t, i) => (

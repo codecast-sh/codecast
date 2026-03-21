@@ -234,6 +234,7 @@ export const mineTasksFromInsights = internalMutation({
     for (const insight of args.insights) {
       const ts = insight.generated_at || Date.now();
       const labels = insight.themes.length ? insight.themes : undefined;
+      const conv = await ctx.db.get(insight.conversation_id);
       const base = {
         user_id: args.user_id,
         team_id: args.team_id,
@@ -245,6 +246,7 @@ export const mineTasksFromInsights = internalMutation({
         confidence: insight.confidence,
         is_private: insight.is_private,
         team_visibility: insight.team_visibility,
+        project_path: conv?.project_path || conv?.git_root,
       };
 
       const alreadyMined = await ctx.db
@@ -1786,5 +1788,25 @@ export const backfillAllTeams = internalAction({
     }
 
     return { docs_created: totalDocs, tasks_created: totalTasks, teams_processed: teams.length, insights_processed: totalInsights, plans_updated: totalPlansUpdated };
+  },
+});
+
+export const backfillTaskProjectPaths = internalMutation({
+  args: { cursor: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const result = await ctx.db.query("tasks").paginate({ numItems: 200, cursor: args.cursor as any || null });
+    let patched = 0;
+    for (const task of result.page) {
+      if ((task as any).project_path) continue;
+      const convId = (task as any).created_from_conversation;
+      if (!convId) continue;
+      const conv = await ctx.db.get(convId as any) as any;
+      const projectPath = conv?.project_path || (conv as any)?.git_root;
+      if (projectPath) {
+        await ctx.db.patch(task._id, { project_path: projectPath } as any);
+        patched++;
+      }
+    }
+    return { patched, pageSize: result.page.length, isDone: result.isDone, continueCursor: result.continueCursor };
   },
 });

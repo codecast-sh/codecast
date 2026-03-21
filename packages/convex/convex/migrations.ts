@@ -132,6 +132,55 @@ export const fixCorruptedMessageRoles = internalMutation({
   },
 });
 
+export const fixTaskSourceFromAgent = internalMutation({
+  args: {
+    dryRun: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const dryRun = args.dryRun ?? true;
+
+    const tasks = await ctx.db.query("tasks").collect();
+    const convCache = new Map<string, string | null>();
+
+    let checked = 0;
+    let fixed = 0;
+    const fixes: Array<{ taskId: string; title: string; agentType: string }> = [];
+
+    for (const task of tasks) {
+      checked++;
+      if (task.source !== "human" || !task.created_from_conversation) continue;
+
+      const convIdStr = task.created_from_conversation.toString();
+      let agentType: string | null;
+      if (convCache.has(convIdStr)) {
+        agentType = convCache.get(convIdStr)!;
+      } else {
+        try {
+          const conv = await ctx.db.get(task.created_from_conversation);
+          agentType = conv?.agent_type || null;
+        } catch {
+          agentType = null;
+        }
+        convCache.set(convIdStr, agentType);
+      }
+
+      if (agentType) {
+        fixes.push({
+          taskId: task._id,
+          title: task.title,
+          agentType,
+        });
+        if (!dryRun) {
+          await ctx.db.patch(task._id, { source: "agent" as any });
+        }
+        fixed++;
+      }
+    }
+
+    return { dryRun, checked, fixed, fixCount: fixes.length };
+  },
+});
+
 export const analyzeMessageRoles = query({
   args: {
     limit: v.optional(v.number()),

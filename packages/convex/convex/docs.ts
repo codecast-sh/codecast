@@ -3,7 +3,7 @@ import { mutation, query, internalMutation, internalQuery } from "./_generated/s
 import { Id } from "./_generated/dataModel";
 import { verifyApiToken } from "./apiTokens";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { createDataContext } from "./data";
+import { createDataContext, scopeByProject } from "./data";
 import { resolveTeamForPath } from "./privacy";
 
 function generatePlanShortId(): string {
@@ -11,6 +11,56 @@ function generatePlanShortId(): string {
   let id = "pl-";
   for (let i = 0; i < 4; i++) id += chars[Math.floor(Math.random() * chars.length)];
   return id;
+}
+
+function normalizeToRoot(path: string): string {
+  const parts = path.split('/');
+  const srcIndex = parts.findIndex(p => p === 'src' || p === 'projects' || p === 'repos' || p === 'code');
+  if (srcIndex >= 0 && srcIndex < parts.length - 1) {
+    return parts.slice(0, srcIndex + 2).join('/');
+  }
+  return path;
+}
+
+function repoName(path: string): string {
+  return normalizeToRoot(path).split('/').filter(Boolean).pop() || path;
+}
+
+function docGitRoot(d: any, convMap: Map<string, any>): string | null {
+  const cid = d.conversation_id || d.related_conversation_ids?.[0];
+  if (cid) {
+    const conv = convMap.get(String(cid));
+    if (conv?.git_root) return conv.git_root;
+  }
+  return null;
+}
+
+function dedupeProjectPaths(paths: string[], docs?: any[], convMap?: Map<string, any>): string[] {
+  const gitRootForPath = new Map<string, string>();
+  if (docs && convMap) {
+    for (const d of docs) {
+      if (!d.project_path) continue;
+      const root = docGitRoot(d, convMap);
+      if (root) gitRootForPath.set(d.project_path, root);
+    }
+  }
+
+  const byName = new Map<string, string>();
+  for (const path of paths) {
+    const root = gitRootForPath.get(path) || normalizeToRoot(path);
+    const name = root.split('/').filter(Boolean).pop() || path;
+    const existing = byName.get(name);
+    if (!existing || (path.includes('/src/') && !existing.includes('/src/'))) {
+      byName.set(name, path);
+    }
+  }
+  return Array.from(byName.values());
+}
+
+function docRepoName(d: any, convMap: Map<string, any>): string {
+  const root = docGitRoot(d, convMap);
+  if (root) return root.split('/').filter(Boolean).pop() || root;
+  return d.project_path ? repoName(d.project_path) : "";
 }
 
 function extractPlanInfo(content: string): { title: string; goal?: string } {
@@ -71,7 +121,9 @@ export const create = mutation({
         .first();
       if (conv) {
         conversation_id = conv._id;
-        team_id = (!conv.is_private || conv.auto_shared) ? conv.team_id : undefined;
+        if (!team_id) {
+          team_id = (!conv.is_private || conv.auto_shared) ? conv.team_id : undefined;
+        }
       }
     }
 
@@ -254,7 +306,7 @@ export const update = mutation({
 
     const updates: any = { updated_at: Date.now() };
     if (args.title) updates.title = args.title;
-    if (args.content) updates.content = args.content;
+    if (args.content !== undefined) updates.content = args.content;
     if (args.doc_type) updates.doc_type = args.doc_type;
     if (args.labels) updates.labels = args.labels;
     if (args.pinned !== undefined) updates.pinned = args.pinned;
@@ -262,7 +314,86 @@ export const update = mutation({
     if (args.project_id !== undefined) updates.project_id = args.project_id || undefined;
 
     await ctx.db.patch(args.id, updates);
+
+    // sync state reset is handled by docs.resetSync called from the HTTP route
+
     return { success: true };
+  },
+});
+
+export const resetSync = mutation({
+  args: {
+    api_token: v.string(),
+    id: v.id("docs"),
+    content: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token);
+    if (!auth) throw new Error("Unauthorized");
+    const docId = args.id as string;
+    const snapshots = await ctx.db
+      .query("doc_snapshots")
+      .withIndex("id_version", (q: any) => q.eq("id", docId))
+      .collect();
+    const deltas = await ctx.db
+      .query("doc_deltas")
+      .withIndex("id_version", (q: any) => q.eq("id", docId))
+      .collect();
+    for (const d of deltas) await ctx.db.delete(d._id);
+
+    const text = args.content || "";
+    const paragraphs = text.split(/\n\n+/).filter(Boolean);
+    const content = paragraphs.length > 0
+      ? paragraphs.map((p: string) => ({
+          type: "paragraph" as const,
+          content: [{ type: "text" as const, text: p }],
+        }))
+      : [{ type: "paragraph" as const }];
+    const json = JSON.stringify({ type: "doc", content });
+
+    if (snapshots.length > 0) {
+      const latest = snapshots.reduce((a: any, b: any) => a.version > b.version ? a : b);
+      await ctx.db.patch(latest._id, { content: json, version: latest.version + 1 });
+      for (const s of snapshots) {
+        if (s._id !== latest._id) await ctx.db.delete(s._id);
+      }
+    } else {
+      await ctx.db.insert("doc_snapshots", { id: docId, version: 1, content: json });
+    }
+    return { success: true };
+  },
+});
+
+export const patch = mutation({
+  args: {
+    api_token: v.string(),
+    id: v.id("docs"),
+    old_string: v.string(),
+    new_string: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token);
+    if (!auth) throw new Error("Unauthorized");
+
+    const doc = await ctx.db.get(args.id);
+    if (!doc || doc.user_id !== auth.userId) throw new Error("Doc not found");
+
+    const content = doc.content || "";
+    const idx = content.indexOf(args.old_string);
+    if (idx === -1) throw new Error("old_string not found in document content");
+
+    const newContent = content.slice(0, idx) + args.new_string + content.slice(idx + args.old_string.length);
+    await ctx.db.patch(args.id, { content: newContent, updated_at: Date.now() });
+
+    if (doc.plan_id) {
+      const plan = await ctx.db.get(doc.plan_id);
+      if (plan) {
+        const { title, goal } = extractPlanInfo(newContent);
+        if (title) await ctx.db.patch(plan._id, { title, goal, updated_at: Date.now() });
+      }
+    }
+
+    return { success: true, length: newContent.length };
   },
 });
 
@@ -400,16 +531,18 @@ export const webList = query({
           return !effectiveTeamId;
         });
         if (args.project_path) {
-          docs = docs.filter((d) => d.project_path?.includes(args.project_path!));
+          const filterName = repoName(args.project_path);
+          docs = docs.filter((d) => d.project_path && docRepoName(d, convMap) === filterName);
         }
       } else {
-        docs = baseDocs.filter((d) => d.project_path?.includes(args.project_path!));
+        const filterName = repoName(args.project_path!);
+        docs = baseDocs.filter((d) => d.project_path && docRepoName(d, convMap) === filterName);
       }
       const unscopedDocs = baseDocs.filter((d) => {
         const effectiveTeamId = resolveConvTeamId(d, convMap);
         return !effectiveTeamId && !d.archived_at && !isNoiseDoc(d);
       });
-      projectPaths = [...new Set(unscopedDocs.map((d) => d.project_path).filter(Boolean))] as string[];
+      projectPaths = dedupeProjectPaths([...new Set(unscopedDocs.map((d) => d.project_path).filter(Boolean))] as string[], unscopedDocs, convMap);
     } else if (args.workspace === "team" && args.team_id) {
       docs = allDocs;
     } else if (args.workspace === "personal") {
@@ -429,16 +562,15 @@ export const webList = query({
       });
     }
 
-    if (!projectPaths.length) {
-      const baseDocs = userDocs.length > 0 ? userDocs : allDocs;
-      projectPaths = [...new Set(baseDocs.filter((d) => !d.archived_at && !isNoiseDoc(d)).map((d) => d.project_path).filter(Boolean))] as string[];
-    }
-
     if (args.doc_type) {
       docs = docs.filter((d) => d.doc_type === args.doc_type);
     }
 
     docs = docs.filter((d) => !d.archived_at && !isNoiseDoc(d) && d.source !== "plan_mode");
+
+    if (!projectPaths.length) {
+      projectPaths = dedupeProjectPaths([...new Set(docs.map((d) => d.project_path).filter(Boolean))] as string[], docs, convMap);
+    }
 
     const enriched = docs.map((d) => {
       const cid = d.conversation_id || (d.related_conversation_ids?.[0]);
@@ -648,6 +780,7 @@ export const deleteBySource = internalMutation({
   },
 });
 
+
 export const debugList = internalQuery({
   args: {},
   handler: async (ctx) => {
@@ -721,28 +854,37 @@ export const backfillPlanDocs = internalMutation({
 });
 
 export const fixDocTeams = internalMutation({
-  args: {},
-  handler: async (ctx) => {
-    const docs = await ctx.db.query("docs").collect();
+  args: { team_id: v.optional(v.string()), limit: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const batchSize = args.limit || 500;
+    let docs;
+    if (args.team_id) {
+      docs = await ctx.db
+        .query("docs")
+        .withIndex("by_team_id", (q) => q.eq("team_id", args.team_id as any))
+        .take(batchSize);
+    } else {
+      docs = await ctx.db.query("docs").take(batchSize);
+    }
     let updated = 0;
+    const mappingsCache = new Map<string, any[]>();
     for (const doc of docs) {
-      const convIds = doc.related_conversation_ids || (doc.conversation_id ? [doc.conversation_id] : []);
-      if (convIds.length === 0) continue;
+      const path = doc.project_path;
+      if (!path) continue;
 
-      const conv = await ctx.db.get(convIds[0]);
-      if (!conv) continue;
+      const uid = String(doc.user_id);
+      if (!mappingsCache.has(uid)) {
+        mappingsCache.set(uid, await ctx.db
+          .query("directory_team_mappings")
+          .withIndex("by_user_id", (q: any) => q.eq("user_id", doc.user_id))
+          .collect());
+      }
+      const { teamId: resolvedTeamId } = resolveTeamForPath(mappingsCache.get(uid)!, path, undefined);
 
-      const patch: any = {};
-      // Team comes from the originating session
-      if (conv.team_id && doc.team_id !== conv.team_id) {
-        patch.team_id = conv.team_id;
+      if (String(doc.team_id || "") !== String(resolvedTeamId || "")) {
+        await ctx.db.patch(doc._id, { team_id: resolvedTeamId || undefined });
+        updated++;
       }
-      if (!doc.project_path && conv.project_path) {
-        patch.project_path = conv.project_path;
-      }
-      if (Object.keys(patch).length === 0) continue;
-      await ctx.db.patch(doc._id, patch);
-      updated++;
     }
     return { updated, total: docs.length };
   },
@@ -867,15 +1009,15 @@ export const mentionSearch = query({
         tasks = await ctx.db
           .query("tasks")
           .withSearchIndex("search_tasks", (s: any) => s.search("title", args.query).eq("user_id", userId))
-          .take(perType);
+          .take(perType * 3);
       } else {
         tasks = await ctx.db
           .query("tasks")
           .withIndex("by_user_id", (t: any) => t.eq("user_id", userId))
           .order("desc")
-          .take(perType);
+          .take(perType * 3);
       }
-      for (const task of tasks) {
+      for (const task of scopeByProject(tasks, args.projectPath).slice(0, perType)) {
         results.push({
           id: String(task._id),
           type: "task",
@@ -894,16 +1036,15 @@ export const mentionSearch = query({
         docs = await ctx.db
           .query("docs")
           .withSearchIndex("search_docs", (s) => s.search("title", args.query).eq("user_id", userId))
-          .take(perType);
+          .take(perType * 3);
       } else {
         docs = await ctx.db
           .query("docs")
           .withIndex("by_user_id", (d) => d.eq("user_id", userId))
           .order("desc")
-          .take(perType);
+          .take(perType * 3);
       }
-      for (const doc of docs) {
-        if (doc.archived_at) continue;
+      for (const doc of scopeByProject(docs, args.projectPath).filter(d => !d.archived_at).slice(0, perType)) {
         results.push({
           id: String(doc._id),
           type: "doc",
@@ -923,7 +1064,7 @@ export const mentionSearch = query({
       const filtered = q
         ? plans.filter((p: any) => p.title?.toLowerCase().includes(q))
         : plans;
-      for (const plan of filtered.slice(0, perType)) {
+      for (const plan of scopeByProject(filtered, args.projectPath).slice(0, perType)) {
         results.push({
           id: String(plan._id),
           type: "plan",

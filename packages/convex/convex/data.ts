@@ -19,12 +19,22 @@ const SCOPED_TABLES = new Set([
 
 export type DataContext = Awaited<ReturnType<typeof createDataContext>>;
 
+export function scopeByProject<T extends Record<string, any>>(
+  items: T[],
+  projectPath?: string | null
+): T[] {
+  if (!projectPath) return items;
+  return items.filter(item => !item.project_path || item.project_path.startsWith(projectPath));
+}
+
 export async function createDataContext(ctx: { db: any }, opts: DataContextOpts) {
   const workspace = await resolveWorkspace(ctx, opts);
+  const projectPath = opts.project_path;
 
   const self = {
     workspace,
     userId: opts.userId,
+    projectPath,
     raw: ctx.db,
 
     async insert(table: string, fields: Record<string, any>) {
@@ -37,22 +47,30 @@ export async function createDataContext(ctx: { db: any }, opts: DataContextOpts)
       };
       if (SCOPED_TABLES.has(table)) {
         doc.team_id = workspace.type === "team" ? workspace.teamId : undefined;
+        if (projectPath && !doc.project_path) {
+          doc.project_path = projectPath;
+        }
       }
       return ctx.db.insert(table, doc);
     },
 
     query(table: string) {
+      const applyProjectScope = SCOPED_TABLES.has(table) && projectPath;
       if (!SCOPED_TABLES.has(table) || workspace.type === "unscoped") {
-        return ctx.db.query(table);
+        return applyProjectScope
+          ? wrapProjectQuery(ctx.db.query(table), projectPath)
+          : ctx.db.query(table);
       }
       if (workspace.type === "team") {
-        return ctx.db.query(table)
+        const base = ctx.db.query(table)
           .withIndex("by_team_id", (q: any) => q.eq("team_id", workspace.teamId));
+        return applyProjectScope ? wrapProjectQuery(base, projectPath) : base;
       }
-      return wrapPersonalQuery(
+      const personal = wrapPersonalQuery(
         ctx.db.query(table)
           .withIndex("by_user_id", (q: any) => q.eq("user_id", opts.userId))
       );
+      return applyProjectScope ? wrapProjectQuery(personal, projectPath) : personal;
     },
 
     async get(id: any) {
@@ -143,6 +161,29 @@ function wrapPersonalQuery(inner: any): any {
     async take(n: number) {
       const results = await q.collect();
       return results.filter((d: any) => !d.team_id).slice(0, n);
+    },
+    withIndex: (name: string, fn: any) => wrap(q.withIndex(name, fn)),
+    paginate: (opts: any) => q.paginate(opts),
+  });
+  return wrap(inner);
+}
+
+function wrapProjectQuery(inner: any, projectPath: string): any {
+  const matchesProject = (d: any) => !d.project_path || d.project_path.startsWith(projectPath);
+  const wrap = (q: any) => ({
+    filter: (fn: any) => wrap(q.filter(fn)),
+    order: (dir: any) => wrap(q.order(dir)),
+    async collect() {
+      const results = await q.collect();
+      return results.filter(matchesProject);
+    },
+    async first() {
+      const results = await q.collect();
+      return results.find(matchesProject) ?? null;
+    },
+    async take(n: number) {
+      const results = await q.collect();
+      return results.filter(matchesProject).slice(0, n);
     },
     withIndex: (name: string, fn: any) => wrap(q.withIndex(name, fn)),
     paginate: (opts: any) => q.paginate(opts),

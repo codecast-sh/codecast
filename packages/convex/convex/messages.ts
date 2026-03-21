@@ -29,6 +29,118 @@ function extractTitleFromContent(content: string): string {
   return "Untitled Document";
 }
 
+type DocExtractionMessage = {
+  role?: string;
+  content?: string;
+  tool_calls?: Array<{ id: string; name: string; input: string }>;
+  timestamp?: number;
+};
+
+type DocExtractionConversation = {
+  user_id: Id<"users">;
+  team_id?: string;
+  project_path?: string;
+  is_private?: boolean;
+  team_visibility?: string;
+};
+
+async function extractDocsFromMessages(
+  ctx: any,
+  messages: DocExtractionMessage[],
+  conversation: DocExtractionConversation,
+  conversation_id: Id<"conversations">,
+) {
+  for (const msg of messages) {
+    if (msg.role === "assistant" && msg.content && msg.content.length > 5000) {
+      const headingCount = (msg.content.match(/^#{1,3}\s/gm) || []).length;
+      if (headingCount >= 3) {
+        const syntheticPath = `inline://${conversation_id}/${Date.now()}`;
+        const existing = await ctx.db
+          .query("docs")
+          .withIndex("by_source_file", (q: any) => q.eq("source_file", syntheticPath))
+          .first();
+        if (!existing) {
+          await ctx.db.insert("docs", {
+            user_id: conversation.user_id,
+            team_id: conversation.team_id,
+            title: extractTitleFromContent(msg.content),
+            content: msg.content,
+            doc_type: classifyDocContent(msg.content),
+            source: "inline_extract",
+            source_file: syntheticPath,
+            conversation_id,
+            project_path: conversation.project_path,
+            is_private: conversation.is_private,
+            team_visibility: conversation.team_visibility,
+            created_at: msg.timestamp || Date.now(),
+            updated_at: msg.timestamp || Date.now(),
+          });
+        }
+      }
+    }
+    if (msg.tool_calls) {
+      for (const tc of msg.tool_calls) {
+        if (tc.name !== "Write" && tc.name !== "Edit") continue;
+        let input: any;
+        try { input = JSON.parse(tc.input); } catch { continue; }
+        const filePath: string = input.file_path || "";
+        if (!filePath.endsWith(".md")) continue;
+
+        const existing = await ctx.db
+          .query("docs")
+          .withIndex("by_source_file", (q: any) => q.eq("source_file", filePath))
+          .first();
+
+        if (tc.name === "Write") {
+          const content: string = input.content || "";
+          if (content.length < 200) continue;
+          const fileName = filePath.split("/").pop() || filePath;
+          const docType = fileName.toLowerCase().includes("plan") ? "plan" as const
+            : fileName.toLowerCase().includes("design") ? "design" as const
+            : fileName.toLowerCase().includes("spec") ? "spec" as const
+            : classifyDocContent(content);
+          if (existing) {
+            await ctx.db.patch(existing._id, {
+              title: extractTitleFromContent(content),
+              content,
+              doc_type: docType,
+              updated_at: msg.timestamp || Date.now(),
+            });
+          } else {
+            await ctx.db.insert("docs", {
+              user_id: conversation.user_id,
+              team_id: conversation.team_id,
+              title: extractTitleFromContent(content),
+              content,
+              doc_type: docType,
+              source: "file_sync",
+              source_file: filePath,
+              conversation_id,
+              project_path: conversation.project_path,
+              is_private: conversation.is_private,
+              team_visibility: conversation.team_visibility,
+              created_at: msg.timestamp || Date.now(),
+              updated_at: msg.timestamp || Date.now(),
+            });
+          }
+        } else if (tc.name === "Edit" && existing) {
+          const oldStr: string = input.old_string || "";
+          const newStr: string = input.new_string || "";
+          if (!oldStr || !existing.content?.includes(oldStr)) continue;
+          const updatedContent = input.replace_all
+            ? existing.content.split(oldStr).join(newStr)
+            : existing.content.replace(oldStr, newStr);
+          await ctx.db.patch(existing._id, {
+            title: extractTitleFromContent(updatedContent),
+            content: updatedContent,
+            updated_at: msg.timestamp || Date.now(),
+          });
+        }
+      }
+    }
+  }
+}
+
 export const getMessageTimestamp = query({
   args: {
     conversation_id: v.id("conversations"),
@@ -250,6 +362,10 @@ export const addMessage = mutation({
         conversation_id: args.conversation_id,
       });
     }
+
+    try {
+      await extractDocsFromMessages(ctx, [args], conversation, args.conversation_id);
+    } catch {}
 
     return messageId;
   },
@@ -479,100 +595,11 @@ export const addMessages = mutation({
         }
       }
 
-      // Inline doc extraction: check for doc-worthy content in this batch
-      for (const msg of args.messages) {
-        // Large structured assistant messages (inline plans/designs/etc)
-        if (msg.role === "assistant" && msg.content && msg.content.length > 5000) {
-          const headingCount = (msg.content.match(/^#{1,3}\s/gm) || []).length;
-          if (headingCount >= 3) {
-            const msgRecord = ids.length > 0 ? await ctx.db.get(ids[ids.length - 1]) : null;
-            const syntheticPath = `inline://${args.conversation_id}/${msgRecord?._id || "unknown"}`;
-            const existing = await ctx.db
-              .query("docs")
-              .withIndex("by_source_file", (q) => q.eq("source_file", syntheticPath))
-              .first();
-            if (!existing) {
-              await ctx.db.insert("docs", {
-                user_id: conversation.user_id,
-                team_id: conversation.team_id,
-                title: extractTitleFromContent(msg.content),
-                content: msg.content,
-                doc_type: classifyDocContent(msg.content),
-                source: "inline_extract",
-                source_file: syntheticPath,
-                conversation_id: args.conversation_id,
-                project_path: conversation.project_path,
-                is_private: conversation.is_private,
-                team_visibility: conversation.team_visibility,
-                created_at: msg.timestamp || Date.now(),
-                updated_at: msg.timestamp || Date.now(),
-              });
-            }
-          }
-        }
-        // Write/Edit tool calls to .md files
-        if (msg.tool_calls) {
-          for (const tc of msg.tool_calls) {
-            if (tc.name !== "Write" && tc.name !== "Edit") continue;
-            let input: any;
-            try { input = JSON.parse(tc.input); } catch { continue; }
-            const filePath: string = input.file_path || "";
-            if (!filePath.endsWith(".md")) continue;
-
-            const existing = await ctx.db
-              .query("docs")
-              .withIndex("by_source_file", (q) => q.eq("source_file", filePath))
-              .first();
-
-            if (tc.name === "Write") {
-              const content: string = input.content || "";
-              if (content.length < 200) continue;
-              const fileName = filePath.split("/").pop() || filePath;
-              const docType = fileName.toLowerCase().includes("plan") ? "plan" as const
-                : fileName.toLowerCase().includes("design") ? "design" as const
-                : fileName.toLowerCase().includes("spec") ? "spec" as const
-                : classifyDocContent(content);
-              if (existing) {
-                await ctx.db.patch(existing._id, {
-                  title: extractTitleFromContent(content),
-                  content,
-                  doc_type: docType,
-                  updated_at: msg.timestamp || Date.now(),
-                });
-              } else {
-                await ctx.db.insert("docs", {
-                  user_id: conversation.user_id,
-                  team_id: conversation.team_id,
-                  title: extractTitleFromContent(content),
-                  content,
-                  doc_type: docType,
-                  source: "file_sync",
-                  source_file: filePath,
-                  conversation_id: args.conversation_id,
-                  project_path: conversation.project_path,
-                  is_private: conversation.is_private,
-                  team_visibility: conversation.team_visibility,
-                  created_at: msg.timestamp || Date.now(),
-                  updated_at: msg.timestamp || Date.now(),
-                });
-              }
-            } else if (tc.name === "Edit" && existing) {
-              const oldStr: string = input.old_string || "";
-              const newStr: string = input.new_string || "";
-              if (!oldStr || !existing.content?.includes(oldStr)) continue;
-              const updatedContent = input.replace_all
-                ? existing.content.split(oldStr).join(newStr)
-                : existing.content.replace(oldStr, newStr);
-              await ctx.db.patch(existing._id, {
-                title: extractTitleFromContent(updatedContent),
-                content: updatedContent,
-                updated_at: msg.timestamp || Date.now(),
-              });
-            }
-          }
-        }
-      }
     }
+
+    try {
+      await extractDocsFromMessages(ctx, args.messages, conversation, args.conversation_id);
+    } catch {}
 
     return { inserted: insertedCount, ids };
   },

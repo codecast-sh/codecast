@@ -2879,10 +2879,17 @@ cliRoute("/cli/docs/get", async (ctx, body) => {
   return await ctx.runQuery(api.docs.get, body);
 });
 cliRoute("/cli/docs/update", async (ctx, body) => {
-  return await ctx.runMutation(api.docs.update, body);
+  const result = await ctx.runMutation(api.docs.update, body);
+  if (body.content !== undefined) {
+    await ctx.runMutation(api.docs.resetSync, { api_token: body.api_token, id: body.id, content: body.content });
+  }
+  return result;
 });
 cliRoute("/cli/docs/search", async (ctx, body) => {
   return await ctx.runQuery(api.docs.search, body);
+});
+cliRoute("/cli/docs/patch", async (ctx, body) => {
+  return await ctx.runMutation(api.docs.patch, body);
 });
 
 // Workflows
