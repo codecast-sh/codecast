@@ -11,7 +11,6 @@ import {
   Search,
   Pin,
   FolderGit2,
-  Layers,
   Plus,
 } from "lucide-react";
 
@@ -146,7 +145,7 @@ export default function DocsPage() {
   const projectPaths = useInboxStore((s) => s.docProjectPaths);
   const createDoc = useMutation(api.docs.webCreate);
 
-  useSyncDocs(docFilter.type || undefined, docFilter.query || undefined, docFilter.project || undefined, docFilter.scope || undefined);
+  useSyncDocs(docFilter.type || undefined, docFilter.query || undefined, docFilter.project || undefined);
 
   const handleNewDoc = async () => {
     const result = await createDoc({ title: "Untitled", content: "" });
@@ -207,7 +206,7 @@ export default function DocsPage() {
                     key={key}
                     onClick={() => setDocFilter({ type: key })}
                     className={`text-xs px-2.5 py-1 rounded-md transition-colors ${
-                      docFilter.type === key ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"
+                      docFilter.type === key ? `bg-sol-bg-highlight ${cfg.color}` : `${cfg.color} opacity-50 hover:opacity-100`
                     }`}
                   >
                     {cfg.label}
@@ -215,51 +214,30 @@ export default function DocsPage() {
                 ))}
               </div>
             </div>
-            <div className="flex items-center gap-2 mt-2">
-              <div className="flex gap-1 items-center">
-                <Layers className="w-3 h-3 text-sol-text-dim" />
+            {projectPaths.length > 1 && (
+              <div className="flex items-center gap-1 mt-2">
+                <FolderGit2 className="w-3 h-3 text-sol-text-dim" />
                 <button
-                  onClick={() => setDocFilter({ scope: "", project: "" })}
+                  onClick={() => setDocFilter({ project: "" })}
                   className={`text-xs px-2 py-0.5 rounded-md transition-colors ${
-                    !docFilter.scope ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"
+                    !docFilter.project ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"
                   }`}
                 >
-                  Team
+                  All
                 </button>
-                <button
-                  onClick={() => setDocFilter({ scope: "projects", project: "" })}
-                  className={`text-xs px-2 py-0.5 rounded-md transition-colors ${
-                    docFilter.scope === "projects" ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"
-                  }`}
-                >
-                  Projects
-                </button>
-              </div>
-              {docFilter.scope === "projects" && projectPaths.length > 0 && (
-                <div className="flex items-center gap-1 ml-2">
-                  <FolderGit2 className="w-3 h-3 text-sol-text-dim" />
+                {projectPaths.map((p) => (
                   <button
-                    onClick={() => setDocFilter({ project: "" })}
+                    key={p}
+                    onClick={() => setDocFilter({ project: p })}
                     className={`text-xs px-2 py-0.5 rounded-md transition-colors ${
-                      !docFilter.project ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"
+                      docFilter.project === p ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"
                     }`}
                   >
-                    All
+                    {shortProject(p)}
                   </button>
-                  {projectPaths.map((p) => (
-                    <button
-                      key={p}
-                      onClick={() => setDocFilter({ project: p })}
-                      className={`text-xs px-2 py-0.5 rounded-md transition-colors ${
-                        docFilter.project === p ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"
-                      }`}
-                    >
-                      {shortProject(p)}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
+                ))}
+              </div>
+            )}
           </div>
 
           <div className="flex-1 overflow-y-auto px-4 py-2">

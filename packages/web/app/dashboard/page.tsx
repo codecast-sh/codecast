@@ -114,6 +114,7 @@ export default function DashboardPage() {
         <ActivityFeed
           mode={filter === "team" ? "team" : "personal"}
           teamId={teamId}
+          directoryFilter={directoryFilter}
         />
       </DashboardLayout>
     </AuthGuard>

@@ -714,12 +714,13 @@ interface ActivityFeedProps {
   mode: "personal" | "team";
   teamId?: string;
   compact?: boolean;
+  directoryFilter?: string | null;
   onNavigate?: (conversationId: string) => void;
 }
 
 const WINDOW_STEPS: WindowHours[] = [168, 720];
 
-export function ActivityFeed({ mode, teamId, compact, onNavigate }: ActivityFeedProps) {
+export function ActivityFeed({ mode, teamId, compact, directoryFilter, onNavigate }: ActivityFeedProps) {
   const [windowIdx, setWindowIdx] = useState(0);
   const windowHours = WINDOW_STEPS[windowIdx];
   const [actorFilter, setActorFilter] = useState<Id<"users"> | undefined>(undefined);
@@ -759,15 +760,24 @@ export function ActivityFeed({ mode, teamId, compact, onNavigate }: ActivityFeed
     if (!digest?.feed) return [];
     let items = digest.feed;
     if (actorFilter) items = items.filter((item: any) => item.actor?._id?.toString() === actorFilter?.toString());
+    if (directoryFilter) {
+      const filterName = directoryFilter.split('/').filter(Boolean).pop();
+      items = items.filter((item: any) => {
+        const path = item.git_root || item.project_path;
+        if (!path) return false;
+        const parts = path.split('/').filter(Boolean);
+        return parts.includes(filterName!);
+      });
+    }
     if (projectFilter) items = items.filter((item: any) => extractProject(item.project_path) === projectFilter);
     return items;
-  }, [digest?.feed, actorFilter, projectFilter]);
+  }, [digest?.feed, actorFilter, directoryFilter, projectFilter]);
 
   const projectColors = useProjectColors(filteredFeed);
 
   const filteredDaySummaries = useMemo(() => {
     if (!digest?.day_summaries) return [];
-    if (!actorFilter && !projectFilter) return digest.day_summaries;
+    if (!actorFilter && !projectFilter && !directoryFilter) return digest.day_summaries;
     const feedDates = new Set(
       filteredFeed.map((item: any) => {
         const ts = item.updated_at || item.started_at || item.generated_at;
@@ -775,7 +785,7 @@ export function ActivityFeed({ mode, teamId, compact, onNavigate }: ActivityFeed
       })
     );
     return digest.day_summaries.filter((d: any) => feedDates.has(d.date));
-  }, [digest?.day_summaries, actorFilter, projectFilter, filteredFeed, tz]);
+  }, [digest?.day_summaries, actorFilter, directoryFilter, projectFilter, filteredFeed, tz]);
 
   const feedByDay = useMemo(() => {
     const map = new Map<string, any[]>();
@@ -799,7 +809,10 @@ export function ActivityFeed({ mode, teamId, compact, onNavigate }: ActivityFeed
           setViewMode={setViewMode}
           compact={compact}
         />
-        <ConversationList filter={mode === "team" ? "team" : "my"} onNavigate={onNavigate} />
+        {mode === "team" && (
+          <PeopleRow people={digest.people} onSelect={setActorFilter} selectedId={actorFilter} />
+        )}
+        <ConversationList filter={mode === "team" ? "team" : "my"} directoryFilter={directoryFilter} memberFilter={actorFilter?.toString() ?? null} onNavigate={onNavigate} />
       </div>
     );
   }

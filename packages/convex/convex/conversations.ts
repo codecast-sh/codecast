@@ -1502,7 +1502,9 @@ export const listConversations = query({
       if (args.directoryFilter) {
         const root = deriveGitRoot(c);
         if (!root) return false;
-        if (root !== args.directoryFilter && !root.startsWith(args.directoryFilter + '/')) return false;
+        const filterName = args.directoryFilter.split('/').filter(Boolean).pop();
+        const rootParts = root.split('/').filter(Boolean);
+        if (!filterName || !rootParts.includes(filterName)) return false;
       }
       if (args.timeFilter === "active") {
         const isActive = c.status === "active" && (c.updated_at > fiveMinutesAgo || liveConvIds.has(c._id.toString()));

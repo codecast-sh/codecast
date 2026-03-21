@@ -4,6 +4,7 @@ import { Id } from "./_generated/dataModel";
 import { verifyApiToken } from "./apiTokens";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { createDataContext } from "./data";
+import { resolveTeamForPath } from "./privacy";
 
 function generatePlanShortId(): string {
   const chars = "0123456789abcdefghijklmnopqrstuvwxyz";
@@ -428,6 +429,11 @@ export const webList = query({
       });
     }
 
+    if (!projectPaths.length) {
+      const baseDocs = userDocs.length > 0 ? userDocs : allDocs;
+      projectPaths = [...new Set(baseDocs.filter((d) => !d.archived_at && !isNoiseDoc(d)).map((d) => d.project_path).filter(Boolean))] as string[];
+    }
+
     if (args.doc_type) {
       docs = docs.filter((d) => d.doc_type === args.doc_type);
     }
@@ -778,6 +784,7 @@ export const mentionSearch = query({
     query: v.string(),
     types: v.optional(v.array(v.string())),
     limit: v.optional(v.number()),
+    projectPath: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -785,7 +792,21 @@ export const mentionSearch = query({
 
     const user = await ctx.db.get(userId);
     let teamId = user?.active_team_id || (user as any)?.team_id;
-    if (!teamId) {
+
+    if (args.projectPath) {
+      const mappings = await ctx.db
+        .query("directory_team_mappings")
+        .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+        .collect();
+      const { teamId: mappedTeamId } = resolveTeamForPath(
+        mappings,
+        args.projectPath,
+        undefined
+      );
+      teamId = mappedTeamId;
+    }
+
+    if (!teamId && !args.projectPath) {
       const membership = await ctx.db
         .query("team_memberships")
         .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))

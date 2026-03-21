@@ -1078,11 +1078,10 @@ interface ConversationListProps {
   filter: "my" | "team";
   directoryFilter?: string | null;
   memberFilter?: string | null;
-  onMemberFilterChange?: (memberId: string | null) => void;
   onNavigate?: (conversationId: string) => void;
 }
 
-export function ConversationList({ filter, directoryFilter, memberFilter, onMemberFilterChange, onNavigate }: ConversationListProps) {
+export function ConversationList({ filter, directoryFilter, memberFilter, onNavigate }: ConversationListProps) {
   const router = useRouter();
   const [currentTime, setCurrentTime] = useState(Date.now());
   const [timeFilter, setTimeFilter] = useState<TimeFilter>("all");
@@ -1106,8 +1105,6 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
     api.teams.getTeamMembers,
     effectiveTeamId ? { team_id: effectiveTeamId } : "skip"
   );
-  const userTeams = useQuery(api.teams.getUserTeams);
-  const activeTeam = activeTeamId ? userTeams?.find(t => t?._id === activeTeamId) : null;
   const hasTeammates = teamMembers && teamMembers.length > 1;
   const hasTeam = !!effectiveTeamId;
 
@@ -1336,29 +1333,6 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
           {hasSubagents && subagentFilter !== "subagent" && <span className="ml-1 w-1.5 h-1.5 rounded-full bg-sol-violet/60 inline-block" />}
         </button>
 
-        {/* Member filter (team only) */}
-        {filter === "team" && teamMembers && teamMembers.length > 0 && (
-          <>
-            <div className="w-px bg-sol-border/30 mx-1" />
-            <select
-              value={memberFilter || ""}
-              onChange={(e) => onMemberFilterChange?.(e.target.value || null)}
-              className={`appearance-none cursor-pointer px-2 sm:px-2.5 md:px-3 py-1 sm:py-1.5 pr-7 text-xs sm:text-sm rounded-lg transition-colors whitespace-nowrap border ${
-                memberFilter
-                  ? "bg-purple-500/20 text-purple-400 border-purple-500/40"
-                  : "bg-sol-bg-alt text-sol-text-muted border-sol-border/30 hover:border-sol-border/50"
-              }`}
-              style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%23888'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'/%3E%3C/svg%3E")`, backgroundSize: '12px', backgroundPosition: 'right 8px center', backgroundRepeat: 'no-repeat' }}
-            >
-              <option value="">All {activeTeam?.name || "Team"}</option>
-              {teamMembers.filter((m): m is NonNullable<typeof m> => m !== null).map((member) => (
-                <option key={member._id} value={member._id}>
-                  {member.name || member.email}
-                </option>
-              ))}
-            </select>
-          </>
-        )}
       </div>
 
       {/* Screen reader announcement for focused item */}

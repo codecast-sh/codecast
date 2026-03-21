@@ -451,9 +451,22 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
         }
       }
     }
-    return Array.from(dirLastUpdated.entries())
-      .sort((a, b) => b[1] - a[1])
-      .map(([path]) => path);
+    const byName = new Map<string, { path: string; updatedAt: number }>();
+    for (const [path, updatedAt] of dirLastUpdated) {
+      const name = path.split('/').filter(Boolean).pop() || path;
+      const existing = byName.get(name);
+      const maxUpdated = Math.max(updatedAt, existing?.updatedAt ?? 0);
+      const preferSrc = path.includes('/src/') && (!existing || !existing.path.includes('/src/'));
+      const existingIsSrc = existing?.path.includes('/src/') && !path.includes('/src/');
+      if (!existing || preferSrc || (updatedAt > (existing?.updatedAt ?? 0) && !existingIsSrc)) {
+        byName.set(name, { path, updatedAt: maxUpdated });
+      } else {
+        byName.set(name, { ...existing!, updatedAt: maxUpdated });
+      }
+    }
+    return Array.from(byName.values())
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .map(v => v.path);
   }, [filteredConversations]);
 
 
