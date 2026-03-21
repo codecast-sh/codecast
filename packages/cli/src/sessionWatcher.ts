@@ -53,7 +53,7 @@ export class SessionWatcher extends EventEmitter {
       path: this.projectsPath,
       filter: (rel) => rel.endsWith(".jsonl"),
       callback: (filePath, eventType) => this.handleFileEvent(filePath, eventType),
-      maxDepth: 2,
+      maxDepth: 4,
       debounceMs: 100,
     });
 
@@ -68,7 +68,7 @@ export class SessionWatcher extends EventEmitter {
     const now = Date.now();
 
     const scanDir = (dir: string, depth: number) => {
-      if (depth > 2) return;
+      if (depth > 4) return;
       try {
         const entries = fs.readdirSync(dir, { withFileTypes: true });
         for (const entry of entries) {
@@ -120,8 +120,8 @@ export class SessionWatcher extends EventEmitter {
     if (parts.length < 2) return;
 
     const projectDirName = parts[0];
-    const sessionFileName = parts[1];
-    const sessionId = sessionFileName.replace(".jsonl", "");
+    const fileName = parts[parts.length - 1];
+    const sessionId = fileName.replace(".jsonl", "");
 
     this.emit("session", {
       sessionId,

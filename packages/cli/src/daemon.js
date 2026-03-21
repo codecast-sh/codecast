@@ -1727,7 +1727,7 @@ class SessionWatcher extends EventEmitter3 {
       path: this.projectsPath,
       filter: (rel) => rel.endsWith(".jsonl"),
       callback: (filePath, eventType) => this.handleFileEvent(filePath, eventType),
-      maxDepth: 2,
+      maxDepth: 4,
       debounceMs: 100
     });
     this.watcher.on("error", (err) => this.emit("error", err));
@@ -1739,7 +1739,7 @@ class SessionWatcher extends EventEmitter3 {
     const RECENT_THRESHOLD_MS = 10 * 60 * 1000;
     const now = Date.now();
     const scanDir = (dir, depth) => {
-      if (depth > 2)
+      if (depth > 4)
         return;
       try {
         const entries = fs2.readdirSync(dir, { withFileTypes: true });
@@ -1785,8 +1785,8 @@ class SessionWatcher extends EventEmitter3 {
     if (parts.length < 2)
       return;
     const projectDirName = parts[0];
-    const sessionFileName = parts[1];
-    const sessionId = sessionFileName.replace(".jsonl", "");
+    const fileName = parts[parts.length - 1];
+    const sessionId = fileName.replace(".jsonl", "");
     this.emit("session", {
       sessionId,
       filePath,
@@ -10131,6 +10131,17 @@ class SyncService {
       throw error;
     }
   }
+  async setAvailableSkills(conversationId, skills, projectPath) {
+    try {
+      await this.client.mutation("conversations:setAvailableSkills", {
+        ...conversationId ? { conversation_id: conversationId } : {},
+        ...projectPath ? { project_path: projectPath } : {},
+        skills,
+        api_token: this.apiToken
+      });
+    } catch {
+    }
+  }
   async updateProjectPath(sessionId, projectPath, gitRoot) {
     try {
       const result = await this.client.mutation("conversations:updateProjectPath", {
@@ -10867,9 +10878,9 @@ function extractArgumentsPreview(content) {
 // src/permissionHandler.ts
 var POLL_INTERVAL_MS = 1000;
 var TIMEOUT_MS = 5 * 60 * 1000;
-async function handlePermissionRequest(syncService2, conversationId, sessionId, prompt, log) {
+async function handlePermissionRequest(syncService, conversationId, sessionId, prompt, log) {
   try {
-    await syncService2.createPermissionRequest({
+    await syncService.createPermissionRequest({
       conversation_id: conversationId,
       session_id: sessionId,
       tool_name: prompt.tool_name,
@@ -10878,7 +10889,7 @@ async function handlePermissionRequest(syncService2, conversationId, sessionId, 
     log(`Created permission request for tool: ${prompt.tool_name}`);
     const startTime = Date.now();
     while (Date.now() - startTime < TIMEOUT_MS) {
-      const decision = await syncService2.getPermissionDecision(sessionId);
+      const decision = await syncService.getPermissionDecision(sessionId);
       if (decision) {
         const approved = decision.status === "approved";
         log(`Permission ${approved ? "approved" : "denied"} for tool: ${prompt.tool_name}`);
@@ -10899,7 +10910,7 @@ async function handlePermissionRequest(syncService2, conversationId, sessionId, 
 import * as fs10 from "fs";
 import * as path10 from "path";
 import * as os from "os";
-var VERSION = "1.0.86";
+var VERSION = "1.0.87";
 var LATEST_URL = "https://dl.codecast.sh/latest.json";
 var UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000;
 var CONFIG_DIR3 = process.env.HOME + "/.codecast";
@@ -11049,7 +11060,7 @@ function countMessagesInFile(filePath) {
 function extractSessionIdFromPath(filePath) {
   return path11.basename(filePath, ".jsonl");
 }
-async function performReconciliation(syncService2, log, maxFiles = 50) {
+async function performReconciliation(syncService, log, maxFiles = 50) {
   const result = {
     timestamp: Date.now(),
     checked: 0,
@@ -11094,7 +11105,7 @@ async function performReconciliation(syncService2, log, maxFiles = 50) {
   log(`Reconciliation: Checking ${sessionIds.length} sessions against backend`);
   let backendCounts = [];
   try {
-    backendCounts = await syncService2.getMessageCountsForReconciliation(sessionIds);
+    backendCounts = await syncService.getMessageCountsForReconciliation(sessionIds);
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
     result.errors.push(`Failed to query backend: ${errMsg}`);
@@ -11189,8 +11200,9 @@ function hasTmux() {
 }
 
 // src/taskScheduler.ts
+var ENRICHED_PATH2 = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
 var _execAsync = promisify(exec);
-var execAsync = (cmd, opts) => _execAsync(cmd, { timeout: 1e4, ...opts });
+var execAsync = (cmd, opts) => _execAsync(cmd, { timeout: 1e4, env: { ...process.env, PATH: ENRICHED_PATH2 }, ...opts });
 var POLL_INTERVAL_MS2 = 30000;
 var HEARTBEAT_INTERVAL_MS = 60000;
 var MAX_CONCURRENCY = 2;
@@ -11203,9 +11215,9 @@ class TaskScheduler {
   running = new Map;
   pollTimer = null;
   stopped = false;
-  constructor({ syncService: syncService2, config, log }) {
+  constructor({ syncService, config, log }) {
     this.daemonId = crypto3.randomUUID();
-    this.syncService = syncService2;
+    this.syncService = syncService;
     this.config = config;
     this.log = (msg, level) => log(`[TaskSched] ${msg}`, level);
   }
@@ -11298,7 +11310,8 @@ class TaskScheduler {
       await execAsync(`tmux send-keys -t '${tmuxSession}' ${JSON.stringify(shellCmd)} Enter`);
       this.log(`Spawned tmux session ${tmuxSession} for task "${task.title}"`);
     } catch (err) {
-      this.log(`Failed to spawn tmux for task "${task.title}": ${err instanceof Error ? err.message : String(err)}`, "error");
+      const stderr = err?.stderr ? ` stderr: ${err.stderr}` : "";
+      this.log(`Failed to spawn tmux for task "${task.title}": ${err instanceof Error ? err.message : String(err)}${stderr}`, "error");
       await this.syncService.failTaskRun(task._id, this.daemonId, "Failed to spawn tmux session");
       return;
     }
@@ -11972,11 +11985,22 @@ function writeCodexSession(jsonl, sessionId, name) {
 // src/daemon.ts
 var __dirname = "/Users/ashot/src/codecast/packages/cli/src";
 var _execAsync2 = promisify2(exec2);
-var ENRICHED_PATH2 = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
+var ENRICHED_PATH3 = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
 var EXEC_TIMEOUT_MS = 1e4;
-var execAsync2 = (cmd, opts) => _execAsync2(cmd, { timeout: EXEC_TIMEOUT_MS, ...opts, env: { ...process.env, PATH: ENRICHED_PATH2, ...opts?.env } });
+var execAsync2 = async (cmd, opts) => {
+  const result = await _execAsync2(cmd, {
+    encoding: "utf8",
+    timeout: EXEC_TIMEOUT_MS,
+    ...opts,
+    env: { ...process.env, PATH: ENRICHED_PATH3, ...opts?.env || {} }
+  });
+  return {
+    stdout: String(result.stdout),
+    stderr: String(result.stderr)
+  };
+};
 var _execFileAsync = promisify2(execFile);
-var SAFE_ENV = { ...process.env, PATH: ENRICHED_PATH2 };
+var SAFE_ENV = { ...process.env, PATH: ENRICHED_PATH3 };
 function tmuxExecSync(args, opts) {
   return execFileSync("tmux", args, {
     timeout: opts?.timeout ?? EXEC_TIMEOUT_MS,
@@ -12173,7 +12197,88 @@ var MIN_WORKING_DURATION_FOR_NOTIF_MS = 1e4;
 var lastHookStatus = new Map;
 var pendingInteractivePrompts = new Map;
 var AGENT_STATUS_DIR = path13.join(process.env.HOME || "", ".codecast", "agent-status");
-function sendAgentStatus(syncService2, conversationId, sessionId, status, clientTs, permissionMode, idleMessage) {
+var skillsSyncedConversations = new Set;
+function readAvailableSkills(projectPath) {
+  const skills = [];
+  const seen = new Set;
+  const home = process.env.HOME || "";
+  const commandDirs = [
+    path13.join(home, ".claude", "commands"),
+    ...projectPath ? [path13.join(projectPath, ".claude", "commands")] : []
+  ];
+  for (const dir of commandDirs) {
+    try {
+      if (!fs14.existsSync(dir))
+        continue;
+      for (const file of fs14.readdirSync(dir)) {
+        if (!file.endsWith(".md"))
+          continue;
+        const name = file.replace(/\.md$/, "");
+        if (seen.has(name))
+          continue;
+        seen.add(name);
+        try {
+          const content = fs14.readFileSync(path13.join(dir, file), "utf-8");
+          const m = content.match(/^---[\s\S]*?description:\s*(.+?)[\r\n]/m);
+          skills.push({ name, description: m?.[1]?.trim() || "" });
+        } catch {
+        }
+      }
+    } catch {
+    }
+  }
+  const skillDirs = [
+    path13.join(home, ".claude", "skills"),
+    ...projectPath ? [path13.join(projectPath, ".claude", "skills")] : []
+  ];
+  for (const dir of skillDirs) {
+    try {
+      if (!fs14.existsSync(dir))
+        continue;
+      for (const entry of fs14.readdirSync(dir)) {
+        const skillMd = path13.join(dir, entry, "SKILL.md");
+        const standalone = path13.join(dir, entry);
+        let content = "";
+        if (fs14.existsSync(skillMd)) {
+          content = fs14.readFileSync(skillMd, "utf-8");
+        } else if (entry.endsWith(".md")) {
+          content = fs14.readFileSync(standalone, "utf-8");
+        } else
+          continue;
+        const nameMatch = content.match(/^---[\s\S]*?name:\s*(.+?)[\r\n]/m);
+        const descMatch = content.match(/^---[\s\S]*?description:\s*(.+?)[\r\n]/m);
+        const invocable = /user_invocable:\s*true/i.test(content);
+        const name = nameMatch?.[1]?.trim() || entry.replace(/\.md$/, "");
+        if (!invocable || seen.has(name))
+          continue;
+        seen.add(name);
+        skills.push({ name, description: descMatch?.[1]?.trim() || "" });
+      }
+    } catch {
+    }
+  }
+  return skills;
+}
+function syncSkillsForConversation(conversationId, projectPath, syncService) {
+  if (skillsSyncedConversations.has(conversationId))
+    return;
+  skillsSyncedConversations.add(conversationId);
+  const allSkills = readAvailableSkills(projectPath);
+  if (allSkills.length === 0)
+    return;
+  syncService.setAvailableSkills(conversationId, JSON.stringify(allSkills)).catch(() => {
+  });
+  if (projectPath) {
+    const globalSkills = readAvailableSkills();
+    const globalNames = new Set(globalSkills.map((s) => s.name));
+    const projectOnly = allSkills.filter((s) => !globalNames.has(s.name));
+    if (projectOnly.length > 0) {
+      syncService.setAvailableSkills(undefined, JSON.stringify(projectOnly), projectPath).catch(() => {
+      });
+    }
+  }
+}
+function sendAgentStatus(syncService, conversationId, sessionId, status, clientTs, permissionMode, idleMessage) {
   const prevStatus = lastSentAgentStatus.get(sessionId);
   const isTransition = prevStatus !== status;
   if (status === "working" && !permissionMode && !isTransition) {
@@ -12188,7 +12293,7 @@ function sendAgentStatus(syncService2, conversationId, sessionId, status, client
     }
   }
   lastSentAgentStatus.set(sessionId, status);
-  syncService2.updateSessionAgentStatus(conversationId, status, clientTs, permissionMode).catch((err) => {
+  syncService.updateSessionAgentStatus(conversationId, status, clientTs, permissionMode).catch((err) => {
     log(`[sendAgentStatus] error: ${err?.message || err}`);
   });
   if (status === "idle" && idleMessage) {
@@ -12197,7 +12302,7 @@ function sendAgentStatus(syncService2, conversationId, sessionId, status, client
     if (workStart) {
       const workingDuration = Date.now() - workStart;
       if (workingDuration >= MIN_WORKING_DURATION_FOR_NOTIF_MS) {
-        syncService2.createSessionNotification({
+        syncService.createSessionNotification({
           conversation_id: conversationId,
           type: "session_idle",
           title: "Claude done",
@@ -12734,7 +12839,7 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
               if (!fs14.existsSync(flagFile)) {
                 fs14.writeFileSync(flagFile, new Date().toISOString());
                 if (conversationId) {
-                  syncService.createSessionNotification({
+                  syncServiceRef?.createSessionNotification({
                     conversation_id: conversationId,
                     type: "info",
                     title: "Codex running in full-access mode",
@@ -13722,9 +13827,9 @@ function decodeProjectDirName(dirName) {
   }
   return resolved;
 }
-async function flushPendingMessagesBatch(pendingMsgs, conversationId, syncService2, retryQueue) {
+async function flushPendingMessagesBatch(pendingMsgs, conversationId, syncService, retryQueue) {
   try {
-    await syncService2.addMessages({
+    await syncService.addMessages({
       conversationId,
       messages: pendingMsgs.map((msg) => ({
         messageUuid: msg.uuid,
@@ -13773,9 +13878,9 @@ function prepMessageForSync(msg) {
     subtype: msg.subtype
   };
 }
-async function syncMessagesBatch(messages, conversationId, syncService2, retryQueue) {
+async function syncMessagesBatch(messages, conversationId, syncService, retryQueue) {
   try {
-    await syncService2.addMessages({
+    await syncService.addMessages({
       conversationId,
       messages: messages.map(prepMessageForSync)
     });
@@ -13824,7 +13929,8 @@ function readFileTail(filePath, maxBytes = 8192) {
     fs14.closeSync(fd);
   }
 }
-async function processSessionFile(filePath, sessionId, projectPath, syncService2, userId, teamId, conversationCache, retryQueue, pendingMessages, titleCache, updateStateCallback, parentConversationId) {
+async function processSessionFile(filePath, sessionId, projectPath, syncService, userId, teamId, conversationCache, retryQueue, pendingMessages, titleCache, updateStateCallback, parentConversationId) {
+  const isSubagent = filePath.split(path13.sep).includes("subagents");
   let lastPosition = getPosition(filePath);
   let stats;
   try {
@@ -13878,7 +13984,7 @@ async function processSessionFile(filePath, sessionId, projectPath, syncService2
       const summaryTitle = extractSummaryTitle(titleContent);
       if (summaryTitle && titleCache[sessionId] !== summaryTitle) {
         try {
-          await syncService2.updateTitle(conversationId, summaryTitle);
+          await syncService.updateTitle(conversationId, summaryTitle);
           titleCache[sessionId] = summaryTitle;
           saveTitleCache(titleCache);
           log(`Updated title for session ${sessionId}: ${summaryTitle}`);
@@ -13909,7 +14015,7 @@ async function processSessionFile(filePath, sessionId, projectPath, syncService2
               const parentConvId = conversationCache[parentSessionId];
               if (parentConvId) {
                 try {
-                  await syncService2.linkPlanHandoff(parentConvId, conversationId);
+                  await syncService.linkPlanHandoff(parentConvId, conversationId);
                   planHandoffChildren.set(parentConvId, conversationId);
                   log(`Retroactive plan handoff: linked ${sessionId.slice(0, 8)} -> parent ${parentSessionId.slice(0, 8)}`);
                 } catch (err) {
@@ -14019,18 +14125,25 @@ async function processSessionFile(filePath, sessionId, projectPath, syncService2
           const tmuxEntry = startedSessionTmux.get(matchedStartedConversation);
           conversationCache[sessionId] = conversationId;
           saveConversationCache(conversationCache);
-          syncService2.updateSessionId(conversationId, sessionId).catch(() => {
+          syncService.updateSessionId(conversationId, sessionId).catch(() => {
           });
           if (tmuxEntry) {
-            syncService2.registerManagedSession(sessionId, process.pid, tmuxEntry.tmuxSession, conversationId).catch(() => {
+            syncService.registerManagedSession(sessionId, process.pid, tmuxEntry.tmuxSession, conversationId).catch(() => {
             });
           }
           startedSessionTmux.delete(matchedStartedConversation);
           log(`Linked session ${sessionId} to existing started conversation ${conversationId}`);
+          if (parentConversationId) {
+            syncService.linkSessions(parentConversationId, conversationId).then(() => {
+              log(`Linked started conversation ${conversationId.slice(0, 12)} to parent ${parentConversationId.slice(0, 12)}`);
+            }).catch((err) => {
+              log(`Failed to link started conversation to parent: ${err}`);
+            });
+          }
         } else {
           const cliFlags = detectCliFlags(headContent + `
 ` + newContent);
-          conversationId = await syncService2.createConversation({
+          conversationId = await syncService.createConversation({
             userId,
             teamId,
             sessionId,
@@ -14052,28 +14165,29 @@ async function processSessionFile(filePath, sessionId, projectPath, syncService2
           }
           log(`Created conversation ${conversationId} for session ${sessionId}`);
           syncStats.conversationsCreated++;
+          syncSkillsForConversation(conversationId, actualProjectPath, syncService);
           findSessionProcess(sessionId, "claude").then((proc) => {
             if (!proc)
               return;
             findTmuxPaneForTty(proc.tty).then((tmuxPane) => {
               const tmuxSessionName = tmuxPane?.split(":")[0];
-              syncService2.registerManagedSession(sessionId, proc.pid, tmuxSessionName, conversationId).catch(() => {
+              syncService.registerManagedSession(sessionId, proc.pid, tmuxSessionName, conversationId).catch(() => {
               });
               if (tmuxSessionName)
                 log(`Registered managed session for ${sessionId.slice(0, 8)} (tmux: ${tmuxSessionName})`);
             }).catch(() => {
-              syncService2.registerManagedSession(sessionId, process.pid, undefined, conversationId).catch(() => {
+              syncService.registerManagedSession(sessionId, process.pid, undefined, conversationId).catch(() => {
               });
             });
           }).catch(() => {
-            syncService2.registerManagedSession(sessionId, process.pid, undefined, conversationId).catch(() => {
+            syncService.registerManagedSession(sessionId, process.pid, undefined, conversationId).catch(() => {
             });
           });
           for (const [childSessionId, parentSessionId] of pendingSubagentParents) {
             if (parentSessionId === sessionId) {
               const childConvId = conversationCache[childSessionId];
               if (childConvId) {
-                syncService2.linkSessions(conversationId, childConvId).then(() => {
+                syncService.linkSessions(conversationId, childConvId).then(() => {
                   log(`Linked pending subagent ${childSessionId.slice(0, 8)} -> parent ${sessionId.slice(0, 8)}`);
                 }).catch((err) => {
                   log(`Failed to link subagent ${childSessionId.slice(0, 8)}: ${err}`);
@@ -14091,7 +14205,7 @@ async function processSessionFile(filePath, sessionId, projectPath, syncService2
           });
         }
         if (pendingMessages[sessionId]) {
-          await flushPendingMessagesBatch(pendingMessages[sessionId], conversationId, syncService2, retryQueue);
+          await flushPendingMessagesBatch(pendingMessages[sessionId], conversationId, syncService, retryQueue);
           delete pendingMessages[sessionId];
         }
       } catch (err) {
@@ -14171,7 +14285,7 @@ async function processSessionFile(filePath, sessionId, projectPath, syncService2
               const dirName = path13.basename(path13.dirname(filePath));
               const projPath = dirName ? decodeProjectDirName(dirName) : undefined;
               try {
-                const planShortId = await syncService2.syncPlanFromPlanMode({
+                const planShortId = await syncService.syncPlanFromPlanMode({
                   sessionId,
                   planContent: block.input.plan,
                   projectPath: projPath
@@ -14181,7 +14295,7 @@ async function processSessionFile(filePath, sessionId, projectPath, syncService2
                   savePlanModeCache();
                   if (projPath) {
                     try {
-                      const snippet = await syncService2.getPlanSnippet(planShortId);
+                      const snippet = await syncService.getPlanSnippet(planShortId);
                       if (snippet) {
                         const contextDir = path13.join(projPath, ".claude");
                         if (!fs14.existsSync(contextDir))
@@ -14207,7 +14321,7 @@ ${snippet}
               const taskMap = planModeTaskMap.get(sessionId) || new Map;
               const localId = String(taskMap.size + 1);
               try {
-                const shortId = await syncService2.syncTaskFromPlanMode({
+                const shortId = await syncService.syncTaskFromPlanMode({
                   sessionId,
                   title: block.input.subject,
                   description: block.input.description,
@@ -14229,7 +14343,7 @@ ${snippet}
               if (shortId) {
                 const status = block.input.status === "completed" ? "done" : block.input.status === "in_progress" ? "in_progress" : block.input.status;
                 try {
-                  await syncService2.updateTaskStatus(shortId, status, sessionId);
+                  await syncService.updateTaskStatus(shortId, status, sessionId);
                   log(`Updated task ${shortId} -> ${status} in session ${sessionId.slice(0, 8)}`);
                 } catch (err) {
                   log(`Failed to sync TaskUpdate: ${err instanceof Error ? err.message : String(err)}`);
@@ -14241,7 +14355,8 @@ ${snippet}
         }
       }
     }
-    const batchResult = await syncMessagesBatch(messages, conversationId, syncService2, retryQueue);
+    syncSkillsForConversation(conversationId, projectPath, syncService);
+    const batchResult = await syncMessagesBatch(messages, conversationId, syncService, retryQueue);
     if (batchResult.authExpired) {
       log("⚠️  Authentication expired - sync paused");
       return;
@@ -14270,7 +14385,7 @@ ${snippet}
       try {
         const firstUserMessage = messages.find((msg) => msg.role === "user");
         const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
-        conversationId = await syncService2.createConversation({
+        conversationId = await syncService.createConversation({
           userId,
           teamId,
           sessionId,
@@ -14284,7 +14399,7 @@ ${snippet}
         conversationCache[sessionId] = conversationId;
         saveConversationCache(conversationCache);
         log(`Recreated conversation ${conversationId} for session ${sessionId}`);
-        await syncService2.addMessages({
+        await syncService.addMessages({
           conversationId,
           messages: messages.map(prepMessageForSync)
         });
@@ -14307,16 +14422,16 @@ ${snippet}
       if (permissionPrompt) {
         log(`Permission prompt detected for tool: ${permissionPrompt.tool_name}`);
         permissionJustResolved.add(sessionId);
-        sendAgentStatus(syncService2, conversationId, sessionId, "permission_blocked");
+        sendAgentStatus(syncService, conversationId, sessionId, "permission_blocked");
         const permArgPreview = truncateForNotification(`${permissionPrompt.tool_name}: ${permissionPrompt.arguments_preview || ""}`, 150);
-        syncService2.createSessionNotification({
+        syncService.createSessionNotification({
           conversation_id: conversationId,
           type: "permission_request",
           title: `codecast - Permission needed`,
           message: permArgPreview
         }).catch(() => {
         });
-        handlePermissionRequest(syncService2, conversationId, sessionId, permissionPrompt, log).then((decision) => {
+        handlePermissionRequest(syncService, conversationId, sessionId, permissionPrompt, log).then((decision) => {
           if (decision) {
             const key = decision.approved ? "Enter" : "Escape";
             log(`Attempting to inject '${key}' to session ${sessionId.slice(0, 8)}`);
@@ -14349,12 +14464,12 @@ ${snippet}
         });
       }
       const errorText = detectErrorInMessage(lastAssistantMessage.content);
-      if (errorText && !permissionPrompt) {
+      if (errorText && !permissionPrompt && !isSubagent) {
         const now = Date.now();
         const lastErr = lastErrorNotification.get(sessionId) ?? 0;
         if (now - lastErr > IDLE_COOLDOWN_MS) {
           lastErrorNotification.set(sessionId, now);
-          syncService2.createSessionNotification({
+          syncService.createSessionNotification({
             conversation_id: conversationId,
             type: "session_error",
             title: "codecast - Error",
@@ -14370,7 +14485,7 @@ ${snippet}
         if (wasInterrupted) {
           idleTimers.delete(sessionId);
           lastIdleNotifiedSize.set(sessionId, stats.size);
-          sendAgentStatus(syncService2, conversationId, sessionId, "idle");
+          sendAgentStatus(syncService, conversationId, sessionId, "idle");
         } else {
           const hookEntry = lastHookStatus.get(sessionId);
           const hookIsRecent = hookEntry && Date.now() / 1000 - hookEntry.ts < 30;
@@ -14378,7 +14493,7 @@ ${snippet}
           const hookSaysActive = hookIsRecent && hookEntry && (hookEntry.status === "working" || hookEntry.status === "thinking" || hookEntry.status === "compacting");
           if (hasPendingToolCalls || hookSaysActive) {
             if (!hookIsRecent) {
-              sendAgentStatus(syncService2, conversationId, sessionId, "working");
+              sendAgentStatus(syncService, conversationId, sessionId, "working");
             }
             idleTimers.delete(sessionId);
           } else if (lastAssistantMessage.stopReason === "end_turn") {
@@ -14386,12 +14501,12 @@ ${snippet}
             const capturedSize = stats.size;
             if (capturedSize !== lastIdleNotifiedSize.get(sessionId)) {
               lastIdleNotifiedSize.set(sessionId, capturedSize);
-              const preview = truncateForNotification(lastAssistantMessage.content);
-              sendAgentStatus(syncService2, conversationId, sessionId, "idle", undefined, undefined, preview);
+              const preview = isSubagent ? undefined : truncateForNotification(lastAssistantMessage.content);
+              sendAgentStatus(syncService, conversationId, sessionId, "idle", undefined, undefined, preview);
             }
           } else {
             if (!hookIsRecent) {
-              sendAgentStatus(syncService2, conversationId, sessionId, "working");
+              sendAgentStatus(syncService, conversationId, sessionId, "working");
             }
             const capturedSize = stats.size;
             const capturedConvId = conversationId;
@@ -14399,8 +14514,8 @@ ${snippet}
               lastIdleNotifiedSize.set(sessionId, capturedSize);
               idleTimers.set(sessionId, setTimeout(() => {
                 idleTimers.delete(sessionId);
-                const preview = truncateForNotification(lastAssistantMessage.content);
-                sendAgentStatus(syncService2, capturedConvId, sessionId, "idle", undefined, undefined, preview);
+                const preview = isSubagent ? undefined : truncateForNotification(lastAssistantMessage.content);
+                sendAgentStatus(syncService, capturedConvId, sessionId, "idle", undefined, undefined, preview);
               }, IDLE_DEBOUNCE_MS));
             }
           }
@@ -14423,7 +14538,7 @@ ${snippet}
     throw err;
   }
 }
-async function processCursorSession(dbPath, sessionId, workspacePath, syncService2, userId, teamId, conversationCache, retryQueue, pendingMessages, updateStateCallback) {
+async function processCursorSession(dbPath, sessionId, workspacePath, syncService, userId, teamId, conversationCache, retryQueue, pendingMessages, updateStateCallback) {
   const syncedCount = getPosition(dbPath);
   let result;
   try {
@@ -14447,7 +14562,7 @@ async function processCursorSession(dbPath, sessionId, workspacePath, syncServic
       const firstMessageTimestamp = messages[0]?.timestamp;
       const firstUserMessage = messages.find((msg) => msg.role === "user");
       const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
-      conversationId = await syncService2.createConversation({
+      conversationId = await syncService.createConversation({
         userId,
         teamId,
         sessionId,
@@ -14460,7 +14575,7 @@ async function processCursorSession(dbPath, sessionId, workspacePath, syncServic
       saveConversationCache(conversationCache);
       log(`Created conversation ${conversationId} for Cursor session ${sessionId}`);
       if (pendingMessages[sessionId]) {
-        await flushPendingMessagesBatch(pendingMessages[sessionId], conversationId, syncService2, retryQueue);
+        await flushPendingMessagesBatch(pendingMessages[sessionId], conversationId, syncService, retryQueue);
         delete pendingMessages[sessionId];
       }
     } catch (err) {
@@ -14504,7 +14619,7 @@ async function processCursorSession(dbPath, sessionId, workspacePath, syncServic
       return;
     }
   }
-  const batchResult = await syncMessagesBatch(messages, conversationId, syncService2, retryQueue);
+  const batchResult = await syncMessagesBatch(messages, conversationId, syncService, retryQueue);
   if (batchResult.authExpired) {
     log("⚠️  Authentication expired - sync paused");
     return;
@@ -14517,7 +14632,7 @@ async function processCursorSession(dbPath, sessionId, workspacePath, syncServic
     const firstUserMessage = messages.find((msg) => msg.role === "user");
     const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
     try {
-      conversationId = await syncService2.createConversation({
+      conversationId = await syncService.createConversation({
         userId,
         teamId,
         sessionId,
@@ -14529,7 +14644,7 @@ async function processCursorSession(dbPath, sessionId, workspacePath, syncServic
       conversationCache[sessionId] = conversationId;
       saveConversationCache(conversationCache);
       log(`Recreated conversation ${conversationId} for Cursor session ${sessionId}`);
-      await syncService2.addMessages({
+      await syncService.addMessages({
         conversationId,
         messages: messages.map(prepMessageForSync)
       });
@@ -14544,7 +14659,7 @@ async function processCursorSession(dbPath, sessionId, workspacePath, syncServic
   syncStats.sessionsActive.add(sessionId);
   updateStateCallback();
 }
-async function processCursorTranscriptFile(filePath, sessionId, syncService2, userId, teamId, conversationCache, retryQueue, pendingMessages, updateStateCallback) {
+async function processCursorTranscriptFile(filePath, sessionId, syncService, userId, teamId, conversationCache, retryQueue, pendingMessages, updateStateCallback) {
   let lastPosition = getPosition(filePath);
   let stats;
   try {
@@ -14589,7 +14704,7 @@ async function processCursorTranscriptFile(filePath, sessionId, syncService2, us
       const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
       const gitInfo = projectPath ? getGitInfo(projectPath) : undefined;
       try {
-        conversationId = await syncService2.createConversation({
+        conversationId = await syncService.createConversation({
           userId,
           teamId,
           sessionId,
@@ -14606,7 +14721,7 @@ async function processCursorTranscriptFile(filePath, sessionId, syncService2, us
         log(`Created conversation ${conversationId} for Cursor transcript ${sessionId}`);
         syncStats.conversationsCreated++;
         if (pendingMessages[sessionId]) {
-          await flushPendingMessagesBatch(pendingMessages[sessionId], conversationId, syncService2, retryQueue);
+          await flushPendingMessagesBatch(pendingMessages[sessionId], conversationId, syncService, retryQueue);
           delete pendingMessages[sessionId];
         }
       } catch (err) {
@@ -14651,7 +14766,7 @@ async function processCursorTranscriptFile(filePath, sessionId, syncService2, us
         return;
       }
     }
-    const batchResult = await syncMessagesBatch(messages, conversationId, syncService2, retryQueue);
+    const batchResult = await syncMessagesBatch(messages, conversationId, syncService, retryQueue);
     if (batchResult.authExpired) {
       log("⚠️  Authentication expired - sync paused");
       return;
@@ -14666,7 +14781,7 @@ async function processCursorTranscriptFile(filePath, sessionId, syncService2, us
         const firstUserMessage = messages.find((m) => m.role === "user");
         const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
         const gitInfo = projectPath ? getGitInfo(projectPath) : undefined;
-        conversationId = await syncService2.createConversation({
+        conversationId = await syncService.createConversation({
           userId,
           teamId,
           sessionId,
@@ -14681,7 +14796,7 @@ async function processCursorTranscriptFile(filePath, sessionId, syncService2, us
         conversationCache[sessionId] = conversationId;
         saveConversationCache(conversationCache);
         log(`Recreated conversation ${conversationId} for Cursor transcript ${sessionId}`);
-        await syncService2.addMessages({
+        await syncService.addMessages({
           conversationId,
           messages: messages.map(prepMessageForSync)
         });
@@ -14701,7 +14816,7 @@ async function processCursorTranscriptFile(filePath, sessionId, syncService2, us
     log(`Error processing Cursor transcript file ${filePath}: ${errMsg}`);
   }
 }
-async function processCodexSession(filePath, sessionId, syncService2, userId, teamId, conversationCache, retryQueue, pendingMessages, titleCache, updateStateCallback) {
+async function processCodexSession(filePath, sessionId, syncService, userId, teamId, conversationCache, retryQueue, pendingMessages, titleCache, updateStateCallback) {
   let lastPosition = getPosition(filePath);
   let stats;
   try {
@@ -14746,7 +14861,7 @@ async function processCodexSession(filePath, sessionId, syncService2, userId, te
       const summaryTitle = extractSummaryTitle(titleContent);
       if (summaryTitle && titleCache[sessionId] !== summaryTitle) {
         try {
-          await syncService2.updateTitle(conversationId, summaryTitle);
+          await syncService.updateTitle(conversationId, summaryTitle);
           titleCache[sessionId] = summaryTitle;
           saveTitleCache(titleCache);
           log(`Updated title for Codex session ${sessionId}: ${summaryTitle}`);
@@ -14809,19 +14924,19 @@ async function processCodexSession(filePath, sessionId, syncService2, userId, te
           const tmuxEntry = startedSessionTmux.get(matchedStartedConversation);
           conversationCache[sessionId] = conversationId;
           saveConversationCache(conversationCache);
-          syncService2.updateSessionId(conversationId, sessionId).catch(() => {
+          syncService.updateSessionId(conversationId, sessionId).catch(() => {
           });
           if (tmuxEntry) {
-            syncService2.registerManagedSession(sessionId, process.pid, tmuxEntry.tmuxSession, conversationId).catch(() => {
+            syncService.registerManagedSession(sessionId, process.pid, tmuxEntry.tmuxSession, conversationId).catch(() => {
             });
-            startCodexPermissionPoller(sessionId, tmuxEntry.tmuxSession, conversationId, syncService2);
+            startCodexPermissionPoller(sessionId, tmuxEntry.tmuxSession, conversationId, syncService);
           }
           startedSessionTmux.delete(matchedStartedConversation);
           log(`Linked Codex session ${sessionId} to existing started conversation ${conversationId}`);
         } else {
           const firstUserMessage = messages.find((msg) => msg.role === "user");
           const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
-          conversationId = await syncService2.createConversation({
+          conversationId = await syncService.createConversation({
             userId,
             teamId,
             sessionId,
@@ -14844,7 +14959,7 @@ async function processCodexSession(filePath, sessionId, syncService2, userId, te
             });
           }
           if (pendingMessages[sessionId]) {
-            await flushPendingMessagesBatch(pendingMessages[sessionId], conversationId, syncService2, retryQueue);
+            await flushPendingMessagesBatch(pendingMessages[sessionId], conversationId, syncService, retryQueue);
             delete pendingMessages[sessionId];
           }
         }
@@ -14891,7 +15006,7 @@ async function processCodexSession(filePath, sessionId, syncService2, userId, te
         return;
       }
     }
-    const batchResult = await syncMessagesBatch(messages, conversationId, syncService2, retryQueue);
+    const batchResult = await syncMessagesBatch(messages, conversationId, syncService, retryQueue);
     if (batchResult.authExpired) {
       log("⚠️  Authentication expired - sync paused");
       return;
@@ -14904,7 +15019,7 @@ async function processCodexSession(filePath, sessionId, syncService2, userId, te
       const firstUserMessage = messages.find((msg) => msg.role === "user");
       const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
       try {
-        conversationId = await syncService2.createConversation({
+        conversationId = await syncService.createConversation({
           userId,
           teamId,
           sessionId,
@@ -14915,7 +15030,7 @@ async function processCodexSession(filePath, sessionId, syncService2, userId, te
         conversationCache[sessionId] = conversationId;
         saveConversationCache(conversationCache);
         log(`Recreated conversation ${conversationId} for Codex session ${sessionId}`);
-        await syncService2.addMessages({
+        await syncService.addMessages({
           conversationId,
           messages: messages.map(prepMessageForSync)
         });
@@ -14931,7 +15046,7 @@ async function processCodexSession(filePath, sessionId, syncService2, userId, te
     syncStats.sessionsActive.add(sessionId);
     tryRegisterSessionProcess(sessionId, "codex");
     if (conversationId) {
-      sendAgentStatus(syncService2, conversationId, sessionId, "working");
+      sendAgentStatus(syncService, conversationId, sessionId, "working");
     }
     updateStateCallback();
   } catch (err) {
@@ -14940,7 +15055,7 @@ async function processCodexSession(filePath, sessionId, syncService2, userId, te
   }
 }
 var geminiSyncedCounts = new Map;
-async function processGeminiSession(filePath, sessionId, projectHash, syncService2, userId, teamId, conversationCache, retryQueue, pendingMessages, titleCache, updateStateCallback) {
+async function processGeminiSession(filePath, sessionId, projectHash, syncService, userId, teamId, conversationCache, retryQueue, pendingMessages, titleCache, updateStateCallback) {
   try {
     let content;
     try {
@@ -14964,7 +15079,7 @@ async function processGeminiSession(filePath, sessionId, projectHash, syncServic
         const firstUserMessage = allMessages.find((msg) => msg.role === "user");
         const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
         const startTime = allMessages[0]?.timestamp;
-        conversationId = await syncService2.createConversation({
+        conversationId = await syncService.createConversation({
           userId,
           teamId,
           sessionId,
@@ -14987,7 +15102,7 @@ async function processGeminiSession(filePath, sessionId, projectHash, syncServic
           });
         }
         if (pendingMessages[sessionId]) {
-          await flushPendingMessagesBatch(pendingMessages[sessionId], conversationId, syncService2, retryQueue);
+          await flushPendingMessagesBatch(pendingMessages[sessionId], conversationId, syncService, retryQueue);
           delete pendingMessages[sessionId];
         }
       } catch (err) {
@@ -15032,7 +15147,7 @@ async function processGeminiSession(filePath, sessionId, projectHash, syncServic
         return;
       }
     }
-    const batchResult = await syncMessagesBatch(newMessages, conversationId, syncService2, retryQueue);
+    const batchResult = await syncMessagesBatch(newMessages, conversationId, syncService, retryQueue);
     if (batchResult.authExpired) {
       log("⚠️  Authentication expired - sync paused");
       return;
@@ -15044,7 +15159,7 @@ async function processGeminiSession(filePath, sessionId, projectHash, syncServic
       const firstUserMessage = allMessages.find((msg) => msg.role === "user");
       const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
       try {
-        conversationId = await syncService2.createConversation({
+        conversationId = await syncService.createConversation({
           userId,
           teamId,
           sessionId,
@@ -15055,7 +15170,7 @@ async function processGeminiSession(filePath, sessionId, projectHash, syncServic
         conversationCache[sessionId] = conversationId;
         saveConversationCache(conversationCache);
         log(`Recreated conversation ${conversationId} for Gemini session ${sessionId}`);
-        await syncService2.addMessages({
+        await syncService.addMessages({
           conversationId,
           messages: newMessages.map(prepMessageForSync)
         });
@@ -15160,6 +15275,7 @@ async function findSessionProcess(sessionId, agentType = "claude") {
   }
   const binaryPattern = agentType === "gemini" ? "gemini" : agentType === "codex" ? "codex" : "claude";
   try {
+    const codexResumeCandidates = [];
     try {
       const registryFile = path13.join(CONFIG_DIR5, "session-registry", `${sessionId}.json`);
       if (fs14.existsSync(registryFile)) {
@@ -15191,7 +15307,6 @@ async function findSessionProcess(sessionId, agentType = "claude") {
       const lines = stdout.trim().split(`
 `);
       const geminiCandidates = [];
-      const codexResumeCandidates2 = [];
       for (const line of lines) {
         if (!line.trim())
           continue;
@@ -15208,7 +15323,7 @@ async function findSessionProcess(sessionId, agentType = "claude") {
         const normalizedTty = normalizeTty(tty);
         if (line.includes(sessionId)) {
           if (agentType === "codex") {
-            codexResumeCandidates2.push({ pid, tty: normalizedTty });
+            codexResumeCandidates.push({ pid, tty: normalizedTty });
             continue;
           }
           const result = { pid, tty: normalizedTty, sessionId };
@@ -15483,16 +15598,33 @@ function parseInteractivePrompt(text) {
       }
     }
   }
-  if (options.length < 2 || firstOptionIdx < 0)
-    return null;
-  const tail = lines.slice(firstOptionIdx).join(`
+  if (options.length >= 2 && firstOptionIdx >= 0) {
+    const tail = lines.slice(firstOptionIdx).join(`
 `);
-  const hasFooter = /enter to confirm|esc to exit|↑.*↓|←.*→|arrow keys/i.test(tail);
-  if (!hasCursorIndicator && !hasFooter)
-    return null;
-  const headerLines = lines.slice(Math.max(0, firstOptionIdx - 5), firstOptionIdx).map((l) => l.trim()).filter((l) => l.length > 0 && !/^[❯>]/.test(l) && !/^[─━═─\-_]{5,}$/.test(l));
-  const question = headerLines[0] || "Select an option";
-  return { question, options };
+    const hasFooter = /enter to confirm|esc(ape)? to (exit|cancel)|↑.*↓|←.*→|arrow keys/i.test(tail);
+    if (hasCursorIndicator || hasFooter) {
+      const headerLines = lines.slice(Math.max(0, firstOptionIdx - 5), firstOptionIdx).map((l) => l.trim()).filter((l) => l.length > 0 && !/^[❯>]/.test(l) && !/^[─━═─\-_]{5,}$/.test(l));
+      const question = headerLines[0] || "Select an option";
+      return { question, options };
+    }
+  }
+  const joined = lines.slice(-15).join(`
+`);
+  const enterMatch = joined.match(/(?:press\s+)?enter\s+to\s+(continue|confirm|proceed|accept)[\s.…]*/i);
+  const escMatch = joined.match(/esc(?:ape)?\s+to\s+(cancel|exit|quit|go back)[\s.…]*/i);
+  if (enterMatch) {
+    const contextLines = lines.filter((l) => l.trim().length > 0).slice(-8);
+    const headerLine = contextLines.find((l) => !/(press|enter|esc|─|━)/i.test(l) && l.trim().length > 5);
+    const question = headerLine?.trim() || "Continue?";
+    const confirmOptions = [
+      { label: `Continue (${enterMatch[1]})` }
+    ];
+    if (escMatch) {
+      confirmOptions.push({ label: `Cancel (${escMatch[1]})` });
+    }
+    return { question, options: confirmOptions, isConfirmation: true };
+  }
+  return null;
 }
 function parsePollMessage(content) {
   try {
@@ -15503,17 +15635,12 @@ function parsePollMessage(content) {
   }
   return null;
 }
-async function checkForInteractivePrompt(tmuxTarget, sessionId, conversationId, syncService2) {
+async function checkForInteractivePrompt(tmuxTarget, sessionId, conversationId, syncService, delayMs = 2000) {
   if (pendingInteractivePrompts.has(sessionId)) {
     log(`Skipping prompt check: pending prompt exists for ${sessionId.slice(0, 8)}`);
     return;
   }
-  const hookEntry = lastHookStatus.get(sessionId);
-  if (hookEntry && hookEntry.status === "working" && Date.now() / 1000 - hookEntry.ts < 10) {
-    log(`Skipping prompt check: session ${sessionId.slice(0, 8)} is working`);
-    return;
-  }
-  await new Promise((resolve4) => setTimeout(resolve4, 2000));
+  await new Promise((resolve4) => setTimeout(resolve4, delayMs));
   try {
     const { stdout: paneContent } = await tmuxExec(["capture-pane", "-p", "-J", "-t", tmuxTarget, "-S", "-50"]);
     const prompt = parseInteractivePrompt(paneContent);
@@ -15521,10 +15648,10 @@ async function checkForInteractivePrompt(tmuxTarget, sessionId, conversationId, 
       log(`No interactive prompt found in ${tmuxTarget} for session ${sessionId.slice(0, 8)}`);
       return;
     }
-    log(`Interactive prompt detected in session ${sessionId.slice(0, 8)}: "${prompt.question}" with ${prompt.options.length} options`);
+    log(`Interactive prompt detected in session ${sessionId.slice(0, 8)}: "${prompt.question}" with ${prompt.options.length} options (confirmation=${!!prompt.isConfirmation})`);
     const now = Date.now();
-    pendingInteractivePrompts.set(sessionId, now);
-    await syncService2.addMessages({
+    pendingInteractivePrompts.set(sessionId, { timestamp: now, options: prompt.options, isConfirmation: prompt.isConfirmation });
+    await syncService.addMessages({
       conversationId,
       messages: [{
         messageUuid: `interactive-prompt-${sessionId}-${now}`,
@@ -15537,7 +15664,8 @@ async function checkForInteractivePrompt(tmuxTarget, sessionId, conversationId, 
           input: {
             questions: [{
               question: prompt.question,
-              options: prompt.options
+              options: prompt.options,
+              ...prompt.isConfirmation ? { isConfirmation: true } : {}
             }]
           }
         }]
@@ -15591,13 +15719,15 @@ async function injectViaTmuxInner(target, content) {
   if (poll) {
     const steps = poll.steps || (poll.keys || []).map((k) => ({ key: k }));
     for (const step of steps) {
-      await tmuxExec(["send-keys", "-t", target, step.key]);
-      await new Promise((resolve4) => setTimeout(resolve4, 500));
       if (step.text) {
-        await new Promise((resolve4) => setTimeout(resolve4, 300));
+        await tmuxExec(["send-keys", "-t", target, "Escape"]);
+        await new Promise((resolve4) => setTimeout(resolve4, 500));
         await tmuxExec(["send-keys", "-t", target, "-l", step.text]);
         await new Promise((resolve4) => setTimeout(resolve4, 150));
         await tmuxExec(["send-keys", "-t", target, "Enter"]);
+        await new Promise((resolve4) => setTimeout(resolve4, 500));
+      } else {
+        await tmuxExec(["send-keys", "-t", target, step.key]);
         await new Promise((resolve4) => setTimeout(resolve4, 500));
       }
     }
@@ -15629,12 +15759,7 @@ async function injectViaTmuxInner(target, content) {
   }
   const captureLines = Math.max(30, Math.ceil(sanitized.length / 60) + 10);
   const contentPrefix = sanitized.slice(0, 40);
-  let pasteConfirmed = false;
-  for (let pasteRetry = 0;pasteRetry < 4; pasteRetry++) {
-    if (pasteRetry > 0) {
-      log(`Paste retry ${pasteRetry} for ${target} (text not appearing in pane)`);
-      await new Promise((resolve4) => setTimeout(resolve4, 500 * pasteRetry));
-    }
+  const doPaste = async () => {
     const id = `cc-${process.pid}-${Date.now()}`;
     const tmpFile = `/tmp/${id}`;
     try {
@@ -15649,61 +15774,69 @@ async function injectViaTmuxInner(target, content) {
       } catch {
       }
     }
-    for (let attempt = 0;attempt < 12; attempt++) {
-      try {
-        const { stdout: echoCheck } = await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${captureLines}`]);
-        if (tmuxPromptStillHasInput(echoCheck, contentPrefix)) {
-          pasteConfirmed = true;
-          break;
-        }
-      } catch {
+  };
+  let prePaste = "";
+  try {
+    const { stdout } = await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${captureLines}`]);
+    prePaste = stdout;
+  } catch {
+  }
+  await doPaste();
+  let pasteConfirmed = false;
+  for (let attempt = 0;attempt < 5; attempt++) {
+    await new Promise((resolve4) => setTimeout(resolve4, 200));
+    try {
+      const { stdout: postPaste } = await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${captureLines}`]);
+      if (postPaste !== prePaste) {
+        pasteConfirmed = true;
+        break;
       }
-      await new Promise((resolve4) => setTimeout(resolve4, 150));
+    } catch {
     }
-    if (pasteConfirmed)
-      break;
   }
   if (!pasteConfirmed) {
-    log(`WARNING: paste text never appeared in pane ${target} after 4 retries`);
+    log(`Paste may not have landed in ${target} (pane unchanged after 1s), proceeding anyway`);
   }
   const enterDelay = Math.max(200, Math.min(1000, Math.ceil(sanitized.length / 100) * 50));
   await new Promise((resolve4) => setTimeout(resolve4, enterDelay));
   await tmuxExec(["send-keys", "-t", target, "Enter"]);
-  for (let retry = 0;retry < 5; retry++) {
+  let rePasted = false;
+  for (let retry = 0;retry < 3; retry++) {
     await new Promise((resolve4) => setTimeout(resolve4, 600));
     try {
       const { stdout: postCheck } = await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${captureLines}`]);
+      const lastLines = postCheck.split(`
+`).slice(-5).join(`
+`);
+      const hasPrompt = /[❯›]/.test(lastLines);
+      const hasActivity = /⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏|●|thinking|Bash|Read|Edit|Write|Glob|Grep/.test(lastLines);
+      if (hasActivity || !hasPrompt) {
+        break;
+      }
       if (tmuxPromptStillHasInput(postCheck, contentPrefix)) {
         log(`Enter may not have submitted (retry ${retry + 1}), sending Enter again to ${target}`);
         await tmuxExec(["send-keys", "-t", target, "Enter"]);
-      } else {
-        const lastLines = postCheck.split(`
-`).slice(-5).join(`
-`);
-        const hasPrompt = /[❯›]/.test(lastLines);
-        const hasActivity = /⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏|●|thinking|Bash|Read|Edit|Write|Glob|Grep/.test(lastLines);
-        if (hasActivity || !hasPrompt) {
-          break;
-        }
+        continue;
+      }
+      if (!pasteConfirmed && !rePasted) {
         const promptLine = lastLines.split(`
 `).find((l) => /[❯›]/.test(l));
-        if (promptLine) {
-          const promptMatch = promptLine.match(/[❯›]/);
-          const afterPrompt = promptMatch ? promptLine.slice(promptMatch.index + 1).trim() : "";
-          if (!afterPrompt)
-            break;
+        const afterPrompt = promptLine ? promptLine.match(/[❯›]/) ? promptLine.slice(promptLine.match(/[❯›]/).index + 1).trim() : "" : "";
+        if (!afterPrompt) {
+          log(`Paste likely dropped (empty prompt, no activity), re-pasting once to ${target}`);
+          await doPaste();
+          await new Promise((resolve4) => setTimeout(resolve4, enterDelay));
+          await tmuxExec(["send-keys", "-t", target, "Enter"]);
+          rePasted = true;
+          continue;
         }
-        break;
       }
+      break;
     } catch {
       break;
     }
   }
-  if (pasteConfirmed) {
-    log(`Injected via tmux to ${target}`);
-  } else {
-    log(`WARNING: Injection to ${target} completed but paste was never confirmed`);
-  }
+  log(`Injected via tmux to ${target}${pasteConfirmed ? "" : " (unconfirmed)"}${rePasted ? " (re-pasted)" : ""}`);
 }
 function buildAppleScript(app, normalizedTty, content, poll) {
   const isIterm = app === "iTerm2";
@@ -15712,13 +15845,16 @@ function buildAppleScript(app, normalizedTty, content, poll) {
     let stepActions;
     if (isIterm) {
       stepActions = steps.map((step, i) => {
-        const lines = [`            tell s to write text "${step.key}" without newline`];
+        const lines = [];
         if (step.text) {
-          const escapedText = step.text.replace(/"/g, "\\\"");
+          lines.push(`            tell s to write text (ASCII character 27)`);
           lines.push("            delay 0.5");
+          const escapedText = step.text.replace(/"/g, "\\\"");
           lines.push(`            tell s to write text "${escapedText}" without newline`);
           lines.push("            delay 0.15");
           lines.push(`            tell s to write text ""`);
+        } else {
+          lines.push(`            tell s to write text "${step.key}" without newline`);
         }
         if (i < steps.length - 1)
           lines.push("            delay 0.5");
@@ -15728,11 +15864,14 @@ function buildAppleScript(app, normalizedTty, content, poll) {
 `);
     } else {
       stepActions = steps.map((step, i) => {
-        const lines = [`          do script "${step.key}" in t`];
+        const lines = [];
         if (step.text) {
-          const escapedText = step.text.replace(/"/g, "\\\"");
+          lines.push(`          do script (ASCII character 27) in t`);
           lines.push("          delay 0.5");
+          const escapedText = step.text.replace(/"/g, "\\\"");
           lines.push(`          do script "${escapedText}" in t`);
+        } else {
+          lines.push(`          do script "${step.key}" in t`);
         }
         if (i < steps.length - 1)
           lines.push("          delay 0.5");
@@ -15935,7 +16074,7 @@ function detectCodexPermissionFromPane(paneContent) {
   }
   return { reason: reason || "Command approval requested", command: command.slice(0, 300) };
 }
-function startCodexPermissionPoller(sessionId, tmuxSession, conversationId, syncService2) {
+function startCodexPermissionPoller(sessionId, tmuxSession, conversationId, syncService) {
   if (codexPermissionPollers.has(sessionId))
     return;
   const interval = setInterval(async () => {
@@ -15953,9 +16092,9 @@ function startCodexPermissionPoller(sessionId, tmuxSession, conversationId, sync
         return;
       codexPermissionPending.add(sessionId);
       log(`Codex permission prompt detected in tmux for session ${sessionId.slice(0, 8)}: ${prompt.reason.slice(0, 100)}`);
-      sendAgentStatus(syncService2, conversationId, sessionId, "permission_blocked");
+      sendAgentStatus(syncService, conversationId, sessionId, "permission_blocked");
       const preview = truncateForNotification(`${prompt.command || prompt.reason}`, 200);
-      syncService2.createSessionNotification({
+      syncService.createSessionNotification({
         conversation_id: conversationId,
         type: "permission_request",
         title: "codecast - Permission needed",
@@ -15966,7 +16105,7 @@ function startCodexPermissionPoller(sessionId, tmuxSession, conversationId, sync
         tool_name: "exec_command",
         arguments_preview: prompt.command || prompt.reason
       };
-      handlePermissionRequest(syncService2, conversationId, sessionId, permissionPrompt, log).then(async (decision) => {
+      handlePermissionRequest(syncService, conversationId, sessionId, permissionPrompt, log).then(async (decision) => {
         if (decision) {
           const key = decision.approved ? "Enter" : "Escape";
           log(`Injecting Codex permission '${key}' for session ${sessionId.slice(0, 8)}`);
@@ -15976,7 +16115,7 @@ function startCodexPermissionPoller(sessionId, tmuxSession, conversationId, sync
             log(`Failed to inject Codex permission key: ${err instanceof Error ? err.message : String(err)}`);
           }
         }
-        sendAgentStatus(syncService2, conversationId, sessionId, "working");
+        sendAgentStatus(syncService, conversationId, sessionId, "working");
         codexPermissionPending.delete(sessionId);
       }).catch((err) => {
         log(`Codex permission handling error: ${err instanceof Error ? err.message : String(err)}`);
@@ -16182,6 +16321,9 @@ function resolveSessionId(filePath) {
   const name = path13.basename(filePath, ".jsonl");
   if (UUID_RE.test(name))
     return name;
+  const parts = filePath.split(path13.sep);
+  if (parts.includes("subagents"))
+    return name;
   try {
     const head = readFileHead(filePath, 4096);
     const m = head.match(/"sessionId"\s*:\s*"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"/i);
@@ -16358,7 +16500,7 @@ async function autoResumeSessionInner(sessionId, content, titleCache, nonInterac
         }
       }
       resumeSessionCache.set(sessionId, tmuxSession);
-      if (syncServiceRef) {
+      if (syncServiceRef && conversationId) {
         syncServiceRef.registerManagedSession(sessionId, process.pid, tmuxSession, conversationId).catch(() => {
         });
         syncServiceRef.updateSessionAgentStatus(conversationId, "connected").catch(() => {
@@ -16370,7 +16512,7 @@ async function autoResumeSessionInner(sessionId, content, titleCache, nonInterac
     await tmuxExec(["send-keys", "-t", tmuxSession, "Enter"]);
     logDelivery(`Auto-resumed ${agentType} ${shortId} in tmux=${tmuxSession} cwd=${cwd} cmd=${resumeCmd}`);
     resumeSessionCache.set(sessionId, tmuxSession);
-    if (syncServiceRef) {
+    if (syncServiceRef && conversationId) {
       syncServiceRef.registerManagedSession(sessionId, process.pid, tmuxSession, conversationId).catch(() => {
       });
       syncServiceRef.updateSessionAgentStatus(conversationId, "connected").catch(() => {
@@ -16572,7 +16714,7 @@ async function repairAndResumeSession(sessionId, content, titleCache, nonInterac
   }
   return false;
 }
-async function postDeliveryHealthCheck(sessionId, conversationId, content, messageId, syncService2, titleCache, conversationCache) {
+async function postDeliveryHealthCheck(sessionId, conversationId, content, messageId, syncService, titleCache, conversationCache) {
   await new Promise((resolve4) => setTimeout(resolve4, 15000));
   if (resumeInFlight.has(sessionId)) {
     log(`Health check: skipping for ${sessionId.slice(0, 8)}, resume in flight`);
@@ -16594,14 +16736,14 @@ async function postDeliveryHealthCheck(sessionId, conversationId, content, messa
     if (repaired) {
       log(`Health check: repaired and re-delivered message for ${sessionId.slice(0, 8)}`);
       try {
-        await syncService2.setSessionError(conversationId);
+        await syncService.setSessionError(conversationId);
       } catch {
       }
     } else {
       log(`Health check: repair failed for ${sessionId.slice(0, 8)}, retrying message delivery`);
       try {
-        await syncService2.retryMessage(messageId);
-        await syncService2.setSessionError(conversationId, "Session crashed — retrying message delivery");
+        await syncService.retryMessage(messageId);
+        await syncService.setSessionError(conversationId, "Session crashed — retrying message delivery");
       } catch {
       }
     }
@@ -16625,21 +16767,21 @@ async function postDeliveryHealthCheck(sessionId, conversationId, content, messa
     if (repaired) {
       log(`Health check: repaired crashed session ${sessionId.slice(0, 8)}`);
       try {
-        await syncService2.setSessionError(conversationId);
+        await syncService.setSessionError(conversationId);
       } catch {
       }
     } else {
       log(`Health check: repair failed for crashed session ${sessionId.slice(0, 8)}, retrying message delivery`);
       try {
-        await syncService2.retryMessage(messageId);
-        await syncService2.setSessionError(conversationId, "Session crashed — retrying message delivery");
+        await syncService.retryMessage(messageId);
+        await syncService.setSessionError(conversationId, "Session crashed — retrying message delivery");
       } catch {
       }
     }
   } else {
     log(`Health check: session ${sessionId.slice(0, 8)} is healthy`);
     try {
-      await syncService2.setSessionError(conversationId);
+      await syncService.setSessionError(conversationId);
     } catch {
     }
   }
@@ -16695,7 +16837,7 @@ async function startFreshSessionForDelivery(conversationId) {
     return null;
   }
 }
-async function materializeSession(conversationId, conversationCache, titleCache, syncService2) {
+async function materializeSession(conversationId, conversationCache, titleCache, syncService) {
   const existing = materializeInFlight.get(conversationId);
   if (existing)
     return existing;
@@ -16729,8 +16871,8 @@ async function materializeSession(conversationId, conversationCache, titleCache,
         titleCache[sessionId] = exportData.conversation.title;
         saveTitleCache(titleCache);
       }
-      if (syncService2) {
-        syncService2.updateSessionId(conversationId, sessionId).catch(() => {
+      if (syncService) {
+        syncService.updateSessionId(conversationId, sessionId).catch(() => {
         });
       }
       logDelivery(`Materialized session=${sessionId.slice(0, 8)} conv=${conversationId.slice(0, 12)} (${exportData.messages.length} msgs, tail=${tailMessages})`);
@@ -16746,11 +16888,11 @@ async function materializeSession(conversationId, conversationCache, titleCache,
   materializeInFlight.set(conversationId, promise);
   return promise;
 }
-async function downloadImage(storageId, syncService2) {
+async function downloadImage(storageId, syncService) {
   const destPath = `/tmp/codecast/images/${storageId}.png`;
   if (fs14.existsSync(destPath))
     return destPath;
-  const imageUrl = await syncService2.getClient().query("images:getImageUrl", { storageId });
+  const imageUrl = await syncService.getClient().query("images:getImageUrl", { storageId });
   if (!imageUrl)
     return null;
   const dir = path13.dirname(destPath);
@@ -16761,16 +16903,44 @@ async function downloadImage(storageId, syncService2) {
   fs14.writeFileSync(destPath, Buffer.from(await resp.arrayBuffer()));
   return destPath;
 }
-async function deliverMessage(conversationId, content, conversationCache, syncService2, messageId, titleCache) {
+async function deliverMessage(conversationId, content, conversationCache, syncService, messageId, titleCache) {
   logDelivery(`deliverMessage called: conv=${conversationId.slice(0, 12)} msgId=${messageId.slice(0, 12)} content="${content.slice(0, 80)}"`);
   const childConvId = planHandoffChildren.get(conversationId);
   if (childConvId) {
     logDelivery(`Redirecting message from plan parent ${conversationId.slice(0, 12)} to child ${childConvId.slice(0, 12)}`);
-    return deliverMessage(childConvId, content, conversationCache, syncService2, messageId, titleCache);
+    return deliverMessage(childConvId, content, conversationCache, syncService, messageId, titleCache);
   }
   const reverseCache = buildReverseConversationCache(conversationCache);
   let sessionId = reverseCache[conversationId];
+  const pendingPrompt = pendingInteractivePrompts.get(sessionId || conversationId);
   pendingInteractivePrompts.delete(sessionId || conversationId);
+  if (pendingPrompt && !parsePollMessage(content)) {
+    const normalized = content.replace(/\s+/g, " ").trim().toLowerCase();
+    if (normalized && pendingPrompt.options.length > 0) {
+      if (pendingPrompt.isConfirmation) {
+        const isConfirm = /^(continue|enter|yes|ok|confirm|proceed|accept|y)$/i.test(normalized) || pendingPrompt.options[0] && normalized.includes(pendingPrompt.options[0].label.toLowerCase().split(" (")[0]);
+        const isCancel = /^(cancel|escape|esc|no|quit|n)$/i.test(normalized) || pendingPrompt.options[1] && normalized.includes(pendingPrompt.options[1].label.toLowerCase().split(" (")[0]);
+        if (isConfirm) {
+          content = JSON.stringify({ __cc_poll: true, keys: ["Enter"], display: "Continue" });
+          logDelivery(`Converted plain text to confirmation Enter for session=${(sessionId || conversationId).slice(0, 8)}`);
+        } else if (isCancel) {
+          content = JSON.stringify({ __cc_poll: true, keys: ["Escape"], display: "Cancel" });
+          logDelivery(`Converted plain text to confirmation Escape for session=${(sessionId || conversationId).slice(0, 8)}`);
+        }
+      } else {
+        const matchIdx = pendingPrompt.options.findIndex((opt) => {
+          const optNorm = opt.label.replace(/\s+/g, " ").trim().toLowerCase();
+          return optNorm === normalized || normalized.includes(optNorm) || optNorm.includes(normalized);
+        });
+        if (matchIdx >= 0) {
+          const key = String(matchIdx + 1);
+          const display = pendingPrompt.options[matchIdx].label;
+          content = JSON.stringify({ __cc_poll: true, keys: [key], display });
+          logDelivery(`Converted plain text "${display}" to poll key=${key} for session=${(sessionId || conversationId).slice(0, 8)}`);
+        }
+      }
+    }
+  }
   if (!sessionId) {
     const cacheKeys = Object.keys(conversationCache);
     const reverseKeys = Object.keys(reverseCache);
@@ -16822,10 +16992,11 @@ async function deliverMessage(conversationId, content, conversationCache, syncSe
         await new Promise((resolve4) => setTimeout(resolve4, 1500));
         const startedTmuxTarget = entry.tmuxSession + ":0.0";
         await injectViaTmux(startedTmuxTarget, content);
-        await syncService2.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
+        await syncService.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
         log(`Delivered message to started session tmux ${entry.tmuxSession} for conversation ${conversationId.slice(0, 12)}`);
-        if (content.trimStart().startsWith("/")) {
-          checkForInteractivePrompt(startedTmuxTarget, conversationId, conversationId, syncService2).catch(() => {
+        const isPollResponse = !!parsePollMessage(content);
+        if (content.trimStart().startsWith("/") || isPollResponse) {
+          checkForInteractivePrompt(startedTmuxTarget, conversationId, conversationId, syncService, isPollResponse ? 4000 : 2000).catch(() => {
           });
         }
         return true;
@@ -16868,7 +17039,7 @@ async function deliverMessage(conversationId, content, conversationCache, syncSe
       }
       if (!sessionId) {
         log(`No session_id in local cache for conversation ${conversationId}, attempting to materialize from server...`);
-        sessionId = await materializeSession(conversationId, conversationCache, titleCache, syncService2);
+        sessionId = await materializeSession(conversationId, conversationCache, titleCache, syncService);
         if (!sessionId) {
           logDelivery(`Materialization failed for conv=${conversationId.slice(0, 12)}, starting fresh session`);
           const freshEntry = await startFreshSessionForDelivery(conversationId);
@@ -16880,7 +17051,7 @@ async function deliverMessage(conversationId, content, conversationCache, syncSe
       }
     } else {
       log(`No session_id in local cache for conversation ${conversationId}, attempting to materialize from server...`);
-      sessionId = await materializeSession(conversationId, conversationCache, titleCache, syncService2);
+      sessionId = await materializeSession(conversationId, conversationCache, titleCache, syncService);
       if (!sessionId) {
         logDelivery(`Materialization failed for conv=${conversationId.slice(0, 12)}, starting fresh session`);
         const freshEntry = await startFreshSessionForDelivery(conversationId);
@@ -16924,11 +17095,12 @@ async function deliverMessage(conversationId, content, conversationCache, syncSe
         }
       } else {
         await injectViaTmux(cachedTmux, content);
-        await syncService2.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
-        syncService2.setSessionError(conversationId).catch(() => {
+        await syncService.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
+        syncService.setSessionError(conversationId).catch(() => {
         });
-        if (content.trimStart().startsWith("/")) {
-          checkForInteractivePrompt(cachedTmux, sessionId, conversationId, syncService2).catch(() => {
+        const isPollResponse = !!parsePollMessage(content);
+        if (content.trimStart().startsWith("/") || isPollResponse) {
+          checkForInteractivePrompt(cachedTmux, sessionId, conversationId, syncService, isPollResponse ? 4000 : 2000).catch(() => {
           });
         }
         return true;
@@ -16965,10 +17137,11 @@ async function deliverMessage(conversationId, content, conversationCache, syncSe
             sessionProcessCache.delete(sessionId);
             agentDetectedDead = true;
           } else {
-            await syncService2.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
+            await syncService.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
             logDelivery(`Delivered via tmux ${tmuxTarget}`);
-            if (content.trimStart().startsWith("/")) {
-              checkForInteractivePrompt(tmuxTarget, sessionId, conversationId, syncService2).catch(() => {
+            const isPollResponse = !!parsePollMessage(content);
+            if (content.trimStart().startsWith("/") || isPollResponse) {
+              checkForInteractivePrompt(tmuxTarget, sessionId, conversationId, syncService, isPollResponse ? 4000 : 2000).catch(() => {
               });
             }
             return true;
@@ -16982,7 +17155,7 @@ async function deliverMessage(conversationId, content, conversationCache, syncSe
         logDelivery(`Trying ${termLabel} injection for tty=${proc.tty}`);
         try {
           await injectViaTerminal(proc.tty, content, proc.termProgram);
-          await syncService2.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
+          await syncService.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
           logDelivery(`Delivered via ${termLabel} tty=${proc.tty}`);
           return true;
         } catch (err) {
@@ -17002,16 +17175,17 @@ async function deliverMessage(conversationId, content, conversationCache, syncSe
   const resumed = await autoResumeSession(sessionId, content, titleCache, isMaterialized, undefined, conversationId);
   if (resumed) {
     materializedSessions.delete(sessionId);
-    await syncService2.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
+    await syncService.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
     logDelivery(`Delivered via auto-resume for session=${sessionId.slice(0, 8)}`);
-    if (content.trimStart().startsWith("/")) {
+    const isPollResponse = !!parsePollMessage(content);
+    if (content.trimStart().startsWith("/") || isPollResponse) {
       const resumeTmux = resumeSessionCache.get(sessionId);
       if (resumeTmux) {
-        checkForInteractivePrompt(resumeTmux + ":0.0", sessionId, conversationId, syncService2).catch(() => {
+        checkForInteractivePrompt(resumeTmux + ":0.0", sessionId, conversationId, syncService, isPollResponse ? 4000 : 2000).catch(() => {
         });
       }
     }
-    postDeliveryHealthCheck(sessionId, conversationId, content, messageId, syncService2, titleCache, conversationCache).catch((err) => {
+    postDeliveryHealthCheck(sessionId, conversationId, content, messageId, syncService, titleCache, conversationCache).catch((err) => {
       log(`Health check error: ${err instanceof Error ? err.message : String(err)}`);
     });
     return true;
@@ -17020,16 +17194,17 @@ async function deliverMessage(conversationId, content, conversationCache, syncSe
   const repaired = await repairAndResumeSession(sessionId, content, titleCache, isMaterialized, undefined, conversationId);
   if (repaired) {
     materializedSessions.delete(sessionId);
-    await syncService2.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
+    await syncService.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
     logDelivery(`Delivered via repair+resume for session=${sessionId.slice(0, 8)}`);
-    if (content.trimStart().startsWith("/")) {
+    const isPollResponse = !!parsePollMessage(content);
+    if (content.trimStart().startsWith("/") || isPollResponse) {
       const resumeTmux = resumeSessionCache.get(sessionId);
       if (resumeTmux) {
-        checkForInteractivePrompt(resumeTmux + ":0.0", sessionId, conversationId, syncService2).catch(() => {
+        checkForInteractivePrompt(resumeTmux + ":0.0", sessionId, conversationId, syncService, isPollResponse ? 4000 : 2000).catch(() => {
         });
       }
     }
-    postDeliveryHealthCheck(sessionId, conversationId, content, messageId, syncService2, titleCache, conversationCache).catch((err) => {
+    postDeliveryHealthCheck(sessionId, conversationId, content, messageId, syncService, titleCache, conversationCache).catch((err) => {
       log(`Health check error: ${err instanceof Error ? err.message : String(err)}`);
     });
     return true;
@@ -17040,7 +17215,7 @@ async function deliverMessage(conversationId, content, conversationCache, syncSe
 function isSyncPaused() {
   return process.env.CODE_CHAT_SYNC_PAUSED === "1" || process.env.CODECAST_PAUSED === "1";
 }
-async function repairProjectPaths(syncService2) {
+async function repairProjectPaths(syncService) {
   const claudeProjectsDir = path13.join(process.env.HOME || "", ".claude", "projects");
   if (!fs14.existsSync(claudeProjectsDir))
     return;
@@ -17066,7 +17241,7 @@ async function repairProjectPaths(syncService2) {
         if (!projectPath)
           continue;
         const gitInfo = getGitInfo(projectPath);
-        const result = await syncService2.updateProjectPath(sessionId, projectPath, gitInfo?.root);
+        const result = await syncService.updateProjectPath(sessionId, projectPath, gitInfo?.root);
         if (result?.updated) {
           repaired++;
           log(`Repaired path for ${sessionId.slice(0, 8)}: ${projectPath}`);
@@ -17079,7 +17254,7 @@ async function repairProjectPaths(syncService2) {
     log(`Repaired ${repaired} project paths (checked ${checked})`);
   }
 }
-async function backfillPlanModeFromJSONL(syncService2) {
+async function backfillPlanModeFromJSONL(syncService) {
   const claudeProjectsDir = path13.join(process.env.HOME || "", ".claude", "projects");
   if (!fs14.existsSync(claudeProjectsDir))
     return;
@@ -17127,7 +17302,7 @@ async function backfillPlanModeFromJSONL(syncService2) {
         if (!planContent)
           continue;
         const projPath = decodedPath && fs14.existsSync(decodedPath) ? decodedPath : undefined;
-        const planShortId = await syncService2.syncPlanFromPlanMode({
+        const planShortId = await syncService.syncPlanFromPlanMode({
           sessionId,
           planContent,
           projectPath: projPath
@@ -17574,9 +17749,9 @@ function compareVersions(a, b) {
   }
   return 0;
 }
-async function checkForForcedUpdate(syncService2) {
+async function checkForForcedUpdate(syncService) {
   try {
-    const minVersion = await syncService2.getMinCliVersion();
+    const minVersion = await syncService.getMinCliVersion();
     if (!minVersion)
       return false;
     const currentVersion = getVersion();
@@ -17652,10 +17827,10 @@ function startEventLoopMonitor() {
     }
   }, EVENT_LOOP_CHECK_INTERVAL_MS);
 }
-function startVersionChecker(syncService2) {
-  checkForForcedUpdate(syncService2);
+function startVersionChecker(syncService) {
+  checkForForcedUpdate(syncService);
   return setInterval(() => {
-    checkForForcedUpdate(syncService2);
+    checkForForcedUpdate(syncService);
   }, VERSION_CHECK_INTERVAL_MS);
 }
 function logHealthReport(retryQueue) {
@@ -17667,12 +17842,12 @@ function logHealthReport(retryQueue) {
     logWarn(`Health: ${unsyncedFiles.length} pending files, ${droppedOps.length} dropped ops, ${queueSize} in retry queue`);
   }
 }
-function startReconciliation(syncService2, retryQueue) {
+function startReconciliation(syncService, retryQueue) {
   log("Reconciliation scheduler started (runs every hour)");
   setTimeout(async () => {
     try {
       logHealthReport(retryQueue);
-      const result = await performReconciliation(syncService2, (msg, level) => log(msg, level || "info"));
+      const result = await performReconciliation(syncService, (msg, level) => log(msg, level || "info"));
       if (result.discrepancies.length > 0) {
         logWarn(`Reconciliation found ${result.discrepancies.length} discrepancies`);
         const repaired = await repairDiscrepancies(result.discrepancies, log);
@@ -17689,7 +17864,7 @@ function startReconciliation(syncService2, retryQueue) {
     }
     try {
       logHealthReport(retryQueue);
-      const result = await performReconciliation(syncService2, (msg, level) => log(msg, level || "info"));
+      const result = await performReconciliation(syncService, (msg, level) => log(msg, level || "info"));
       if (result.discrepancies.length > 0) {
         logWarn(`Reconciliation found ${result.discrepancies.length} discrepancies`);
         const repaired = await repairDiscrepancies(result.discrepancies, log);
@@ -17972,23 +18147,23 @@ async function main() {
   if (config.excluded_paths) {
     log(`Excluded paths: ${config.excluded_paths}`);
   }
-  const syncService2 = new SyncService({
+  const syncService = new SyncService({
     convexUrl,
     authToken: config.auth_token,
     userId: config.user_id
   });
-  syncServiceRef = syncService2;
+  syncServiceRef = syncService;
   try {
-    const didUpdate = await checkForForcedUpdate(syncService2);
+    const didUpdate = await checkForForcedUpdate(syncService);
     if (didUpdate)
       return;
   } catch (err) {
     log(`Startup update check failed: ${err instanceof Error ? err.message : String(err)}`);
   }
-  repairProjectPaths(syncService2).catch((err) => {
+  repairProjectPaths(syncService).catch((err) => {
     log(`Failed to repair project paths: ${err instanceof Error ? err.message : String(err)}`);
   });
-  backfillPlanModeFromJSONL(syncService2).catch((err) => {
+  backfillPlanModeFromJSONL(syncService).catch((err) => {
     log(`Failed to backfill plan_mode from JSONL: ${err instanceof Error ? err.message : String(err)}`);
   });
   setInterval(() => {
@@ -18034,7 +18209,7 @@ async function main() {
   sendHeartbeat().catch(() => {
   });
   const taskScheduler = new TaskScheduler({
-    syncService: syncService2,
+    syncService,
     config,
     log
   });
@@ -18043,6 +18218,64 @@ async function main() {
   const titleCache = readTitleCache();
   const pendingMessages = {};
   const activeSessions = new Map;
+  {
+    const globalSkills = readAvailableSkills();
+    if (globalSkills.length > 0) {
+      const skillsJson = JSON.stringify(globalSkills);
+      log(`Startup: syncing ${globalSkills.length} global skills to user profile`);
+      syncService.setAvailableSkills(undefined, skillsJson).then(() => {
+        log(`Startup: user-level skills synced`);
+      }).catch((err) => log(`Startup skills sync error: ${err}`));
+    }
+    const globalNames = new Set(globalSkills.map((s) => s.name));
+    const projectsDir = path13.join(process.env.HOME || "", ".claude", "projects");
+    const decodeProjectPath = (dirName) => {
+      const segments = dirName.replace(/^-/, "").split("-");
+      let resolved = "";
+      let i = 0;
+      while (i < segments.length) {
+        let candidate = segments[i];
+        i++;
+        while (true) {
+          const testPath = resolved + "/" + candidate;
+          if (i >= segments.length) {
+            resolved = testPath;
+            break;
+          }
+          try {
+            if (fs14.statSync(testPath).isDirectory()) {
+              resolved = testPath;
+              break;
+            }
+          } catch {
+          }
+          candidate += "-" + segments[i];
+          i++;
+        }
+      }
+      return fs14.existsSync(resolved) ? resolved : null;
+    };
+    try {
+      const entries = fs14.readdirSync(projectsDir);
+      for (const entry of entries) {
+        const projectPath = decodeProjectPath(entry);
+        if (!projectPath)
+          continue;
+        const hasCommands = fs14.existsSync(path13.join(projectPath, ".claude", "commands"));
+        const hasSkills = fs14.existsSync(path13.join(projectPath, ".claude", "skills"));
+        if (!hasCommands && !hasSkills)
+          continue;
+        const allSkills = readAvailableSkills(projectPath);
+        const projectOnly = allSkills.filter((s) => !globalNames.has(s.name));
+        if (projectOnly.length > 0) {
+          log(`Startup: syncing ${projectOnly.length} project skills for ${path13.basename(projectPath)}`);
+          syncService.setAvailableSkills(undefined, JSON.stringify(projectOnly), projectPath).catch(() => {
+          });
+        }
+      }
+    } catch {
+    }
+  }
   const retryQueue = new RetryQueue({
     initialDelayMs: 3000,
     maxDelayMs: 60000,
@@ -18060,12 +18293,12 @@ async function main() {
   retryQueue.setExecutor(async (op) => {
     if (op.type === "createConversation") {
       const params = op.params;
-      const conversationId = await syncService2.createConversation(params);
+      const conversationId = await syncService.createConversation(params);
       conversationCache[params.sessionId] = conversationId;
       saveConversationCache(conversationCache);
       log(`Retry: Created conversation ${conversationId} for session ${params.sessionId}`);
       if (pendingMessages[params.sessionId]) {
-        await flushPendingMessagesBatch(pendingMessages[params.sessionId], conversationId, syncService2, retryQueue);
+        await flushPendingMessagesBatch(pendingMessages[params.sessionId], conversationId, syncService, retryQueue);
         delete pendingMessages[params.sessionId];
       }
       updateState();
@@ -18073,7 +18306,7 @@ async function main() {
     }
     if (op.type === "addMessage") {
       const params = op.params;
-      await syncService2.addMessage(params);
+      await syncService.addMessage(params);
       updateState();
       return true;
     }
@@ -18107,7 +18340,7 @@ async function main() {
     let sync = fileSyncs.get(filePath);
     if (!sync) {
       sync = new InvalidateSync(async () => {
-        await processSessionFile(filePath, event.sessionId, event.projectPath, syncService2, config.user_id, config.team_id, conversationCache, retryQueue, pendingMessages, titleCache, updateState);
+        await processSessionFile(filePath, event.sessionId, event.projectPath, syncService, config.user_id, config.team_id, conversationCache, retryQueue, pendingMessages, titleCache, updateState);
       });
       fileSyncs.set(filePath, sync);
     }
@@ -18159,7 +18392,7 @@ async function main() {
         }
       }
       if (statusChanged || modeChanged) {
-        sendAgentStatus(syncService2, convId, sessionId, data.status, data.ts * 1000, data.permission_mode);
+        sendAgentStatus(syncService, convId, sessionId, data.status, data.ts * 1000, data.permission_mode);
         log(`Hook status: ${data.status}${data.permission_mode ? ` mode=${data.permission_mode}` : ""} for session ${sessionId.slice(0, 8)}`);
       }
       if (data.status === "stopped" && statusChanged) {
@@ -18172,7 +18405,7 @@ async function main() {
           }
         } else {
           log(`Session ended for ${sessionId.slice(0, 8)}, marking completed`);
-          syncService2.markSessionCompleted(convId).catch(() => {
+          syncService.markSessionCompleted(convId).catch(() => {
           });
           try {
             fs14.unlinkSync(filePath);
@@ -18192,14 +18425,14 @@ async function main() {
         if (toolName && !SKIP_TOOLS.has(toolName)) {
           log(`Creating permission record: ${toolName} for session ${sessionId.slice(0, 8)}`);
           const permPrompt = { tool_name: toolName, arguments_preview: preview };
-          syncService2.createSessionNotification({
+          syncService.createSessionNotification({
             conversation_id: convId,
             type: "permission_request",
             title: "codecast - Permission needed",
             message: truncateForNotification(`${toolName}: ${preview}`, 150)
           }).catch(() => {
           });
-          handlePermissionRequest(syncService2, convId, sessionId, permPrompt, log).then((decision) => {
+          handlePermissionRequest(syncService, convId, sessionId, permPrompt, log).then((decision) => {
             permissionRecordPending.delete(sessionId);
             if (decision) {
               const key = decision.approved ? "Enter" : "Escape";
@@ -18217,7 +18450,7 @@ async function main() {
                       await injectViaTerminal(proc.tty, decision.approved ? "\r" : "\x1B", proc.termProgram);
                     }
                     log(`Injected '${key}' for session ${sessionId.slice(0, 8)}`);
-                    sendAgentStatus(syncService2, convId, sessionId, "working");
+                    sendAgentStatus(syncService, convId, sessionId, "working");
                   } catch (err) {
                     log(`Failed to inject permission: ${err instanceof Error ? err.message : String(err)}`);
                   }
@@ -18319,13 +18552,13 @@ async function main() {
           }
         }
         log(`Startup scan: Syncing ${sessionId}${parentConversationId ? ` (subagent of ${parentConversationId})` : ""}`);
-        await processSessionFile(filePath, sessionId, projectPath, syncService2, config.user_id, config.team_id, conversationCache, retryQueue, pendingMessages, titleCache, updateState, parentConversationId);
+        await processSessionFile(filePath, sessionId, projectPath, syncService, config.user_id, config.team_id, conversationCache, retryQueue, pendingMessages, titleCache, updateState, parentConversationId);
       }
       for (const [childSessionId, parentSessionId] of pendingSubagentParents) {
         const parentConvId = conversationCache[parentSessionId];
         const childConvId = conversationCache[childSessionId];
         if (parentConvId && childConvId) {
-          syncService2.linkSessions(parentConvId, childConvId).then(() => {
+          syncService.linkSessions(parentConvId, childConvId).then(() => {
             log(`Startup scan: Linked subagent ${childSessionId.slice(0, 8)} -> parent ${parentSessionId.slice(0, 8)}`);
           }).catch((err) => {
             log(`Startup scan: Failed to link subagent ${childSessionId.slice(0, 8)}: ${err}`);
@@ -18377,7 +18610,7 @@ async function main() {
                 const parentConvId = conversationCache[parentSessionId];
                 if (parentConvId && parentConvId !== childConvId) {
                   try {
-                    await syncService2.linkPlanHandoff(parentConvId, childConvId);
+                    await syncService.linkPlanHandoff(parentConvId, childConvId);
                     planHandoffChildren.set(parentConvId, childConvId);
                     linked++;
                     log(`Backfill: linked plan handoff ${childSessionId.slice(0, 8)} -> parent ${parentSessionId.slice(0, 8)}`);
@@ -18401,7 +18634,7 @@ async function main() {
   });
   const watchdogInterval = startWatchdog({
     config,
-    syncService: syncService2,
+    syncService,
     conversationCache,
     retryQueue,
     pendingMessages,
@@ -18409,8 +18642,8 @@ async function main() {
     updateState,
     watcher
   });
-  const versionCheckInterval = startVersionChecker(syncService2);
-  const reconciliationInterval = startReconciliation(syncService2, retryQueue);
+  const versionCheckInterval = startVersionChecker(syncService);
+  const reconciliationInterval = startReconciliation(syncService, retryQueue);
   const eventLoopMonitorInterval = startEventLoopMonitor();
   const cursorWatcher = new CursorWatcher;
   const cursorSyncs = new Map;
@@ -18438,7 +18671,7 @@ async function main() {
     let sync = cursorSyncs.get(dbPath);
     if (!sync) {
       sync = new InvalidateSync(async () => {
-        await processCursorSession(dbPath, event.sessionId, event.workspacePath, syncService2, config.user_id, config.team_id, conversationCache, retryQueue, pendingMessages, updateState);
+        await processCursorSession(dbPath, event.sessionId, event.workspacePath, syncService, config.user_id, config.team_id, conversationCache, retryQueue, pendingMessages, updateState);
       });
       cursorSyncs.set(dbPath, sync);
     }
@@ -18481,7 +18714,7 @@ async function main() {
     let sync = cursorTranscriptSyncs.get(filePath);
     if (!sync) {
       sync = new InvalidateSync(async () => {
-        await processCursorTranscriptFile(filePath, event.sessionId, syncService2, config.user_id, config.team_id, conversationCache, retryQueue, pendingMessages, updateState);
+        await processCursorTranscriptFile(filePath, event.sessionId, syncService, config.user_id, config.team_id, conversationCache, retryQueue, pendingMessages, updateState);
       });
       cursorTranscriptSyncs.set(filePath, sync);
     }
@@ -18509,7 +18742,7 @@ async function main() {
     let sync = codexSyncs.get(filePath);
     if (!sync) {
       sync = new InvalidateSync(async () => {
-        await processCodexSession(filePath, event.sessionId, syncService2, config.user_id, config.team_id, conversationCache, retryQueue, pendingMessages, titleCache, updateState);
+        await processCodexSession(filePath, event.sessionId, syncService, config.user_id, config.team_id, conversationCache, retryQueue, pendingMessages, titleCache, updateState);
       });
       codexSyncs.set(filePath, sync);
     }
@@ -18537,7 +18770,7 @@ async function main() {
     let sync = geminiSyncs.get(filePath);
     if (!sync) {
       sync = new InvalidateSync(async () => {
-        await processGeminiSession(filePath, event.sessionId, event.projectHash, syncService2, config.user_id, config.team_id, conversationCache, retryQueue, pendingMessages, titleCache, updateState);
+        await processGeminiSession(filePath, event.sessionId, event.projectHash, syncService, config.user_id, config.team_id, conversationCache, retryQueue, pendingMessages, titleCache, updateState);
       });
       geminiSyncs.set(filePath, sync);
     }
@@ -18547,7 +18780,7 @@ async function main() {
     logError("Gemini watcher error", error);
   });
   geminiWatcher.start();
-  const subscriptionClient = syncService2.getSubscriptionClient();
+  const subscriptionClient = syncService.getSubscriptionClient();
   let unsubscribe = null;
   let permissionUnsubscribe = null;
   let commandUnsubscribe = null;
@@ -18559,7 +18792,7 @@ async function main() {
       return;
     if (retryCount >= 10) {
       logDelivery(`msg=${messageId.slice(0, 8)} exceeded max retries (10), marking undeliverable`);
-      syncService2.updateMessageStatus({ messageId, status: "undeliverable" }).catch(() => {
+      syncService.updateMessageStatus({ messageId, status: "undeliverable" }).catch(() => {
       });
       return;
     }
@@ -18570,7 +18803,7 @@ async function main() {
     setTimeout(async () => {
       messageRetryTimers.delete(messageId);
       try {
-        await syncService2.retryMessage(messageId);
+        await syncService.retryMessage(messageId);
         logDelivery(`Retry ${retryCount + 1} triggered for msg=${messageId.slice(0, 8)}`);
       } catch (err) {
         logDelivery(`Retry trigger failed for msg=${messageId.slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`);
@@ -18602,7 +18835,7 @@ async function main() {
               const imagePaths = [];
               for (const storageId of imageIds) {
                 try {
-                  const imagePath = await downloadImage(storageId, syncService2);
+                  const imagePath = await downloadImage(storageId, syncService);
                   if (imagePath) {
                     imagePaths.push(imagePath);
                     log(`Downloaded image to ${imagePath}`);
@@ -18617,10 +18850,10 @@ async function main() {
                 messageContent = realText ? `${realText} ${imageTags}` : imageTags;
               }
             }
-            syncService2.updateSessionAgentStatus(msg.conversation_id, "connected").catch(() => {
+            syncService.updateSessionAgentStatus(msg.conversation_id, "connected").catch(() => {
             });
             try {
-              const delivered = await deliverMessage(msg.conversation_id, messageContent, conversationCache, syncService2, msg._id, titleCache);
+              const delivered = await deliverMessage(msg.conversation_id, messageContent, conversationCache, syncService, msg._id, titleCache);
               if (delivered) {
                 logDelivery(`SUCCESS: msg=${msg._id.slice(0, 8)} delivered`);
               } else {

@@ -136,7 +136,7 @@ export async function runClaudeWrapper(args: string[]): Promise<void> {
 
   // Check if we're already in tmux
   const existingTmuxPane = getTmuxPane();
-  tmuxSessionName = null;
+  tmuxSessionName = undefined;
 
   // If not in tmux, create a tmux session for reliable message injection
   if (!existingTmuxPane && process.stdin.isTTY && hasTmux()) {

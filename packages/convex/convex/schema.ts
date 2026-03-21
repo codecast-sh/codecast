@@ -72,6 +72,7 @@ export default defineSchema({
       name: v.string(),
       description: v.optional(v.string()),
     }))),
+    available_skills: v.optional(v.string()),
   })
     .index("email", ["email"])
     .index("by_github_username", ["github_username"])
@@ -210,6 +211,7 @@ export default defineSchema({
     workflow_run_id: v.optional(v.id("workflow_runs")),
     is_workflow_sub: v.optional(v.boolean()),
     is_workflow_primary: v.optional(v.boolean()),
+    available_skills: v.optional(v.string()),
   })
     .index("by_user_id", ["user_id"])
     .index("by_user_updated", ["user_id", "updated_at"])
@@ -1091,6 +1093,8 @@ export default defineSchema({
     workflow_run_id: v.optional(v.id("workflow_runs")),
     workflow_node_id: v.optional(v.string()),
 
+    project_path: v.optional(v.string()),
+
     created_at: v.number(),
     updated_at: v.number(),
     closed_at: v.optional(v.number()),
@@ -1356,6 +1360,15 @@ export default defineSchema({
       active_filter: v.optional(v.union(v.literal("my"), v.literal("team"))),
       inbox_shortcuts_hidden: v.optional(v.boolean()),
       workspace_initialized: v.optional(v.boolean()),
+      task_view: v.optional(v.object({
+        status: v.optional(v.string()),
+        view: v.optional(v.union(v.literal("list"), v.literal("kanban"))),
+        sort: v.optional(v.string()),
+        priority: v.optional(v.string()),
+        label: v.optional(v.string()),
+        assignee: v.optional(v.string()),
+        hide_agent: v.optional(v.boolean()),
+      })),
     })),
 
     layouts: v.optional(v.object({

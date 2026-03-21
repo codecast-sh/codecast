@@ -6,12 +6,14 @@ import { isElectron } from "../../../lib/desktop";
 const SHORTCUT_LABELS: Record<string, string> = {
   toggleWindow: "Toggle Main Window",
   togglePalette: "Quick Command Palette",
+  toggleCompose: "Quick Compose Session",
   toggleEnv: "Switch Local / Prod",
 };
 
 const SHORTCUT_DESCRIPTIONS: Record<string, string> = {
   toggleWindow: "Show or hide the main Codecast window",
   togglePalette: "Open the floating command palette from anywhere",
+  toggleCompose: "Open compose palette to start a session with a message",
   toggleEnv: "Switch between local dev and production",
 };
 
@@ -50,7 +52,7 @@ function ShortcutRecorder({
       let key: string;
       if (e.code === "Space") {
         key = "Space";
-      } else if (e.key.length === 1 || e.key === "\u00A0") {
+      } else if (e.key === "Dead" || e.key.length === 1 || e.key === "\u00A0") {
         key = e.code.replace(/^Key/, "").replace(/^Digit/, "");
       } else {
         key = e.key;

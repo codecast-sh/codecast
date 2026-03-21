@@ -150,6 +150,7 @@ async function findChildConversations(
         const childId = matchChildByPrompt(inp.prompt, subagentMatchData);
         if (!childId) return;
         if (inp.name) agentNameMap[inp.name] = childId;
+        if (inp.description) agentNameMap[inp.description] = childId;
         if (msg.message_uuid) map[msg.message_uuid] = childId;
       } catch {}
     };
@@ -1186,6 +1187,7 @@ export const getConversationWithMeta = query({
                 const childId = matchChildByPrompt(inp.prompt, subagentMatchData);
                 if (!childId) continue;
                 if (inp.name) agentNameMap[inp.name] = childId;
+                if (inp.description) agentNameMap[inp.description] = childId;
                 if (msg.message_uuid) childByParentUuid[msg.message_uuid] = childId;
               } catch {}
             }
@@ -1450,7 +1452,7 @@ export const listConversations = query({
       return { conversations: [], nextCursor: null };
     }
 
-    const limit = Math.min(args.limit ?? 20, 200);
+    const limit = Math.min(args.limit ?? 20, 1000);
     const includeMessagePreviews = args.include_message_previews ?? false;
     const cursorTimestamp = args.cursor ? parseInt(args.cursor, 10) : null;
 
@@ -5375,13 +5377,14 @@ export const listIdleSessions = query({
       const deferred = conv.inbox_deferred_at && conv.inbox_deferred_at >= conv.updated_at;
 
       let implementationSession: { _id: string; title?: string } | undefined;
+      const subagentChildren: typeof conversations = [];
       if (conv.message_count > 0) {
         const children = await ctx.db
           .query("conversations")
           .withIndex("by_parent_conversation_id", (q) =>
             q.eq("parent_conversation_id", conv._id)
           )
-          .take(5);
+          .take(20);
         const implChild = children.find(
           (c) => c.parent_message_uuid === "plan-handoff" && !c.is_subagent
         );
@@ -5391,6 +5394,11 @@ export const listIdleSessions = query({
         if (isIdle && children.some((c) => c.is_subagent && c.status === "active" &&
             (liveConvIds.has(c._id.toString()) || (now - c.updated_at) < 5 * 60 * 1000))) {
           isIdle = false;
+        }
+        for (const c of children) {
+          if ((c.is_subagent || (c.parent_conversation_id && !c.parent_message_uuid)) && c.message_count > 0) {
+            subagentChildren.push(c);
+          }
         }
       }
 
@@ -5443,6 +5451,47 @@ export const listIdleSessions = query({
         is_workflow_primary: conv.is_workflow_primary || false,
         workflow_run_status,
       });
+
+      for (const child of subagentChildren) {
+        const childDaemon = liveConvIds.has(child._id.toString());
+        const childAgentStatus = agentStatusMap.get(child._id.toString());
+        const childRecentlyUpdated = (now - child.updated_at) < 45 * 1000;
+        const childIsIdle = childAgentStatus
+          ? childAgentStatus !== "working" && childAgentStatus !== "compacting" && childAgentStatus !== "thinking" && childAgentStatus !== "connected"
+          : childDaemon
+            ? !childRecentlyUpdated
+            : !childRecentlyUpdated;
+        results.push({
+          _id: child._id,
+          session_id: child.session_id,
+          title: child.title,
+          subtitle: child.subtitle,
+          updated_at: child.updated_at,
+          started_at: child.started_at,
+          project_path: child.project_path,
+          git_root: child.git_root,
+          git_branch: child.git_branch,
+          agent_type: child.agent_type,
+          message_count: child.message_count,
+          idle_summary: child.idle_summary,
+          is_idle: childIsIdle,
+          is_unresponsive: false,
+          is_connected: !!childDaemon,
+          has_pending: !!child.has_pending_messages,
+          is_deferred: false,
+          is_pinned: false,
+          agent_status: childAgentStatus,
+          last_user_message: null,
+          session_error: child.session_error,
+          is_subagent: true,
+          parent_conversation_id: conv._id,
+          worktree_name: child.worktree_name,
+          worktree_branch: child.worktree_branch,
+          workflow_run_id: null,
+          is_workflow_primary: false,
+          workflow_run_status: null,
+        });
+      }
     }
 
     results.sort((a, b) => {

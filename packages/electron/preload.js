@@ -16,10 +16,16 @@ contextBridge.exposeInMainWorld("__CODECAST_ELECTRON__", {
   setShortcut: (key, accelerator) => ipcRenderer.invoke("set-shortcut", key, accelerator),
   paletteNavigate: (path) => ipcRenderer.send("palette-navigate", path),
   paletteHide: () => ipcRenderer.send("palette-hide"),
+  paletteCompose: (initialMessage) => ipcRenderer.send("palette-compose", initialMessage),
   onPaletteShow: (cb) => {
     const handler = () => cb();
     ipcRenderer.on("palette-show", handler);
     return () => ipcRenderer.removeListener("palette-show", handler);
+  },
+  onComposeShow: (cb) => {
+    const handler = () => cb();
+    ipcRenderer.on("compose-show", handler);
+    return () => ipcRenderer.removeListener("compose-show", handler);
   },
   platform: process.platform,
 });

@@ -5,8 +5,9 @@ import * as crypto from "crypto";
 import { SyncService } from "./syncService.js";
 import { hasTmux } from "./tmux.js";
 
+const ENRICHED_PATH = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
 const _execAsync = promisify(exec);
-const execAsync: typeof _execAsync = (cmd, opts?) => _execAsync(cmd, { timeout: 10_000, ...opts as any });
+const execAsync = (cmd: string, opts?: Record<string, any>) => _execAsync(cmd, { timeout: 10_000, env: { ...process.env, PATH: ENRICHED_PATH }, ...opts });
 
 const POLL_INTERVAL_MS = 30_000;
 const HEARTBEAT_INTERVAL_MS = 60_000;
@@ -135,7 +136,8 @@ export class TaskScheduler {
       await execAsync(`tmux send-keys -t '${tmuxSession}' ${JSON.stringify(shellCmd)} Enter`);
       this.log(`Spawned tmux session ${tmuxSession} for task "${task.title}"`);
     } catch (err) {
-      this.log(`Failed to spawn tmux for task "${task.title}": ${err instanceof Error ? err.message : String(err)}`, "error");
+      const stderr = (err as any)?.stderr ? ` stderr: ${(err as any).stderr}` : "";
+      this.log(`Failed to spawn tmux for task "${task.title}": ${err instanceof Error ? err.message : String(err)}${stderr}`, "error");
       await this.syncService.failTaskRun(task._id, this.daemonId, "Failed to spawn tmux session");
       return;
     }

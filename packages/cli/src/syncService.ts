@@ -563,6 +563,17 @@ export class SyncService {
     }
   }
 
+  async setAvailableSkills(conversationId: string | undefined, skills: string, projectPath?: string): Promise<void> {
+    try {
+      await this.client.mutation("conversations:setAvailableSkills" as any, {
+        ...(conversationId ? { conversation_id: conversationId } : {}),
+        ...(projectPath ? { project_path: projectPath } : {}),
+        skills,
+        api_token: this.apiToken,
+      });
+    } catch {}
+  }
+
   async updateProjectPath(sessionId: string, projectPath: string, gitRoot?: string): Promise<{ updated: boolean } | null> {
     try {
       const result = await this.client.mutation("conversations:updateProjectPath" as any, {

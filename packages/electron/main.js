@@ -21,6 +21,7 @@ const BASE_URL = process.env.CODECAST_URL || PROD_URL;
 const DEFAULT_SHORTCUTS = {
   toggleWindow: "CommandOrControl+Alt+Space",
   togglePalette: "Control+Alt+Space",
+  toggleCompose: "CommandOrControl+Alt+N",
   toggleEnv: "CommandOrControl+Alt+L",
 };
 
@@ -226,7 +227,8 @@ function hidePalette() {
 }
 
 function createTray() {
-  const icon = nativeImage.createFromPath(path.join(__dirname, "assets", "tray.png"));
+  const icon = nativeImage.createFromPath(path.join(__dirname, "assets", "trayTemplate@2x.png"));
+  icon.setTemplateImage(true);
   tray = new Tray(icon.resize({ width: 18, height: 18 }));
   const menu = Menu.buildFromTemplate([
     { label: "Show Codecast", click: () => { mainWindow?.show(); mainWindow?.focus(); } },
@@ -335,6 +337,17 @@ ipcMain.on("palette-hide", () => {
   hidePalette();
 });
 
+ipcMain.on("palette-compose", (_e, initialMessage) => {
+  hidePalette();
+  if (mainWindow) {
+    mainWindow.show();
+    mainWindow.focus();
+    mainWindow.webContents.executeJavaScript(
+      `window.__CODECAST_COMPOSE_SHOW && window.__CODECAST_COMPOSE_SHOW(${JSON.stringify(initialMessage || "")})`
+    );
+  }
+});
+
 // Settings IPC
 ipcMain.handle("get-shortcuts", () => loadSettings());
 ipcMain.handle("set-shortcut", (_e, key, accelerator) => {
@@ -364,6 +377,17 @@ function registerShortcuts() {
   if (shortcuts.togglePalette) {
     globalShortcut.register(shortcuts.togglePalette, () => {
       togglePalette();
+    });
+  }
+
+  if (shortcuts.toggleCompose) {
+    globalShortcut.register(shortcuts.toggleCompose, () => {
+      if (!mainWindow) return;
+      mainWindow.show();
+      mainWindow.focus();
+      mainWindow.webContents.executeJavaScript(
+        "window.__CODECAST_COMPOSE_SHOW && window.__CODECAST_COMPOSE_SHOW()"
+      );
     });
   }
 

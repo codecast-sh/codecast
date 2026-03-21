@@ -44,7 +44,18 @@ import {
 const _execAsync = promisify(exec);
 const ENRICHED_PATH = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
 const EXEC_TIMEOUT_MS = 10_000;
-const execAsync: typeof _execAsync = (cmd, opts?) => _execAsync(cmd, { timeout: EXEC_TIMEOUT_MS, ...opts as any, env: { ...process.env, PATH: ENRICHED_PATH, ...(opts as any)?.env } });
+const execAsync = async (cmd: string, opts?: any): Promise<{ stdout: string; stderr: string }> => {
+  const result = await _execAsync(cmd, {
+    encoding: "utf8",
+    timeout: EXEC_TIMEOUT_MS,
+    ...opts,
+    env: { ...process.env, PATH: ENRICHED_PATH, ...(opts?.env || {}) },
+  });
+  return {
+    stdout: String(result.stdout),
+    stderr: String(result.stderr),
+  };
+};
 
 const _execFileAsync = promisify(execFile);
 
@@ -328,8 +339,78 @@ type AgentStatus = "working" | "idle" | "permission_blocked" | "compacting" | "t
 type PermissionMode = "default" | "plan" | "acceptEdits" | "bypassPermissions" | "dontAsk";
 type HookStatusData = { status: AgentStatus; ts: number; permission_mode?: PermissionMode; message?: string; transcript_path?: string };
 const lastHookStatus = new Map<string, HookStatusData>();
-const pendingInteractivePrompts = new Map<string, number>();
+const pendingInteractivePrompts = new Map<string, { timestamp: number; options: Array<{ label: string; description?: string }>; isConfirmation?: boolean }>();
 const AGENT_STATUS_DIR = path.join(process.env.HOME || "", ".codecast", "agent-status");
+const skillsSyncedConversations = new Set<string>();
+
+function readAvailableSkills(projectPath?: string): Array<{ name: string; description: string }> {
+  const skills: Array<{ name: string; description: string }> = [];
+  const seen = new Set<string>();
+  const home = process.env.HOME || "";
+  const commandDirs = [
+    path.join(home, ".claude", "commands"),
+    ...(projectPath ? [path.join(projectPath, ".claude", "commands")] : []),
+  ];
+  for (const dir of commandDirs) {
+    try {
+      if (!fs.existsSync(dir)) continue;
+      for (const file of fs.readdirSync(dir)) {
+        if (!file.endsWith(".md")) continue;
+        const name = file.replace(/\.md$/, "");
+        if (seen.has(name)) continue;
+        seen.add(name);
+        try {
+          const content = fs.readFileSync(path.join(dir, file), "utf-8");
+          const m = content.match(/^---[\s\S]*?description:\s*(.+?)[\r\n]/m);
+          skills.push({ name, description: m?.[1]?.trim() || "" });
+        } catch {}
+      }
+    } catch {}
+  }
+  const skillDirs = [
+    path.join(home, ".claude", "skills"),
+    ...(projectPath ? [path.join(projectPath, ".claude", "skills")] : []),
+  ];
+  for (const dir of skillDirs) {
+    try {
+      if (!fs.existsSync(dir)) continue;
+      for (const entry of fs.readdirSync(dir)) {
+        const skillMd = path.join(dir, entry, "SKILL.md");
+        const standalone = path.join(dir, entry);
+        let content = "";
+        if (fs.existsSync(skillMd)) {
+          content = fs.readFileSync(skillMd, "utf-8");
+        } else if (entry.endsWith(".md")) {
+          content = fs.readFileSync(standalone, "utf-8");
+        } else continue;
+        const nameMatch = content.match(/^---[\s\S]*?name:\s*(.+?)[\r\n]/m);
+        const descMatch = content.match(/^---[\s\S]*?description:\s*(.+?)[\r\n]/m);
+        const invocable = /user_invocable:\s*true/i.test(content);
+        const name = nameMatch?.[1]?.trim() || entry.replace(/\.md$/, "");
+        if (!invocable || seen.has(name)) continue;
+        seen.add(name);
+        skills.push({ name, description: descMatch?.[1]?.trim() || "" });
+      }
+    } catch {}
+  }
+  return skills;
+}
+
+function syncSkillsForConversation(conversationId: string, projectPath: string | undefined, syncService: SyncService): void {
+  if (skillsSyncedConversations.has(conversationId)) return;
+  skillsSyncedConversations.add(conversationId);
+  const allSkills = readAvailableSkills(projectPath);
+  if (allSkills.length === 0) return;
+  syncService.setAvailableSkills(conversationId, JSON.stringify(allSkills)).catch(() => {});
+  if (projectPath) {
+    const globalSkills = readAvailableSkills();
+    const globalNames = new Set(globalSkills.map(s => s.name));
+    const projectOnly = allSkills.filter(s => !globalNames.has(s.name));
+    if (projectOnly.length > 0) {
+      syncService.setAvailableSkills(undefined, JSON.stringify(projectOnly), projectPath).catch(() => {});
+    }
+  }
+}
 
 function sendAgentStatus(
   syncService: SyncService,
@@ -937,9 +1018,9 @@ async function executeRemoteCommand(
               if (!fs.existsSync(flagFile)) {
                 fs.writeFileSync(flagFile, new Date().toISOString());
                 if (conversationId) {
-                  syncService.createSessionNotification({
+                  syncServiceRef?.createSessionNotification({
                     conversation_id: conversationId,
-                    type: "info",
+                    type: "info" as any,
                     title: "Codex running in full-access mode",
                     message: "Codex is running without permission prompts by default. Configure with: cast config codex_args",
                   }).catch(() => {});
@@ -2144,6 +2225,7 @@ async function processSessionFile(
   updateStateCallback: () => void,
   parentConversationId?: string,
 ): Promise<void> {
+  const isSubagent = filePath.split(path.sep).includes("subagents");
     let lastPosition = getPosition(filePath);
   let stats;
 
@@ -2360,6 +2442,13 @@ async function processSessionFile(
         }
         startedSessionTmux.delete(matchedStartedConversation);
         log(`Linked session ${sessionId} to existing started conversation ${conversationId}`);
+        if (parentConversationId) {
+          syncService.linkSessions(parentConversationId, conversationId).then(() => {
+            log(`Linked started conversation ${conversationId.slice(0, 12)} to parent ${parentConversationId!.slice(0, 12)}`);
+          }).catch((err) => {
+            log(`Failed to link started conversation to parent: ${err}`);
+          });
+        }
       } else {
         const cliFlags = detectCliFlags(headContent + "\n" + newContent);
         conversationId = await syncService.createConversation({
@@ -2384,6 +2473,7 @@ async function processSessionFile(
         }
         log(`Created conversation ${conversationId} for session ${sessionId}`);
         syncStats.conversationsCreated++;
+        syncSkillsForConversation(conversationId, actualProjectPath, syncService);
 
         // Detect tmux and register managed session
         findSessionProcess(sessionId, "claude").then((proc) => {
@@ -2579,6 +2669,8 @@ async function processSessionFile(
     }
   }
 
+  syncSkillsForConversation(conversationId, projectPath, syncService);
+
   const batchResult = await syncMessagesBatch(messages, conversationId, syncService, retryQueue);
   if (batchResult.authExpired) {
     log("⚠️  Authentication expired - sync paused");
@@ -2708,7 +2800,7 @@ async function processSessionFile(
       }
 
       const errorText = detectErrorInMessage(lastAssistantMessage.content);
-      if (errorText && !permissionPrompt) {
+      if (errorText && !permissionPrompt && !isSubagent) {
         const now = Date.now();
         const lastErr = lastErrorNotification.get(sessionId) ?? 0;
         if (now - lastErr > IDLE_COOLDOWN_MS) {
@@ -2751,7 +2843,7 @@ async function processSessionFile(
             const capturedSize = stats.size;
             if (capturedSize !== lastIdleNotifiedSize.get(sessionId)) {
               lastIdleNotifiedSize.set(sessionId, capturedSize);
-              const preview = truncateForNotification(lastAssistantMessage.content);
+              const preview = isSubagent ? undefined : truncateForNotification(lastAssistantMessage.content);
               sendAgentStatus(syncService, conversationId, sessionId, "idle", undefined, undefined, preview);
             }
           } else {
@@ -2765,7 +2857,7 @@ async function processSessionFile(
               lastIdleNotifiedSize.set(sessionId, capturedSize);
               idleTimers.set(sessionId, setTimeout(() => {
                 idleTimers.delete(sessionId);
-                const preview = truncateForNotification(lastAssistantMessage.content);
+                const preview = isSubagent ? undefined : truncateForNotification(lastAssistantMessage.content);
                 sendAgentStatus(syncService, capturedConvId, sessionId, "idle", undefined, undefined, preview);
               }, IDLE_DEBOUNCE_MS));
             }
@@ -3679,6 +3771,7 @@ async function findSessionProcess(sessionId: string, agentType: "claude" | "code
   const binaryPattern = agentType === "gemini" ? "gemini" : agentType === "codex" ? "codex" : "claude";
 
   try {
+    const codexResumeCandidates: Array<{ pid: number; tty: string }> = [];
     // Strategy 0: Check session registry (written by SessionStart hook)
     try {
       const registryFile = path.join(CONFIG_DIR, "session-registry", `${sessionId}.json`);
@@ -3710,7 +3803,6 @@ async function findSessionProcess(sessionId: string, agentType: "claude" | "code
       const { stdout } = await execAsync(`ps aux | grep -E '${binaryPattern}' | grep -v grep | grep -v 'codecast'`);
       const lines = stdout.trim().split("\n");
       const geminiCandidates: Array<{ pid: number; tty: string }> = [];
-      const codexResumeCandidates: Array<{ pid: number; tty: string }> = [];
       for (const line of lines) {
         if (!line.trim()) continue;
         const isResume = isResumeInvocation(agentType, line);
@@ -3969,7 +4061,7 @@ async function findTmuxPaneForTty(tty: string): Promise<string | null> {
   }
 }
 
-type InteractivePrompt = { question: string; options: Array<{ label: string; description?: string }> };
+type InteractivePrompt = { question: string; options: Array<{ label: string; description?: string }>; isConfirmation?: boolean };
 
 function parseInteractivePrompt(text: string): InteractivePrompt | null {
   const lines = text.split("\n");
@@ -4000,18 +4092,36 @@ function parseInteractivePrompt(text: string): InteractivePrompt | null {
     }
   }
 
-  if (options.length < 2 || firstOptionIdx < 0) return null;
+  if (options.length >= 2 && firstOptionIdx >= 0) {
+    const tail = lines.slice(firstOptionIdx).join("\n");
+    const hasFooter = /enter to confirm|esc(ape)? to (exit|cancel)|↑.*↓|←.*→|arrow keys/i.test(tail);
+    if (hasCursorIndicator || hasFooter) {
+      const headerLines = lines.slice(Math.max(0, firstOptionIdx - 5), firstOptionIdx)
+        .map(l => l.trim())
+        .filter(l => l.length > 0 && !/^[❯>]/.test(l) && !/^[─━═─\-_]{5,}$/.test(l));
+      const question = headerLines[0] || "Select an option";
+      return { question, options };
+    }
+  }
 
-  const tail = lines.slice(firstOptionIdx).join("\n");
-  const hasFooter = /enter to confirm|esc to exit|↑.*↓|←.*→|arrow keys/i.test(tail);
-  if (!hasCursorIndicator && !hasFooter) return null;
+  // Detect confirmation prompts: "Press Enter to continue..." / "Esc to cancel"
+  const joined = lines.slice(-15).join("\n");
+  const enterMatch = joined.match(/(?:press\s+)?enter\s+to\s+(continue|confirm|proceed|accept)[\s.…]*/i);
+  const escMatch = joined.match(/esc(?:ape)?\s+to\s+(cancel|exit|quit|go back)[\s.…]*/i);
+  if (enterMatch) {
+    const contextLines = lines.filter(l => l.trim().length > 0).slice(-8);
+    const headerLine = contextLines.find(l => !/(press|enter|esc|─|━)/i.test(l) && l.trim().length > 5);
+    const question = headerLine?.trim() || "Continue?";
+    const confirmOptions: Array<{ label: string; description?: string }> = [
+      { label: `Continue (${enterMatch[1]})` },
+    ];
+    if (escMatch) {
+      confirmOptions.push({ label: `Cancel (${escMatch[1]})` });
+    }
+    return { question, options: confirmOptions, isConfirmation: true };
+  }
 
-  const headerLines = lines.slice(Math.max(0, firstOptionIdx - 5), firstOptionIdx)
-    .map(l => l.trim())
-    .filter(l => l.length > 0 && !/^[❯>]/.test(l) && !/^[─━═─\-_]{5,}$/.test(l));
-  const question = headerLines[0] || "Select an option";
-
-  return { question, options };
+  return null;
 }
 
 type PollMessage = { keys?: string[]; steps?: Array<{ key: string; text?: string }>; text?: string; display?: string };
@@ -4029,13 +4139,11 @@ async function checkForInteractivePrompt(
   sessionId: string,
   conversationId: string,
   syncService: SyncService,
+  delayMs = 2000,
 ): Promise<void> {
   if (pendingInteractivePrompts.has(sessionId)) { log(`Skipping prompt check: pending prompt exists for ${sessionId.slice(0, 8)}`); return; }
 
-  const hookEntry = lastHookStatus.get(sessionId);
-  if (hookEntry && hookEntry.status === "working" && (Date.now() / 1000 - hookEntry.ts) < 10) { log(`Skipping prompt check: session ${sessionId.slice(0, 8)} is working`); return; }
-
-  await new Promise(resolve => setTimeout(resolve, 2000));
+  await new Promise(resolve => setTimeout(resolve, delayMs));
 
   try {
     const { stdout: paneContent } = await tmuxExec(["capture-pane", "-p", "-J", "-t", tmuxTarget, "-S", "-50"]);
@@ -4045,10 +4153,10 @@ async function checkForInteractivePrompt(
       return;
     }
 
-    log(`Interactive prompt detected in session ${sessionId.slice(0, 8)}: "${prompt.question}" with ${prompt.options.length} options`);
+    log(`Interactive prompt detected in session ${sessionId.slice(0, 8)}: "${prompt.question}" with ${prompt.options.length} options (confirmation=${!!prompt.isConfirmation})`);
 
     const now = Date.now();
-    pendingInteractivePrompts.set(sessionId, now);
+    pendingInteractivePrompts.set(sessionId, { timestamp: now, options: prompt.options, isConfirmation: prompt.isConfirmation });
 
     await syncService.addMessages({
       conversationId,
@@ -4064,6 +4172,7 @@ async function checkForInteractivePrompt(
             questions: [{
               question: prompt.question,
               options: prompt.options,
+              ...(prompt.isConfirmation ? { isConfirmation: true } : {}),
             }],
           },
         }],
@@ -4160,16 +4269,7 @@ async function injectViaTmuxInner(target: string, content: string): Promise<void
   const captureLines = Math.max(30, Math.ceil(sanitized.length / 60) + 10);
   const contentPrefix = sanitized.slice(0, 40);
 
-  // Retry paste up to 4 times with increasing delays if text doesn't appear in pane.
-  // Claude Code may show the prompt before its input handler is fully ready, causing
-  // early paste attempts to be silently discarded.
-  let pasteConfirmed = false;
-  for (let pasteRetry = 0; pasteRetry < 4; pasteRetry++) {
-    if (pasteRetry > 0) {
-      log(`Paste retry ${pasteRetry} for ${target} (text not appearing in pane)`);
-      await new Promise(resolve => setTimeout(resolve, 500 * pasteRetry));
-    }
-
+  const doPaste = async () => {
     const id = `cc-${process.pid}-${Date.now()}`;
     const tmpFile = `/tmp/${id}`;
     try {
@@ -4181,64 +4281,80 @@ async function injectViaTmuxInner(target: string, content: string): Promise<void
     } finally {
       try { fs.unlinkSync(tmpFile); } catch {}
     }
+  };
 
-    for (let attempt = 0; attempt < 12; attempt++) {
-      try {
-        const { stdout: echoCheck } = await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${captureLines}`]);
-        if (tmuxPromptStillHasInput(echoCheck, contentPrefix)) {
-          pasteConfirmed = true;
-          break;
-        }
-      } catch {}
-      await new Promise(resolve => setTimeout(resolve, 150));
-    }
-    if (pasteConfirmed) break;
+  // Capture pane before paste for before/after comparison
+  let prePaste = "";
+  try {
+    const { stdout } = await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${captureLines}`]);
+    prePaste = stdout;
+  } catch {}
+
+  // Paste once
+  await doPaste();
+
+  // Brief confirmation: did the pane change? (5 checks, 200ms apart = 1s max)
+  let pasteConfirmed = false;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    await new Promise(resolve => setTimeout(resolve, 200));
+    try {
+      const { stdout: postPaste } = await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${captureLines}`]);
+      if (postPaste !== prePaste) {
+        pasteConfirmed = true;
+        break;
+      }
+    } catch {}
   }
 
   if (!pasteConfirmed) {
-    log(`WARNING: paste text never appeared in pane ${target} after 4 retries`);
+    log(`Paste may not have landed in ${target} (pane unchanged after 1s), proceeding anyway`);
   }
 
-  // Scale delay before Enter based on message length
+  // Send Enter
   const enterDelay = Math.max(200, Math.min(1000, Math.ceil(sanitized.length / 100) * 50));
   await new Promise(resolve => setTimeout(resolve, enterDelay));
   await tmuxExec(["send-keys", "-t", target, "Enter"]);
 
-  // Verify the message was submitted - if text is still in the input, retry Enter
-  // For long messages, check if the agent started processing (prompt changes from input to working)
-  for (let retry = 0; retry < 5; retry++) {
+  // Post-submit: verify the agent started processing
+  let rePasted = false;
+  for (let retry = 0; retry < 3; retry++) {
     await new Promise(resolve => setTimeout(resolve, 600));
     try {
       const { stdout: postCheck } = await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${captureLines}`]);
-      // Check if the input text is still there (message not yet submitted)
+      const lastLines = postCheck.split("\n").slice(-5).join("\n");
+      const hasPrompt = /[❯›]/.test(lastLines);
+      const hasActivity = /⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏|●|thinking|Bash|Read|Edit|Write|Glob|Grep/.test(lastLines);
+
+      if (hasActivity || !hasPrompt) {
+        break;
+      }
+
+      // Text still in input means Enter didn't submit
       if (tmuxPromptStillHasInput(postCheck, contentPrefix)) {
         log(`Enter may not have submitted (retry ${retry + 1}), sending Enter again to ${target}`);
         await tmuxExec(["send-keys", "-t", target, "Enter"]);
-      } else {
-        // Also check if we can see any sign of activity (prompt gone or spinner visible)
-        const lastLines = postCheck.split("\n").slice(-5).join("\n");
-        const hasPrompt = /[❯›]/.test(lastLines);
-        const hasActivity = /⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏|●|thinking|Bash|Read|Edit|Write|Glob|Grep/.test(lastLines);
-        if (hasActivity || !hasPrompt) {
-          break;
-        }
-        // Prompt visible but no text - could mean submitted or could mean text scrolled off
-        const promptLine = lastLines.split("\n").find(l => /[❯›]/.test(l));
-        if (promptLine) {
-          const promptMatch = promptLine.match(/[❯›]/);
-          const afterPrompt = promptMatch ? promptLine.slice(promptMatch.index! + 1).trim() : "";
-          if (!afterPrompt) break;
-        }
-        break;
+        continue;
       }
+
+      // Empty prompt, no activity -- paste may have been silently dropped
+      if (!pasteConfirmed && !rePasted) {
+        const promptLine = lastLines.split("\n").find(l => /[❯›]/.test(l));
+        const afterPrompt = promptLine ? (promptLine.match(/[❯›]/) ? promptLine.slice(promptLine.match(/[❯›]/)!.index! + 1).trim() : "") : "";
+        if (!afterPrompt) {
+          log(`Paste likely dropped (empty prompt, no activity), re-pasting once to ${target}`);
+          await doPaste();
+          await new Promise(resolve => setTimeout(resolve, enterDelay));
+          await tmuxExec(["send-keys", "-t", target, "Enter"]);
+          rePasted = true;
+          continue;
+        }
+      }
+
+      break;
     } catch { break; }
   }
 
-  if (pasteConfirmed) {
-    log(`Injected via tmux to ${target}`);
-  } else {
-    log(`WARNING: Injection to ${target} completed but paste was never confirmed`);
-  }
+  log(`Injected via tmux to ${target}${pasteConfirmed ? "" : " (unconfirmed)"}${rePasted ? " (re-pasted)" : ""}`)
 }
 
 function buildAppleScript(
@@ -4777,6 +4893,8 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 function resolveSessionId(filePath: string): string {
   const name = path.basename(filePath, ".jsonl");
   if (UUID_RE.test(name)) return name;
+  const parts = filePath.split(path.sep);
+  if (parts.includes("subagents")) return name;
   try {
     const head = readFileHead(filePath, 4096);
     const m = head.match(/"sessionId"\s*:\s*"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"/i);
@@ -4962,7 +5080,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
       }
 
       resumeSessionCache.set(sessionId, tmuxSession);
-      if (syncServiceRef) {
+      if (syncServiceRef && conversationId) {
         syncServiceRef.registerManagedSession(sessionId, process.pid, tmuxSession, conversationId).catch(() => {});
         syncServiceRef.updateSessionAgentStatus(conversationId, "connected").catch(() => {});
       }
@@ -4977,7 +5095,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
 
     // Register managed session early so the web UI can show "Connected" status
     resumeSessionCache.set(sessionId, tmuxSession);
-    if (syncServiceRef) {
+    if (syncServiceRef && conversationId) {
       syncServiceRef.registerManagedSession(sessionId, process.pid, tmuxSession, conversationId).catch(() => {});
       syncServiceRef.updateSessionAgentStatus(conversationId, "connected").catch(() => {});
       const existing = resumeHeartbeatIntervals.get(sessionId);
@@ -5434,7 +5552,40 @@ async function deliverMessage(
   const reverseCache = buildReverseConversationCache(conversationCache);
   let sessionId = reverseCache[conversationId];
 
+  const pendingPrompt = pendingInteractivePrompts.get(sessionId || conversationId);
   pendingInteractivePrompts.delete(sessionId || conversationId);
+
+  // If there's an active poll and the message is plain text (not already a poll response),
+  // check if it matches one of the poll options and convert to a poll response
+  if (pendingPrompt && !parsePollMessage(content)) {
+    const normalized = content.replace(/\s+/g, " ").trim().toLowerCase();
+    if (normalized && pendingPrompt.options.length > 0) {
+      if (pendingPrompt.isConfirmation) {
+        const isConfirm = /^(continue|enter|yes|ok|confirm|proceed|accept|y)$/i.test(normalized) ||
+          (pendingPrompt.options[0] && normalized.includes(pendingPrompt.options[0].label.toLowerCase().split(" (")[0]));
+        const isCancel = /^(cancel|escape|esc|no|quit|n)$/i.test(normalized) ||
+          (pendingPrompt.options[1] && normalized.includes(pendingPrompt.options[1].label.toLowerCase().split(" (")[0]));
+        if (isConfirm) {
+          content = JSON.stringify({ __cc_poll: true, keys: ["Enter"], display: "Continue" });
+          logDelivery(`Converted plain text to confirmation Enter for session=${(sessionId || conversationId).slice(0, 8)}`);
+        } else if (isCancel) {
+          content = JSON.stringify({ __cc_poll: true, keys: ["Escape"], display: "Cancel" });
+          logDelivery(`Converted plain text to confirmation Escape for session=${(sessionId || conversationId).slice(0, 8)}`);
+        }
+      } else {
+        const matchIdx = pendingPrompt.options.findIndex(opt => {
+          const optNorm = opt.label.replace(/\s+/g, " ").trim().toLowerCase();
+          return optNorm === normalized || normalized.includes(optNorm) || optNorm.includes(normalized);
+        });
+        if (matchIdx >= 0) {
+          const key = String(matchIdx + 1);
+          const display = pendingPrompt.options[matchIdx].label;
+          content = JSON.stringify({ __cc_poll: true, keys: [key], display });
+          logDelivery(`Converted plain text "${display}" to poll key=${key} for session=${(sessionId || conversationId).slice(0, 8)}`);
+        }
+      }
+    }
+  }
 
   if (!sessionId) {
     const cacheKeys = Object.keys(conversationCache);
@@ -5492,8 +5643,9 @@ async function deliverMessage(
         await injectViaTmux(startedTmuxTarget, content);
         await syncService.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
         log(`Delivered message to started session tmux ${entry.tmuxSession} for conversation ${conversationId.slice(0, 12)}`);
-        if (content.trimStart().startsWith("/")) {
-          checkForInteractivePrompt(startedTmuxTarget, conversationId, conversationId, syncService).catch(() => {});
+        const isPollResponse = !!parsePollMessage(content);
+        if (content.trimStart().startsWith("/") || isPollResponse) {
+          checkForInteractivePrompt(startedTmuxTarget, conversationId, conversationId, syncService, isPollResponse ? 4000 : 2000).catch(() => {});
         }
         return true;
       } catch (err) {
@@ -5595,8 +5747,9 @@ async function deliverMessage(
         await injectViaTmux(cachedTmux, content);
         await syncService.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
         syncService.setSessionError(conversationId).catch(() => {});
-        if (content.trimStart().startsWith("/")) {
-          checkForInteractivePrompt(cachedTmux, sessionId, conversationId, syncService).catch(() => {});
+        const isPollResponse = !!parsePollMessage(content);
+        if (content.trimStart().startsWith("/") || isPollResponse) {
+          checkForInteractivePrompt(cachedTmux, sessionId, conversationId, syncService, isPollResponse ? 4000 : 2000).catch(() => {});
         }
         return true;
       }
@@ -5637,8 +5790,9 @@ async function deliverMessage(
           } else {
             await syncService.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
             logDelivery(`Delivered via tmux ${tmuxTarget}`);
-            if (content.trimStart().startsWith("/")) {
-              checkForInteractivePrompt(tmuxTarget, sessionId, conversationId, syncService).catch(() => {});
+            const isPollResponse = !!parsePollMessage(content);
+            if (content.trimStart().startsWith("/") || isPollResponse) {
+              checkForInteractivePrompt(tmuxTarget, sessionId, conversationId, syncService, isPollResponse ? 4000 : 2000).catch(() => {});
             }
             return true;
           }
@@ -5678,10 +5832,11 @@ async function deliverMessage(
     materializedSessions.delete(sessionId);
     await syncService.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
     logDelivery(`Delivered via auto-resume for session=${sessionId.slice(0, 8)}`);
-    if (content.trimStart().startsWith("/")) {
+    const isPollResponse = !!parsePollMessage(content);
+    if (content.trimStart().startsWith("/") || isPollResponse) {
       const resumeTmux = resumeSessionCache.get(sessionId);
       if (resumeTmux) {
-        checkForInteractivePrompt(resumeTmux + ":0.0", sessionId, conversationId, syncService).catch(() => {});
+        checkForInteractivePrompt(resumeTmux + ":0.0", sessionId, conversationId, syncService, isPollResponse ? 4000 : 2000).catch(() => {});
       }
     }
     postDeliveryHealthCheck(sessionId, conversationId, content, messageId, syncService, titleCache, conversationCache).catch(err => {
@@ -5697,10 +5852,11 @@ async function deliverMessage(
     materializedSessions.delete(sessionId);
     await syncService.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
     logDelivery(`Delivered via repair+resume for session=${sessionId.slice(0, 8)}`);
-    if (content.trimStart().startsWith("/")) {
+    const isPollResponse = !!parsePollMessage(content);
+    if (content.trimStart().startsWith("/") || isPollResponse) {
       const resumeTmux = resumeSessionCache.get(sessionId);
       if (resumeTmux) {
-        checkForInteractivePrompt(resumeTmux + ":0.0", sessionId, conversationId, syncService).catch(() => {});
+        checkForInteractivePrompt(resumeTmux + ":0.0", sessionId, conversationId, syncService, isPollResponse ? 4000 : 2000).catch(() => {});
       }
     }
     postDeliveryHealthCheck(sessionId, conversationId, content, messageId, syncService, titleCache, conversationCache).catch(err => {
@@ -6931,6 +7087,55 @@ async function main(): Promise<void> {
   const titleCache = readTitleCache();
   const pendingMessages: PendingMessages = {};
   const activeSessions = new Map<string, ActiveSession>();
+
+  // Sync skills to user profile on startup (global + per-project)
+  {
+    const globalSkills = readAvailableSkills();
+    if (globalSkills.length > 0) {
+      const skillsJson = JSON.stringify(globalSkills);
+      log(`Startup: syncing ${globalSkills.length} global skills to user profile`);
+      syncService.setAvailableSkills(undefined as any, skillsJson).then(() => {
+        log(`Startup: user-level skills synced`);
+      }).catch(err => log(`Startup skills sync error: ${err}`));
+    }
+    const globalNames = new Set(globalSkills.map(s => s.name));
+    const projectsDir = path.join(process.env.HOME || "", ".claude", "projects");
+    const decodeProjectPath = (dirName: string): string | null => {
+      const segments = dirName.replace(/^-/, "").split("-");
+      let resolved = "";
+      let i = 0;
+      while (i < segments.length) {
+        let candidate = segments[i];
+        i++;
+        while (true) {
+          const testPath = resolved + "/" + candidate;
+          if (i >= segments.length) { resolved = testPath; break; }
+          try {
+            if (fs.statSync(testPath).isDirectory()) { resolved = testPath; break; }
+          } catch {}
+          candidate += "-" + segments[i];
+          i++;
+        }
+      }
+      return fs.existsSync(resolved) ? resolved : null;
+    };
+    try {
+      const entries = fs.readdirSync(projectsDir);
+      for (const entry of entries) {
+        const projectPath = decodeProjectPath(entry);
+        if (!projectPath) continue;
+        const hasCommands = fs.existsSync(path.join(projectPath, ".claude", "commands"));
+        const hasSkills = fs.existsSync(path.join(projectPath, ".claude", "skills"));
+        if (!hasCommands && !hasSkills) continue;
+        const allSkills = readAvailableSkills(projectPath);
+        const projectOnly = allSkills.filter(s => !globalNames.has(s.name));
+        if (projectOnly.length > 0) {
+          log(`Startup: syncing ${projectOnly.length} project skills for ${path.basename(projectPath)}`);
+          syncService.setAvailableSkills(undefined as any, JSON.stringify(projectOnly), projectPath).catch(() => {});
+        }
+      }
+    } catch {}
+  }
 
   const retryQueue = new RetryQueue({
     initialDelayMs: 3000,
