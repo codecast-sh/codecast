@@ -54,6 +54,22 @@ async function getAuthenticatedUserIdReadOnly(
   return null;
 }
 
+function resolveUserSkills(userSkillsJson: string | undefined, projectPath: string | undefined | null): string | undefined {
+  if (!userSkillsJson) return undefined;
+  try {
+    const parsed = JSON.parse(userSkillsJson);
+    if (Array.isArray(parsed)) return userSkillsJson;
+    const global: Array<{ name: string }> = parsed["global"] || [];
+    const project: Array<{ name: string }> = projectPath ? (parsed[projectPath] || []) : [];
+    const seen = new Set<string>();
+    const merged = [];
+    for (const s of [...global, ...project]) {
+      if (!seen.has(s.name)) { seen.add(s.name); merged.push(s); }
+    }
+    return merged.length > 0 ? JSON.stringify(merged) : undefined;
+  } catch { return userSkillsJson; }
+}
+
 function matchChildByPrompt(
   prompt: string,
   subagents: Array<{ _id: string; preview: string }>,
@@ -120,32 +136,34 @@ async function findChildConversations(
     }
   }
 
-  // Build agent name -> child conversation ID map from Task tool calls
+  // Build agent name -> child conversation ID map and UUID map from Task/Agent tool calls
   const agentNameMap: Record<string, string> = {};
   if (subagentChildren.length > 0) {
     const subagentMatchData = subagentChildren
       .filter((c: any) => firstMessagePreviews.has(c._id as string))
       .map((c: any) => ({ _id: c._id as string, preview: firstMessagePreviews.get(c._id as string)! }));
 
-    // First try from the provided (paginated) messages
+    const matchToolCall = (msg: any, tc: any) => {
+      try {
+        const inp = JSON.parse(tc.input);
+        if (!inp.prompt) return;
+        const childId = matchChildByPrompt(inp.prompt, subagentMatchData);
+        if (!childId) return;
+        if (inp.name) agentNameMap[inp.name] = childId;
+        if (msg.message_uuid) map[msg.message_uuid] = childId;
+      } catch {}
+    };
+
     for (const msg of messages) {
       if (msg.tool_calls) {
         for (const tc of msg.tool_calls) {
-          if (tc.name === "Task") {
-            try {
-              const inp = JSON.parse(tc.input);
-              if (inp.name && inp.prompt) {
-                const childId = matchChildByPrompt(inp.prompt, subagentMatchData);
-                if (childId) agentNameMap[inp.name] = childId;
-              }
-            } catch {}
-          }
+          if (tc.name === "Task" || tc.name === "Agent") matchToolCall(msg, tc);
         }
       }
     }
 
-    // If we didn't find all agents, scan all parent messages for Task tool calls
-    if (Object.keys(agentNameMap).length < subagentChildren.length) {
+    const matchedChildIds = new Set([...Object.values(map), ...Object.values(agentNameMap)]);
+    if (matchedChildIds.size < subagentChildren.length) {
       const allParentMessages = await ctx.db
         .query("messages")
         .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conversationId))
@@ -153,15 +171,7 @@ async function findChildConversations(
       for (const msg of allParentMessages) {
         if (msg.tool_calls) {
           for (const tc of msg.tool_calls) {
-            if (tc.name === "Task" && !agentNameMap[tc.input]) {
-              try {
-                const inp = JSON.parse(tc.input);
-                if (inp.name && inp.prompt && !agentNameMap[inp.name]) {
-                  const childId = matchChildByPrompt(inp.prompt, subagentMatchData);
-                  if (childId) agentNameMap[inp.name] = childId;
-                }
-              } catch {}
-            }
+            if (tc.name === "Task" || tc.name === "Agent") matchToolCall(msg, tc);
           }
         }
       }
@@ -1169,13 +1179,14 @@ export const getConversationWithMeta = query({
       for (const msg of allParentMessages) {
         if (msg.tool_calls) {
           for (const tc of msg.tool_calls) {
-            if (tc.name === "Task") {
+            if (tc.name === "Task" || tc.name === "Agent") {
               try {
                 const inp = JSON.parse(tc.input);
-                if (inp.name && inp.prompt && !agentNameMap[inp.name]) {
-                  const childId = matchChildByPrompt(inp.prompt, subagentMatchData);
-                  if (childId) agentNameMap[inp.name] = childId;
-                }
+                if (!inp.prompt) continue;
+                const childId = matchChildByPrompt(inp.prompt, subagentMatchData);
+                if (!childId) continue;
+                if (inp.name) agentNameMap[inp.name] = childId;
+                if (msg.message_uuid) childByParentUuid[msg.message_uuid] = childId;
               } catch {}
             }
           }
@@ -1253,6 +1264,7 @@ export const getConversationWithMeta = query({
 
     return {
       ...conversation,
+      available_skills: resolveUserSkills((user as any)?.available_skills, conversation.project_path) || conversation.available_skills || undefined,
       title,
       effective_team_visibility,
       user: user ? { name: user.name, email: user.email, avatar_url: user.image || user.github_avatar_url || null } : null,
@@ -3371,6 +3383,37 @@ export const updateTitle = mutation({
       await ctx.db.patch(conversation.user_id, {
         daemon_last_seen: Date.now(),
       });
+    }
+  },
+});
+
+export const setAvailableSkills = mutation({
+  args: {
+    conversation_id: v.optional(v.id("conversations")),
+    skills: v.string(),
+    project_path: v.optional(v.string()),
+    api_token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!authUserId) return;
+    const user = await ctx.db.get(authUserId);
+    if (!user) return;
+    const key = args.project_path || "global";
+    let skillsMap: Record<string, any> = {};
+    if (user.available_skills) {
+      try {
+        const parsed = JSON.parse(user.available_skills);
+        skillsMap = Array.isArray(parsed) ? { global: parsed } : parsed;
+      } catch {}
+    }
+    skillsMap[key] = JSON.parse(args.skills);
+    await ctx.db.patch(authUserId, { available_skills: JSON.stringify(skillsMap) });
+    if (args.conversation_id) {
+      const conversation = await ctx.db.get(args.conversation_id);
+      if (conversation && conversation.user_id.toString() === authUserId.toString()) {
+        await ctx.db.patch(args.conversation_id, { available_skills: args.skills });
+      }
     }
   },
 });
