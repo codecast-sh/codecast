@@ -128,12 +128,25 @@ export const daemonHeartbeat = mutation({
       has_tmux: args.has_tmux,
     });
 
-    const pendingCommands = await ctx.db
+    const allPendingCommands = await ctx.db
       .query("daemon_commands")
       .withIndex("by_user_pending", (q) =>
         q.eq("user_id", auth.userId).eq("executed_at", undefined)
       )
       .collect();
+
+    const COMMAND_TTL_MS = 5 * 60 * 1000;
+    const pendingCommands = allPendingCommands.filter(
+      (c) => now - c._creationTime < COMMAND_TTL_MS
+    );
+    for (const stale of allPendingCommands) {
+      if (now - stale._creationTime >= COMMAND_TTL_MS) {
+        await ctx.db.patch(stale._id, {
+          executed_at: now,
+          error: "expired_ttl",
+        });
+      }
+    }
 
     const user = await ctx.db.get(auth.userId);
 
@@ -1332,6 +1345,8 @@ export const getMyPendingCommands = query({
       return [];
     }
 
+    const COMMAND_TTL_MS = 5 * 60 * 1000;
+    const now = Date.now();
     const commands = await ctx.db
       .query("daemon_commands")
       .withIndex("by_user_pending", (q) =>
@@ -1339,11 +1354,13 @@ export const getMyPendingCommands = query({
       )
       .collect();
 
-    return commands.map((c) => ({
-      id: c._id,
-      command: c.command,
-      args: c.args,
-    }));
+    return commands
+      .filter((c) => now - c._creationTime < COMMAND_TTL_MS)
+      .map((c) => ({
+        id: c._id,
+        command: c.command,
+        args: c.args,
+      }));
   },
 });
 
