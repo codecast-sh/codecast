@@ -59,7 +59,7 @@ export function getProjectName(gitRoot?: string, projectPath?: string): string {
 
 // -- InboxConversation (shared) --
 
-export const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, onSendAndAdvance, lastUserMessage, sessionError, onBack, targetMessageId, backHref, onExpandToMain }: { sessionId: string; isIdle: boolean; onSendAndAdvance: () => void; lastUserMessage?: string | null; sessionError?: string; onBack?: () => void; targetMessageId?: string; backHref?: string; onExpandToMain?: () => void }) {
+export const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, onSendAndAdvance, lastUserMessage, sessionError, onBack, targetMessageId, backHref, onExpandToMain, onClose }: { sessionId: string; isIdle: boolean; onSendAndAdvance: () => void; lastUserMessage?: string | null; sessionError?: string; onBack?: () => void; targetMessageId?: string; backHref?: string; onExpandToMain?: () => void; onClose?: () => void }) {
   const {
     conversation,
     hasMoreAbove,
@@ -191,6 +191,11 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
           conversation={conversation as ConversationData}
           embedded
           headerExtra={shareControls}
+          headerEnd={onClose ? (
+            <button onClick={onClose} className="p-1 rounded text-sol-text-dim hover:text-sol-text transition-colors" title="Close">
+              <X className="w-3.5 h-3.5" />
+            </button>
+          ) : undefined}
           headerLeft={onExpandToMain ? (
             <button onClick={onExpandToMain} className="p-0.5 rounded text-sol-text-dim hover:text-sol-cyan transition-colors flex-shrink-0" title="Go to inbox">
               <ChevronsLeft className="w-4 h-4" />
@@ -719,6 +724,7 @@ export function ConversationColumn() {
   const router = useRouter();
 
   const session = sidePanelSessionId ? sessions[sidePanelSessionId] : null;
+  console.log('[ConvoCol]', { sidePanelSessionId, hasSession: !!session, sessionKeys: Object.keys(sessions).length });
   if (!session || !sidePanelSessionId) return null;
 
   const handleExpandToMain = () => {
@@ -726,8 +732,12 @@ export function ConversationColumn() {
     router.push("/inbox");
   };
 
+  const handleClose = () => {
+    selectPanelSession(null);
+  };
+
   return (
-    <div className="h-full border-l border-sol-border/30 min-w-[300px] flex-1">
+    <div className="h-full">
       <InboxConversation
         key={sidePanelSessionId}
         sessionId={sidePanelSessionId}
@@ -736,6 +746,7 @@ export function ConversationColumn() {
         lastUserMessage={session.last_user_message}
         sessionError={session.session_error}
         onExpandToMain={handleExpandToMain}
+        onClose={handleClose}
       />
     </div>
   );
