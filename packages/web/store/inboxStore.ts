@@ -284,6 +284,51 @@ export function sortSessions(sessions: Record<string, InboxSession>): InboxSessi
   return list;
 }
 
+export function isSub(s: InboxSession): boolean {
+  return !!s.is_subagent || !!s.parent_conversation_id || !!s.worktree_name;
+}
+
+export interface CategorizedSessions {
+  sorted: InboxSession[];
+  pinned: InboxSession[];
+  newSessions: InboxSession[];
+  needsInput: InboxSession[];
+  working: InboxSession[];
+  subsByParent: Map<string, InboxSession[]>;
+}
+
+export function categorizeSessions(
+  sessions: Record<string, InboxSession>,
+  sessionsWithQueuedMessages: Set<string>,
+): CategorizedSessions {
+  const sorted = sortSessions(sessions);
+  const parentIds = new Set(sorted.filter((s) => !isSub(s)).map((s) => s._id));
+
+  const subsByParent = new Map<string, InboxSession[]>();
+  for (const s of sorted) {
+    if (isSub(s) && s.parent_conversation_id && parentIds.has(s.parent_conversation_id)) {
+      if (!subsByParent.has(s.parent_conversation_id)) subsByParent.set(s.parent_conversation_id, []);
+      subsByParent.get(s.parent_conversation_id)!.push(s);
+    }
+  }
+  for (const subs of subsByParent.values()) {
+    subs.sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
+  }
+  const subsWithParent = new Set(Array.from(subsByParent.values()).flat().map((s) => s._id));
+
+  const isTop = (s: InboxSession) => !subsWithParent.has(s._id);
+
+  return {
+    sorted,
+    pinned: sorted.filter((s) => s.is_pinned && isTop(s)),
+    newSessions: sorted.filter((s) => s.message_count === 0 && !s.is_pinned && isTop(s))
+      .sort((a, b) => (a.is_connected ? 1 : 0) - (b.is_connected ? 1 : 0)),
+    needsInput: sorted.filter((s) => s.is_idle && s.message_count > 0 && !s.is_pinned && !sessionsWithQueuedMessages.has(s._id) && isTop(s)),
+    working: sorted.filter((s) => (!s.is_idle || sessionsWithQueuedMessages.has(s._id)) && s.message_count > 0 && !s.is_pinned && isTop(s)),
+    subsByParent,
+  };
+}
+
 // -- Store interface --
 
 interface InboxStoreState {
@@ -541,17 +586,27 @@ export const useInboxStore = create<InboxStoreState>(
   stashSession: (id: string) => {
     soundDismiss();
     const state = get();
+    const now = Date.now();
+    const sessionValues = Object.values(state.sessions) as InboxSession[];
+    const childIds = sessionValues
+      .filter((s) => s.parent_conversation_id === id)
+      .map((s) => s._id);
+    const allIds = [id, ...childIds];
     const newSessions = { ...state.sessions };
-    delete newSessions[id];
     const newPending = { ...state.pending };
-    newPending[`sessions:${id}`] = { type: "exclude", expiresAt: Date.now() + 15_000 };
-    const wasPinned = state.sessions[id]?.is_pinned;
     const newConversations = { ...state.conversations };
-    if (newConversations[id]) {
-      newConversations[id] = { ...newConversations[id], inbox_dismissed_at: Date.now(), ...(wasPinned ? { inbox_pinned_at: null } : {}) };
+    const dispatchConvos: Record<string, any> = {};
+    for (const sid of allIds) {
+      delete newSessions[sid];
+      newPending[`sessions:${sid}`] = { type: "exclude", expiresAt: now + 15_000 };
+      const wasPinned = state.sessions[sid]?.is_pinned;
+      if (newConversations[sid]) {
+        newConversations[sid] = { ...newConversations[sid], inbox_dismissed_at: now, ...(wasPinned ? { inbox_pinned_at: null } : {}) };
+      }
+      dispatchConvos[sid] = { inbox_dismissed_at: now, ...(state.sessions[sid]?.is_pinned ? { inbox_pinned_at: null } : {}) };
     }
     let newSessionId = state.currentSessionId;
-    if (state.currentSessionId === id) {
+    if (state.currentSessionId && allIds.includes(state.currentSessionId)) {
       const sorted = sortSessions(newSessions);
       newSessionId = sorted.find((s) => !s.is_pinned)?._id ?? sorted[0]?._id ?? null;
     }
@@ -563,19 +618,25 @@ export const useInboxStore = create<InboxStoreState>(
       clientState: { ...state.clientState, current_conversation_id: newSessionId ?? undefined },
     });
     get()._dispatch("patch", [], {
-      conversations: { [id]: { inbox_dismissed_at: Date.now(), ...(wasPinned ? { inbox_pinned_at: null } : {}) } },
+      conversations: dispatchConvos,
       client_state: { _: { current_conversation_id: newSessionId ?? null } },
     }).catch(() => {});
   },
 
   unstashSession: action(function (this: Draft, id: string) {
-    if (this.conversations[id]) {
-      this.conversations[id].inbox_dismissed_at = null;
-    }
-    delete this.pending[`sessions:${id}`];
-    if (this.dismissedSessions[id]) {
-      this.sessions[id] = this.dismissedSessions[id];
-      delete this.dismissedSessions[id];
+    const childIds = Object.values(this.dismissedSessions as Record<string, InboxSession>)
+      .filter((s) => s.parent_conversation_id === id)
+      .map((s) => s._id);
+    const allIds = [id, ...childIds];
+    for (const sid of allIds) {
+      if (this.conversations[sid]) {
+        this.conversations[sid].inbox_dismissed_at = null;
+      }
+      delete this.pending[`sessions:${sid}`];
+      if (this.dismissedSessions[sid]) {
+        this.sessions[sid] = this.dismissedSessions[sid];
+        delete this.dismissedSessions[sid];
+      }
     }
     this.currentSessionId = id;
     this.viewingDismissedId = null;
@@ -731,14 +792,15 @@ export const useInboxStore = create<InboxStoreState>(
       if (resolvedCurrentId && !table[resolvedCurrentId] && prev[resolvedCurrentId]) {
         table[resolvedCurrentId] = prev[resolvedCurrentId] as any;
       }
-      const newConversations = { ...state.conversations };
+      const freshState = get();
+      const newConversations = { ...freshState.conversations };
       for (const s of incoming) {
         if (!newConversations[s._id]) {
           newConversations[s._id] = { _id: s._id };
         }
       }
-      if (!state.currentSessionId && !state.showMySessions && Object.keys(table).length > 0 && state.clientStateInitialized) {
-        const persisted = state.clientState.current_conversation_id;
+      if (!freshState.currentSessionId && !freshState.showMySessions && Object.keys(table).length > 0 && freshState.clientStateInitialized) {
+        const persisted = freshState.clientState.current_conversation_id;
         const sorted = sortSessions(table as Record<string, InboxSession>);
         const restoreId = (persisted && table[persisted]) ? persisted : (sorted[0]?._id ?? null);
         set({ sessions: table, pending, conversations: newConversations, currentSessionId: restoreId });
@@ -992,28 +1054,30 @@ export const useInboxStore = create<InboxStoreState>(
   // =====================
 
   setMessages: (convId: string, msgs: Message[], meta?: Partial<PaginationState>) => {
-    const existing = get().messages[convId] || [];
-    const localMsgs = existing.filter((m: Message) => m._isOptimistic || m._isQueued);
-    let finalMsgs = msgs;
-    if (localMsgs.length > 0) {
-      const serverContents = new Set(
-        msgs.filter((m: Message) => m.role === "user" && m.content)
-          .map((m: Message) => stripImageRef(m.content!))
-      );
-      const surviving = localMsgs.filter(
-        (m: Message) => !serverContents.has(stripImageRef(m.content || ""))
-      );
-      if (surviving.length > 0) {
-        finalMsgs = [...msgs, ...surviving].sort((a: Message, b: Message) => a.timestamp - b.timestamp);
+    set((s: InboxStoreState) => {
+      const existing = s.messages[convId] || [];
+      const localMsgs = existing.filter((m: Message) => m._isOptimistic || m._isQueued);
+      let finalMsgs = msgs;
+      if (localMsgs.length > 0) {
+        const serverContents = new Set(
+          msgs.filter((m: Message) => m.role === "user" && m.content)
+            .map((m: Message) => stripImageRef(m.content!))
+        );
+        const surviving = localMsgs.filter(
+          (m: Message) => !serverContents.has(stripImageRef(m.content || ""))
+        );
+        if (surviving.length > 0) {
+          finalMsgs = [...msgs, ...surviving].sort((a: Message, b: Message) => a.timestamp - b.timestamp);
+        }
       }
-    }
-    set((s: InboxStoreState) => ({
-      messages: { ...s.messages, [convId]: finalMsgs },
-      pagination: {
-        ...s.pagination,
-        [convId]: { ...(s.pagination[convId] || DEFAULT_PAGINATION), ...meta },
-      },
-    }));
+      return {
+        messages: { ...s.messages, [convId]: finalMsgs },
+        pagination: {
+          ...s.pagination,
+          [convId]: { ...(s.pagination[convId] || DEFAULT_PAGINATION), ...meta },
+        },
+      };
+    });
   },
 
   mergeMessages: (convId: string, msgs: Message[], direction: "prepend" | "append", meta?: Partial<PaginationState>) => {
