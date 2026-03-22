@@ -24,6 +24,7 @@ cast search "error handling"      # exact phrase match
 cast search bug -g -s 7d          # global, last 7 days
 cast feed                         # browse recent conversations
 cast read <id> 15:25              # read messages 15-25
+cast read <id> 15 --full          # expand tool calls for a message
 
 # Analysis
 cast diff <id>                    # files changed, commits, tools used
