@@ -8,14 +8,14 @@ import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { AuthGuard } from "../../../components/AuthGuard";
 import { DashboardLayout } from "../../../components/DashboardLayout";
 import { DocumentDetailLayout } from "../../../components/DocumentDetailLayout";
+import { DocListPanel, DetailSplitLayout } from "../../../components/DetailListPanel";
+import { SessionCardInner } from "../../../components/ActivityFeed";
 import { Badge } from "../../../components/ui/badge";
 import "../../../components/editor/editor.css";
 import {
   Pin,
   Archive,
   Clock,
-  MessageSquare,
-  PanelRight,
   Circle,
   CircleDot,
   CheckCircle2,
@@ -187,12 +187,15 @@ export default function DocDetailPage() {
   return (
     <AuthGuard>
       <DashboardLayout>
+        <DetailSplitLayout list={<DocListPanel selectedId={doc._id} />}>
+        <div className="h-full min-w-0">
         <DocumentDetailLayout
           docId={doc._id}
           title={(doc as any).display_title ?? doc.title}
           markdownContent={doc.content}
           onTitleChange={handleTitleChange}
           backHref="/docs"
+          linkedObjectId={doc._id}
           placeholder="Start typing or insert using /"
           topBarLeft={
             <>
@@ -284,29 +287,16 @@ export default function DocDetailPage() {
                   <h2 className="text-xs font-medium text-sol-text-dim uppercase tracking-wider mb-3">
                     Sessions
                   </h2>
-                  <div className="border border-sol-border/20 rounded-lg divide-y divide-sol-border/10 overflow-hidden">
+                  <div className="space-y-1.5">
                     {((doc as any).related_conversations ||
                       (conversation ? [conversation] : [])
                     ).map((conv: any) => (
-                      <button
+                      <SessionCardInner
                         key={conv._id || conv.session_id}
-                        onClick={() => openSidePanel(conv._id)}
-                        className="flex items-center gap-3 px-4 py-3 hover:bg-sol-bg-alt/50 transition-colors group w-full text-left"
-                      >
-                        <MessageSquare className="w-4 h-4 text-sol-text-dim flex-shrink-0" />
-                        <span className="flex-1 text-sm text-sol-text truncate group-hover:text-sol-cyan">
-                          {conv.title || "Untitled Session"}
-                        </span>
-                        {conv.project_path && (
-                          <span className="text-[10px] font-mono text-sol-text-dim truncate max-w-[200px]">
-                            {conv.project_path.split("/").slice(-2).join("/")}
-                          </span>
-                        )}
-                        <span className="text-xs text-sol-text-dim tabular-nums flex-shrink-0">
-                          {conv.message_count && `${conv.message_count} msgs`}
-                        </span>
-                        <PanelRight className="w-3 h-3 text-sol-text-dim opacity-0 group-hover:opacity-100 flex-shrink-0" />
-                      </button>
+                        item={{ ...conv, conversation_id: conv._id }}
+                        compact
+                        onNavigate={(id) => openSidePanel(id)}
+                      />
                     ))}
                   </div>
                 </div>
@@ -352,6 +342,8 @@ export default function DocDetailPage() {
             </>
           )}
         </DocumentDetailLayout>
+        </div>
+        </DetailSplitLayout>
       </DashboardLayout>
     </AuthGuard>
   );

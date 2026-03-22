@@ -1,6 +1,7 @@
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { ActivityFeed } from "../../../components/ActivityFeed";
+import { ErrorBoundary } from "../../../components/ErrorBoundary";
 import { LoadingSkeleton } from "../../../components/LoadingSkeleton";
 import { EmptyState } from "../../../components/EmptyState";
 import { DashboardLayout } from "../../../components/DashboardLayout";
@@ -38,7 +39,9 @@ export default function TeamActivityPage() {
   return (
     <DashboardLayout>
       <div className="max-w-3xl mx-auto py-6">
-        <ActivityFeed mode="team" teamId={teamId} />
+        <ErrorBoundary name="ActivityFeed" level="inline">
+          <ActivityFeed mode="team" teamId={teamId} />
+        </ErrorBoundary>
       </div>
     </DashboardLayout>
   );

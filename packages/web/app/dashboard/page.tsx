@@ -4,6 +4,7 @@ import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useSearchParams, useRouter } from "next/navigation";
 import { AuthGuard } from "../../components/AuthGuard";
 import { DashboardLayout } from "../../components/DashboardLayout";
+import { ErrorBoundary } from "../../components/ErrorBoundary";
 import { ActivityFeed } from "../../components/ActivityFeed";
 import { reportWebVitals } from "../../lib/reportWebVitals";
 import { useQuery } from "convex/react";
@@ -111,11 +112,13 @@ export default function DashboardPage() {
         directoryFilter={directoryFilter}
         onDirectoryFilterChange={handleDirectoryFilterChange}
       >
-        <ActivityFeed
-          mode={filter === "team" ? "team" : "personal"}
-          teamId={teamId}
-          directoryFilter={directoryFilter}
-        />
+        <ErrorBoundary name="ActivityFeed" level="inline">
+          <ActivityFeed
+            mode={filter === "team" ? "team" : "personal"}
+            teamId={teamId}
+            directoryFilter={directoryFilter}
+          />
+        </ErrorBoundary>
       </DashboardLayout>
     </AuthGuard>
   );

@@ -9,6 +9,7 @@ import { Panel, Group, Separator } from "react-resizable-panels";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { DashboardLayout } from "../../components/DashboardLayout";
+import { ErrorBoundary } from "../../components/ErrorBoundary";
 import { ConversationDiffLayout } from "../../components/ConversationDiffLayout";
 import { ConversationData } from "../../components/ConversationView";
 import { useConversationMessages } from "../../hooks/useConversationMessages";
@@ -704,11 +705,6 @@ export function QueuePageClient({ initialSessionId }: { initialSessionId?: strin
     }
   });
 
-  // Redirect old /inbox?s=XXX URLs to /conversation/XXX
-  useMountEffect(() => {
-    const sessionId = searchParams.get("s");
-    if (sessionId) router.replace(`/conversation/${sessionId}`);
-  });
 
   const [isMac] = useState(() => typeof navigator !== "undefined" && navigator.platform.toUpperCase().includes("MAC"));
   const sessions = useInboxStore((s) => s.sessions);
@@ -788,11 +784,10 @@ export function QueuePageClient({ initialSessionId }: { initialSessionId?: strin
       paramProcessedRef.current = true;
       return;
     }
-    // Invalid ID format -- query was skipped, redirect immediately
+    // Invalid ID format -- query was skipped, just clear pending state
     if (!isConvexId(pendingInjectId)) {
       setPendingInjectId(null);
       paramProcessedRef.current = true;
-      window.location.replace(`/conversation/${pendingInjectId}`);
       return;
     }
     // directConv: undefined = still loading, null = not found/no access
@@ -800,7 +795,6 @@ export function QueuePageClient({ initialSessionId }: { initialSessionId?: strin
     if (directConv === null) {
       setPendingInjectId(null);
       paramProcessedRef.current = true;
-      window.location.replace(`/conversation/${pendingInjectId}`);
       return;
     }
     injectSession({
@@ -957,32 +951,38 @@ export function QueuePageClient({ initialSessionId }: { initialSessionId?: strin
       {showMySessions ? (
         <div className="h-full overflow-y-auto" data-main-scroll>
           <div className="max-w-4xl mx-auto px-4 py-4">
-            <ActivityFeed mode="personal" compact onNavigate={handleNavigateToConversation} />
+            <ErrorBoundary name="ActivityFeed" level="inline">
+              <ActivityFeed mode="personal" compact onNavigate={handleNavigateToConversation} />
+            </ErrorBoundary>
           </div>
         </div>
       ) : selectedPlanId ? (
         <InboxPlanView key={selectedPlanId} planId={selectedPlanId} />
       ) : viewingDismissedSession ? (
-        <InboxConversation
-          key={viewingDismissedSession._id}
-          sessionId={viewingDismissedSession._id}
-          isIdle={viewingDismissedSession.is_idle}
-          onSendAndAdvance={() => setViewingDismissedId(null)}
-          lastUserMessage={viewingDismissedSession.last_user_message}
-          sessionError={viewingDismissedSession.session_error}
-          onBack={handleBack}
-        />
+        <ErrorBoundary name="Conversation" level="inline" key={`eb-${viewingDismissedSession._id}`}>
+          <InboxConversation
+            key={viewingDismissedSession._id}
+            sessionId={viewingDismissedSession._id}
+            isIdle={viewingDismissedSession.is_idle}
+            onSendAndAdvance={() => setViewingDismissedId(null)}
+            lastUserMessage={viewingDismissedSession.last_user_message}
+            sessionError={viewingDismissedSession.session_error}
+            onBack={handleBack}
+          />
+        </ErrorBoundary>
       ) : currentSession ? (
-        <InboxConversation
-          key={scrollTarget?.sessionId === currentSession._id ? `${currentSession._id}-${scrollTarget.messageId}` : (currentSession.session_id || currentSession._id)}
-          sessionId={currentSession._id}
-          isIdle={currentSession.is_idle}
-          onSendAndAdvance={handleSendAndAdvance}
-          lastUserMessage={currentSession.last_user_message}
-          sessionError={currentSession.session_error}
-          onBack={handleBack}
-          targetMessageId={scrollTarget?.sessionId === currentSession._id ? scrollTarget.messageId : undefined}
-        />
+        <ErrorBoundary name="Conversation" level="inline" key={`eb-${currentSession._id}`}>
+          <InboxConversation
+            key={scrollTarget?.sessionId === currentSession._id ? `${currentSession._id}-${scrollTarget.messageId}` : (currentSession.session_id || currentSession._id)}
+            sessionId={currentSession._id}
+            isIdle={currentSession.is_idle}
+            onSendAndAdvance={handleSendAndAdvance}
+            lastUserMessage={currentSession.last_user_message}
+            sessionError={currentSession.session_error}
+            onBack={handleBack}
+            targetMessageId={scrollTarget?.sessionId === currentSession._id ? scrollTarget.messageId : undefined}
+          />
+        </ErrorBoundary>
       ) : pendingInjectId ? (
         <div className="h-full flex items-center justify-center text-sol-text-dim">
           <div className="flex items-center gap-2">
@@ -996,7 +996,9 @@ export function QueuePageClient({ initialSessionId }: { initialSessionId?: strin
       ) : (
         <div className="h-full overflow-y-auto" data-main-scroll>
           <div className="max-w-4xl mx-auto px-4 py-4">
-            <ActivityFeed mode="personal" compact onNavigate={handleNavigateToConversation} />
+            <ErrorBoundary name="ActivityFeed" level="inline">
+              <ActivityFeed mode="personal" compact onNavigate={handleNavigateToConversation} />
+            </ErrorBoundary>
           </div>
         </div>
       )}

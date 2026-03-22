@@ -16,6 +16,8 @@ import { toast } from "sonner";
 import { AuthGuard } from "../../../components/AuthGuard";
 import { DashboardLayout } from "../../../components/DashboardLayout";
 import { ContextChatInput } from "../../../components/ContextChatInput";
+import { TaskListPanel, DetailSplitLayout } from "../../../components/DetailListPanel";
+import { SessionCardInner } from "../../../components/ActivityFeed";
 
 const api = _api as any;
 import { Badge } from "../../../components/ui/badge";
@@ -32,15 +34,11 @@ import {
   ArrowUp,
   ArrowDown,
   Minus,
-  MessageSquare,
-  FolderGit2,
   FileText,
-  PanelRight,
   Clock,
   Zap,
   Bot,
   ChevronDown,
-  GitBranch,
   Radio,
   FileCode,
   ListChecks,
@@ -166,99 +164,6 @@ function Dropdown({
   );
 }
 
-const OUTCOME_STYLES: Record<string, { bg: string; text: string; label: string }> = {
-  shipped: { bg: "bg-emerald-500/15", text: "text-emerald-400", label: "Shipped" },
-  progress: { bg: "bg-sol-blue/15", text: "text-sol-blue", label: "Progress" },
-  exploration: { bg: "bg-sol-violet/15", text: "text-sol-violet", label: "Exploration" },
-  blocked: { bg: "bg-sol-red/15", text: "text-sol-red", label: "Blocked" },
-  abandoned: { bg: "bg-sol-text-dim/15", text: "text-sol-text-dim", label: "Abandoned" },
-};
-
-function formatDuration(start: number, end: number) {
-  const mins = Math.round((end - start) / 60000);
-  if (mins < 60) return `${mins}m`;
-  const hours = Math.floor(mins / 60);
-  const remainMins = mins % 60;
-  return remainMins > 0 ? `${hours}h ${remainMins}m` : `${hours}h`;
-}
-
-function SessionCard({ session }: { session: any }) {
-  const isActive = session.is_active;
-  const outcome = session.outcome_type ? OUTCOME_STYLES[session.outcome_type] : null;
-  const projectName = session.project_path?.split("/").pop();
-  const openSidePanel = useInboxStore((s) => s.openSidePanel);
-
-  return (
-    <button
-      onClick={() => openSidePanel(session._id)}
-      className={`block w-full text-left px-4 py-3 hover:bg-sol-bg-alt/50 transition-colors ${isActive ? "border-l-2 border-emerald-400" : ""}`}
-    >
-      <div className="flex items-start gap-3">
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-1">
-            {isActive && (
-              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 text-[10px] font-medium">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                live
-              </span>
-            )}
-            <span className="text-sm font-medium text-sol-text truncate">
-              {session.title || "Untitled Session"}
-            </span>
-          </div>
-          {session.headline && (
-            <p className="text-xs text-sol-text-muted line-clamp-2 mb-1.5">{session.headline}</p>
-          )}
-          <div className="flex items-center gap-3 text-[11px] text-sol-text-dim flex-wrap">
-            {projectName && (
-              <span className="flex items-center gap-1">
-                <FolderGit2 className="w-3 h-3" />
-                {projectName}
-              </span>
-            )}
-            {session.git_branch && (
-              <span className="flex items-center gap-1 font-mono">
-                <GitBranch className="w-3 h-3" />
-                {session.git_branch}
-              </span>
-            )}
-            <span className="flex items-center gap-1">
-              <MessageSquare className="w-3 h-3" />
-              {session.message_count}
-            </span>
-            {session.started_at && session.updated_at && (
-              <span className="flex items-center gap-1">
-                <Clock className="w-3 h-3" />
-                {formatDuration(session.started_at, session.updated_at)}
-              </span>
-            )}
-            <span>{formatRelative(session.updated_at || session.started_at)}</span>
-          </div>
-        </div>
-        <div className="flex items-center gap-2 flex-shrink-0">
-          {outcome && (
-            <span className={`text-[10px] px-1.5 py-0.5 rounded ${outcome.bg} ${outcome.text}`}>
-              {outcome.label}
-            </span>
-          )}
-          <PanelRight className="w-3.5 h-3.5 text-sol-text-dim" />
-        </div>
-      </div>
-      {isActive && session.recent_messages && session.recent_messages.length > 0 && (
-        <div className="mt-2 ml-0 border-t border-sol-border/10 pt-2 space-y-1">
-          {session.recent_messages.map((msg: any) => (
-            <div key={msg._id} className="flex gap-2 text-[11px]">
-              <span className={`flex-shrink-0 font-medium ${msg.role === "user" ? "text-sol-cyan" : "text-sol-violet"}`}>
-                {msg.role === "user" ? "you" : "agent"}
-              </span>
-              <span className="text-sol-text-dim truncate">{msg.content}</span>
-            </div>
-          ))}
-        </div>
-      )}
-    </button>
-  );
-}
 
 function UserBadge({ name, image }: { name: string; image?: string }) {
   return (
@@ -421,6 +326,7 @@ export default function TaskDetailPage() {
 
   const data = useInboxStore((s) => s.tasks[id]) as TaskDetail | undefined;
   const updateTask = useInboxStore((s) => s.updateTask);
+  const openSidePanel = useInboxStore((s) => s.openSidePanel);
   const webUpdate = useMutation(api.tasks.webUpdate);
   const webAddComment = useMutation(api.tasks.webAddComment);
   const currentUser = useQuery(api.users.getCurrentUser);
@@ -601,8 +507,9 @@ export default function TaskDetailPage() {
   return (
     <AuthGuard>
       <DashboardLayout>
+        <DetailSplitLayout list={<TaskListPanel selectedId={id} />}>
         <div
-          className="h-full flex flex-col relative"
+          className="flex-1 h-full flex flex-col relative min-w-0"
           onDragEnter={(e) => { e.preventDefault(); dragCounterRef.current++; setIsDragging(true); }}
           onDragOver={(e) => { e.preventDefault(); }}
           onDragLeave={(e) => { e.preventDefault(); dragCounterRef.current--; if (dragCounterRef.current <= 0) { dragCounterRef.current = 0; setIsDragging(false); } }}
@@ -835,7 +742,7 @@ export default function TaskDetailPage() {
                   </span>
                 )}
               </h2>
-              <div className="border border-sol-border/30 rounded-lg divide-y divide-sol-border/20 overflow-hidden">
+              <div className="space-y-1.5">
                 {[...data.linked_conversations]
                   .sort((a: any, b: any) => {
                     if (a.is_active && !b.is_active) return -1;
@@ -843,7 +750,12 @@ export default function TaskDetailPage() {
                     return (b.updated_at || 0) - (a.updated_at || 0);
                   })
                   .map((conv: any) => (
-                    <SessionCard key={conv._id} session={conv} />
+                    <SessionCardInner
+                      key={conv._id}
+                      item={{ ...conv, conversation_id: conv._id, status: conv.is_active ? "active" : conv.status }}
+                      compact
+                      onNavigate={(id) => openSidePanel(id)}
+                    />
                   ))}
               </div>
             </div>
@@ -960,12 +872,14 @@ export default function TaskDetailPage() {
           contextType="task"
           contextTitle={data.title}
           getContextBody={getTaskContextBody}
+          linkedObjectId={data._id}
         />
         </div>
         </div>
 
         {/* Keyboard shortcuts footer */}
         <div className="flex-shrink-0 flex items-center gap-4 px-6 py-2 border-t border-sol-border/20 bg-sol-bg text-[10px] text-sol-text-dim">
+          <span><kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/40 font-mono">j</kbd><kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/40 font-mono ml-0.5">k</kbd> navigate</span>
           <span><kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/40 font-mono">{"⌫"}</kbd> back</span>
           <span><kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/40 font-mono">s</kbd> status</span>
           <span><kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/40 font-mono">p</kbd> priority</span>
@@ -993,6 +907,7 @@ export default function TaskDetailPage() {
               <h2 className="text-sm font-semibold text-sol-text mb-4">Keyboard Shortcuts</h2>
               <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-xs">
                 {[
+                  ["j / k", "Navigate tasks"],
                   ["Backspace", "Go back to task list"],
                   ["Esc", "Go back to task list"],
                   ["s", "Change status"],
@@ -1015,6 +930,7 @@ export default function TaskDetailPage() {
           </div>
         )}
         </div>
+        </DetailSplitLayout>
       </DashboardLayout>
     </AuthGuard>
   );

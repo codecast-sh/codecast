@@ -18,6 +18,7 @@ import { useSharedConversationMessages } from "../../../hooks/useSharedConversat
 import { useDiffViewerStore } from "../../../store/diffViewerStore";
 import { useInboxStore } from "../../../store/inboxStore";
 import { useForkNavigationStore } from "../../../store/forkNavigationStore";
+import { cleanUserMessage } from "../../../components/GlobalSessionPanel";
 import { QueuePageClient } from "../../inbox/QueuePageClient";
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -100,6 +101,7 @@ function OwnerView({
 
   const { conversation, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, loadOlder, loadNewer, jumpToStart, jumpToEnd, isSearchingForTarget } = useConversationMessages(id, targetMessageId, highlightQuery);
   const setCurrentConversation = useInboxStore((s) => s.setCurrentConversation);
+  const sessionLastUserMessage = useInboxStore((s) => s.sessions[conversation?.session_id ?? ""]?.last_user_message);
 
   useWatchEffect(() => {
     if (conversation) {
@@ -217,6 +219,7 @@ function OwnerView({
         targetMessageId={targetMessageId}
         isOwner={isOwner}
         autoFocusInput={autoFocusInput}
+        fallbackStickyContent={cleanUserMessage(sessionLastUserMessage)}
         subHeaderContent={<>
           {activePlanId && <PlanContextPanel planId={activePlanId} />}
           {workflowRunId && <WorkflowContextPanel workflowRunId={workflowRunId} />}
@@ -349,33 +352,37 @@ function SharedView({ id, highlightQuery, onClearHighlight }: { id: string; high
 
 function DeniedView() {
   return (
-    <main className="h-screen flex flex-col bg-sol-base03 items-center justify-center">
-      <div className="text-center max-w-md px-4">
-        <svg className="w-16 h-16 mx-auto mb-4 text-sol-base01" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-        </svg>
-        <h1 className="text-xl text-sol-base0 mb-2">No Permission</h1>
-        <p className="text-sol-base00 text-sm">
-          This conversation is private. You don't have permission to view it.
-        </p>
+    <DashboardLayout>
+      <div className="flex-1 flex items-center justify-center">
+        <div className="text-center max-w-md px-4">
+          <svg className="w-16 h-16 mx-auto mb-4 text-sol-base01" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+          </svg>
+          <h1 className="text-xl text-sol-base0 mb-2">No Permission</h1>
+          <p className="text-sol-base00 text-sm">
+            This conversation is private. You don't have permission to view it.
+          </p>
+        </div>
       </div>
-    </main>
+    </DashboardLayout>
   );
 }
 
 function NotFoundView() {
   return (
-    <main className="h-screen flex flex-col bg-sol-base03 items-center justify-center">
-      <div className="text-center max-w-md px-4">
-        <svg className="w-16 h-16 mx-auto mb-4 text-sol-base01" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-        </svg>
-        <h1 className="text-xl text-sol-base0 mb-2">Not Found</h1>
-        <p className="text-sol-base00 text-sm">
-          This conversation doesn't exist or has been deleted.
-        </p>
+    <DashboardLayout>
+      <div className="flex-1 flex items-center justify-center">
+        <div className="text-center max-w-md px-4">
+          <svg className="w-16 h-16 mx-auto mb-4 text-sol-base01" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          <h1 className="text-xl text-sol-base0 mb-2">Not Found</h1>
+          <p className="text-sol-base00 text-sm">
+            This conversation doesn't exist or has been deleted.
+          </p>
+        </div>
       </div>
-    </main>
+    </DashboardLayout>
   );
 }
 
@@ -450,13 +457,19 @@ export default function ConversationPage() {
   }, [isUUID, sessionLookup, publicData, resolvedConvexId, id]);
 
   const storeHasSession = useInboxStore((s) => !!(s.sessions[id] || s.conversations[id]));
+  const resolvedStoreId = useInboxStore((s) => s.getConvexId(id));
 
   if (storeHasSession) {
     return <QueuePageClient initialSessionId={id} />;
   }
 
+  if (resolvedStoreId) {
+    return <QueuePageClient initialSessionId={resolvedStoreId} />;
+  }
+
   if (!isUUID && !isValidConvexId) {
-    return <NotFoundView />;
+    router.replace("/inbox");
+    return <ConversationLoadingSkeleton />;
   }
 
   if (redirectId) {

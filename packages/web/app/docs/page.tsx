@@ -215,11 +215,11 @@ export default function DocsPage() {
               </div>
             </div>
             {projectPaths.length > 1 && (
-              <div className="flex items-center gap-1 mt-2">
-                <FolderGit2 className="w-3 h-3 text-sol-text-dim" />
+              <div className="flex items-center gap-1 mt-2 overflow-x-auto scrollbar-auto">
+                <FolderGit2 className="w-3 h-3 text-sol-text-dim flex-shrink-0" />
                 <button
                   onClick={() => setDocFilter({ project: "" })}
-                  className={`text-xs px-2 py-0.5 rounded-md transition-colors ${
+                  className={`text-xs px-2 py-0.5 rounded-md transition-colors flex-shrink-0 ${
                     !docFilter.project ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"
                   }`}
                 >
@@ -229,7 +229,7 @@ export default function DocsPage() {
                   <button
                     key={p}
                     onClick={() => setDocFilter({ project: p })}
-                    className={`text-xs px-2 py-0.5 rounded-md transition-colors ${
+                    className={`text-xs px-2 py-0.5 rounded-md transition-colors whitespace-nowrap flex-shrink-0 ${
                       docFilter.project === p ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"
                     }`}
                   >
