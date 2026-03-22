@@ -1,4 +1,46 @@
-import { c } from "./colors.js";
+import { c, fmt } from "./colors.js";
+
+function shortenToolPath(path: string): string {
+  const match = path.match(/(?:packages|src|lib|app)\/.*$/);
+  if (match) return match[0];
+  const segments = path.split("/");
+  if (segments.length > 3) return segments.slice(-3).join("/");
+  return path;
+}
+
+function summarizeToolCall(tc: { name?: string; input?: unknown }): string {
+  const name = tc.name || "unknown";
+  let param = "";
+  try {
+    const input = typeof tc.input === "string" ? JSON.parse(tc.input) : tc.input;
+    if (input && typeof input === "object") {
+      const obj = input as Record<string, unknown>;
+      switch (name) {
+        case "Read":
+        case "Edit":
+        case "Write":
+          if (obj.file_path) param = shortenToolPath(String(obj.file_path));
+          break;
+        case "Bash":
+          if (obj.command) {
+            const cmd = String(obj.command).split("\n")[0].slice(0, 60);
+            param = cmd + (String(obj.command).length > 60 ? "..." : "");
+          }
+          break;
+        case "Grep":
+          param = obj.pattern ? `"${String(obj.pattern).slice(0, 30)}"` : "";
+          break;
+        case "Glob":
+          if (obj.pattern) param = String(obj.pattern);
+          break;
+        case "Agent":
+          if (obj.description) param = String(obj.description).slice(0, 40);
+          break;
+      }
+    }
+  } catch {}
+  return param ? `${name} ${param}` : name;
+}
 
 interface SearchMatch {
   line: number;
@@ -287,31 +329,32 @@ export function formatReadResult(result: ReadResult, options: FormatOptions = {}
         for (const tc of msg.tool_calls as Array<{ name?: string; input?: unknown }>) {
           lines.push(`       - ${tc.name || "unknown"}`);
           if (tc.input) {
-            const inputStr = JSON.stringify(tc.input, null, 2);
-            const indented = inputStr.split("\n").map((l) => "         " + l).join("\n");
+            let parsed = tc.input;
+            try { if (typeof parsed === "string") parsed = JSON.parse(parsed); } catch {}
+            const inputStr = typeof parsed === "string" ? parsed : JSON.stringify(parsed, null, 2);
+            const indented = inputStr.split("\n").map((l: string) => "         " + l).join("\n");
             lines.push(indented);
           }
         }
         lines.push(`       </TOOL_CALLS>`);
       } else {
-        lines.push(`       [${msg.tool_calls.length} tool call${msg.tool_calls.length === 1 ? "" : "s"}]`);
+        const calls = msg.tool_calls as Array<{ name?: string; input?: unknown }>;
+        const first = summarizeToolCall(calls[0]);
+        const more = calls.length > 1 ? ` ...(${calls.length - 1} more)` : "";
+        lines.push(`       ${fmt.muted(`${first}${more}`)}`);
       }
     }
 
-    if (hasToolResults && msg.tool_results) {
-      if (options.full) {
-        lines.push(`       <TOOL_RESULTS>`);
-        for (const tr of msg.tool_results as Array<{ content?: string; isError?: boolean }>) {
-          const prefix = tr.isError ? "[ERROR] " : "";
-          const content = tr.content || "(empty)";
-          const truncated = content.length > 2000 ? content.slice(0, 2000) + "\n... (truncated)" : content;
-          const indented = truncated.split("\n").map((l) => "         " + prefix + l).join("\n");
-          lines.push(indented);
-        }
-        lines.push(`       </TOOL_RESULTS>`);
-      } else {
-        lines.push(`       [${msg.tool_results.length} tool result${msg.tool_results.length === 1 ? "" : "s"}]`);
+    if (hasToolResults && msg.tool_results && options.full) {
+      lines.push(`       <TOOL_RESULTS>`);
+      for (const tr of msg.tool_results as Array<{ content?: string; isError?: boolean }>) {
+        const prefix = tr.isError ? "[ERROR] " : "";
+        const content = tr.content || "(empty)";
+        const truncated = content.length > 2000 ? content.slice(0, 2000) + "\n... (truncated)" : content;
+        const indented = truncated.split("\n").map((l) => "         " + prefix + l).join("\n");
+        lines.push(indented);
       }
+      lines.push(`       </TOOL_RESULTS>`);
     }
 
     lines.push("");
@@ -682,12 +725,7 @@ export function formatFeedResults(result: FeedResult, options: FeedOptions = {})
       if (msg.role === "user") {
         lines.push(`  ${lineNum}: ${role} ${msg.content}`);
       } else {
-        const toolInfo: string[] = [];
-        if (msg.tool_calls_count) {
-          toolInfo.push(`${msg.tool_calls_count} tool${msg.tool_calls_count === 1 ? "" : "s"}`);
-        }
-        const suffix = toolInfo.length > 0 ? ` [${toolInfo.join(", ")}]` : "";
-        lines.push(`       ${lineNum}: ${role} ${msg.content}${suffix}`);
+        lines.push(`       ${lineNum}: ${role} ${msg.content}`);
       }
     }
 
@@ -698,6 +736,7 @@ export function formatFeedResults(result: FeedResult, options: FeedOptions = {})
     const firstId = truncateId(result.conversations[0].id);
     const page = options.page ?? 1;
     lines.push(`Use: cast read ${firstId} <range>        # read messages by line range`);
+    lines.push(`     cast read ${firstId} <line> --full   # expand tool calls for a message`);
     lines.push(`     cast feed -p ${page + 1}                  # next page`);
   }
 

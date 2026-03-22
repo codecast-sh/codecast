@@ -4877,6 +4877,7 @@ program
           conversation_id: conversationId,
           start_line: startLine,
           end_line: endLine,
+          full_content: options.full || undefined,
         }),
       });
 
@@ -10974,9 +10975,9 @@ fi
 [ -z "$FEED" ] && exit 0
 
 if [ "$STABLE_MODE" = "team" ]; then
-  INSTRUCTION="Review this feed of recent team activity. Start your session with a brief, natural message acknowledging what the team has been working on recently (2-3 sentences max, referencing specific projects or themes you see). Then ask: where do you want to go next?"
+  INSTRUCTION="This gives you bigger-picture visibility on what has been and is being worked on by the team."
 else
-  INSTRUCTION="Review this feed of your recent activity. Start your session with a brief, natural message acknowledging what you've been working on recently (2-3 sentences max, referencing specific projects or themes you see). Then ask: where do you want to go next?"
+  INSTRUCTION="This gives you bigger-picture visibility on what you have been and are currently working on."
 fi
 
 cat <<EOF
