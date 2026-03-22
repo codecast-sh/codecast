@@ -40,7 +40,40 @@ export function CreatePalette() {
     (window as any).__CODECAST_COMPOSE_SHOW = (msg?: string) => {
       useInboxStore.getState().openComposePalette(msg || "");
     };
-    return () => { delete (window as any).__CODECAST_COMPOSE_SHOW; };
+    (window as any).__CODECAST_START_SESSION = async (data: { message: string; agentType: string; projectPath?: string }) => {
+      const store = useInboxStore.getState();
+      const sid = nanoid(10);
+      const now = Date.now();
+      const agentType = data.agentType || "claude_code";
+      const path = data.projectPath || store.currentConversation.projectPath || store.currentConversation.gitRoot || store.recentProjects?.[0]?.path;
+
+      soundNewSession();
+      store.setConversationMeta(sid, {
+        _id: sid, _creationTime: now, user_id: "", agent_type: agentType,
+        session_id: sid, project_path: path, git_root: path,
+        started_at: now, updated_at: now, message_count: 0, status: "active",
+        title: "New session", messages: [], user: null,
+        child_conversations: [], child_conversation_map: {},
+        has_more_above: false, oldest_timestamp: null, last_timestamp: null,
+        fork_count: 0, forked_from_details: null, compaction_count: 0,
+        fork_children: [], parent_conversation_id: null,
+      });
+      const convexId = await store.createSession({
+        agent_type: agentType,
+        project_path: path,
+        git_root: path,
+        session_id: sid,
+      });
+      if (convexId) {
+        store.resolveSessionId(sid, convexId);
+        store.sendMessage(convexId, data.message);
+        window.history.pushState({ inboxId: convexId }, "", `/conversation/${convexId}`);
+      }
+    };
+    return () => {
+      delete (window as any).__CODECAST_COMPOSE_SHOW;
+      delete (window as any).__CODECAST_START_SESSION;
+    };
   }, []);
 
   useWatchEffect(() => {

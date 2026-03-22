@@ -19,6 +19,7 @@ interface ContextChatInputProps {
   contextTitle: string;
   getContextBody: () => string;
   placeholder?: string;
+  linkedObjectId?: string;
 }
 
 export function ContextChatInput({
@@ -26,6 +27,7 @@ export function ContextChatInput({
   contextTitle,
   getContextBody,
   placeholder,
+  linkedObjectId,
 }: ContextChatInputProps) {
   const [message, setMessage] = useState("");
   const [isFocused, setIsFocused] = useState(false);
@@ -92,10 +94,14 @@ export function ContextChatInput({
     });
 
     if (convexId) {
+      store.resolveSessionId(sid, convexId);
       store.sendMessage(convexId, fullMessage);
       useInboxStore.setState({ sidePanelSessionId: convexId, sidePanelOpen: false });
+      if (linkedObjectId) {
+        store._dispatch("linkConversation", [contextType, linkedObjectId, convexId]);
+      }
     }
-  }, [message, contextType, contextTitle, getContextBody, agentKey]);
+  }, [message, contextType, contextTitle, getContextBody, agentKey, linkedObjectId]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -144,6 +150,7 @@ export function ContextChatInput({
         <div className="flex items-end gap-2">
           <textarea
             ref={textareaRef}
+            data-chat-input
             value={message}
             onChange={(e) => {
               setMessage(e.target.value);
