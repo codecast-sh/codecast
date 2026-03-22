@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld("__CODECAST_ELECTRON__", {
   paletteNavigate: (path) => ipcRenderer.send("palette-navigate", path),
   paletteHide: () => ipcRenderer.send("palette-hide"),
   paletteCompose: (initialMessage) => ipcRenderer.send("palette-compose", initialMessage),
+  paletteStartSession: (data) => ipcRenderer.send("palette-start-session", data),
   onPaletteShow: (cb) => {
     const handler = () => cb();
     ipcRenderer.on("palette-show", handler);
