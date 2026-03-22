@@ -172,6 +172,7 @@ const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, o
           backHref="/inbox"
           onBack={onBack}
           targetMessageId={targetMessageId}
+          fallbackStickyContent={cleanUserMessage(lastUserMessage)}
           subHeaderContent={<>
             {activePlanId && <PlanContextPanel planId={activePlanId} />}
             {workflowRunId && <WorkflowContextPanel workflowRunId={workflowRunId} />}

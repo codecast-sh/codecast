@@ -3404,7 +3404,7 @@ const taskStatusConfig: Record<string, { icon: string; color: string; bg: string
   running: { icon: '\u25B6', color: 'text-sol-blue', bg: 'bg-sol-blue/10 border-sol-blue/20' },
 };
 
-function TaskNotificationLine({ content, timestamp, agentNameToChildMap, childConversations }: { content: string; timestamp: number; agentNameToChildMap?: Record<string, string>; childConversations?: Array<{ _id: string; title: string; is_subagent?: boolean; first_message_preview?: string }> }) {
+function TaskNotificationLine({ content, timestamp, agentNameToChildMap }: { content: string; timestamp: number; agentNameToChildMap?: Record<string, string> }) {
   const parsed = parseTaskNotification(content);
   const router = useRouter();
   if (!parsed) return null;
@@ -3415,18 +3415,6 @@ function TaskNotificationLine({ content, timestamp, agentNameToChildMap, childCo
   const agentName = nameMatch?.[1];
   if (agentName && agentNameToChildMap?.[agentName]) {
     childId = agentNameToChildMap[agentName];
-  }
-  if (!childId && agentName && childConversations) {
-    const lowerName = agentName.toLowerCase();
-    const nameWords = lowerName.split(/\s+/).filter(w => w.length > 2);
-    childId = childConversations.find(c => {
-      if (!c.is_subagent || !c.title) return false;
-      const lowerTitle = c.title.toLowerCase();
-      if (lowerTitle.includes(lowerName) || lowerName.includes(lowerTitle)) return true;
-      const titleWords = lowerTitle.split(/\s+/).filter(w => w.length > 2);
-      const matchCount = nameWords.filter(w => titleWords.some(tw => tw.startsWith(w) || w.startsWith(tw))).length;
-      return matchCount >= Math.min(nameWords.length, titleWords.length) - 1 && matchCount >= 2;
-    })?._id;
   }
 
   return (
@@ -8449,7 +8437,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           return <SkillExpansionBlock key={msg._id} content={msg.content!} timestamp={msg.timestamp} cmdName={kind.cmdName} collapsed={collapsed} />;
         case 'task_notification':
           if (collapsed) return null;
-          return <TaskNotificationLine key={msg._id} content={msg.content!} timestamp={msg.timestamp} agentNameToChildMap={agentNameToChildMap} childConversations={conversation?.child_conversations} />;
+          return <TaskNotificationLine key={msg._id} content={msg.content!} timestamp={msg.timestamp} agentNameToChildMap={agentNameToChildMap} />;
         case 'task_prompt':
           return null;
         case 'compaction_summary':
