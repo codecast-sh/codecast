@@ -160,7 +160,9 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
       session_id: sessionId,
     });
 
-    if (!isInboxRoute) {
+    if (isInboxRoute) {
+      store.setCurrentSession(sessionId);
+    } else {
       router.push(`/conversation/${sessionId}?focus=1`);
     }
   }, [currentConvContext, directoryFilter, router, isInboxRoute]);

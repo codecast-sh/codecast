@@ -6,7 +6,7 @@ import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { ConversationDiffLayout } from "./ConversationDiffLayout";
 import { ConversationData } from "./ConversationView";
 import { useConversationMessages } from "../hooks/useConversationMessages";
-import { useInboxStore, InboxSession, isConvexId, sortSessions } from "../store/inboxStore";
+import { useInboxStore, InboxSession, isConvexId, categorizeSessions } from "../store/inboxStore";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "./ui/tooltip";
 import { cleanTitle } from "../lib/conversationProcessor";
 import { SharePopover } from "./SharePopover";
@@ -14,7 +14,7 @@ import { PlanContextPanel } from "./PlanContextPanel";
 import { WorkflowContextPanel } from "./WorkflowContextPanel";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { X, Maximize2, ArrowLeft, ChevronsLeft, ChevronsRight } from "lucide-react";
+import { X, ChevronsLeft, ChevronsRight } from "lucide-react";
 import { TaskStatusBadge } from "./TaskStatusBadge";
 
 const NOISE_PREFIXES = ["[Request interrupted", "This session is being continued", "Your task is to create a detailed summary", "Please continue the conversation", "<task-notification>", "Implement the following plan"];
@@ -831,7 +831,6 @@ export function SessionListPanel({
   const showAll = useInboxStore((s) => s.showAllSessions);
   const toggleShowAll = useInboxStore((s) => s.toggleShowAllSessions);
   const sessions = useInboxStore((s) => s.sessions);
-  const sortedSessions = useMemo(() => sortSessions(sessions), [sessions]);
   const stashSession = useInboxStore((s) => s.stashSession);
   const deferSession = useInboxStore((s) => s.deferSession);
   const pinSession = useInboxStore((s) => s.pinSession);
@@ -845,26 +844,11 @@ export function SessionListPanel({
     }
   }, [onSessionSelect]);
 
-  const isSub = (s: InboxSession) => !!s.is_subagent || !!s.parent_conversation_id || !!s.worktree_name;
-  const allParentIds = new Set(sortedSessions.filter((s) => !isSub(s)).map((s) => s._id));
-  const globalSubByParent = new Map<string, InboxSession[]>();
-  for (const s of sortedSessions) {
-    if (isSub(s) && s.parent_conversation_id && allParentIds.has(s.parent_conversation_id)) {
-      if (!globalSubByParent.has(s.parent_conversation_id)) globalSubByParent.set(s.parent_conversation_id, []);
-      globalSubByParent.get(s.parent_conversation_id)!.push(s);
-    }
-  }
-  for (const subs of globalSubByParent.values()) {
-    subs.sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
-  }
-  const subsWithParent = new Set(Array.from(globalSubByParent.values()).flat().map((s) => s._id));
-
   const sessionsWithQueuedMessages = useInboxStore((s) => s.sessionsWithQueuedMessages);
-  const pinned = sortedSessions.filter((s) => s.is_pinned && !subsWithParent.has(s._id));
-  const newSessions = sortedSessions.filter((s) => s.message_count === 0 && !s.is_pinned && !subsWithParent.has(s._id))
-    .sort((a, b) => (a.is_connected ? 1 : 0) - (b.is_connected ? 1 : 0));
-  const needsInput = sortedSessions.filter((s) => s.is_idle && s.message_count > 0 && !s.is_pinned && !sessionsWithQueuedMessages.has(s._id) && !subsWithParent.has(s._id));
-  const working = sortedSessions.filter((s) => (!s.is_idle || sessionsWithQueuedMessages.has(s._id)) && s.message_count > 0 && !s.is_pinned && !subsWithParent.has(s._id));
+  const { sorted: sortedSessions, pinned, newSessions, needsInput, working, subsByParent: globalSubByParent } = useMemo(
+    () => categorizeSessions(sessions, sessionsWithQueuedMessages),
+    [sessions, sessionsWithQueuedMessages],
+  );
 
   const collapsedSections = useInboxStore((s) => s.collapsedSections);
   const toggleSection = useInboxStore((s) => s.toggleCollapsedSection);
@@ -1057,8 +1041,12 @@ export function CollapsedSessionRail() {
   const sessions = useInboxStore((s) => s.sessions);
   const selectPanelSession = useInboxStore((s) => s.selectPanelSession);
   const toggleSidePanel = useInboxStore((s) => s.toggleSidePanel);
+  const queuedSet = useInboxStore((s) => s.sessionsWithQueuedMessages);
 
-  const sorted = useMemo(() => sortSessions(sessions), [sessions]);
+  const { pinned, needsInput, working, newSessions } = useMemo(
+    () => categorizeSessions(sessions, queuedSet),
+    [sessions, queuedSet],
+  );
 
   const getStatusStyle = (s: InboxSession): { bg: string; pulse: boolean } => {
     if (s.session_error) return { bg: "#dc322f", pulse: false };
@@ -1068,12 +1056,6 @@ export function CollapsedSessionRail() {
     if (s.is_idle && s.message_count > 0) return { bg: "#b58900", pulse: false };
     return { bg: "rgba(38, 139, 210, 0.4)", pulse: false };
   };
-
-  const pinned = sorted.filter((s) => s.is_pinned);
-  const queuedSet = useInboxStore((s) => s.sessionsWithQueuedMessages);
-  const needsInput = sorted.filter((s) => s.is_idle && s.message_count > 0 && !s.is_pinned && !queuedSet.has(s._id));
-  const working = sorted.filter((s) => (!s.is_idle || queuedSet.has(s._id)) && s.message_count > 0 && !s.is_pinned);
-  const newSessions = sorted.filter((s) => s.message_count === 0 && !s.is_pinned);
 
   const groups = [pinned, needsInput, working, newSessions].filter((g) => g.length > 0);
   const needsInputCount = needsInput.length;
@@ -1159,49 +1141,19 @@ export const ConversationColumn = memo(function ConversationColumn() {
   return (
     <div className="h-full flex flex-col">
       {session && sidePanelSessionId ? (
-        <>
-          <div className="flex-shrink-0 flex items-center justify-between px-3 py-1.5 border-b border-sol-border/50">
-            <div className="flex items-center gap-1.5 min-w-0">
-              <button
-                onClick={handleBack}
-                className="p-0.5 rounded text-sol-text-dim hover:text-sol-text transition-colors flex-shrink-0"
-                title="Back to session list"
-              >
-                <ArrowLeft className="w-3.5 h-3.5" />
-              </button>
-              <span className="text-xs font-medium text-sol-text-muted truncate">
-                {cleanTitle(session.title || "Session")}
-              </span>
-            </div>
-            <div className="flex items-center gap-0.5 flex-shrink-0">
-              <button
-                onClick={handleExpand}
-                className="p-1 rounded text-sol-text-dim hover:text-sol-text transition-colors"
-                title="Open full conversation"
-              >
-                <Maximize2 className="w-3 h-3" />
-              </button>
-              <button
-                onClick={handleClose}
-                className="p-1 rounded text-sol-text-dim hover:text-sol-text transition-colors"
-                title="Close panel"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          </div>
-          <div className="flex-1 min-h-0">
-            <InboxConversation
-              key={sidePanelSessionId}
-              sessionId={sidePanelSessionId}
-              isIdle={session.is_idle}
-              onSendAndAdvance={() => {}}
-              lastUserMessage={session.last_user_message}
-              sessionError={session.session_error}
-              onBack={handleBack}
-            />
-          </div>
-        </>
+        <div className="h-full">
+          <InboxConversation
+            key={sidePanelSessionId}
+            sessionId={sidePanelSessionId}
+            isIdle={session.is_idle}
+            onSendAndAdvance={() => {}}
+            lastUserMessage={session.last_user_message}
+            sessionError={session.session_error}
+            onBack={handleBack}
+            onExpandToMain={handleExpand}
+            onClose={handleClose}
+          />
+        </div>
       ) : (
         <SessionListPanel
           onSessionSelect={handleSessionSelect}

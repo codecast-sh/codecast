@@ -2725,11 +2725,20 @@ function CastCommandBlock({ tool, result }: { tool: ToolCall; result?: ToolResul
         <CastEntityCard type="doc" convexId={docConvexId} />
       )}
 
-      {expanded && output && (
+      {expanded && (
         <div className="mt-1 rounded border border-sol-border/30 bg-sol-bg-alt max-h-80 overflow-auto">
-          <pre className={`p-1.5 sm:p-2 text-[11px] sm:text-xs font-mono overflow-x-auto whitespace-pre-wrap ${isError ? "text-sol-red" : "text-sol-text-secondary"}`}>
-            {renderAnsi(output)}
-          </pre>
+          <div className="px-1.5 sm:px-2 py-1 sm:py-1.5 border-b border-sol-border/20 bg-sol-bg-highlight/30">
+            <pre className="text-[11px] sm:text-xs font-mono text-sol-green whitespace-pre-wrap break-all">
+              $ {cast.fullCmd}
+            </pre>
+          </div>
+          {output && output.trim() ? (
+            <pre className={`p-1.5 sm:p-2 text-[11px] sm:text-xs font-mono overflow-x-auto whitespace-pre-wrap ${isError ? "text-sol-red" : "text-sol-text-secondary"}`}>
+              {renderAnsi(output)}
+            </pre>
+          ) : (
+            <div className="p-2 text-xs text-sol-text-dim">No output</div>
+          )}
         </div>
       )}
     </div>
@@ -6578,6 +6587,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
               <div className="flex items-end gap-2">
                 <textarea
                   ref={textareaRef}
+                  data-chat-input
                   data-draft-conv={conversationId}
                   value={message}
                   onChange={(e) => handleMessageChange(e.target.value)}
@@ -7923,7 +7933,11 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       }
 
       const pp = paginationPropsRef.current;
+      if (scrollTop < 300 && !pp.hasMoreAbove) {
+        console.warn('[PAGE-UP] at top but hasMoreAbove=false, isLoadingOlder:', pp.isLoadingOlder, 'isLoadingNewer:', pp.isLoadingNewer, 'cooldown:', paginationCooldownRef.current, 'onLoadOlder:', !!pp.onLoadOlder);
+      }
       if (scrollTop < 300 && pp.hasMoreAbove && !pp.isLoadingOlder && !pp.isLoadingNewer && !paginationCooldownRef.current && pp.onLoadOlder) {
+        console.warn('[PAGE-UP] triggering loadOlder');
         scrollAnchorRef.current = scrollHeight;
         isPaginatingRef.current = true;
         pp.onLoadOlder();
@@ -8121,7 +8135,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     });
     if (itemIndex >= 0) {
       setUserScrolled(true);
-      setTimeout(() => virtualizer.scrollToIndex(itemIndex, { align: "center", behavior: "smooth" }), 100);
+      setTimeout(() => {
+        virtualizer.scrollToIndex(itemIndex, { align: "center", behavior: "smooth" });
+        history.replaceState(null, "", window.location.pathname + window.location.search);
+      }, 100);
     }
   }, [timeline, virtualizer, targetMessageId]);
 
@@ -8192,6 +8209,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
               if (Math.abs(off) <= 2 || settleCount >= 15) {
                 setHighlightedMessageId(targetMessageId);
                 setTimeout(() => setHighlightedMessageId(null), 3000);
+                if (window.location.hash) {
+                  history.replaceState(null, "", window.location.pathname + window.location.search);
+                }
                 return;
               }
             }

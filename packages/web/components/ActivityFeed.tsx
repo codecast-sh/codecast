@@ -326,7 +326,7 @@ function SessionTurns({ turns, onDeepDive }: { turns: Array<{ ask: string; did: 
   );
 }
 
-function SessionCardInner({ item, compact, showActor, onNavigate, projectColor }: {
+export function SessionCardInner({ item, compact, showActor, onNavigate, projectColor }: {
   item: any;
   compact?: boolean;
   showActor?: boolean;

@@ -11,10 +11,23 @@ interface ErrorBoundaryProps {
 
 interface ErrorBoundaryState {
   error: Error | null;
+  showDetails: boolean;
+}
+
+const HMR_ERROR_PATTERNS = [
+  "Failed to fetch dynamically imported module",
+  "Failed to reload",
+  "does not provide an export named",
+  "is not a function",
+  "Cannot read properties of undefined",
+];
+
+function isHmrRelatedError(msg: string): boolean {
+  return HMR_ERROR_PATTERNS.some((p) => msg.includes(p));
 }
 
 export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
-  state: ErrorBoundaryState = { error: null };
+  state: ErrorBoundaryState = { error: null, showDetails: false };
 
   static getDerivedStateFromError(error: Error) {
     return { error };
@@ -23,7 +36,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
   componentDidCatch(error: Error, info: React.ErrorInfo) {
     console.error(`[ErrorBoundary${this.props.name ? `:${this.props.name}` : ""}]`, error, info.componentStack);
 
-    if (error.message?.includes("Failed to fetch dynamically imported module")) {
+    if (error.message && isHmrRelatedError(error.message)) {
       const key = "eb_reload_" + window.location.pathname;
       const last = sessionStorage.getItem(key);
       if (!last || Date.now() - Number(last) > 10_000) {
@@ -34,8 +47,12 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
   }
 
   reset = () => {
-    this.setState({ error: null });
+    this.setState({ error: null, showDetails: false });
     this.props.onReset?.();
+  };
+
+  toggleDetails = () => {
+    this.setState((s) => ({ showDetails: !s.showDetails }));
   };
 
   render() {
@@ -48,9 +65,31 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
 
     if (level === "inline") {
       return (
-        <div className="flex items-center gap-2 px-3 py-2 text-xs text-gray-400">
-          <span>Failed to load{name ? ` ${name}` : ""}</span>
-          <button onClick={this.reset} className="text-sol-cyan hover:underline">retry</button>
+        <div className="relative px-3 py-2 text-xs text-gray-400">
+          <div className="flex items-center gap-2">
+            <button onClick={this.toggleDetails} className="hover:text-gray-300 cursor-pointer" title="Show error details">
+              Failed to load{name ? ` ${name}` : ""}
+            </button>
+            <button onClick={this.reset} className="text-sol-cyan hover:underline">retry</button>
+          </div>
+          {this.state.showDetails && this.state.error && (
+            <div className="absolute bottom-full left-2 right-2 mb-1 z-50 rounded-lg border border-sol-border bg-sol-bg shadow-xl shadow-black/40 max-w-lg">
+              <div className="flex items-center justify-between px-3 py-1.5 border-b border-sol-border/60">
+                <span className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">
+                  {name || "Error"} Stack Trace
+                </span>
+                <button onClick={this.toggleDetails} className="text-gray-500 hover:text-gray-300 text-xs">x</button>
+              </div>
+              <div className="p-3 max-h-64 overflow-auto">
+                <p className="text-xs text-sol-red font-mono break-all mb-2">{this.state.error.message}</p>
+                {this.state.error.stack && (
+                  <pre className="text-[10px] text-gray-500 font-mono whitespace-pre-wrap break-all">
+                    {this.state.error.stack}
+                  </pre>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       );
     }

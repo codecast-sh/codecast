@@ -22,6 +22,7 @@ interface DocumentDetailLayoutProps {
   metaContent?: React.ReactNode;
   children?: React.ReactNode;
   contextType?: string;
+  linkedObjectId?: string;
 }
 
 export function DocumentDetailLayout({
@@ -37,6 +38,7 @@ export function DocumentDetailLayout({
   metaContent,
   children,
   contextType = "doc",
+  linkedObjectId,
 }: DocumentDetailLayoutProps) {
   const [isEditing, setIsEditing] = useState(initialEditable);
   const [showMeta, setShowMeta] = useState(false);
@@ -150,6 +152,7 @@ export function DocumentDetailLayout({
           contextType={contextType}
           contextTitle={title || "Untitled"}
           getContextBody={getContextBody}
+          linkedObjectId={linkedObjectId}
         />
         </div>
       </div>
