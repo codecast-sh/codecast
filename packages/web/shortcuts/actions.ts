@@ -103,4 +103,19 @@ export function useGlobalShortcutActions() {
   useShortcutAction('nav.inbox', useCallback(() => {
     router.push("/inbox");
   }, [router]));
+
+  useShortcutAction('compose.focus', useCallback(() => {
+    const el = document.querySelector<HTMLTextAreaElement>('[data-chat-input]');
+    if (el) { el.focus(); el.scrollIntoView({ block: 'nearest' }); }
+  }, []));
+
+  useShortcutAction('sidebar.toggleLeft', useCallback(() => {
+    const store = useInboxStore.getState();
+    const collapsed = store.clientState.ui?.sidebar_collapsed ?? false;
+    store.updateClientUI({ sidebar_collapsed: !collapsed });
+  }, []));
+
+  useShortcutAction('sidebar.toggleRight', useCallback(() => {
+    useInboxStore.getState().toggleSidePanel();
+  }, []));
 }

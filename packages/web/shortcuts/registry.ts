@@ -28,7 +28,10 @@ export type ShortcutAction =
   | 'msg.queue'
   | 'review.nextFile'
   | 'review.prevFile'
-  | 'review.comment';
+  | 'review.comment'
+  | 'compose.focus'
+  | 'sidebar.toggleLeft'
+  | 'sidebar.toggleRight';
 
 export interface ShortcutDef {
   key: string;
@@ -80,6 +83,10 @@ export const SHORTCUTS: ShortcutDef[] = [
   { key: 'alt+k', action: 'msg.prev', when: 'conversation', description: 'Previous user message' },
   { key: 'alt+f', action: 'msg.fork', when: 'conversation', description: 'Fork from message' },
   { key: 'ctrl+enter', action: 'msg.queue', when: 'conversation', skipInputCheck: true, description: 'Queue message' },
+
+  { key: 'ctrl+m', action: 'compose.focus', skipInputCheck: true, description: 'Focus message input' },
+  { key: 'ctrl+[', action: 'sidebar.toggleLeft', skipInputCheck: true, description: 'Toggle left sidebar' },
+  { key: 'ctrl+]', action: 'sidebar.toggleRight', skipInputCheck: true, description: 'Toggle sessions panel' },
 
   { key: 'j', action: 'review.nextFile', when: 'review', description: 'Next file' },
   { key: 'k', action: 'review.prevFile', when: 'review', description: 'Previous file' },
