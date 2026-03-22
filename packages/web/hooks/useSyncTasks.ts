@@ -36,9 +36,9 @@ export function useSyncTaskDetail(id?: string) {
     api.taskMining.webGetTaskDetail,
     id ? { id: id as any } : "skip"
   );
-  const syncTable = useInboxStore((s) => s.syncTable);
+  const syncRecord = useInboxStore((s) => s.syncRecord);
 
   useConvexSync(data, useCallback((d: any) => {
-    if (id && d) syncTable("tasks", [{ ...d, _id: id }]);
-  }, [id, syncTable]));
+    if (id && d) syncRecord("tasks", id, d);
+  }, [id, syncRecord]));
 }
