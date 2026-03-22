@@ -2437,7 +2437,7 @@ async function processSessionFile(
         startedSessionTmux.delete(matchedStartedConversation);
         log(`Linked session ${sessionId} to existing started conversation ${conversationId}`);
         if (parentConversationId) {
-          syncService.linkSessions(parentConversationId, conversationId).then(() => {
+          syncService.linkSessions(parentConversationId, conversationId, subagentDescriptions.get(sessionId)).then(() => {
             log(`Linked started conversation ${conversationId.slice(0, 12)} to parent ${parentConversationId!.slice(0, 12)}`);
           }).catch((err) => {
             log(`Failed to link started conversation to parent: ${err}`);
@@ -2445,6 +2445,19 @@ async function processSessionFile(
         }
       } else {
         const cliFlags = detectCliFlags(headContent + "\n" + newContent);
+        let subagentDescription: string | undefined;
+        if (isSubagent) {
+          try {
+            const metaPath = filePath.replace(/\.jsonl$/, ".meta.json");
+            if (fs.existsSync(metaPath)) {
+              const meta = JSON.parse(fs.readFileSync(metaPath, "utf-8"));
+              if (meta.description) {
+                subagentDescription = meta.description;
+                subagentDescriptions.set(sessionId, meta.description);
+              }
+            }
+          } catch {}
+        }
         conversationId = await syncService.createConversation({
           userId,
           teamId,
@@ -2458,6 +2471,7 @@ async function processSessionFile(
           parentConversationId,
           gitInfo,
           cliFlags: cliFlags || undefined,
+          subagentDescription,
         });
         conversationCache[sessionId] = conversationId;
         saveConversationCache(conversationCache);
@@ -2488,7 +2502,7 @@ async function processSessionFile(
           if (parentSessionId === sessionId) {
             const childConvId = conversationCache[childSessionId];
             if (childConvId) {
-              syncService.linkSessions(conversationId, childConvId).then(() => {
+              syncService.linkSessions(conversationId, childConvId, subagentDescriptions.get(childSessionId)).then(() => {
                 log(`Linked pending subagent ${childSessionId.slice(0, 8)} -> parent ${sessionId.slice(0, 8)}`);
               }).catch((err) => {
                 log(`Failed to link subagent ${childSessionId.slice(0, 8)}: ${err}`);
@@ -4858,6 +4872,8 @@ loadPlanModeCache();
 
 // Track subagent sessions whose parent hasn't been cached yet: childSessionId -> parentSessionId
 const pendingSubagentParents = new Map<string, string>();
+// Track subagent descriptions read from .meta.json: sessionId -> description
+const subagentDescriptions = new Map<string, string>();
 
 interface CachedProcessInfo {
   pid: number;
@@ -7489,6 +7505,13 @@ async function main(): Promise<void> {
           if (parentSessionId && conversationCache[parentSessionId]) {
             parentConversationId = conversationCache[parentSessionId];
           }
+          try {
+            const metaPath = filePath.replace(/\.jsonl$/, ".meta.json");
+            if (fs.existsSync(metaPath)) {
+              const meta = JSON.parse(fs.readFileSync(metaPath, "utf-8"));
+              if (meta.description) subagentDescriptions.set(sessionId, meta.description);
+            }
+          } catch {}
         }
 
         log(`Startup scan: Syncing ${sessionId}${parentConversationId ? ` (subagent of ${parentConversationId})` : ""}`);
@@ -7514,7 +7537,7 @@ async function main(): Promise<void> {
         const parentConvId = conversationCache[parentSessionId];
         const childConvId = conversationCache[childSessionId];
         if (parentConvId && childConvId) {
-          syncService.linkSessions(parentConvId, childConvId).then(() => {
+          syncService.linkSessions(parentConvId, childConvId, subagentDescriptions.get(childSessionId)).then(() => {
             log(`Startup scan: Linked subagent ${childSessionId.slice(0, 8)} -> parent ${parentSessionId.slice(0, 8)}`);
           }).catch((err) => {
             log(`Startup scan: Failed to link subagent ${childSessionId.slice(0, 8)}: ${err}`);

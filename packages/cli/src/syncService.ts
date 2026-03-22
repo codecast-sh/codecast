@@ -84,6 +84,7 @@ export interface CreateConversationParams {
   gitCommitHash?: string;
   gitInfo?: GitInfo;
   cliFlags?: string;
+  subagentDescription?: string;
 }
 
 export class SyncService {
@@ -188,6 +189,7 @@ export class SyncService {
           worktree_branch: gitInfo?.worktreeBranch,
           worktree_path: gitInfo?.worktreePath,
           worktree_status: gitInfo?.worktreeName ? "active" : undefined,
+          subagent_description: params.subagentDescription,
           api_token: this.apiToken,
         }
       );
@@ -200,7 +202,7 @@ export class SyncService {
     }
   }
 
-  async linkSessions(parentConversationId: string, childConversationId: string): Promise<void> {
+  async linkSessions(parentConversationId: string, childConversationId: string, subagentDescription?: string): Promise<void> {
     await this.throttle();
     try {
       await this.client.mutation(
@@ -208,6 +210,7 @@ export class SyncService {
         {
           parent_conversation_id: parentConversationId,
           child_conversation_id: childConversationId,
+          subagent_description: subagentDescription,
           api_token: this.apiToken,
         }
       );

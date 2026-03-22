@@ -136,11 +136,21 @@ async function findChildConversations(
     }
   }
 
-  // Build agent name -> child conversation ID map and UUID map from Task/Agent tool calls
+  // Build agent name -> child conversation ID map from stored subagent_description
   const agentNameMap: Record<string, string> = {};
-  if (subagentChildren.length > 0) {
-    const subagentMatchData = subagentChildren
-      .filter((c: any) => firstMessagePreviews.has(c._id as string))
+  for (const child of subagentChildren) {
+    if (child.subagent_description) {
+      agentNameMap[child.subagent_description] = child._id as string;
+    }
+  }
+
+  // Fallback: scan parent messages for Agent/Task tool calls to build UUID map and
+  // fill agentNameMap for children without subagent_description (legacy data)
+  const unmappedChildren = subagentChildren.filter(
+    (c: any) => !c.subagent_description && firstMessagePreviews.has(c._id as string)
+  );
+  if (unmappedChildren.length > 0) {
+    const subagentMatchData = unmappedChildren
       .map((c: any) => ({ _id: c._id as string, preview: firstMessagePreviews.get(c._id as string)! }));
 
     const matchToolCall = (msg: any, tc: any) => {
@@ -372,6 +382,7 @@ export const createConversation = mutation({
       v.literal("merged"),
       v.literal("archived")
     )),
+    subagent_description: v.optional(v.string()),
     api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -402,6 +413,9 @@ export const createConversation = mutation({
           patch.is_subagent = undefined;
         } else if (!existing.parent_conversation_id && !args.parent_message_uuid) {
           patch.is_subagent = true;
+        }
+        if (args.subagent_description && !existing.subagent_description) {
+          patch.subagent_description = args.subagent_description;
         }
         if (Object.keys(patch).length > 0) {
           await ctx.db.patch(existing._id, patch);
@@ -470,6 +484,7 @@ export const createConversation = mutation({
       worktree_branch: args.worktree_branch,
       worktree_path: args.worktree_path,
       worktree_status: args.worktree_status,
+      subagent_description: args.subagent_description,
     });
     // Set short_id for O(1) lookup by truncated ID
     await ctx.db.patch(conversationId, {
@@ -1131,70 +1146,8 @@ export const getConversationWithMeta = query({
       || (conversation.slug ? formatSlugAsTitle(conversation.slug) : null)
       || "New Session";
 
-    const allChildren = await ctx.db
-      .query("conversations")
-      .withIndex("by_parent_conversation_id", (q: any) => q.eq("parent_conversation_id", args.conversation_id))
-      .collect();
-
-    const NOISE_TITLE_PREFIXES = ["[Using:", "[Request", "[SUGGESTION MODE:"];
-    const subagentChildren = allChildren.filter((c: any) => c.is_subagent || !c.parent_message_uuid);
-    const firstMessagePreviews = new Map<string, string>();
-    for (const child of subagentChildren) {
-      const firstMsg = await ctx.db
-        .query("messages")
-        .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", child._id))
-        .first();
-      if (firstMsg?.content) {
-        const content = typeof firstMsg.content === "string" ? firstMsg.content : "";
-        const cleaned = content.replace(/<[^>]+>/g, "").trim();
-        firstMessagePreviews.set(child._id as string, cleaned.slice(0, 150));
-      }
-    }
-
-    const childConversations = allChildren
-      .filter((conv: any) => !NOISE_TITLE_PREFIXES.some((p) => (conv.title || "").startsWith(p)))
-      .map((conv: any) => ({
-        _id: conv._id,
-        title: conv.title || "New Session",
-        is_subagent: conv.is_subagent || !conv.parent_message_uuid,
-        first_message_preview: firstMessagePreviews.get(conv._id as string),
-      }));
-
-    const childByParentUuid: Record<string, string> = {};
-    for (const c of allChildren) {
-      if (c.parent_message_uuid) {
-        childByParentUuid[c.parent_message_uuid as string] = c._id as string;
-      }
-    }
-
-    const agentNameMap: Record<string, string> = {};
-    if (subagentChildren.length > 0) {
-      const subagentMatchData = subagentChildren
-        .filter((c: any) => firstMessagePreviews.has(c._id as string))
-        .map((c: any) => ({ _id: c._id as string, preview: firstMessagePreviews.get(c._id as string)! }));
-
-      const allParentMessages = await ctx.db
-        .query("messages")
-        .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", args.conversation_id))
-        .take(500);
-      for (const msg of allParentMessages) {
-        if (msg.tool_calls) {
-          for (const tc of msg.tool_calls) {
-            if (tc.name === "Task" || tc.name === "Agent") {
-              try {
-                const inp = JSON.parse(tc.input);
-                if (!inp.prompt) continue;
-                const childId = matchChildByPrompt(inp.prompt, subagentMatchData);
-                if (!childId) continue;
-                if (inp.name) agentNameMap[inp.name] = childId;
-                if (inp.description) agentNameMap[inp.description] = childId;
-                if (msg.message_uuid) childByParentUuid[msg.message_uuid] = childId;
-              } catch {}
-            }
-          }
-        }
-      }
-    }
+    const { children: childConversations, map: childByParentUuid, agentNameMap } =
+      await findChildConversations(ctx, args.conversation_id, []);
 
     let forkedFromDetails = null;
     if (conversation.forked_from) {
@@ -5656,6 +5609,7 @@ export const linkSessions = mutation({
   args: {
     parent_conversation_id: v.id("conversations"),
     child_conversation_id: v.id("conversations"),
+    subagent_description: v.optional(v.string()),
     api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -5676,6 +5630,9 @@ export const linkSessions = mutation({
       parent_conversation_id: args.parent_conversation_id,
       is_subagent: true,
       inbox_dismissed_at: Date.now(),
+      ...(args.subagent_description && !child.subagent_description
+        ? { subagent_description: args.subagent_description }
+        : {}),
     });
   },
 });
