@@ -7,6 +7,7 @@ import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, TaskItem } from "../store/inboxStore";
 import { useSyncTasks } from "../hooks/useSyncTasks";
 import { useWorkspaceArgs } from "../hooks/useWorkspaceArgs";
+import { useMountEffect } from "../hooks/useMountEffect";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { getLabelColor } from "../lib/labelColors";
 import { Panel, Group, Separator } from "react-resizable-panels";
@@ -25,6 +26,14 @@ import {
 const api = _api as any;
 
 type TaskStatus = "backlog" | "open" | "in_progress" | "in_review" | "done" | "dropped";
+type Density = "full" | "compact" | "mini" | "gutter";
+
+function getDensity(width: number): Density {
+  if (width > 240) return "full";
+  if (width > 150) return "compact";
+  if (width > 50) return "mini";
+  return "gutter";
+}
 
 const STATUS_CONFIG: Record<string, { icon: typeof Circle; color: string }> = {
   backlog: { icon: CircleDotDashed, color: "text-sol-text-dim" },
@@ -53,26 +62,70 @@ function formatAge(ts: number) {
   return `${Math.round(ago / 86400000)}d`;
 }
 
-function CompactTaskRow({ task, isSelected }: { task: TaskItem; isSelected: boolean }) {
+function useContainerWidth(ref: React.RefObject<HTMLDivElement | null>) {
+  const [width, setWidth] = useState(320);
+  useMountEffect(() => {
+    if (!ref.current) return;
+    const el = ref.current;
+    setWidth(el.clientWidth);
+    const obs = new ResizeObserver((entries) => {
+      const w = entries[0]?.contentRect.width;
+      if (w != null) setWidth(w);
+    });
+    obs.observe(el);
+    return () => obs.disconnect();
+  });
+  return width;
+}
+
+function CompactTaskRow({ task, isSelected, density }: { task: TaskItem; isSelected: boolean; density: Density }) {
   const status = STATUS_CONFIG[task.status] || STATUS_CONFIG.open;
   const priority = PRIORITY_CONFIG[task.priority] || PRIORITY_CONFIG.medium;
   const StatusIcon = status.icon;
   const PriorityIcon = priority.icon;
 
+  const base = isSelected
+    ? "bg-sol-cyan/10 border-l-[3px] border-l-sol-cyan"
+    : "hover:bg-sol-bg-alt/50 border-l-[3px] border-l-transparent";
+
+  if (density === "gutter") {
+    return (
+      <Link
+        href={`/tasks/${task._id}`}
+        data-item-id={task._id}
+        title={task.title}
+        className={`flex justify-center py-1.5 border-b border-sol-border/10 ${base}`}
+      >
+        <StatusIcon className={`w-3 h-3 ${status.color}`} />
+      </Link>
+    );
+  }
+
+  if (density === "mini") {
+    return (
+      <Link
+        href={`/tasks/${task._id}`}
+        data-item-id={task._id}
+        className={`flex items-center gap-2 px-2 py-1.5 border-b border-sol-border/10 ${base}`}
+      >
+        <StatusIcon className={`w-3.5 h-3.5 flex-shrink-0 ${status.color}`} />
+        <span className="flex-1 text-xs text-sol-text truncate min-w-0">{task.title}</span>
+      </Link>
+    );
+  }
+
   return (
     <Link
       href={`/tasks/${task._id}`}
       data-item-id={task._id}
-      className={`w-full flex items-center gap-2 px-3 py-2 transition-colors text-left border-b border-sol-border/10 ${
-        isSelected
-          ? "bg-sol-cyan/10 border-l-[3px] border-l-sol-cyan"
-          : "hover:bg-sol-bg-alt/50 border-l-[3px] border-l-transparent"
-      }`}
+      className={`w-full flex items-center gap-2 px-3 py-2 transition-colors text-left border-b border-sol-border/10 ${base}`}
     >
       <StatusIcon className={`w-3.5 h-3.5 flex-shrink-0 ${status.color}`} />
-      <span className="text-[10px] font-mono text-sol-text-dim w-12 flex-shrink-0">{task.short_id}</span>
+      {density === "full" && (
+        <span className="text-[10px] font-mono text-sol-text-dim w-12 flex-shrink-0">{task.short_id}</span>
+      )}
       <span className="flex-1 text-xs text-sol-text truncate min-w-0">{task.title}</span>
-      {task.labels?.slice(0, 1).map((l: string) => {
+      {density === "full" && task.labels?.slice(0, 1).map((l: string) => {
         const lc = getLabelColor(l);
         return (
           <span key={l} className={`inline-flex items-center gap-0.5 text-[9px] px-1 py-0 rounded-full border flex-shrink-0 ${lc.bg} ${lc.border} ${lc.text}`}>
@@ -84,8 +137,12 @@ function CompactTaskRow({ task, isSelected }: { task: TaskItem; isSelected: bool
       {task.assignee_info?.image && (
         <img src={task.assignee_info.image} alt="" className="w-4 h-4 rounded-full flex-shrink-0" />
       )}
-      <PriorityIcon className={`w-3 h-3 flex-shrink-0 ${priority.color}`} />
-      <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{formatAge(task.updated_at)}</span>
+      {density === "full" && (
+        <PriorityIcon className={`w-3 h-3 flex-shrink-0 ${priority.color}`} />
+      )}
+      {density === "full" && (
+        <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{formatAge(task.updated_at)}</span>
+      )}
     </Link>
   );
 }
@@ -96,6 +153,9 @@ export function TaskListPanel({ selectedId }: { selectedId: string }) {
   const tasks = useInboxStore((s) => s.tasks);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const scrollRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const width = useContainerWidth(containerRef);
+  const density = getDensity(width);
 
   const tasksList = useMemo(() => {
     return Object.values(tasks).filter(
@@ -179,50 +239,55 @@ export function TaskListPanel({ selectedId }: { selectedId: string }) {
   }, [flatTasks, selectedId, router]);
 
   return (
-    <div className="h-full flex flex-col bg-sol-bg/50">
+    <div ref={containerRef} className="h-full flex flex-col bg-sol-bg/50">
       <div ref={scrollRef} className="flex-1 overflow-y-auto">
         {planGroups.map((g) => {
           const key = g.plan?._id || "__unplanned";
           const isCollapsed = collapsedGroups.has(key);
           return (
             <div key={key}>
-              <div className="flex items-center gap-1.5 px-3 py-1.5 bg-sol-bg-alt/30 border-b border-sol-border/20">
-                <button
-                  onClick={() => toggleGroup(key)}
-                  className="flex items-center gap-1.5 flex-1 min-w-0 text-left"
-                >
-                  <svg className={`w-2.5 h-2.5 text-sol-text-dim transition-transform flex-shrink-0 ${isCollapsed ? "" : "rotate-90"}`} fill="currentColor" viewBox="0 0 20 20">
-                    <path d="M6 4l8 6-8 6V4z" />
-                  </svg>
-                  <span className="text-[10px] font-medium text-sol-text-dim uppercase tracking-wide truncate">
-                    {g.plan?.title || "Unplanned"}
-                  </span>
-                  <span className="text-[10px] text-sol-text-dim flex-shrink-0">({g.tasks.length})</span>
-                  {g.plan?.status && (
-                    <span className={`text-[9px] px-1 py-0 rounded border flex-shrink-0 ${
-                      g.plan.status === "active" ? "border-sol-green/30 text-sol-green" : "border-sol-border/30 text-sol-text-dim"
-                    }`}>
-                      {g.plan.status}
-                    </span>
-                  )}
-                </button>
-                {g.plan && (
-                  <Link
-                    href={`/plans/${g.plan._id}`}
-                    className="text-[9px] text-sol-cyan hover:underline flex-shrink-0"
-                    onClick={(e) => e.stopPropagation()}
+              {density !== "gutter" && (
+                <div className="flex items-center gap-1.5 px-3 py-1.5 bg-sol-bg-alt/30 border-b border-sol-border/20">
+                  <button
+                    onClick={() => toggleGroup(key)}
+                    className="flex items-center gap-1.5 flex-1 min-w-0 text-left"
                   >
-                    View plan
-                  </Link>
-                )}
-              </div>
+                    <svg className={`w-2.5 h-2.5 text-sol-text-dim transition-transform flex-shrink-0 ${isCollapsed ? "" : "rotate-90"}`} fill="currentColor" viewBox="0 0 20 20">
+                      <path d="M6 4l8 6-8 6V4z" />
+                    </svg>
+                    <span className="text-[10px] font-medium text-sol-text-dim uppercase tracking-wide truncate">
+                      {g.plan?.title || "Unplanned"}
+                    </span>
+                    <span className="text-[10px] text-sol-text-dim flex-shrink-0">({g.tasks.length})</span>
+                    {density === "full" && g.plan?.status && (
+                      <span className={`text-[9px] px-1 py-0 rounded border flex-shrink-0 ${
+                        g.plan.status === "active" ? "border-sol-green/30 text-sol-green" : "border-sol-border/30 text-sol-text-dim"
+                      }`}>
+                        {g.plan.status}
+                      </span>
+                    )}
+                  </button>
+                  {density === "full" && g.plan && (
+                    <Link
+                      href={`/plans/${g.plan._id}`}
+                      className="text-[9px] text-sol-cyan hover:underline flex-shrink-0"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      View plan
+                    </Link>
+                  )}
+                </div>
+              )}
+              {density === "gutter" && planGroups.length > 1 && (
+                <div className="border-b border-sol-border/30 my-0.5" />
+              )}
               {!isCollapsed && g.tasks.map((t) => (
-                <CompactTaskRow key={t._id} task={t} isSelected={t._id === selectedId} />
+                <CompactTaskRow key={t._id} task={t} isSelected={t._id === selectedId} density={density} />
               ))}
             </div>
           );
         })}
-        {tasksList.length === 0 && (
+        {tasksList.length === 0 && density !== "gutter" && (
           <div className="px-3 py-8 text-xs text-sol-text-dim text-center">No tasks</div>
         )}
       </div>
@@ -239,6 +304,15 @@ const DOC_TYPE_COLORS: Record<string, string> = {
   note: "text-sol-text-muted",
 };
 
+const DOC_TYPE_DOT_COLORS: Record<string, string> = {
+  plan: "bg-sol-blue",
+  design: "bg-sol-violet",
+  spec: "bg-sol-cyan",
+  investigation: "bg-sol-yellow",
+  handoff: "bg-sol-orange",
+  note: "bg-gray-400",
+};
+
 export function DocListPanel({ selectedId }: { selectedId: string }) {
   const router = useRouter();
   const workspaceArgs = useWorkspaceArgs();
@@ -247,6 +321,9 @@ export function DocListPanel({ selectedId }: { selectedId: string }) {
     workspaceArgs === "skip" ? "skip" : { ...workspaceArgs, limit: 50 }
   );
   const scrollRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const width = useContainerWidth(containerRef);
+  const density = getDensity(width);
 
   const items = useMemo(() => (result?.docs ?? result ?? []) as any[], [result]);
 
@@ -288,7 +365,7 @@ export function DocListPanel({ selectedId }: { selectedId: string }) {
   }, [items, selectedId, router]);
 
   return (
-    <div className="h-full flex flex-col bg-sol-bg/50">
+    <div ref={containerRef} className="h-full flex flex-col bg-sol-bg/50">
       <div ref={scrollRef} className="flex-1 overflow-y-auto">
         {items.map((d: any) => {
           const href = d.plan_short_id
@@ -296,31 +373,50 @@ export function DocListPanel({ selectedId }: { selectedId: string }) {
             : `/docs/${d._id}`;
           const isSelected = d._id === selectedId;
           const typeColor = DOC_TYPE_COLORS[d.doc_type] || "text-sol-text-dim";
+          const dotColor = DOC_TYPE_DOT_COLORS[d.doc_type] || "bg-gray-400";
+          const base = isSelected
+            ? "bg-sol-cyan/10 border-l-[3px] border-l-sol-cyan"
+            : "hover:bg-sol-bg-alt/50 border-l-[3px] border-l-transparent";
+
+          if (density === "gutter") {
+            return (
+              <Link
+                key={d._id}
+                href={href}
+                data-item-id={d._id}
+                title={d.display_title || d.title || "Untitled"}
+                className={`flex justify-center py-1.5 border-b border-sol-border/10 ${base}`}
+              >
+                <span className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${dotColor}`} />
+              </Link>
+            );
+          }
+
           return (
             <Link
               key={d._id}
               href={href}
               data-item-id={d._id}
-              className={`w-full flex items-center gap-2 px-3 py-2 transition-colors text-left border-b border-sol-border/10 ${
-                isSelected
-                  ? "bg-sol-cyan/10 border-l-[3px] border-l-sol-cyan"
-                  : "hover:bg-sol-bg-alt/50 border-l-[3px] border-l-transparent"
-              }`}
+              className={`w-full flex items-center gap-2 px-3 py-2 transition-colors text-left border-b border-sol-border/10 ${base}`}
             >
               <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${typeColor}`} style={{ backgroundColor: "currentColor" }} />
               <span className="flex-1 text-xs text-sol-text truncate min-w-0">
                 {d.display_title || d.title || "Untitled"}
               </span>
-              <span className={`text-[9px] px-1 py-0 rounded border border-current/20 flex-shrink-0 ${typeColor}`}>
-                {d.doc_type}
-              </span>
-              <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">
-                {formatAge(d.created_at)}
-              </span>
+              {density === "full" && (
+                <span className={`text-[9px] px-1 py-0 rounded border border-current/20 flex-shrink-0 ${typeColor}`}>
+                  {d.doc_type}
+                </span>
+              )}
+              {density === "full" && (
+                <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">
+                  {formatAge(d.created_at)}
+                </span>
+              )}
             </Link>
           );
         })}
-        {items.length === 0 && (
+        {items.length === 0 && density !== "gutter" && (
           <div className="px-3 py-8 text-xs text-sol-text-dim text-center">No docs</div>
         )}
       </div>
@@ -343,7 +439,7 @@ export function DetailSplitLayout({
       className="h-full"
       defaultLayout={{ "detail-list": 22, "detail-content": 78 }}
     >
-      <Panel id="detail-list" minSize="15%" maxSize="40%">
+      <Panel id="detail-list" minSize="4%" maxSize="40%" collapsible collapsedSize="0%">
         {list}
       </Panel>
       <Separator className={listSeparatorClass} />

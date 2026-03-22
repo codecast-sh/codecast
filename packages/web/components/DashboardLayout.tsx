@@ -270,7 +270,7 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
     <Group orientation="horizontal" className="h-full" defaultLayout={{ "right-content": 70, "session-list": 30 }}>
       <Panel id="right-content" minSize="30%"><div className="h-full">{mainContent}</div></Panel>
       <Separator className={separatorClass} />
-      <Panel id="session-list" minSize="15%" maxSize="50%" defaultSize="30%">
+      <Panel id="session-list" minSize="15%" maxSize="50%" defaultSize="30%" collapsible collapsedSize="0%">
         <ErrorBoundary name="SessionList" level="panel">
           <div className="w-full h-full border-l border-sol-border/30">
             <SessionListPanel
@@ -419,7 +419,7 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
             defaultLayout={layout}
             onLayoutChange={handleLayoutChange}
           >
-            <Panel id="sidebar" minSize="0%" maxSize="50%">
+            <Panel id="sidebar" minSize="10%" maxSize="50%" collapsible collapsedSize="0%">
               <div className="h-full bg-sol-bg-alt overflow-auto">
                 <ErrorBoundary name="Sidebar" level="panel">
                   <Sidebar
