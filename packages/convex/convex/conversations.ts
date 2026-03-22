@@ -2183,6 +2183,37 @@ export const getConversationPublic = query({
   },
 });
 
+export const paletteSearch = query({
+  args: {
+    query: v.string(),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+    const searchTerm = args.query.trim();
+    if (!searchTerm || searchTerm.length < 2) return [];
+    const limit = args.limit ?? 30;
+    const results = await ctx.db
+      .query("conversations")
+      .withSearchIndex("search_title", (q) =>
+        q.search("title", searchTerm).eq("user_id", userId)
+      )
+      .take(limit);
+    return results.map((c) => ({
+      _id: c._id,
+      session_id: c.session_id,
+      title: c.title,
+      updated_at: c.updated_at,
+      project_path: c.project_path,
+      git_root: c.git_root,
+      agent_type: c.agent_type,
+      message_count: c.message_count,
+      is_idle: c.status === "completed",
+    }));
+  },
+});
+
 export const searchConversations = query({
   args: {
     query: v.string(),

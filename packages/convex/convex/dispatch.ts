@@ -248,6 +248,40 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     return { command_id: commandId };
   },
 
+  linkConversation: async (ctx, userId, [objectType, objectId, conversationId]: [string, string, string]) => {
+    const conv = await ctx.db.get(conversationId as Id<"conversations">);
+    if (!conv || conv.user_id.toString() !== userId.toString()) throw new Error("Unauthorized");
+
+    if (objectType === "doc") {
+      const doc = await ctx.db.get(objectId as Id<"docs">);
+      if (!doc || doc.user_id.toString() !== userId.toString()) return;
+      const existing = doc.related_conversation_ids || (doc.conversation_id ? [doc.conversation_id] : []);
+      if (!existing.some((id: any) => id.toString() === conversationId)) {
+        await ctx.db.patch(objectId as Id<"docs">, {
+          related_conversation_ids: [...existing, conversationId as Id<"conversations">],
+        });
+      }
+    } else if (objectType === "task") {
+      const task = await ctx.db.get(objectId as Id<"tasks">);
+      if (!task || task.user_id.toString() !== userId.toString()) return;
+      const existing = task.conversation_ids || [];
+      if (!existing.some((id: any) => id.toString() === conversationId)) {
+        await ctx.db.patch(objectId as Id<"tasks">, {
+          conversation_ids: [...existing, conversationId as Id<"conversations">],
+        });
+      }
+    } else if (objectType === "plan") {
+      const plan = await ctx.db.get(objectId as Id<"plans">);
+      if (!plan || plan.user_id.toString() !== userId.toString()) return;
+      const existing = plan.session_ids || [];
+      if (!existing.some((id: any) => id.toString() === conversationId)) {
+        await ctx.db.patch(objectId as Id<"plans">, {
+          session_ids: [...existing, conversationId as Id<"conversations">],
+        });
+      }
+    }
+  },
+
   sendEscape: async (ctx, userId, [convId]: [string]) => {
     const conv = await ctx.db.get(convId as Id<"conversations">);
     if (!conv || conv.user_id !== userId) throw new Error("Not authorized");

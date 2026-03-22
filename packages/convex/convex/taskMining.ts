@@ -1315,16 +1315,37 @@ export const webGetDocDetail = query({
       const convs = [];
       for (const cid of convIds) {
         const conv = await ctx.db.get(cid);
-        if (conv) convs.push({
-          _id: conv._id,
-          session_id: conv.session_id,
-          title: conv.title,
-          project_path: conv.project_path,
-          started_at: conv.started_at,
-          updated_at: conv.updated_at,
-          message_count: conv.message_count,
-          short_id: conv.short_id,
-        });
+        if (conv) {
+          const entry: any = {
+            _id: conv._id,
+            session_id: conv.session_id,
+            title: conv.title,
+            headline: (conv as any).headline,
+            project_path: conv.project_path,
+            started_at: (conv as any).started_at || conv._creationTime,
+            updated_at: conv.updated_at,
+            message_count: conv.message_count,
+            is_active: (conv as any).is_active,
+            agent_type: conv.agent_type,
+            outcome_type: (conv as any).outcome_type,
+            git_branch: (conv as any).git_branch,
+            short_id: conv.short_id,
+          };
+          const insight = await ctx.db
+            .query("session_insights")
+            .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conv._id))
+            .first();
+          if (insight) {
+            entry.key_changes = insight.key_changes;
+            entry.turns = insight.turns;
+            entry.timeline = insight.timeline;
+            entry.blockers = insight.blockers;
+            entry.next_action = insight.next_action;
+            if (!entry.headline) entry.headline = insight.headline;
+            if (!entry.outcome_type) entry.outcome_type = insight.outcome_type;
+          }
+          convs.push(entry);
+        }
       }
       result.related_conversations = convs;
     }
@@ -1428,6 +1449,22 @@ export const webGetTaskDetail = query({
         }));
       }
       linkedConversations.push(entry);
+    }
+
+    for (const lc of linkedConversations) {
+      const insight = await ctx.db
+        .query("session_insights")
+        .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", lc._id))
+        .first();
+      if (insight) {
+        lc.key_changes = insight.key_changes;
+        lc.turns = insight.turns;
+        lc.timeline = insight.timeline;
+        lc.blockers = insight.blockers;
+        lc.next_action = insight.next_action;
+        if (!lc.headline) lc.headline = insight.headline;
+        if (!lc.outcome_type) lc.outcome_type = insight.outcome_type;
+      }
     }
 
     let relatedDocs: any[] = [];
