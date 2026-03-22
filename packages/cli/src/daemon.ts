@@ -13,7 +13,6 @@ import {
   choosePreferredCodexCandidate,
   hasCodexSessionFileOpen,
   isResumeInvocation,
-  matchSingleFreshStartedConversation,
   matchStartedConversation,
 } from "./sessionProcessMatcher.js";
 import { GeminiWatcher, type GeminiSessionEvent } from "./geminiWatcher.js";
@@ -2400,7 +2399,7 @@ async function processSessionFile(
       }
 
       let matchedStartedConversation: string | null = null;
-      if (startedSessionTmux.size > 0) {
+      if (startedSessionTmux.size > 0 && !isSubagent && !parentConversationId) {
         const startedClaudeEntries = Array.from(startedSessionTmux.entries())
           .filter(([, entry]) => entry.agentType === "claude");
         const proc = await findSessionProcess(sessionId, "claude").catch(() => null);
@@ -2423,11 +2422,6 @@ async function processSessionFile(
           log(`Matched session ${sessionId.slice(0, 8)} to conversation ${matchedStartedConversation.slice(0, 12)} via tmux ${tmuxSessionName}`);
         } else if (matchedStartedConversation && actualProjectPath) {
           log(`Matched session ${sessionId.slice(0, 8)} to conversation ${matchedStartedConversation.slice(0, 12)} via projectPath fallback`);
-        } else {
-          matchedStartedConversation = matchSingleFreshStartedConversation(startedClaudeEntries);
-          if (matchedStartedConversation) {
-            log(`Matched session ${sessionId.slice(0, 8)} to conversation ${matchedStartedConversation.slice(0, 12)} via fresh-start fallback`);
-          }
         }
       }
 
@@ -3345,11 +3339,6 @@ async function processCodexSession(
             log(`Matched codex session ${sessionId.slice(0, 8)} to conversation ${matchedStartedConversation.slice(0, 12)} via tmux ${tmuxSessionName}`);
           } else if (matchedStartedConversation && projectPath) {
             log(`Matched codex session ${sessionId.slice(0, 8)} to conversation ${matchedStartedConversation.slice(0, 12)} via projectPath fallback`);
-          } else {
-            matchedStartedConversation = matchSingleFreshStartedConversation(startedCodexEntries);
-            if (matchedStartedConversation) {
-              log(`Matched codex session ${sessionId.slice(0, 8)} to conversation ${matchedStartedConversation.slice(0, 12)} via fresh-start fallback`);
-            }
           }
         }
 
@@ -4775,26 +4764,50 @@ async function discoverAndLinkSession(
       return;
     }
     if (!fs.existsSync(projectDir)) continue;
+    const candidates: string[] = [];
     for (const f of fs.readdirSync(projectDir)) {
       const m = f.match(UUID_JSONL_RE);
       if (!m || existingFiles.has(f)) continue;
       const sessionId = m[1];
       const cache = readConversationCache();
       if (cache[sessionId]) continue;
+      candidates.push(sessionId);
+    }
+    if (candidates.length === 0) continue;
+    // Verify which candidate belongs to this tmux session's process
+    let linkedSessionId: string | null = null;
+    for (const sessionId of candidates) {
+      try {
+        const proc = await findSessionProcess(sessionId, "claude").catch(() => null);
+        if (proc) {
+          const tmuxPane = await findTmuxPaneForTty(proc.tty);
+          if (tmuxPane && tmuxPane.split(":")[0] === tmuxSession) {
+            linkedSessionId = sessionId;
+            break;
+          }
+        }
+      } catch {}
+    }
+    // If process verification fails but there's exactly one candidate, use it
+    if (!linkedSessionId && candidates.length === 1) {
+      linkedSessionId = candidates[0];
+    }
+    if (linkedSessionId) {
+      const cache = readConversationCache();
       const reverseCache = buildReverseConversationCache(cache);
       if (reverseCache[conversationId]) {
         log(`[DISCOVER] Conversation ${conversationId.slice(0, 12)} already linked to ${reverseCache[conversationId].slice(0, 8)} by another writer`);
         startedSessionTmux.delete(conversationId);
         return;
       }
-      cache[sessionId] = conversationId;
+      cache[linkedSessionId] = conversationId;
       saveConversationCache(cache);
       if (syncServiceRef) {
-        syncServiceRef.updateSessionId(conversationId, sessionId).catch(() => {});
-        syncServiceRef.registerManagedSession(sessionId, process.pid, tmuxSession, conversationId).catch(() => {});
+        syncServiceRef.updateSessionId(conversationId, linkedSessionId).catch(() => {});
+        syncServiceRef.registerManagedSession(linkedSessionId, process.pid, tmuxSession, conversationId).catch(() => {});
       }
       startedSessionTmux.delete(conversationId);
-      log(`[DISCOVER] Linked session ${sessionId.slice(0, 8)} to conversation ${conversationId.slice(0, 12)} via JSONL discovery`);
+      log(`[DISCOVER] Linked session ${linkedSessionId.slice(0, 8)} to conversation ${conversationId.slice(0, 12)} via JSONL discovery`);
       return;
     }
   }

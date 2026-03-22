@@ -107,6 +107,21 @@ describe("matchStartedConversation", () => {
     expect(match).toBeNull();
   });
 
+  test("returns null when multiple entries match same projectPath within TTL", () => {
+    const match = matchStartedConversation(
+      [
+        ["conv-1", { tmuxSession: "cc-claude-aaa", projectPath: "/repo", startedAt: 4800 }],
+        ["conv-2", { tmuxSession: "cc-claude-bbb", projectPath: "/repo", startedAt: 4900 }],
+      ],
+      {
+        projectPath: "/repo",
+        now: 5000,
+        ttlMs: 300,
+      }
+    );
+    expect(match).toBeNull();
+  });
+
   test("supports single-pass iterator inputs (Map.entries)", () => {
     const entries = new Map<string, { tmuxSession: string; projectPath: string; startedAt: number }>([
       ["conv-1", { tmuxSession: "cc-codex-1", projectPath: "/repo", startedAt: 4900 }],

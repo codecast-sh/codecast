@@ -61,11 +61,10 @@ export function matchStartedConversation(
   }
 
   if (!projectPath) return null;
-  for (const [conversationId, entry] of startedEntries) {
-    if (entry.projectPath === projectPath && now - entry.startedAt < ttlMs) {
-      return conversationId;
-    }
-  }
+  const pathMatches = startedEntries.filter(
+    ([, entry]) => entry.projectPath === projectPath && now - entry.startedAt < ttlMs
+  );
+  if (pathMatches.length === 1) return pathMatches[0][0];
   return null;
 }
 
