@@ -13,6 +13,7 @@ declare global {
       paletteHide: () => void;
       paletteStartSession: (data: { message: string; agentType: string; projectPath?: string }) => void;
       onPaletteShow: (cb: () => void) => () => void;
+      onComposeShow: (cb: () => void) => () => void;
       platform: string;
     };
   }

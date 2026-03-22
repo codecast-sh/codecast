@@ -88,13 +88,15 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
       include_message_previews: false,
     }) ?? { conversations: [] };
 
+  const isSearching = query.trim().length >= 2;
   const searchResults = useQuery(
     api.conversations.paletteSearch,
-    query.trim().length >= 2 ? { query: query.trim(), limit: 30 } : "skip"
+    isSearching ? { query: query.trim(), limit: 30 } : "skip"
   );
+  const searchLoading = isSearching && searchResults === undefined;
 
-  const displayConversations = query.trim().length >= 2 && searchResults
-    ? searchResults
+  const displayConversations = isSearching
+    ? searchResults ?? []
     : recentConversations;
 
   const projects = useMemo(() => {
@@ -207,6 +209,15 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
     });
     return unsub;
   }, [standalone]);
+
+  useWatchEffect(() => {
+    if (!standalone || !isElectron()) return;
+    const unsub = window.__CODECAST_ELECTRON__!.onComposeShow(() => {
+      setQuery("");
+      enterComposeMode("");
+    });
+    return unsub;
+  }, [standalone, enterComposeMode]);
 
   const navigate = useCallback(
     (path: string) => {
@@ -332,9 +343,19 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
           </CommandPrimitive.Group>
         )}
 
-        {showRecent && (
-          <CommandPrimitive.Group heading={query.trim().length >= 2 && searchResults ? "Search Results" : "Recent Sessions"} className={groupClass}>
-            {(query.trim().length >= 2 && searchResults ? displayConversations! : displayConversations!.slice(0, 30)).map((conv: any) => (
+        {searchLoading && (
+          <div className="flex items-center justify-center gap-2 py-6 text-xs text-sol-text-dim">
+            <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+            </svg>
+            Searching...
+          </div>
+        )}
+
+        {!searchLoading && showRecent && (
+          <CommandPrimitive.Group heading={isSearching ? "Search Results" : "Recent Sessions"} className={groupClass}>
+            {(isSearching ? displayConversations! : displayConversations!.slice(0, 30)).map((conv: any) => (
               <CommandPrimitive.Item
                 key={`recent-${conv._id}`}
                 value={`session ${cleanTitle(conv.title || "")} ${conv.project_path || ""}|||${conv._id}`}

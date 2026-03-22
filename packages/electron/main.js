@@ -393,12 +393,16 @@ function registerShortcuts() {
 
   if (shortcuts.toggleCompose) {
     globalShortcut.register(shortcuts.toggleCompose, () => {
-      if (!mainWindow) return;
-      mainWindow.show();
-      mainWindow.focus();
-      mainWindow.webContents.executeJavaScript(
-        "window.__CODECAST_COMPOSE_SHOW && window.__CODECAST_COMPOSE_SHOW()"
-      );
+      if (!paletteWindow) {
+        createPaletteWindow();
+        paletteWindow.once("ready-to-show", () => {
+          showPalette();
+          paletteWindow.webContents.send("compose-show");
+        });
+        return;
+      }
+      showPalette();
+      paletteWindow.webContents.send("compose-show");
     });
   }
 
