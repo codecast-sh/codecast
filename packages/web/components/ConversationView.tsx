@@ -7933,11 +7933,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       }
 
       const pp = paginationPropsRef.current;
-      if (scrollTop < 300 && !pp.hasMoreAbove) {
-        console.warn('[PAGE-UP] at top but hasMoreAbove=false, isLoadingOlder:', pp.isLoadingOlder, 'isLoadingNewer:', pp.isLoadingNewer, 'cooldown:', paginationCooldownRef.current, 'onLoadOlder:', !!pp.onLoadOlder);
-      }
       if (scrollTop < 300 && pp.hasMoreAbove && !pp.isLoadingOlder && !pp.isLoadingNewer && !paginationCooldownRef.current && pp.onLoadOlder) {
-        console.warn('[PAGE-UP] triggering loadOlder');
         scrollAnchorRef.current = scrollHeight;
         isPaginatingRef.current = true;
         pp.onLoadOlder();
