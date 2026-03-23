@@ -11506,7 +11506,7 @@ async function handlePermissionRequest(syncService, conversationId, sessionId, p
 import * as fs10 from "fs";
 import * as path10 from "path";
 import * as os from "os";
-var VERSION = "1.0.90";
+var VERSION = "1.0.91";
 var LATEST_URL = "https://dl.codecast.sh/latest.json";
 var UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000;
 var CONFIG_DIR3 = process.env.HOME + "/.codecast";
@@ -12794,6 +12794,8 @@ var workingPhaseStart = new Map;
 var MIN_WORKING_DURATION_FOR_NOTIF_MS = 1e4;
 var dismissedIdleSince = new Map;
 var DISMISSED_IDLE_KILL_MS = 60 * 60 * 1000;
+var zombieStrikes = new Map;
+var ZOMBIE_STRIKE_THRESHOLD = 3;
 var lastHookStatus = new Map;
 var pendingInteractivePrompts = new Map;
 var AGENT_STATUS_DIR = path13.join(process.env.HOME || "", ".codecast", "agent-status");
@@ -15889,7 +15891,7 @@ function tryRegisterSessionProcess(sessionId, agentType) {
             const interval = setInterval(async () => {
               try {
                 const result2 = await syncServiceRef.heartbeatManagedSession(sessionId);
-                processHeartbeatResponse(sessionId, result2);
+                await processHeartbeatResponse(sessionId, result2);
               } catch {
               }
             }, 30000);
@@ -16760,7 +16762,7 @@ async function killSessionBySessionId(sessionId, reason) {
   }
   log(`[AUTO-KILL] Session ${sessionId.slice(0, 8)} killed: ${reason}`);
 }
-function processHeartbeatResponse(sessionId, result) {
+async function processHeartbeatResponse(sessionId, result) {
   if (!result?.found)
     return;
   const status = lastSentAgentStatus.get(sessionId);
@@ -16772,8 +16774,15 @@ function processHeartbeatResponse(sessionId, result) {
     }
     const idleSince = dismissedIdleSince.get(sessionId);
     if (Date.now() - idleSince >= DISMISSED_IDLE_KILL_MS) {
-      killSessionBySessionId(sessionId, "dismissed and idle for 1+ hour").catch(() => {
-      });
+      const tmux = resumeSessionCache.get(sessionId);
+      const alive = tmux ? await isTmuxAgentAlive(tmux) : false;
+      if (alive) {
+        log(`[DISMISSED-IDLE] Session ${sessionId.slice(0, 8)} timer expired but agent still alive, resetting`);
+        dismissedIdleSince.delete(sessionId);
+      } else {
+        killSessionBySessionId(sessionId, "dismissed and idle for 1+ hour").catch(() => {
+        });
+      }
     }
   } else {
     if (dismissedIdleSince.has(sessionId)) {
@@ -17296,7 +17305,7 @@ async function autoResumeSessionInner(sessionId, content, titleCache, nonInterac
       const interval = setInterval(async () => {
         try {
           const result = await syncServiceRef.heartbeatManagedSession(sessionId);
-          processHeartbeatResponse(sessionId, result);
+          await processHeartbeatResponse(sessionId, result);
         } catch {
         }
       }, 30000);
@@ -18153,16 +18162,16 @@ async function isTmuxAgentAlive(tmuxSession) {
       try {
         const { stdout: paneContent } = await tmuxExec(["capture-pane", "-p", "-J", "-t", tmuxSession, "-S", "-5"], { timeout: 3000, killSignal: "SIGKILL" });
         const trimmed = paneContent.trim();
+        if (!trimmed)
+          return false;
         if (/[$%#]\s*$/.test(trimmed))
           return false;
         if (/Segmentation fault|panic:|SIGABRT|core dumped|exited with/.test(trimmed))
           return false;
-        if (/[❯›]|⏵|thinking|Thinking|working|Running|bypass permissions|permission/.test(trimmed)) {
-          return true;
-        }
+        return true;
       } catch {
       }
-      return false;
+      return true;
     }
   } catch {
     return false;
@@ -18707,21 +18716,39 @@ function startWatchdog(deps) {
         }
       }
       const activeStartedTmux = new Set([...startedSessionTmux.values()].map((e) => e.tmuxSession));
+      const activeResumeTmux = new Set(resumeSessionCache.values());
       try {
         const { stdout: tmuxList } = await tmuxExec(["list-sessions", "-F", "#{session_name}"], { timeout: 3000, killSignal: "SIGKILL" });
+        const seenThisCycle = new Set;
         for (const tmuxName of tmuxList.trim().split(`
 `)) {
           if (!tmuxName || !/^cc-resume-/.test(tmuxName) && !/^cc-claude-/.test(tmuxName))
             continue;
+          seenThisCycle.add(tmuxName);
           if (activeStartedTmux.has(tmuxName))
             continue;
+          if (activeResumeTmux.has(tmuxName))
+            continue;
           if (!await isTmuxAgentAlive(tmuxName)) {
-            log(`Reaping zombie tmux session ${tmuxName}`);
-            try {
-              await tmuxExec(["kill-session", "-t", tmuxName]);
-            } catch {
+            const strikes = (zombieStrikes.get(tmuxName) || 0) + 1;
+            zombieStrikes.set(tmuxName, strikes);
+            if (strikes >= ZOMBIE_STRIKE_THRESHOLD) {
+              log(`Reaping zombie tmux session ${tmuxName} (${strikes} consecutive dead checks)`);
+              try {
+                await tmuxExec(["kill-session", "-t", tmuxName]);
+              } catch {
+              }
+              zombieStrikes.delete(tmuxName);
+            } else {
+              log(`Zombie candidate ${tmuxName}: strike ${strikes}/${ZOMBIE_STRIKE_THRESHOLD}`);
             }
+          } else {
+            zombieStrikes.delete(tmuxName);
           }
+        }
+        for (const name of zombieStrikes.keys()) {
+          if (!seenThisCycle.has(name))
+            zombieStrikes.delete(name);
         }
       } catch {
       }

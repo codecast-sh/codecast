@@ -337,6 +337,8 @@ const workingPhaseStart = new Map<string, number>();
 const MIN_WORKING_DURATION_FOR_NOTIF_MS = 10_000;
 const dismissedIdleSince = new Map<string, number>();
 const DISMISSED_IDLE_KILL_MS = 60 * 60 * 1000;
+const zombieStrikes = new Map<string, number>();
+const ZOMBIE_STRIKE_THRESHOLD = 3;
 
 type AgentStatus = "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "stopped";
 type PermissionMode = "default" | "plan" | "acceptEdits" | "bypassPermissions" | "dontAsk";
@@ -3787,7 +3789,7 @@ function tryRegisterSessionProcess(sessionId: string, agentType: "claude" | "cod
             const interval = setInterval(async () => {
               try {
                 const result = await syncServiceRef!.heartbeatManagedSession(sessionId);
-                processHeartbeatResponse(sessionId, result);
+                await processHeartbeatResponse(sessionId, result);
               } catch {}
             }, 30000);
             resumeHeartbeatIntervals.set(sessionId, interval);
@@ -4683,7 +4685,7 @@ async function killSessionBySessionId(sessionId: string, reason: string): Promis
   log(`[AUTO-KILL] Session ${sessionId.slice(0, 8)} killed: ${reason}`);
 }
 
-function processHeartbeatResponse(sessionId: string, result?: { found: boolean; dismissed?: boolean }): void {
+async function processHeartbeatResponse(sessionId: string, result?: { found: boolean; dismissed?: boolean }): Promise<void> {
   if (!result?.found) return;
 
   const status = lastSentAgentStatus.get(sessionId);
@@ -4696,7 +4698,14 @@ function processHeartbeatResponse(sessionId: string, result?: { found: boolean; 
     }
     const idleSince = dismissedIdleSince.get(sessionId)!;
     if (Date.now() - idleSince >= DISMISSED_IDLE_KILL_MS) {
-      killSessionBySessionId(sessionId, "dismissed and idle for 1+ hour").catch(() => {});
+      const tmux = resumeSessionCache.get(sessionId);
+      const alive = tmux ? await isTmuxAgentAlive(tmux) : false;
+      if (alive) {
+        log(`[DISMISSED-IDLE] Session ${sessionId.slice(0, 8)} timer expired but agent still alive, resetting`);
+        dismissedIdleSince.delete(sessionId);
+      } else {
+        killSessionBySessionId(sessionId, "dismissed and idle for 1+ hour").catch(() => {});
+      }
     }
   } else {
     if (dismissedIdleSince.has(sessionId)) {
@@ -5269,7 +5278,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
       const interval = setInterval(async () => {
         try {
           const result = await syncServiceRef!.heartbeatManagedSession(sessionId);
-          processHeartbeatResponse(sessionId, result);
+          await processHeartbeatResponse(sessionId, result);
         } catch {}
       }, 30000);
       resumeHeartbeatIntervals.set(sessionId, interval);
@@ -6224,19 +6233,18 @@ async function isTmuxAgentAlive(tmuxSession: string): Promise<boolean> {
           ["capture-pane", "-p", "-J", "-t", tmuxSession, "-S", "-5"], { timeout: 3000, killSignal: "SIGKILL" }
         );
         const trimmed = paneContent.trim();
-        // If the last line is a shell prompt, agent has exited back to shell
+        if (!trimmed) return false;
+        // Only declare dead on POSITIVE evidence of death
         if (/[$%#]\s*$/.test(trimmed)) return false;
-        // If we see crash indicators, agent is dead
         if (/Segmentation fault|panic:|SIGABRT|core dumped|exited with/.test(trimmed)) return false;
-        // Agent-agnostic: look for signs of an active TUI
-        // Claude: ❯ ⏵, Codex: ›, active work indicators, permission prompts
-        if (/[❯›]|⏵|thinking|Thinking|working|Running|bypass permissions|permission/.test(trimmed)) {
-          return true;
-        }
+        // Pane has content but no death indicators — assume alive (conservative)
+        return true;
       } catch {}
-      return false;
+      // tmux capture failed — don't assume dead
+      return true;
     }
   } catch {
+    // tmux session doesn't exist at all
     return false;
   }
 }
@@ -6899,16 +6907,33 @@ function startWatchdog(
     }
 
     // Reap zombie cc-resume-* and cc-claude-* tmux sessions where agent has crashed
+    // Require 3 consecutive "dead" checks before killing (strike system)
     const activeStartedTmux = new Set([...startedSessionTmux.values()].map(e => e.tmuxSession));
+    const activeResumeTmux = new Set(resumeSessionCache.values());
     try {
       const { stdout: tmuxList } = await tmuxExec(["list-sessions", "-F", "#{session_name}"], { timeout: 3000, killSignal: "SIGKILL" });
+      const seenThisCycle = new Set<string>();
       for (const tmuxName of tmuxList.trim().split("\n")) {
         if (!tmuxName || (!/^cc-resume-/.test(tmuxName) && !/^cc-claude-/.test(tmuxName))) continue;
+        seenThisCycle.add(tmuxName);
         if (activeStartedTmux.has(tmuxName)) continue;
+        if (activeResumeTmux.has(tmuxName)) continue;
         if (!(await isTmuxAgentAlive(tmuxName))) {
-          log(`Reaping zombie tmux session ${tmuxName}`);
-          try { await tmuxExec(["kill-session", "-t", tmuxName]); } catch {}
+          const strikes = (zombieStrikes.get(tmuxName) || 0) + 1;
+          zombieStrikes.set(tmuxName, strikes);
+          if (strikes >= ZOMBIE_STRIKE_THRESHOLD) {
+            log(`Reaping zombie tmux session ${tmuxName} (${strikes} consecutive dead checks)`);
+            try { await tmuxExec(["kill-session", "-t", tmuxName]); } catch {}
+            zombieStrikes.delete(tmuxName);
+          } else {
+            log(`Zombie candidate ${tmuxName}: strike ${strikes}/${ZOMBIE_STRIKE_THRESHOLD}`);
+          }
+        } else {
+          zombieStrikes.delete(tmuxName);
         }
+      }
+      for (const name of zombieStrikes.keys()) {
+        if (!seenThisCycle.has(name)) zombieStrikes.delete(name);
       }
     } catch {}
 
