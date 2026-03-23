@@ -23,10 +23,10 @@ export function useGlobalShortcutActions() {
     if (isOnInboxPage) {
       store.navigateDown();
     } else {
-      const sorted = store.sortedSessions();
-      if (sorted.length === 0) return;
-      const idx = sorted.findIndex(s => s._id === store.sidePanelSessionId);
-      store.selectPanelSession(sorted[(idx + 1) % sorted.length]._id);
+      const ordered = store.visualOrder();
+      if (ordered.length === 0) return;
+      const idx = ordered.findIndex(s => s._id === store.sidePanelSessionId);
+      store.selectPanelSession(ordered[(idx + 1) % ordered.length]._id);
     }
   }, [isOnInboxPage]));
 
@@ -35,10 +35,10 @@ export function useGlobalShortcutActions() {
     if (isOnInboxPage) {
       store.navigateUp();
     } else {
-      const sorted = store.sortedSessions();
-      if (sorted.length === 0) return;
-      const idx = sorted.findIndex(s => s._id === store.sidePanelSessionId);
-      store.selectPanelSession(sorted[(idx - 1 + sorted.length) % sorted.length]._id);
+      const ordered = store.visualOrder();
+      if (ordered.length === 0) return;
+      const idx = ordered.findIndex(s => s._id === store.sidePanelSessionId);
+      store.selectPanelSession(ordered[(idx - 1 + ordered.length) % ordered.length]._id);
     }
   }, [isOnInboxPage]));
 
@@ -70,9 +70,9 @@ export function useGlobalShortcutActions() {
     const store = useInboxStore.getState();
     const currentId = isOnInboxPage ? store.currentSessionId : store.sidePanelSessionId;
     if (!currentId) return;
-    const sorted = store.sortedSessions();
-    const idx = sorted.findIndex(s => s._id === currentId);
-    const next = sorted[idx + 1] ?? sorted.find(s => s._id !== currentId);
+    const ordered = store.visualOrder();
+    const idx = ordered.findIndex(s => s._id === currentId);
+    const next = ordered[idx + 1] ?? ordered.find(s => s._id !== currentId);
     store.stashSession(currentId);
     if (next) {
       if (isOnInboxPage) store.setCurrentSession(next._id);
@@ -88,9 +88,9 @@ export function useGlobalShortcutActions() {
     if (convexId && isConvexId(convexId)) {
       killSessionMutation({ conversation_id: convexId as Id<"conversations">, mark_completed: true }).catch(() => {});
     }
-    const sorted = store.sortedSessions();
-    const idx = sorted.findIndex(s => s._id === currentId);
-    const next = sorted[idx + 1] ?? sorted.find(s => s._id !== currentId);
+    const ordered = store.visualOrder();
+    const idx = ordered.findIndex(s => s._id === currentId);
+    const next = ordered[idx + 1] ?? ordered.find(s => s._id !== currentId);
     store.stashSession(currentId);
     if (next) {
       if (isOnInboxPage) store.setCurrentSession(next._id);
@@ -102,9 +102,9 @@ export function useGlobalShortcutActions() {
     const store = useInboxStore.getState();
     const currentId = isOnInboxPage ? store.currentSessionId : store.sidePanelSessionId;
     if (!currentId) return;
-    const sorted = store.sortedSessions();
-    const idx = sorted.findIndex(s => s._id === currentId);
-    const next = sorted[idx + 1] ?? sorted.find(s => s._id !== currentId);
+    const ordered = store.visualOrder();
+    const idx = ordered.findIndex(s => s._id === currentId);
+    const next = ordered[idx + 1] ?? ordered.find(s => s._id !== currentId);
     store.deferSession(currentId);
     if (next) {
       if (isOnInboxPage) store.setCurrentSession(next._id);

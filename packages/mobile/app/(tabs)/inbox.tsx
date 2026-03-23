@@ -10,7 +10,7 @@ import {
   SessionData, SwipeableSessionItem, cleanTitle, agentLabel, agentColor,
   formatRelativeTime, projectName, styles as sessionStyles,
 } from '@/components/SessionItem';
-import { useInboxStore, type InboxSession, sortSessions } from '@codecast/web/store/inboxStore';
+import { useInboxStore, type InboxSession, categorizeSessions } from '@codecast/web/store/inboxStore';
 import { useSyncInboxSessions } from '@/hooks/useSyncInboxSessions';
 import { useQuery } from 'convex/react';
 
@@ -312,13 +312,12 @@ export default function InboxScreen() {
   const unstashSession = useInboxStore((s) => s.unstashSession);
   const pinSession = useInboxStore((s) => s.pinSession);
 
-  const sorted = useMemo(() => sortSessions(sessions), [sessions]);
-  const activeSessions = useMemo(() => sorted.filter((s) => !s.is_deferred), [sorted]);
-  const pinned = useMemo(() => activeSessions.filter((s) => s.is_pinned), [activeSessions]);
-  const newSessions = useMemo(() => activeSessions.filter((s) => s.message_count === 0 && !s.is_pinned), [activeSessions]);
-  const needsInput = useMemo(() => activeSessions.filter((s) => s.is_idle && s.message_count > 0 && !s.is_pinned), [activeSessions]);
-  const working = useMemo(() => activeSessions.filter((s) => !s.is_idle && s.message_count > 0 && !s.is_pinned), [activeSessions]);
-  const deferred = useMemo(() => sorted.filter((s) => s.is_deferred), [sorted]);
+  const sessionsWithQueuedMessages = useInboxStore((s) => s.sessionsWithQueuedMessages);
+  const { sorted: sortedAll, pinned, newSessions, needsInput, working } = useMemo(
+    () => categorizeSessions(sessions, sessionsWithQueuedMessages),
+    [sessions, sessionsWithQueuedMessages],
+  );
+  const activeSessions = useMemo(() => sortedAll.filter((s) => !s.is_deferred), [sortedAll]);
   const dismissedSessions = useMemo(() => Object.values(dismissedSessionsMap), [dismissedSessionsMap]);
 
   const searchResults = useQuery(
@@ -390,32 +389,14 @@ export default function InboxScreen() {
       )];
     }
     sections.push(renderSection("Pinned", pinned, Theme.magenta));
+    sections.push(renderSection("New", newSessions));
     sections.push(renderSection("Needs Input", needsInput, Theme.accent));
     sections.push(renderSection("Working", working, Theme.greenBright));
-    sections.push(renderSection("New", newSessions));
     return sections.filter(Boolean);
   }, [activeSessions, sessions, pinned, working, needsInput, newSessions, renderSection]);
 
   const ListFooter = useMemo(() => (
     <RNView>
-      {deferred.length > 0 && (
-        <RNView style={styles.sectionContainer}>
-          <RNView style={styles.sectionHeader}>
-            <FontAwesome name="clock-o" size={12} color={Theme.textMuted0} />
-            <RNText style={styles.sectionTitle}>Deferred ({deferred.length})</RNText>
-          </RNView>
-          {deferred.map(s => (
-            <SwipeableSessionItem
-              key={s._id}
-              session={s as SessionData}
-              onPress={() => router.push(`/session/${s._id}`)}
-              onDismiss={() => handleDismiss(s._id)}
-              onPin={() => handlePin(s._id)}
-            />
-          ))}
-        </RNView>
-      )}
-
       <TouchableOpacity
         style={styles.dismissedToggle}
         onPress={() => setShowDismissed(prev => !prev)}
@@ -444,7 +425,7 @@ export default function InboxScreen() {
       )}
       <RNView style={{ height: 80 }} />
     </RNView>
-  ), [deferred, showDismissed, dismissedSessions, router, handleDismiss, handleUndismiss, handlePin]);
+  ), [showDismissed, dismissedSessions, router, handleUndismiss]);
 
   const searchResultsList = useMemo(() => {
     if (!searchResults) return [];
@@ -609,11 +590,6 @@ const styles = StyleSheet.create({
   emptySubtext: {
     fontSize: 14,
     color: Theme.textMuted0,
-  },
-  sectionContainer: {
-    borderTopWidth: 1,
-    borderTopColor: Theme.bgHighlight,
-    marginTop: Spacing.sm,
   },
   sectionHeader: {
     flexDirection: 'row',

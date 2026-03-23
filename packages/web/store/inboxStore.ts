@@ -338,15 +338,30 @@ export function categorizeSessions(
 
   const isTop = (s: InboxSession) => !subsWithParent.has(s._id);
 
-  return {
-    sorted,
-    pinned: sorted.filter((s) => s.is_pinned && isTop(s)),
-    newSessions: sorted.filter((s) => s.message_count === 0 && !s.is_pinned && isTop(s))
-      .sort((a, b) => (a.is_connected ? 1 : 0) - (b.is_connected ? 1 : 0)),
-    needsInput: sorted.filter((s) => s.is_idle && s.message_count > 0 && !s.is_pinned && !sessionsWithQueuedMessages.has(s._id) && isTop(s)),
-    working: sorted.filter((s) => (!s.is_idle || sessionsWithQueuedMessages.has(s._id)) && s.message_count > 0 && !s.is_pinned && isTop(s)),
-    subsByParent,
-  };
+  const pinned = sorted.filter((s) => s.is_pinned && isTop(s));
+  const newSessions = sorted.filter((s) => s.message_count === 0 && !s.is_pinned && isTop(s))
+    .sort((a, b) => (a.is_connected ? 1 : 0) - (b.is_connected ? 1 : 0));
+  const needsInput = sorted.filter((s) => s.is_idle && s.message_count > 0 && !s.is_pinned && !sessionsWithQueuedMessages.has(s._id) && isTop(s));
+  const working = sorted.filter((s) => (!s.is_idle || sessionsWithQueuedMessages.has(s._id)) && s.message_count > 0 && !s.is_pinned && isTop(s));
+
+  return { sorted, pinned, newSessions, needsInput, working, subsByParent };
+}
+
+export function visualOrderSessions(
+  sessions: Record<string, InboxSession>,
+  sessionsWithQueuedMessages: Set<string>,
+): InboxSession[] {
+  const { pinned, newSessions, needsInput, working, subsByParent } =
+    categorizeSessions(sessions, sessionsWithQueuedMessages);
+  const result: InboxSession[] = [];
+  for (const section of [pinned, newSessions, needsInput, working]) {
+    for (const s of section) {
+      result.push(s);
+      const subs = subsByParent.get(s._id);
+      if (subs) result.push(...subs);
+    }
+  }
+  return result;
 }
 
 // -- Store interface --
@@ -426,6 +441,7 @@ interface InboxStoreState {
   addPending: (key: string, entry: PendingEntry) => void;
   clearPending: (key: string) => void;
   sortedSessions: () => InboxSession[];
+  visualOrder: () => InboxSession[];
 
   // -- Navigation --
   advanceToNext: () => void;
@@ -1007,12 +1023,10 @@ export const useInboxStore = create<InboxStoreState>(
     };
     this.clientStateInitialized = true;
     if (!initialized && serverState.drafts) {
-      const restored: Record<string, Record<string, any>> = {};
       for (const [k, v] of Object.entries(serverState.drafts)) {
-        if (v && typeof v === "object") restored[k] = v as Record<string, any>;
-      }
-      if (Object.keys(restored).length > 0) {
-        Object.assign(this.drafts, restored);
+        if (v && typeof v === "object" && !this.drafts[k]) {
+          this.drafts[k] = v as Record<string, any>;
+        }
       }
     }
     if (!initialized && serverState.current_conversation_id && !this.currentSessionId) {
@@ -1036,6 +1050,10 @@ export const useInboxStore = create<InboxStoreState>(
     return sortSessions(get().sessions).filter((s: InboxSession) => !s.is_subagent && !s.parent_conversation_id);
   },
 
+  visualOrder: () => {
+    return visualOrderSessions(get().sessions, get().sessionsWithQueuedMessages);
+  },
+
   // =====================
   // NAVIGATION
   // =====================
@@ -1052,21 +1070,21 @@ export const useInboxStore = create<InboxStoreState>(
   },
 
   navigateUp: () => {
-    const sorted = get().sortedSessions();
-    if (sorted.length === 0) return;
+    const ordered = get().visualOrder();
+    if (ordered.length === 0) return;
     const currentId = get().currentSessionId;
-    const idx = sorted.findIndex((s: InboxSession) => s._id === currentId);
-    const newIdx = (idx - 1 + sorted.length) % sorted.length;
-    get().setCurrentSession(sorted[newIdx]._id);
+    const idx = ordered.findIndex((s: InboxSession) => s._id === currentId);
+    const newIdx = (idx - 1 + ordered.length) % ordered.length;
+    get().setCurrentSession(ordered[newIdx]._id);
   },
 
   navigateDown: () => {
-    const sorted = get().sortedSessions();
-    if (sorted.length === 0) return;
+    const ordered = get().visualOrder();
+    if (ordered.length === 0) return;
     const currentId = get().currentSessionId;
-    const idx = sorted.findIndex((s: InboxSession) => s._id === currentId);
-    const newIdx = (idx + 1) % sorted.length;
-    get().setCurrentSession(sorted[newIdx]._id);
+    const idx = ordered.findIndex((s: InboxSession) => s._id === currentId);
+    const newIdx = (idx + 1) % ordered.length;
+    get().setCurrentSession(ordered[newIdx]._id);
   },
 
   setCurrentSession: action(function (this: Draft, id: string) {
