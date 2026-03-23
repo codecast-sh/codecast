@@ -11548,7 +11548,7 @@ async function handlePermissionRequest(syncService, conversationId, sessionId, p
 import * as fs10 from "fs";
 import * as path10 from "path";
 import * as os from "os";
-var VERSION = "1.0.94";
+var VERSION = "1.0.95";
 var LATEST_URL = "https://dl.codecast.sh/latest.json";
 var UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000;
 var CONFIG_DIR3 = process.env.HOME + "/.codecast";
@@ -12872,6 +12872,14 @@ function getPermissionFlags(agentType, config) {
   }
   return null;
 }
+function resolveCodexApprovalPolicy(config) {
+  const flags = getPermissionFlags("codex", config);
+  const codexArgs = config?.codex_args || "";
+  if (flags?.includes("--dangerously-bypass") || codexArgs.includes("--dangerously-bypass") || flags?.includes("--full-auto") || codexArgs.includes("--full-auto")) {
+    return "never";
+  }
+  return "on-request";
+}
 function getDefaultParamFlags(agentType, config) {
   const params = config?.agent_default_params?.[agentType];
   if (!params || Object.keys(params).length === 0)
@@ -12891,6 +12899,7 @@ var EVENT_LOOP_LAG_THRESHOLD_MS = 60 * 1000;
 var HEARTBEAT_STALE_THRESHOLD_MS = 15 * 60 * 1000;
 var remoteLogQueue = [];
 var syncServiceRef = null;
+var conversationCacheRef = null;
 var daemonVersion;
 var activeConfig = null;
 var platform2 = process.platform;
@@ -13680,20 +13689,20 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
         const envPrefix = worktreeResult ? `env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT AGENT_RESOURCE_INDEX=${worktreeResult.portIndex}` : `env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT`;
         let cmdText = `${envPrefix} ${[binary, ...binaryArgs].join(" ")}`;
         let codexThreadId = null;
+        const codexSkipApprovals = binaryArgs.includes("--full-auto") || binaryArgs.includes("--dangerously-bypass-approvals-and-sandbox");
+        const codexApprovalPolicy = codexSkipApprovals ? "never" : "on-request";
         if (agentType === "codex" && codexAppServerInstance?.running) {
           try {
-            const sandbox = binaryArgs.includes("--full-auto") ? "danger-full-access" : "workspace-write";
-            const approval = binaryArgs.includes("--full-auto") ? "never" : "on-request";
+            const sandbox = codexSkipApprovals ? "danger-full-access" : "workspace-write";
             const developerInstructions = await buildCodexStableContext(config, cwd);
             const resp = await codexAppServerInstance.threadStart({
               cwd,
               sandbox,
-              approvalPolicy: approval,
+              approvalPolicy: codexApprovalPolicy,
               ...developerInstructions ? { developerInstructions } : {}
             });
             codexThreadId = resp.thread.id;
-            cmdText = `${envPrefix} codex resume ${codexThreadId}`;
-            log(`[codex-app-server] pre-created thread ${codexThreadId.slice(0, 8)} for new session`);
+            log(`[codex-app-server] pre-created thread ${codexThreadId.slice(0, 8)} (approvalPolicy=${codexApprovalPolicy})`);
           } catch (err) {
             log(`[codex-app-server] thread pre-create failed, falling back: ${err instanceof Error ? err.message : String(err)}`);
           }
@@ -13710,7 +13719,7 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
           log(`[REMOTE] Started ${agentType} session via app-server: ${codexThreadId.slice(0, 8)} (cwd: ${cwd})`);
           if (conversationId) {
             const initialManagedSessionId = getInitialManagedSessionId(agentType, expectedSessionId, codexThreadId);
-            registerAppServerConversation(conversationId, codexThreadId, { cwd });
+            registerAppServerConversation(conversationId, codexThreadId, { cwd, approvalPolicy: codexApprovalPolicy });
             if (initialManagedSessionId && syncServiceRef) {
               syncServiceRef.registerManagedSession(initialManagedSessionId, process.pid, undefined, conversationId).catch(() => {
               });
@@ -13739,14 +13748,13 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
           result = JSON.stringify(resultObj);
           log(`[REMOTE] Started ${agentType} session in tmux: ${tmuxSession} (cwd: ${cwd})`);
           if (conversationId) {
-            const initialManagedSessionId = getInitialManagedSessionId(agentType, expectedSessionId, codexThreadId || undefined);
+            const initialManagedSessionId = getInitialManagedSessionId(agentType, expectedSessionId);
             startedSessionTmux.set(conversationId, {
               tmuxSession,
               projectPath: cwd,
               startedAt: Date.now(),
               agentType,
               sessionId: initialManagedSessionId,
-              appServerThreadId: codexThreadId || undefined,
               worktreeName: worktreeResult?.worktreeName,
               worktreeBranch: worktreeResult?.worktreeBranch,
               worktreePath: worktreeResult?.worktreePath
@@ -13754,10 +13762,6 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
             log(`[REMOTE] Registered started session tmux for conversation ${conversationId.slice(0, 12)}`);
             if (initialManagedSessionId) {
               registerManagedStartedSession(conversationId, initialManagedSessionId, tmuxSession);
-            }
-            if (codexThreadId) {
-              registerAppServerConversation(conversationId, codexThreadId, { cwd, persist: false });
-              log(`[codex-app-server] registered conv=${conversationId.slice(0, 12)} -> thread=${codexThreadId.slice(0, 8)}`);
             }
             if (agentType === "claude") {
               discoverAndLinkSession(conversationId, tmuxSession, cwd).catch((err) => {
@@ -13776,6 +13780,19 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
         const conversationId = parsed.conversation_id;
         if (!conversationId) {
           error = "Missing conversation_id";
+          break;
+        }
+        const escapeThreadId = appServerConversations.get(conversationId);
+        if (escapeThreadId && codexAppServerInstance?.running) {
+          const activeTurnId = findActiveTurnForThread(escapeThreadId);
+          if (activeTurnId) {
+            await codexAppServerInstance.turnInterrupt(escapeThreadId, activeTurnId);
+            result = "escape_interrupted";
+            log(`[REMOTE] Interrupted app-server turn ${activeTurnId.slice(0, 8)} on thread ${escapeThreadId.slice(0, 8)}`);
+          } else {
+            result = "escape_no_active_turn";
+            log(`[REMOTE] No active turn to interrupt on app-server thread ${escapeThreadId.slice(0, 8)}`);
+          }
           break;
         }
         const cache = readConversationCache();
@@ -13967,6 +13984,26 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
         const conversationId = parsed.conversation_id;
         if (!conversationId) {
           error = "Missing conversation_id";
+          break;
+        }
+        const killThreadId = appServerConversations.get(conversationId);
+        if (killThreadId && codexAppServerInstance?.running) {
+          const activeTurnId = findActiveTurnForThread(killThreadId);
+          if (activeTurnId) {
+            try {
+              await codexAppServerInstance.turnInterrupt(killThreadId, activeTurnId);
+            } catch {
+            }
+          }
+          removeAppServerThreadRegistration(appServerThreads, appServerConversations, conversationId, killThreadId);
+          forgetPersistedAppServerConversation(conversationId);
+          if (syncServiceRef) {
+            syncServiceRef.markSessionCompleted(conversationId).catch(() => {
+            });
+            sendAgentStatus(syncServiceRef, conversationId, killThreadId, "stopped");
+          }
+          result = "killed_app_server";
+          log(`[REMOTE] Killed app-server thread ${killThreadId.slice(0, 8)} for conversation ${conversationId.slice(0, 12)}`);
           break;
         }
         const started = startedSessionTmux.get(conversationId);
@@ -14990,8 +15027,16 @@ async function processSessionFile(filePath, sessionId, projectPath, syncService,
             }
           }
         }
+        if (!conversationId) {
+          const freshCache = readConversationCache();
+          if (freshCache[sessionId]) {
+            conversationId = freshCache[sessionId];
+            conversationCache[sessionId] = conversationId;
+            log(`Session ${sessionId.slice(0, 8)} already linked to ${conversationId.slice(0, 12)} by background discovery, skipping match`);
+          }
+        }
         let matchedStartedConversation = null;
-        if (startedSessionTmux.size > 0 && !isSubagent && !parentConversationId) {
+        if (!conversationId && startedSessionTmux.size > 0 && !isSubagent && !parentConversationId) {
           const startedClaudeEntries = Array.from(startedSessionTmux.entries()).filter(([, entry]) => entry.agentType === "claude");
           const proc = await findSessionProcess(sessionId, "claude").catch(() => null);
           let tmuxSessionName = null;
@@ -15015,7 +15060,13 @@ async function processSessionFile(filePath, sessionId, projectPath, syncService,
             log(`Matched session ${sessionId.slice(0, 8)} to conversation ${matchedStartedConversation.slice(0, 12)} via projectPath fallback`);
           }
         }
-        if (matchedStartedConversation) {
+        if (!conversationId && conversationCache[sessionId]) {
+          conversationId = conversationCache[sessionId];
+          matchedStartedConversation = null;
+          log(`Session ${sessionId.slice(0, 8)} already linked to ${conversationId.slice(0, 12)} by discovery (post-async), skipping match/create`);
+        }
+        if (conversationId) {
+        } else if (matchedStartedConversation) {
           conversationId = matchedStartedConversation;
           const tmuxEntry = startedSessionTmux.get(matchedStartedConversation);
           conversationCache[sessionId] = conversationId;
@@ -17095,6 +17146,13 @@ function removeAppServerThreadRegistration(threads, conversations, conversationI
     threads.delete(resolvedThreadId);
   }
 }
+function findActiveTurnForThread(threadId) {
+  for (const [turnId, progress] of appServerTurnProgress) {
+    if (progress.threadId === threadId)
+      return turnId;
+  }
+  return;
+}
 function clearLiveAppServerThreadRegistrations() {
   appServerThreads.clear();
   appServerConversations.clear();
@@ -17146,7 +17204,7 @@ function registerAppServerConversation(conversationId, threadId, opts = {}) {
   const updatedAt = opts.updatedAt ?? Date.now();
   const existingThreadId = appServerConversations.get(conversationId);
   const existingConversation = appServerThreads.get(threadId)?.conversationId;
-  upsertAppServerThreadRegistration(appServerThreads, appServerConversations, conversationId, threadId, { cwd: opts.cwd });
+  upsertAppServerThreadRegistration(appServerThreads, appServerConversations, conversationId, threadId, { cwd: opts.cwd, approvalPolicy: opts.approvalPolicy });
   if (!opts.persist)
     return;
   if (existingConversation && existingConversation !== conversationId) {
@@ -17189,10 +17247,12 @@ async function rehydratePersistedAppServerThreads() {
         threadId: record.threadId,
         ...record.cwd ? { cwd: record.cwd } : {}
       });
+      const rehydratedPolicy = resolveCodexApprovalPolicy(activeConfig);
       registerAppServerConversation(conversationId, record.threadId, {
         cwd: record.cwd,
         updatedAt: record.updatedAt,
-        persist: false
+        persist: false,
+        approvalPolicy: rehydratedPolicy
       });
       resumed++;
     } catch (err) {
@@ -17482,6 +17542,9 @@ async function discoverAndLinkSession(conversationId, tmuxSession, cwd) {
         return;
       }
       cache[linkedSessionId] = conversationId;
+      if (conversationCacheRef) {
+        conversationCacheRef[linkedSessionId] = conversationId;
+      }
       saveConversationCache(cache);
       if (syncServiceRef) {
         syncServiceRef.updateSessionId(conversationId, linkedSessionId).catch(() => {
@@ -17714,6 +17777,35 @@ async function autoResumeSessionInner(sessionId, content, titleCache, nonInterac
   }
   const prefix = agentType === "codex" ? "cx" : agentType === "gemini" ? "gm" : "cc";
   const tmuxSession = slug ? `${prefix}-resume-${slug}-${shortId}` : `${prefix}-resume-${shortId}`;
+  const cachedTmux = resumeSessionCache.get(sessionId);
+  const aliveTarget = cachedTmux || tmuxSession;
+  try {
+    await tmuxExec(["has-session", "-t", aliveTarget], { timeout: 3000, killSignal: "SIGKILL" });
+    const alive = await isTmuxAgentAlive(aliveTarget);
+    if (alive) {
+      logDelivery(`Session ${shortId} already alive in tmux=${aliveTarget}, reusing`);
+      resumeSessionCache.set(sessionId, aliveTarget);
+      if (content) {
+        await injectViaTmux(aliveTarget + ":0.0", content);
+      }
+      if (syncServiceRef && conversationId && !resumeHeartbeatIntervals.has(sessionId)) {
+        syncServiceRef.registerManagedSession(sessionId, process.pid, aliveTarget, conversationId).catch(() => {
+        });
+        syncServiceRef.updateSessionAgentStatus(conversationId, "connected").catch(() => {
+        });
+        const interval = setInterval(async () => {
+          try {
+            const result = await syncServiceRef.heartbeatManagedSession(sessionId);
+            await processHeartbeatResponse(sessionId, result);
+          } catch {
+          }
+        }, 30000);
+        resumeHeartbeatIntervals.set(sessionId, interval);
+      }
+      return true;
+    }
+  } catch {
+  }
   try {
     try {
       await tmuxExec(["kill-session", "-t", tmuxSession]);
@@ -19584,6 +19676,7 @@ async function main() {
   });
   taskScheduler.start();
   const conversationCache = readConversationCache();
+  conversationCacheRef = conversationCache;
   const titleCache = readTitleCache();
   const pendingMessages = {};
   const activeSessions = new Map;
@@ -20108,6 +20201,10 @@ async function main() {
       const entry = appServerThreads.get(threadId);
       if (!entry)
         return true;
+      if (entry.approvalPolicy === "never") {
+        log(`[codex-app-server] auto-approving ${approval.method} for thread ${threadId.slice(0, 8)} (approvalPolicy=never)`);
+        return true;
+      }
       const permissionPrompt = {
         tool_name: approval.method,
         arguments_preview: JSON.stringify(approval.params).slice(0, 200)
@@ -20193,7 +20290,7 @@ async function main() {
   });
   codexAppServerInstance.on("approvalRequested", (threadId, approval) => {
     const entry = appServerThreads.get(threadId);
-    if (entry) {
+    if (entry && entry.approvalPolicy !== "never") {
       sendAgentStatus(syncService, entry.conversationId, threadId, "permission_blocked");
       syncService.createSessionNotification({
         conversation_id: entry.conversationId,
