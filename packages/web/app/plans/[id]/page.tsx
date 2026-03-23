@@ -7,7 +7,6 @@ import { useMountEffect } from "../../../hooks/useMountEffect";
 import { AuthGuard } from "../../../components/AuthGuard";
 import { DashboardLayout } from "../../../components/DashboardLayout";
 import { DocumentDetailLayout } from "../../../components/DocumentDetailLayout";
-import { DocListPanel, DetailSplitLayout } from "../../../components/DetailListPanel";
 import "../../../components/editor/editor.css";
 import {
   PlanProgressBar,
@@ -168,9 +167,8 @@ export default function PlanDetailPage() {
   return (
     <AuthGuard>
       <DashboardLayout>
-        <DetailSplitLayout list={<DocListPanel selectedId={plan.doc_id} />}>
         <div className="h-full min-w-0">
-        <DocumentDetailLayout
+          <DocumentDetailLayout
           docId={plan.doc_id}
           title={plan.title}
           markdownContent={plan.doc_content || ""}
@@ -367,9 +365,8 @@ export default function PlanDetailPage() {
           ) : (
             <OrchestrationTab tasks={plan.tasks || []} sessions={plan.sessions || []} />
           )}
-        </DocumentDetailLayout>
+          </DocumentDetailLayout>
         </div>
-        </DetailSplitLayout>
       </DashboardLayout>
     </AuthGuard>
   );

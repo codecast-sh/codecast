@@ -11,10 +11,12 @@ import ReactMarkdown from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import remarkGfm from "remark-gfm";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { isCommandMessage, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractSkillsFromMessages, extractFilePaths } from "../lib/conversationProcessor";
+import { isCommandMessage, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractSkillsFromMessages, extractFilePaths, isSystemMessage } from "../lib/conversationProcessor";
+import { getBuiltinCommands } from "../lib/builtinCommands";
 import type { SkillItem } from "../lib/conversationProcessor";
 import { createReducer, reducer } from "../lib/messageReducer";
 import { UsageDisplay } from "./UsageDisplay";
+import { KeyCap } from "./KeyboardShortcutsHelp";
 import { toast } from "sonner";
 import { CodeBlock } from "./CodeBlock";
 import { useDiffViewerStore } from "../store/diffViewerStore";
@@ -69,7 +71,7 @@ import { setupDesktopDrag, desktopHeaderClass } from "../lib/desktop";
 import { isInboxRoute } from "../lib/inboxRouting";
 import { MessageNavButton } from "./MessageBrowserPopover";
 import type { MentionItem } from "./editor/MentionList";
-import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Hash, FolderOpen } from "lucide-react";
+import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Hash, FolderOpen, Keyboard } from "lucide-react";
 
 function EntityAwareCode({ children, className, ...props }: any) {
   const text = String(children);
@@ -278,6 +280,7 @@ type ConversationViewProps = {
   targetMessageId?: string;
   isOwner?: boolean;
   onSendAndAdvance?: () => void;
+  onSendAndDismiss?: () => void;
   autoFocusInput?: boolean;
   fallbackStickyContent?: string | null;
   onBack?: () => void;
@@ -334,8 +337,7 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
         const store = useInboxStore.getState();
         const oldId = storeSession?._id || conversation._id;
         const storedDraft = store.getDraft(oldId);
-        const liveText = (document.querySelector('[data-draft-conv="' + oldId + '"]') as HTMLTextAreaElement)?.value;
-        const draftMessage = liveText ?? storedDraft?.draft_message ?? null;
+        const draftMessage = storedDraft?.draft_message ?? null;
         if (draftMessage || storedDraft?.draft_image_storage_ids) {
           store.setDraft(sessionId, { ...storedDraft, draft_message: draftMessage });
           store.clearDraft(oldId);
@@ -877,6 +879,7 @@ function shortenUrl(url: string): string {
 }
 
 function hasRichMarkdown(text: string): boolean {
+  if (/\b(ct|pl)-[a-z0-9]+\b/i.test(text)) return true;
   const markers = [
     /^#{1,3}\s+\S/m,           // headers
     /\|.+\|.+\|/,              // tables
@@ -926,7 +929,8 @@ type UserMessageKind =
   | { kind: 'noise' }
   | { kind: 'tool_results_only' }
   | { kind: 'empty' }
-  | { kind: 'teammate_events' };
+  | { kind: 'teammate_events' }
+  | { kind: 'poll_response' };
 
 const STICKY_NOISE_PREFIXES = ["[Request interrupted", "This session is being continued", "<task-notification>", "Your task is to create a detailed summary", "Full transcript available at:"];
 
@@ -944,6 +948,13 @@ function classifyUserMessage(
     return msg.images?.length ? { kind: 'normal' } : { kind: 'empty' };
   }
   const t = content.trim();
+  if (t.startsWith('{') && t.includes('__cc_poll')) {
+    try { if (JSON.parse(t).__cc_poll) return { kind: 'poll_response' }; } catch {}
+  }
+  const prevAssistant = immediatePrev?.role === 'assistant' ? immediatePrev : contextPrev?.role === 'assistant' ? contextPrev : null;
+  if (prevAssistant?.tool_calls?.some(tc => tc.name === 'AskUserQuestion')) {
+    return { kind: 'poll_response' };
+  }
   if (!stripSystemTags(t).trim()) return { kind: 'noise' };
   if (isCommandMessage(t)) {
     if (isSkillExpansion(t)) {
@@ -2655,7 +2666,7 @@ function CastCommandBlock({ tool, result }: { tool: ToolCall; result?: ToolResul
 
     return (
       <>
-        {entityIds.map(id => (
+        {entityIds.length > 0 && entityIds.map(id => (
           <EntityIdPill key={id} shortId={id} />
         ))}
 
@@ -2699,7 +2710,7 @@ function CastCommandBlock({ tool, result }: { tool: ToolCall; result?: ToolResul
   return (
     <div className="my-0.5">
       <div
-        className="flex items-center gap-1.5 text-xs cursor-pointer group"
+        className="flex items-baseline gap-1.5 text-xs cursor-pointer group flex-wrap"
         onClick={() => setExpanded(!expanded)}
       >
         <span className={`flex items-center gap-1 font-mono flex-shrink-0 ${config.color}`}>
@@ -2879,11 +2890,13 @@ function PlanModeBlock({ tool, result, onSendMessage }: { tool: ToolCall; result
   );
 }
 
+const _askUserSentState = new Map<string, Record<number, { key: string; label: string; text?: string }>>();
+
 function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall; result?: ToolResult; onSendMessage?: (content: string) => void }) {
   let parsedInput: { questions?: Array<{ question: string; header?: string; options: Array<{ label: string; description?: string }>; multiSelect?: boolean; isConfirmation?: boolean }>; answers?: Record<string, string> } = {};
   try { parsedInput = JSON.parse(tool.input); } catch {}
-  const [sent, setSent] = useState(false);
-  const [selections, setSelections] = useState<Record<number, { key: string; label: string; text?: string }>>({});
+  const [sent, setSent] = useState(() => _askUserSentState.has(tool.id));
+  const [selections, setSelections] = useState<Record<number, { key: string; label: string; text?: string }>>(() => _askUserSentState.get(tool.id) ?? {});
   const [otherOpen, setOtherOpen] = useState<Record<number, boolean>>({});
   const [otherTexts, setOtherTexts] = useState<Record<number, string>>({});
 
@@ -2923,6 +2936,7 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
 
   const handleSubmitAll = () => {
     if (!onSendMessage || !allAnswered) return;
+    _askUserSentState.set(tool.id, selections);
     setSent(true);
     onSendMessage(buildPayload(selections));
   };
@@ -2933,6 +2947,9 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
     if (isMultiQuestion) {
       setSelections(prev => ({ ...prev, [qIdx]: sel }));
     } else {
+      const newSels = { ...selections, [qIdx]: sel };
+      _askUserSentState.set(tool.id, newSels);
+      setSelections(newSels);
       setSent(true);
       onSendMessage!(buildPayload({ 0: sel }));
     }
@@ -2971,6 +2988,9 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
                       if (isMultiQuestion) {
                         setSelections(prev => ({ ...prev, [i]: { key: pollKey, label: cleanLabel } }));
                       } else {
+                        const newSels = { ...selections, [i]: { key: pollKey, label: cleanLabel } };
+                        _askUserSentState.set(tool.id, newSels);
+                        setSelections(newSels);
                         setSent(true);
                         onSendMessage!(JSON.stringify({ __cc_poll: true, keys: [pollKey], display: cleanLabel }));
                       }
@@ -5110,9 +5130,9 @@ function ShortcutHint({ keys, label }: { keys: string[]; label: string }) {
   return (
     <div className="flex items-center justify-between">
       <span className="text-sol-text/70">{label}</span>
-      <span className="flex items-center gap-0.5">
+      <span className="flex items-center gap-[2px]">
         {keys.map((k, i) => (
-          <kbd key={i} className="px-1 py-px rounded border border-sol-border/40 bg-sol-bg-alt text-[9px] font-mono leading-tight min-w-[18px] text-center">{k}</kbd>
+          <KeyCap key={i} size="xs">{k}</KeyCap>
         ))}
       </span>
     </div>
@@ -5342,11 +5362,11 @@ function MessageNavigator({ userMessages, onRewind, onFork, onClose, forkPointMa
           </div>
           <div className="px-4 py-2 border-t border-sol-blue/20 flex items-center justify-between">
             <div className="flex items-center gap-4 text-[11px] text-sol-blue/60">
-              <span><kbd className="px-1.5 py-0.5 rounded border border-sol-blue/20 bg-sol-blue/5 text-[10px] font-mono text-sol-blue/70">j</kbd><span className="mx-0.5">/</span><kbd className="px-1.5 py-0.5 rounded border border-sol-blue/20 bg-sol-blue/5 text-[10px] font-mono text-sol-blue/70">k</kbd> navigate</span>
-              <span><kbd className="px-1.5 py-0.5 rounded border border-sol-blue/20 bg-sol-blue/5 text-[10px] font-mono text-sol-blue/70">h</kbd><span className="mx-0.5">/</span><kbd className="px-1.5 py-0.5 rounded border border-sol-blue/20 bg-sol-blue/5 text-[10px] font-mono text-sol-blue/70">l</kbd> branches</span>
-              <span><kbd className="px-1.5 py-0.5 rounded border border-sol-blue/20 bg-sol-blue/5 text-[10px] font-mono text-sol-blue/70">Enter</kbd> rewind</span>
-              <span><kbd className="px-1.5 py-0.5 rounded border border-sol-blue/20 bg-sol-blue/5 text-[10px] font-mono text-sol-blue/70">F</kbd> fork</span>
-              <span><kbd className="px-1.5 py-0.5 rounded border border-sol-blue/20 bg-sol-blue/5 text-[10px] font-mono text-sol-blue/70">Esc</kbd> close</span>
+              <span className="flex items-center gap-1"><span className="flex items-center gap-[2px]"><KeyCap size="xs">J</KeyCap><span className="text-sol-text-dim/40">/</span><KeyCap size="xs">K</KeyCap></span> navigate</span>
+              <span className="flex items-center gap-1"><span className="flex items-center gap-[2px]"><KeyCap size="xs">H</KeyCap><span className="text-sol-text-dim/40">/</span><KeyCap size="xs">L</KeyCap></span> branches</span>
+              <span className="flex items-center gap-1"><KeyCap size="xs">Enter</KeyCap> rewind</span>
+              <span className="flex items-center gap-1"><KeyCap size="xs">F</KeyCap> fork</span>
+              <span className="flex items-center gap-1"><KeyCap size="xs">Esc</KeyCap> close</span>
             </div>
             <span className="text-[10px] text-sol-blue/40">{userMessages.length} message{userMessages.length !== 1 ? "s" : ""}</span>
           </div>
@@ -5356,7 +5376,7 @@ function MessageNavigator({ userMessages, onRewind, onFork, onClose, forkPointMa
   );
 }
 
-const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, isSessionStarting, isSessionReady, sessionId, agentType, agentStatus, pendingPermissionsCount, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onSendEscape, onOpenNavigator, onPopulateInput, permissionMode, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch, onGateSend, skills, filePaths, mentionItems }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; isSessionStarting?: boolean; isSessionReady?: boolean; sessionId?: string; agentType?: string; agentStatus?: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected"; pendingPermissionsCount?: number; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string) => void) | null>; permissionMode?: string; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void>; onGateSend?: (content: string) => Promise<void>; skills?: SkillItem[]; filePaths?: string[]; mentionItems?: MentionItem[] }) {
+const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, onSendAndDismiss, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, isSessionStarting, isSessionReady, sessionId, agentType, agentStatus, deliveryStatus, pendingPermissionsCount, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onSendEscape, onOpenNavigator, onPopulateInput, permissionMode, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch, onGateSend, skills, filePaths, mentionItems }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; onSendAndDismiss?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; isSessionStarting?: boolean; isSessionReady?: boolean; sessionId?: string; agentType?: string; agentStatus?: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected"; deliveryStatus?: string; pendingPermissionsCount?: number; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string) => void) | null>; permissionMode?: string; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void>; onGateSend?: (content: string) => Promise<void>; skills?: SkillItem[]; filePaths?: string[]; mentionItems?: MentionItem[] }) {
   const cached = useInboxStore.getState().getDraft(conversationId);
   const [message, setMessage] = useState(() => cached?.draft_message ?? initialDraft ?? "");
   const messageRef = useRef(message);
@@ -5506,12 +5526,18 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
 
   const stuckThresholdMs = isSessionStarting ? 25_000 : 15_000;
 
+  const isExistingMessageDead = existingPending?.status === "failed" || existingPending?.status === "undeliverable";
+
   useWatchEffect(() => {
     if (pendingMessageId) return;
     if (!existingPending) {
       if (!isWaitingForResponse) setShowStuckBanner(false);
       autoResumeTriggeredRef.current = false;
       forceRestartAttemptedRef.current = false;
+      return;
+    }
+    if (isExistingMessageDead) {
+      setShowStuckBanner(true);
       return;
     }
     const age = Date.now() - existingPending.created_at;
@@ -5521,7 +5547,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
       const timer = setTimeout(() => setShowStuckBanner(true), stuckThresholdMs - age);
       return () => clearTimeout(timer);
     }
-  }, [existingPending, pendingMessageId, isWaitingForResponse, stuckThresholdMs]);
+  }, [existingPending, pendingMessageId, isWaitingForResponse, stuckThresholdMs, isExistingMessageDead]);
 
   useWatchEffect(() => {
     if (!sentAt || !pendingMessageId) return;
@@ -5562,6 +5588,37 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
     }
     return [];
   });
+  const staleImageIds = useMemo(() => {
+    const ids = pastedImages
+      .filter(img => img.storageId && (!img.previewUrl || img.previewUrl.startsWith("blob:")))
+      .map(img => img.storageId!);
+    return ids.length > 0 ? ids : null;
+  }, [pastedImages]);
+  const resolvedImageUrls = useQuery(
+    api.images.getImageUrls,
+    staleImageIds ? { storageIds: staleImageIds as Id<"_storage">[] } : "skip"
+  );
+  useWatchEffect(() => {
+    if (!resolvedImageUrls) return;
+    setPastedImages(prev => {
+      const updated = prev.map(img => {
+        if (img.storageId && resolvedImageUrls[img.storageId as string]) {
+          return { ...img, previewUrl: resolvedImageUrls[img.storageId as string]! };
+        }
+        return img;
+      });
+      const draftImages = updated.filter(i => i.storageId).map(i => ({
+        storageId: i.storageId as string, previewUrl: i.previewUrl, name: i.file.name,
+      }));
+      const existing = useInboxStore.getState().getDraft(conversationId);
+      if (draftImages.length > 0) {
+        useInboxStore.getState().setDraft(conversationId, {
+          ...existing, draft_image_storage_ids: draftImages,
+        });
+      }
+      return updated;
+    });
+  }, [resolvedImageUrls, conversationId]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const escapeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [selectedImageIndex, setSelectedImageIndex] = useState<number | null>(null);
@@ -5641,12 +5698,16 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
     if (isResuming) return;
     setIsResuming(true);
     try {
-      await resumeSessionMutation({ conversation_id: conversationId as Id<"conversations"> });
+      if (isExistingMessageDead || (messageStatus?.status === "failed" || messageStatus?.status === "undeliverable")) {
+        await restartSessionMutation({ conversation_id: conversationId as Id<"conversations"> });
+      } else {
+        await resumeSessionMutation({ conversation_id: conversationId as Id<"conversations"> });
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to resume session");
       setIsResuming(false);
     }
-  }, [conversationId, resumeSessionMutation, isResuming]);
+  }, [conversationId, resumeSessionMutation, restartSessionMutation, isResuming, isExistingMessageDead, messageStatus?.status]);
 
   useWatchEffect(() => {
     if (isResuming && (isConversationLive || isThinking)) {
@@ -5690,33 +5751,33 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
 
   const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const saveDraftSnapshot = useCallback((targetId: string) => {
+    const msg = messageRef.current;
+    const imgs = pastedImagesRef.current;
+    const draftImages = imgs
+      .filter(i => i.storageId && !i.uploading)
+      .map(i => ({ storageId: i.storageId as string, previewUrl: i.previewUrl, name: i.file.name }));
+    if (!msg && draftImages.length === 0) return;
+    useInboxStore.getState().setDraft(targetId, {
+      draft_message: msg || null,
+      draft_image_storage_ids: draftImages.length > 0 ? draftImages : null,
+    });
+  }, []);
+
   useWatchEffect(() => {
     if (convIdRef.current !== conversationId) {
       if (draftTimerRef.current) {
         clearTimeout(draftTimerRef.current);
         draftTimerRef.current = null;
       }
-      const currentMsg = messageRef.current;
-      if (currentMsg) {
-        useInboxStore.getState().setDraft(conversationId, {
-          ...useInboxStore.getState().getDraft(conversationId),
-          draft_message: currentMsg,
-        });
-      }
+      saveDraftSnapshot(convIdRef.current);
       convIdRef.current = conversationId;
     }
-  }, [conversationId]);
+  }, [conversationId, saveDraftSnapshot]);
 
   useMountEffect(() => () => {
     if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
-    const msg = messageRef.current;
-    const id = convIdRef.current;
-    if (msg) {
-      useInboxStore.getState().setDraft(id, {
-        ...useInboxStore.getState().getDraft(id),
-        draft_message: msg,
-      });
-    }
+    saveDraftSnapshot(convIdRef.current);
   });
 
   const handleMessageChange = useCallback((val: string) => {
@@ -5743,6 +5804,8 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
         setAcTrigger(null);
       }
     }
+    const existing = useInboxStore.getState().getDraft(conversationId);
+    useInboxStore.getState().setDraftLocal(conversationId, { ...existing, draft_message: val || null });
     if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
     draftTimerRef.current = setTimeout(() => {
       const existing = useInboxStore.getState().getDraft(conversationId);
@@ -5834,8 +5897,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
     setPastedImages([]);
     setSelectedImageIndex(null);
     setLightboxImageIndex(null);
-    updateDraft(message, null);
-  }, [pastedImages, updateDraft, message]);
+  }, [pastedImages]);
 
   const uploadImage = useCallback(async (file: File) => {
     const previewUrl = URL.createObjectURL(file);
@@ -5885,18 +5947,21 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setAcTrigger(null);
     if (onGateSend) {
       const text = message.trim();
       if (!text) return;
       setMessage("");
-      updateDraft("", null);
+      messageRef.current = "";
+      useInboxStore.getState().clearDraftFinal(conversationId);
       await onGateSend(text);
       return;
     }
     if (onWorkflowLaunch) {
       const goal = message.trim();
       setMessage("");
-      updateDraft("", null);
+      messageRef.current = "";
+      useInboxStore.getState().clearDraftFinal(conversationId);
       await onWorkflowLaunch(goal);
       return;
     }
@@ -5936,8 +6001,12 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
       savedDraftRef.current = null;
       const content = message.trim();
       setMessage("");
+      messageRef.current = "";
       onClearSelection?.();
+      const savedPopulateFn = onPopulateInput?.current ?? null;
+      if (onPopulateInput) onPopulateInput.current = null;
       await onForkFromMessage(selectedMessageUuid);
+      setTimeout(() => { if (onPopulateInput) onPopulateInput.current = savedPopulateFn; }, 200);
       requestAnimationFrame(async () => {
         try {
           const branches = useInboxStore.getState().activeBranches;
@@ -5971,9 +6040,10 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
     const clientId = addOptimistic(conversationId, trimmed, optimisticImages.length > 0 ? optimisticImages : undefined);
     soundSend();
     setMessage("");
+    messageRef.current = "";
     setSelectedQueueIndex(null);
     clearAllImages();
-    updateDraft("", null);
+    useInboxStore.getState().clearDraftFinal(conversationId);
     requestAnimationFrame(() => textareaRef.current?.focus());
     onMessageSent?.();
 
@@ -6217,12 +6287,17 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
       if (text) {
         setQueuedMessages(prev => [...prev, text]);
         setMessage("");
-        updateDraft("", null);
+        useInboxStore.getState().clearDraftFinal(conversationId);
         setSelectedQueueIndex(null);
       }
       return;
     }
-    if (e.key === "Enter" && e.altKey && onSendAndAdvance) {
+    if (e.key === "Enter" && e.altKey && e.shiftKey && onSendAndDismiss) {
+      e.preventDefault();
+      handleSubmit(e).then(() => onSendAndDismiss());
+      return;
+    }
+    if (e.key === "Enter" && e.altKey && !e.shiftKey && onSendAndAdvance) {
       e.preventDefault();
       handleSubmit(e).then(() => onSendAndAdvance());
       return;
@@ -6240,13 +6315,23 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
       {lightboxImageIndex === null && <div className="h-16 bg-gradient-to-t from-sol-bg via-sol-bg/80 to-transparent -mt-16 relative" />}
       <div className={`pb-4 pointer-events-auto ${lightboxImageIndex === null ? "bg-sol-bg" : ""}`}>
         <div className="relative">
-          {(isFocused || shortcutTooltip || showStuckBanner || isSessionStarting || isSessionReady || isInactive || isSessionDisconnected || (agentStatus && agentStatus !== "idle") || (!agentStatus && (isWaitingForResponse || isThinking || isConversationLive))) && (
+          {(isFocused || shortcutTooltip || showStuckBanner || isSessionStarting || isSessionReady || isInactive || isSessionDisconnected || (pendingMessageId || existingPending) || (agentStatus && agentStatus !== "idle") || (!agentStatus && (isWaitingForResponse || isThinking || isConversationLive))) && (
             <div className={`mx-auto px-4 mb-1 flex justify-between items-center ${isExpanded ? "max-w-4xl" : "max-w-md"} ${lightboxImageIndex !== null ? "hidden" : ""}`}>
               <p className="text-[11px] text-sol-text-dim/70 pl-1">
                 {isSessionStarting && !showStuckBanner && !agentStatus ? (
                   <span className="flex items-center gap-1.5">
                     <span className="w-2 h-2 rounded-full bg-sol-cyan/50 animate-pulse" />
                     Starting session...
+                  </span>
+                ) : (pendingMessageId || existingPending) && !agentStatus && (deliveryStatus === "starting" || deliveryStatus === "connected") ? (
+                  <span className="flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-sol-cyan/50 animate-pulse" />
+                    {deliveryStatus === "starting" ? "Starting session..." : "Delivering..."}
+                  </span>
+                ) : (pendingMessageId || existingPending) && !showStuckBanner && !agentStatus ? (
+                  <span className="flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-sol-cyan/50 animate-pulse" />
+                    Queued — waiting for daemon...
                   </span>
                 ) : isSessionReady && !showStuckBanner && (!agentStatus || agentStatus === "idle" || agentStatus === "connected") ? (
                   <span className="flex items-center gap-1.5">
@@ -6269,15 +6354,17 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
                   ) : (
                     <span className="flex items-center gap-1.5 text-sol-orange">
                       <span className="w-2 h-2 rounded-full bg-sol-orange" />
-                      {existingPending || pendingMessageId
-                        ? `Message not reaching session${messageStatus?.retry_count ? ` (retry ${messageStatus.retry_count})` : ""}`
-                        : "Session not responding"}
+                      {isExistingMessageDead || messageStatus?.status === "undeliverable"
+                        ? "Message undeliverable — session lost"
+                        : (existingPending || pendingMessageId)
+                          ? `Message not reaching session${messageStatus?.retry_count ? ` (retry ${messageStatus.retry_count})` : ""}`
+                          : "Session not responding"}
                       <button
                         type="button"
                         onClick={handleForceResume}
                         className="ml-1 px-1.5 py-0.5 rounded bg-sol-orange/10 hover:bg-sol-orange/20 border border-sol-orange/30 text-sol-orange transition-colors text-[10px]"
                       >
-                        Force resume
+                        {isExistingMessageDead || messageStatus?.status === "undeliverable" || messageStatus?.status === "failed" ? "Restart & retry" : "Force resume"}
                       </button>
                     </span>
                   )
@@ -6344,12 +6431,14 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
                     if (rect) setShortcutTooltip(prev => prev ? null : { x: rect.right, y: rect.top });
                   }}
                   onMouseEnter={() => {
+                    clearTimeout((window as any).__shortcutTooltipTimer);
                     const rect = sendRef.current?.getBoundingClientRect();
                     if (rect) setShortcutTooltip({ x: rect.right, y: rect.top });
                   }}
-                  onMouseLeave={(e) => {
-                    const related = e.relatedTarget as Element | null;
-                    if (!related?.closest?.('[data-shortcut-tooltip]')) setShortcutTooltip(null);
+                  onMouseLeave={() => {
+                    (window as any).__shortcutTooltipTimer = setTimeout(() => {
+                      if (!document.querySelector('[data-shortcut-tooltip]:hover')) setShortcutTooltip(null);
+                    }, 150);
                   }}
                   className="text-[9px] text-sol-text-dim hover:text-sol-text transition-colors w-4 h-4 flex items-center justify-center rounded-full border border-sol-text-dim/50 hover:border-sol-text-dim bg-sol-bg-alt font-semibold"
                 >
@@ -6611,12 +6700,15 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
           </form>
         </div>
       </div>
-      {shortcutTooltip && (
+      {shortcutTooltip && createPortal(
         <div
           data-shortcut-tooltip
-          className="fixed z-[100] bg-sol-bg border border-sol-border/60 rounded-lg shadow-lg p-3 w-56 transition-opacity duration-150"
+          className="fixed z-[10000] bg-sol-bg border border-sol-border/60 rounded-lg shadow-lg p-3 w-56"
           style={{ top: shortcutTooltip.y - 30, left: shortcutTooltip.x, transform: 'translate(-100%, -100%)' }}
-          onMouseLeave={() => setShortcutTooltip(null)}
+          onMouseEnter={() => clearTimeout((window as any).__shortcutTooltipTimer)}
+          onMouseLeave={() => {
+            (window as any).__shortcutTooltipTimer = setTimeout(() => setShortcutTooltip(null), 150);
+          }}
         >
           <div className="text-[10px] font-medium text-sol-text/80 mb-2">Keyboard Shortcuts</div>
           <div className="space-y-1.5 text-[9px] text-sol-text-dim/70">
@@ -6638,9 +6730,19 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
             <ShortcutHint keys={["Shift", "Enter"]} label="New line" />
             <ShortcutHint keys={["Ctrl", "Enter"]} label="Queue message" />
             <ShortcutHint keys={["Alt", "Enter"]} label="Reply and advance" />
+            <ShortcutHint keys={["Alt", "Shift", "Enter"]} label="Reply and dismiss" />
             <ShortcutHint keys={["Enter"]} label="Send message" />
+            <div className="border-t border-sol-border/20 mt-1.5 pt-1.5">
+              <button
+                onClick={() => { setShortcutTooltip(null); useInboxStore.getState().toggleShortcutsPanel(); }}
+                className="text-sol-cyan/80 hover:text-sol-cyan transition-colors flex items-center gap-1"
+              >
+                <Keyboard className="w-3 h-3" /> View all shortcuts
+              </button>
+            </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
       {lightboxImageIndex !== null && pastedImages[lightboxImageIndex] && createPortal(
         <div className="fixed inset-0 z-[10001] flex items-center justify-center" style={{ backgroundColor: `rgba(0,0,0,${0.8 * lightboxSwipe.backdropOpacity})` }}>
@@ -6669,7 +6771,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
 const CC_MODE_ORDER = ["default", "plan", "acceptEdits", "bypassPermissions", "dontAsk"];
 
 export const ConversationView = forwardRef<ConversationViewHandle, ConversationViewProps>(
-  function ConversationView({ conversation, commits = [], pullRequests = [], backHref, backLabel = "Back", headerExtra, headerLeft, headerEnd, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, onLoadOlder, onLoadNewer, onJumpToStart, onJumpToEnd, highlightQuery, onClearHighlight, embedded, showMessageInput = true, targetMessageId, isOwner = true, onSendAndAdvance, autoFocusInput, fallbackStickyContent, onBack, subHeaderContent, hideHeader }, ref) {
+  function ConversationView({ conversation, commits = [], pullRequests = [], backHref, backLabel = "Back", headerExtra, headerLeft, headerEnd, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, onLoadOlder, onLoadNewer, onJumpToStart, onJumpToEnd, highlightQuery, onClearHighlight, embedded, showMessageInput = true, targetMessageId, isOwner = true, onSendAndAdvance, onSendAndDismiss, autoFocusInput, fallbackStickyContent, onBack, subHeaderContent, hideHeader }, ref) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [userScrolled, _setUserScrolled] = useState(false);
   const userScrolledRef = useRef(false);
@@ -6740,27 +6842,33 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const repairSession = useMutation(api.conversations.repairSession);
   const promoteToPlan = useMutation(api.plans.webPromoteSession);
   const addOptimisticMsg = useInboxStore((s) => s.addOptimisticMessage);
+  const activeBranches = useInboxStore((s) => s.activeBranches);
+  const optimisticForkChildren = useInboxStore((s) => s.optimisticForkChildren);
+  const firstActiveForkId = useMemo(() => {
+    const entries = Object.entries(activeBranches);
+    if (entries.length === 0) return null;
+    const [, convId] = entries[0];
+    const allForks = [...(conversation?.fork_children || []), ...optimisticForkChildren];
+    if (!allForks.some(f => f._id === convId)) return null;
+    return convId;
+  }, [activeBranches, conversation?.fork_children, optimisticForkChildren]);
+  const effectiveConversationId = firstActiveForkId || conversation?._id;
 
   const handleSendInlineMessage = useCallback(async (content: string) => {
-    if (!conversation) return;
-    let displayContent = content;
-    try {
-      const parsed = JSON.parse(content);
-      if (parsed.__cc_poll && parsed.display) displayContent = parsed.display;
-    } catch {}
-    const clientId = addOptimisticMsg(conversation._id, displayContent);
+    if (!conversation || !effectiveConversationId) return;
+    const clientId = addOptimisticMsg(effectiveConversationId, content);
     setUserScrolled(false);
     requestAnimationFrame(() => scrollToBottomFnRef.current());
     try {
-      await sendInlineMessage({ conversation_id: conversation._id, content, client_id: clientId });
+      await sendInlineMessage({ conversation_id: effectiveConversationId as Id<"conversations">, content, client_id: clientId });
     } catch {
       toast.error("Failed to send message");
     }
-  }, [conversation, sendInlineMessage, addOptimisticMsg, setUserScrolled]);
+  }, [conversation, effectiveConversationId, sendInlineMessage, addOptimisticMsg, setUserScrolled]);
   const managedSession = useQuery(
     api.managedSessions.isSessionManaged,
-    conversation && isOwner && conversation.status === "active" && isConvexId(conversation._id)
-      ? { conversation_id: conversation._id }
+    conversation && isOwner && conversation.status === "active" && effectiveConversationId && isConvexId(effectiveConversationId)
+      ? { conversation_id: effectiveConversationId as Id<"conversations"> }
       : "skip"
   );
   const isSessionLive = managedSession?.managed === true;
@@ -6803,13 +6911,13 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const optimisticTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const handleCycleMode = useCallback(() => {
     if (!conversation || !isOwner || conversation.status !== "active") return;
-    sendKeys({ conversation_id: conversation._id, keys: "BTab" });
+    sendKeys({ conversation_id: (effectiveConversationId || conversation._id) as Id<"conversations">, keys: "BTab" });
     const currentMode = optimisticMode || managedSession?.permission_mode || "default";
     const nextIdx = (CC_MODE_ORDER.indexOf(currentMode) + 1) % CC_MODE_ORDER.length;
     setOptimisticMode(CC_MODE_ORDER[nextIdx]);
     clearTimeout(optimisticTimerRef.current);
     optimisticTimerRef.current = setTimeout(() => setOptimisticMode(null), 8000);
-  }, [conversation, isOwner, sendKeys, optimisticMode, managedSession?.permission_mode]);
+  }, [conversation, isOwner, sendKeys, optimisticMode, managedSession?.permission_mode, effectiveConversationId]);
   useWatchEffect(() => {
     if (optimisticMode && managedSession?.permission_mode === optimisticMode) {
       setOptimisticMode(null);
@@ -6837,7 +6945,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
   const agentNameToChildMap = conversation?.agent_name_map as Record<string, string> | undefined;
 
-  const optimisticForkChildren = useInboxStore((s) => s.optimisticForkChildren);
   const addOptimisticFork = useInboxStore((s) => s.addOptimisticFork);
   const pruneOptimisticForks = useInboxStore((s) => s.pruneOptimisticForks);
 
@@ -6944,7 +7051,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const pendingPermissions = pendingPermissionsRaw?.filter((p: any) => !PERMISSION_SKIP_TOOLS.has(p.tool_name));
 
   // Fork navigation state (data in inbox store, UI state in forkNavigationStore)
-  const activeBranches = useInboxStore((s) => s.activeBranches);
   const inboxMessages = useInboxStore((s) => s.messages);
   const forkSwitchBranch = useInboxStore((s) => s.switchBranch);
   const forkClearBranch = useInboxStore((s) => s.clearBranch);
@@ -6954,17 +7060,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const toggleTreePanel = useForkNavigationStore((s) => s.toggleTreePanel);
   const forkSetSelectedIndex = useForkNavigationStore((s) => s.setSelectedIndex);
   const resetForkNav = useInboxStore((s) => s.resetForkNav);
-
-  const firstActiveForkId = useMemo(() => {
-    const entries = Object.entries(activeBranches);
-    if (entries.length === 0) return null;
-    const [, convId] = entries[0];
-    const allForks = [...(conversation?.fork_children || []), ...optimisticForkChildren];
-    if (!allForks.some(f => f._id === convId)) return null;
-    return convId;
-  }, [activeBranches, conversation?.fork_children, optimisticForkChildren]);
-
-  const effectiveConversationId = firstActiveForkId || conversation?._id;
 
   const prevConvIdRef = useRef<string | null>(null);
   useWatchEffect(() => {
@@ -7120,10 +7215,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   );
 
   const handleSendEscape = useCallback(() => {
-    if (!conversation || !isOwner || conversation.status !== "active") return;
-    sendEscape({ conversation_id: conversation._id });
+    if (!conversation || !isOwner || conversation.status !== "active" || !effectiveConversationId) return;
+    sendEscape({ conversation_id: effectiveConversationId as Id<"conversations"> });
     toast.info("Escape sent to session");
-  }, [conversation, isOwner, sendEscape]);
+  }, [conversation, isOwner, sendEscape, effectiveConversationId]);
 
   const handleMessageSent = useCallback(() => {
     setUserScrolled(false);
@@ -7141,9 +7236,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     setNavigatorOpen(false);
     handleForkFromMessage(msg.message_uuid);
     if (isOwner && conversation.status === "active") {
-      rewindSession({ conversation_id: conversation._id, steps_back: indexFromEnd });
+      rewindSession({ conversation_id: (effectiveConversationId || conversation._id) as Id<"conversations">, steps_back: indexFromEnd });
     }
-  }, [handleForkFromMessage, conversation, isOwner, rewindSession]);
+  }, [handleForkFromMessage, conversation, isOwner, rewindSession, effectiveConversationId]);
 
   const handleNavigatorFork = useCallback((msg: NavUserMessage) => {
     if (!msg.message_uuid) return;
@@ -7200,12 +7295,17 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   }, [timeline, conversation?.agent_type]);
 
   const sessionSkills = useMemo(() => {
+    let extracted: Array<{ name: string; description: string }> = [];
     if (conversation?.available_skills) {
-      try { return JSON.parse(conversation.available_skills) as Array<{ name: string; description: string }>; } catch {}
+      try { extracted = JSON.parse(conversation.available_skills); } catch {}
     }
-    if (!conversation?.messages) return [];
-    return extractSkillsFromMessages(conversation.messages);
-  }, [conversation?.available_skills, conversation?.messages]);
+    if (!extracted.length && conversation?.messages) {
+      extracted = extractSkillsFromMessages(conversation.messages);
+    }
+    const builtins = getBuiltinCommands(conversation?.agent_type);
+    const names = new Set(extracted.map(s => s.name.toLowerCase()));
+    return [...extracted, ...builtins.filter(b => !names.has(b.name.toLowerCase()))];
+  }, [conversation?.available_skills, conversation?.messages, conversation?.agent_type]);
 
   const sessionFilePaths = useMemo(() => {
     if (!conversation?.messages) return [];
@@ -7239,18 +7339,55 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     return !!(hasThinkingContent && !hasVisibleContent);
   }, [conversation, timeline, hasMoreBelow]);
 
+  const serverUserMessages = useQuery(
+    api.conversations.getUserMessages,
+    conversation?._id && isConvexId(conversation._id)
+      ? { conversation_id: conversation._id as Id<"conversations"> }
+      : "skip"
+  );
+
+  const processedServerMsgIds = useMemo(() => {
+    if (!serverUserMessages) return new Set<string>();
+    const ids = new Set<string>();
+    for (const m of serverUserMessages) {
+      const display = cleanContent(m.content);
+      if (display.length > 0 && !isSystemMessage(display)) ids.add(m._id);
+    }
+    return ids;
+  }, [serverUserMessages]);
+
   const stickyUserMsgIndices = useMemo(() => {
+    const useServer = processedServerMsgIds.size > 0;
     const indices: number[] = [];
     for (let i = 0; i < timeline.length; i++) {
       const item = timeline[i];
       if (item.type !== 'message') continue;
       const msg = item.data as Message;
       if (msg.role !== 'user') continue;
-      const kind = userMsgKindMap.get(msg._id);
-      if (kind && isStickyWorthy(kind)) indices.push(i);
+      if (useServer) {
+        if (processedServerMsgIds.has(msg._id)) indices.push(i);
+      } else {
+        const kind = userMsgKindMap.get(msg._id);
+        if (kind && isStickyWorthy(kind)) indices.push(i);
+      }
     }
     return indices;
-  }, [timeline, userMsgKindMap]);
+  }, [timeline, processedServerMsgIds, userMsgKindMap]);
+
+  const serverStickyFallback = useMemo(() => {
+    if (!serverUserMessages || serverUserMessages.length === 0 || !hasMoreAbove) return null;
+    const localIds = new Set<string>();
+    for (const item of timeline) {
+      if (item.type === 'message') localIds.add((item.data as Message)._id);
+    }
+    for (let i = serverUserMessages.length - 1; i >= 0; i--) {
+      const msg = serverUserMessages[i];
+      if (!localIds.has(msg._id) && processedServerMsgIds.has(msg._id)) {
+        return { id: msg._id, content: msg.content };
+      }
+    }
+    return null;
+  }, [serverUserMessages, timeline, hasMoreAbove, processedServerMsgIds]);
 
   const [activeStickyMsg, setActiveStickyMsgRaw] = useState<{ index: number; content: string; id: string } | null>(null);
   const setActiveStickyMsg = useCallback((val: { index: number; content: string; id: string } | null) => {
@@ -7588,6 +7725,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         case 'noise': return 0;
         case 'tool_results_only': return 0;
         case 'empty': return 0;
+        case 'poll_response': return 0;
       }
       return 100;
     }
@@ -7789,7 +7927,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         }
       }
       if (bestIdx !== null) {
-        const viewportHeight = el.clientHeight;
         let hideForNextMsg = false;
         const stickyBottom = headerHeight + (stickyElRef.current?.offsetHeight ?? 0);
         if (bestArrayIdx !== null) {
@@ -7802,11 +7939,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
               if (nextMsgTop < stickyBottom) {
                 hideForNextMsg = true;
               }
-            }
-          } else {
-            const contentBottom = el.scrollHeight - scrollTop;
-            if (contentBottom < viewportHeight + 100) {
-              hideForNextMsg = true;
             }
           }
         }
@@ -7837,6 +7969,12 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         }
         setActiveStickyMsg({ index: bestIdx, content: msg.content!, id: msgId });
         setStickyMsgVisible(!inGap && !hideForNextMsg);
+      } else if (serverStickyFallback && scrollTop > headerHeight + 40) {
+        prevStickyMsgIdRef.current = serverStickyFallback.id;
+        prevStickyIdxRef.current = null;
+        stickyGapRef.current = null;
+        setActiveStickyMsg({ index: -1, content: serverStickyFallback.content, id: serverStickyFallback.id });
+        setStickyMsgVisible(true);
       } else if (fallbackStickyContent && scrollTop > el.clientHeight) {
         prevStickyMsgIdRef.current = '__fallback__';
         prevStickyIdxRef.current = null;
@@ -7855,7 +7993,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     const onScroll = () => { if (!ticking) { ticking = true; requestAnimationFrame(check); } };
     el.addEventListener('scroll', onScroll, { passive: true });
     return () => el.removeEventListener('scroll', onScroll);
-  }, [stickyUserMsgIndices, virtualizer, timeline, fallbackStickyContent, headerHeight, stickyDisabled]);
+  }, [stickyUserMsgIndices, virtualizer, timeline, fallbackStickyContent, serverStickyFallback, headerHeight, stickyDisabled]);
 
   useImperativeHandle(ref, () => ({
     scrollToMessage: (messageId: string) => {
@@ -8426,6 +8564,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         case 'compaction_prompt':
         case 'noise':
         case 'empty':
+        case 'poll_response':
           return null;
         case 'command':
           if (collapsed) return null;
@@ -8657,7 +8796,13 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
               </h1>
             )}
 
-            {isSessionDisconnected ? (
+            {isSessionDisconnected && (managedSession?.agent_status === "starting" || managedSession?.agent_status === "connected") ? (
+              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] flex-shrink-0 bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/30">
+                <span className="w-1.5 h-1.5 rounded-full bg-sol-cyan animate-pulse" />
+                <span className="hidden sm:inline">{managedSession?.agent_status === "starting" ? "Starting" : "Delivering"}</span>
+                <span className="sm:hidden">{managedSession?.agent_status === "starting" ? "Start" : "Dlvr"}</span>
+              </span>
+            ) : isSessionDisconnected ? (
               <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] flex-shrink-0 bg-sol-text-dim/5 text-sol-text-dim/50 border border-sol-text-dim/10">
                 <span className="w-1.5 h-1.5 rounded-full bg-sol-text-dim/30" />
                 <span className="hidden sm:inline">Disconnected</span>
@@ -8665,29 +8810,31 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
               </span>
             ) : null}
 
-            {!isSessionDisconnected && (managedSession?.agent_status === "working" || managedSession?.agent_status === "thinking" || managedSession?.agent_status === "compacting" || managedSession?.agent_status === "permission_blocked" || managedSession?.agent_status === "connected" || (!managedSession?.agent_status && isConversationLive)) && (
+            {!isSessionDisconnected && (managedSession?.agent_status === "working" || managedSession?.agent_status === "thinking" || managedSession?.agent_status === "compacting" || managedSession?.agent_status === "permission_blocked" || managedSession?.agent_status === "connected" || managedSession?.agent_status === "starting" || (!managedSession?.agent_status && isConversationLive)) && (
               <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] flex-shrink-0 ${
                 managedSession?.agent_status === "thinking" ? "bg-sol-violet/10 text-sol-violet border border-sol-violet/30" :
                 managedSession?.agent_status === "compacting" ? "bg-amber-500/10 text-amber-400 border border-amber-500/30" :
                 managedSession?.agent_status === "permission_blocked" ? "bg-sol-orange/10 text-sol-orange border border-sol-orange/30" :
-                managedSession?.agent_status === "connected" ? "bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/30" :
+                managedSession?.agent_status === "connected" || managedSession?.agent_status === "starting" ? "bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/30" :
                 "bg-emerald-500/10 text-emerald-400 border border-emerald-500/30"
               }`}>
                 <span className={`w-1.5 h-1.5 rounded-full animate-pulse ${
                   managedSession?.agent_status === "thinking" ? "bg-sol-violet" :
                   managedSession?.agent_status === "compacting" ? "bg-amber-400" :
                   managedSession?.agent_status === "permission_blocked" ? "bg-sol-orange" :
-                  managedSession?.agent_status === "connected" ? "bg-sol-cyan" :
+                  managedSession?.agent_status === "connected" || managedSession?.agent_status === "starting" ? "bg-sol-cyan" :
                   "bg-emerald-400"
                 }`} />
                 <span className="hidden sm:inline">{managedSession?.agent_status === "thinking" ? "Thinking" :
                  managedSession?.agent_status === "compacting" ? "Compacting" :
                  managedSession?.agent_status === "permission_blocked" ? "Needs Input" :
+                 managedSession?.agent_status === "starting" ? "Starting" :
                  managedSession?.agent_status === "connected" ? "Connected" :
                  "Working"}</span>
                 <span className="sm:hidden">{managedSession?.agent_status === "thinking" ? "Think" :
                  managedSession?.agent_status === "compacting" ? "Compact" :
                  managedSession?.agent_status === "permission_blocked" ? "Input" :
+                 managedSession?.agent_status === "starting" ? "Start" :
                  managedSession?.agent_status === "connected" ? "Conn" :
                  "Work"}</span>
               </span>
@@ -8841,8 +8988,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                         <DropdownMenuItem onSelect={() => {
                           setTimeout(async () => {
                             try {
-                              await restartSession({ conversation_id: conversation._id });
-                              toast.success("Session restarting...");
+                              await restartSession({ conversation_id: (effectiveConversationId || conversation._id) as Id<"conversations"> });
+                              toast.success("Restarting session, retrying pending messages...");
                             } catch { toast.error("Failed to restart session"); }
                           });
                         }}>
@@ -8854,8 +9001,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                         <DropdownMenuItem onSelect={() => {
                           setTimeout(async () => {
                             try {
-                              await repairSession({ conversation_id: conversation._id });
-                              toast.success("Repairing session from DB...");
+                              await repairSession({ conversation_id: (effectiveConversationId || conversation._id) as Id<"conversations"> });
+                              toast.success("Repairing session, retrying pending messages...");
                             } catch { toast.error("Failed to repair session"); }
                           });
                         }}>
@@ -8887,7 +9034,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
                         </svg>
                         Rename
-                        <kbd className="ml-auto text-[9px] text-sol-text-dim bg-sol-bg-alt border border-sol-border rounded px-1 py-0.5">⌃⇧E</kbd>
                       </DropdownMenuItem>
                     )}
                     {conversation?.session_id && (
@@ -8990,17 +9136,14 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                                 <DropdownMenuItem
                                   key={t}
                                   onClick={() => {
-                                    setTimeout(async () => {
-                                      try {
-                                        const result = await forkFromMessage({
-                                          conversation_id: conversation._id.toString(),
-                                          target_agent_type: t,
-                                        });
-                                        toast.success(`Forked as ${formatAgentType(t)}`);
-                                        window.location.href = `/conversation/${result.conversation_id}`;
-                                      } catch (err) {
-                                        toast.error(err instanceof Error ? err.message : "Failed to switch agent");
-                                      }
+                                    const sessionId = useInboxStore.getState().switchAgent(conversation._id.toString(), t);
+                                    if (!sessionId) return;
+                                    forkFromMessage({
+                                      conversation_id: conversation._id.toString(),
+                                      target_agent_type: t,
+                                      session_id: sessionId,
+                                    }).catch((err) => {
+                                      toast.error(err instanceof Error ? err.message : "Failed to switch agent");
                                     });
                                   }}
                                 >
@@ -9020,7 +9163,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
                           </svg>
                           Fork tree
-                          <kbd className="ml-auto text-[9px] text-sol-text-dim bg-sol-bg-alt border border-sol-border rounded px-1 py-0.5">t</kbd>
                         </DropdownMenuItem>
                       </>
                     )}
@@ -9103,8 +9245,13 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           onClick={() => {
             if (activeStickyMsg.index >= 0) {
               virtualizer.scrollToIndex(activeStickyMsg.index, { align: 'start' });
-            } else if (onJumpToEnd) {
-              onJumpToEnd();
+            } else if (activeStickyMsg.id && activeStickyMsg.id !== '__fallback__' && conversation?._id) {
+              useInboxStore.setState({
+                pendingNavigateId: conversation._id,
+                pendingScrollToMessageId: activeStickyMsg.id,
+              });
+            } else if (onJumpToStart) {
+              onJumpToStart();
             }
           }}
         >
@@ -9335,7 +9482,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
               </div>
             )
           )}
-          <MessageInput conversationId={firstActiveForkId || conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} isSessionStarting={isSessionStarting} isSessionReady={isSessionReady} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={isSessionDisconnected ? undefined : managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={handleForkFromMessage} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onGateSend={workflowRun?.status === "paused" ? handleGateRespond : undefined} skills={sessionSkills} filePaths={sessionFilePaths} mentionItems={mentionItemsRef.current} />
+          <MessageInput conversationId={firstActiveForkId || conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} onSendAndDismiss={onSendAndDismiss} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} isSessionStarting={isSessionStarting} isSessionReady={isSessionReady} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={isSessionDisconnected ? undefined : managedSession?.agent_status as any} deliveryStatus={managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={handleForkFromMessage} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onGateSend={workflowRun?.status === "paused" ? handleGateRespond : undefined} skills={sessionSkills} filePaths={sessionFilePaths} mentionItems={mentionItemsRef.current} />
           {navigatorOpen && navigatorUserMessages && navigatorUserMessages.length > 0 && (
             <MessageNavigator
               userMessages={navigatorUserMessages}

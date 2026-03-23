@@ -1,7 +1,8 @@
 import { create } from "zustand";
-import { mutativeMiddleware, action } from "./mutativeMiddleware";
+import { mutativeMiddleware, action, sync } from "./mutativeMiddleware";
 import { applySyncTable, type PendingEntry } from "./syncProtocol";
 import { soundDismiss } from "../lib/sounds";
+import { loadCache, writePatchesToIDB, setHydrating } from "./idbCache";
 
 export type { PendingEntry } from "./syncProtocol";
 
@@ -64,7 +65,7 @@ export type InboxSession = {
   is_unresponsive?: boolean;
   is_connected?: boolean;
   has_pending: boolean;
-  agent_status?: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected";
+  agent_status?: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "starting";
   is_deferred?: boolean;
   is_pinned?: boolean;
   last_user_message?: string | null;
@@ -152,6 +153,7 @@ export type TaskItem = {
   status: string;
   priority: string;
   source: string;
+  triage_status?: string;
   labels?: string[];
   blocked_by?: string[];
   blocks?: string[];
@@ -219,6 +221,15 @@ export type TaskViewPrefs = {
   label?: string;
   assignee?: string;
   hide_agent?: boolean;
+  source?: string;
+};
+
+export type DocViewPrefs = {
+  doc_type?: string;
+  sort?: string;
+  project?: string;
+  label?: string;
+  scope?: string;
 };
 
 export type ClientUI = {
@@ -233,6 +244,7 @@ export type ClientUI = {
   inbox_shortcuts_hidden?: boolean;
   sounds_enabled?: boolean;
   task_view?: TaskViewPrefs;
+  doc_view?: DocViewPrefs;
 };
 
 export type ClientLayouts = {
@@ -258,6 +270,7 @@ export type ClientState = {
   ui?: ClientUI;
   layouts?: ClientLayouts;
   dismissed?: ClientDismissed;
+  drafts?: Record<string, Record<string, any> | null>;
 
   // deprecated: backward compat
   sidebar_collapsed?: boolean;
@@ -284,6 +297,13 @@ export function sortSessions(sessions: Record<string, InboxSession>): InboxSessi
   return list;
 }
 
+export function getSessionRenderKey(
+  session: Pick<InboxSession, "_id" | "session_id"> | null | undefined,
+): string | null {
+  if (!session) return null;
+  return session.session_id || session._id;
+}
+
 export function isSub(s: InboxSession): boolean {
   return !!s.is_subagent || !!s.parent_conversation_id || !!s.worktree_name;
 }
@@ -302,11 +322,11 @@ export function categorizeSessions(
   sessionsWithQueuedMessages: Set<string>,
 ): CategorizedSessions {
   const sorted = sortSessions(sessions);
-  const parentIds = new Set(sorted.filter((s) => !isSub(s)).map((s) => s._id));
+  const allIds = new Set(sorted.map((s) => s._id));
 
   const subsByParent = new Map<string, InboxSession[]>();
   for (const s of sorted) {
-    if (isSub(s) && s.parent_conversation_id && parentIds.has(s.parent_conversation_id)) {
+    if (s.parent_conversation_id && allIds.has(s.parent_conversation_id)) {
       if (!subsByParent.has(s.parent_conversation_id)) subsByParent.set(s.parent_conversation_id, []);
       subsByParent.get(s.parent_conversation_id)!.push(s);
     }
@@ -372,6 +392,12 @@ interface InboxStoreState {
   openComposePalette: (initialMessage?: string) => void;
   closeComposePalette: () => void;
 
+  // -- Unified command palette --
+  palette: { open: boolean; targets: any[]; targetType: 'task' | 'doc' | null; initialMode: string };
+  openPalette: (opts?: { targets?: any[]; targetType?: 'task' | 'doc'; mode?: string }) => void;
+  closePalette: () => void;
+  togglePalette: () => void;
+
   // -- Fork navigation --
   activeBranches: Record<string, string>;
   optimisticForkChildren: ForkChild[];
@@ -391,6 +417,7 @@ interface InboxStoreState {
   resumeSession: (convId: string) => Promise<any>;
   sendEscape: (convId: string) => void;
   createSession: (opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string }) => Promise<any>;
+  switchAgent: (currentId: string, targetAgentType: string) => string | null;
 
   // -- Generic sync --
   syncTable: (tableName: string, incoming: Array<{ _id: string; [k: string]: any }>, extra?: Record<string, any>) => void;
@@ -435,8 +462,10 @@ interface InboxStoreState {
 
   // -- Drafts --
   setDraft: (id: string, fields: Record<string, any>) => void;
+  setDraftLocal: (id: string, fields: Record<string, any>) => void;
   getDraft: (id: string) => Record<string, any> | undefined;
   clearDraft: (id: string) => void;
+  clearDraftFinal: (id: string) => void;
 
   // -- Session ID resolution --
   resolveSessionId: (sessionId: string, convexId: string) => void;
@@ -483,6 +512,10 @@ interface InboxStoreState {
   sessionsWithQueuedMessages: Set<string>;
   setSessionHasQueuedMessages: (sessionId: string, hasQueued: boolean) => void;
 
+  // -- Shortcuts panel --
+  shortcutsPanelOpen: boolean;
+  toggleShortcutsPanel: () => void;
+
   // -- Side panel --
   sidePanelSessionId: string | null;
   sidePanelOpen: boolean;
@@ -494,12 +527,24 @@ interface InboxStoreState {
 
   // -- Task / Doc mutations (action + side effect) --
   updateTaskStatus: (shortId: string, status: string) => Promise<any>;
-  updateTask: (shortId: string, fields: { status?: string; priority?: string; title?: string; description?: string; labels?: string[] }) => Promise<any>;
+  updateTask: (shortId: string, fields: { status?: string; priority?: string; title?: string; description?: string; labels?: string[]; triage_status?: string }) => Promise<any>;
   createTask: (opts: { title: string; description?: string; task_type?: string; priority?: string; status?: string; project_id?: string; labels?: string[] }) => Promise<any>;
   addTaskComment: (shortId: string, text: string, commentType?: string) => Promise<any>;
   updateDoc: (id: string, fields: { content?: string; title?: string; doc_type?: string; labels?: string[] }) => void;
   pinDoc: (id: string, pinned: boolean) => Promise<any>;
   archiveDoc: (id: string) => Promise<any>;
+
+  // -- Cached query data (local-first) --
+  teams: any[];
+  teamMembers: any[];
+  teamUnreadCount: number | null;
+  favorites: any[];
+  bookmarks: any[];
+  syncTeams: (teams: any[]) => void;
+  syncTeamMembers: (members: any[]) => void;
+  syncTeamUnreadCount: (count: number | null) => void;
+  syncFavorites: (favorites: any[]) => void;
+  syncBookmarks: (bookmarks: any[]) => void;
 
   // -- Selectors --
   getSession: (id: string) => InboxSession | undefined;
@@ -520,6 +565,41 @@ const DEFAULT_PAGINATION: PaginationState = {
 
 function stripImageRef(s: string): string {
   return s.replace(/\[Image[:\s][^\]]*\]/gi, "").trim();
+}
+
+function rekeyId(draft: any, oldId: string, newId: string) {
+  if (oldId === newId) return;
+  if (draft.sessions[oldId]) {
+    draft.sessions[newId] = { ...draft.sessions[oldId], _id: newId };
+    delete draft.sessions[oldId];
+  }
+  if (draft.messages[oldId]) {
+    draft.messages[newId] = draft.messages[oldId];
+    delete draft.messages[oldId];
+  }
+  if (draft.pagination[oldId]) {
+    draft.pagination[newId] = draft.pagination[oldId];
+    delete draft.pagination[oldId];
+  }
+  if (draft.drafts[oldId]) {
+    draft.drafts[newId] = draft.drafts[oldId];
+    delete draft.drafts[oldId];
+  }
+  if (draft.clientState.drafts?.[oldId]) {
+    draft.clientState.drafts[newId] = draft.clientState.drafts[oldId];
+    draft.clientState.drafts[oldId] = null;
+  }
+  if (draft.conversations[oldId]) {
+    draft.conversations[newId] = { ...draft.conversations[oldId], _id: newId };
+    delete draft.conversations[oldId];
+  }
+  if (draft.currentSessionId === oldId) {
+    draft.currentSessionId = newId;
+    draft.clientState.current_conversation_id = newId;
+  }
+  if (draft.sidePanelSessionId === oldId) {
+    draft.sidePanelSessionId = newId;
+  }
 }
 
 export const useInboxStore = create<InboxStoreState>(
@@ -574,6 +654,32 @@ export const useInboxStore = create<InboxStoreState>(
     set({ composePalette: { isOpen: false, initialMessage: "" } });
   },
 
+  palette: { open: false, targets: [], targetType: null, initialMode: 'root' },
+
+  openPalette: (opts?: { targets?: any[]; targetType?: 'task' | 'doc'; mode?: string }) => {
+    set({
+      palette: {
+        open: true,
+        targets: opts?.targets || [],
+        targetType: opts?.targetType || null,
+        initialMode: opts?.mode || 'root',
+      },
+    });
+  },
+
+  closePalette: () => {
+    set({ palette: { open: false, targets: [], targetType: null, initialMode: 'root' } });
+  },
+
+  togglePalette: () => {
+    const { palette } = get();
+    if (palette.open) {
+      set({ palette: { open: false, targets: [], targetType: null, initialMode: 'root' } });
+    } else {
+      set({ palette: { open: true, targets: [], targetType: null, initialMode: 'root' } });
+    }
+  },
+
   activeBranches: {},
   optimisticForkChildren: [],
   recentProjects: [],
@@ -621,6 +727,57 @@ export const useInboxStore = create<InboxStoreState>(
       conversations: dispatchConvos,
       client_state: { _: { current_conversation_id: newSessionId ?? null } },
     }).catch(() => {});
+  },
+
+  switchAgent: (currentId: string, targetAgentType: string) => {
+    const state = get();
+    const session = state.sessions[currentId];
+    if (!session) return null;
+
+    const sessionId = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+    const now = Date.now();
+    const agentLabels: Record<string, string> = { claude_code: "Claude", codex: "Codex", cursor: "Cursor", gemini: "Gemini" };
+
+    const newSessions = { ...state.sessions };
+    const newPending = { ...state.pending };
+    const newConversations = { ...state.conversations };
+
+    delete newSessions[currentId];
+    newPending[`sessions:${currentId}`] = { type: "exclude", expiresAt: now + 15_000 };
+    if (newConversations[currentId]) {
+      newConversations[currentId] = { ...newConversations[currentId], inbox_dismissed_at: now };
+    }
+
+    newSessions[sessionId] = {
+      _id: sessionId,
+      session_id: sessionId,
+      title: session.title ? `${agentLabels[targetAgentType] || targetAgentType}: ${session.title}` : "New session",
+      updated_at: now,
+      started_at: now,
+      project_path: session.project_path,
+      git_root: session.git_root,
+      agent_type: targetAgentType,
+      message_count: 0,
+      is_idle: true,
+      has_pending: false,
+      last_user_message: null,
+    } as InboxSession;
+
+    set({
+      sessions: newSessions,
+      pending: newPending,
+      conversations: newConversations,
+      currentSessionId: sessionId,
+      viewingDismissedId: null,
+      clientState: { ...state.clientState, current_conversation_id: sessionId },
+    });
+
+    get()._dispatch("patch", [], {
+      conversations: { [currentId]: { inbox_dismissed_at: now } },
+      client_state: { _: { current_conversation_id: sessionId } },
+    }).catch(() => {});
+
+    return sessionId;
   },
 
   unstashSession: action(function (this: Draft, id: string) {
@@ -769,67 +926,73 @@ export const useInboxStore = create<InboxStoreState>(
   // GENERIC SYNC
   // =====================
 
-  syncTable: (tableName: string, incoming: Array<{ _id: string; [k: string]: any }>, extra?: Record<string, any>) => {
-    const state = get();
-    const { table, pending } = applySyncTable(tableName, incoming as any, state.pending);
+  syncTable: sync(function (this: Draft, tableName: string, incoming: Array<{ _id: string; [k: string]: any }>, extra?: Record<string, any>) {
+    const { table, pending } = applySyncTable(tableName, incoming as any, this.pending);
 
     if (tableName === "sessions") {
-      const prev = state.sessions as Record<string, InboxSession>;
+      const prev = this.sessions;
       const incomingBySessionId = new Map(incoming.map((s: any) => [s.session_id, s]));
       for (const [oldId, oldSession] of Object.entries(prev)) {
         if (isConvexId(oldId)) continue;
         const match = incomingBySessionId.get((oldSession as InboxSession).session_id || oldId);
         if (match) {
-          get().resolveSessionId(oldId, match._id);
-          if (state.currentSessionId === oldId) {
-            set({ currentSessionId: match._id });
+          rekeyId(this, oldId, match._id);
+          if (this.currentSessionId === oldId) {
+            this.currentSessionId = match._id;
           }
         } else if (!table[oldId]) {
           table[oldId] = oldSession as any;
         }
       }
-      const resolvedCurrentId = get().currentSessionId;
-      if (resolvedCurrentId && !table[resolvedCurrentId] && prev[resolvedCurrentId]) {
-        table[resolvedCurrentId] = prev[resolvedCurrentId] as any;
+      if (this.currentSessionId && !table[this.currentSessionId] && prev[this.currentSessionId]) {
+        table[this.currentSessionId] = prev[this.currentSessionId] as any;
       }
-      const freshState = get();
-      const newConversations = { ...freshState.conversations };
       for (const s of incoming) {
-        if (!newConversations[s._id]) {
-          newConversations[s._id] = { _id: s._id };
+        if (!this.conversations[s._id]) {
+          this.conversations[s._id] = { _id: s._id };
         }
       }
-      if (!freshState.currentSessionId && !freshState.showMySessions && Object.keys(table).length > 0 && freshState.clientStateInitialized) {
-        const persisted = freshState.clientState.current_conversation_id;
+      if (!this.currentSessionId && !this.showMySessions && Object.keys(table).length > 0 && this.clientStateInitialized) {
+        const persisted = this.clientState.current_conversation_id;
         const sorted = sortSessions(table as Record<string, InboxSession>);
-        const restoreId = (persisted && table[persisted]) ? persisted : (sorted[0]?._id ?? null);
-        set({ sessions: table, pending, conversations: newConversations, currentSessionId: restoreId });
-      } else {
-        set({ sessions: table, pending, conversations: newConversations });
+        this.currentSessionId = (persisted && table[persisted]) ? persisted : (sorted[0]?._id ?? null);
       }
+      this.sessions = table as any;
+      this.pending = pending as any;
       return;
     }
 
-    const updates: any = { [tableName]: table, pending };
-    if (extra) Object.assign(updates, extra);
-    set(updates);
-  },
+    const prev = (this as any)[tableName] as Record<string, any> | undefined;
+    if (prev && !extra) {
+      const newKeys = Object.keys(table);
+      if (newKeys.length === Object.keys(prev).length &&
+          newKeys.every(k => prev[k]?.updated_at === (table[k] as any)?.updated_at)) {
+        return;
+      }
+    }
 
-  syncRecord: (tableName: string, id: string, record: any) => {
-    set((s: InboxStoreState) => ({
-      [tableName]: { ...(s as any)[tableName], [id]: { ...(s as any)[tableName]?.[id], ...record } },
-    }));
-  },
+    (this as any)[tableName] = table;
+    this.pending = pending as any;
+    if (extra) Object.assign(this, extra);
+  }),
 
-  syncClientState: (serverState: any) => {
+  syncRecord: sync(function (this: Draft, tableName: string, id: string, record: any) {
+    const existing = (this as any)[tableName]?.[id];
+    (this as any)[tableName] = {
+      ...(this as any)[tableName],
+      [id]: { ...existing, ...record },
+    };
+  }),
+
+  syncClientState: sync(function (this: Draft, serverState: any) {
     if (!serverState) return;
-    const prev = get().clientState;
+    const prev = this.clientState;
     const serverUi = serverState.ui ?? {
       sidebar_collapsed: serverState.sidebar_collapsed,
       zen_mode: serverState.zen_mode,
     };
-    const initialized = get().clientStateInitialized;
-    const cs: ClientState = {
+    const initialized = this.clientStateInitialized;
+    this.clientState = {
       current_conversation_id: serverState.current_conversation_id,
       show_dismissed: serverState.show_dismissed,
       dismissed_ids: serverState.dismissed_ids,
@@ -840,32 +1003,34 @@ export const useInboxStore = create<InboxStoreState>(
         dashboard: serverState.layout,
       } : undefined),
       dismissed: { ...prev.dismissed, ...serverState.dismissed },
+      drafts: initialized ? prev.drafts : serverState.drafts,
     };
-    const updates: any = { clientState: cs, clientStateInitialized: true };
-    if (!initialized && serverState.current_conversation_id && !get().currentSessionId) {
-      const sessions = get().sessions;
-      if (sessions[serverState.current_conversation_id]) {
-        updates.currentSessionId = serverState.current_conversation_id;
-      } else {
-        updates.pendingNavigateId = serverState.current_conversation_id;
+    this.clientStateInitialized = true;
+    if (!initialized && serverState.drafts) {
+      const restored: Record<string, Record<string, any>> = {};
+      for (const [k, v] of Object.entries(serverState.drafts)) {
+        if (v && typeof v === "object") restored[k] = v as Record<string, any>;
+      }
+      if (Object.keys(restored).length > 0) {
+        Object.assign(this.drafts, restored);
       }
     }
-    set(updates);
-  },
+    if (!initialized && serverState.current_conversation_id && !this.currentSessionId) {
+      if (this.sessions[serverState.current_conversation_id]) {
+        this.currentSessionId = serverState.current_conversation_id;
+      } else {
+        this.pendingNavigateId = serverState.current_conversation_id;
+      }
+    }
+  }),
 
-  addPending: (key: string, entry: PendingEntry) => {
-    set((s: InboxStoreState) => ({
-      pending: { ...s.pending, [key]: entry },
-    }));
-  },
+  addPending: sync(function (this: Draft, key: string, entry: PendingEntry) {
+    this.pending[key] = entry;
+  }),
 
-  clearPending: (key: string) => {
-    set((s: InboxStoreState) => {
-      const next = { ...s.pending };
-      delete next[key];
-      return { pending: next };
-    });
-  },
+  clearPending: sync(function (this: Draft, key: string) {
+    delete this.pending[key];
+  }),
 
   sortedSessions: () => {
     return sortSessions(get().sessions).filter((s: InboxSession) => !s.is_subagent && !s.parent_conversation_id);
@@ -1053,53 +1218,40 @@ export const useInboxStore = create<InboxStoreState>(
   // MESSAGE MANAGEMENT
   // =====================
 
-  setMessages: (convId: string, msgs: Message[], meta?: Partial<PaginationState>) => {
-    set((s: InboxStoreState) => {
-      const existing = s.messages[convId] || [];
-      const localMsgs = existing.filter((m: Message) => m._isOptimistic || m._isQueued);
-      let finalMsgs = msgs;
-      if (localMsgs.length > 0) {
-        const serverContents = new Set(
-          msgs.filter((m: Message) => m.role === "user" && m.content)
-            .map((m: Message) => stripImageRef(m.content!))
+  setMessages: sync(function (this: Draft, convId: string, msgs: Message[], meta?: Partial<PaginationState>) {
+    const existing = this.messages[convId] || [];
+    const localMsgs = existing.filter((m: Message) => m._isOptimistic || m._isQueued);
+    let finalMsgs = msgs;
+    if (localMsgs.length > 0) {
+      const serverUserMsgs = msgs.filter((m: Message) => m.role === "user" && m.content);
+      const surviving = localMsgs.filter((m: Message) => {
+        const stripped = stripImageRef(m.content || "");
+        return !serverUserMsgs.some((s: Message) =>
+          stripImageRef(s.content!) === stripped &&
+          Math.abs(s.timestamp - m.timestamp) < 120_000
         );
-        const surviving = localMsgs.filter(
-          (m: Message) => !serverContents.has(stripImageRef(m.content || ""))
-        );
-        if (surviving.length > 0) {
-          finalMsgs = [...msgs, ...surviving].sort((a: Message, b: Message) => a.timestamp - b.timestamp);
-        }
+      });
+      if (surviving.length > 0) {
+        finalMsgs = [...msgs, ...surviving].sort((a: Message, b: Message) => a.timestamp - b.timestamp);
       }
-      return {
-        messages: { ...s.messages, [convId]: finalMsgs },
-        pagination: {
-          ...s.pagination,
-          [convId]: { ...(s.pagination[convId] || DEFAULT_PAGINATION), ...meta },
-        },
-      };
-    });
-  },
+    }
+    this.messages[convId] = finalMsgs;
+    this.pagination[convId] = { ...(this.pagination[convId] || DEFAULT_PAGINATION), ...meta };
+  }),
 
-  mergeMessages: (convId: string, msgs: Message[], direction: "prepend" | "append", meta?: Partial<PaginationState>) => {
-    set((s: InboxStoreState) => {
-      const existing = s.messages[convId] || [];
-      const existingIds = new Set(existing.map((m: Message) => m._id));
-      const unique = msgs.filter((m: Message) => !existingIds.has(m._id));
-      if (unique.length === 0 && !meta) return s;
+  mergeMessages: sync(function (this: Draft, convId: string, msgs: Message[], direction: "prepend" | "append", meta?: Partial<PaginationState>) {
+    const existing = this.messages[convId] || [];
+    const existingIds = new Set(existing.map((m: Message) => m._id));
+    const unique = msgs.filter((m: Message) => !existingIds.has(m._id));
+    if (unique.length === 0 && !meta) return;
 
-      const merged = direction === "prepend"
-        ? [...unique, ...existing]
-        : [...existing, ...unique];
-      merged.sort((a: Message, b: Message) => a.timestamp - b.timestamp);
-
-      return {
-        messages: { ...s.messages, [convId]: merged },
-        pagination: meta
-          ? { ...s.pagination, [convId]: { ...(s.pagination[convId] || DEFAULT_PAGINATION), ...meta } }
-          : s.pagination,
-      };
-    });
-  },
+    const merged = direction === "prepend"
+      ? [...unique, ...existing]
+      : [...existing, ...unique];
+    merged.sort((a: Message, b: Message) => a.timestamp - b.timestamp);
+    this.messages[convId] = merged;
+    if (meta) this.pagination[convId] = { ...(this.pagination[convId] || DEFAULT_PAGINATION), ...meta };
+  }),
 
   addOptimisticMessage: (convId: string, content: string, images?: Array<{ media_type: string; storage_id?: string }>) => {
     const id = `optimistic_${Date.now()}_${Math.random().toString(36).slice(2)}`;
@@ -1111,64 +1263,58 @@ export const useInboxStore = create<InboxStoreState>(
       _isOptimistic: true,
       ...(images && images.length > 0 ? { images } : {}),
     };
-    set((s: InboxStoreState) => ({
-      messages: { ...s.messages, [convId]: [...(s.messages[convId] || []), msg] },
-    }));
+    const state = get();
+    set({
+      messages: { ...state.messages, [convId]: [...(state.messages[convId] || []), msg] },
+    });
     return id;
   },
 
   markOptimisticAsQueued: (convId: string, content: string) => {
-    set((s: InboxStoreState) => {
-      const msgs = s.messages[convId];
-      if (!msgs) return s;
-      const stripped = stripImageRef(content);
-      const updated = msgs.map((m: Message) => {
-        if (m._isOptimistic && m.role === "user" && stripImageRef(m.content || "") === stripped) {
-          const { _isOptimistic, ...rest } = m;
-          return { ...rest, _isQueued: true as const };
-        }
-        return m;
-      });
-      return { messages: { ...s.messages, [convId]: updated } };
+    const state = get();
+    const msgs = state.messages[convId];
+    if (!msgs) return;
+    const stripped = stripImageRef(content);
+    const updated = msgs.map((m: Message) => {
+      if (m._isOptimistic && m.role === "user" && stripImageRef(m.content || "") === stripped) {
+        const { _isOptimistic, ...rest } = m;
+        return { ...rest, _isQueued: true as const };
+      }
+      return m;
     });
+    set({ messages: { ...state.messages, [convId]: updated } });
   },
 
   setPagination: (convId: string, update: Partial<PaginationState>) => {
-    set((s: InboxStoreState) => ({
+    const state = get();
+    set({
       pagination: {
-        ...s.pagination,
-        [convId]: { ...(s.pagination[convId] || DEFAULT_PAGINATION), ...update },
+        ...state.pagination,
+        [convId]: { ...(state.pagination[convId] || DEFAULT_PAGINATION), ...update },
       },
-    }));
+    });
   },
 
   initPagination: (convId: string) => {
     const existing = get().pagination[convId];
     if (existing) return;
-    set((s: InboxStoreState) => ({
-      pagination: { ...s.pagination, [convId]: { ...DEFAULT_PAGINATION } },
-    }));
+    set({
+      pagination: { ...get().pagination, [convId]: { ...DEFAULT_PAGINATION } },
+    });
   },
 
   // =====================
   // METADATA
   // =====================
 
-  setConversationMeta: (convId: string, meta: ConversationMeta) => {
-    set((s: InboxStoreState) => ({
-      conversations: { ...s.conversations, [convId]: meta },
-    }));
-  },
+  setConversationMeta: sync(function (this: Draft, convId: string, meta: ConversationMeta) {
+    this.conversations[convId] = meta;
+  }),
 
-  updateConversationMeta: (convId: string, partial: Record<string, any>) => {
-    set((s: InboxStoreState) => {
-      const prev = s.conversations[convId];
-      if (!prev) return s;
-      return {
-        conversations: { ...s.conversations, [convId]: { ...prev, ...partial } },
-      };
-    });
-  },
+  updateConversationMeta: sync(function (this: Draft, convId: string, partial: Record<string, any>) {
+    if (!this.conversations[convId]) return;
+    Object.assign(this.conversations[convId], partial);
+  }),
 
   setCurrentConversation: (ctx: CurrentConversationContext) => {
     set({ currentConversation: ctx });
@@ -1186,64 +1332,40 @@ export const useInboxStore = create<InboxStoreState>(
   // DRAFTS
   // =====================
 
-  setDraft: (id: string, fields: Record<string, any>) => {
-    set((s: InboxStoreState) => ({
-      drafts: { ...s.drafts, [id]: fields },
-    }));
+  setDraft: sync(function (this: Draft, id: string, fields: Record<string, any>) {
+    this.drafts[id] = fields;
+    if (!this.clientState.drafts) this.clientState.drafts = {};
+    this.clientState.drafts[id] = fields;
+  }),
+
+  setDraftLocal: (id: string, fields: Record<string, any>) => {
+    set((s: InboxStoreState) => ({ drafts: { ...s.drafts, [id]: fields } }));
   },
 
   getDraft: (id: string) => {
     return get().drafts[id];
   },
 
-  clearDraft: (id: string) => {
-    set((s: InboxStoreState) => {
-      const next = { ...s.drafts };
-      delete next[id];
-      return { drafts: next };
-    });
+  clearDraft: sync(function (this: Draft, id: string) {
+    delete this.drafts[id];
+    if (!this.clientState.drafts) this.clientState.drafts = {};
+    this.clientState.drafts[id] = null;
+  }),
+
+  clearDraftFinal: (id: string) => {
+    get().clearDraft(id);
+    get()._dispatch("clearDraft", [id], {
+      client_state: { _: { drafts: { [id]: null } } },
+    }).catch(() => {});
   },
 
   // =====================
   // SESSION ID RESOLUTION
   // =====================
 
-  resolveSessionId: (sessionId: string, convexId: string) => {
-    if (sessionId === convexId) return;
-    const state = get();
-
-    const rekey = <T>(map: Record<string, T>): Record<string, T> | null => {
-      if (!map[sessionId]) return null;
-      const next = { ...map };
-      next[convexId] = next[sessionId];
-      delete next[sessionId];
-      return next;
-    };
-
-    const updates: Partial<InboxStoreState> = {};
-    // Re-key sessions and fix _id so lookups by currentSession._id work correctly
-    if (state.sessions[sessionId]) {
-      updates.sessions = { ...state.sessions };
-      (updates.sessions as any)[convexId] = { ...(state.sessions[sessionId] as any), _id: convexId };
-      delete (updates.sessions as any)[sessionId];
-    }
-    const m = rekey(state.messages); if (m) updates.messages = m as any;
-    const p = rekey(state.pagination); if (p) updates.pagination = p as any;
-    const d = rekey(state.drafts); if (d) updates.drafts = d as any;
-
-    if (state.conversations[sessionId]) {
-      updates.conversations = { ...state.conversations };
-      (updates.conversations as any)[convexId] = { ...state.conversations[sessionId], _id: convexId };
-      delete (updates.conversations as any)[sessionId];
-    }
-
-    if (state.currentSessionId === sessionId) {
-      updates.currentSessionId = convexId;
-      updates.clientState = { ...state.clientState, current_conversation_id: convexId };
-    }
-    if (state.sidePanelSessionId === sessionId) updates.sidePanelSessionId = convexId;
-    if (Object.keys(updates).length > 0) set(updates);
-  },
+  resolveSessionId: sync(function (this: Draft, sessionId: string, convexId: string) {
+    rekeyId(this, sessionId, convexId);
+  }),
 
   getConvexId: (id: string) => {
     if (isConvexId(id)) return id;
@@ -1331,11 +1453,9 @@ export const useInboxStore = create<InboxStoreState>(
   docProjectPaths: [],
 
 
-  syncDocDetail: (id: string, detail: DocDetail) => {
-    set((s: InboxStoreState) => ({
-      docDetails: { ...s.docDetails, [id]: detail },
-    }));
-  },
+  syncDocDetail: sync(function (this: Draft, id: string, detail: DocDetail) {
+    this.docDetails[id] = detail;
+  }),
 
   setTaskFilter: (filter: Partial<{ status: string }>) => {
     set((s: InboxStoreState) => ({
@@ -1451,6 +1571,9 @@ export const useInboxStore = create<InboxStoreState>(
   // SIDE PANEL
   // =====================
 
+  shortcutsPanelOpen: false,
+  toggleShortcutsPanel: () => set({ shortcutsPanelOpen: !get().shortcutsPanelOpen }),
+
   sidePanelSessionId: null,
   sidePanelOpen: false,
 
@@ -1480,6 +1603,36 @@ export const useInboxStore = create<InboxStoreState>(
   },
 
   // =====================
+  // CACHED QUERY DATA
+  // =====================
+
+  teams: [],
+  teamMembers: [],
+  teamUnreadCount: null,
+  favorites: [],
+  bookmarks: [],
+
+  syncTeams: sync(function (this: Draft, teams: any[]) {
+    this.teams = teams;
+  }),
+
+  syncTeamMembers: sync(function (this: Draft, members: any[]) {
+    this.teamMembers = members;
+  }),
+
+  syncTeamUnreadCount: sync(function (this: Draft, count: number | null) {
+    this.teamUnreadCount = count;
+  }),
+
+  syncFavorites: sync(function (this: Draft, favorites: any[]) {
+    this.favorites = favorites;
+  }),
+
+  syncBookmarks: sync(function (this: Draft, bookmarks: any[]) {
+    this.bookmarks = bookmarks;
+  }),
+
+  // =====================
   // SELECTORS
   // =====================
 
@@ -1504,3 +1657,46 @@ export const store = new Proxy({} as StoreProxy, {
     return val;
   },
 });
+
+// -- IndexedDB cache: wire patch-driven writes + hydrate on load --
+
+if (typeof window !== "undefined") {
+  (useInboxStore.getState() as any)._setIDBWrite(writePatchesToIDB);
+
+  setHydrating(true);
+  loadCache().then((cached) => {
+    setHydrating(false);
+    if (!cached) return;
+
+    const apply = (pick: string[]) => {
+      const state = useInboxStore.getState();
+      const updates: Record<string, any> = {};
+      for (const key of pick) {
+        const val = cached[key];
+        if (val == null) continue;
+        const cur = (state as any)[key];
+        if (key === "clientState" && state.clientStateInitialized) continue;
+        if (key === "collapsedSections" || key === "sidebarNavExpanded") {
+          updates[key] = { ...val, ...cur };
+        } else if (key === "teamUnreadCount") {
+          if (state.teamUnreadCount == null) updates[key] = val;
+        } else if (Array.isArray(val)) {
+          if (cur?.length === 0) updates[key] = val;
+        } else if (typeof val === "object") {
+          if (Object.keys(cur || {}).length === 0) updates[key] = val;
+        }
+      }
+      if (Object.keys(updates).length > 0) useInboxStore.setState(updates);
+    };
+
+    // Critical path: sidebar + current conversation render immediately
+    apply(["sessions", "dismissedSessions", "clientState", "messages", "pagination",
+           "conversations", "teams", "teamMembers", "teamUnreadCount", "drafts"]);
+
+    // Deferred: list views + secondary data render next frame
+    requestAnimationFrame(() => {
+      apply(["tasks", "docs", "plans", "favorites", "bookmarks",
+             "recentProjects", "collapsedSections", "sidebarNavExpanded"]);
+    });
+  });
+}

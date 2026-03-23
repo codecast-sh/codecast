@@ -1,7 +1,9 @@
 import { useQuery } from "convex/react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { useCallback } from "react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../store/inboxStore";
+import { useConvexSync } from "../hooks/useConvexSync";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 
 interface TeamAvatarBarProps {
@@ -32,10 +34,14 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
   const memberFilter = searchParams.get("member");
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id) as Id<"teams"> | undefined;
   const effectiveTeamId = propTeamId ?? activeTeamId;
-  const teamMembers = useQuery(
+  const teamMembersQuery = useQuery(
     api.teams.getTeamMembers,
     effectiveTeamId ? { team_id: effectiveTeamId } : "skip"
   );
+  const cachedMembers = useInboxStore((s) => s.teamMembers);
+  const teamMembers = teamMembersQuery ?? (cachedMembers.length > 0 ? cachedMembers : null);
+
+  useConvexSync(teamMembersQuery, useCallback((d: any) => useInboxStore.getState().syncTeamMembers(d), []));
 
   if (!effectiveTeamId || !teamMembers || teamMembers.length === 0) {
     return null;

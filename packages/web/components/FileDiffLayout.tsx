@@ -22,7 +22,6 @@ import {
   SplitSquareVertical,
 } from "lucide-react";
 import { Button } from "./ui/button";
-import { KeyboardShortcutsHelp } from "./KeyboardShortcutsHelp";
 import { DiffView } from "./DiffView";
 import { parsePatch, getFileStatus } from "../lib/patchParser";
 import { cn, copyToClipboard } from "../lib/utils";
@@ -690,7 +689,7 @@ export function FileDiffLayout({
   const strippedFiles = useMemo(() => stripCommonPrefix(files), [files]);
 
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
-  const [showHelp, setShowHelp] = useState(false);
+  const toggleShortcutsPanel = useInboxStore(s => s.toggleShortcutsPanel);
   const layoutPref = useInboxStore(s => s.clientState.layouts?.file_diff ?? DEFAULT_FILE_DIFF_LAYOUT);
   const updateLayout = useInboxStore(s => s.updateClientLayout);
   const updateUI = useInboxStore(s => s.updateClientUI);
@@ -775,7 +774,7 @@ export function FileDiffLayout({
         break;
       case "?":
         e.preventDefault();
-        setShowHelp((prev) => !prev);
+        toggleShortcutsPanel();
         break;
     }
   });
@@ -871,7 +870,7 @@ export function FileDiffLayout({
               variant="ghost"
               size="icon"
               className="h-8 w-8 opacity-50 hover:opacity-100"
-              onClick={() => setShowHelp(true)}
+              onClick={toggleShortcutsPanel}
               title="Keyboard shortcuts (?)"
             >
               <Keyboard className="h-4 w-4" />
@@ -896,7 +895,6 @@ export function FileDiffLayout({
             renderExtra={renderFileExtra}
           />
         </div>
-        <KeyboardShortcutsHelp isOpen={showHelp} onClose={() => setShowHelp(false)} />
       </div>
     );
   }
@@ -914,7 +912,7 @@ export function FileDiffLayout({
           variant="ghost"
           size="icon"
           className="h-8 w-8 opacity-50 hover:opacity-100"
-          onClick={() => setShowHelp(true)}
+          onClick={toggleShortcutsPanel}
           title="Keyboard shortcuts (?)"
         >
           <Keyboard className="h-4 w-4" />
@@ -940,7 +938,7 @@ export function FileDiffLayout({
           variant="ghost"
           size="icon"
           className="h-8 w-8 opacity-50 hover:opacity-100"
-          onClick={() => setShowHelp(true)}
+          onClick={toggleShortcutsPanel}
           title="Keyboard shortcuts (?)"
         >
           <Keyboard className="h-4 w-4" />
@@ -979,7 +977,6 @@ export function FileDiffLayout({
           )}
           <FileDiffContent {...diffContentProps} />
         </div>
-        <KeyboardShortcutsHelp isOpen={showHelp} onClose={() => setShowHelp(false)} />
       </div>
     );
   }
@@ -991,7 +988,6 @@ export function FileDiffLayout({
         <div className="flex-1 min-h-0">
           <FileDiffContent {...diffContentProps} />
         </div>
-        <KeyboardShortcutsHelp isOpen={showHelp} onClose={() => setShowHelp(false)} />
       </div>
     );
   }
@@ -1024,7 +1020,6 @@ export function FileDiffLayout({
           </Panel>
         </Group>
       </div>
-      <KeyboardShortcutsHelp isOpen={showHelp} onClose={() => setShowHelp(false)} />
     </div>
   );
 }

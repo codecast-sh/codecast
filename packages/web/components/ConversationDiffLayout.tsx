@@ -8,7 +8,6 @@ import { useDiffViewerStore } from "../store/diffViewerStore";
 import { extractFileChanges } from "../lib/fileChangeExtractor";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
-import { KeyboardShortcutsHelp } from "./KeyboardShortcutsHelp";
 import { FileDiffLayout, DiffFile } from "./FileDiffLayout";
 import type { FileChange } from "../store/diffViewerStore";
 import { useInboxStore } from "../store/inboxStore";
@@ -39,6 +38,7 @@ interface ConversationDiffLayoutProps {
   targetMessageId?: string;
   isOwner?: boolean;
   onSendAndAdvance?: () => void;
+  onSendAndDismiss?: () => void;
   autoFocusInput?: boolean;
   backHref?: string;
   fallbackStickyContent?: string | null;
@@ -67,6 +67,7 @@ export function ConversationDiffLayout({
   onClearHighlight,
   isOwner,
   onSendAndAdvance,
+  onSendAndDismiss,
   autoFocusInput,
   backHref: backHrefProp,
   fallbackStickyContent,
@@ -75,7 +76,6 @@ export function ConversationDiffLayout({
 }: ConversationDiffLayoutProps) {
   const heightClass = embedded ? "h-full" : "h-screen";
   const [isMobile, setIsMobile] = useState(false);
-  const [showHelp, setShowHelp] = useState(false);
   const layoutPref = useInboxStore(s => s.clientState.layouts?.conversation_diff ?? DEFAULT_DIFF_LAYOUT);
   const updateLayout = useInboxStore(s => s.updateClientLayout);
   const layout: Layout = { "content-panel": layoutPref.content, "diff-panel": layoutPref.diff };
@@ -137,10 +137,6 @@ export function ConversationDiffLayout({
         e.preventDefault();
         clearSelection();
         break;
-      case "?":
-        e.preventDefault();
-        setShowHelp((prev) => !prev);
-        break;
     }
   });
 
@@ -179,6 +175,7 @@ export function ConversationDiffLayout({
     targetMessageId,
     isOwner,
     onSendAndAdvance,
+    onSendAndDismiss,
     autoFocusInput,
     fallbackStickyContent,
     onBack,
@@ -252,7 +249,6 @@ export function ConversationDiffLayout({
         </Panel>
       </Group>
 
-      <KeyboardShortcutsHelp isOpen={showHelp} onClose={() => setShowHelp(false)} />
     </div>
   );
 }

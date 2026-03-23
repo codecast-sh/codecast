@@ -2,6 +2,8 @@ import { useState, useCallback } from "react";
 import { useEventListener } from "../hooks/useEventListener";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useRouter } from "next/navigation";
+import { useInboxStore } from "../store/inboxStore";
+import { KeyCap } from "./KeyboardShortcutsHelp";
 import { ReviewView } from "./ReviewView";
 import { useBatchReview } from "./BatchReviewContext";
 import { BatchProgressBar } from "./BatchProgressBar";
@@ -83,38 +85,14 @@ export function BatchReviewView() {
       </div>
 
       {showShortcuts && (
-        <div className="sol-header px-4 py-2 text-xs text-sol-text-muted border-t border-sol-border">
-          <div className="flex gap-6">
-            <span>
-              <kbd className="px-1.5 py-0.5 bg-sol-bg-alt rounded border border-sol-border">
-                ]
-              </kbd>{" "}
-              next PR
-            </span>
-            <span>
-              <kbd className="px-1.5 py-0.5 bg-sol-bg-alt rounded border border-sol-border">
-                [
-              </kbd>{" "}
-              prev PR
-            </span>
-            <span>
-              <kbd className="px-1.5 py-0.5 bg-sol-bg-alt rounded border border-sol-border">
-                j/k
-              </kbd>{" "}
-              next/prev file
-            </span>
-            <span>
-              <kbd className="px-1.5 py-0.5 bg-sol-bg-alt rounded border border-sol-border">
-                Esc
-              </kbd>{" "}
-              exit batch mode
-            </span>
-            <span>
-              <kbd className="px-1.5 py-0.5 bg-sol-bg-alt rounded border border-sol-border">
-                ?
-              </kbd>{" "}
-              toggle shortcuts
-            </span>
+        <div className="sol-header px-4 py-1.5 text-[10px] text-sol-text-dim border-t border-sol-border/40">
+          <div className="flex items-center gap-4">
+            <span className="flex items-center gap-1"><span className="flex items-center gap-[2px]"><KeyCap size="xs">]</KeyCap><span className="text-sol-text-dim/40">/</span><KeyCap size="xs">[</KeyCap></span> PRs</span>
+            <span className="flex items-center gap-1"><span className="flex items-center gap-[2px]"><KeyCap size="xs">J</KeyCap><span className="text-sol-text-dim/40">/</span><KeyCap size="xs">K</KeyCap></span> files</span>
+            <span className="flex items-center gap-1"><KeyCap size="xs">Esc</KeyCap> exit</span>
+            <button onClick={() => useInboxStore.getState().toggleShortcutsPanel()} className="ml-auto flex items-center gap-1 hover:text-sol-text-muted transition-colors">
+              <KeyCap size="xs">?</KeyCap> all shortcuts
+            </button>
           </div>
         </div>
       )}

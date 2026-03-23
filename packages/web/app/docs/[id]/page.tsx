@@ -2,13 +2,12 @@
 import { useCallback, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useInboxStore, DocDetail } from "../../../store/inboxStore";
-import { useSyncDocDetail } from "../../../hooks/useSyncDocs";
+import { useSyncDocs, useSyncDocDetail } from "../../../hooks/useSyncDocs";
+import { DetailSplitLayout } from "../../../components/DetailSplitLayout";
+import { DocListContent } from "../page";
 import { useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
-import { AuthGuard } from "../../../components/AuthGuard";
-import { DashboardLayout } from "../../../components/DashboardLayout";
 import { DocumentDetailLayout } from "../../../components/DocumentDetailLayout";
-import { DocListPanel, DetailSplitLayout } from "../../../components/DetailListPanel";
 import { SessionCardInner } from "../../../components/ActivityFeed";
 import { Badge } from "../../../components/ui/badge";
 import "../../../components/editor/editor.css";
@@ -119,15 +118,19 @@ export default function DocDetailPage() {
   const id = params.id as string;
 
   useSyncDocDetail(id);
+  useSyncDocs();
 
+  const allDocs = useInboxStore((s) => s.docs);
   const detail = useInboxStore((s) => s.docDetails[id]) as DocDetail | undefined;
-  const listItem = useInboxStore((s) => s.docs[id]);
+  const listItem = allDocs[id];
   const data = detail || (listItem as DocDetail | undefined);
   const updateDoc = useInboxStore((s) => s.updateDoc);
   const pinDoc = useInboxStore((s) => s.pinDoc);
   const archiveDoc = useInboxStore((s) => s.archiveDoc);
   const openSidePanel = useInboxStore((s) => s.openSidePanel);
   const promoteToPlan = useMutation(api.docs.webPromoteToPlan);
+
+  const sidebar = <DocListContent />;
 
   const handleTitleChange = useCallback(
     (title: string) => {
@@ -166,13 +169,11 @@ export default function DocDetailPage() {
 
   if (!data) {
     return (
-      <AuthGuard>
-        <DashboardLayout>
-          <div className="flex items-center justify-center h-64 text-sol-text-dim text-sm">
-            Loading...
-          </div>
-        </DashboardLayout>
-      </AuthGuard>
+      <DetailSplitLayout list={sidebar}>
+        <div className="flex items-center justify-center h-64 text-sol-text-dim text-sm">
+          Loading...
+        </div>
+      </DetailSplitLayout>
     );
   }
 
@@ -185,10 +186,8 @@ export default function DocDetailPage() {
     relatedTasks.length > 0;
 
   return (
-    <AuthGuard>
-      <DashboardLayout>
-        <DetailSplitLayout list={<DocListPanel selectedId={doc._id} />}>
-        <div className="h-full min-w-0">
+    <DetailSplitLayout list={sidebar}>
+    <div className="h-full min-w-0">
         <DocumentDetailLayout
           docId={doc._id}
           title={(doc as any).display_title ?? doc.title}
@@ -342,9 +341,7 @@ export default function DocDetailPage() {
             </>
           )}
         </DocumentDetailLayout>
-        </div>
-        </DetailSplitLayout>
-      </DashboardLayout>
-    </AuthGuard>
+    </div>
+    </DetailSplitLayout>
   );
 }

@@ -5,6 +5,8 @@ import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { toast } from "sonner";
 import Link from "next/link";
 import { useWatchEffect } from "../hooks/useWatchEffect";
+import { useMountEffect } from "../hooks/useMountEffect";
+import { desktopHeaderClass } from "../lib/desktop";
 
 type ConfigFile = {
   path: string;
@@ -440,6 +442,9 @@ export function ConfigEditor() {
     new Set(["global_claude", "global_codex", "agents", "commands", "skills"])
   );
 
+  const [deskClass, setDeskClass] = useState("");
+  useMountEffect(() => { setDeskClass(desktopHeaderClass()); });
+
   const listCmd = useConfigCommand();
   const projects = useQuery(api.projects.webList, {});
 
@@ -497,7 +502,7 @@ export function ConfigEditor() {
     <div className="flex h-screen bg-zinc-950 text-zinc-100">
       {/* Sidebar */}
       <aside className="w-60 shrink-0 border-r border-zinc-800 flex flex-col overflow-hidden">
-        <div className="px-4 py-4 border-b border-zinc-800 flex items-center gap-3">
+        <div className={`px-4 py-4 border-b border-zinc-800 flex items-center gap-3 ${deskClass}`}>
           <Link href="/inbox" className="text-zinc-600 hover:text-zinc-400 transition-colors">
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />

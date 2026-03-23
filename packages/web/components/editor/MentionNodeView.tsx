@@ -233,6 +233,8 @@ function SessionMention({ attrs }: { attrs: Record<string, any> }) {
   );
 }
 
+export { SessionMention, PersonMention, TaskMention, PlanMention, DocMention };
+
 export function MentionNodeView({ node }: NodeViewProps) {
   const attrs = node.attrs;
   const mtype = attrs.type || "doc";

@@ -6,7 +6,7 @@ import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { ConversationDiffLayout } from "./ConversationDiffLayout";
 import { ConversationData } from "./ConversationView";
 import { useConversationMessages } from "../hooks/useConversationMessages";
-import { useInboxStore, InboxSession, isConvexId, categorizeSessions } from "../store/inboxStore";
+import { useInboxStore, InboxSession, getSessionRenderKey, isConvexId, categorizeSessions } from "../store/inboxStore";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "./ui/tooltip";
 import { cleanTitle } from "../lib/conversationProcessor";
 import { SharePopover } from "./SharePopover";
@@ -59,7 +59,7 @@ export function getProjectName(gitRoot?: string, projectPath?: string): string {
 
 // -- InboxConversation (shared) --
 
-export const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, onSendAndAdvance, lastUserMessage, sessionError, onBack, targetMessageId, backHref, onExpandToMain, onClose }: { sessionId: string; isIdle: boolean; onSendAndAdvance: () => void; lastUserMessage?: string | null; sessionError?: string; onBack?: () => void; targetMessageId?: string; backHref?: string; onExpandToMain?: () => void; onClose?: () => void }) {
+export const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, onSendAndAdvance, onSendAndDismiss, lastUserMessage, sessionError, onBack, targetMessageId, backHref, onExpandToMain, onClose }: { sessionId: string; isIdle: boolean; onSendAndAdvance: () => void; onSendAndDismiss?: () => void; lastUserMessage?: string | null; sessionError?: string; onBack?: () => void; targetMessageId?: string; backHref?: string; onExpandToMain?: () => void; onClose?: () => void }) {
   const {
     conversation,
     hasMoreAbove,
@@ -211,6 +211,7 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
           onJumpToEnd={jumpToEnd}
           isOwner={true}
           onSendAndAdvance={onSendAndAdvance}
+          onSendAndDismiss={onSendAndDismiss}
           autoFocusInput
           backHref={backHref}
           onBack={onBack}
@@ -231,6 +232,7 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
 export function SessionCard({
   session,
   isActive,
+  isParentActive,
   globalIndex,
   onSelect,
   onDismiss,
@@ -242,6 +244,7 @@ export function SessionCard({
 }: {
   session: InboxSession;
   isActive: boolean;
+  isParentActive?: boolean;
   globalIndex: number;
   onSelect: (index: number) => void;
   onDismiss?: (id: string) => void;
@@ -318,11 +321,13 @@ export function SessionCard({
         className={`relative group transition-colors overflow-hidden ${isDragOver ? "ring-1 ring-inset ring-violet-400/40 bg-violet-500/10" : ""} ${
           isActive
             ? "bg-violet-500/[0.08] border-l-2 border-l-violet-400/60"
-            : isWorking
-              ? "hover:bg-violet-500/[0.06] border-l border-l-violet-400/25"
-              : isDismissed
-                ? "opacity-40 hover:opacity-60 hover:bg-violet-500/[0.04]"
-                : "hover:bg-violet-500/[0.06] border-l border-l-violet-500/15"
+            : isParentActive
+              ? "bg-sol-cyan/[0.10] border-l border-l-sol-cyan/40"
+              : isWorking
+                ? "hover:bg-violet-500/[0.06] border-l border-l-violet-400/25"
+                : isDismissed
+                  ? "opacity-40 hover:opacity-60 hover:bg-violet-500/[0.04]"
+                  : "hover:bg-violet-500/[0.06] border-l border-l-violet-500/15"
         }`}
       >
         <div
@@ -894,6 +899,7 @@ export function SessionListPanel({
                     key={sub._id}
                     session={sub}
                     isActive={sub._id === activeSessionId}
+                    isParentActive={session._id === activeSessionId}
                     globalIndex={0}
                     onSelect={() => handleSelect(sub)}
                     onDismiss={stashSession}
@@ -961,27 +967,24 @@ export function SessionListPanel({
             </svg>
           </button>
           {!collapsedSections.dismissed && dismissedList.length > 0 && (() => {
-            const isSubDismissed = (s: InboxSession) => !!s.is_subagent || !!s.worktree_name;
-            const parents = dismissedList.filter((s) => !isSubDismissed(s));
+            const allDismissedIds = new Set(dismissedList.map((s) => s._id));
             const subMap = new Map<string, InboxSession[]>();
-            const orphans: InboxSession[] = [];
             for (const s of dismissedList) {
-              if (isSubDismissed(s)) {
-                const pid = s.parent_conversation_id;
-                if (pid && dismissedList.some((p) => p._id === pid)) {
-                  if (!subMap.has(pid)) subMap.set(pid, []);
-                  subMap.get(pid)!.push(s);
-                } else {
-                  orphans.push(s);
-                }
+              if (s.parent_conversation_id && allDismissedIds.has(s.parent_conversation_id)) {
+                if (!subMap.has(s.parent_conversation_id)) subMap.set(s.parent_conversation_id, []);
+                subMap.get(s.parent_conversation_id)!.push(s);
               }
             }
             for (const subs of subMap.values()) {
               subs.sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
             }
+            const subsWithParent = new Set(Array.from(subMap.values()).flat().map((s) => s._id));
+            const orphanedSub = (s: InboxSession) =>
+              !subsWithParent.has(s._id) && s.parent_conversation_id && sessions[s.parent_conversation_id];
+            const topLevel = dismissedList.filter((s) => !subsWithParent.has(s._id) && !orphanedSub(s));
             return (
             <div>
-              {parents.map((session) => (
+              {topLevel.map((session) => (
                 <React.Fragment key={session._id}>
                   <SessionCard
                     session={session}
@@ -996,6 +999,7 @@ export function SessionListPanel({
                       key={sub._id}
                       session={sub}
                       isActive={sub._id === activeSessionId}
+                      isParentActive={session._id === activeSessionId}
                       globalIndex={-1}
                       onSelect={() => handleSelect(sub)}
                       onRestore={(id) => unstashSession(id)}
@@ -1003,17 +1007,6 @@ export function SessionListPanel({
                     />
                   ))}
                 </React.Fragment>
-              ))}
-              {orphans.map((session) => (
-                <SessionCard
-                  key={session._id}
-                  session={session}
-                  isActive={session._id === activeSessionId}
-                  globalIndex={-1}
-                  onSelect={() => handleSelect(session)}
-                  onRestore={(id) => unstashSession(id)}
-                  variant="dismissed"
-                />
               ))}
             </div>
             );
@@ -1119,6 +1112,7 @@ export const ConversationColumn = memo(function ConversationColumn() {
   const router = useRouter();
 
   const session = sidePanelSessionId ? (sessions[sidePanelSessionId] ?? dismissedSessions[sidePanelSessionId] ?? null) : null;
+  const sessionRenderKey = getSessionRenderKey(session);
 
   const handleSessionSelect = useCallback((id: string) => {
     selectPanelSession(id);
@@ -1138,15 +1132,21 @@ export const ConversationColumn = memo(function ConversationColumn() {
     selectPanelSession(null);
   }, [selectPanelSession]);
 
+  const stashSession = useInboxStore(s => s.stashSession);
+  const handleSendAndDismiss = useCallback(() => {
+    if (sidePanelSessionId) stashSession(sidePanelSessionId);
+  }, [sidePanelSessionId, stashSession]);
+
   return (
     <div className="h-full flex flex-col">
       {session && sidePanelSessionId ? (
         <div className="h-full">
           <InboxConversation
-            key={sidePanelSessionId}
+            key={sessionRenderKey || sidePanelSessionId}
             sessionId={sidePanelSessionId}
             isIdle={session.is_idle}
             onSendAndAdvance={() => {}}
+            onSendAndDismiss={handleSendAndDismiss}
             lastUserMessage={session.last_user_message}
             sessionError={session.session_error}
             onBack={handleBack}

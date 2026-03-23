@@ -21,10 +21,10 @@ const BINARIES: Record<string, string> = {
   "codecast-windows-x64.exe": "https://dl.codecast.sh/codecast-windows-x64.exe",
 };
 
-const LATEST_DESKTOP_VERSION = "1.1.15";
+const LATEST_DESKTOP_VERSION = "1.1.16";
 const DESKTOP_DOWNLOAD_URL = "https://codecast.sh/download/mac";
-const MAC_DMG_URL = "https://dl.codecast.sh/Codecast-1.1.15-arm64.dmg";
-const MAC_DMG_VERSION = "1.1.15";
+const MAC_DMG_URL = "https://dl.codecast.sh/Codecast-1.1.16-arm64.dmg";
+const MAC_DMG_VERSION = "1.1.16";
 
 app.get("/api/health", (c) =>
   c.json({

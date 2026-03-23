@@ -7,7 +7,75 @@ import { EmptyState } from "./EmptyState";
 import { ConversationList } from "./ConversationList";
 import { useEventListener } from "../hooks/useEventListener";
 import { useWatchEffect } from "../hooks/useWatchEffect";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import { remarkEntityIds } from "../lib/remarkEntityIds";
+import { EntityIdPill, isEntityId } from "./EntityIdPill";
+import { SessionMention } from "./editor/MentionNodeView";
+import "./editor/editor.css";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
+
+function SessionMentionById({ conversationId }: { conversationId: string }) {
+  const data = useQuery(api.conversations.getConversationMention, {
+    conversation_id: conversationId as Id<"conversations">,
+  });
+  if (!data) return <span className="text-[11px] text-sol-text-dim/40">loading...</span>;
+  return (
+    <SessionMention attrs={{
+      id: data._id,
+      label: data.title,
+      messageCount: data.message_count,
+      projectPath: data.project_path,
+      model: data.model,
+      status: data.status,
+      updatedAt: data.updated_at,
+      idleSummary: data.idle_summary,
+    }} />
+  );
+}
+
+function DigestLink({ href, children, ...props }: any) {
+  if (href?.startsWith("entity://")) {
+    return <EntityIdPill shortId={href.slice(9)} />;
+  }
+  const convMatch = href?.match(/^\/conversation\/(.+)/);
+  if (convMatch) {
+    return <SessionMentionById conversationId={convMatch[1]} />;
+  }
+  return <a href={href} className="text-sol-cyan/70 hover:text-sol-cyan underline" target="_blank" rel="noopener noreferrer" {...props}>{children}</a>;
+}
+
+function DigestCode({ children, className, ...props }: any) {
+  const text = String(children);
+  if (!className && isEntityId(text)) return <EntityIdPill shortId={text} />;
+  return <code className={`text-[11px] text-sol-cyan/70 bg-sol-bg-alt/30 px-1 py-0.5 rounded ${className || ""}`} {...props}>{children}</code>;
+}
+
+const digestRemarkPlugins = [remarkGfm, remarkEntityIds];
+
+function DigestRenderer({ content, className }: { content: string; className?: string }) {
+  return (
+    <div className={className}>
+      <ReactMarkdown
+        remarkPlugins={digestRemarkPlugins}
+        components={{
+          a: DigestLink,
+          code: DigestCode,
+          h2: ({ children }) => <h2 className="text-[13px] font-semibold text-sol-text-muted/85 mt-3 mb-1 border-b border-sol-border/10 pb-0.5">{children}</h2>,
+          h3: ({ children }) => <h3 className="text-[12px] font-semibold text-sol-text-muted/75 mt-2 mb-0.5">{children}</h3>,
+          p: ({ children }) => <p className="text-[12px] leading-relaxed my-1">{children}</p>,
+          ul: ({ children }) => <ul className="text-[12px] my-1 pl-4 list-disc">{children}</ul>,
+          li: ({ children }) => <li className="my-0.5">{children}</li>,
+          strong: ({ children }) => <strong className="text-sol-text-muted/90 font-semibold">{children}</strong>,
+          hr: () => <hr className="my-3 border-sol-border/10" />,
+          pre: ({ children }) => <pre className="text-[11px] bg-sol-bg-alt/20 rounded p-2 my-1 overflow-x-auto">{children}</pre>,
+        }}
+      >
+        {content}
+      </ReactMarkdown>
+    </div>
+  );
+}
 
 function getRelativeTime(timestamp: number): string {
   const now = Date.now();
@@ -480,42 +548,55 @@ function SessionCard({ item, compact, showActor, onNavigate, projectColor }: {
   );
 }
 
+function extractFirstSection(narrative: string): string {
+  const lines = narrative.split("\n");
+  let endIdx = -1;
+  let foundFirst = false;
+  for (let i = 0; i < lines.length; i++) {
+    if (/^##\s/.test(lines[i])) {
+      if (foundFirst) { endIdx = i; break; }
+      foundFirst = true;
+    }
+  }
+  if (endIdx > 0) return lines.slice(0, endIdx).join("\n").trim();
+  return narrative.length > 500 ? narrative.slice(0, 500) + "..." : narrative;
+}
+
 function DayNarrative({ narrative, events }: { narrative: string; events: any[] }) {
   const [expanded, setExpanded] = useState(false);
-  const [showFullNarrative, setShowFullNarrative] = useState(false);
+  const [showEvents, setShowEvents] = useState(false);
+
+  const isRich = narrative.includes("##") || narrative.length > 300;
+  const preview = isRich ? extractFirstSection(narrative) : narrative;
+  const hasMore = isRich && preview.length < narrative.length;
 
   const sessionCount = useMemo(() => {
     const ids = new Set(events.map((e) => e.session_title).filter(Boolean));
     return ids.size;
   }, [events]);
 
-  const isLong = narrative.length > 200;
-  const displayNarrative = isLong && !showFullNarrative ? narrative.slice(0, 180) + "..." : narrative;
-
   return (
     <div className="mb-1.5">
-      <div
-        className="px-2.5 py-1.5 rounded bg-sol-bg-alt/15 border-l-2 border-sol-violet/15"
-      >
-        <p className="text-[11px] text-sol-text-muted/55 leading-relaxed">
-          {displayNarrative}
-          {isLong && !showFullNarrative && (
+      <div className="px-2.5 py-1.5 rounded bg-sol-bg-alt/15 border-l-2 border-sol-violet/15">
+        <div className="text-[12px] text-sol-text-muted/70 leading-relaxed">
+          <DigestRenderer content={expanded ? narrative : preview} />
+          {hasMore && (
             <button
-              onClick={(e) => { e.stopPropagation(); setShowFullNarrative(true); }}
-              className="text-sol-text-dim/35 hover:text-sol-cyan/50 ml-1 transition-colors"
-            >more</button>
+              onClick={(e) => { e.stopPropagation(); setExpanded(!expanded); }}
+              className="text-sol-text-dim/35 hover:text-sol-cyan/50 text-[10px] mt-1 block transition-colors"
+            >{expanded ? "collapse" : "show full digest"}</button>
           )}
-        </p>
+        </div>
         {events.length > 0 && (
           <button
-            onClick={() => setExpanded(!expanded)}
+            onClick={() => setShowEvents(!showEvents)}
             className="text-[9px] text-sol-text-dim/25 hover:text-sol-cyan/40 mt-0.5 block transition-colors"
           >
-            {expanded ? "collapse" : `${events.length} events, ${sessionCount}s`}
+            {showEvents ? "hide events" : `${events.length} events, ${sessionCount}s`}
           </button>
         )}
       </div>
-      {expanded && events.length > 0 && (
+      {showEvents && events.length > 0 && (
         <div className="mt-1.5 pl-3 border-l border-sol-border/10 space-y-px" onClick={(e) => e.stopPropagation()}>
           {events.map((e: any, i: number) => {
             const style = TIMELINE_TYPE_STYLES[e.type] || TIMELINE_TYPE_STYLES.change;
@@ -720,12 +801,15 @@ interface ActivityFeedProps {
 
 const WINDOW_STEPS: WindowHours[] = [168, 720];
 
+type DigestScope = "day" | "week" | "month";
+
 export function ActivityFeed({ mode, teamId, compact, directoryFilter, onNavigate }: ActivityFeedProps) {
   const [windowIdx, setWindowIdx] = useState(0);
   const windowHours = WINDOW_STEPS[windowIdx];
   const [actorFilter, setActorFilter] = useState<Id<"users"> | undefined>(undefined);
   const [projectFilter, setProjectFilter] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<"feed" | "raw">("feed");
+  const [digestScope, setDigestScope] = useState<DigestScope>("day");
 
   const tz = useMemo(() => Intl.DateTimeFormat().resolvedOptions().timeZone, []);
 
@@ -735,6 +819,15 @@ export function ActivityFeed({ mode, teamId, compact, directoryFilter, onNavigat
     window_hours: windowHours,
     timezone: tz,
   });
+
+  const scopedDigests = useQuery(
+    api.sessionInsights.getDigestsByScope,
+    digestScope !== "day" ? {
+      scope: digestScope,
+      team_id: (mode === "team" && teamId) ? teamId as Id<"teams"> : undefined,
+      window_months: digestScope === "month" ? 6 : 3,
+    } : "skip"
+  );
 
   const canLoadMore = windowIdx < WINDOW_STEPS.length - 1;
 
@@ -807,6 +900,8 @@ export function ActivityFeed({ mode, teamId, compact, directoryFilter, onNavigat
           sessionCount={digest.sessions_analyzed}
           viewMode={viewMode}
           setViewMode={setViewMode}
+          digestScope={digestScope}
+          setDigestScope={setDigestScope}
           compact={compact}
         />
         {mode === "team" && (
@@ -823,6 +918,8 @@ export function ActivityFeed({ mode, teamId, compact, directoryFilter, onNavigat
         sessionCount={digest.sessions_analyzed}
         viewMode={viewMode}
         setViewMode={setViewMode}
+        digestScope={digestScope}
+        setDigestScope={setDigestScope}
         compact={compact}
       />
 
@@ -840,7 +937,9 @@ export function ActivityFeed({ mode, teamId, compact, directoryFilter, onNavigat
         <PeopleRow people={digest.people} onSelect={setActorFilter} selectedId={actorFilter} />
       )}
 
-      {digest.sessions_analyzed === 0 ? (
+      {digestScope !== "day" ? (
+        <ScopedDigestView scope={digestScope} digests={scopedDigests} />
+      ) : digest.sessions_analyzed === 0 ? (
         <EmptyState title="No activity yet" description="Insights appear as sessions produce activity." />
       ) : filteredDaySummaries.length === 0 ? (
         <EmptyState title="No sessions" description={actorFilter ? "No sessions for this person in this window." : "No sessions found."} />
@@ -865,18 +964,78 @@ export function ActivityFeed({ mode, teamId, compact, directoryFilter, onNavigat
   );
 }
 
-function FeedControls({ sessionCount, viewMode, setViewMode, compact }: {
+function formatDigestDate(date: string, scope: DigestScope): string {
+  if (scope === "month") {
+    const [y, m] = date.split("-");
+    const monthName = new Date(parseInt(y), parseInt(m) - 1).toLocaleString("en", { month: "long" });
+    return `${monthName} ${y}`;
+  }
+  if (scope === "week") {
+    return date;
+  }
+  return new Date(date + "T12:00:00").toLocaleDateString("en", { weekday: "short", month: "short", day: "numeric" });
+}
+
+function ScopedDigestView({ scope, digests }: { scope: DigestScope; digests: any[] | undefined }) {
+  if (digests === undefined) return <LoadingSkeleton />;
+  if (digests.length === 0) return <EmptyState title={`No ${scope} digests`} description="Generate digests first via backfillDigests." />;
+
+  return (
+    <div className="space-y-3">
+      {digests.map((d: any) => (
+        <div key={d.date} className="rounded-lg border border-sol-border/15 overflow-hidden">
+          <div className="flex items-center justify-between px-3 py-1.5 bg-sol-bg-alt/10 border-b border-sol-border/10">
+            <span className="text-[12px] font-semibold text-sol-text/80">
+              {formatDigestDate(d.date, scope)}
+            </span>
+            <div className="flex items-center gap-2">
+              {d.session_count != null && (
+                <span className="text-[10px] text-sol-text-dim/40 tabular-nums">
+                  {d.session_count} sessions
+                </span>
+              )}
+              <span className="text-[9px] text-sol-text-dim/25 tabular-nums">
+                {new Date(d.generated_at).toLocaleDateString("en", { month: "short", day: "numeric" })}
+              </span>
+            </div>
+          </div>
+          <div className="px-3 py-2 text-[12px] text-sol-text-muted/70 leading-relaxed">
+            <DigestRenderer content={d.narrative} />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function FeedControls({ sessionCount, viewMode, setViewMode, digestScope, setDigestScope, compact }: {
   sessionCount: number;
   viewMode: "feed" | "raw";
   setViewMode: (m: "feed" | "raw") => void;
+  digestScope: DigestScope;
+  setDigestScope: (s: DigestScope) => void;
   compact?: boolean;
 }) {
+  const scopes: DigestScope[] = ["day", "week", "month"];
   return (
     <div className={`flex items-center justify-between ${compact ? "px-1" : ""}`}>
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-3">
         <span className="text-[11px] text-sol-text-dim tabular-nums">
           {sessionCount} session{sessionCount !== 1 ? "s" : ""}
         </span>
+        {viewMode === "feed" && (
+          <div className="flex items-center border border-sol-border/20 rounded-md overflow-hidden">
+            {scopes.map((s) => (
+              <button
+                key={s}
+                onClick={() => setDigestScope(s)}
+                className={`px-2 py-0.5 text-[10px] font-medium capitalize transition-colors ${s !== "day" ? "border-l border-sol-border/20" : ""} ${digestScope === s ? "bg-sol-violet/15 text-sol-text" : "text-sol-text-dim/40 hover:text-sol-text-dim/70 hover:bg-sol-bg-alt/30"}`}
+              >
+                {s}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
       <div className="flex items-center border border-sol-border/30 rounded-md overflow-hidden">
         <button

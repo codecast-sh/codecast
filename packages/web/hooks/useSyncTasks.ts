@@ -7,7 +7,7 @@ import { useConvexSync } from "./useConvexSync";
 
 const api = _api as any;
 
-export function useSyncTasks(statusFilter?: string) {
+export function useSyncTasks(statusFilter?: string, triageStatus?: string) {
   const [numItems, setNumItems] = useState(300);
   const workspaceArgs = useWorkspaceArgs();
   const syncTable = useInboxStore((s) => s.syncTable);
@@ -16,6 +16,8 @@ export function useSyncTasks(statusFilter?: string) {
       status: statusFilter || undefined,
       ...workspaceArgs,
       limit: numItems,
+      ...(triageStatus ? { triage_status: triageStatus } : {}),
+      include_derived: true,
     }
   );
 

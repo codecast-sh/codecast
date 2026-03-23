@@ -40,6 +40,7 @@ const PrView = lazy(() => import("@/app/pr/[owner]/[repo]/[number]/page"));
 const ReviewView = lazy(() => import("@/app/review/[id]/page"));
 const ReviewBatch = lazy(() => import("@/app/review/batch/page"));
 
+const DocsLayout = lazy(() => import("@/app/docs/layout"));
 const Docs = lazy(() => import("@/app/docs/page"));
 const DocDetail = lazy(() => import("@/app/docs/[id]/page"));
 const Plans = lazy(() => import("@/app/plans/page"));
@@ -124,9 +125,11 @@ export function App() {
             <Route path="review/:id" element={<E name="ReviewView"><ReviewView /></E>} />
             <Route path="review/batch" element={<E name="ReviewBatch"><ReviewBatch /></E>} />
 
-            {/* Docs, plans, tasks */}
-            <Route path="docs" element={<E name="Docs"><Docs /></E>} />
-            <Route path="docs/:id" element={<E name="DocDetail"><DocDetail /></E>} />
+            {/* Docs - shared layout with persistent list panel */}
+            <Route path="docs" element={<E name="DocsLayout"><DocsLayout /></E>}>
+              <Route index element={<E name="Docs"><Docs /></E>} />
+              <Route path=":id" element={<E name="DocDetail"><DocDetail /></E>} />
+            </Route>
             <Route path="plans" element={<E name="Plans"><Plans /></E>} />
             <Route path="plans/:id" element={<E name="PlanDetail"><PlanDetail /></E>} />
             <Route path="tasks" element={<E name="Tasks"><Tasks /></E>} />

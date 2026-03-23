@@ -120,7 +120,7 @@ export function ContextChatInput({
     <div className="shrink-0 pointer-events-none sticky bottom-0 z-10">
       <div className="h-16 bg-gradient-to-t from-sol-bg via-sol-bg/80 to-transparent -mt-16 relative" />
       <div className={`pb-4 pointer-events-auto bg-sol-bg`}>
-      <div className={`mx-auto px-2 sm:px-4 transition-all duration-200 ease-out ${isExpanded ? "max-w-4xl" : "max-w-md"}`}>
+      <div className={`mx-auto px-2 sm:px-4 transition-all duration-200 ease-out ${isExpanded ? "max-w-4xl" : "max-w-xs"}`}>
       {isExpanded && (
         <div className={`mx-auto px-4 mb-1 flex justify-between items-center ${isExpanded ? "max-w-4xl" : "max-w-md"}`}>
           <div className="flex items-center gap-1">
@@ -146,7 +146,7 @@ export function ContextChatInput({
           </span>
         </div>
       )}
-      <div className={`flex flex-col border px-4 py-2 shadow-lg transition-all duration-200 ${isExpanded ? "rounded-2xl" : "rounded-full"} bg-sol-bg-alt ${isFocused ? "border-sol-border" : "border-sol-border/50"}`}>
+      <div className={`flex flex-col border shadow-lg transition-all duration-200 ${isExpanded ? "px-4 py-2 rounded-2xl" : "px-3 py-1.5 rounded-full"} bg-sol-bg-alt ${isFocused ? "border-sol-border" : "border-sol-border/50"}`}>
         <div className="flex items-end gap-2">
           <textarea
             ref={textareaRef}
@@ -163,20 +163,20 @@ export function ContextChatInput({
             }}
             placeholder={placeholder || defaultPlaceholder}
             rows={1}
-            className="flex-1 bg-transparent text-sm text-sol-text placeholder:text-sol-text-dim focus:outline-none resize-none overflow-hidden leading-relaxed py-1"
+            className={`flex-1 bg-transparent text-sol-text placeholder:text-sol-text-dim focus:outline-none resize-none overflow-hidden leading-relaxed ${isExpanded ? "text-sm py-1" : "text-xs py-0.5"}`}
           />
           <div className="shrink-0">
             <button
               type="button"
               onClick={handleSubmit}
               disabled={!hasText}
-              className={`w-8 h-8 rounded-full transition-colors flex items-center justify-center border ${
+              className={`${isExpanded ? "w-8 h-8" : "w-6 h-6"} rounded-full transition-colors flex items-center justify-center border ${
                 !hasText
                   ? "border-sol-border/30 text-sol-text-dim/25 cursor-not-allowed"
                   : "border-sol-blue/50 bg-sol-blue/20 text-sol-blue hover:bg-sol-blue/30 hover:border-sol-blue"
               }`}
             >
-              <ArrowUp className="w-4 h-4" />
+              <ArrowUp className={isExpanded ? "w-4 h-4" : "w-3 h-3"} />
             </button>
           </div>
         </div>

@@ -4,7 +4,7 @@ import { CollabDocEditor } from "./editor/CollabDocEditor";
 import { useMentionQuery } from "../hooks/useMentionQuery";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { ContextChatInput } from "./ContextChatInput";
-import { ArrowLeft, Edit3, Eye, MoreHorizontal, Copy, Check } from "lucide-react";
+import { ArrowLeft, Edit3, Eye, MoreHorizontal, Copy, Check, X } from "lucide-react";
 import Link from "next/link";
 import { copyToClipboard } from "../lib/utils";
 import { toast } from "sonner";
@@ -94,6 +94,13 @@ export function DocumentDetailLayout({
             {isEditing ? <Edit3 className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
           </button>
           {topBarRight}
+          <Link
+            href={backHref}
+            className="p-1 rounded-md text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt transition-colors"
+            title="Close"
+          >
+            <X className="w-4 h-4" />
+          </Link>
           {metaContent && (
             <button
               onClick={() => setShowMeta(!showMeta)}

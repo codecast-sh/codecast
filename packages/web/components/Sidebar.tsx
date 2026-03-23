@@ -9,6 +9,7 @@ import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { cleanTitle } from "../lib/conversationProcessor";
 import { shouldShowSession } from "../lib/sessionFilters";
 import { useInboxStore, categorizeSessions } from "../store/inboxStore";
+import { useConvexSync } from "../hooks/useConvexSync";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { TeamIcon } from "./TeamIcon";
 import { isDesktop } from "../lib/desktop";
@@ -271,12 +272,14 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
   const isAdmin = currentUser?.email === "ashot@almostcandid.com";
   const [currentTime, setCurrentTime] = useState(Date.now());
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id) as Id<"teams"> | undefined;
-  const teams = useQuery(api.teams.getUserTeams);
-  const activeTeam = teams?.find((t: any) => t?._id === activeTeamId);
-  const teamUnreadCount = useQuery(
+  const teamsQuery = useQuery(api.teams.getUserTeams);
+  const teams = useInboxStore((s) => s.teams);
+  const activeTeam = (teamsQuery ?? teams)?.find((t: any) => t?._id === activeTeamId);
+  const teamUnreadCountQuery = useQuery(
     api.conversations.getTeamUnreadCount,
     activeTeamId ? { teamId: activeTeamId } : "skip"
   );
+  const teamUnreadCount = teamUnreadCountQuery ?? useInboxStore.getState().teamUnreadCount;
   const toggleFavorite = useMutation(api.conversations.toggleFavorite);
   const [createModal, setCreateModal] = useState<CreateModalType>(null);
   const inboxSessions = useInboxStore((s) => s.sessions);
@@ -295,9 +298,16 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
     return () => clearInterval(interval);
   });
 
-  const favorites = useQuery(api.conversations.listFavorites);
-  const bookmarks = useQuery(api.bookmarks.listBookmarks);
+  const favoritesQuery = useQuery(api.conversations.listFavorites);
+  const bookmarksQuery = useQuery(api.bookmarks.listBookmarks);
+  const favorites = favoritesQuery ?? useInboxStore.getState().favorites;
+  const bookmarks = bookmarksQuery ?? useInboxStore.getState().bookmarks;
   const toggleBookmark = useMutation(api.bookmarks.toggleBookmark);
+
+  useConvexSync(teamsQuery, useCallback((d: any) => useInboxStore.getState().syncTeams(d), []));
+  useConvexSync(teamUnreadCountQuery, useCallback((d: any) => useInboxStore.getState().syncTeamUnreadCount(d), []));
+  useConvexSync(favoritesQuery, useCallback((d: any) => useInboxStore.getState().syncFavorites(d), []));
+  useConvexSync(bookmarksQuery, useCallback((d: any) => useInboxStore.getState().syncBookmarks(d), []));
   const { conversations } =
     useQuery(api.conversations.listConversations, {
       filter: "my",
@@ -389,8 +399,10 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
         <div>
           <button
             onClick={() => {
-              useInboxStore.getState().setShowMySessions(true);
-              useInboxStore.getState().clearSelection();
+              if (isInbox) {
+                useInboxStore.getState().setShowMySessions(true);
+                useInboxStore.getState().clearSelection();
+              }
               router.push("/inbox");
             }}
             className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-4 py-2.5 transition-colors motion-reduce:transition-none text-left ${

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "bun:test";
-import { useInboxStore, type InboxSession } from "../inboxStore";
+import { getSessionRenderKey, useInboxStore, type InboxSession } from "../inboxStore";
 
 const baseSession: InboxSession = {
   _id: "conv1",
@@ -73,5 +73,25 @@ describe("inboxStore.setConversationAgent", () => {
     expect(state.conversations.conv2?.agent_type).toBe("gemini");
     expect(state.currentConversation.agentType).toBe("gemini");
     expect(state.currentConversation.source).toBe("sessions");
+  });
+});
+
+describe("getSessionRenderKey", () => {
+  it("stays stable across optimistic-to-server id promotion", () => {
+    expect(getSessionRenderKey({
+      _id: "temp-session-id",
+      session_id: "session-1",
+    })).toBe("session-1");
+
+    expect(getSessionRenderKey({
+      _id: "jn7abc123def456ghi789jklmnopqrs",
+      session_id: "session-1",
+    })).toBe("session-1");
+  });
+
+  it("falls back to the conversation id when there is no session id", () => {
+    expect(getSessionRenderKey({
+      _id: "jn7abc123def456ghi789jklmnopqrs",
+    } as Pick<InboxSession, "_id" | "session_id">)).toBe("jn7abc123def456ghi789jklmnopqrs");
   });
 });

@@ -25,6 +25,7 @@ import { CliOfflineBanner } from "./CliOfflineBanner";
 import { TmuxMissingBanner } from "./TmuxMissingBanner";
 import { ElectronUpdateBanner } from "./ElectronUpdateBanner";
 import { FindBar } from "./FindBar";
+import { KeyboardShortcutsPanel, ShortcutsToggleButton } from "./KeyboardShortcutsHelp";
 import { NewSessionModal } from "./ConversationList";
 import { CreatePalette } from "./CreatePalette";
 import { useInboxStore } from "../store/inboxStore";
@@ -268,9 +269,9 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
 
   const rightArea = showSessionList ? (
     <Group orientation="horizontal" className="h-full" defaultLayout={{ "right-content": 70, "session-list": 30 }}>
-      <Panel id="right-content" minSize="30%"><div className="h-full">{mainContent}</div></Panel>
+      <Panel id="right-content" minSize={400}><div className="h-full">{mainContent}</div></Panel>
       <Separator className={separatorClass} />
-      <Panel id="session-list" minSize="15%" maxSize="50%" defaultSize="30%" collapsible collapsedSize="0%">
+      <Panel id="session-list" minSize={200} maxSize="50%" defaultSize="30%" collapsible collapsedSize={0}>
         <ErrorBoundary name="SessionList" level="panel">
           <div className="w-full h-full border-l border-sol-border/30">
             <SessionListPanel
@@ -378,6 +379,7 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
               <Plus className="w-4 h-4" />
               New
             </button>
+            <ShortcutsToggleButton />
             <ThemeToggle />
             <ErrorBoundary name="NotificationBell" level="inline">
               <NotificationBell />
@@ -409,34 +411,37 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
       </ErrorBoundary>
 
       {/* Content area with sidebar and main */}
-      <div className="flex-1 min-h-0">
-        {hideSidebar || isZenMode || sidebarCollapsed || isMobile ? (
-          <div className="h-full">{rightArea}</div>
-        ) : (
-          <Group
-            orientation="horizontal"
-            className="h-full"
-            defaultLayout={layout}
-            onLayoutChange={handleLayoutChange}
-          >
-            <Panel id="sidebar" minSize="10%" maxSize="50%" collapsible collapsedSize="0%">
-              <div className="h-full bg-sol-bg-alt overflow-auto">
-                <ErrorBoundary name="Sidebar" level="panel">
-                  <Sidebar
-                    filter={filter}
-                    onFilterChange={onFilterChange}
-                    directoryFilter={directoryFilter}
-                    onDirectoryFilterChange={onDirectoryFilterChange}
-                    isMobileOpen={isMobileSidebarOpen}
-                    onMobileClose={() => setIsMobileSidebarOpen(false)}
-                  />
-                </ErrorBoundary>
-              </div>
-            </Panel>
-            <Separator className={separatorClass} />
-            <Panel id="main" minSize="30%">{rightArea}</Panel>
-          </Group>
-        )}
+      <div className="flex-1 min-h-0 flex">
+        <div className="flex-1 min-w-0">
+          {hideSidebar || isZenMode || sidebarCollapsed || isMobile ? (
+            <div className="h-full">{rightArea}</div>
+          ) : (
+            <Group
+              orientation="horizontal"
+              className="h-full"
+              defaultLayout={layout}
+              onLayoutChange={handleLayoutChange}
+            >
+              <Panel id="sidebar" minSize={180} maxSize="50%" collapsible collapsedSize={0}>
+                <div className="h-full bg-sol-bg-alt overflow-auto">
+                  <ErrorBoundary name="Sidebar" level="panel">
+                    <Sidebar
+                      filter={filter}
+                      onFilterChange={onFilterChange}
+                      directoryFilter={directoryFilter}
+                      onDirectoryFilterChange={onDirectoryFilterChange}
+                      isMobileOpen={isMobileSidebarOpen}
+                      onMobileClose={() => setIsMobileSidebarOpen(false)}
+                    />
+                  </ErrorBoundary>
+                </div>
+              </Panel>
+              <Separator className={separatorClass} />
+              <Panel id="main" minSize={400}>{rightArea}</Panel>
+            </Group>
+          )}
+        </div>
+        <KeyboardShortcutsPanel />
       </div>
 
       {/* Mobile sidebar overlay */}

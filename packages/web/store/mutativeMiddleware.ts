@@ -1,16 +1,27 @@
 import { create as mutativeCreate, apply, type Patch } from "mutative";
 
 type DispatchFn = (action: string, args: any, patches?: any) => Promise<any>;
+type IDBWriteFn = (patches: Patch[], state: any) => void;
 
 const ACTION_FLAG = Symbol("action");
+const SYNC_FLAG = Symbol("sync");
 
 export function action<T extends (...args: any[]) => any>(fn: T): T {
   (fn as any)[ACTION_FLAG] = true;
   return fn;
 }
 
+export function sync<T extends (...args: any[]) => any>(fn: T): T {
+  (fn as any)[SYNC_FLAG] = true;
+  return fn;
+}
+
 function isAction(fn: any): boolean {
   return typeof fn === "function" && fn[ACTION_FLAG] === true;
+}
+
+function isSync(fn: any): boolean {
+  return typeof fn === "function" && fn[SYNC_FLAG] === true;
 }
 
 type TableKind = "collection" | "singleton";
@@ -91,13 +102,17 @@ export function groupPatchesByTable(
 export function mutativeMiddleware(config: any): any {
   return (set: any, get: any, api: any) => {
     let dispatchFn: DispatchFn | null = null;
+    let idbWriteFn: IDBWriteFn | null = null;
 
     const rawStore = config(set, get, api);
 
     const wrapped: Record<string, any> = {};
 
     for (const [key, val] of Object.entries(rawStore)) {
-      if (!isAction(val)) {
+      const isAct = isAction(val);
+      const isSyn = isSync(val);
+
+      if (!isAct && !isSyn) {
         wrapped[key] = val;
         continue;
       }
@@ -113,18 +128,29 @@ export function mutativeMiddleware(config: any): any {
         );
         set(nextState, true);
 
-        if (!dispatchFn) return;
+        if (idbWriteFn && patches.length > 0) {
+          const fn = idbWriteFn;
+          const p = patches;
+          const s = nextState;
+          (typeof requestIdleCallback === "function" ? requestIdleCallback : setTimeout)(() => fn(p, s));
+        }
 
-        const grouped =
-          patches.length > 0 ? groupPatchesByTable(patches) : undefined;
-        return dispatchFn(key, args, grouped).catch(() => {
-          set(apply(get(), inversePatches), true);
-        });
+        if (isAct && dispatchFn) {
+          const grouped =
+            patches.length > 0 ? groupPatchesByTable(patches) : undefined;
+          return dispatchFn(key, args, grouped).catch(() => {
+            set(apply(get(), inversePatches), true);
+          });
+        }
       };
     }
 
     wrapped._setDispatch = (fn: DispatchFn) => {
       dispatchFn = fn;
+    };
+
+    wrapped._setIDBWrite = (fn: IDBWriteFn) => {
+      idbWriteFn = fn;
     };
 
     wrapped._dispatch = (action: string, args: any, patches?: any) => {

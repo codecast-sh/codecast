@@ -2,6 +2,19 @@
 @tailwind components;
 @tailwind utilities;
 
+@layer utilities {
+  .cq-container {
+    container-type: inline-size;
+  }
+}
+
+@container (max-width: 600px) {
+  .cq-hide-compact { display: none !important; }
+}
+@container (max-width: 350px) {
+  .cq-hide-minimal { display: none !important; }
+}
+
 :root {
   --font-mono: "JetBrains Mono", monospace;
   --font-serif: "Fraunces", serif;

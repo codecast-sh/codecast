@@ -28,6 +28,7 @@ import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { MentionList, type MentionItem } from "./MentionList";
 import { MentionNodeView } from "./MentionNodeView";
 import { SlashCommandExtension } from "./SlashCommandExtension";
+import { EntityIdExtension } from "./EntityIdExtension";
 import { BubbleToolbar } from "./BubbleToolbar";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import type { SyncApi } from "@convex-dev/prosemirror-sync";
@@ -232,6 +233,7 @@ function buildExtensions(onMentionQuery: MentionQueryFn, placeholder: string) {
       },
     }),
     SlashCommandExtension,
+    EntityIdExtension,
     Typography,
     Highlight.configure({ HTMLAttributes: { class: "editor-highlight" } }),
     ImageExtension.configure({ HTMLAttributes: { class: "editor-image" } }),

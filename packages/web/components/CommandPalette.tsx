@@ -2,25 +2,93 @@ import { useState, useCallback, useMemo, useRef } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useShortcutAction } from "../shortcuts";
 import { useRouter, usePathname } from "next/navigation";
-import { useQuery } from "convex/react";
-import { api } from "@codecast/convex/convex/_generated/api";
+import { useQuery, useMutation } from "convex/react";
+import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { Command as CommandPrimitive } from "cmdk";
 import { cleanTitle } from "../lib/conversationProcessor";
-import { useInboxStore, InboxSession } from "../store/inboxStore";
+import { useInboxStore, InboxSession, TaskItem, DocItem } from "../store/inboxStore";
 import { isElectron } from "../lib/desktop";
 import { isInboxRoute } from "../lib/inboxRouting";
 import { AgentTypeIcon } from "./AgentTypeIcon";
+import { getLabelColor, DEFAULT_LABELS } from "../lib/labelColors";
+import { toast } from "sonner";
+import {
+  Circle,
+  CircleDot,
+  CircleDotDashed,
+  CheckCircle2,
+  XCircle,
+  AlertTriangle,
+  ArrowUp,
+  ArrowDown,
+  Minus,
+  FileText,
+  Pin,
+  Archive,
+  Copy,
+  Trash2,
+  Tag,
+  User,
+  Bot,
+  Check,
+  Search,
+  CornerDownLeft,
+} from "lucide-react";
+
+const api = _api as any;
+
+type ActionMode = "status" | "priority" | "labels" | "assign" | "type";
+
+function isTask(item: any): item is TaskItem {
+  return item && "status" in item && "short_id" in item;
+}
+
+const STATUS_OPTIONS = [
+  { key: "backlog", icon: CircleDotDashed, label: "Backlog", color: "text-neutral-500", shortcut: "1" },
+  { key: "open", icon: Circle, label: "Open", color: "text-blue-400", shortcut: "2" },
+  { key: "in_progress", icon: CircleDot, label: "In Progress", color: "text-yellow-400", shortcut: "3" },
+  { key: "in_review", icon: CircleDot, label: "In Review", color: "text-violet-400", shortcut: "4" },
+  { key: "done", icon: CheckCircle2, label: "Done", color: "text-green-400", shortcut: "5" },
+  { key: "dropped", icon: XCircle, label: "Dropped", color: "text-neutral-500", shortcut: "6" },
+];
+
+const PRIORITY_OPTIONS = [
+  { key: "urgent", icon: AlertTriangle, label: "Urgent", color: "text-red-400", shortcut: "1" },
+  { key: "high", icon: ArrowUp, label: "High", color: "text-orange-400", shortcut: "2" },
+  { key: "medium", icon: Minus, label: "Medium", color: "text-neutral-400", shortcut: "3" },
+  { key: "low", icon: ArrowDown, label: "Low", color: "text-neutral-500", shortcut: "4" },
+  { key: "none", icon: Minus, label: "None", color: "text-neutral-600", shortcut: "5" },
+];
+
+const DOC_TYPE_OPTIONS = [
+  { key: "note", label: "Note", shortcut: "1" },
+  { key: "plan", label: "Plan", shortcut: "2" },
+  { key: "design", label: "Design", shortcut: "3" },
+  { key: "spec", label: "Spec", shortcut: "4" },
+  { key: "investigation", label: "Investigation", shortcut: "5" },
+  { key: "handoff", label: "Handoff", shortcut: "6" },
+];
+
+const AGENT_OPTIONS = [
+  { key: "agent:claude_code", label: "Claude Code" },
+  { key: "agent:codex", label: "Codex" },
+  { key: "agent:cursor", label: "Cursor" },
+  { key: "agent:gemini", label: "Gemini" },
+];
+
+const AGENT_COLORS: Record<string, string> = {
+  "agent:codex": "text-blue-400",
+  "agent:cursor": "text-purple-400",
+  "agent:gemini": "text-amber-400",
+};
 
 const NAV_PAGES = [
   { label: "Dashboard", path: "/dashboard", icon: "grid", keywords: "home sessions main" },
-  { label: "My Sessions", path: "/dashboard", icon: "user", keywords: "personal conversations" },
-  { label: "Team Sessions", path: "/dashboard?filter=team", icon: "users", keywords: "team shared" },
+  { label: "Tasks", path: "/tasks", icon: "check", keywords: "todo work items" },
+  { label: "Documents", path: "/docs", icon: "file", keywords: "notes plans specs" },
   { label: "Inbox", path: "/inbox", icon: "inbox", keywords: "idle queue waiting" },
   { label: "Search", path: "/search", icon: "search", keywords: "find query" },
   { label: "Settings", path: "/settings", icon: "settings", keywords: "preferences config profile" },
-  { label: "Settings: Profile", path: "/settings/profile", icon: "settings", keywords: "account name email" },
-  { label: "Settings: CLI", path: "/settings/cli", icon: "terminal", keywords: "daemon install token" },
-  { label: "Settings: Team", path: "/settings/team", icon: "users", keywords: "team manage members" },
   { label: "Notifications", path: "/notifications", icon: "bell", keywords: "alerts updates" },
 ] as const;
 
@@ -29,6 +97,10 @@ function NavIcon({ type, className }: { type: string; className?: string }) {
   switch (type) {
     case "grid":
       return <svg className={c} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" /></svg>;
+    case "check":
+      return <svg className={c} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>;
+    case "file":
+      return <svg className={c} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>;
     case "user":
       return <svg className={c} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg>;
     case "users":
@@ -39,8 +111,6 @@ function NavIcon({ type, className }: { type: string; className?: string }) {
       return <svg className={c} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>;
     case "settings":
       return <svg className={c} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>;
-    case "terminal":
-      return <svg className={c} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>;
     case "bell":
       return <svg className={c} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" /></svg>;
     case "star":
@@ -73,31 +143,315 @@ function getShortPath(p: string): string {
   return parts.length ? parts[parts.length - 1] : p;
 }
 
+// ─── Action submenu component (Linear-style) ───────────────────
+function ActionSubmenu({
+  mode,
+  targets,
+  targetType,
+  onClose,
+  onBack,
+  teamMembers,
+  currentUser,
+}: {
+  mode: ActionMode;
+  targets: any[];
+  targetType: "task" | "doc";
+  onClose: () => void;
+  onBack: () => void;
+  teamMembers?: any[];
+  currentUser?: any;
+}) {
+  const [search, setSearch] = useState("");
+  const [highlightIndex, setHighlightIndex] = useState(0);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+
+  const webUpdateTask = useMutation(api.tasks.webUpdate);
+  const assignToAgent = useMutation(api.tasks.assignToAgent);
+  const updateTask = useInboxStore((s) => s.updateTask);
+  const updateDoc = useInboxStore((s) => s.updateDoc);
+  const pinDoc = useInboxStore((s) => s.pinDoc);
+  const archiveDoc = useInboxStore((s) => s.archiveDoc);
+  const router = useRouter();
+
+  const target = targets[0];
+  const currentLabels = target?.labels || [];
+
+  useWatchEffect(() => {
+    setSearch("");
+    setHighlightIndex(0);
+    setTimeout(() => inputRef.current?.focus(), 0);
+  }, [mode]);
+
+  const items = useMemo(() => {
+    const q = search.toLowerCase();
+
+    if (mode === "status") {
+      return STATUS_OPTIONS
+        .filter((o) => o.label.toLowerCase().includes(q))
+        .map((o) => ({
+          ...o,
+          active: isTask(target) && target.status === o.key,
+        }));
+    }
+    if (mode === "priority") {
+      return PRIORITY_OPTIONS
+        .filter((o) => o.label.toLowerCase().includes(q))
+        .map((o) => ({
+          ...o,
+          active: isTask(target) && target.priority === o.key,
+        }));
+    }
+    if (mode === "type") {
+      return DOC_TYPE_OPTIONS
+        .filter((o) => o.label.toLowerCase().includes(q))
+        .map((o) => ({
+          ...o,
+          active: !isTask(target) && (target as DocItem).doc_type === o.key,
+        }));
+    }
+    if (mode === "labels") {
+      const all = [...new Set([...DEFAULT_LABELS, ...currentLabels])];
+      const matched = all
+        .filter((l) => l.toLowerCase().includes(q))
+        .map((l, i) => ({
+          key: l,
+          label: l,
+          active: currentLabels.includes(l),
+          shortcut: i < 9 ? String(i + 1) : undefined,
+          dot: getLabelColor(l).dot,
+        }));
+      if (q && !matched.some((l) => l.key.toLowerCase() === q)) {
+        matched.unshift({ key: q, label: `Create "${q}"`, active: false, shortcut: undefined, dot: getLabelColor(q).dot });
+      }
+      return matched;
+    }
+    if (mode === "assign") {
+      const agents = AGENT_OPTIONS.map((a) => ({ ...a, type: "agent" as const, image: undefined }));
+      const members = (teamMembers || []).filter(Boolean).map((m: any) => ({
+        key: m._id,
+        label: currentUser && m._id === currentUser._id ? `${m.name} (you)` : m.name,
+        type: "user" as const,
+        image: m.image || m.github_avatar_url,
+      }));
+      return [...agents, ...members].filter((o) => o.label.toLowerCase().includes(q));
+    }
+    return [];
+  }, [mode, search, target, currentLabels, teamMembers, currentUser]);
+
+  useWatchEffect(() => { setHighlightIndex(0); }, [search]);
+
+  const selectItem = useCallback((index: number) => {
+    const item = items[index] as any;
+    if (!item || !target) return;
+    const count = targets.length;
+
+    if (targetType === "task") {
+      const applyTaskUpdate = (fields: Record<string, any>) => {
+        for (const t of targets as TaskItem[]) {
+          updateTask(t.short_id, fields);
+          webUpdateTask({ short_id: t.short_id, ...fields }).catch(() => {});
+        }
+      };
+      const label = count === 1 ? (targets[0] as TaskItem).short_id : `${count} tasks`;
+
+      if (mode === "status") {
+        applyTaskUpdate({ status: item.key });
+        toast.success(`${label} \u2192 ${item.label}`);
+      } else if (mode === "priority") {
+        applyTaskUpdate({ priority: item.key });
+        toast.success(`${label} priority \u2192 ${item.label}`);
+      } else if (mode === "labels") {
+        const newLabels = item.active
+          ? currentLabels.filter((l: string) => l !== item.key)
+          : [...currentLabels, item.key];
+        applyTaskUpdate({ labels: newLabels });
+        toast.success(`${item.active ? "Removed" : "Added"} label: ${item.key}`);
+      } else if (mode === "assign") {
+        if (item.key.startsWith("agent:")) {
+          for (const t of targets as TaskItem[]) {
+            assignToAgent({ short_id: t.short_id, agent_type: item.key.replace("agent:", "") }).catch(() => {});
+          }
+          toast.success(`Starting session with ${item.label}...`);
+        } else {
+          applyTaskUpdate({ assignee: item.key });
+          const member = (teamMembers || []).find((m: any) => m._id === item.key);
+          toast.success(`Assigned to ${member?.name || "user"}`);
+        }
+      }
+    } else {
+      const doc = target as DocItem;
+      if (mode === "type") {
+        updateDoc(doc._id, { doc_type: item.key });
+        toast.success(`Type \u2192 ${item.label}`);
+      } else if (mode === "labels") {
+        const newLabels = item.active
+          ? currentLabels.filter((l: string) => l !== item.key)
+          : [...currentLabels, item.key];
+        updateDoc(doc._id, { labels: newLabels });
+        toast.success(`${item.active ? "Removed" : "Added"} label: ${item.key}`);
+      }
+    }
+    onClose();
+  }, [items, target, targets, targetType, mode, currentLabels, onClose, updateTask, webUpdateTask, assignToAgent, updateDoc, teamMembers, router]);
+
+  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === "Escape" || (e.key === "Backspace" && search === "")) {
+      e.preventDefault();
+      onBack();
+      return;
+    }
+    if (e.key === "ArrowDown" || (e.key === "j" && e.ctrlKey)) {
+      e.preventDefault();
+      setHighlightIndex((i) => Math.min(i + 1, items.length - 1));
+      return;
+    }
+    if (e.key === "ArrowUp" || (e.key === "k" && e.ctrlKey)) {
+      e.preventDefault();
+      setHighlightIndex((i) => Math.max(i - 1, 0));
+      return;
+    }
+    if (e.key === "Enter") {
+      e.preventDefault();
+      selectItem(highlightIndex);
+      return;
+    }
+    const num = parseInt(e.key);
+    if (num >= 1 && num <= items.length) {
+      e.preventDefault();
+      selectItem(num - 1);
+    }
+  }, [items, highlightIndex, selectItem, onBack, search]);
+
+  useWatchEffect(() => {
+    const el = listRef.current;
+    if (!el) return;
+    const highlighted = el.children[highlightIndex] as HTMLElement;
+    if (highlighted) highlighted.scrollIntoView({ block: "nearest" });
+  }, [highlightIndex]);
+
+  const modeLabel =
+    mode === "status" ? "Change status..." :
+    mode === "priority" ? "Set priority..." :
+    mode === "labels" ? "Toggle label..." :
+    mode === "assign" ? "Assign to person or agent..." :
+    mode === "type" ? "Change document type..." :
+    "Select...";
+
+  const itemClass = (i: number) =>
+    `w-full flex items-center gap-3 px-4 py-2.5 text-sm transition-colors ${
+      i === highlightIndex
+        ? "bg-sol-bg-highlight text-sol-text"
+        : "text-sol-text-muted hover:bg-sol-bg-alt/50"
+    }`;
+
+  return (
+    <>
+      <div className="flex items-center gap-2 px-4 py-2 border-b border-sol-border/30">
+        <button
+          onClick={onBack}
+          className="text-xs px-1.5 py-0.5 rounded bg-sol-bg-alt border border-sol-border/50 text-sol-text-dim hover:text-sol-text transition-colors flex-shrink-0"
+        >
+          &larr;
+        </button>
+        <Search className="w-4 h-4 text-sol-text-dim flex-shrink-0" />
+        <input
+          ref={inputRef}
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder={modeLabel}
+          className="flex-1 text-sm bg-transparent text-sol-text placeholder:text-sol-text-dim/60 outline-none"
+        />
+      </div>
+      <div ref={listRef} className="max-h-[320px] overflow-y-auto py-1">
+        {items.length === 0 && (
+          <div className="px-4 py-6 text-center text-sm text-sol-text-dim">No results</div>
+        )}
+        {items.map((item: any, i: number) => {
+          const Icon = item.icon;
+          return (
+            <button
+              key={item.key}
+              onClick={() => selectItem(i)}
+              onMouseEnter={() => setHighlightIndex(i)}
+              className={itemClass(i)}
+            >
+              {mode === "assign" ? (
+                item.type === "agent" ? (
+                  <Bot className={`w-4 h-4 flex-shrink-0 ${AGENT_COLORS[item.key] || "text-sol-violet"}`} />
+                ) : item.image ? (
+                  <img src={item.image} alt={item.label} className="w-4 h-4 rounded-full flex-shrink-0" />
+                ) : (
+                  <div className="w-4 h-4 rounded-full flex-shrink-0 bg-sol-bg-highlight border border-sol-border/50 flex items-center justify-center text-[8px] font-medium text-sol-text-muted">
+                    {item.label.replace(" (you)", "").split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase()}
+                  </div>
+                )
+              ) : mode === "labels" ? (
+                <span className={`w-3 h-3 rounded-full flex-shrink-0 ${item.dot || "bg-neutral-400"}`} />
+              ) : Icon ? (
+                <Icon className={`w-4 h-4 flex-shrink-0 ${item.color || ""}`} />
+              ) : null}
+              <span className="flex-1 text-left">{item.label}</span>
+              {item.active && <Check className="w-4 h-4 text-sol-cyan flex-shrink-0" />}
+              {item.shortcut && (
+                <kbd className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-sol-bg-alt border border-sol-border/40 text-sol-text-dim">
+                  {item.shortcut}
+                </kbd>
+              )}
+              {mode === "assign" && item.type === "agent" && (
+                <span className="text-[10px] text-sol-text-dim font-mono">start session</span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+      <div className="flex items-center gap-3 px-4 py-2 border-t border-sol-border/30 text-[10px] text-sol-text-dim">
+        <span className="flex items-center gap-1">
+          <kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/40 font-mono">&uarr;&darr;</kbd>
+          navigate
+        </span>
+        <span className="flex items-center gap-1">
+          <CornerDownLeft className="w-3 h-3" />
+          select
+        </span>
+        <span className="flex items-center gap-1">
+          <kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/40 font-mono">esc</kbd>
+          back
+        </span>
+        {items.length > 0 && (
+          <span className="flex items-center gap-1">
+            <kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/40 font-mono">1-{Math.min(items.length, 9)}</kbd>
+            quick pick
+          </span>
+        )}
+      </div>
+    </>
+  );
+}
+
+// ─── Unified Command Palette ────────────────────────────────────
 export function CommandPalette({ standalone = false }: { standalone?: boolean }) {
-  const [open, setOpen] = useState(standalone);
   const [query, setQuery] = useState("");
+  const [actionMode, setActionMode] = useState<ActionMode | null>(null);
   const router = useRouter();
   const pathname = usePathname();
 
+  const { open: paletteOpen, targets, targetType, initialMode } = useInboxStore((s) => s.palette);
+  const closePalette = useInboxStore((s) => s.closePalette);
+  const togglePalette = useInboxStore((s) => s.togglePalette);
+
+  const updateTask = useInboxStore((s) => s.updateTask);
+  const updateDoc = useInboxStore((s) => s.updateDoc);
+  const pinDoc = useInboxStore((s) => s.pinDoc);
+  const archiveDoc = useInboxStore((s) => s.archiveDoc);
+  const webUpdateTask = useMutation(api.tasks.webUpdate);
+
+  const open = standalone || paletteOpen;
+
   const favorites = useQuery(api.conversations.listFavorites);
   const bookmarks = useQuery(api.bookmarks.listBookmarks);
-  const { conversations: recentConversations } =
-    useQuery(api.conversations.listConversations, {
-      filter: "my",
-      limit: 50,
-      include_message_previews: false,
-    }) ?? { conversations: [] };
-
-  const isSearching = query.trim().length >= 2;
-  const searchResults = useQuery(
-    api.conversations.paletteSearch,
-    isSearching ? { query: query.trim(), limit: 30 } : "skip"
-  );
-  const searchLoading = isSearching && searchResults === undefined;
-
-  const displayConversations = isSearching
-    ? searchResults ?? []
-    : recentConversations;
+  const recentConversations = useQuery(api.conversations.listRecentSessions) ?? [];
 
   const projects = useMemo(() => {
     const dirMap = new Map<string, number>();
@@ -150,36 +504,75 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
         projectPath: composeProject || projects[0] || undefined,
       });
     } else {
-      setOpen(false);
+      closePalette();
       useInboxStore.getState().openComposePalette(msg);
     }
     setComposeMode(false);
     setComposeMsg("");
-  }, [composeMsg, composeAgent, composeProject, projects, standalone]);
+  }, [composeMsg, composeAgent, composeProject, projects, standalone, closePalette]);
 
+  // Global Cmd+K toggle — context-aware
+  const storeOpenPalette = useInboxStore((s) => s.openPalette);
   useShortcutAction('palette.toggle', useCallback(() => {
     if (standalone) return;
-    setOpen((prev) => !prev);
-  }, [standalone]));
+    const state = useInboxStore.getState();
+    if (state.palette.open) {
+      state.closePalette();
+      return;
+    }
+    const taskMatch = pathname?.match(/^\/tasks\/([^/]+)$/);
+    if (taskMatch) {
+      const id = taskMatch[1];
+      const task = state.tasks[id] || Object.values(state.tasks).find((t: any) => t._id === id || t.short_id === id);
+      if (task) {
+        storeOpenPalette({ targets: [task], targetType: 'task' });
+        return;
+      }
+    }
+    const docMatch = pathname?.match(/^\/docs\/([^/]+)$/);
+    if (docMatch) {
+      const id = docMatch[1];
+      const doc = state.docDetails[id] || state.docs[id];
+      if (doc) {
+        storeOpenPalette({ targets: [doc], targetType: 'doc' });
+        return;
+      }
+    }
+    // On list pages, return false so GenericListView can handle with focused item
+    if (pathname === '/tasks' || pathname === '/docs') return false;
+    togglePalette();
+  }, [standalone, togglePalette, storeOpenPalette, pathname]));
 
+  // Reset state when palette opens
+  useWatchEffect(() => {
+    if (open) {
+      setQuery("");
+      setActionMode(initialMode !== "root" ? initialMode as ActionMode : null);
+    }
+  }, [open, initialMode]);
+
+  // Escape handling
   useWatchEffect(() => {
     if (standalone) return;
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && open) {
+      if (e.key === "Escape" && open && !actionMode) {
         e.preventDefault();
-        setOpen(false);
+        closePalette();
       }
     };
     document.addEventListener("keydown", handleKeyDown, true);
     return () => document.removeEventListener("keydown", handleKeyDown, true);
-  }, [open, standalone]);
+  }, [open, standalone, actionMode, closePalette]);
 
+  // Standalone palette events (Electron)
   useWatchEffect(() => {
     if (!standalone) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
-        if (composeMode) {
+        if (actionMode) {
+          setActionMode(null);
+        } else if (composeMode) {
           exitComposeMode();
         } else if (isElectron()) {
           window.__CODECAST_ELECTRON__!.paletteHide();
@@ -188,18 +581,13 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
     };
     document.addEventListener("keydown", handleKeyDown, true);
     return () => document.removeEventListener("keydown", handleKeyDown, true);
-  }, [standalone, composeMode, exitComposeMode]);
-
-  useWatchEffect(() => {
-    if (!open && !standalone) {
-      setQuery("");
-    }
-  }, [open, standalone]);
+  }, [standalone, composeMode, actionMode, exitComposeMode]);
 
   useWatchEffect(() => {
     if (!standalone || !isElectron()) return;
     const unsub = window.__CODECAST_ELECTRON__!.onPaletteShow(() => {
       setQuery("");
+      setActionMode(null);
       setComposeMode(false);
       setComposeMsg("");
       setTimeout(() => {
@@ -226,9 +614,9 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
         return;
       }
       router.push(path);
-      setOpen(false);
+      closePalette();
     },
-    [router, standalone]
+    [router, standalone, closePalette]
   );
 
   const navigateToSession = useCallback(
@@ -260,200 +648,103 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
       } else {
         router.push(conversationPath);
       }
-      setOpen(false);
+      closePalette();
     },
-    [router, pathname, standalone]
+    [router, pathname, standalone, closePalette]
   );
+
+  // Root action handlers
+  const handleRootAction = useCallback((actionKey: string) => {
+    if (!targets.length) return;
+    const target = targets[0] as any;
+
+    if (["status", "priority", "labels", "assign", "type"].includes(actionKey)) {
+      setActionMode(actionKey as ActionMode);
+      return;
+    }
+
+    if (actionKey === "copy") {
+      if (targetType === "task" && isTask(target)) {
+        navigator.clipboard.writeText(target.short_id);
+        toast.success(`Copied ${target.short_id}`);
+      } else {
+        navigator.clipboard.writeText(target._id);
+        toast.success("Copied ID");
+      }
+      closePalette();
+      return;
+    }
+
+    if (actionKey === "drop" && targetType === "task") {
+      for (const t of targets as TaskItem[]) {
+        updateTask(t.short_id, { status: "dropped" });
+        webUpdateTask({ short_id: t.short_id, status: "dropped" }).catch(() => {});
+      }
+      toast.success("Task dropped");
+      closePalette();
+      return;
+    }
+
+    if (actionKey === "pin" && targetType === "doc") {
+      const doc = target as DocItem;
+      pinDoc(doc._id, !doc.pinned);
+      toast.success(doc.pinned ? "Unpinned" : "Pinned");
+      closePalette();
+      return;
+    }
+
+    if (actionKey === "archive" && targetType === "doc") {
+      archiveDoc(target._id);
+      toast.success("Archived");
+      router.push("/docs");
+      closePalette();
+      return;
+    }
+  }, [targets, targetType, closePalette, updateTask, webUpdateTask, pinDoc, archiveDoc, router]);
+
+  const hasTargets = targets.length > 0 && targetType;
+  const target = targets[0] as any;
+
+  const contextLabel = useMemo(() => {
+    if (!hasTargets) return "";
+    if (targets.length === 1) {
+      if (isTask(target)) return `${target.short_id} \u00B7 ${target.title}`;
+      return target.display_title || target.title || "Untitled";
+    }
+    return `${targets.length} ${targetType}s selected`;
+  }, [targets, target, targetType, hasTargets]);
+
+  const taskActions = useMemo(() => [
+    { key: "status", label: "Change status...", icon: CircleDot, shortcut: "S" },
+    { key: "priority", label: "Set priority...", icon: ArrowUp, shortcut: "P" },
+    { key: "labels", label: "Add labels...", icon: Tag, shortcut: "L" },
+    { key: "assign", label: "Assign to...", icon: User, shortcut: "A" },
+    { key: "copy", label: "Copy task ID", icon: Copy, shortcut: "\u2318." },
+    { key: "drop", label: "Drop task", icon: Trash2, shortcut: "D" },
+  ], []);
+
+  const docActions = useMemo(() => {
+    const isPinned = target?.pinned;
+    return [
+      { key: "type", label: "Change type...", icon: FileText, shortcut: "T" },
+      { key: "pin", label: isPinned ? "Unpin document" : "Pin document", icon: Pin, shortcut: "P" },
+      { key: "labels", label: "Add labels...", icon: Tag, shortcut: "L" },
+      { key: "copy", label: "Copy document ID", icon: Copy, shortcut: "\u2318." },
+      { key: "archive", label: "Archive document", icon: Archive, shortcut: "A" },
+    ];
+  }, [target?.pinned]);
+
+  const actions = targetType === "task" ? taskActions : targetType === "doc" ? docActions : [];
 
   const showFavorites = favorites && favorites.length > 0;
   const showBookmarks = bookmarks && bookmarks.length > 0;
   const showProjects = projects.length > 0;
-  const showRecent = displayConversations && displayConversations.length > 0;
+  const showRecent = recentConversations && recentConversations.length > 0;
 
   const groupClass = "px-1.5 [&_[cmdk-group-heading]]:px-2.5 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-widest [&_[cmdk-group-heading]]:text-sol-text-dim/70";
   const itemClass = "flex items-center gap-3 px-2.5 py-2 mx-1 rounded-lg text-sm text-sol-text-muted cursor-pointer transition-colors data-[selected=true]:bg-sol-cyan/10 data-[selected=true]:text-sol-text";
 
-  const paletteContent = (
-    <CommandPrimitive
-      className="w-[580px] rounded-xl border border-sol-border/80 bg-sol-bg shadow-2xl shadow-black/40 overflow-hidden flex flex-col animate-in fade-in-0 zoom-in-95 slide-in-from-top-2 duration-150"
-      filter={(value, search) => {
-        const idx = value.indexOf("|||");
-        const searchable = idx >= 0 ? value.slice(0, idx) : value;
-        return searchable.toLowerCase().includes(search.toLowerCase()) ? 1 : 0;
-      }}
-      loop
-    >
-      <div className="flex items-center gap-3 px-4 py-3 border-b border-sol-border/60">
-        <div className="text-sol-text-dim">
-          <NavIcon type="search" className="w-[18px] h-[18px]" />
-        </div>
-        <CommandPrimitive.Input
-          value={query}
-          onValueChange={setQuery}
-          placeholder="Jump to..."
-          className="flex-1 bg-transparent text-[15px] text-sol-text placeholder:text-sol-text-dim/60 outline-none"
-          autoFocus
-        />
-        <kbd className="px-1.5 py-0.5 text-[10px] font-medium text-sol-text-dim bg-sol-bg-alt rounded border border-sol-border/80 tracking-wide">
-          ESC
-        </kbd>
-      </div>
-
-      <CommandPrimitive.List className="max-h-[min(60vh,480px)] overflow-y-auto overscroll-contain py-1.5 scroll-smooth">
-        {!query.trim() && (
-          <CommandPrimitive.Empty className="py-6 text-center text-sm text-sol-text-dim">
-            No results found.
-          </CommandPrimitive.Empty>
-        )}
-
-        {showFavorites && (
-          <CommandPrimitive.Group heading="Favorites" className={groupClass}>
-            {(query ? favorites! : favorites!.slice(0, 5)).map((fav: any) => (
-              <CommandPrimitive.Item
-                key={`fav-${fav._id}`}
-                value={`favorite ${cleanTitle(fav.title || fav.session_id || "")}|||${fav._id}`}
-                onSelect={() => navigateToSession(fav)}
-                className={itemClass}
-              >
-                <span className="text-amber-400 flex-shrink-0">
-                  <NavIcon type="star" />
-                </span>
-                <span className="truncate flex-1">{cleanTitle(fav.title || "New Session")}</span>
-                <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{fav.message_count} msgs</span>
-              </CommandPrimitive.Item>
-            ))}
-          </CommandPrimitive.Group>
-        )}
-
-        {showBookmarks && (
-          <CommandPrimitive.Group heading="Bookmarks" className={groupClass}>
-            {(query ? bookmarks! : bookmarks!.slice(0, 6)).map((bm: any) => (
-              <CommandPrimitive.Item
-                key={`bm-${bm._id}`}
-                value={`bookmark ${bm.message_preview || bm.conversation_title || ""}|||${bm._id}`}
-                onSelect={() => navigate(`/conversation/${bm.conversation_id}#msg-${bm.message_id}`)}
-                className={itemClass}
-              >
-                <span className="text-sol-cyan flex-shrink-0">
-                  <NavIcon type="bookmark" />
-                </span>
-                <span className="truncate flex-1">{bm.message_preview || bm.conversation_title}</span>
-              </CommandPrimitive.Item>
-            ))}
-          </CommandPrimitive.Group>
-        )}
-
-        {searchLoading && (
-          <div className="flex items-center justify-center gap-2 py-6 text-xs text-sol-text-dim">
-            <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-            </svg>
-            Searching...
-          </div>
-        )}
-
-        {!searchLoading && showRecent && (
-          <CommandPrimitive.Group heading={isSearching ? "Search Results" : "Recent Sessions"} className={groupClass}>
-            {(isSearching ? displayConversations! : displayConversations!.slice(0, 30)).map((conv: any) => (
-              <CommandPrimitive.Item
-                key={`recent-${conv._id}`}
-                value={`session ${cleanTitle(conv.title || "")} ${conv.project_path || ""}|||${conv._id}`}
-                onSelect={() => navigateToSession(conv)}
-                className={`${itemClass} group`}
-              >
-                <span className="text-sol-text-dim flex-shrink-0">
-                  <NavIcon type="session" />
-                </span>
-                <span className="truncate flex-1">{cleanTitle(conv.title || "Untitled")}</span>
-                <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{timeAgo(conv.updated_at)}</span>
-              </CommandPrimitive.Item>
-            ))}
-          </CommandPrimitive.Group>
-        )}
-
-        <CommandPrimitive.Group heading="Pages" className={groupClass}>
-          {NAV_PAGES.map((page) => (
-            <CommandPrimitive.Item
-              key={page.path + page.label}
-              value={`${page.label} ${page.keywords}`}
-              onSelect={() => navigate(page.path)}
-              className={itemClass}
-            >
-              <span className="text-sol-text-dim data-[selected=true]:text-sol-cyan flex-shrink-0">
-                <NavIcon type={page.icon} />
-              </span>
-              <span className="truncate">{page.label}</span>
-            </CommandPrimitive.Item>
-          ))}
-        </CommandPrimitive.Group>
-
-        {showProjects && (
-          <CommandPrimitive.Group heading="Projects" className={groupClass}>
-            {projects.map((dir) => (
-              <CommandPrimitive.Item
-                key={`proj-${dir}`}
-                value={`project ${getShortPath(dir)} ${dir}`}
-                onSelect={() => navigate(`/dashboard?dir=${encodeURIComponent(dir)}`)}
-                className={itemClass}
-              >
-                <span className="text-sol-text-dim flex-shrink-0">
-                  <NavIcon type="folder" />
-                </span>
-                <span className="truncate">{getShortPath(dir)}</span>
-                <span className="text-[10px] text-sol-text-dim truncate ml-auto max-w-[200px]">{dir}</span>
-              </CommandPrimitive.Item>
-            ))}
-          </CommandPrimitive.Group>
-        )}
-
-        <CommandPrimitive.Group forceMount className={groupClass}>
-          {query.trim() && (
-            <CommandPrimitive.Item
-              value={`__compose__ ${query}`}
-              onSelect={() => {
-                if (standalone && isElectron()) {
-                  enterComposeMode(query.trim());
-                } else {
-                  setOpen(false);
-                  useInboxStore.getState().openComposePalette(query.trim());
-                }
-              }}
-              className={itemClass}
-            >
-              <span className="text-sol-yellow flex-shrink-0">
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4v16m8-8H4" />
-                </svg>
-              </span>
-              <span className="truncate">New session: &ldquo;{query.trim().length > 40 ? query.trim().slice(0, 40) + "..." : query.trim()}&rdquo;</span>
-            </CommandPrimitive.Item>
-          )}
-        </CommandPrimitive.Group>
-      </CommandPrimitive.List>
-
-      <div className="px-3 py-2 border-t border-sol-border/60 flex items-center justify-between text-[10px] text-sol-text-dim bg-sol-bg-alt/40">
-        <div className="flex items-center gap-3">
-          <span className="flex items-center gap-1">
-            <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80 text-sol-text-secondary">&#8593;</kbd>
-            <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80 text-sol-text-secondary">&#8595;</kbd>
-            navigate
-          </span>
-          <span className="flex items-center gap-1">
-            <kbd className="px-1.5 py-0.5 bg-sol-bg rounded border border-sol-border/80 text-sol-text-secondary">&#9166;</kbd>
-            open
-          </span>
-        </div>
-        <span className="flex items-center gap-1">
-          <kbd className="inline-flex items-center gap-0.5 px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80 text-sol-text-secondary">
-            <span className="text-xs">&#8984;</span>K
-          </kbd>
-          toggle
-        </span>
-      </div>
-    </CommandPrimitive>
-  );
-
+  // Handle compose mode for standalone palette
   if (standalone && composeMode) {
     return (
       <div className="w-[580px] rounded-xl border border-sol-border/80 bg-sol-bg shadow-2xl shadow-black/40 overflow-hidden flex flex-col animate-in fade-in-0 zoom-in-95 slide-in-from-top-2 duration-150">
@@ -535,6 +826,235 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
     );
   }
 
+  // Action submenu mode
+  if (actionMode && hasTargets) {
+    const paletteContent = (
+      <div className="w-[580px] rounded-xl border border-sol-border/80 bg-sol-bg shadow-2xl shadow-black/40 overflow-hidden flex flex-col animate-in fade-in-0 zoom-in-95 slide-in-from-top-2 duration-150">
+        {contextLabel && (
+          <div className="px-4 pt-3 pb-0">
+            <div className="text-xs font-mono text-sol-text-dim truncate">{contextLabel}</div>
+          </div>
+        )}
+        <ActionSubmenu
+          mode={actionMode}
+          targets={targets}
+          targetType={targetType!}
+          onClose={closePalette}
+          onBack={() => setActionMode(null)}
+        />
+      </div>
+    );
+
+    if (standalone) return paletteContent;
+
+    return (
+      <div className="fixed inset-0 z-[9999]">
+        <div className="absolute inset-0 bg-black/60 backdrop-blur-[2px]" onClick={closePalette} />
+        <div className="absolute inset-0 flex items-start justify-center pt-[min(20vh,160px)]">
+          {paletteContent}
+        </div>
+      </div>
+    );
+  }
+
+  // Root mode: navigation + context actions
+  const paletteContent = (
+    <CommandPrimitive
+      className="w-[580px] rounded-xl border border-sol-border/80 bg-sol-bg shadow-2xl shadow-black/40 overflow-hidden flex flex-col animate-in fade-in-0 zoom-in-95 slide-in-from-top-2 duration-150"
+      filter={(value, search) => {
+        const idx = value.indexOf("|||");
+        const searchable = idx >= 0 ? value.slice(0, idx) : value;
+        return searchable.toLowerCase().includes(search.toLowerCase()) ? 1 : 0;
+      }}
+      loop
+    >
+      <div className="flex items-center gap-3 px-4 py-3 border-b border-sol-border/60">
+        <div className="text-sol-text-dim">
+          <NavIcon type="search" className="w-[18px] h-[18px]" />
+        </div>
+        <CommandPrimitive.Input
+          value={query}
+          onValueChange={setQuery}
+          placeholder={hasTargets ? "Action or jump to..." : "Jump to..."}
+          className="flex-1 bg-transparent text-[15px] text-sol-text placeholder:text-sol-text-dim/60 outline-none"
+          autoFocus
+          onKeyDown={() => {}}
+        />
+        <kbd className="px-1.5 py-0.5 text-[10px] font-medium text-sol-text-dim bg-sol-bg-alt rounded border border-sol-border/80 tracking-wide">
+          ESC
+        </kbd>
+      </div>
+
+      <CommandPrimitive.List className="max-h-[min(60vh,480px)] overflow-y-auto overscroll-contain py-1.5 scroll-smooth">
+        {!query.trim() && (
+          <CommandPrimitive.Empty className="py-6 text-center text-sm text-sol-text-dim">
+            No results found.
+          </CommandPrimitive.Empty>
+        )}
+
+        {hasTargets && (
+          <CommandPrimitive.Group
+            heading={contextLabel}
+            className={groupClass}
+          >
+            {actions.map((action) => {
+              const Icon = action.icon;
+              return (
+                <CommandPrimitive.Item
+                  key={`action-${action.key}`}
+                  value={`action ${action.label}|||${action.key}`}
+                  onSelect={() => handleRootAction(action.key)}
+                  className={itemClass}
+                >
+                  <Icon className="w-4 h-4 flex-shrink-0" />
+                  <span className="truncate flex-1">{action.label}</span>
+                  <kbd className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-sol-bg-alt border border-sol-border/40 text-sol-text-dim">
+                    {action.shortcut}
+                  </kbd>
+                </CommandPrimitive.Item>
+              );
+            })}
+          </CommandPrimitive.Group>
+        )}
+
+        {showFavorites && (
+          <CommandPrimitive.Group heading="Favorites" className={groupClass}>
+            {(query ? favorites! : favorites!.slice(0, 5)).map((fav: any) => (
+              <CommandPrimitive.Item
+                key={`fav-${fav._id}`}
+                value={`favorite ${cleanTitle(fav.title || fav.session_id || "")}|||${fav._id}`}
+                onSelect={() => navigateToSession(fav)}
+                className={itemClass}
+              >
+                <span className="text-amber-400 flex-shrink-0">
+                  <NavIcon type="star" />
+                </span>
+                <span className="truncate flex-1">{cleanTitle(fav.title || "New Session")}</span>
+                <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{fav.message_count} msgs</span>
+              </CommandPrimitive.Item>
+            ))}
+          </CommandPrimitive.Group>
+        )}
+
+        {showBookmarks && (
+          <CommandPrimitive.Group heading="Bookmarks" className={groupClass}>
+            {(query ? bookmarks! : bookmarks!.slice(0, 6)).map((bm: any) => (
+              <CommandPrimitive.Item
+                key={`bm-${bm._id}`}
+                value={`bookmark ${bm.message_preview || bm.conversation_title || ""}|||${bm._id}`}
+                onSelect={() => navigate(`/conversation/${bm.conversation_id}#msg-${bm.message_id}`)}
+                className={itemClass}
+              >
+                <span className="text-sol-cyan flex-shrink-0">
+                  <NavIcon type="bookmark" />
+                </span>
+                <span className="truncate flex-1">{bm.message_preview || bm.conversation_title}</span>
+              </CommandPrimitive.Item>
+            ))}
+          </CommandPrimitive.Group>
+        )}
+
+        {showRecent && (
+          <CommandPrimitive.Group heading="Recent Sessions" className={groupClass}>
+            {recentConversations.map((conv: any) => (
+              <CommandPrimitive.Item
+                key={`recent-${conv._id}`}
+                value={`session ${cleanTitle(conv.title || "")} ${conv.project_path || ""}|||${conv._id}`}
+                onSelect={() => navigateToSession(conv)}
+                className={`${itemClass} group`}
+              >
+                <span className="text-sol-text-dim flex-shrink-0">
+                  <NavIcon type="session" />
+                </span>
+                <span className="truncate flex-1">{cleanTitle(conv.title || "Untitled")}</span>
+                <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{timeAgo(conv.updated_at)}</span>
+              </CommandPrimitive.Item>
+            ))}
+          </CommandPrimitive.Group>
+        )}
+
+        <CommandPrimitive.Group heading="Pages" className={groupClass}>
+          {NAV_PAGES.map((page) => (
+            <CommandPrimitive.Item
+              key={page.path + page.label}
+              value={`${page.label} ${page.keywords}`}
+              onSelect={() => navigate(page.path)}
+              className={itemClass}
+            >
+              <span className="text-sol-text-dim flex-shrink-0">
+                <NavIcon type={page.icon} />
+              </span>
+              <span className="truncate">{page.label}</span>
+            </CommandPrimitive.Item>
+          ))}
+        </CommandPrimitive.Group>
+
+        {showProjects && (
+          <CommandPrimitive.Group heading="Projects" className={groupClass}>
+            {projects.map((dir) => (
+              <CommandPrimitive.Item
+                key={`proj-${dir}`}
+                value={`project ${getShortPath(dir)} ${dir}`}
+                onSelect={() => navigate(`/dashboard?dir=${encodeURIComponent(dir)}`)}
+                className={itemClass}
+              >
+                <span className="text-sol-text-dim flex-shrink-0">
+                  <NavIcon type="folder" />
+                </span>
+                <span className="truncate">{getShortPath(dir)}</span>
+                <span className="text-[10px] text-sol-text-dim truncate ml-auto max-w-[200px]">{dir}</span>
+              </CommandPrimitive.Item>
+            ))}
+          </CommandPrimitive.Group>
+        )}
+
+        <CommandPrimitive.Group className={groupClass}>
+          {query.trim() && (
+            <CommandPrimitive.Item
+              value={`__compose__ ${query}`}
+              onSelect={() => {
+                if (standalone && isElectron()) {
+                  enterComposeMode(query.trim());
+                } else {
+                  closePalette();
+                  useInboxStore.getState().openComposePalette(query.trim());
+                }
+              }}
+              className={itemClass}
+            >
+              <span className="text-sol-yellow flex-shrink-0">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4v16m8-8H4" />
+                </svg>
+              </span>
+              <span className="truncate">New session: &ldquo;{query.trim().length > 40 ? query.trim().slice(0, 40) + "..." : query.trim()}&rdquo;</span>
+            </CommandPrimitive.Item>
+          )}
+        </CommandPrimitive.Group>
+      </CommandPrimitive.List>
+
+      <div className="px-3 py-2 border-t border-sol-border/60 flex items-center justify-between text-[10px] text-sol-text-dim bg-sol-bg-alt/40">
+        <div className="flex items-center gap-3">
+          <span className="flex items-center gap-1">
+            <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80 text-sol-text-secondary">&#8593;</kbd>
+            <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80 text-sol-text-secondary">&#8595;</kbd>
+            navigate
+          </span>
+          <span className="flex items-center gap-1">
+            <kbd className="px-1.5 py-0.5 bg-sol-bg rounded border border-sol-border/80 text-sol-text-secondary">&#9166;</kbd>
+            open
+          </span>
+        </div>
+        <span className="flex items-center gap-1">
+          <kbd className="inline-flex items-center gap-0.5 px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80 text-sol-text-secondary">
+            <span className="text-xs">&#8984;</span>K
+          </kbd>
+          toggle
+        </span>
+      </div>
+    </CommandPrimitive>
+  );
+
   if (standalone) {
     return paletteContent;
   }
@@ -545,7 +1065,7 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
     <div className="fixed inset-0 z-[9999]">
       <div
         className="absolute inset-0 bg-black/60 backdrop-blur-[2px]"
-        onClick={() => setOpen(false)}
+        onClick={closePalette}
       />
       <div className="absolute inset-0 flex items-start justify-center pt-[min(20vh,160px)]">
         {paletteContent}

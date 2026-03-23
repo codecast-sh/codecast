@@ -1,13 +1,15 @@
 "use client";
-import { useState, useCallback, useRef, Fragment } from "react";
+import { useState, useCallback, useRef, useMemo } from "react";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { useParams, useRouter } from "next/navigation";
 import { useMutation, useQuery } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, TaskDetail, TaskItem } from "../../../store/inboxStore";
-import { useSyncTaskDetail } from "../../../hooks/useSyncTasks";
+import { useSyncTasks, useSyncTaskDetail } from "../../../hooks/useSyncTasks";
+import { DetailSplitLayout } from "../../../components/DetailSplitLayout";
+import { TaskListContent } from "../page";
 import { useMentionQuery } from "../../../hooks/useMentionQuery";
-import { TaskCommandPalette } from "../../../components/TaskCommandPalette";
+// TaskCommandPalette replaced by unified CommandPalette
 import { WorkflowContextPanel } from "../../../components/WorkflowContextPanel";
 import { MarkdownRenderer } from "../../../components/tools/MarkdownRenderer";
 import { DocEditor } from "../../../components/editor/DocEditor";
@@ -16,7 +18,6 @@ import { toast } from "sonner";
 import { AuthGuard } from "../../../components/AuthGuard";
 import { DashboardLayout } from "../../../components/DashboardLayout";
 import { ContextChatInput } from "../../../components/ContextChatInput";
-import { TaskListPanel, DetailSplitLayout } from "../../../components/DetailListPanel";
 import { SessionCardInner } from "../../../components/ActivityFeed";
 
 const api = _api as any;
@@ -44,6 +45,8 @@ import {
   ListChecks,
   ShieldCheck,
   ImagePlus,
+  MessageSquare,
+  X,
 } from "lucide-react";
 
 const STATUS_OPTIONS = [
@@ -78,7 +81,20 @@ function formatRelative(ts: number) {
   return `${Math.round(ago / 86400000)}d ago`;
 }
 
+function ClaudeIcon({ size = "sm" }: { size?: "sm" | "md" }) {
+  const px = size === "md" ? "w-7 h-7" : "w-5 h-5";
+  const svg = size === "md" ? "w-4 h-4" : "w-3 h-3";
+  return (
+    <span className={`${px} rounded bg-sol-orange flex items-center justify-center shrink-0`}>
+      <svg className={`${svg} text-sol-bg`} viewBox="0 0 24 24" fill="currentColor">
+        <path d="M17.3041 3.541h-3.6718l6.696 16.918H24L17.3041 3.541Zm-10.6082 0L0 20.459h3.7442l1.3693-3.5527h7.0052l1.3693 3.5528h3.7442L10.5363 3.5409H6.696Zm-.3712 10.2232 2.2914-5.9456 2.2914 5.9456H6.3247Z" />
+      </svg>
+    </span>
+  );
+}
+
 function Avatar({ name, image, size = "sm" }: { name: string; image?: string; size?: "sm" | "md" }) {
+  if (name.toLowerCase() === "claude") return <ClaudeIcon size={size} />;
   const px = size === "md" ? "w-7 h-7" : "w-5 h-5";
   const textSize = size === "md" ? "text-[10px]" : "text-[8px]";
   if (image) {
@@ -323,8 +339,10 @@ export default function TaskDetailPage() {
   const id = params.id as string;
 
   useSyncTaskDetail(id);
+  useSyncTasks();
 
-  const data = useInboxStore((s) => s.tasks[id]) as TaskDetail | undefined;
+  const allTasks = useInboxStore((s) => s.tasks);
+  const data = allTasks[id] as TaskDetail | undefined;
   const updateTask = useInboxStore((s) => s.updateTask);
   const openSidePanel = useInboxStore((s) => s.openSidePanel);
   const webUpdate = useMutation(api.tasks.webUpdate);
@@ -343,9 +361,12 @@ export default function TaskDetailPage() {
   const [titleDraft, setTitleDraft] = useState("");
   const titleRef = useRef<HTMLInputElement>(null);
   const commentRef = useRef<HTMLTextAreaElement>(null);
-  const [cmdOpen, setCmdOpen] = useState(false);
-  const [cmdMode, setCmdMode] = useState<"root" | "status" | "priority" | "labels" | "assign">("root");
-  const [showHelp, setShowHelp] = useState(false);
+  const openPalette = useInboxStore((s) => s.openPalette);
+  const paletteOpen = useInboxStore((s) => s.palette.open);
+  const shortcutsPanelOpen = useInboxStore(s => s.shortcutsPanelOpen);
+  const [commentOpen, setCommentOpen] = useState(false);
+
+  const sidebar = <TaskListContent />;
 
   const handleUpdate = useCallback(async (fields: Record<string, any>) => {
     if (!data?.short_id) return;
@@ -403,6 +424,7 @@ export default function TaskDetailPage() {
     setSubmittingComment(true);
     try {
       await webAddComment({ short_id: data.short_id, text, comment_type: "note", image_storage_ids: imageIds.length > 0 ? imageIds : undefined });
+      setCommentOpen(false);
     } catch {
       setComment(text);
       toast.error("Failed to add comment");
@@ -437,24 +459,14 @@ export default function TaskDetailPage() {
   }, [titleDraft, data?.title, handleUpdate]);
 
 
-  const openCmd = useCallback((mode: "root" | "status" | "priority" | "labels" | "assign") => {
-    setCmdMode(mode);
-    setCmdOpen(true);
-  }, []);
+  const openCmd = useCallback((mode: string) => {
+    if (!data) return;
+    openPalette({ targets: [data as unknown as TaskItem], targetType: 'task', mode });
+  }, [data, openPalette]);
 
   useWatchEffect(() => {
-    if (cmdOpen) return;
-    if (showHelp) {
-      const helpHandler = (e: KeyboardEvent) => {
-        if (e.key === "?" || e.key === "Escape") {
-          e.preventDefault();
-          e.stopImmediatePropagation();
-          setShowHelp(false);
-        }
-      };
-      window.addEventListener("keydown", helpHandler, true);
-      return () => window.removeEventListener("keydown", helpHandler, true);
-    }
+    if (paletteOpen) return;
+    if (shortcutsPanelOpen) return;
     const handler = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
       if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) return;
@@ -482,20 +494,19 @@ export default function TaskDetailPage() {
       } else if (e.key === "Escape" && !e.metaKey && !e.ctrlKey) {
         stop();
         router.push("/tasks");
-      } else if (e.key === "?" && !e.metaKey && !e.ctrlKey) {
-        stop();
-        setShowHelp((h) => !h);
       }
     };
     window.addEventListener("keydown", handler, true);
     return () => window.removeEventListener("keydown", handler, true);
-  }, [cmdOpen, showHelp, data, openCmd, startEditTitle, router]);
+  }, [paletteOpen, shortcutsPanelOpen, data, openCmd, startEditTitle, router]);
 
   if (!data) {
     return (
       <AuthGuard>
         <DashboardLayout>
-          <div className="flex items-center justify-center h-64 text-sol-text-dim text-sm">Loading...</div>
+          <DetailSplitLayout list={sidebar}>
+            <div className="flex items-center justify-center h-64 text-sol-text-dim text-sm">Loading...</div>
+          </DetailSplitLayout>
         </DashboardLayout>
       </AuthGuard>
     );
@@ -507,7 +518,7 @@ export default function TaskDetailPage() {
   return (
     <AuthGuard>
       <DashboardLayout>
-        <DetailSplitLayout list={<TaskListPanel selectedId={id} />}>
+        <DetailSplitLayout list={sidebar}>
         <div
           className="flex-1 h-full flex flex-col relative min-w-0"
           onDragEnter={(e) => { e.preventDefault(); dragCounterRef.current++; setIsDragging(true); }}
@@ -523,12 +534,21 @@ export default function TaskDetailPage() {
         <div className="flex-1 overflow-y-auto">
         <div className="flex flex-col min-h-full">
         <div className="flex-1 max-w-4xl mx-auto px-6 py-6 w-full">
-          <Link
-            href="/tasks"
-            className="inline-flex items-center gap-1.5 text-sm text-sol-text-dim hover:text-sol-cyan transition-colors mb-4"
-          >
-            Tasks
-          </Link>
+          <div className="flex items-center justify-between mb-4">
+            <Link
+              href="/tasks"
+              className="inline-flex items-center gap-1.5 text-sm text-sol-text-dim hover:text-sol-cyan transition-colors"
+            >
+              Tasks
+            </Link>
+            <button
+              onClick={() => router.push("/tasks")}
+              className="p-1 rounded-md text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt transition-colors"
+              title="Close"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
 
           {/* Title row */}
           <div className="flex items-start gap-3 mb-3">
@@ -659,7 +679,7 @@ export default function TaskDetailPage() {
                 href={`/conversation/${data.linked_conversations?.[0]?.session_id || ""}`}
                 className="text-sol-cyan hover:underline"
               >
-                session
+                {data.linked_conversations?.[0]?.title || data.linked_conversations?.[0]?.headline || "session"}
               </Link>
             </div>
           )}
@@ -809,62 +829,79 @@ export default function TaskDetailPage() {
 
           {/* Comment input */}
           <div className="mb-2">
-            <div className="flex flex-col border px-4 py-2 rounded-2xl bg-sol-bg-alt border-sol-border shadow-lg">
-              {commentImages.length > 0 && (
-                <div className="flex items-center gap-2 pb-2 mb-2 border-b border-sol-border/50 flex-wrap">
-                  {commentImages.map((img, idx) => (
-                    <div key={idx} className="relative group cursor-pointer">
-                      <div className="relative h-16 w-16 rounded-lg overflow-hidden bg-sol-bg shrink-0">
-                        <img src={img.previewUrl} alt="Attached" className="h-full w-full object-cover" />
-                        {img.uploading && (
-                          <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
-                            <svg className="w-5 h-5 animate-spin text-white" fill="none" viewBox="0 0 24 24">
-                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                            </svg>
-                          </div>
-                        )}
+            {!commentOpen ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setCommentOpen(true);
+                  setTimeout(() => commentRef.current?.focus(), 0);
+                }}
+                className="flex items-center gap-2 text-xs font-medium px-3 py-1.5 rounded-lg border border-sol-border text-sol-text-muted bg-sol-bg-alt/50 hover:text-sol-text hover:bg-sol-bg-alt transition-colors"
+              >
+                <MessageSquare className="w-3.5 h-3.5" />
+                Add comment
+              </button>
+            ) : (
+              <div className="flex flex-col border px-3 py-2 rounded-xl bg-sol-bg-alt border-sol-border/50">
+                {commentImages.length > 0 && (
+                  <div className="flex items-center gap-2 pb-2 mb-2 border-b border-sol-border/50 flex-wrap">
+                    {commentImages.map((img, idx) => (
+                      <div key={idx} className="relative group cursor-pointer">
+                        <div className="relative h-16 w-16 rounded-lg overflow-hidden bg-sol-bg shrink-0">
+                          <img src={img.previewUrl} alt="Attached" className="h-full w-full object-cover" />
+                          {img.uploading && (
+                            <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
+                              <svg className="w-5 h-5 animate-spin text-white" fill="none" viewBox="0 0 24 24">
+                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                              </svg>
+                            </div>
+                          )}
+                        </div>
+                        <button type="button" onClick={() => clearCommentImage(idx)} className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-sol-bg-alt border border-sol-border flex items-center justify-center text-sol-text-dim hover:text-sol-text transition-colors opacity-0 group-hover:opacity-100">
+                          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        </button>
                       </div>
-                      <button type="button" onClick={() => clearCommentImage(idx)} className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-sol-bg-alt border border-sol-border flex items-center justify-center text-sol-text-dim hover:text-sol-text transition-colors opacity-0 group-hover:opacity-100">
-                        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                        </svg>
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-              <div className="flex items-end gap-2">
-                <label className="shrink-0 cursor-pointer text-sol-text-dim hover:text-sol-text transition-colors py-1 flex items-center">
-                  <ImagePlus className="w-4 h-4" />
-                  <input type="file" accept="image/*" multiple className="hidden" onChange={(e) => { Array.from(e.target.files || []).forEach(f => uploadCommentImage(f)); e.target.value = ""; }} />
-                </label>
-                <textarea
-                  ref={commentRef}
-                  value={comment}
-                  onChange={(e) => setComment(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.shiftKey) {
-                      e.preventDefault();
-                      handleAddComment();
-                    }
-                  }}
-                  onPaste={handleCommentPaste}
-                  placeholder="Leave a comment..."
-                  rows={1}
-                  className="flex-1 bg-transparent text-sm placeholder:text-sol-text-dim focus:outline-none resize-none overflow-hidden leading-relaxed py-1 text-sol-text"
-                />
-                <div className="shrink-0">
-                  <button
-                    onClick={handleAddComment}
-                    disabled={(!comment.trim() && !commentImages.some(i => i.storageId)) || submittingComment}
-                    className={`w-8 h-8 rounded-full transition-colors flex items-center justify-center border ${(!comment.trim() && !commentImages.some(i => i.storageId)) || submittingComment ? "border-sol-border/30 text-sol-text-dim/25 cursor-not-allowed" : "border-sol-blue/50 bg-sol-blue/20 text-sol-blue hover:bg-sol-blue/30 hover:border-sol-blue"}`}
-                  >
-                    <ArrowUp className="w-4 h-4" />
-                  </button>
+                    ))}
+                  </div>
+                )}
+                <div className="flex items-end gap-2">
+                  <label className="shrink-0 cursor-pointer text-sol-text-dim hover:text-sol-text transition-colors py-1 flex items-center">
+                    <ImagePlus className="w-4 h-4" />
+                    <input type="file" accept="image/*" multiple className="hidden" onChange={(e) => { Array.from(e.target.files || []).forEach(f => uploadCommentImage(f)); e.target.value = ""; }} />
+                  </label>
+                  <textarea
+                    ref={commentRef}
+                    value={comment}
+                    onChange={(e) => setComment(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault();
+                        handleAddComment();
+                      }
+                      if (e.key === "Escape") {
+                        if (!comment.trim() && commentImages.length === 0) setCommentOpen(false);
+                      }
+                    }}
+                    onPaste={handleCommentPaste}
+                    placeholder="Leave a comment..."
+                    rows={1}
+                    className="flex-1 bg-transparent text-sm placeholder:text-sol-text-dim focus:outline-none resize-none overflow-hidden leading-relaxed py-1 text-sol-text"
+                  />
+                  <div className="shrink-0">
+                    <button
+                      onClick={handleAddComment}
+                      disabled={(!comment.trim() && !commentImages.some(i => i.storageId)) || submittingComment}
+                      className={`w-7 h-7 rounded-full transition-colors flex items-center justify-center border ${(!comment.trim() && !commentImages.some(i => i.storageId)) || submittingComment ? "border-sol-border/30 text-sol-text-dim/25 cursor-not-allowed" : "border-sol-blue/50 bg-sol-blue/20 text-sol-blue hover:bg-sol-blue/30 hover:border-sol-blue"}`}
+                    >
+                      <ArrowUp className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                 </div>
               </div>
-            </div>
+            )}
           </div>
 
         </div>
@@ -889,46 +926,8 @@ export default function TaskDetailPage() {
           <span className="ml-auto"><kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/40 font-mono">?</kbd> help</span>
         </div>
 
-        {data && (
-          <TaskCommandPalette
-            open={cmdOpen}
-            onClose={() => setCmdOpen(false)}
-            targetTasks={[data as unknown as TaskItem]}
-            initialMode={cmdMode}
-            teamMembers={teamMembers}
-            currentUser={currentUser}
-          />
-        )}
+        {/* Unified palette is global via DashboardLayout */}
 
-        {showHelp && (
-          <div className="fixed inset-0 z-[300] flex items-center justify-center" onClick={() => setShowHelp(false)}>
-            <div className="fixed inset-0 bg-black/50" />
-            <div className="relative bg-sol-bg border border-sol-border rounded-xl shadow-2xl w-full max-w-md p-6" onClick={(e) => e.stopPropagation()}>
-              <h2 className="text-sm font-semibold text-sol-text mb-4">Keyboard Shortcuts</h2>
-              <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-xs">
-                {[
-                  ["j / k", "Navigate tasks"],
-                  ["Backspace", "Go back to task list"],
-                  ["Esc", "Go back to task list"],
-                  ["s", "Change status"],
-                  ["p", "Set priority"],
-                  ["l", "Add labels"],
-                  ["e", "Edit title"],
-                  ["\u2318K", "Command palette"],
-                  ["?", "Toggle this help"],
-                ].map(([key, desc]) => (
-                  <Fragment key={key}>
-                    <kbd className="px-1.5 py-0.5 rounded bg-sol-bg-alt border border-sol-border/40 font-mono text-sol-text text-right">{key}</kbd>
-                    <span className="text-sol-text-muted py-0.5">{desc}</span>
-                  </Fragment>
-                ))}
-              </div>
-              <button onClick={() => setShowHelp(false)} className="mt-4 text-xs text-sol-text-dim hover:text-sol-text transition-colors">
-                Press ? or Esc to close
-              </button>
-            </div>
-          </div>
-        )}
         </div>
         </DetailSplitLayout>
       </DashboardLayout>

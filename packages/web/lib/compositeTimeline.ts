@@ -109,12 +109,24 @@ export function buildCompositeTimeline(
   items.sort((a, b) => a.timestamp - b.timestamp);
 
   const seenUuids = new Set<string>();
+  const seenIds = new Set<string>();
+  const seenUserContent = new Map<string, number>();
   return items.filter((item) => {
     if (item.type !== 'message') return true;
     const msg = item.data as Message;
+    if (msg._id) {
+      if (seenIds.has(msg._id)) return false;
+      seenIds.add(msg._id);
+    }
     if (msg.message_uuid) {
       if (seenUuids.has(msg.message_uuid)) return false;
       seenUuids.add(msg.message_uuid);
+    }
+    if (msg.role === 'user' && msg.content?.trim()) {
+      const key = msg.content.trim();
+      const lastTs = seenUserContent.get(key);
+      if (lastTs !== undefined && Math.abs(msg.timestamp - lastTs) < 60_000) return false;
+      seenUserContent.set(key, msg.timestamp);
     }
     if (msg.role === 'user' && msg.tool_results && msg.tool_results.length > 0) return false;
     if (msg.role === 'user' && (!msg.content || !msg.content.trim()) && !(msg.images && msg.images.length > 0)) return false;

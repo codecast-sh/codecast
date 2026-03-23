@@ -2,18 +2,19 @@ import { useState, useCallback, useRef, memo, useMemo } from "react";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useEventListener } from "../../hooks/useEventListener";
-import { useShortcutContext, useShortcutAction } from "../../shortcuts";
+import { useShortcutContext } from "../../shortcuts";
 import { useQuery, useMutation } from "convex/react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { Panel, Group, Separator } from "react-resizable-panels";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { DashboardLayout } from "../../components/DashboardLayout";
+import { KeyCap } from "../../components/KeyboardShortcutsHelp";
 import { ErrorBoundary } from "../../components/ErrorBoundary";
 import { ConversationDiffLayout } from "../../components/ConversationDiffLayout";
 import { ConversationData } from "../../components/ConversationView";
 import { useConversationMessages } from "../../hooks/useConversationMessages";
-import { useInboxStore, InboxSession, isConvexId, sortSessions } from "../../store/inboxStore";
+import { useInboxStore, InboxSession, getSessionRenderKey, isConvexId, sortSessions } from "../../store/inboxStore";
 import { useSessionSwitcher } from "../../hooks/useSessionSwitcher";
 import { SessionSwitcher } from "../../components/SessionSwitcher";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "../../components/ui/tooltip";
@@ -26,7 +27,7 @@ import { WorkflowContextPanel } from "../../components/WorkflowContextPanel";
 import { toast } from "sonner";
 import { cleanUserMessage, formatIdleDuration, getProjectName, DraftPlansSection, SessionListPanel } from "../../components/GlobalSessionPanel";
 
-const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, onSendAndAdvance, lastUserMessage, sessionError, onBack, targetMessageId }: { sessionId: string; isIdle: boolean; onSendAndAdvance: () => void; lastUserMessage?: string | null; sessionError?: string; onBack?: () => void; targetMessageId?: string }) {
+const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, onSendAndAdvance, onSendAndDismiss, lastUserMessage, sessionError, onBack, targetMessageId }: { sessionId: string; isIdle: boolean; onSendAndAdvance: () => void; onSendAndDismiss?: () => void; lastUserMessage?: string | null; sessionError?: string; onBack?: () => void; targetMessageId?: string }) {
   const {
     conversation,
     hasMoreAbove,
@@ -168,6 +169,7 @@ const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, o
           onJumpToEnd={jumpToEnd}
           isOwner={true}
           onSendAndAdvance={onSendAndAdvance}
+          onSendAndDismiss={onSendAndDismiss}
           autoFocusInput
           backHref="/inbox"
           onBack={onBack}
@@ -685,11 +687,8 @@ function SessionCard({
 
 // InboxSessionPanel and NeedsAttentionSection moved to GlobalSessionPanel.tsx as shared SessionListPanel
 
-function InboxShortcuts({ toggleShortcuts }: { toggleShortcuts: () => void }) {
+function InboxShortcuts() {
   useShortcutContext('inbox');
-  useShortcutAction('ui.toggleShortcutsHelp', useCallback(() => {
-    toggleShortcuts();
-  }, [toggleShortcuts]));
   return null;
 }
 
@@ -707,7 +706,6 @@ export function QueuePageClient({ initialSessionId }: { initialSessionId?: strin
   });
 
 
-  const [isMac] = useState(() => typeof navigator !== "undefined" && navigator.platform.toUpperCase().includes("MAC"));
   const sessions = useInboxStore((s) => s.sessions);
   const clientStateInitialized = useInboxStore((s) => s.clientStateInitialized);
   const dismissedSessions = useInboxStore((s) => s.dismissedSessions);
@@ -729,11 +727,7 @@ export function QueuePageClient({ initialSessionId }: { initialSessionId?: strin
   const switcherState = useSessionSwitcher();
 
   const shortcutsHidden = useInboxStore(s => s.clientState.ui?.inbox_shortcuts_hidden ?? false);
-  const updateUI = useInboxStore(s => s.updateClientUI);
   const showShortcuts = !shortcutsHidden;
-  const toggleShortcuts = useCallback(() => {
-    updateUI({ inbox_shortcuts_hidden: !shortcutsHidden });
-  }, [shortcutsHidden, updateUI]);
 
   const DEFAULT_INBOX_LAYOUT = { main: 76, sidebar: 24 };
   const inboxLayoutPref = useInboxStore(s => s.clientState.layouts?.inbox ?? DEFAULT_INBOX_LAYOUT);
@@ -844,6 +838,10 @@ export function QueuePageClient({ initialSessionId }: { initialSessionId?: strin
     advanceToNext();
   }, [advanceToNext]);
 
+  const handleSendAndDismiss = useCallback(() => {
+    if (currentSessionId) stashSession(currentSessionId);
+  }, [currentSessionId, stashSession]);
+
   const handleSessionSelect = useCallback((id: string) => {
     if (sessions[id]) {
       setCurrentSession(id);
@@ -943,6 +941,8 @@ export function QueuePageClient({ initialSessionId }: { initialSessionId?: strin
 
   const [mobileSessionsOpen, setMobileSessionsOpen] = useState(false);
   const [isMobileInbox, setIsMobileInbox] = useState(false);
+  const viewingDismissedRenderKey = getSessionRenderKey(viewingDismissedSession);
+  const currentSessionRenderKey = getSessionRenderKey(currentSession);
 
   useMountEffect(() => { setIsMobileInbox(window.innerWidth < 768); });
   useEventListener("resize", () => setIsMobileInbox(window.innerWidth < 768));
@@ -960,9 +960,9 @@ export function QueuePageClient({ initialSessionId }: { initialSessionId?: strin
       ) : selectedPlanId ? (
         <InboxPlanView key={selectedPlanId} planId={selectedPlanId} />
       ) : viewingDismissedSession ? (
-        <ErrorBoundary name="Conversation" level="inline" key={`eb-${viewingDismissedSession._id}`}>
+        <ErrorBoundary name="Conversation" level="inline" key={`eb-${viewingDismissedRenderKey}`}>
           <InboxConversation
-            key={viewingDismissedSession._id}
+            key={viewingDismissedRenderKey || viewingDismissedSession._id}
             sessionId={viewingDismissedSession._id}
             isIdle={viewingDismissedSession.is_idle}
             onSendAndAdvance={() => setViewingDismissedId(null)}
@@ -972,12 +972,17 @@ export function QueuePageClient({ initialSessionId }: { initialSessionId?: strin
           />
         </ErrorBoundary>
       ) : currentSession ? (
-        <ErrorBoundary name="Conversation" level="inline" key={`eb-${currentSession._id}`}>
+        <ErrorBoundary name="Conversation" level="inline" key={`eb-${currentSessionRenderKey}`}>
           <InboxConversation
-            key={scrollTarget?.sessionId === currentSession._id ? `${currentSession._id}-${scrollTarget.messageId}` : (currentSession.session_id || currentSession._id)}
+            key={
+              scrollTarget?.sessionId === currentSession._id
+                ? `${currentSessionRenderKey}-${scrollTarget.messageId}`
+                : (currentSessionRenderKey || currentSession._id)
+            }
             sessionId={currentSession._id}
             isIdle={currentSession.is_idle}
             onSendAndAdvance={handleSendAndAdvance}
+            onSendAndDismiss={handleSendAndDismiss}
             lastUserMessage={currentSession.last_user_message}
             sessionError={currentSession.session_error}
             onBack={handleBack}
@@ -1008,7 +1013,7 @@ export function QueuePageClient({ initialSessionId }: { initialSessionId?: strin
 
   return (
     <DashboardLayout>
-      <InboxShortcuts toggleShortcuts={toggleShortcuts} />
+      <InboxShortcuts />
       {switcherState.open && (
         <SessionSwitcher
           sessions={switcherState.mruSessions}
@@ -1039,11 +1044,11 @@ export function QueuePageClient({ initialSessionId }: { initialSessionId?: strin
         </div>
       ) : sidePanelOpen ? (
         <Group orientation="horizontal" className="flex-1 min-h-0" defaultLayout={inboxLayout} onLayoutChange={handleInboxLayoutChange}>
-          <Panel id="inbox-main" defaultSize="76%" minSize="30%">
+          <Panel id="inbox-main" defaultSize="76%" minSize={400}>
             {inboxContent}
           </Panel>
           <Separator className="relative z-10 w-px bg-black/10 cursor-col-resize before:absolute before:inset-y-0 before:-left-[2px] before:-right-[2px] before:content-[''] before:transition-colors before:duration-150 hover:before:bg-sol-cyan data-[resize-handle-active]:before:bg-sol-cyan" />
-          <Panel id="inbox-sidebar" defaultSize="24%" minSize="0%" maxSize="45%" collapsible collapsedSize="0%">
+          <Panel id="inbox-sidebar" defaultSize="24%" minSize={200} maxSize="45%" collapsible collapsedSize={0}>
             <SessionListPanel onSessionSelect={handleSessionSelect} onPlanSelect={handlePlanSelect} activeSessionId={viewingDismissedId ?? currentSessionId} activePlanId={selectedPlanId} />
           </Panel>
         </Group>
@@ -1053,50 +1058,18 @@ export function QueuePageClient({ initialSessionId }: { initialSessionId?: strin
         </div>
       )}
       {showShortcuts && !isMobileInbox && (
-        <div className="flex-shrink-0 px-3 py-1.5 border-t border-sol-border/50 bg-sol-bg-alt/40 flex items-center gap-4 text-[10px] text-sol-text-dim">
+        <div className="flex-shrink-0 px-3 py-1 border-t border-sol-border/30 bg-sol-bg-alt/30 flex items-center gap-3 text-[10px] text-sol-text-dim">
           <span className="flex items-center gap-1">
-            <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80">Ctrl</kbd>
-            <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80">J/K</kbd>
-            nav
+            <span className="flex items-center gap-[2px]"><KeyCap size="xs">{"\u2303"}</KeyCap><KeyCap size="xs">J</KeyCap><span className="text-sol-text-dim/40">/</span><KeyCap size="xs">K</KeyCap></span> nav
           </span>
           <span className="flex items-center gap-1">
-            <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80">Ctrl</kbd>
-            <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80">I</kbd>
-            needs input
+            <span className="flex items-center gap-[2px]"><KeyCap size="xs">{"\u2303"}</KeyCap><KeyCap size="xs">I</KeyCap></span> idle
           </span>
           <span className="flex items-center gap-1">
-            <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80">{isMac ? "Ctrl" : "Alt"}</kbd>
-            <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80">P</kbd>
-            pinned
+            <span className="flex items-center gap-[2px]"><KeyCap size="xs">{"\u2303"}</KeyCap><KeyCap size="xs">{"\u232b"}</KeyCap></span> dismiss
           </span>
-          <span className="flex items-center gap-1">
-            <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80">Ctrl+Shift</kbd>
-            <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80">P</kbd>
-            pin
-          </span>
-          <span className="flex items-center gap-1">
-            <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80">Shift</kbd>
-            <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80">←</kbd>
-            defer
-          </span>
-          <span className="flex items-center gap-1">
-            <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80">Ctrl</kbd>
-            <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80">←</kbd>
-            dismiss
-          </span>
-          <span className="flex items-center gap-1">
-            <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80">Ctrl</kbd>
-            <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80">Tab</kbd>
-            switch
-          </span>
-          <span className="flex items-center gap-1">
-            <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80">Ctrl</kbd>
-            <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80">.</kbd>
-            zen
-          </span>
-          <button onClick={toggleShortcuts} className="ml-auto flex items-center gap-1 hover:text-sol-text-muted transition-colors">
-            <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80">?</kbd>
-            hide
+          <button onClick={() => useInboxStore.getState().toggleShortcutsPanel()} className="ml-auto flex items-center gap-1 hover:text-sol-text-muted transition-colors">
+            <KeyCap size="xs">?</KeyCap> all shortcuts
           </button>
         </div>
       )}

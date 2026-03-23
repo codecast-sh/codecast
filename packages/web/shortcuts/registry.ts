@@ -5,6 +5,7 @@ export type ShortcutAction =
   | 'session.jumpPinned'
   | 'session.pin'
   | 'session.stash'
+  | 'session.kill'
   | 'session.deferAdvance'
   | 'session.create'
   | 'session.createIsolated'
@@ -53,14 +54,14 @@ export const SHORTCUTS: ShortcutDef[] = [
   { key: 'alt+p', mac: 'ctrl+p', action: 'session.jumpPinned', skipInputCheck: true, description: 'Jump to pinned session' },
   { key: 'ctrl+shift+p', action: 'session.pin', skipInputCheck: true, description: 'Pin/unpin session' },
   { key: 'ctrl+backspace', action: 'session.stash', skipInputCheck: true, description: 'Stash session' },
+  { key: 'ctrl+shift+backspace', action: 'session.kill', skipInputCheck: true, description: 'Kill session agent' },
   { key: 'shift+backspace', action: 'session.deferAdvance', skipInputCheck: true, description: 'Defer and advance' },
   { key: 'ctrl+n', action: 'session.create', skipInputCheck: true, description: 'New session' },
   { key: 'ctrl+shift+n', action: 'session.createIsolated', skipInputCheck: true, description: 'New isolated session' },
   { key: 'ctrl+shift+e', action: 'session.rename', skipInputCheck: true, description: 'Rename session' },
 
   { key: 'ctrl+.', action: 'ui.zenToggle', skipInputCheck: true, description: 'Toggle zen mode' },
-  { key: '?', action: 'ui.toggleShortcutsHelp', when: 'inbox', description: 'Toggle shortcuts help' },
-  { key: '?', action: 'ui.toggleShortcutsHelp', when: 'review', description: 'Toggle shortcuts help' },
+  { key: '?', action: 'ui.toggleShortcutsHelp', description: 'Toggle shortcuts help' },
 
   { key: 'meta+shift+alt+1', action: 'nav.inbox', skipInputCheck: true, description: 'Go to inbox' },
 
@@ -141,22 +142,27 @@ export function getShortcutsForAction(action: ShortcutAction): ShortcutDef[] {
   return SHORTCUTS.filter(s => s.action === action);
 }
 
-export function formatShortcut(def: ShortcutDef): string {
+export function formatShortcutParts(def: ShortcutDef): string[] {
   const combo = (isMac && def.mac) ? def.mac : def.key;
-  const parts = combo.split('+');
-  return parts.map(part => {
+  return combo.split('+').map(part => {
     switch (part.toLowerCase()) {
       case 'ctrl': return isMac ? '\u2303' : 'Ctrl';
       case 'meta': return isMac ? '\u2318' : 'Ctrl';
       case 'alt': return isMac ? '\u2325' : 'Alt';
       case 'shift': return isMac ? '\u21e7' : 'Shift';
-      case 'backspace': return isMac ? '\u232b' : 'Backspace';
+      case 'backspace': return isMac ? '\u232b' : 'Bksp';
       case 'escape': return 'Esc';
       case 'enter': return isMac ? '\u21a9' : 'Enter';
       case 'tab': return isMac ? '\u21e5' : 'Tab';
+      case 'arrowup': return '\u2191';
+      case 'arrowdown': return '\u2193';
+      case 'arrowleft': return '\u2190';
+      case 'arrowright': return '\u2192';
+      case 'space': return '\u2423';
+      case 'delete': return isMac ? '\u2326' : 'Del';
       default: return part.toUpperCase();
     }
-  }).join(isMac ? '' : '+');
+  });
 }
 
 export function getShortcutsByContext(when?: string): ShortcutDef[] {

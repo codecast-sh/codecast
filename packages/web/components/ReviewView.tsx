@@ -2,6 +2,8 @@ import { useState, useCallback } from "react";
 import { useAction } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useShortcutContext, useShortcutAction } from "../shortcuts";
+import { useInboxStore } from "../store/inboxStore";
+import { KeyCap } from "./KeyboardShortcutsHelp";
 
 interface FileDiff {
   path: string;
@@ -26,7 +28,7 @@ interface CommentDraft {
 export function ReviewView({ prId }: { prId: string }) {
   const [currentFileIndex, setCurrentFileIndex] = useState(0);
   const [commentDraft, setCommentDraft] = useState<CommentDraft | null>(null);
-  const [showShortcuts, setShowShortcuts] = useState(true);
+  const [showShortcuts] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -111,9 +113,6 @@ export function ReviewView({ prId }: { prId: string }) {
     }
   }, [currentFile, commentDraft]));
 
-  useShortcutAction('ui.toggleShortcutsHelp', useCallback(() => {
-    setShowShortcuts((prev) => !prev);
-  }, []));
 
   const handleLineClick = (lineNumber: number | undefined) => {
     if (!lineNumber) return;
@@ -351,32 +350,13 @@ export function ReviewView({ prId }: { prId: string }) {
       </div>
 
       {showShortcuts && (
-        <div className="sol-header px-4 py-2 text-xs text-sol-text-muted">
-          <div className="flex gap-6">
-            <span>
-              <kbd className="px-1.5 py-0.5 bg-sol-bg-alt rounded border border-sol-border">
-                j
-              </kbd>{" "}
-              next file
-            </span>
-            <span>
-              <kbd className="px-1.5 py-0.5 bg-sol-bg-alt rounded border border-sol-border">
-                k
-              </kbd>{" "}
-              prev file
-            </span>
-            <span>
-              <kbd className="px-1.5 py-0.5 bg-sol-bg-alt rounded border border-sol-border">
-                c
-              </kbd>{" "}
-              comment
-            </span>
-            <span>
-              <kbd className="px-1.5 py-0.5 bg-sol-bg-alt rounded border border-sol-border">
-                ?
-              </kbd>{" "}
-              toggle shortcuts
-            </span>
+        <div className="sol-header px-4 py-1.5 text-[10px] text-sol-text-dim">
+          <div className="flex items-center gap-4">
+            <span className="flex items-center gap-1"><span className="flex items-center gap-[2px]"><KeyCap size="xs">J</KeyCap><span className="text-sol-text-dim/40">/</span><KeyCap size="xs">K</KeyCap></span> files</span>
+            <span className="flex items-center gap-1"><KeyCap size="xs">C</KeyCap> comment</span>
+            <button onClick={() => useInboxStore.getState().toggleShortcutsPanel()} className="ml-auto flex items-center gap-1 hover:text-sol-text-muted transition-colors">
+              <KeyCap size="xs">?</KeyCap> all shortcuts
+            </button>
           </div>
         </div>
       )}
