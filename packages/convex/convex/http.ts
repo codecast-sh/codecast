@@ -1954,6 +1954,130 @@ http.route({
 });
 
 http.route({
+  path: "/cli/conversations/count",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const corsHeaders = {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type",
+    };
+
+    try {
+      const body = await request.json();
+      const { api_token, path_prefix } = body;
+
+      if (!api_token || !path_prefix) {
+        return new Response(JSON.stringify({ error: "Missing api_token or path_prefix" }), {
+          status: 400,
+          headers: { "Content-Type": "application/json", ...corsHeaders },
+        });
+      }
+
+      const result = await ctx.runQuery(api.users.countConversationsForPathCLI, {
+        api_token,
+        path_prefix,
+      });
+
+      if ((result as any).error) {
+        return new Response(JSON.stringify({ error: (result as any).error }), {
+          status: (result as any).error === "Unauthorized" ? 401 : 400,
+          headers: { "Content-Type": "application/json", ...corsHeaders },
+        });
+      }
+
+      return new Response(JSON.stringify(result), {
+        status: 200,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      });
+    } catch (error) {
+      console.error("Count conversations error:", error);
+      return new Response(JSON.stringify({ error: "Internal error" }), {
+        status: 500,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      });
+    }
+  }),
+});
+
+http.route({
+  path: "/cli/conversations/count",
+  method: "OPTIONS",
+  handler: httpAction(async () => {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+      },
+    });
+  }),
+});
+
+http.route({
+  path: "/cli/conversations/delete-by-path",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const corsHeaders = {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type",
+    };
+
+    try {
+      const body = await request.json();
+      const { api_token, path_prefix } = body;
+
+      if (!api_token || !path_prefix) {
+        return new Response(JSON.stringify({ error: "Missing api_token or path_prefix" }), {
+          status: 400,
+          headers: { "Content-Type": "application/json", ...corsHeaders },
+        });
+      }
+
+      const result = await ctx.runMutation(api.users.deleteConversationsForPathCLI, {
+        api_token,
+        path_prefix,
+      });
+
+      if ((result as any).error) {
+        return new Response(JSON.stringify({ error: (result as any).error }), {
+          status: (result as any).error === "Unauthorized" ? 401 : 400,
+          headers: { "Content-Type": "application/json", ...corsHeaders },
+        });
+      }
+
+      return new Response(JSON.stringify(result), {
+        status: 200,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      });
+    } catch (error) {
+      console.error("Delete conversations error:", error);
+      return new Response(JSON.stringify({ error: "Internal error" }), {
+        status: 500,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      });
+    }
+  }),
+});
+
+http.route({
+  path: "/cli/conversations/delete-by-path",
+  method: "OPTIONS",
+  handler: httpAction(async () => {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+      },
+    });
+  }),
+});
+
+http.route({
   path: "/cli/teams/projects",
   method: "POST",
   handler: httpAction(async (ctx, request) => {
@@ -2889,7 +3013,11 @@ cliRoute("/cli/docs/search", async (ctx, body) => {
   return await ctx.runQuery(api.docs.search, body);
 });
 cliRoute("/cli/docs/patch", async (ctx, body) => {
-  return await ctx.runMutation(api.docs.patch, body);
+  const result = await ctx.runMutation(api.docs.patch, body);
+  if (result.content) {
+    await ctx.runMutation(api.docs.resetSync, { api_token: body.api_token, id: body.id, content: result.content });
+  }
+  return result;
 });
 
 // Workflows

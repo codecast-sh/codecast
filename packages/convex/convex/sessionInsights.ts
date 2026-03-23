@@ -1472,33 +1472,47 @@ async function getDigests(
 ): Promise<Record<string, { narrative: string; events: any[]; generated_at: number; session_count?: number }>> {
   const result: Record<string, { narrative: string; events: any[]; generated_at: number; session_count?: number }> = {};
   for (const date of dateKeys) {
-    const candidates = await ctx.db
-      .query("digests")
-      .withIndex("by_user_scope_date", (q: any) => q.eq("user_id", userId).eq("scope", scope).eq("date", date))
-      .collect();
-    const existing = candidates.find((d: any) =>
-      teamId ? d.team_id?.toString() === teamId.toString() : !d.team_id
-    );
-    if (existing?.narrative) {
-      result[date] = {
-        narrative: existing.narrative,
-        events: existing.events || [],
-        generated_at: existing.generated_at,
-        session_count: existing.session_count,
-      };
-      continue;
-    }
-    if (scope === "day" && !teamId) {
-      const legacy = await ctx.db
-        .query("day_timelines")
-        .withIndex("by_user_date", (q: any) => q.eq("user_id", userId).eq("date", date))
+    if (teamId) {
+      const teamDigest = await ctx.db
+        .query("digests")
+        .withIndex("by_team_scope_date", (q: any) => q.eq("team_id", teamId).eq("scope", scope).eq("date", date))
+        .order("desc")
         .first();
-      if (legacy?.narrative) {
+      if (teamDigest?.narrative) {
         result[date] = {
-          narrative: legacy.narrative,
-          events: legacy.events || [],
-          generated_at: legacy.generated_at,
+          narrative: teamDigest.narrative,
+          events: teamDigest.events || [],
+          generated_at: teamDigest.generated_at,
+          session_count: teamDigest.session_count,
         };
+      }
+    } else {
+      const candidates = await ctx.db
+        .query("digests")
+        .withIndex("by_user_scope_date", (q: any) => q.eq("user_id", userId).eq("scope", scope).eq("date", date))
+        .collect();
+      const existing = candidates.find((d: any) => !d.team_id);
+      if (existing?.narrative) {
+        result[date] = {
+          narrative: existing.narrative,
+          events: existing.events || [],
+          generated_at: existing.generated_at,
+          session_count: existing.session_count,
+        };
+        continue;
+      }
+      if (scope === "day") {
+        const legacy = await ctx.db
+          .query("day_timelines")
+          .withIndex("by_user_date", (q: any) => q.eq("user_id", userId).eq("date", date))
+          .first();
+        if (legacy?.narrative) {
+          result[date] = {
+            narrative: legacy.narrative,
+            events: legacy.events || [],
+            generated_at: legacy.generated_at,
+          };
+        }
       }
     }
   }
@@ -1528,6 +1542,67 @@ export const getDayInsightsForNarrative = internalQuery({
       if (args.team_id) return i.team_id?.toString() === args.team_id.toString();
       return !i.team_id;
     });
+
+    const conversations = await Promise.all(
+      dayInsights.map((i) => ctx.db.get(i.conversation_id))
+    );
+    const convMap = new Map(
+      conversations.filter((c): c is NonNullable<typeof c> => c !== null).map((c) => [c._id.toString(), c])
+    );
+
+    const actorIds = [...new Set(dayInsights.map((i) => i.actor_user_id.toString()))];
+    const actorDocs = await Promise.all(actorIds.map((id) => ctx.db.get(id as Id<"users">)));
+    const actorMap = new Map(
+      actorDocs.filter((u): u is NonNullable<typeof u> => u !== null).map((u) => [u._id.toString(), u])
+    );
+
+    return dayInsights.map((i) => {
+      const conv = convMap.get(i.conversation_id.toString());
+      const actor = actorMap.get(i.actor_user_id.toString());
+      return {
+        conversation_id: i.conversation_id,
+        actor_user_id: i.actor_user_id,
+        actor_name: actor?.name || actor?.email?.split("@")[0] || "unknown",
+        actor_image: actor?.image || (actor as any)?.github_avatar_url || null,
+        title: conv?.title || "Session",
+        project_path: conv?.project_path,
+        timeline: i.timeline || [],
+        headline: i.headline,
+        key_changes: i.key_changes,
+        outcome_type: i.outcome_type,
+        summary: i.summary,
+        turns: i.turns || [],
+        blockers: i.blockers || [],
+        next_action: i.next_action,
+        themes: i.themes || [],
+        metadata: i.metadata,
+        started_at: conv?.started_at,
+        updated_at: conv?.updated_at,
+      };
+    });
+  },
+});
+
+export const getTeamDayInsights = internalQuery({
+  args: {
+    team_id: v.id("teams"),
+    date: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const dateStart = new Date(args.date + "T00:00:00Z").getTime();
+    const dateEnd = dateStart + 24 * 60 * 60 * 1000;
+
+    const insights = await ctx.db
+      .query("session_insights")
+      .withIndex("by_team_generated_at", (q) =>
+        q.eq("team_id", args.team_id).gt("generated_at", dateStart - 12 * 60 * 60 * 1000)
+      )
+      .order("asc")
+      .take(200);
+
+    const dayInsights = insights.filter((i) =>
+      i.generated_at >= dateStart && i.generated_at < dateEnd
+    );
 
     const conversations = await Promise.all(
       dayInsights.map((i) => ctx.db.get(i.conversation_id))
@@ -1760,19 +1835,47 @@ export const getDigestsByScope = query({
       endKey = now.toISOString().slice(0, 7);
     }
 
-    const digests = await ctx.db
-      .query("digests")
-      .withIndex("by_user_scope_date", (q) =>
-        q.eq("user_id", userId).eq("scope", args.scope).gte("date", startKey)
-      )
-      .take(100);
+    let digests;
+    if (args.team_id) {
+      digests = await ctx.db
+        .query("digests")
+        .withIndex("by_team_scope_date", (q) =>
+          q.eq("team_id", args.team_id!).eq("scope", args.scope).gte("date", startKey)
+        )
+        .take(200);
+    } else {
+      digests = await ctx.db
+        .query("digests")
+        .withIndex("by_user_scope_date", (q) =>
+          q.eq("user_id", userId).eq("scope", args.scope).gte("date", startKey)
+        )
+        .take(100);
+    }
 
-    return digests
-      .filter((d) => {
-        if (d.date > endKey) return false;
-        if (args.team_id) return d.team_id?.toString() === args.team_id.toString();
-        return !d.team_id;
-      })
+    const filtered = digests.filter((d) => {
+      if (d.date > endKey) return false;
+      if (!args.team_id) return !d.team_id;
+      return true;
+    });
+
+    if (args.team_id) {
+      const seen = new Set<string>();
+      const deduped = filtered.filter((d) => {
+        if (seen.has(d.date)) return false;
+        seen.add(d.date);
+        return true;
+      });
+      return deduped
+        .sort((a, b) => b.date.localeCompare(a.date))
+        .map((d) => ({
+          date: d.date,
+          narrative: d.narrative,
+          session_count: d.session_count,
+          generated_at: d.generated_at,
+        }));
+    }
+
+    return filtered
       .sort((a, b) => b.date.localeCompare(a.date))
       .map((d) => ({
         date: d.date,
@@ -1804,10 +1907,9 @@ export const generateDigest = internalAction({
     let sessionCount = 0;
 
     if (args.scope === "day") {
-      const dayInsights = await ctx.runQuery(
-        internal.sessionInsights.getDayInsightsForNarrative,
-        { user_id: args.user_id, date: args.date, team_id: args.team_id }
-      );
+      const dayInsights = args.team_id
+        ? await ctx.runQuery(internal.sessionInsights.getTeamDayInsights, { team_id: args.team_id, date: args.date })
+        : await ctx.runQuery(internal.sessionInsights.getDayInsightsForNarrative, { user_id: args.user_id, date: args.date });
       if (!dayInsights.length) return { status: "skipped", reason: "no_insights" };
 
       sessionCount = dayInsights.length;

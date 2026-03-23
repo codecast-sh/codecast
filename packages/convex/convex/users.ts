@@ -944,6 +944,7 @@ export const updateDirectoryTeamMapping = mutation({
 export const removeDirectoryTeamMapping = mutation({
   args: {
     path_prefix: v.string(),
+    delete_conversations: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -960,7 +961,83 @@ export const removeDirectoryTeamMapping = mutation({
     if (mapping) {
       await ctx.db.delete(mapping._id);
     }
-    return { success: true };
+
+    let conversationsDeleted = 0;
+    let messagesDeleted = 0;
+    if (args.delete_conversations) {
+      const result = await deleteConversationsForPathInternal(ctx, userId, args.path_prefix);
+      conversationsDeleted = result.conversationsDeleted;
+      messagesDeleted = result.messagesDeleted;
+    }
+
+    return { success: true, conversationsDeleted, messagesDeleted };
+  },
+});
+
+async function deleteConversationsForPathInternal(
+  ctx: any,
+  userId: any,
+  pathPrefix: string,
+) {
+  const convos = await ctx.db
+    .query("conversations")
+    .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+    .take(500);
+
+  let conversationsDeleted = 0;
+  let messagesDeleted = 0;
+  for (const conv of convos) {
+    const projectPath = conv.git_root || conv.project_path;
+    if (projectPath && (projectPath === pathPrefix || projectPath.startsWith(pathPrefix + "/"))) {
+      const msgs = await ctx.db
+        .query("messages")
+        .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conv._id))
+        .take(1000);
+      for (const msg of msgs) {
+        await ctx.db.delete(msg._id);
+        messagesDeleted++;
+      }
+      await ctx.db.delete(conv._id);
+      conversationsDeleted++;
+    }
+  }
+  return { conversationsDeleted, messagesDeleted };
+}
+
+export const countConversationsForPath = query({
+  args: {
+    path_prefix: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return { count: 0 };
+
+    const convos = await ctx.db
+      .query("conversations")
+      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+      .take(500);
+
+    let count = 0;
+    for (const conv of convos) {
+      const projectPath = conv.git_root || conv.project_path;
+      if (projectPath && (projectPath === args.path_prefix || projectPath.startsWith(args.path_prefix + "/"))) {
+        count++;
+      }
+    }
+    return { count };
+  },
+});
+
+export const deleteConversationsForPath = mutation({
+  args: {
+    path_prefix: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      throw new Error("Not authenticated");
+    }
+    return deleteConversationsForPathInternal(ctx, userId, args.path_prefix);
   },
 });
 
@@ -1536,6 +1613,46 @@ export const updateDirectoryMappingForCLI = mutation({
     }
 
     return { success: true, action: existingMapping ? "updated" : "created", retroactivelyShared: retroactiveCount };
+  },
+});
+
+export const countConversationsForPathCLI = query({
+  args: {
+    api_token: v.string(),
+    path_prefix: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const result = await verifyApiToken(ctx, args.api_token);
+    if (!result) {
+      return { error: "Unauthorized" };
+    }
+    const convos = await ctx.db
+      .query("conversations")
+      .withIndex("by_user_id", (q) => q.eq("user_id", result.userId))
+      .take(500);
+
+    let count = 0;
+    for (const conv of convos) {
+      const projectPath = conv.git_root || conv.project_path;
+      if (projectPath && (projectPath === args.path_prefix || projectPath.startsWith(args.path_prefix + "/"))) {
+        count++;
+      }
+    }
+    return { count };
+  },
+});
+
+export const deleteConversationsForPathCLI = mutation({
+  args: {
+    api_token: v.string(),
+    path_prefix: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const result = await verifyApiToken(ctx, args.api_token);
+    if (!result) {
+      return { error: "Unauthorized" };
+    }
+    return deleteConversationsForPathInternal(ctx, result.userId, args.path_prefix);
   },
 });
 

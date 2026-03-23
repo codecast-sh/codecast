@@ -1349,9 +1349,34 @@ export const webList = query({
     }
 
     plans.sort((a: any, b: any) => (b.updated_at || 0) - (a.updated_at || 0));
-    return plans.slice(0, args.limit || 500);
+    const result = plans.slice(0, args.limit || 500);
+    return enrichPlansWithLiveness(ctx, userId, result);
   },
 });
+
+async function enrichPlansWithLiveness(ctx: any, userId: any, plans: any[]) {
+  const now = Date.now();
+  const HEARTBEAT_ALIVE_MS = 90 * 1000;
+  const managedSessions = await ctx.db
+    .query("managed_sessions")
+    .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+    .collect();
+  const liveSessions = managedSessions.filter(
+    (s: any) => now - s.last_heartbeat < HEARTBEAT_ALIVE_MS && s.conversation_id,
+  );
+  const activeTaskIds = new Set<string>();
+  for (const s of liveSessions) {
+    const conv = await ctx.db.get(s.conversation_id!);
+    if (conv && (conv as any).active_task_id) {
+      activeTaskIds.add((conv as any).active_task_id.toString());
+    }
+  }
+  return plans.map((p: any) => {
+    const taskIds = (p.task_ids || []).map((id: any) => id.toString());
+    const activeAgents = taskIds.filter((id: string) => activeTaskIds.has(id)).length;
+    return { ...p, active_agents: activeAgents };
+  });
+}
 
 export const webTeamList = query({
   args: {
@@ -1375,7 +1400,8 @@ export const webTeamList = query({
       plans = plans.filter((p: any) => p.status !== "done" && p.status !== "abandoned");
     }
 
-    return plans.slice(0, args.limit || 500);
+    const result = plans.slice(0, args.limit || 500);
+    return enrichPlansWithLiveness(ctx, userId, result);
   },
 });
 

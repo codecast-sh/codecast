@@ -882,6 +882,7 @@ export default defineSchema({
     user_id: v.id("users"),
     team_id: v.optional(v.id("teams")),
     project_id: v.optional(v.id("projects")),
+    project_path: v.optional(v.string()),
     short_id: v.string(),
     title: v.string(),
     description: v.optional(v.string()),

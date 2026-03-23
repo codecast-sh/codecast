@@ -63,6 +63,80 @@ function docRepoName(d: any, convMap: Map<string, any>): string {
   return d.project_path ? repoName(d.project_path) : "";
 }
 
+type DocNode = { type: string; attrs?: Record<string, any>; content?: DocNode[]; text?: string };
+
+function markdownToDoc(text: string): DocNode {
+  const lines = text.split("\n");
+  const content: DocNode[] = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    const line = lines[i];
+
+    if (line.startsWith("```")) {
+      const lang = line.slice(3).trim();
+      const codeLines: string[] = [];
+      i++;
+      while (i < lines.length && !lines[i].startsWith("```")) {
+        codeLines.push(lines[i]);
+        i++;
+      }
+      i++;
+      const node: DocNode = { type: "codeBlock" };
+      if (lang) node.attrs = { language: lang };
+      if (codeLines.length > 0) node.content = [{ type: "text", text: codeLines.join("\n") }];
+      content.push(node);
+      continue;
+    }
+
+    if (/^---+$/.test(line.trim())) { content.push({ type: "horizontalRule" }); i++; continue; }
+
+    const hm = line.match(/^(#{1,3})\s+(.+)/);
+    if (hm) {
+      content.push({ type: "heading", attrs: { level: hm[1].length }, content: [{ type: "text", text: hm[2] }] });
+      i++;
+      continue;
+    }
+
+    if (line.startsWith("> ")) {
+      const ql: string[] = [];
+      while (i < lines.length && lines[i].startsWith("> ")) { ql.push(lines[i].slice(2)); i++; }
+      content.push({ type: "blockquote", content: [{ type: "paragraph", content: [{ type: "text", text: ql.join("\n") }] }] });
+      continue;
+    }
+
+    if (/^[-*]\s/.test(line)) {
+      const items: DocNode[] = [];
+      while (i < lines.length && /^[-*]\s/.test(lines[i])) {
+        items.push({ type: "listItem", content: [{ type: "paragraph", content: [{ type: "text", text: lines[i].replace(/^[-*]\s/, "") }] }] });
+        i++;
+      }
+      content.push({ type: "bulletList", content: items });
+      continue;
+    }
+
+    if (line.trim() === "") { i++; continue; }
+
+    const paraLines: string[] = [];
+    while (i < lines.length && lines[i].trim() !== "" &&
+           !lines[i].startsWith("#") && !lines[i].startsWith("```") &&
+           !lines[i].startsWith("> ") && !/^[-*]\s/.test(lines[i]) &&
+           !/^---+$/.test(lines[i].trim())) {
+      paraLines.push(lines[i]);
+      i++;
+    }
+    const pc: DocNode[] = [];
+    paraLines.forEach((pl, idx) => {
+      if (idx > 0) pc.push({ type: "hardBreak" });
+      pc.push({ type: "text", text: pl });
+    });
+    if (pc.length > 0) content.push({ type: "paragraph", content: pc });
+  }
+
+  if (content.length === 0) content.push({ type: "paragraph" });
+  return { type: "doc", content };
+}
+
 function extractPlanInfo(content: string): { title: string; goal?: string } {
   const titleMatch = content.match(/^#\s+(.+)/m);
   const title = titleMatch ? titleMatch[1].trim() : "";
@@ -341,15 +415,7 @@ export const resetSync = mutation({
       .collect();
     for (const d of deltas) await ctx.db.delete(d._id);
 
-    const text = args.content || "";
-    const paragraphs = text.split(/\n\n+/).filter(Boolean);
-    const content = paragraphs.length > 0
-      ? paragraphs.map((p: string) => ({
-          type: "paragraph" as const,
-          content: [{ type: "text" as const, text: p }],
-        }))
-      : [{ type: "paragraph" as const }];
-    const json = JSON.stringify({ type: "doc", content });
+    const json = JSON.stringify(markdownToDoc(args.content || ""));
 
     if (snapshots.length > 0) {
       const latest = snapshots.reduce((a: any, b: any) => a.version > b.version ? a : b);
@@ -393,7 +459,7 @@ export const patch = mutation({
       }
     }
 
-    return { success: true, length: newContent.length };
+    return { success: true, length: newContent.length, content: newContent };
   },
 });
 

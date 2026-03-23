@@ -428,18 +428,16 @@ export const createConversation = mutation({
     const now = Date.now();
     const startedAt = args.started_at ?? now;
 
-    const user = await ctx.db.get(args.user_id);
     const conversationPath = args.git_root || args.project_path;
     const mappings = await ctx.db
       .query("directory_team_mappings")
       .withIndex("by_user_id", (q) => q.eq("user_id", args.user_id))
       .collect();
 
-    const fallbackTeamId = args.team_id || (user as any)?.active_team_id || (user as any)?.team_id;
     const { teamId: resolvedTeamId, isPrivate, autoShared } = resolveTeamForPath(
       mappings,
       conversationPath,
-      fallbackTeamId
+      args.team_id as Id<"teams"> | undefined
     );
 
     let parentConversationId: Id<"conversations"> | undefined;
@@ -579,7 +577,6 @@ export const createQuickSession = mutation({
     const sessionId = args.session_id || crypto.randomUUID();
     const agentType = args.agent_type || "claude_code";
 
-    const user = await ctx.db.get(userId);
     const conversationPath = args.git_root || args.project_path;
     const mappings = await ctx.db
       .query("directory_team_mappings")
@@ -589,7 +586,7 @@ export const createQuickSession = mutation({
     const { teamId: resolvedTeamId, isPrivate, autoShared } = resolveTeamForPath(
       mappings,
       conversationPath,
-      (user as any)?.active_team_id || (user as any)?.team_id
+      undefined
     );
 
     const conversationId = await ctx.db.insert("conversations", {
@@ -616,6 +613,7 @@ export const createQuickSession = mutation({
       agent_type: daemonAgentType,
       project_path: args.project_path || args.git_root,
       conversation_id: conversationId,
+      session_id: sessionId,
     };
     if (args.isolated) {
       daemonArgs.isolated = true;
@@ -1107,7 +1105,7 @@ export const listMessages = query({
       hasTeamAccess = await canTeamMemberAccess(ctx, authUserId, conversation);
     }
     if (!isOwner && !hasTeamAccess && !isShared) {
-      throw new Error("Access denied");
+      return { page: [], isDone: true, continueCursor: "" };
     }
 
     return await ctx.db

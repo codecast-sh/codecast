@@ -154,7 +154,6 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     const sessionId = opts.session_id || crypto.randomUUID();
     const agentType = (opts.agent_type || "claude_code") as "claude_code" | "codex" | "cursor" | "gemini";
 
-    const user = await ctx.db.get(userId);
     const conversationPath = opts.git_root || opts.project_path;
     const mappings = await ctx.db
       .query("directory_team_mappings")
@@ -164,7 +163,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     const { teamId: resolvedTeamId, isPrivate, autoShared } = resolveTeamForPath(
       mappings,
       conversationPath,
-      user?.active_team_id || user?.team_id
+      undefined
     );
 
     const conversationId = await ctx.db.insert("conversations", {
@@ -371,8 +370,11 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   },
 
   createTask: async (ctx, userId, [opts]: [any]) => {
-    const user = await ctx.db.get(userId);
-    const teamId = user?.active_team_id || user?.team_id;
+    const mappings = await ctx.db
+      .query("directory_team_mappings")
+      .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+      .collect();
+    const { teamId } = resolveTeamForPath(mappings, opts.project_path, undefined);
     const chars = "0123456789abcdefghijklmnopqrstuvwxyz";
     let shortId = "ct-";
     for (let i = 0; i < 4; i++) shortId += chars[Math.floor(Math.random() * chars.length)];
