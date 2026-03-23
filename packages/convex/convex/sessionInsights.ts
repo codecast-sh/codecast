@@ -1758,7 +1758,11 @@ export const getDigestsByScope = query({
       .take(100);
 
     return digests
-      .filter((d) => d.date <= endKey)
+      .filter((d) => {
+        if (d.date > endKey) return false;
+        if (args.team_id) return d.team_id?.toString() === args.team_id.toString();
+        return !d.team_id;
+      })
       .sort((a, b) => b.date.localeCompare(a.date))
       .map((d) => ({
         date: d.date,
@@ -1816,7 +1820,7 @@ export const generateDigest = internalAction({
     } else if (args.scope === "week") {
       const { monday, sunday } = getWeekDateRange(args.date);
       const dayDigests = await ctx.runQuery(internal.sessionInsights.getDigestsInRange, {
-        user_id: args.user_id, scope: "day", start_date: monday, end_date: sunday,
+        user_id: args.user_id, team_id: args.team_id, scope: "day", start_date: monday, end_date: sunday,
       });
       if (!dayDigests.length) return { status: "skipped", reason: "no_child_digests" };
 
@@ -1829,7 +1833,7 @@ export const generateDigest = internalAction({
     } else {
       const weekKeys = getWeeksInMonth(args.date);
       const weekDigests = await ctx.runQuery(internal.sessionInsights.getDigestsInRange, {
-        user_id: args.user_id, scope: "week",
+        user_id: args.user_id, team_id: args.team_id, scope: "week",
         start_date: weekKeys[0], end_date: weekKeys[weekKeys.length - 1],
       });
       if (!weekDigests.length) return { status: "skipped", reason: "no_child_digests" };
