@@ -228,7 +228,7 @@ export function reducer(state: ReducerState, rawMessages: RawMessage[]): Process
   // Phase 2: Process tool results
   //
   for (const msg of rawMessages) {
-    if (msg.role === 'user' && msg.tool_results) {
+    if (msg.tool_results) {
       for (const result of msg.tool_results) {
         const messageId = state.toolIdToMessageId.get(result.tool_use_id);
         if (!messageId) {

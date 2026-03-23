@@ -285,16 +285,40 @@ type Draft = InboxStoreState;
 export function sortSessions(sessions: Record<string, InboxSession>): InboxSession[] {
   const list = Object.values(sessions);
   list.sort((a, b) => {
+    const aWaitingForInput = isSessionWaitingForInput(a);
+    const bWaitingForInput = isSessionWaitingForInput(b);
     if (a.is_pinned !== b.is_pinned) return a.is_pinned ? -1 : 1;
     if (a.is_deferred !== b.is_deferred) return a.is_deferred ? 1 : -1;
     if (!isConvexId(a._id) !== !isConvexId(b._id)) return !isConvexId(a._id) ? -1 : 1;
     const aNew = a.message_count === 0;
     const bNew = b.message_count === 0;
     if (aNew !== bNew) return aNew ? -1 : 1;
+    if (aWaitingForInput !== bWaitingForInput) return aWaitingForInput ? -1 : 1;
     if (a.is_idle !== b.is_idle) return a.is_idle ? -1 : 1;
     return 0;
   });
   return list;
+}
+
+export function isInterruptControlMessage(raw: string | null | undefined): boolean {
+  const trimmed = raw?.trim();
+  if (!trimmed) return false;
+  return trimmed.startsWith("[Request interrupted") || trimmed.startsWith("[Request cancelled");
+}
+
+export function isSessionInterrupted(session: Pick<InboxSession, "last_user_message">): boolean {
+  return isInterruptControlMessage(session.last_user_message);
+}
+
+export function isSessionWaitingForInput(
+  session: Pick<InboxSession, "_id" | "is_idle" | "message_count" | "is_pinned" | "last_user_message">,
+  sessionsWithQueuedMessages?: Set<string>,
+): boolean {
+  return session.is_idle &&
+    session.message_count > 0 &&
+    !session.is_pinned &&
+    !sessionsWithQueuedMessages?.has(session._id) &&
+    !isSessionInterrupted(session);
 }
 
 export function getSessionRenderKey(
@@ -341,8 +365,8 @@ export function categorizeSessions(
   const pinned = sorted.filter((s) => s.is_pinned && isTop(s));
   const newSessions = sorted.filter((s) => s.message_count === 0 && !s.is_pinned && isTop(s))
     .sort((a, b) => (a.is_connected ? 1 : 0) - (b.is_connected ? 1 : 0));
-  const needsInput = sorted.filter((s) => s.is_idle && s.message_count > 0 && !s.is_pinned && !sessionsWithQueuedMessages.has(s._id) && isTop(s));
-  const working = sorted.filter((s) => (!s.is_idle || sessionsWithQueuedMessages.has(s._id)) && s.message_count > 0 && !s.is_pinned && isTop(s));
+  const needsInput = sorted.filter((s) => isSessionWaitingForInput(s, sessionsWithQueuedMessages) && isTop(s));
+  const working = sorted.filter((s) => (!isSessionWaitingForInput(s, sessionsWithQueuedMessages) && s.message_count > 0 && !s.is_pinned) && isTop(s));
 
   return { sorted, pinned, newSessions, needsInput, working, subsByParent };
 }
@@ -480,6 +504,7 @@ interface InboxStoreState {
   setDraft: (id: string, fields: Record<string, any>) => void;
   setDraftLocal: (id: string, fields: Record<string, any>) => void;
   getDraft: (id: string) => Record<string, any> | undefined;
+  moveDraft: (fromId: string, toId: string) => void;
   clearDraft: (id: string) => void;
   clearDraftFinal: (id: string) => void;
 
@@ -787,6 +812,7 @@ export const useInboxStore = create<InboxStoreState>(
       viewingDismissedId: null,
       clientState: { ...state.clientState, current_conversation_id: sessionId },
     });
+    get().moveDraft(currentId, sessionId);
 
     get()._dispatch("patch", [], {
       conversations: { [currentId]: { inbox_dismissed_at: now } },
@@ -1061,7 +1087,7 @@ export const useInboxStore = create<InboxStoreState>(
   advanceToNext: () => {
     const sorted = get().sortedSessions();
     const currentId = get().currentSessionId;
-    const idleSessions = sorted.filter((s: InboxSession) => s.is_idle && !s.is_pinned);
+    const idleSessions = sorted.filter((s: InboxSession) => isSessionWaitingForInput(s));
     const currentIdleIdx = idleSessions.findIndex((s: InboxSession) => s._id === currentId);
     const nextIdle = idleSessions[currentIdleIdx + 1] || idleSessions[0];
     if (nextIdle && nextIdle._id !== currentId) {
@@ -1363,6 +1389,20 @@ export const useInboxStore = create<InboxStoreState>(
   getDraft: (id: string) => {
     return get().drafts[id];
   },
+
+  moveDraft: sync(function (this: Draft, fromId: string, toId: string) {
+    if (fromId === toId) return;
+    const draft = this.drafts[fromId]
+      ?? (this.clientState.drafts?.[fromId] && typeof this.clientState.drafts[fromId] === "object"
+        ? this.clientState.drafts[fromId] as Record<string, any>
+        : undefined);
+    if (!draft) return;
+    this.drafts[toId] = draft;
+    delete this.drafts[fromId];
+    if (!this.clientState.drafts) this.clientState.drafts = {};
+    this.clientState.drafts[toId] = draft;
+    this.clientState.drafts[fromId] = null;
+  }),
 
   clearDraft: sync(function (this: Draft, id: string) {
     delete this.drafts[id];

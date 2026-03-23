@@ -4,7 +4,7 @@ import { useCallback } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useMutation } from "convex/react";
 import { api as _typedApi } from "@codecast/convex/convex/_generated/api";
-import { useInboxStore, isConvexId } from "../store/inboxStore";
+import { useInboxStore, isConvexId, isSessionWaitingForInput } from "../store/inboxStore";
 import { isInboxSessionView } from "../lib/inboxRouting";
 import { useShortcutAction } from "./ShortcutProvider";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
@@ -45,7 +45,7 @@ export function useGlobalShortcutActions() {
   useShortcutAction('session.jumpIdle', useCallback(() => {
     const store = useInboxStore.getState();
     const sorted = store.sortedSessions();
-    const first = sorted.find(s => s.is_idle && s.message_count > 0 && !s.is_pinned);
+    const first = sorted.find(s => isSessionWaitingForInput(s));
     if (!first) return;
     if (isOnInboxPage) store.setCurrentSession(first._id);
     else store.selectPanelSession(first._id);
@@ -74,7 +74,7 @@ export function useGlobalShortcutActions() {
     const idx = ordered.findIndex(s => s._id === currentId);
     const next = ordered[idx + 1] ?? ordered.find(s => s._id !== currentId);
     store.stashSession(currentId);
-    if (next) {
+    if (next && useInboxStore.getState().sessions[next._id]) {
       if (isOnInboxPage) store.setCurrentSession(next._id);
       else store.selectPanelSession(next._id);
     }
@@ -92,7 +92,7 @@ export function useGlobalShortcutActions() {
     const idx = ordered.findIndex(s => s._id === currentId);
     const next = ordered[idx + 1] ?? ordered.find(s => s._id !== currentId);
     store.stashSession(currentId);
-    if (next) {
+    if (next && useInboxStore.getState().sessions[next._id]) {
       if (isOnInboxPage) store.setCurrentSession(next._id);
       else store.selectPanelSession(next._id);
     }

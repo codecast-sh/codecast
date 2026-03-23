@@ -128,7 +128,16 @@ export function buildCompositeTimeline(
       if (lastTs !== undefined && Math.abs(msg.timestamp - lastTs) < 60_000) return false;
       seenUserContent.set(key, msg.timestamp);
     }
-    if (msg.role === 'user' && msg.tool_results && msg.tool_results.length > 0) return false;
+    if (
+      msg.tool_results &&
+      msg.tool_results.length > 0 &&
+      (!msg.content || !msg.content.trim()) &&
+      !msg.thinking &&
+      !(msg.tool_calls && msg.tool_calls.length > 0) &&
+      !(msg.images && msg.images.length > 0)
+    ) {
+      return false;
+    }
     if (msg.role === 'user' && (!msg.content || !msg.content.trim()) && !(msg.images && msg.images.length > 0)) return false;
     return true;
   });

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "bun:test";
-import { getSessionRenderKey, useInboxStore, type InboxSession } from "../inboxStore";
+import { categorizeSessions, getSessionRenderKey, useInboxStore, type InboxSession } from "../inboxStore";
 
 const baseSession: InboxSession = {
   _id: "conv1",
@@ -16,6 +16,10 @@ describe("inboxStore.setConversationAgent", () => {
     useInboxStore.setState({
       sessions: {},
       conversations: {},
+      drafts: {},
+      clientState: {},
+      currentSessionId: null,
+      pending: {},
       currentConversation: {},
     });
   });
@@ -76,6 +80,81 @@ describe("inboxStore.setConversationAgent", () => {
   });
 });
 
+describe("draft migration", () => {
+  beforeEach(() => {
+    useInboxStore.setState({
+      sessions: {},
+      conversations: {},
+      drafts: {},
+      clientState: {},
+      currentSessionId: null,
+      pending: {},
+      currentConversation: {},
+    });
+  });
+
+  it("moves the draft payload to the replacement session id", () => {
+    useInboxStore.getState().setDraft("conv1", {
+      draft_message: "keep this",
+      draft_image_storage_ids: [{ storageId: "img1" }],
+    });
+
+    useInboxStore.getState().moveDraft("conv1", "temp2");
+
+    const state = useInboxStore.getState();
+    expect(state.drafts.conv1).toBeUndefined();
+    expect(state.clientState.drafts?.conv1).toBeNull();
+    expect(state.drafts.temp2).toEqual({
+      draft_message: "keep this",
+      draft_image_storage_ids: [{ storageId: "img1" }],
+    });
+    expect(state.clientState.drafts?.temp2).toEqual({
+      draft_message: "keep this",
+      draft_image_storage_ids: [{ storageId: "img1" }],
+    });
+  });
+
+  it("preserves drafts when switching agents through the inbox store", () => {
+    useInboxStore.setState({
+      sessions: {
+        conv1: baseSession,
+      },
+      conversations: {
+        conv1: {
+          _id: "conv1",
+          agent_type: "claude_code",
+          title: "New Session",
+        },
+      },
+      drafts: {
+        conv1: {
+          draft_message: "draft survives switch",
+        },
+      },
+      clientState: {
+        drafts: {
+          conv1: {
+            draft_message: "draft survives switch",
+          },
+        },
+      },
+      currentSessionId: "conv1",
+      pending: {},
+    });
+
+    const newSessionId = useInboxStore.getState().switchAgent("conv1", "codex");
+
+    expect(newSessionId).toBeTruthy();
+    const state = useInboxStore.getState();
+    expect(state.drafts.conv1).toBeUndefined();
+    expect(state.clientState.drafts?.conv1).toBeNull();
+    expect(newSessionId ? state.drafts[newSessionId] : undefined).toEqual({
+      draft_message: "draft survives switch",
+    });
+    expect(newSessionId ? state.sessions[newSessionId]?.agent_type : undefined).toBe("codex");
+  });
+});
+
 describe("getSessionRenderKey", () => {
   it("stays stable across optimistic-to-server id promotion", () => {
     expect(getSessionRenderKey({
@@ -93,5 +172,35 @@ describe("getSessionRenderKey", () => {
     expect(getSessionRenderKey({
       _id: "jn7abc123def456ghi789jklmnopqrs",
     } as Pick<InboxSession, "_id" | "session_id">)).toBe("jn7abc123def456ghi789jklmnopqrs");
+  });
+});
+
+describe("categorizeSessions", () => {
+  it("keeps interrupted sessions out of Needs Input", () => {
+    const interrupted: InboxSession = {
+      ...baseSession,
+      _id: "conv-interrupted",
+      session_id: "session-interrupted",
+      message_count: 3,
+      last_user_message: "[Request interrupted by user]",
+    };
+    const needsReply: InboxSession = {
+      ...baseSession,
+      _id: "conv-needs-reply",
+      session_id: "session-needs-reply",
+      message_count: 4,
+      last_user_message: "Can you finish the refactor?",
+    };
+
+    const { needsInput, working } = categorizeSessions(
+      {
+        [interrupted._id]: interrupted,
+        [needsReply._id]: needsReply,
+      },
+      new Set(),
+    );
+
+    expect(needsInput.map((s) => s._id)).toEqual(["conv-needs-reply"]);
+    expect(working.map((s) => s._id)).toContain("conv-interrupted");
   });
 });
