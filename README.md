@@ -304,20 +304,23 @@ Config lives at `~/.codecast/config.json`:
 |----------|--------|
 | `Cmd+K` | Command palette |
 | `Cmd+/` | Search |
-| `Ctrl+J/K` | Navigate sessions |
-| `Ctrl+I` | Jump to idle sessions |
-| `Alt+P` | Jump to pinned sessions |
-| `P` | Pin/unpin session |
-| `S` | Stash session |
-| `X` | Kill session |
-| `D` | Toggle diff panel |
-| `T` | Toggle file tree |
-| `Alt+J/K` | Navigate messages |
-| `Alt+F` | Fork conversation |
-| `Ctrl+.` | Zen mode |
-| `Ctrl+[/]` | Toggle sidebars |
+| `Ctrl+J / K` | Next / previous session |
+| `Ctrl+I` | Jump to idle session |
+| `Ctrl+P` | Jump to pinned session |
+| `Ctrl+Shift+P` | Pin/unpin session |
+| `Ctrl+Backspace` | Stash session |
+| `Ctrl+Shift+Backspace` | Kill session agent |
+| `Shift+Backspace` | Defer and advance |
 | `Ctrl+N` | New session |
-| `Ctrl+R` | Rename session |
+| `Ctrl+Shift+E` | Rename session |
+| `D` | Toggle diff panel (in conversation) |
+| `T` | Toggle file tree (in conversation) |
+| `Alt+J / K` | Next / previous user message |
+| `Alt+F` | Fork from message |
+| `Ctrl+M` | Focus message input |
+| `Ctrl+.` | Zen mode |
+| `Ctrl+[ / ]` | Toggle left / right sidebars |
+| `?` | Toggle shortcuts help |
 
 ## Changelog
 
