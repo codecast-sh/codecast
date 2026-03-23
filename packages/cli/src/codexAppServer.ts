@@ -185,6 +185,7 @@ export class CodexAppServer extends EventEmitter {
   private restartTimer: ReturnType<typeof setTimeout> | null = null;
   private stopped = false;
   private initialized = false;
+  private _binaryMissing = false;
   private log: (msg: string) => void;
   private onApproval?: (threadId: string, approval: ApprovalRequest) => Promise<boolean>;
   private codexBinary: string;
@@ -215,6 +216,10 @@ export class CodexAppServer extends EventEmitter {
 
   get running(): boolean {
     return this.process !== null && this.process.exitCode === null && this.initialized;
+  }
+
+  get binaryMissing(): boolean {
+    return this._binaryMissing;
   }
 
   private async initialize(): Promise<void> {
@@ -284,6 +289,14 @@ export class CodexAppServer extends EventEmitter {
 
     child.on("error", (err) => {
       this.log(`[codex-app-server] process error: ${err.message}`);
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        this._binaryMissing = true;
+        this.stopped = true;
+        this.log(`[codex-app-server] binary "${this.codexBinary}" not found in PATH, disabling`);
+        this.emit("binaryNotFound", this.codexBinary);
+        this.cleanup();
+        return;
+      }
       this.emit("error", err);
       this.cleanup();
       this.scheduleRestart();

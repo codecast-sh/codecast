@@ -2153,6 +2153,7 @@ class CodexAppServer extends EventEmitter7 {
   restartTimer = null;
   stopped = false;
   initialized = false;
+  _binaryMissing = false;
   log;
   onApproval;
   codexBinary;
@@ -2180,6 +2181,9 @@ class CodexAppServer extends EventEmitter7 {
   }
   get running() {
     return this.process !== null && this.process.exitCode === null && this.initialized;
+  }
+  get binaryMissing() {
+    return this._binaryMissing;
   }
   async initialize() {
     const resp = await this.sendRequest("initialize", {
@@ -2236,6 +2240,14 @@ class CodexAppServer extends EventEmitter7 {
     });
     child.on("error", (err) => {
       this.log(`[codex-app-server] process error: ${err.message}`);
+      if (err.code === "ENOENT") {
+        this._binaryMissing = true;
+        this.stopped = true;
+        this.log(`[codex-app-server] binary "${this.codexBinary}" not found in PATH, disabling`);
+        this.emit("binaryNotFound", this.codexBinary);
+        this.cleanup();
+        return;
+      }
       this.emit("error", err);
       this.cleanup();
       this.scheduleRestart();
@@ -13641,6 +13653,14 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
             }
           }
         }
+        if (agentType === "codex" && codexAppServerInstance?.binaryMissing) {
+          error = "Codex is not installed. Install it from https://codex.openai.com then restart your daemon.";
+          if (conversationId) {
+            syncServiceRef?.setSessionError(conversationId, error).catch(() => {
+            });
+          }
+          break;
+        }
         let binary;
         let binaryArgs = [];
         if (agentType === "codex") {
@@ -20303,6 +20323,9 @@ async function main() {
   });
   codexAppServerInstance.on("error", (err) => {
     log(`[codex-app-server] error: ${err.message}`);
+  });
+  codexAppServerInstance.on("binaryNotFound", (binary) => {
+    log(`[codex-app-server] "${binary}" not installed -- codex sessions will return install instructions`);
   });
   codexAppServerInstance.start();
   log("[codex-app-server] started");

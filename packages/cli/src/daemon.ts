@@ -1071,6 +1071,14 @@ async function executeRemoteCommand(
           }
         }
 
+        if (agentType === "codex" && codexAppServerInstance?.binaryMissing) {
+          error = "Codex is not installed. Install it from https://codex.openai.com then restart your daemon.";
+          if (conversationId) {
+            syncServiceRef?.setSessionError(conversationId, error).catch(() => {});
+          }
+          break;
+        }
+
         let binary: string;
         let binaryArgs: string[] = [];
         if (agentType === "codex") {
@@ -8609,6 +8617,10 @@ async function main(): Promise<void> {
 
   codexAppServerInstance.on("error", (err: Error) => {
     log(`[codex-app-server] error: ${err.message}`);
+  });
+
+  codexAppServerInstance.on("binaryNotFound", (binary: string) => {
+    log(`[codex-app-server] "${binary}" not installed -- codex sessions will return install instructions`);
   });
 
   codexAppServerInstance.start();
