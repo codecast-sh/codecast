@@ -50,6 +50,11 @@ export const notifyTeamSessionStart = internalMutation({
       return;
     }
 
+    const STALE_MS = 5 * 60 * 1000;
+    if (conversation.started_at && Date.now() - conversation.started_at > STALE_MS) {
+      return;
+    }
+
     const user = await ctx.db.get(args.user_id);
     if (!user) {
       return;

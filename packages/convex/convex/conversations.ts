@@ -1220,6 +1220,7 @@ export const getConversationWithMeta = query({
 
     return {
       ...conversation,
+      is_own: !!isOwner,
       available_skills: resolveUserSkills((user as any)?.available_skills, conversation.project_path) || conversation.available_skills || undefined,
       title,
       effective_team_visibility,

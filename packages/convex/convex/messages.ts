@@ -44,6 +44,53 @@ type DocExtractionConversation = {
   team_visibility?: string;
 };
 
+function buildExistingMessagePatch(
+  existing: {
+    role: string;
+    content?: string;
+    thinking?: string;
+    tool_calls?: unknown;
+    tool_results?: unknown;
+    images?: unknown;
+    subtype?: string;
+  },
+  incoming: {
+    role: string;
+    content?: string;
+    thinking?: string;
+    tool_calls?: unknown;
+    tool_results?: unknown;
+    images?: unknown;
+    subtype?: string;
+  },
+): Record<string, unknown> | null {
+  const patch: Record<string, unknown> = {};
+
+  if (incoming.role === "assistant") {
+    if (incoming.content !== undefined && incoming.content !== existing.content) {
+      patch.content = incoming.content;
+    }
+    if (incoming.thinking !== undefined && incoming.thinking !== existing.thinking) {
+      patch.thinking = incoming.thinking;
+    }
+    if (incoming.subtype !== undefined && incoming.subtype !== existing.subtype) {
+      patch.subtype = incoming.subtype;
+    }
+    if (incoming.tool_calls !== undefined && JSON.stringify(incoming.tool_calls) !== JSON.stringify(existing.tool_calls ?? null)) {
+      patch.tool_calls = incoming.tool_calls;
+    }
+    if (incoming.tool_results !== undefined && JSON.stringify(incoming.tool_results) !== JSON.stringify(existing.tool_results ?? null)) {
+      patch.tool_results = incoming.tool_results;
+    }
+  }
+
+  if (incoming.images && JSON.stringify(incoming.images) !== JSON.stringify(existing.images ?? null)) {
+    patch.images = incoming.images;
+  }
+
+  return Object.keys(patch).length > 0 ? patch : null;
+}
+
 async function extractDocsFromMessages(
   ctx: any,
   messages: DocExtractionMessage[],
@@ -260,8 +307,17 @@ export const addMessage = mutation({
         .first();
 
       if (existing) {
-        if (args.images && args.images.length > 0 && (!existing.images || existing.images.length === 0)) {
-          await ctx.db.patch(existing._id, { images: args.images });
+        const patch = buildExistingMessagePatch(existing, {
+          role: args.role,
+          content: safeContent,
+          thinking: safeThinking,
+          tool_calls: safeToolCalls,
+          tool_results: safeToolResults,
+          images: args.images,
+          subtype: args.subtype,
+        });
+        if (patch) {
+          await ctx.db.patch(existing._id, patch);
         }
         return existing._id;
       }
@@ -464,8 +520,17 @@ export const addMessages = mutation({
           .first();
 
         if (existing) {
-          if (msg.images && msg.images.length > 0 && (!existing.images || existing.images.length === 0)) {
-            await ctx.db.patch(existing._id, { images: msg.images });
+          const patch = buildExistingMessagePatch(existing, {
+            role: msg.role,
+            content: safeContent,
+            thinking: safeThinking,
+            tool_calls: safeToolCalls,
+            tool_results: safeToolResults,
+            images: msg.images,
+            subtype: msg.subtype,
+          });
+          if (patch) {
+            await ctx.db.patch(existing._id, patch);
           }
           ids.push(existing._id);
           continue;
@@ -840,4 +905,3 @@ export const getSharedMessageMeta = query({
     };
   },
 });
-

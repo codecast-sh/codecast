@@ -856,6 +856,7 @@ export default defineSchema({
   projects: defineTable({
     user_id: v.id("users"),
     team_id: v.optional(v.id("teams")),
+    short_id: v.optional(v.string()),
     title: v.string(),
     description: v.optional(v.string()),
     status: v.union(
@@ -864,6 +865,8 @@ export default defineSchema({
       v.literal("paused"),
       v.literal("done")
     ),
+    color: v.optional(v.string()),
+    icon: v.optional(v.string()),
     project_path: v.optional(v.string()),
     target_date: v.optional(v.number()),
     labels: v.optional(v.array(v.string())),
@@ -872,7 +875,8 @@ export default defineSchema({
   })
     .index("by_user_id", ["user_id"])
     .index("by_user_status", ["user_id", "status"])
-    .index("by_team_id", ["team_id"]),
+    .index("by_team_id", ["team_id"])
+    .index("by_short_id", ["short_id"]),
 
   plans: defineTable({
     user_id: v.id("users"),

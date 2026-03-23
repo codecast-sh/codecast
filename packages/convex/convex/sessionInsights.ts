@@ -1536,10 +1536,20 @@ export const getDayInsightsForNarrative = internalQuery({
       conversations.filter((c): c is NonNullable<typeof c> => c !== null).map((c) => [c._id.toString(), c])
     );
 
+    const actorIds = [...new Set(dayInsights.map((i) => i.actor_user_id.toString()))];
+    const actorDocs = await Promise.all(actorIds.map((id) => ctx.db.get(id as Id<"users">)));
+    const actorMap = new Map(
+      actorDocs.filter((u): u is NonNullable<typeof u> => u !== null).map((u) => [u._id.toString(), u])
+    );
+
     return dayInsights.map((i) => {
       const conv = convMap.get(i.conversation_id.toString());
+      const actor = actorMap.get(i.actor_user_id.toString());
       return {
         conversation_id: i.conversation_id,
+        actor_user_id: i.actor_user_id,
+        actor_name: actor?.name || actor?.email?.split("@")[0] || "unknown",
+        actor_image: actor?.image || (actor as any)?.github_avatar_url || null,
         title: conv?.title || "Session",
         project_path: conv?.project_path,
         timeline: i.timeline || [],
@@ -1603,10 +1613,12 @@ function getWeeksInMonth(monthKey: string): string[] {
 function renderInsightBlock(insight: any): string {
   const project = insight.project_path?.split("/").filter(Boolean).pop() || "unknown";
   const cid = insight.conversation_id;
+  const actor = insight.actor_name || "unknown";
+  const actorId = insight.actor_user_id;
   const parts: string[] = [];
 
   parts.push(`### [${insight.title}](/conversation/${cid})`);
-  parts.push(`**${project}** | ${insight.outcome_type}`);
+  parts.push(`[@${actor}](/team/${actorId}) in **${project}** | ${insight.outcome_type}`);
 
   if (insight.headline) parts.push(insight.headline);
   if (insight.summary) parts.push(insight.summary);
@@ -1628,14 +1640,12 @@ function renderInsightBlock(insight: any): string {
 
 const DIGEST_PROMPT = `Synthesize these activity records into a tight markdown digest.
 
-Each session: one bullet. No paragraphs, no multi-sentence descriptions. Format:
-- **Bold** outcomes and file names
-- \`code\` for functions, paths, commands
-- ## headings to group by project/theme
-- Preserve all markdown links from the input exactly as-is (e.g. [Title](/conversation/id))
-- Reference sessions using their original links when mentioning them
+CRITICAL: Preserve ALL links from the input exactly as-is. Every session MUST keep its [Title](/conversation/id) link. Every person MUST keep their [@Name](/team/id) link. Format each session as:
+- [Session Title](/conversation/id) ([@Author](/team/id)): one-line summary with \`code\` and **bold**
 
-10 sessions = ~100 words. 3 sessions = ~40 words. Ruthlessly brief.
+Group sessions under ## headings by project or theme.
+
+10 sessions = ~150 words. 3 sessions = ~50 words. Brief but preserve all links and authors.
 No title, no preamble. Start with first ## heading.`;
 
 const DIGEST_MODEL: Record<string, { model: string; maxTokens: number }> = {
