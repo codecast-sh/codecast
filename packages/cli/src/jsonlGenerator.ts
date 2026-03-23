@@ -117,6 +117,7 @@ interface ReadResult {
     role: string;
     content: string;
     timestamp: string;
+    message_uuid?: string;
     tool_calls?: Array<{ id?: string; name?: string; input?: string }>;
     tool_results?: Array<{ tool_use_id?: string; content?: string; is_error?: boolean }>;
   }>;
@@ -285,6 +286,7 @@ async function fetchExportViaReadApi(siteUrl: string, apiToken: string, conversa
         role: msg.role,
         content: msg.content || "",
         timestamp: msg.timestamp,
+        message_uuid: msg.message_uuid,
         tool_calls: msg.tool_calls?.map((tc, idx) => ({
           id: tc.id || `tool_${startLine}_${idx}`,
           name: tc.name || "unknown_tool",
@@ -512,13 +514,13 @@ export function generateClaudeCodeJsonl(
   return { jsonl: merged.join("\n") + "\n", sessionId };
 }
 
-export function writeClaudeCodeSession(jsonl: string, sessionId: string, projectPath?: string): string {
+export function writeClaudeCodeSession(jsonl: string, sessionId: string, projectPath?: string): { sessionId: string; filePath: string } {
   const projectSlug = (projectPath || process.cwd()).replace(/\//g, "-");
   const projectDir = path.join(process.env.HOME!, ".claude", "projects", projectSlug);
   fs.mkdirSync(projectDir, { recursive: true });
   const filePath = path.join(projectDir, `${sessionId}.jsonl`);
   fs.writeFileSync(filePath, jsonl);
-  return sessionId;
+  return { sessionId, filePath };
 }
 
 // ── Codex JSONL ────────────────────────────────────────────

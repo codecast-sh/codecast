@@ -613,9 +613,9 @@ export class SyncService {
     } catch {}
   }
 
-  async heartbeatManagedSession(sessionId: string): Promise<void> {
+  async heartbeatManagedSession(sessionId: string): Promise<{ found: boolean; dismissed?: boolean } | undefined> {
     try {
-      await this.client.mutation("managedSessions:heartbeat" as any, {
+      return await this.client.mutation("managedSessions:heartbeat" as any, {
         session_id: sessionId,
         api_token: this.apiToken,
       });
@@ -696,7 +696,7 @@ export class SyncService {
     } catch {}
   }
 
-  async updateSessionAgentStatus(conversationId: string, status: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "stopped", clientTs?: number, permissionMode?: string): Promise<void> {
+  async updateSessionAgentStatus(conversationId: string, status: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "stopped" | "starting", clientTs?: number, permissionMode?: string): Promise<void> {
     if (!this.apiToken) return;
     try {
       await this.client.mutation(

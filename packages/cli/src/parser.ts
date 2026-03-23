@@ -90,15 +90,7 @@ export function extractMessages(entries: ClaudeSessionEntry[]): ParsedMessage[] 
       continue;
     }
 
-    if (entry.type === "queue-operation" && entry.operation === "enqueue" && entry.content) {
-      messages.push({
-        uuid: entry.uuid,
-        role: "user",
-        content: entry.content,
-        timestamp,
-      });
-      continue;
-    }
+    if (entry.type === "queue-operation") continue;
 
     if (entry.isMeta || entry.isCompactSummary || entry.isVisibleInTranscriptOnly) continue;
 

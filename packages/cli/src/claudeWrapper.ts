@@ -189,9 +189,13 @@ export async function runClaudeWrapper(args: string[]): Promise<void> {
                     await sleep(500);
                     const escapedText = step.text.replace(/'/g, "'\\''");
                     execSync(`tmux send-keys -t '${tmuxSessionName}' -l '${escapedText}'`, { stdio: "ignore" });
-                    await sleep(150);
+                    await sleep(350);
+                    execSync(`tmux send-keys -t '${tmuxSessionName}' Enter`, { stdio: "ignore" });
+                    await sleep(350);
                     execSync(`tmux send-keys -t '${tmuxSessionName}' Enter`, { stdio: "ignore" });
                     await sleep(500);
+                    execSync(`tmux send-keys -t '${tmuxSessionName}' Enter`, { stdio: "ignore" });
+                    await sleep(300);
                   } else {
                     execSync(`tmux send-keys -t '${tmuxSessionName}' '${step.key}'`, { stdio: "ignore" });
                     await sleep(500);
@@ -201,14 +205,22 @@ export async function runClaudeWrapper(args: string[]): Promise<void> {
                   await sleep(300);
                   const escapedText = poll.text.replace(/'/g, "'\\''");
                   execSync(`tmux send-keys -t '${tmuxSessionName}' -l '${escapedText}'`, { stdio: "ignore" });
-                  await sleep(150);
+                  await sleep(350);
+                  execSync(`tmux send-keys -t '${tmuxSessionName}' Enter`, { stdio: "ignore" });
+                  await sleep(350);
+                  execSync(`tmux send-keys -t '${tmuxSessionName}' Enter`, { stdio: "ignore" });
+                  await sleep(500);
                   execSync(`tmux send-keys -t '${tmuxSessionName}' Enter`, { stdio: "ignore" });
                 }
                 log(`Injected poll response via tmux to session ${tmuxSessionName}`);
               } else {
                 const escapedContent = msg.content.replace(/'/g, "'\\''");
                 execSync(`tmux send-keys -t '${tmuxSessionName}' '${escapedContent}'`, { stdio: "ignore" });
-                await sleep(100);
+                await sleep(350);
+                execSync(`tmux send-keys -t '${tmuxSessionName}' Enter`, { stdio: "ignore" });
+                await sleep(350);
+                execSync(`tmux send-keys -t '${tmuxSessionName}' Enter`, { stdio: "ignore" });
+                await sleep(500);
                 execSync(`tmux send-keys -t '${tmuxSessionName}' Enter`, { stdio: "ignore" });
                 log(`Injected via tmux send-keys to session ${tmuxSessionName}`);
               }
@@ -336,9 +348,12 @@ export async function runClaudeWrapper(args: string[]): Promise<void> {
               await sleep(500);
               const escapedText = step.text.replace(/'/g, "'\\''");
               execSync(`tmux send-keys -t ${tmuxPane} -l '${escapedText}'`, { stdio: "ignore" });
-              await sleep(150);
+              await sleep(350);
+              execSync(`tmux send-keys -t ${tmuxPane} Enter`, { stdio: "ignore" });
+              await sleep(350);
               execSync(`tmux send-keys -t ${tmuxPane} Enter`, { stdio: "ignore" });
               await sleep(500);
+              execSync(`tmux send-keys -t ${tmuxPane} Enter`, { stdio: "ignore" });
             } else {
               execSync(`tmux send-keys -t ${tmuxPane} '${step.key}'`, { stdio: "ignore" });
               await sleep(500);
@@ -348,14 +363,22 @@ export async function runClaudeWrapper(args: string[]): Promise<void> {
             await sleep(300);
             const escapedText = poll.text.replace(/'/g, "'\\''");
             execSync(`tmux send-keys -t ${tmuxPane} -l '${escapedText}'`, { stdio: "ignore" });
-            await sleep(150);
+            await sleep(350);
+            execSync(`tmux send-keys -t ${tmuxPane} Enter`, { stdio: "ignore" });
+            await sleep(350);
+            execSync(`tmux send-keys -t ${tmuxPane} Enter`, { stdio: "ignore" });
+            await sleep(500);
             execSync(`tmux send-keys -t ${tmuxPane} Enter`, { stdio: "ignore" });
           }
           log(`Injected poll response via tmux to pane ${tmuxPane}`);
         } else {
           const escapedContent = content.replace(/'/g, "'\\''");
           execSync(`tmux send-keys -t ${tmuxPane} '${escapedContent}'`, { stdio: "ignore" });
-          await sleep(100);
+          await sleep(350);
+          execSync(`tmux send-keys -t ${tmuxPane} Enter`, { stdio: "ignore" });
+          await sleep(350);
+          execSync(`tmux send-keys -t ${tmuxPane} Enter`, { stdio: "ignore" });
+          await sleep(500);
           execSync(`tmux send-keys -t ${tmuxPane} Enter`, { stdio: "ignore" });
           log(`Injected via tmux send-keys to pane ${tmuxPane}`);
         }

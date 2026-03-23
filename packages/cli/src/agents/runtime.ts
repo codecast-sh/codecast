@@ -423,6 +423,10 @@ export class TmuxRuntime implements AgentRuntime {
     spawnSync("tmux", ["send-keys", "-t", opts.sessionName, "Enter"], {
       encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"],
     });
+    spawnSync("sleep", ["0.2"]);
+    spawnSync("tmux", ["send-keys", "-t", opts.sessionName, "Enter"], {
+      encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"],
+    });
     try { unlinkSync(promptFile); } catch {}
 
     return {

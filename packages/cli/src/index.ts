@@ -8525,6 +8525,7 @@ work
   .option("--assignee <name>", "New assignee")
   .option("--labels <labels>", "Comma-separated labels")
   .option("--project <id>", "Project ID")
+  .option("--project-path <path>", "Project directory path")
   .option("--plan <plan_id>", "Plan short ID to associate this task with")
   .action(async (shortId: string, options: any) => {
     const body: Record<string, any> = { short_id: shortId };
@@ -8535,6 +8536,7 @@ work
     if (options.assignee !== undefined) body.assignee = options.assignee;
     if (options.labels) body.labels = options.labels.split(",").map((s: string) => s.trim());
     if (options.project !== undefined) body.project_id = options.project;
+    if (options.projectPath !== undefined) body.project_path = options.projectPath;
     if (options.plan) body.plan_id = options.plan;
     await cliPost("/cli/work/update", body);
     console.log(`${c.green}ok${c.reset} Updated ${c.cyan}${shortId}${c.reset}`);
@@ -8546,10 +8548,16 @@ work
   .argument("<short_id>", "Task short ID")
   .argument("<text>", "Comment text")
   .option("-t, --type <type>", "Comment type: note, progress, blocker, review", "note")
+  .option("-a, --author <name>", "Override comment author (default: auto-detect)")
   .action(async (shortId: string, text: string, options: any) => {
     const sessionId = detectCurrentSessionId();
     const body: Record<string, any> = { short_id: shortId, text, comment_type: options.type };
-    if (sessionId) body.conversation_id = sessionId;
+    if (sessionId) {
+      body.conversation_id = sessionId;
+      body.author = options.author || "Claude";
+    } else if (options.author) {
+      body.author = options.author;
+    }
     await cliPost("/cli/work/comment", body);
     console.log(`${c.green}ok${c.reset} Comment added to ${c.cyan}${shortId}${c.reset}`);
   });

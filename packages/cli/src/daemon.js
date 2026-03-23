@@ -15,7 +15,7 @@ import * as fs14 from "fs";
 import * as os2 from "os";
 import * as path13 from "path";
 import { Database as Database3 } from "bun:sqlite";
-import { execSync as execSync2, execFileSync, exec as exec2, execFile, spawn } from "child_process";
+import { execSync as execSync2, execFileSync, exec as exec2, execFile, spawn as spawn2, spawnSync as spawnSync2 } from "child_process";
 
 // node_modules/.pnpm/chokidar@4.0.3/node_modules/chokidar/esm/index.js
 import { stat as statcb } from "fs";
@@ -2098,6 +2098,619 @@ class CodexWatcher extends EventEmitter6 {
   }
 }
 
+// src/codexAppServer.ts
+import { EventEmitter as EventEmitter7 } from "events";
+import { spawn } from "child_process";
+import * as readline from "readline";
+var DEFAULT_TIMEOUT_MS = 30000;
+var THREAD_START_TIMEOUT_MS = 60000;
+var MAX_RESTART_DELAY_MS = 30000;
+var APPROVAL_METHODS = new Set([
+  "execCommandApproval",
+  "applyPatchApproval",
+  "item/commandExecution/requestApproval",
+  "item/fileChange/requestApproval",
+  "item/permissions/requestApproval",
+  "item/tool/requestUserInput",
+  "item/tool/call"
+]);
+
+class CodexAppServer extends EventEmitter7 {
+  process = null;
+  rl = null;
+  nextId = 1;
+  pendingRequests = new Map;
+  turnAccumulators = new Map;
+  restartDelay = 1000;
+  restartTimer = null;
+  stopped = false;
+  initialized = false;
+  log;
+  onApproval;
+  codexBinary;
+  sessionSource;
+  constructor(opts) {
+    super();
+    this.log = opts.log;
+    this.onApproval = opts.onApproval;
+    this.codexBinary = opts.codexBinary || "codex";
+    this.sessionSource = opts.sessionSource || "codecast";
+  }
+  start() {
+    if (this.process)
+      return;
+    this.stopped = false;
+    this.spawnProcess();
+  }
+  stop() {
+    this.stopped = true;
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer);
+      this.restartTimer = null;
+    }
+    this.killProcess();
+  }
+  get running() {
+    return this.process !== null && this.process.exitCode === null && this.initialized;
+  }
+  async initialize() {
+    const resp = await this.sendRequest("initialize", {
+      clientInfo: { name: "codecast", title: "Codecast Daemon", version: "1.0.0" },
+      capabilities: { experimentalApi: false }
+    }, THREAD_START_TIMEOUT_MS);
+    this.initialized = true;
+    const r = resp;
+    this.log(`[codex-app-server] initialized: ${r.userAgent ?? "unknown"} (${r.platformOs ?? "unknown"})`);
+    this.emit("ready");
+  }
+  async threadStart(params) {
+    return this.sendRequest("thread/start", params, THREAD_START_TIMEOUT_MS);
+  }
+  async turnStart(params) {
+    return this.sendRequest("turn/start", params, DEFAULT_TIMEOUT_MS);
+  }
+  async turnInterrupt(threadId, turnId) {
+    await this.sendRequest("turn/interrupt", { threadId, turnId }, DEFAULT_TIMEOUT_MS);
+  }
+  async threadResume(params) {
+    return this.sendRequest("thread/resume", params, THREAD_START_TIMEOUT_MS);
+  }
+  respondToApproval(id, approved) {
+    this.writeMessage({
+      jsonrpc: "2.0",
+      id,
+      result: { approved }
+    });
+  }
+  spawnProcess() {
+    const args = ["app-server", "--session-source", this.sessionSource];
+    this.log(`[codex-app-server] spawning: ${this.codexBinary} ${args.join(" ")}`);
+    const child = spawn(this.codexBinary, args, {
+      stdio: ["pipe", "pipe", "pipe"],
+      env: {
+        ...process.env,
+        PATH: [process.env.HOME + "/.bun/bin", process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":")
+      }
+    });
+    this.process = child;
+    if (!child.stdout || !child.stdin) {
+      this.log("[codex-app-server] failed to get stdio handles");
+      this.scheduleRestart();
+      return;
+    }
+    const rl = readline.createInterface({ input: child.stdout });
+    this.rl = rl;
+    rl.on("line", (line) => {
+      this.handleLine(line);
+    });
+    child.stderr?.on("data", (data) => {
+      const text = data.toString().trim();
+      if (text)
+        this.log(`[codex-app-server:stderr] ${text}`);
+    });
+    child.on("error", (err) => {
+      this.log(`[codex-app-server] process error: ${err.message}`);
+      this.emit("error", err);
+      this.cleanup();
+      this.scheduleRestart();
+    });
+    child.on("close", (code, signal) => {
+      this.log(`[codex-app-server] process exited: code=${code} signal=${signal}`);
+      this.cleanup();
+      if (!this.stopped) {
+        this.scheduleRestart();
+      } else {
+        this.emit("closed");
+      }
+    });
+    this.restartDelay = 1000;
+    this.initialize().catch((err) => {
+      this.log(`[codex-app-server] initialize failed: ${err.message}`);
+      this.emit("error", err);
+    });
+  }
+  killProcess() {
+    if (this.process) {
+      this.process.kill("SIGTERM");
+      setTimeout(() => {
+        if (this.process && this.process.exitCode === null) {
+          this.process.kill("SIGKILL");
+        }
+      }, 5000);
+    }
+    this.cleanup();
+  }
+  cleanup() {
+    this.initialized = false;
+    if (this.rl) {
+      this.rl.close();
+      this.rl = null;
+    }
+    this.process = null;
+    this.pendingRequests.forEach((pending, id) => {
+      clearTimeout(pending.timer);
+      pending.reject(new Error("codex app-server process terminated"));
+      this.pendingRequests.delete(id);
+    });
+  }
+  scheduleRestart() {
+    if (this.stopped)
+      return;
+    this.log(`[codex-app-server] restarting in ${this.restartDelay}ms`);
+    this.restartTimer = setTimeout(() => {
+      this.restartTimer = null;
+      if (!this.stopped)
+        this.spawnProcess();
+    }, this.restartDelay);
+    this.restartDelay = Math.min(this.restartDelay * 2, MAX_RESTART_DELAY_MS);
+  }
+  sendRequest(method, params, timeoutMs) {
+    return new Promise((resolve3, reject) => {
+      if (!this.process || !this.process.stdin) {
+        reject(new Error("codex app-server not running"));
+        return;
+      }
+      const id = this.nextId++;
+      const timer = setTimeout(() => {
+        this.pendingRequests.delete(id);
+        reject(new Error(`Request ${method} timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+      this.pendingRequests.set(id, { resolve: resolve3, reject, timer });
+      this.writeMessage({
+        jsonrpc: "2.0",
+        id,
+        method,
+        params
+      });
+    });
+  }
+  writeMessage(msg) {
+    if (!this.process?.stdin?.writable)
+      return;
+    this.process.stdin.write(JSON.stringify(msg) + `
+`);
+  }
+  handleLine(line) {
+    if (!line.trim())
+      return;
+    let msg;
+    try {
+      msg = JSON.parse(line);
+    } catch {
+      this.log(`[codex-app-server] unparseable line: ${line.slice(0, 200)}`);
+      return;
+    }
+    if (typeof msg.id !== "undefined" && (("result" in msg) || ("error" in msg))) {
+      this.handleResponse(msg);
+      return;
+    }
+    if (typeof msg.id !== "undefined" && typeof msg.method === "string") {
+      this.handleServerRequest(msg);
+      return;
+    }
+    if (typeof msg.method === "string") {
+      this.handleNotification(msg);
+      return;
+    }
+    this.log(`[codex-app-server] unroutable message: ${JSON.stringify(msg).slice(0, 200)}`);
+  }
+  handleResponse(msg) {
+    const id = msg.id;
+    const pending = this.pendingRequests.get(id);
+    if (!pending) {
+      this.log(`[codex-app-server] response for unknown request id=${id}`);
+      return;
+    }
+    this.pendingRequests.delete(id);
+    clearTimeout(pending.timer);
+    if (msg.error) {
+      const err = msg.error;
+      pending.reject(new Error(String(err.message || JSON.stringify(err))));
+    } else {
+      pending.resolve(msg.result);
+    }
+  }
+  handleServerRequest(msg) {
+    const method = msg.method;
+    const id = msg.id;
+    const params = msg.params || {};
+    if (APPROVAL_METHODS.has(method)) {
+      const threadId = params.threadId || "";
+      const approval = { id, method, params };
+      this.emit("approvalRequested", threadId, approval);
+      if (this.onApproval) {
+        this.onApproval(threadId, approval).then((approved) => {
+          this.respondToApproval(id, approved);
+        }).catch((err) => {
+          this.log(`[codex-app-server] approval handler error: ${err.message}`);
+          this.respondToApproval(id, false);
+        });
+      }
+      return;
+    }
+    this.log(`[codex-app-server] unhandled server request: ${method}`);
+    this.writeMessage({
+      jsonrpc: "2.0",
+      id,
+      error: { code: -32601, message: "Method not found" }
+    });
+  }
+  handleNotification(msg) {
+    const method = msg.method;
+    const params = msg.params || {};
+    switch (method) {
+      case "thread/started": {
+        const thread = params.thread;
+        const threadId = thread?.id || params.threadId;
+        this.emit("threadStarted", threadId);
+        break;
+      }
+      case "turn/started": {
+        const threadId = params.threadId;
+        const turn = params.turn;
+        this.turnAccumulators.set(turn.id, { items: [], threadId });
+        this.emit("turnStarted", threadId, turn.id);
+        break;
+      }
+      case "turn/completed": {
+        const threadId = params.threadId;
+        const turn = params.turn;
+        const acc = this.turnAccumulators.get(turn.id);
+        const items = acc?.items || [];
+        this.turnAccumulators.delete(turn.id);
+        const messages = threadItemsToMessages(items);
+        this.emit("turnCompleted", threadId, turn.id, messages, turn.status, turn.error);
+        break;
+      }
+      case "item/started": {
+        const turnId = params.turnId;
+        const item = params.item;
+        const acc = this.turnAccumulators.get(turnId);
+        if (acc) {
+          this.emit("itemStarted", params.threadId, turnId, item);
+        }
+        break;
+      }
+      case "item/completed": {
+        const threadId = params.threadId;
+        const turnId = params.turnId;
+        const item = params.item;
+        const acc = this.turnAccumulators.get(turnId);
+        if (acc) {
+          acc.items.push(item);
+        }
+        this.emit("itemCompleted", threadId, turnId, item);
+        break;
+      }
+      case "item/agentMessage/delta": {
+        this.emit("messageDelta", params.threadId, params.turnId, params.delta, params.itemId);
+        break;
+      }
+      case "item/commandExecution/outputDelta": {
+        this.emit("commandOutputDelta", params.threadId, params.turnId, params.delta, params.itemId);
+        break;
+      }
+      case "item/fileChange/outputDelta": {
+        this.emit("fileChangeDelta", params.threadId, params.turnId, params.delta, params.itemId);
+        break;
+      }
+      case "thread/name/updated": {
+        this.emit("threadNameUpdated", params.threadId, params.threadName);
+        break;
+      }
+      case "thread/status/changed": {
+        const status = params.status;
+        this.emit("statusChanged", params.threadId, status);
+        break;
+      }
+      default:
+        this.log(`[codex-app-server] unhandled notification: ${method}`);
+        break;
+    }
+  }
+}
+function threadItemToMessage(item) {
+  const now = Date.now();
+  switch (item.type) {
+    case "userMessage": {
+      const texts = [];
+      const images = [];
+      for (const input of item.content) {
+        if (input.type === "text") {
+          texts.push(input.text);
+        } else if (input.type === "localImage") {
+          images.push({ mediaType: "image/png", data: input.path });
+        }
+      }
+      return {
+        uuid: item.id,
+        role: "user",
+        content: texts.join(`
+`),
+        timestamp: now,
+        images: images.length > 0 ? images : undefined
+      };
+    }
+    case "agentMessage": {
+      return {
+        uuid: item.id,
+        role: "assistant",
+        content: item.text,
+        timestamp: now,
+        subtype: item.phase || undefined
+      };
+    }
+    case "reasoning": {
+      const thinkingText = item.content.length > 0 ? item.content.join(`
+`) : item.summary.join(`
+`);
+      if (!thinkingText)
+        return null;
+      return {
+        uuid: item.id,
+        role: "assistant",
+        content: "",
+        timestamp: now,
+        thinking: thinkingText
+      };
+    }
+    case "commandExecution": {
+      const toolCalls = [{
+        id: item.id,
+        name: "commandExecution",
+        input: { command: item.command, cwd: item.cwd }
+      }];
+      const toolResults = [{
+        toolUseId: item.id,
+        content: item.aggregatedOutput || "",
+        isError: item.status === "failed"
+      }];
+      return {
+        uuid: item.id,
+        role: "assistant",
+        content: "",
+        timestamp: now,
+        toolCalls,
+        toolResults
+      };
+    }
+    case "fileChange": {
+      const diffSummary = item.changes.map((c) => `${c.kind}: ${c.path}`).join(`
+`);
+      const fullDiff = item.changes.map((c) => c.diff).join(`
+`);
+      const toolCalls = [{
+        id: item.id,
+        name: "fileChange",
+        input: { changes: diffSummary }
+      }];
+      const toolResults = [{
+        toolUseId: item.id,
+        content: fullDiff,
+        isError: item.status === "failed"
+      }];
+      return {
+        uuid: item.id,
+        role: "assistant",
+        content: "",
+        timestamp: now,
+        toolCalls,
+        toolResults
+      };
+    }
+    case "mcpToolCall": {
+      let args = {};
+      if (item.arguments && typeof item.arguments === "object" && !Array.isArray(item.arguments)) {
+        args = item.arguments;
+      } else if (item.arguments !== undefined) {
+        args = { input: item.arguments };
+      }
+      const toolCalls = [{
+        id: item.id,
+        name: `${item.server}__${item.tool}`,
+        input: args
+      }];
+      let resultContent = "";
+      if (item.error) {
+        resultContent = item.error.message;
+      } else if (item.result?.content) {
+        resultContent = JSON.stringify(item.result.content);
+      }
+      const toolResults = [{
+        toolUseId: item.id,
+        content: resultContent,
+        isError: item.status === "failed" || !!item.error
+      }];
+      return {
+        uuid: item.id,
+        role: "assistant",
+        content: "",
+        timestamp: now,
+        toolCalls,
+        toolResults
+      };
+    }
+    case "dynamicToolCall": {
+      let args = {};
+      if (item.arguments && typeof item.arguments === "object" && !Array.isArray(item.arguments)) {
+        args = item.arguments;
+      } else if (item.arguments !== undefined) {
+        args = { input: item.arguments };
+      }
+      const toolCalls = [{
+        id: item.id,
+        name: item.tool,
+        input: args
+      }];
+      return {
+        uuid: item.id,
+        role: "assistant",
+        content: "",
+        timestamp: now,
+        toolCalls
+      };
+    }
+    case "collabAgentToolCall": {
+      const toolCalls = [{
+        id: item.id,
+        name: `collab:${item.tool}`,
+        input: {
+          sender: item.senderThreadId,
+          receivers: item.receiverThreadIds,
+          prompt: item.prompt || ""
+        }
+      }];
+      return {
+        uuid: item.id,
+        role: "assistant",
+        content: "",
+        timestamp: now,
+        toolCalls
+      };
+    }
+    case "webSearch": {
+      return {
+        uuid: item.id,
+        role: "assistant",
+        content: "",
+        timestamp: now,
+        toolCalls: [{
+          id: item.id,
+          name: "webSearch",
+          input: { query: item.query }
+        }]
+      };
+    }
+    case "plan": {
+      return {
+        uuid: item.id,
+        role: "assistant",
+        content: item.text,
+        timestamp: now,
+        subtype: "plan"
+      };
+    }
+    case "imageView": {
+      return {
+        uuid: item.id,
+        role: "assistant",
+        content: "",
+        timestamp: now,
+        images: [{ mediaType: "image/png", data: item.path }]
+      };
+    }
+    case "imageGeneration": {
+      return {
+        uuid: item.id,
+        role: "assistant",
+        content: item.result,
+        timestamp: now,
+        subtype: "imageGeneration"
+      };
+    }
+    case "contextCompaction":
+      return null;
+    default:
+      return null;
+  }
+}
+function threadItemsToMessages(items) {
+  let currentText = "";
+  let currentThinking = "";
+  let currentToolCalls = [];
+  let currentToolResults = [];
+  let currentImages = [];
+  let lastUuid;
+  const messages = [];
+  const now = Date.now();
+  const flushAssistant = () => {
+    if (currentText || currentThinking || currentToolCalls.length > 0 || currentToolResults.length > 0 || currentImages.length > 0) {
+      messages.push({
+        uuid: lastUuid,
+        role: "assistant",
+        content: currentText.trim(),
+        timestamp: now,
+        thinking: currentThinking.trim() || undefined,
+        toolCalls: currentToolCalls.length > 0 ? [...currentToolCalls] : undefined,
+        toolResults: currentToolResults.length > 0 ? [...currentToolResults] : undefined,
+        images: currentImages.length > 0 ? [...currentImages] : undefined
+      });
+      currentText = "";
+      currentThinking = "";
+      currentToolCalls = [];
+      currentToolResults = [];
+      currentImages = [];
+      lastUuid = undefined;
+    }
+  };
+  for (const item of items) {
+    if (item.type === "userMessage") {
+      flushAssistant();
+      continue;
+    }
+    if (item.type === "contextCompaction")
+      continue;
+    if (item.type === "agentMessage") {
+      currentText += (currentText ? `
+` : "") + item.text;
+      lastUuid = lastUuid || item.id;
+      continue;
+    }
+    if (item.type === "reasoning") {
+      const text = item.content.length > 0 ? item.content.join(`
+`) : item.summary.join(`
+`);
+      if (text) {
+        currentThinking += (currentThinking ? `
+` : "") + text;
+      }
+      continue;
+    }
+    if (item.type === "plan") {
+      currentText += (currentText ? `
+` : "") + item.text;
+      lastUuid = lastUuid || item.id;
+      continue;
+    }
+    if (item.type === "imageView") {
+      currentImages.push({ mediaType: "image/png", data: item.path });
+      continue;
+    }
+    const converted = threadItemToMessage(item);
+    if (converted) {
+      if (converted.toolCalls)
+        currentToolCalls.push(...converted.toolCalls);
+      if (converted.toolResults)
+        currentToolResults.push(...converted.toolResults);
+      if (converted.images)
+        currentImages.push(...converted.images);
+      lastUuid = lastUuid || converted.uuid;
+    }
+  }
+  flushAssistant();
+  return messages;
+}
+
 // src/sessionProcessMatcher.ts
 function isResumeInvocation(agentType, commandLine) {
   if (agentType === "codex" || agentType === "gemini") {
@@ -2139,10 +2752,10 @@ function matchStartedConversation(entries, {
 }
 
 // src/geminiWatcher.ts
-import { EventEmitter as EventEmitter7 } from "events";
+import { EventEmitter as EventEmitter8 } from "events";
 import * as path6 from "path";
 import * as fs6 from "fs";
-class GeminiWatcher extends EventEmitter7 {
+class GeminiWatcher extends EventEmitter8 {
   watcher = null;
   basePath;
   constructor(basePath) {
@@ -2248,15 +2861,8 @@ function extractMessages(entries) {
       }
       continue;
     }
-    if (entry.type === "queue-operation" && entry.operation === "enqueue" && entry.content) {
-      messages.push({
-        uuid: entry.uuid,
-        role: "user",
-        content: entry.content,
-        timestamp
-      });
+    if (entry.type === "queue-operation")
       continue;
-    }
     if (entry.isMeta || entry.isCompactSummary || entry.isVisibleInTranscriptOnly)
       continue;
     const normalizedType = entry.type === "human" ? "user" : entry.type;
@@ -8576,7 +9182,7 @@ var require_extension = __commonJS({
 });
 var require_websocket = __commonJS({
   "../common/temp/node_modules/.pnpm/ws@8.18.0_bufferutil@4.0.9/node_modules/ws/lib/websocket.js"(exports, module) {
-    var EventEmitter8 = __require("events");
+    var EventEmitter9 = __require("events");
     var https = __require("https");
     var http = __require("http");
     var net = __require("net");
@@ -8608,7 +9214,7 @@ var require_websocket = __commonJS({
     var protocolVersions = [8, 13];
     var readyStates = ["CONNECTING", "OPEN", "CLOSING", "CLOSED"];
     var subprotocolRegex = /^[!#$%&'*+\-.0-9A-Z^_`|a-z~]+$/;
-    var WebSocket2 = class _WebSocket extends EventEmitter8 {
+    var WebSocket2 = class _WebSocket extends EventEmitter9 {
       constructor(address, protocols, options) {
         super();
         this._binaryType = BINARY_TYPES[0];
@@ -9379,7 +9985,7 @@ var require_subprotocol = __commonJS({
 });
 var require_websocket_server = __commonJS({
   "../common/temp/node_modules/.pnpm/ws@8.18.0_bufferutil@4.0.9/node_modules/ws/lib/websocket-server.js"(exports, module) {
-    var EventEmitter8 = __require("events");
+    var EventEmitter9 = __require("events");
     var http = __require("http");
     var { Duplex } = __require("stream");
     var { createHash } = __require("crypto");
@@ -9392,7 +9998,7 @@ var require_websocket_server = __commonJS({
     var RUNNING = 0;
     var CLOSING = 1;
     var CLOSED = 2;
-    var WebSocketServer2 = class extends EventEmitter8 {
+    var WebSocketServer2 = class extends EventEmitter9 {
       constructor(options, callback) {
         super();
         options = {
@@ -9835,6 +10441,7 @@ class SyncService {
         worktree_branch: gitInfo?.worktreeBranch,
         worktree_path: gitInfo?.worktreePath,
         worktree_status: gitInfo?.worktreeName ? "active" : undefined,
+        subagent_description: params.subagentDescription,
         api_token: this.apiToken
       });
       return result;
@@ -9845,12 +10452,13 @@ class SyncService {
       throw error;
     }
   }
-  async linkSessions(parentConversationId, childConversationId) {
+  async linkSessions(parentConversationId, childConversationId, subagentDescription) {
     await this.throttle();
     try {
       await this.client.mutation("conversations:linkSessions", {
         parent_conversation_id: parentConversationId,
         child_conversation_id: childConversationId,
+        subagent_description: subagentDescription,
         api_token: this.apiToken
       });
     } catch (error) {
@@ -10167,7 +10775,7 @@ class SyncService {
   }
   async heartbeatManagedSession(sessionId) {
     try {
-      await this.client.mutation("managedSessions:heartbeat", {
+      return await this.client.mutation("managedSessions:heartbeat", {
         session_id: sessionId,
         api_token: this.apiToken
       });
@@ -10898,7 +11506,7 @@ async function handlePermissionRequest(syncService, conversationId, sessionId, p
 import * as fs10 from "fs";
 import * as path10 from "path";
 import * as os from "os";
-var VERSION = "1.0.89";
+var VERSION = "1.0.90";
 var LATEST_URL = "https://dl.codecast.sh/latest.json";
 var UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000;
 var CONFIG_DIR3 = process.env.HOME + "/.codecast";
@@ -11592,6 +12200,7 @@ async function fetchExportViaReadApi(siteUrl, apiToken, conversationId) {
         role: msg.role,
         content: msg.content || "",
         timestamp: msg.timestamp,
+        message_uuid: msg.message_uuid,
         tool_calls: msg.tool_calls?.map((tc, idx) => ({
           id: tc.id || `tool_${startLine}_${idx}`,
           name: tc.name || "unknown_tool",
@@ -11830,7 +12439,7 @@ function writeClaudeCodeSession(jsonl, sessionId, projectPath) {
   fs13.mkdirSync(projectDir, { recursive: true });
   const filePath = path12.join(projectDir, `${sessionId}.jsonl`);
   fs13.writeFileSync(filePath, jsonl);
-  return sessionId;
+  return { sessionId, filePath };
 }
 function mapToolName(name) {
   return "shell_command";
@@ -12039,7 +12648,8 @@ setInterval(() => {
   const elapsed = now - lastTickTime;
   if (elapsed > SLEEP_DETECTION_THRESHOLD_MS) {
     wakeGraceUntil = now + WAKE_GRACE_PERIOD_MS;
-    log(`Sleep detected (${Math.round(elapsed / 1000)}s gap), grace period until ${new Date(wakeGraceUntil).toISOString()}`);
+    dismissedIdleSince.clear();
+    log(`Sleep detected (${Math.round(elapsed / 1000)}s gap), grace period until ${new Date(wakeGraceUntil).toISOString()}, dismissed-idle timers reset`);
   }
   lastTickTime = now;
 }, 5000);
@@ -12182,6 +12792,8 @@ var WORKING_STATUS_THROTTLE_MS = 1e4;
 var lastSentAgentStatus = new Map;
 var workingPhaseStart = new Map;
 var MIN_WORKING_DURATION_FOR_NOTIF_MS = 1e4;
+var dismissedIdleSince = new Map;
+var DISMISSED_IDLE_KILL_MS = 60 * 60 * 1000;
 var lastHookStatus = new Map;
 var pendingInteractivePrompts = new Map;
 var AGENT_STATUS_DIR = path13.join(process.env.HOME || "", ".codecast", "agent-status");
@@ -12770,6 +13382,8 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
           tmuxExecSync(["new-session", "-d", "-s", tmuxSession, "-c", projectPath], { timeout: 5000 });
           tmuxExecSync(["send-keys", "-t", tmuxSession, "-l", cmdText], { timeout: 5000 });
           tmuxExecSync(["send-keys", "-t", tmuxSession, "Enter"], { timeout: 5000 });
+          spawnSync2("sleep", ["0.2"]);
+          tmuxExecSync(["send-keys", "-t", tmuxSession, "Enter"], { timeout: 5000 });
           result = JSON.stringify({ tmux_session: tmuxSession, workflow_run_id: workflowRunId });
           log(`[REMOTE] Started workflow run ${workflowRunId} in tmux: ${tmuxSession}`);
         } catch (spawnErr) {
@@ -12858,7 +13472,20 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
         }
         binaryArgs = sanitizeBinaryArgs(binaryArgs);
         const envPrefix = worktreeResult ? `env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT AGENT_RESOURCE_INDEX=${worktreeResult.portIndex}` : `env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT`;
-        const cmdText = `${envPrefix} ${[binary, ...binaryArgs].join(" ")}`;
+        let cmdText = `${envPrefix} ${[binary, ...binaryArgs].join(" ")}`;
+        let codexThreadId = null;
+        if (agentType === "codex" && codexAppServerInstance?.running) {
+          try {
+            const sandbox = binaryArgs.includes("--full-auto") ? "danger-full-access" : "workspace-write";
+            const approval = binaryArgs.includes("--full-auto") ? "never" : "on-request";
+            const resp = await codexAppServerInstance.threadStart({ cwd, sandbox, approvalPolicy: approval });
+            codexThreadId = resp.thread.id;
+            cmdText = `${envPrefix} codex resume ${codexThreadId}`;
+            log(`[codex-app-server] pre-created thread ${codexThreadId.slice(0, 8)} for new session`);
+          } catch (err) {
+            log(`[codex-app-server] thread pre-create failed, falling back: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
         if (!hasTmux()) {
           error = "tmux is not installed";
           break;
@@ -12866,6 +13493,8 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
         try {
           tmuxExecSync(["new-session", "-d", "-s", tmuxSession, "-c", cwd], { timeout: 5000 });
           tmuxExecSync(["send-keys", "-t", tmuxSession, "-l", cmdText], { timeout: 5000 });
+          tmuxExecSync(["send-keys", "-t", tmuxSession, "Enter"], { timeout: 5000 });
+          spawnSync2("sleep", ["0.2"]);
           tmuxExecSync(["send-keys", "-t", tmuxSession, "Enter"], { timeout: 5000 });
           const resultObj = { tmux_session: tmuxSession, agent_type: agentType, project_path: cwd };
           if (worktreeResult) {
@@ -12887,6 +13516,11 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
               worktreePath: worktreeResult?.worktreePath
             });
             log(`[REMOTE] Registered started session tmux for conversation ${conversationId.slice(0, 12)}`);
+            if (codexThreadId) {
+              appServerThreads.set(codexThreadId, { threadId: codexThreadId, conversationId });
+              appServerConversations.set(conversationId, codexThreadId);
+              log(`[codex-app-server] registered conv=${conversationId.slice(0, 12)} -> thread=${codexThreadId.slice(0, 8)}`);
+            }
             if (agentType === "claude") {
               discoverAndLinkSession(conversationId, tmuxSession, cwd).catch((err) => {
                 log(`Session discovery failed for ${conversationId.slice(0, 12)}: ${err}`);
@@ -13242,7 +13876,8 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
                 const TOKEN_BUDGET = 1e5;
                 const tailMessages = chooseClaudeTailMessagesForTokenBudget(exportData, TOKEN_BUDGET);
                 const { jsonl } = generateClaudeCodeJsonl(exportData, { tailMessages, sessionId });
-                const newSessionId2 = writeClaudeCodeSession(jsonl, sessionId, projectPath);
+                const { sessionId: newSessionId2, filePath: reconFilePath } = writeClaudeCodeSession(jsonl, sessionId, projectPath);
+                setPosition(reconFilePath, fs14.statSync(reconFilePath).size);
                 log(`[REMOTE] Reconstituted JSONL for ${sessionId.slice(0, 8)} (${exportData.messages.length} msgs, tail=${tailMessages})`);
                 const reconResumed = await autoResumeSession(newSessionId2, "", readTitleCache(), false, cwd, conversationId);
                 if (reconResumed) {
@@ -13282,6 +13917,8 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
             try {
               tmuxExecSync(["new-session", "-d", "-s", tmuxSession, "-c", cwd], { timeout: 5000 });
               tmuxExecSync(["send-keys", "-t", tmuxSession, "-l", blankCmdText], { timeout: 5000 });
+              tmuxExecSync(["send-keys", "-t", tmuxSession, "Enter"], { timeout: 5000 });
+              spawnSync2("sleep", ["0.2"]);
               tmuxExecSync(["send-keys", "-t", tmuxSession, "Enter"], { timeout: 5000 });
               startedSessionTmux.set(conversationId, {
                 tmuxSession,
@@ -13426,7 +14063,8 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
           path13.join(home, ".codex", "prompts"),
           path13.join(home, ".codex", "skills")
         ];
-        const resolvedDir = path13.resolve(dir_path);
+        const expandedDir = dir_path.startsWith("~/") ? path13.join(home, dir_path.slice(2)) : dir_path;
+        const resolvedDir = path13.resolve(expandedDir);
         if (!allowedDirs.some((a) => resolvedDir === a || resolvedDir.startsWith(a + path13.sep))) {
           error = "Dir not allowed";
           break;
@@ -13461,7 +14099,8 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
           path13.join(home, ".codex", "prompts"),
           path13.join(home, ".codex", "skills")
         ];
-        const resolved = path13.resolve(deletePath);
+        const expandedDelete = deletePath.startsWith("~/") ? path13.join(home, deletePath.slice(2)) : deletePath;
+        const resolved = path13.resolve(expandedDelete);
         if (!allowedDirs.some((a) => resolved.startsWith(a + path13.sep))) {
           error = "Only files in agents/commands/skills/prompts dirs can be deleted";
           break;
@@ -14117,7 +14756,7 @@ async function processSessionFile(filePath, sessionId, projectPath, syncService,
           startedSessionTmux.delete(matchedStartedConversation);
           log(`Linked session ${sessionId} to existing started conversation ${conversationId}`);
           if (parentConversationId) {
-            syncService.linkSessions(parentConversationId, conversationId).then(() => {
+            syncService.linkSessions(parentConversationId, conversationId, subagentDescriptions.get(sessionId)).then(() => {
               log(`Linked started conversation ${conversationId.slice(0, 12)} to parent ${parentConversationId.slice(0, 12)}`);
             }).catch((err) => {
               log(`Failed to link started conversation to parent: ${err}`);
@@ -14126,6 +14765,20 @@ async function processSessionFile(filePath, sessionId, projectPath, syncService,
         } else {
           const cliFlags = detectCliFlags(headContent + `
 ` + newContent);
+          let subagentDescription;
+          if (isSubagent) {
+            try {
+              const metaPath = filePath.replace(/\.jsonl$/, ".meta.json");
+              if (fs14.existsSync(metaPath)) {
+                const meta = JSON.parse(fs14.readFileSync(metaPath, "utf-8"));
+                if (meta.description) {
+                  subagentDescription = meta.description;
+                  subagentDescriptions.set(sessionId, meta.description);
+                }
+              }
+            } catch {
+            }
+          }
           conversationId = await syncService.createConversation({
             userId,
             teamId,
@@ -14138,7 +14791,8 @@ async function processSessionFile(filePath, sessionId, projectPath, syncService,
             parentMessageUuid: isPlanHandoff ? "plan-handoff" : parentConversationId ? undefined : parentMessageUuid,
             parentConversationId,
             gitInfo,
-            cliFlags: cliFlags || undefined
+            cliFlags: cliFlags || undefined,
+            subagentDescription
           });
           conversationCache[sessionId] = conversationId;
           saveConversationCache(conversationCache);
@@ -14170,7 +14824,7 @@ async function processSessionFile(filePath, sessionId, projectPath, syncService,
             if (parentSessionId === sessionId) {
               const childConvId = conversationCache[childSessionId];
               if (childConvId) {
-                syncService.linkSessions(conversationId, childConvId).then(() => {
+                syncService.linkSessions(conversationId, childConvId, subagentDescriptions.get(childSessionId)).then(() => {
                   log(`Linked pending subagent ${childSessionId.slice(0, 8)} -> parent ${sessionId.slice(0, 8)}`);
                 }).catch((err) => {
                   log(`Failed to link subagent ${childSessionId.slice(0, 8)}: ${err}`);
@@ -15023,7 +15677,7 @@ async function processCodexSession(filePath, sessionId, syncService, userId, tea
     syncStats.messagesSynced += messages.length;
     syncStats.sessionsActive.add(sessionId);
     tryRegisterSessionProcess(sessionId, "codex");
-    if (conversationId) {
+    if (conversationId && !appServerConversations.has(conversationId)) {
       sendAgentStatus(syncService, conversationId, sessionId, "working");
     }
     updateStateCallback();
@@ -15232,9 +15886,12 @@ function tryRegisterSessionProcess(sessionId, agentType) {
             });
           });
           if (!resumeHeartbeatIntervals.has(sessionId)) {
-            const interval = setInterval(() => {
-              syncServiceRef.heartbeatManagedSession(sessionId).catch(() => {
-              });
+            const interval = setInterval(async () => {
+              try {
+                const result2 = await syncServiceRef.heartbeatManagedSession(sessionId);
+                processHeartbeatResponse(sessionId, result2);
+              } catch {
+              }
             }, 30000);
             resumeHeartbeatIntervals.set(sessionId, interval);
           }
@@ -15549,13 +16206,15 @@ function parseInteractivePrompt(text) {
   const optionPattern = /^\s*[❯>)]*\s*(\d+)[.)]\s+(.+?)(?:\s{2,}(.+?))?$/;
   const options = [];
   let firstOptionIdx = -1;
+  let lastOptionIdx = -1;
   let gapCount = 0;
   let hasCursorIndicator = false;
-  for (let i = 0;i < lines.length; i++) {
+  for (let i = lines.length - 1;i >= 0; i--) {
     const m = lines[i].match(optionPattern);
     if (m) {
-      if (firstOptionIdx < 0)
-        firstOptionIdx = i;
+      if (lastOptionIdx < 0)
+        lastOptionIdx = i;
+      firstOptionIdx = i;
       if (/^\s*[❯>]\s*\d/.test(lines[i]))
         hasCursorIndicator = true;
       const label = m[2].replace(/\s*[✓✗✔☑]\s*/g, "").trim();
@@ -15563,7 +16222,7 @@ function parseInteractivePrompt(text) {
         continue;
       const description = m[3]?.trim() || undefined;
       if (label)
-        options.push({ label, description });
+        options.unshift({ label, description });
       gapCount = 0;
     } else if (options.length > 0) {
       const trimmed = lines[i].trim();
@@ -15571,7 +16230,7 @@ function parseInteractivePrompt(text) {
         gapCount++;
         if (gapCount > 3)
           break;
-      } else if (/^\s*[❯>]\s*$/.test(lines[i]) || /confirm|exit|adjust|effort/i.test(trimmed)) {
+      } else {
         break;
       }
     }
@@ -15582,7 +16241,7 @@ function parseInteractivePrompt(text) {
     const hasFooter = /enter to confirm|esc(ape)? to (exit|cancel)|↑.*↓|←.*→|arrow keys/i.test(tail);
     if (hasCursorIndicator || hasFooter) {
       const headerLines = lines.slice(Math.max(0, firstOptionIdx - 5), firstOptionIdx).map((l) => l.trim()).filter((l) => l.length > 0 && !/^[❯>]/.test(l) && !/^[─━═─\-_]{5,}$/.test(l));
-      const question = headerLines[0] || "Select an option";
+      const question = headerLines[headerLines.length - 1] || "Select an option";
       return { question, options };
     }
   }
@@ -15703,7 +16362,9 @@ async function injectViaTmuxInner(target, content) {
         await tmuxExec(["send-keys", "-t", target, "-l", step.text]);
         await new Promise((resolve4) => setTimeout(resolve4, 150));
         await tmuxExec(["send-keys", "-t", target, "Enter"]);
-        await new Promise((resolve4) => setTimeout(resolve4, 500));
+        await new Promise((resolve4) => setTimeout(resolve4, 200));
+        await tmuxExec(["send-keys", "-t", target, "Enter"]);
+        await new Promise((resolve4) => setTimeout(resolve4, 300));
       } else {
         await tmuxExec(["send-keys", "-t", target, step.key]);
         await new Promise((resolve4) => setTimeout(resolve4, 500));
@@ -15713,6 +16374,8 @@ async function injectViaTmuxInner(target, content) {
       await new Promise((resolve4) => setTimeout(resolve4, 300));
       await tmuxExec(["send-keys", "-t", target, "-l", poll.text]);
       await new Promise((resolve4) => setTimeout(resolve4, 150));
+      await tmuxExec(["send-keys", "-t", target, "Enter"]);
+      await new Promise((resolve4) => setTimeout(resolve4, 200));
       await tmuxExec(["send-keys", "-t", target, "Enter"]);
     }
     log(`Injected poll response via tmux to ${target}`);
@@ -15735,15 +16398,16 @@ async function injectViaTmuxInner(target, content) {
     }
   } catch {
   }
-  const captureLines = Math.max(30, Math.ceil(sanitized.length / 60) + 10);
+  const contentLines = content.split(/\r?\n/).length;
+  const captureLines = Math.max(30, contentLines + Math.ceil(sanitized.length / 60) + 10);
   const contentPrefix = sanitized.slice(0, 40);
   const doPaste = async () => {
     const id = `cc-${process.pid}-${Date.now()}`;
     const tmpFile = `/tmp/${id}`;
     try {
-      fs14.writeFileSync(tmpFile, sanitized);
+      fs14.writeFileSync(tmpFile, content);
       await tmuxExec(["load-buffer", "-b", id, tmpFile]);
-      await tmuxExec(["paste-buffer", "-t", target, "-b", id, "-d"]);
+      await tmuxExec(["paste-buffer", "-t", target, "-b", id, "-d", "-p"]);
     } catch (err) {
       await tmuxExec(["send-keys", "-t", target, "-l", sanitized]);
     } finally {
@@ -15778,25 +16442,33 @@ async function injectViaTmuxInner(target, content) {
   const enterDelay = Math.max(200, Math.min(1000, Math.ceil(sanitized.length / 100) * 50));
   await new Promise((resolve4) => setTimeout(resolve4, enterDelay));
   await tmuxExec(["send-keys", "-t", target, "Enter"]);
+  await new Promise((resolve4) => setTimeout(resolve4, 200));
+  await tmuxExec(["send-keys", "-t", target, "Enter"]);
   let rePasted = false;
-  for (let retry = 0;retry < 3; retry++) {
+  for (let retry = 0;retry < 5; retry++) {
     await new Promise((resolve4) => setTimeout(resolve4, 600));
     try {
       const { stdout: postCheck } = await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${captureLines}`]);
       const lastLines = postCheck.split(`
-`).slice(-5).join(`
+`).slice(-15).join(`
 `);
       const hasPrompt = /[❯›]/.test(lastLines);
       const hasActivity = /⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏|●|thinking|Bash|Read|Edit|Write|Glob|Grep/.test(lastLines);
-      if (hasActivity || !hasPrompt) {
+      if (hasActivity) {
         break;
       }
-      if (tmuxPromptStillHasInput(postCheck, contentPrefix)) {
+      const inputStuck = tmuxPromptStillHasInput(postCheck, contentPrefix);
+      if (!hasPrompt && !inputStuck) {
+        break;
+      }
+      if (inputStuck) {
         log(`Enter may not have submitted (retry ${retry + 1}), sending Enter again to ${target}`);
+        await tmuxExec(["send-keys", "-t", target, "Enter"]);
+        await new Promise((resolve4) => setTimeout(resolve4, 200));
         await tmuxExec(["send-keys", "-t", target, "Enter"]);
         continue;
       }
-      if (!pasteConfirmed && !rePasted) {
+      if (hasPrompt && !pasteConfirmed && !rePasted) {
         const promptLine = lastLines.split(`
 `).find((l) => /[❯›]/.test(l));
         const afterPrompt = promptLine ? promptLine.match(/[❯›]/) ? promptLine.slice(promptLine.match(/[❯›]/).index + 1).trim() : "" : "";
@@ -15831,6 +16503,8 @@ function buildAppleScript(app, normalizedTty, content, poll) {
           lines.push(`            tell s to write text "${escapedText}" without newline`);
           lines.push("            delay 0.15");
           lines.push(`            tell s to write text ""`);
+          lines.push("            delay 0.2");
+          lines.push(`            tell s to write text ""`);
         } else {
           lines.push(`            tell s to write text "${step.key}" without newline`);
         }
@@ -15862,6 +16536,8 @@ function buildAppleScript(app, normalizedTty, content, poll) {
             delay 0.3
             tell s to write text "${poll.text.replace(/"/g, "\\\"")}" without newline
             delay 0.15
+            tell s to write text ""
+            delay 0.2
             tell s to write text ""` : `
           delay 0.3
           do script "${poll.text.replace(/"/g, "\\\"")}" in t` : "";
@@ -15909,6 +16585,8 @@ end run`;
           if sTty is targetTty then
             tell s to write text msgText without newline
             delay 0.15
+            tell s to write text ""
+            delay 0.2
             tell s to write text ""
             return "ok"
           end if
@@ -16019,9 +16697,97 @@ function findSessionFile(sessionId) {
 }
 var resumeSessionCache = new Map;
 var resumeHeartbeatIntervals = new Map;
+async function killSessionBySessionId(sessionId, reason) {
+  const cache = readConversationCache();
+  const conversationId = cache[sessionId];
+  let killed = false;
+  const cachedTmux = resumeSessionCache.get(sessionId);
+  if (cachedTmux && validateTmuxTarget(cachedTmux)) {
+    try {
+      await tmuxExec(["kill-session", "-t", cachedTmux]);
+      killed = true;
+    } catch {
+    }
+    resumeSessionCache.delete(sessionId);
+  }
+  if (!killed) {
+    try {
+      const proc = await findSessionProcess(sessionId, detectSessionAgentType(sessionId));
+      if (proc) {
+        const tmuxTarget = await findTmuxPaneForTty(proc.tty);
+        if (tmuxTarget && validateTmuxTarget(tmuxTarget)) {
+          try {
+            await tmuxExec(["kill-session", "-t", tmuxTarget.split(":")[0]]);
+            killed = true;
+          } catch {
+          }
+        }
+        if (!killed) {
+          try {
+            process.kill(proc.pid, "SIGKILL");
+            killed = true;
+          } catch {
+          }
+        }
+      }
+    } catch {
+    }
+  }
+  if (conversationId) {
+    const started = startedSessionTmux.get(conversationId);
+    if (started && validateTmuxTarget(started.tmuxSession) && !killed) {
+      try {
+        await tmuxExec(["kill-session", "-t", started.tmuxSession]);
+      } catch {
+      }
+    }
+    startedSessionTmux.delete(conversationId);
+  }
+  const hbInterval = resumeHeartbeatIntervals.get(sessionId);
+  if (hbInterval) {
+    clearInterval(hbInterval);
+    resumeHeartbeatIntervals.delete(sessionId);
+  }
+  stopCodexPermissionPoller(sessionId);
+  sessionProcessCache.delete(sessionId);
+  resumeInFlight.delete(sessionId);
+  resumeInFlightStarted.delete(sessionId);
+  dismissedIdleSince.delete(sessionId);
+  if (conversationId && syncServiceRef) {
+    syncServiceRef.markSessionCompleted(conversationId).catch(() => {
+    });
+    sendAgentStatus(syncServiceRef, conversationId, sessionId, "stopped");
+  }
+  log(`[AUTO-KILL] Session ${sessionId.slice(0, 8)} killed: ${reason}`);
+}
+function processHeartbeatResponse(sessionId, result) {
+  if (!result?.found)
+    return;
+  const status = lastSentAgentStatus.get(sessionId);
+  const isIdle = status === "idle" || status === "permission_blocked";
+  if (result.dismissed && isIdle) {
+    if (!dismissedIdleSince.has(sessionId)) {
+      dismissedIdleSince.set(sessionId, Date.now());
+      log(`[DISMISSED-IDLE] Session ${sessionId.slice(0, 8)} is dismissed+idle, starting 1h timer`);
+    }
+    const idleSince = dismissedIdleSince.get(sessionId);
+    if (Date.now() - idleSince >= DISMISSED_IDLE_KILL_MS) {
+      killSessionBySessionId(sessionId, "dismissed and idle for 1+ hour").catch(() => {
+      });
+    }
+  } else {
+    if (dismissedIdleSince.has(sessionId)) {
+      log(`[DISMISSED-IDLE] Session ${sessionId.slice(0, 8)} no longer dismissed+idle, timer cleared`);
+    }
+    dismissedIdleSince.delete(sessionId);
+  }
+}
 var codexPermissionPollers = new Map;
 var codexPermissionPending = new Set;
 var codexPermissionRunning = new Set;
+var codexAppServerInstance = null;
+var appServerThreads = new Map;
+var appServerConversations = new Map;
 var CODEX_PERMISSION_PATTERNS = [
   /Would you like to run the following command\?/,
   /Press enter to confirm or esc to cancel/,
@@ -16287,6 +17053,7 @@ function savePlanModeCache() {
 }
 loadPlanModeCache();
 var pendingSubagentParents = new Map;
+var subagentDescriptions = new Map;
 var sessionProcessCache = new Map;
 var PROCESS_CACHE_TTL_MS = 30000;
 function cacheSessionProcess(sessionId, info, tmuxTarget) {
@@ -16469,6 +17236,8 @@ async function autoResumeSessionInner(sessionId, content, titleCache, nonInterac
       const nonInteractiveCmd = `env -u CLAUDECODE ${resumeCmd} -p "$(cat '${tmpFile}')" --output-format stream-json --verbose && rm -f '${tmpFile}'`;
       await tmuxExec(["send-keys", "-t", tmuxSession, "-l", nonInteractiveCmd]);
       await tmuxExec(["send-keys", "-t", tmuxSession, "Enter"]);
+      await new Promise((resolve4) => setTimeout(resolve4, 200));
+      await tmuxExec(["send-keys", "-t", tmuxSession, "Enter"]);
       logDelivery(`Auto-resumed ${agentType} ${shortId} in tmux=${tmuxSession} (non-interactive) cwd=${cwd}`);
       const fatalErrors2 = [
         "No conversation found",
@@ -16512,6 +17281,8 @@ async function autoResumeSessionInner(sessionId, content, titleCache, nonInterac
     }
     await tmuxExec(["send-keys", "-t", tmuxSession, "-l", `env -u CLAUDECODE ${resumeCmd}`]);
     await tmuxExec(["send-keys", "-t", tmuxSession, "Enter"]);
+    await new Promise((resolve4) => setTimeout(resolve4, 200));
+    await tmuxExec(["send-keys", "-t", tmuxSession, "Enter"]);
     logDelivery(`Auto-resumed ${agentType} ${shortId} in tmux=${tmuxSession} cwd=${cwd} cmd=${resumeCmd}`);
     resumeSessionCache.set(sessionId, tmuxSession);
     if (syncServiceRef && conversationId) {
@@ -16522,9 +17293,12 @@ async function autoResumeSessionInner(sessionId, content, titleCache, nonInterac
       const existing = resumeHeartbeatIntervals.get(sessionId);
       if (existing)
         clearInterval(existing);
-      const interval = setInterval(() => {
-        syncServiceRef.heartbeatManagedSession(sessionId).catch(() => {
-        });
+      const interval = setInterval(async () => {
+        try {
+          const result = await syncServiceRef.heartbeatManagedSession(sessionId);
+          processHeartbeatResponse(sessionId, result);
+        } catch {
+        }
       }, 30000);
       resumeHeartbeatIntervals.set(sessionId, interval);
       if (agentType === "codex" && conversationId) {
@@ -16659,7 +17433,8 @@ async function repairAndResumeSession(sessionId, content, titleCache, nonInterac
         writeCodexSession(jsonl, sessionId, "rollout");
         log(`Wrote new Codex session file for ${sessionId.slice(0, 8)}`);
       } else {
-        writeClaudeCodeSession(jsonl, sessionId, projectPath);
+        const { filePath: repairFilePath } = writeClaudeCodeSession(jsonl, sessionId, projectPath);
+        setPosition(repairFilePath, fs14.statSync(repairFilePath).size);
         log(`Wrote new session file for ${sessionId.slice(0, 8)}`);
       }
     }
@@ -16822,6 +17597,8 @@ async function startFreshSessionForDelivery(conversationId) {
     tmuxExecSync(["new-session", "-d", "-s", tmuxSession, "-c", projectPath], { timeout: 5000 });
     tmuxExecSync(["send-keys", "-t", tmuxSession, "-l", blankCmdText], { timeout: 5000 });
     tmuxExecSync(["send-keys", "-t", tmuxSession, "Enter"], { timeout: 5000 });
+    spawnSync2("sleep", ["0.2"]);
+    tmuxExecSync(["send-keys", "-t", tmuxSession, "Enter"], { timeout: 5000 });
     const entry = {
       tmuxSession,
       projectPath,
@@ -16865,7 +17642,8 @@ async function materializeSession(conversationId, conversationCache, titleCache,
       const tailMessages = chooseClaudeTailMessagesForTokenBudget(exportData, TOKEN_BUDGET);
       const { jsonl, sessionId } = generateClaudeCodeJsonl(exportData, { tailMessages });
       const projectPath = exportData.conversation.project_path || undefined;
-      writeClaudeCodeSession(jsonl, sessionId, projectPath);
+      const { filePath: matFilePath } = writeClaudeCodeSession(jsonl, sessionId, projectPath);
+      setPosition(matFilePath, fs14.statSync(matFilePath).size);
       conversationCache[sessionId] = conversationId;
       saveConversationCache(conversationCache);
       materializedSessions.add(sessionId);
@@ -16912,6 +17690,20 @@ async function deliverMessage(conversationId, content, conversationCache, syncSe
     logDelivery(`Redirecting message from plan parent ${conversationId.slice(0, 12)} to child ${childConvId.slice(0, 12)}`);
     return deliverMessage(childConvId, content, conversationCache, syncService, messageId, titleCache);
   }
+  if (codexAppServerInstance?.running) {
+    const appServerThreadId = appServerConversations.get(conversationId);
+    if (appServerThreadId) {
+      try {
+        const input = [{ type: "text", text: content }];
+        await codexAppServerInstance.turnStart({ threadId: appServerThreadId, input });
+        await syncService.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
+        logDelivery(`[codex-app-server] delivered via app-server to thread ${appServerThreadId.slice(0, 8)}`);
+        return true;
+      } catch (err) {
+        logDelivery(`[codex-app-server] delivery failed, falling back to tmux: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+  }
   const reverseCache = buildReverseConversationCache(conversationCache);
   let sessionId = reverseCache[conversationId];
   const pendingPrompt = pendingInteractivePrompts.get(sessionId || conversationId);
@@ -16947,6 +17739,8 @@ async function deliverMessage(conversationId, content, conversationCache, syncSe
     const cacheKeys = Object.keys(conversationCache);
     const reverseKeys = Object.keys(reverseCache);
     logDelivery(`No session in cache for conv=${conversationId.slice(0, 12)}, cache has ${cacheKeys.length} sessions/${reverseKeys.length} convs, startedTmux has ${startedSessionTmux.size} entries`);
+    syncService.updateSessionAgentStatus(conversationId, "starting").catch(() => {
+    });
     const tryStartedTmux = async (entry) => {
       try {
         await tmuxExec(["has-session", "-t", entry.tmuxSession]);
@@ -17392,7 +18186,7 @@ function isManagedByLaunchd() {
 }
 function spawnReplacement() {
   try {
-    const child = spawn(process.execPath, process.argv.slice(1), {
+    const child = spawn2(process.execPath, process.argv.slice(1), {
       detached: true,
       stdio: "ignore",
       env: { ...process.env, CODECAST_RESTART: "1" }
@@ -18070,7 +18864,7 @@ async function main() {
         } catch {
         }
         try {
-          spawn("sh", ["-c", `sleep ${backoffMinutes * 60} && "${process.execPath}" ${process.argv.slice(1).map((a) => `"${a}"`).join(" ")}`], {
+          spawn2("sh", ["-c", `sleep ${backoffMinutes * 60} && "${process.execPath}" ${process.argv.slice(1).map((a) => `"${a}"`).join(" ")}`], {
             detached: true,
             stdio: "ignore",
             env: { ...process.env, CODECAST_RESTART: "1" }
@@ -18083,7 +18877,7 @@ async function main() {
       clearCrashCount();
     }
     try {
-      spawn(process.execPath, process.argv.slice(1), {
+      spawn2(process.execPath, process.argv.slice(1), {
         detached: true,
         stdio: "ignore",
         env: { ...process.env, CODECAST_RESTART: "1" }
@@ -18552,6 +19346,15 @@ async function main() {
           if (parentSessionId && conversationCache[parentSessionId]) {
             parentConversationId = conversationCache[parentSessionId];
           }
+          try {
+            const metaPath = filePath.replace(/\.jsonl$/, ".meta.json");
+            if (fs14.existsSync(metaPath)) {
+              const meta = JSON.parse(fs14.readFileSync(metaPath, "utf-8"));
+              if (meta.description)
+                subagentDescriptions.set(sessionId, meta.description);
+            }
+          } catch {
+          }
         }
         log(`Startup scan: Syncing ${sessionId}${parentConversationId ? ` (subagent of ${parentConversationId})` : ""}`);
         await processSessionFile(filePath, sessionId, projectPath, syncService, config.user_id, config.team_id, conversationCache, retryQueue, pendingMessages, titleCache, updateState, parentConversationId);
@@ -18560,7 +19363,7 @@ async function main() {
         const parentConvId = conversationCache[parentSessionId];
         const childConvId = conversationCache[childSessionId];
         if (parentConvId && childConvId) {
-          syncService.linkSessions(parentConvId, childConvId).then(() => {
+          syncService.linkSessions(parentConvId, childConvId, subagentDescriptions.get(childSessionId)).then(() => {
             log(`Startup scan: Linked subagent ${childSessionId.slice(0, 8)} -> parent ${parentSessionId.slice(0, 8)}`);
           }).catch((err) => {
             log(`Startup scan: Failed to link subagent ${childSessionId.slice(0, 8)}: ${err}`);
@@ -18726,6 +19529,75 @@ async function main() {
     logError("Cursor transcript watcher error", error);
   });
   cursorTranscriptWatcher.start();
+  codexAppServerInstance = new CodexAppServer({
+    log,
+    onApproval: async (threadId, approval) => {
+      const entry = appServerThreads.get(threadId);
+      if (!entry)
+        return true;
+      const permissionPrompt = {
+        tool_name: approval.method,
+        arguments_preview: JSON.stringify(approval.params).slice(0, 200)
+      };
+      try {
+        const decision = await handlePermissionRequest(syncService, entry.conversationId, threadId, permissionPrompt, log);
+        return decision?.approved ?? true;
+      } catch (err) {
+        log(`[codex-app-server] approval error: ${err instanceof Error ? err.message : String(err)}`);
+        return true;
+      }
+    }
+  });
+  codexAppServerInstance.on("turnCompleted", async (threadId, turnId, messages, status) => {
+    const entry = appServerThreads.get(threadId);
+    if (!entry)
+      return;
+    if (messages.length > 0) {
+      const batchResult = await syncMessagesBatch(messages, entry.conversationId, syncService, retryQueue);
+      if (!batchResult.authExpired && !batchResult.conversationNotFound) {
+        syncStats.messagesSynced += messages.length;
+        syncStats.sessionsActive.add(threadId);
+        log(`[codex-app-server] synced ${messages.length} messages for thread ${threadId.slice(0, 8)}`);
+      }
+    }
+    sendAgentStatus(syncService, entry.conversationId, threadId, status === "completed" ? "idle" : "working");
+  });
+  codexAppServerInstance.on("turnStarted", (threadId) => {
+    const entry = appServerThreads.get(threadId);
+    if (entry) {
+      sendAgentStatus(syncService, entry.conversationId, threadId, "working");
+    }
+  });
+  codexAppServerInstance.on("threadNameUpdated", async (threadId, name) => {
+    if (!name)
+      return;
+    const entry = appServerThreads.get(threadId);
+    if (!entry)
+      return;
+    try {
+      await syncService.updateTitle(entry.conversationId, name);
+      log(`[codex-app-server] updated title for thread ${threadId.slice(0, 8)}: ${name}`);
+    } catch {
+    }
+  });
+  codexAppServerInstance.on("approvalRequested", (threadId, approval) => {
+    const entry = appServerThreads.get(threadId);
+    if (entry) {
+      sendAgentStatus(syncService, entry.conversationId, threadId, "permission_blocked");
+      syncService.createSessionNotification({
+        conversation_id: entry.conversationId,
+        type: "permission_request",
+        title: "codecast - Permission needed",
+        message: `${approval.method}: ${JSON.stringify(approval.params).slice(0, 200)}`
+      }).catch(() => {
+      });
+    }
+  });
+  codexAppServerInstance.on("error", (err) => {
+    log(`[codex-app-server] error: ${err.message}`);
+  });
+  codexAppServerInstance.start();
+  log("[codex-app-server] started");
   const codexWatcher = new CodexWatcher;
   const codexSyncs = new Map;
   codexWatcher.on("ready", () => {
@@ -19046,6 +19918,7 @@ async function main() {
     watcher.stop();
     cursorWatcher.stop();
     cursorTranscriptWatcher.stop();
+    codexAppServerInstance?.stop();
     retryQueue.stop();
     const pendingOps = retryQueue.getQueueSize();
     if (pendingOps > 0) {
@@ -19278,7 +20151,7 @@ async function runWatchdog() {
     clearCrashCount();
     const { executablePath, args } = getDaemonExecInfo();
     try {
-      const child = spawn(executablePath, args, {
+      const child = spawn2(executablePath, args, {
         detached: true,
         stdio: "ignore",
         env: { ...process.env, CODECAST_RESTART: "1" }
