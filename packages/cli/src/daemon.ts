@@ -9,7 +9,12 @@ import { SessionWatcher, type SessionEvent } from "./sessionWatcher.js";
 import { CursorWatcher, type CursorSessionEvent } from "./cursorWatcher.js";
 import { CursorTranscriptWatcher, type CursorTranscriptEvent } from "./cursorTranscriptWatcher.js";
 import { CodexWatcher, type CodexSessionEvent } from "./codexWatcher.js";
-import { CodexAppServer, type ApprovalRequest } from "./codexAppServer.js";
+import {
+  CodexAppServer,
+  threadItemsToMessages,
+  type ApprovalRequest,
+  type ThreadItem,
+} from "./codexAppServer.js";
 import {
   choosePreferredCodexCandidate,
   hasCodexSessionFileOpen,
@@ -32,6 +37,7 @@ import { getVersion, performUpdate, ensureCastAlias } from "./update.js";
 import { performReconciliation, repairDiscrepancies } from "./reconciliation.js";
 import { TaskScheduler } from "./taskScheduler.js";
 import { hasTmux } from "./tmux.js";
+import { formatFeedResults } from "./formatter.js";
 import {
   fetchExport,
   generateClaudeCodeJsonl,
@@ -128,12 +134,16 @@ const STATE_FILE = path.join(CONFIG_DIR, "daemon.state");
 const PID_FILE = path.join(CONFIG_DIR, "daemon.pid");
 const VERSION_FILE = path.join(CONFIG_DIR, "daemon.version");
 const STARTED_SESSIONS_FILE = path.join(CONFIG_DIR, "started-sessions.json");
+const APP_SERVER_THREADS_FILE = path.join(CONFIG_DIR, "app-server-threads.json");
+const PID_FILE_STALE_GRACE_MS = 2_000;
 
 interface Config {
   user_id?: string;
   team_id?: string;
   convex_url?: string;
   auth_token?: string;
+  stable_mode?: "solo" | "team";
+  stable_global?: boolean;
   excluded_paths?: string;
   claude_args?: string;
   codex_args?: string;
@@ -343,10 +353,27 @@ const ZOMBIE_STRIKE_THRESHOLD = 3;
 type AgentStatus = "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "stopped";
 type PermissionMode = "default" | "plan" | "acceptEdits" | "bypassPermissions" | "dontAsk";
 type HookStatusData = { status: AgentStatus; ts: number; permission_mode?: PermissionMode; message?: string; transcript_path?: string };
+type AppServerThreadStatus = { type?: string; activeFlags?: string[] };
 const lastHookStatus = new Map<string, HookStatusData>();
 const pendingInteractivePrompts = new Map<string, { timestamp: number; options: Array<{ label: string; description?: string }>; isConfirmation?: boolean }>();
 const AGENT_STATUS_DIR = path.join(process.env.HOME || "", ".codecast", "agent-status");
 const skillsSyncedConversations = new Set<string>();
+
+export function mapCodexAppServerThreadStatusToAgentStatus(status: AppServerThreadStatus | null | undefined): AgentStatus | null {
+  if (!status?.type) return null;
+  switch (status.type) {
+    case "idle":
+      return "idle";
+    case "active":
+      return status.activeFlags?.includes("waitingOnApproval") || status.activeFlags?.includes("waitingOnUserInput")
+        ? "permission_blocked"
+        : "working";
+    case "systemError":
+      return "stopped";
+    default:
+      return null;
+  }
+}
 
 function readAvailableSkills(projectPath?: string): Array<{ name: string; description: string }> {
   const skills: Array<{ name: string; description: string }> = [];
@@ -1063,7 +1090,13 @@ async function executeRemoteCommand(
           try {
             const sandbox = binaryArgs.includes("--full-auto") ? "danger-full-access" as const : "workspace-write" as const;
             const approval = binaryArgs.includes("--full-auto") ? "never" as const : "on-request" as const;
-            const resp = await codexAppServerInstance.threadStart({ cwd, sandbox, approvalPolicy: approval });
+            const developerInstructions = await buildCodexStableContext(config, cwd);
+            const resp = await codexAppServerInstance.threadStart({
+              cwd,
+              sandbox,
+              approvalPolicy: approval,
+              ...(developerInstructions ? { developerInstructions } : {}),
+            });
             codexThreadId = resp.thread.id;
             cmdText = `${envPrefix} codex resume ${codexThreadId}`;
             log(`[codex-app-server] pre-created thread ${codexThreadId.slice(0, 8)} for new session`);
@@ -1096,14 +1129,14 @@ async function executeRemoteCommand(
               projectPath: cwd,
               startedAt: Date.now(),
               agentType,
+              appServerThreadId: codexThreadId || undefined,
               worktreeName: worktreeResult?.worktreeName,
               worktreeBranch: worktreeResult?.worktreeBranch,
               worktreePath: worktreeResult?.worktreePath,
             });
             log(`[REMOTE] Registered started session tmux for conversation ${conversationId.slice(0, 12)}`);
             if (codexThreadId) {
-              appServerThreads.set(codexThreadId, { threadId: codexThreadId, conversationId });
-              appServerConversations.set(conversationId, codexThreadId);
+              registerAppServerConversation(conversationId, codexThreadId, { cwd, persist: false });
               log(`[codex-app-server] registered conv=${conversationId.slice(0, 12)} -> thread=${codexThreadId.slice(0, 8)}`);
             }
             if (agentType === "claude") {
@@ -1755,6 +1788,52 @@ function readConfig(): Config | null {
     return JSON.parse(fs.readFileSync(CONFIG_FILE, "utf-8")) as Config;
   } catch {
     return null;
+  }
+}
+
+const ANSI_ESCAPE_RE = /\x1b\[[0-9;]*m/g;
+
+function stripAnsi(text: string): string {
+  return text.replace(ANSI_ESCAPE_RE, "");
+}
+
+export async function buildCodexStableContext(config: Config | null, cwd?: string): Promise<string | undefined> {
+  const stableMode = config?.stable_mode;
+  if (!stableMode || !config?.auth_token || !config?.convex_url) return undefined;
+
+  const projectPath = config.stable_global ? undefined : cwd;
+  const lookbackDays = stableMode === "team" ? 14 : 7;
+  const limit = stableMode === "team" ? 15 : 10;
+  const siteUrl = config.convex_url.replace(".cloud", ".site");
+
+  try {
+    const response = await fetch(`${siteUrl}/cli/feed`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        api_token: config.auth_token,
+        limit,
+        offset: 0,
+        start_time: Date.now() - lookbackDays * 24 * 60 * 60 * 1000,
+        project_path: projectPath,
+      }),
+    });
+
+    const result = await response.json() as any;
+    if (!response.ok || result?.error) return undefined;
+
+    const feed = stripAnsi(formatFeedResults(result, { projectPath }));
+    const instruction = stableMode === "team"
+      ? "This gives you bigger-picture visibility on what has been and is being worked on by the team."
+      : "This gives you bigger-picture visibility on what you have been and are currently working on.";
+
+    return `<stable-context mode="${stableMode}">
+${instruction}
+
+${feed}
+</stable-context>`;
+  } catch {
+    return undefined;
   }
 }
 
@@ -4711,8 +4790,211 @@ const codexPermissionPending = new Set<string>(); // sessionIds currently waitin
 const codexPermissionRunning = new Set<string>(); // sessionIds with an in-flight tmux capture
 
 let codexAppServerInstance: CodexAppServer | null = null;
-const appServerThreads = new Map<string, { threadId: string; conversationId: string }>();
+type AppServerThreadEntry = { threadId: string; conversationId: string; cwd?: string };
+type PersistedAppServerThreadRecord = { threadId: string; updatedAt: number; cwd?: string };
+type AppServerTurnProgress = { threadId: string; items: ThreadItem[]; lastSyncedSignature?: string };
+const appServerThreads = new Map<string, AppServerThreadEntry>();
 const appServerConversations = new Map<string, string>();
+const persistedAppServerThreads = new Map<string, PersistedAppServerThreadRecord>();
+const appServerTurnProgress = new Map<string, AppServerTurnProgress>();
+const APP_SERVER_THREAD_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+let rehydratePersistedAppServerThreadsPromise: Promise<void> | null = null;
+
+export function upsertAppServerThreadRegistration(
+  threads: Map<string, AppServerThreadEntry>,
+  conversations: Map<string, string>,
+  conversationId: string,
+  threadId: string,
+  extra?: Partial<AppServerThreadEntry>,
+): void {
+  const existingThreadId = conversations.get(conversationId);
+  if (existingThreadId && existingThreadId !== threadId) {
+    const existingThreadEntry = threads.get(existingThreadId);
+    if (existingThreadEntry?.conversationId === conversationId) {
+      threads.delete(existingThreadId);
+    }
+  }
+
+  const existingConversation = threads.get(threadId)?.conversationId;
+  if (existingConversation && existingConversation !== conversationId) {
+    conversations.delete(existingConversation);
+  }
+
+  threads.set(threadId, { threadId, conversationId, ...extra });
+  conversations.set(conversationId, threadId);
+}
+
+export function removeAppServerThreadRegistration(
+  threads: Map<string, AppServerThreadEntry>,
+  conversations: Map<string, string>,
+  conversationId: string,
+  threadId?: string,
+): void {
+  const resolvedThreadId = threadId ?? conversations.get(conversationId);
+  conversations.delete(conversationId);
+  if (!resolvedThreadId) return;
+  const existing = threads.get(resolvedThreadId);
+  if (existing?.conversationId === conversationId) {
+    threads.delete(resolvedThreadId);
+  }
+}
+
+function clearLiveAppServerThreadRegistrations(): void {
+  appServerThreads.clear();
+  appServerConversations.clear();
+  appServerTurnProgress.clear();
+}
+
+function buildAppServerProgressSignature(messages: RawMessage[]): string {
+  return JSON.stringify(messages.map((message) => ({
+    uuid: message.uuid,
+    role: message.role,
+    content: message.content,
+    thinking: message.thinking,
+    toolCalls: message.toolCalls,
+    toolResults: message.toolResults,
+    images: message.images,
+    subtype: message.subtype,
+  })));
+}
+
+async function syncAppServerTurnMessagesIfChanged(
+  turnId: string,
+  conversationId: string,
+  messages: RawMessage[],
+  syncService: SyncService,
+  retryQueue: RetryQueue,
+  threadIdForLog: string,
+): Promise<void> {
+  if (messages.length === 0) return;
+  const progress = appServerTurnProgress.get(turnId);
+  if (!progress) return;
+  const signature = buildAppServerProgressSignature(messages);
+  if (progress.lastSyncedSignature === signature) return;
+  const batchResult = await syncMessagesBatch(messages, conversationId, syncService, retryQueue);
+  if (!batchResult.authExpired && !batchResult.conversationNotFound) {
+    progress.lastSyncedSignature = signature;
+    syncStats.messagesSynced += messages.length;
+    syncStats.sessionsActive.add(threadIdForLog);
+    log(`[codex-app-server] live synced ${messages.length} messages for thread ${threadIdForLog}`);
+  }
+}
+
+function persistAppServerThreadRegistrations(): void {
+  try {
+    const data: Record<string, PersistedAppServerThreadRecord> = {};
+    const now = Date.now();
+    for (const [conversationId, record] of persistedAppServerThreads) {
+      if (now - record.updatedAt < APP_SERVER_THREAD_TTL_MS) {
+        data[conversationId] = record;
+      }
+    }
+    fs.writeFileSync(APP_SERVER_THREADS_FILE, JSON.stringify(data), "utf-8");
+  } catch {}
+}
+
+function registerAppServerConversation(
+  conversationId: string,
+  threadId: string,
+  opts: {
+    cwd?: string;
+    updatedAt?: number;
+    persist?: boolean;
+  } = {},
+): void {
+  const updatedAt = opts.updatedAt ?? Date.now();
+  const existingThreadId = appServerConversations.get(conversationId);
+  const existingConversation = appServerThreads.get(threadId)?.conversationId;
+  upsertAppServerThreadRegistration(appServerThreads, appServerConversations, conversationId, threadId, { cwd: opts.cwd });
+  if (!opts.persist) return;
+  if (existingConversation && existingConversation !== conversationId) {
+    persistedAppServerThreads.delete(existingConversation);
+  }
+  persistedAppServerThreads.set(conversationId, { threadId, updatedAt, cwd: opts.cwd });
+  if (existingThreadId && existingThreadId !== threadId) {
+    persistedAppServerThreads.delete(conversationId);
+  }
+  persistAppServerThreadRegistrations();
+}
+
+function forgetPersistedAppServerConversation(conversationId: string): void {
+  if (!persistedAppServerThreads.delete(conversationId)) return;
+  persistAppServerThreadRegistrations();
+}
+
+function markAppServerConversationResumable(
+  conversationId: string,
+  threadId?: string,
+  updatedAt: number = Date.now(),
+): void {
+  const resolvedThreadId = threadId ?? appServerConversations.get(conversationId);
+  if (!resolvedThreadId) return;
+  const liveEntry = appServerThreads.get(resolvedThreadId);
+  persistedAppServerThreads.set(conversationId, {
+    threadId: resolvedThreadId,
+    updatedAt,
+    cwd: liveEntry?.cwd,
+  });
+  persistAppServerThreadRegistrations();
+}
+
+async function rehydratePersistedAppServerThreads(): Promise<void> {
+  if (!codexAppServerInstance?.running || persistedAppServerThreads.size === 0) return;
+
+  const entries = [...persistedAppServerThreads.entries()];
+  let resumed = 0;
+  let dropped = 0;
+
+  for (const [conversationId, record] of entries) {
+    if (appServerConversations.has(conversationId)) continue;
+    try {
+      await codexAppServerInstance.threadResume({
+        threadId: record.threadId,
+        ...(record.cwd ? { cwd: record.cwd } : {}),
+      });
+      registerAppServerConversation(conversationId, record.threadId, {
+        cwd: record.cwd,
+        updatedAt: record.updatedAt,
+        persist: false,
+      });
+      resumed++;
+    } catch (err) {
+      dropped++;
+      persistedAppServerThreads.delete(conversationId);
+      log(`[codex-app-server] dropping persisted thread ${record.threadId.slice(0, 8)} for conv=${conversationId.slice(0, 12)}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  if (dropped > 0) {
+    persistAppServerThreadRegistrations();
+  }
+  if (resumed > 0 || dropped > 0) {
+    log(`[codex-app-server] rehydrated ${resumed} persisted thread(s), dropped ${dropped}`);
+  }
+}
+
+function loadPersistedAppServerThreadRegistrations(): void {
+  try {
+    if (!fs.existsSync(APP_SERVER_THREADS_FILE)) return;
+    const raw = JSON.parse(fs.readFileSync(APP_SERVER_THREADS_FILE, "utf-8")) as Record<string, { threadId: string; updatedAt?: number; cwd?: string }>;
+    const now = Date.now();
+    let loaded = 0;
+    for (const [conversationId, record] of Object.entries(raw)) {
+      if (!record?.threadId) continue;
+      const updatedAt = record.updatedAt ?? now;
+      if (now - updatedAt >= APP_SERVER_THREAD_TTL_MS) continue;
+      persistedAppServerThreads.set(conversationId, {
+        threadId: record.threadId,
+        updatedAt,
+        cwd: record.cwd,
+      });
+      loaded++;
+    }
+    if (loaded > 0) {
+      log(`Loaded ${loaded} app-server thread registration(s) from disk`);
+    }
+  } catch {}
+}
 
 const CODEX_PERMISSION_PATTERNS = [
   /Would you like to run the following command\?/,
@@ -4823,6 +5105,7 @@ type StartedSessionInfo = {
   projectPath: string;
   startedAt: number;
   agentType: "claude" | "codex" | "cursor" | "gemini";
+  appServerThreadId?: string;
   worktreeName?: string;
   worktreeBranch?: string;
   worktreePath?: string;
@@ -4876,6 +5159,7 @@ class PersistedStartedSessions extends Map<string, StartedSessionInfo> {
   }
 }
 
+loadPersistedAppServerThreadRegistrations();
 const startedSessionTmux = new PersistedStartedSessions();
 const restartingSessionIds = new Map<string, number>();
 const RESTART_GUARD_TTL_MS = 60_000;
@@ -5725,6 +6009,10 @@ async function deliverMessage(
         logDelivery(`[codex-app-server] delivered via app-server to thread ${appServerThreadId.slice(0, 8)}`);
         return true;
       } catch (err) {
+        removeAppServerThreadRegistration(appServerThreads, appServerConversations, conversationId, appServerThreadId);
+        if (err instanceof Error && /thread not found|no rollout found/i.test(err.message)) {
+          forgetPersistedAppServerConversation(conversationId);
+        }
         logDelivery(`[codex-app-server] delivery failed, falling back to tmux: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
@@ -6290,21 +6578,84 @@ function clearCrashCount(): void {
   try { if (fs.existsSync(CRASH_FILE)) fs.unlinkSync(CRASH_FILE); } catch {}
 }
 
-function acquireLock(): boolean {
-  const underLaunchd = isManagedByLaunchd();
-  if (fs.existsSync(PID_FILE)) {
+function readPidFile(pidFile: string): number | null {
+  try {
+    const pid = parseInt(fs.readFileSync(pidFile, "utf-8").trim(), 10);
+    return Number.isFinite(pid) && pid > 0 ? pid : null;
+  } catch {
+    return null;
+  }
+}
+
+export function tryAcquirePidFileLock(
+  pidFile: string,
+  pid: number,
+  options: {
+    nowMs?: number;
+    staleGraceMs?: number;
+    isProcessRunning?: (pid: number) => boolean;
+  } = {},
+): boolean {
+  const nowMs = options.nowMs ?? Date.now();
+  const staleGraceMs = options.staleGraceMs ?? PID_FILE_STALE_GRACE_MS;
+  const isPidRunning = options.isProcessRunning ?? isProcessRunning;
+
+  for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      const existingPid = parseInt(fs.readFileSync(PID_FILE, "utf-8").trim(), 10);
-      if (existingPid === process.pid) {
-        return true;
+      const fd = fs.openSync(pidFile, "wx", 0o600);
+      try {
+        fs.writeFileSync(fd, `${pid}\n`);
+        fs.fsyncSync(fd);
+      } finally {
+        fs.closeSync(fd);
       }
-      if (!isNaN(existingPid) && isProcessRunning(existingPid)) {
-        return false;
-      }
-    } catch {
-      // PID file exists but is unreadable or invalid, continue
+      return true;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== "EEXIST") return false;
+    }
+
+    const existingPid = readPidFile(pidFile);
+    if (existingPid === pid) return true;
+    if (existingPid && isPidRunning(existingPid)) return false;
+
+    let stat: fs.Stats;
+    try {
+      stat = fs.statSync(pidFile);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "ENOENT") continue;
+      return false;
+    }
+
+    if (nowMs - stat.mtimeMs < staleGraceMs) {
+      return false;
+    }
+
+    try {
+      fs.unlinkSync(pidFile);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "ENOENT") continue;
+      return false;
     }
   }
+
+  return false;
+}
+
+export function releasePidFileIfOwned(pidFile: string, pid: number): boolean {
+  if (readPidFile(pidFile) !== pid) return false;
+  try {
+    fs.unlinkSync(pidFile);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function acquireLock(): boolean {
+  const underLaunchd = isManagedByLaunchd();
 
   // Even without a PID file, check for zombie daemon processes (e.g. from a
   // shutdown that deleted the PID file but failed to exit).
@@ -6319,13 +6670,7 @@ function acquireLock(): boolean {
     } catch {}
   }
 
-  fs.writeFileSync(PID_FILE, String(process.pid), { mode: 0o600 });
-  // Verify we won the race (another process may have written simultaneously)
-  try {
-    const writtenPid = parseInt(fs.readFileSync(PID_FILE, "utf-8").trim(), 10);
-    if (writtenPid !== process.pid) return false;
-  } catch { return false; }
-  return true;
+  return tryAcquirePidFileLock(PID_FILE, process.pid);
 }
 
 function findStaleSessionFiles(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): string[] {
@@ -7956,25 +8301,79 @@ async function main(): Promise<void> {
     },
   });
 
-  codexAppServerInstance.on("turnCompleted", async (threadId: string, turnId: string, messages: any[], status: string) => {
-    const entry = appServerThreads.get(threadId);
-    if (!entry) return;
-    if (messages.length > 0) {
-      const batchResult = await syncMessagesBatch(messages, entry.conversationId, syncService, retryQueue);
-      if (!batchResult.authExpired && !batchResult.conversationNotFound) {
-        syncStats.messagesSynced += messages.length;
-        syncStats.sessionsActive.add(threadId);
-        log(`[codex-app-server] synced ${messages.length} messages for thread ${threadId.slice(0, 8)}`);
-      }
-    }
-    sendAgentStatus(syncService, entry.conversationId, threadId, status === "completed" ? "idle" : "working");
+  codexAppServerInstance.on("ready", () => {
+    if (rehydratePersistedAppServerThreadsPromise) return;
+    rehydratePersistedAppServerThreadsPromise = rehydratePersistedAppServerThreads()
+      .catch((err) => {
+        log(`[codex-app-server] rehydrate failed: ${err instanceof Error ? err.message : String(err)}`);
+      })
+      .finally(() => {
+        rehydratePersistedAppServerThreadsPromise = null;
+      });
   });
 
-  codexAppServerInstance.on("turnStarted", (threadId: string) => {
+  codexAppServerInstance.on("exited", () => {
+    if (appServerThreads.size > 0 || appServerConversations.size > 0) {
+      log(`[codex-app-server] clearing ${appServerThreads.size} live thread registration(s) after exit`);
+    }
+    clearLiveAppServerThreadRegistrations();
+  });
+
+  codexAppServerInstance.on("turnCompleted", async (threadId: string, turnId: string, messages: any[], status: string) => {
     const entry = appServerThreads.get(threadId);
+    try {
+      if (!entry) return;
+      await syncAppServerTurnMessagesIfChanged(
+        turnId,
+        entry.conversationId,
+        messages as RawMessage[],
+        syncService,
+        retryQueue,
+        threadId.slice(0, 8),
+      );
+      if (status === "completed") {
+        markAppServerConversationResumable(entry.conversationId, threadId);
+      }
+      sendAgentStatus(syncService, entry.conversationId, threadId, status === "completed" ? "idle" : "working");
+    } finally {
+      appServerTurnProgress.delete(turnId);
+    }
+  });
+
+  codexAppServerInstance.on("turnStarted", (threadId: string, turnId: string) => {
+    const entry = appServerThreads.get(threadId);
+    appServerTurnProgress.set(turnId, { threadId, items: [] });
     if (entry) {
       sendAgentStatus(syncService, entry.conversationId, threadId, "working");
     }
+  });
+
+  codexAppServerInstance.on("itemCompleted", (threadId: string, turnId: string, item: ThreadItem) => {
+    const entry = appServerThreads.get(threadId);
+    const progress = appServerTurnProgress.get(turnId);
+    if (!entry || !progress) return;
+    progress.items.push(item);
+    const messages = threadItemsToMessages(progress.items) as RawMessage[];
+    syncAppServerTurnMessagesIfChanged(
+      turnId,
+      entry.conversationId,
+      messages,
+      syncService,
+      retryQueue,
+      threadId.slice(0, 8),
+    ).catch((err) => {
+      log(`[codex-app-server] live sync failed for thread ${threadId.slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`);
+    });
+  });
+
+  codexAppServerInstance.on("statusChanged", (threadId: string, status: AppServerThreadStatus) => {
+    const entry = appServerThreads.get(threadId);
+    if (!entry) return;
+    const agentStatus = mapCodexAppServerThreadStatusToAgentStatus(status);
+    if (!agentStatus) return;
+    const activeFlags = status.activeFlags?.length ? ` flags=${status.activeFlags.join(",")}` : "";
+    log(`[codex-app-server] thread ${threadId.slice(0, 8)} status=${status.type}${activeFlags} -> ${agentStatus}`);
+    sendAgentStatus(syncService, entry.conversationId, threadId, agentStatus);
   });
 
   codexAppServerInstance.on("threadNameUpdated", async (threadId: string, name: string | null) => {
@@ -8384,7 +8783,7 @@ async function main(): Promise<void> {
     // This prevents zombie daemons that hold the event loop open via in-flight retries.
     const hardExitTimer = setTimeout(() => {
       try { fs.appendFileSync(LOG_FILE, `[${new Date().toISOString()}] [CRITICAL] Hard exit after shutdown timeout\n`); } catch {}
-      try { fs.unlinkSync(PID_FILE); } catch {}
+      releasePidFileIfOwned(PID_FILE, process.pid);
       try { fs.unlinkSync(VERSION_FILE); } catch {}
       process.exit(1);
     }, 15_000);
@@ -8434,13 +8833,8 @@ async function main(): Promise<void> {
       sync.stop();
     }
 
-    if (fs.existsSync(PID_FILE)) {
-      try {
-        fs.unlinkSync(PID_FILE);
-        log("PID file removed");
-      } catch (err) {
-        log(`Failed to remove PID file: ${err instanceof Error ? err.message : String(err)}`);
-      }
+    if (releasePidFileIfOwned(PID_FILE, process.pid)) {
+      log("PID file removed");
     }
     try { fs.unlinkSync(VERSION_FILE); } catch {}
 

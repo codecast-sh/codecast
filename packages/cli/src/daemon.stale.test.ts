@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { shouldTreatClaudeFileAsStale } from "./daemon.js";
+import { isAppServerManagedCodexSessionHead, shouldTreatClaudeFileAsStale } from "./daemon.js";
 
 describe("shouldTreatClaudeFileAsStale", () => {
   test("marks file stale when there is no sync record", () => {
@@ -50,5 +50,23 @@ describe("shouldTreatClaudeFileAsStale", () => {
         }
       )
     ).toBe(true);
+  });
+});
+
+describe("isAppServerManagedCodexSessionHead", () => {
+  test("detects codecast app-server transcripts", () => {
+    expect(
+      isAppServerManagedCodexSessionHead(
+        '{"type":"session_meta","payload":{"originator":"codecast","source":{"custom":"codecast"}}}\n'
+      )
+    ).toBe(true);
+  });
+
+  test("ignores normal Codex CLI transcripts", () => {
+    expect(
+      isAppServerManagedCodexSessionHead(
+        '{"type":"session_meta","payload":{"originator":"codex_cli_rs","source":"cli"}}\n'
+      )
+    ).toBe(false);
   });
 });

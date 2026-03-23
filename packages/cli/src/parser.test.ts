@@ -148,22 +148,24 @@ describe("parser - codex images", () => {
 
     const messages = parseCodexSessionFile(lines.join("\n"));
 
-    expect(messages).toHaveLength(1);
+    expect(messages).toHaveLength(3);
     expect(messages[0].role).toBe("assistant");
-    expect(messages[0].content).toBe("Done.");
     expect(messages[0].toolCalls).toHaveLength(1);
     expect(messages[0].toolCalls?.[0].id).toBe("call_1");
-    expect(messages[0].toolResults).toHaveLength(1);
-    expect(messages[0].toolResults?.[0]).toEqual({
+    expect(messages[1].role).toBe("assistant");
+    expect(messages[1].toolResults).toHaveLength(1);
+    expect(messages[1].toolResults?.[0]).toEqual({
       toolUseId: "call_1",
       content: "captured image",
     });
-    expect(messages[0].images).toHaveLength(1);
-    expect(messages[0].images?.[0]).toEqual({
+    expect(messages[1].images).toHaveLength(1);
+    expect(messages[1].images?.[0]).toEqual({
       mediaType: "image/jpeg",
       data: "AAAA",
       toolUseId: "call_1",
     });
+    expect(messages[2].role).toBe("assistant");
+    expect(messages[2].content).toBe("Done.");
   });
 
   test("preserves raw function_call arguments for apply_patch", () => {
@@ -200,13 +202,67 @@ describe("parser - codex images", () => {
     ];
 
     const messages = parseCodexSessionFile(lines.join("\n"));
-    expect(messages).toHaveLength(1);
+    expect(messages).toHaveLength(3);
     expect(messages[0].toolCalls).toHaveLength(1);
     expect(messages[0].toolCalls?.[0]).toEqual({
       id: "call_patch_1",
       name: "apply_patch",
       input: { input: rawPatch },
     });
+  });
+
+  test("preserves codex assistant/tool interleaving instead of flattening one whole turn", () => {
+    const lines = [
+      JSON.stringify({
+        timestamp: "2026-02-25T00:00:01.000Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "I’m checking the docs first." }],
+        },
+      }),
+      JSON.stringify({
+        timestamp: "2026-02-25T00:00:02.000Z",
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "exec_command",
+          call_id: "call_docs",
+          arguments: "{\"cmd\":\"rg README.md\"}",
+        },
+      }),
+      JSON.stringify({
+        timestamp: "2026-02-25T00:00:03.000Z",
+        type: "response_item",
+        payload: {
+          type: "function_call_output",
+          call_id: "call_docs",
+          output: "README.md",
+        },
+      }),
+      JSON.stringify({
+        timestamp: "2026-02-25T00:00:04.000Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "The main overview is in README.md." }],
+        },
+      }),
+    ];
+
+    const messages = parseCodexSessionFile(lines.join("\n"));
+
+    expect(messages).toHaveLength(4);
+    expect(messages.map((msg) => msg.role)).toEqual(["assistant", "assistant", "assistant", "assistant"]);
+    expect(messages[0].content).toBe("I’m checking the docs first.");
+    expect(messages[1].toolCalls?.[0].name).toBe("exec_command");
+    expect(messages[2].toolResults?.[0]).toEqual({
+      toolUseId: "call_docs",
+      content: "README.md",
+    });
+    expect(messages[3].content).toBe("The main overview is in README.md.");
   });
 });
 

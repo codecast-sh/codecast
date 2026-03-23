@@ -137,6 +137,44 @@ const APPROVAL_METHODS = new Set([
   "item/tool/call",
 ]);
 
+const SILENT_NOTIFICATIONS = new Set([
+  "thread/tokenUsage/updated",
+  "account/rateLimits/updated",
+  "turn/diff/updated",
+  "item/commandExecution/terminalInteraction",
+  "serverRequest/resolved",
+]);
+
+export function approvalResultForMethod(method: string, approved: boolean, params?: Record<string, unknown>): Record<string, unknown> {
+  switch (method) {
+    case "execCommandApproval":
+    case "applyPatchApproval":
+      return { decision: approved ? "approved" : "denied" };
+
+    case "item/commandExecution/requestApproval":
+      return { decision: approved ? "accept" : "decline" };
+
+    case "item/fileChange/requestApproval":
+      return { decision: approved ? "accept" : "decline" };
+
+    case "item/permissions/requestApproval": {
+      const requested = (params?.permissions || {}) as Record<string, unknown>;
+      return approved
+        ? { permissions: requested, scope: "session" }
+        : { permissions: {}, scope: "turn" };
+    }
+
+    case "item/tool/requestUserInput":
+      return { answers: {} };
+
+    case "item/tool/call":
+      return { contentItems: [], success: approved };
+
+    default:
+      return { decision: approved ? "approved" : "denied" };
+  }
+}
+
 export class CodexAppServer extends EventEmitter {
   private process: ChildProcess | null = null;
   private rl: readline.Interface | null = null;
@@ -206,12 +244,10 @@ export class CodexAppServer extends EventEmitter {
     return this.sendRequest("thread/resume", params, THREAD_START_TIMEOUT_MS) as Promise<ThreadResumeResponse>;
   }
 
-  respondToApproval(id: number | string, approved: boolean): void {
-    this.writeMessage({
-      jsonrpc: "2.0",
-      id,
-      result: { approved },
-    });
+  respondToApproval(id: number | string, approved: boolean, method?: string, params?: Record<string, unknown>): void {
+    const result = approvalResultForMethod(method || "", approved, params);
+    this.log(`[codex-app-server] approval response: method=${method} approved=${approved} result=${JSON.stringify(result)}`);
+    this.writeMessage({ jsonrpc: "2.0", id, result });
   }
 
   private spawnProcess(): void {
@@ -255,6 +291,7 @@ export class CodexAppServer extends EventEmitter {
 
     child.on("close", (code, signal) => {
       this.log(`[codex-app-server] process exited: code=${code} signal=${signal}`);
+      this.emit("exited", code, signal);
       this.cleanup();
       if (!this.stopped) {
         this.scheduleRestart();
@@ -396,10 +433,10 @@ export class CodexAppServer extends EventEmitter {
 
       if (this.onApproval) {
         this.onApproval(threadId, approval).then((approved) => {
-          this.respondToApproval(id, approved);
+          this.respondToApproval(id, approved, method, params);
         }).catch((err) => {
           this.log(`[codex-app-server] approval handler error: ${err.message}`);
-          this.respondToApproval(id, false);
+          this.respondToApproval(id, false, method, params);
         });
       }
       return;
@@ -493,7 +530,9 @@ export class CodexAppServer extends EventEmitter {
       }
 
       default:
-        this.log(`[codex-app-server] unhandled notification: ${method}`);
+        if (!SILENT_NOTIFICATIONS.has(method)) {
+          this.log(`[codex-app-server] unhandled notification: ${method}`);
+        }
         break;
     }
   }

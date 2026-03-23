@@ -2242,6 +2242,7 @@ class CodexAppServer extends EventEmitter7 {
     });
     child.on("close", (code, signal) => {
       this.log(`[codex-app-server] process exited: code=${code} signal=${signal}`);
+      this.emit("exited", code, signal);
       this.cleanup();
       if (!this.stopped) {
         this.scheduleRestart();
@@ -3090,29 +3091,40 @@ function parseCodexSessionFile(content) {
   const lines = content.split(`
 `);
   const messages = [];
-  let currentAssistantContent = "";
-  let currentAssistantThinking = "";
-  let currentToolCalls = [];
-  let currentToolResults = [];
-  let currentAssistantImages = [];
+  let pendingAssistantThinking = "";
   let lastTimestamp = Date.now();
-  const flushAssistantMessage = () => {
-    if (currentAssistantContent || currentAssistantThinking || currentToolCalls.length > 0 || currentToolResults.length > 0 || currentAssistantImages.length > 0) {
-      messages.push({
-        role: "assistant",
-        content: currentAssistantContent.trim(),
-        timestamp: lastTimestamp,
-        thinking: currentAssistantThinking.trim() || undefined,
-        toolCalls: currentToolCalls.length > 0 ? [...currentToolCalls] : undefined,
-        toolResults: currentToolResults.length > 0 ? [...currentToolResults] : undefined,
-        images: currentAssistantImages.length > 0 ? [...currentAssistantImages] : undefined
-      });
-      currentAssistantContent = "";
-      currentAssistantThinking = "";
-      currentToolCalls = [];
-      currentToolResults = [];
-      currentAssistantImages = [];
+  const takePendingThinking = () => {
+    const thinking = pendingAssistantThinking.trim();
+    pendingAssistantThinking = "";
+    return thinking || undefined;
+  };
+  const pushAssistantMessage = (message) => {
+    const contentText = message.content?.trim() || "";
+    const thinking = takePendingThinking();
+    if (!contentText && !thinking && !(message.toolCalls && message.toolCalls.length > 0) && !(message.images && message.images.length > 0)) {
+      return;
     }
+    messages.push({
+      role: "assistant",
+      content: contentText,
+      timestamp: message.timestamp,
+      thinking,
+      toolCalls: message.toolCalls && message.toolCalls.length > 0 ? message.toolCalls : undefined,
+      images: message.images && message.images.length > 0 ? message.images : undefined
+    });
+  };
+  const pushToolResultMessage = (message) => {
+    messages.push({
+      role: "assistant",
+      content: "",
+      timestamp: message.timestamp,
+      toolResults: [{
+        toolUseId: message.toolUseId,
+        content: message.content,
+        isError: message.isError
+      }],
+      images: message.images && message.images.length > 0 ? message.images : undefined
+    });
   };
   for (const line of lines) {
     if (!line.trim())
@@ -3135,7 +3147,6 @@ function parseCodexSessionFile(content) {
       const { text, images } = extractCodexTextAndImages(payload.content);
       const trimmedText = text.trim();
       if (role === "user") {
-        flushAssistantMessage();
         const isSystemContext = trimmedText.startsWith("<environment_context>") || trimmedText.startsWith("<INSTRUCTIONS>") || trimmedText.startsWith("# AGENTS.md instructions") || trimmedText.startsWith("<permissions") || trimmedText.startsWith("<collaboration_mode>") || trimmedText.startsWith("<app-context>");
         if ((trimmedText || images.length > 0) && !isSystemContext) {
           messages.push({
@@ -3146,13 +3157,11 @@ function parseCodexSessionFile(content) {
           });
         }
       } else if (role === "assistant") {
-        if (trimmedText) {
-          currentAssistantContent += (currentAssistantContent ? `
-` : "") + trimmedText;
-        }
-        if (images.length > 0) {
-          currentAssistantImages.push(...images);
-        }
+        pushAssistantMessage({
+          timestamp,
+          content: trimmedText,
+          images
+        });
       }
     } else if (payload.type === "reasoning") {
       const contentArray = Array.isArray(payload.content) ? payload.content : [];
@@ -3161,7 +3170,7 @@ function parseCodexSessionFile(content) {
 `) : summaryArray.map((c) => c.text || "").join(`
 `);
       if (thinkingText) {
-        currentAssistantThinking += (currentAssistantThinking ? `
+        pendingAssistantThinking += (pendingAssistantThinking ? `
 ` : "") + thinkingText;
       }
     } else if (payload.type === "function_call") {
@@ -3182,46 +3191,58 @@ function parseCodexSessionFile(content) {
           }
         }
       }
-      currentToolCalls.push({
-        id: payload.call_id || "",
-        name: payload.name || "",
-        input: args
+      pushAssistantMessage({
+        timestamp,
+        toolCalls: [{
+          id: payload.call_id || "",
+          name: payload.name || "",
+          input: args
+        }]
       });
     } else if (payload.type === "function_call_output") {
       const outputParsed = extractCodexTextAndImages(payload.output);
-      currentToolResults.push({
+      pushToolResultMessage({
+        timestamp,
         toolUseId: payload.call_id || "",
-        content: typeof payload.output === "string" ? payload.output : outputParsed.text
-      });
-      if (outputParsed.images.length > 0) {
-        currentAssistantImages.push(...outputParsed.images.map((img) => ({
+        content: typeof payload.output === "string" ? payload.output : outputParsed.text,
+        images: outputParsed.images.map((img) => ({
           mediaType: img.mediaType,
           data: img.data,
           toolUseId: payload.call_id || undefined
-        })));
-      }
+        }))
+      });
     } else if (payload.type === "custom_tool_call") {
-      currentToolCalls.push({
-        id: payload.call_id || "",
-        name: payload.name || "",
-        input: payload.input ? { input: payload.input } : {}
+      pushAssistantMessage({
+        timestamp,
+        toolCalls: [{
+          id: payload.call_id || "",
+          name: payload.name || "",
+          input: payload.input ? { input: payload.input } : {}
+        }]
       });
     } else if (payload.type === "custom_tool_call_output") {
       const outputParsed = extractCodexTextAndImages(payload.output);
-      currentToolResults.push({
+      pushToolResultMessage({
+        timestamp,
         toolUseId: payload.call_id || "",
-        content: typeof payload.output === "string" ? payload.output : outputParsed.text
-      });
-      if (outputParsed.images.length > 0) {
-        currentAssistantImages.push(...outputParsed.images.map((img) => ({
+        content: typeof payload.output === "string" ? payload.output : outputParsed.text,
+        images: outputParsed.images.map((img) => ({
           mediaType: img.mediaType,
           data: img.data,
           toolUseId: payload.call_id || undefined
-        })));
-      }
+        }))
+      });
     }
   }
-  flushAssistantMessage();
+  const trailingThinking = takePendingThinking();
+  if (trailingThinking) {
+    messages.push({
+      role: "assistant",
+      content: "",
+      timestamp: lastTimestamp,
+      thinking: trailingThinking
+    });
+  }
   return messages;
 }
 function extractCodexCwd(content) {
@@ -12050,6 +12071,134 @@ function formatTimeAgo(ms) {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
+// src/colors.ts
+var isColorSupported = process.stdout.isTTY !== false && process.env.NO_COLOR === undefined;
+var raw = {
+  reset: "\x1B[0m",
+  bold: "\x1B[1m",
+  dim: "\x1B[2m",
+  italic: "\x1B[3m",
+  underline: "\x1B[4m",
+  black: "\x1B[30m",
+  red: "\x1B[31m",
+  green: "\x1B[32m",
+  yellow: "\x1B[33m",
+  blue: "\x1B[34m",
+  magenta: "\x1B[35m",
+  cyan: "\x1B[36m",
+  white: "\x1B[37m",
+  gray: "\x1B[90m",
+  bgRed: "\x1B[41m",
+  bgGreen: "\x1B[42m",
+  bgYellow: "\x1B[43m",
+  bgBlue: "\x1B[44m"
+};
+var none = Object.fromEntries(Object.keys(raw).map((k) => [k, ""]));
+var codes = isColorSupported ? raw : none;
+var c = codes;
+
+// src/formatter.ts
+function formatDate(isoDate) {
+  const date = new Date(isoDate);
+  const now = new Date;
+  const diffMs = now.getTime() - date.getTime();
+  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+  if (diffDays === 0) {
+    return date.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  } else if (diffDays === 1) {
+    return "Yesterday";
+  } else if (diffDays < 7) {
+    return date.toLocaleDateString("en-US", { weekday: "short" });
+  } else {
+    return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  }
+}
+function truncatePath(path12, maxLen = 38) {
+  if (!path12)
+    return "";
+  const home = process.env.HOME || "";
+  if (home && path12.startsWith(home)) {
+    path12 = "~" + path12.slice(home.length);
+  }
+  if (path12.length > maxLen) {
+    const parts = path12.split("/");
+    if (parts.length > 3) {
+      const prefix = parts[0];
+      const suffix = parts.slice(-2).join("/");
+      if ((prefix + "/.../" + suffix).length <= maxLen) {
+        return prefix + "/.../" + suffix;
+      }
+      return ".../" + suffix;
+    }
+  }
+  return path12;
+}
+function truncateId(id) {
+  return id.slice(0, 7);
+}
+function formatRole(role) {
+  return `[${role}]`;
+}
+function formatFeedResults(result, options = {}) {
+  const lines = [];
+  lines.push("<FEED>");
+  if (result.conversations.length === 0) {
+    lines.push("No conversations found.");
+    if (options.projectPath) {
+      lines.push(`
+Scope: ${truncatePath(options.projectPath)}`);
+      lines.push("Use -g to view all sessions globally.");
+    }
+    lines.push("</FEED>");
+    return lines.join(`
+`);
+  }
+  const pageInfo = options.page && options.page > 1 ? ` (page ${options.page})` : "";
+  lines.push(`Recent conversations (${result.conversations.length})${pageInfo}
+`);
+  for (const conv of result.conversations) {
+    const header = `── ${conv.title} `;
+    const padding = "─".repeat(Math.max(0, 60 - header.length));
+    lines.push(header + padding);
+    const userDisplay = conv.user?.name || conv.user?.email;
+    const liveLabel = conv.is_live ? `${c.green}LIVE ${conv.agent_status || "active"}${c.reset}` : "";
+    const meta = [
+      truncateId(conv.id),
+      liveLabel,
+      formatDate(conv.updated_at),
+      `${conv.message_count} msgs`,
+      truncatePath(conv.project_path),
+      userDisplay ? `${c.yellow}${userDisplay}${c.reset}` : ""
+    ].filter(Boolean).join(" | ");
+    lines.push(`   ${meta}
+`);
+    for (const msg of conv.preview) {
+      const lineNum = String(msg.line).padStart(4);
+      const role = formatRole(msg.role);
+      if (msg.role === "user") {
+        lines.push(`  ${lineNum}: ${role} ${msg.content}`);
+      } else {
+        lines.push(`       ${lineNum}: ${role} ${msg.content}`);
+      }
+    }
+    lines.push("");
+  }
+  if (result.conversations.length > 0) {
+    const firstId = truncateId(result.conversations[0].id);
+    const page = options.page ?? 1;
+    lines.push(`Use: cast read ${firstId} <range>        # read messages by line range`);
+    lines.push(`     cast read ${firstId} <line> --full   # expand tool calls for a message`);
+    lines.push(`     cast feed -p ${page + 1}                  # next page`);
+  }
+  if (options.projectPath) {
+    lines.push(`
+Scope: ${truncatePath(options.projectPath)}`);
+  }
+  lines.push("</FEED>");
+  return lines.join(`
+`);
+}
+
 // src/jsonlGenerator.ts
 import * as fs13 from "fs";
 import * as path12 from "path";
@@ -12691,6 +12840,8 @@ var STATE_FILE = path13.join(CONFIG_DIR5, "daemon.state");
 var PID_FILE = path13.join(CONFIG_DIR5, "daemon.pid");
 var VERSION_FILE = path13.join(CONFIG_DIR5, "daemon.version");
 var STARTED_SESSIONS_FILE = path13.join(CONFIG_DIR5, "started-sessions.json");
+var APP_SERVER_THREADS_FILE = path13.join(CONFIG_DIR5, "app-server-threads.json");
+var PID_FILE_STALE_GRACE_MS = 2000;
 function getPermissionFlags(agentType, config) {
   const modes = config?.agent_permission_modes;
   if (agentType === "claude") {
@@ -12828,6 +12979,20 @@ var lastHookStatus = new Map;
 var pendingInteractivePrompts = new Map;
 var AGENT_STATUS_DIR = path13.join(process.env.HOME || "", ".codecast", "agent-status");
 var skillsSyncedConversations = new Set;
+function mapCodexAppServerThreadStatusToAgentStatus(status) {
+  if (!status?.type)
+    return null;
+  switch (status.type) {
+    case "idle":
+      return "idle";
+    case "active":
+      return status.activeFlags?.includes("waitingOnApproval") || status.activeFlags?.includes("waitingOnUserInput") ? "permission_blocked" : "working";
+    case "systemError":
+      return "stopped";
+    default:
+      return null;
+  }
+}
 function readAvailableSkills(projectPath) {
   const skills = [];
   const seen = new Set;
@@ -13172,7 +13337,7 @@ async function pollDaemonCommands() {
       return;
     const data = await response.json();
     if (data.commands && data.commands.length > 0) {
-      log(`[POLL] Received ${data.commands.length} command(s): ${data.commands.map((c) => c.command).join(", ")}`);
+      log(`[POLL] Received ${data.commands.length} command(s): ${data.commands.map((c2) => c2.command).join(", ")}`);
       for (const cmd of data.commands) {
         if (processedPollCommandIds.has(cmd.id))
           continue;
@@ -13506,7 +13671,13 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
           try {
             const sandbox = binaryArgs.includes("--full-auto") ? "danger-full-access" : "workspace-write";
             const approval = binaryArgs.includes("--full-auto") ? "never" : "on-request";
-            const resp = await codexAppServerInstance.threadStart({ cwd, sandbox, approvalPolicy: approval });
+            const developerInstructions = await buildCodexStableContext(config, cwd);
+            const resp = await codexAppServerInstance.threadStart({
+              cwd,
+              sandbox,
+              approvalPolicy: approval,
+              ...developerInstructions ? { developerInstructions } : {}
+            });
             codexThreadId = resp.thread.id;
             cmdText = `${envPrefix} codex resume ${codexThreadId}`;
             log(`[codex-app-server] pre-created thread ${codexThreadId.slice(0, 8)} for new session`);
@@ -13537,14 +13708,14 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
               projectPath: cwd,
               startedAt: Date.now(),
               agentType,
+              appServerThreadId: codexThreadId || undefined,
               worktreeName: worktreeResult?.worktreeName,
               worktreeBranch: worktreeResult?.worktreeBranch,
               worktreePath: worktreeResult?.worktreePath
             });
             log(`[REMOTE] Registered started session tmux for conversation ${conversationId.slice(0, 12)}`);
             if (codexThreadId) {
-              appServerThreads.set(codexThreadId, { threadId: codexThreadId, conversationId });
-              appServerConversations.set(conversationId, codexThreadId);
+              registerAppServerConversation(conversationId, codexThreadId, { cwd, persist: false });
               log(`[codex-app-server] registered conv=${conversationId.slice(0, 12)} -> thread=${codexThreadId.slice(0, 8)}`);
             }
             if (agentType === "claude") {
@@ -14174,6 +14345,44 @@ function readConfig() {
     return JSON.parse(fs14.readFileSync(CONFIG_FILE, "utf-8"));
   } catch {
     return null;
+  }
+}
+var ANSI_ESCAPE_RE = /\x1b\[[0-9;]*m/g;
+function stripAnsi(text) {
+  return text.replace(ANSI_ESCAPE_RE, "");
+}
+async function buildCodexStableContext(config, cwd) {
+  const stableMode = config?.stable_mode;
+  if (!stableMode || !config?.auth_token || !config?.convex_url)
+    return;
+  const projectPath = config.stable_global ? undefined : cwd;
+  const lookbackDays = stableMode === "team" ? 14 : 7;
+  const limit = stableMode === "team" ? 15 : 10;
+  const siteUrl = config.convex_url.replace(".cloud", ".site");
+  try {
+    const response = await fetch(`${siteUrl}/cli/feed`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        api_token: config.auth_token,
+        limit,
+        offset: 0,
+        start_time: Date.now() - lookbackDays * 24 * 60 * 60 * 1000,
+        project_path: projectPath
+      })
+    });
+    const result = await response.json();
+    if (!response.ok || result?.error)
+      return;
+    const feed = stripAnsi(formatFeedResults(result, { projectPath }));
+    const instruction = stableMode === "team" ? "This gives you bigger-picture visibility on what has been and is being worked on by the team." : "This gives you bigger-picture visibility on what you have been and are currently working on.";
+    return `<stable-context mode="${stableMode}">
+${instruction}
+
+${feed}
+</stable-context>`;
+  } catch {
+    return;
   }
 }
 function patchConfig(updates) {
@@ -16010,12 +16219,12 @@ async function findSessionProcess(sessionId, agentType = "claude") {
           return result2;
         }
         let newest = null;
-        for (const c of geminiCandidates) {
+        for (const c2 of geminiCandidates) {
           try {
-            const { stdout: startOut } = await execAsync2(`ps -o lstart= -p ${c.pid}`);
+            const { stdout: startOut } = await execAsync2(`ps -o lstart= -p ${c2.pid}`);
             const startedAt = new Date(startOut.trim()).getTime();
             if (!isNaN(startedAt) && (!newest || startedAt > newest.startedAt)) {
-              newest = { pid: c.pid, tty: c.tty, startedAt };
+              newest = { pid: c2.pid, tty: c2.tty, startedAt };
             }
           } catch {
           }
@@ -16164,9 +16373,9 @@ async function findSessionProcess(sessionId, agentType = "claude") {
               } catch {
               }
             }
-            const unclaimed = candidates.filter((c) => {
+            const unclaimed = candidates.filter((c2) => {
               for (const [cachedSid, cachedInfo] of sessionProcessCache) {
-                if (cachedSid !== sessionId && cachedInfo.pid === c.pid)
+                if (cachedSid !== sessionId && cachedInfo.pid === c2.pid)
                   return false;
               }
               return true;
@@ -16180,14 +16389,14 @@ async function findSessionProcess(sessionId, agentType = "claude") {
               const jsonlBirthMs = jsonlStat.birthtimeMs;
               let bestCandidate = null;
               let bestDelta = Infinity;
-              for (const c of unclaimed) {
+              for (const c2 of unclaimed) {
                 try {
-                  const { stdout: etimeOut } = await execAsync2(`ps -o lstart= -p ${c.pid}`);
+                  const { stdout: etimeOut } = await execAsync2(`ps -o lstart= -p ${c2.pid}`);
                   const processStart = new Date(etimeOut.trim()).getTime();
                   const delta = Math.abs(processStart - jsonlBirthMs);
                   if (delta < bestDelta) {
                     bestDelta = delta;
-                    bestCandidate = c;
+                    bestCandidate = c2;
                   }
                 } catch {
                 }
@@ -16814,6 +17023,174 @@ var codexPermissionRunning = new Set;
 var codexAppServerInstance = null;
 var appServerThreads = new Map;
 var appServerConversations = new Map;
+var persistedAppServerThreads = new Map;
+var appServerTurnProgress = new Map;
+var APP_SERVER_THREAD_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+var rehydratePersistedAppServerThreadsPromise = null;
+function upsertAppServerThreadRegistration(threads, conversations, conversationId, threadId, extra) {
+  const existingThreadId = conversations.get(conversationId);
+  if (existingThreadId && existingThreadId !== threadId) {
+    const existingThreadEntry = threads.get(existingThreadId);
+    if (existingThreadEntry?.conversationId === conversationId) {
+      threads.delete(existingThreadId);
+    }
+  }
+  const existingConversation = threads.get(threadId)?.conversationId;
+  if (existingConversation && existingConversation !== conversationId) {
+    conversations.delete(existingConversation);
+  }
+  threads.set(threadId, { threadId, conversationId, ...extra });
+  conversations.set(conversationId, threadId);
+}
+function removeAppServerThreadRegistration(threads, conversations, conversationId, threadId) {
+  const resolvedThreadId = threadId ?? conversations.get(conversationId);
+  conversations.delete(conversationId);
+  if (!resolvedThreadId)
+    return;
+  const existing = threads.get(resolvedThreadId);
+  if (existing?.conversationId === conversationId) {
+    threads.delete(resolvedThreadId);
+  }
+}
+function clearLiveAppServerThreadRegistrations() {
+  appServerThreads.clear();
+  appServerConversations.clear();
+  appServerTurnProgress.clear();
+}
+function buildAppServerProgressSignature(messages) {
+  return JSON.stringify(messages.map((message) => ({
+    uuid: message.uuid,
+    role: message.role,
+    content: message.content,
+    thinking: message.thinking,
+    toolCalls: message.toolCalls,
+    toolResults: message.toolResults,
+    images: message.images,
+    subtype: message.subtype
+  })));
+}
+async function syncAppServerTurnMessagesIfChanged(turnId, conversationId, messages, syncService, retryQueue, threadIdForLog) {
+  if (messages.length === 0)
+    return;
+  const progress = appServerTurnProgress.get(turnId);
+  if (!progress)
+    return;
+  const signature = buildAppServerProgressSignature(messages);
+  if (progress.lastSyncedSignature === signature)
+    return;
+  const batchResult = await syncMessagesBatch(messages, conversationId, syncService, retryQueue);
+  if (!batchResult.authExpired && !batchResult.conversationNotFound) {
+    progress.lastSyncedSignature = signature;
+    syncStats.messagesSynced += messages.length;
+    syncStats.sessionsActive.add(threadIdForLog);
+    log(`[codex-app-server] live synced ${messages.length} messages for thread ${threadIdForLog}`);
+  }
+}
+function persistAppServerThreadRegistrations() {
+  try {
+    const data = {};
+    const now = Date.now();
+    for (const [conversationId, record] of persistedAppServerThreads) {
+      if (now - record.updatedAt < APP_SERVER_THREAD_TTL_MS) {
+        data[conversationId] = record;
+      }
+    }
+    fs14.writeFileSync(APP_SERVER_THREADS_FILE, JSON.stringify(data), "utf-8");
+  } catch {
+  }
+}
+function registerAppServerConversation(conversationId, threadId, opts = {}) {
+  const updatedAt = opts.updatedAt ?? Date.now();
+  const existingThreadId = appServerConversations.get(conversationId);
+  const existingConversation = appServerThreads.get(threadId)?.conversationId;
+  upsertAppServerThreadRegistration(appServerThreads, appServerConversations, conversationId, threadId, { cwd: opts.cwd });
+  if (!opts.persist)
+    return;
+  if (existingConversation && existingConversation !== conversationId) {
+    persistedAppServerThreads.delete(existingConversation);
+  }
+  persistedAppServerThreads.set(conversationId, { threadId, updatedAt, cwd: opts.cwd });
+  if (existingThreadId && existingThreadId !== threadId) {
+    persistedAppServerThreads.delete(conversationId);
+  }
+  persistAppServerThreadRegistrations();
+}
+function forgetPersistedAppServerConversation(conversationId) {
+  if (!persistedAppServerThreads.delete(conversationId))
+    return;
+  persistAppServerThreadRegistrations();
+}
+function markAppServerConversationResumable(conversationId, threadId, updatedAt = Date.now()) {
+  const resolvedThreadId = threadId ?? appServerConversations.get(conversationId);
+  if (!resolvedThreadId)
+    return;
+  const liveEntry = appServerThreads.get(resolvedThreadId);
+  persistedAppServerThreads.set(conversationId, {
+    threadId: resolvedThreadId,
+    updatedAt,
+    cwd: liveEntry?.cwd
+  });
+  persistAppServerThreadRegistrations();
+}
+async function rehydratePersistedAppServerThreads() {
+  if (!codexAppServerInstance?.running || persistedAppServerThreads.size === 0)
+    return;
+  const entries = [...persistedAppServerThreads.entries()];
+  let resumed = 0;
+  let dropped = 0;
+  for (const [conversationId, record] of entries) {
+    if (appServerConversations.has(conversationId))
+      continue;
+    try {
+      await codexAppServerInstance.threadResume({
+        threadId: record.threadId,
+        ...record.cwd ? { cwd: record.cwd } : {}
+      });
+      registerAppServerConversation(conversationId, record.threadId, {
+        cwd: record.cwd,
+        updatedAt: record.updatedAt,
+        persist: false
+      });
+      resumed++;
+    } catch (err) {
+      dropped++;
+      persistedAppServerThreads.delete(conversationId);
+      log(`[codex-app-server] dropping persisted thread ${record.threadId.slice(0, 8)} for conv=${conversationId.slice(0, 12)}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  if (dropped > 0) {
+    persistAppServerThreadRegistrations();
+  }
+  if (resumed > 0 || dropped > 0) {
+    log(`[codex-app-server] rehydrated ${resumed} persisted thread(s), dropped ${dropped}`);
+  }
+}
+function loadPersistedAppServerThreadRegistrations() {
+  try {
+    if (!fs14.existsSync(APP_SERVER_THREADS_FILE))
+      return;
+    const raw2 = JSON.parse(fs14.readFileSync(APP_SERVER_THREADS_FILE, "utf-8"));
+    const now = Date.now();
+    let loaded = 0;
+    for (const [conversationId, record] of Object.entries(raw2)) {
+      if (!record?.threadId)
+        continue;
+      const updatedAt = record.updatedAt ?? now;
+      if (now - updatedAt >= APP_SERVER_THREAD_TTL_MS)
+        continue;
+      persistedAppServerThreads.set(conversationId, {
+        threadId: record.threadId,
+        updatedAt,
+        cwd: record.cwd
+      });
+      loaded++;
+    }
+    if (loaded > 0) {
+      log(`Loaded ${loaded} app-server thread registration(s) from disk`);
+    }
+  } catch {
+  }
+}
 var CODEX_PERMISSION_PATTERNS = [
   /Would you like to run the following command\?/,
   /Press enter to confirm or esc to cancel/,
@@ -16941,9 +17318,9 @@ class PersistedStartedSessions extends Map {
     try {
       if (!fs14.existsSync(STARTED_SESSIONS_FILE))
         return;
-      const raw = JSON.parse(fs14.readFileSync(STARTED_SESSIONS_FILE, "utf-8"));
+      const raw2 = JSON.parse(fs14.readFileSync(STARTED_SESSIONS_FILE, "utf-8"));
       const now = Date.now();
-      for (const [k, v] of Object.entries(raw)) {
+      for (const [k, v] of Object.entries(raw2)) {
         if (now - v.startedAt < STARTED_SESSION_TTL_MS) {
           super.set(k, v);
         }
@@ -16955,6 +17332,7 @@ class PersistedStartedSessions extends Map {
     }
   }
 }
+loadPersistedAppServerThreadRegistrations();
 var startedSessionTmux = new PersistedStartedSessions;
 var restartingSessionIds = new Map;
 var RESTART_GUARD_TTL_MS = 60000;
@@ -17482,7 +17860,7 @@ async function repairAndResumeSession(sessionId, content, titleCache, nonInterac
         const parsed = JSON.parse(line);
         const content2 = parsed.message?.content;
         if (Array.isArray(content2)) {
-          const hasCorruptToolResult = content2.some((c) => c.type === "tool_result" && c.content && typeof c.content === "string" && (c.content.includes("is not an object") || c.content.includes("undefined")));
+          const hasCorruptToolResult = content2.some((c2) => c2.type === "tool_result" && c2.content && typeof c2.content === "string" && (c2.content.includes("is not an object") || c2.content.includes("undefined")));
           if (hasCorruptToolResult) {
             removed++;
             continue;
@@ -17720,6 +18098,10 @@ async function deliverMessage(conversationId, content, conversationCache, syncSe
         logDelivery(`[codex-app-server] delivered via app-server to thread ${appServerThreadId.slice(0, 8)}`);
         return true;
       } catch (err) {
+        removeAppServerThreadRegistration(appServerThreads, appServerConversations, conversationId, appServerThreadId);
+        if (err instanceof Error && /thread not found|no rollout found/i.test(err.message)) {
+          forgetPersistedAppServerConversation(conversationId);
+        }
         logDelivery(`[codex-app-server] delivery failed, falling back to tmux: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
@@ -18243,20 +18625,74 @@ function clearCrashCount() {
   } catch {
   }
 }
-function acquireLock() {
-  const underLaunchd = isManagedByLaunchd();
-  if (fs14.existsSync(PID_FILE)) {
+function readPidFile(pidFile) {
+  try {
+    const pid = parseInt(fs14.readFileSync(pidFile, "utf-8").trim(), 10);
+    return Number.isFinite(pid) && pid > 0 ? pid : null;
+  } catch {
+    return null;
+  }
+}
+function tryAcquirePidFileLock(pidFile, pid, options = {}) {
+  const nowMs = options.nowMs ?? Date.now();
+  const staleGraceMs = options.staleGraceMs ?? PID_FILE_STALE_GRACE_MS;
+  const isPidRunning = options.isProcessRunning ?? isProcessRunning;
+  for (let attempt = 0;attempt < 3; attempt++) {
     try {
-      const existingPid = parseInt(fs14.readFileSync(PID_FILE, "utf-8").trim(), 10);
-      if (existingPid === process.pid) {
-        return true;
+      const fd = fs14.openSync(pidFile, "wx", 384);
+      try {
+        fs14.writeFileSync(fd, `${pid}
+`);
+        fs14.fsyncSync(fd);
+      } finally {
+        fs14.closeSync(fd);
       }
-      if (!isNaN(existingPid) && isProcessRunning(existingPid)) {
+      return true;
+    } catch (err) {
+      const code2 = err.code;
+      if (code2 !== "EEXIST")
         return false;
-      }
-    } catch {
+    }
+    const existingPid = readPidFile(pidFile);
+    if (existingPid === pid)
+      return true;
+    if (existingPid && isPidRunning(existingPid))
+      return false;
+    let stat4;
+    try {
+      stat4 = fs14.statSync(pidFile);
+    } catch (err) {
+      const code2 = err.code;
+      if (code2 === "ENOENT")
+        continue;
+      return false;
+    }
+    if (nowMs - stat4.mtimeMs < staleGraceMs) {
+      return false;
+    }
+    try {
+      fs14.unlinkSync(pidFile);
+    } catch (err) {
+      const code2 = err.code;
+      if (code2 === "ENOENT")
+        continue;
+      return false;
     }
   }
+  return false;
+}
+function releasePidFileIfOwned(pidFile, pid) {
+  if (readPidFile(pidFile) !== pid)
+    return false;
+  try {
+    fs14.unlinkSync(pidFile);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function acquireLock() {
+  const underLaunchd = isManagedByLaunchd();
   if (!underLaunchd) {
     try {
       const pgrepOut = execSync2(`pgrep -f 'daemon\\.ts$' 2>/dev/null || true`, { encoding: "utf-8", timeout: 3000 });
@@ -18272,15 +18708,7 @@ function acquireLock() {
     } catch {
     }
   }
-  fs14.writeFileSync(PID_FILE, String(process.pid), { mode: 384 });
-  try {
-    const writtenPid = parseInt(fs14.readFileSync(PID_FILE, "utf-8").trim(), 10);
-    if (writtenPid !== process.pid)
-      return false;
-  } catch {
-    return false;
-  }
-  return true;
+  return tryAcquirePidFileLock(PID_FILE, process.pid);
 }
 function findStaleSessionFiles(maxAgeMs = 7 * 24 * 60 * 60 * 1000) {
   const claudeProjectsDir = path13.join(process.env.HOME || "", ".claude", "projects");
@@ -18481,7 +18909,7 @@ function findWorkspacePathForCursorConversation(sessionId) {
     }
     const composerData = getCursorComposerData(dbPath);
     const composers = composerData?.allComposers || [];
-    if (!composers.some((c) => c.composerId === sessionId)) {
+    if (!composers.some((c2) => c2.composerId === sessionId)) {
       continue;
     }
     const workspaceStorageDir = path13.dirname(dbPath);
@@ -18793,8 +19221,8 @@ function startWatchdog(deps) {
             const sessionId = file.replace(".json", "");
             const filePath = path13.join(statusDir, file);
             try {
-              const raw = fs14.readFileSync(filePath, "utf-8");
-              const data = JSON.parse(raw);
+              const raw2 = fs14.readFileSync(filePath, "utf-8");
+              const data = JSON.parse(raw2);
               if (!data.ts)
                 continue;
               const ageMs = now - data.ts * 1000;
@@ -19224,8 +19652,8 @@ async function main() {
       if (!basename8 || !filePath.endsWith(".json"))
         return;
       const sessionId = basename8;
-      const raw = fs14.readFileSync(filePath, "utf-8");
-      const data = JSON.parse(raw);
+      const raw2 = fs14.readFileSync(filePath, "utf-8");
+      const data = JSON.parse(raw2);
       if (!data.status || !data.ts)
         return;
       const convId = conversationCache[sessionId];
@@ -19605,25 +20033,63 @@ async function main() {
       }
     }
   });
+  codexAppServerInstance.on("ready", () => {
+    if (rehydratePersistedAppServerThreadsPromise)
+      return;
+    rehydratePersistedAppServerThreadsPromise = rehydratePersistedAppServerThreads().catch((err) => {
+      log(`[codex-app-server] rehydrate failed: ${err instanceof Error ? err.message : String(err)}`);
+    }).finally(() => {
+      rehydratePersistedAppServerThreadsPromise = null;
+    });
+  });
+  codexAppServerInstance.on("exited", () => {
+    if (appServerThreads.size > 0 || appServerConversations.size > 0) {
+      log(`[codex-app-server] clearing ${appServerThreads.size} live thread registration(s) after exit`);
+    }
+    clearLiveAppServerThreadRegistrations();
+  });
   codexAppServerInstance.on("turnCompleted", async (threadId, turnId, messages, status) => {
     const entry = appServerThreads.get(threadId);
-    if (!entry)
-      return;
-    if (messages.length > 0) {
-      const batchResult = await syncMessagesBatch(messages, entry.conversationId, syncService, retryQueue);
-      if (!batchResult.authExpired && !batchResult.conversationNotFound) {
-        syncStats.messagesSynced += messages.length;
-        syncStats.sessionsActive.add(threadId);
-        log(`[codex-app-server] synced ${messages.length} messages for thread ${threadId.slice(0, 8)}`);
+    try {
+      if (!entry)
+        return;
+      await syncAppServerTurnMessagesIfChanged(turnId, entry.conversationId, messages, syncService, retryQueue, threadId.slice(0, 8));
+      if (status === "completed") {
+        markAppServerConversationResumable(entry.conversationId, threadId);
       }
+      sendAgentStatus(syncService, entry.conversationId, threadId, status === "completed" ? "idle" : "working");
+    } finally {
+      appServerTurnProgress.delete(turnId);
     }
-    sendAgentStatus(syncService, entry.conversationId, threadId, status === "completed" ? "idle" : "working");
   });
-  codexAppServerInstance.on("turnStarted", (threadId) => {
+  codexAppServerInstance.on("turnStarted", (threadId, turnId) => {
     const entry = appServerThreads.get(threadId);
+    appServerTurnProgress.set(turnId, { threadId, items: [] });
     if (entry) {
       sendAgentStatus(syncService, entry.conversationId, threadId, "working");
     }
+  });
+  codexAppServerInstance.on("itemCompleted", (threadId, turnId, item) => {
+    const entry = appServerThreads.get(threadId);
+    const progress = appServerTurnProgress.get(turnId);
+    if (!entry || !progress)
+      return;
+    progress.items.push(item);
+    const messages = threadItemsToMessages(progress.items);
+    syncAppServerTurnMessagesIfChanged(turnId, entry.conversationId, messages, syncService, retryQueue, threadId.slice(0, 8)).catch((err) => {
+      log(`[codex-app-server] live sync failed for thread ${threadId.slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`);
+    });
+  });
+  codexAppServerInstance.on("statusChanged", (threadId, status) => {
+    const entry = appServerThreads.get(threadId);
+    if (!entry)
+      return;
+    const agentStatus = mapCodexAppServerThreadStatusToAgentStatus(status);
+    if (!agentStatus)
+      return;
+    const activeFlags = status.activeFlags?.length ? ` flags=${status.activeFlags.join(",")}` : "";
+    log(`[codex-app-server] thread ${threadId.slice(0, 8)} status=${status.type}${activeFlags} -> ${agentStatus}`);
+    sendAgentStatus(syncService, entry.conversationId, threadId, agentStatus);
   });
   codexAppServerInstance.on("threadNameUpdated", async (threadId, name) => {
     if (!name)
@@ -19944,10 +20410,7 @@ async function main() {
 `);
       } catch {
       }
-      try {
-        fs14.unlinkSync(PID_FILE);
-      } catch {
-      }
+      releasePidFileIfOwned(PID_FILE, process.pid);
       try {
         fs14.unlinkSync(VERSION_FILE);
       } catch {
@@ -19990,13 +20453,8 @@ async function main() {
     for (const sync of cursorTranscriptSyncs.values()) {
       sync.stop();
     }
-    if (fs14.existsSync(PID_FILE)) {
-      try {
-        fs14.unlinkSync(PID_FILE);
-        log("PID file removed");
-      } catch (err) {
-        log(`Failed to remove PID file: ${err instanceof Error ? err.message : String(err)}`);
-      }
+    if (releasePidFileIfOwned(PID_FILE, process.pid)) {
+      log("PID file removed");
     }
     try {
       fs14.unlinkSync(VERSION_FILE);
@@ -20172,7 +20630,7 @@ async function runWatchdog() {
   }
   if (!daemonAlive) {
     logLine("Daemon not running, restarting...");
-    const updateCmd = commands.find((c) => c.command === "force_update");
+    const updateCmd = commands.find((c2) => c2.command === "force_update");
     if (updateCmd) {
       logLine("Force update pending, updating before restart...");
       const success = await performUpdate();
@@ -20191,7 +20649,7 @@ async function runWatchdog() {
         logLine("Update successful");
         clearCrashCount();
       }
-      commands = commands.filter((c) => c.id !== updateCmd.id);
+      commands = commands.filter((c2) => c2.id !== updateCmd.id);
     }
     for (const cmd of commands) {
       await fetch(`${siteUrl}/cli/command-result`, {
@@ -20218,7 +20676,7 @@ async function runWatchdog() {
     } catch (err) {
       logLine(`Failed to restart daemon: ${err}`);
     }
-  } else if (commands.some((c) => c.command === "force_update")) {
+  } else if (commands.some((c2) => c2.command === "force_update")) {
     logLine("Daemon alive with pending force_update, daemon should handle via subscription");
   }
 }
@@ -20238,9 +20696,15 @@ if (import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith
   });
 }
 export {
+  upsertAppServerThreadRegistration,
+  tryAcquirePidFileLock,
   tmuxPromptStillHasInput,
   shouldTreatClaudeFileAsStale,
   runWatchdog,
   runDaemon,
-  isAppServerManagedCodexSessionHead
+  removeAppServerThreadRegistration,
+  releasePidFileIfOwned,
+  mapCodexAppServerThreadStatusToAgentStatus,
+  isAppServerManagedCodexSessionHead,
+  buildCodexStableContext
 };
