@@ -545,6 +545,11 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
         return;
       }
     }
+    const planMatch = pathname?.match(/^\/plans\/([^/]+)$/);
+    if (planMatch) {
+      storeOpenPalette({ targets: [{ _id: planMatch[1], short_id: planMatch[1] }], targetType: 'plan' });
+      return;
+    }
     // On list pages, return false so GenericListView can handle with focused item
     if (pathname === '/tasks' || pathname === '/docs') return false;
     togglePalette();

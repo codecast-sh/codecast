@@ -4,6 +4,7 @@ import { useQuery } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useWorkspaceArgs } from "../hooks/useWorkspaceArgs";
 import { TaskStatusBadge } from "./TaskStatusBadge";
+import { LivenessDot } from "./LivenessDot";
 import {
   Target,
   Zap,
@@ -107,7 +108,7 @@ function ActiveAgentCard({ task }: { task: any }) {
       href={`/conversation/${task.activeSession.session_id}`}
       className="flex items-center gap-2 px-3 py-2 rounded-lg bg-emerald-500/8 border border-emerald-500/20 hover:bg-emerald-500/15 transition-colors group"
     >
-      <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse flex-shrink-0" />
+      <LivenessDot state="active" size="sm" />
       <span className="text-xs font-mono text-sol-text-dim flex-shrink-0">{task.short_id}</span>
       <span className="text-xs text-emerald-300/80 truncate group-hover:text-emerald-200 transition-colors">
         {task.title}

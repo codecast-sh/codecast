@@ -72,11 +72,12 @@ export function useGlobalShortcutActions() {
     if (!currentId) return;
     const ordered = store.visualOrder();
     const idx = ordered.findIndex(s => s._id === currentId);
-    const next = ordered[idx + 1] ?? ordered.find(s => s._id !== currentId);
     store.stashSession(currentId);
-    if (next && useInboxStore.getState().sessions[next._id]) {
-      if (isOnInboxPage) store.setCurrentSession(next._id);
-      else store.selectPanelSession(next._id);
+    if (!isOnInboxPage) {
+      const sessions = useInboxStore.getState().sessions;
+      const next = ordered.slice(idx + 1).find(s => sessions[s._id])
+        ?? ordered.find(s => sessions[s._id]);
+      if (next) store.selectPanelSession(next._id);
     }
   }, [isOnInboxPage]));
 
@@ -90,11 +91,12 @@ export function useGlobalShortcutActions() {
     }
     const ordered = store.visualOrder();
     const idx = ordered.findIndex(s => s._id === currentId);
-    const next = ordered[idx + 1] ?? ordered.find(s => s._id !== currentId);
     store.stashSession(currentId);
-    if (next && useInboxStore.getState().sessions[next._id]) {
-      if (isOnInboxPage) store.setCurrentSession(next._id);
-      else store.selectPanelSession(next._id);
+    if (!isOnInboxPage) {
+      const sessions = useInboxStore.getState().sessions;
+      const next = ordered.slice(idx + 1).find(s => sessions[s._id])
+        ?? ordered.find(s => sessions[s._id]);
+      if (next) store.selectPanelSession(next._id);
     }
   }, [isOnInboxPage, killSessionMutation]));
 

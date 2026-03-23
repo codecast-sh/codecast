@@ -11,26 +11,28 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { remarkEntityIds } from "../lib/remarkEntityIds";
 import { EntityIdPill, isEntityId } from "./EntityIdPill";
-import { SessionMention, PersonMention } from "./editor/MentionNodeView";
+import { PersonMention } from "./editor/MentionNodeView";
 import "./editor/editor.css";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 
 function SessionMentionById({ conversationId }: { conversationId: string }) {
+  const router = useRouter();
   const data = useQuery(api.conversations.getConversationMention, {
     conversation_id: conversationId as Id<"conversations">,
   });
   if (!data) return <span className="text-[11px] text-sol-text-dim/40 animate-pulse">...</span>;
+  const project = data.project_path?.split("/").filter(Boolean).pop();
+  const isLive = data.status === "working" || data.status === "thinking";
   return (
-    <SessionMention attrs={{
-      id: data._id,
-      label: data.title,
-      messageCount: data.message_count,
-      projectPath: data.project_path,
-      model: data.model,
-      status: data.status,
-      updatedAt: data.updated_at,
-      idleSummary: data.idle_summary,
-    }} />
+    <button
+      onClick={(e) => { e.stopPropagation(); router.push(`/conversation/${conversationId}`); }}
+      className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-sol-bg-alt/20 border border-sol-border/15 hover:border-sol-yellow/30 hover:bg-sol-yellow/5 transition-colors cursor-pointer align-baseline max-w-[320px] text-left"
+    >
+      {isLive && <span className="w-1.5 h-1.5 rounded-full bg-green-400 shrink-0 animate-pulse" />}
+      <span className="text-[11px] font-medium text-sol-text/80 truncate">{data.title}</span>
+      {project && <span className="text-[9px] text-sol-text-dim/35 shrink-0">{project}</span>}
+      <span className="text-[9px] text-sol-text-dim/25 tabular-nums shrink-0">{data.message_count}m</span>
+    </button>
   );
 }
 

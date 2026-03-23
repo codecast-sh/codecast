@@ -432,8 +432,8 @@ interface InboxStoreState {
   closeComposePalette: () => void;
 
   // -- Unified command palette --
-  palette: { open: boolean; targets: any[]; targetType: 'task' | 'doc' | null; initialMode: string };
-  openPalette: (opts?: { targets?: any[]; targetType?: 'task' | 'doc'; mode?: string }) => void;
+  palette: { open: boolean; targets: any[]; targetType: 'task' | 'doc' | 'plan' | null; initialMode: string };
+  openPalette: (opts?: { targets?: any[]; targetType?: 'task' | 'doc' | 'plan'; mode?: string }) => void;
   closePalette: () => void;
   togglePalette: () => void;
 
@@ -697,7 +697,7 @@ export const useInboxStore = create<InboxStoreState>(
 
   palette: { open: false, targets: [], targetType: null, initialMode: 'root' },
 
-  openPalette: (opts?: { targets?: any[]; targetType?: 'task' | 'doc'; mode?: string }) => {
+  openPalette: (opts?: { targets?: any[]; targetType?: 'task' | 'doc' | 'plan'; mode?: string }) => {
     set({
       palette: {
         open: true,
@@ -754,8 +754,12 @@ export const useInboxStore = create<InboxStoreState>(
     }
     let newSessionId = state.currentSessionId;
     if (state.currentSessionId && allIds.includes(state.currentSessionId)) {
-      const sorted = sortSessions(newSessions);
-      newSessionId = sorted.find((s) => !s.is_pinned)?._id ?? sorted[0]?._id ?? null;
+      const removedSet = new Set(allIds);
+      const ordered = visualOrderSessions(state.sessions, state.sessionsWithQueuedMessages);
+      const idx = ordered.findIndex(s => s._id === state.currentSessionId);
+      const next = ordered.slice(idx + 1).find(s => !removedSet.has(s._id))
+        ?? ordered.find(s => !removedSet.has(s._id));
+      newSessionId = next?._id ?? null;
     }
     set({
       sessions: newSessions,
@@ -1241,8 +1245,11 @@ export const useInboxStore = create<InboxStoreState>(
     newPending[`sessions:${id}`] = { type: "exclude", expiresAt: Date.now() + 10_000 };
     let newSessionId = state.currentSessionId;
     if (state.currentSessionId === id) {
-      const sorted = sortSessions(newSessions);
-      newSessionId = sorted.find((s) => !s.is_pinned)?._id ?? sorted[0]?._id ?? null;
+      const ordered = visualOrderSessions(state.sessions, state.sessionsWithQueuedMessages);
+      const idx = ordered.findIndex(s => s._id === id);
+      const next = ordered.slice(idx + 1).find(s => s._id !== id)
+        ?? ordered.find(s => s._id !== id);
+      newSessionId = next?._id ?? null;
     }
     set({
       sessions: newSessions,

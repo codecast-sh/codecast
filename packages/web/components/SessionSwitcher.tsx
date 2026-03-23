@@ -2,6 +2,7 @@ import { useRef } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { InboxSession } from "../store/inboxStore";
 import { cleanTitle } from "../lib/conversationProcessor";
+import { LivenessDot, sessionLivenessState } from "./LivenessDot";
 
 function getProjectName(gitRoot?: string, projectPath?: string): string {
   const path = gitRoot || projectPath;
@@ -10,21 +11,7 @@ function getProjectName(gitRoot?: string, projectPath?: string): string {
 }
 
 function StatusDot({ session }: { session: InboxSession }) {
-  if (!session.is_idle && session.message_count > 0) {
-    return (
-      <span className="relative flex h-2 w-2 flex-shrink-0">
-        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-sol-green opacity-75" />
-        <span className="relative inline-flex rounded-full h-2 w-2 bg-sol-green" />
-      </span>
-    );
-  }
-  if (session.session_error) {
-    return <span className="w-2 h-2 rounded-full bg-sol-red flex-shrink-0" />;
-  }
-  if (session.is_idle && session.message_count > 0) {
-    return <span className="w-2 h-2 rounded-full bg-sol-yellow flex-shrink-0" />;
-  }
-  return <span className="w-2 h-2 rounded-full bg-sol-text-dim/30 flex-shrink-0" />;
+  return <LivenessDot state={sessionLivenessState(session)} />;
 }
 
 export function SessionSwitcher({

@@ -10,6 +10,7 @@ import { useSyncTasks, useSyncTaskDetail } from "../../hooks/useSyncTasks";
 
 import { CreateTaskModal } from "../../components/CreateTaskModal";
 import { GenericListView, ListGroup, ItemRowState } from "../../components/GenericListView";
+import { LivenessDot, ActiveSessionBadge, taskLivenessState } from "../../components/LivenessDot";
 
 const api = _api as any;
 import { AuthGuard } from "../../components/AuthGuard";
@@ -108,7 +109,11 @@ export function TaskRow({ task, state, triageMode, onTriage }: { task: TaskItem;
         className="flex-shrink-0 hover:scale-125 transition-transform"
         title="Change status (s)"
       >
-        <StatusIcon className={`w-4 h-4 ${status.color}`} />
+        {(task as any).activeSession && taskLivenessState(task.status, (task as any).activeSession) === "active" ? (
+          <LivenessDot state="active" size="sm" />
+        ) : (
+          <StatusIcon className={`w-4 h-4 ${status.color}`} />
+        )}
       </button>
       <span className="text-xs font-mono text-sol-text-dim w-16 flex-shrink-0 cq-hide-minimal">{task.short_id}</span>
       {state.isEditing ? (
@@ -137,30 +142,9 @@ export function TaskRow({ task, state, triageMode, onTriage }: { task: TaskItem;
           <span className="flex-shrink-0 cq-hide-compact" title={`${task.source} created`}><Bot className="w-3.5 h-3.5 text-sol-text-dim/60" /></span>
         )
       )}
-      {(task as any).activeSession && (() => {
-        const { session_id, agent_status, agent_type, title } = (task as any).activeSession;
-        const isBlocked = agent_status === "permission_blocked";
-        const isIdle = agent_status === "idle" || agent_status === "stopped";
-        const dotClass = isBlocked ? "bg-orange-400" : isIdle ? "bg-sol-text-dim" : "bg-emerald-400 animate-pulse";
-        const badgeClass = isBlocked
-          ? "bg-orange-500/15 text-orange-400 hover:bg-orange-500/25"
-          : isIdle
-          ? "bg-sol-bg-alt text-sol-text-dim hover:bg-sol-bg-highlight"
-          : "bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25";
-        const statusLabel = isBlocked ? "blocked" : isIdle ? "idle"
-          : agent_type === "codex" ? "codex" : agent_type === "cursor" ? "cursor" : agent_type === "gemini" ? "gemini" : "live";
-        return (
-          <Link
-            href={`/conversation/${session_id}`}
-            onClick={(e) => e.stopPropagation()}
-            className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] cursor-pointer transition-colors flex-shrink-0 cq-hide-compact ${badgeClass}`}
-            title={title || "Active session"}
-          >
-            <span className={`w-1.5 h-1.5 rounded-full ${dotClass}`} />
-            {statusLabel}
-          </Link>
-        );
-      })()}
+      {(task as any).activeSession && (
+        <ActiveSessionBadge session={(task as any).activeSession} className="cq-hide-compact" />
+      )}
       {(task as any).plan && (
         <Link
           href={`/plans/${(task as any).plan._id}`}
@@ -469,25 +453,9 @@ function KanbanCard({
       <div className="flex items-start justify-between gap-2 mb-2">
         <span className="text-[10px] font-mono text-sol-text-dim leading-none mt-0.5">{task.short_id}</span>
         <div className="flex items-center gap-1.5 flex-shrink-0">
-          {(task as any).activeSession && (() => {
-            const { agent_status, agent_type } = (task as any).activeSession;
-            const isBlocked = agent_status === "permission_blocked";
-            const isIdle = agent_status === "idle" || agent_status === "stopped";
-            const dotClass = isBlocked ? "bg-orange-400" : isIdle ? "bg-sol-text-dim" : "bg-emerald-400 animate-pulse";
-            const badgeClass = isBlocked
-              ? "bg-orange-500/15 text-orange-400"
-              : isIdle
-              ? "bg-sol-bg-alt text-sol-text-dim"
-              : "bg-emerald-500/15 text-emerald-400";
-            const statusLabel = isBlocked ? "blocked" : isIdle ? "idle"
-              : agent_type === "codex" ? "codex" : agent_type === "cursor" ? "cursor" : agent_type === "gemini" ? "gemini" : "live";
-            return (
-              <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] ${badgeClass}`}>
-                <span className={`w-1 h-1 rounded-full ${dotClass}`} />
-                {statusLabel}
-              </span>
-            );
-          })()}
+          {(task as any).activeSession && (
+            <ActiveSessionBadge session={(task as any).activeSession} compact />
+          )}
           {assignee ? (
             assignee.image ? (
               <img src={assignee.image} alt={assignee.name} className="w-4 h-4 rounded-full" title={assignee.name} />

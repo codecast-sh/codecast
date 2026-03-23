@@ -5,7 +5,7 @@ import { Input } from "../../../components/ui/input";
 import { Button } from "../../../components/ui/button";
 import { Label } from "../../../components/ui/label";
 import { useState } from "react";
-import { GitBranch, Folder, Check, Search, Eye, EyeOff, ChevronDown } from "lucide-react";
+import { GitBranch, Folder, Check, Search, Eye, EyeOff, ChevronDown, AlertTriangle } from "lucide-react";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import {
   DropdownMenu,
@@ -13,6 +13,14 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "../../../components/ui/dropdown-menu";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "../../../components/ui/dialog";
 import { TeamIcon } from "../../../components/TeamIcon";
 
 type TeamVisibility = "hidden" | "activity" | "summary" | "full";
@@ -33,11 +41,17 @@ export default function SyncPage() {
   const updateSyncSettings = useMutation(api.users.updateSyncSettings);
   const updateDirectoryMapping = useMutation(api.users.updateDirectoryTeamMapping);
   const removeDirectoryMapping = useMutation(api.users.removeDirectoryTeamMapping);
+  const deleteConversationsForPath = useMutation(api.users.deleteConversationsForPath);
   const setTeamVisibility = useMutation(api.teams.setTeamVisibility);
 
   const [editMode, setEditMode] = useState(false);
   const [newProject, setNewProject] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
+  const [pendingUnsync, setPendingUnsync] = useState<{
+    path: string;
+    sessionCount: number;
+    action: "unsync" | "remove_team";
+  } | null>(null);
 
   if (!user || !syncSettings) {
     return null;
@@ -75,6 +89,11 @@ export default function SyncPage() {
     return null;
   };
 
+  const getSessionCountForPath = (path: string): number => {
+    const project = allProjects.find(p => p.path === path);
+    return project?.session_count ?? 0;
+  };
+
   const handleTeamChange = async (path: string, teamId: Id<"teams"> | null) => {
     if (teamId) {
       await updateDirectoryMapping({
@@ -85,6 +104,11 @@ export default function SyncPage() {
     } else {
       const existingMapping = mappingsByPath.get(path);
       if (existingMapping) {
+        const count = getSessionCountForPath(path);
+        if (count > 0) {
+          setPendingUnsync({ path, sessionCount: count, action: "remove_team" });
+          return;
+        }
         await removeDirectoryMapping({ path_prefix: path });
       }
     }
@@ -95,6 +119,11 @@ export default function SyncPage() {
       const newProjects = [...syncProjects, path];
       await updateSyncSettings({ sync_projects: newProjects });
     } else {
+      const count = getSessionCountForPath(path);
+      if (count > 0) {
+        setPendingUnsync({ path, sessionCount: count, action: "unsync" });
+        return;
+      }
       const newProjects = syncProjects.filter(p => p !== path);
       await updateSyncSettings({ sync_projects: newProjects });
       const existingMapping = mappingsByPath.get(path);
@@ -102,6 +131,26 @@ export default function SyncPage() {
         await removeDirectoryMapping({ path_prefix: path });
       }
     }
+  };
+
+  const executeUnsync = async (deleteConversations: boolean) => {
+    if (!pendingUnsync) return;
+    const { path, action } = pendingUnsync;
+
+    if (action === "unsync") {
+      const newProjects = syncProjects.filter(p => p !== path);
+      await updateSyncSettings({ sync_projects: newProjects });
+      const existingMapping = mappingsByPath.get(path);
+      if (existingMapping) {
+        await removeDirectoryMapping({ path_prefix: path, delete_conversations: deleteConversations });
+      } else if (deleteConversations) {
+        await deleteConversationsForPath({ path_prefix: path });
+      }
+    } else {
+      await removeDirectoryMapping({ path_prefix: path, delete_conversations: deleteConversations });
+    }
+
+    setPendingUnsync(null);
   };
 
   const handleVisibilityChange = async (teamId: Id<"teams">, visibility: TeamVisibility) => {
@@ -449,6 +498,48 @@ export default function SyncPage() {
           </p>
         </div>
       </Card>
+
+      <Dialog open={!!pendingUnsync} onOpenChange={(open) => !open && setPendingUnsync(null)}>
+        <DialogContent className="bg-sol-bg border-sol-border">
+          <DialogHeader>
+            <DialogTitle className="text-sol-text flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5 text-sol-yellow" />
+              Remove Sync for {pendingUnsync ? getProjectName(pendingUnsync.path) : ""}?
+            </DialogTitle>
+            <DialogDescription className="text-sol-base1">
+              This project has {pendingUnsync?.sessionCount} synced conversation{pendingUnsync?.sessionCount !== 1 ? "s" : ""}.
+              You can keep them on the server or delete them permanently.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 py-2">
+            <div className="text-xs text-sol-base1 font-mono bg-sol-base03 px-3 py-2 rounded truncate">
+              {pendingUnsync?.path}
+            </div>
+          </div>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button
+              variant="outline"
+              onClick={() => setPendingUnsync(null)}
+              className="border-sol-border text-sol-base1"
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => executeUnsync(false)}
+              className="border-sol-cyan text-sol-cyan hover:bg-sol-cyan/10"
+            >
+              Keep Conversations
+            </Button>
+            <Button
+              onClick={() => executeUnsync(true)}
+              className="bg-red-600 text-white hover:bg-red-700"
+            >
+              Delete Conversations
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

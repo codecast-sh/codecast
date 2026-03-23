@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useConvexAuth } from "convex/react";
 import { Button } from "@/components/ui/button";
 import { InstallTabs } from "@/components/install-tabs";
-import { Logo, LogoIcon } from "@/components/Logo";
+import { Logo } from "@/components/Logo";
 import { isDesktop } from "@/lib/desktop";
 import { useWatchEffect } from "@/hooks/useWatchEffect";
 
@@ -98,91 +98,6 @@ function TypingEffect() {
   );
 }
 
-function LiveIndicator() {
-  return (
-    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-[#859900]/10 border border-[#859900]/30 text-[#859900] text-xs font-mono">
-      <span className="relative flex h-2 w-2">
-        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#859900] opacity-75"></span>
-        <span className="relative inline-flex rounded-full h-2 w-2 bg-[#859900]"></span>
-      </span>
-      LIVE
-    </span>
-  );
-}
-
-function ConversationDemo() {
-  const messages = [
-    { type: "user", text: "add dark mode to the settings page", time: "2:34 PM" },
-    { type: "tool", name: "Read", file: "src/pages/Settings.tsx" },
-    { type: "tool", name: "Edit", file: "src/pages/Settings.tsx", badge: "+47 -12" },
-    { type: "tool", name: "Edit", file: "src/styles/theme.css", badge: "+23 -0" },
-    { type: "assistant", text: "Added dark mode toggle to Settings. The theme persists to localStorage and syncs with system preferences.", time: "2:35 PM" },
-    { type: "user", text: "nice, now run the tests", time: "2:35 PM" },
-    { type: "tool", name: "Bash", command: "npm test", result: "42 passed", status: "success" },
-  ];
-
-  return (
-    <div className="relative">
-      <div className="absolute -inset-4 bg-gradient-to-r from-[#b58900]/20 via-[#cb4b16]/20 to-[#dc322f]/20 rounded-2xl blur-xl opacity-50"></div>
-      <div className="relative bg-[#002b36] rounded-xl border border-[#094959] shadow-2xl overflow-hidden">
-        <div className="flex items-center justify-between px-4 py-2.5 bg-[#073642] border-b border-[#094959]">
-          <div className="flex items-center gap-2">
-            <div className="flex gap-1.5">
-              <div className="w-3 h-3 rounded-full bg-[#dc322f]"></div>
-              <div className="w-3 h-3 rounded-full bg-[#b58900]"></div>
-              <div className="w-3 h-3 rounded-full bg-[#859900]"></div>
-            </div>
-            <LogoIcon size={14} className="text-[#586e75] ml-2" />
-            <span className="text-xs font-mono text-[#586e75] ml-1">codecast</span>
-          </div>
-          <LiveIndicator />
-        </div>
-
-        <div className="p-4 space-y-3 font-mono text-sm max-h-[400px] overflow-hidden">
-          {messages.map((msg, i) => (
-            <div
-              key={i}
-              className="animate-fadeIn"
-              style={{ animationDelay: `${i * 150}ms` }}
-            >
-              {msg.type === "user" && (
-                <div className="flex items-start gap-3">
-                  <div className="w-6 h-6 rounded bg-[#268bd2] flex items-center justify-center text-xs text-white font-bold shrink-0">U</div>
-                  <div className="flex-1">
-                    <p className="text-[#93a1a1]">{msg.text}</p>
-                    <p className="text-xs text-[#586e75] mt-0.5">{msg.time}</p>
-                  </div>
-                </div>
-              )}
-              {msg.type === "tool" && (
-                <div className="ml-9 flex items-center gap-2 text-xs">
-                  <span className={`px-1.5 py-0.5 rounded font-medium ${
-                    msg.name === "Read" ? "bg-[#2aa198]/20 text-[#2aa198]" :
-                    msg.name === "Edit" ? "bg-[#b58900]/20 text-[#b58900]" :
-                    "bg-[#6c71c4]/20 text-[#6c71c4]"
-                  }`}>{msg.name}</span>
-                  <span className="text-[#657b83]">{msg.file || msg.command}</span>
-                  {msg.badge && <span className="text-[#859900]">{msg.badge}</span>}
-                  {msg.result && <span className="text-[#859900]">{msg.result}</span>}
-                </div>
-              )}
-              {msg.type === "assistant" && (
-                <div className="flex items-start gap-3">
-                  <div className="w-6 h-6 rounded bg-[#cb4b16] flex items-center justify-center text-xs text-white font-bold shrink-0">C</div>
-                  <div className="flex-1">
-                    <p className="text-[#eee8d5]">{msg.text}</p>
-                    <p className="text-xs text-[#586e75] mt-0.5">{msg.time}</p>
-                  </div>
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function StatCard({ value, label }: { value: string; label: string }) {
   return (
     <div className="text-center">
@@ -267,16 +182,16 @@ export default function LandingPage() {
           </div>
 
           <h1 className="text-5xl md:text-6xl font-bold leading-[1.1] tracking-tight mb-6 font-mono" style={{ color: '#002b36' }}>
-            Move up a layer.<br />
-            <span style={{ color: '#93a1a1' }}>Drive your roadmap with agents.</span>
+            Your AI coding sessions,<br />
+            <span style={{ color: '#93a1a1' }}>accessible everywhere</span>
           </h1>
 
           <p className="text-lg leading-relaxed mb-1" style={{ color: '#657b83' }}>
-            Works with <Highlight color="amber">Claude Code</Highlight>, <Highlight color="green">Codex</Highlight>, <Highlight color="rose">Gemini</Highlight>, and <Highlight color="blue">Cursor</Highlight>.
+            Real-time sync for <Highlight color="amber">Claude Code</Highlight>, <Highlight color="green">Codex</Highlight>, <Highlight color="rose">Gemini</Highlight>, and <Highlight color="blue">Cursor</Highlight>.
           </p>
           <p className="text-xl leading-relaxed mb-4 max-w-2xl mx-auto" style={{ color: '#657b83' }}>
-            Stop managing individual conversations. Work at the level of plans, projects, and tasks --
-            agents see the bigger picture and help you organize, triage, and ship.
+            Watch your agent work from any device,
+            share sessions with your team, and give it memory across every session.
           </p>
 
           <p className="text-lg mb-8 font-mono min-h-[28px]" style={{ color: '#586e75' }}>
@@ -302,9 +217,33 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* Demo */}
-      <section className="max-w-4xl mx-auto px-6 pb-20">
-        <ConversationDemo />
+      {/* Hero Image */}
+      <section className="max-w-6xl mx-auto px-6 pb-20">
+        <div className="relative">
+          <div className="absolute -inset-4 bg-gradient-to-r from-[#b58900]/20 via-[#cb4b16]/20 to-[#dc322f]/20 rounded-2xl blur-xl opacity-50"></div>
+          <div className="relative rounded-xl overflow-hidden shadow-2xl"> 
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src="/docs/hero.png"
+              alt="Codecast inbox showing live agent sessions with status indicators, pinned sessions, and the three-column layout"
+              className="w-full block"
+              style={{ backgroundColor: '#002b36' }}
+            />
+          </div>
+        </div>
+      </section>
+
+      {/* Move up a layer */}
+      <section className="max-w-4xl mx-auto px-6 pb-16">
+        <div className="text-center">
+          <h2 className="text-3xl font-bold mb-4 font-mono" style={{ color: '#002b36' }}>
+            Move up a layer
+          </h2>
+          <p className="text-lg leading-relaxed max-w-2xl mx-auto" style={{ color: '#657b83' }}>
+            Stop managing individual conversations. Work at the level of plans, projects, and tasks --
+            agents see the bigger picture and help you organize, triage, and ship.
+          </p>
+        </div>
       </section>
 
       {/* Stats */}

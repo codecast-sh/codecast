@@ -1114,9 +1114,9 @@ export const ConversationColumn = memo(function ConversationColumn() {
   const session = sidePanelSessionId ? (sessions[sidePanelSessionId] ?? dismissedSessions[sidePanelSessionId] ?? null) : null;
   const sessionRenderKey = getSessionRenderKey(session);
 
-  const handleSessionSelect = useCallback((id: string) => {
-    selectPanelSession(id);
-  }, [selectPanelSession]);
+  useWatchEffect(() => {
+    if (sidePanelSessionId && !session) selectPanelSession(null);
+  });
 
   const handleBack = useCallback(() => {
     selectPanelSession(null);
@@ -1137,29 +1137,24 @@ export const ConversationColumn = memo(function ConversationColumn() {
     if (sidePanelSessionId) stashSession(sidePanelSessionId);
   }, [sidePanelSessionId, stashSession]);
 
+  if (!session || !sidePanelSessionId) return null;
+
   return (
     <div className="h-full flex flex-col">
-      {session && sidePanelSessionId ? (
-        <div className="h-full">
-          <InboxConversation
-            key={sessionRenderKey || sidePanelSessionId}
-            sessionId={sidePanelSessionId}
-            isIdle={session.is_idle}
-            onSendAndAdvance={() => {}}
-            onSendAndDismiss={handleSendAndDismiss}
-            lastUserMessage={session.last_user_message}
-            sessionError={session.session_error}
-            onBack={handleBack}
-            onExpandToMain={handleExpand}
-            onClose={handleClose}
-          />
-        </div>
-      ) : (
-        <SessionListPanel
-          onSessionSelect={handleSessionSelect}
-          activeSessionId={sidePanelSessionId}
+      <div className="h-full">
+        <InboxConversation
+          key={sessionRenderKey || sidePanelSessionId}
+          sessionId={sidePanelSessionId}
+          isIdle={session.is_idle}
+          onSendAndAdvance={() => {}}
+          onSendAndDismiss={handleSendAndDismiss}
+          lastUserMessage={session.last_user_message}
+          sessionError={session.session_error}
+          onBack={handleBack}
+          onExpandToMain={handleExpand}
+          onClose={handleClose}
         />
-      )}
+      </div>
     </div>
   );
 });

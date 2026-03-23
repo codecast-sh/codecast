@@ -115,7 +115,7 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
   const selectPanelSession = useInboxStore(s => s.selectPanelSession);
   const showCollapsedRail = !sidePanelOpen && !isOnInboxPage && !isMobile && !isZenMode;
   const showSessionList = sidePanelOpen && !isOnInboxPage && !isMobile && !isZenMode;
-  const showConversationColumn = !!sidePanelSessionId && !isOnInboxPage && !isMobile;
+  const showConversationColumn = sidePanelOpen && !!sidePanelSessionId && !isOnInboxPage && !isMobile;
 
   useMountEffect(() => {
     setIsMobile(window.innerWidth < 768);
@@ -192,14 +192,29 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
   useShortcutContext('desktop', isDesktopApp);
 
   useShortcutAction('session.create', useCallback(() => {
+    const store = useInboxStore.getState();
     if (isOnInboxPage) {
       handleQuickCreate();
     } else {
+      if (store.showMySessions) store.setShowMySessions(false);
+      soundNewSession();
       const path = directoryFilter || currentConvContext.projectPath || currentConvContext.gitRoot;
-      const agentType = currentConvContext.agentType || "claude_code";
-      openNewSession({ projectPath: path, gitRoot: currentConvContext.gitRoot, agentType });
+      const agentType = (currentConvContext.agentType || "claude_code") as "claude_code" | "codex" | "cursor" | "gemini";
+      const sid = nanoid(10);
+      const now = Date.now();
+      store.setConversationMeta(sid, {
+        _id: sid, _creationTime: now, user_id: "", agent_type: agentType,
+        session_id: sid, project_path: path, git_root: currentConvContext.gitRoot || path,
+        started_at: now, updated_at: now, message_count: 0, status: "active",
+        title: "New session", messages: [],
+      });
+      store.createSession({
+        agent_type: agentType, project_path: path,
+        git_root: currentConvContext.gitRoot || path, session_id: sid,
+      });
+      useInboxStore.setState({ sidePanelSessionId: sid });
     }
-  }, [isOnInboxPage, directoryFilter, currentConvContext, handleQuickCreate, openNewSession]));
+  }, [isOnInboxPage, directoryFilter, currentConvContext, handleQuickCreate]));
 
   useShortcutAction('session.createIsolated', useCallback(() => {
     handleQuickCreateIsolated();
@@ -351,9 +366,11 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
           <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
             <button
               onClick={() => {
-                const path = directoryFilter || currentConvContext.projectPath || currentConvContext.gitRoot;
-                const agentType = currentConvContext.agentType || "claude_code";
-                openNewSession({ projectPath: path, gitRoot: currentConvContext.gitRoot, agentType });
+                if (directoryFilter || currentConvContext.projectPath || currentConvContext.gitRoot) {
+                  handleQuickCreate();
+                } else {
+                  openNewSession({});
+                }
               }}
               className="hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-sol-cyan/15 text-sol-cyan border border-sol-cyan/30 hover:bg-sol-cyan/25 hover:border-sol-cyan/50 transition-all"
               title="New session (Ctrl+N)"

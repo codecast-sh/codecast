@@ -405,15 +405,19 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
   return (
     <TooltipProvider delayDuration={200}>
     <div className="flex flex-col items-center gap-3">
-        <div className="flex items-center gap-2 text-sol-text-muted text-xs cursor-default" title={currentPath || undefined}>
-          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
-          </svg>
-          <span className="font-medium text-sol-text">{currentName}</span>
-        </div>
+        {currentPath ? (
+          <div className="flex items-center gap-2 text-sol-text-muted text-xs cursor-default" title={currentPath}>
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
+            </svg>
+            <span className="font-medium text-sol-text">{currentName}</span>
+          </div>
+        ) : recentProjects.length > 0 ? (
+          <div className="text-sol-text-dim text-xs">select a project</div>
+        ) : null}
 
       <div className="flex flex-wrap justify-center gap-1.5">
-        {isolated && currentPath && (
+        {currentPath && (
           <button
             onClick={() => handleSwitch(currentPath)}
             className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border border-sol-cyan/40 bg-sol-cyan/5 text-sol-cyan transition-all"
@@ -9465,7 +9469,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         <div className="flex flex-col">
         {(!conversation || timeline.length === 0) ? (
           <div className={`flex-1 flex flex-col items-center gap-3 ${hideHeader ? "justify-start pt-6" : "justify-start pt-16"}`}>
-            {conversation && (conversation.project_path || conversation.git_root) && (
+            {conversation && (
               <ProjectSwitcher conversation={conversation} />
             )}
           </div>

@@ -5,6 +5,7 @@ import { useQuery, useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { Badge } from "./ui/badge";
 import { TaskStatusBadge, getExecStatusConfig } from "./TaskStatusBadge";
+import { LivenessDot, ActiveSessionBadge } from "./LivenessDot";
 import { WorkflowContextPanel } from "./WorkflowContextPanel";
 import { toast } from "sonner";
 import {
@@ -487,7 +488,7 @@ export function OrchestrationHeader({ tasks, sessions }: { tasks: any[]; session
                 href={`/conversation/${t.activeSession.session_id}`}
                 className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-emerald-500/10 hover:bg-emerald-500/20 transition-colors group/agent"
               >
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse flex-shrink-0" />
+                <LivenessDot state="active" size="xs" />
                 <span className="text-xs font-mono text-sol-text-dim">{t.short_id}</span>
                 <span className="text-xs text-emerald-700 dark:text-emerald-300/80 truncate max-w-[200px] group-hover/agent:text-emerald-800 dark:group-hover/agent:text-emerald-200 transition-colors">
                   {t.title}
@@ -750,14 +751,7 @@ export function PlanTaskSection({ planShortId, tasks, sessions }: { planShortId:
                   />
                 </div>
                 {task.activeSession && (
-                  <Link
-                    href={`/conversation/${task.activeSession.session_id}`}
-                    onClick={(e: React.MouseEvent) => e.stopPropagation()}
-                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 text-[10px] hover:bg-emerald-500/25 transition-colors flex-shrink-0"
-                  >
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                    live
-                  </Link>
+                  <ActiveSessionBadge session={task.activeSession} />
                 )}
                 {hasExec && (
                   <TaskStatusBadge status={task.execution_status} type="execution" className="flex-shrink-0" />
@@ -950,13 +944,7 @@ export function OrchestrationTab({ tasks, sessions }: { tasks: any[]; sessions: 
                           <TaskStatusBadge status={task.execution_status} type="execution" />
                         )}
                         {task.activeSession && (
-                          <Link
-                            href={`/conversation/${task.activeSession.session_id}`}
-                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 text-[10px] hover:bg-emerald-500/25 transition-colors"
-                          >
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                            live
-                          </Link>
+                          <ActiveSessionBadge session={task.activeSession} />
                         )}
                         {task.actual_minutes && (
                           <span className="text-[10px] text-gray-400 dark:text-gray-500 font-mono">

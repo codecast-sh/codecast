@@ -22,7 +22,9 @@ import {
   MessageSquare,
   ChevronRight,
   Plus,
+  Zap,
 } from "lucide-react";
+import { LivenessDot, planLivenessState } from "../../components/LivenessDot";
 
 const api = _api as any;
 
@@ -72,6 +74,9 @@ function SidebarPlanItem({ plan, isSelected, onSelect }: { plan: any; isSelected
   const status = STATUS_CONFIG[plan.status as PlanStatus] || STATUS_CONFIG.draft;
   const StatusIcon = status.icon;
   const sessionCount = plan.session_ids?.length || 0;
+  const activeAgents = plan.active_agents || 0;
+  const liveness = planLivenessState(plan.status, activeAgents > 0);
+  const taskCount = plan.task_ids?.length || plan.progress?.total || 0;
 
   return (
     <button
@@ -83,7 +88,11 @@ function SidebarPlanItem({ plan, isSelected, onSelect }: { plan: any; isSelected
       }`}
     >
       <div className="flex items-center gap-2 min-w-0">
-        <StatusIcon className={`w-3.5 h-3.5 flex-shrink-0 ${status.color}`} />
+        {liveness === "active" ? (
+          <LivenessDot state="active" size="sm" />
+        ) : (
+          <StatusIcon className={`w-3.5 h-3.5 flex-shrink-0 ${status.color}`} />
+        )}
         <span className={`text-sm truncate ${isSelected ? "text-sol-text font-medium" : "text-sol-text"}`}>
           {plan.title}
         </span>
@@ -91,6 +100,17 @@ function SidebarPlanItem({ plan, isSelected, onSelect }: { plan: any; isSelected
       <div className="flex items-center gap-2 mt-1 pl-[22px]">
         <span className="text-[10px] font-mono text-sol-text-dim">{plan.short_id}</span>
         <MiniProgressBar progress={plan.progress} />
+        {activeAgents > 0 && (
+          <span className="flex items-center gap-0.5 text-[10px] text-emerald-400">
+            <Zap className="w-2.5 h-2.5" />
+            {activeAgents}
+          </span>
+        )}
+        {taskCount > 0 && (
+          <span className="text-[10px] text-sol-text-dim tabular-nums">
+            {taskCount}t
+          </span>
+        )}
         {sessionCount > 0 && (
           <span className="flex items-center gap-0.5 text-[10px] text-sol-text-dim">
             <MessageSquare className="w-2.5 h-2.5" />
