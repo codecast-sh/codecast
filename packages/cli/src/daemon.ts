@@ -3,7 +3,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { Database } from "bun:sqlite";
-import { execSync, execFileSync, exec, execFile, spawn, spawnSync } from "child_process";
+import { execSync, execFileSync, exec, execFile, spawn } from "child_process";
 import { watch as chokidarWatch } from "chokidar";
 import { SessionWatcher, type SessionEvent } from "./sessionWatcher.js";
 import { CursorWatcher, type CursorSessionEvent } from "./cursorWatcher.js";
@@ -966,8 +966,6 @@ async function executeRemoteCommand(
           tmuxExecSync(["new-session", "-d", "-s", tmuxSession, "-c", projectPath], { timeout: 5000 });
           tmuxExecSync(["send-keys", "-t", tmuxSession, "-l", cmdText], { timeout: 5000 });
           tmuxExecSync(["send-keys", "-t", tmuxSession, "Enter"], { timeout: 5000 });
-          spawnSync("sleep", ["0.2"]);
-          tmuxExecSync(["send-keys", "-t", tmuxSession, "Enter"], { timeout: 5000 });
           result = JSON.stringify({ tmux_session: tmuxSession, workflow_run_id: workflowRunId });
           log(`[REMOTE] Started workflow run ${workflowRunId} in tmux: ${tmuxSession}`);
         } catch (spawnErr) {
@@ -1082,8 +1080,6 @@ async function executeRemoteCommand(
         try {
           tmuxExecSync(["new-session", "-d", "-s", tmuxSession, "-c", cwd], { timeout: 5000 });
           tmuxExecSync(["send-keys", "-t", tmuxSession, "-l", cmdText], { timeout: 5000 });
-          tmuxExecSync(["send-keys", "-t", tmuxSession, "Enter"], { timeout: 5000 });
-          spawnSync("sleep", ["0.2"]);
           tmuxExecSync(["send-keys", "-t", tmuxSession, "Enter"], { timeout: 5000 });
           const resultObj: Record<string, any> = { tmux_session: tmuxSession, agent_type: agentType, project_path: cwd };
           if (worktreeResult) {
@@ -1506,8 +1502,6 @@ async function executeRemoteCommand(
             try {
               tmuxExecSync(["new-session", "-d", "-s", tmuxSession, "-c", cwd], { timeout: 5000 });
               tmuxExecSync(["send-keys", "-t", tmuxSession, "-l", blankCmdText], { timeout: 5000 });
-              tmuxExecSync(["send-keys", "-t", tmuxSession, "Enter"], { timeout: 5000 });
-              spawnSync("sleep", ["0.2"]);
               tmuxExecSync(["send-keys", "-t", tmuxSession, "Enter"], { timeout: 5000 });
               startedSessionTmux.set(conversationId, {
                 tmuxSession,
@@ -3309,6 +3303,22 @@ async function processCodexSession(
     fs.closeSync(fd);
 
     const newContent = buffer.toString("utf-8");
+    let sessionMetaHead: string;
+    try {
+      sessionMetaHead = readFileHead(filePath, 4096);
+    } catch (err: any) {
+      if (err.code === "EACCES" || err.code === "EPERM") {
+        log(`Warning: Permission denied reading ${filePath} for Codex session metadata. Skipping.`);
+        return;
+      }
+      throw err;
+    }
+    if (isAppServerManagedCodexSessionHead(sessionMetaHead)) {
+      setPosition(filePath, stats.size);
+      markSynced(filePath, stats.size, 0);
+      log(`Skipping app-server-managed Codex transcript ${sessionId}`);
+      return;
+    }
     const messages = parseCodexSessionFile(newContent);
 
     let conversationId = conversationCache[sessionId];
@@ -3345,18 +3355,8 @@ async function processCodexSession(
     }
 
     if (!conversationId) {
-      let headContent: string;
       try {
-        headContent = readFileHead(filePath, 16384);
-      } catch (err: any) {
-        if (err.code === 'EACCES' || err.code === 'EPERM') {
-          log(`Warning: Permission denied reading ${filePath} for conversation creation. Skipping.`);
-          return;
-        }
-        throw err;
-      }
-
-      try {
+        const headContent = sessionMetaHead.length >= 16384 ? sessionMetaHead : readFileHead(filePath, 16384);
         const projectPath = extractCodexCwd(headContent);
         const firstMessageTimestamp = messages[0]?.timestamp;
         let matchedStartedConversation: string | null = null;
@@ -4275,9 +4275,7 @@ async function injectViaTmuxInner(target: string, content: string): Promise<void
         await tmuxExec(["send-keys", "-t", target, "-l", step.text]);
         await new Promise(resolve => setTimeout(resolve, 150));
         await tmuxExec(["send-keys", "-t", target, "Enter"]);
-        await new Promise(resolve => setTimeout(resolve, 200));
-        await tmuxExec(["send-keys", "-t", target, "Enter"]);
-        await new Promise(resolve => setTimeout(resolve, 300));
+        await new Promise(resolve => setTimeout(resolve, 500));
       } else {
         await tmuxExec(["send-keys", "-t", target, step.key]);
         await new Promise(resolve => setTimeout(resolve, 500));
@@ -4287,8 +4285,6 @@ async function injectViaTmuxInner(target: string, content: string): Promise<void
       await new Promise(resolve => setTimeout(resolve, 300));
       await tmuxExec(["send-keys", "-t", target, "-l", poll.text]);
       await new Promise(resolve => setTimeout(resolve, 150));
-      await tmuxExec(["send-keys", "-t", target, "Enter"]);
-      await new Promise(resolve => setTimeout(resolve, 200));
       await tmuxExec(["send-keys", "-t", target, "Enter"]);
     }
     log(`Injected poll response via tmux to ${target}`);
@@ -4319,9 +4315,9 @@ async function injectViaTmuxInner(target: string, content: string): Promise<void
     const id = `cc-${process.pid}-${Date.now()}`;
     const tmpFile = `/tmp/${id}`;
     try {
-      fs.writeFileSync(tmpFile, content);
+      fs.writeFileSync(tmpFile, sanitized);
       await tmuxExec(["load-buffer", "-b", id, tmpFile]);
-      await tmuxExec(["paste-buffer", "-t", target, "-b", id, "-d", "-p"]);
+      await tmuxExec(["paste-buffer", "-t", target, "-b", id, "-d"]);
     } catch (err) {
       await tmuxExec(["send-keys", "-t", target, "-l", sanitized]);
     } finally {
@@ -4356,11 +4352,9 @@ async function injectViaTmuxInner(target: string, content: string): Promise<void
     log(`Paste may not have landed in ${target} (pane unchanged after 1s), proceeding anyway`);
   }
 
-  // Send Enter (double-tap with 200ms gap to handle occasional hangs)
+  // Send Enter to submit
   const enterDelay = Math.max(200, Math.min(1000, Math.ceil(sanitized.length / 100) * 50));
   await new Promise(resolve => setTimeout(resolve, enterDelay));
-  await tmuxExec(["send-keys", "-t", target, "Enter"]);
-  await new Promise(resolve => setTimeout(resolve, 200));
   await tmuxExec(["send-keys", "-t", target, "Enter"]);
 
   // Post-submit: verify the agent started processing
@@ -4388,17 +4382,17 @@ async function injectViaTmuxInner(target: string, content: string): Promise<void
       if (inputStuck) {
         log(`Enter may not have submitted (retry ${retry + 1}), sending Enter again to ${target}`);
         await tmuxExec(["send-keys", "-t", target, "Enter"]);
-        await new Promise(resolve => setTimeout(resolve, 200));
-        await tmuxExec(["send-keys", "-t", target, "Enter"]);
         continue;
       }
 
       // Empty prompt, no activity -- paste may have been silently dropped
-      if (hasPrompt && !pasteConfirmed && !rePasted) {
+      if (hasPrompt && !pasteConfirmed && !rePasted && retry >= 2) {
         const promptLine = lastLines.split("\n").find(l => /[❯›]/.test(l));
         const afterPrompt = promptLine ? (promptLine.match(/[❯›]/) ? promptLine.slice(promptLine.match(/[❯›]/)!.index! + 1).trim() : "") : "";
         if (!afterPrompt) {
           log(`Paste likely dropped (empty prompt, no activity), re-pasting once to ${target}`);
+          await tmuxExec(["send-keys", "-t", target, "C-u"]);
+          await new Promise(resolve => setTimeout(resolve, 200));
           await doPaste();
           await new Promise(resolve => setTimeout(resolve, enterDelay));
           await tmuxExec(["send-keys", "-t", target, "Enter"]);
@@ -4436,8 +4430,6 @@ function buildAppleScript(
           lines.push(`            tell s to write text "${escapedText}" without newline`);
           lines.push("            delay 0.15");
           lines.push(`            tell s to write text ""`);
-          lines.push("            delay 0.2");
-          lines.push(`            tell s to write text ""`);
         } else {
           lines.push(`            tell s to write text "${step.key}" without newline`);
         }
@@ -4462,7 +4454,7 @@ function buildAppleScript(
 
     const textAction = poll.text
       ? isIterm
-        ? `\n            delay 0.3\n            tell s to write text "${poll.text.replace(/"/g, '\\"')}" without newline\n            delay 0.15\n            tell s to write text ""\n            delay 0.2\n            tell s to write text ""`
+        ? `\n            delay 0.3\n            tell s to write text "${poll.text.replace(/"/g, '\\"')}" without newline\n            delay 0.15\n            tell s to write text ""`
         : `\n          delay 0.3\n          do script "${poll.text.replace(/"/g, '\\"')}" in t`
       : "";
 
@@ -4514,8 +4506,6 @@ end run`;
           if sTty is targetTty then
             tell s to write text msgText without newline
             delay 0.15
-            tell s to write text ""
-            delay 0.2
             tell s to write text ""
             return "ok"
           end if
@@ -5221,8 +5211,6 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
       const nonInteractiveCmd = `env -u CLAUDECODE ${resumeCmd} -p "$(cat '${tmpFile}')" --output-format stream-json --verbose && rm -f '${tmpFile}'`;
       await tmuxExec(["send-keys", "-t", tmuxSession, "-l", nonInteractiveCmd]);
       await tmuxExec(["send-keys", "-t", tmuxSession, "Enter"]);
-      await new Promise(resolve => setTimeout(resolve, 200));
-      await tmuxExec(["send-keys", "-t", tmuxSession, "Enter"]);
       logDelivery(`Auto-resumed ${agentType} ${shortId} in tmux=${tmuxSession} (non-interactive) cwd=${cwd}`);
 
       // Poll briefly for fatal errors before declaring success
@@ -5262,8 +5250,6 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
 
     // Prefix with env -u CLAUDECODE to prevent "cannot launch inside another Claude Code session" error
     await tmuxExec(["send-keys", "-t", tmuxSession, "-l", `env -u CLAUDECODE ${resumeCmd}`]);
-    await tmuxExec(["send-keys", "-t", tmuxSession, "Enter"]);
-    await new Promise(resolve => setTimeout(resolve, 200));
     await tmuxExec(["send-keys", "-t", tmuxSession, "Enter"]);
 
     logDelivery(`Auto-resumed ${agentType} ${shortId} in tmux=${tmuxSession} cwd=${cwd} cmd=${resumeCmd}`);
@@ -5613,8 +5599,6 @@ async function startFreshSessionForDelivery(
   try {
     tmuxExecSync(["new-session", "-d", "-s", tmuxSession, "-c", projectPath], { timeout: 5000 });
     tmuxExecSync(["send-keys", "-t", tmuxSession, "-l", blankCmdText], { timeout: 5000 });
-    tmuxExecSync(["send-keys", "-t", tmuxSession, "Enter"], { timeout: 5000 });
-    spawnSync("sleep", ["0.2"]);
     tmuxExecSync(["send-keys", "-t", tmuxSession, "Enter"], { timeout: 5000 });
     const entry: StartedSessionInfo = {
       tmuxSession,
@@ -6401,6 +6385,23 @@ export function shouldTreatClaudeFileAsStale(
   return fileStat.size > syncRecord.lastSyncedPosition;
 }
 
+export function isAppServerManagedCodexSessionHead(headContent: string): boolean {
+  const firstLine = headContent.split("\n").find((line) => line.trim().length > 0);
+  if (!firstLine) return false;
+
+  try {
+    const parsed = JSON.parse(firstLine) as {
+      type?: string;
+      payload?: { originator?: string; source?: string | { custom?: string } };
+    };
+    if (parsed.type !== "session_meta") return false;
+    if (parsed.payload?.originator === "codecast") return true;
+    return typeof parsed.payload?.source === "object" && parsed.payload.source?.custom === "codecast";
+  } catch {
+    return firstLine.includes('"originator":"codecast"') || firstLine.includes('"source":{"custom":"codecast"}');
+  }
+}
+
 function findStaleCodexSessionFiles(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): string[] {
   const codexSessionsDir = path.join(process.env.HOME || "", ".codex", "sessions");
   const staleFiles: string[] = [];
@@ -6430,6 +6431,8 @@ function findStaleCodexSessionFiles(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000):
 
           const lastPosition = getPosition(fullPath);
           if (fileStat.size !== lastPosition) {
+            const headContent = readFileHead(fullPath, 2048);
+            if (isAppServerManagedCodexSessionHead(headContent)) continue;
             staleFiles.push(fullPath);
           }
         } catch {
