@@ -41,13 +41,13 @@ function Highlight({ children, color }: { children: React.ReactNode; color: "amb
 }
 
 const TYPING_PHRASES = [
-  "watching your agent debug a 500 error",
-  "sharing how you built that feature",
-  "picking up where your teammate left off",
-  "searching 'how did we implement auth?'",
-  "your agent remembering why you chose that architecture",
-  "asking 'what did we decide about caching?'",
-  "your agent learning from last week's session",
+  "triaging tasks mined from last night's agent sessions",
+  "your agent picking up a plan and decomposing it into tasks",
+  "orchestrating three agents in parallel on a feature plan",
+  "searching 'how did we implement auth?' across 500 sessions",
+  "your agent reading the project roadmap before starting work",
+  "reviewing what your team's agents shipped this week",
+  "an agent resuming a plan with full context from yesterday",
 ];
 
 function TypingEffect() {
@@ -267,16 +267,16 @@ export default function LandingPage() {
           </div>
 
           <h1 className="text-5xl md:text-6xl font-bold leading-[1.1] tracking-tight mb-6 font-mono" style={{ color: '#002b36' }}>
-            Your AI coding sessions,<br />
-            <span style={{ color: '#93a1a1' }}>accessible everywhere</span>
+            Move up a layer.<br />
+            <span style={{ color: '#93a1a1' }}>Drive your roadmap with agents.</span>
           </h1>
 
           <p className="text-lg leading-relaxed mb-1" style={{ color: '#657b83' }}>
-            Real-time sync for <Highlight color="amber">Claude Code</Highlight>, <Highlight color="green">Codex</Highlight>, <Highlight color="rose">Gemini</Highlight>, and <Highlight color="blue">Cursor</Highlight>.
+            Works with <Highlight color="amber">Claude Code</Highlight>, <Highlight color="green">Codex</Highlight>, <Highlight color="rose">Gemini</Highlight>, and <Highlight color="blue">Cursor</Highlight>.
           </p>
           <p className="text-xl leading-relaxed mb-4 max-w-2xl mx-auto" style={{ color: '#657b83' }}>
-            Watch your agent work from any device,
-            share sessions with your team, and give it memory across every session.
+            Stop managing individual conversations. Work at the level of plans, projects, and tasks --
+            agents see the bigger picture and help you organize, triage, and ship.
           </p>
 
           <p className="text-lg mb-8 font-mono min-h-[28px]" style={{ color: '#586e75' }}>
@@ -313,7 +313,7 @@ export default function LandingPage() {
           <div className="grid grid-cols-2 md:grid-cols-4 gap-8">
             <StatCard value="12K+" label="Sessions synced" />
             <StatCard value="<50ms" label="Sync latency" />
-            <StatCard value="∞" label="Session recall" />
+            <StatCard value="4" label="Agents supported" />
             <StatCard value="100%" label="Private by default" />
           </div>
         </div>
@@ -323,10 +323,10 @@ export default function LandingPage() {
       <section id="how-it-works" className="max-w-6xl mx-auto px-6 py-20">
         <div className="text-center mb-16">
           <h2 className="text-3xl font-bold mb-4 font-mono" style={{ color: '#002b36' }}>
-            Three steps to team-wide visibility
+            From sessions to roadmap in three steps
           </h2>
           <p className="text-lg max-w-2xl mx-auto" style={{ color: '#657b83' }}>
-            Install the CLI, start coding, and watch your sessions sync automatically.
+            Install the CLI, let agents work, then manage everything from your dashboard.
           </p>
         </div>
 
@@ -356,10 +356,10 @@ export default function LandingPage() {
           <div className="relative">
             <div className="absolute -left-4 -top-4 w-12 h-12 rounded-full text-white flex items-center justify-center font-mono font-bold text-lg" style={{ backgroundColor: '#268bd2' }}>3</div>
             <div className="rounded-xl p-6 pt-10 h-full" style={{ backgroundColor: '#fdf6e3', border: '1px solid #eee8d5' }}>
-              <div className="font-mono text-sm mb-2" style={{ color: '#b58900' }}>codecast.sh/team/...</div>
-              <h3 className="text-xl font-semibold mb-2 font-mono" style={{ color: '#002b36' }}>Share &amp; search</h3>
+              <div className="font-mono text-sm mb-2" style={{ color: '#b58900' }}>plans / tasks / docs / inbox</div>
+              <h3 className="text-xl font-semibold mb-2 font-mono" style={{ color: '#002b36' }}>Work at a higher level</h3>
               <p style={{ color: '#657b83' }}>
-                Access sessions from any device. Share with teammates. Search your AI coding history.
+                Triage auto-mined tasks, orchestrate plans across agents, and drive your roadmap from the dashboard, desktop, or mobile.
               </p>
             </div>
           </div>
@@ -439,18 +439,18 @@ export default function LandingPage() {
           <div className="grid md:grid-cols-2 gap-16 items-center">
             <div>
               <h2 className="text-3xl font-bold mb-6 font-mono" style={{ color: '#fdf6e3' }}>
-                Built for developers who ship fast
+                The layer above your agents
               </h2>
               <div className="space-y-6">
                 <div className="flex gap-4 bg-[#859900]/10 -mx-4 px-4 py-4 rounded-xl border border-[#859900]/20">
                   <div className="w-10 h-10 rounded-lg bg-[#859900]/30 flex items-center justify-center shrink-0">
                     <svg className="w-5 h-5 text-[#859900]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" />
                     </svg>
                   </div>
                   <div>
-                    <h3 className="font-semibold text-lg mb-1">Team visibility</h3>
-                    <p className="text-[#93a1a1]">See what your teammates are building across Claude Code, Codex, Gemini, and Cursor. Share sessions, pick up where they left off, learn from their debugging.</p>
+                    <h3 className="font-semibold text-lg mb-1">Plans, tasks, and docs</h3>
+                    <p className="text-[#93a1a1]">Create plans that decompose into tasks. Agents pick up tasks with full project context. Tasks are auto-mined from sessions and triaged for your review.</p>
                   </div>
                 </div>
 
@@ -461,8 +461,8 @@ export default function LandingPage() {
                     </svg>
                   </div>
                   <div>
-                    <h3 className="font-semibold text-lg mb-1">Real-time sync</h3>
-                    <p className="text-[#839496]">Watch your agent work from anywhere. Send messages, approve changes, and keep coding from your phone or tablet.</p>
+                    <h3 className="font-semibold text-lg mb-1">Orchestrate in parallel</h3>
+                    <p className="text-[#839496]">Run multiple agents on different tasks simultaneously. Wave-based execution resolves dependencies. Failed tasks retry automatically.</p>
                   </div>
                 </div>
 
@@ -473,20 +473,20 @@ export default function LandingPage() {
                     </svg>
                   </div>
                   <div>
-                    <h3 className="font-semibold text-lg mb-1">Persistent global agent memory</h3>
-                    <p className="text-[#839496]">Team-wide memory across every tool and session. Your agent recalls what you or your teammates built, regardless of which tool was used.</p>
+                    <h3 className="font-semibold text-lg mb-1">Agents see the bigger picture</h3>
+                    <p className="text-[#839496]">Persistent memory across every session and tool. Agents access plans, decisions, and past work -- no more re-explaining your codebase.</p>
                   </div>
                 </div>
 
                 <div className="flex gap-4">
                   <div className="w-10 h-10 rounded-lg bg-[#268bd2]/20 flex items-center justify-center shrink-0">
                     <svg className="w-5 h-5 text-[#268bd2]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
                     </svg>
                   </div>
                   <div>
-                    <h3 className="font-semibold text-lg mb-1">Searchable history</h3>
-                    <p className="text-[#839496]">&quot;How did we implement that API?&quot; Search across all conversations, tool calls, and file changes.</p>
+                    <h3 className="font-semibold text-lg mb-1">Team-wide visibility</h3>
+                    <p className="text-[#839496]">Activity feeds show who&apos;s working on what, across Claude Code, Codex, Gemini, and Cursor. Collaborate on plans, share sessions, stop duplicating solved problems.</p>
                   </div>
                 </div>
               </div>
@@ -890,11 +890,12 @@ export default function LandingPage() {
       {/* CTA */}
       <section className="max-w-4xl mx-auto px-6 pb-20">
         <div className="bg-[#002b36] rounded-2xl p-12 text-center">
-          <h2 className="text-3xl font-bold text-white mb-4">
-            Ready to see what your AI has been up to?
+          <h2 className="text-3xl font-bold text-white mb-4 font-mono">
+            Move up a layer
           </h2>
           <p className="text-lg text-[#839496] mb-8 max-w-xl mx-auto">
-            Get started in 30 seconds. Free for individuals.
+            Stop managing conversations. Start driving your roadmap with agents.
+            Free for individuals. 30 seconds to install.
           </p>
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
             <Link href="/signup">
@@ -918,7 +919,7 @@ export default function LandingPage() {
             <div>
               <Logo size="md" className="text-[#002b36] mb-4" />
               <p className="text-sm text-[#657b83]">
-                Real-time sync for Claude Code, Codex, Gemini, and Cursor.
+                The operating system for AI coding agents.
               </p>
             </div>
             <div>

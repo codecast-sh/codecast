@@ -69,6 +69,18 @@ function CodeBlock({ children, title }: { children: string; title?: string }) {
 
 const FEATURE_CATEGORIES = [
   {
+    title: "Session Inbox",
+    problem: "Agents run everywhere, unsupervised",
+    description: "A triage queue for all your agent sessions. See live status, pin important work, defer noise, and respond to agents waiting for input -- all with keyboard shortcuts.",
+    icon: TerminalIcon,
+    color: "amber",
+    commands: [
+      { cmd: "Ctrl+J/K to navigate sessions", desc: "Keyboard-first triage" },
+      { cmd: "Pin, stash, defer, kill", desc: "Session management" },
+      { cmd: "Send messages from web UI", desc: "Resume in new terminal" },
+    ],
+  },
+  {
     title: "Agent Memory",
     problem: "Every AI session starts fresh",
     description: "Give your AI agent persistent memory. It searches past sessions automatically when starting new work, recalls decisions, and learns from its own history.",
@@ -76,50 +88,50 @@ const FEATURE_CATEGORIES = [
     color: "purple",
     commands: [
       { cmd: "cast memory", desc: "Install agent memory component" },
-      { cmd: "cast ask \"how did we implement auth?\"", desc: "Natural language query" },
-      { cmd: "cast context \"add stripe\"", desc: "Pre-work intelligence" },
+      { cmd: 'cast ask "how did we implement auth?"', desc: "Natural language query" },
+      { cmd: 'cast context "add stripe"', desc: "Pre-work intelligence" },
     ],
   },
   {
     title: "Search & Browse",
-    problem: "\"How did we do this before?\"",
-    description: "Stop re-solving the same problems. Search your AI coding history like ripgrep - full text, time filters, context lines. Find that one session from last month.",
+    problem: '"How did we do this before?"',
+    description: "Stop re-solving the same problems. Search your AI coding history like ripgrep -- full text, time filters, context lines. Find that one session from last month.",
     icon: SearchIcon,
     color: "blue",
     commands: [
-      { cmd: "cast search \"auth\" -s 7d", desc: "Search last 7 days" },
+      { cmd: 'cast search "auth" -s 7d', desc: "Search last 7 days" },
       { cmd: "cast feed -g", desc: "Browse all sessions" },
       { cmd: "cast read abc123 10:20", desc: "Read messages 10-20" },
     ],
   },
   {
-    title: "Session Resume",
-    problem: "Lost context when picking up work",
-    description: "Resume any session with full history. Generate handoff docs for continuity. Your agent picks up exactly where you (or it) left off.",
-    icon: TerminalIcon,
-    color: "amber",
-    commands: [
-      { cmd: "cast resume \"logo design\"", desc: "Search and resume" },
-      { cmd: "cast handoff", desc: "Generate context transfer" },
-      { cmd: "cast summary --today", desc: "Summarize today's work" },
-    ],
-  },
-  {
-    title: "File Intelligence",
-    problem: "\"Who changed this file and why?\"",
-    description: "Trace what your AI has touched. See which sessions modified a file, understand the intent behind changes, and find related work across your codebase.",
+    title: "Plans & Orchestration",
+    problem: "Multi-session features fall apart",
+    description: "Create plans, decompose into tasks, and orchestrate parallel agent execution in waves. Each agent gets full context. Failed tasks retry automatically.",
     icon: GitIcon,
     color: "green",
     commands: [
-      { cmd: "cast blame src/auth.ts", desc: "Who touched this file" },
-      { cmd: "cast similar --file src/api.ts", desc: "Related sessions" },
-      { cmd: "cast diff --today", desc: "Today's file changes" },
+      { cmd: "cast plan create 'Auth overhaul'", desc: "Create a plan" },
+      { cmd: "cast plan orchestrate <id>", desc: "Run in parallel waves" },
+      { cmd: "cast plan status <id>", desc: "Track progress" },
+    ],
+  },
+  {
+    title: "Tasks & Auto-Mining",
+    problem: "Work items lost in conversation",
+    description: "Tasks are mined automatically from agent sessions with confidence scoring. Triage suggested tasks, organize by plan, track status from backlog through completion.",
+    icon: LightbulbIcon,
+    color: "red",
+    commands: [
+      { cmd: "cast task create 'Fix bug' -p high", desc: "Create task" },
+      { cmd: "cast task ls --status open", desc: "List open tasks" },
+      { cmd: "cast task done <id>", desc: "Mark complete" },
     ],
   },
   {
     title: "Team Collaboration",
     problem: "Invisible work and duplicated effort",
-    description: "See what teammates are building in real-time. Share sessions without copy-pasting. Learn from their debugging. Stop duplicating solved problems.",
+    description: "See what teammates are building in real-time. Share sessions by project directory. Activity feeds show who's working on what. Privacy controls at every level.",
     icon: UsersIcon,
     color: "orange",
     commands: [
@@ -129,15 +141,27 @@ const FEATURE_CATEGORIES = [
     ],
   },
   {
-    title: "Knowledge Management",
+    title: "Documents & Knowledge",
     problem: "Decisions live in people's heads",
-    description: "Make architectural decisions searchable. Track rationale. Save code patterns for reuse. Build institutional knowledge from AI sessions.",
-    icon: LightbulbIcon,
-    color: "red",
+    description: "Create specs, designs, and notes with a rich editor. @mention sessions, tasks, and plans. Track architectural decisions with rationale. All searchable by your agent.",
+    icon: BrainIcon,
+    color: "purple",
     commands: [
-      { cmd: "cast decisions add \"Use Convex\"", desc: "Record decision" },
-      { cmd: "cast learn add \"http-pattern\"", desc: "Save code pattern" },
-      { cmd: "cast decisions --search \"db\"", desc: "Search decisions" },
+      { cmd: "cast doc create 'Auth Design'", desc: "Create document" },
+      { cmd: "cast decisions add 'Use Convex'", desc: "Record decision" },
+      { cmd: "cast learn add 'http-pattern'", desc: "Save code pattern" },
+    ],
+  },
+  {
+    title: "Everywhere You Are",
+    problem: "Stuck at your desk to manage agents",
+    description: "Web dashboard, native macOS desktop app with global shortcuts, and iOS mobile app. Cmd+K command palette for instant navigation. Push notifications when agents need input.",
+    icon: SearchIcon,
+    color: "blue",
+    commands: [
+      { cmd: "Cmd+K command palette", desc: "Jump to anything" },
+      { cmd: "Desktop: Cmd+Shift+Space", desc: "Global palette" },
+      { cmd: "iOS: push notifications", desc: "Stay informed" },
     ],
   },
 ];
@@ -217,6 +241,22 @@ const COMMAND_REFERENCE = [
       { cmd: "memory", desc: "Install agent memory component" },
     ],
   },
+  {
+    category: "Documents",
+    commands: [
+      { cmd: 'doc create "<title>" -t type', desc: "Create document (note, design, spec, etc.)" },
+      { cmd: "doc ls", desc: "List documents with type filters" },
+      { cmd: "overview", desc: "Show all plans, tasks, and agents" },
+    ],
+  },
+  {
+    category: "Workflows",
+    commands: [
+      { cmd: "workflow run <plan-id>", desc: "Execute workflow from plan" },
+      { cmd: "plan set-workflow <id> <file>", desc: "Attach workflow to plan" },
+      { cmd: "plan orchestrate <id>", desc: "Parallel wave execution" },
+    ],
+  },
 ];
 
 export default function CLIPage() {
@@ -254,17 +294,17 @@ export default function CLIPage() {
         <div className="text-center max-w-3xl mx-auto">
           <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-amber-50 border border-amber-200 text-amber-700 text-sm font-medium mb-6">
             <TerminalIcon className="w-4 h-4" />
-            Command Line Interface
+            Platform
           </div>
 
           <h1 className="text-5xl md:text-6xl font-bold text-stone-900 leading-[1.1] tracking-tight mb-6">
-            Your AI agent,<br />
-            <span className="text-stone-400">with a memory</span>
+            Move up a layer.<br />
+            <span className="text-stone-400">Drive your roadmap with agents.</span>
           </h1>
 
           <p className="text-xl text-stone-600 leading-relaxed max-w-2xl mx-auto mb-8">
-            The codecast CLI gives your AI agent persistent memory, searchable history,
-            and context transfer. Search past sessions, resume work, track decisions.
+            Work at the level of plans, projects, and tasks. Agents see the bigger picture --
+            they pick up work from your roadmap, recall past decisions, and ship in parallel.
           </p>
 
           <div className="mb-8">
@@ -356,15 +396,15 @@ export default function CLIPage() {
       <section className="max-w-6xl mx-auto px-6 py-20">
         <div className="text-center mb-16">
           <h2 className="text-3xl font-bold text-stone-900 mb-4">
-            Everything you need for AI-assisted development
+            The layer above your agents
           </h2>
           <p className="text-lg text-stone-500 max-w-2xl mx-auto">
-            Search, resume, analyze, and share your AI coding sessions.
-            Built for developers who want their AI to remember.
+            Plans, tasks, orchestration, memory, and team collaboration.
+            Everything you need to manage AI agents at the project level.
           </p>
         </div>
 
-        <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-8">
+        <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-8">
           {FEATURE_CATEGORIES.map((category) => (
             <div key={category.title} className="bg-white rounded-xl border border-stone-200 p-6">
               <div className={`w-12 h-12 rounded-lg flex items-center justify-center mb-4 ${
@@ -438,11 +478,11 @@ export default function CLIPage() {
               Agent Memory
             </div>
             <h2 className="text-3xl font-bold text-stone-900 mb-4">
-              Your AI remembers everything
+              Agents see the bigger picture
             </h2>
             <p className="text-lg text-stone-600 leading-relaxed mb-6">
-              Install the memory component and your AI agent gains access to all past sessions.
-              It can search for relevant context, recall decisions, and learn from previous work.
+              Install the memory component and your agent gains access to plans, past sessions, decisions,
+              and team context. It works at the project level, not just the current conversation.
             </p>
             <ul className="space-y-3 text-stone-600">
               <li className="flex items-center gap-3">
@@ -496,10 +536,10 @@ cast blame src/auth.ts
       <section className="max-w-4xl mx-auto px-6 pb-20">
         <div className="bg-stone-900 rounded-2xl p-12 text-center">
           <h2 className="text-3xl font-bold text-white mb-4">
-            Give your AI a memory
+            Move up a layer
           </h2>
           <p className="text-lg text-stone-400 mb-8 max-w-xl mx-auto">
-            Install in 30 seconds. Free for individuals.
+            Stop managing conversations. Start managing your roadmap. Plans, tasks, orchestration, and memory -- free for individuals.
           </p>
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
             <Link href="/signup">
@@ -523,7 +563,7 @@ cast blame src/auth.ts
             <div>
               <Logo size="md" className="text-stone-900 mb-4" />
               <p className="text-sm text-stone-500">
-                Real-time sync for AI coding sessions.
+                The operating system for AI coding agents.
               </p>
             </div>
             <div>

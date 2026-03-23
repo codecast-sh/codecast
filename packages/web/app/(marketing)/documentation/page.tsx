@@ -142,8 +142,11 @@ const TOC = [
   { id: "desktop-app", label: "Desktop App", children: [
     { id: "inbox", label: "Inbox & Orchestration" },
     { id: "inbox-shortcuts", label: "Keyboard Shortcuts" },
+    { id: "command-palette", label: "Command Palette" },
+    { id: "activity-feed", label: "Activity Feed" },
     { id: "conversations", label: "Conversations" },
     { id: "dashboard-plans", label: "Plans & Tasks" },
+    { id: "documents", label: "Documents" },
     { id: "desktop-download", label: "Download" },
   ]},
   { id: "mobile-app", label: "Mobile App", children: [
@@ -169,10 +172,16 @@ const TOC = [
     { id: "plans-overview", label: "Overview" },
     { id: "plans-commands", label: "Commands" },
     { id: "plans-workflow", label: "Workflow" },
+    { id: "orchestration", label: "Orchestration" },
   ]},
   { id: "tasks", label: "Tasks", children: [
     { id: "tasks-overview", label: "Overview" },
     { id: "tasks-commands", label: "Commands" },
+    { id: "task-mining", label: "Auto-Mining & Triage" },
+  ]},
+  { id: "workflows", label: "Workflows", children: [
+    { id: "workflow-nodes", label: "Node Types" },
+    { id: "workflow-execution", label: "Execution" },
   ]},
   { id: "agent-scheduling", label: "Agent Scheduling", children: [
     { id: "schedule-overview", label: "Overview" },
@@ -291,8 +300,8 @@ export default function DocsPage() {
           <div className="mb-12">
             <h1 className="text-4xl font-bold font-mono mb-4" style={{ color: SOL.base03 }}>Documentation</h1>
             <p className="text-lg leading-relaxed" style={{ color: SOL.base00 }}>
-              Everything you need to sync, search, and orchestrate your AI coding sessions.
-              Codecast works with Claude Code, Codex, Gemini CLI, and Cursor.
+              Plans, tasks, orchestration, memory, and the CLI. Everything you need to manage
+              AI agents at the project level. Works with Claude Code, Codex, Gemini, and Cursor.
             </p>
           </div>
 
@@ -557,6 +566,34 @@ $ cast plan done ct-a1b2`}</Code>
             linked sessions, and full decision history.
           </p>
 
+          <Heading id="orchestration" level={3}>Orchestration</Heading>
+          <p className="mb-2" style={{ color: SOL.base00 }}>
+            Orchestration runs plan tasks in parallel waves across multiple agents. When you
+            call <InlineCode>cast plan orchestrate &lt;id&gt;</InlineCode>, codecast decomposes the plan into
+            dependency-aware waves and spins up agent sessions for each task -- each with full plan context,
+            decisions, and relevant prior sessions.
+          </p>
+          <Code>{`# Decompose plan into tasks (if not done already)
+$ cast plan decompose ct-a1b2
+
+# Orchestrate: run tasks in parallel waves
+$ cast plan orchestrate ct-a1b2
+  Wave 1: starting 3 tasks in parallel...
+    ct-t1 "Database schema migration" → claude session abc
+    ct-t2 "API endpoint stubs" → codex session def
+    ct-t3 "Test fixtures" → claude session ghi
+  Wave 1: 3/3 complete
+  Wave 2: starting 2 tasks (depended on wave 1)...
+    ct-t4 "Business logic" → claude session jkl
+    ct-t5 "Integration tests" → codex session mno
+  Wave 2: 2/2 complete
+  Plan ct-a1b2 complete. 5 tasks done.`}</Code>
+          <p style={{ color: SOL.base00 }}>
+            Failed tasks retry automatically with escalation logging. If a task fails multiple times,
+            it&apos;s marked as blocked and orchestration continues with remaining tasks. You can monitor
+            progress from the web dashboard or CLI.
+          </p>
+
           {/* Tasks */}
           <Heading id="tasks" level={2}>Tasks</Heading>
 
@@ -584,6 +621,73 @@ $ cast task create "Email templates" --blocked-by ct-x1y2`}</Code>
           <Callout type="info">
             Tasks are synced to the web dashboard and visible in the Plans view. Team members can see task status in real-time.
           </Callout>
+
+          <Heading id="task-mining" level={3}>Auto-Mining & Triage</Heading>
+          <p className="mb-2" style={{ color: SOL.base00 }}>
+            Codecast automatically mines tasks from your agent sessions. As agents work, they generate insights --
+            when an insight looks like a work item, it&apos;s extracted as a <InlineCode>suggested</InlineCode> task
+            with a confidence score.
+          </p>
+          <p className="mb-2" style={{ color: SOL.base00 }}>
+            Suggested tasks appear in a triage queue on the web dashboard. You can accept, dismiss, or edit
+            them before promoting to your task backlog. Accepted tasks can be bound to plans, assigned priorities,
+            and given labels. Dismissed tasks are hidden but recoverable.
+          </p>
+          <p style={{ color: SOL.base00 }}>
+            The triage system has three status categories: <InlineCode>active</InlineCode> (accepted into your backlog),
+            {" "}<InlineCode>suggested</InlineCode> (mined but not yet triaged), and <InlineCode>dismissed</InlineCode> (rejected).
+            Filter toggles in the toolbar let you switch between these views.
+          </p>
+          <Callout type="info">
+            Auto-mined tasks reference the source session and message, so you can always trace back to the
+            original context where the work item was identified.
+          </Callout>
+
+          {/* Workflows */}
+          <Heading id="workflows" level={2}>Workflows</Heading>
+          <p className="mb-4" style={{ color: SOL.base00 }}>
+            Visual workflow definitions with node-based execution. Define multi-step pipelines that combine
+            agent tasks, shell commands, prompts, human approvals, and conditional logic. Workflows run
+            with live progress tracking, and each node gets its own tmux session streamed to the dashboard.
+          </p>
+
+          <Heading id="workflow-nodes" level={3}>Node Types</Heading>
+          <div className="space-y-3 mb-4">
+            {[
+              ["agent", SOL.blue, "Spin up an agent session (Claude, Codex, etc.) with a prompt and full plan context"],
+              ["prompt", SOL.violet, "Send a prompt to an existing session or create a new one with specific instructions"],
+              ["command", SOL.green, "Execute a shell command and capture the output for downstream nodes"],
+              ["human_gate", SOL.yellow, "Pause the workflow and wait for human input via the message composer"],
+              ["conditional", SOL.orange, "Branch the workflow based on the output of a previous node"],
+              ["parallel", SOL.cyan, "Run multiple nodes simultaneously and wait for all to complete"],
+            ].map(([name, color, desc]) => (
+              <div key={name as string} className="flex gap-3 items-start p-3 rounded-lg" style={{ backgroundColor: `${SOL.base2}80`, borderLeft: `3px solid ${color}` }}>
+                <code className="font-mono text-sm font-medium shrink-0 mt-0.5" style={{ color: color as string }}>{name as string}</code>
+                <span className="text-sm" style={{ color: SOL.base00 }}>{desc as string}</span>
+              </div>
+            ))}
+          </div>
+
+          <Heading id="workflow-execution" level={3}>Execution</Heading>
+          <p className="mb-2" style={{ color: SOL.base00 }}>
+            Workflows are attached to plans and executed from the CLI or web dashboard. Each run creates a
+            primary conversation visible in the inbox, and individual node sessions appear as sub-sessions.
+          </p>
+          <Code>{`# Attach a workflow definition to a plan
+$ cast plan set-workflow ct-a1b2 workflow.yaml
+
+# Execute the workflow
+$ cast workflow run ct-a1b2
+  Starting workflow for plan "Auth Overhaul"...
+  [1/5] agent: "Design API schema" → session abc
+  [2/5] command: npm test → exit 0
+  [3/5] human_gate: "Review the schema design"
+        Waiting for human input...`}</Code>
+          <p style={{ color: SOL.base00 }}>
+            Human gates pause the workflow and notify you (via push notification on mobile or desktop).
+            Reply through the regular message composer to continue. The workflow resumes with your input
+            passed to the next node.
+          </p>
 
           {/* Agent Scheduling */}
           <Heading id="agent-scheduling" level={2}>Agent Scheduling</Heading>
@@ -677,21 +781,30 @@ $ cast schedule add "Check for broken tests" --on push`}</Code>
           </p>
           <div className="rounded-lg overflow-hidden my-4" style={{ border: `1px solid ${SOL.base2}` }}>
             {[
-              ["Ctrl+J", "Next session", "Move down in the session queue"],
-              ["Ctrl+K", "Previous session", "Move up in the session queue"],
-              ["Ctrl+I", "Jump to needs input", "Jump to the first session waiting for your input"],
-              ["Ctrl+Backspace", "Dismiss", "Stash the current session (remove from queue)"],
-              ["Shift+Backspace", "Defer", "Defer the current session for later review"],
-              ["Ctrl+Shift+P", "Pin/unpin", "Pin or unpin the current session"],
+              ["Ctrl+J / K", "Navigate sessions", "Move up/down in the session queue"],
+              ["Ctrl+I", "Jump to needs input", "First session waiting for your input"],
               ["Ctrl+P", "Jump to pinned", "Jump to first pinned session"],
-              ["?", "Toggle shortcuts", "Show or hide the keyboard shortcut overlay"],
+              ["Ctrl+Shift+P", "Pin/unpin", "Pin or unpin the current session"],
+              ["Ctrl+Backspace", "Stash", "Remove session from queue"],
+              ["Shift+Backspace", "Defer & advance", "Defer session and move to next"],
+              ["Ctrl+Shift+Bksp", "Kill agent", "Kill the session's agent process"],
+              ["Ctrl+N", "New session", "Create a new agent session"],
+              ["Cmd+K", "Command palette", "Jump to any session, task, or page"],
+              ["Cmd+/", "Search", "Open global search"],
+              ["D / T", "Diff / Tree", "Toggle diff or file tree panel"],
+              ["Alt+J / K", "Navigate messages", "Jump between user messages"],
+              ["Alt+F", "Fork", "Fork conversation from current message"],
+              ["Ctrl+M", "Focus compose", "Focus the message input"],
+              ["Ctrl+.", "Zen mode", "Hide sidebars for focused reading"],
+              ["Ctrl+[ / ]", "Toggle sidebars", "Toggle left/right sidebars"],
+              ["?", "Shortcuts help", "Show the keyboard shortcut overlay"],
             ].map(([key, action, desc], i) => (
               <div
                 key={key}
                 className="grid grid-cols-[120px_140px_1fr] gap-4 px-4 py-2.5 text-sm items-center"
                 style={{
                   backgroundColor: i % 2 === 0 ? "transparent" : `${SOL.base2}40`,
-                  borderBottom: i < 7 ? `1px solid ${SOL.base2}` : undefined,
+                  borderBottom: i < 16 ? `1px solid ${SOL.base2}` : undefined,
                 }}
               >
                 <kbd className="font-mono text-xs px-2 py-1 rounded inline-block w-fit" style={{ backgroundColor: SOL.base2, color: SOL.base03 }}>{key}</kbd>
@@ -704,6 +817,45 @@ $ cast schedule add "Check for broken tests" --on push`}</Code>
             The inbox remembers your position. Dismiss a session with <kbd className="font-mono text-xs px-1.5 py-0.5 rounded" style={{ backgroundColor: SOL.base2, color: SOL.base03 }}>Ctrl+Backspace</kbd> and
             it automatically advances to the next one -- perfect for triaging a queue of agent sessions.
           </Callout>
+
+          <Heading id="command-palette" level={3}>Command Palette</Heading>
+          <p className="mb-2" style={{ color: SOL.base00 }}>
+            Press <kbd className="font-mono text-xs px-1.5 py-0.5 rounded" style={{ backgroundColor: SOL.base2, color: SOL.base03 }}>Cmd+K</kbd> to
+            open a Linear-style command palette that searches across sessions, tasks, plans, docs, and built-in actions.
+            Results are ranked by recency and relevance, with separate groups for each entity type.
+          </p>
+          <p className="mb-2" style={{ color: SOL.base00 }}>
+            The palette supports quick actions directly on search results: pin, stash, defer, kill, or rename sessions
+            without leaving the palette. Type a slash prefix to filter by entity type
+            (<InlineCode>/task</InlineCode>, <InlineCode>/plan</InlineCode>, <InlineCode>/doc</InlineCode>) or use it
+            as a launcher for built-in navigation (inbox, tasks, plans, docs, settings).
+          </p>
+          <Screenshot
+            src="/docs/command-palette.png"
+            alt="Command palette showing recent sessions, quick actions, and entity search"
+            caption="Cmd+K palette -- jump to anything, run actions, search across all entities"
+          />
+          <Callout type="tip">
+            On the desktop app, <kbd className="font-mono text-xs px-1.5 py-0.5 rounded" style={{ backgroundColor: SOL.base2, color: SOL.base03 }}>Cmd+Shift+Space</kbd> opens
+            a global floating palette from any app -- no need to switch to codecast first.
+          </Callout>
+
+          <Heading id="activity-feed" level={3}>Activity Feed</Heading>
+          <p className="mb-2" style={{ color: SOL.base00 }}>
+            The activity feed is a daily digest view organized by project. Each day shows a narrative summary
+            of what happened across all agent sessions, with individual session cards showing titles, status,
+            message counts, and the agent that was used.
+          </p>
+          <p className="mb-2" style={{ color: SOL.base00 }}>
+            Filter by project to focus on one codebase, or view the global feed to see everything.
+            Team activity feeds show what your teammates&apos; agents are working on -- useful for standups
+            and avoiding duplicate work.
+          </p>
+          <Screenshot
+            src="/docs/activity-feed.png"
+            alt="Activity feed showing daily session digest grouped by project"
+            caption="Activity feed -- daily digest with project grouping, session cards, and narrative summaries"
+          />
 
           <Heading id="conversations" level={3}>Conversations</Heading>
           <p style={{ color: SOL.base00 }}>
@@ -731,6 +883,23 @@ $ cast schedule add "Check for broken tests" --on push`}</Code>
             alt="Codecast plans page showing active plans with status badges, task counts, and plan IDs"
             caption="Plans view -- track multi-session features with goals, tasks, and decision history"
           />
+
+          <Heading id="documents" level={3}>Documents</Heading>
+          <p className="mb-2" style={{ color: SOL.base00 }}>
+            A collaborative document editor for specs, designs, investigations, handoffs, and notes.
+            Documents are TipTap-powered with rich formatting: headings, lists, code blocks, and images.
+          </p>
+          <p className="mb-2" style={{ color: SOL.base00 }}>
+            The key feature is entity mentions -- type <InlineCode>@</InlineCode> to reference sessions, tasks, plans,
+            or other docs inline. Mentions are resolved and rendered as rich links with status badges. Slash commands
+            (<InlineCode>/</InlineCode>) provide quick formatting and entity insertion.
+          </p>
+          <p style={{ color: SOL.base00 }}>
+            Documents can be created from the web UI, CLI (<InlineCode>cast doc create</InlineCode>), or promoted
+            from plan bodies. Types include <InlineCode>note</InlineCode>, <InlineCode>plan</InlineCode>,
+            {" "}<InlineCode>design</InlineCode>, <InlineCode>spec</InlineCode>, <InlineCode>investigation</InlineCode>,
+            and <InlineCode>handoff</InlineCode>. All documents are searchable via the command palette and CLI.
+          </p>
 
           <Heading id="desktop-download" level={3}>Download</Heading>
           <p className="mb-4" style={{ color: SOL.base00 }}>
