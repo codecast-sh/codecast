@@ -180,15 +180,25 @@ export function TaskRow({ task, state, triageMode, onTriage }: { task: TaskItem;
       {task.blocked_by && task.blocked_by.length > 0 && (
         <Link2 className="w-3.5 h-3.5 text-sol-red flex-shrink-0 cq-hide-compact" />
       )}
-      {task.labels?.map((l: string) => {
-        const lc = getLabelColor(l);
-        return (
-          <span key={l} className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0 rounded-full border cq-hide-compact ${lc.bg} ${lc.border} ${lc.text}`}>
-            <span className={`w-1.5 h-1.5 rounded-full ${lc.dot}`} />
-            {l}
-          </span>
-        );
-      })}
+      {task.labels && task.labels.length > 0 && (
+        <div className="flex items-center gap-1 flex-shrink min-w-0 overflow-hidden flex-nowrap cq-hide-compact">
+          {task.labels.slice(0, 2).map((l: string) => {
+            const lc = getLabelColor(l);
+            return (
+              <span key={l} className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0 rounded-full border whitespace-nowrap ${lc.bg} ${lc.border} ${lc.text}`}>
+                <span className={`w-1.5 h-1.5 rounded-full ${lc.dot}`} />
+                {l}
+              </span>
+            );
+          })}
+          {task.labels.slice(2).map((l: string) => {
+            const lc = getLabelColor(l);
+            return (
+              <span key={l} className={`w-2 h-2 rounded-full flex-shrink-0 ${lc.dot}`} title={l} />
+            );
+          })}
+        </div>
+      )}
       {task.assignee_info && (
         <div className="flex items-center gap-1 flex-shrink-0 cq-hide-compact" title={`Assigned: ${task.assignee_info.name}`}>
           {task.assignee_info.image ? (

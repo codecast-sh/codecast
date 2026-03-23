@@ -360,39 +360,41 @@ function DiffBlock({ oldStr, newStr, filePath }: { oldStr: string; newStr: strin
 
   const totalDiffLines = oldLines.length + newLines.length;
   const isTall = totalDiffLines > 15;
-
-  const diffInner = (
-    <ScrollView horizontal showsHorizontalScrollIndicator nestedScrollEnabled>
-      <RNView style={{ paddingVertical: 2 }}>
-        {oldLines.map((line, i) => (
-          <RNView key={`o${i}`} style={{ flexDirection: 'row', backgroundColor: Theme.red + '12', paddingHorizontal: 6, paddingVertical: 1 }}>
-            <RNText style={{ fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.red, width: 14 }}>-</RNText>
-            <HighlightedCodeText content={line} style={{ fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.textSecondary }} />
-          </RNView>
-        ))}
-        {newLines.map((line, i) => (
-          <RNView key={`n${i}`} style={{ flexDirection: 'row', backgroundColor: Theme.green + '12', paddingHorizontal: 6, paddingVertical: 1 }}>
-            <RNText style={{ fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.green, width: 14 }}>+</RNText>
-            <HighlightedCodeText content={line} style={{ fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.textSecondary }} />
-          </RNView>
-        ))}
-      </RNView>
-    </ScrollView>
-  );
+  const displayOldLines = isTall ? oldLines.slice(0, Math.min(oldLines.length, 6)) : oldLines;
+  const displayNewLines = isTall ? newLines.slice(0, Math.min(newLines.length, 6)) : newLines;
 
   return (
     <RNView style={{ marginVertical: 4 }}>
-      <RNView style={{ overflow: 'hidden', maxHeight: isTall ? CODE_BLOCK_MAX_HEIGHT : undefined }}>
-        {isTall ? (
-          <ScrollView nestedScrollEnabled showsVerticalScrollIndicator>
-            {diffInner}
-          </ScrollView>
-        ) : diffInner}
+      <RNView style={{ overflow: 'hidden' }}>
+        <ScrollView horizontal showsHorizontalScrollIndicator nestedScrollEnabled>
+          <RNView style={{ paddingVertical: 2 }}>
+            {displayOldLines.map((line, i) => (
+              <RNView key={`o${i}`} style={{ flexDirection: 'row', backgroundColor: Theme.red + '12', paddingHorizontal: 6, paddingVertical: 1 }}>
+                <RNText style={{ fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.red, width: 14 }}>-</RNText>
+                <HighlightedCodeText content={line} style={{ fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.textSecondary }} />
+              </RNView>
+            ))}
+            {displayNewLines.map((line, i) => (
+              <RNView key={`n${i}`} style={{ flexDirection: 'row', backgroundColor: Theme.green + '12', paddingHorizontal: 6, paddingVertical: 1 }}>
+                <RNText style={{ fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.green, width: 14 }}>+</RNText>
+                <HighlightedCodeText content={line} style={{ fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.textSecondary }} />
+              </RNView>
+            ))}
+          </RNView>
+        </ScrollView>
       </RNView>
       <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 4 }}>
-        <TouchableOpacity onPress={() => setFullscreen(true)} activeOpacity={0.6} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-          <FontAwesome name="expand" size={10} color={Theme.textDim} />
-        </TouchableOpacity>
+        {isTall && (
+          <TouchableOpacity onPress={() => setFullscreen(true)} activeOpacity={0.6} style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+            <FontAwesome name="expand" size={10} color={Theme.textDim} />
+            <RNText style={{ fontSize: 9, color: Theme.textDim }}>{totalDiffLines} lines</RNText>
+          </TouchableOpacity>
+        )}
+        {!isTall && (
+          <TouchableOpacity onPress={() => setFullscreen(true)} activeOpacity={0.6} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <FontAwesome name="expand" size={10} color={Theme.textDim} />
+          </TouchableOpacity>
+        )}
         <TouchableOpacity onPress={handleCopy} activeOpacity={0.6} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
           {copied ? <FontAwesome name="check" size={10} color={Theme.green} /> : <FontAwesome name="clipboard" size={11} color={Theme.textDim} />}
         </TouchableOpacity>
@@ -402,7 +404,7 @@ function DiffBlock({ oldStr, newStr, filePath }: { oldStr: string; newStr: strin
   );
 }
 
-const CODE_BLOCK_MAX_HEIGHT = 300;
+const CODE_BLOCK_PREVIEW_LINES = 12;
 
 function CodeBlockWithCopy({ content, language }: { content: string; language: string }) {
   const [copied, setCopied] = useState(false);
@@ -417,42 +419,41 @@ function CodeBlockWithCopy({ content, language }: { content: string; language: s
   const lines = content.split('\n');
   const showLineNumbers = lines.length > 3;
   const isTall = lines.length > 15;
-
-  const codeInner = (
-    <ScrollView horizontal showsHorizontalScrollIndicator nestedScrollEnabled>
-      <RNView style={{ padding: 8 }}>
-        {showLineNumbers ? (
-          <RNView style={{ flexDirection: 'row' }}>
-            <RNView style={{ paddingRight: 8, marginRight: 8, borderRightWidth: StyleSheet.hairlineWidth, borderRightColor: Theme.borderLight }}>
-              {lines.map((_, i) => (
-                <RNText key={i} style={{ fontSize: 10, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.textDim, textAlign: 'right', minWidth: 20 }}>{i + 1}</RNText>
-              ))}
-            </RNView>
-            <HighlightedCodeText content={content} style={{ fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.textSecondary }} />
-          </RNView>
-        ) : (
-          <HighlightedCodeText content={content} style={{ fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.textSecondary }} />
-        )}
-      </RNView>
-    </ScrollView>
-  );
+  const displayLines = isTall ? lines.slice(0, CODE_BLOCK_PREVIEW_LINES) : lines;
+  const displayContent = isTall ? displayLines.join('\n') : content;
 
   return (
     <RNView style={{ marginVertical: 4 }}>
-      <RNView style={{ backgroundColor: Theme.bgAlt, borderRadius: 6, borderWidth: StyleSheet.hairlineWidth, borderColor: Theme.borderLight, overflow: 'hidden', maxHeight: isTall ? CODE_BLOCK_MAX_HEIGHT : undefined }}>
-        {isTall ? (
-          <ScrollView nestedScrollEnabled showsVerticalScrollIndicator>
-            {codeInner}
-          </ScrollView>
-        ) : codeInner}
+      <RNView style={{ backgroundColor: Theme.bgAlt, borderRadius: 6, borderWidth: StyleSheet.hairlineWidth, borderColor: Theme.borderLight, overflow: 'hidden' }}>
+        <ScrollView horizontal showsHorizontalScrollIndicator nestedScrollEnabled>
+          <RNView style={{ padding: 8 }}>
+            {showLineNumbers ? (
+              <RNView style={{ flexDirection: 'row' }}>
+                <RNView style={{ paddingRight: 8, marginRight: 8, borderRightWidth: StyleSheet.hairlineWidth, borderRightColor: Theme.borderLight }}>
+                  {displayLines.map((_, i) => (
+                    <RNText key={i} style={{ fontSize: 10, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.textDim, textAlign: 'right', minWidth: 20 }}>{i + 1}</RNText>
+                  ))}
+                </RNView>
+                <HighlightedCodeText content={displayContent} style={{ fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.textSecondary }} />
+              </RNView>
+            ) : (
+              <HighlightedCodeText content={displayContent} style={{ fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.textSecondary }} />
+            )}
+          </RNView>
+        </ScrollView>
       </RNView>
       <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 4 }}>
         {isTall && (
-          <RNText style={{ fontSize: 9, color: Theme.textDim }}>{lines.length} lines</RNText>
+          <TouchableOpacity onPress={() => setFullscreen(true)} activeOpacity={0.6} style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+            <FontAwesome name="expand" size={10} color={Theme.textDim} />
+            <RNText style={{ fontSize: 9, color: Theme.textDim }}>{lines.length} lines</RNText>
+          </TouchableOpacity>
         )}
-        <TouchableOpacity onPress={() => setFullscreen(true)} activeOpacity={0.6} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-          <FontAwesome name="expand" size={10} color={Theme.textDim} />
-        </TouchableOpacity>
+        {!isTall && (
+          <TouchableOpacity onPress={() => setFullscreen(true)} activeOpacity={0.6} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <FontAwesome name="expand" size={10} color={Theme.textDim} />
+          </TouchableOpacity>
+        )}
         <TouchableOpacity onPress={handleCopy} activeOpacity={0.6} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
           {copied ? <FontAwesome name="check" size={10} color={Theme.green} /> : <FontAwesome name="clipboard" size={11} color={Theme.textDim} />}
         </TouchableOpacity>
@@ -2528,7 +2529,7 @@ function UsageBar({ usage }: { usage: UsageData }) {
 }
 
 const CONTENT_TRUNCATE_LENGTH = 3000;
-const ASSISTANT_CONTENT_MAX_HEIGHT = 1800;
+const ASSISTANT_CONTENT_MAX_HEIGHT = 600;
 
 function CommandStatusLine({ content, timestamp }: { content: string; timestamp: number }) {
   const cmdType = getCommandType(content);
@@ -2576,8 +2577,6 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
   });
   const [contentExpanded, setContentExpanded] = useState(false);
   const [fullscreenVisible, setFullscreenVisible] = useState(false);
-  const [assistantOverflowing, setAssistantOverflowing] = useState(false);
-  const [userOverflowing, setUserOverflowing] = useState(false);
   const [userContentExpanded, setUserContentExpanded] = useState(false);
   const [localExpanded, setLocalExpanded] = useState(false);
   useEffect(() => { setLocalExpanded(false); }, [globalCollapsed]);
@@ -2665,8 +2664,10 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
   }
   const effectiveCollapsed = globalCollapsed && !localExpanded;
   const isLongContent = rawContent.length > CONTENT_TRUNCATE_LENGTH;
+  const lineCount = rawContent.split('\n').length;
+  const estimatedOverflow = lineCount > 30 || rawContent.length > 1500;
   const COLLAPSED_LINES = 2;
-  const isCollapseTruncated = effectiveCollapsed && rawContent.length > 150 && rawContent.split('\n').length > COLLAPSED_LINES;
+  const isCollapseTruncated = effectiveCollapsed && rawContent.length > 150 && lineCount > COLLAPSED_LINES;
   const content = isCollapseTruncated
     ? rawContent.split('\n').slice(0, COLLAPSED_LINES).join('\n').slice(0, 200) + '...'
     : (isLongContent && !contentExpanded)
@@ -2745,12 +2746,8 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
             styles.bubbleContent,
             isLongContent && !contentExpanded && styles.bubbleContentCollapsed,
             !isUser && !contentExpanded && !isLongContent && { maxHeight: ASSISTANT_CONTENT_MAX_HEIGHT, overflow: 'hidden' as const },
-            isUser && !userContentExpanded && !isLongContent && { maxHeight: 1800, overflow: 'hidden' as const },
+            isUser && !userContentExpanded && !isLongContent && { maxHeight: ASSISTANT_CONTENT_MAX_HEIGHT, overflow: 'hidden' as const },
           ]}
-          onLayout={!isLongContent ? (e) => {
-            if (isUser && !userContentExpanded) setUserOverflowing(e.nativeEvent.layout.height >= 1800);
-            else if (!isUser && !contentExpanded) setAssistantOverflowing(e.nativeEvent.layout.height >= ASSISTANT_CONTENT_MAX_HEIGHT);
-          } : undefined}
         >
           {typeof content === 'string' && content.includes('<skill>') ? (
             parseSkillBlocks(content).map((part, idx) => {
@@ -2804,7 +2801,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
               isUser={isUser}
             />
           )}
-          {(isLongContent && !contentExpanded || (!isUser && assistantOverflowing && !contentExpanded) || (isUser && userOverflowing && !userContentExpanded)) && (
+          {((isLongContent && !contentExpanded) || (!isUser && estimatedOverflow && !contentExpanded) || (isUser && estimatedOverflow && !userContentExpanded)) && (
             <LinearGradient
               colors={[isUser ? Theme.violet + '00' : Theme.bg + '00', isUser ? Theme.violet + '26' : Theme.bg]}
               style={styles.contentGradientOverlay}
@@ -2812,7 +2809,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
             />
           )}
         </RNView>
-        {isUser && userOverflowing && (
+        {isUser && estimatedOverflow && (
           <RNView style={styles.contentActions}>
             <TouchableOpacity onPress={() => setUserContentExpanded(!userContentExpanded)} style={styles.showMoreButton} activeOpacity={0.7}>
               <FontAwesome name={userContentExpanded ? "chevron-up" : "chevron-down"} size={10} color={Theme.cyan} style={{ marginRight: 5 }} />
@@ -2824,7 +2821,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
             </TouchableOpacity>
           </RNView>
         )}
-        {!isUser && (isLongContent || assistantOverflowing) && (
+        {!isUser && (isLongContent || estimatedOverflow) && (
           <RNView style={styles.contentActions}>
             <TouchableOpacity
               onPress={() => setContentExpanded(!contentExpanded)}
