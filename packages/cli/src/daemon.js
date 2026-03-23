@@ -2458,8 +2458,7 @@ class CodexAppServer extends EventEmitter7 {
     }
   }
 }
-function threadItemToMessage(item) {
-  const now = Date.now();
+function threadItemToMessage(item, timestamp = Date.now()) {
   switch (item.type) {
     case "userMessage": {
       const texts = [];
@@ -2476,7 +2475,7 @@ function threadItemToMessage(item) {
         role: "user",
         content: texts.join(`
 `),
-        timestamp: now,
+        timestamp,
         images: images.length > 0 ? images : undefined
       };
     }
@@ -2485,7 +2484,7 @@ function threadItemToMessage(item) {
         uuid: item.id,
         role: "assistant",
         content: item.text,
-        timestamp: now,
+        timestamp,
         subtype: item.phase || undefined
       };
     }
@@ -2499,7 +2498,7 @@ function threadItemToMessage(item) {
         uuid: item.id,
         role: "assistant",
         content: "",
-        timestamp: now,
+        timestamp,
         thinking: thinkingText
       };
     }
@@ -2518,7 +2517,7 @@ function threadItemToMessage(item) {
         uuid: item.id,
         role: "assistant",
         content: "",
-        timestamp: now,
+        timestamp,
         toolCalls,
         toolResults
       };
@@ -2542,7 +2541,7 @@ function threadItemToMessage(item) {
         uuid: item.id,
         role: "assistant",
         content: "",
-        timestamp: now,
+        timestamp,
         toolCalls,
         toolResults
       };
@@ -2574,7 +2573,7 @@ function threadItemToMessage(item) {
         uuid: item.id,
         role: "assistant",
         content: "",
-        timestamp: now,
+        timestamp,
         toolCalls,
         toolResults
       };
@@ -2595,7 +2594,7 @@ function threadItemToMessage(item) {
         uuid: item.id,
         role: "assistant",
         content: "",
-        timestamp: now,
+        timestamp,
         toolCalls
       };
     }
@@ -2613,7 +2612,7 @@ function threadItemToMessage(item) {
         uuid: item.id,
         role: "assistant",
         content: "",
-        timestamp: now,
+        timestamp,
         toolCalls
       };
     }
@@ -2622,7 +2621,7 @@ function threadItemToMessage(item) {
         uuid: item.id,
         role: "assistant",
         content: "",
-        timestamp: now,
+        timestamp,
         toolCalls: [{
           id: item.id,
           name: "webSearch",
@@ -2635,7 +2634,7 @@ function threadItemToMessage(item) {
         uuid: item.id,
         role: "assistant",
         content: item.text,
-        timestamp: now,
+        timestamp,
         subtype: "plan"
       };
     }
@@ -2644,7 +2643,7 @@ function threadItemToMessage(item) {
         uuid: item.id,
         role: "assistant",
         content: "",
-        timestamp: now,
+        timestamp,
         images: [{ mediaType: "image/png", data: item.path }]
       };
     }
@@ -2653,7 +2652,7 @@ function threadItemToMessage(item) {
         uuid: item.id,
         role: "assistant",
         content: item.result,
-        timestamp: now,
+        timestamp,
         subtype: "imageGeneration"
       };
     }
@@ -2666,28 +2665,24 @@ function threadItemToMessage(item) {
 function threadItemsToMessages(items) {
   let currentText = "";
   let currentThinking = "";
-  let currentToolCalls = [];
-  let currentToolResults = [];
   let currentImages = [];
   let lastUuid;
   const messages = [];
-  const now = Date.now();
+  const baseTimestamp = Date.now();
+  let timestampOffset = 0;
+  const nextTimestamp = () => baseTimestamp + timestampOffset++;
   const flushAssistant = () => {
-    if (currentText || currentThinking || currentToolCalls.length > 0 || currentToolResults.length > 0 || currentImages.length > 0) {
+    if (currentText || currentThinking || currentImages.length > 0) {
       messages.push({
         uuid: lastUuid,
         role: "assistant",
         content: currentText.trim(),
-        timestamp: now,
+        timestamp: nextTimestamp(),
         thinking: currentThinking.trim() || undefined,
-        toolCalls: currentToolCalls.length > 0 ? [...currentToolCalls] : undefined,
-        toolResults: currentToolResults.length > 0 ? [...currentToolResults] : undefined,
         images: currentImages.length > 0 ? [...currentImages] : undefined
       });
       currentText = "";
       currentThinking = "";
-      currentToolCalls = [];
-      currentToolResults = [];
       currentImages = [];
       lastUuid = undefined;
     }
@@ -2727,13 +2722,11 @@ function threadItemsToMessages(items) {
     }
     const converted = threadItemToMessage(item);
     if (converted) {
-      if (converted.toolCalls)
-        currentToolCalls.push(...converted.toolCalls);
-      if (converted.toolResults)
-        currentToolResults.push(...converted.toolResults);
-      if (converted.images)
-        currentImages.push(...converted.images);
-      lastUuid = lastUuid || converted.uuid;
+      flushAssistant();
+      messages.push({
+        ...converted,
+        timestamp: nextTimestamp()
+      });
     }
   }
   flushAssistant();
@@ -11555,7 +11548,7 @@ async function handlePermissionRequest(syncService, conversationId, sessionId, p
 import * as fs10 from "fs";
 import * as path10 from "path";
 import * as os from "os";
-var VERSION = "1.0.93";
+var VERSION = "1.0.94";
 var LATEST_URL = "https://dl.codecast.sh/latest.json";
 var UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000;
 var CONFIG_DIR3 = process.env.HOME + "/.codecast";
@@ -12789,6 +12782,25 @@ async function tmuxExec(args, opts) {
     env: { ...SAFE_ENV, ...opts?.env }
   });
 }
+async function getTmuxSessionOption(sessionName, optionName) {
+  try {
+    const { stdout } = await tmuxExec(["show-options", "-qv", "-t", sessionName, optionName]);
+    const value = stdout.trim();
+    return value || null;
+  } catch {
+    return null;
+  }
+}
+async function setTmuxSessionOption(sessionName, optionName, value) {
+  await tmuxExec(["set-option", "-q", "-t", sessionName, optionName, value]);
+}
+function isTmuxSessionMetadataMatch(storedSessionId, sessionId) {
+  return typeof storedSessionId === "string" && storedSessionId === sessionId;
+}
+async function tmuxSessionMatchesFullSessionId(sessionName, sessionId) {
+  const stored = await getTmuxSessionOption(sessionName, "@codecast_session_id");
+  return isTmuxSessionMetadataMatch(stored, sessionId);
+}
 function validatePath(p) {
   if (!p || typeof p !== "string")
     return null;
@@ -13590,6 +13602,7 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
         const agentType = rawAgentType === "codex" || rawAgentType === "cursor" || rawAgentType === "gemini" ? rawAgentType : "claude";
         const rawPath = parsed.project_path || process.env.HOME || "/tmp";
         const conversationId = parsed.conversation_id;
+        const expectedSessionId = parsed.session_id;
         const isolated = parsed.isolated === true;
         const worktreeName = parsed.worktree_name;
         const shortId = Math.random().toString(36).slice(2, 8);
@@ -13685,6 +13698,29 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
             log(`[codex-app-server] thread pre-create failed, falling back: ${err instanceof Error ? err.message : String(err)}`);
           }
         }
+        if (agentType === "codex" && codexThreadId) {
+          const resultObj = { agent_type: agentType, project_path: cwd, app_server_thread_id: codexThreadId };
+          if (worktreeResult) {
+            resultObj.worktree_name = worktreeResult.worktreeName;
+            resultObj.worktree_branch = worktreeResult.worktreeBranch;
+            resultObj.worktree_path = worktreeResult.worktreePath;
+            resultObj.port_index = worktreeResult.portIndex;
+          }
+          result = JSON.stringify(resultObj);
+          log(`[REMOTE] Started ${agentType} session via app-server: ${codexThreadId.slice(0, 8)} (cwd: ${cwd})`);
+          if (conversationId) {
+            const initialManagedSessionId = getInitialManagedSessionId(agentType, expectedSessionId, codexThreadId);
+            registerAppServerConversation(conversationId, codexThreadId, { cwd });
+            if (initialManagedSessionId && syncServiceRef) {
+              syncServiceRef.registerManagedSession(initialManagedSessionId, process.pid, undefined, conversationId).catch(() => {
+              });
+              syncServiceRef.updateSessionAgentStatus(conversationId, "connected").catch(() => {
+              });
+            }
+            log(`[codex-app-server] registered conv=${conversationId.slice(0, 12)} -> thread=${codexThreadId.slice(0, 8)}`);
+          }
+          break;
+        }
         if (!hasTmux()) {
           error = "tmux is not installed";
           break;
@@ -13703,17 +13739,22 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
           result = JSON.stringify(resultObj);
           log(`[REMOTE] Started ${agentType} session in tmux: ${tmuxSession} (cwd: ${cwd})`);
           if (conversationId) {
+            const initialManagedSessionId = getInitialManagedSessionId(agentType, expectedSessionId, codexThreadId || undefined);
             startedSessionTmux.set(conversationId, {
               tmuxSession,
               projectPath: cwd,
               startedAt: Date.now(),
               agentType,
+              sessionId: initialManagedSessionId,
               appServerThreadId: codexThreadId || undefined,
               worktreeName: worktreeResult?.worktreeName,
               worktreeBranch: worktreeResult?.worktreeBranch,
               worktreePath: worktreeResult?.worktreePath
             });
             log(`[REMOTE] Registered started session tmux for conversation ${conversationId.slice(0, 12)}`);
+            if (initialManagedSessionId) {
+              registerManagedStartedSession(conversationId, initialManagedSessionId, tmuxSession);
+            }
             if (codexThreadId) {
               registerAppServerConversation(conversationId, codexThreadId, { cwd, persist: false });
               log(`[codex-app-server] registered conv=${conversationId.slice(0, 12)} -> thread=${codexThreadId.slice(0, 8)}`);
@@ -13935,7 +13976,7 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
             log(`[REMOTE] Killed started tmux session ${started.tmuxSession} for conversation ${conversationId.slice(0, 12)}`);
           } catch {
           }
-          startedSessionTmux.delete(conversationId);
+          deleteStartedSession(conversationId);
           result = "killed_tmux";
         }
         const cache = readConversationCache();
@@ -13992,12 +14033,11 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
           sessionProcessCache.delete(sessionId);
           resumeInFlight.delete(sessionId);
           resumeInFlightStarted.delete(sessionId);
-          const shortId = sessionId.slice(0, 8);
           try {
             const { stdout: tmuxList } = await tmuxExec(["list-sessions", "-F", "#{session_name}"]);
             for (const tmuxName of tmuxList.trim().split(`
 `)) {
-              if (!tmuxName || !tmuxName.includes(shortId))
+              if (!tmuxName || !await tmuxSessionMatchesFullSessionId(tmuxName, sessionId))
                 continue;
               if (!validateTmuxTarget(tmuxName))
                 continue;
@@ -14005,7 +14045,7 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
               if (!alive) {
                 try {
                   await tmuxExec(["kill-session", "-t", tmuxName]);
-                  log(`[REMOTE] Killed zombie tmux session ${tmuxName} for session ${shortId}`);
+                  log(`[REMOTE] Killed zombie tmux session ${tmuxName} for session ${sessionId}`);
                   if (!result)
                     result = "killed_zombie";
                 } catch {
@@ -14983,10 +15023,12 @@ async function processSessionFile(filePath, sessionId, projectPath, syncService,
           syncService.updateSessionId(conversationId, sessionId).catch(() => {
           });
           if (tmuxEntry) {
-            syncService.registerManagedSession(sessionId, process.pid, tmuxEntry.tmuxSession, conversationId).catch(() => {
-            });
+            registerManagedStartedSession(conversationId, sessionId, tmuxEntry.tmuxSession);
+            if (tmuxEntry.sessionId && tmuxEntry.sessionId !== sessionId) {
+              stopManagedSessionHeartbeat(tmuxEntry.sessionId);
+            }
           }
-          startedSessionTmux.delete(matchedStartedConversation);
+          deleteStartedSession(matchedStartedConversation);
           log(`Linked session ${sessionId} to existing started conversation ${conversationId}`);
           if (parentConversationId) {
             syncService.linkSessions(parentConversationId, conversationId, subagentDescriptions.get(sessionId)).then(() => {
@@ -15799,11 +15841,13 @@ async function processCodexSession(filePath, sessionId, syncService, userId, tea
           syncService.updateSessionId(conversationId, sessionId).catch(() => {
           });
           if (tmuxEntry) {
-            syncService.registerManagedSession(sessionId, process.pid, tmuxEntry.tmuxSession, conversationId).catch(() => {
-            });
+            registerManagedStartedSession(conversationId, sessionId, tmuxEntry.tmuxSession);
+            if (tmuxEntry.sessionId && tmuxEntry.sessionId !== sessionId) {
+              stopManagedSessionHeartbeat(tmuxEntry.sessionId);
+            }
             startCodexPermissionPoller(sessionId, tmuxEntry.tmuxSession, conversationId, syncService);
           }
-          startedSessionTmux.delete(matchedStartedConversation);
+          deleteStartedSession(matchedStartedConversation);
           log(`Linked Codex session ${sessionId} to existing started conversation ${conversationId}`);
         } else {
           const firstUserMessage = messages.find((msg) => msg.role === "user");
@@ -16298,10 +16342,9 @@ async function findSessionProcess(sessionId, agentType = "claude") {
     }
     try {
       const { stdout: tmuxList } = await tmuxExec(["list-sessions", "-F", "#{session_name}"]);
-      const shortId = sessionId.slice(0, 8);
       for (const tmuxName of tmuxList.trim().split(`
 `)) {
-        if (!tmuxName.includes(shortId))
+        if (!await tmuxSessionMatchesFullSessionId(tmuxName, sessionId))
           continue;
         try {
           const { stdout: paneInfo } = await tmuxExec(["list-panes", "-t", tmuxName, "-F", "#{pane_tty} #{pane_pid}"]);
@@ -16969,7 +17012,7 @@ async function killSessionBySessionId(sessionId, reason) {
       } catch {
       }
     }
-    startedSessionTmux.delete(conversationId);
+    deleteStartedSession(conversationId);
   }
   const hbInterval = resumeHeartbeatIntervals.get(sessionId);
   if (hbInterval) {
@@ -17340,6 +17383,46 @@ var resumeInFlight = new Map;
 var resumeInFlightStarted = new Map;
 var RESUME_IN_FLIGHT_TIMEOUT_MS = 120000;
 var UUID_JSONL_RE = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/;
+function stopManagedSessionHeartbeat(sessionId) {
+  if (!sessionId)
+    return;
+  const interval = resumeHeartbeatIntervals.get(sessionId);
+  if (interval) {
+    clearInterval(interval);
+    resumeHeartbeatIntervals.delete(sessionId);
+  }
+}
+function ensureManagedSessionHeartbeat(sessionId) {
+  if (!syncServiceRef || resumeHeartbeatIntervals.has(sessionId))
+    return;
+  const interval = setInterval(async () => {
+    try {
+      const result = await syncServiceRef.heartbeatManagedSession(sessionId);
+      await processHeartbeatResponse(sessionId, result);
+    } catch {
+    }
+  }, 30000);
+  resumeHeartbeatIntervals.set(sessionId, interval);
+}
+function registerManagedStartedSession(conversationId, sessionId, tmuxSession) {
+  if (!syncServiceRef)
+    return;
+  syncServiceRef.registerManagedSession(sessionId, process.pid, tmuxSession, conversationId).catch(() => {
+  });
+  ensureManagedSessionHeartbeat(sessionId);
+}
+function deleteStartedSession(conversationId) {
+  const entry = startedSessionTmux.get(conversationId);
+  if (entry?.sessionId) {
+    stopManagedSessionHeartbeat(entry.sessionId);
+  }
+  startedSessionTmux.delete(conversationId);
+}
+function getInitialManagedSessionId(agentType, expectedSessionId, appServerThreadId) {
+  if (agentType === "codex")
+    return appServerThreadId || expectedSessionId;
+  return expectedSessionId;
+}
 async function discoverAndLinkSession(conversationId, tmuxSession, cwd) {
   const claudeProjectsDir = path13.join(process.env.HOME || "", ".claude", "projects");
   const projectDirName = cwd.replace(/\//g, "-");
@@ -17390,11 +17473,12 @@ async function discoverAndLinkSession(conversationId, tmuxSession, cwd) {
       linkedSessionId = candidates[0];
     }
     if (linkedSessionId) {
+      const startedEntry = startedSessionTmux.get(conversationId);
       const cache = readConversationCache();
       const reverseCache = buildReverseConversationCache(cache);
       if (reverseCache[conversationId]) {
         log(`[DISCOVER] Conversation ${conversationId.slice(0, 12)} already linked to ${reverseCache[conversationId].slice(0, 8)} by another writer`);
-        startedSessionTmux.delete(conversationId);
+        deleteStartedSession(conversationId);
         return;
       }
       cache[linkedSessionId] = conversationId;
@@ -17402,10 +17486,12 @@ async function discoverAndLinkSession(conversationId, tmuxSession, cwd) {
       if (syncServiceRef) {
         syncServiceRef.updateSessionId(conversationId, linkedSessionId).catch(() => {
         });
-        syncServiceRef.registerManagedSession(linkedSessionId, process.pid, tmuxSession, conversationId).catch(() => {
-        });
+        registerManagedStartedSession(conversationId, linkedSessionId, tmuxSession);
+        if (startedEntry?.sessionId && startedEntry.sessionId !== linkedSessionId) {
+          stopManagedSessionHeartbeat(startedEntry.sessionId);
+        }
       }
-      startedSessionTmux.delete(conversationId);
+      deleteStartedSession(conversationId);
       log(`[DISCOVER] Linked session ${linkedSessionId.slice(0, 8)} to conversation ${conversationId.slice(0, 12)} via JSONL discovery`);
       return;
     }
@@ -17634,6 +17720,8 @@ async function autoResumeSessionInner(sessionId, content, titleCache, nonInterac
     } catch {
     }
     await tmuxExec(["new-session", "-d", "-s", tmuxSession, "-c", cwd]);
+    await setTmuxSessionOption(tmuxSession, "@codecast_session_id", sessionId);
+    await setTmuxSessionOption(tmuxSession, "@codecast_agent_type", agentType);
     if (nonInteractive && agentType === "claude") {
       const tmpFile = path13.join(os2.tmpdir(), `codecast-msg-${shortId}.txt`);
       fs14.writeFileSync(tmpFile, content);
@@ -18162,7 +18250,7 @@ async function deliverMessage(conversationId, content, conversationCache, syncSe
             const { stdout: paneContent } = await tmuxExec(["capture-pane", "-p", "-J", "-t", entry.tmuxSession, "-S", "-20"]);
             if (fatalErrors.some((e) => paneContent.includes(e))) {
               log(`Started session ${entry.tmuxSession} hit fatal error, falling through. Pane: ${paneContent.slice(0, 200)}`);
-              startedSessionTmux.delete(conversationId);
+              deleteStartedSession(conversationId);
               return false;
             }
             if (trustPromptPatterns.test(paneContent)) {
@@ -18201,7 +18289,7 @@ async function deliverMessage(conversationId, content, conversationCache, syncSe
       } catch (err) {
         log(`Started session tmux ${entry.tmuxSession} not reachable, falling through: ${err instanceof Error ? err.message : String(err)}`);
         if (Date.now() - entry.startedAt > 60000) {
-          startedSessionTmux.delete(conversationId);
+          deleteStartedSession(conversationId);
         }
         return false;
       }
@@ -19166,10 +19254,10 @@ function startWatchdog(deps) {
                 await tmuxExec(["kill-session", "-t", entry.tmuxSession]);
               } catch {
               }
-              startedSessionTmux.delete(convId);
+              deleteStartedSession(convId);
             }
           } catch {
-            startedSessionTmux.delete(convId);
+            deleteStartedSession(convId);
           }
         }
       }
@@ -20705,6 +20793,8 @@ export {
   removeAppServerThreadRegistration,
   releasePidFileIfOwned,
   mapCodexAppServerThreadStatusToAgentStatus,
+  isTmuxSessionMetadataMatch,
   isAppServerManagedCodexSessionHead,
+  getInitialManagedSessionId,
   buildCodexStableContext
 };

@@ -3081,6 +3081,39 @@ async function updateDirectoryMapping(config: Config, pathPrefix: string, teamId
   }
 }
 
+async function countConversationsForPath(config: Config, pathPrefix: string): Promise<number> {
+  if (!config.auth_token || !config.convex_url) return 0;
+  try {
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+    const response = await fetch(`${siteUrl}/cli/conversations/count`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_token: config.auth_token, path_prefix: pathPrefix }),
+    });
+    if (!response.ok) return 0;
+    const data = await response.json();
+    return data.count ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
+async function deleteConversationsForPath(config: Config, pathPrefix: string): Promise<{ conversationsDeleted: number; messagesDeleted: number }> {
+  if (!config.auth_token || !config.convex_url) return { conversationsDeleted: 0, messagesDeleted: 0 };
+  try {
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+    const response = await fetch(`${siteUrl}/cli/conversations/delete-by-path`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_token: config.auth_token, path_prefix: pathPrefix }),
+    });
+    if (!response.ok) return { conversationsDeleted: 0, messagesDeleted: 0 };
+    return await response.json();
+  } catch {
+    return { conversationsDeleted: 0, messagesDeleted: 0 };
+  }
+}
+
 function getProjectName(path: string): string {
   const parts = path.split("/");
   return parts[parts.length - 1] || path;
@@ -3314,6 +3347,25 @@ program
           pageSize: 15,
         });
 
+        const previousProjects = config.sync_projects || [];
+        const deselected = previousProjects.filter(p => !selectedProjects.includes(p));
+
+        for (const removedPath of deselected) {
+          const count = await countConversationsForPath(config, removedPath);
+          if (count > 0) {
+            const shouldDelete = await confirm({
+              message: `${getProjectName(removedPath)} has ${count} synced conversation${count !== 1 ? "s" : ""}. Delete them from the server?`,
+              default: false,
+            });
+            if (shouldDelete) {
+              const result = await deleteConversationsForPath(config, removedPath);
+              console.log(`${fmt.success(icons.check)} Deleted ${result.conversationsDeleted} conversation${result.conversationsDeleted !== 1 ? "s" : ""}`);
+            } else {
+              console.log(`${fmt.muted("Keeping conversations for")} ${getProjectName(removedPath)}`);
+            }
+          }
+        }
+
         config.sync_projects = selectedProjects;
         writeConfig(config);
         await updateSyncSettingsOnServer(config);
@@ -3346,6 +3398,22 @@ program
         });
 
         if (selectedTeam !== project.teamId) {
+          if (!selectedTeam && project.teamId) {
+            const count = await countConversationsForPath(config, project.path);
+            if (count > 0) {
+              const shouldDelete = await confirm({
+                message: `${getProjectName(project.path)} has ${count} synced conversation${count !== 1 ? "s" : ""}. Delete them from the server?`,
+                default: false,
+              });
+              if (shouldDelete) {
+                const result = await deleteConversationsForPath(config, project.path);
+                console.log(`${fmt.success(icons.check)} Deleted ${result.conversationsDeleted} conversation${result.conversationsDeleted !== 1 ? "s" : ""}`);
+              } else {
+                console.log(`${fmt.muted("Keeping conversations for")} ${getProjectName(project.path)}`);
+              }
+            }
+          }
+
           const success = await updateDirectoryMapping(config, project.path, selectedTeam);
           if (success) {
             const newTeamName = selectedTeam
@@ -3478,6 +3546,20 @@ program
       }
 
       const absPath = path.resolve(pathArg);
+      const count = await countConversationsForPath(config, absPath);
+      if (count > 0) {
+        const shouldDelete = await confirm({
+          message: `${getProjectName(absPath)} has ${count} synced conversation${count !== 1 ? "s" : ""}. Delete them from the server?`,
+          default: false,
+        });
+        if (shouldDelete) {
+          const result = await deleteConversationsForPath(config, absPath);
+          console.log(`${fmt.success(icons.check)} Deleted ${result.conversationsDeleted} conversation${result.conversationsDeleted !== 1 ? "s" : ""}`);
+        } else {
+          console.log(`${fmt.muted("Keeping conversations")}`);
+        }
+      }
+
       const success = await updateDirectoryMapping(config, absPath, null);
       if (success) {
         console.log(`${fmt.success(icons.check)} ${getProjectName(absPath)} is now private (Only Me)`);

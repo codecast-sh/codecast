@@ -12,6 +12,7 @@ import { CodexWatcher, type CodexSessionEvent } from "./codexWatcher.js";
 import {
   CodexAppServer,
   threadItemsToMessages,
+  type ApprovalPolicy,
   type ApprovalRequest,
   type ThreadItem,
 } from "./codexAppServer.js";
@@ -81,6 +82,29 @@ async function tmuxExec(args: string[], opts?: { timeout?: number; killSignal?: 
     killSignal: (opts?.killSignal ?? "SIGTERM") as any,
     env: { ...SAFE_ENV, ...opts?.env },
   });
+}
+
+async function getTmuxSessionOption(sessionName: string, optionName: string): Promise<string | null> {
+  try {
+    const { stdout } = await tmuxExec(["show-options", "-qv", "-t", sessionName, optionName]);
+    const value = stdout.trim();
+    return value || null;
+  } catch {
+    return null;
+  }
+}
+
+async function setTmuxSessionOption(sessionName: string, optionName: string, value: string): Promise<void> {
+  await tmuxExec(["set-option", "-q", "-t", sessionName, optionName, value]);
+}
+
+export function isTmuxSessionMetadataMatch(storedSessionId: string | null | undefined, sessionId: string): boolean {
+  return typeof storedSessionId === "string" && storedSessionId === sessionId;
+}
+
+async function tmuxSessionMatchesFullSessionId(sessionName: string, sessionId: string): Promise<boolean> {
+  const stored = await getTmuxSessionOption(sessionName, "@codecast_session_id");
+  return isTmuxSessionMetadataMatch(stored, sessionId);
 }
 
 function validatePath(p: string): string | null {
@@ -181,6 +205,15 @@ function getPermissionFlags(agentType: "claude" | "codex" | "cursor" | "gemini",
   return null;
 }
 
+function resolveCodexApprovalPolicy(config?: Config | null): ApprovalPolicy {
+  const flags = getPermissionFlags("codex", config);
+  const codexArgs = config?.codex_args || "";
+  if (flags?.includes("--dangerously-bypass") || codexArgs.includes("--dangerously-bypass") || flags?.includes("--full-auto") || codexArgs.includes("--full-auto")) {
+    return "never";
+  }
+  return "on-request";
+}
+
 function getDefaultParamFlags(agentType: "claude" | "codex" | "cursor" | "gemini", config?: Config | null): string | null {
   const params = config?.agent_default_params?.[agentType];
   if (!params || Object.keys(params).length === 0) return null;
@@ -251,6 +284,7 @@ interface RemoteLog {
 
 let remoteLogQueue: RemoteLog[] = [];
 let syncServiceRef: SyncService | null = null;
+let conversationCacheRef: ConversationCache | null = null;
 let daemonVersion: string | undefined;
 let activeConfig: Config | null = null;
 const platform = process.platform;
@@ -1007,6 +1041,7 @@ async function executeRemoteCommand(
           rawAgentType === "codex" || rawAgentType === "cursor" || rawAgentType === "gemini" ? rawAgentType : "claude";
         const rawPath: string = parsed.project_path || process.env.HOME || "/tmp";
         const conversationId: string | undefined = parsed.conversation_id;
+        const expectedSessionId: string | undefined = parsed.session_id;
         const isolated: boolean = parsed.isolated === true;
         const worktreeName: string | undefined = parsed.worktree_name;
 
@@ -1086,23 +1121,45 @@ async function executeRemoteCommand(
         let cmdText = `${envPrefix} ${[binary, ...binaryArgs].join(" ")}`;
 
         let codexThreadId: string | null = null;
+        const codexSkipApprovals = binaryArgs.includes("--full-auto") || binaryArgs.includes("--dangerously-bypass-approvals-and-sandbox");
+        const codexApprovalPolicy: ApprovalPolicy = codexSkipApprovals ? "never" : "on-request";
         if (agentType === "codex" && codexAppServerInstance?.running) {
           try {
-            const sandbox = binaryArgs.includes("--full-auto") ? "danger-full-access" as const : "workspace-write" as const;
-            const approval = binaryArgs.includes("--full-auto") ? "never" as const : "on-request" as const;
+            const sandbox = codexSkipApprovals ? "danger-full-access" as const : "workspace-write" as const;
             const developerInstructions = await buildCodexStableContext(config, cwd);
             const resp = await codexAppServerInstance.threadStart({
               cwd,
               sandbox,
-              approvalPolicy: approval,
+              approvalPolicy: codexApprovalPolicy,
               ...(developerInstructions ? { developerInstructions } : {}),
             });
             codexThreadId = resp.thread.id;
-            cmdText = `${envPrefix} codex resume ${codexThreadId}`;
-            log(`[codex-app-server] pre-created thread ${codexThreadId.slice(0, 8)} for new session`);
+            log(`[codex-app-server] pre-created thread ${codexThreadId.slice(0, 8)} (approvalPolicy=${codexApprovalPolicy})`);
           } catch (err) {
             log(`[codex-app-server] thread pre-create failed, falling back: ${err instanceof Error ? err.message : String(err)}`);
           }
+        }
+
+        if (agentType === "codex" && codexThreadId) {
+          const resultObj: Record<string, any> = { agent_type: agentType, project_path: cwd, app_server_thread_id: codexThreadId };
+          if (worktreeResult) {
+            resultObj.worktree_name = worktreeResult.worktreeName;
+            resultObj.worktree_branch = worktreeResult.worktreeBranch;
+            resultObj.worktree_path = worktreeResult.worktreePath;
+            resultObj.port_index = worktreeResult.portIndex;
+          }
+          result = JSON.stringify(resultObj);
+          log(`[REMOTE] Started ${agentType} session via app-server: ${codexThreadId.slice(0, 8)} (cwd: ${cwd})`);
+          if (conversationId) {
+            const initialManagedSessionId = getInitialManagedSessionId(agentType, expectedSessionId, codexThreadId);
+            registerAppServerConversation(conversationId, codexThreadId, { cwd, approvalPolicy: codexApprovalPolicy });
+            if (initialManagedSessionId && syncServiceRef) {
+              syncServiceRef.registerManagedSession(initialManagedSessionId, process.pid, undefined, conversationId).catch(() => {});
+              syncServiceRef.updateSessionAgentStatus(conversationId, "connected").catch(() => {});
+            }
+            log(`[codex-app-server] registered conv=${conversationId.slice(0, 12)} -> thread=${codexThreadId.slice(0, 8)}`);
+          }
+          break;
         }
 
         if (!hasTmux()) {
@@ -1124,20 +1181,20 @@ async function executeRemoteCommand(
           result = JSON.stringify(resultObj);
           log(`[REMOTE] Started ${agentType} session in tmux: ${tmuxSession} (cwd: ${cwd})`);
           if (conversationId) {
+            const initialManagedSessionId = getInitialManagedSessionId(agentType, expectedSessionId);
             startedSessionTmux.set(conversationId, {
               tmuxSession,
               projectPath: cwd,
               startedAt: Date.now(),
               agentType,
-              appServerThreadId: codexThreadId || undefined,
+              sessionId: initialManagedSessionId,
               worktreeName: worktreeResult?.worktreeName,
               worktreeBranch: worktreeResult?.worktreeBranch,
               worktreePath: worktreeResult?.worktreePath,
             });
             log(`[REMOTE] Registered started session tmux for conversation ${conversationId.slice(0, 12)}`);
-            if (codexThreadId) {
-              registerAppServerConversation(conversationId, codexThreadId, { cwd, persist: false });
-              log(`[codex-app-server] registered conv=${conversationId.slice(0, 12)} -> thread=${codexThreadId.slice(0, 8)}`);
+            if (initialManagedSessionId) {
+              registerManagedStartedSession(conversationId, initialManagedSessionId, tmuxSession);
             }
             if (agentType === "claude") {
               discoverAndLinkSession(conversationId, tmuxSession, cwd).catch(err => {
@@ -1158,6 +1215,21 @@ async function executeRemoteCommand(
           error = "Missing conversation_id";
           break;
         }
+
+        const escapeThreadId = appServerConversations.get(conversationId);
+        if (escapeThreadId && codexAppServerInstance?.running) {
+          const activeTurnId = findActiveTurnForThread(escapeThreadId);
+          if (activeTurnId) {
+            await codexAppServerInstance.turnInterrupt(escapeThreadId, activeTurnId);
+            result = "escape_interrupted";
+            log(`[REMOTE] Interrupted app-server turn ${activeTurnId.slice(0, 8)} on thread ${escapeThreadId.slice(0, 8)}`);
+          } else {
+            result = "escape_no_active_turn";
+            log(`[REMOTE] No active turn to interrupt on app-server thread ${escapeThreadId.slice(0, 8)}`);
+          }
+          break;
+        }
+
         const cache = readConversationCache();
         const reverse = buildReverseConversationCache(cache);
         const sessionId = reverse[conversationId];
@@ -1358,13 +1430,32 @@ async function executeRemoteCommand(
           break;
         }
 
+        const killThreadId = appServerConversations.get(conversationId);
+        if (killThreadId && codexAppServerInstance?.running) {
+          const activeTurnId = findActiveTurnForThread(killThreadId);
+          if (activeTurnId) {
+            try {
+              await codexAppServerInstance.turnInterrupt(killThreadId, activeTurnId);
+            } catch {}
+          }
+          removeAppServerThreadRegistration(appServerThreads, appServerConversations, conversationId, killThreadId);
+          forgetPersistedAppServerConversation(conversationId);
+          if (syncServiceRef) {
+            syncServiceRef.markSessionCompleted(conversationId).catch(() => {});
+            sendAgentStatus(syncServiceRef, conversationId, killThreadId, "stopped");
+          }
+          result = "killed_app_server";
+          log(`[REMOTE] Killed app-server thread ${killThreadId.slice(0, 8)} for conversation ${conversationId.slice(0, 12)}`);
+          break;
+        }
+
         const started = startedSessionTmux.get(conversationId);
         if (started && validateTmuxTarget(started.tmuxSession)) {
           try {
             await tmuxExec(["kill-session", "-t", started.tmuxSession]);
             log(`[REMOTE] Killed started tmux session ${started.tmuxSession} for conversation ${conversationId.slice(0, 12)}`);
           } catch {}
-          startedSessionTmux.delete(conversationId);
+          deleteStartedSession(conversationId);
           result = "killed_tmux";
         }
 
@@ -1419,17 +1510,16 @@ async function executeRemoteCommand(
           resumeInFlight.delete(sessionId);
           resumeInFlightStarted.delete(sessionId);
 
-          const shortId = sessionId.slice(0, 8);
           try {
             const { stdout: tmuxList } = await tmuxExec(["list-sessions", "-F", "#{session_name}"]);
             for (const tmuxName of tmuxList.trim().split("\n")) {
-              if (!tmuxName || !tmuxName.includes(shortId)) continue;
+              if (!tmuxName || !(await tmuxSessionMatchesFullSessionId(tmuxName, sessionId))) continue;
               if (!validateTmuxTarget(tmuxName)) continue;
               const alive = await isTmuxAgentAlive(tmuxName);
               if (!alive) {
                 try {
                   await tmuxExec(["kill-session", "-t", tmuxName]);
-                  log(`[REMOTE] Killed zombie tmux session ${tmuxName} for session ${shortId}`);
+                  log(`[REMOTE] Killed zombie tmux session ${tmuxName} for session ${sessionId}`);
                   if (!result) result = "killed_zombie";
                 } catch {}
               }
@@ -2505,8 +2595,17 @@ async function processSessionFile(
         }
       }
 
+      if (!conversationId) {
+        const freshCache = readConversationCache();
+        if (freshCache[sessionId]) {
+          conversationId = freshCache[sessionId];
+          conversationCache[sessionId] = conversationId;
+          log(`Session ${sessionId.slice(0, 8)} already linked to ${conversationId.slice(0, 12)} by background discovery, skipping match`);
+        }
+      }
+
       let matchedStartedConversation: string | null = null;
-      if (startedSessionTmux.size > 0 && !isSubagent && !parentConversationId) {
+      if (!conversationId && startedSessionTmux.size > 0 && !isSubagent && !parentConversationId) {
         const startedClaudeEntries = Array.from(startedSessionTmux.entries())
           .filter(([, entry]) => entry.agentType === "claude");
         const proc = await findSessionProcess(sessionId, "claude").catch(() => null);
@@ -2532,17 +2631,29 @@ async function processSessionFile(
         }
       }
 
-      if (matchedStartedConversation) {
-        conversationId = matchedStartedConversation;
-        const tmuxEntry = startedSessionTmux.get(matchedStartedConversation);
-        conversationCache[sessionId] = conversationId;
-        saveConversationCache(conversationCache);
-        syncService.updateSessionId(conversationId, sessionId).catch(() => {});
-        if (tmuxEntry) {
-          syncService.registerManagedSession(sessionId, process.pid, tmuxEntry.tmuxSession, conversationId).catch(() => {});
-        }
-        startedSessionTmux.delete(matchedStartedConversation);
-        log(`Linked session ${sessionId} to existing started conversation ${conversationId}`);
+      // Re-check after async gap: discoverAndLinkSession may have linked during findSessionProcess/findTmuxPaneForTty
+      if (!conversationId && conversationCache[sessionId]) {
+        conversationId = conversationCache[sessionId];
+        matchedStartedConversation = null;
+        log(`Session ${sessionId.slice(0, 8)} already linked to ${conversationId.slice(0, 12)} by discovery (post-async), skipping match/create`);
+      }
+
+        if (conversationId) {
+          // Already linked by background discovery — skip matching and creation
+        } else if (matchedStartedConversation) {
+          conversationId = matchedStartedConversation;
+          const tmuxEntry = startedSessionTmux.get(matchedStartedConversation);
+          conversationCache[sessionId] = conversationId;
+          saveConversationCache(conversationCache);
+          syncService.updateSessionId(conversationId, sessionId).catch(() => {});
+          if (tmuxEntry) {
+          registerManagedStartedSession(conversationId, sessionId, tmuxEntry.tmuxSession);
+          if (tmuxEntry.sessionId && tmuxEntry.sessionId !== sessionId) {
+            stopManagedSessionHeartbeat(tmuxEntry.sessionId);
+          }
+          }
+          deleteStartedSession(matchedStartedConversation);
+          log(`Linked session ${sessionId} to existing started conversation ${conversationId}`);
         if (parentConversationId) {
           syncService.linkSessions(parentConversationId, conversationId, subagentDescriptions.get(sessionId)).then(() => {
             log(`Linked started conversation ${conversationId.slice(0, 12)} to parent ${parentConversationId!.slice(0, 12)}`);
@@ -3476,10 +3587,13 @@ async function processCodexSession(
           saveConversationCache(conversationCache);
           syncService.updateSessionId(conversationId, sessionId).catch(() => {});
           if (tmuxEntry) {
-            syncService.registerManagedSession(sessionId, process.pid, tmuxEntry.tmuxSession, conversationId).catch(() => {});
+            registerManagedStartedSession(conversationId, sessionId, tmuxEntry.tmuxSession);
+            if (tmuxEntry.sessionId && tmuxEntry.sessionId !== sessionId) {
+              stopManagedSessionHeartbeat(tmuxEntry.sessionId);
+            }
             startCodexPermissionPoller(sessionId, tmuxEntry.tmuxSession, conversationId, syncService);
           }
-          startedSessionTmux.delete(matchedStartedConversation);
+          deleteStartedSession(matchedStartedConversation);
           log(`Linked Codex session ${sessionId} to existing started conversation ${conversationId}`);
         } else {
 
@@ -4035,9 +4149,8 @@ async function findSessionProcess(sessionId: string, agentType: "claude" | "code
     // Strategy B: Scan tmux sessions named cc-resume-* or codecast-*
     try {
       const { stdout: tmuxList } = await tmuxExec(["list-sessions", "-F", "#{session_name}"]);
-      const shortId = sessionId.slice(0, 8);
       for (const tmuxName of tmuxList.trim().split("\n")) {
-        if (!tmuxName.includes(shortId)) continue;
+        if (!(await tmuxSessionMatchesFullSessionId(tmuxName, sessionId))) continue;
         // Get the pane TTY for this tmux session
         try {
           const { stdout: paneInfo } = await tmuxExec(["list-panes", "-t", tmuxName, "-F", "#{pane_tty} #{pane_pid}"]);
@@ -4735,7 +4848,7 @@ async function killSessionBySessionId(sessionId: string, reason: string): Promis
     if (started && validateTmuxTarget(started.tmuxSession) && !killed) {
       try { await tmuxExec(["kill-session", "-t", started.tmuxSession]); } catch {}
     }
-    startedSessionTmux.delete(conversationId);
+    deleteStartedSession(conversationId);
   }
 
   const hbInterval = resumeHeartbeatIntervals.get(sessionId);
@@ -4790,7 +4903,7 @@ const codexPermissionPending = new Set<string>(); // sessionIds currently waitin
 const codexPermissionRunning = new Set<string>(); // sessionIds with an in-flight tmux capture
 
 let codexAppServerInstance: CodexAppServer | null = null;
-type AppServerThreadEntry = { threadId: string; conversationId: string; cwd?: string };
+type AppServerThreadEntry = { threadId: string; conversationId: string; cwd?: string; approvalPolicy?: ApprovalPolicy };
 type PersistedAppServerThreadRecord = { threadId: string; updatedAt: number; cwd?: string };
 type AppServerTurnProgress = { threadId: string; items: ThreadItem[]; lastSyncedSignature?: string };
 const appServerThreads = new Map<string, AppServerThreadEntry>();
@@ -4837,6 +4950,13 @@ export function removeAppServerThreadRegistration(
   if (existing?.conversationId === conversationId) {
     threads.delete(resolvedThreadId);
   }
+}
+
+function findActiveTurnForThread(threadId: string): string | undefined {
+  for (const [turnId, progress] of appServerTurnProgress) {
+    if (progress.threadId === threadId) return turnId;
+  }
+  return undefined;
 }
 
 function clearLiveAppServerThreadRegistrations(): void {
@@ -4900,12 +5020,13 @@ function registerAppServerConversation(
     cwd?: string;
     updatedAt?: number;
     persist?: boolean;
+    approvalPolicy?: ApprovalPolicy;
   } = {},
 ): void {
   const updatedAt = opts.updatedAt ?? Date.now();
   const existingThreadId = appServerConversations.get(conversationId);
   const existingConversation = appServerThreads.get(threadId)?.conversationId;
-  upsertAppServerThreadRegistration(appServerThreads, appServerConversations, conversationId, threadId, { cwd: opts.cwd });
+  upsertAppServerThreadRegistration(appServerThreads, appServerConversations, conversationId, threadId, { cwd: opts.cwd, approvalPolicy: opts.approvalPolicy });
   if (!opts.persist) return;
   if (existingConversation && existingConversation !== conversationId) {
     persistedAppServerThreads.delete(existingConversation);
@@ -4952,10 +5073,12 @@ async function rehydratePersistedAppServerThreads(): Promise<void> {
         threadId: record.threadId,
         ...(record.cwd ? { cwd: record.cwd } : {}),
       });
+      const rehydratedPolicy = resolveCodexApprovalPolicy(activeConfig);
       registerAppServerConversation(conversationId, record.threadId, {
         cwd: record.cwd,
         updatedAt: record.updatedAt,
         persist: false,
+        approvalPolicy: rehydratedPolicy,
       });
       resumed++;
     } catch (err) {
@@ -5105,7 +5228,7 @@ type StartedSessionInfo = {
   projectPath: string;
   startedAt: number;
   agentType: "claude" | "codex" | "cursor" | "gemini";
-  appServerThreadId?: string;
+  sessionId?: string;
   worktreeName?: string;
   worktreeBranch?: string;
   worktreePath?: string;
@@ -5171,6 +5294,49 @@ const RESUME_IN_FLIGHT_TIMEOUT_MS = 120_000;
 
 const UUID_JSONL_RE = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/;
 
+function stopManagedSessionHeartbeat(sessionId: string | undefined): void {
+  if (!sessionId) return;
+  const interval = resumeHeartbeatIntervals.get(sessionId);
+  if (interval) {
+    clearInterval(interval);
+    resumeHeartbeatIntervals.delete(sessionId);
+  }
+}
+
+function ensureManagedSessionHeartbeat(sessionId: string): void {
+  if (!syncServiceRef || resumeHeartbeatIntervals.has(sessionId)) return;
+  const interval = setInterval(async () => {
+    try {
+      const result = await syncServiceRef!.heartbeatManagedSession(sessionId);
+      await processHeartbeatResponse(sessionId, result);
+    } catch {}
+  }, 30000);
+  resumeHeartbeatIntervals.set(sessionId, interval);
+}
+
+function registerManagedStartedSession(conversationId: string, sessionId: string, tmuxSession: string): void {
+  if (!syncServiceRef) return;
+  syncServiceRef.registerManagedSession(sessionId, process.pid, tmuxSession, conversationId).catch(() => {});
+  ensureManagedSessionHeartbeat(sessionId);
+}
+
+function deleteStartedSession(conversationId: string): void {
+  const entry = startedSessionTmux.get(conversationId);
+  if (entry?.sessionId) {
+    stopManagedSessionHeartbeat(entry.sessionId);
+  }
+  startedSessionTmux.delete(conversationId);
+}
+
+export function getInitialManagedSessionId(
+  agentType: "claude" | "codex" | "cursor" | "gemini",
+  expectedSessionId?: string,
+  appServerThreadId?: string,
+): string | undefined {
+  if (agentType === "codex") return appServerThreadId || expectedSessionId;
+  return expectedSessionId;
+}
+
 async function discoverAndLinkSession(
   conversationId: string,
   tmuxSession: string,
@@ -5223,20 +5389,27 @@ async function discoverAndLinkSession(
       linkedSessionId = candidates[0];
     }
     if (linkedSessionId) {
+      const startedEntry = startedSessionTmux.get(conversationId);
       const cache = readConversationCache();
       const reverseCache = buildReverseConversationCache(cache);
       if (reverseCache[conversationId]) {
         log(`[DISCOVER] Conversation ${conversationId.slice(0, 12)} already linked to ${reverseCache[conversationId].slice(0, 8)} by another writer`);
-        startedSessionTmux.delete(conversationId);
+        deleteStartedSession(conversationId);
         return;
       }
       cache[linkedSessionId] = conversationId;
+      if (conversationCacheRef) {
+        conversationCacheRef[linkedSessionId] = conversationId;
+      }
       saveConversationCache(cache);
       if (syncServiceRef) {
         syncServiceRef.updateSessionId(conversationId, linkedSessionId).catch(() => {});
-        syncServiceRef.registerManagedSession(linkedSessionId, process.pid, tmuxSession, conversationId).catch(() => {});
+        registerManagedStartedSession(conversationId, linkedSessionId, tmuxSession);
+        if (startedEntry?.sessionId && startedEntry.sessionId !== linkedSessionId) {
+          stopManagedSessionHeartbeat(startedEntry.sessionId);
+        }
       }
-      startedSessionTmux.delete(conversationId);
+      deleteStartedSession(conversationId);
       log(`[DISCOVER] Linked session ${linkedSessionId.slice(0, 8)} to conversation ${conversationId.slice(0, 12)} via JSONL discovery`);
       return;
     }
@@ -5483,10 +5656,40 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
   const prefix = agentType === "codex" ? "cx" : agentType === "gemini" ? "gm" : "cc";
   const tmuxSession = slug ? `${prefix}-resume-${slug}-${shortId}` : `${prefix}-resume-${shortId}`;
 
+  // Check if this session already has a healthy agent running (avoid killing + recreating)
+  const cachedTmux = resumeSessionCache.get(sessionId);
+  const aliveTarget = cachedTmux || tmuxSession;
+  try {
+    await tmuxExec(["has-session", "-t", aliveTarget], { timeout: 3000, killSignal: "SIGKILL" });
+    const alive = await isTmuxAgentAlive(aliveTarget);
+    if (alive) {
+      logDelivery(`Session ${shortId} already alive in tmux=${aliveTarget}, reusing`);
+      resumeSessionCache.set(sessionId, aliveTarget);
+      if (content) {
+        await injectViaTmux(aliveTarget + ":0.0", content);
+      }
+      // Ensure heartbeat + sync registration exist (may be missing after daemon restart)
+      if (syncServiceRef && conversationId && !resumeHeartbeatIntervals.has(sessionId)) {
+        syncServiceRef.registerManagedSession(sessionId, process.pid, aliveTarget, conversationId).catch(() => {});
+        syncServiceRef.updateSessionAgentStatus(conversationId, "connected").catch(() => {});
+        const interval = setInterval(async () => {
+          try {
+            const result = await syncServiceRef!.heartbeatManagedSession(sessionId);
+            await processHeartbeatResponse(sessionId, result);
+          } catch {}
+        }, 30000);
+        resumeHeartbeatIntervals.set(sessionId, interval);
+      }
+      return true;
+    }
+  } catch {}
+
   try {
     try { await tmuxExec(["kill-session", "-t", tmuxSession]); } catch {}
 
     await tmuxExec(["new-session", "-d", "-s", tmuxSession, "-c", cwd]);
+    await setTmuxSessionOption(tmuxSession, "@codecast_session_id", sessionId);
+    await setTmuxSessionOption(tmuxSession, "@codecast_agent_type", agentType);
 
     // For non-interactive mode (materialized sessions), use -p flag to process message and exit
     if (nonInteractive && agentType === "claude") {
@@ -6083,7 +6286,7 @@ async function deliverMessage(
             const { stdout: paneContent } = await tmuxExec(["capture-pane", "-p", "-J", "-t", entry.tmuxSession, "-S", "-20"]);
             if (fatalErrors.some(e => paneContent.includes(e))) {
               log(`Started session ${entry.tmuxSession} hit fatal error, falling through. Pane: ${paneContent.slice(0, 200)}`);
-              startedSessionTmux.delete(conversationId);
+              deleteStartedSession(conversationId);
               return false;
             }
             // Dismiss workspace trust prompt if detected (shows ❯ but isn't the input prompt)
@@ -6122,7 +6325,7 @@ async function deliverMessage(
         log(`Started session tmux ${entry.tmuxSession} not reachable, falling through: ${err instanceof Error ? err.message : String(err)}`);
         // Only clear if session is old (>60s). Fresh sessions may just need more startup time.
         if (Date.now() - entry.startedAt > 60_000) {
-          startedSessionTmux.delete(conversationId);
+          deleteStartedSession(conversationId);
         }
         return false;
       }
@@ -7246,10 +7449,10 @@ function startWatchdog(
           if (!(await isTmuxAgentAlive(entry.tmuxSession))) {
             log(`Pruning started session ${entry.tmuxSession}: agent dead (zombie shell)`);
             try { await tmuxExec(["kill-session", "-t", entry.tmuxSession]); } catch {}
-            startedSessionTmux.delete(convId);
+            deleteStartedSession(convId);
           }
         } catch {
-          startedSessionTmux.delete(convId);
+          deleteStartedSession(convId);
         }
       }
     }
@@ -7647,6 +7850,7 @@ async function main(): Promise<void> {
   taskScheduler.start();
 
   const conversationCache = readConversationCache();
+  conversationCacheRef = conversationCache;
   const titleCache = readTitleCache();
   const pendingMessages: PendingMessages = {};
   const activeSessions = new Map<string, ActiveSession>();
@@ -8287,6 +8491,10 @@ async function main(): Promise<void> {
     onApproval: async (threadId: string, approval: ApprovalRequest) => {
       const entry = appServerThreads.get(threadId);
       if (!entry) return true;
+      if (entry.approvalPolicy === "never") {
+        log(`[codex-app-server] auto-approving ${approval.method} for thread ${threadId.slice(0, 8)} (approvalPolicy=never)`);
+        return true;
+      }
       const permissionPrompt = {
         tool_name: approval.method,
         arguments_preview: JSON.stringify(approval.params).slice(0, 200),
@@ -8388,7 +8596,7 @@ async function main(): Promise<void> {
 
   codexAppServerInstance.on("approvalRequested", (threadId: string, approval: ApprovalRequest) => {
     const entry = appServerThreads.get(threadId);
-    if (entry) {
+    if (entry && entry.approvalPolicy !== "never") {
       sendAgentStatus(syncService, entry.conversationId, threadId, "permission_blocked");
       syncService.createSessionNotification({
         conversation_id: entry.conversationId,

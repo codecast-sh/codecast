@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  isTmuxSessionMetadataMatch,
   removeAppServerThreadRegistration,
   upsertAppServerThreadRegistration,
 } from "./daemon.js";
@@ -26,5 +27,14 @@ describe("app-server thread registration", () => {
 
     expect(conversations.size).toBe(0);
     expect(threads.size).toBe(0);
+  });
+
+  test("requires an exact full session id match for tmux metadata", () => {
+    const sessionA = "019d1bd3-d1dc-7d32-8fd0-39d33ee384b3";
+    const sessionB = "019d1bd3-3932-7d40-825e-eacedf960d05";
+
+    expect(isTmuxSessionMetadataMatch(sessionA, sessionA)).toBe(true);
+    expect(isTmuxSessionMetadataMatch(sessionA.slice(0, 8), sessionA)).toBe(false);
+    expect(isTmuxSessionMetadataMatch(sessionB, sessionA)).toBe(false);
   });
 });

@@ -538,9 +538,7 @@ export class CodexAppServer extends EventEmitter {
   }
 }
 
-export function threadItemToMessage(item: ThreadItem): ParsedMessage | null {
-  const now = Date.now();
-
+export function threadItemToMessage(item: ThreadItem, timestamp = Date.now()): ParsedMessage | null {
   switch (item.type) {
     case "userMessage": {
       const texts: string[] = [];
@@ -556,7 +554,7 @@ export function threadItemToMessage(item: ThreadItem): ParsedMessage | null {
         uuid: item.id,
         role: "user",
         content: texts.join("\n"),
-        timestamp: now,
+        timestamp,
         images: images.length > 0 ? images : undefined,
       };
     }
@@ -566,7 +564,7 @@ export function threadItemToMessage(item: ThreadItem): ParsedMessage | null {
         uuid: item.id,
         role: "assistant",
         content: item.text,
-        timestamp: now,
+        timestamp,
         subtype: item.phase || undefined,
       };
     }
@@ -580,7 +578,7 @@ export function threadItemToMessage(item: ThreadItem): ParsedMessage | null {
         uuid: item.id,
         role: "assistant",
         content: "",
-        timestamp: now,
+        timestamp,
         thinking: thinkingText,
       };
     }
@@ -600,7 +598,7 @@ export function threadItemToMessage(item: ThreadItem): ParsedMessage | null {
         uuid: item.id,
         role: "assistant",
         content: "",
-        timestamp: now,
+        timestamp,
         toolCalls,
         toolResults,
       };
@@ -623,7 +621,7 @@ export function threadItemToMessage(item: ThreadItem): ParsedMessage | null {
         uuid: item.id,
         role: "assistant",
         content: "",
-        timestamp: now,
+        timestamp,
         toolCalls,
         toolResults,
       };
@@ -660,7 +658,7 @@ export function threadItemToMessage(item: ThreadItem): ParsedMessage | null {
         uuid: item.id,
         role: "assistant",
         content: "",
-        timestamp: now,
+        timestamp,
         toolCalls,
         toolResults,
       };
@@ -684,7 +682,7 @@ export function threadItemToMessage(item: ThreadItem): ParsedMessage | null {
         uuid: item.id,
         role: "assistant",
         content: "",
-        timestamp: now,
+        timestamp,
         toolCalls,
       };
     }
@@ -703,7 +701,7 @@ export function threadItemToMessage(item: ThreadItem): ParsedMessage | null {
         uuid: item.id,
         role: "assistant",
         content: "",
-        timestamp: now,
+        timestamp,
         toolCalls,
       };
     }
@@ -713,7 +711,7 @@ export function threadItemToMessage(item: ThreadItem): ParsedMessage | null {
         uuid: item.id,
         role: "assistant",
         content: "",
-        timestamp: now,
+        timestamp,
         toolCalls: [{
           id: item.id,
           name: "webSearch",
@@ -727,7 +725,7 @@ export function threadItemToMessage(item: ThreadItem): ParsedMessage | null {
         uuid: item.id,
         role: "assistant",
         content: item.text,
-        timestamp: now,
+        timestamp,
         subtype: "plan",
       };
     }
@@ -737,7 +735,7 @@ export function threadItemToMessage(item: ThreadItem): ParsedMessage | null {
         uuid: item.id,
         role: "assistant",
         content: "",
-        timestamp: now,
+        timestamp,
         images: [{ mediaType: "image/png", data: item.path }],
       };
     }
@@ -747,7 +745,7 @@ export function threadItemToMessage(item: ThreadItem): ParsedMessage | null {
         uuid: item.id,
         role: "assistant",
         content: item.result,
-        timestamp: now,
+        timestamp,
         subtype: "imageGeneration",
       };
     }
@@ -763,30 +761,27 @@ export function threadItemToMessage(item: ThreadItem): ParsedMessage | null {
 export function threadItemsToMessages(items: ThreadItem[]): ParsedMessage[] {
   let currentText = "";
   let currentThinking = "";
-  let currentToolCalls: ToolCall[] = [];
-  let currentToolResults: ToolResult[] = [];
   let currentImages: ImageBlock[] = [];
   let lastUuid: string | undefined;
 
   const messages: ParsedMessage[] = [];
-  const now = Date.now();
+  const baseTimestamp = Date.now();
+  let timestampOffset = 0;
+
+  const nextTimestamp = () => baseTimestamp + timestampOffset++;
 
   const flushAssistant = () => {
-    if (currentText || currentThinking || currentToolCalls.length > 0 || currentToolResults.length > 0 || currentImages.length > 0) {
+    if (currentText || currentThinking || currentImages.length > 0) {
       messages.push({
         uuid: lastUuid,
         role: "assistant",
         content: currentText.trim(),
-        timestamp: now,
+        timestamp: nextTimestamp(),
         thinking: currentThinking.trim() || undefined,
-        toolCalls: currentToolCalls.length > 0 ? [...currentToolCalls] : undefined,
-        toolResults: currentToolResults.length > 0 ? [...currentToolResults] : undefined,
         images: currentImages.length > 0 ? [...currentImages] : undefined,
       });
       currentText = "";
       currentThinking = "";
-      currentToolCalls = [];
-      currentToolResults = [];
       currentImages = [];
       lastUuid = undefined;
     }
@@ -829,10 +824,11 @@ export function threadItemsToMessages(items: ThreadItem[]): ParsedMessage[] {
 
     const converted = threadItemToMessage(item);
     if (converted) {
-      if (converted.toolCalls) currentToolCalls.push(...converted.toolCalls);
-      if (converted.toolResults) currentToolResults.push(...converted.toolResults);
-      if (converted.images) currentImages.push(...converted.images);
-      lastUuid = lastUuid || converted.uuid;
+      flushAssistant();
+      messages.push({
+        ...converted,
+        timestamp: nextTimestamp(),
+      });
     }
   }
 
