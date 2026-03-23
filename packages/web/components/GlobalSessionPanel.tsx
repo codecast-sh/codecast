@@ -6,7 +6,7 @@ import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { ConversationDiffLayout } from "./ConversationDiffLayout";
 import { ConversationData } from "./ConversationView";
 import { useConversationMessages } from "../hooks/useConversationMessages";
-import { useInboxStore, InboxSession, getSessionRenderKey, isConvexId, categorizeSessions } from "../store/inboxStore";
+import { useInboxStore, InboxSession, getSessionRenderKey, isConvexId, categorizeSessions, isInterruptControlMessage } from "../store/inboxStore";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "./ui/tooltip";
 import { cleanTitle } from "../lib/conversationProcessor";
 import { SharePopover } from "./SharePopover";
@@ -83,7 +83,7 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
   const lastMsg = conversation?.messages?.[conversation.messages.length - 1];
   const lastRoleIsUser = lastMsg?.role === "user";
   const isStale = (Date.now() - (conversation?.updated_at || 0)) > 5 * 60 * 1000;
-  const looksAbandoned = isIdle && lastRoleIsUser && isStale;
+  const looksAbandoned = isIdle && lastRoleIsUser && !isInterruptControlMessage(lastMsg?.content) && isStale;
 
   useWatchEffect(() => {
     if (!isIdle && (resumeState === "sent" || resumeState === "resuming")) {

@@ -11,7 +11,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { remarkEntityIds } from "../lib/remarkEntityIds";
 import { EntityIdPill, isEntityId } from "./EntityIdPill";
-import { SessionMention } from "./editor/MentionNodeView";
+import { SessionMention, PersonMention } from "./editor/MentionNodeView";
 import "./editor/editor.css";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 
@@ -19,7 +19,7 @@ function SessionMentionById({ conversationId }: { conversationId: string }) {
   const data = useQuery(api.conversations.getConversationMention, {
     conversation_id: conversationId as Id<"conversations">,
   });
-  if (!data) return <span className="text-[11px] text-sol-text-dim/40">loading...</span>;
+  if (!data) return <span className="text-[11px] text-sol-text-dim/40 animate-pulse">...</span>;
   return (
     <SessionMention attrs={{
       id: data._id,
@@ -34,6 +34,16 @@ function SessionMentionById({ conversationId }: { conversationId: string }) {
   );
 }
 
+function PersonMentionInline({ userId, label }: { userId: string; label: string }) {
+  return (
+    <PersonMention attrs={{
+      id: userId,
+      label: label.replace(/^@/, ""),
+      image: null,
+    }} />
+  );
+}
+
 function DigestLink({ href, children, ...props }: any) {
   if (href?.startsWith("entity://")) {
     return <EntityIdPill shortId={href.slice(9)} />;
@@ -41,6 +51,10 @@ function DigestLink({ href, children, ...props }: any) {
   const convMatch = href?.match(/^\/conversation\/(.+)/);
   if (convMatch) {
     return <SessionMentionById conversationId={convMatch[1]} />;
+  }
+  const teamMatch = href?.match(/^\/team\/(.+)/);
+  if (teamMatch) {
+    return <PersonMentionInline userId={teamMatch[1]} label={String(children)} />;
   }
   return <a href={href} className="text-sol-cyan/70 hover:text-sol-cyan underline" target="_blank" rel="noopener noreferrer" {...props}>{children}</a>;
 }

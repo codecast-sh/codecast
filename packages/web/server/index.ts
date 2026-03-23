@@ -21,10 +21,8 @@ const BINARIES: Record<string, string> = {
   "codecast-windows-x64.exe": "https://dl.codecast.sh/codecast-windows-x64.exe",
 };
 
-const LATEST_DESKTOP_VERSION = "1.1.17";
-const DESKTOP_DOWNLOAD_URL = "https://codecast.sh/download/mac";
-const MAC_DMG_URL = "https://dl.codecast.sh/Codecast-1.1.17-arm64.dmg";
-const MAC_DMG_VERSION = "1.1.17";
+const MAC_DMG_URL = "https://dl.codecast.sh/Codecast-1.1.18-arm64.dmg";
+const MAC_DMG_VERSION = "1.1.18";
 
 app.get("/api/health", (c) =>
   c.json({
@@ -33,10 +31,6 @@ app.get("/api/health", (c) =>
     timestamp: new Date().toISOString(),
     version: pkg.version,
   })
-);
-
-app.get("/api/desktop/version", (c) =>
-  c.json({ version: LATEST_DESKTOP_VERSION, downloadUrl: DESKTOP_DOWNLOAD_URL })
 );
 
 app.get("/download/mac", (c) =>

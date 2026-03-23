@@ -4,6 +4,7 @@ import { useCallback } from "react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../store/inboxStore";
 import { useConvexSync } from "../hooks/useConvexSync";
+import { useCurrentUser } from "../hooks/useCurrentUser";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 
 interface TeamAvatarBarProps {
@@ -33,7 +34,8 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
   const searchParams = useSearchParams();
   const memberFilter = searchParams.get("member");
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id) as Id<"teams"> | undefined;
-  const effectiveTeamId = propTeamId ?? activeTeamId;
+  const { user: currentUser } = useCurrentUser();
+  const effectiveTeamId = propTeamId ?? activeTeamId ?? ((currentUser as any)?.team_id as Id<"teams"> | undefined);
   const teamMembersQuery = useQuery(
     api.teams.getTeamMembers,
     effectiveTeamId ? { team_id: effectiveTeamId } : "skip"

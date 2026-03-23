@@ -2,7 +2,6 @@ import { useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
-import { useWorkspaceArgs } from "../hooks/useWorkspaceArgs";
 import { useMentionQuery } from "../hooks/useMentionQuery";
 import { useImageUpload } from "../hooks/useImageUpload";
 import { toast } from "sonner";
@@ -42,7 +41,6 @@ export function CreateDocModal({ onClose, initialType }: { onClose: () => void; 
   const router = useRouter();
   const createDoc = useMutation(api.docs.webCreate);
   const createPlan = useMutation(api.plans.webCreate);
-  const workspaceArgs = useWorkspaceArgs();
   const handleMentionQuery = useMentionQuery();
   const handleImageUpload = useImageUpload();
 
@@ -86,9 +84,8 @@ export function CreateDocModal({ onClose, initialType }: { onClose: () => void; 
         onClose();
         if (result?.short_id) router.push(`/plans/${result.short_id}`);
       } else {
-        const wsArgs = workspaceArgs === "skip" ? {} : workspaceArgs;
         const content = contentRef.current.trim();
-        const result = await createDoc({ title: title.trim(), content, doc_type: docType, ...wsArgs });
+        const result = await createDoc({ title: title.trim(), content, doc_type: docType });
         toast.success(`Created: ${title.trim()}`);
         onClose();
         if (result?.id) router.push(`/docs/${result.id}`);

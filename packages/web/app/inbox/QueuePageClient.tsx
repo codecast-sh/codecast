@@ -14,7 +14,7 @@ import { ErrorBoundary } from "../../components/ErrorBoundary";
 import { ConversationDiffLayout } from "../../components/ConversationDiffLayout";
 import { ConversationData } from "../../components/ConversationView";
 import { useConversationMessages } from "../../hooks/useConversationMessages";
-import { useInboxStore, InboxSession, getSessionRenderKey, isConvexId, sortSessions } from "../../store/inboxStore";
+import { useInboxStore, InboxSession, getSessionRenderKey, isConvexId, sortSessions, isInterruptControlMessage } from "../../store/inboxStore";
 import { useSessionSwitcher } from "../../hooks/useSessionSwitcher";
 import { SessionSwitcher } from "../../components/SessionSwitcher";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "../../components/ui/tooltip";
@@ -51,7 +51,7 @@ const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, o
   const lastMsg = conversation?.messages?.[conversation.messages.length - 1];
   const lastRoleIsUser = lastMsg?.role === "user";
   const isStale = (Date.now() - (conversation?.updated_at || 0)) > 5 * 60 * 1000;
-  const looksAbandoned = isIdle && lastRoleIsUser && isStale;
+  const looksAbandoned = isIdle && lastRoleIsUser && !isInterruptControlMessage(lastMsg?.content) && isStale;
 
   useWatchEffect(() => {
     if (!isIdle && (resumeState === "sent" || resumeState === "resuming")) {
@@ -100,10 +100,11 @@ const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, o
   }
 
   const convId = conversation._id as Id<"conversations">;
+  const isOwnSession = (conversation as any).is_own !== false;
   const shareUrl = conversation.share_token
     ? `${typeof window !== "undefined" ? window.location.origin : ""}/conversation/${convId}`
     : null;
-  const shareControls = (
+  const shareControls = isOwnSession ? (
     <SharePopover
       isPrivate={conversation.is_private !== false}
       teamVisibility={(conversation as any).team_visibility || (conversation as any).effective_team_visibility}
@@ -114,20 +115,20 @@ const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, o
       onGenerateShareLink={async () => { await generateShareLink({ conversation_id: convId }); return `${window.location.origin}/conversation/${convId}`; }}
       shareUrl={shareUrl}
     />
-  );
+  ) : null;
 
   const activePlanId = (conversation as any)?.active_plan_id;
   const workflowRunId = (conversation as any)?.workflow_run_id;
 
   return (
     <div className="relative h-full flex flex-col">
-      {(resumeState === "resuming" || resumeState === "sent") && (
+      {isOwnSession && (resumeState === "resuming" || resumeState === "sent") && (
         <div className="absolute top-0 left-0 right-0 z-10 flex items-center gap-2 px-4 py-1.5 bg-sol-orange/90 text-sol-bg text-xs backdrop-blur-sm">
           <span className="w-1.5 h-1.5 rounded-full bg-sol-bg animate-pulse" />
           Resuming session...
         </div>
       )}
-      {resumeState === "failed" && (
+      {isOwnSession && resumeState === "failed" && (
         <div className="absolute top-0 left-0 right-0 z-10 flex items-center gap-2 px-4 py-1.5 bg-sol-red/90 text-sol-bg text-xs backdrop-blur-sm">
           <span className="w-1.5 h-1.5 rounded-full bg-sol-bg" />
           Resume timed out
@@ -136,7 +137,7 @@ const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, o
           </button>
         </div>
       )}
-      {sessionError && resumeState === "idle" && (
+      {isOwnSession && sessionError && resumeState === "idle" && (
         <div className="absolute top-0 left-0 right-0 z-10 flex items-center gap-2 px-4 py-1.5 bg-sol-red/90 text-sol-bg text-xs backdrop-blur-sm">
           <span className="w-1.5 h-1.5 rounded-full bg-sol-bg" />
           {sessionError}
@@ -145,7 +146,7 @@ const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, o
           </button>
         </div>
       )}
-      {looksAbandoned && !sessionError && resumeState === "idle" && (
+      {isOwnSession && looksAbandoned && !sessionError && resumeState === "idle" && (
         <div className="absolute top-0 left-0 right-0 z-10 flex items-center gap-2 px-4 py-1.5 bg-sol-bg-alt/90 border-b border-sol-border/50 text-sol-text-dim text-xs backdrop-blur-sm">
           <span className="w-1.5 h-1.5 rounded-full bg-sol-text-dim/50" />
           Session unresponsive — send a message or
@@ -167,14 +168,14 @@ const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, o
           onLoadNewer={loadNewer}
           onJumpToStart={jumpToStart}
           onJumpToEnd={jumpToEnd}
-          isOwner={true}
-          onSendAndAdvance={onSendAndAdvance}
-          onSendAndDismiss={onSendAndDismiss}
+          isOwner={isOwnSession}
+          onSendAndAdvance={isOwnSession ? onSendAndAdvance : undefined}
+          onSendAndDismiss={isOwnSession ? onSendAndDismiss : undefined}
           autoFocusInput
           backHref="/inbox"
           onBack={onBack}
           targetMessageId={targetMessageId}
-          fallbackStickyContent={cleanUserMessage(lastUserMessage)}
+          fallbackStickyContent={isOwnSession ? cleanUserMessage(lastUserMessage) : undefined}
           subHeaderContent={<>
             {activePlanId && <PlanContextPanel planId={activePlanId} />}
             {workflowRunId && <WorkflowContextPanel workflowRunId={workflowRunId} />}
@@ -884,6 +885,11 @@ export function QueuePageClient({ initialSessionId }: { initialSessionId?: strin
     }
   }, [currentSession?._id, currentSession?.project_path, currentSession?.git_root, currentSession?.agent_type, setCurrentConversation, touchMru]);
 
+  useWatchEffect(() => {
+    if (currentSession || showMySessions || selectedPlanId || viewingDismissedId || pendingInjectId) return;
+    if (sortedSessions.length > 0) setCurrentSession(sortedSessions[0]._id);
+  }, [currentSession, showMySessions, selectedPlanId, viewingDismissedId, pendingInjectId, sortedSessions, setCurrentSession]);
+
   // Sync URL when current session changes (but not before initial param is resolved)
   useWatchEffect(() => {
     if (!paramProcessedRef.current) return;
@@ -999,6 +1005,8 @@ export function QueuePageClient({ initialSessionId }: { initialSessionId?: strin
             <span className="text-sm">Loading session...</span>
           </div>
         </div>
+      ) : sortedSessions.length > 0 ? (
+        <div className="h-full" />
       ) : (
         <div className="h-full overflow-y-auto" data-main-scroll>
           <div className="max-w-4xl mx-auto px-4 py-4">

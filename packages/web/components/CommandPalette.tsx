@@ -9,6 +9,7 @@ import { cleanTitle } from "../lib/conversationProcessor";
 import { useInboxStore, InboxSession, TaskItem, DocItem } from "../store/inboxStore";
 import { isElectron } from "../lib/desktop";
 import { isInboxRoute } from "../lib/inboxRouting";
+import { useCurrentUser } from "../hooks/useCurrentUser";
 import { AgentTypeIcon } from "./AgentTypeIcon";
 import { getLabelColor, DEFAULT_LABELS } from "../lib/labelColors";
 import { toast } from "sonner";
@@ -446,6 +447,12 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
   const pinDoc = useInboxStore((s) => s.pinDoc);
   const archiveDoc = useInboxStore((s) => s.archiveDoc);
   const webUpdateTask = useMutation(api.tasks.webUpdate);
+  const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id);
+  const { user: currentUser } = useCurrentUser();
+  const effectiveTeamId = (activeTeamId || (currentUser as any)?.team_id) as string | undefined;
+  const teamMembersQuery = useQuery(api.teams.getTeamMembers, effectiveTeamId ? { team_id: effectiveTeamId as any } : "skip");
+  const cachedMembers = useInboxStore((s) => s.teamMembers);
+  const teamMembers = teamMembersQuery ?? (cachedMembers.length > 0 ? cachedMembers : undefined);
 
   const open = standalone || paletteOpen;
 
@@ -603,6 +610,7 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
     const unsub = window.__CODECAST_ELECTRON__!.onComposeShow(() => {
       setQuery("");
       enterComposeMode("");
+      setTimeout(() => composeRef.current?.focus(), 300);
     });
     return unsub;
   }, [standalone, enterComposeMode]);
@@ -798,6 +806,7 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
         <div className="flex-1 px-4 py-3 min-h-[120px]">
           <textarea
             ref={composeRef}
+            autoFocus
             value={composeMsg}
             onChange={(e) => setComposeMsg(e.target.value)}
             onKeyDown={(e) => {
@@ -808,7 +817,6 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
             }}
             placeholder="Send a message..."
             className="w-full h-full min-h-[100px] bg-transparent text-sm text-sol-text placeholder:text-sol-text-dim/60 outline-none resize-none"
-            autoFocus
           />
         </div>
 
@@ -841,6 +849,8 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
           targetType={targetType!}
           onClose={closePalette}
           onBack={() => setActionMode(null)}
+          teamMembers={teamMembers}
+          currentUser={currentUser}
         />
       </div>
     );

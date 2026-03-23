@@ -23,7 +23,6 @@ import { SetupPromptBanner } from "./SetupPromptBanner";
 import { DesktopAppBanner } from "./DesktopAppBanner";
 import { CliOfflineBanner } from "./CliOfflineBanner";
 import { TmuxMissingBanner } from "./TmuxMissingBanner";
-import { ElectronUpdateBanner } from "./ElectronUpdateBanner";
 import { FindBar } from "./FindBar";
 import { KeyboardShortcutsPanel, ShortcutsToggleButton } from "./KeyboardShortcutsHelp";
 import { NewSessionModal } from "./ConversationList";
@@ -193,29 +192,14 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
   useShortcutContext('desktop', isDesktopApp);
 
   useShortcutAction('session.create', useCallback(() => {
-    const store = useInboxStore.getState();
     if (isOnInboxPage) {
       handleQuickCreate();
     } else {
-      if (store.showMySessions) store.setShowMySessions(false);
-      soundNewSession();
       const path = directoryFilter || currentConvContext.projectPath || currentConvContext.gitRoot;
-      const agentType = (currentConvContext.agentType || "claude_code") as "claude_code" | "codex" | "cursor" | "gemini";
-      const sid = nanoid(10);
-      const now = Date.now();
-      store.setConversationMeta(sid, {
-        _id: sid, _creationTime: now, user_id: "", agent_type: agentType,
-        session_id: sid, project_path: path, git_root: currentConvContext.gitRoot || path,
-        started_at: now, updated_at: now, message_count: 0, status: "active",
-        title: "New session", messages: [],
-      });
-      store.createSession({
-        agent_type: agentType, project_path: path,
-        git_root: currentConvContext.gitRoot || path, session_id: sid,
-      });
-      useInboxStore.setState({ sidePanelSessionId: sid, sidePanelOpen: false });
+      const agentType = currentConvContext.agentType || "claude_code";
+      openNewSession({ projectPath: path, gitRoot: currentConvContext.gitRoot, agentType });
     }
-  }, [isOnInboxPage, directoryFilter, currentConvContext, handleQuickCreate]));
+  }, [isOnInboxPage, directoryFilter, currentConvContext, handleQuickCreate, openNewSession]));
 
   useShortcutAction('session.createIsolated', useCallback(() => {
     handleQuickCreateIsolated();
@@ -367,11 +351,9 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
           <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
             <button
               onClick={() => {
-                if (directoryFilter || currentConvContext.projectPath || currentConvContext.gitRoot) {
-                  handleQuickCreate();
-                } else {
-                  openNewSession({});
-                }
+                const path = directoryFilter || currentConvContext.projectPath || currentConvContext.gitRoot;
+                const agentType = currentConvContext.agentType || "claude_code";
+                openNewSession({ projectPath: path, gitRoot: currentConvContext.gitRoot, agentType });
               }}
               className="hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-sol-cyan/15 text-sol-cyan border border-sol-cyan/30 hover:bg-sol-cyan/25 hover:border-sol-cyan/50 transition-all"
               title="New session (Ctrl+N)"
@@ -403,7 +385,6 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
       </header>
 
       <ErrorBoundary name="Banners" level="inline">
-        <ElectronUpdateBanner />
         <DesktopAppBanner />
         <SetupPromptBanner />
         <CliOfflineBanner />

@@ -328,7 +328,7 @@ export function GenericListView<T>({
       isFocused,
       isSelected,
       isEditing,
-      onClick: () => router.push(getItemRoute(item)),
+      onClick: () => { setFocusIndex(globalIdx); router.push(getItemRoute(item)); },
       onSelect: () => toggleSelect(id),
       onContextMenu: (e: React.MouseEvent) => {
         e.preventDefault();
