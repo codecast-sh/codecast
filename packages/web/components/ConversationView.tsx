@@ -5382,6 +5382,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
   const messageRef = useRef(message);
   messageRef.current = message;
   const convIdRef = useRef(conversationId);
+  const sendingRef = useRef(false);
   const [isWaitingForUpload, setIsWaitingForUpload] = useState(false);
   const [isFocused, setIsFocused] = useState(false);
   const [shortcutTooltip, setShortcutTooltip] = useState<{ x: number; y: number } | null>(null);
@@ -5752,6 +5753,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
   const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const saveDraftSnapshot = useCallback((targetId: string) => {
+    if (sendingRef.current) return;
     const msg = messageRef.current;
     const imgs = pastedImagesRef.current;
     const draftImages = imgs
@@ -5804,17 +5806,20 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
         setAcTrigger(null);
       }
     }
-    const existing = useInboxStore.getState().getDraft(conversationId);
-    useInboxStore.getState().setDraftLocal(conversationId, { ...existing, draft_message: val || null });
-    if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
-    draftTimerRef.current = setTimeout(() => {
+    if (!sendingRef.current) {
       const existing = useInboxStore.getState().getDraft(conversationId);
-      if (!val && !existing?.draft_image_storage_ids?.length) {
-        useInboxStore.getState().clearDraft(conversationId);
-      } else {
-        useInboxStore.getState().setDraft(conversationId, { ...existing, draft_message: val || null });
-      }
-    }, 300);
+      useInboxStore.getState().setDraftLocal(conversationId, { ...existing, draft_message: val || null });
+      if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
+      draftTimerRef.current = setTimeout(() => {
+        if (sendingRef.current) return;
+        const existing = useInboxStore.getState().getDraft(conversationId);
+        if (!val && !existing?.draft_image_storage_ids?.length) {
+          useInboxStore.getState().clearDraft(conversationId);
+        } else {
+          useInboxStore.getState().setDraft(conversationId, { ...existing, draft_message: val || null });
+        }
+      }, 300);
+    }
   }, [conversationId, skills, filePaths, mentionItems]);
 
   const isSelectionActive = !!(selectedMessageContent && selectedMessageUuid);
@@ -5951,17 +5956,23 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
     if (onGateSend) {
       const text = message.trim();
       if (!text) return;
+      sendingRef.current = true;
+      if (draftTimerRef.current) { clearTimeout(draftTimerRef.current); draftTimerRef.current = null; }
       setMessage("");
       messageRef.current = "";
       useInboxStore.getState().clearDraftFinal(conversationId);
+      sendingRef.current = false;
       await onGateSend(text);
       return;
     }
     if (onWorkflowLaunch) {
       const goal = message.trim();
+      sendingRef.current = true;
+      if (draftTimerRef.current) { clearTimeout(draftTimerRef.current); draftTimerRef.current = null; }
       setMessage("");
       messageRef.current = "";
       useInboxStore.getState().clearDraftFinal(conversationId);
+      sendingRef.current = false;
       await onWorkflowLaunch(goal);
       return;
     }
@@ -5993,6 +6004,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
 
     // If a message is selected, fork from it then send the new content
     if (isSelectionActive && selectedMessageUuid && onForkFromMessage) {
+      sendingRef.current = true;
       if (draftTimerRef.current) {
         clearTimeout(draftTimerRef.current);
         draftTimerRef.current = null;
@@ -6002,6 +6014,8 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
       const content = message.trim();
       setMessage("");
       messageRef.current = "";
+      useInboxStore.getState().clearDraftFinal(conversationId);
+      sendingRef.current = false;
       onClearSelection?.();
       const savedPopulateFn = onPopulateInput?.current ?? null;
       if (onPopulateInput) onPopulateInput.current = null;
@@ -6033,6 +6047,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
     const trimmed = message.trim() || (finalImages.length > 0 ? "[image]" : "");
     const storageIds = finalImages.map(img => img.storageId!);
     const optimisticImages = finalImages.map(img => ({ media_type: img.file.type, storage_id: img.storageId as string }));
+    sendingRef.current = true;
     if (draftTimerRef.current) {
       clearTimeout(draftTimerRef.current);
       draftTimerRef.current = null;
@@ -6044,6 +6059,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
     setSelectedQueueIndex(null);
     clearAllImages();
     useInboxStore.getState().clearDraftFinal(conversationId);
+    sendingRef.current = false;
     requestAnimationFrame(() => textareaRef.current?.focus());
     onMessageSent?.();
 
@@ -6285,9 +6301,13 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
       e.preventDefault();
       const text = message.trim();
       if (text) {
+        sendingRef.current = true;
+        if (draftTimerRef.current) { clearTimeout(draftTimerRef.current); draftTimerRef.current = null; }
         setQueuedMessages(prev => [...prev, text]);
         setMessage("");
+        messageRef.current = "";
         useInboxStore.getState().clearDraftFinal(conversationId);
+        sendingRef.current = false;
         setSelectedQueueIndex(null);
       }
       return;
