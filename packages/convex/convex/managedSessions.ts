@@ -183,7 +183,15 @@ export const heartbeat = mutation({
       last_heartbeat: Date.now(),
     });
 
-    return { found: true };
+    let dismissed = false;
+    if (session.conversation_id) {
+      const conv = await ctx.db.get(session.conversation_id);
+      if (conv && conv.inbox_dismissed_at && conv.inbox_dismissed_at >= (conv.updated_at || 0) && !conv.is_subagent) {
+        dismissed = true;
+      }
+    }
+
+    return { found: true, dismissed };
   },
 });
 
@@ -346,7 +354,7 @@ export const markMessageDelivered = mutation({
 export const updateAgentStatus = mutation({
   args: {
     conversation_id: v.id("conversations"),
-    agent_status: v.union(v.literal("working"), v.literal("idle"), v.literal("permission_blocked"), v.literal("compacting"), v.literal("thinking"), v.literal("connected"), v.literal("stopped")),
+    agent_status: v.union(v.literal("working"), v.literal("idle"), v.literal("permission_blocked"), v.literal("compacting"), v.literal("thinking"), v.literal("connected"), v.literal("stopped"), v.literal("starting")),
     client_ts: v.optional(v.number()),
     api_token: v.optional(v.string()),
     permission_mode: v.optional(v.union(v.literal("default"), v.literal("plan"), v.literal("acceptEdits"), v.literal("bypassPermissions"), v.literal("dontAsk"))),

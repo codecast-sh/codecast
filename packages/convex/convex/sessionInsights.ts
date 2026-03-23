@@ -1458,29 +1458,48 @@ export const getActivityDigest = query({
       day_summaries: daySummaries,
       feed,
       people,
-      day_narratives: await getDayNarratives(ctx, authUserId, daySummaries, tz),
+      day_narratives: await getDigests(ctx, authUserId, "day", daySummaries.map((d) => d.date)),
     };
   },
 });
 
-async function getDayNarratives(
+async function getDigests(
   ctx: any,
   userId: Id<"users">,
-  daySummaries: { date: string }[],
-  tz: string
-): Promise<Record<string, { narrative: string; events: any[]; generated_at: number }>> {
-  const result: Record<string, { narrative: string; events: any[]; generated_at: number }> = {};
-  for (const day of daySummaries) {
-    const existing = await ctx.db
-      .query("day_timelines")
-      .withIndex("by_user_date", (q: any) => q.eq("user_id", userId).eq("date", day.date))
-      .first();
+  scope: "day" | "week" | "month",
+  dateKeys: string[],
+  teamId?: Id<"teams">,
+): Promise<Record<string, { narrative: string; events: any[]; generated_at: number; session_count?: number }>> {
+  const result: Record<string, { narrative: string; events: any[]; generated_at: number; session_count?: number }> = {};
+  for (const date of dateKeys) {
+    const candidates = await ctx.db
+      .query("digests")
+      .withIndex("by_user_scope_date", (q: any) => q.eq("user_id", userId).eq("scope", scope).eq("date", date))
+      .collect();
+    const existing = candidates.find((d: any) =>
+      teamId ? d.team_id?.toString() === teamId.toString() : !d.team_id
+    );
     if (existing?.narrative) {
-      result[day.date] = {
+      result[date] = {
         narrative: existing.narrative,
         events: existing.events || [],
         generated_at: existing.generated_at,
+        session_count: existing.session_count,
       };
+      continue;
+    }
+    if (scope === "day" && !teamId) {
+      const legacy = await ctx.db
+        .query("day_timelines")
+        .withIndex("by_user_date", (q: any) => q.eq("user_id", userId).eq("date", date))
+        .first();
+      if (legacy?.narrative) {
+        result[date] = {
+          narrative: legacy.narrative,
+          events: legacy.events || [],
+          generated_at: legacy.generated_at,
+        };
+      }
     }
   }
   return result;
@@ -1526,6 +1545,11 @@ export const getDayInsightsForNarrative = internalQuery({
         key_changes: i.key_changes,
         outcome_type: i.outcome_type,
         summary: i.summary,
+        turns: i.turns || [],
+        blockers: i.blockers || [],
+        next_action: i.next_action,
+        themes: i.themes || [],
+        metadata: i.metadata,
         started_at: conv?.started_at,
         updated_at: conv?.updated_at,
       };
@@ -1533,11 +1557,100 @@ export const getDayInsightsForNarrative = internalQuery({
   },
 });
 
-export const upsertDayTimeline = internalMutation({
+// --- Date helpers for ISO week/month key computation ---
+
+function getISOWeekKey(dateStr: string): string {
+  const d = new Date(dateStr + "T12:00:00Z");
+  const dayOfWeek = d.getUTCDay() || 7;
+  const thursday = new Date(d);
+  thursday.setUTCDate(d.getUTCDate() + 4 - dayOfWeek);
+  const yearStart = new Date(Date.UTC(thursday.getUTCFullYear(), 0, 1));
+  const weekNum = Math.ceil((((thursday.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+  return `${thursday.getUTCFullYear()}-W${String(weekNum).padStart(2, "0")}`;
+}
+
+function getWeekDateRange(weekKey: string): { monday: string; sunday: string } {
+  const [yearStr, weekStr] = weekKey.split("-W");
+  const year = parseInt(yearStr);
+  const week = parseInt(weekStr);
+  const jan4 = new Date(Date.UTC(year, 0, 4));
+  const jan4Day = jan4.getUTCDay() || 7;
+  const week1Monday = new Date(jan4);
+  week1Monday.setUTCDate(jan4.getUTCDate() - jan4Day + 1);
+  const monday = new Date(week1Monday);
+  monday.setUTCDate(week1Monday.getUTCDate() + (week - 1) * 7);
+  const sunday = new Date(monday);
+  sunday.setUTCDate(monday.getUTCDate() + 6);
+  const fmt = (d: Date) => d.toISOString().slice(0, 10);
+  return { monday: fmt(monday), sunday: fmt(sunday) };
+}
+
+function getWeeksInMonth(monthKey: string): string[] {
+  const [year, month] = monthKey.split("-").map(Number);
+  const weeks = new Set<string>();
+  const daysInMonth = new Date(year, month, 0).getDate();
+  for (let day = 1; day <= daysInMonth; day++) {
+    const dateStr = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    weeks.add(getISOWeekKey(dateStr));
+  }
+  return [...weeks].sort();
+}
+
+// --- Render a session insight as a markdown block for the synthesizer prompt ---
+
+function renderInsightBlock(insight: any): string {
+  const project = insight.project_path?.split("/").filter(Boolean).pop() || "unknown";
+  const cid = insight.conversation_id;
+  const parts: string[] = [];
+
+  parts.push(`### [${insight.title}](/conversation/${cid})`);
+  parts.push(`**${project}** | ${insight.outcome_type}`);
+
+  if (insight.headline) parts.push(insight.headline);
+  if (insight.summary) parts.push(insight.summary);
+
+  if (insight.turns?.length) {
+    for (const turn of insight.turns) {
+      parts.push(`- ${turn.ask} → ${turn.did.join("; ")}`);
+    }
+  }
+
+  if (insight.key_changes?.length) parts.push(`**Changes:** ${insight.key_changes.join(", ")}`);
+  if (insight.blockers?.length) parts.push(`**Blocked:** ${insight.blockers.join(", ")}`);
+  if (insight.metadata?.pr_numbers?.length) parts.push(`**PRs:** ${insight.metadata.pr_numbers.map((n: number) => `#${n}`).join(", ")}`);
+
+  return parts.join("\n");
+}
+
+// --- The single synthesizer prompt used at every level ---
+
+const DIGEST_PROMPT = `Synthesize these activity records into a tight markdown digest.
+
+Each session: one bullet. No paragraphs, no multi-sentence descriptions. Format:
+- **Bold** outcomes and file names
+- \`code\` for functions, paths, commands
+- ## headings to group by project/theme
+- Preserve all markdown links from the input exactly as-is (e.g. [Title](/conversation/id))
+- Reference sessions using their original links when mentioning them
+
+10 sessions = ~100 words. 3 sessions = ~40 words. Ruthlessly brief.
+No title, no preamble. Start with first ## heading.`;
+
+const DIGEST_MODEL: Record<string, { model: string; maxTokens: number }> = {
+  day: { model: "claude-haiku-4-5-20251001", maxTokens: 800 },
+  week: { model: "claude-sonnet-4-20250514", maxTokens: 2500 },
+  month: { model: "claude-sonnet-4-20250514", maxTokens: 2500 },
+};
+
+// --- Digest mutations and queries ---
+
+export const upsertDigest = internalMutation({
   args: {
     user_id: v.id("users"),
     team_id: v.optional(v.id("teams")),
+    scope: v.union(v.literal("day"), v.literal("week"), v.literal("month")),
     date: v.string(),
+    narrative: v.string(),
     events: v.array(v.object({
       time: v.number(),
       t: v.string(),
@@ -1547,101 +1660,179 @@ export const upsertDayTimeline = internalMutation({
       session_title: v.optional(v.string()),
       project: v.optional(v.string()),
     })),
-    narrative: v.optional(v.string()),
+    session_count: v.optional(v.number()),
     generated_at: v.number(),
   },
   handler: async (ctx, args) => {
     const existing = await ctx.db
-      .query("day_timelines")
-      .withIndex("by_user_date", (q) => q.eq("user_id", args.user_id).eq("date", args.date))
+      .query("digests")
+      .withIndex("by_user_scope_date", (q) =>
+        q.eq("user_id", args.user_id).eq("scope", args.scope).eq("date", args.date)
+      )
       .first();
 
     if (existing) {
       await ctx.db.patch(existing._id, {
-        events: args.events,
         narrative: args.narrative,
+        events: args.events,
+        session_count: args.session_count,
         generated_at: args.generated_at,
       });
       return existing._id;
     }
 
-    return await ctx.db.insert("day_timelines", {
+    return await ctx.db.insert("digests", {
       user_id: args.user_id,
       team_id: args.team_id,
+      scope: args.scope,
       date: args.date,
-      events: args.events,
       narrative: args.narrative,
+      events: args.events,
+      session_count: args.session_count,
       generated_at: args.generated_at,
     });
   },
 });
 
-export const generateDayNarrative = internalAction({
+export const getDigestsInRange = internalQuery({
+  args: {
+    user_id: v.id("users"),
+    scope: v.union(v.literal("day"), v.literal("week"), v.literal("month")),
+    start_date: v.string(),
+    end_date: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const all = await ctx.db
+      .query("digests")
+      .withIndex("by_user_scope_date", (q) =>
+        q.eq("user_id", args.user_id).eq("scope", args.scope).gte("date", args.start_date)
+      )
+      .take(100);
+    return all.filter((d) => d.date <= args.end_date);
+  },
+});
+
+export const getDigestsByScope = query({
+  args: {
+    scope: v.union(v.literal("day"), v.literal("week"), v.literal("month")),
+    team_id: v.optional(v.id("teams")),
+    window_months: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+
+    const months = args.window_months ?? 1;
+    const now = new Date();
+    const startDate = new Date(now);
+    startDate.setMonth(startDate.getMonth() - months);
+
+    let startKey: string;
+    let endKey: string;
+    if (args.scope === "day") {
+      startKey = startDate.toISOString().slice(0, 10);
+      endKey = now.toISOString().slice(0, 10);
+    } else if (args.scope === "week") {
+      startKey = "2020-W01";
+      endKey = "2099-W53";
+    } else {
+      startKey = startDate.toISOString().slice(0, 7);
+      endKey = now.toISOString().slice(0, 7);
+    }
+
+    const digests = await ctx.db
+      .query("digests")
+      .withIndex("by_user_scope_date", (q) =>
+        q.eq("user_id", userId).eq("scope", args.scope).gte("date", startKey)
+      )
+      .take(100);
+
+    return digests
+      .filter((d) => d.date <= endKey)
+      .sort((a, b) => b.date.localeCompare(a.date))
+      .map((d) => ({
+        date: d.date,
+        narrative: d.narrative,
+        session_count: d.session_count,
+        generated_at: d.generated_at,
+      }));
+  },
+});
+
+// --- The main digest generator ---
+
+export const generateDigest = internalAction({
   args: {
     user_id: v.id("users"),
     team_id: v.optional(v.id("teams")),
+    scope: v.union(v.literal("day"), v.literal("week"), v.literal("month")),
     date: v.string(),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<InsightGenStatus> => {
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) return { status: "skipped", reason: "missing_api_key" };
 
-    const dayInsights = await ctx.runQuery(
-      internal.sessionInsights.getDayInsightsForNarrative,
-      { user_id: args.user_id, date: args.date, team_id: args.team_id }
-    );
-
-    if (!dayInsights.length) return { status: "skipped", reason: "no_insights" };
-
-    const mergedEvents: Array<{
-      time: number;
-      t: string;
-      event: string;
-      type: string;
-      session_id?: Id<"conversations">;
-      session_title?: string;
-      project?: string;
+    let activityText: string;
+    let events: Array<{
+      time: number; t: string; event: string; type: string;
+      session_id?: Id<"conversations">; session_title?: string; project?: string;
     }> = [];
+    let sessionCount = 0;
 
-    for (const insight of dayInsights) {
-      const project = insight.project_path?.split("/").filter(Boolean).pop() || undefined;
-      for (const te of insight.timeline || []) {
-        const timeParts = te.t.match(/^(\d{1,2}):(\d{2})/);
-        const timeMinutes = timeParts ? Number(timeParts[1]) * 60 + Number(timeParts[2]) : 0;
-        mergedEvents.push({
-          time: timeMinutes,
-          t: te.t,
-          event: te.event,
-          type: te.type,
-          session_id: insight.conversation_id,
-          session_title: insight.title,
-          project,
-        });
+    if (args.scope === "day") {
+      const dayInsights = await ctx.runQuery(
+        internal.sessionInsights.getDayInsightsForNarrative,
+        { user_id: args.user_id, date: args.date, team_id: args.team_id }
+      );
+      if (!dayInsights.length) return { status: "skipped", reason: "no_insights" };
+
+      sessionCount = dayInsights.length;
+      activityText = dayInsights.map(renderInsightBlock).join("\n\n---\n\n");
+
+      for (const insight of dayInsights) {
+        const project = insight.project_path?.split("/").filter(Boolean).pop() || undefined;
+        for (const te of insight.timeline || []) {
+          const timeParts = te.t.match(/^(\d{1,2}):(\d{2})/);
+          const timeMinutes = timeParts ? Number(timeParts[1]) * 60 + Number(timeParts[2]) : 0;
+          events.push({
+            time: timeMinutes, t: te.t, event: te.event, type: te.type,
+            session_id: insight.conversation_id, session_title: insight.title, project,
+          });
+        }
       }
+      events.sort((a, b) => a.time - b.time);
+      events = events.slice(0, 40);
+
+    } else if (args.scope === "week") {
+      const { monday, sunday } = getWeekDateRange(args.date);
+      const dayDigests = await ctx.runQuery(internal.sessionInsights.getDigestsInRange, {
+        user_id: args.user_id, scope: "day", start_date: monday, end_date: sunday,
+      });
+      if (!dayDigests.length) return { status: "skipped", reason: "no_child_digests" };
+
+      sessionCount = dayDigests.reduce((sum: number, d: any) => sum + (d.session_count || 0), 0);
+      activityText = [...dayDigests]
+        .sort((a: any, b: any) => a.date.localeCompare(b.date))
+        .map((d: any) => `## ${d.date}\n\n${d.narrative}`)
+        .join("\n\n---\n\n");
+
+    } else {
+      const weekKeys = getWeeksInMonth(args.date);
+      const weekDigests = await ctx.runQuery(internal.sessionInsights.getDigestsInRange, {
+        user_id: args.user_id, scope: "week",
+        start_date: weekKeys[0], end_date: weekKeys[weekKeys.length - 1],
+      });
+      if (!weekDigests.length) return { status: "skipped", reason: "no_child_digests" };
+
+      sessionCount = weekDigests.reduce((sum: number, d: any) => sum + (d.session_count || 0), 0);
+      activityText = [...weekDigests]
+        .sort((a: any, b: any) => a.date.localeCompare(b.date))
+        .map((d: any) => `## ${d.date}\n\n${d.narrative}`)
+        .join("\n\n---\n\n");
     }
 
-    mergedEvents.sort((a, b) => a.time - b.time);
-    const cappedEvents = mergedEvents.slice(0, 40);
-
-    const sessionsText = dayInsights.map((i) => {
-      const project = i.project_path?.split("/").filter(Boolean).pop() || "unknown";
-      return `[${project}] ${i.title}: ${i.headline || i.summary.slice(0, 100)} (${i.outcome_type})`;
-    }).join("\n");
-
-    const timelineText = cappedEvents.map((e) => {
-      const label = e.session_title ? `[${e.project || ""}:${e.session_title}]` : "";
-      return `${e.t} ${label} (${e.type}) ${e.event}`;
-    }).join("\n");
-
-    const prompt = `Day summary for ${args.date}. STRICT: exactly 2 sentences, under 120 words total.
-
-Sessions:
-${sessionsText}
-
-Sentence 1: What was the main focus and what got done (shipped/fixed/built). Name specific projects.
-Sentence 2: Current state -- what's in progress, what's blocked, what's next.
-
-No lists, no bullet points. Just two tight sentences. Return ONLY the text.`;
+    const { model, maxTokens } = DIGEST_MODEL[args.scope];
+    const fullPrompt = `${DIGEST_PROMPT}\n\n---\n\n${activityText}`;
 
     try {
       const response = await fetch("https://api.anthropic.com/v1/messages", {
@@ -1652,9 +1843,9 @@ No lists, no bullet points. Just two tight sentences. Return ONLY the text.`;
           "anthropic-version": "2023-06-01",
         },
         body: JSON.stringify({
-          model: "claude-haiku-4-5-20251001",
-          max_tokens: 150,
-          messages: [{ role: "user", content: prompt }],
+          model,
+          max_tokens: maxTokens,
+          messages: [{ role: "user", content: fullPrompt }],
         }),
       });
 
@@ -1664,60 +1855,95 @@ No lists, no bullet points. Just two tight sentences. Return ONLY the text.`;
       const narrative = data.content?.[0]?.text?.trim();
       if (!narrative) return { status: "error", reason: "empty_response" };
 
-      await ctx.runMutation(internal.sessionInsights.upsertDayTimeline, {
+      await ctx.runMutation(internal.sessionInsights.upsertDigest, {
         user_id: args.user_id,
         team_id: args.team_id,
+        scope: args.scope,
         date: args.date,
-        events: cappedEvents.map((e) => ({
-          ...e,
-          session_id: e.session_id || undefined,
-        })),
         narrative,
+        events: events.map((e) => ({ ...e, session_id: e.session_id || undefined })),
+        session_count: sessionCount,
         generated_at: Date.now(),
       });
 
-      return { status: "ok", narrative };
+      return { status: "ok" };
     } catch (error) {
-      console.error("Failed to generate day narrative:", error);
+      console.error(`Failed to generate ${args.scope} digest:`, error);
       return { status: "error", reason: "fetch_failed" };
     }
   },
 });
 
-export const backfillDayNarratives = action({
+// --- Backfill: cascading digest generation across scopes ---
+
+export const backfillDigests = action({
   args: {
+    scope: v.optional(v.union(v.literal("day"), v.literal("week"), v.literal("month"))),
     window_hours: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const user = await ctx.runQuery(api.users.getCurrentUser, {} as any);
     if (!user) throw new Error("Not authenticated");
 
+    const scope = args.scope ?? "day";
     const windowHours = Math.max(1, Math.min(args.window_hours ?? 168, 24 * 30));
     const since = Date.now() - windowHours * 60 * 60 * 1000;
     const tz = "America/Los_Angeles";
 
-    const insights = await ctx.runQuery(internal.sessionInsights.getRecentInsightsForUser, {
-      user_id: user._id,
-      since,
-    });
-
-    const dayDates = new Set<string>();
-    for (const i of insights) {
-      const dateStr = new Date(i.generated_at).toLocaleDateString("en-CA", { timeZone: tz });
-      dayDates.add(dateStr);
+    if (scope === "day") {
+      const insights = await ctx.runQuery(internal.sessionInsights.getRecentInsightsForUser, {
+        user_id: user._id, since,
+      });
+      const dayDates = new Set<string>();
+      for (const i of insights) {
+        dayDates.add(new Date(i.generated_at).toLocaleDateString("en-CA", { timeZone: tz }));
+      }
+      let generated = 0;
+      for (const date of dayDates) {
+        const result = await ctx.runAction(internal.sessionInsights.generateDigest, {
+          user_id: user._id, team_id: user.active_team_id || undefined, scope: "day", date,
+        });
+        if ((result as any)?.status === "ok") generated++;
+      }
+      return { scope, dates: dayDates.size, generated };
     }
 
+    if (scope === "week") {
+      const insights = await ctx.runQuery(internal.sessionInsights.getRecentInsightsForUser, {
+        user_id: user._id, since,
+      });
+      const weekKeys = new Set<string>();
+      for (const i of insights) {
+        const dateStr = new Date(i.generated_at).toLocaleDateString("en-CA", { timeZone: tz });
+        weekKeys.add(getISOWeekKey(dateStr));
+      }
+      let generated = 0;
+      for (const weekKey of weekKeys) {
+        const result = await ctx.runAction(internal.sessionInsights.generateDigest, {
+          user_id: user._id, team_id: user.active_team_id || undefined, scope: "week", date: weekKey,
+        });
+        if ((result as any)?.status === "ok") generated++;
+      }
+      return { scope, dates: weekKeys.size, generated };
+    }
+
+    // month
+    const insights = await ctx.runQuery(internal.sessionInsights.getRecentInsightsForUser, {
+      user_id: user._id, since,
+    });
+    const monthKeys = new Set<string>();
+    for (const i of insights) {
+      const dateStr = new Date(i.generated_at).toLocaleDateString("en-CA", { timeZone: tz });
+      monthKeys.add(dateStr.slice(0, 7));
+    }
     let generated = 0;
-    for (const date of dayDates) {
-      const result = await ctx.runAction(internal.sessionInsights.generateDayNarrative, {
-        user_id: user._id,
-        team_id: user.active_team_id || undefined,
-        date,
+    for (const monthKey of monthKeys) {
+      const result = await ctx.runAction(internal.sessionInsights.generateDigest, {
+        user_id: user._id, team_id: user.active_team_id || undefined, scope: "month", date: monthKey,
       });
       if ((result as any)?.status === "ok") generated++;
     }
-
-    return { days: dayDates.size, generated };
+    return { scope, dates: monthKeys.size, generated };
   },
 });
 

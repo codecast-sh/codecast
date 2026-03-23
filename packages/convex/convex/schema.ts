@@ -475,7 +475,7 @@ export default defineSchema({
     tmux_session: v.optional(v.string()),
     started_at: v.number(),
     last_heartbeat: v.number(),
-    agent_status: v.optional(v.union(v.literal("working"), v.literal("idle"), v.literal("permission_blocked"), v.literal("compacting"), v.literal("thinking"), v.literal("connected"), v.literal("stopped"))),
+    agent_status: v.optional(v.union(v.literal("working"), v.literal("idle"), v.literal("permission_blocked"), v.literal("compacting"), v.literal("thinking"), v.literal("connected"), v.literal("stopped"), v.literal("starting"))),
     agent_status_updated_at: v.optional(v.number()),
     permission_mode: v.optional(v.union(v.literal("default"), v.literal("plan"), v.literal("acceptEdits"), v.literal("bypassPermissions"), v.literal("dontAsk"))),
   })
@@ -679,6 +679,27 @@ export default defineSchema({
   })
     .index("by_user_date", ["user_id", "date"])
     .index("by_team_date", ["team_id", "date"]),
+
+  digests: defineTable({
+    user_id: v.id("users"),
+    team_id: v.optional(v.id("teams")),
+    scope: v.union(v.literal("day"), v.literal("week"), v.literal("month")),
+    date: v.string(),
+    narrative: v.string(),
+    events: v.array(v.object({
+      time: v.number(),
+      t: v.string(),
+      event: v.string(),
+      type: v.string(),
+      session_id: v.optional(v.id("conversations")),
+      session_title: v.optional(v.string()),
+      project: v.optional(v.string()),
+    })),
+    session_count: v.optional(v.number()),
+    generated_at: v.number(),
+  })
+    .index("by_user_scope_date", ["user_id", "scope", "date"])
+    .index("by_team_scope_date", ["team_id", "scope", "date"]),
 
   notifications: defineTable({
     recipient_user_id: v.id("users"),
@@ -1052,6 +1073,11 @@ export default defineSchema({
     ),
     confidence: v.optional(v.number()),
     promoted: v.optional(v.boolean()),
+    triage_status: v.optional(v.union(
+      v.literal("active"),
+      v.literal("suggested"),
+      v.literal("dismissed"),
+    )),
 
     // Visibility (inherited from source conversation for mined tasks)
     is_private: v.optional(v.boolean()),
@@ -1390,6 +1416,8 @@ export default defineSchema({
       cli_offline: v.optional(v.number()),
       tmux_missing: v.optional(v.number()),
     })),
+
+    drafts: v.optional(v.any()),
 
     // deprecated: kept for backward compat during migration
     sidebar_collapsed: v.optional(v.boolean()),

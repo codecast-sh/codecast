@@ -127,6 +127,7 @@ export const create = mutation({
       created_from_conversation,
       created_from_insight: args.insight_id as any,
       source: (args.source || "human") as any,
+      triage_status: (args.source && args.source !== "human") ? "suggested" : "active",
       confidence: args.confidence,
       attempt_count: 0,
       retry_count: 0,
@@ -191,7 +192,7 @@ export const promote = mutation({
       if (!accessed) throw new Error("Task not found");
     }
 
-    await ctx.db.patch(task._id, { promoted: true, updated_at: Date.now() });
+    await ctx.db.patch(task._id, { promoted: true, triage_status: "active" as const, updated_at: Date.now() });
     return { success: true };
   },
 });
@@ -213,7 +214,7 @@ export const snippet = query({
 
     const activeTasks = tasks.filter((t: any) =>
       (t.status === "open" || t.status === "in_progress" || t.status === "in_review") &&
-      (t.source !== "insight" || t.promoted === true)
+      (!t.triage_status || t.triage_status === "active")
     );
 
     const userIds = [...new Set(activeTasks.map((t: any) => t.user_id as Id<"users">))] as Id<"users">[];
@@ -350,9 +351,8 @@ export const list = query({
       tasks = tasks.filter((t: any) => t.status !== "done" && t.status !== "dropped");
     }
 
-    // By default, exclude unpromoted insight-sourced tasks (derived noise)
     if (!args.include_derived) {
-      tasks = tasks.filter((t: any) => t.source !== "insight" || t.promoted === true);
+      tasks = tasks.filter((t: any) => !t.triage_status || t.triage_status === "active");
     }
 
     if (args.execution_status) {
@@ -421,6 +421,7 @@ export const update = mutation({
     assignee: v.optional(v.string()),
     labels: v.optional(v.array(v.string())),
     project_id: v.optional(v.string()),
+    project_path: v.optional(v.string()),
     plan_id: v.optional(v.string()),
     blocked_by: v.optional(v.array(v.string())),
     blocks: v.optional(v.array(v.string())),
@@ -458,6 +459,7 @@ export const update = mutation({
     if (args.assignee !== undefined) updates.assignee = args.assignee;
     if (args.labels) updates.labels = args.labels;
     if (args.project_id !== undefined) updates.project_id = args.project_id || undefined;
+    if (args.project_path !== undefined) updates.project_path = args.project_path || undefined;
     if (args.plan_id) {
       const plan = await ctx.db
         .query("plans")
@@ -735,6 +737,7 @@ export const webList = query({
     limit: v.optional(v.number()),
     page: v.optional(v.number()),
     include_derived: v.optional(v.boolean()),
+    triage_status: v.optional(v.string()),
     team_id: v.optional(v.id("teams")),
     workspace: v.optional(v.union(v.literal("personal"), v.literal("team"))),
   },
@@ -777,9 +780,10 @@ export const webList = query({
       tasks = tasks.filter((t) => t.status !== "done" && t.status !== "dropped");
     }
 
-    // By default, exclude unpromoted insight-sourced tasks
-    if (!args.include_derived) {
-      tasks = tasks.filter((t) => t.source !== "insight" || t.promoted === true);
+    if (args.triage_status) {
+      tasks = tasks.filter((t: any) => t.triage_status === args.triage_status);
+    } else if (!args.include_derived) {
+      tasks = tasks.filter((t: any) => !t.triage_status || t.triage_status === "active");
     }
 
     if (args.execution_status) {
@@ -937,7 +941,9 @@ export const webUpdate = mutation({
     assignee: v.optional(v.string()),
     labels: v.optional(v.array(v.string())),
     project_id: v.optional(v.string()),
+    project_path: v.optional(v.string()),
     execution_status: v.optional(v.string()),
+    triage_status: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -960,7 +966,12 @@ export const webUpdate = mutation({
     }
     if (args.labels) updates.labels = args.labels;
     if (args.project_id !== undefined) updates.project_id = args.project_id || undefined;
+    if (args.project_path !== undefined) updates.project_path = args.project_path || undefined;
     if (args.execution_status !== undefined) updates.execution_status = args.execution_status || undefined;
+    if (args.triage_status) {
+      updates.triage_status = args.triage_status;
+      if (args.triage_status === "active") updates.promoted = true;
+    }
 
     if (args.status === "done" || args.status === "dropped") {
       updates.closed_at = now;
@@ -1215,7 +1226,7 @@ export const webTeamList = query({
     }
 
     if (args.promoted_only) {
-      tasks = tasks.filter((t: any) => t.source !== "insight" || t.promoted === true);
+      tasks = tasks.filter((t: any) => !t.triage_status || t.triage_status === "active");
     }
 
     return tasks.slice(0, args.limit || 300);
@@ -1246,7 +1257,7 @@ export const webPromote = mutation({
       if (!accessed) throw new Error("Task not found");
     }
 
-    await ctx.db.patch(task._id, { promoted: true, updated_at: Date.now() });
+    await ctx.db.patch(task._id, { promoted: true, triage_status: "active" as const, updated_at: Date.now() });
     return { success: true };
   },
 });
@@ -1378,6 +1389,10 @@ export const backfillTeamScope = mutation({
         patches.promoted = true;
       }
 
+      if (!(t as any).triage_status) {
+        patches.triage_status = (t.source === "human" || t.promoted) ? "active" : "suggested";
+      }
+
       if (Object.keys(patches).length > 0) {
         await ctx.db.patch(t._id, patches);
         if (patches.team_id) tasksFixed++;
@@ -1397,6 +1412,34 @@ export const backfillTeamScope = mutation({
     }
 
     return { tasksFixed, tasksPromoted, docsFixed, totalTasks: allTasks.length, totalDocs: allDocs.length };
+  },
+});
+
+export const backfillTriageStatus = mutation({
+  args: {
+    api_token: v.string(),
+    cursor: v.optional(v.string()),
+    batch_size: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token);
+    if (!auth) throw new Error("Unauthorized");
+
+    const batchSize = args.batch_size || 100;
+    let query = ctx.db.query("tasks");
+    const tasks = await query.collect();
+
+    let updated = 0;
+    let skipped = 0;
+    for (const t of tasks) {
+      if ((t as any).triage_status) { skipped++; continue; }
+      const status = (t.source === "human" || t.promoted) ? "active" : "suggested";
+      await ctx.db.patch(t._id, { triage_status: status as any });
+      updated++;
+      if (updated >= batchSize) break;
+    }
+
+    return { updated, skipped, total: tasks.length, done: updated < batchSize };
   },
 });
 
@@ -1724,7 +1767,7 @@ export const getReadyTasks = query({
 
     return allTasks.filter((t: any) => {
       if (t.status !== "open") return false;
-      if (t.source === "insight" && !t.promoted) return false;
+      if (t.triage_status && t.triage_status !== "active") return false;
       if (!t.blocked_by || t.blocked_by.length === 0) return true;
       return t.blocked_by.every((bid: string) => {
         const status = statusMap.get(bid);

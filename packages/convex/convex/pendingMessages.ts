@@ -159,6 +159,30 @@ export const retryMessage = mutation({
   },
 });
 
+export async function resetConversationPendingMessages(
+  ctx: { db: any },
+  conversationId: Id<"conversations">
+) {
+  const messages = await ctx.db
+    .query("pending_messages")
+    .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conversationId))
+    .collect();
+
+  let resetCount = 0;
+  for (const msg of messages) {
+    if (msg.status === "failed" || msg.status === "undeliverable") {
+      await ctx.db.patch(msg._id, { status: "pending", retry_count: 0, delivered_at: undefined });
+      resetCount++;
+    }
+  }
+
+  if (resetCount > 0) {
+    await ctx.db.patch(conversationId, { has_pending_messages: true });
+  }
+
+  return resetCount;
+}
+
 export const getPendingMessages = query({
   args: {
     user_id: v.optional(v.id("users")),
@@ -195,15 +219,19 @@ export const getConversationPendingMessage = query({
     const authUserId = await getAuthUserId(ctx);
     if (!authUserId) return null;
 
-    const msg = await ctx.db
+    const msgs = await ctx.db
       .query("pending_messages")
       .withIndex("by_conversation_id", (q) => q.eq("conversation_id", args.conversation_id))
-      .filter((q) => q.eq(q.field("status"), "pending"))
-      .first();
+      .filter((q) => q.neq(q.field("status"), "delivered"))
+      .collect();
 
+    const owned = msgs.filter((m) => m.from_user_id.toString() === authUserId.toString());
+    const msg = owned.find((m) => m.status === "pending")
+      ?? owned.find((m) => m.status === "failed")
+      ?? owned.find((m) => m.status === "undeliverable")
+      ?? null;
     if (!msg) return null;
-    if (msg.from_user_id.toString() !== authUserId.toString()) return null;
-    return { created_at: msg.created_at, retry_count: msg.retry_count };
+    return { created_at: msg.created_at, retry_count: msg.retry_count, status: msg.status as string };
   },
 });
 

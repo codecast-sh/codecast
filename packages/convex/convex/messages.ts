@@ -268,20 +268,21 @@ export const addMessage = mutation({
     }
 
     if (args.role === "user" && safeContent?.trim()) {
-      const recent = await ctx.db
+      const recentMessages = await ctx.db
         .query("messages")
         .withIndex("by_conversation_timestamp", (q) =>
           q.eq("conversation_id", args.conversation_id)
         )
         .order("desc")
-        .first();
-      if (
-        recent &&
-        recent.role === "user" &&
-        redactSecrets(recent.content || "").trim() === safeContent.trim() &&
-        Math.abs(msgTimestamp - recent.timestamp) < 5 * 60 * 1000
-      ) {
-        return recent._id;
+        .take(5);
+      const dup = recentMessages.find(
+        (r) =>
+          r.role === "user" &&
+          redactSecrets(r.content || "").trim() === safeContent.trim() &&
+          Math.abs(msgTimestamp - r.timestamp) < 5 * 60 * 1000
+      );
+      if (dup) {
+        return dup._id;
       }
     }
 
@@ -472,20 +473,21 @@ export const addMessages = mutation({
       }
 
       if (msg.role === "user" && safeContent?.trim()) {
-        const recent = await ctx.db
+        const recentMessages = await ctx.db
           .query("messages")
           .withIndex("by_conversation_timestamp", (q) =>
             q.eq("conversation_id", args.conversation_id)
           )
           .order("desc")
-          .first();
-        if (
-          recent &&
-          recent.role === "user" &&
-          redactSecrets(recent.content || "").trim() === safeContent.trim() &&
-          Math.abs(msgTimestamp - recent.timestamp) < 5 * 60 * 1000
-        ) {
-          ids.push(recent._id);
+          .take(5);
+        const dup = recentMessages.find(
+          (r) =>
+            r.role === "user" &&
+            redactSecrets(r.content || "").trim() === safeContent.trim() &&
+            Math.abs(msgTimestamp - r.timestamp) < 5 * 60 * 1000
+        );
+        if (dup) {
+          ids.push(dup._id);
           continue;
         }
       }

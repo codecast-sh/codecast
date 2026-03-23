@@ -6,6 +6,7 @@ import { Id } from "./_generated/dataModel";
 import { checkRateLimit } from "./rateLimit";
 import { verifyApiToken } from "./apiTokens";
 import { internal } from "./_generated/api";
+import { resetConversationPendingMessages } from "./pendingMessages";
 import {
   isTeamMember,
   canTeamMemberAccess,
@@ -2136,23 +2137,25 @@ export const getConversationPublic = query({
   },
 });
 
-export const paletteSearch = query({
-  args: {
-    query: v.string(),
-    limit: v.optional(v.number()),
-  },
-  handler: async (ctx, args) => {
+export const listRecentSessions = query({
+  args: {},
+  handler: async (ctx) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return [];
-    const searchTerm = args.query.trim();
-    if (!searchTerm || searchTerm.length < 2) return [];
-    const limit = args.limit ?? 30;
     const results = await ctx.db
       .query("conversations")
-      .withSearchIndex("search_title", (q) =>
-        q.search("title", searchTerm).eq("user_id", userId)
+      .withIndex("by_user_updated", (q) => q.eq("user_id", userId))
+      .order("desc")
+      .filter((q) =>
+        q.and(
+          q.neq(q.field("is_subagent"), true),
+          q.or(
+            q.eq(q.field("status"), "active"),
+            q.eq(q.field("status"), "completed")
+          )
+        )
       )
-      .take(limit);
+      .take(200);
     return results.map((c) => ({
       _id: c._id,
       session_id: c.session_id,
@@ -2162,7 +2165,6 @@ export const paletteSearch = query({
       git_root: c.git_root,
       agent_type: c.agent_type,
       message_count: c.message_count,
-      is_idle: c.status === "completed",
     }));
   },
 });
@@ -3168,6 +3170,7 @@ export const readConversationMessages = query({
         role: m.role,
         content: m.content || "",
         timestamp: new Date(m.timestamp).toISOString(),
+        message_uuid: m.message_uuid || undefined,
         tool_calls: truncateToolCalls(m.tool_calls),
         tool_results: truncateToolResults(m.tool_results),
       };
@@ -5005,6 +5008,25 @@ export const getConversationMeta = query({
   },
 });
 
+export const getConversationMention = query({
+  args: { conversation_id: v.id("conversations") },
+  handler: async (ctx, args) => {
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation) return null;
+    return {
+      _id: conversation._id,
+      title: conversation.title || "Session",
+      message_count: conversation.message_count || 0,
+      project_path: conversation.project_path || null,
+      model: conversation.model || null,
+      status: conversation.status || null,
+      updated_at: conversation.updated_at || conversation._creationTime,
+      idle_summary: conversation.idle_summary || null,
+      agent_type: conversation.agent_type || null,
+    };
+  },
+});
+
 export const backfillAutoSharedConversations = internalMutation({
   args: {
     cursor: v.optional(v.string()),
@@ -5858,6 +5880,14 @@ export const listDismissedSessions = query({
     );
 
     const NOISE_TITLE_PREFIXES = ["[Using:", "[Request", "[SUGGESTION MODE:"];
+
+    const activeParentIds = new Set<string>();
+    for (const c of conversations) {
+      if (c.is_subagent || c.is_workflow_sub || (c.parent_conversation_id && !c.parent_message_uuid)) continue;
+      const dismissed = c.inbox_dismissed_at && c.inbox_dismissed_at >= c.updated_at;
+      if (!dismissed) activeParentIds.add(c._id.toString());
+    }
+
     const results = [];
 
     for (const conv of conversations) {
@@ -5866,6 +5896,7 @@ export const listDismissedSessions = query({
       if (isSubagent) {
         const isAlive = conv.status === "active" && (conv.updated_at > now - 5 * 60 * 1000 || liveConvIds.has(conv._id.toString()));
         if (isAlive) continue;
+        if (conv.parent_conversation_id && activeParentIds.has(conv.parent_conversation_id.toString())) continue;
 
         results.push({
           _id: conv._id,
@@ -6168,6 +6199,8 @@ export const restartSession = mutation({
       }),
       created_at: now + 1,
     });
+
+    await resetConversationPendingMessages(ctx, args.conversation_id);
   },
 });
 
@@ -6203,6 +6236,8 @@ export const repairSession = mutation({
       }),
       created_at: now + 1,
     });
+
+    await resetConversationPendingMessages(ctx, args.conversation_id);
   },
 });
 
