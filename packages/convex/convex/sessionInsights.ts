@@ -1458,7 +1458,7 @@ export const getActivityDigest = query({
       day_summaries: daySummaries,
       feed,
       people,
-      day_narratives: await getDigests(ctx, authUserId, "day", daySummaries.map((d) => d.date)),
+      day_narratives: await getDigests(ctx, authUserId, "day", daySummaries.map((d) => d.date), args.team_id),
     };
   },
 });
@@ -1524,7 +1524,9 @@ export const getDayInsightsForNarrative = internalQuery({
       .take(100);
 
     const dayInsights = insights.filter((i) => {
-      return i.generated_at >= dateStart && i.generated_at < dateEnd;
+      if (i.generated_at < dateStart || i.generated_at >= dateEnd) return false;
+      if (args.team_id) return i.team_id?.toString() === args.team_id.toString();
+      return !i.team_id;
     });
 
     const conversations = await Promise.all(
@@ -1664,12 +1666,15 @@ export const upsertDigest = internalMutation({
     generated_at: v.number(),
   },
   handler: async (ctx, args) => {
-    const existing = await ctx.db
+    const candidates = await ctx.db
       .query("digests")
       .withIndex("by_user_scope_date", (q) =>
         q.eq("user_id", args.user_id).eq("scope", args.scope).eq("date", args.date)
       )
-      .first();
+      .collect();
+    const existing = candidates.find((d) =>
+      args.team_id ? d.team_id?.toString() === args.team_id.toString() : !d.team_id
+    );
 
     if (existing) {
       await ctx.db.patch(existing._id, {
@@ -1697,6 +1702,7 @@ export const upsertDigest = internalMutation({
 export const getDigestsInRange = internalQuery({
   args: {
     user_id: v.id("users"),
+    team_id: v.optional(v.id("teams")),
     scope: v.union(v.literal("day"), v.literal("week"), v.literal("month")),
     start_date: v.string(),
     end_date: v.string(),
@@ -1708,7 +1714,11 @@ export const getDigestsInRange = internalQuery({
         q.eq("user_id", args.user_id).eq("scope", args.scope).gte("date", args.start_date)
       )
       .take(100);
-    return all.filter((d) => d.date <= args.end_date);
+    return all.filter((d) => {
+      if (d.date > args.end_date) return false;
+      if (args.team_id) return d.team_id?.toString() === args.team_id.toString();
+      return !d.team_id;
+    });
   },
 });
 
