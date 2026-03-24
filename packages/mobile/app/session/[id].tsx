@@ -364,26 +364,24 @@ function DiffBlock({ oldStr, newStr, filePath }: { oldStr: string; newStr: strin
   const displayNewLines = isTall ? newLines.slice(0, Math.min(newLines.length, 6)) : newLines;
 
   return (
-    <RNView style={{ marginVertical: 4 }}>
-      <RNView style={{ overflow: 'hidden' }}>
-        <ScrollView horizontal showsHorizontalScrollIndicator nestedScrollEnabled>
-          <RNView style={{ paddingVertical: 2 }}>
-            {displayOldLines.map((line, i) => (
-              <RNView key={`o${i}`} style={{ flexDirection: 'row', backgroundColor: Theme.red + '12', paddingHorizontal: 6, paddingVertical: 1 }}>
-                <RNText style={{ fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.red, width: 14 }}>-</RNText>
-                <HighlightedCodeText content={line} style={{ fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.textSecondary }} />
-              </RNView>
-            ))}
-            {displayNewLines.map((line, i) => (
-              <RNView key={`n${i}`} style={{ flexDirection: 'row', backgroundColor: Theme.green + '12', paddingHorizontal: 6, paddingVertical: 1 }}>
-                <RNText style={{ fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.green, width: 14 }}>+</RNText>
-                <HighlightedCodeText content={line} style={{ fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.textSecondary }} />
-              </RNView>
-            ))}
-          </RNView>
-        </ScrollView>
-      </RNView>
-      <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 4 }}>
+    <RNView style={{ marginVertical: 2 }}>
+      <ScrollView horizontal showsHorizontalScrollIndicator nestedScrollEnabled>
+        <RNView>
+          {displayOldLines.map((line, i) => (
+            <RNView key={`o${i}`} style={{ flexDirection: 'row', backgroundColor: Theme.red + '12', paddingHorizontal: 6, paddingVertical: 1 }}>
+              <RNText style={{ fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.red, width: 14 }}>-</RNText>
+              <HighlightedCodeText content={line} style={{ fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.textSecondary }} />
+            </RNView>
+          ))}
+          {displayNewLines.map((line, i) => (
+            <RNView key={`n${i}`} style={{ flexDirection: 'row', backgroundColor: Theme.green + '12', paddingHorizontal: 6, paddingVertical: 1 }}>
+              <RNText style={{ fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.green, width: 14 }}>+</RNText>
+              <HighlightedCodeText content={line} style={{ fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.textSecondary }} />
+            </RNView>
+          ))}
+        </RNView>
+      </ScrollView>
+      <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 2 }}>
         {isTall && (
           <TouchableOpacity onPress={() => setFullscreen(true)} activeOpacity={0.6} style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
             <FontAwesome name="expand" size={10} color={Theme.textDim} />
@@ -423,10 +421,10 @@ function CodeBlockWithCopy({ content, language }: { content: string; language: s
   const displayContent = isTall ? displayLines.join('\n') : content;
 
   return (
-    <RNView style={{ marginVertical: 4 }}>
+    <RNView style={{ marginVertical: 2 }}>
       <RNView style={{ backgroundColor: Theme.bgAlt, borderRadius: 6, borderWidth: StyleSheet.hairlineWidth, borderColor: Theme.borderLight, overflow: 'hidden' }}>
         <ScrollView horizontal showsHorizontalScrollIndicator nestedScrollEnabled>
-          <RNView style={{ padding: 8 }}>
+          <RNView style={{ padding: 6 }}>
             {showLineNumbers ? (
               <RNView style={{ flexDirection: 'row' }}>
                 <RNView style={{ paddingRight: 8, marginRight: 8, borderRightWidth: StyleSheet.hairlineWidth, borderRightColor: Theme.borderLight }}>
@@ -2220,10 +2218,13 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImag
   const isPlan = isMarkdownFile && isPlanFile(filePath, mdContent);
   const canToggleViewMode = isMarkdownFile && (isRead || isWrite) && result && result.content;
 
-  const MD_COLLAPSED_HEIGHT = 600;
+  const TOOL_CONTENT_MAX_HEIGHT = 350;
+  const MD_COLLAPSED_HEIGHT = 350;
   const [mdOverflowing, setMdOverflowing] = useState(false);
   const [mdExpanded, setMdExpanded] = useState(false);
   const [mdFullscreen, setMdFullscreen] = useState(false);
+  const [toolContentOverflowing, setToolContentOverflowing] = useState(false);
+  const [toolContentFullExpanded, setToolContentFullExpanded] = useState(false);
 
   // Tools that shouldn't show their input (just noise)
   // Command is shown in summary, no need to repeat
@@ -2279,7 +2280,10 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImag
         </RNView>
       )}
       {expanded && (
-        <RNView style={[styles.toolCallContent, result?.is_error && styles.toolCallContentError]}>
+        <RNView
+          onLayout={(e) => { if (!toolContentFullExpanded) setToolContentOverflowing(e.nativeEvent.layout.height >= TOOL_CONTENT_MAX_HEIGHT); }}
+          style={[styles.toolCallContent, result?.is_error && styles.toolCallContentError, !toolContentFullExpanded && { maxHeight: TOOL_CONTENT_MAX_HEIGHT, overflow: 'hidden' as const }]}>
+
           {language && !isBash && !(isEdit && parsedInput.old_string && parsedInput.new_string) && (
             <RNView style={styles.languageLabelRow}>
               <RNText style={styles.languageLabel}>{language}</RNText>
@@ -2360,9 +2364,17 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImag
                 </RNText>
               )}
             </RNView>
-          ) : result && (!resultDisplay || !resultDisplay.trim()) ? (
-            <RNText style={styles.noOutputText}>No output</RNText>
           ) : null}
+          {!toolContentFullExpanded && toolContentOverflowing && (
+            <LinearGradient colors={[Theme.bgAlt + '00', Theme.bgAlt]} style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 60 }} pointerEvents="none" />
+          )}
+        </RNView>
+      )}
+      {expanded && toolContentOverflowing && (
+        <RNView style={{ flexDirection: 'row', gap: 12, paddingTop: 4, paddingHorizontal: 4 }}>
+          <TouchableOpacity onPress={() => setToolContentFullExpanded(!toolContentFullExpanded)} activeOpacity={0.7}>
+            <RNText style={{ fontSize: 11, color: Theme.cyan, fontWeight: '600' }}>{toolContentFullExpanded ? 'Collapse' : 'Expand'}</RNText>
+          </TouchableOpacity>
         </RNView>
       )}
       {mdFullscreen && (
@@ -2385,18 +2397,10 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImag
   );
 }
 
-function ThinkingBlock({ content, showContent = true }: { content: string; showContent?: boolean }) {
+function ThinkingBlock({ content }: { content: string }) {
   const [expanded, setExpanded] = useState(false);
   const truncated = truncateLines(content, expanded ? 50 : 2);
   const isLong = truncated.truncated || content.length > 200;
-
-  if (!showContent) {
-    return (
-      <RNView style={[styles.thinkingBlock, { opacity: 0.3 }]}>
-        <RNText style={[styles.thinkingText, { fontStyle: 'italic' }]}>thinking...</RNText>
-      </RNView>
-    );
-  }
 
   return (
     <TouchableOpacity
@@ -2529,7 +2533,7 @@ function UsageBar({ usage }: { usage: UsageData }) {
 }
 
 const CONTENT_TRUNCATE_LENGTH = 3000;
-const ASSISTANT_CONTENT_MAX_HEIGHT = 600;
+const ASSISTANT_CONTENT_MAX_HEIGHT = 400;
 
 function CommandStatusLine({ content, timestamp }: { content: string; timestamp: number }) {
   const cmdType = getCommandType(content);
@@ -2701,7 +2705,8 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
 
   return (
     <Pressable onLongPress={handleLongPress} onPress={globalCollapsed && !localExpanded ? handleTapToExpand : undefined}>
-      <RNView style={[styles.messageBubble, isUser ? styles.userBubble : styles.assistantBubble, showHeader && !isUser && styles.assistantBubbleFirst, isToolCallOnly && styles.toolCallOnlyBubble]}>
+      <RNView
+        style={[styles.messageBubble, isUser ? styles.userBubble : styles.assistantBubble, showHeader && !isUser && styles.assistantBubbleFirst, isToolCallOnly && styles.toolCallOnlyBubble]}>
         {showHeader && !isToolCallOnly && (
         <RNView style={styles.bubbleHeader}>
           {isUser ? (
@@ -4646,7 +4651,7 @@ const styles = StyleSheet.create({
     paddingBottom: 10,
   },
   bubbleContentCollapsed: {
-    maxHeight: 400,
+    maxHeight: 300,
     overflow: 'hidden',
   },
   showMoreButton: {
@@ -4766,7 +4771,7 @@ const styles = StyleSheet.create({
   },
   thinkingBlock: {
     marginHorizontal: 14,
-    marginVertical: 2,
+    marginVertical: 1,
     opacity: 0.5,
   },
   thinkingHeader: {
@@ -4906,8 +4911,8 @@ const styles = StyleSheet.create({
   },
   toolCallsCompact: {
     paddingHorizontal: 14,
-    paddingVertical: 4,
-    gap: 2,
+    paddingVertical: 2,
+    gap: 1,
   },
   toolCallsContainer: {
     paddingHorizontal: 14,
@@ -4915,7 +4920,7 @@ const styles = StyleSheet.create({
     gap: 2,
   },
   toolCallContainer: {
-    marginVertical: 1,
+    marginVertical: 0,
   },
   toolCallHeader: {
     fontSize: 12,
@@ -4943,7 +4948,7 @@ const styles = StyleSheet.create({
   },
   toolCallContent: {
     marginTop: 4,
-    padding: 10,
+    padding: 6,
     borderRadius: 6,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: Theme.borderLight,
@@ -4955,11 +4960,11 @@ const styles = StyleSheet.create({
     backgroundColor: Theme.red + '08',
   },
   bashCommandSection: {
-    marginHorizontal: -10,
-    marginTop: -10,
-    marginBottom: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+    marginHorizontal: -6,
+    marginTop: -6,
+    marginBottom: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: Theme.borderLight,
     backgroundColor: Theme.bgHighlight + '4D',
@@ -5009,7 +5014,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: Theme.textDim,
     paddingHorizontal: 8,
-    paddingVertical: 8,
+    paddingVertical: 2,
   },
   languageLabel: {
     fontSize: 10,
