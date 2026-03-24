@@ -13,32 +13,70 @@
 
 ## One-Time Setup
 
-### 1. Create App Store Connect Listing
+### 1. Initialize EAS
+
+```bash
+cd packages/mobile
+npx eas init
+```
+
+This creates a project in your Expo account and updates `app.json` with your `projectId`.
+
+### 2. Update app.json
+
+Set your own values:
+```json
+{
+  "expo": {
+    "owner": "your-expo-username",
+    "ios": {
+      "bundleIdentifier": "com.yourdomain.codecast"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "your-project-id-from-eas-init"
+      }
+    }
+  }
+}
+```
+
+### 3. Create App Store Connect Listing
 
 1. Go to [App Store Connect](https://appstoreconnect.apple.com)
-2. Click "Apps" → "+" → "New App"
+2. Click "Apps" > "+" > "New App"
 3. Fill in:
    - Platform: iOS
-   - Name: Codecast
+   - Name: Codecast (or your chosen name)
    - Primary Language: English (U.S.)
-   - Bundle ID: com.ashotp.codecast
-   - SKU: codecast-ios-001
+   - Bundle ID: `com.yourdomain.codecast`
+   - SKU: `codecast-ios-001`
    - User Access: Full Access
 4. Copy the **Apple ID** (10-digit number from app page URL)
-5. Update `eas.json` with the `ascAppId`
+5. Set as `ASC_APP_ID` env var for EAS submit
 
-### 2. Configure EAS Credentials
+### 4. Configure EAS Credentials
 
 ```bash
 cd packages/mobile
 npx eas credentials
 ```
 
-Choose "iOS" → "production" and follow prompts to generate:
+Choose "iOS" > "production" and follow prompts to generate:
 - Distribution Certificate
 - Provisioning Profile
 
 EAS manages these automatically with your Apple Team ID.
+
+### 5. Set Environment Variables
+
+For cloud builds, set secrets via EAS:
+```bash
+npx eas secret:create --name EXPO_PUBLIC_CONVEX_URL --value "https://convex.yourdomain.com" --scope project
+npx eas secret:create --name APPLE_ID --value "you@example.com" --scope project
+npx eas secret:create --name ASC_APP_ID --value "1234567890" --scope project
+npx eas secret:create --name APPLE_TEAM_ID --value "XXXXXXXXXX" --scope project
+```
 
 ## Build Commands
 
@@ -100,6 +138,15 @@ bun run release:ios
 
 4. Wait for Apple review (1-3 days typically)
 
+## OTA Updates
+
+Push JavaScript updates without a new App Store binary:
+
+```bash
+bun run update:preview       # TestFlight channel
+bun run update:production    # Production channel
+```
+
 ## Version Management
 
 EAS manages version incrementing automatically via `appVersionSource: "remote"` in eas.json.
@@ -123,22 +170,9 @@ npx eas credentials --platform ios
 ```
 
 ### Build Failures
-Check build logs at: https://expo.dev/accounts/ashotp/projects/codecast/builds
+Check build logs at your Expo dashboard: `https://expo.dev/accounts/<your-username>/projects/codecast/builds`
 
 ### Stuck Submission
 ```bash
 npx eas submit --platform ios --id <build-id>
-```
-
-## Environment Variables
-
-For production builds, ensure Convex URL is set:
-```bash
-# In .env
-EXPO_PUBLIC_CONVEX_URL=https://your-convex-deployment.convex.cloud
-```
-
-Or set via EAS secrets:
-```bash
-npx eas secret:create --name EXPO_PUBLIC_CONVEX_URL --value "https://..." --scope project
 ```
