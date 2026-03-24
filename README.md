@@ -27,7 +27,7 @@ Codecast watches your coding agents (Claude Code, Codex CLI, Cursor, Gemini) and
 
 It runs as a background daemon with zero manual effort after setup. You get a web dashboard, a native desktop app, a mobile app, and a powerful CLI — all connected in real time.
 
-![Inbox view showing live agent sessions with pinned conversations and session queue](docs/screenshots/inbox.png)
+![Codecast dashboard showing live agent sessions and conversation viewer](docs/screenshots/hero.png)
 
 ## Install
 
