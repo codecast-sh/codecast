@@ -437,6 +437,49 @@ export const addMessage = mutation({
       await extractDocsFromMessages(ctx, [args], conversation, args.conversation_id);
     } catch {}
 
+    if (args.role === "user" && safeContent) {
+      const planMentions = safeContent.match(/\bpl-[a-z0-9]{3,8}\b/gi);
+      if (planMentions) {
+        const uniquePlanMentions = [...new Set(planMentions.map(m => m.toLowerCase()))];
+        for (const mention of uniquePlanMentions) {
+          const plan = await ctx.db
+            .query("plans")
+            .withIndex("by_short_id", (q) => q.eq("short_id", mention))
+            .first();
+          if (plan) {
+            const convPlanIds = (conversation as any).plan_ids || [];
+            if (!convPlanIds.some((pid: any) => pid.toString() === plan._id.toString())) {
+              convPlanIds.push(plan._id);
+              await ctx.db.patch(args.conversation_id, { plan_ids: convPlanIds });
+            }
+            const planSessionIds = plan.session_ids || [];
+            if (!planSessionIds.some((sid: any) => sid.toString() === args.conversation_id.toString())) {
+              planSessionIds.push(args.conversation_id);
+              await ctx.db.patch(plan._id, { session_ids: planSessionIds, updated_at: Date.now() });
+            }
+          }
+        }
+      }
+
+      const taskMentions = safeContent.match(/\bct-[a-z0-9]{3,8}\b/gi);
+      if (taskMentions) {
+        const uniqueTaskMentions = [...new Set(taskMentions.map(m => m.toLowerCase()))];
+        for (const mention of uniqueTaskMentions) {
+          const task = await ctx.db
+            .query("tasks")
+            .withIndex("by_short_id", (q) => q.eq("short_id", mention))
+            .first();
+          if (task) {
+            const taskConvIds = task.conversation_ids || [];
+            if (!taskConvIds.some((cid: any) => cid.toString() === args.conversation_id.toString())) {
+              taskConvIds.push(args.conversation_id);
+              await ctx.db.patch(task._id, { conversation_ids: taskConvIds });
+            }
+          }
+        }
+      }
+    }
+
     return messageId;
   },
 });

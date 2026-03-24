@@ -124,6 +124,20 @@ export const create = mutation({
     });
     await ctx.db.patch(id, { doc_id: docId });
 
+    if (created_from_conversation_id) {
+      const conv = await ctx.db.get(created_from_conversation_id);
+      if (conv) {
+        await ctx.db.patch(created_from_conversation_id, {
+          active_plan_id: id,
+          plan_ids: [...((conv as any).plan_ids || []), id],
+        });
+      }
+      await ctx.db.patch(id, {
+        session_ids: [created_from_conversation_id],
+        current_session_id: created_from_conversation_id,
+      });
+    }
+
     return { id, short_id, doc_id: docId };
   },
 });
@@ -507,7 +521,49 @@ export const bindSession = mutation({
       updated_at: Date.now(),
     });
 
-    await ctx.db.patch(conv._id, { active_plan_id: plan._id });
+    const planIds = (conv as any).plan_ids || [];
+    if (!planIds.some((pid: any) => pid === plan._id)) {
+      planIds.push(plan._id);
+    }
+    await ctx.db.patch(conv._id, { active_plan_id: plan._id, plan_ids: planIds });
+
+    return { success: true };
+  },
+});
+
+export const associatePlan = mutation({
+  args: {
+    api_token: v.string(),
+    plan_id: v.string(),
+    conversation_id: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token);
+    if (!auth) throw new Error("Unauthorized");
+
+    const plan = await ctx.db
+      .query("plans")
+      .withIndex("by_short_id", (q) => q.eq("short_id", args.plan_id))
+      .first();
+    if (!plan) throw new Error("Plan not found");
+
+    const conv = await ctx.db
+      .query("conversations")
+      .withIndex("by_session_id", (q) => q.eq("session_id", args.conversation_id))
+      .first();
+    if (!conv) throw new Error("Conversation not found");
+
+    const planIds = (conv as any).plan_ids || [];
+    if (!planIds.some((pid: any) => pid.toString() === plan._id.toString())) {
+      planIds.push(plan._id);
+      await ctx.db.patch(conv._id, { plan_ids: planIds });
+    }
+
+    const sessionIds = plan.session_ids || [];
+    if (!sessionIds.some((sid: any) => sid.toString() === conv._id.toString())) {
+      sessionIds.push(conv._id);
+      await ctx.db.patch(plan._id, { session_ids: sessionIds, updated_at: Date.now() });
+    }
 
     return { success: true };
   },

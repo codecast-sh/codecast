@@ -200,6 +200,7 @@ export default defineSchema({
     session_error: v.optional(v.string()),
     active_plan_id: v.optional(v.id("plans")),
     active_task_id: v.optional(v.id("tasks")),
+    plan_ids: v.optional(v.array(v.id("plans"))),
     worktree_name: v.optional(v.string()),
     worktree_branch: v.optional(v.string()),
     worktree_path: v.optional(v.string()),
