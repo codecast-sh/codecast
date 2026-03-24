@@ -45,6 +45,21 @@ function looksLikeUserMessage(content: string | undefined): boolean {
   return false;
 }
 
+export const setAdminRole = internalMutation({
+  args: {
+    email: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const users = await ctx.db.query("users").collect();
+    const user = users.find((u) => u.email === args.email);
+    if (!user) {
+      return { success: false, error: `User with email ${args.email} not found` };
+    }
+    await ctx.db.patch(user._id, { role: "admin" });
+    return { success: true, userId: user._id, email: user.email };
+  },
+});
+
 export const fixCorruptedMessageRoles = internalMutation({
   args: {
     dryRun: v.optional(v.boolean()),

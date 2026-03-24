@@ -88,20 +88,7 @@ export default function DashboardPage() {
   }, [filterParam]);
 
   useMountEffect(() => {
-    reportWebVitals((metric) => {
-      console.log(`[Dashboard Vitals] ${metric.name}:`, metric.value);
-    });
-
-    const startMark = 'dashboard-mount';
-    performance.mark(startMark);
-
-    return () => {
-      performance.measure('dashboard-lifecycle', startMark);
-      const measures = performance.getEntriesByName('dashboard-lifecycle');
-      if (measures.length > 0) {
-        console.log(`[Dashboard] Mount to unmount: ${measures[0].duration.toFixed(2)}ms`);
-      }
-    };
+    reportWebVitals(() => {});
   });
 
   return (

@@ -7,7 +7,7 @@ on:
 
 env:
   R2_BUCKET: codecast
-  R2_ENDPOINT: https://518bafbd08199d43fe9080a12a7ac1b7.r2.cloudflarestorage.com
+  R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
 
 jobs:
   backup:

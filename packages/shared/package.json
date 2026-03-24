@@ -2,6 +2,7 @@
   "name": "@codecast/shared",
   "version": "0.0.1",
   "private": true,
+  "license": "MIT",
   "main": "./index.ts",
   "types": "./index.ts",
   "exports": {

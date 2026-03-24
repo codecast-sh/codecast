@@ -11,7 +11,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { v4 as uuidv4 } from "uuid";
 
-const SITE_URL = process.env.CONVEX_URL || "https://convex-proxy-production.up.railway.app";
+const SITE_URL = process.env.CONVEX_URL || "https://convex.codecast.sh";
 const CONFIG = JSON.parse(fs.readFileSync(path.join(process.env.HOME!, ".codecast", "config.json"), "utf-8"));
 const API_TOKEN = CONFIG.auth_token;
 

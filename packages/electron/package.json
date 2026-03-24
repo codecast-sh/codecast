@@ -4,6 +4,7 @@
   "description": "Codecast Desktop (Electron)",
   "main": "main.js",
   "private": true,
+  "license": "MIT",
   "scripts": {
     "start": "electron .",
     "dev": "CODECAST_URL=http://local.codecast.sh electron .",
@@ -37,7 +38,7 @@
       "icon": "assets/icon.icns",
       "darkModeSupport": true,
       "minimumSystemVersion": "10.15",
-      "identity": "Ashot Petrosian (WRG9THCK9Q)",
+      "identity": null,
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
       "entitlements": "entitlements.mac.plist",

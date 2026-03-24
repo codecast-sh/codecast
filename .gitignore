@@ -52,6 +52,10 @@ daemon.log
 packages/web/public/binaries/
 packages/web/binaries/
 
+# CLI build artifacts
+packages/cli/daemon.js
+packages/cli/src/daemon.js
+
 # Deploy secrets
 .env.deploy
 
@@ -64,3 +68,16 @@ packages/web/binaries/
 logs/
 packages/desktop/src-tauri/target/
 docs/workflow-execution-plan.md
+
+# Local dev configs
+nginx.dev.conf
+com.codecast.nginx.plist
+CLAUDE.md
+AGENTS.md
+app_spec.txt
+
+# Agent session artifacts
+SESSION_SUMMARY_*.md
+VERIFICATION-*.md
+COMMENT-SYNC-VERIFICATION.md
+TESTING_PERMISSIONS.md

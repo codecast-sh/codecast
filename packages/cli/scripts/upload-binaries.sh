@@ -5,7 +5,7 @@ cd "$(dirname "$0")/.."
 
 BINARIES_DIR="../web/public/binaries"
 R2_BUCKET="codecast"
-R2_ENDPOINT="https://518bafbd08199d43fe9080a12a7ac1b7.r2.cloudflarestorage.com"
+: "${R2_ENDPOINT:?Set R2_ENDPOINT (e.g. https://<account-id>.r2.cloudflarestorage.com)}"
 
 : "${AWS_ACCESS_KEY_ID:?Set AWS_ACCESS_KEY_ID}"
 : "${AWS_SECRET_ACCESS_KEY:?Set AWS_SECRET_ACCESS_KEY}"

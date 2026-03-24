@@ -220,7 +220,7 @@ export const sendDaemonCommand = mutation({
     }
 
     const currentUser = await ctx.db.get(authUserId);
-    if (!currentUser || currentUser.email !== "ashot@almostcandid.com") {
+    if (!currentUser || currentUser.role !== "admin") {
       throw new Error("Not authorized");
     }
 
@@ -283,7 +283,7 @@ export const getDaemonStatus = query({
     }
 
     const currentUser = await ctx.db.get(authUserId);
-    if (!currentUser || currentUser.email !== "ashot@almostcandid.com") {
+    if (!currentUser || currentUser.role !== "admin") {
       return { users: [], isAdmin: false };
     }
 
@@ -323,7 +323,7 @@ export const getPendingCommands = query({
     }
 
     const currentUser = await ctx.db.get(authUserId);
-    if (!currentUser || currentUser.email !== "ashot@almostcandid.com") {
+    if (!currentUser || currentUser.role !== "admin") {
       return [];
     }
 

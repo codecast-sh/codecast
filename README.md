@@ -13,7 +13,8 @@
   <a href="https://codecast.sh">Web Dashboard</a> &middot;
   <a href="#install">Install CLI</a> &middot;
   <a href="#features">Features</a> &middot;
-  <a href="#changelog">Changelog</a>
+  <a href="docs/SELF-HOSTING.md">Self-Hosting</a> &middot;
+  <a href="CONTRIBUTING.md">Contributing</a>
 </p>
 
 ---
@@ -247,6 +248,17 @@ codecast/
 
 ## Development
 
+### Setup
+
+```bash
+bun install
+cp packages/web/.env.example packages/web/.env.local
+cp packages/convex/.env.example packages/convex/.env.local
+cp packages/cli/.env.example packages/cli/.env.local
+```
+
+Configure your Convex instance URL in each `.env.local`. See [Self-Hosting](docs/SELF-HOSTING.md) for full setup.
+
 ### Run dev servers
 
 ```bash
@@ -256,25 +268,13 @@ codecast/
 
 Starts both the Convex backend and Vite web dashboard. The CLI daemon runs separately with `cast start`.
 
-### Deploy
-
-```bash
-./scripts/deploy-all.sh   # Convex + CLI + push (triggers Railway web deploy)
-```
-
-The web app auto-deploys on push to main via Railway. CLI releases are manual:
-
-```bash
-cd packages/cli
-./scripts/deploy.sh         # Normal release
-./scripts/deploy.sh --force # Force auto-update on all remote clients
-```
-
 ### Type check
 
 ```bash
 bun run typecheck
 ```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for code conventions and architecture details.
 
 ## Configuration
 

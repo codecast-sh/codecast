@@ -325,7 +325,7 @@ export default function DocsPage() {
           </p>
           <Code>{`$ cast auth
 Opening browser for authentication...
-Authenticated as ashot@codecast.sh`}</Code>
+Authenticated as you@example.com`}</Code>
           <p className="text-sm" style={{ color: SOL.base01 }}>
             Alternatively, generate a setup token on the web dashboard at <InlineCode>Settings &gt; CLI</InlineCode> and run <InlineCode>cast login &lt;token&gt;</InlineCode>.
           </p>

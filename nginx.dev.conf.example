@@ -14,20 +14,12 @@ http {
         local.1.codecast.sh    3201;
         local.2.codecast.sh    3202;
         local.3.codecast.sh    3203;
-        local.footage.com      5173;
-        local.1.footage.com    5174;
-        local.2.footage.com    5175;
-        local.3.footage.com    5176;
-        local.unionagency.co   3300;
-        local.1.unionagency.co 3301;
-        local.2.unionagency.co 3302;
-        local.3.unionagency.co 3303;
         default                3200;
     }
 
     server {
         listen 80;
-        server_name local.codecast.sh local.1.codecast.sh local.2.codecast.sh local.3.codecast.sh local.footage.com local.1.footage.com local.2.footage.com local.3.footage.com local.unionagency.co local.1.unionagency.co local.2.unionagency.co local.3.unionagency.co;
+        server_name local.codecast.sh local.1.codecast.sh local.2.codecast.sh local.3.codecast.sh;
 
         location / {
             proxy_pass http://127.0.0.1:$backend_port;

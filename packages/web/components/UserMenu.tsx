@@ -109,7 +109,7 @@ export function UserMenu() {
 
   const displayName = user?.name || user?.email?.split("@")[0] || "User";
   const initials = displayName.slice(0, 1).toUpperCase();
-  const isAdmin = user?.email === "ashot@almostcandid.com";
+  const isAdmin = user?.role === "admin";
   const isLocal = typeof window !== "undefined" && window.location.hostname.includes("local.");
   const menuBtnClass = "w-full px-4 py-2 text-left text-sm text-sol-base1 text-sol-text hover:bg-slate-700 hover:bg-sol-bg-alt transition-colors";
 

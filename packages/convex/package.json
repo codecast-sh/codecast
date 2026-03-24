@@ -2,6 +2,7 @@
   "name": "@codecast/convex",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "scripts": {
     "dev": "convex dev",
     "deploy": "convex deploy"

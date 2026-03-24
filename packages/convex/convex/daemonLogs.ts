@@ -3,7 +3,7 @@ import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 
-const ADMIN_EMAIL = "ashot@almostcandid.com";
+const isAdmin = (user: { role?: string } | null) => user?.role === "admin";
 
 const MAX_LOGS_PER_BATCH = 100;
 const MAX_MESSAGE_LENGTH = 2000;
@@ -150,7 +150,7 @@ export const adminList = query({
     }
 
     const currentUser = await ctx.db.get(authUserId);
-    if (!currentUser || currentUser.email !== ADMIN_EMAIL) {
+    if (!currentUser || !isAdmin(currentUser)) {
       return { logs: [], users: [], isAdmin: false };
     }
 
@@ -200,7 +200,7 @@ export const adminGetUsers = query({
     }
 
     const currentUser = await ctx.db.get(authUserId);
-    if (!currentUser || currentUser.email !== ADMIN_EMAIL) {
+    if (!currentUser || !isAdmin(currentUser)) {
       return [];
     }
 
@@ -260,7 +260,7 @@ export const adminGetStats = query({
     }
 
     const currentUser = await ctx.db.get(authUserId);
-    if (!currentUser || currentUser.email !== ADMIN_EMAIL) {
+    if (!currentUser || !isAdmin(currentUser)) {
       return null;
     }
 

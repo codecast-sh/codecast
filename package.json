@@ -1,6 +1,7 @@
 {
   "name": "codecast",
   "private": true,
+  "license": "MIT",
   "packageManager": "bun@1.1.38",
   "workspaces": [
     "packages/*"
