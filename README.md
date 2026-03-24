@@ -23,9 +23,9 @@
 
 ---
 
-Codecast watches your coding agents (Claude Code, Codex CLI, Cursor, Gemini) and syncs every conversation to a shared database. On top of that sync layer, it provides a full workspace for managing the artifacts agents produce: tasks, plans, documents, workflows, and team activity feeds.
+Codecast integrates your coding agents (Claude Code, Codex CLI, Cursor, Gemini) into a shared system with global session memory, tasks, plans, documents, and team collaboration. The CLI installs into each agent's config, giving every agent access to the full history of what your team has built — and the ability to create tasks, schedule follow-up work, and orchestrate multi-agent plans.
 
-It runs as a background daemon with zero manual effort after setup. You get a web dashboard, a native desktop app, a mobile app, and a powerful CLI — all connected in real time.
+A background daemon syncs every conversation in real time. You get a web dashboard, a native desktop app, a mobile app, and a CLI that works both from your terminal and from inside agent sessions.
 
 ![Codecast dashboard showing live agent sessions and conversation viewer](docs/screenshots/hero.png)
 
@@ -151,7 +151,61 @@ An iOS app for monitoring agent sessions on the go.
 
 ## CLI
 
-The `cast` CLI is both a daemon manager and a power-user interface to the full system.
+The `cast` CLI is an agentic interface that integrates your coding agents — Claude Code, Codex, Cursor, Gemini — into a shared system with global session memory, tasks, plans, docs, and team collaboration. It installs lightweight snippets into each agent's config, giving them access to the full Codecast system from within any conversation.
+
+### Agent Integration
+
+```bash
+cast install            # Install snippets into agent configs
+cast stable team        # Inject recent team activity into every new session
+cast stable solo -g     # Inject your sessions across all projects
+```
+
+`cast install` writes to `~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, and `~/.cursor/rules/codecast.mdc`, teaching each agent how to use `cast` commands for memory, tasks, plans, and scheduling. After installation, your agents can search past sessions, create and manage tasks, and schedule follow-up work — without any manual copy-paste.
+
+`cast stable` injects a rolling context window of recent conversations into every new agent session, so agents start with awareness of what's been happening across the project or team.
+
+### Session Memory
+
+```bash
+cast feed               # Browse recent conversations
+cast read <id> 15:25    # Read messages 15-25 of a session
+cast search "auth bug"  # Full-text search across all sessions
+cast search "error" -g -s 7d  # Global search, last 7 days
+cast ask "how does X work"     # Query across all sessions
+cast context "implement auth"  # Find relevant prior sessions
+cast similar <id>       # Find sessions that touched the same files
+cast blame <file>       # Which sessions modified this file?
+cast summary <id>       # Generate a session summary
+cast diff --today       # Aggregate all work done today
+cast handoff            # Generate a context transfer document
+```
+
+These commands work both from your terminal and from inside agent sessions. When an agent calls `cast search` or `cast ask`, it's querying across every conversation your team has had — giving it long-term memory that persists across sessions.
+
+### Task & Plan Orchestration
+
+```bash
+cast task create "Fix auth bug" -p high
+cast task start <id>
+cast task done <id> -m "Fixed by adding guard"
+cast plan create "Auth Overhaul" -g "Replace old auth middleware"
+cast plan decompose <id>          # Break plan into tasks
+cast plan orchestrate <id>        # Run tasks in waves across agents
+cast plan autopilot <id>          # Continuous orchestration with monitoring
+```
+
+Plans support wave-based parallel execution: `autopilot` spawns agents for ready tasks, monitors progress, merges completed work, advances to the next wave, and self-reschedules if it hits a runtime limit.
+
+### Documents, Decisions & Scheduling
+
+```bash
+cast doc create "Auth Design" -t design
+cast decisions add "Use JWT" --reason "Stateless, works across services"
+cast schedule add "Check CI" --in 30m
+cast schedule add "Review PRs" --every 4h
+cast schedule add "Respond to comments" --on pr_comment
+```
 
 ### Daemon
 
@@ -159,60 +213,7 @@ The `cast` CLI is both a daemon manager and a power-user interface to the full s
 cast start              # Start the background sync daemon
 cast stop               # Stop the daemon
 cast status             # Show daemon status and agent connections
-cast logs               # Stream daemon logs
-```
-
-### Session Inspection
-
-```bash
-cast feed               # Browse recent conversations
-cast read <id> 15:25    # Read messages 15-25 of a session
-cast read <id> 15 --full # Expand tool calls for a specific message
-cast search "auth bug"  # Full-text search across all sessions
-cast search "error" -g -s 7d  # Global search, last 7 days
-cast similar <id>       # Find sessions that touched the same files
-cast blame <file>       # Which sessions modified this file?
-```
-
-### Analysis & Context
-
-```bash
-cast summary <id>       # Generate a session summary
-cast diff <id>          # Files changed, commits made, tools used
-cast diff --today       # Aggregate all work done today
-cast context "implement auth"  # Find relevant prior sessions
-cast ask "how does X work"     # Query across all sessions
-cast handoff            # Generate a context transfer document
-```
-
-### Task & Plan Management
-
-```bash
-cast task create "Fix auth bug" -p high
-cast task ls --status in_progress
-cast task start <id>
-cast task done <id> -m "Fixed by adding guard"
-cast plan create "Auth Overhaul" -g "Replace old auth middleware"
-cast plan decompose <id>   # Break into tasks
-cast plan orchestrate <id> # Run tasks in waves across agents
-```
-
-### Documents & Decisions
-
-```bash
-cast doc create "Auth Design" -t design
-cast doc ls
-cast decisions add "Use JWT" --reason "Stateless, works across services"
-cast decisions list
-```
-
-### Scheduling
-
-```bash
-cast schedule add "Check CI" --in 30m
-cast schedule add "Review PRs" --every 4h
-cast schedule add "Respond to comments" --on pr_comment
-cast schedule ls
+cast setup              # Auto-start on login (launchd/systemd)
 ```
 
 ## Architecture
