@@ -95,6 +95,9 @@ export type Message = {
   subtype?: string;
   _isOptimistic?: true;
   _isQueued?: true;
+  _clientId?: string;
+  _isFailed?: true;
+  client_id?: string;
 };
 
 export type PaginationState = {
@@ -408,6 +411,7 @@ interface InboxStoreState {
   mruStack: string[];
 
   messages: Record<string, Message[]>;
+  pendingMessages: Record<string, Message[]>;
   pagination: Record<string, PaginationState>;
   conversations: Record<string, ConversationMeta>;
 
@@ -495,6 +499,7 @@ interface InboxStoreState {
   mergeMessages: (convId: string, msgs: Message[], direction: "prepend" | "append", meta?: Partial<PaginationState>) => void;
   addOptimisticMessage: (convId: string, content: string, images?: Array<{ media_type: string; storage_id?: string }>) => string;
   markOptimisticAsQueued: (convId: string, content: string) => void;
+  markOptimisticAsFailed: (convId: string, clientId: string) => void;
   setPagination: (convId: string, update: Partial<PaginationState>) => void;
   initPagination: (convId: string) => void;
 
@@ -622,6 +627,10 @@ function rekeyId(draft: any, oldId: string, newId: string) {
     draft.messages[newId] = draft.messages[oldId];
     delete draft.messages[oldId];
   }
+  if (draft.pendingMessages[oldId]) {
+    draft.pendingMessages[newId] = draft.pendingMessages[oldId];
+    delete draft.pendingMessages[oldId];
+  }
   if (draft.pagination[oldId]) {
     draft.pagination[newId] = draft.pagination[oldId];
     delete draft.pagination[oldId];
@@ -668,6 +677,7 @@ export const useInboxStore = create<InboxStoreState>(
   mruStack: [],
 
   messages: {},
+  pendingMessages: {},
   pagination: {},
   conversations: {},
 
@@ -924,15 +934,19 @@ export const useInboxStore = create<InboxStoreState>(
 
   sendMessage: action(function (this: Draft, convId: string, content: string, _imageIds?: string[], images?: Array<{ media_type: string; storage_id?: string }>) {
     const id = `optimistic_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-    if (!this.messages[convId]) this.messages[convId] = [];
-    this.messages[convId].push({
+    const msg = {
       _id: id,
       role: "user" as const,
       content,
       timestamp: Date.now(),
       _isOptimistic: true as const,
+      _clientId: id,
       ...(images && images.length > 0 ? { images } : {}),
-    });
+    };
+    if (!this.messages[convId]) this.messages[convId] = [];
+    this.messages[convId].push(msg);
+    if (!this.pendingMessages[convId]) this.pendingMessages[convId] = [];
+    this.pendingMessages[convId].push(msg);
   }),
 
   resumeSession: action(function (_convId: string) {}),
@@ -1126,12 +1140,18 @@ export const useInboxStore = create<InboxStoreState>(
     get().setCurrentSession(ordered[newIdx]._id);
   },
 
-  setCurrentSession: action(function (this: Draft, id: string) {
-    this.currentSessionId = id;
-    this.selectedPlanId = null;
-    this.viewingDismissedId = null;
-    this.clientState.current_conversation_id = id;
-  }),
+  setCurrentSession: (id: string) => {
+    const state = get();
+    set({
+      currentSessionId: id,
+      selectedPlanId: null,
+      viewingDismissedId: null,
+      clientState: { ...state.clientState, current_conversation_id: id },
+    });
+    get()._dispatch("patch", [], {
+      client_state: { _: { current_conversation_id: id } },
+    }).catch(() => {});
+  },
 
   setSelectedPlan: action(function (this: Draft, id: string | null) {
     this.selectedPlanId = id;
@@ -1276,18 +1296,21 @@ export const useInboxStore = create<InboxStoreState>(
   // =====================
 
   setMessages: sync(function (this: Draft, convId: string, msgs: Message[], meta?: Partial<PaginationState>) {
-    const existing = this.messages[convId] || [];
-    const localMsgs = existing.filter((m: Message) => m._isOptimistic || m._isQueued);
+    const pending = this.pendingMessages[convId] || [];
     let finalMsgs = msgs;
-    if (localMsgs.length > 0) {
-      const serverUserMsgs = msgs.filter((m: Message) => m.role === "user" && m.content);
-      const surviving = localMsgs.filter((m: Message) => {
+    if (pending.length > 0) {
+      const serverUserMsgs = msgs.filter((m: Message) => m.role === "user");
+      const surviving = pending.filter((m: Message) => {
+        if (m._clientId) {
+          return !serverUserMsgs.some((s: Message) => s.client_id === m._clientId);
+        }
         const stripped = stripImageRef(m.content || "");
         return !serverUserMsgs.some((s: Message) =>
-          stripImageRef(s.content!) === stripped &&
+          stripImageRef(s.content || "") === stripped &&
           Math.abs(s.timestamp - m.timestamp) < 120_000
         );
       });
+      this.pendingMessages[convId] = surviving;
       if (surviving.length > 0) {
         finalMsgs = [...msgs, ...surviving].sort((a: Message, b: Message) => a.timestamp - b.timestamp);
       }
@@ -1318,28 +1341,49 @@ export const useInboxStore = create<InboxStoreState>(
       content,
       timestamp: Date.now(),
       _isOptimistic: true,
+      _clientId: id,
       ...(images && images.length > 0 ? { images } : {}),
     };
     const state = get();
     set({
       messages: { ...state.messages, [convId]: [...(state.messages[convId] || []), msg] },
+      pendingMessages: { ...state.pendingMessages, [convId]: [...(state.pendingMessages[convId] || []), msg] },
     });
     return id;
   },
 
   markOptimisticAsQueued: (convId: string, content: string) => {
     const state = get();
-    const msgs = state.messages[convId];
-    if (!msgs) return;
     const stripped = stripImageRef(content);
-    const updated = msgs.map((m: Message) => {
+    const promote = (m: Message) => {
       if (m._isOptimistic && m.role === "user" && stripImageRef(m.content || "") === stripped) {
         const { _isOptimistic, ...rest } = m;
         return { ...rest, _isQueued: true as const };
       }
       return m;
+    };
+    const msgs = state.messages[convId];
+    const pending = state.pendingMessages[convId];
+    set({
+      ...(msgs ? { messages: { ...state.messages, [convId]: msgs.map(promote) } } : {}),
+      ...(pending ? { pendingMessages: { ...state.pendingMessages, [convId]: pending.map(promote) } } : {}),
     });
-    set({ messages: { ...state.messages, [convId]: updated } });
+  },
+
+  markOptimisticAsFailed: (convId: string, clientId: string) => {
+    const state = get();
+    const mark = (m: Message): Message => {
+      if (m._clientId === clientId || m._id === clientId) {
+        return { ...m, _isFailed: true as const };
+      }
+      return m;
+    };
+    const msgs = state.messages[convId];
+    const pending = state.pendingMessages[convId];
+    set({
+      ...(msgs ? { messages: { ...state.messages, [convId]: msgs.map(mark) } } : {}),
+      ...(pending ? { pendingMessages: { ...state.pendingMessages, [convId]: pending.map(mark) } } : {}),
+    });
   },
 
   setPagination: (convId: string, update: Partial<PaginationState>) => {

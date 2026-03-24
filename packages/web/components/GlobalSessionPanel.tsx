@@ -75,11 +75,13 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
 
   const resumeSession = useMutation(api.users.resumeSession);
   const restartSessionMutation = useMutation(api.conversations.restartSession);
+  const repairSessionMutation = useMutation(api.conversations.repairSession);
   const setPrivacy = useMutation(api.conversations.setPrivacy);
   const setTeamVisibility = useMutation(api.conversations.setTeamVisibility);
   const generateShareLink = useMutation(api.conversations.generateShareLink);
-  const [resumeState, setResumeState] = useState<"idle" | "resuming" | "sent" | "failed">("idle");
+  const [resumeState, setResumeState] = useState<"idle" | "resuming" | "sent" | "reconstituting" | "failed">("idle");
   const forceRestartAttemptedRef = useRef(false);
+  const reconstitutionAttemptedRef = useRef(false);
 
   const lastMsg = conversation?.messages?.[conversation.messages.length - 1];
   const lastRoleIsUser = lastMsg?.role === "user";
@@ -87,9 +89,10 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
   const looksAbandoned = isIdle && lastRoleIsUser && !isInterruptControlMessage(lastMsg?.content) && isStale;
 
   useWatchEffect(() => {
-    if (!isIdle && (resumeState === "sent" || resumeState === "resuming")) {
+    if (!isIdle && (resumeState === "sent" || resumeState === "resuming" || resumeState === "reconstituting")) {
       setResumeState("idle");
       forceRestartAttemptedRef.current = false;
+      reconstitutionAttemptedRef.current = false;
     }
   }, [isIdle, resumeState]);
 
@@ -104,12 +107,29 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
         } catch {
           setResumeState("failed");
         }
+      } else if (!reconstitutionAttemptedRef.current && isConvexId(sessionId)) {
+        reconstitutionAttemptedRef.current = true;
+        setResumeState("reconstituting");
+        try {
+          await repairSessionMutation({ conversation_id: sessionId as Id<"conversations"> });
+          setResumeState("reconstituting");
+        } catch {
+          setResumeState("failed");
+        }
       } else {
         setResumeState("failed");
       }
     }, 45_000);
     return () => clearTimeout(timeout);
-  }, [resumeState, sessionId, restartSessionMutation]);
+  }, [resumeState, sessionId, restartSessionMutation, repairSessionMutation]);
+
+  useWatchEffect(() => {
+    if (resumeState !== "reconstituting") return;
+    const timeout = setTimeout(() => {
+      setResumeState("failed");
+    }, 60_000);
+    return () => clearTimeout(timeout);
+  }, [resumeState]);
 
   const handleManualResume = useCallback(() => {
     setResumeState("resuming");
@@ -158,6 +178,12 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
         <div className="absolute top-0 left-0 right-0 z-10 flex items-center gap-2 px-4 py-1.5 bg-sol-orange/90 text-sol-bg text-xs backdrop-blur-sm">
           <span className="w-1.5 h-1.5 rounded-full bg-sol-bg animate-pulse" />
           Resuming session...
+        </div>
+      )}
+      {resumeState === "reconstituting" && (
+        <div className="absolute top-0 left-0 right-0 z-10 flex items-center gap-2 px-4 py-1.5 bg-sol-orange/90 text-sol-bg text-xs backdrop-blur-sm">
+          <span className="w-1.5 h-1.5 rounded-full bg-sol-bg animate-pulse" />
+          Reconstituting session from database...
         </div>
       )}
       {resumeState === "failed" && (

@@ -18,6 +18,9 @@ type Message = {
   subtype?: string;
   _isOptimistic?: true;
   _isQueued?: true;
+  _clientId?: string;
+  _isFailed?: true;
+  client_id?: string;
 };
 
 export function useConversationMessages(
