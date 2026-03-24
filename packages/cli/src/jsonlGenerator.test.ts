@@ -433,6 +433,89 @@ describe("generateClaudeCodeJsonl", () => {
     });
     expect(merged).toBeTruthy();
   });
+
+  test("synthesizes tool_results for unresolved tool_use IDs in user messages", () => {
+    const data: ExportResult = {
+      conversation: {
+        id: "conv", title: "t", session_id: "session", agent_type: "claude_code",
+        project_path: "/tmp/project", model: "claude-opus-4-6-20260205",
+        message_count: 4, started_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:01.000Z",
+      },
+      messages: [
+        { role: "user", content: "check files", timestamp: "2026-01-01T00:00:00.000Z" },
+        {
+          role: "assistant", content: "",
+          timestamp: "2026-01-01T00:00:00.100Z",
+          tool_calls: [
+            { id: "call_read", name: "Read", input: '{"path":"a.txt"}' },
+            { id: "call_bash", name: "Bash", input: '{"command":"ls"}' },
+            { id: "call_grep", name: "Grep", input: '{"pattern":"foo"}' },
+          ],
+        },
+        {
+          role: "user", content: "",
+          timestamp: "2026-01-01T00:00:00.200Z",
+          tool_results: [{ tool_use_id: "call_grep", content: "found match" }],
+        },
+        { role: "assistant", content: "done", timestamp: "2026-01-01T00:00:00.300Z" },
+      ],
+    };
+
+    const { jsonl } = generateClaudeCodeJsonl(data);
+    const lines = jsonl.trim().split("\n").map((l) => JSON.parse(l));
+    const userEntries = lines.filter((l) => l.type === "user");
+
+    const allToolResults: Array<{ tool_use_id: string; is_error?: boolean }> = [];
+    for (const entry of userEntries) {
+      const content = entry?.message?.content;
+      if (!Array.isArray(content)) continue;
+      for (const block of content) {
+        if (block?.type === "tool_result") {
+          allToolResults.push({ tool_use_id: block.tool_use_id, is_error: block.is_error });
+        }
+      }
+    }
+
+    const resultIds = allToolResults.map((r) => r.tool_use_id).sort();
+    expect(resultIds).toEqual(["call_bash", "call_grep", "call_read"]);
+
+    const realResult = allToolResults.find((r) => r.tool_use_id === "call_grep");
+    expect(realResult?.is_error).toBeUndefined();
+
+    const syntheticRead = allToolResults.find((r) => r.tool_use_id === "call_read");
+    expect(syntheticRead?.is_error).toBe(true);
+    const syntheticBash = allToolResults.find((r) => r.tool_use_id === "call_bash");
+    expect(syntheticBash?.is_error).toBe(true);
+  });
+
+  test("synthesizes tool_results when session ends with dangling tool_use", () => {
+    const data: ExportResult = {
+      conversation: {
+        id: "conv", title: "t", session_id: "session", agent_type: "claude_code",
+        project_path: "/tmp/project", model: "claude-opus-4-6-20260205",
+        message_count: 2, started_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:01.000Z",
+      },
+      messages: [
+        { role: "user", content: "do it", timestamp: "2026-01-01T00:00:00.000Z" },
+        {
+          role: "assistant", content: "running",
+          timestamp: "2026-01-01T00:00:00.100Z",
+          tool_calls: [{ id: "call_dangling", name: "Bash", input: '{"command":"echo"}' }],
+        },
+      ],
+    };
+
+    const { jsonl } = generateClaudeCodeJsonl(data);
+    const lines = jsonl.trim().split("\n").map((l) => JSON.parse(l));
+
+    const lastUser = [...lines].reverse().find((l) => l.message?.role === "user");
+    expect(lastUser).toBeTruthy();
+    const content = lastUser!.message.content;
+    expect(Array.isArray(content)).toBe(true);
+    const tr = content.find((b: any) => b.type === "tool_result" && b.tool_use_id === "call_dangling");
+    expect(tr).toBeTruthy();
+    expect(tr.is_error).toBe(true);
+  });
 });
 
 describe("generateCodexJsonl", () => {

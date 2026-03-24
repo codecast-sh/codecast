@@ -405,7 +405,10 @@ export function generateClaudeCodeJsonl(
 
     if (msg.role === "user") {
       const { matched } = partitionToolResultsByExpected(msg.tool_results, expectedToolUseIds);
-      if (matched.length > 0) {
+      const unresolved = new Set(expectedToolUseIds);
+      for (const tr of matched) unresolved.delete(tr.tool_use_id);
+
+      if (matched.length > 0 || unresolved.size > 0) {
         const content: Array<Record<string, unknown>> = [];
         if (msg.content && msg.content.trim().length > 0) {
           content.push({ type: "text", text: msg.content });
@@ -416,6 +419,14 @@ export function generateClaudeCodeJsonl(
             tool_use_id: tr.tool_use_id,
             content: [{ type: "text", text: truncate(tr.content || "") }],
             ...(tr.is_error ? { is_error: true } : {}),
+          });
+        }
+        for (const toolId of unresolved) {
+          content.push({
+            type: "tool_result",
+            tool_use_id: toolId,
+            content: [{ type: "text", text: "[result unavailable]" }],
+            is_error: true,
           });
         }
         lines.push(JSON.stringify({
@@ -465,10 +476,11 @@ export function generateClaudeCodeJsonl(
         type: "assistant", uuid, timestamp: msg.timestamp,
       }));
       parentUuid = uuid;
-      expectedToolUseIds = assistantToolUseIds;
+      for (const id of assistantToolUseIds) expectedToolUseIds.add(id);
 
       const { matched: inlineMatched } = partitionToolResultsByExpected(msg.tool_results, expectedToolUseIds);
       if (inlineMatched.length > 0) {
+        for (const tr of inlineMatched) expectedToolUseIds.delete(tr.tool_use_id);
         const trUuid = uuidv4();
         const trContent = inlineMatched.map((tr) => ({
           type: "tool_result" as const,
@@ -484,9 +496,27 @@ export function generateClaudeCodeJsonl(
           toolUseResult: inlineMatched.map((tr) => ({ type: "text", text: tr.content || "" })),
         }));
         parentUuid = trUuid;
-        expectedToolUseIds = new Set();
       }
     }
+  }
+
+  if (expectedToolUseIds.size > 0) {
+    const trUuid = uuidv4();
+    const trContent = Array.from(expectedToolUseIds).map((toolId) => ({
+      type: "tool_result" as const,
+      tool_use_id: toolId,
+      content: [{ type: "text" as const, text: "[result unavailable]" }],
+      is_error: true,
+    }));
+    const lastMsg = messages[messages.length - 1];
+    lines.push(JSON.stringify({
+      parentUuid, isSidechain: false, userType: "external", cwd, sessionId,
+      version: "2.1.29", gitBranch: "main", type: "user",
+      message: { role: "user", content: trContent },
+      uuid: trUuid, timestamp: lastMsg?.timestamp || data.conversation.updated_at,
+    }));
+    parentUuid = trUuid;
+    expectedToolUseIds = new Set();
   }
 
   // Post-process: merge consecutive assistant messages.
