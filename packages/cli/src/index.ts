@@ -4227,7 +4227,9 @@ async function selectAndAttachFromLiveSessions(
   if (!session.sessionId.startsWith("unknown")) {
     console.log(`\nResuming: ${session.sessionId.slice(0, 8)}`);
     const extraArgs = resolveAgentArgs(session.agentType, options.cliOverrideArgs, config);
-    launchSession(session.sessionId, session.agentType, extraArgs, !extraArgs);
+    const conv = convexData[session.sessionId];
+    const reconCtx = conv && (conv as any).conversation_id ? { conversationId: (conv as any).conversation_id, config } : undefined;
+    await launchSession(session.sessionId, session.agentType, extraArgs, !extraArgs, undefined, reconCtx);
     return;
   }
 
@@ -4323,7 +4325,7 @@ program
                 const effectiveAgent = targetAgent === "claude" ? "claude_code" : targetAgent === "codex" ? "codex" : sourceAgent;
                 const cmd = effectiveAgent === "codex"
                   ? `codex resume ${exactSessionId}`
-                  : `claude --resume ${exactSessionId}`;
+                  : `cast resume ${exactSessionId}`;
                 console.log(`Would run: ${cmd}`);
               }
               return;
@@ -4345,7 +4347,7 @@ program
             } else {
               const effectiveAgent = targetAgent === "claude" ? "claude_code" : targetAgent === "codex" ? "codex" : sourceAgent;
               const extraArgs = resolveAgentArgs(effectiveAgent, options.claudeArgs, config);
-              launchSession(exactSessionId, effectiveAgent, extraArgs, !extraArgs, options.here ? undefined : matched.project_path);
+              await launchSession(exactSessionId, effectiveAgent, extraArgs, !extraArgs, options.here ? undefined : matched.project_path, { conversationId: matched.conversation_id, config });
             }
             return;
           }
@@ -4392,7 +4394,7 @@ program
                 const effectiveAgent = targetAgent === "claude" ? "claude_code" : targetAgent === "codex" ? "codex" : sourceAgent;
                 const cmd = effectiveAgent === "codex"
                   ? `codex resume ${conv.session_id}`
-                  : `claude --resume ${conv.session_id}`;
+                  : `cast resume ${conv.session_id}`;
                 console.log(`Would run: ${cmd}`);
               }
               return;
@@ -4414,7 +4416,7 @@ program
             } else {
               const effectiveAgent = targetAgent === "claude" ? "claude_code" : targetAgent === "codex" ? "codex" : sourceAgent;
               const extraArgs = resolveAgentArgs(effectiveAgent, options.claudeArgs, config);
-              launchSession(conv.session_id, effectiveAgent, extraArgs, !extraArgs, options.here ? undefined : conv.project_path);
+              await launchSession(conv.session_id, effectiveAgent, extraArgs, !extraArgs, options.here ? undefined : conv.project_path, { conversationId: conv.id, config });
             }
             return;
           }
@@ -4517,7 +4519,7 @@ program
         } else {
           const effectiveAgent = targetAgent === "claude" ? "claude_code" : targetAgent === "codex" ? "codex" : conv.agent_type;
           const extraArgs = resolveAgentArgs(effectiveAgent, options.claudeArgs, config);
-          launchSession(sessionId, effectiveAgent, extraArgs, !extraArgs, options.here ? undefined : conv.project_path);
+          await launchSession(sessionId, effectiveAgent, extraArgs, !extraArgs, options.here ? undefined : conv.project_path, { conversationId: conv.id, config });
         }
         return;
       }
@@ -4701,7 +4703,7 @@ program
         } else {
           const effectiveAgent = targetAgent === "claude" ? "claude_code" : targetAgent === "codex" ? "codex" : conv.agent_type;
           const extraArgs = resolveAgentArgs(effectiveAgent, options.claudeArgs, config);
-          launchSession(sessionId, effectiveAgent, extraArgs, !extraArgs, options.here ? undefined : conv.project_path);
+          await launchSession(sessionId, effectiveAgent, extraArgs, !extraArgs, options.here ? undefined : conv.project_path, { conversationId: conv.id, config });
         }
         return;
     } catch (error) {
@@ -4773,7 +4775,60 @@ async function convertAndLaunch(
   }
 }
 
-function launchSession(sessionId: string, agentType?: string, extraArgs?: string, showArgsHint?: boolean, projectPath?: string | null): void {
+interface ReconstitutionContext {
+  conversationId: string;
+  config: Config;
+}
+
+function claudeSessionPath(sessionId: string, projectPath?: string | null): string {
+  const projectSlug = (projectPath || process.cwd()).replace(/\//g, "-");
+  const projectDir = path.join(os.homedir(), ".claude", "projects", projectSlug);
+  return path.join(projectDir, `${sessionId}.jsonl`);
+}
+
+async function ensureLocalSession(
+  sessionId: string,
+  projectPath: string | null | undefined,
+  reconCtx?: ReconstitutionContext,
+): Promise<string> {
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (!UUID_RE.test(sessionId)) return sessionId;
+
+  const filePath = claudeSessionPath(sessionId, projectPath);
+  if (fs.existsSync(filePath)) return sessionId;
+
+  if (!reconCtx) {
+    console.log(`Local session file not found: ${filePath}`);
+    return sessionId;
+  }
+
+  console.log(`Local session file missing. Reconstituting from codecast...`);
+  const siteUrl = reconCtx.config.convex_url!.replace(".cloud", ".site");
+  const data = await fetchExport(siteUrl, reconCtx.config.auth_token!, reconCtx.conversationId);
+  console.log(`  ${data.messages.length} messages exported`);
+
+  const CLAUDE_CONTEXT_LIMIT_TOKENS = 200_000;
+  const AUTO_TRIM_THRESHOLD_TOKENS = 120_000;
+  const AUTO_TRIM_TARGET_TOKENS = 100_000;
+
+  const estimatedTokens = estimateClaudeImportTokens(data);
+  let tailMessages: number | undefined;
+
+  if (estimatedTokens > AUTO_TRIM_THRESHOLD_TOKENS) {
+    tailMessages = chooseClaudeTailMessagesForTokenBudget(data, AUTO_TRIM_TARGET_TOKENS);
+    console.log(
+      `  ~${estimatedTokens.toLocaleString()} tokens estimated (limit ~${CLAUDE_CONTEXT_LIMIT_TOKENS.toLocaleString()}).\n` +
+      `  Auto-trimming to last ${tailMessages} messages (~${AUTO_TRIM_TARGET_TOKENS.toLocaleString()} tokens).`
+    );
+  }
+
+  const { jsonl, sessionId: newSessionId } = generateClaudeCodeJsonl(data, { tailMessages });
+  const result = writeClaudeCodeSession(jsonl, newSessionId, projectPath || undefined);
+  console.log(`  Reconstituted as: ${newSessionId} (${result.filePath})`);
+  return newSessionId;
+}
+
+async function launchSession(sessionId: string, agentType?: string, extraArgs?: string, showArgsHint?: boolean, projectPath?: string | null, reconCtx?: ReconstitutionContext): Promise<void> {
   if (agentType === "codex") {
     launchCodex(sessionId, extraArgs, showArgsHint, projectPath);
   } else if (agentType === "cursor") {
@@ -4781,7 +4836,8 @@ function launchSession(sessionId: string, agentType?: string, extraArgs?: string
     console.log("Open Cursor IDE to continue this session.");
     process.exit(1);
   } else {
-    launchClaude(sessionId, extraArgs, showArgsHint, projectPath);
+    const resolvedId = await ensureLocalSession(sessionId, projectPath, reconCtx);
+    launchClaude(resolvedId, extraArgs, showArgsHint, projectPath);
   }
 }
 
@@ -6943,9 +6999,9 @@ program
           const { jsonl, sessionId } = generateClaudeCodeJsonl(data, { tailMessages });
           writeClaudeCodeSession(jsonl, sessionId, data.conversation.project_path || undefined);
           const resolvedArgs = options.claudeArgs ?? config.claude_args ?? "";
-          const cmd = `claude --resume ${sessionId}${resolvedArgs ? " " + resolvedArgs : ""}`;
-          console.log(`\nResume command:\n  ${cmd}`);
-          openInNewTab(cmd, data.conversation.project_path);
+          const launchCmd = `claude --resume ${sessionId}${resolvedArgs ? " " + resolvedArgs : ""}`;
+          console.log(`\nResume command:\n  cast resume ${sessionId}`);
+          openInNewTab(launchCmd, data.conversation.project_path);
         }
       }
     } catch (error) {
@@ -8455,19 +8511,22 @@ work
 
 work
   .command("ls")
-  .description("List work items")
+  .alias("list")
+  .description("List work items (default: active only)")
   .option("-p, --project <id>", "Filter by project ID")
   .option("-s, --status <status>", "Filter by status")
   .option("-r, --ready", "Show only ready items (open, no blockers)")
-  .option("-a, --all", "Include derived/mined tasks (hidden by default)")
+  .option("-a, --all", "Include done/dropped tasks")
+  .option("-d, --derived", "Include derived/mined tasks (hidden by default)")
   .option("-n, --limit <n>", "Max results", "50")
   .option("-v, --verbose", "Show descriptions")
   .action(async (options: any) => {
     const body: Record<string, any> = { limit: parseInt(options.limit) };
     if (options.project) body.project_id = options.project;
+    if (options.all) body.include_done = true;
     if (options.status) body.status = options.status;
     if (options.ready) body.ready = true;
-    if (options.all) body.include_derived = true;
+    if (options.derived || options.all) body.include_derived = true;
     body.project_path = getRealCwd();
 
     const tasks = await cliPost("/cli/work/list", body);
@@ -8478,7 +8537,8 @@ work
     for (const t of tasks) {
       console.log(formatWorkItem(t, options.verbose));
     }
-    console.log(fmt.muted(`\n  ${tasks.length} items`));
+    const suffix = options.all || options.status ? "" : fmt.muted(" (active only, use --all to see all)");
+    console.log(fmt.muted(`\n  ${tasks.length} items`) + suffix);
   });
 
 work
@@ -9025,7 +9085,8 @@ plan
 
 plan
   .command("ls")
-  .description("List plans")
+  .alias("list")
+  .description("List plans (default: active only)")
   .option("--active", "Show active plans (default)")
   .option("--draft", "Show draft plans")
   .option("--done", "Show done plans")
@@ -9048,7 +9109,8 @@ plan
     for (const p of plans) {
       console.log(formatPlanItem(p));
     }
-    console.log(fmt.muted(`\n  ${plans.length} plans`));
+    const suffix = options.all || options.done || options.draft ? "" : fmt.muted(" (active only, use --all to see all)");
+    console.log(fmt.muted(`\n  ${plans.length} plans`) + suffix);
   });
 
 plan

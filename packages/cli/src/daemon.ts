@@ -46,6 +46,7 @@ import {
   writeClaudeCodeSession,
   writeCodexSession,
   chooseClaudeTailMessagesForTokenBudget,
+  estimateClaudeImportTokens,
 } from "./jsonlGenerator.js";
 
 const _execAsync = promisify(exec);
@@ -1558,6 +1559,7 @@ async function executeRemoteCommand(
         let resumed = false;
         if (forceReconstitute) {
           log(`[REMOTE] Force-reconstituting session ${sessionId.slice(0, 8)} from DB${projectPath ? ` in ${projectPath}` : ""}`);
+          resumed = await repairAndResumeSession(sessionId, "", readTitleCache(), false, projectPath, conversationId);
         } else {
           log(`[REMOTE] Force-resuming session ${sessionId.slice(0, 8)}${projectPath ? ` in ${projectPath}` : ""}`);
           resumed = await autoResumeSession(sessionId, "", readTitleCache(), false, projectPath, conversationId);
@@ -4835,6 +4837,8 @@ function findSessionFile(sessionId: string): SessionFileInfo | null {
 
 const resumeSessionCache = new Map<string, string>();
 const resumeHeartbeatIntervals = new Map<string, NodeJS.Timeout>();
+const heartbeatHealthCheckCounter = new Map<string, number>();
+const HEALTH_CHECK_EVERY_N_HEARTBEATS = 3;
 
 async function killSessionBySessionId(sessionId: string, reason: string): Promise<void> {
   const cache = readConversationCache();
@@ -5320,17 +5324,77 @@ function stopManagedSessionHeartbeat(sessionId: string | undefined): void {
     clearInterval(interval);
     resumeHeartbeatIntervals.delete(sessionId);
   }
+  heartbeatHealthCheckCounter.delete(sessionId);
 }
 
 function ensureManagedSessionHeartbeat(sessionId: string): void {
   if (!syncServiceRef || resumeHeartbeatIntervals.has(sessionId)) return;
+  heartbeatHealthCheckCounter.set(sessionId, 0);
   const interval = setInterval(async () => {
     try {
       const result = await syncServiceRef!.heartbeatManagedSession(sessionId);
       await processHeartbeatResponse(sessionId, result);
     } catch {}
+
+    const count = (heartbeatHealthCheckCounter.get(sessionId) || 0) + 1;
+    heartbeatHealthCheckCounter.set(sessionId, count);
+    if (count % HEALTH_CHECK_EVERY_N_HEARTBEATS === 0) {
+      await heartbeatHealthCheck(sessionId);
+    }
   }, 30000);
   resumeHeartbeatIntervals.set(sessionId, interval);
+}
+
+async function heartbeatHealthCheck(sessionId: string): Promise<void> {
+  const tmux = resumeSessionCache.get(sessionId);
+  if (!tmux) return;
+
+  if (resumeInFlight.has(sessionId)) return;
+  const restartTs = restartingSessionIds.get(sessionId);
+  if (restartTs && Date.now() - restartTs < RESTART_GUARD_TTL_MS) return;
+
+  try {
+    await tmuxExec(["has-session", "-t", tmux], { timeout: 3000, killSignal: "SIGKILL" });
+  } catch {
+    log(`[HEARTBEAT-HEALTH] tmux session ${tmux} gone for ${sessionId.slice(0, 8)}, triggering reconstitution`);
+    await handleDeadSession(sessionId, tmux);
+    return;
+  }
+
+  const alive = await isTmuxAgentAlive(tmux);
+  if (!alive) {
+    log(`[HEARTBEAT-HEALTH] Agent dead in ${tmux} for ${sessionId.slice(0, 8)}, triggering reconstitution`);
+    await handleDeadSession(sessionId, tmux);
+  }
+}
+
+async function handleDeadSession(sessionId: string, tmuxSession: string): Promise<void> {
+  try { await tmuxExec(["kill-session", "-t", tmuxSession]); } catch {}
+  resumeSessionCache.delete(sessionId);
+  stopCodexPermissionPoller(sessionId);
+  stopManagedSessionHeartbeat(sessionId);
+  heartbeatHealthCheckCounter.delete(sessionId);
+
+  const cache = readConversationCache();
+  const conversationId = cache[sessionId];
+
+  if (conversationId && syncServiceRef) {
+    await syncServiceRef.setSessionError(conversationId, "Session crashed — reconstituting from database").catch(() => {});
+  }
+
+  const repaired = await repairAndResumeSession(sessionId, "", readTitleCache(), false, undefined, conversationId);
+  if (repaired) {
+    log(`[HEARTBEAT-HEALTH] Reconstituted session ${sessionId.slice(0, 8)}`);
+    if (conversationId && syncServiceRef) {
+      await syncServiceRef.setSessionError(conversationId).catch(() => {});
+      await syncServiceRef.updateSessionAgentStatus(conversationId, "connected").catch(() => {});
+    }
+  } else {
+    log(`[HEARTBEAT-HEALTH] Reconstitution failed for ${sessionId.slice(0, 8)}`);
+    if (conversationId && syncServiceRef) {
+      await syncServiceRef.setSessionError(conversationId, "Session crashed and could not be reconstituted").catch(() => {});
+    }
+  }
 }
 
 function registerManagedStartedSession(conversationId: string, sessionId: string, tmuxSession: string): void {
@@ -5601,15 +5665,37 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
     logDelivery(`Cannot auto-resume ${sessionId.slice(0, 8)}: tmux not installed`);
     return false;
   }
-  const sessionFile = findSessionFile(sessionId);
-  if (!sessionFile) {
-    logDelivery(`Cannot auto-resume ${sessionId.slice(0, 8)}: session JSONL file not found`);
+  let sessionFile = findSessionFile(sessionId);
+  const config = readConfig();
+  if (!sessionFile && conversationId && config?.auth_token && config?.convex_url) {
+    logDelivery(`Session ${sessionId.slice(0, 8)} not found locally, reconstituting from codecast...`);
+    try {
+      const siteUrl = config.convex_url.replace(".cloud", ".site");
+      const data = await fetchExport(siteUrl, config.auth_token, conversationId);
+      const estimatedTokens = estimateClaudeImportTokens(data);
+      const tailMessages = estimatedTokens > 120_000
+        ? chooseClaudeTailMessagesForTokenBudget(data, 100_000)
+        : undefined;
+      const { jsonl, sessionId: newId } = generateClaudeCodeJsonl(data, { tailMessages });
+      const result = writeClaudeCodeSession(jsonl, newId, data.conversation.project_path || undefined);
+      logDelivery(`Reconstituted ${sessionId.slice(0, 8)} as ${newId.slice(0, 8)} (${data.messages.length} msgs)`);
+      sessionId = newId;
+      sessionFile = findSessionFile(newId);
+      if (!sessionFile) {
+        logDelivery(`Reconstituted file not found at expected path: ${result.filePath}`);
+        return false;
+      }
+    } catch (err) {
+      logDelivery(`Reconstitution failed for ${sessionId.slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`);
+      return false;
+    }
+  } else if (!sessionFile) {
+    logDelivery(`Cannot auto-resume ${sessionId.slice(0, 8)}: session JSONL file not found${!conversationId ? " (no conversation ID for reconstitution)" : ""}`);
     return false;
   }
 
   const { path: jsonlPath, agentType } = sessionFile;
   const jsonlContent = readFileHead(jsonlPath, 5000);
-  const config = readConfig();
 
   let cwd: string;
   let resumeCmd: string;
@@ -6269,10 +6355,12 @@ async function deliverMessage(
           return optNorm === normalized || normalized.includes(optNorm) || optNorm.includes(normalized);
         });
         if (matchIdx >= 0) {
-          const key = String(matchIdx + 1);
           const display = pendingPrompt.options[matchIdx].label;
-          content = JSON.stringify({ __cc_poll: true, keys: [key], display });
-          logDelivery(`Converted plain text "${display}" to poll key=${key} for session=${(sessionId || conversationId).slice(0, 8)}`);
+          const steps: Array<{ key: string }> = [];
+          for (let i = 0; i < matchIdx; i++) steps.push({ key: "Down" });
+          steps.push({ key: "Enter" });
+          content = JSON.stringify({ __cc_poll: true, steps, display });
+          logDelivery(`Converted plain text "${display}" to poll arrows=${matchIdx}+Enter for session=${(sessionId || conversationId).slice(0, 8)}`);
         }
       }
     }
