@@ -5,6 +5,7 @@ import {
   CheckSquare,
   MessageSquare,
   Target,
+  Calendar,
   Circle,
   CircleDot,
   CheckCircle2,
@@ -41,6 +42,7 @@ const TYPE_CONFIG: Record<string, { icon: typeof User; color: string; label: str
   doc: { icon: FileText, color: "text-sol-cyan", label: "Docs" },
   session: { icon: MessageSquare, color: "text-sol-blue", label: "Sessions" },
   plan: { icon: Target, color: "text-sol-violet", label: "Plans" },
+  date: { icon: Calendar, color: "text-sol-orange", label: "Dates" },
 };
 
 const STATUS_ICONS: Record<string, typeof Circle> = {
@@ -265,7 +267,7 @@ export const MentionList = forwardRef<any, MentionListProps>(
                           {item.shortId}
                         </span>
                       )}
-                      {!item.shortId && item.sublabel && item.type === "person" && (
+                      {!item.shortId && item.sublabel && (item.type === "person" || item.type === "date") && (
                         <span className="text-[11px] text-sol-text-dim font-mono flex-shrink-0">
                           {item.sublabel}
                         </span>

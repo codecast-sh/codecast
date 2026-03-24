@@ -20,6 +20,7 @@ import { MentionList, type MentionItem } from "./MentionList";
 import { MentionNodeView } from "./MentionNodeView";
 import "./editor.css";
 import { SlashCommandExtension } from "./SlashCommandExtension";
+import { DateMentionExtension } from "./DateMentionExtension";
 import { BubbleToolbar } from "./BubbleToolbar";
 import { useMountEffect } from "../../hooks/useMountEffect";
 
@@ -113,7 +114,7 @@ export function DocEditor({
   onImageUpload,
   editable = true,
   className = "",
-  placeholder = "Start writing, use / for commands, @ to mention...",
+  placeholder = "Start writing, use / for commands, @ to mention, # for dates...",
 }: DocEditorProps) {
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastSavedRef = useRef(content);
@@ -273,8 +274,8 @@ export function DocEditor({
   }) : null;
 
   const extensions = mentionExtension
-    ? [...baseExtensions, mentionExtension]
-    : baseExtensions;
+    ? [...baseExtensions, mentionExtension, DateMentionExtension]
+    : [...baseExtensions, DateMentionExtension];
 
   const editor = useEditor({
     extensions,

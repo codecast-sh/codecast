@@ -4,6 +4,7 @@ import {
   FileText,
   MessageSquare,
   Target,
+  Calendar,
   Circle,
   CircleDot,
   CheckCircle2,
@@ -233,7 +234,35 @@ function SessionMention({ attrs }: { attrs: Record<string, any> }) {
   );
 }
 
-export { SessionMention, PersonMention, TaskMention, PlanMention, DocMention };
+function DateMention({ attrs }: { attrs: Record<string, any> }) {
+  const dateValue = attrs.dateValue || attrs.id;
+  const label = attrs.label || dateValue;
+
+  let resolvedDisplay = "";
+  if (dateValue) {
+    const parts = dateValue.split("-");
+    if (parts.length === 3) {
+      const d = new Date(+parts[0], +parts[1] - 1, +parts[2]);
+      const SHORT_MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+      const DAYS = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+      resolvedDisplay = `${DAYS[d.getDay()]}, ${SHORT_MONTHS[d.getMonth()]} ${d.getDate()}`;
+    }
+  }
+
+  const showResolved = resolvedDisplay && resolvedDisplay !== label;
+
+  return (
+    <span className="mention-inline mention-inline-date">
+      <Calendar className="w-[14px] h-[14px] flex-shrink-0 text-[#cb4b16]" />
+      <span className="mention-inline-label">{label}</span>
+      {showResolved && (
+        <span className="mention-date-resolved">{resolvedDisplay}</span>
+      )}
+    </span>
+  );
+}
+
+export { SessionMention, PersonMention, TaskMention, PlanMention, DocMention, DateMention };
 
 export function MentionNodeView({ node }: NodeViewProps) {
   const attrs = node.attrs;
@@ -246,6 +275,7 @@ export function MentionNodeView({ node }: NodeViewProps) {
       {mtype === "doc" && <DocMention attrs={attrs} />}
       {mtype === "plan" && <PlanMention attrs={attrs} />}
       {mtype === "session" && <SessionMention attrs={attrs} />}
+      {mtype === "date" && <DateMention attrs={attrs} />}
     </NodeViewWrapper>
   );
 }

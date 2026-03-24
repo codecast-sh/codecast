@@ -28,6 +28,7 @@ import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { MentionList, type MentionItem } from "./MentionList";
 import { MentionNodeView } from "./MentionNodeView";
 import { SlashCommandExtension } from "./SlashCommandExtension";
+import { DateMentionExtension } from "./DateMentionExtension";
 import { EntityIdExtension } from "./EntityIdExtension";
 import { BubbleToolbar } from "./BubbleToolbar";
 import { useMountEffect } from "../../hooks/useMountEffect";
@@ -234,6 +235,7 @@ function buildExtensions(onMentionQuery: MentionQueryFn, placeholder: string) {
       },
     }),
     SlashCommandExtension,
+    DateMentionExtension,
     EntityIdExtension,
     Typography,
     Highlight.configure({ HTMLAttributes: { class: "editor-highlight" } }),
@@ -391,7 +393,7 @@ export function CollabDocEditor({
   onMentionQuery,
   editable = true,
   className = "",
-  placeholder = "Start writing, use / for commands, @ to mention...",
+  placeholder = "Start writing, use / for commands, @ to mention, # for dates...",
   getMarkdownRef,
   cliEditedAt,
 }: CollabDocEditorProps) {
