@@ -54,7 +54,7 @@ import { MarkdownRenderer, isMarkdownFile, isPlanFile, CollapsibleImage } from "
 import { useImageGallery, ImageGalleryProvider } from "./ImageGallery";
 import { MessageSharePopover } from "./MessageSharePopover";
 import { PlanBadge, TaskBadge } from "./PlanTaskHoverCard";
-import { EntityIdPill, EntityAwareCode, EntityAwareLink } from "./EntityIdPill";
+import { EntityIdPill, EntityAwareCode, EntityAwareLink, renderWithMentions } from "./EntityIdPill";
 import { remarkEntityIds } from "../lib/remarkEntityIds";
 import { ConversationTree } from "./ConversationTree";
 import { useInboxStore, isConvexId, type ForkChild } from "../store/inboxStore";
@@ -70,7 +70,9 @@ import { getApplyPatchInput, parseApplyPatchSections } from "../lib/applyPatchPa
 import { setupDesktopDrag, desktopHeaderClass } from "../lib/desktop";
 import { MessageNavButton } from "./MessageBrowserPopover";
 import type { MentionItem } from "./editor/MentionList";
-import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Hash, FolderOpen, Keyboard } from "lucide-react";
+import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Hash, FolderOpen, Keyboard, ListChecks, Target } from "lucide-react";
+
+const sacredInputs = new Map<string, { text: string; images?: any[] }>();
 
 function renderMarkdownPre(node: any, children: any, props: any) {
   const codeElement = node?.children?.[0];
@@ -3403,6 +3405,53 @@ function parseSkillBlocks(text: string): { parts: Array<{ type: 'text' | 'skill'
   return { parts };
 }
 
+interface ParsedContextBlock {
+  type: string;
+  title: string;
+  id?: string;
+  status?: string;
+  priority?: string;
+}
+
+function parseContextBlocks(text: string): { contexts: ParsedContextBlock[]; remaining: string } {
+  const contexts: ParsedContextBlock[] = [];
+  const remaining = text.replace(
+    /<context\s+type="([^"]+)"\s+title="([^"]+)">\s*([\s\S]*?)\s*<\/context>\s*/g,
+    (_, type, title, inner) => {
+      const ctx: ParsedContextBlock = { type, title };
+      const idMatch = inner.match(/ID:\s*(\S+)/);
+      const statusMatch = inner.match(/Status:\s*(\S+)/);
+      const priorityMatch = inner.match(/Priority:\s*(\S+)/);
+      if (idMatch) ctx.id = idMatch[1];
+      if (statusMatch) ctx.status = statusMatch[1];
+      if (priorityMatch) ctx.priority = priorityMatch[1];
+      contexts.push(ctx);
+      return "";
+    }
+  ).trim();
+  return { contexts, remaining };
+}
+
+const CONTEXT_TYPE_CONFIG: Record<string, { icon: typeof ListChecks; colorClass: string }> = {
+  task: { icon: ListChecks, colorClass: "bg-sol-yellow/10 text-sol-yellow border-sol-yellow/20 hover:bg-sol-yellow/20" },
+  plan: { icon: Target, colorClass: "bg-sol-cyan/10 text-sol-cyan border-sol-cyan/20 hover:bg-sol-cyan/20" },
+  doc: { icon: FileText, colorClass: "bg-sol-violet/10 text-sol-violet border-sol-violet/20 hover:bg-sol-violet/20" },
+};
+
+function ContextBlockPill({ ctx }: { ctx: ParsedContextBlock }) {
+  const config = CONTEXT_TYPE_CONFIG[ctx.type] || CONTEXT_TYPE_CONFIG.task;
+  const Icon = config.icon;
+
+  return (
+    <div className={`inline-flex items-center gap-1.5 px-2 py-1 rounded border text-xs ${config.colorClass}`}>
+      <Icon className="w-3 h-3 flex-shrink-0" />
+      <span className="font-medium capitalize">{ctx.type}</span>
+      <span className="text-sol-text-muted truncate max-w-[250px]">{ctx.title}</span>
+      {ctx.id && <EntityIdPill shortId={ctx.id} />}
+    </div>
+  );
+}
+
 type InsightPart = { type: 'text'; content: string } | { type: 'insight'; label: string; content: string };
 
 function parseInsightBlocks(text: string): InsightPart[] {
@@ -3652,12 +3701,13 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
   const [contentExpanded, setContentExpanded] = useState(false);
   const [isOverflowing, setIsOverflowing] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
-  const displayContent = content
+  const rawContent = content
     .replace(/<task-notification>[\s\S]*?<\/task-notification>/g, "")
     .replace(/\[Image[:\s][^\]]*\]/gi, "")
     .replace(/<image\b[^>]*\/?>\s*(?:<\/image>)?/gi, "")
     .replace(/\[image\]/gi, "")
     .trim();
+  const { contexts: contextBlocks, remaining: displayContent } = parseContextBlocks(rawContent);
   const isMarkdown = hasRichMarkdown(displayContent);
 
   const effectivelyCollapsed = collapsed && !isExpanded;
@@ -3810,6 +3860,13 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
           </svg>
         )}
       </div>
+      {contextBlocks.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 pl-8 mb-1.5">
+          {contextBlocks.map((ctx, i) => (
+            <ContextBlockPill key={i} ctx={ctx} />
+          ))}
+        </div>
+      )}
       {displayContent ? <div
         ref={contentRef}
         className={`text-sol-text text-sm pl-8 break-words relative ${effectivelyCollapsed ? "line-clamp-2 whitespace-pre-wrap" : isMarkdown ? "prose prose-invert prose-sm max-w-none" : "whitespace-pre-wrap"}`}
@@ -3817,14 +3874,14 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
       >
         {(() => {
           const hasTeammate = displayContent.includes('<teammate-message');
-          if (effectivelyCollapsed && !hasTeammate) return displayContent;
+          if (effectivelyCollapsed && !hasTeammate) return <>{renderWithMentions(displayContent)}</>;
           if (effectivelyCollapsed && hasTeammate) {
             const tmParts = parseTeammateMessages(displayContent);
             return (
               <div className="space-y-1">
                 {tmParts.map((part, i) => part.type === 'teammate' ? (
                   <TeammateMessageCard key={i} teammateId={part.teammateId} color={part.color} summary={part.summary} content={part.content} />
-                ) : <span key={i} className="whitespace-pre-wrap">{part.content}</span>)}
+                ) : <span key={i} className="whitespace-pre-wrap">{renderWithMentions(part.content)}</span>)}
               </div>
             );
           }
@@ -3838,7 +3895,7 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
                   <ReactMarkdown key={i} remarkPlugins={entityRemarkPlugins} rehypePlugins={[rehypeHighlight]}
                     components={{ code: EntityAwareCode, a: EntityAwareLink, img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} />, pre: ({ node, children, ...props }) => renderMarkdownPre(node, children, props) }}
                   >{part.content}</ReactMarkdown>
-                ) : <span key={i} className="whitespace-pre-wrap">{part.content}</span>)}
+                ) : <span key={i} className="whitespace-pre-wrap">{renderWithMentions(part.content)}</span>)}
               </div>
             );
           }
@@ -3853,7 +3910,7 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
                   <ReactMarkdown key={i} remarkPlugins={entityRemarkPlugins} rehypePlugins={[rehypeHighlight]}
                     components={{ code: EntityAwareCode, a: EntityAwareLink, img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} />, pre: ({ node, children, ...props }) => renderMarkdownPre(node, children, props) }}
                   >{part.content}</ReactMarkdown>
-                ) : <span key={i}>{part.content}</span>)}
+                ) : <span key={i}>{renderWithMentions(part.content)}</span>)}
               </div>
             );
           }
@@ -3868,7 +3925,7 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
                 pre: ({ node, children, ...props }) => renderMarkdownPre(node, children, props),
               }}
             >{displayContent}</ReactMarkdown>
-          ) : displayContent;
+          ) : <>{renderWithMentions(displayContent)}</>;
         })()}
         {!effectivelyCollapsed && !contentExpanded && isOverflowing && (
           <div className="absolute bottom-0 left-0 right-0 h-20 pointer-events-none bg-gradient-to-b from-transparent to-[color-mix(in_srgb,var(--sol-blue)_10%,var(--sol-bg))]" />
@@ -5364,12 +5421,16 @@ const ForkReplyInput = memo(function ForkReplyInput({ userName, userAvatar, onFo
   );
 });
 
-const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, onSendAndDismiss, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, isSessionStarting, isSessionReady, sessionId, agentType, agentStatus, deliveryStatus, pendingPermissionsCount, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onSendEscape, onOpenNavigator, onPopulateInput, permissionMode, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch, onGateSend, skills, filePaths, mentionItems, onMentionQuery }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; onSendAndDismiss?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; isSessionStarting?: boolean; isSessionReady?: boolean; sessionId?: string; agentType?: string; agentStatus?: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "starting"; deliveryStatus?: string; pendingPermissionsCount?: number; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string) => void) | null>; permissionMode?: string; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void>; onGateSend?: (content: string) => Promise<void>; skills?: SkillItem[]; filePaths?: string[]; mentionItems?: MentionItem[]; onMentionQuery?: (q: string) => void }) {
+const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, onSendAndDismiss, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, isSessionStarting, isSessionReady, sessionId, agentType, agentStatus, deliveryStatus, pendingPermissionsCount, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onSendEscape, onOpenNavigator, onPopulateInput, permissionMode, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch, onGateSend, skills, filePaths, mentionItems, onMentionQuery }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; onSendAndDismiss?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; isSessionStarting?: boolean; isSessionReady?: boolean; sessionId?: string; agentType?: string; agentStatus?: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "starting" | "resuming"; deliveryStatus?: string; pendingPermissionsCount?: number; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string) => void) | null>; permissionMode?: string; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void>; onGateSend?: (content: string) => Promise<void>; skills?: SkillItem[]; filePaths?: string[]; mentionItems?: MentionItem[]; onMentionQuery?: (q: string) => void }) {
+  const convIdRef = useRef(conversationId);
   const cached = useInboxStore.getState().getDraft(conversationId);
-  const [message, setMessage] = useState(() => cached?.draft_message ?? initialDraft ?? "");
+  const [message, _setMessage] = useState(() => sacredInputs.get(conversationId)?.text ?? cached?.draft_message ?? initialDraft ?? "");
+  const setMessage = useCallback((val: string) => {
+    sacredInputs.set(convIdRef.current, { text: val });
+    _setMessage(val);
+  }, []);
   const messageRef = useRef(message);
   messageRef.current = message;
-  const convIdRef = useRef(conversationId);
   const sendingRef = useRef(false);
   const [isWaitingForUpload, setIsWaitingForUpload] = useState(false);
   const [isFocused, setIsFocused] = useState(false);
@@ -5517,9 +5578,10 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
     canQueryServer ? { conversation_id: conversationId as Id<"conversations"> } : "skip"
   );
 
-  const isAgentStarting = agentStatus === "starting" || deliveryStatus === "starting";
+  const isAgentStarting = agentStatus === "starting" || agentStatus === "resuming" || deliveryStatus === "starting";
   const isAgentDelivering = agentStatus === "connected" || deliveryStatus === "connected";
-  const stuckThresholdMs = isSessionStarting || isAgentStarting ? 30_000 : 15_000;
+  const isAgentResuming = agentStatus === "resuming";
+  const stuckThresholdMs = isAgentResuming ? 120_000 : isSessionStarting || isAgentStarting ? 30_000 : 15_000;
 
   const isExistingMessageDead = existingPending?.status === "failed" || existingPending?.status === "undeliverable";
 
@@ -5766,8 +5828,14 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
         clearTimeout(draftTimerRef.current);
         draftTimerRef.current = null;
       }
+      sacredInputs.set(convIdRef.current, { text: messageRef.current });
       saveDraftSnapshot(convIdRef.current);
       convIdRef.current = conversationId;
+      const sacred = sacredInputs.get(conversationId);
+      const storeDraft = useInboxStore.getState().getDraft(conversationId)?.draft_message;
+      const newDraft = sacred?.text ?? storeDraft ?? "";
+      sacredInputs.set(conversationId, { text: newDraft });
+      _setMessage(newDraft);
     }
   }, [conversationId, saveDraftSnapshot]);
 
@@ -6347,7 +6415,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
                 ) : (pendingMessageId || existingPending) && !showStuckBanner && (isAgentStarting || isAgentDelivering) ? (
                   <span className="flex items-center gap-1.5">
                     <span className="w-2 h-2 rounded-full bg-sol-cyan/50 animate-pulse" />
-                    {isAgentStarting ? "Starting session..." : "Delivering..."}
+                    {agentStatus === "resuming" ? "Resuming session..." : isAgentStarting ? "Starting session..." : "Delivering..."}
                   </span>
                 ) : (pendingMessageId || existingPending) && !showStuckBanner && !agentStatus ? (
                   <span className="flex items-center gap-1.5">
@@ -6419,7 +6487,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
                     <span className="w-2 h-2 rounded-full bg-sol-cyan/50 animate-pulse" />
                     Sending queued ({queuedMessages.length})...
                   </span>
-                ) : agentStatus === "idle" ? (
+                ) : agentStatus === "idle" || agentStatus === "connected" ? (
                   "\u00A0"
                 ) : isThinking ? (
                   <span className="flex items-center gap-1.5">
@@ -6450,16 +6518,16 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
                           setIsResuming(false);
                         }
                       }}
-                      className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-sol-orange/10 hover:bg-sol-orange/20 border border-sol-orange/30 text-sol-orange transition-colors"
+                      className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-sol-text-dim/5 hover:bg-sol-text-dim/10 border border-sol-text-dim/20 text-sol-text-dim transition-colors"
                     >
                       <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                         <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                       </svg>
-                      Restart session
+                      Session ended — send a message to restart
                     </button>
                   ) : isResuming ? (
-                    <span className="flex items-center gap-1.5 text-sol-orange">
-                      <span className="w-2 h-2 rounded-full bg-sol-orange animate-pulse" />
+                    <span className="flex items-center gap-1.5 text-sol-text-dim">
+                      <span className="w-2 h-2 rounded-full bg-sol-text-dim animate-pulse" />
                       Restarting...
                     </span>
                   ) : (
@@ -7411,35 +7479,38 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     return extractFilePaths(conversation.messages);
   }, [conversation?.messages]);
 
-  const projectPath = conversation?.project_path || conversation?.git_root;
-  const mentionCache = useQuery(api.docs.mentionSearch, { query: "", limit: 200, ...(projectPath ? { projectPath } : {}) });
-  const mentionCacheRef = useRef<MentionItem[]>([]);
-  if (mentionCache) mentionCacheRef.current = mentionCache;
-  const [mentionQuery, setMentionQuery] = useState("");
-  const mentionDebounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
-  const handleMentionQuery = useCallback((q: string) => {
-    if (mentionDebounceRef.current) clearTimeout(mentionDebounceRef.current);
-    if (!q) { setMentionQuery(""); return; }
-    const cache = mentionCacheRef.current;
-    const lower = q.toLowerCase();
-    const localHits = cache.filter(m =>
-      m.label.toLowerCase().includes(lower) ||
-      (m.shortId && m.shortId.toLowerCase().includes(lower)) ||
-      (m.sublabel && m.sublabel.toLowerCase().includes(lower))
-    );
-    if (localHits.length >= 3) return;
-    mentionDebounceRef.current = setTimeout(() => setMentionQuery(q), 250);
-  }, []);
-  const mentionSearchResults = useQuery(api.docs.mentionSearch, mentionQuery ? { query: mentionQuery, limit: 50, ...(projectPath ? { projectPath } : {}) } : "skip");
+  const storeSessions = useInboxStore((s) => s.sessions);
+  const storeDismissed = useInboxStore((s) => s.dismissedSessions);
+  const storeTasks = useInboxStore((s) => s.tasks);
+  const storePlans = useInboxStore((s) => s.plans);
+  const storeDocs = useInboxStore((s) => s.docs);
+  const storeMembers = useInboxStore((s) => s.teamMembers);
   const mentionItemsRef = useRef<MentionItem[]>([]);
   const mentionItems = useMemo(() => {
-    const cache = mentionCacheRef.current;
-    if (!mentionSearchResults?.length) return cache;
-    const cacheIds = new Set(cache.map(m => m.id));
-    const extras = mentionSearchResults.filter((m: MentionItem) => !cacheIds.has(m.id));
-    return extras.length ? [...cache, ...extras] : cache;
-  }, [mentionCache, mentionSearchResults]);
+    const PER_TYPE = 30;
+    const byRecency = (a: { updatedAt?: number }, b: { updatedAt?: number }) => (b.updatedAt || 0) - (a.updatedAt || 0);
+    const persons: MentionItem[] = storeMembers.map((m: any) => ({ id: String(m._id || m.id), type: "person", label: m.name || m.github_username || "Unknown", sublabel: m.github_username ? `@${m.github_username}` : m.email, image: m.image || m.github_avatar_url }));
+    const tasks: MentionItem[] = Object.values(storeTasks)
+      .sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0)).slice(0, PER_TYPE)
+      .map(t => ({ id: t._id, type: "task", label: t.title, sublabel: t.short_id, shortId: t.short_id, status: t.status, priority: t.priority, updatedAt: t.updated_at }));
+    const docs: MentionItem[] = Object.values(storeDocs)
+      .filter(d => d.doc_type !== "plan")
+      .sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0)).slice(0, PER_TYPE)
+      .map(d => ({ id: d._id, type: "doc", label: d.title, sublabel: d.doc_type, docType: d.doc_type, updatedAt: d.updated_at }));
+    const plans: MentionItem[] = Object.values(storePlans)
+      .sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0)).slice(0, PER_TYPE)
+      .map(p => ({ id: p._id, type: "plan", label: p.title, sublabel: p.short_id, shortId: p.short_id, status: p.status, goal: p.goal, updatedAt: p.updated_at }));
+    const allSessions = { ...storeSessions, ...storeDismissed };
+    const sessions: MentionItem[] = Object.values(allSessions)
+      .filter(s => !s.is_subagent)
+      .sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0)).slice(0, PER_TYPE)
+      .map(s => ({ id: s._id, type: "session", label: s.title || "Untitled Session", sublabel: s.idle_summary?.slice(0, 80) || s.session_id, shortId: s.session_id, messageCount: s.message_count, projectPath: s.project_path, agentType: s.agent_type, updatedAt: s.updated_at, idleSummary: s.idle_summary }));
+    const all = [...persons, ...tasks, ...docs, ...plans, ...sessions];
+    all.sort(byRecency);
+    return all;
+  }, [storeMembers, storeTasks, storeDocs, storePlans, storeSessions, storeDismissed]);
   mentionItemsRef.current = mentionItems;
+  const handleMentionQuery = useCallback((_q: string) => {}, []);
 
   const isWaitingForResponse = useMemo(() => {
     if (!conversation || conversation.status !== "active" || timeline.length === 0 || hasMoreBelow) return false;
@@ -8951,11 +9022,11 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
               </h1>
             )}
 
-            {isSessionDisconnected && (managedSession?.agent_status === "starting" || managedSession?.agent_status === "connected") ? (
+            {isSessionDisconnected && (managedSession?.agent_status === "starting" || managedSession?.agent_status === "resuming" || managedSession?.agent_status === "connected") ? (
               <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] flex-shrink-0 bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/30">
                 <span className="w-1.5 h-1.5 rounded-full bg-sol-cyan animate-pulse" />
-                <span className="hidden sm:inline">{managedSession?.agent_status === "starting" ? "Starting" : "Delivering"}</span>
-                <span className="sm:hidden">{managedSession?.agent_status === "starting" ? "Start" : "Dlvr"}</span>
+                <span className="hidden sm:inline">{managedSession?.agent_status === "starting" ? "Starting" : managedSession?.agent_status === "resuming" ? "Resuming" : "Delivering"}</span>
+                <span className="sm:hidden">{managedSession?.agent_status === "starting" ? "Start" : managedSession?.agent_status === "resuming" ? "Rsum" : "Dlvr"}</span>
               </span>
             ) : isSessionDisconnected ? (
               <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] flex-shrink-0 bg-sol-text-dim/5 text-sol-text-dim/50 border border-sol-text-dim/10">
@@ -8965,31 +9036,33 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
               </span>
             ) : null}
 
-            {!isSessionDisconnected && (managedSession?.agent_status === "working" || managedSession?.agent_status === "thinking" || managedSession?.agent_status === "compacting" || managedSession?.agent_status === "permission_blocked" || managedSession?.agent_status === "connected" || managedSession?.agent_status === "starting" || (!managedSession?.agent_status && isConversationLive)) && (
+            {!isSessionDisconnected && (managedSession?.agent_status === "working" || managedSession?.agent_status === "thinking" || managedSession?.agent_status === "compacting" || managedSession?.agent_status === "permission_blocked" || managedSession?.agent_status === "connected" || managedSession?.agent_status === "starting" || managedSession?.agent_status === "resuming" || (!managedSession?.agent_status && isConversationLive)) && (
               <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] flex-shrink-0 ${
                 managedSession?.agent_status === "thinking" ? "bg-sol-violet/10 text-sol-violet border border-sol-violet/30" :
                 managedSession?.agent_status === "compacting" ? "bg-amber-500/10 text-amber-400 border border-amber-500/30" :
                 managedSession?.agent_status === "permission_blocked" ? "bg-sol-orange/10 text-sol-orange border border-sol-orange/30" :
-                managedSession?.agent_status === "connected" || managedSession?.agent_status === "starting" ? "bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/30" :
+                managedSession?.agent_status === "connected" || managedSession?.agent_status === "starting" || managedSession?.agent_status === "resuming" ? "bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/30" :
                 "bg-emerald-500/10 text-emerald-400 border border-emerald-500/30"
               }`}>
                 <span className={`w-1.5 h-1.5 rounded-full animate-pulse ${
                   managedSession?.agent_status === "thinking" ? "bg-sol-violet" :
                   managedSession?.agent_status === "compacting" ? "bg-amber-400" :
                   managedSession?.agent_status === "permission_blocked" ? "bg-sol-orange" :
-                  managedSession?.agent_status === "connected" || managedSession?.agent_status === "starting" ? "bg-sol-cyan" :
+                  managedSession?.agent_status === "connected" || managedSession?.agent_status === "starting" || managedSession?.agent_status === "resuming" ? "bg-sol-cyan" :
                   "bg-emerald-400"
                 }`} />
                 <span className="hidden sm:inline">{managedSession?.agent_status === "thinking" ? "Thinking" :
                  managedSession?.agent_status === "compacting" ? "Compacting" :
                  managedSession?.agent_status === "permission_blocked" ? "Needs Input" :
                  managedSession?.agent_status === "starting" ? "Starting" :
+                 managedSession?.agent_status === "resuming" ? "Resuming" :
                  managedSession?.agent_status === "connected" ? "Connected" :
                  "Working"}</span>
                 <span className="sm:hidden">{managedSession?.agent_status === "thinking" ? "Think" :
                  managedSession?.agent_status === "compacting" ? "Compact" :
                  managedSession?.agent_status === "permission_blocked" ? "Input" :
                  managedSession?.agent_status === "starting" ? "Start" :
+                 managedSession?.agent_status === "resuming" ? "Rsum" :
                  managedSession?.agent_status === "connected" ? "Conn" :
                  "Work"}</span>
               </span>
@@ -9417,10 +9490,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                     )}
                   </DropdownMenuContent>
                 </DropdownMenu>
-                {headerEnd}
               </div>
               </TooltipProvider>
             )}
+            {headerEnd}
           </div>
         </div>
         {conversation && (
