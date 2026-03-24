@@ -23,6 +23,7 @@ interface DocumentDetailLayoutProps {
   children?: React.ReactNode;
   contextType?: string;
   linkedObjectId?: string;
+  cliEditedAt?: number;
 }
 
 export function DocumentDetailLayout({
@@ -39,6 +40,7 @@ export function DocumentDetailLayout({
   children,
   contextType = "doc",
   linkedObjectId,
+  cliEditedAt,
 }: DocumentDetailLayoutProps) {
   const [isEditing, setIsEditing] = useState(initialEditable);
   const [showMeta, setShowMeta] = useState(false);
@@ -145,6 +147,7 @@ export function DocumentDetailLayout({
                 editable={isEditing}
                 placeholder={placeholder}
                 getMarkdownRef={getMarkdownRef}
+                cliEditedAt={cliEditedAt}
               />
             </ErrorBoundary>
           </div>

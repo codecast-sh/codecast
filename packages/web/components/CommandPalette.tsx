@@ -13,12 +13,14 @@ import { useCurrentUser } from "../hooks/useCurrentUser";
 import { AgentTypeIcon } from "./AgentTypeIcon";
 import { getLabelColor, DEFAULT_LABELS } from "../lib/labelColors";
 import { toast } from "sonner";
+import { undoableArchiveDoc } from "../store/undoActions";
 import {
   Circle,
   CircleDot,
   CircleDotDashed,
   CheckCircle2,
   XCircle,
+  PauseCircle,
   AlertTriangle,
   ArrowUp,
   ArrowDown,
@@ -34,11 +36,21 @@ import {
   Check,
   Search,
   CornerDownLeft,
+  ListTodo,
+  Map as MapIcon,
 } from "lucide-react";
 
 const api = _api as any;
 
-type ActionMode = "status" | "priority" | "labels" | "assign" | "type";
+type ActionMode = "status" | "priority" | "labels" | "assign" | "type" | "plan_status";
+
+const PLAN_STATUS_OPTIONS = [
+  { key: "draft", icon: Circle, label: "Draft", color: "text-neutral-500", shortcut: "1" },
+  { key: "active", icon: CircleDot, label: "Active", color: "text-cyan-400", shortcut: "2" },
+  { key: "paused", icon: PauseCircle, label: "Paused", color: "text-yellow-400", shortcut: "3" },
+  { key: "done", icon: CheckCircle2, label: "Done", color: "text-green-400", shortcut: "4" },
+  { key: "abandoned", icon: XCircle, label: "Abandoned", color: "text-neutral-500", shortcut: "5" },
+];
 
 function isTask(item: any): item is TaskItem {
   return item && "status" in item && "short_id" in item;
@@ -156,7 +168,7 @@ function ActionSubmenu({
 }: {
   mode: ActionMode;
   targets: any[];
-  targetType: "task" | "doc";
+  targetType: "task" | "doc" | "plan";
   onClose: () => void;
   onBack: () => void;
   teamMembers?: any[];
@@ -168,6 +180,7 @@ function ActionSubmenu({
   const listRef = useRef<HTMLDivElement>(null);
 
   const webUpdateTask = useMutation(api.tasks.webUpdate);
+  const webUpdatePlan = useMutation(api.plans.webUpdate);
   const assignToAgent = useMutation(api.tasks.assignToAgent);
   const updateTask = useInboxStore((s) => s.updateTask);
   const updateDoc = useInboxStore((s) => s.updateDoc);
@@ -237,6 +250,14 @@ function ActionSubmenu({
       }));
       return [...agents, ...members].filter((o) => o.label.toLowerCase().includes(q));
     }
+    if (mode === "plan_status") {
+      return PLAN_STATUS_OPTIONS
+        .filter((o) => o.label.toLowerCase().includes(q))
+        .map((o) => ({
+          ...o,
+          active: target?.status === o.key,
+        }));
+    }
     return [];
   }, [mode, search, target, currentLabels, teamMembers, currentUser]);
 
@@ -280,6 +301,12 @@ function ActionSubmenu({
           toast.success(`Assigned to ${member?.name || "user"}`);
         }
       }
+    } else if (targetType === "plan") {
+      if (mode === "plan_status") {
+        const shortId = target.short_id || target._id;
+        webUpdatePlan({ short_id: shortId, status: item.key }).catch(() => {});
+        toast.success(`Plan \u2192 ${item.label}`);
+      }
     } else {
       const doc = target as DocItem;
       if (mode === "type") {
@@ -294,7 +321,7 @@ function ActionSubmenu({
       }
     }
     onClose();
-  }, [items, target, targets, targetType, mode, currentLabels, onClose, updateTask, webUpdateTask, assignToAgent, updateDoc, teamMembers, router]);
+  }, [items, target, targets, targetType, mode, currentLabels, onClose, updateTask, webUpdateTask, webUpdatePlan, assignToAgent, updateDoc, teamMembers, router]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === "Escape" || (e.key === "Backspace" && search === "")) {
@@ -438,14 +465,14 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
   const router = useRouter();
   const pathname = usePathname();
 
-  const { open: paletteOpen, targets, targetType, initialMode } = useInboxStore((s) => s.palette);
+  const { open: paletteOpen, targets, targetType, initialMode, initialQuery: paletteInitialQuery } = useInboxStore((s) => s.palette);
   const closePalette = useInboxStore((s) => s.closePalette);
   const togglePalette = useInboxStore((s) => s.togglePalette);
+  const openCreateModal = useInboxStore((s) => s.openCreateModal);
 
   const updateTask = useInboxStore((s) => s.updateTask);
   const updateDoc = useInboxStore((s) => s.updateDoc);
   const pinDoc = useInboxStore((s) => s.pinDoc);
-  const archiveDoc = useInboxStore((s) => s.archiveDoc);
   const webUpdateTask = useMutation(api.tasks.webUpdate);
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id);
   const { user: currentUser } = useCurrentUser();
@@ -558,10 +585,10 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
   // Reset state when palette opens
   useWatchEffect(() => {
     if (open) {
-      setQuery("");
+      setQuery(paletteInitialQuery || "");
       setActionMode(initialMode !== "root" ? initialMode as ActionMode : null);
     }
-  }, [open, initialMode]);
+  }, [open, initialMode, paletteInitialQuery]);
 
   // Escape handling
   useWatchEffect(() => {
@@ -671,7 +698,7 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
     if (!targets.length) return;
     const target = targets[0] as any;
 
-    if (["status", "priority", "labels", "assign", "type"].includes(actionKey)) {
+    if (["status", "priority", "labels", "assign", "type", "plan_status"].includes(actionKey)) {
       setActionMode(actionKey as ActionMode);
       return;
     }
@@ -680,6 +707,9 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
       if (targetType === "task" && isTask(target)) {
         navigator.clipboard.writeText(target.short_id);
         toast.success(`Copied ${target.short_id}`);
+      } else if (targetType === "plan") {
+        navigator.clipboard.writeText(target.short_id || target._id);
+        toast.success(`Copied ${target.short_id || target._id}`);
       } else {
         navigator.clipboard.writeText(target._id);
         toast.success("Copied ID");
@@ -707,13 +737,12 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
     }
 
     if (actionKey === "archive" && targetType === "doc") {
-      archiveDoc(target._id);
-      toast.success("Archived");
+      undoableArchiveDoc(target._id);
       router.push("/docs");
       closePalette();
       return;
     }
-  }, [targets, targetType, closePalette, updateTask, webUpdateTask, pinDoc, archiveDoc, router]);
+  }, [targets, targetType, closePalette, updateTask, webUpdateTask, pinDoc, router]);
 
   const hasTargets = targets.length > 0 && targetType;
   const target = targets[0] as any;
@@ -747,7 +776,12 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
     ];
   }, [target?.pinned]);
 
-  const actions = targetType === "task" ? taskActions : targetType === "doc" ? docActions : [];
+  const planActions = useMemo(() => [
+    { key: "plan_status", label: "Change status...", icon: CircleDot, shortcut: "S" },
+    { key: "copy", label: "Copy plan ID", icon: Copy, shortcut: "\u2318." },
+  ], []);
+
+  const actions = targetType === "task" ? taskActions : targetType === "doc" ? docActions : targetType === "plan" ? planActions : [];
 
   const showFavorites = favorites && favorites.length > 0;
   const showBookmarks = bookmarks && bookmarks.length > 0;
@@ -1002,6 +1036,29 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
               <span className="truncate">{page.label}</span>
             </CommandPrimitive.Item>
           ))}
+        </CommandPrimitive.Group>
+
+        <CommandPrimitive.Group heading="Create" className={groupClass}>
+          <CommandPrimitive.Item
+            key="create-task"
+            value="Create task new todo"
+            onSelect={() => { closePalette(); openCreateModal('task'); }}
+            className={itemClass}
+          >
+            <ListTodo className="w-4 h-4 text-sol-cyan flex-shrink-0" />
+            <span className="truncate flex-1">Create Task</span>
+            <kbd className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-sol-bg-alt border border-sol-border/40 text-sol-text-dim">T</kbd>
+          </CommandPrimitive.Item>
+          <CommandPrimitive.Item
+            key="create-plan"
+            value="Create plan new project"
+            onSelect={() => { closePalette(); openCreateModal('plan'); }}
+            className={itemClass}
+          >
+            <MapIcon className="w-4 h-4 text-sol-yellow flex-shrink-0" />
+            <span className="truncate flex-1">Create Plan</span>
+            <kbd className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-sol-bg-alt border border-sol-border/40 text-sol-text-dim">P</kbd>
+          </CommandPrimitive.Item>
         </CommandPrimitive.Group>
 
         {showProjects && (

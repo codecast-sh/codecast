@@ -203,6 +203,25 @@ function PlanHoverContent({ plan }: { plan: any }) {
   );
 }
 
+export function EntityAwareCode({ children, className, ...props }: any) {
+  const text = String(children);
+  if (!className && isEntityId(text)) {
+    return <EntityIdPill shortId={text} />;
+  }
+  return <code className={className} {...props}>{children}</code>;
+}
+
+export function EntityAwareLink({ href, children, ...props }: any) {
+  if (href?.startsWith("entity://")) {
+    return <EntityIdPill shortId={href.slice(9)} />;
+  }
+  const text = typeof children === "string" ? children : Array.isArray(children) ? children.map(String).join("") : String(children ?? "");
+  if (isEntityId(text)) {
+    return <EntityIdPill shortId={text} />;
+  }
+  return <a href={href} {...props}>{children}</a>;
+}
+
 export function EntityIdPill({ shortId }: { shortId: string }) {
   const id = shortId.toLowerCase().trim();
   const prefix = id.split("-")[0];

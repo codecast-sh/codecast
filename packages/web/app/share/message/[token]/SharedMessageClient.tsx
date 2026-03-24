@@ -7,6 +7,8 @@ import remarkGfm from "remark-gfm";
 import Link from "next/link";
 import { CodeBlock } from "@/components/CodeBlock";
 import { CollapsibleImage } from "@/components/tools/MarkdownRenderer";
+import { remarkEntityIds } from "@/lib/remarkEntityIds";
+import { EntityAwareCode, EntityAwareLink } from "@/components/EntityIdPill";
 
 function formatRelativeTime(ts: number): string {
   const now = Date.now();
@@ -212,9 +214,11 @@ function MarkdownContentBlock({ content, label, timestamp }: { content: string; 
       </div>
       <div className="px-4 py-3 prose prose-invert prose-sm max-w-none text-sol-text">
         <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
+          remarkPlugins={[remarkGfm, remarkEntityIds]}
           rehypePlugins={[rehypeHighlight]}
           components={{
+            code: EntityAwareCode,
+            a: EntityAwareLink,
             img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} />,
             pre: ({ node, children, ...props }) => {
               const codeElement = node?.children?.[0];
@@ -317,9 +321,11 @@ function MessageBlock({ message, isTarget }: { message: any; isTarget?: boolean 
           {hasContent && (
             <div className="pl-7 prose prose-invert prose-sm max-w-none text-sol-text">
               <ReactMarkdown
-                remarkPlugins={[remarkGfm]}
+                remarkPlugins={[remarkGfm, remarkEntityIds]}
                 rehypePlugins={[rehypeHighlight]}
                 components={{
+                  code: EntityAwareCode,
+                  a: EntityAwareLink,
                   img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} />,
                   pre: ({ node, children, ...props }) => {
                     const codeElement = node?.children?.[0];

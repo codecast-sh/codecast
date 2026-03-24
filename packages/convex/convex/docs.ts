@@ -426,6 +426,7 @@ export const resetSync = mutation({
     } else {
       await ctx.db.insert("doc_snapshots", { id: docId, version: 1, content: json });
     }
+    await ctx.db.patch(args.id, { cli_edited_at: Date.now() });
     return { success: true };
   },
 });
@@ -449,7 +450,8 @@ export const patch = mutation({
     if (idx === -1) throw new Error("old_string not found in document content");
 
     const newContent = content.slice(0, idx) + args.new_string + content.slice(idx + args.old_string.length);
-    await ctx.db.patch(args.id, { content: newContent, updated_at: Date.now() });
+    const now = Date.now();
+    await ctx.db.patch(args.id, { content: newContent, updated_at: now, cli_edited_at: now });
 
     if (doc.plan_id) {
       const plan = await ctx.db.get(doc.plan_id);

@@ -7,6 +7,8 @@ import { api as _typedApi } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, isConvexId, isSessionWaitingForInput } from "../store/inboxStore";
 import { isInboxSessionView } from "../lib/inboxRouting";
 import { useShortcutAction } from "./ShortcutProvider";
+import { performUndo, performRedo } from "../store/undoStack";
+import { undoableStashSession, undoableDeferSession, undoablePinSession } from "../store/undoActions";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 
 const api = _typedApi as any;
@@ -63,7 +65,7 @@ export function useGlobalShortcutActions() {
   useShortcutAction('session.pin', useCallback(() => {
     const store = useInboxStore.getState();
     const currentId = isOnInboxPage ? store.currentSessionId : store.sidePanelSessionId;
-    if (currentId) store.pinSession(currentId);
+    if (currentId) undoablePinSession(currentId);
   }, [isOnInboxPage]));
 
   useShortcutAction('session.stash', useCallback(() => {
@@ -71,10 +73,10 @@ export function useGlobalShortcutActions() {
     const currentId = isOnInboxPage ? store.currentSessionId : store.sidePanelSessionId;
     if (!currentId) return;
     const ordered = store.visualOrder();
-    const idx = ordered.findIndex(s => s._id === currentId);
-    store.stashSession(currentId);
+    undoableStashSession(currentId);
     if (!isOnInboxPage) {
       const sessions = useInboxStore.getState().sessions;
+      const idx = ordered.findIndex(s => s._id === currentId);
       const next = ordered.slice(idx + 1).find(s => sessions[s._id])
         ?? ordered.find(s => sessions[s._id]);
       if (next) store.selectPanelSession(next._id);
@@ -91,7 +93,7 @@ export function useGlobalShortcutActions() {
     }
     const ordered = store.visualOrder();
     const idx = ordered.findIndex(s => s._id === currentId);
-    store.stashSession(currentId);
+    undoableStashSession(currentId);
     if (!isOnInboxPage) {
       const sessions = useInboxStore.getState().sessions;
       const next = ordered.slice(idx + 1).find(s => sessions[s._id])
@@ -107,7 +109,7 @@ export function useGlobalShortcutActions() {
     const ordered = store.visualOrder();
     const idx = ordered.findIndex(s => s._id === currentId);
     const next = ordered[idx + 1] ?? ordered.find(s => s._id !== currentId);
-    store.deferSession(currentId);
+    undoableDeferSession(currentId);
     if (next) {
       if (isOnInboxPage) store.setCurrentSession(next._id);
       else store.selectPanelSession(next._id);
@@ -147,5 +149,18 @@ export function useGlobalShortcutActions() {
 
   useShortcutAction('sidebar.toggleRight', useCallback(() => {
     useInboxStore.getState().toggleSidePanel();
+  }, []));
+
+  useShortcutAction('ui.undo', useCallback(() => {
+    return performUndo() || false;
+  }, []));
+
+  useShortcutAction('ui.redo', useCallback(() => {
+    return performRedo() || false;
+  }, []));
+
+  useShortcutAction('create.open', useCallback(() => {
+    const store = useInboxStore.getState();
+    store.openPalette({ initialQuery: 'Create' });
   }, []));
 }

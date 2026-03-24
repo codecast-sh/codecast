@@ -167,6 +167,7 @@ export type TaskItem = {
   plan?: PlanRef;
   activeSession?: { session_id: string; title?: string; agent_status?: string; agent_type?: string } | null;
   source_agent_type?: string | null;
+  session_count?: number;
   steps?: TaskStep[];
   acceptance_criteria?: string[];
   execution_status?: TaskExecutionStatus;
@@ -381,8 +382,6 @@ export function visualOrderSessions(
   for (const section of [pinned, newSessions, needsInput, working]) {
     for (const s of section) {
       result.push(s);
-      const subs = subsByParent.get(s._id);
-      if (subs) result.push(...subs);
     }
   }
   return result;
@@ -432,10 +431,15 @@ interface InboxStoreState {
   closeComposePalette: () => void;
 
   // -- Unified command palette --
-  palette: { open: boolean; targets: any[]; targetType: 'task' | 'doc' | 'plan' | null; initialMode: string };
-  openPalette: (opts?: { targets?: any[]; targetType?: 'task' | 'doc' | 'plan'; mode?: string }) => void;
+  palette: { open: boolean; targets: any[]; targetType: 'task' | 'doc' | 'plan' | null; initialMode: string; initialQuery?: string };
+  openPalette: (opts?: { targets?: any[]; targetType?: 'task' | 'doc' | 'plan'; mode?: string; initialQuery?: string }) => void;
   closePalette: () => void;
   togglePalette: () => void;
+
+  // -- Create modal --
+  createModal: 'task' | 'plan' | 'doc' | null;
+  openCreateModal: (type: 'task' | 'plan' | 'doc') => void;
+  closeCreateModal: () => void;
 
   // -- Fork navigation --
   activeBranches: Record<string, string>;
@@ -697,13 +701,14 @@ export const useInboxStore = create<InboxStoreState>(
 
   palette: { open: false, targets: [], targetType: null, initialMode: 'root' },
 
-  openPalette: (opts?: { targets?: any[]; targetType?: 'task' | 'doc' | 'plan'; mode?: string }) => {
+  openPalette: (opts?: { targets?: any[]; targetType?: 'task' | 'doc' | 'plan'; mode?: string; initialQuery?: string }) => {
     set({
       palette: {
         open: true,
         targets: opts?.targets || [],
         targetType: opts?.targetType || null,
         initialMode: opts?.mode || 'root',
+        initialQuery: opts?.initialQuery,
       },
     });
   },
@@ -720,6 +725,10 @@ export const useInboxStore = create<InboxStoreState>(
       set({ palette: { open: true, targets: [], targetType: null, initialMode: 'root' } });
     }
   },
+
+  createModal: null,
+  openCreateModal: (type: 'task' | 'plan' | 'doc') => set({ createModal: type }),
+  closeCreateModal: () => set({ createModal: null }),
 
   activeBranches: {},
   optimisticForkChildren: [],
@@ -1126,15 +1135,12 @@ export const useInboxStore = create<InboxStoreState>(
 
   setSelectedPlan: action(function (this: Draft, id: string | null) {
     this.selectedPlanId = id;
-    this.currentSessionId = null;
     this.viewingDismissedId = null;
   }),
 
   clearSelection: action(function (this: Draft) {
-    this.currentSessionId = null;
     this.selectedPlanId = null;
     this.viewingDismissedId = null;
-    this.clientState.current_conversation_id = undefined;
   }),
 
   setShowDismissed: (show: boolean) => {

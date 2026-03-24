@@ -1262,6 +1262,8 @@ export default defineSchema({
 
     embedding: v.optional(v.array(v.float64())),
 
+    cli_edited_at: v.optional(v.number()),
+
     created_at: v.number(),
     updated_at: v.number(),
     archived_at: v.optional(v.number()),

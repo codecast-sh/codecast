@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { useLayoutEffect, useRef, useState, useMemo, useImperativeHandle, forwardRef, useCallback, memo } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useEventListener } from "../hooks/useEventListener";
@@ -54,12 +54,12 @@ import { MarkdownRenderer, isMarkdownFile, isPlanFile, CollapsibleImage } from "
 import { useImageGallery, ImageGalleryProvider } from "./ImageGallery";
 import { MessageSharePopover } from "./MessageSharePopover";
 import { PlanBadge, TaskBadge } from "./PlanTaskHoverCard";
-import { EntityIdPill, isEntityId } from "./EntityIdPill";
+import { EntityIdPill, EntityAwareCode, EntityAwareLink } from "./EntityIdPill";
 import { remarkEntityIds } from "../lib/remarkEntityIds";
 import { ConversationTree } from "./ConversationTree";
-import { useInboxStore, isConvexId, type ForkChild, type InboxSession } from "../store/inboxStore";
+import { useInboxStore, isConvexId, type ForkChild } from "../store/inboxStore";
 import { useSlideOutStore } from "../store/slideOutStore";
-import { soundNewSession, soundSend } from "../lib/sounds";
+import { soundSend } from "../lib/sounds";
 import { useForkNavigationStore } from "../store/forkNavigationStore";
 import { buildCompositeTimeline } from "../lib/compositeTimeline";
 import { useMessageSelection } from "../hooks/useMessageSelection";
@@ -68,25 +68,9 @@ import { BranchSelector } from "./BranchSelector";
 import { ForkTreePanel } from "./ForkTreePanel";
 import { getApplyPatchInput, parseApplyPatchSections } from "../lib/applyPatchParser";
 import { setupDesktopDrag, desktopHeaderClass } from "../lib/desktop";
-import { isInboxRoute } from "../lib/inboxRouting";
 import { MessageNavButton } from "./MessageBrowserPopover";
 import type { MentionItem } from "./editor/MentionList";
 import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Hash, FolderOpen, Keyboard } from "lucide-react";
-
-function EntityAwareCode({ children, className, ...props }: any) {
-  const text = String(children);
-  if (!className && isEntityId(text)) {
-    return <EntityIdPill shortId={text} />;
-  }
-  return <code className={className} {...props}>{children}</code>;
-}
-
-function EntityAwareLink({ href, children, ...props }: any) {
-  if (href?.startsWith("entity://")) {
-    return <EntityIdPill shortId={href.slice(9)} />;
-  }
-  return <a href={href} {...props}>{children}</a>;
-}
 
 function renderMarkdownPre(node: any, children: any, props: any) {
   const codeElement = node?.children?.[0];
@@ -304,10 +288,7 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
   );
   const openNewSession = useInboxStore((s) => s.openNewSession);
   const isolated = useInboxStore((s) => s.isolatedWorktreeMode);
-  const createQuickSession = useMutation(api.conversations.createQuickSession);
-  const killSession = useMutation(api.conversations.killSession);
-  const pathname = usePathname();
-  const router = useRouter();
+  const reconfigureSession = useMutation(api.conversations.reconfigureSession);
 
   const recentProjects = freshProjects ?? cachedProjects;
 
@@ -316,8 +297,6 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
   const currentConvContext = useInboxStore((s) => s.currentConversation);
   const currentPath = storeSession?.project_path || storeSession?.git_root || conversation.git_root || conversation.project_path || currentConvContext?.projectPath || currentConvContext?.gitRoot;
   const currentName = currentPath?.split("/").filter(Boolean).pop() || "unknown";
-  const currentAgent = storeSession?.agent_type || conversation.agent_type || "claude_code";
-  const isInInbox = isInboxRoute(pathname);
 
   const otherProjects = useMemo(() => {
     return recentProjects.filter((p: { path: string }) => p.path !== currentPath);
@@ -328,79 +307,25 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
   const handleSwitch = useCallback(async (projectPath: string, forceIsolated?: boolean) => {
     const trimmed = projectPath.trim();
     if (!trimmed) return;
-    soundNewSession();
+    if (trimmed === currentPath && !forceIsolated) return;
     try {
-      const resolvedId = storeSession?._id || conversation._id;
-      const sessionId = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
-      const now = Date.now();
+      const id = storeSession?._id || conversation._id;
+      const store = useInboxStore.getState();
+      store.updateSessionProject(id, trimmed);
+      store.updateConversationMeta(id, { project_path: trimmed, git_root: trimmed });
 
-      if (isInInbox) {
-        const store = useInboxStore.getState();
-        const oldId = storeSession?._id || conversation._id;
-        store.moveDraft(oldId, sessionId);
-        if (isConvexId(oldId)) {
-          store.markKilling(oldId);
-        }
-        const newSession: InboxSession = {
-          _id: sessionId,
-          session_id: sessionId,
-          title: "New session",
-          updated_at: now,
+      if (isConvexId(id)) {
+        reconfigureSession({
+          conversation_id: id as Id<"conversations">,
           project_path: trimmed,
           git_root: trimmed,
-          agent_type: currentAgent as "claude_code" | "codex" | "cursor" | "gemini",
-          message_count: 0,
-          is_idle: true,
-          has_pending: false,
-          last_user_message: null,
-        };
-        const newSessions = { ...store.sessions };
-        delete newSessions[oldId];
-        newSessions[sessionId] = newSession;
-        const newPending = { ...store.pending };
-        delete newPending[`sessions:${sessionId}`];
-        useInboxStore.setState({
-          sessions: newSessions,
-          currentSessionId: sessionId,
-          pending: newPending,
-          viewingDismissedId: null,
-          conversations: {
-            ...store.conversations,
-            [sessionId]: {
-              _id: sessionId, _creationTime: now, user_id: "", agent_type: currentAgent,
-              session_id: sessionId, project_path: trimmed, git_root: trimmed,
-              started_at: now, updated_at: now, message_count: 0, status: "active",
-              title: "New session", messages: [], user: null,
-              child_conversations: [], child_conversation_map: {},
-              has_more_above: false, oldest_timestamp: null, last_timestamp: null,
-              fork_count: 0, forked_from_details: null, compaction_count: 0,
-              fork_children: [], parent_conversation_id: null,
-            },
-          },
-        });
-      }
-
-      const conversationId = await createQuickSession({
-        agent_type: currentAgent as "claude_code" | "codex" | "cursor" | "gemini",
-        project_path: trimmed,
-        git_root: trimmed,
-        session_id: isInInbox ? sessionId : undefined,
-        isolated: (forceIsolated ?? isolated) || undefined,
-      });
-
-      if (isInInbox) {
-        useInboxStore.getState().resolveSessionId(sessionId, conversationId);
-      } else {
-        router.push(`/conversation/${conversationId}`);
-      }
-
-      if (isConvexId(resolvedId)) {
-        killSession({ conversation_id: resolvedId as Id<"conversations">, mark_completed: true }).catch(() => {});
+          isolated: (forceIsolated ?? isolated) || undefined,
+        }).catch(() => {});
       }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to create session");
+      toast.error(err instanceof Error ? err.message : "Failed to switch project");
     }
-  }, [storeSession, conversation._id, killSession, createQuickSession, currentAgent, router, isInInbox, isolated]);
+  }, [storeSession, conversation._id, reconfigureSession, currentPath, isolated]);
 
   return (
     <TooltipProvider delayDuration={200}>
@@ -486,80 +411,26 @@ function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedW
   onSelectWorkflow: (id: string) => void;
   workflows: Array<{ _id: string; name: string }> | undefined;
 }) {
-  const createQuickSession = useMutation(api.conversations.createQuickSession);
-  const killSession = useMutation(api.conversations.killSession);
+  const reconfigureSession = useMutation(api.conversations.reconfigureSession);
   const storeSession = useInboxStore((s) => s.sessions[conversation._id]);
   const currentAgent = storeSession?.agent_type || conversation.agent_type || "claude_code";
-  const projectPath = storeSession?.project_path || storeSession?.git_root || conversation.git_root || conversation.project_path;
 
   const handleAgentSwitch = useCallback(async (agentType: "claude_code" | "codex" | "cursor" | "gemini") => {
     if (agentType === currentAgent) return;
-    soundNewSession();
-
-    const store = useInboxStore.getState();
-    const oldId = storeSession?._id || conversation._id;
-    const sessionId = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
-    const now = Date.now();
-    store.moveDraft(oldId, sessionId);
-
-    if (isConvexId(oldId)) {
-      store.markKilling(oldId);
-    }
-
-    const newSession: InboxSession = {
-      _id: sessionId,
-      session_id: sessionId,
-      title: "New session",
-      updated_at: now,
-      project_path: projectPath || undefined,
-      git_root: projectPath || undefined,
-      agent_type: agentType,
-      message_count: 0,
-      is_idle: true,
-      has_pending: false,
-      last_user_message: null,
-    };
-    const newSessions = { ...store.sessions };
-    delete newSessions[oldId];
-    newSessions[sessionId] = newSession;
-    const newPending = { ...store.pending };
-    delete newPending[`sessions:${sessionId}`];
-    useInboxStore.setState({
-      sessions: newSessions,
-      currentSessionId: sessionId,
-      pending: newPending,
-      viewingDismissedId: null,
-      conversations: {
-        ...store.conversations,
-        [sessionId]: {
-          _id: sessionId, _creationTime: now, user_id: "", agent_type: agentType,
-          session_id: sessionId, project_path: projectPath, git_root: projectPath,
-          started_at: now, updated_at: now, message_count: 0, status: "active",
-          title: "New session", messages: [], user: null,
-          child_conversations: [], child_conversation_map: {},
-          has_more_above: false, oldest_timestamp: null, last_timestamp: null,
-          fork_count: 0, forked_from_details: null, compaction_count: 0,
-          fork_children: [], parent_conversation_id: null,
-        },
-      },
-    });
-
     try {
-      const conversationId = await createQuickSession({
-        agent_type: agentType,
-        project_path: projectPath || undefined,
-        git_root: projectPath || undefined,
-        session_id: sessionId,
-      });
-      useInboxStore.getState().resolveSessionId(sessionId, conversationId);
+      const id = storeSession?._id || conversation._id;
+      useInboxStore.getState().setConversationAgent(id, agentType);
 
-      if (isConvexId(oldId)) {
-        killSession({ conversation_id: oldId as Id<"conversations">, mark_completed: true }).catch(() => {});
+      if (isConvexId(id)) {
+        reconfigureSession({
+          conversation_id: id as Id<"conversations">,
+          agent_type: agentType,
+        }).catch(() => {});
       }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to switch agent");
     }
-  }, [storeSession, conversation._id, killSession, createQuickSession, currentAgent, projectPath]);
+  }, [storeSession, conversation._id, reconfigureSession, currentAgent]);
 
   const agents = [
     { type: "claude_code" as const, label: "Claude" },
@@ -6470,7 +6341,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
                 ) : (pendingMessageId || existingPending) && !showStuckBanner && !agentStatus ? (
                   <span className="flex items-center gap-1.5">
                     <span className="w-2 h-2 rounded-full bg-sol-cyan/50 animate-pulse" />
-                    Queued — waiting for daemon...
+                    Processing...
                   </span>
                 ) : isSessionReady && !showStuckBanner && (!agentStatus || agentStatus === "idle" || agentStatus === "connected") ? (
                   <span className="flex items-center gap-1.5">

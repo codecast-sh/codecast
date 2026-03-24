@@ -875,6 +875,7 @@ export const webList = query({
       plan: t.plan_id ? planMap.get(t.plan_id.toString()) || null : null,
       activeSession: activeTaskMap.get(t._id.toString()) || null,
       source_agent_type: t.created_from_conversation ? sourceAgentMap.get(t.created_from_conversation.toString()) || null : null,
+      session_count: (t.conversation_ids || []).length,
     }));
     return { items, hasMore };
   },

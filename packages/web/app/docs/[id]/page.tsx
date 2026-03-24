@@ -28,6 +28,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { toast } from "sonner";
+import { undoableArchiveDoc } from "../../../store/undoActions";
 
 const api = _api as any;
 
@@ -126,7 +127,6 @@ export default function DocDetailPage() {
   const data = detail || (listItem as DocDetail | undefined);
   const updateDoc = useInboxStore((s) => s.updateDoc);
   const pinDoc = useInboxStore((s) => s.pinDoc);
-  const archiveDoc = useInboxStore((s) => s.archiveDoc);
   const openSidePanel = useInboxStore((s) => s.openSidePanel);
   const promoteToPlan = useMutation(api.docs.webPromoteToPlan);
 
@@ -145,11 +145,11 @@ export default function DocDetailPage() {
     await pinDoc(data._id, !data.pinned);
   }, [data, pinDoc]);
 
-  const handleArchive = useCallback(async () => {
+  const handleArchive = useCallback(() => {
     if (!data) return;
-    await archiveDoc(data._id);
+    undoableArchiveDoc(data._id);
     router.push("/docs");
-  }, [data, archiveDoc, router]);
+  }, [data, router]);
 
   const handleTypeChange = useCallback(
     async (newType: string) => {
@@ -196,6 +196,7 @@ export default function DocDetailPage() {
           backHref="/docs"
           linkedObjectId={doc._id}
           placeholder="Start typing or insert using /"
+          cliEditedAt={(doc as any).cli_edited_at}
           topBarLeft={
             <>
               <DocTypeSelector value={doc.doc_type} onChange={handleTypeChange} />

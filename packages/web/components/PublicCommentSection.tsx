@@ -4,6 +4,8 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { remarkEntityIds } from "../lib/remarkEntityIds";
+import { EntityAwareCode, EntityAwareLink } from "./EntityIdPill";
 import { toast } from "sonner";
 
 type PublicCommentSectionProps = {
@@ -114,7 +116,7 @@ export function PublicCommentSection({
             )}
           </div>
           <div className="text-sol-text text-sm prose prose-invert prose-sm max-w-none">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+            <ReactMarkdown remarkPlugins={[remarkGfm, remarkEntityIds]} components={{ code: EntityAwareCode, a: EntityAwareLink }}>
               {comment.content}
             </ReactMarkdown>
           </div>

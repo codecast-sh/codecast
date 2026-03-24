@@ -12,6 +12,8 @@ export type ShortcutAction =
   | 'session.rename'
   | 'ui.zenToggle'
   | 'ui.toggleShortcutsHelp'
+  | 'ui.undo'
+  | 'ui.redo'
   | 'nav.inbox'
   | 'search.open'
   | 'palette.toggle'
@@ -32,7 +34,8 @@ export type ShortcutAction =
   | 'review.comment'
   | 'compose.focus'
   | 'sidebar.toggleLeft'
-  | 'sidebar.toggleRight';
+  | 'sidebar.toggleRight'
+  | 'create.open';
 
 export interface ShortcutDef {
   key: string;
@@ -62,6 +65,8 @@ export const SHORTCUTS: ShortcutDef[] = [
 
   { key: 'ctrl+.', action: 'ui.zenToggle', skipInputCheck: true, description: 'Toggle zen mode' },
   { key: '?', action: 'ui.toggleShortcutsHelp', description: 'Toggle shortcuts help' },
+  { key: 'ctrl+z', mac: 'meta+z', action: 'ui.undo', description: 'Undo' },
+  { key: 'ctrl+shift+z', mac: 'meta+shift+z', action: 'ui.redo', description: 'Redo' },
 
   { key: 'meta+shift+alt+1', action: 'nav.inbox', skipInputCheck: true, description: 'Go to inbox' },
 
@@ -92,6 +97,8 @@ export const SHORTCUTS: ShortcutDef[] = [
   { key: 'j', action: 'review.nextFile', when: 'review', description: 'Next file' },
   { key: 'k', action: 'review.prevFile', when: 'review', description: 'Previous file' },
   { key: 'c', action: 'review.comment', when: 'review', description: 'Comment on line' },
+
+  { key: 'c', action: 'create.open', description: 'Create task or plan' },
 ];
 
 interface ParsedKey {

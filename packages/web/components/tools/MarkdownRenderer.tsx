@@ -6,6 +6,8 @@ import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useImageGallery } from "../ImageGallery";
 import { CodeBlock } from "../CodeBlock";
 import { MermaidDiagram } from "../MermaidDiagram";
+import { remarkEntityIds } from "../../lib/remarkEntityIds";
+import { EntityAwareCode, EntityAwareLink } from "../EntityIdPill";
 
 function extractTextFromHast(node: any): string {
   if (!node) return '';
@@ -100,9 +102,11 @@ export function MarkdownRenderer({ content, filePath = '', className = '' }: Mar
   return (
     <div className={`prose prose-invert prose-sm max-w-none ${className}`}>
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={[remarkGfm, remarkEntityIds]}
         rehypePlugins={[rehypeHighlight]}
         components={{
+          code: EntityAwareCode,
+          a: EntityAwareLink,
           pre: ({ node, children, ...props }) => {
             const codeElement = node?.children?.[0];
             if (codeElement && codeElement.type === 'element' && codeElement.tagName === 'code') {
@@ -161,11 +165,6 @@ export function MarkdownRenderer({ content, filePath = '', className = '' }: Mar
             <blockquote className="border-l-2 border-sol-border pl-3 my-2 text-sol-text-muted italic">
               {children}
             </blockquote>
-          ),
-          a: ({ href, children }) => (
-            <a href={href} className="text-blue-400 hover:text-blue-300 underline" target="_blank" rel="noopener noreferrer">
-              {children}
-            </a>
           ),
           table: ({ children }) => (
             <div className="overflow-x-auto my-3">

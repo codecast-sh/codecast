@@ -5602,6 +5602,7 @@ const PATCHABLE_FIELDS = new Set([
   "draft_message",
   "project_path",
   "git_root",
+  "agent_type",
 ]);
 
 export const patchConversation = mutation({
@@ -5623,6 +5624,70 @@ export const patchConversation = mutation({
     if (Object.keys(patch).length > 0) {
       await ctx.db.patch(args.id, patch);
     }
+  },
+});
+
+export const reconfigureSession = mutation({
+  args: {
+    conversation_id: v.id("conversations"),
+    agent_type: v.optional(v.union(
+      v.literal("claude_code"),
+      v.literal("codex"),
+      v.literal("cursor"),
+      v.literal("gemini")
+    )),
+    project_path: v.optional(v.string()),
+    git_root: v.optional(v.string()),
+    isolated: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+
+    const conv = await ctx.db.get(args.conversation_id);
+    if (!conv || conv.user_id !== userId) throw new Error("Not found");
+    if ((conv.message_count ?? 0) > 0) throw new Error("Cannot reconfigure session with messages");
+
+    const patch: Record<string, any> = { updated_at: Date.now() };
+    if (args.agent_type) patch.agent_type = args.agent_type;
+    if (args.project_path !== undefined) {
+      patch.project_path = args.project_path;
+      patch.git_root = args.git_root ?? args.project_path;
+      const mappings = await ctx.db
+        .query("directory_team_mappings")
+        .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+        .collect();
+      const { teamId, isPrivate, autoShared } = resolveTeamForPath(mappings, args.project_path, undefined);
+      if (teamId) patch.team_id = teamId;
+      patch.is_private = isPrivate;
+      patch.auto_shared = autoShared || undefined;
+    }
+
+    await ctx.db.patch(args.conversation_id, patch);
+
+    const now = Date.now();
+    await ctx.db.insert("daemon_commands", {
+      user_id: userId,
+      command: "kill_session",
+      args: JSON.stringify({ conversation_id: args.conversation_id }),
+      created_at: now,
+    });
+
+    const updated = { ...conv, ...patch };
+    const agentType = updated.agent_type || "claude_code";
+    const daemonAgentType = agentType === "claude_code" ? "claude" : agentType === "codex" ? "codex" : agentType === "cursor" ? "cursor" : "gemini";
+    await ctx.db.insert("daemon_commands", {
+      user_id: userId,
+      command: "start_session",
+      args: JSON.stringify({
+        agent_type: daemonAgentType,
+        project_path: updated.project_path || updated.git_root,
+        conversation_id: args.conversation_id,
+        session_id: updated.session_id,
+        ...(args.isolated ? { isolated: true } : {}),
+      }),
+      created_at: now + 1,
+    });
   },
 });
 

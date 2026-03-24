@@ -6,6 +6,7 @@ import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, TaskItem, DocItem } from "../store/inboxStore";
 import { CommandPaletteShell, PaletteMode } from "./CommandPaletteShell";
 import { toast } from "sonner";
+import { undoableArchiveDoc } from "../store/undoActions";
 import { getLabelColor, DEFAULT_LABELS } from "../lib/labelColors";
 import {
   Circle,
@@ -328,8 +329,7 @@ export function ItemCommandPalette({
           navigator.clipboard.writeText(doc._id);
           toast.success("Copied ID");
         } else if (itemKey === "archive") {
-          archiveDoc(doc._id);
-          toast.success("Archived");
+          undoableArchiveDoc(doc._id);
           router.push("/docs");
         }
         onClose();

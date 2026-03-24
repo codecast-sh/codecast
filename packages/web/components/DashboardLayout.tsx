@@ -34,6 +34,8 @@ import { desktopHeaderClass, setupDesktopDrag, isElectron } from "../lib/desktop
 import { CollapsedSessionRail, SessionListPanel, ConversationColumn } from "./GlobalSessionPanel";
 import { useSyncInboxSessions } from "../hooks/useSyncInboxSessions";
 import { isInboxRoute as isInboxRoutePath, isInboxSessionView } from "../lib/inboxRouting";
+import { useSessionSwitcher } from "../hooks/useSessionSwitcher";
+import { SessionSwitcher } from "./SessionSwitcher";
 
 interface DashboardLayoutProps {
   children: ReactNode;
@@ -190,6 +192,7 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
 
   useGlobalShortcutActions();
   useShortcutContext('desktop', isDesktopApp);
+  const switcherState = useSessionSwitcher();
 
   useShortcutAction('session.create', useCallback(() => {
     const store = useInboxStore.getState();
@@ -473,6 +476,12 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
       <ErrorBoundary name="CreatePalette" level="inline">
         <CreatePalette />
       </ErrorBoundary>
+      {switcherState.open && (
+        <SessionSwitcher
+          sessions={switcherState.mruSessions}
+          selectedIndex={switcherState.selectedIndex}
+        />
+      )}
     </div>
   );
 }

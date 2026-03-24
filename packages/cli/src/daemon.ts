@@ -381,8 +381,8 @@ const workingPhaseStart = new Map<string, number>();
 const MIN_WORKING_DURATION_FOR_NOTIF_MS = 10_000;
 const dismissedIdleSince = new Map<string, number>();
 const DISMISSED_IDLE_KILL_MS = 60 * 60 * 1000;
-const zombieStrikes = new Map<string, number>();
-const ZOMBIE_STRIKE_THRESHOLD = 3;
+const zombieFirstDead = new Map<string, number>();
+const ZOMBIE_GRACE_PERIOD_MS = 60 * 60 * 1000; // 1 hour
 
 type AgentStatus = "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "stopped";
 type PermissionMode = "default" | "plan" | "acceptEdits" | "bypassPermissions" | "dontAsk";
@@ -4492,9 +4492,13 @@ async function injectViaTmuxInner(target: string, content: string): Promise<void
   }
   const sanitized = content.replace(/\r?\n/g, " ");
 
-  // Check if there's a blocking dialog and dismiss it first
+  // Check if agent has exited (defense-in-depth: catch race between liveness check and injection)
   try {
-    const { stdout: preCheck } = await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", "-5"]);
+    const { stdout: preCheck } = await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", "-10"]);
+    if (/Resume this session with:|claude --resume|codex resume/i.test(preCheck)) {
+      throw new Error("SESSION_EXITED: agent has exited, refusing to inject into bare shell");
+    }
+
     const hasBlockingWarning = /Press enter to continue|Update available|⚠|recorded with model|weekly limit/i.test(preCheck);
     const promptVisible = /[❯›]/.test(preCheck.split("\n").slice(-5).join("\n"));
     if (hasBlockingWarning && !promptVisible) {
@@ -4505,7 +4509,9 @@ async function injectViaTmuxInner(target: string, content: string): Promise<void
       await tmuxExec(["send-keys", "-t", target, "Escape"]);
       await new Promise(resolve => setTimeout(resolve, 500));
     }
-  } catch {}
+  } catch (err) {
+    if (err instanceof Error && err.message.startsWith("SESSION_EXITED")) throw err;
+  }
 
   const contentLines = content.split(/\r?\n/).length;
   const captureLines = Math.max(30, contentLines + Math.ceil(sanitized.length / 60) + 10);
@@ -4566,6 +4572,11 @@ async function injectViaTmuxInner(target: string, content: string): Promise<void
       const lastLines = postCheck.split("\n").slice(-15).join("\n");
       const hasPrompt = /[❯›]/.test(lastLines);
       const hasActivity = /⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏|●|thinking|Bash|Read|Edit|Write|Glob|Grep/.test(lastLines);
+
+      if (/-(?:ba)?sh:.*(?:No such file|command not found)/.test(lastLines) ||
+          /Resume this session with:/i.test(postCheck)) {
+        throw new Error("SESSION_EXITED: message was pasted into a bare shell");
+      }
 
       if (hasActivity) {
         break;
@@ -6707,29 +6718,45 @@ async function isTmuxAgentAlive(tmuxSession: string): Promise<boolean> {
     );
     const panePid = stdout.trim();
     if (!panePid) return false;
+
+    if (await hasAgentProcessInTree(parseInt(panePid, 10))) return true;
+
     try {
-      await execAsync(`pgrep -P ${panePid}`, { timeout: 3000, killSignal: "SIGKILL" });
-      return true;
-    } catch {
-      try {
-        const { stdout: paneContent } = await tmuxExec(
-          ["capture-pane", "-p", "-J", "-t", tmuxSession, "-S", "-5"], { timeout: 3000, killSignal: "SIGKILL" }
-        );
-        const trimmed = paneContent.trim();
-        if (!trimmed) return false;
-        // Only declare dead on POSITIVE evidence of death
-        if (/[$%#]\s*$/.test(trimmed)) return false;
-        if (/Segmentation fault|panic:|SIGABRT|core dumped|exited with/.test(trimmed)) return false;
-        // Pane has content but no death indicators — assume alive (conservative)
-        return true;
-      } catch {}
-      // tmux capture failed — don't assume dead
-      return true;
-    }
+      const { stdout: paneContent } = await tmuxExec(
+        ["capture-pane", "-p", "-J", "-t", tmuxSession, "-S", "-10"], { timeout: 3000, killSignal: "SIGKILL" }
+      );
+      const trimmed = paneContent.trim();
+      if (!trimmed) return false;
+      if (/Resume this session with:|claude --resume|codex resume/i.test(trimmed)) return false;
+      if (/Segmentation fault|panic:|SIGABRT|core dumped|exited with/.test(trimmed)) return false;
+      if (/[$%#]\s*$/.test(trimmed)) return false;
+      if (/-(?:ba)?sh:.*(?:No such file|command not found)/.test(trimmed)) return false;
+      return false;
+    } catch {}
+    return false;
   } catch {
-    // tmux session doesn't exist at all
     return false;
   }
+}
+
+async function hasAgentProcessInTree(rootPid: number): Promise<boolean> {
+  try {
+    const { stdout } = await execAsync(`pgrep -P ${rootPid}`, { timeout: 3000, killSignal: "SIGKILL" });
+    const childPids = stdout.trim().split(/\s+/).filter(Boolean).map(Number);
+    for (const cpid of childPids) {
+      if (isAgentProcess(cpid)) return true;
+    }
+    for (const cpid of childPids) {
+      try {
+        const { stdout: gcOut } = await execAsync(`pgrep -P ${cpid}`, { timeout: 2000, killSignal: "SIGKILL" });
+        const gcPids = gcOut.trim().split(/\s+/).filter(Boolean).map(Number);
+        for (const gcpid of gcPids) {
+          if (isAgentProcess(gcpid)) return true;
+        }
+      } catch {}
+    }
+  } catch {}
+  return false;
 }
 
 function isAgentProcess(pid: number): boolean {
@@ -7478,21 +7505,25 @@ function startWatchdog(
         if (activeStartedTmux.has(tmuxName)) continue;
         if (activeResumeTmux.has(tmuxName)) continue;
         if (!(await isTmuxAgentAlive(tmuxName))) {
-          const strikes = (zombieStrikes.get(tmuxName) || 0) + 1;
-          zombieStrikes.set(tmuxName, strikes);
-          if (strikes >= ZOMBIE_STRIKE_THRESHOLD) {
-            log(`Reaping zombie tmux session ${tmuxName} (${strikes} consecutive dead checks)`);
-            try { await tmuxExec(["kill-session", "-t", tmuxName]); } catch {}
-            zombieStrikes.delete(tmuxName);
+          const now = Date.now();
+          if (!zombieFirstDead.has(tmuxName)) {
+            zombieFirstDead.set(tmuxName, now);
+            log(`Zombie candidate ${tmuxName}: grace period started (1h)`);
           } else {
-            log(`Zombie candidate ${tmuxName}: strike ${strikes}/${ZOMBIE_STRIKE_THRESHOLD}`);
+            const deadSince = zombieFirstDead.get(tmuxName)!;
+            const deadMs = now - deadSince;
+            if (deadMs >= ZOMBIE_GRACE_PERIOD_MS) {
+              log(`Reaping zombie tmux session ${tmuxName} (dead for ${Math.round(deadMs / 60000)}min)`);
+              try { await tmuxExec(["kill-session", "-t", tmuxName]); } catch {}
+              zombieFirstDead.delete(tmuxName);
+            }
           }
         } else {
-          zombieStrikes.delete(tmuxName);
+          zombieFirstDead.delete(tmuxName);
         }
       }
-      for (const name of zombieStrikes.keys()) {
-        if (!seenThisCycle.has(name)) zombieStrikes.delete(name);
+      for (const name of zombieFirstDead.keys()) {
+        if (!seenThisCycle.has(name)) zombieFirstDead.delete(name);
       }
     } catch {}
 

@@ -1,5 +1,6 @@
 import * as Sentry from "@sentry/react";
 import posthog from "posthog-js";
+import { toast } from "sonner";
 
 const SENTRY_DSN = import.meta.env.VITE_SENTRY_DSN;
 const POSTHOG_KEY = import.meta.env.VITE_POSTHOG_KEY;
@@ -79,6 +80,51 @@ export function captureError(error: Error, context?: Record<string, unknown>) {
   if (SENTRY_DSN) {
     Sentry.captureException(error, { extra: context });
   }
+}
+
+const _seenGlobalErrors = new Set<string>();
+
+export function setupErrorToasts() {
+  window.addEventListener("error", (e) => {
+    if (!e.error) return;
+    const key = e.error?.message || e.message;
+    if (_seenGlobalErrors.has(key)) return;
+    _seenGlobalErrors.add(key);
+    setTimeout(() => _seenGlobalErrors.delete(key), 30_000);
+
+    const stack = e.error?.stack || "";
+    captureError(e.error, { source: "window.onerror" });
+    toast.error(`Uncaught: ${key}`, {
+      duration: 15_000,
+      action: {
+        label: "Copy stack",
+        onClick: () => {
+          navigator.clipboard.writeText(`${key}\n\n${stack}`);
+          toast.success("Stack trace copied");
+        },
+      },
+    });
+  });
+
+  window.addEventListener("unhandledrejection", (e) => {
+    const err = e.reason instanceof Error ? e.reason : new Error(String(e.reason));
+    const key = err.message;
+    if (_seenGlobalErrors.has(key)) return;
+    _seenGlobalErrors.add(key);
+    setTimeout(() => _seenGlobalErrors.delete(key), 30_000);
+
+    captureError(err, { source: "unhandledrejection" });
+    toast.error(`Unhandled rejection: ${key}`, {
+      duration: 15_000,
+      action: {
+        label: "Copy stack",
+        onClick: () => {
+          navigator.clipboard.writeText(`${key}\n\n${err.stack || ""}`);
+          toast.success("Stack trace copied");
+        },
+      },
+    });
+  });
 }
 
 export { Sentry, posthog };

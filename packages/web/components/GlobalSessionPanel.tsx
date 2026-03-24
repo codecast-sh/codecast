@@ -14,6 +14,7 @@ import { PlanContextPanel } from "./PlanContextPanel";
 import { WorkflowContextPanel } from "./WorkflowContextPanel";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
+import { undoableStashSession } from "../store/undoActions";
 import { X, ChevronsLeft, ChevronsRight } from "lucide-react";
 import { TaskStatusBadge } from "./TaskStatusBadge";
 
@@ -1132,10 +1133,9 @@ export const ConversationColumn = memo(function ConversationColumn() {
     selectPanelSession(null);
   }, [selectPanelSession]);
 
-  const stashSession = useInboxStore(s => s.stashSession);
   const handleSendAndDismiss = useCallback(() => {
-    if (sidePanelSessionId) stashSession(sidePanelSessionId);
-  }, [sidePanelSessionId, stashSession]);
+    if (sidePanelSessionId) undoableStashSession(sidePanelSessionId);
+  }, [sidePanelSessionId]);
 
   if (!session || !sidePanelSessionId) return null;
 

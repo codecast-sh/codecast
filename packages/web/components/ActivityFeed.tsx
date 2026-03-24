@@ -50,6 +50,10 @@ function DigestLink({ href, children, ...props }: any) {
   if (href?.startsWith("entity://")) {
     return <EntityIdPill shortId={href.slice(9)} />;
   }
+  const text = typeof children === "string" ? children : Array.isArray(children) ? children.map(String).join("") : String(children ?? "");
+  if (isEntityId(text)) {
+    return <EntityIdPill shortId={text} />;
+  }
   const convMatch = href?.match(/^\/conversation\/(.+)/);
   if (convMatch) {
     return <SessionMentionById conversationId={convMatch[1]} />;

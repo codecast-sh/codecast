@@ -15,8 +15,6 @@ import { ConversationDiffLayout } from "../../components/ConversationDiffLayout"
 import { ConversationData } from "../../components/ConversationView";
 import { useConversationMessages } from "../../hooks/useConversationMessages";
 import { useInboxStore, InboxSession, getSessionRenderKey, isConvexId, sortSessions, isInterruptControlMessage } from "../../store/inboxStore";
-import { useSessionSwitcher } from "../../hooks/useSessionSwitcher";
-import { SessionSwitcher } from "../../components/SessionSwitcher";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "../../components/ui/tooltip";
 import { cleanTitle } from "../../lib/conversationProcessor";
 import { SharePopover } from "../../components/SharePopover";
@@ -25,6 +23,7 @@ import { TaskStatusBadge } from "../../components/TaskStatusBadge";
 import { PlanContextPanel } from "../../components/PlanContextPanel";
 import { WorkflowContextPanel } from "../../components/WorkflowContextPanel";
 import { toast } from "sonner";
+import { undoableStashSession } from "../../store/undoActions";
 import { cleanUserMessage, formatIdleDuration, getProjectName, DraftPlansSection, SessionListPanel } from "../../components/GlobalSessionPanel";
 
 const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, onSendAndAdvance, onSendAndDismiss, lastUserMessage, sessionError, onBack, targetMessageId }: { sessionId: string; isIdle: boolean; onSendAndAdvance: () => void; onSendAndDismiss?: () => void; lastUserMessage?: string | null; sessionError?: string; onBack?: () => void; targetMessageId?: string }) {
@@ -712,9 +711,6 @@ export function QueuePageClient({ initialSessionId }: { initialSessionId?: strin
   const dismissedSessions = useInboxStore((s) => s.dismissedSessions);
   const currentSessionId = useInboxStore((s) => s.currentSessionId);
   const advanceToNext = useInboxStore((s) => s.advanceToNext);
-  const stashSession = useInboxStore((s) => s.stashSession);
-  const deferSession = useInboxStore((s) => s.deferSession);
-  const pinSession = useInboxStore((s) => s.pinSession);
   const setCurrentSession = useInboxStore((s) => s.setCurrentSession);
   const selectedPlanId = useInboxStore((s) => s.selectedPlanId);
   const setSelectedPlan = useInboxStore((s) => s.setSelectedPlan);
@@ -724,8 +720,6 @@ export function QueuePageClient({ initialSessionId }: { initialSessionId?: strin
   const showMySessions = useInboxStore((s) => s.showMySessions);
   const setShowMySessions = useInboxStore((s) => s.setShowMySessions);
   const sortedSessions = useMemo(() => sortSessions(sessions), [sessions]);
-
-  const switcherState = useSessionSwitcher();
 
   const shortcutsHidden = useInboxStore(s => s.clientState.ui?.inbox_shortcuts_hidden ?? false);
   const showShortcuts = !shortcutsHidden;
@@ -828,8 +822,8 @@ export function QueuePageClient({ initialSessionId }: { initialSessionId?: strin
   }, [pendingNavigateId, pendingScrollToMessageId, sessions, setCurrentSession]);
 
   const handleDismiss = useCallback((id: string) => {
-    stashSession(id);
-  }, [stashSession]);
+    undoableStashSession(id);
+  }, []);
 
   const prevSessionRef = useRef(currentSessionId);
   prevSessionRef.current = currentSessionId;
@@ -840,8 +834,8 @@ export function QueuePageClient({ initialSessionId }: { initialSessionId?: strin
   }, [advanceToNext]);
 
   const handleSendAndDismiss = useCallback(() => {
-    if (currentSessionId) stashSession(currentSessionId);
-  }, [currentSessionId, stashSession]);
+    if (currentSessionId) undoableStashSession(currentSessionId);
+  }, [currentSessionId]);
 
   const handleSessionSelect = useCallback((id: string) => {
     if (sessions[id]) {
@@ -1022,12 +1016,6 @@ export function QueuePageClient({ initialSessionId }: { initialSessionId?: strin
   return (
     <DashboardLayout>
       <InboxShortcuts />
-      {switcherState.open && (
-        <SessionSwitcher
-          sessions={switcherState.mruSessions}
-          selectedIndex={switcherState.selectedIndex}
-        />
-      )}
       <div className="flex flex-col h-full">
       {isMobileInbox ? (
         <div className="flex-1 min-h-0 relative">

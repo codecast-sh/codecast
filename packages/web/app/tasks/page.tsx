@@ -8,7 +8,6 @@ import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, TaskItem } from "../../store/inboxStore";
 import { useSyncTasks, useSyncTaskDetail } from "../../hooks/useSyncTasks";
 
-import { CreateTaskModal } from "../../components/CreateTaskModal";
 import { GenericListView, ListGroup, ItemRowState } from "../../components/GenericListView";
 import { LivenessDot, ActiveSessionBadge, taskLivenessState } from "../../components/LivenessDot";
 
@@ -43,6 +42,7 @@ import {
   User,
   Bot,
   Check,
+  MessageSquare,
 } from "lucide-react";
 
 type TaskStatus = "backlog" | "open" | "in_progress" | "in_review" | "done" | "dropped";
@@ -142,9 +142,13 @@ export function TaskRow({ task, state, triageMode, onTriage }: { task: TaskItem;
           <span className="flex-shrink-0 cq-hide-compact" title={`${task.source} created`}><Bot className="w-3.5 h-3.5 text-sol-text-dim/60" /></span>
         )
       )}
-      {(task as any).activeSession && (
+      {(task as any).activeSession ? (
         <ActiveSessionBadge session={(task as any).activeSession} className="cq-hide-compact" />
-      )}
+      ) : task.session_count && task.session_count > 0 ? (
+        <span className="text-[10px] text-sol-text-dim flex-shrink-0 font-mono cq-hide-compact" title={`${task.session_count} session${task.session_count > 1 ? "s" : ""}`}>
+          <MessageSquare className="w-3 h-3 inline mr-0.5" />{task.session_count}
+        </span>
+      ) : null}
       {(task as any).plan && (
         <Link
           href={`/plans/${(task as any).plan._id}`}
@@ -687,7 +691,8 @@ export function TaskListContent() {
   const { status: urlStatus, view: viewMode, sort: sortBy, priority: priorityFilter, label: labelFilter, assignee: assigneeFilter, sourceFilter, setParam } = useTaskUrlState();
   const setTaskFilter = useInboxStore((s) => s.setTaskFilter);
   const tasks = useInboxStore((s) => s.tasks);
-  const [showCreate, setShowCreate] = useState(false);
+  const showCreate = useInboxStore((s) => s.createModal === 'task');
+  const openCreateModal = useInboxStore((s) => s.openCreateModal);
   const [hiddenStatuses, setHiddenStatuses] = useState<Set<string>>(new Set(["dropped"]));
 
   const statusFilter = urlStatus;
@@ -917,7 +922,7 @@ export function TaskListContent() {
           getSearchText={(t) => `${t.short_id} ${t.title}`}
           emptyIcon={<Circle className="w-8 h-8 opacity-30" />}
           emptyMessage="No tasks found"
-          onCreate={() => setShowCreate(true)}
+          onCreate={() => openCreateModal('task')}
           hasMore={hasMore}
           onLoadMore={loadMore}
           paletteShortcuts={[
@@ -985,7 +990,7 @@ export function TaskListContent() {
               })}
               onCardClick={(t) => router.push(`/tasks/${t._id}`)}
               onContextMenu={(e, task) => { e.preventDefault(); openPaletteForItems([task]); }}
-              onAddTask={() => setShowCreate(true)}
+              onAddTask={() => openCreateModal('task')}
               onStatusChange={async (task, newStatus) => {
                 updateTask(task.short_id, { status: newStatus });
                 try {
@@ -998,7 +1003,6 @@ export function TaskListContent() {
             />
           ) : undefined}
         >
-          {showCreate && <CreateTaskModal onClose={() => setShowCreate(false)} teamMembers={teamMembers} currentUser={currentUser} />}
         </GenericListView>
     );
 }

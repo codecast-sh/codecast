@@ -64,9 +64,14 @@ export default function SyncPage() {
   const mappingsByPath = new Map(directoryMappings?.map(m => [m.path_prefix, m]) || []);
 
   const handleToggleSyncAll = async () => {
-    await updateSyncSettings({
-      sync_mode: syncAll ? "selected" : "all",
-    });
+    if (syncAll) {
+      await updateSyncSettings({
+        sync_mode: "selected",
+        sync_projects: allProjects.map(p => p.path),
+      });
+    } else {
+      await updateSyncSettings({ sync_mode: "all" });
+    }
   };
 
   const isSynced = (path: string): boolean => {

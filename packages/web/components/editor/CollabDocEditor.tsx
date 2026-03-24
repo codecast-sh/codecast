@@ -46,6 +46,7 @@ interface CollabDocEditorProps {
   className?: string;
   placeholder?: string;
   getMarkdownRef?: React.MutableRefObject<(() => string) | null>;
+  cliEditedAt?: number;
 }
 
 const MENTION_ROUTE_MAP: Record<string, string> = {
@@ -311,6 +312,16 @@ function CursorOverlay({ presences }: { presences: PresenceEntry[] }) {
   );
 }
 
+function ExternalEditSync({ markdownContent, extensions }: { markdownContent: string; extensions: any[] }) {
+  const { editor } = useCurrentEditor();
+  useMountEffect(() => {
+    if (!editor || editor.isDestroyed) return;
+    const json = markdownToJson(markdownContent, extensions);
+    editor.commands.setContent(json);
+  });
+  return null;
+}
+
 function EditorInner({
   docId,
   editable,
@@ -382,6 +393,7 @@ export function CollabDocEditor({
   className = "",
   placeholder = "Start writing, use / for commands, @ to mention...",
   getMarkdownRef,
+  cliEditedAt,
 }: CollabDocEditorProps) {
   const syncApi = api.docSync as unknown as SyncApi;
   const sync = useTiptapSync(syncApi, docId);
@@ -436,6 +448,13 @@ export function CollabDocEditor({
           presences={presences}
           getMarkdownRef={getMarkdownRef}
         />
+        {cliEditedAt && (
+          <ExternalEditSync
+            key={cliEditedAt}
+            markdownContent={markdownContent}
+            extensions={extensionsRef.current!}
+          />
+        )}
       </EditorProvider>
     </div>
   );

@@ -1,5 +1,6 @@
 import { Component, ReactNode } from "react";
 import { RefreshCw } from "lucide-react";
+import { toast } from "sonner";
 import { captureError } from "@/lib/analytics";
 
 interface ErrorBoundaryProps {
@@ -27,6 +28,8 @@ function isHmrRelatedError(msg: string): boolean {
   return HMR_ERROR_PATTERNS.some((p) => msg.includes(p));
 }
 
+const _recentErrors = new Set<string>();
+
 export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
   state: ErrorBoundaryState = { error: null, showDetails: false };
 
@@ -35,8 +38,27 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
   }
 
   componentDidCatch(error: Error, info: React.ErrorInfo) {
-    console.error(`[ErrorBoundary${this.props.name ? `:${this.props.name}` : ""}]`, error, info.componentStack);
+    const label = this.props.name || "Component";
+    console.error(`[ErrorBoundary:${label}]`, error, info.componentStack);
     captureError(error, { component: this.props.name, componentStack: info.componentStack ?? undefined });
+
+    const dedupKey = `${label}:${error.message}`;
+    if (!_recentErrors.has(dedupKey)) {
+      _recentErrors.add(dedupKey);
+      setTimeout(() => _recentErrors.delete(dedupKey), 30_000);
+
+      const fullTrace = `${error.message}\n\n${error.stack || ""}\n\nComponent: ${label}${info.componentStack || ""}`;
+      toast.error(`${label}: ${error.message}`, {
+        duration: 15_000,
+        action: {
+          label: "Copy stack",
+          onClick: () => {
+            navigator.clipboard.writeText(fullTrace);
+            toast.success("Stack trace copied to clipboard");
+          },
+        },
+      });
+    }
 
     if (error.message && isHmrRelatedError(error.message)) {
       const key = "eb_reload_" + window.location.pathname;

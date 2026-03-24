@@ -1,6 +1,8 @@
 import { useRef, useCallback, useState } from "react";
 import { useInboxStore, InboxSession } from "../store/inboxStore";
 import { useEventListener } from "./useEventListener";
+import { usePathname } from "next/navigation";
+import { isInboxSessionView } from "../lib/inboxRouting";
 
 export type SwitcherState = {
   open: boolean;
@@ -12,7 +14,11 @@ const CLOSED: SwitcherState = { open: false, selectedIndex: 0, mruSessions: [] }
 
 export function useSessionSwitcher() {
   const setCurrentSession = useInboxStore((s) => s.setCurrentSession);
+  const selectPanelSession = useInboxStore((s) => s.selectPanelSession);
   const touchMru = useInboxStore((s) => s.touchMru);
+  const pathname = usePathname();
+  const inboxSource = useInboxStore((s) => s.currentConversation?.source);
+  const isOnInboxPage = isInboxSessionView(pathname, inboxSource);
 
   const [renderState, setRenderState] = useState<SwitcherState>(CLOSED);
 
@@ -43,7 +49,11 @@ export function useSessionSwitcher() {
     const target = sessions[idx];
     if (target) {
       const { sessions: all } = useInboxStore.getState();
-      if (all[target._id]) { setCurrentSession(target._id); touchMru(target._id); }
+      if (all[target._id]) {
+        if (isOnInboxPage) setCurrentSession(target._id);
+        else selectPanelSession(target._id);
+        touchMru(target._id);
+      }
     }
     overlayOpen.current = false;
     selectedIdx.current = 0;
@@ -52,7 +62,7 @@ export function useSessionSwitcher() {
     pending.current = false;
     ctrlHeld.current = false;
     setRenderState(CLOSED);
-  }, [setCurrentSession, touchMru]);
+  }, [isOnInboxPage, setCurrentSession, selectPanelSession, touchMru]);
 
   const updateRender = useCallback(() => {
     setRenderState({
