@@ -5408,23 +5408,12 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
   const [acTrigger, setAcTrigger] = useState<AutocompleteTrigger>(null);
   const [acIndex, setAcIndex] = useState(0);
   const acRef = useRef<HTMLDivElement>(null);
-  const prevAcQueryRef = useRef("");
-  const stableMentionRef = useRef<MentionItem[]>([]);
 
   const acQuery = useMemo(() => {
     if (!acTrigger) return "";
     const rawQuery = message.slice(acTrigger.startPos + 1);
     return (acTrigger.type === "@" ? rawQuery.match(/^[\w./\\-]*/)?.[0] ?? "" : rawQuery).toLowerCase();
   }, [acTrigger, message]);
-
-  if (acQuery !== prevAcQueryRef.current) {
-    prevAcQueryRef.current = acQuery;
-    if (mentionItems?.length) stableMentionRef.current = mentionItems;
-    setAcIndex(0);
-  } else if (mentionItems?.length && !stableMentionRef.current.length) {
-    stableMentionRef.current = mentionItems;
-  }
-  if (!acTrigger) stableMentionRef.current = mentionItems || [];
 
   const acItems: AcItem[] = useMemo(() => {
     if (!acTrigger) return [];
@@ -5436,17 +5425,16 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
     }
     if (acTrigger.type === "@") {
       const items: AcItem[] = [];
-      const source = stableMentionRef.current;
 
-      if (source.length) {
-        const entityMatches = source
+      if (mentionItems?.length) {
+        const entityMatches = mentionItems
           .filter(m => {
             if (!acQuery) return true;
             return m.label.toLowerCase().includes(acQuery) ||
               (m.shortId && m.shortId.toLowerCase().includes(acQuery)) ||
               (m.sublabel && m.sublabel.toLowerCase().includes(acQuery));
           })
-          .slice(0, 8)
+          .slice(0, 15)
           .map(m => ({
             label: m.label,
             description: m.sublabel,
@@ -5463,14 +5451,14 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
           const name = p.split("/").pop() || p;
           return name.toLowerCase().includes(acQuery) || p.toLowerCase().includes(acQuery);
         })
-        .slice(0, 4)
+        .slice(0, 8)
         .map(p => ({ label: p, description: undefined, type: "file" as string }));
       items.push(...fileMatches);
 
       return items;
     }
     return [];
-  }, [acTrigger, acQuery, skills, filePaths]);
+  }, [acTrigger, acQuery, skills, filePaths, mentionItems]);
 
   const clampedAcIndex = acItems.length > 0 ? Math.min(acIndex, acItems.length - 1) : 0;
 
@@ -6855,15 +6843,24 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const [commentMessageId, setCommentMessageId] = useState<Id<"messages"> | null>(null);
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const [allMatchingMessageIds, setAllMatchingMessageIds] = useState<string[]>([]);
+  const [matchInstances, setMatchInstances] = useState<{ messageId: string; localIndex: number }[]>([]);
   const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
   const [isLocalSearchOpen, setIsLocalSearchOpen] = useState(false);
   const [localSearchQuery, setLocalSearchQuery] = useState("");
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("");
+  const [navTrigger, setNavTrigger] = useState(0);
   const localSearchInputRef = useRef<HTMLInputElement>(null);
-  const highlightQuery = isLocalSearchOpen ? (localSearchQuery || undefined) : propHighlightQuery;
+  useWatchEffect(() => {
+    if (!localSearchQuery) { setDebouncedSearchQuery(""); return; }
+    const timer = setTimeout(() => setDebouncedSearchQuery(localSearchQuery), 300);
+    return () => clearTimeout(timer);
+  }, [localSearchQuery]);
+  const highlightQuery = isLocalSearchOpen ? (debouncedSearchQuery || undefined) : propHighlightQuery;
   const onClearHighlight = useCallback(() => {
     if (isLocalSearchOpen) {
       setIsLocalSearchOpen(false);
       setLocalSearchQuery("");
+      setDebouncedSearchQuery("");
     } else {
       propClearHighlight?.();
     }
@@ -7415,15 +7412,34 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   }, [conversation?.messages]);
 
   const projectPath = conversation?.project_path || conversation?.git_root;
+  const mentionCache = useQuery(api.docs.mentionSearch, { query: "", limit: 200, ...(projectPath ? { projectPath } : {}) });
+  const mentionCacheRef = useRef<MentionItem[]>([]);
+  if (mentionCache) mentionCacheRef.current = mentionCache;
   const [mentionQuery, setMentionQuery] = useState("");
   const mentionDebounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
-  const debouncedSetMentionQuery = useCallback((q: string) => {
+  const handleMentionQuery = useCallback((q: string) => {
     if (mentionDebounceRef.current) clearTimeout(mentionDebounceRef.current);
-    mentionDebounceRef.current = setTimeout(() => setMentionQuery(q), 150);
+    if (!q) { setMentionQuery(""); return; }
+    const cache = mentionCacheRef.current;
+    const lower = q.toLowerCase();
+    const localHits = cache.filter(m =>
+      m.label.toLowerCase().includes(lower) ||
+      (m.shortId && m.shortId.toLowerCase().includes(lower)) ||
+      (m.sublabel && m.sublabel.toLowerCase().includes(lower))
+    );
+    if (localHits.length >= 3) return;
+    mentionDebounceRef.current = setTimeout(() => setMentionQuery(q), 250);
   }, []);
-  const mentionResults = useQuery(api.docs.mentionSearch, { query: mentionQuery, limit: 50, ...(projectPath ? { projectPath } : {}) });
+  const mentionSearchResults = useQuery(api.docs.mentionSearch, mentionQuery ? { query: mentionQuery, limit: 50, ...(projectPath ? { projectPath } : {}) } : "skip");
   const mentionItemsRef = useRef<MentionItem[]>([]);
-  if (mentionResults) mentionItemsRef.current = mentionResults;
+  const mentionItems = useMemo(() => {
+    const cache = mentionCacheRef.current;
+    if (!mentionSearchResults?.length) return cache;
+    const cacheIds = new Set(cache.map(m => m.id));
+    const extras = mentionSearchResults.filter((m: MentionItem) => !cacheIds.has(m.id));
+    return extras.length ? [...cache, ...extras] : cache;
+  }, [mentionCache, mentionSearchResults]);
+  mentionItemsRef.current = mentionItems;
 
   const isWaitingForResponse = useMemo(() => {
     if (!conversation || conversation.status !== "active" || timeline.length === 0 || hasMoreBelow) return false;
@@ -7543,11 +7559,12 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   // Track if we've already scrolled for this highlight query
   const hasScrolledToHighlight = useRef(false);
 
-  // Find all messages matching search query
+  // Find all match instances (individual occurrences, not just messages)
   useWatchEffect(() => {
     if (!highlightQuery || messages.length === 0) {
       setHighlightedMessageId(null);
       setAllMatchingMessageIds([]);
+      setMatchInstances([]);
       setCurrentMatchIndex(0);
       hasScrolledToHighlight.current = false;
       return;
@@ -7555,17 +7572,25 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     const terms = parseSearchTerms(highlightQuery);
     if (terms.length === 0) return;
 
+    const pattern = terms.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+    const regex = new RegExp(pattern, 'gi');
     const matchingIds: string[] = [];
+    const instances: { messageId: string; localIndex: number }[] = [];
     for (const msg of messages) {
-      const content = msg.content?.toLowerCase() || "";
-      if (terms.some(term => content.includes(term))) {
-        matchingIds.push(msg._id);
+      const content = msg.content || "";
+      regex.lastIndex = 0;
+      let localIndex = 0;
+      while (regex.exec(content) !== null) {
+        instances.push({ messageId: msg._id, localIndex });
+        localIndex++;
       }
+      if (localIndex > 0) matchingIds.push(msg._id);
     }
 
     setAllMatchingMessageIds(matchingIds);
-    if (matchingIds.length > 0) {
-      setHighlightedMessageId(matchingIds[0]);
+    setMatchInstances(instances);
+    if (instances.length > 0) {
+      setHighlightedMessageId(instances[0].messageId);
       setCurrentMatchIndex(0);
     } else {
       setHighlightedMessageId(null);
@@ -7573,20 +7598,49 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   }, [highlightQuery, messages]);
 
   const goToNextMatch = useCallback(() => {
-    if (allMatchingMessageIds.length === 0) return;
-    const nextIndex = (currentMatchIndex + 1) % allMatchingMessageIds.length;
+    if (matchInstances.length === 0) return;
+    const nextIndex = (currentMatchIndex + 1) % matchInstances.length;
     setCurrentMatchIndex(nextIndex);
-    setHighlightedMessageId(allMatchingMessageIds[nextIndex]);
+    setHighlightedMessageId(matchInstances[nextIndex].messageId);
     hasScrolledToHighlight.current = false;
-  }, [allMatchingMessageIds, currentMatchIndex]);
+    setNavTrigger(t => t + 1);
+  }, [matchInstances, currentMatchIndex]);
 
   const goToPrevMatch = useCallback(() => {
-    if (allMatchingMessageIds.length === 0) return;
-    const prevIndex = currentMatchIndex === 0 ? allMatchingMessageIds.length - 1 : currentMatchIndex - 1;
+    if (matchInstances.length === 0) return;
+    const prevIndex = currentMatchIndex === 0 ? matchInstances.length - 1 : currentMatchIndex - 1;
     setCurrentMatchIndex(prevIndex);
-    setHighlightedMessageId(allMatchingMessageIds[prevIndex]);
+    setHighlightedMessageId(matchInstances[prevIndex].messageId);
     hasScrolledToHighlight.current = false;
-  }, [allMatchingMessageIds, currentMatchIndex]);
+    setNavTrigger(t => t + 1);
+  }, [matchInstances, currentMatchIndex]);
+
+  // Activate the specific mark in the DOM after navigation
+  useWatchEffect(() => {
+    void navTrigger;
+    if (matchInstances.length === 0 || !containerRef.current) return;
+    const instance = matchInstances[currentMatchIndex];
+    if (!instance) return;
+    const activate = () => {
+      if (!containerRef.current) return;
+      containerRef.current.querySelectorAll('mark[data-search-active]').forEach(m => {
+        m.removeAttribute('data-search-active');
+        (m as HTMLElement).style.cssText = '';
+      });
+      const msgEl = containerRef.current.querySelector('.message-highlight');
+      if (!msgEl) return;
+      const marks = Array.from(msgEl.querySelectorAll('mark[data-search-highlight]'));
+      const target = marks[instance.localIndex];
+      if (target) {
+        target.setAttribute('data-search-active', 'true');
+        (target as HTMLElement).style.backgroundColor = 'rgb(245 158 11)';
+        (target as HTMLElement).style.borderRadius = '2px';
+        (target as HTMLElement).style.boxShadow = '0 0 0 1px rgb(245 158 11)';
+        target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      }
+    };
+    setTimeout(activate, 200);
+  }, [currentMatchIndex, matchInstances, navTrigger]);
 
   // Highlight all text occurrences of search query in the DOM
   useWatchEffect(() => {
@@ -9035,10 +9089,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                     ) : (
                       <span className="max-w-[100px] truncate">{highlightQuery}</span>
                     )}
-                    {allMatchingMessageIds.length > 0 && (
+                    {matchInstances.length > 0 && (
                       <>
                         <span className="text-[10px] opacity-70 ml-1">
-                          {currentMatchIndex + 1}/{allMatchingMessageIds.length}
+                          {currentMatchIndex + 1}/{matchInstances.length}
                         </span>
                         <button
                           onClick={goToPrevMatch}
@@ -9060,7 +9114,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                         </button>
                       </>
                     )}
-                    {allMatchingMessageIds.length === 0 && highlightQuery && (
+                    {matchInstances.length === 0 && highlightQuery && (
                       <span className="text-[10px] opacity-70 ml-1">0 matches</span>
                     )}
                     <button
@@ -9635,7 +9689,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   </div>
                 )
               )}
-              <MessageInput conversationId={firstActiveForkId || conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} onSendAndDismiss={onSendAndDismiss} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} isSessionStarting={isSessionStarting} isSessionReady={isSessionReady} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={isSessionDisconnected ? undefined : managedSession?.agent_status as any} deliveryStatus={managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={handleForkFromMessage} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onGateSend={workflowRun?.status === "paused" ? handleGateRespond : undefined} skills={sessionSkills} filePaths={sessionFilePaths} mentionItems={mentionItemsRef.current} onMentionQuery={debouncedSetMentionQuery} />
+              <MessageInput conversationId={firstActiveForkId || conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} onSendAndDismiss={onSendAndDismiss} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} isSessionStarting={isSessionStarting} isSessionReady={isSessionReady} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={isSessionDisconnected ? undefined : managedSession?.agent_status as any} deliveryStatus={managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={handleForkFromMessage} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onGateSend={workflowRun?.status === "paused" ? handleGateRespond : undefined} skills={sessionSkills} filePaths={sessionFilePaths} mentionItems={mentionItems} onMentionQuery={handleMentionQuery} />
             </>
           )}
           {navigatorOpen && navigatorUserMessages && navigatorUserMessages.length > 0 && (
