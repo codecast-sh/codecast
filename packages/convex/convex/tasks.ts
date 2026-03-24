@@ -312,6 +312,7 @@ export const list = query({
     limit: v.optional(v.number()),
     team: v.optional(v.boolean()),
     include_derived: v.optional(v.boolean()),
+    include_done: v.optional(v.boolean()),
     project_path: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -346,8 +347,7 @@ export const list = query({
       tasks = await db.query("tasks").collect();
     }
 
-    // Filter out done/dropped unless explicitly requested
-    if (!args.status) {
+    if (!args.status && !args.include_done) {
       tasks = tasks.filter((t: any) => t.status !== "done" && t.status !== "dropped");
     }
 

@@ -1045,7 +1045,7 @@ export const mentionSearch = query({
       idleSummary?: string;
     }> = [];
 
-    const perType = Math.max(5, Math.ceil(limit / types.length));
+    const perType = Math.max(10, Math.ceil(limit / types.length));
 
     if (types.includes("person") && teamId) {
       const memberships = await ctx.db
@@ -1077,13 +1077,13 @@ export const mentionSearch = query({
         tasks = await ctx.db
           .query("tasks")
           .withSearchIndex("search_tasks", (s: any) => s.search("title", args.query).eq("user_id", userId))
-          .take(perType * 3);
+          .take(perType * 5);
       } else {
         tasks = await ctx.db
           .query("tasks")
           .withIndex("by_user_id", (t: any) => t.eq("user_id", userId))
           .order("desc")
-          .take(perType * 3);
+          .take(perType * 5);
       }
       for (const task of scopeByProject(tasks, args.projectPath).slice(0, perType)) {
         results.push({
@@ -1104,13 +1104,13 @@ export const mentionSearch = query({
         docs = await ctx.db
           .query("docs")
           .withSearchIndex("search_docs", (s) => s.search("title", args.query).eq("user_id", userId))
-          .take(perType * 3);
+          .take(perType * 5);
       } else {
         docs = await ctx.db
           .query("docs")
           .withIndex("by_user_id", (d) => d.eq("user_id", userId))
           .order("desc")
-          .take(perType * 3);
+          .take(perType * 5);
       }
       for (const doc of scopeByProject(docs, args.projectPath).filter(d => !d.archived_at).slice(0, perType)) {
         results.push({
@@ -1128,7 +1128,7 @@ export const mentionSearch = query({
         .query("plans")
         .withIndex("by_user_id", (p: any) => p.eq("user_id", userId))
         .order("desc")
-        .take(perType * 3);
+        .take(perType * 5);
       const filtered = q
         ? plans.filter((p: any) => p.title?.toLowerCase().includes(q))
         : plans;
@@ -1150,7 +1150,7 @@ export const mentionSearch = query({
         .query("conversations")
         .withIndex("by_user_updated", (c: any) => c.eq("user_id", userId))
         .order("desc")
-        .take(perType * 3);
+        .take(perType * 5);
       const filtered = q
         ? sessions.filter((s: any) =>
             s.title?.toLowerCase().includes(q) ||

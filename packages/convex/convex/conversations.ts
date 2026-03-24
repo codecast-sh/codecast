@@ -5986,9 +5986,8 @@ export const listDismissedSessions = query({
       if (title.toLowerCase() === "warmup") continue;
       if (NOISE_TITLE_PREFIXES.some((p) => title.startsWith(p))) continue;
 
-      const isDismissedActive = conv.status === "active" && conv.inbox_dismissed_at && conv.inbox_dismissed_at >= conv.updated_at;
-      const isDismissedCompleted = conv.status === "completed" && conv.inbox_dismissed_at;
-      if (!isDismissedActive && !isDismissedCompleted) continue;
+      if (!conv.inbox_dismissed_at || conv.inbox_dismissed_at < conv.updated_at) continue;
+      const isDismissedCompleted = conv.status === "completed";
 
       let implementationSession: { _id: string; title?: string } | undefined;
       if (isDismissedCompleted) {

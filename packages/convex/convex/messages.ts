@@ -323,45 +323,57 @@ export const addMessage = mutation({
       }
     }
 
-    if (args.role === "user" && safeContent?.trim()) {
-      const recentMessages = await ctx.db
-        .query("messages")
-        .withIndex("by_conversation_timestamp", (q) =>
-          q.eq("conversation_id", args.conversation_id)
-        )
-        .order("desc")
-        .take(5);
-      const dup = recentMessages.find(
-        (r) =>
-          r.role === "user" &&
-          redactSecrets(r.content || "").trim() === safeContent.trim() &&
-          Math.abs(msgTimestamp - r.timestamp) < 5 * 60 * 1000
-      );
-      if (dup) {
-        return dup._id;
+    if (args.role === "user") {
+      const hasContent = !!safeContent?.trim();
+      const hasImages = args.images && args.images.length > 0;
+      if (hasContent || hasImages) {
+        const recentMessages = await ctx.db
+          .query("messages")
+          .withIndex("by_conversation_timestamp", (q) =>
+            q.eq("conversation_id", args.conversation_id)
+          )
+          .order("desc")
+          .take(5);
+        const dup = recentMessages.find(
+          (r) =>
+            r.role === "user" &&
+            redactSecrets(r.content || "").trim() === (safeContent || "").trim() &&
+            Math.abs(msgTimestamp - r.timestamp) < (hasContent ? 5 * 60 * 1000 : 30_000)
+        );
+        if (dup) {
+          return dup._id;
+        }
       }
     }
 
     let images = args.images;
     let contentToStore = safeContent;
+    let clientIdToStore: string | undefined;
     if (args.role === "user") {
-      const pendingMsg = await ctx.db
+      const pendingMsgs = await ctx.db
         .query("pending_messages")
         .withIndex("by_conversation_id", (q) => q.eq("conversation_id", args.conversation_id))
-        .order("desc")
-        .first();
-      if (pendingMsg) {
-        const c = (safeContent || "").replace(/\[Image[:\s][^\]]*\]/gi, "").trim();
-        const pc = redactSecrets(pendingMsg.content).replace(/\[image\]/gi, "").trim();
+        .collect();
+      const c = (safeContent || "").replace(/\[Image[:\s][^\]]*\]/gi, "").trim();
+      const cFlat = c.replace(/\s+/g, " ").trim();
+      const sorted = [...pendingMsgs].sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
+      const matchingPending = sorted.find(pm => {
+        const pc = redactSecrets(pm.content).replace(/\[image\]/gi, "").trim();
         const pcFlat = pc.replace(/\r?\n/g, " ").replace(/\s+/g, " ").trim();
-        const cFlat = c.replace(/\s+/g, " ").trim();
-        if (cFlat === pcFlat || c === pc) {
-          contentToStore = redactSecrets(pendingMsg.content);
-          if (!images || images.length === 0) {
-            const ids = pendingMsg.image_storage_ids ?? (pendingMsg.image_storage_id ? [pendingMsg.image_storage_id] : []);
-            if (ids.length > 0) {
-              images = ids.map(id => ({ media_type: "image/png", storage_id: id }));
-            }
+        const contentMatch = cFlat === pcFlat || c === pc;
+        if (!contentMatch) return false;
+        if (!cFlat && !pcFlat) {
+          return Math.abs(msgTimestamp - (pm.created_at || 0)) < 120_000;
+        }
+        return true;
+      });
+      if (matchingPending) {
+        contentToStore = redactSecrets(matchingPending.content);
+        clientIdToStore = matchingPending.client_id;
+        if (!images || images.length === 0) {
+          const ids = matchingPending.image_storage_ids ?? (matchingPending.image_storage_id ? [matchingPending.image_storage_id] : []);
+          if (ids.length > 0) {
+            images = ids.map(id => ({ media_type: "image/png", storage_id: id }));
           }
         }
       }
@@ -377,6 +389,7 @@ export const addMessage = mutation({
       tool_results: safeToolResults,
       images,
       subtype: args.subtype,
+      client_id: clientIdToStore,
       timestamp: msgTimestamp,
     });
     const newMessageCount = conversation.message_count + 1;
@@ -537,46 +550,58 @@ export const addMessages = mutation({
         }
       }
 
-      if (msg.role === "user" && safeContent?.trim()) {
-        const recentMessages = await ctx.db
-          .query("messages")
-          .withIndex("by_conversation_timestamp", (q) =>
-            q.eq("conversation_id", args.conversation_id)
-          )
-          .order("desc")
-          .take(5);
-        const dup = recentMessages.find(
-          (r) =>
-            r.role === "user" &&
-            redactSecrets(r.content || "").trim() === safeContent.trim() &&
-            Math.abs(msgTimestamp - r.timestamp) < 5 * 60 * 1000
-        );
-        if (dup) {
-          ids.push(dup._id);
-          continue;
+      if (msg.role === "user") {
+        const hasContent = !!safeContent?.trim();
+        const hasImages = msg.images && msg.images.length > 0;
+        if (hasContent || hasImages) {
+          const recentMessages = await ctx.db
+            .query("messages")
+            .withIndex("by_conversation_timestamp", (q) =>
+              q.eq("conversation_id", args.conversation_id)
+            )
+            .order("desc")
+            .take(5);
+          const dup = recentMessages.find(
+            (r) =>
+              r.role === "user" &&
+              redactSecrets(r.content || "").trim() === (safeContent || "").trim() &&
+              Math.abs(msgTimestamp - r.timestamp) < (hasContent ? 5 * 60 * 1000 : 30_000)
+          );
+          if (dup) {
+            ids.push(dup._id);
+            continue;
+          }
         }
       }
 
       let images = msg.images;
       let contentToStore = safeContent;
+      let clientIdToStore: string | undefined;
       if (msg.role === "user") {
-        const pendingMsg = await ctx.db
+        const pendingMsgs = await ctx.db
           .query("pending_messages")
           .withIndex("by_conversation_id", (q) => q.eq("conversation_id", args.conversation_id))
-          .order("desc")
-          .first();
-        if (pendingMsg) {
-          const c = (safeContent || "").replace(/\[Image[:\s][^\]]*\]/gi, "").trim();
-          const pc = redactSecrets(pendingMsg.content).replace(/\[image\]/gi, "").trim();
+          .collect();
+        const c = (safeContent || "").replace(/\[Image[:\s][^\]]*\]/gi, "").trim();
+        const cFlat = c.replace(/\s+/g, " ").trim();
+        const sorted = [...pendingMsgs].sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
+        const matchingPending = sorted.find(pm => {
+          const pc = redactSecrets(pm.content).replace(/\[image\]/gi, "").trim();
           const pcFlat = pc.replace(/\r?\n/g, " ").replace(/\s+/g, " ").trim();
-          const cFlat = c.replace(/\s+/g, " ").trim();
-          if (cFlat === pcFlat || c === pc) {
-            contentToStore = redactSecrets(pendingMsg.content);
-            if (!images || images.length === 0) {
-              const ids = pendingMsg.image_storage_ids ?? (pendingMsg.image_storage_id ? [pendingMsg.image_storage_id] : []);
-              if (ids.length > 0) {
-                images = ids.map(id => ({ media_type: "image/png", storage_id: id }));
-              }
+          const contentMatch = cFlat === pcFlat || c === pc;
+          if (!contentMatch) return false;
+          if (!cFlat && !pcFlat) {
+            return Math.abs(msgTimestamp - (pm.created_at || 0)) < 120_000;
+          }
+          return true;
+        });
+        if (matchingPending) {
+          contentToStore = redactSecrets(matchingPending.content);
+          clientIdToStore = matchingPending.client_id;
+          if (!images || images.length === 0) {
+            const ids = matchingPending.image_storage_ids ?? (matchingPending.image_storage_id ? [matchingPending.image_storage_id] : []);
+            if (ids.length > 0) {
+              images = ids.map(id => ({ media_type: "image/png", storage_id: id }));
             }
           }
         }
@@ -592,6 +617,7 @@ export const addMessages = mutation({
         tool_results: safeToolResults,
         images,
         subtype: msg.subtype,
+        client_id: clientIdToStore,
         timestamp: msgTimestamp,
       });
       ids.push(messageId);

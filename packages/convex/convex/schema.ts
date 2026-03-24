@@ -286,6 +286,7 @@ export default defineSchema({
       tool_use_id: v.optional(v.string()),
     }))),
     subtype: v.optional(v.string()),
+    client_id: v.optional(v.string()),
     timestamp: v.number(),
     tokens_used: v.optional(v.number()),
     usage: v.optional(v.object({
