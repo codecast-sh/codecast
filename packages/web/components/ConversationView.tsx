@@ -16,6 +16,7 @@ import { getBuiltinCommands } from "../lib/builtinCommands";
 import type { SkillItem } from "../lib/conversationProcessor";
 import { createReducer, reducer } from "../lib/messageReducer";
 import { UsageDisplay } from "./UsageDisplay";
+import { ErrorBoundary } from "./ErrorBoundary";
 import { KeyCap } from "./KeyboardShortcutsHelp";
 import { toast } from "sonner";
 import { CodeBlock } from "./CodeBlock";
@@ -9564,7 +9565,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         {(!conversation || timeline.length === 0) ? (
           <div className={`flex-1 flex flex-col items-center gap-3 ${hideHeader ? "justify-start pt-6" : "justify-start pt-16"}`}>
             {conversation && (
-              <ProjectSwitcher conversation={conversation} />
+              <ErrorBoundary name="ProjectSwitcher" level="inline">
+                <ProjectSwitcher conversation={conversation} />
+              </ErrorBoundary>
             )}
           </div>
         ) : (

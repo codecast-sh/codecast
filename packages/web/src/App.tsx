@@ -75,13 +75,13 @@ const SettingsIntegrationsGithub = lazy(() => import("@/app/settings/integration
 const SettingsDesktop = lazy(() => import("@/app/settings/desktop/page"));
 
 function E({ name, children }: { name: string; children: ReactNode }) {
-  return <ErrorBoundary name={name}>{children}</ErrorBoundary>;
+  return <ErrorBoundary name={name} level="panel">{children}</ErrorBoundary>;
 }
 
 export function App() {
   return (
     <Providers>
-      <ErrorBoundary name="App" level="page">
+      <ErrorBoundary name="App" level="panel">
         <Suspense>
           <Routes>
             {/* Marketing - light mode layout */}
