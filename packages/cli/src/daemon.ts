@@ -4838,7 +4838,9 @@ function findSessionFile(sessionId: string): SessionFileInfo | null {
 const resumeSessionCache = new Map<string, string>();
 const resumeHeartbeatIntervals = new Map<string, NodeJS.Timeout>();
 const heartbeatHealthCheckCounter = new Map<string, number>();
+const healthCheckDeadStrikes = new Map<string, number>();
 const HEALTH_CHECK_EVERY_N_HEARTBEATS = 3;
+const HEALTH_CHECK_DEAD_STRIKES_TO_KILL = 3;
 
 async function killSessionBySessionId(sessionId: string, reason: string): Promise<void> {
   const cache = readConversationCache();
@@ -5363,8 +5365,17 @@ async function heartbeatHealthCheck(sessionId: string): Promise<void> {
 
   const alive = await isTmuxAgentAlive(tmux);
   if (!alive) {
-    log(`[HEARTBEAT-HEALTH] Agent dead in ${tmux} for ${sessionId.slice(0, 8)}, triggering reconstitution`);
-    await handleDeadSession(sessionId, tmux);
+    const strikes = (healthCheckDeadStrikes.get(sessionId) || 0) + 1;
+    healthCheckDeadStrikes.set(sessionId, strikes);
+    if (strikes >= HEALTH_CHECK_DEAD_STRIKES_TO_KILL) {
+      log(`[HEARTBEAT-HEALTH] Agent dead in ${tmux} for ${sessionId.slice(0, 8)} (${strikes} strikes), triggering reconstitution`);
+      healthCheckDeadStrikes.delete(sessionId);
+      await handleDeadSession(sessionId, tmux);
+    } else {
+      log(`[HEARTBEAT-HEALTH] Agent appears dead in ${tmux} for ${sessionId.slice(0, 8)} (strike ${strikes}/${HEALTH_CHECK_DEAD_STRIKES_TO_KILL})`);
+    }
+  } else {
+    healthCheckDeadStrikes.delete(sessionId);
   }
 }
 
@@ -5374,6 +5385,7 @@ async function handleDeadSession(sessionId: string, tmuxSession: string): Promis
   stopCodexPermissionPoller(sessionId);
   stopManagedSessionHeartbeat(sessionId);
   heartbeatHealthCheckCounter.delete(sessionId);
+  healthCheckDeadStrikes.delete(sessionId);
 
   const cache = readConversationCache();
   const conversationId = cache[sessionId];
@@ -6819,7 +6831,7 @@ async function isTmuxAgentAlive(tmuxSession: string): Promise<boolean> {
       if (/Segmentation fault|panic:|SIGABRT|core dumped|exited with/.test(trimmed)) return false;
       if (/[$%#]\s*$/.test(trimmed)) return false;
       if (/-(?:ba)?sh:.*(?:No such file|command not found)/.test(trimmed)) return false;
-      return false;
+      return true;
     } catch {}
     return false;
   } catch {
