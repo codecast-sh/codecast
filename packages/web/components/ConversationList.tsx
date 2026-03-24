@@ -781,32 +781,47 @@ export function NewSessionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
   const cachedProjects = useInboxStore((s) => s.recentProjects);
   const setRecentProjects = useInboxStore((s) => s.setRecentProjects);
   const recentProjects = freshProjects ?? (cachedProjects.length > 0 ? cachedProjects : null);
+  const [frozenProjects, setFrozenProjects] = useState<typeof recentProjects>(null);
   const modalRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
   const context = useInboxStore((s) => s.newSession.context);
+  const initializedRef = useRef(false);
 
   useConvexSync(freshProjects, setRecentProjects);
 
+  useWatchEffect(() => {
+    if (isOpen && recentProjects?.length && !frozenProjects) {
+      setFrozenProjects([...recentProjects]);
+    }
+    if (!isOpen) {
+      setFrozenProjects(null);
+      initializedRef.current = false;
+    }
+  }, [isOpen, recentProjects, frozenProjects]);
+
   const filteredProjects = useMemo(() => {
-    if (!recentProjects || recentProjects.length === 0) return [];
-    if (!projectPath) return recentProjects;
+    if (!frozenProjects || frozenProjects.length === 0) return [];
+    if (!projectPath) return frozenProjects;
     const lower = projectPath.toLowerCase();
-    return recentProjects.filter((p: { path: string }) => p.path.toLowerCase().includes(lower));
-  }, [recentProjects, projectPath]);
+    return frozenProjects.filter((p: { path: string }) => p.path.toLowerCase().includes(lower));
+  }, [frozenProjects, projectPath]);
 
   useWatchEffect(() => {
-    if (isOpen && context.projectPath) {
+    if (!isOpen || initializedRef.current) return;
+    if (context.projectPath) {
       setProjectPath(context.projectPath);
-    } else if (isOpen && !context.projectPath && recentProjects?.length) {
-      setProjectPath(recentProjects[0].path);
+      initializedRef.current = true;
+    } else if (frozenProjects?.length) {
+      setProjectPath(frozenProjects[0].path);
+      initializedRef.current = true;
     }
-    if (isOpen && context.agentType) {
+    if (context.agentType) {
       const mapped = context.agentType === "claude_code" ? "claude" : context.agentType === "codex" ? "codex" : context.agentType === "cursor" ? "cursor" : "gemini";
       setAgentType(mapped as "claude" | "codex" | "cursor" | "gemini");
     }
-  }, [isOpen, context, recentProjects]);
+  }, [isOpen, context, frozenProjects]);
 
   useWatchEffect(() => {
     if (!isOpen) return;

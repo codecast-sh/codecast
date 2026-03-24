@@ -58,17 +58,19 @@ export function CreatePalette() {
         fork_count: 0, forked_from_details: null, compaction_count: 0,
         fork_children: [], parent_conversation_id: null,
       });
-      const convexId = await store.createSession({
+      store.createSession({
         agent_type: agentType,
         project_path: path,
         git_root: path,
         session_id: sid,
+      }).then((convexId: string) => {
+        if (convexId) {
+          store.resolveSessionId(sid, convexId);
+          store.sendMessage(convexId, data.message);
+          window.history.pushState({ inboxId: convexId }, "", `/conversation/${convexId}`);
+        }
       });
-      if (convexId) {
-        store.resolveSessionId(sid, convexId);
-        store.sendMessage(convexId, data.message);
-        window.history.pushState({ inboxId: convexId }, "", `/conversation/${convexId}`);
-      }
+      store.setCurrentSession(sid);
     };
     return () => {
       delete (window as any).__CODECAST_COMPOSE_SHOW;

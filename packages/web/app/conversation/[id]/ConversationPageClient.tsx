@@ -460,7 +460,7 @@ export default function ConversationPage() {
   }, [isUUID, sessionLookup, publicData, resolvedConvexId, id]);
 
   const storeHasSession = useInboxStore((s) => !!(s.sessions[id] || s.conversations[id]));
-  const resolvedStoreId = useInboxStore((s) => s.getConvexId(id));
+  const resolvedStoreId = useInboxStore((s) => isUUID ? s.getConvexId(id) : undefined);
 
   if (storeHasSession) {
     return <QueuePageClient initialSessionId={id} />;
