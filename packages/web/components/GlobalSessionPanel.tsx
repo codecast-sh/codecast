@@ -119,7 +119,7 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
       } else {
         setResumeState("failed");
       }
-    }, 45_000);
+    }, 90_000);
     return () => clearTimeout(timeout);
   }, [resumeState, sessionId, restartSessionMutation, repairSessionMutation]);
 
@@ -266,6 +266,7 @@ export function SessionCard({
   onDefer,
   onPin,
   onRestore,
+  onKill,
   onNavigateToSession,
   variant = "default",
 }: {
@@ -278,6 +279,7 @@ export function SessionCard({
   onDefer?: (id: string) => void;
   onPin?: (id: string) => void;
   onRestore?: (id: string) => void;
+  onKill?: (id: string) => void;
   onNavigateToSession?: (id: string) => void;
   variant?: "default" | "working" | "dismissed";
 }) {
@@ -429,15 +431,29 @@ export function SessionCard({
             )}
           </div>
         )}
-        {onRestore && (
-          <button
-            onClick={(e) => { e.stopPropagation(); onRestore(session._id); }}
-            className="absolute top-1 right-1.5 p-0.5 rounded text-gray-500 hover:text-violet-400 opacity-0 group-hover:opacity-100 transition-opacity"
-          >
-            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17L7 7M7 7h6M7 7v6" />
-            </svg>
-          </button>
+        {(onRestore || onKill) && (
+          <div className="absolute top-1 right-1.5 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+            {onKill && (
+              <button
+                onClick={(e) => { e.stopPropagation(); onKill(session._id); }}
+                className="p-0.5 rounded text-gray-500 hover:text-sol-red transition-colors"
+              >
+                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            )}
+            {onRestore && (
+              <button
+                onClick={(e) => { e.stopPropagation(); onRestore(session._id); }}
+                className="p-0.5 rounded text-gray-500 hover:text-violet-400 transition-colors"
+              >
+                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17L7 7M7 7h6M7 7v6" />
+                </svg>
+              </button>
+            )}
+          </div>
         )}
       </div>
     );
@@ -644,22 +660,43 @@ export function SessionCard({
           )}
         </div>
       )}
-      {onRestore && (
-        <TooltipProvider delayDuration={300}>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                onClick={(e) => { e.stopPropagation(); onRestore(session._id); }}
-                className="absolute top-1.5 right-1.5 p-1 rounded-md text-sol-text-dim hover:text-sol-cyan opacity-0 group-hover:opacity-100 transition-opacity bg-sol-bg/95 backdrop-blur-sm shadow-sm border border-sol-border/30"
-              >
-                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17L7 7M7 7h6M7 7v6" />
-                </svg>
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="left">Restore</TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
+      {(onRestore || onKill) && (
+        <div className="absolute top-1.5 right-1.5 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+          {onKill && (
+            <TooltipProvider delayDuration={300}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); onKill(session._id); }}
+                    className="p-1 rounded-md text-sol-text-dim hover:text-sol-red bg-sol-bg/95 backdrop-blur-sm shadow-sm border border-sol-border/30"
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="left">Kill</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          )}
+          {onRestore && (
+            <TooltipProvider delayDuration={300}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); onRestore(session._id); }}
+                    className="p-1 rounded-md text-sol-text-dim hover:text-sol-cyan bg-sol-bg/95 backdrop-blur-sm shadow-sm border border-sol-border/30"
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17L7 7M7 7h6M7 7v6" />
+                    </svg>
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="left">Restore</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          )}
+        </div>
       )}
     </div>
   );
@@ -869,6 +906,16 @@ export function SessionListPanel({
   const unstashSession = useInboxStore((s) => s.unstashSession);
   const dismissedSessions = useInboxStore((s) => s.dismissedSessions);
   const dismissedList = useMemo(() => Object.values(dismissedSessions), [dismissedSessions]);
+  const killSessionMutation = useMutation(api.conversations.killSession);
+  const handleKillDismissed = useCallback((id: string) => {
+    if (isConvexId(id)) {
+      killSessionMutation({ conversation_id: id as Id<"conversations">, mark_completed: true }).catch(() => {});
+    }
+    const newDismissed = { ...useInboxStore.getState().dismissedSessions };
+    delete newDismissed[id];
+    useInboxStore.setState({ dismissedSessions: newDismissed });
+    toast.success(`Killed session`);
+  }, [killSessionMutation]);
 
   const handleSelect = useCallback((session: InboxSession) => {
     if (onSessionSelect) {
@@ -1019,6 +1066,7 @@ export function SessionListPanel({
                     globalIndex={-1}
                     onSelect={() => handleSelect(session)}
                     onRestore={(id) => unstashSession(id)}
+                    onKill={handleKillDismissed}
                     variant="dismissed"
                   />
                   {subMap.get(session._id)?.map((sub) => (
@@ -1030,6 +1078,7 @@ export function SessionListPanel({
                       globalIndex={-1}
                       onSelect={() => handleSelect(sub)}
                       onRestore={(id) => unstashSession(id)}
+                      onKill={handleKillDismissed}
                       variant="dismissed"
                     />
                   ))}

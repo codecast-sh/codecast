@@ -93,7 +93,7 @@ export function useGlobalShortcutActions() {
     }
     const ordered = store.visualOrder();
     const idx = ordered.findIndex(s => s._id === currentId);
-    undoableStashSession(currentId);
+    undoableStashSession(currentId, { verb: "Killed" });
     if (!isOnInboxPage) {
       const sessions = useInboxStore.getState().sessions;
       const next = ordered.slice(idx + 1).find(s => sessions[s._id])

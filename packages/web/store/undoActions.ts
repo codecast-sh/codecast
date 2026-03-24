@@ -32,16 +32,17 @@ function snapshotSession(state: StoreState, id: string) {
   };
 }
 
-export function undoableStashSession(id: string) {
+export function undoableStashSession(id: string, options?: { verb?: string }) {
   const state = useInboxStore.getState();
   const session = state.sessions[id];
   const label = session?.title || "session";
+  const verb = options?.verb || "Dismissed";
   const snap = snapshotSession(state, id);
 
   useInboxStore.getState().stashSession(id);
 
   pushUndo({
-    label: `Dismiss "${label}"`,
+    label: `${verb} ${label}`,
     undo: () => {
       const store = useInboxStore.getState();
       const restoredSessions = { ...store.sessions };
@@ -76,7 +77,7 @@ export function undoableStashSession(id: string) {
     },
   });
 
-  showUndoToast(`Dismissed "${label}"`);
+  showUndoToast(`${verb} ${label}`);
 }
 
 export function undoableDeferSession(id: string) {
@@ -91,7 +92,7 @@ export function undoableDeferSession(id: string) {
   useInboxStore.getState().deferSession(id);
 
   pushUndo({
-    label: `Defer "${label}"`,
+    label: `Defer ${label}`,
     undo: () => {
       const store = useInboxStore.getState();
       const newSessions = { ...store.sessions };
@@ -129,7 +130,7 @@ export function undoablePinSession(id: string) {
 
   useInboxStore.getState().pinSession(id);
 
-  const actionLabel = wasPinned ? `Unpin "${label}"` : `Pin "${label}"`;
+  const actionLabel = wasPinned ? `Unpin ${label}` : `Pin ${label}`;
 
   pushUndo({
     label: actionLabel,
@@ -168,7 +169,7 @@ export function undoableRenameSession(id: string, title: string) {
   useInboxStore.getState().renameSession(id, title);
 
   pushUndo({
-    label: `Rename to "${title}"`,
+    label: `Rename to ${title}`,
     undo: () => {
       useInboxStore.getState().renameSession(id, prevTitle);
     },
@@ -191,7 +192,7 @@ export function undoableArchiveDoc(id: string) {
   useInboxStore.getState().archiveDoc(id);
 
   pushUndo({
-    label: `Archive "${label}"`,
+    label: `Archive ${label}`,
     undo: () => {
       const store = useInboxStore.getState();
       const newDocs = { ...store.docs, [id]: docSnap };
@@ -208,5 +209,5 @@ export function undoableArchiveDoc(id: string) {
     },
   });
 
-  showUndoToast(`Archived "${label}"`);
+  showUndoToast(`Archived ${label}`);
 }
