@@ -880,9 +880,9 @@ export function QueuePageClient({ initialSessionId }: { initialSessionId?: strin
   }, [currentSession?._id, currentSession?.project_path, currentSession?.git_root, currentSession?.agent_type, setCurrentConversation, touchMru]);
 
   useWatchEffect(() => {
-    if (currentSession || showMySessions || selectedPlanId || viewingDismissedId || pendingInjectId) return;
+    if (currentSessionId || currentSession || showMySessions || selectedPlanId || viewingDismissedId || pendingInjectId) return;
     if (sortedSessions.length > 0) setCurrentSession(sortedSessions[0]._id);
-  }, [currentSession, showMySessions, selectedPlanId, viewingDismissedId, pendingInjectId, sortedSessions, setCurrentSession]);
+  }, [currentSessionId, currentSession, showMySessions, selectedPlanId, viewingDismissedId, pendingInjectId, sortedSessions, setCurrentSession]);
 
   // Sync URL when current session changes (but not before initial param is resolved)
   useWatchEffect(() => {

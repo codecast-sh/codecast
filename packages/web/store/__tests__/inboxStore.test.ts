@@ -156,22 +156,27 @@ describe("draft migration", () => {
 });
 
 describe("getSessionRenderKey", () => {
-  it("stays stable across optimistic-to-server id promotion", () => {
-    expect(getSessionRenderKey({
-      _id: "temp-session-id",
-      session_id: "session-1",
-    })).toBe("session-1");
-
+  it("prefers stable session_id over _id to survive rekeys", () => {
     expect(getSessionRenderKey({
       _id: "jn7abc123def456ghi789jklmnopqrs",
       session_id: "session-1",
-    })).toBe("session-1");
+    } as InboxSession)).toBe("session-1");
+
+    expect(getSessionRenderKey({
+      _id: "jn7abc123def456ghi789jklmnopqrs",
+    } as InboxSession)).toBe("jn7abc123def456ghi789jklmnopqrs");
   });
 
-  it("falls back to the conversation id when there is no session id", () => {
-    expect(getSessionRenderKey({
+  it("returns same key before and after rekey", () => {
+    const before = getSessionRenderKey({
+      _id: "temp-random-id",
+      session_id: "session-stable",
+    } as InboxSession);
+    const after = getSessionRenderKey({
       _id: "jn7abc123def456ghi789jklmnopqrs",
-    } as Pick<InboxSession, "_id" | "session_id">)).toBe("jn7abc123def456ghi789jklmnopqrs");
+      session_id: "session-stable",
+    } as InboxSession);
+    expect(before).toBe(after);
   });
 });
 

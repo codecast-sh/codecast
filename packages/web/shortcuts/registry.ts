@@ -65,8 +65,8 @@ export const SHORTCUTS: ShortcutDef[] = [
 
   { key: 'ctrl+.', action: 'ui.zenToggle', skipInputCheck: true, description: 'Toggle zen mode' },
   { key: '?', action: 'ui.toggleShortcutsHelp', description: 'Toggle shortcuts help' },
-  { key: 'ctrl+z', mac: 'meta+z', action: 'ui.undo', description: 'Undo' },
-  { key: 'ctrl+shift+z', mac: 'meta+shift+z', action: 'ui.redo', description: 'Redo' },
+  { key: 'ctrl+z', mac: 'meta+z', action: 'ui.undo', skipInputCheck: true, description: 'Undo' },
+  { key: 'ctrl+shift+z', mac: 'meta+shift+z', action: 'ui.redo', skipInputCheck: true, description: 'Redo' },
 
   { key: 'meta+shift+alt+1', action: 'nav.inbox', skipInputCheck: true, description: 'Go to inbox' },
 
