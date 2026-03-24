@@ -385,7 +385,7 @@ const DISMISSED_IDLE_KILL_MS = 60 * 60 * 1000;
 const zombieFirstDead = new Map<string, number>();
 const ZOMBIE_GRACE_PERIOD_MS = 60 * 60 * 1000; // 1 hour
 
-type AgentStatus = "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "stopped";
+type AgentStatus = "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "stopped" | "resuming";
 type PermissionMode = "default" | "plan" | "acceptEdits" | "bypassPermissions" | "dontAsk";
 type HookStatusData = { status: AgentStatus; ts: number; permission_mode?: PermissionMode; message?: string; transcript_path?: string };
 type AppServerThreadStatus = { type?: string; activeFlags?: string[] };
@@ -2845,20 +2845,6 @@ async function processSessionFile(
               if (planShortId) {
                 planModePlanMap.set(sessionId, planShortId);
                 savePlanModeCache();
-                if (projPath) {
-                  try {
-                    const snippet = await syncService.getPlanSnippet(planShortId);
-                    if (snippet) {
-                      const contextDir = path.join(projPath, ".claude");
-                      if (!fs.existsSync(contextDir)) fs.mkdirSync(contextDir, { recursive: true });
-                      const contextFile = path.join(contextDir, "plan-context.md");
-                      fs.writeFileSync(contextFile, `# Active Plan Context\n\n${snippet}\n`, { mode: 0o644 });
-                      log(`Wrote plan context to ${contextFile}`);
-                    }
-                  } catch (ctxErr) {
-                    log(`Failed to write plan context: ${ctxErr instanceof Error ? ctxErr.message : String(ctxErr)}`);
-                  }
-                }
               }
               log(`Synced plan_mode plan ${planShortId} for session ${sessionId.slice(0, 8)} (${block.input.plan.length} chars)`);
             } catch (err) {
@@ -5858,11 +5844,11 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
 
     logDelivery(`Auto-resumed ${agentType} ${shortId} in tmux=${tmuxSession} cwd=${cwd} cmd=${resumeCmd}`);
 
-    // Register managed session early so the web UI can show "Connected" status
+    // Register managed session early with "resuming" status — will transition to "connected" once prompt is visible
     resumeSessionCache.set(sessionId, tmuxSession);
     if (syncServiceRef && conversationId) {
       syncServiceRef.registerManagedSession(sessionId, process.pid, tmuxSession, conversationId).catch(() => {});
-      syncServiceRef.updateSessionAgentStatus(conversationId, "connected").catch(() => {});
+      syncServiceRef.updateSessionAgentStatus(conversationId, "resuming").catch(() => {});
       const existing = resumeHeartbeatIntervals.get(sessionId);
       if (existing) clearInterval(existing);
       const interval = setInterval(async () => {
@@ -5891,10 +5877,17 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
       "ENOENT",
     ];
     const promptPattern = /[❯›]/;
+    // Scale readiness poll based on JSONL file size — large sessions take much longer to resume
+    let jsonlSize = 0;
+    try { jsonlSize = fs.statSync(jsonlPath).size; } catch {}
+    const maxPollMs = jsonlSize > 10_000_000 ? 90_000
+      : jsonlSize > 1_000_000 ? 45_000
+      : 15_000;
+    const maxIterations = Math.ceil(maxPollMs / 250);
     const startTime = Date.now();
     let ready = false;
 
-    for (let i = 0; i < 60; i++) {
+    for (let i = 0; i < maxIterations; i++) {
       await new Promise(resolve => setTimeout(resolve, 250));
       try {
         const { stdout: paneContent } = await tmuxExec(["capture-pane", "-p", "-J", "-t", tmuxSession, "-S", "-20"]);
@@ -5911,7 +5904,12 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
       } catch {}
     }
     if (!ready) {
-      logDelivery(`Agent ${shortId} startup timed out after ${Date.now() - startTime}ms, proceeding anyway`);
+      logDelivery(`Agent ${shortId} startup timed out after ${Date.now() - startTime}ms (max=${maxPollMs}ms, jsonl=${Math.round(jsonlSize / 1024)}KB), proceeding anyway`);
+    }
+
+    // Transition to "connected" now that the agent prompt is visible (or timed out)
+    if (syncServiceRef && conversationId) {
+      syncServiceRef.updateSessionAgentStatus(conversationId, "connected").catch(() => {});
     }
 
     // Dismiss startup warnings (model mismatch, rate limit) before injection
@@ -6434,6 +6432,7 @@ async function deliverMessage(
         const startedTmuxTarget = entry.tmuxSession + ":0.0";
         await injectViaTmux(startedTmuxTarget, content);
         await syncService.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
+        syncService.updateSessionAgentStatus(conversationId, "connected").catch(() => {});
         log(`Delivered message to started session tmux ${entry.tmuxSession} for conversation ${conversationId.slice(0, 12)}`);
         const isPollResponse = !!parsePollMessage(content);
         if (content.trimStart().startsWith("/") || isPollResponse) {
@@ -6489,6 +6488,7 @@ async function deliverMessage(
           log(`Cannot deliver: no local session, materialization failed, and fresh start failed for ${conversationId}`);
           return false;
         }
+        syncService.updateSessionAgentStatus(conversationId, "resuming").catch(() => {});
       }
     } else {
       log(`No session_id in local cache for conversation ${conversationId}, attempting to materialize from server...`);
@@ -6500,6 +6500,7 @@ async function deliverMessage(
         logDelivery(`Cannot deliver: no local session, materialization failed, and fresh start failed for conv=${conversationId.slice(0, 12)}`);
         return false;
       }
+      syncService.updateSessionAgentStatus(conversationId, "resuming").catch(() => {});
     }
   }
 
@@ -6819,7 +6820,7 @@ async function isTmuxAgentAlive(tmuxSession: string): Promise<boolean> {
     const panePid = stdout.trim();
     if (!panePid) return false;
 
-    if (await hasAgentProcessInTree(parseInt(panePid, 10))) return true;
+    const hasProcess = await hasAgentProcessInTree(parseInt(panePid, 10));
 
     try {
       const { stdout: paneContent } = await tmuxExec(
@@ -6829,11 +6830,12 @@ async function isTmuxAgentAlive(tmuxSession: string): Promise<boolean> {
       if (!trimmed) return false;
       if (/Resume this session with:|claude --resume|codex resume/i.test(trimmed)) return false;
       if (/Segmentation fault|panic:|SIGABRT|core dumped|exited with/.test(trimmed)) return false;
-      if (/[$%#]\s*$/.test(trimmed)) return false;
       if (/-(?:ba)?sh:.*(?:No such file|command not found)/.test(trimmed)) return false;
+      if (hasProcess) return true;
+      if (/[$%#]\s*$/.test(trimmed)) return false;
       return true;
     } catch {}
-    return false;
+    return hasProcess;
   } catch {
     return false;
   }
@@ -8330,6 +8332,69 @@ async function main(): Promise<void> {
       }
     } catch {}
   }, 30 * 60 * 1000);
+
+  const CLAUDE_PLANS_DIR = path.join(process.env.HOME || "", ".claude", "plans");
+  const planFileSynced = new Map<string, number>();
+
+  function findMostRecentSessionId(): string | null {
+    const claudeProjectsDir = path.join(process.env.HOME || "", ".claude", "projects");
+    if (!fs.existsSync(claudeProjectsDir)) return null;
+    let best: { sessionId: string; mtime: number } | null = null;
+    try {
+      for (const dir of fs.readdirSync(claudeProjectsDir)) {
+        const dirPath = path.join(claudeProjectsDir, dir);
+        if (!fs.statSync(dirPath).isDirectory()) continue;
+        for (const file of fs.readdirSync(dirPath)) {
+          if (!file.endsWith(".jsonl") || file.includes("sessions-index")) continue;
+          const fp = path.join(dirPath, file);
+          const mtime = fs.statSync(fp).mtimeMs;
+          if (!best || mtime > best.mtime) {
+            best = { sessionId: file.replace(".jsonl", ""), mtime };
+          }
+        }
+      }
+    } catch {}
+    return best?.sessionId || null;
+  }
+
+  function handlePlanFile(filePath: string) {
+    if (!filePath.endsWith(".md")) return;
+    try {
+      const stat = fs.statSync(filePath);
+      const lastSynced = planFileSynced.get(filePath);
+      if (lastSynced && stat.mtimeMs <= lastSynced) return;
+
+      const content = fs.readFileSync(filePath, "utf-8");
+      if (!content.trim()) return;
+
+      const sessionId = findMostRecentSessionId();
+      if (!sessionId) return;
+
+      planFileSynced.set(filePath, stat.mtimeMs);
+      syncService.syncPlanFromPlanMode({
+        sessionId,
+        planContent: content,
+      }).then(planShortId => {
+        if (planShortId) {
+          planModePlanMap.set(sessionId, planShortId);
+          savePlanModeCache();
+          log(`Synced plan file ${path.basename(filePath)} -> ${planShortId} for session ${sessionId.slice(0, 8)}`);
+        }
+      }).catch(err => {
+        log(`Failed to sync plan file ${path.basename(filePath)}: ${err instanceof Error ? err.message : String(err)}`);
+      });
+    } catch {}
+  }
+
+  if (fs.existsSync(CLAUDE_PLANS_DIR)) {
+    const planFileWatcher = chokidarWatch(CLAUDE_PLANS_DIR, {
+      ignoreInitial: true,
+      awaitWriteFinish: { stabilityThreshold: 300, pollInterval: 50 },
+      depth: 0,
+    });
+    planFileWatcher.on("add", handlePlanFile).on("change", handlePlanFile);
+    log(`Plan file watcher started on ${CLAUDE_PLANS_DIR}`);
+  }
 
   // Startup scan: sync any files that were missed while daemon was down
   const performStartupScan = async () => {
