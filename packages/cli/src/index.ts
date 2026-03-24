@@ -264,6 +264,24 @@ function detectCurrentSessionId(): string | null {
   }
 }
 
+async function autoBindFromEnv(): Promise<void> {
+  const taskShortId = process.env.CODECAST_TASK_ID;
+  const planShortId = process.env.CODECAST_PLAN_ID;
+  if (!taskShortId && !planShortId) return;
+
+  const sessionId = detectCurrentSessionId();
+  if (!sessionId) return;
+
+  try {
+    if (taskShortId) {
+      await cliPost("/cli/work/update", { short_id: taskShortId, status: "in_progress", conversation_id: sessionId });
+    }
+    if (planShortId) {
+      await cliPost("/cli/plans/bind", { short_id: planShortId, conversation_id: sessionId });
+    }
+  } catch {}
+}
+
 const CONFIG_DIR = process.env.HOME + "/.codecast";
 const CONFIG_FILE = path.join(CONFIG_DIR, "config.json");
 const PID_FILE = path.join(CONFIG_DIR, "daemon.pid");
@@ -9183,21 +9201,6 @@ plan
     }
     await cliPost("/cli/plans/bind", { short_id: planId, conversation_id: sessionId });
     console.log(`${c.green}ok${c.reset} Session bound to plan ${c.cyan}${planId}${c.reset}`);
-    // Inject plan context into project directory
-    try {
-      const snippetResult = await cliPost("/cli/plans/snippet", { plan_short_id: planId });
-      if (snippetResult?.snippet) {
-        const fs = await import("fs");
-        const path = await import("path");
-        const contextDir = path.join(process.cwd(), ".claude");
-        if (!fs.existsSync(contextDir)) fs.mkdirSync(contextDir, { recursive: true });
-        const contextFile = path.join(contextDir, "plan-context.md");
-        fs.writeFileSync(contextFile, `# Active Plan Context\n\n${snippetResult.snippet}\n`, { mode: 0o644 });
-        console.log(`${c.green}ok${c.reset} Plan context written to ${c.dim}.claude/plan-context.md${c.reset}`);
-      }
-    } catch {
-      // Non-critical, continue
-    }
   });
 
 plan
@@ -11732,4 +11735,5 @@ program.hook('preAction', (thisCommand, actionCommand) => {
 });
 
 ensureCastAlias();
+autoBindFromEnv();
 program.parse();
