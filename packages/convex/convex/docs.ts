@@ -251,7 +251,11 @@ async function syncDocToPlanEntity(
       if (conversationId) {
         const conv = await ctx.db.get(conversationId);
         if (conv && !conv.active_plan_id) {
-          await ctx.db.patch(conversationId, { active_plan_id: plan._id });
+          const planIds = (conv as any).plan_ids || [];
+          if (!planIds.some((pid: any) => pid.toString() === plan._id.toString())) {
+            planIds.push(plan._id);
+          }
+          await ctx.db.patch(conversationId, { active_plan_id: plan._id, plan_ids: planIds });
         }
       }
       return plan.short_id;
@@ -271,7 +275,11 @@ async function syncDocToPlanEntity(
     if (conversationId) {
       const conv = await ctx.db.get(conversationId);
       if (conv && !conv.active_plan_id) {
-        await ctx.db.patch(conversationId, { active_plan_id: existingPlan._id });
+        const planIds = (conv as any).plan_ids || [];
+        if (!planIds.some((pid: any) => pid.toString() === existingPlan._id.toString())) {
+          planIds.push(existingPlan._id);
+        }
+        await ctx.db.patch(conversationId, { active_plan_id: existingPlan._id, plan_ids: planIds });
       }
     }
     return existingPlan.short_id;
@@ -297,7 +305,9 @@ async function syncDocToPlanEntity(
   if (conversationId) {
     const conv = await ctx.db.get(conversationId);
     if (conv) {
-      await ctx.db.patch(conversationId, { active_plan_id: planId });
+      const planIds = (conv as any).plan_ids || [];
+      planIds.push(planId);
+      await ctx.db.patch(conversationId, { active_plan_id: planId, plan_ids: planIds });
     }
   }
   return short_id;

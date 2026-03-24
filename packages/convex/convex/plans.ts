@@ -12,7 +12,7 @@ async function recalcProgress(ctx: any, taskIds: Id<"tasks">[]) {
 
   for (const tid of taskIds) {
     const task = await ctx.db.get(tid);
-    if (!task) continue;
+    if (!task || task.status === "dropped") continue;
     total++;
     if (task.status === "done") done++;
     else if (task.status === "in_progress" || task.status === "in_review") in_progress++;
@@ -849,6 +849,7 @@ export const getOrchestrationStatus = query({
     let currentWave = 0;
 
     for (const task of tasks) {
+      if (task.status === "dropped") continue;
       const waveNumber = (task as any).wave_number as number | undefined;
       if (waveNumber !== undefined && waveNumber !== null) {
         const wave = waveMap.get(waveNumber) || { done: 0, total: 0 };
@@ -1351,14 +1352,15 @@ export const qualityScore = query({
     }
 
     let readiness = 0, completeness = 0, risk = 0;
-    const total = tasks.length;
+    const activeTasks = tasks.filter((t: any) => t.status !== "dropped");
+    const total = activeTasks.length;
     if (total === 0) return { readiness: 0, completeness: 0, risk: 0, overall: 0, details: {} };
 
-    const done = tasks.filter((t: any) => t.status === "done").length;
-    const withDesc = tasks.filter((t: any) => t.description && t.description.length > 10).length;
-    const withDeps = tasks.filter((t: any) => t.blocked_by?.length > 0).length;
-    const needsContext = tasks.filter((t: any) => t.execution_status === "needs_context").length;
-    const highRetry = tasks.filter((t: any) => (t.retry_count || 0) >= 2).length;
+    const done = activeTasks.filter((t: any) => t.status === "done").length;
+    const withDesc = activeTasks.filter((t: any) => t.description && t.description.length > 10).length;
+    const withDeps = activeTasks.filter((t: any) => t.blocked_by?.length > 0).length;
+    const needsContext = activeTasks.filter((t: any) => t.execution_status === "needs_context").length;
+    const highRetry = activeTasks.filter((t: any) => (t.retry_count || 0) >= 2).length;
 
     readiness = Math.round((withDesc / total) * 50 + (withDeps > 0 ? 25 : 0) + (plan.goal ? 25 : 0));
     completeness = Math.round((done / total) * 100);

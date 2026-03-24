@@ -3840,7 +3840,7 @@ export const forkFromMessage = mutation({
       updated_at: now,
       message_count: messagesToCopy.length,
       is_private: true,
-      status: "completed",
+      status: "active",
       forked_from: original._id,
       parent_message_uuid: args.message_uuid,
     });
@@ -5987,6 +5987,7 @@ export const listDismissedSessions = query({
       if (NOISE_TITLE_PREFIXES.some((p) => title.startsWith(p))) continue;
 
       if (!conv.inbox_dismissed_at || conv.inbox_dismissed_at < conv.updated_at) continue;
+      if (conv.inbox_killed_at) continue;
       const isDismissedCompleted = conv.status === "completed";
 
       let implementationSession: { _id: string; title?: string } | undefined;
@@ -6225,9 +6226,11 @@ export const killSession = mutation({
       created_at: Date.now(),
     });
 
+    const patch: Record<string, any> = { inbox_killed_at: Date.now() };
     if (args.mark_completed) {
-      await ctx.db.patch(args.conversation_id, { status: "completed" });
+      patch.status = "completed";
     }
+    await ctx.db.patch(args.conversation_id, patch);
   },
 });
 

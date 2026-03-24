@@ -183,6 +183,7 @@ export default defineSchema({
     skip_title_generation: v.optional(v.boolean()),
     idle_summary: v.optional(v.string()),
     inbox_dismissed_at: v.optional(v.number()),
+    inbox_killed_at: v.optional(v.number()),
     inbox_deferred_at: v.optional(v.number()),
     inbox_pinned_at: v.optional(v.number()),
     draft_message: v.optional(v.string()),
@@ -477,7 +478,7 @@ export default defineSchema({
     tmux_session: v.optional(v.string()),
     started_at: v.number(),
     last_heartbeat: v.number(),
-    agent_status: v.optional(v.union(v.literal("working"), v.literal("idle"), v.literal("permission_blocked"), v.literal("compacting"), v.literal("thinking"), v.literal("connected"), v.literal("stopped"), v.literal("starting"))),
+    agent_status: v.optional(v.union(v.literal("working"), v.literal("idle"), v.literal("permission_blocked"), v.literal("compacting"), v.literal("thinking"), v.literal("connected"), v.literal("stopped"), v.literal("starting"), v.literal("resuming"))),
     agent_status_updated_at: v.optional(v.number()),
     permission_mode: v.optional(v.union(v.literal("default"), v.literal("plan"), v.literal("acceptEdits"), v.literal("bypassPermissions"), v.literal("dontAsk"))),
   })

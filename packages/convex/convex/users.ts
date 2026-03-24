@@ -1121,11 +1121,14 @@ export const getRecentProjectPaths = query({
       return [];
     }
     const limit = args.limit ?? 10;
+    const threeWeeksAgo = Date.now() - 21 * 24 * 60 * 60 * 1000;
     const conversations = await ctx.db
       .query("conversations")
-      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+      .withIndex("by_user_updated", (q) =>
+        q.eq("user_id", userId).gte("updated_at", threeWeeksAgo)
+      )
       .order("desc")
-      .take(100);
+      .take(200);
 
     const pathCounts = new Map<string, { count: number; lastActive: number }>();
     for (const conv of conversations) {
@@ -1141,7 +1144,7 @@ export const getRecentProjectPaths = query({
     }
 
     return Array.from(pathCounts.entries())
-      .sort((a, b) => b[1].lastActive - a[1].lastActive)
+      .sort((a, b) => b[1].count - a[1].count)
       .slice(0, limit)
       .map(([path, stats]) => ({
         path,
