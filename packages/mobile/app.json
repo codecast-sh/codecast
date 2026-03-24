@@ -62,6 +62,13 @@
           "color": "#d97706",
           "sounds": []
         }
+      ],
+      [
+        "@sentry/react-native/expo",
+        {
+          "organization": "codecast-a2",
+          "project": "react-native"
+        }
       ]
     ],
     "experiments": {

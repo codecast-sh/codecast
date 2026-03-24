@@ -1,6 +1,6 @@
 import { ConvexReactClient } from "convex/react";
 import { ConvexAuthProvider } from "@convex-dev/auth/react";
-import { ReactNode } from "react";
+import { ReactNode, useRef } from "react";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import { NavigationProgress } from "@/components/NavigationProgress";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -9,9 +9,29 @@ import { DesktopProvider } from "@/components/DesktopProvider";
 import { SlideOutProvider } from "@/components/SlideOutProvider";
 import { ShortcutProvider } from "@/shortcuts";
 import { useLocalStorageMigration } from "@/hooks/useLocalStorageMigration";
+import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { identifyUser, resetUser } from "@/lib/analytics";
 
 function PrefsMigration() {
   useLocalStorageMigration();
+  return null;
+}
+
+function AnalyticsIdentify() {
+  const { user } = useCurrentUser();
+  const lastId = useRef<string | null>(null);
+  const id = user?._id ?? null;
+  if (id && id !== lastId.current) {
+    lastId.current = id;
+    identifyUser(id, {
+      email: user!.email,
+      name: user!.name,
+      github_username: user!.github_username,
+    });
+  } else if (!id && lastId.current) {
+    lastId.current = null;
+    resetUser();
+  }
   return null;
 }
 
@@ -39,6 +59,7 @@ export function Providers({ children }: { children: ReactNode }) {
           <SlideOutProvider />
         </ErrorBoundary>
         <PrefsMigration />
+        <AnalyticsIdentify />
         <Toaster position="bottom-right" />
         </ShortcutProvider>
       </ThemeProvider>

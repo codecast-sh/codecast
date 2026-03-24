@@ -1,13 +1,26 @@
 import { onCLS, onFCP, onINP, onLCP, onTTFB, type Metric } from 'web-vitals';
+import { track } from './analytics';
+
+function sendToPostHog(metric: Metric) {
+  track('web_vital', {
+    name: metric.name,
+    value: metric.value,
+    rating: metric.rating,
+    delta: metric.delta,
+    navigationType: metric.navigationType,
+  });
+}
 
 export function reportWebVitals(onPerfEntry?: (metric: Metric) => void) {
-  if (onPerfEntry) {
-    onCLS(onPerfEntry);
-    onFCP(onPerfEntry);
-    onINP(onPerfEntry);
-    onLCP(onPerfEntry);
-    onTTFB(onPerfEntry);
-  }
+  const handler = (metric: Metric) => {
+    sendToPostHog(metric);
+    onPerfEntry?.(metric);
+  };
+  onCLS(handler);
+  onFCP(handler);
+  onINP(handler);
+  onLCP(handler);
+  onTTFB(handler);
 }
 
 export function measurePageLoad() {

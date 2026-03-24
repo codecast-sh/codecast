@@ -1,5 +1,6 @@
 import { Component, ReactNode } from "react";
 import { RefreshCw } from "lucide-react";
+import { captureError } from "@/lib/analytics";
 
 interface ErrorBoundaryProps {
   children: ReactNode;
@@ -35,6 +36,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
 
   componentDidCatch(error: Error, info: React.ErrorInfo) {
     console.error(`[ErrorBoundary${this.props.name ? `:${this.props.name}` : ""}]`, error, info.componentStack);
+    captureError(error, { component: this.props.name, componentStack: info.componentStack ?? undefined });
 
     if (error.message && isHmrRelatedError(error.message)) {
       const key = "eb_reload_" + window.location.pathname;
