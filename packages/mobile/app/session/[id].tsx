@@ -3489,7 +3489,7 @@ export default function SessionDetailScreen() {
     if (agentType === 'codex') {
       cmd = `codex resume ${conversation.session_id}`;
     } else {
-      cmd = `claude --resume ${conversation.session_id}`;
+      cmd = `cast resume ${conversation.session_id}`;
     }
     Clipboard.setString(cmd);
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
