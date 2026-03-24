@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import React, { useState, useCallback } from "react";
 import { useQuery } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useSlideOutStore } from "../store/slideOutStore";
@@ -203,6 +203,39 @@ function PlanHoverContent({ plan }: { plan: any }) {
   );
 }
 
+const MENTION_RE = /@\[([^\]]*?)(?:\s+(ct-\w+|pl-\w+|jx\w+))?\](?:\s*\([^)]*\))?/g;
+
+function MentionPill({ name, entityId }: { name: string; entityId?: string }) {
+  if (entityId && isEntityId(entityId)) {
+    return <EntityIdPill shortId={entityId} />;
+  }
+  return (
+    <span className="inline-flex items-center gap-0.5 px-1.5 py-0 rounded text-[11px] font-medium leading-[1.4] bg-sol-blue/10 text-sol-blue border border-sol-blue/20 align-baseline">
+      @{name}
+    </span>
+  );
+}
+
+export function renderWithMentions(text: string): React.ReactNode[] {
+  const parts: React.ReactNode[] = [];
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  MENTION_RE.lastIndex = 0;
+  while ((match = MENTION_RE.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push(text.slice(lastIndex, match.index));
+    }
+    const name = match[1].trim();
+    const entityId = match[2];
+    parts.push(<MentionPill key={match.index} name={name} entityId={entityId} />);
+    lastIndex = MENTION_RE.lastIndex;
+  }
+  if (lastIndex < text.length) {
+    parts.push(text.slice(lastIndex));
+  }
+  return parts.length > 0 ? parts : [text];
+}
+
 export function EntityAwareCode({ children, className, ...props }: any) {
   const text = String(children);
   if (!className && isEntityId(text)) {
@@ -214,6 +247,14 @@ export function EntityAwareCode({ children, className, ...props }: any) {
 export function EntityAwareLink({ href, children, ...props }: any) {
   if (href?.startsWith("entity://")) {
     return <EntityIdPill shortId={href.slice(9)} />;
+  }
+  if (href?.startsWith("mention://")) {
+    const name = decodeURIComponent(href.slice(10));
+    return (
+      <span className="inline-flex items-center gap-0.5 px-1.5 py-0 rounded text-[11px] font-medium leading-[1.4] bg-sol-blue/10 text-sol-blue border border-sol-blue/20 align-baseline">
+        @{name}
+      </span>
+    );
   }
   const text = typeof children === "string" ? children : Array.isArray(children) ? children.map(String).join("") : String(children ?? "");
   if (isEntityId(text)) {
