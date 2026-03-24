@@ -2070,6 +2070,13 @@ async function promptMemoryEnablement(): Promise<void> {
     }
   } else if (config.work_enabled) {
     installWorkSnippet(false);
+  } else if (config.memory_enabled && !config.work_enabled) {
+    installWorkSnippet(false);
+    config.work_enabled = true;
+    config.work_version = getWorkVersion();
+    writeConfig(config);
+    const targets = getSnippetTargets();
+    console.log(`Work snippet installed in ${targets.map(t => t.label).join(", ")}.`);
   }
   if (config.task_enabled && config.task_version !== getTaskVersion()) {
     const result = installTaskSnippet(true);
