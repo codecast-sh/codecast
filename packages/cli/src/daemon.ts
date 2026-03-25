@@ -108,6 +108,30 @@ async function tmuxSessionMatchesFullSessionId(sessionName: string, sessionId: s
   return isTmuxSessionMetadataMatch(stored, sessionId);
 }
 
+function resolveLocalRepo(remotePath: string): string | null {
+  if (!remotePath) return null;
+  if (fs.existsSync(remotePath)) return remotePath;
+  const parts = remotePath.split(path.sep).filter(Boolean);
+  const repoName = parts[parts.length - 1];
+  if (!repoName) return null;
+  const home = process.env.HOME || "/tmp";
+  const candidates = [
+    path.join(home, "src", repoName),
+    path.join(home, "Documents", "GitHub", repoName),
+    path.join(home, "projects", repoName),
+    path.join(home, "code", repoName),
+    path.join(home, "repos", repoName),
+    path.join(home, repoName),
+  ];
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      log(`Resolved remote CWD ${remotePath} -> ${candidate}`);
+      return candidate;
+    }
+  }
+  return null;
+}
+
 function validatePath(p: string): string | null {
   if (!p || typeof p !== "string") return null;
   if (!path.isAbsolute(p)) return null;
@@ -192,6 +216,7 @@ function getPermissionFlags(agentType: "claude" | "codex" | "cursor" | "gemini",
 
   if (agentType === "claude") {
     if (modes?.claude === "bypass") return "--permission-mode bypassPermissions";
+    return "--allow-dangerously-skip-permissions";
   } else if (agentType === "codex") {
     const existing = config?.codex_args || "";
     if (existing.includes("--full-auto") || existing.includes("--ask-for-approval") || existing.includes("--dangerously-bypass")) return null;
@@ -1113,7 +1138,7 @@ async function executeRemoteCommand(
           const extraArgs = config.claude_args || "";
           if (extraArgs) binaryArgs.push(...extraArgs.split(/\s+/).filter(Boolean));
           const permFlags = getPermissionFlags(agentType, config);
-          if (permFlags && !extraArgs.includes("--dangerously-skip-permissions") && !extraArgs.includes("--permission-mode")) {
+          if (permFlags && !extraArgs.includes("--dangerously-skip-permissions") && !extraArgs.includes("--permission-mode") && !extraArgs.includes("--allow-dangerously-skip-permissions")) {
             binaryArgs.push(...permFlags.split(/\s+/).filter(Boolean));
           }
         }
@@ -1583,7 +1608,7 @@ async function executeRemoteCommand(
           log(`[REMOTE] Force-resume succeeded for ${sessionId.slice(0, 8)}`);
         } else if (conversationId && projectPath) {
           log(`[REMOTE] Resume failed for ${sessionId.slice(0, 8)}, reconstituting session from DB...`);
-          const cwd = fs.existsSync(projectPath) ? projectPath : (process.env.HOME || "/tmp");
+          const cwd = resolveLocalRepo(projectPath) || process.env.HOME || "/tmp";
           let reconstituted = false;
 
           if (config?.convex_url && config?.auth_token) {
@@ -1616,6 +1641,13 @@ async function executeRemoteCommand(
             } catch (reconErr) {
               log(`[REMOTE] Reconstitution failed for ${sessionId.slice(0, 8)}: ${reconErr instanceof Error ? reconErr.message : String(reconErr)}`);
             }
+          }
+
+          const resumeFailureReason = resumeFatalReasons.get(sessionId) ?? null;
+          if (!reconstituted && !shouldStartBlankSessionAfterResumeFailure(resumeFailureReason)) {
+            error = `Failed to resume session ${sessionId.slice(0, 8)} — stale session id could not be rematerialized yet`;
+            log(`[REMOTE] Skipping blank-session fallback for ${sessionId.slice(0, 8)} (reason=${resumeFailureReason})`);
+            break;
           }
 
           if (!reconstituted) {
@@ -2371,15 +2403,25 @@ async function syncMessagesBatch(
       return { authExpired: false, conversationNotFound: true };
     }
 
-    log(`Batch sync failed, queueing individually: ${errMsg}`);
-    for (const msg of messages) {
-      const prepped = prepMessageForSync(msg);
-      retryQueue.add("addMessage", {
+    log(`Batch sync failed (${messages.length} msgs), retrying batch once: ${errMsg}`);
+    try {
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      await syncService.addMessages({
         conversationId,
-        ...prepped,
-      }, errMsg);
+        messages: messages.map(prepMessageForSync),
+      });
+      resetAuthFailureCount();
+      log(`Batch retry succeeded for ${messages.length} messages`);
+      return { authExpired: false, conversationNotFound: false };
+    } catch (retryErr) {
+      const retryErrMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+      log(`Batch retry also failed, queueing as batch: ${retryErrMsg}`);
+      retryQueue.add("addMessages", {
+        conversationId,
+        messages: messages.map(prepMessageForSync),
+      }, retryErrMsg);
+      return { authExpired: false, conversationNotFound: false };
     }
-    return { authExpired: false, conversationNotFound: false };
   }
 }
 
@@ -2430,6 +2472,7 @@ async function processSessionFile(
   titleCache: TitleCache,
   updateStateCallback: () => void,
   parentConversationId?: string,
+  overrideAgentType?: "claude_code",
 ): Promise<void> {
   const isSubagent = filePath.split(path.sep).includes("subagents");
     let lastPosition = getPosition(filePath);
@@ -2605,6 +2648,25 @@ async function processSessionFile(
         }
       }
 
+      // Detect parent from tmux spawn tracking (agent-spawn.sh / tmux new-session called by another session)
+      if (!parentConversationId && tmuxSpawnedBySession.size > 0) {
+        const spawnProc = await findSessionProcess(sessionId, "claude").catch(() => null);
+        if (spawnProc) {
+          let childTmuxName = sessionProcessCache.get(sessionId)?.tmuxTarget?.split(":")[0] ?? null;
+          if (!childTmuxName) {
+            const pane = await findTmuxPaneForTty(spawnProc.tty);
+            if (pane) {
+              childTmuxName = pane.split(":")[0];
+              cacheSessionProcess(sessionId, spawnProc, pane);
+            }
+          }
+          if (childTmuxName && tmuxSpawnedBySession.has(childTmuxName)) {
+            parentConversationId = tmuxSpawnedBySession.get(childTmuxName)!;
+            log(`Detected tmux-spawned parent for ${sessionId.slice(0, 8)}: ${parentConversationId.slice(0, 12)} via tmux session ${childTmuxName}`);
+          }
+        }
+      }
+
       if (!conversationId) {
         const freshCache = readConversationCache();
         if (freshCache[sessionId]) {
@@ -2690,7 +2752,7 @@ async function processSessionFile(
           userId,
           teamId,
           sessionId,
-          agentType: "claude_code",
+          agentType: overrideAgentType || "claude_code",
           projectPath: actualProjectPath,
           slug,
           title,
@@ -2808,7 +2870,7 @@ async function processSessionFile(
         userId,
         teamId,
         sessionId,
-        agentType: "claude_code",
+        agentType: overrideAgentType || "claude_code",
         projectPath: retryProjectPath,
         slug,
         startedAt: firstMsgTimestamp,
@@ -2891,6 +2953,44 @@ async function processSessionFile(
     }
   }
 
+  // Detect tmux session spawns in bash tool calls (agent-spawn.sh, tmux new-session)
+  if (conversationId && (newContent.includes("agent-spawn") || newContent.includes("tmux new-session") || newContent.includes("new-session"))) {
+    const spawnLines = newContent.split("\n");
+    for (const spawnLine of spawnLines) {
+      if (!spawnLine.includes("agent-spawn") && !spawnLine.includes("new-session")) continue;
+      try {
+        const entry = JSON.parse(spawnLine);
+        const msg = entry.message || entry;
+        const blocks = Array.isArray(msg.content) ? msg.content : [];
+        for (const block of blocks) {
+          if (block.type !== "tool_use") continue;
+          const cmd = block.input?.command;
+          if (typeof cmd !== "string") continue;
+          let spawnMatch = cmd.match(/agent-spawn(?:\.sh)?\s+\S+\s+["']?([^\s"']+)["']?/);
+          if (!spawnMatch) {
+            spawnMatch = cmd.match(/tmux\s+new-session\s+(?:.*?\s)?-s\s+["']?([^\s"']+)["']?/);
+          }
+          if (spawnMatch) {
+            const tmuxName = spawnMatch[1];
+            tmuxSpawnedBySession.set(tmuxName, conversationId);
+            log(`Tracked tmux spawn: ${tmuxName} -> parent ${conversationId.slice(0, 12)}`);
+            // Retroactively link if child session was already created
+            for (const [childSid, info] of sessionProcessCache) {
+              if (info.tmuxTarget?.split(":")[0] === tmuxName && conversationCache[childSid]) {
+                const childConvId = conversationCache[childSid];
+                syncService.linkSessions(conversationId, childConvId).then(() => {
+                  log(`Retroactively linked tmux-spawned child ${childSid.slice(0, 8)} -> parent ${conversationId.slice(0, 12)}`);
+                }).catch(err => {
+                  log(`Failed retroactive tmux spawn link: ${err instanceof Error ? err.message : String(err)}`);
+                });
+              }
+            }
+          }
+        }
+      } catch {}
+    }
+  }
+
   syncSkillsForConversation(conversationId, projectPath, syncService);
 
   const batchResult = await syncMessagesBatch(messages, conversationId, syncService, retryQueue);
@@ -2930,7 +3030,7 @@ async function processSessionFile(
         userId,
         teamId,
         sessionId,
-        agentType: "claude_code",
+        agentType: overrideAgentType || "claude_code",
         projectPath: recreateProjectPath,
         slug,
         title,
@@ -5302,8 +5402,49 @@ const RESTART_GUARD_TTL_MS = 60_000;
 const resumeInFlight = new Map<string, Promise<boolean>>();
 const resumeInFlightStarted = new Map<string, number>();
 const RESUME_IN_FLIGHT_TIMEOUT_MS = 120_000;
+type ResumeFatalReason = "missing_conversation" | "session_not_found";
+const resumeFatalReasons = new Map<string, ResumeFatalReason>();
+
+const sessionDeliveryFailures = new Map<string, { count: number; lastFailure: number }>();
+const SESSION_CIRCUIT_BREAKER_THRESHOLD = 3;
+const SESSION_CIRCUIT_BREAKER_COOLDOWN_MS = 300_000; // 5 minutes
+
+function isSessionCircuitOpen(sessionId: string): boolean {
+  const entry = sessionDeliveryFailures.get(sessionId);
+  if (!entry) return false;
+  if (entry.count >= SESSION_CIRCUIT_BREAKER_THRESHOLD) {
+    if (Date.now() - entry.lastFailure < SESSION_CIRCUIT_BREAKER_COOLDOWN_MS) return true;
+    sessionDeliveryFailures.delete(sessionId);
+  }
+  return false;
+}
+
+function recordSessionDeliveryFailure(sessionId: string): void {
+  const entry = sessionDeliveryFailures.get(sessionId) || { count: 0, lastFailure: 0 };
+  entry.count++;
+  entry.lastFailure = Date.now();
+  sessionDeliveryFailures.set(sessionId, entry);
+}
+
+function resetSessionDeliveryFailures(sessionId: string): void {
+  sessionDeliveryFailures.delete(sessionId);
+}
 
 const UUID_JSONL_RE = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/;
+
+export function classifyClaudeResumeFatalReason(paneContent: string): ResumeFatalReason | null {
+  if (/No conversation found with session ID:/i.test(paneContent)) return "missing_conversation";
+  if (/Session not found/i.test(paneContent)) return "session_not_found";
+  return null;
+}
+
+export function shouldMaterializeFreshClaudeSession(reason: ResumeFatalReason | null | undefined): boolean {
+  return reason === "missing_conversation" || reason === "session_not_found";
+}
+
+export function shouldStartBlankSessionAfterResumeFailure(reason: ResumeFatalReason | null | undefined): boolean {
+  return !shouldMaterializeFreshClaudeSession(reason);
+}
 
 function stopManagedSessionHeartbeat(sessionId: string | undefined): void {
   if (!sessionId) return;
@@ -5498,6 +5639,26 @@ async function discoverAndLinkSession(
   log(`[DISCOVER] Timed out discovering session for conversation ${conversationId.slice(0, 12)}`);
 }
 
+function remapConversationSession(
+  oldSessionId: string,
+  newSessionId: string,
+  conversationId: string,
+  conversationCache?: ConversationCache,
+): void {
+  const cache = conversationCache || readConversationCache();
+  delete cache[oldSessionId];
+  cache[newSessionId] = conversationId;
+  saveConversationCache(cache);
+  if (conversationCacheRef) {
+    delete conversationCacheRef[oldSessionId];
+    conversationCacheRef[newSessionId] = conversationId;
+  }
+  resumeSessionCache.delete(oldSessionId);
+  stopManagedSessionHeartbeat(oldSessionId);
+  stopCodexPermissionPoller(oldSessionId);
+  resumeFatalReasons.delete(oldSessionId);
+}
+
 const planHandoffChildren = new Map<string, string>();
 const planHandoffChecked = new Set<string>();
 const planModeSynced = new Set<string>();
@@ -5544,6 +5705,8 @@ loadPlanModeCache();
 const pendingSubagentParents = new Map<string, string>();
 // Track subagent descriptions read from .meta.json: sessionId -> description
 const subagentDescriptions = new Map<string, string>();
+// Track tmux sessions spawned by known parent sessions: tmuxSessionName -> parentConversationId
+const tmuxSpawnedBySession = new Map<string, string>();
 
 interface CachedProcessInfo {
   pid: number;
@@ -5663,6 +5826,11 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
     logDelivery(`Cannot auto-resume ${sessionId.slice(0, 8)}: tmux not installed`);
     return false;
   }
+  const priorFatalReason = resumeFatalReasons.get(sessionId);
+  if (priorFatalReason) {
+    logDelivery(`Skipping auto-resume for ${sessionId.slice(0, 8)}: prior fatal reason=${priorFatalReason}`);
+    return false;
+  }
   let sessionFile = findSessionFile(sessionId);
   const config = readConfig();
   if (!sessionFile && conversationId && config?.auth_token && config?.convex_url) {
@@ -5677,6 +5845,12 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
       const { jsonl, sessionId: newId } = generateClaudeCodeJsonl(data, { tailMessages });
       const result = writeClaudeCodeSession(jsonl, newId, data.conversation.project_path || undefined);
       logDelivery(`Reconstituted ${sessionId.slice(0, 8)} as ${newId.slice(0, 8)} (${data.messages.length} msgs)`);
+      if (conversationId) {
+        remapConversationSession(sessionId, newId, conversationId);
+        if (syncServiceRef) {
+          syncServiceRef.updateSessionId(conversationId, newId).catch(() => {});
+        }
+      }
       sessionId = newId;
       sessionFile = findSessionFile(newId);
       if (!sessionFile) {
@@ -5704,7 +5878,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
   const validOverride = cwdOverride && fs.existsSync(cwdOverride) ? cwdOverride : undefined;
 
   if (agentType === "codex") {
-    cwd = validOverride || extractCodexCwd(jsonlContent) || process.env.HOME || "/tmp";
+    cwd = validOverride || resolveLocalRepo(extractCodexCwd(jsonlContent) || "") || process.env.HOME || "/tmp";
     let extraFlags = config?.codex_args || "";
     const permFlags = getPermissionFlags("codex", config);
     if (permFlags) extraFlags = extraFlags ? extraFlags + " " + permFlags : permFlags;
@@ -5713,7 +5887,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
     cwd = validOverride || process.env.HOME || "/tmp";
     resumeCmd = `gemini --resume latest`;
   } else {
-    cwd = validOverride || extractCwd(jsonlContent) || process.env.HOME || "/tmp";
+    cwd = validOverride || resolveLocalRepo(extractCwd(jsonlContent) || "") || process.env.HOME || "/tmp";
     let extraFlags = config?.claude_args || "";
     try {
       const firstUserLine = jsonlContent.split("\n").find(l => l.includes('"type":"user"'));
@@ -5725,7 +5899,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
       }
     } catch {}
     const permFlags = getPermissionFlags("claude", config);
-    if (permFlags && !extraFlags.includes("--dangerously-skip-permissions") && !extraFlags.includes("--permission-mode")) {
+    if (permFlags && !extraFlags.includes("--dangerously-skip-permissions") && !extraFlags.includes("--permission-mode") && !extraFlags.includes("--allow-dangerously-skip-permissions")) {
       extraFlags = extraFlags ? extraFlags + " " + permFlags : permFlags;
     }
     let resumeId = sessionId;
@@ -5817,6 +5991,10 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
         try {
           const { stdout: paneContent } = await tmuxExec(["capture-pane", "-p", "-J", "-t", tmuxSession, "-S", "-20"]);
           if (fatalErrors.some(e => paneContent.includes(e))) {
+            const fatalReason = classifyClaudeResumeFatalReason(paneContent);
+            if (fatalReason) {
+              resumeFatalReasons.set(sessionId, fatalReason);
+            }
             logDelivery(`Auto-resume FATAL (non-interactive) for ${shortId}: ${paneContent.slice(0, 300)}`);
             try { await tmuxExec(["kill-session", "-t", tmuxSession]); } catch {}
             try { fs.unlinkSync(tmpFile); } catch {}
@@ -5831,6 +6009,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
       }
 
       resumeSessionCache.set(sessionId, tmuxSession);
+      resumeFatalReasons.delete(sessionId);
       if (syncServiceRef && conversationId) {
         syncServiceRef.registerManagedSession(sessionId, process.pid, tmuxSession, conversationId).catch(() => {});
         syncServiceRef.updateSessionAgentStatus(conversationId, "connected").catch(() => {});
@@ -5888,19 +6067,24 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
     let ready = false;
 
     for (let i = 0; i < maxIterations; i++) {
-      await new Promise(resolve => setTimeout(resolve, 250));
-      try {
-        const { stdout: paneContent } = await tmuxExec(["capture-pane", "-p", "-J", "-t", tmuxSession, "-S", "-20"]);
-        if (fatalErrors.some(e => paneContent.includes(e))) {
-          logDelivery(`Auto-resume FATAL for ${shortId}: agent crashed. Pane: ${paneContent.slice(0, 300)}`);
-          try { await tmuxExec(["kill-session", "-t", tmuxSession]); } catch {}
-          return false;
-        }
-        if (promptPattern.test(paneContent) && await isTmuxAgentAlive(tmuxSession)) {
-          logDelivery(`Agent ${shortId} ready (prompt visible) after ${Date.now() - startTime}ms`);
-          ready = true;
-          break;
-        }
+        await new Promise(resolve => setTimeout(resolve, 250));
+        try {
+          const { stdout: paneContent } = await tmuxExec(["capture-pane", "-p", "-J", "-t", tmuxSession, "-S", "-20"]);
+          if (fatalErrors.some(e => paneContent.includes(e))) {
+            const fatalReason = agentType === "claude" ? classifyClaudeResumeFatalReason(paneContent) : null;
+            if (fatalReason) {
+              resumeFatalReasons.set(sessionId, fatalReason);
+            }
+            logDelivery(`Auto-resume FATAL for ${shortId}: agent crashed. Pane: ${paneContent.slice(0, 300)}`);
+            try { await tmuxExec(["kill-session", "-t", tmuxSession]); } catch {}
+            return false;
+          }
+          if (promptPattern.test(paneContent) && await isTmuxAgentAlive(tmuxSession)) {
+            resumeFatalReasons.delete(sessionId);
+            logDelivery(`Agent ${shortId} ready (prompt visible) after ${Date.now() - startTime}ms`);
+            ready = true;
+            break;
+          }
       } catch {}
     }
     if (!ready) {
@@ -5950,7 +6134,8 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
 }
 
 const repairAttempts = new Map<string, number>();
-const REPAIR_COOLDOWN_MS = 10 * 60 * 1000;
+const REPAIR_COOLDOWN_MS = 60 * 1000;
+const repairInFlight = new Map<string, Promise<boolean>>();
 
 async function repairAndResumeSession(
   sessionId: string,
@@ -5960,135 +6145,182 @@ async function repairAndResumeSession(
   cwdOverride?: string,
   conversationId?: string
 ): Promise<boolean> {
-  const lastAttempt = repairAttempts.get(sessionId);
+  const existing = repairInFlight.get(sessionId);
+  if (existing) return existing;
+
+  const cooldownKey = conversationId || sessionId;
+  const lastAttempt = repairAttempts.get(cooldownKey) || repairAttempts.get(sessionId);
   if (lastAttempt && Date.now() - lastAttempt < REPAIR_COOLDOWN_MS) {
-    log(`Repair cooldown active for ${sessionId.slice(0, 8)}, skipping`);
-    return false;
-  }
-  repairAttempts.set(sessionId, Date.now());
-
-  const config = readConfig();
-  if (!config?.convex_url || !config?.auth_token) {
-    log(`Cannot repair session: missing config`);
+    log(`Repair cooldown active for ${sessionId.slice(0, 8)} (conv=${conversationId?.slice(0, 8) ?? "?"}), skipping`);
     return false;
   }
 
-  const convId = conversationId || (() => {
-    const cache = readConversationCache();
-    return cache[sessionId];
-  })();
+  const promise = (async (): Promise<boolean> => {
+    let success = false;
 
-  if (!convId) {
-    log(`Cannot repair ${sessionId.slice(0, 8)}: no conversation_id found`);
-    return false;
-  }
-
-  const siteUrl = config.convex_url.replace(".cloud", ".site");
-
-  // Strategy 1: Regenerate JSONL from Convex (cleanest)
-  try {
-    log(`Repairing session ${sessionId.slice(0, 8)} via Convex regeneration...`);
-    const exportData = await fetchExport(siteUrl, config.auth_token!, convId);
-    if (exportData.messages.length === 0) {
-      log(`Repair aborted for ${sessionId.slice(0, 8)}: conversation has 0 messages, nothing to resume`);
-      return false;
-    }
-    const sessionFile = findSessionFile(sessionId);
-    const isCodexSession = sessionFile?.agentType === "codex";
-
-    let jsonl: string;
-    let tailMessages: number | undefined;
-    if (isCodexSession) {
-      ({ jsonl } = generateCodexJsonl(exportData, { sessionId }));
-    } else {
-      const TOKEN_BUDGET = 100_000;
-      tailMessages = chooseClaudeTailMessagesForTokenBudget(exportData, TOKEN_BUDGET);
-      ({ jsonl } = generateClaudeCodeJsonl(exportData, { tailMessages, sessionId }));
-    }
-
-    const projectPath = cwdOverride || exportData.conversation.project_path || undefined;
-
-    // Backup original and write repaired
-    if (sessionFile) {
-      const bakPath = sessionFile.path + ".bak";
-      if (!fs.existsSync(bakPath)) {
-        fs.copyFileSync(sessionFile.path, bakPath);
+    try {
+      const config = readConfig();
+      if (!config?.convex_url || !config?.auth_token) {
+        log(`Cannot repair session: missing config`);
+        return false;
       }
-      fs.writeFileSync(sessionFile.path, jsonl);
-      if (isCodexSession) {
-        log(`Repaired Codex JSONL for ${sessionId.slice(0, 8)} (${exportData.messages.length} messages)`);
-      } else {
-        log(`Repaired JSONL for ${sessionId.slice(0, 8)} (${exportData.messages.length} messages, tail=${tailMessages})`);
+
+      const convId = conversationId || (() => {
+        const cache = readConversationCache();
+        return cache[sessionId];
+      })();
+
+      if (!convId) {
+        log(`Cannot repair ${sessionId.slice(0, 8)}: no conversation_id found`);
+        return false;
       }
-    } else {
-      if (isCodexSession) {
-        writeCodexSession(jsonl, sessionId, "rollout");
-        log(`Wrote new Codex session file for ${sessionId.slice(0, 8)}`);
-      } else {
-        const { filePath: repairFilePath } = writeClaudeCodeSession(jsonl, sessionId, projectPath);
-        setPosition(repairFilePath, fs.statSync(repairFilePath).size);
-        log(`Wrote new session file for ${sessionId.slice(0, 8)}`);
-      }
-    }
 
-    const resumed = await autoResumeSession(sessionId, content, titleCache, nonInteractive, cwdOverride || projectPath, convId);
-    if (resumed) {
-      log(`Repair + resume succeeded for ${sessionId.slice(0, 8)}`);
-      return true;
-    }
-  } catch (err) {
-    log(`Convex regeneration failed for ${sessionId.slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`);
-  }
+      const siteUrl = config.convex_url.replace(".cloud", ".site");
 
-  // Strategy 2: Surgical JSONL cleanup - remove entries that crash Claude CLI
-  try {
-    const sessionFile = findSessionFile(sessionId);
-    if (!sessionFile) return false;
-
-    log(`Attempting surgical JSONL cleanup for ${sessionId.slice(0, 8)}...`);
-    const lines = fs.readFileSync(sessionFile.path, "utf-8").split("\n").filter(l => l.trim());
-    const cleanLines: string[] = [];
-    let removed = 0;
-
-    for (const line of lines) {
       try {
-        const parsed = JSON.parse(line);
-        const content = parsed.message?.content;
-        if (Array.isArray(content)) {
-          const hasCorruptToolResult = content.some((c: any) =>
-            c.type === "tool_result" && c.content && typeof c.content === "string" &&
-            (c.content.includes("is not an object") || c.content.includes("undefined"))
-          );
-          if (hasCorruptToolResult) {
-            removed++;
-            continue;
+        log(`Repairing session ${sessionId.slice(0, 8)} via Convex regeneration...`);
+        const exportData = await fetchExport(siteUrl, config.auth_token!, convId);
+        if (exportData.messages.length === 0) {
+          log(`Repair aborted for ${sessionId.slice(0, 8)}: conversation has 0 messages, nothing to resume`);
+          return false;
+        }
+        const sessionFile = findSessionFile(sessionId);
+        const agentType = sessionFile?.agentType ?? "claude";
+        const isCodexSession = agentType === "codex";
+        const failureReason = !isCodexSession ? resumeFatalReasons.get(sessionId) ?? null : null;
+        const projectPath = cwdOverride || exportData.conversation.project_path || undefined;
+
+        let jsonl: string;
+        let tailMessages: number | undefined;
+        let targetSessionId = sessionId;
+
+        if (isCodexSession) {
+          ({ jsonl } = generateCodexJsonl(exportData, { sessionId }));
+        } else {
+          const TOKEN_BUDGET = 100_000;
+          tailMessages = chooseClaudeTailMessagesForTokenBudget(exportData, TOKEN_BUDGET);
+          if (shouldMaterializeFreshClaudeSession(failureReason)) {
+            const generated = generateClaudeCodeJsonl(exportData, { tailMessages });
+            jsonl = generated.jsonl;
+            targetSessionId = generated.sessionId;
+          } else {
+            ({ jsonl } = generateClaudeCodeJsonl(exportData, { tailMessages, sessionId }));
           }
         }
-        cleanLines.push(line);
-      } catch {
-        cleanLines.push(line);
+
+        if (targetSessionId !== sessionId) {
+          const { filePath: repairFilePath } = writeClaudeCodeSession(jsonl, targetSessionId, projectPath);
+          setPosition(repairFilePath, fs.statSync(repairFilePath).size);
+          remapConversationSession(sessionId, targetSessionId, convId);
+          if (titleCache[sessionId] && !titleCache[targetSessionId]) {
+            titleCache[targetSessionId] = titleCache[sessionId];
+            saveTitleCache(titleCache);
+          }
+          if (syncServiceRef) {
+            syncServiceRef.updateSessionId(convId, targetSessionId).catch(() => {});
+          }
+          log(`Materialized fresh Claude session ${targetSessionId.slice(0, 8)} from stale ${sessionId.slice(0, 8)} (${exportData.messages.length} messages, tail=${tailMessages})`);
+
+          const resumed = await autoResumeSession(targetSessionId, content, titleCache, nonInteractive, cwdOverride || projectPath, convId);
+          if (resumed) {
+            log(`Repair + resume succeeded for ${sessionId.slice(0, 8)} via fresh session ${targetSessionId.slice(0, 8)}`);
+            success = true;
+            return true;
+          }
+        } else if (sessionFile) {
+          const bakPath = sessionFile.path + ".bak";
+          if (!fs.existsSync(bakPath)) {
+            fs.copyFileSync(sessionFile.path, bakPath);
+          }
+          fs.writeFileSync(sessionFile.path, jsonl);
+          if (isCodexSession) {
+            log(`Repaired Codex JSONL for ${sessionId.slice(0, 8)} (${exportData.messages.length} messages)`);
+          } else {
+            log(`Repaired JSONL for ${sessionId.slice(0, 8)} (${exportData.messages.length} messages, tail=${tailMessages})`);
+          }
+        } else if (isCodexSession) {
+          writeCodexSession(jsonl, sessionId, "rollout");
+          log(`Wrote new Codex session file for ${sessionId.slice(0, 8)}`);
+        } else {
+          const { filePath: repairFilePath } = writeClaudeCodeSession(jsonl, sessionId, projectPath);
+          setPosition(repairFilePath, fs.statSync(repairFilePath).size);
+          log(`Wrote new session file for ${sessionId.slice(0, 8)}`);
+        }
+
+        const resumed = await autoResumeSession(sessionId, content, titleCache, nonInteractive, cwdOverride || projectPath, convId);
+        if (resumed) {
+          log(`Repair + resume succeeded for ${sessionId.slice(0, 8)}`);
+          success = true;
+          return true;
+        }
+      } catch (err) {
+        log(`Convex regeneration failed for ${sessionId.slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+
+      try {
+        const sessionFile = findSessionFile(sessionId);
+        if (!sessionFile) return false;
+
+        log(`Attempting surgical JSONL cleanup for ${sessionId.slice(0, 8)}...`);
+        const lines = fs.readFileSync(sessionFile.path, "utf-8").split("\n").filter(l => l.trim());
+        const cleanLines: string[] = [];
+        let removed = 0;
+
+        for (const line of lines) {
+          try {
+            const parsed = JSON.parse(line);
+            const content = parsed.message?.content;
+            if (Array.isArray(content)) {
+              const hasCorruptToolResult = content.some((c: any) =>
+                c.type === "tool_result" && c.content && typeof c.content === "string" &&
+                (c.content.includes("is not an object") || c.content.includes("undefined"))
+              );
+              if (hasCorruptToolResult) {
+                removed++;
+                continue;
+              }
+            }
+            cleanLines.push(line);
+          } catch {
+            cleanLines.push(line);
+          }
+        }
+
+        if (removed > 0) {
+          const bakPath = sessionFile.path + ".bak";
+          if (!fs.existsSync(bakPath)) {
+            fs.copyFileSync(sessionFile.path, bakPath);
+          }
+          fs.writeFileSync(sessionFile.path, cleanLines.join("\n") + "\n");
+          log(`Surgical cleanup: removed ${removed} corrupt entries from ${sessionId.slice(0, 8)}`);
+
+          const resumed = await autoResumeSession(sessionId, content, titleCache, nonInteractive, cwdOverride, convId);
+          if (resumed) {
+            log(`Surgical repair + resume succeeded for ${sessionId.slice(0, 8)}`);
+            success = true;
+            return true;
+          }
+        }
+      } catch (err) {
+        log(`Surgical cleanup failed for ${sessionId.slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+
+      return false;
+    } finally {
+      repairInFlight.delete(sessionId);
+      const now = Date.now();
+      if (success) {
+        repairAttempts.delete(sessionId);
+        if (conversationId) repairAttempts.delete(conversationId);
+      } else {
+        repairAttempts.set(sessionId, now);
+        if (conversationId) repairAttempts.set(conversationId, now);
       }
     }
+  })();
 
-    if (removed > 0) {
-      const bakPath = sessionFile.path + ".bak";
-      if (!fs.existsSync(bakPath)) {
-        fs.copyFileSync(sessionFile.path, bakPath);
-      }
-      fs.writeFileSync(sessionFile.path, cleanLines.join("\n") + "\n");
-      log(`Surgical cleanup: removed ${removed} corrupt entries from ${sessionId.slice(0, 8)}`);
-
-      const resumed = await autoResumeSession(sessionId, content, titleCache, nonInteractive, cwdOverride, convId);
-      if (resumed) {
-        log(`Surgical repair + resume succeeded for ${sessionId.slice(0, 8)}`);
-        return true;
-      }
-    }
-  } catch (err) {
-    log(`Surgical cleanup failed for ${sessionId.slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`);
-  }
-
-  return false;
+  repairInFlight.set(sessionId, promise);
+  return promise;
 }
 
 async function postDeliveryHealthCheck(
@@ -6615,6 +6847,12 @@ async function deliverMessage(
     logDelivery(`No running process found for session=${sessionId.slice(0, 12)} type=${detectedType}`);
   }
 
+  // Circuit breaker: skip auto-resume if this session has failed too many times recently
+  if (isSessionCircuitOpen(sessionId)) {
+    logDelivery(`Circuit breaker OPEN for session=${sessionId.slice(0, 8)}, skipping auto-resume (cooldown ${SESSION_CIRCUIT_BREAKER_COOLDOWN_MS / 1000}s)`);
+    return false;
+  }
+
   // Last resort: auto-resume in a new tmux session
   const tmuxAvailable = hasTmux();
   logDelivery(`Attempting auto-resume: session=${sessionId.slice(0, 8)} tmux=${tmuxAvailable}`);
@@ -6623,6 +6861,7 @@ async function deliverMessage(
   }
   const resumed = await autoResumeSession(sessionId, content, titleCache, isMaterialized, undefined, conversationId);
   if (resumed) {
+    resetSessionDeliveryFailures(sessionId);
     materializedSessions.delete(sessionId);
     await syncService.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
     logDelivery(`Delivered via auto-resume for session=${sessionId.slice(0, 8)}`);
@@ -6643,6 +6882,7 @@ async function deliverMessage(
   logDelivery(`Auto-resume failed for ${sessionId.slice(0, 8)}, attempting repair...`);
   const repaired = await repairAndResumeSession(sessionId, content, titleCache, isMaterialized, undefined, conversationId);
   if (repaired) {
+    resetSessionDeliveryFailures(sessionId);
     materializedSessions.delete(sessionId);
     await syncService.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
     logDelivery(`Delivered via repair+resume for session=${sessionId.slice(0, 8)}`);
@@ -6659,6 +6899,7 @@ async function deliverMessage(
     return true;
   }
 
+  recordSessionDeliveryFailure(sessionId);
   logDelivery(`DELIVERY FAILED: all methods exhausted for session=${sessionId.slice(0, 8)} conv=${conversationId.slice(0, 12)}`);
   return false;
 }
@@ -8083,6 +8324,27 @@ async function main(): Promise<void> {
         delete pendingMessages[params.sessionId];
       }
       updateState();
+      return true;
+    }
+
+    if (op.type === "addMessages") {
+      const params = op.params as {
+        conversationId: string;
+        messages: Array<{
+          messageUuid?: string;
+          role: "human" | "assistant" | "system";
+          content: string;
+          timestamp: number;
+          thinking?: string;
+          toolCalls?: any;
+          toolResults?: any;
+          images?: any;
+          subtype?: string;
+        }>;
+      };
+      await syncService.addMessages(params);
+      updateState();
+      log(`Retry: Batch synced ${params.messages.length} messages for ${params.conversationId.slice(0, 12)}`);
       return true;
     }
 
