@@ -404,6 +404,10 @@ interface DaemonState {
   lastSyncTime?: number;
   pendingQueueSize?: number;
   authExpired?: boolean;
+  lastHeartbeatTick?: number;
+  lastWatchdogCheck?: number;
+  runtimeVersion?: string;
+  watchdogRestarts?: number;
 }
 
 function detectAgents(): DetectedAgent[] {
@@ -1060,6 +1064,41 @@ function getAgentLabel(agentType?: string): string | null {
   return agentType;
 }
 
+const DAEMON_BLOCKED_THRESHOLD_MS = 2 * 60 * 1000;
+const AUTO_RESTART_COOLDOWN_MS = 5 * 60 * 1000;
+const AUTO_RESTART_STATE_FILE = path.join(CONFIG_DIR, "last-auto-restart");
+
+function checkDaemonHealth(): { blocked: boolean; restarted: boolean } {
+  const pid = getDaemonPid();
+  if (!pid) return { blocked: false, restarted: false };
+
+  const state = readDaemonState();
+  const lastTick = state?.lastHeartbeatTick || state?.lastWatchdogCheck || 0;
+  if (lastTick <= 0) return { blocked: false, restarted: false };
+
+  const tickStaleMs = Date.now() - lastTick;
+  if (tickStaleMs <= DAEMON_BLOCKED_THRESHOLD_MS) return { blocked: false, restarted: false };
+
+  let lastRestart = 0;
+  try {
+    if (fs.existsSync(AUTO_RESTART_STATE_FILE)) {
+      lastRestart = parseInt(fs.readFileSync(AUTO_RESTART_STATE_FILE, "utf-8").trim(), 10) || 0;
+    }
+  } catch {}
+
+  if (Date.now() - lastRestart < AUTO_RESTART_COOLDOWN_MS) {
+    return { blocked: true, restarted: false };
+  }
+
+  try { fs.writeFileSync(AUTO_RESTART_STATE_FILE, String(Date.now()), { mode: 0o600 }); } catch {}
+
+  try { process.kill(pid, "SIGKILL"); } catch {}
+  try { if (fs.existsSync(PID_FILE)) fs.unlinkSync(PID_FILE); } catch {}
+
+  startDaemonQuiet();
+  return { blocked: true, restarted: true };
+}
+
 function showStatus(): void {
   const pid = getDaemonPid();
   const launchdStatus = getMacLaunchdDaemonStatus();
@@ -1090,7 +1129,17 @@ function showStatus(): void {
   console.log("");
 
   if (pid) {
-    row("Daemon", fmt.success(icons.check + " running") + fmt.muted(` (PID ${pid})`));
+    const health = checkDaemonHealth();
+    if (health.blocked) {
+      if (health.restarted) {
+        row("Daemon", fmt.warning("was blocked, auto-restarted"));
+      } else {
+        row("Daemon", fmt.warning("blocked") + fmt.muted(` (PID ${pid})`));
+        console.log(`  ${fmt.muted("Run")} ${fmt.cmd("cast restart")} ${fmt.muted("to recover")}`);
+      }
+    } else {
+      row("Daemon", fmt.success(icons.check + " running") + fmt.muted(` (PID ${pid})`));
+    }
 
     if (state?.lastSyncTime) {
       row("Last sync", fmt.value(formatRelativeTime(state.lastSyncTime)));
@@ -2459,6 +2508,13 @@ program
       console.log(`Update available: v${getVersion()} -> v${available}, updating...`);
       const success = await performUpdate();
       if (success) {
+        const config = readConfig() || {};
+        if (config.memory_enabled) installMemorySnippet(true);
+        if (config.task_enabled) installTaskSnippet(true);
+        if (config.work_enabled) installWorkSnippet(true);
+        if (config.workflow_enabled) installWorkflowSnippet(true);
+        installSessionRegisterHook();
+        installStatusHook();
         console.log(`Updated to v${available}`);
       } else {
         console.log("Update failed, restarting with current version");
@@ -11684,6 +11740,9 @@ workflow
     }
   });
 
+// Silently recover blocked daemon on any CLI invocation
+checkDaemonHealth();
+
 // Check for updates in background (non-blocking)
 checkForUpdates().then(async (available) => {
   if (!available) return;
@@ -11694,22 +11753,31 @@ checkForUpdates().then(async (available) => {
     return;
   }
 
+  const daemonWasRunning = getDaemonPid() !== null;
+  if (daemonWasRunning) {
+    stopDaemon();
+  }
+
   console.log(`\nAuto-updating to v${available}...`);
   const success = await performUpdate();
   if (success) {
-    if (config?.memory_enabled) {
-      installMemorySnippet(true);
-    }
-    if (config?.task_enabled) {
-      installTaskSnippet(true);
-    }
-    if (config?.workflow_enabled) {
-      installWorkflowSnippet(true);
-    }
+    if (config?.memory_enabled) installMemorySnippet(true);
+    if (config?.task_enabled) installTaskSnippet(true);
+    if (config?.work_enabled) installWorkSnippet(true);
+    if (config?.workflow_enabled) installWorkflowSnippet(true);
     installSessionRegisterHook();
     installStatusHook();
-    console.log("Update complete. Restart cast to use the new version.\n");
+
+    if (daemonWasRunning) {
+      startDaemon();
+      console.log(`Updated to v${available} and restarted daemon.\n`);
+    } else {
+      console.log(`Updated to v${available}.\n`);
+    }
   } else {
+    if (daemonWasRunning) {
+      startDaemon();
+    }
     showUpdateNotice(available);
   }
 });
