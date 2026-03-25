@@ -2143,9 +2143,12 @@ export const listRecentSessions = query({
   handler: async (ctx) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return [];
+    const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
     const results = await ctx.db
       .query("conversations")
-      .withIndex("by_user_updated", (q) => q.eq("user_id", userId))
+      .withIndex("by_user_updated", (q) =>
+        q.eq("user_id", userId).gte("updated_at", thirtyDaysAgo)
+      )
       .order("desc")
       .filter((q) =>
         q.and(
@@ -2156,7 +2159,7 @@ export const listRecentSessions = query({
           )
         )
       )
-      .take(200);
+      .take(100);
     return results.map((c) => ({
       _id: c._id,
       session_id: c.session_id,
