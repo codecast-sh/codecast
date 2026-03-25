@@ -256,7 +256,7 @@ export const resumeSession = mutation({
       throw new Error("No session ID on this conversation");
     }
 
-    const agentType = conversation.agent_type === "codex" ? "codex" : conversation.agent_type === "gemini" ? "gemini" : "claude";
+    const agentType = conversation.agent_type === "codex" ? "codex" : conversation.agent_type === "cowork" ? "cowork" : conversation.agent_type === "gemini" ? "gemini" : "claude";
 
     const commandId = await ctx.db.insert("daemon_commands", {
       user_id: authUserId,
@@ -1450,7 +1450,8 @@ export const startSession = mutation({
       v.literal("claude"),
       v.literal("codex"),
       v.literal("cursor"),
-      v.literal("gemini")
+      v.literal("gemini"),
+      v.literal("cowork")
     ),
     project_path: v.optional(v.string()),
     prompt: v.optional(v.string()),

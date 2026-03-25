@@ -132,7 +132,7 @@ export const forceDeleteConversations = mutation({
 export const deleteConversationsByType = mutation({
   args: {
     user_id: v.id("users"),
-    agent_type: v.union(v.literal("claude_code"), v.literal("codex"), v.literal("cursor")),
+    agent_type: v.union(v.literal("claude_code"), v.literal("codex"), v.literal("cursor"), v.literal("cowork")),
   },
   handler: async (ctx, args) => {
     const convos = await ctx.db

@@ -23,6 +23,7 @@ import {
   matchStartedConversation,
 } from "./sessionProcessMatcher.js";
 import { GeminiWatcher, type GeminiSessionEvent } from "./geminiWatcher.js";
+import { CoworkWatcher, type CoworkSessionEvent } from "./coworkWatcher.js";
 import { parseSessionFile, parseCodexSessionFile, parseGeminiSessionFile, parseCursorTranscriptFile, extractSlug, extractParentUuid, extractSummaryTitle, extractCwd, extractCodexCwd, extractGeminiProjectHash, detectCliFlags, type ParsedMessage } from "./parser.js";
 import { extractMessagesFromCursorDb } from "./cursorProcessor.js";
 import { getPosition, setPosition } from "./positionTracker.js";
@@ -184,10 +185,11 @@ interface Config {
     codex?: Record<string, string>;
     gemini?: Record<string, string>;
     cursor?: Record<string, string>;
+    cowork?: Record<string, string>;
   };
 }
 
-function getPermissionFlags(agentType: "claude" | "codex" | "cursor" | "gemini", config?: Config | null): string | null {
+function getPermissionFlags(agentType: "claude" | "codex" | "cursor" | "gemini" | "cowork", config?: Config | null): string | null {
   const modes = config?.agent_permission_modes;
 
   if (agentType === "claude") {
@@ -215,7 +217,7 @@ function resolveCodexApprovalPolicy(config?: Config | null): ApprovalPolicy {
   return "on-request";
 }
 
-function getDefaultParamFlags(agentType: "claude" | "codex" | "cursor" | "gemini", config?: Config | null): string | null {
+function getDefaultParamFlags(agentType: "claude" | "codex" | "cursor" | "gemini" | "cowork", config?: Config | null): string | null {
   const params = config?.agent_default_params?.[agentType];
   if (!params || Object.keys(params).length === 0) return null;
   return Object.entries(params).map(([k, v]) => `--${k} ${v}`).join(" ");
@@ -1038,8 +1040,8 @@ async function executeRemoteCommand(
       case "start_session": {
         const parsed = commandArgs ? JSON.parse(commandArgs) : {};
         const rawAgentType = parsed.agent_type;
-        const agentType: "claude" | "codex" | "cursor" | "gemini" =
-          rawAgentType === "codex" || rawAgentType === "cursor" || rawAgentType === "gemini" ? rawAgentType : "claude";
+        const agentType: "claude" | "codex" | "cursor" | "gemini" | "cowork" =
+          rawAgentType === "codex" || rawAgentType === "cursor" || rawAgentType === "gemini" || rawAgentType === "cowork" ? rawAgentType : "claude";
         const rawPath: string = parsed.project_path || process.env.HOME || "/tmp";
         const conversationId: string | undefined = parsed.conversation_id;
         const expectedSessionId: string | undefined = parsed.session_id;
@@ -1118,7 +1120,7 @@ async function executeRemoteCommand(
           }
         }
 
-        const defaultFlags = getDefaultParamFlags(agentType as "claude" | "codex" | "cursor" | "gemini", config);
+        const defaultFlags = getDefaultParamFlags(agentType as "claude" | "codex" | "cursor" | "gemini" | "cowork", config);
         if (defaultFlags) {
           binaryArgs.push(...defaultFlags.split(/\s+/).filter(Boolean));
         }
@@ -2430,6 +2432,7 @@ async function processSessionFile(
   titleCache: TitleCache,
   updateStateCallback: () => void,
   parentConversationId?: string,
+  overrideAgentType?: "claude_code" | "cowork",
 ): Promise<void> {
   const isSubagent = filePath.split(path.sep).includes("subagents");
     let lastPosition = getPosition(filePath);
@@ -2690,7 +2693,7 @@ async function processSessionFile(
           userId,
           teamId,
           sessionId,
-          agentType: "claude_code",
+          agentType: overrideAgentType || "claude_code",
           projectPath: actualProjectPath,
           slug,
           title,
@@ -2808,7 +2811,7 @@ async function processSessionFile(
         userId,
         teamId,
         sessionId,
-        agentType: "claude_code",
+        agentType: overrideAgentType || "claude_code",
         projectPath: retryProjectPath,
         slug,
         startedAt: firstMsgTimestamp,
@@ -2930,7 +2933,7 @@ async function processSessionFile(
         userId,
         teamId,
         sessionId,
-        agentType: "claude_code",
+        agentType: overrideAgentType || "claude_code",
         projectPath: recreateProjectPath,
         slug,
         title,
@@ -3941,13 +3944,13 @@ function buildReverseConversationCache(cache: ConversationCache): Record<string,
   return reverse;
 }
 
-function detectSessionAgentType(sessionId: string): "claude" | "codex" | "cursor" | "gemini" {
+function detectSessionAgentType(sessionId: string): "claude" | "codex" | "cursor" | "gemini" | "cowork" {
   if (sessionId.startsWith("session-")) return "gemini";
   const sessionFile = findSessionFile(sessionId);
   return sessionFile?.agentType ?? "claude";
 }
 
-function tryRegisterSessionProcess(sessionId: string, agentType: "claude" | "codex" | "cursor" | "gemini"): void {
+function tryRegisterSessionProcess(sessionId: string, agentType: "claude" | "codex" | "cursor" | "gemini" | "cowork"): void {
   try {
     const registryDir = path.join(CONFIG_DIR, "session-registry");
     const registryFile = path.join(registryDir, `${sessionId}.json`);
@@ -3989,7 +3992,7 @@ function tryRegisterSessionProcess(sessionId: string, agentType: "claude" | "cod
   } catch {}
 }
 
-async function findSessionProcess(sessionId: string, agentType: "claude" | "codex" | "cursor" | "gemini" = "claude"): Promise<ClaudeSessionInfo | null> {
+async function findSessionProcess(sessionId: string, agentType: "claude" | "codex" | "cursor" | "gemini" | "cowork" = "claude"): Promise<ClaudeSessionInfo | null> {
   // Check process cache first
   const cached = await getCachedSessionProcess(sessionId);
   if (cached) {
@@ -4753,7 +4756,7 @@ async function injectViaTerminal(tty: string, content: string, termProgram?: str
 }
 
 
-type SessionFileInfo = { path: string; agentType: "claude" | "codex" | "cursor" | "gemini" };
+type SessionFileInfo = { path: string; agentType: "claude" | "codex" | "cursor" | "gemini" | "cowork" };
 
 function findSessionJsonlPath(sessionId: string): string | null {
   return findSessionFile(sessionId)?.path ?? null;
@@ -4815,6 +4818,28 @@ function findSessionFile(sessionId: string): SessionFileInfo | null {
         const jsonPath = path.join(chatsDir, `${sessionId}.json`);
         if (fs.existsSync(jsonPath)) return { path: jsonPath, agentType: "gemini" };
       }
+    } catch {}
+  }
+
+  const coworkDir = path.join(process.env.HOME || "", "Library", "Application Support", "Claude", "local-agent-mode-sessions");
+  if (fs.existsSync(coworkDir)) {
+    try {
+      const findCowork = (dir: string, depth: number): string | null => {
+        if (depth > 8) return null;
+        const entries = fs.readdirSync(dir, { withFileTypes: true });
+        for (const entry of entries) {
+          const fullPath = path.join(dir, entry.name);
+          if (entry.isDirectory()) {
+            const found = findCowork(fullPath, depth + 1);
+            if (found) return found;
+          } else if (entry.isFile() && entry.name === `${sessionId}.jsonl`) {
+            return fullPath;
+          }
+        }
+        return null;
+      };
+      const coworkPath = findCowork(coworkDir, 0);
+      if (coworkPath) return { path: coworkPath, agentType: "cowork" };
     } catch {}
   }
 
@@ -5238,7 +5263,7 @@ type StartedSessionInfo = {
   tmuxSession: string;
   projectPath: string;
   startedAt: number;
-  agentType: "claude" | "codex" | "cursor" | "gemini";
+  agentType: "claude" | "codex" | "cursor" | "gemini" | "cowork";
   sessionId?: string;
   worktreeName?: string;
   worktreeBranch?: string;
@@ -5410,7 +5435,7 @@ function deleteStartedSession(conversationId: string): void {
 }
 
 export function getInitialManagedSessionId(
-  agentType: "claude" | "codex" | "cursor" | "gemini",
+  agentType: "claude" | "codex" | "cursor" | "gemini" | "cowork",
   expectedSessionId?: string,
   appServerThreadId?: string,
 ): string | undefined {
@@ -6515,7 +6540,7 @@ async function deliverMessage(
   }
 
   // Detect codex sessions by checking if the JSONL exists in codex paths
-  let detectedType: "claude" | "codex" | "cursor" | "gemini" = isGeminiSession ? "gemini" : "claude";
+  let detectedType: "claude" | "codex" | "cursor" | "gemini" | "cowork" = isGeminiSession ? "gemini" : "claude";
   if (!isGeminiSession) {
     const sessionFile = findSessionFile(sessionId);
     if (sessionFile) detectedType = sessionFile.agentType;
@@ -8918,6 +8943,57 @@ async function main(): Promise<void> {
   });
 
   geminiWatcher.start();
+
+  const coworkWatcher = new CoworkWatcher();
+  const coworkSyncs = new Map<string, InvalidateSync>();
+
+  coworkWatcher.on("ready", () => {
+    log("Cowork watcher ready");
+  });
+
+  coworkWatcher.on("session", (event: CoworkSessionEvent) => {
+    const filePath = event.filePath;
+
+    const state = readDaemonState();
+    if (state?.authExpired) {
+      return;
+    }
+
+    if (isSyncPaused()) {
+      log(`Sync paused, skipping Cowork session: ${event.sessionId}`);
+      return;
+    }
+
+    let sync = coworkSyncs.get(filePath);
+    if (!sync) {
+      sync = new InvalidateSync(async () => {
+        await processSessionFile(
+          filePath,
+          event.sessionId,
+          event.projectPath,
+          syncService,
+          config.user_id!,
+          config.team_id,
+          conversationCache,
+          retryQueue,
+          pendingMessages,
+          titleCache,
+          updateState,
+          undefined,
+          "cowork"
+        );
+      });
+      coworkSyncs.set(filePath, sync);
+    }
+
+    sync.invalidate();
+  });
+
+  coworkWatcher.on("error", (error: Error) => {
+    logError("Cowork watcher error", error);
+  });
+
+  coworkWatcher.start();
 
   const subscriptionClient = syncService.getSubscriptionClient();
   let unsubscribe: (() => void) | null = null;

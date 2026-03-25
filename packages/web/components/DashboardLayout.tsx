@@ -144,7 +144,7 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
   const handleQuickCreate = useCallback(() => {
     soundNewSession();
     const path = directoryFilter || currentConvContext.projectPath || currentConvContext.gitRoot;
-    const agentType = (currentConvContext.agentType || "claude_code") as "claude_code" | "codex" | "cursor" | "gemini";
+    const agentType = (currentConvContext.agentType || "claude_code") as "claude_code" | "codex" | "cursor" | "gemini" | "cowork";
     const sessionId = nanoid(10);
     const now = Date.now();
 
@@ -176,7 +176,7 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
       return;
     }
     soundNewSession();
-    const agentType = (currentConvContext.agentType || "claude_code") as "claude_code" | "codex" | "cursor" | "gemini";
+    const agentType = (currentConvContext.agentType || "claude_code") as "claude_code" | "codex" | "cursor" | "gemini" | "cowork";
     const conversationId = await createQuickSession({
       agent_type: agentType,
       project_path: path,
@@ -202,7 +202,7 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
       if (store.showMySessions) store.setShowMySessions(false);
       soundNewSession();
       const path = directoryFilter || currentConvContext.projectPath || currentConvContext.gitRoot;
-      const agentType = (currentConvContext.agentType || "claude_code") as "claude_code" | "codex" | "cursor" | "gemini";
+      const agentType = (currentConvContext.agentType || "claude_code") as "claude_code" | "codex" | "cursor" | "gemini" | "cowork";
       const sid = nanoid(10);
       const now = Date.now();
       store.setConversationMeta(sid, {

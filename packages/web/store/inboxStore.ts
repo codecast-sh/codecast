@@ -800,7 +800,7 @@ export const useInboxStore = create<InboxStoreState>(
 
     const sessionId = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
     const now = Date.now();
-    const agentLabels: Record<string, string> = { claude_code: "Claude", codex: "Codex", cursor: "Cursor", gemini: "Gemini" };
+    const agentLabels: Record<string, string> = { claude_code: "Claude", codex: "Codex", cursor: "Cursor", gemini: "Gemini", cowork: "Cowork" };
 
     const newSessions = { ...state.sessions };
     const newPending = { ...state.pending };

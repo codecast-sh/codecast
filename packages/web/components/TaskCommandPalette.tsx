@@ -220,7 +220,7 @@ export function TaskCommandPalette({
         const item = items[index] as any;
         if (item) {
           if (item.key.startsWith("agent:")) {
-            const agentType = item.key.replace("agent:", "") as "claude_code" | "codex" | "cursor" | "gemini";
+            const agentType = item.key.replace("agent:", "") as "claude_code" | "codex" | "cursor" | "gemini" | "cowork";
             for (const task of targetTasks) {
               assignToAgent({ short_id: task.short_id, agent_type: agentType }).catch(() => {});
             }

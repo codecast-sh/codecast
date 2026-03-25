@@ -1755,6 +1755,7 @@ export function formatResumeResults(result: ResumeResult): string {
     if (!agentType || agentType === "claude_code" || agentType === "claude") return "Claude";
     if (agentType === "codex" || agentType === "codex_cli") return "Codex";
     if (agentType === "cursor") return "Cursor";
+    if (agentType === "cowork") return "Cowork";
     return agentType;
   };
 

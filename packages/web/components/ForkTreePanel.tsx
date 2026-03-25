@@ -28,6 +28,7 @@ const agentLabels: Record<string, string> = {
   codex: "Codex",
   cursor: "Cursor",
   gemini: "Gemini",
+  cowork: "Cowork",
 };
 
 type FlatNode = { node: TreeNode; depth: number };

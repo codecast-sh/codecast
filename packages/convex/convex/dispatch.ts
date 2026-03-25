@@ -152,7 +152,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     await checkRateLimit(ctx as any, userId, "createConversation");
     const now = Date.now();
     const sessionId = opts.session_id || crypto.randomUUID();
-    const agentType = (opts.agent_type || "claude_code") as "claude_code" | "codex" | "cursor" | "gemini";
+    const agentType = (opts.agent_type || "claude_code") as "claude_code" | "codex" | "cursor" | "gemini" | "cowork";
 
     const conversationPath = opts.git_root || opts.project_path;
     const mappings = await ctx.db

@@ -88,7 +88,7 @@ export function CreatePalette() {
     const store = useInboxStore.getState();
     const ctx = store.currentConversation;
     const path = ctx.projectPath || ctx.gitRoot || store.recentProjects?.[0]?.path;
-    const agentType = (ctx.agentType || "claude_code") as "claude_code" | "codex" | "cursor" | "gemini";
+    const agentType = (ctx.agentType || "claude_code") as "claude_code" | "codex" | "cursor" | "gemini" | "cowork";
     const sid = nanoid(10);
     const now = Date.now();
 

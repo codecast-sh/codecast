@@ -418,7 +418,7 @@ function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedW
   const storeSession = useInboxStore((s) => s.sessions[conversation._id]);
   const currentAgent = storeSession?.agent_type || conversation.agent_type || "claude_code";
 
-  const handleAgentSwitch = useCallback(async (agentType: "claude_code" | "codex" | "cursor" | "gemini") => {
+  const handleAgentSwitch = useCallback(async (agentType: "claude_code" | "codex" | "cursor" | "gemini" | "cowork") => {
     if (agentType === currentAgent) return;
     try {
       const id = storeSession?._id || conversation._id;
@@ -9402,7 +9402,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                             Switch agent
                           </DropdownMenuSubTrigger>
                           <DropdownMenuSubContent>
-                            {(["claude_code", "codex", "cursor", "gemini"] as const)
+                            {(["claude_code", "codex", "cursor", "gemini", "cowork"] as const)
                               .filter((t) => t !== conversation.agent_type)
                               .map((t) => (
                                 <DropdownMenuItem

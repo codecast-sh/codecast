@@ -1049,7 +1049,7 @@ export const webAddComment = mutation({
 export const assignToAgent = mutation({
   args: {
     short_id: v.string(),
-    agent_type: v.union(v.literal("claude_code"), v.literal("codex"), v.literal("cursor"), v.literal("gemini")),
+    agent_type: v.union(v.literal("claude_code"), v.literal("codex"), v.literal("cursor"), v.literal("gemini"), v.literal("cowork")),
   },
   handler: async (ctx, { short_id, agent_type }) => {
     const userId = await getAuthUserId(ctx);
@@ -1101,7 +1101,7 @@ export const assignToAgent = mutation({
     } as any);
     await ctx.db.patch(conversationId, { has_pending_messages: true } as any);
 
-    const daemonAgentType = agent_type === "claude_code" ? "claude" : agent_type === "codex" ? "codex" : agent_type === "cursor" ? "cursor" : "gemini";
+    const daemonAgentType = agent_type === "claude_code" ? "claude" : agent_type === "cowork" ? "cowork" : agent_type === "codex" ? "codex" : agent_type === "cursor" ? "cursor" : "gemini";
     await ctx.db.insert("daemon_commands", {
       user_id: userId,
       command: "start_session",

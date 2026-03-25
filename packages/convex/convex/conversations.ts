@@ -357,7 +357,8 @@ export const createConversation = mutation({
       v.literal("claude_code"),
       v.literal("codex"),
       v.literal("cursor"),
-      v.literal("gemini")
+      v.literal("gemini"),
+      v.literal("cowork")
     ),
     session_id: v.string(),
     project_hash: v.optional(v.string()),
@@ -557,7 +558,8 @@ export const createQuickSession = mutation({
       v.literal("claude_code"),
       v.literal("codex"),
       v.literal("cursor"),
-      v.literal("gemini")
+      v.literal("gemini"),
+      v.literal("cowork")
     )),
     project_path: v.optional(v.string()),
     git_root: v.optional(v.string()),
@@ -608,7 +610,7 @@ export const createQuickSession = mutation({
       short_id: conversationId.toString().slice(0, 7),
     });
 
-    const daemonAgentType = agentType === "claude_code" ? "claude" : agentType === "codex" ? "codex" : agentType === "cursor" ? "cursor" : "gemini";
+    const daemonAgentType = agentType === "claude_code" ? "claude" : agentType === "cowork" ? "cowork" : agentType === "codex" ? "codex" : agentType === "cursor" ? "cursor" : "gemini";
     const daemonArgs: Record<string, any> = {
       agent_type: daemonAgentType,
       project_path: args.project_path || args.git_root,
@@ -3769,7 +3771,8 @@ export const forkFromMessage = mutation({
       v.literal("claude_code"),
       v.literal("codex"),
       v.literal("cursor"),
-      v.literal("gemini")
+      v.literal("gemini"),
+      v.literal("cowork")
     )),
   },
   handler: async (ctx, args) => {
@@ -3819,7 +3822,7 @@ export const forkFromMessage = mutation({
     }
 
     const agentType = args.target_agent_type || original.agent_type;
-    const agentLabels: Record<string, string> = { claude_code: "Claude", codex: "Codex", cursor: "Cursor", gemini: "Gemini" };
+    const agentLabels: Record<string, string> = { claude_code: "Claude", codex: "Codex", cursor: "Cursor", gemini: "Gemini", cowork: "Cowork" };
     const isAgentSwitch = args.target_agent_type && args.target_agent_type !== original.agent_type;
     const titlePrefix = isAgentSwitch ? `${agentLabels[args.target_agent_type!] || args.target_agent_type}: ` : "Fork: ";
 
@@ -5634,7 +5637,8 @@ export const reconfigureSession = mutation({
       v.literal("claude_code"),
       v.literal("codex"),
       v.literal("cursor"),
-      v.literal("gemini")
+      v.literal("gemini"),
+      v.literal("cowork")
     )),
     project_path: v.optional(v.string()),
     git_root: v.optional(v.string()),
@@ -5675,7 +5679,7 @@ export const reconfigureSession = mutation({
 
     const updated = { ...conv, ...patch };
     const agentType = updated.agent_type || "claude_code";
-    const daemonAgentType = agentType === "claude_code" ? "claude" : agentType === "codex" ? "codex" : agentType === "cursor" ? "cursor" : "gemini";
+    const daemonAgentType = agentType === "claude_code" ? "claude" : agentType === "cowork" ? "cowork" : agentType === "codex" ? "codex" : agentType === "cursor" ? "cursor" : "gemini";
     await ctx.db.insert("daemon_commands", {
       user_id: userId,
       command: "start_session",
@@ -6334,7 +6338,7 @@ export const switchSessionProject = mutation({
     });
 
     const agentType = conv.agent_type || "claude_code";
-    const daemonAgentType = agentType === "claude_code" ? "claude" : agentType === "codex" ? "codex" : agentType === "cursor" ? "cursor" : "gemini";
+    const daemonAgentType = agentType === "claude_code" ? "claude" : agentType === "cowork" ? "cowork" : agentType === "codex" ? "codex" : agentType === "cursor" ? "cursor" : "gemini";
     await ctx.db.insert("daemon_commands", {
       user_id: userId,
       command: "start_session",
@@ -6351,7 +6355,7 @@ export const switchSessionProject = mutation({
 export const switchSessionAgent = mutation({
   args: {
     conversation_id: v.id("conversations"),
-    agent_type: v.union(v.literal("claude_code"), v.literal("codex"), v.literal("cursor"), v.literal("gemini")),
+    agent_type: v.union(v.literal("claude_code"), v.literal("codex"), v.literal("cursor"), v.literal("gemini"), v.literal("cowork")),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -6367,7 +6371,7 @@ export const switchSessionAgent = mutation({
     }
 
     const now = Date.now();
-    const daemonAgentType = args.agent_type === "claude_code" ? "claude" : args.agent_type === "codex" ? "codex" : args.agent_type === "cursor" ? "cursor" : "gemini";
+    const daemonAgentType = args.agent_type === "claude_code" ? "claude" : args.agent_type === "cowork" ? "cowork" : args.agent_type === "codex" ? "codex" : args.agent_type === "cursor" ? "cursor" : "gemini";
 
     await ctx.db.insert("daemon_commands", {
       user_id: userId,

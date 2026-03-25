@@ -149,7 +149,8 @@ export default defineSchema({
       v.literal("claude_code"),
       v.literal("codex"),
       v.literal("cursor"),
-      v.literal("gemini")
+      v.literal("gemini"),
+      v.literal("cowork")
     ),
     session_id: v.string(),
     slug: v.optional(v.string()),
