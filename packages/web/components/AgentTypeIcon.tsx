@@ -35,5 +35,6 @@ export function formatAgentType(agentType?: string): string {
   if (agentType === "codex") return "Codex";
   if (agentType === "cursor") return "Cursor";
   if (agentType === "gemini") return "Gemini";
+
   return agentType;
 }

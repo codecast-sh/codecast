@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
@@ -83,6 +83,9 @@ function NavDropdown({
   onClose,
   onMouseEnter,
   onMouseLeave,
+  pinned,
+  onPin,
+  onScrollToMessage,
   tab,
   onTabChange,
 }: {
@@ -94,6 +97,9 @@ function NavDropdown({
   onClose: () => void;
   onMouseEnter: () => void;
   onMouseLeave: () => void;
+  pinned: boolean;
+  onPin: () => void;
+  onScrollToMessage?: (messageId: string) => void;
   tab: "messages" | "comments";
   onTabChange: (t: "messages" | "comments") => void;
 }) {
@@ -131,6 +137,7 @@ function NavDropdown({
 
   return createPortal(
     <>
+      {pinned && <div className="fixed inset-0 z-[9998] pointer-events-auto" onClick={onClose} />}
       <div
         className="fixed z-[9999] bg-sol-bg border border-sol-border/30 rounded-xl shadow-2xl overflow-hidden flex flex-col"
         style={{ top, left, width: dropdownWidth, maxHeight: "min(500px, 70vh)" }}
@@ -175,11 +182,15 @@ function NavDropdown({
                   onMouseEnter={(e) => handleItemHover(m._id, e.currentTarget, m)}
                   onMouseLeave={handleItemLeave}
                   onClick={() => {
-                    useInboxStore.setState({
-                      pendingNavigateId: conversationId,
-                      pendingScrollToMessageId: m._id,
-                    });
-                    onClose();
+                    onPin();
+                    if (onScrollToMessage) {
+                      onScrollToMessage(m._id);
+                    } else {
+                      useInboxStore.setState({
+                        pendingNavigateId: conversationId,
+                        pendingScrollToMessageId: m._id,
+                      });
+                    }
                   }}
                   className={`px-3 py-1.5 cursor-pointer transition-colors flex items-center gap-2 min-w-0 ${
                     isCurrent
@@ -222,13 +233,17 @@ function NavDropdown({
                   onMouseEnter={() => setHoveredId(c._id)}
                   onMouseLeave={() => setHoveredId(null)}
                   onClick={() => {
+                    onPin();
                     if (c.message_id) {
-                      useInboxStore.setState({
-                        pendingNavigateId: conversationId,
-                        pendingScrollToMessageId: c.message_id,
-                      });
+                      if (onScrollToMessage) {
+                        onScrollToMessage(c.message_id);
+                      } else {
+                        useInboxStore.setState({
+                          pendingNavigateId: conversationId,
+                          pendingScrollToMessageId: c.message_id,
+                        });
+                      }
                     }
-                    onClose();
                   }}
                   className={`px-3 py-2 cursor-pointer transition-colors ${
                     isHovered ? "bg-sol-bg-alt/40" : ""
@@ -266,12 +281,16 @@ export function MessageNavButton({
   conversationId,
   currentMessageId,
   scrollProgress = 1,
+  onScrollToMessage,
 }: {
   conversationId: string;
   currentMessageId: string | null;
   scrollProgress?: number;
+  onScrollToMessage?: (messageId: string) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [pinned, setPinned] = useState(false);
+  const pinnedRef = useRef(false);
   const [triggerRect, setTriggerRect] = useState<DOMRect | null>(null);
   const [tab, setTab] = useState<"messages" | "comments">("messages");
   const btnRef = useRef<HTMLButtonElement>(null);
@@ -339,12 +358,35 @@ export function MessageNavButton({
 
   const scheduleClose = useCallback(() => {
     if (openTimerRef.current) clearTimeout(openTimerRef.current);
+    if (pinnedRef.current) return;
     closeTimerRef.current = setTimeout(() => setOpen(false), 250);
   }, []);
 
   const cancelClose = useCallback(() => {
     if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
   }, []);
+
+  const handlePin = useCallback(() => {
+    pinnedRef.current = true;
+    setPinned(true);
+    if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+    if (openTimerRef.current) clearTimeout(openTimerRef.current);
+  }, []);
+
+  const handleClose = useCallback(() => {
+    pinnedRef.current = false;
+    setPinned(false);
+    setOpen(false);
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") handleClose();
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [open, handleClose]);
 
   if (!messages || total === 0) return null;
 
@@ -356,6 +398,14 @@ export function MessageNavButton({
     <>
       <button
         ref={btnRef}
+        onClick={() => {
+          if (open && pinnedRef.current) { handleClose(); }
+          else {
+            if (!open && btnRef.current) setTriggerRect(btnRef.current.getBoundingClientRect());
+            setOpen(true);
+            handlePin();
+          }
+        }}
         onMouseEnter={scheduleOpen}
         onMouseLeave={scheduleClose}
         className={`flex flex-col gap-[3px] items-end justify-center px-2 py-1.5 rounded transition-colors relative ${
@@ -389,9 +439,12 @@ export function MessageNavButton({
           conversationId={conversationId}
           currentMessageId={effectiveId}
           triggerRect={triggerRect}
-          onClose={() => setOpen(false)}
+          onClose={handleClose}
           onMouseEnter={cancelClose}
           onMouseLeave={scheduleClose}
+          pinned={pinned}
+          onPin={handlePin}
+          onScrollToMessage={onScrollToMessage}
           tab={tab}
           onTabChange={setTab}
         />

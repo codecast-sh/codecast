@@ -1,5 +1,5 @@
 "use client";
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useRef, useEffect } from "react";
 import { useRouter, useSearchParams, useParams, usePathname } from "next/navigation";
 import Link from "next/link";
 import { useInboxStore, DocItem, DocViewPrefs } from "../../store/inboxStore";
@@ -75,20 +75,31 @@ function useDocUrlState() {
   const updateClientUI = useInboxStore((s) => s.updateClientUI);
 
   const isDetailPage = pathname !== "/docs";
-  const hasUrlParams = !isDetailPage && searchParams.toString().length > 0;
 
-  const docType = hasUrlParams
-    ? (searchParams.get("type") || "")
-    : (docView?.doc_type ?? "");
-  const sort = hasUrlParams
-    ? ((searchParams.get("sort") || "updated") as "updated" | "created" | "type" | "project")
-    : ((docView?.sort || "updated") as "updated" | "created" | "type" | "project");
-  const project = hasUrlParams
-    ? (searchParams.get("project") || "")
-    : (docView?.project ?? "");
-  const label = hasUrlParams
-    ? (searchParams.get("label") || "")
-    : (docView?.label ?? "");
+  // Seed store from URL params once (deep links)
+  const seededRef = useRef(false);
+  useEffect(() => {
+    if (seededRef.current || isDetailPage) return;
+    seededRef.current = true;
+    const t = searchParams.get("type");
+    const s = searchParams.get("sort");
+    const p = searchParams.get("project");
+    const l = searchParams.get("label");
+    if (t || s || p || l) {
+      const prefs: Record<string, any> = {};
+      if (t) prefs.doc_type = t;
+      if (s) prefs.sort = s;
+      if (p) prefs.project = p;
+      if (l) prefs.label = l;
+      updateClientUI({ doc_view: { ...docView, ...prefs } as DocViewPrefs });
+    }
+  }, []);
+
+  // Store is the single source of truth
+  const docType = docView?.doc_type ?? "";
+  const sort = (docView?.sort || "updated") as "updated" | "created" | "type" | "project";
+  const project = docView?.project ?? "";
+  const label = docView?.label ?? "";
 
   const setParam = useCallback((updates: Record<string, string>) => {
     const prefs: Record<string, any> = {};
