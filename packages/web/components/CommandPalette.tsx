@@ -483,9 +483,9 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
 
   const open = standalone || paletteOpen;
 
-  const favorites = useQuery(api.conversations.listFavorites);
-  const bookmarks = useQuery(api.bookmarks.listBookmarks);
-  const recentConversations = useQuery(api.conversations.listRecentSessions) ?? [];
+  const favorites = useQuery(api.conversations.listFavorites, open ? {} : "skip");
+  const bookmarks = useQuery(api.bookmarks.listBookmarks, open ? {} : "skip");
+  const recentConversations = useQuery(api.conversations.listRecentSessions, open ? {} : "skip") ?? [];
 
   const projects = useMemo(() => {
     const dirMap = new Map<string, number>();
@@ -532,7 +532,7 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
     const msg = composeMsg.trim();
     if (!msg) return;
     if (standalone && isElectron()) {
-      window.__CODECAST_ELECTRON__!.paletteStartSession({
+      window.__CODECAST_ELECTRON__?.paletteStartSession?.({
         message: msg,
         agentType: composeAgent,
         projectPath: composeProject || projects[0] || undefined,
@@ -614,7 +614,7 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
         } else if (composeMode) {
           exitComposeMode();
         } else if (isElectron()) {
-          window.__CODECAST_ELECTRON__!.paletteHide();
+          window.__CODECAST_ELECTRON__?.paletteHide?.();
         }
       }
     };
@@ -624,7 +624,7 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
 
   useWatchEffect(() => {
     if (!standalone || !isElectron()) return;
-    const unsub = window.__CODECAST_ELECTRON__!.onPaletteShow(() => {
+    const unsub = window.__CODECAST_ELECTRON__?.onPaletteShow?.(() => {
       setQuery("");
       setActionMode(null);
       setComposeMode(false);
@@ -639,7 +639,7 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
 
   useWatchEffect(() => {
     if (!standalone || !isElectron()) return;
-    const unsub = window.__CODECAST_ELECTRON__!.onComposeShow(() => {
+    const unsub = window.__CODECAST_ELECTRON__?.onComposeShow?.(() => {
       setQuery("");
       enterComposeMode("");
       setTimeout(() => composeRef.current?.focus(), 300);
@@ -650,7 +650,7 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
   const navigate = useCallback(
     (path: string) => {
       if (standalone && isElectron()) {
-        window.__CODECAST_ELECTRON__!.paletteNavigate(path);
+        window.__CODECAST_ELECTRON__?.paletteNavigate?.(path);
         return;
       }
       router.push(path);
@@ -663,7 +663,7 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
     (conv: { _id: string; session_id?: string; title?: string; updated_at: number; project_path?: string; git_root?: string; agent_type?: string; message_count?: number; is_idle?: boolean }) => {
       const conversationPath = `/conversation/${conv._id}`;
       if (standalone && isElectron()) {
-        window.__CODECAST_ELECTRON__!.paletteNavigate(conversationPath);
+        window.__CODECAST_ELECTRON__?.paletteNavigate?.(conversationPath);
         return;
       }
       const store = useInboxStore.getState();

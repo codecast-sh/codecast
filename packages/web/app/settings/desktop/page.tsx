@@ -95,14 +95,14 @@ export default function DesktopSettingsPage() {
 
   useMountEffect(() => {
     if (!isElectron()) return;
-    window.__CODECAST_ELECTRON__!.getShortcuts().then(setShortcuts);
+    window.__CODECAST_ELECTRON__?.getShortcuts?.().then(setShortcuts);
   });
 
   const updateShortcut = useCallback(async (key: string, accelerator: string) => {
     if (!isElectron()) return;
     setSaving(key);
-    const updated = await window.__CODECAST_ELECTRON__!.setShortcut(key, accelerator);
-    setShortcuts(updated);
+    const updated = await window.__CODECAST_ELECTRON__?.setShortcut?.(key, accelerator);
+    if (updated) setShortcuts(updated);
     setSaving(null);
   }, []);
 

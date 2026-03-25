@@ -960,8 +960,6 @@ export const useInboxStore = create<InboxStoreState>(
       _clientId: id,
       ...(images && images.length > 0 ? { images } : {}),
     };
-    if (!this.messages[convId]) this.messages[convId] = [];
-    this.messages[convId].push(msg);
     if (!this.pendingMessages[convId]) this.pendingMessages[convId] = [];
     this.pendingMessages[convId].push(msg);
   }),
@@ -1311,10 +1309,9 @@ export const useInboxStore = create<InboxStoreState>(
 
   setMessages: sync(function (this: Draft, convId: string, msgs: Message[], meta?: Partial<PaginationState>) {
     const pending = this.pendingMessages[convId] || [];
-    let finalMsgs = msgs;
     if (pending.length > 0) {
       const serverUserMsgs = msgs.filter((m: Message) => m.role === "user");
-      const surviving = pending.filter((m: Message) => {
+      this.pendingMessages[convId] = pending.filter((m: Message) => {
         if (m._clientId) {
           return !serverUserMsgs.some((s: Message) => s.client_id === m._clientId);
         }
@@ -1324,12 +1321,8 @@ export const useInboxStore = create<InboxStoreState>(
           Math.abs(s.timestamp - m.timestamp) < 120_000
         );
       });
-      this.pendingMessages[convId] = surviving;
-      if (surviving.length > 0) {
-        finalMsgs = [...msgs, ...surviving].sort((a: Message, b: Message) => a.timestamp - b.timestamp);
-      }
     }
-    this.messages[convId] = finalMsgs;
+    this.messages[convId] = msgs;
     this.pagination[convId] = { ...(this.pagination[convId] || DEFAULT_PAGINATION), ...meta };
   }),
 
@@ -1360,7 +1353,6 @@ export const useInboxStore = create<InboxStoreState>(
     };
     const state = get();
     set({
-      messages: { ...state.messages, [convId]: [...(state.messages[convId] || []), msg] },
       pendingMessages: { ...state.pendingMessages, [convId]: [...(state.pendingMessages[convId] || []), msg] },
     });
     return id;
@@ -1376,12 +1368,10 @@ export const useInboxStore = create<InboxStoreState>(
       }
       return m;
     };
-    const msgs = state.messages[convId];
     const pending = state.pendingMessages[convId];
-    set({
-      ...(msgs ? { messages: { ...state.messages, [convId]: msgs.map(promote) } } : {}),
-      ...(pending ? { pendingMessages: { ...state.pendingMessages, [convId]: pending.map(promote) } } : {}),
-    });
+    if (pending) {
+      set({ pendingMessages: { ...state.pendingMessages, [convId]: pending.map(promote) } });
+    }
   },
 
   markOptimisticAsFailed: (convId: string, clientId: string) => {
@@ -1392,12 +1382,10 @@ export const useInboxStore = create<InboxStoreState>(
       }
       return m;
     };
-    const msgs = state.messages[convId];
     const pending = state.pendingMessages[convId];
-    set({
-      ...(msgs ? { messages: { ...state.messages, [convId]: msgs.map(mark) } } : {}),
-      ...(pending ? { pendingMessages: { ...state.pendingMessages, [convId]: pending.map(mark) } } : {}),
-    });
+    if (pending) {
+      set({ pendingMessages: { ...state.pendingMessages, [convId]: pending.map(mark) } });
+    }
   },
 
   setPagination: (convId: string, update: Partial<PaginationState>) => {
@@ -1657,20 +1645,20 @@ export const useInboxStore = create<InboxStoreState>(
   }),
 
   updateDoc: action(function (this: Draft, id: string, fields: { content?: string; title?: string; doc_type?: string; labels?: string[] }) {
-    const now = Date.now();
+    let changed = false;
     if (this.docs[id]) {
-      if (fields.content !== undefined) this.docs[id].content = fields.content;
-      if (fields.title !== undefined) this.docs[id].title = fields.title;
-      if (fields.doc_type !== undefined) (this.docs[id] as any).doc_type = fields.doc_type;
-      if (fields.labels !== undefined) (this.docs[id] as any).labels = fields.labels;
-      this.docs[id].updated_at = now;
+      if (fields.content !== undefined && fields.content !== this.docs[id].content) { this.docs[id].content = fields.content; changed = true; }
+      if (fields.title !== undefined && fields.title !== this.docs[id].title) { this.docs[id].title = fields.title; changed = true; }
+      if (fields.doc_type !== undefined && fields.doc_type !== (this.docs[id] as any).doc_type) { (this.docs[id] as any).doc_type = fields.doc_type; changed = true; }
+      if (fields.labels !== undefined) { (this.docs[id] as any).labels = fields.labels; changed = true; }
+      if (changed) this.docs[id].updated_at = Date.now();
     }
     if (this.docDetails[id]) {
       if (fields.content !== undefined) this.docDetails[id].content = fields.content;
       if (fields.title !== undefined) this.docDetails[id].title = fields.title;
       if (fields.doc_type !== undefined) (this.docDetails[id] as any).doc_type = fields.doc_type;
       if (fields.labels !== undefined) (this.docDetails[id] as any).labels = fields.labels;
-      this.docDetails[id].updated_at = now;
+      if (changed) this.docDetails[id].updated_at = Date.now();
     }
   }),
 

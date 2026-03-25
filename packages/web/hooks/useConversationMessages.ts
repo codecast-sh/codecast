@@ -109,8 +109,22 @@ export function useConversationMessages(
   // READ FROM STORE (primary source of truth - never waits on Convex)
   // =============================================
   const storeMessages = useInboxStore((s) => s.messages[conversationId]) ?? [];
+  const storePending = useInboxStore((s) => s.pendingMessages[conversationId]) ?? [];
   const storeMeta = useInboxStore((s) => s.conversations[conversationId]);
   const storePagination = useInboxStore((s) => s.pagination[conversationId]);
+
+  // Merge server messages with unconfirmed pending messages (local-first)
+  const mergedMessages: Message[] = useMemo(() => {
+    if (storePending.length === 0) return storeMessages;
+    const serverClientIds = new Set(
+      storeMessages.filter((m: Message) => m.client_id).map((m: Message) => m.client_id)
+    );
+    const unconfirmed = storePending.filter((m: Message) =>
+      !m._clientId || !serverClientIds.has(m._clientId)
+    );
+    if (unconfirmed.length === 0) return storeMessages;
+    return [...storeMessages, ...unconfirmed].sort((a: Message, b: Message) => a.timestamp - b.timestamp);
+  }, [storeMessages, storePending]);
 
   // =============================================
   // TARGET MODE: getMessagesAroundTimestamp (local state, transient)
@@ -212,8 +226,8 @@ export function useConversationMessages(
   // Unified message list: store for normal mode, local state for target mode
   // =============================================
   const rawMessages: Message[] = targetMode
-    ? (targetAroundData?.messages ?? storeMessages)
-    : storeMessages;
+    ? (targetAroundData?.messages ?? mergedMessages)
+    : mergedMessages;
 
   // =============================================
   // Child conversation map
@@ -315,7 +329,7 @@ export function useConversationMessages(
   const conversation: Record<string, any> | null = useMemo(() => {
     if (!storeMeta) return null;
     if (targetMode && !targetAroundData && rawMessages.length === 0) return null;
-    if (useNormalMode && storeMessages.length === 0 && (storeMeta?.message_count ?? 0) > 0) return null;
+    if (useNormalMode && mergedMessages.length === 0 && (storeMeta?.message_count ?? 0) > 0) return null;
     return {
       ...storeMeta,
       messages: rawMessages,
@@ -323,7 +337,7 @@ export function useConversationMessages(
       compaction_count: compactionCount,
       child_conversation_map: childConversationMap,
     };
-  }, [storeMeta, rawMessages, loadedStartIndex, compactionCount, childConversationMap, targetMode, targetAroundData, storeMessages.length, useNormalMode]);
+  }, [storeMeta, rawMessages, loadedStartIndex, compactionCount, childConversationMap, targetMode, targetAroundData, mergedMessages.length, useNormalMode]);
 
   // =============================================
   // Target search (auto-load older to find target)

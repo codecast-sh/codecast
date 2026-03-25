@@ -628,6 +628,7 @@ function renderAnsi(text: string): React.ReactNode {
 function stripSystemTags(content: string): string {
   return content
     .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '')
+    .replace(/<task-reminder>[\s\S]*?<\/task-reminder>/g, '')
     .replace(/<local-command-stdout>[\s\S]*?<\/local-command-stdout>/g, '')
     .replace(/<local-command-stderr>[\s\S]*?<\/local-command-stderr>/g, '')
     .replace(/<local-command-caveat>[\s\S]*?<\/local-command-caveat>/g, '')
@@ -851,8 +852,7 @@ function classifyUserMessage(
   if (t.startsWith('{') && t.includes('__cc_poll')) {
     try { if (JSON.parse(t).__cc_poll) return { kind: 'poll_response' }; } catch {}
   }
-  const prevAssistant = immediatePrev?.role === 'assistant' ? immediatePrev : contextPrev?.role === 'assistant' ? contextPrev : null;
-  if (prevAssistant?.tool_calls?.some(tc => tc.name === 'AskUserQuestion')) {
+  if (immediatePrev?.role === 'assistant' && immediatePrev?.tool_calls?.some(tc => tc.name === 'AskUserQuestion')) {
     return { kind: 'poll_response' };
   }
   if (!stripSystemTags(t).trim()) return { kind: 'noise' };
@@ -5423,11 +5423,13 @@ const ForkReplyInput = memo(function ForkReplyInput({ userName, userAvatar, onFo
 });
 
 const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, onSendAndDismiss, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, isSessionStarting, isSessionReady, sessionId, agentType, agentStatus, deliveryStatus, pendingPermissionsCount, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onSendEscape, onOpenNavigator, onPopulateInput, permissionMode, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch, onGateSend, skills, filePaths, mentionItems, onMentionQuery }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; onSendAndDismiss?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; isSessionStarting?: boolean; isSessionReady?: boolean; sessionId?: string; agentType?: string; agentStatus?: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "starting" | "resuming"; deliveryStatus?: string; pendingPermissionsCount?: number; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string) => void) | null>; permissionMode?: string; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void>; onGateSend?: (content: string) => Promise<void>; skills?: SkillItem[]; filePaths?: string[]; mentionItems?: MentionItem[]; onMentionQuery?: (q: string) => void }) {
+  const sacredKey = sessionId || conversationId;
+  const sacredKeyRef = useRef(sacredKey);
   const convIdRef = useRef(conversationId);
   const cached = useInboxStore.getState().getDraft(conversationId);
-  const [message, _setMessage] = useState(() => sacredInputs.get(conversationId)?.text ?? cached?.draft_message ?? initialDraft ?? "");
+  const [message, _setMessage] = useState(() => sacredInputs.get(sacredKey)?.text ?? cached?.draft_message ?? initialDraft ?? "");
   const setMessage = useCallback((val: string) => {
-    sacredInputs.set(convIdRef.current, { text: val });
+    sacredInputs.set(sacredKeyRef.current, { text: val });
     _setMessage(val);
   }, []);
   const messageRef = useRef(message);
@@ -5824,21 +5826,25 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
   }, []);
 
   useWatchEffect(() => {
-    if (convIdRef.current !== conversationId) {
+    const keyChanged = sacredKeyRef.current !== sacredKey;
+    if (keyChanged) {
       if (draftTimerRef.current) {
         clearTimeout(draftTimerRef.current);
         draftTimerRef.current = null;
       }
-      sacredInputs.set(convIdRef.current, { text: messageRef.current });
+      sacredInputs.set(sacredKeyRef.current, { text: messageRef.current });
       saveDraftSnapshot(convIdRef.current);
+      sacredKeyRef.current = sacredKey;
       convIdRef.current = conversationId;
-      const sacred = sacredInputs.get(conversationId);
+      const sacred = sacredInputs.get(sacredKey);
       const storeDraft = useInboxStore.getState().getDraft(conversationId)?.draft_message;
       const newDraft = sacred?.text ?? storeDraft ?? "";
-      sacredInputs.set(conversationId, { text: newDraft });
+      sacredInputs.set(sacredKey, { text: newDraft });
       _setMessage(newDraft);
+    } else if (convIdRef.current !== conversationId) {
+      convIdRef.current = conversationId;
     }
-  }, [conversationId, saveDraftSnapshot]);
+  }, [sacredKey, conversationId, saveDraftSnapshot]);
 
   useMountEffect(() => () => {
     if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
@@ -5980,14 +5986,16 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
         headers: { "Content-Type": file.type },
         body: file,
       });
+      if (!result.ok) throw new Error(`Upload failed: ${result.status} ${result.statusText}`);
       const { storageId } = await result.json();
       setPastedImages(prev => {
         const next = prev.map(img => img.previewUrl === previewUrl ? { ...img, storageId, uploading: false } : img);
         updateDraft(message, next.map(i => ({ storageId: i.storageId as string, previewUrl: i.previewUrl, name: i.file.name })));
         return next;
       });
-    } catch {
-      toast.error("Failed to upload image");
+    } catch (err: any) {
+      console.error("[uploadImage] failed:", err);
+      toast.error(err?.message?.includes("Authentication") ? "Upload failed: not authenticated" : `Failed to upload image: ${err?.message || "unknown error"}`);
       URL.revokeObjectURL(previewUrl);
       setPastedImages(prev => prev.filter(img => img.previewUrl !== previewUrl));
     }
@@ -6109,6 +6117,8 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
       return;
     }
 
+    const targetConvId = conversationId;
+    const targetCanQuery = canQueryServer;
     const trimmed = message.trim() || (finalImages.length > 0 ? "[image]" : "");
     const storageIds = finalImages.map(img => img.storageId!);
     const optimisticImages = finalImages.map(img => ({ media_type: img.file.type, storage_id: img.storageId as string }));
@@ -6117,21 +6127,28 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
       clearTimeout(draftTimerRef.current);
       draftTimerRef.current = null;
     }
-    const clientId = addOptimistic(conversationId, trimmed, optimisticImages.length > 0 ? optimisticImages : undefined);
+    const clientId = addOptimistic(targetConvId, trimmed, optimisticImages.length > 0 ? optimisticImages : undefined);
     soundSend();
     setMessage("");
     messageRef.current = "";
     setSelectedQueueIndex(null);
     clearAllImages();
-    useInboxStore.getState().clearDraftFinal(conversationId);
+    useInboxStore.getState().clearDraftFinal(targetConvId);
     sendingRef.current = false;
     requestAnimationFrame(() => textareaRef.current?.focus());
     onMessageSent?.();
 
     const expandedContent = await expandMentionsInMessage(trimmed);
 
+    if (convIdRef.current !== targetConvId) {
+      console.warn("[MessageInput] conversationId changed between submit and send:", { targetConvId, current: convIdRef.current, sessionId });
+    }
+
     try {
-      const resolvedId = canQueryServer ? conversationId : await waitForConvexId(conversationId);
+      const resolvedId = targetCanQuery ? targetConvId : await waitForConvexId(targetConvId);
+      if (convIdRef.current !== targetConvId) {
+        console.warn("[MessageInput] conversationId drifted during waitForConvexId:", { targetConvId, resolvedId, current: convIdRef.current });
+      }
       const msgId = await sendMessage({
         conversation_id: resolvedId as Id<"conversations">,
         content: expandedContent,
@@ -6144,7 +6161,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
       setShowStuckBanner(false);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to send message");
-      useInboxStore.getState().markOptimisticAsFailed(conversationId, clientId);
+      useInboxStore.getState().markOptimisticAsFailed(targetConvId, clientId);
     }
   };
 
@@ -6154,16 +6171,21 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
     const isIdle = agentStatus === "idle" || (!agentStatus && !isWaitingForResponse && !isThinking && !isConversationLive && !isSessionStarting);
     if (!isIdle) return;
     queueDrainingRef.current = true;
+    const queueTargetConvId = conversationId;
+    const queueCanQuery = canQueryServer;
     const next = queuedMessages[0];
     setQueuedMessages(prev => prev.slice(1));
     setSelectedQueueIndex(null);
-    const clientId = addOptimistic(conversationId, next);
+    const clientId = addOptimistic(queueTargetConvId, next);
     soundSend();
     onMessageSent?.();
     (async () => {
       try {
         const expanded = await expandMentionsInMessage(next);
-        const resolvedId = canQueryServer ? conversationId : await waitForConvexId(conversationId);
+        if (convIdRef.current !== queueTargetConvId) {
+          console.warn("[MessageInput] conversationId changed during queue drain:", { queueTargetConvId, current: convIdRef.current });
+        }
+        const resolvedId = queueCanQuery ? queueTargetConvId : await waitForConvexId(queueTargetConvId);
         const msgId = await sendMessage({
           conversation_id: resolvedId as Id<"conversations">,
           content: expanded,
@@ -6175,7 +6197,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
         setShowStuckBanner(false);
       } catch (error) {
         toast.error(error instanceof Error ? error.message : "Failed to send queued message");
-        useInboxStore.getState().markOptimisticAsFailed(conversationId, clientId);
+        useInboxStore.getState().markOptimisticAsFailed(queueTargetConvId, clientId);
       } finally {
         queueDrainingRef.current = false;
       }
@@ -9503,6 +9525,17 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
               conversationId={conversation._id}
               currentMessageId={activeStickyMsg?.id ?? null}
               scrollProgress={navScrollProgress}
+              onScrollToMessage={(messageId) => {
+                const itemIndex = timeline.findIndex(item =>
+                  item.type === 'message' && item.data._id === messageId
+                );
+                if (itemIndex >= 0) {
+                  setUserScrolled(true);
+                  virtualizer.scrollToIndex(itemIndex, { align: "center", behavior: "smooth" });
+                  setHighlightedMessageId(messageId);
+                  setTimeout(() => setHighlightedMessageId(null), 2000);
+                }
+              }}
             />
           </div>
         )}

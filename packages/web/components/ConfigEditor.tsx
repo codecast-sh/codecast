@@ -450,9 +450,12 @@ export function ConfigEditor() {
 
   // Send config_list when projects are loaded
   const sentRef = useRef(false);
+  const prevProjects = useRef<typeof projects>(undefined);
   useWatchEffect(() => {
-    if (sentRef.current || projects === undefined) return;
+    if (projects === undefined) return;
+    if (sentRef.current && prevProjects.current !== undefined) return;
     sentRef.current = true;
+    prevProjects.current = projects;
     const projectPaths = (projects ?? [])
       .map((p: any) => p.project_path)
       .filter(Boolean) as string[];
