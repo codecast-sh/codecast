@@ -131,6 +131,7 @@ function stripSystemTags(content: string): string {
     .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '')
     .replace(/<local-command-stdout>[\s\S]*?<\/local-command-stdout>/g, '')
     .replace(/<local-command-stderr>[\s\S]*?<\/local-command-stderr>/g, '')
+    .replace(/<local-command-caveat>[\s\S]*?<\/local-command-caveat>/g, '')
     .replace(/<\/?(?:command-(?:name|message|args)|antml:[a-z_]+)[^>]*>/g, '')
     .replace(/^\s*Caveat:.*$/gm, '')
     .replace(/\n{3,}/g, '\n\n');
@@ -2093,6 +2094,168 @@ function SkillBlockCard({ name, description, path }: { name?: string; descriptio
   );
 }
 
+function isTaskNotification(content: string): boolean {
+  return content.trim().startsWith('<task-notification>');
+}
+
+function parseTaskNotification(content: string): { taskId: string; status: string; summary: string; outputFile?: string } | null {
+  const match = content.match(/<task-notification>([\s\S]*?)<\/task-notification>/);
+  if (!match) return null;
+  const inner = match[1];
+  const taskId = inner.match(/<task-id>(.*?)<\/task-id>/)?.[1] || '';
+  const status = inner.match(/<status>(.*?)<\/status>/)?.[1] || '';
+  const summary = inner.match(/<summary>([\s\S]*?)<\/summary>/)?.[1]?.trim() || '';
+  const outputFile = inner.match(/<output-file>(.*?)<\/output-file>/)?.[1];
+  return { taskId, status, summary, outputFile };
+}
+
+const taskStatusConfig: Record<string, { icon: string; color: string; bg: string }> = {
+  completed: { icon: '\u2713', color: Theme.green, bg: Theme.green + '1a' },
+  killed: { icon: '\u25A0', color: Theme.orange, bg: Theme.orange + '1a' },
+  failed: { icon: '\u2717', color: Theme.red, bg: Theme.red + '1a' },
+  running: { icon: '\u25B6', color: Theme.blue, bg: Theme.blue + '1a' },
+};
+
+function TaskNotificationLine({ content, timestamp, childConversationMap }: { content: string; timestamp?: number; childConversationMap?: Record<string, string> }) {
+  const router = useRouter();
+  const parsed = parseTaskNotification(content);
+  if (!parsed) return null;
+  const config = taskStatusConfig[parsed.status] || taskStatusConfig.running;
+
+  const handlePress = () => {
+    if (childConversationMap && parsed.taskId) {
+      const childId = Object.values(childConversationMap).find(id => id);
+      if (childId) {
+        router.push(`/session/${childId}`);
+        return;
+      }
+    }
+  };
+
+  return (
+    <TouchableOpacity onPress={handlePress} activeOpacity={0.7} style={[styles.taskNotificationRow, { backgroundColor: config.bg }]}>
+      <RNText style={[styles.taskNotificationIcon, { color: config.color }]}>{config.icon}</RNText>
+      <RNText style={styles.taskNotificationSummary} numberOfLines={2}>{parsed.summary}</RNText>
+      <RNText style={styles.taskNotificationId}>{parsed.taskId}</RNText>
+    </TouchableOpacity>
+  );
+}
+
+function parseApiErrorContent(content?: string | null): { statusCode: number; message: string; errorType?: string; requestId?: string } | null {
+  if (!content) return null;
+  const trimmed = content.trim();
+  const match = trimmed.match(/^API Error:\s*(\d{3})\s*([\s\S]*)$/i);
+  if (!match) return null;
+  const statusCode = Number(match[1]);
+  const payloadText = (match[2] || '').trim();
+  let message = '';
+  let errorType: string | undefined;
+  let requestId: string | undefined;
+  if (payloadText.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(payloadText);
+      if (typeof parsed.request_id === 'string') requestId = parsed.request_id;
+      const parsedError = parsed.error;
+      if (parsedError && typeof parsedError === 'object') {
+        if (typeof parsedError.type === 'string') errorType = parsedError.type;
+        if (typeof parsedError.message === 'string') message = parsedError.message;
+      }
+    } catch {}
+  }
+  if (!requestId) requestId = trimmed.match(/\b(req_[A-Za-z0-9]+)\b/)?.[1];
+  if (!message) message = statusCode === 500 ? 'Internal server error' : 'API request failed';
+  return { statusCode, message, errorType, requestId };
+}
+
+function ApiErrorCard({ statusCode, message, errorType, requestId }: { statusCode: number; message: string; errorType?: string; requestId?: string }) {
+  const isServer = statusCode >= 500;
+  const color = isServer ? Theme.red : Theme.orange;
+  return (
+    <RNView style={[styles.apiErrorCard, { borderColor: color + '60' }]}>
+      <RNView style={styles.apiErrorHeader}>
+        <RNText style={[styles.apiErrorCode, { color }]}>{statusCode}</RNText>
+        {errorType && <RNText style={[styles.apiErrorType, { color: color + 'cc' }]}>{errorType}</RNText>}
+      </RNView>
+      <RNText style={styles.apiErrorMessage}>{message}</RNText>
+      {requestId && <RNText style={styles.apiErrorRequestId}>{requestId}</RNText>}
+    </RNView>
+  );
+}
+
+type InsightPart = { type: 'text'; content: string } | { type: 'insight'; label: string; content: string };
+
+function parseInsightBlocks(text: string): InsightPart[] {
+  if (!text || typeof text !== 'string') return [{ type: 'text', content: String(text || '') }];
+  const insightRegex = /`([★✦⭐☆\*])\s+([\w\s]+?)\s*─+`([\s\S]*?)`─+`/g;
+  const parts: InsightPart[] = [];
+  let lastIndex = 0;
+  let match;
+  while ((match = insightRegex.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      const before = text.slice(lastIndex, match.index).trim();
+      if (before) parts.push({ type: 'text', content: before });
+    }
+    parts.push({ type: 'insight', label: match[2].trim(), content: match[3].trim() });
+    lastIndex = match.index + match[0].length;
+  }
+  if (lastIndex < text.length) {
+    const remaining = text.slice(lastIndex).trim();
+    if (remaining) parts.push({ type: 'text', content: remaining });
+  }
+  if (parts.length === 0) parts.push({ type: 'text', content: text });
+  return parts;
+}
+
+function InsightCard({ label, content }: { label: string; content: string }) {
+  return (
+    <RNView style={styles.insightCard}>
+      <RNView style={styles.insightHeader}>
+        <RNText style={styles.insightStar}>{'\u2605'}</RNText>
+        <RNText style={styles.insightLabel}>{label}</RNText>
+      </RNView>
+      <MarkdownContent text={content} baseStyle={styles.insightContent} isUser={false} />
+    </RNView>
+  );
+}
+
+type ParsedContextBlock = { type: string; title: string; id?: string; status?: string; priority?: string };
+
+function parseContextBlocks(text: string): { contexts: ParsedContextBlock[]; remaining: string } {
+  const contexts: ParsedContextBlock[] = [];
+  const remaining = text.replace(
+    /<context\s+type="([^"]+)"\s+title="([^"]+)">\s*([\s\S]*?)\s*<\/context>\s*/g,
+    (_, type, title, inner) => {
+      const ctx: ParsedContextBlock = { type, title };
+      const idMatch = inner.match(/ID:\s*(\S+)/);
+      const statusMatch = inner.match(/Status:\s*(\S+)/);
+      const priorityMatch = inner.match(/Priority:\s*(\S+)/);
+      if (idMatch) ctx.id = idMatch[1];
+      if (statusMatch) ctx.status = statusMatch[1];
+      if (priorityMatch) ctx.priority = priorityMatch[1];
+      contexts.push(ctx);
+      return '';
+    }
+  ).trim();
+  return { contexts, remaining };
+}
+
+const contextTypeConfig: Record<string, { icon: 'list' | 'crosshairs' | 'file-text-o'; color: string }> = {
+  task: { icon: 'list', color: Theme.accent },
+  plan: { icon: 'crosshairs', color: Theme.cyan },
+  doc: { icon: 'file-text-o', color: Theme.violet },
+};
+
+function ContextBlockPill({ ctx }: { ctx: ParsedContextBlock }) {
+  const config = contextTypeConfig[ctx.type] || contextTypeConfig.doc;
+  return (
+    <RNView style={[styles.contextPill, { borderColor: config.color + '40' }]}>
+      <FontAwesome name={config.icon} size={9} color={config.color} />
+      <RNText style={[styles.contextPillText, { color: config.color }]} numberOfLines={1}>{ctx.title}</RNText>
+      {ctx.id && <RNText style={styles.contextPillId}>{ctx.id}</RNText>}
+    </RNView>
+  );
+}
+
 function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImageMap, openGallery }: {
   toolCall: ToolCall;
   result?: ToolResult;
@@ -2754,58 +2917,55 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
             isUser && !userContentExpanded && !isLongContent && { maxHeight: ASSISTANT_CONTENT_MAX_HEIGHT, overflow: 'hidden' as const },
           ]}
         >
-          {typeof content === 'string' && content.includes('<skill>') ? (
-            parseSkillBlocks(content).map((part, idx) => {
-              if (part.type === 'skill') {
+          {(() => {
+            if (typeof content !== 'string') {
+              return <MarkdownContent text={content} baseStyle={[styles.bubbleText, isUser ? styles.userText : styles.assistantText]} isUser={isUser} />;
+            }
+            const apiError = parseApiErrorContent(content);
+            if (apiError) {
+              return <ApiErrorCard {...apiError} />;
+            }
+            if (isTaskNotification(content)) {
+              return <TaskNotificationLine content={content} childConversationMap={childConversationMap} />;
+            }
+            if (content.includes('<skill>')) {
+              return parseSkillBlocks(content).map((part, idx) =>
+                part.type === 'skill'
+                  ? <SkillBlockCard key={idx} name={part.skillName} description={part.skillDesc} path={part.skillPath} />
+                  : <MarkdownContent key={idx} text={part.content} baseStyle={[styles.bubbleText, isUser ? styles.userText : styles.assistantText]} isUser={isUser} />
+              );
+            }
+            if (content.includes('<teammate-message')) {
+              return parseTeammateMessages(content).map((part, idx) =>
+                part.type === 'text'
+                  ? <MarkdownContent key={idx} text={part.content} baseStyle={[styles.bubbleText, isUser ? styles.userText : styles.assistantText]} isUser={isUser} />
+                  : <TeammateMessageCard key={idx} teammateId={part.teammateId} color={part.color} summary={part.summary} content={part.content} />
+              );
+            }
+            const insightParts = parseInsightBlocks(content);
+            const hasInsights = insightParts.some(p => p.type === 'insight');
+            if (hasInsights) {
+              return insightParts.map((part, idx) =>
+                part.type === 'insight'
+                  ? <InsightCard key={idx} label={part.label} content={part.content} />
+                  : <MarkdownContent key={idx} text={part.content} baseStyle={[styles.bubbleText, isUser ? styles.userText : styles.assistantText]} isUser={isUser} />
+              );
+            }
+            if (isUser && content.includes('<context ')) {
+              const { contexts, remaining } = parseContextBlocks(content);
+              if (contexts.length > 0) {
                 return (
-                  <SkillBlockCard
-                    key={idx}
-                    name={part.skillName}
-                    description={part.skillDesc}
-                    path={part.skillPath}
-                  />
-                );
-              } else {
-                return (
-                  <MarkdownContent
-                    key={idx}
-                    text={part.content}
-                    baseStyle={[styles.bubbleText, isUser ? styles.userText : styles.assistantText]}
-                    isUser={isUser}
-                  />
+                  <>
+                    <RNView style={styles.contextPillRow}>
+                      {contexts.map((ctx, idx) => <ContextBlockPill key={idx} ctx={ctx} />)}
+                    </RNView>
+                    {remaining ? <MarkdownContent text={remaining} baseStyle={[styles.bubbleText, styles.userText]} isUser={true} /> : null}
+                  </>
                 );
               }
-            })
-          ) : typeof content === 'string' && content.includes('<teammate-message') ? (
-            parseTeammateMessages(content).map((part, idx) => {
-              if (part.type === 'text') {
-                return (
-                  <MarkdownContent
-                    key={idx}
-                    text={part.content}
-                    baseStyle={[styles.bubbleText, isUser ? styles.userText : styles.assistantText]}
-                    isUser={isUser}
-                  />
-                );
-              } else {
-                return (
-                  <TeammateMessageCard
-                    key={idx}
-                    teammateId={part.teammateId}
-                    color={part.color}
-                    summary={part.summary}
-                    content={part.content}
-                  />
-                );
-              }
-            })
-          ) : (
-            <MarkdownContent
-              text={content}
-              baseStyle={[styles.bubbleText, isUser ? styles.userText : styles.assistantText]}
-              isUser={isUser}
-            />
-          )}
+            }
+            return <MarkdownContent text={content} baseStyle={[styles.bubbleText, isUser ? styles.userText : styles.assistantText]} isUser={isUser} />;
+          })()}
           {((isLongContent && !contentExpanded) || (!isUser && estimatedOverflow && !contentExpanded) || (isUser && estimatedOverflow && !userContentExpanded)) && (
             <LinearGradient
               colors={[isUser ? Theme.violet + '00' : Theme.bg + '00', isUser ? Theme.violet + '26' : Theme.bg]}
@@ -4273,9 +4433,24 @@ export default function SessionDetailScreen() {
               if (planContent) {
                 return <PlanBlock content={planContent} timestamp={item.timestamp} />;
               }
-              // User message following compact_boundary -> render as compaction summary
               if (prevNonToolResult?.role === 'system' && prevNonToolResult?.subtype === 'compact_boundary') {
                 return <CompactionSummaryBlock content={item.content} />;
+              }
+            }
+
+            if (item.role === 'user' && item.content && isTaskNotification(item.content)) {
+              const stripped = item.content.replace(/<task-notification>[\s\S]*?<\/task-notification>/g, '').trim();
+              if (!stripped || stripped.length < 4 || stripped.startsWith('Read the output file to retrieve the result:') || stripped.startsWith('Full transcript available at:')) {
+                return <TaskNotificationLine content={item.content} timestamp={item.timestamp} childConversationMap={conversation.child_conversation_map} />;
+              }
+            }
+
+            if (item.role === 'user' && item.content) {
+              const t = item.content.trim();
+              if (t.includes('Your task is to create a detailed summary') ||
+                  t.startsWith('Read the output file to retrieve the result:') ||
+                  t.startsWith('Full transcript available at:')) {
+                return null;
               }
             }
 
@@ -6419,5 +6594,120 @@ const styles = StyleSheet.create({
   usageContextFill: {
     height: '100%',
     borderRadius: 2,
+  },
+  taskNotificationRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 6,
+    marginVertical: 2,
+  },
+  taskNotificationIcon: {
+    fontSize: 14,
+    fontWeight: '700',
+    width: 18,
+    textAlign: 'center',
+  },
+  taskNotificationSummary: {
+    fontSize: 12,
+    color: Theme.text,
+    flex: 1,
+    lineHeight: 17,
+  },
+  taskNotificationId: {
+    fontSize: 10,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    color: Theme.textDim,
+  },
+  apiErrorCard: {
+    borderWidth: 1,
+    borderRadius: 6,
+    padding: 10,
+    marginVertical: 4,
+    backgroundColor: Theme.bgAlt,
+  },
+  apiErrorHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 4,
+  },
+  apiErrorCode: {
+    fontSize: 14,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    fontWeight: '700',
+  },
+  apiErrorType: {
+    fontSize: 11,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+  },
+  apiErrorMessage: {
+    fontSize: 12,
+    color: Theme.textSecondary,
+    lineHeight: 17,
+  },
+  apiErrorRequestId: {
+    fontSize: 9,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    color: Theme.textDim,
+    marginTop: 4,
+  },
+  insightCard: {
+    marginVertical: 4,
+    padding: 10,
+    borderRadius: 6,
+    backgroundColor: Theme.violet + '12',
+    borderLeftWidth: 2,
+    borderLeftColor: Theme.violet,
+  },
+  insightHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 4,
+  },
+  insightStar: {
+    fontSize: 12,
+    color: Theme.violet,
+  },
+  insightLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: Theme.violet,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  insightContent: {
+    fontSize: 13,
+    color: Theme.textSecondary,
+    lineHeight: 19,
+  },
+  contextPillRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginBottom: 6,
+  },
+  contextPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 10,
+    borderWidth: 1,
+    backgroundColor: Theme.bgAlt,
+  },
+  contextPillText: {
+    fontSize: 10,
+    fontWeight: '500',
+    maxWidth: 120,
+  },
+  contextPillId: {
+    fontSize: 9,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    color: Theme.textDim,
   },
 });
