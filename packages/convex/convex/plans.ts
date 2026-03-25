@@ -525,7 +525,11 @@ export const bindSession = mutation({
     if (!planIds.some((pid: any) => pid === plan._id)) {
       planIds.push(plan._id);
     }
-    await ctx.db.patch(conv._id, { active_plan_id: plan._id, plan_ids: planIds });
+    const patchFields: Record<string, any> = { plan_ids: planIds };
+    if (!conv.active_plan_id || conv.active_plan_id === plan._id) {
+      patchFields.active_plan_id = plan._id;
+    }
+    await ctx.db.patch(conv._id, patchFields);
 
     return { success: true };
   },
