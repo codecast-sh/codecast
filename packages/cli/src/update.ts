@@ -5,7 +5,7 @@ import * as os from "os";
 const VERSION = "1.0.98";
 const MEMORY_VERSION = "3";
 const TASK_VERSION = "1";
-const WORK_VERSION = "4";
+const WORK_VERSION = "5";
 const PLAN_VERSION = "2";
 const WORKFLOW_VERSION = "1";
 const LATEST_URL = "https://dl.codecast.sh/latest.json";

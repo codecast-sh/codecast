@@ -404,6 +404,10 @@ interface DaemonState {
   lastSyncTime?: number;
   pendingQueueSize?: number;
   authExpired?: boolean;
+  lastHeartbeatTick?: number;
+  lastWatchdogCheck?: number;
+  runtimeVersion?: string;
+  watchdogRestarts?: number;
 }
 
 function detectAgents(): DetectedAgent[] {
@@ -692,6 +696,52 @@ function installSlashCommand(): void {
   }
 }
 
+function writeTaskPulse(sessionId: string, taskId: string, planId?: string): void {
+  try {
+    const dir = path.join(os.homedir(), ".codecast", "task-pulse");
+    fs.mkdirSync(dir, { recursive: true });
+    const data: Record<string, string> = { task: taskId };
+    if (planId) data.plan = planId;
+    fs.writeFileSync(path.join(dir, `${sessionId}.json`), JSON.stringify(data));
+  } catch {}
+}
+
+function clearTaskPulse(sessionId: string): void {
+  try {
+    const file = path.join(os.homedir(), ".codecast", "task-pulse", `${sessionId}.json`);
+    if (fs.existsSync(file)) fs.unlinkSync(file);
+  } catch {}
+}
+
+const TASK_PULSE_HOOK = `#!/bin/bash
+# Periodic task/plan reminder — emits a short nudge every N user messages
+set -uo pipefail
+
+INPUT=$(cat)
+SESSION_ID=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('session_id',''))" 2>/dev/null)
+[ -z "$SESSION_ID" ] && exit 0
+
+PULSE_FILE="$HOME/.codecast/task-pulse/$SESSION_ID.json"
+[ -f "$PULSE_FILE" ] || exit 0
+
+COUNTER_DIR="$HOME/.codecast/task-pulse/counters"
+mkdir -p "$COUNTER_DIR"
+COUNTER_FILE="$COUNTER_DIR/$SESSION_ID"
+COUNT=0
+[ -f "$COUNTER_FILE" ] && COUNT=$(cat "$COUNTER_FILE")
+COUNT=$((COUNT + 1))
+echo "$COUNT" > "$COUNTER_FILE"
+
+# Emit every 8 turns
+[ $((COUNT % 8)) -ne 0 ] && exit 0
+
+TASK=$(python3 -c "import sys,json; d=json.load(open('$PULSE_FILE')); parts=[]; t=d.get('task',''); p=d.get('plan','');
+[t and parts.append('task '+t), p and parts.append('plan '+p)]; print(', '.join(parts))" 2>/dev/null)
+[ -z "$TASK" ] && exit 0
+
+echo "<task-reminder>You are working on $TASK. Check progress against acceptance criteria.</task-reminder>"
+`;
+
 const SESSION_REGISTER_HOOK = `#!/bin/bash
 # Registers session-to-PID/TTY mapping for codecast daemon process discovery
 set -uo pipefail
@@ -871,6 +921,52 @@ function installSessionRegisterHook(): void {
   } catch {
     // Ignore errors - hook is optional enhancement
   }
+}
+
+function installTaskPulseHook(): void {
+  const home = process.env.HOME || "";
+  const hooksDir = path.join(home, ".claude", "hooks");
+  const hookFile = path.join(hooksDir, "task-pulse.sh");
+  const settingsFile = path.join(home, ".claude", "settings.json");
+
+  try {
+    fs.mkdirSync(hooksDir, { recursive: true });
+    fs.writeFileSync(hookFile, TASK_PULSE_HOOK, { mode: 0o755 });
+
+    let settings: any = {};
+    if (fs.existsSync(settingsFile)) {
+      settings = JSON.parse(fs.readFileSync(settingsFile, "utf-8"));
+    }
+
+    if (!settings.hooks) settings.hooks = {};
+
+    const hookEntry = {
+      type: "command",
+      command: hookFile,
+      timeout: 5,
+    };
+
+    for (const event of ["UserPromptSubmit"] as const) {
+      if (!settings.hooks[event]) settings.hooks[event] = [];
+
+      const hookArray = settings.hooks[event] as any[];
+      const alreadyPresent = hookArray.some((matcher: any) => {
+        const hooks = matcher.hooks || [];
+        return hooks.some((h: any) => h.command?.includes("task-pulse.sh"));
+      });
+
+      if (!alreadyPresent) {
+        if (hookArray.length > 0 && hookArray[0].matcher === "") {
+          hookArray[0].hooks = hookArray[0].hooks || [];
+          hookArray[0].hooks.push(hookEntry);
+        } else {
+          hookArray.unshift({ matcher: "", hooks: [hookEntry] });
+        }
+      }
+    }
+
+    fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 4));
+  } catch {}
 }
 
 function showWelcome(): void {
@@ -1059,6 +1155,22 @@ function getAgentLabel(agentType?: string): string | null {
   return agentType;
 }
 
+const DAEMON_BLOCKED_THRESHOLD_MS = 5 * 60 * 1000;
+
+function checkDaemonHealth(): { blocked: boolean; restarted: boolean } {
+  const pid = getDaemonPid();
+  if (!pid) return { blocked: false, restarted: false };
+
+  const state = readDaemonState();
+  const lastTick = state?.lastHeartbeatTick || state?.lastWatchdogCheck || 0;
+  if (lastTick <= 0) return { blocked: false, restarted: false };
+
+  const tickStaleMs = Date.now() - lastTick;
+  if (tickStaleMs <= DAEMON_BLOCKED_THRESHOLD_MS) return { blocked: false, restarted: false };
+
+  return { blocked: true, restarted: false };
+}
+
 function showStatus(): void {
   const pid = getDaemonPid();
   const launchdStatus = getMacLaunchdDaemonStatus();
@@ -1089,7 +1201,17 @@ function showStatus(): void {
   console.log("");
 
   if (pid) {
-    row("Daemon", fmt.success(icons.check + " running") + fmt.muted(` (PID ${pid})`));
+    const health = checkDaemonHealth();
+    if (health.blocked) {
+      if (health.restarted) {
+        row("Daemon", fmt.warning("was blocked, auto-restarted"));
+      } else {
+        row("Daemon", fmt.warning("blocked") + fmt.muted(` (PID ${pid})`));
+        console.log(`  ${fmt.muted("Run")} ${fmt.cmd("cast restart")} ${fmt.muted("to recover")}`);
+      }
+    } else {
+      row("Daemon", fmt.success(icons.check + " running") + fmt.muted(` (PID ${pid})`));
+    }
 
     if (state?.lastSyncTime) {
       row("Last sync", fmt.value(formatRelativeTime(state.lastSyncTime)));
@@ -1381,6 +1503,7 @@ async function runAuth(): Promise<void> {
   installSlashCommand();
   installSessionRegisterHook();
   installStatusHook();
+  installTaskPulseHook();
 
   console.log(`${fmt.success(icons.check)} ${c.bold}Authenticated successfully!${c.reset}\n`);
   console.log(`  ${fmt.muted("User")}     ${fmt.id(config.user_id || "")}`);
@@ -1715,37 +1838,38 @@ const WORK_SNIPPET_END = "<!-- /codecast-work -->";
 const WORK_SNIPPET = `
 ## Tasks & Plans
 
-You operate within a structured work system. Tasks are specific work items with acceptance criteria. Plans group tasks toward a goal. A human monitors progress through a dashboard — communicate status through the system, not through chat.
+You operate within a structured work tracking system. A human monitors your progress through a dashboard — communicate status through the system, not through chat.
 
-### Orientation
+### When to create structure
 
-Before diving into implementation, understand where your work fits:
-- If bound to a task: you own that task. Read its acceptance criteria carefully. Check sibling tasks to understand what's adjacent and avoid conflicts.
-- If bound to a plan: you coordinate across tasks. Keep the goal coherent as work progresses.
-- If unbound: you're in freeform mode. If the work becomes structured enough to track, suggest creating a task or plan.
+**Create a task** when your work will change code, fix a bug, or produce a deliverable. Run \`cast task create "Title" -p <priority>\` before you start implementing. This is the default — skip it only for simple questions, explanations, or quick lookups that don't produce changes.
 
-When work spans multiple turns or survives compaction, re-read your task or plan context (\`cast task context <id>\` / \`cast plan show <id>\`) to reground yourself. Don't rely on memory of earlier conversation alone.
+**Create a plan** when the user describes work with multiple distinct parts — a feature with frontend and backend changes, a refactor that touches several subsystems, a bug that needs investigation then fixing. Run \`cast plan create "Title" -g "goal"\` and decompose into tasks with \`cast plan decompose <plan_id>\`. Don't create plans for single-task work.
 
-### Communicating status
+**Check existing work first.** Your context includes an overview of active tasks and plans. Before creating new ones, check if your work already has a task (\`cast task ready\`) or fits under an existing plan. Claim existing tasks with \`cast task start <id>\` rather than creating duplicates.
 
-The dashboard is the source of truth. Update it as you work:
-- \`cast task start <id>\` — claim a task, binds your session
-- \`cast task comment <id> "progress" -t progress\` — log what you've done
-- \`cast task done <id> -m "summary"\` — mark complete with what you verified
-- \`cast plan decide <plan_id> "rationale"\` — record decisions that affect the plan
+### Working on tasks
+
+Once you have a task:
+1. \`cast task start <id>\` — claim it and bind your session
+2. Work on the implementation
+3. \`cast task comment <id> "progress" -t progress\` — log milestones as you go
+4. \`cast task done <id> -m "summary"\` — mark complete with what you verified
+
+If bound to a plan, keep the bigger picture coherent:
+- Task larger than expected? Suggest splitting it.
+- Your work creates a dependency? Flag it.
+- Making a directional decision? Record it with \`cast plan decide <plan_id> "rationale"\`.
+- Acceptance criteria ambiguous? Ask before assuming.
 
 If blocked, say so explicitly:
 - **BLOCKED: <reason>** — flags for human intervention
 - **NEEDS_CONTEXT: <what>** — escalates to the user
 - **DONE_WITH_CONCERNS: <concern>** — completed but flagged for review
 
-### Keeping the plan coherent
+### After compaction
 
-You see your slice of the work, but the plan is bigger. If you notice:
-- A task is larger than expected — suggest splitting it
-- Your work creates a dependency for another task — flag it
-- A decision you're making affects the plan's direction — record it with \`cast plan decide\`
-- Acceptance criteria are ambiguous or contradictory — ask before assuming
+When your context gets compacted, re-read your task or plan context (\`cast task context <id>\` / \`cast plan show <id>\`) to reground yourself. Don't rely on memory of earlier conversation alone.
 
 ### Commands
 
@@ -1758,20 +1882,15 @@ cast task update <id> --plan <plan_id>      # Bind existing task to plan
 cast task context <id>                      # Full context (re-read after compaction)
 cast plan create "Title" -g "goal" -b "body"  # Create plan with inline body
 cast plan create "Title" --body-file plan.md  # Create plan from file
-cast plan bind <plan_id>                    # Bind session to plan
-cast plan unbind <plan_id>                  # Unbind session from plan
+cast plan bind/unbind <plan_id>             # Bind/unbind session to plan
 cast plan decompose <plan_id>              # Generate tasks from goal
 cast plan orchestrate <plan_id>            # Spawn agents for ready tasks
 cast plan show/status <plan_id>            # Plan details
 cast plan update <plan_id> -n "note"       # Log progress
 cast plan decide <plan_id> "decision" --rationale "why"
 cast plan done/drop <plan_id>             # Close or abandon a plan
-cast doc create "Title" [-c content] [-t type]  # Create doc (note, plan, insight, decision, runbook)
-cast doc ls [-t type] [-n limit]           # List docs
-cast doc get <id>                          # Show doc content
-cast doc edit <id> --old "..." --new "..." # Patch doc content (find & replace)
-cast doc edit <id> --content "..." --title "..."  # Full update
-cast doc search <query>                    # Search docs by title
+cast doc create "Title" [-c content] [-t type]
+cast doc ls/get/edit/search
 \`\`\`
 ${WORK_SNIPPET_END}
 `;
@@ -2458,6 +2577,14 @@ program
       console.log(`Update available: v${getVersion()} -> v${available}, updating...`);
       const success = await performUpdate();
       if (success) {
+        const config = readConfig() || {};
+        if (config.memory_enabled) installMemorySnippet(true);
+        if (config.task_enabled) installTaskSnippet(true);
+        if (config.work_enabled) installWorkSnippet(true);
+        if (config.workflow_enabled) installWorkflowSnippet(true);
+        installSessionRegisterHook();
+        installStatusHook();
+  installTaskPulseHook();
         console.log(`Updated to v${available}`);
       } else {
         console.log("Update failed, restarting with current version");
@@ -5597,7 +5724,7 @@ program
     // 3. Remove hooks from ~/.claude/settings.json and hook scripts
     const claudeDir = path.join(home, ".claude");
     const settingsFile = path.join(claudeDir, "settings.json");
-    const hookFiles = ["codecast-status.sh", "session-register.sh", "stable-feed.sh"];
+    const hookFiles = ["codecast-status.sh", "session-register.sh", "stable-feed.sh", "task-pulse.sh"];
 
     if (fs.existsSync(settingsFile)) {
       try {
@@ -7127,6 +7254,7 @@ program
       if (config.workflow_enabled) installWorkflowSnippet(true);
       installSessionRegisterHook();
       installStatusHook();
+  installTaskPulseHook();
 
       // Restart daemon if it was running
       if (daemonWasRunning) {
@@ -8532,6 +8660,7 @@ work
 
     const result = await cliPost("/cli/work/create", body);
     console.log(`${c.green}ok${c.reset} Created ${c.cyan}${result.short_id}${c.reset}: ${title}`);
+    if (sessionId) writeTaskPulse(sessionId, result.short_id, options.plan);
   });
 
 work
@@ -8636,6 +8765,8 @@ work
     const result = await cliPost("/cli/work/update", body);
     console.log(`${c.green}ok${c.reset} Started ${c.cyan}${shortId}${c.reset}`);
 
+    if (sessionId) writeTaskPulse(sessionId, shortId, result.plan_id);
+
     if (result.plan_id && sessionId) {
       try {
         await cliPost("/cli/plans/bind", { short_id: result.plan_id, session_id: sessionId });
@@ -8666,6 +8797,7 @@ work
       await cliPost("/cli/work/comment", { short_id: shortId, text: options.message, comment_type: "note" });
     }
     console.log(`${c.green}ok${c.reset} Completed ${c.cyan}${shortId}${c.reset}`);
+    if (sessionId) clearTaskPulse(sessionId);
   });
 
 work
@@ -8674,7 +8806,9 @@ work
   .argument("<short_id>", "Task short ID")
   .option("-m, --message <text>", "Reason for dropping")
   .action(async (shortId: string, options: any) => {
+    const sessionId = detectCurrentSessionId();
     await cliPost("/cli/work/update", { short_id: shortId, status: "dropped" });
+    if (sessionId) clearTaskPulse(sessionId);
     if (options.message) {
       await cliPost("/cli/work/comment", { short_id: shortId, text: options.message, comment_type: "note" });
     }
@@ -9208,6 +9342,7 @@ plan
     }
     await cliPost("/cli/plans/bind", { short_id: planId, conversation_id: sessionId });
     console.log(`${c.green}ok${c.reset} Session bound to plan ${c.cyan}${planId}${c.reset}`);
+    writeTaskPulse(sessionId, "", planId);
   });
 
 plan
@@ -9215,8 +9350,10 @@ plan
   .description("Unbind current session from its plan")
   .argument("<plan_id>", "Plan short ID")
   .action(async (planId: string) => {
+    const sessionId = detectCurrentSessionId();
     await cliPost("/cli/plans/unbind", { short_id: planId });
     console.log(`${c.green}ok${c.reset} Session unbound from plan ${c.cyan}${planId}${c.reset}`);
+    if (sessionId) clearTaskPulse(sessionId);
   });
 
 plan
@@ -11693,22 +11830,32 @@ checkForUpdates().then(async (available) => {
     return;
   }
 
+  const daemonWasRunning = getDaemonPid() !== null;
+  if (daemonWasRunning) {
+    stopDaemon();
+  }
+
   console.log(`\nAuto-updating to v${available}...`);
   const success = await performUpdate();
   if (success) {
-    if (config?.memory_enabled) {
-      installMemorySnippet(true);
-    }
-    if (config?.task_enabled) {
-      installTaskSnippet(true);
-    }
-    if (config?.workflow_enabled) {
-      installWorkflowSnippet(true);
-    }
+    if (config?.memory_enabled) installMemorySnippet(true);
+    if (config?.task_enabled) installTaskSnippet(true);
+    if (config?.work_enabled) installWorkSnippet(true);
+    if (config?.workflow_enabled) installWorkflowSnippet(true);
     installSessionRegisterHook();
     installStatusHook();
-    console.log("Update complete. Restart cast to use the new version.\n");
+  installTaskPulseHook();
+
+    if (daemonWasRunning) {
+      startDaemon();
+      console.log(`Updated to v${available} and restarted daemon.\n`);
+    } else {
+      console.log(`Updated to v${available}.\n`);
+    }
   } else {
+    if (daemonWasRunning) {
+      startDaemon();
+    }
     showUpdateNotice(available);
   }
 });
