@@ -23,6 +23,14 @@ export function isElectron(): boolean {
   return typeof window !== "undefined" && !!window.__CODECAST_ELECTRON__;
 }
 
+function bridge<K extends keyof NonNullable<Window["__CODECAST_ELECTRON__"]>>(
+  method: K,
+): NonNullable<Window["__CODECAST_ELECTRON__"]>[K] | undefined {
+  const b = window.__CODECAST_ELECTRON__;
+  const fn = b?.[method];
+  return typeof fn === "function" ? fn.bind(b) as any : undefined;
+}
+
 export function isDesktop(): boolean {
   return isElectron();
 }
@@ -42,7 +50,7 @@ export async function requestNotificationPermission(): Promise<boolean> {
 
 export async function notifyNative(title: string, body: string, data?: { conversationId?: string }) {
   if (isElectron()) {
-    window.__CODECAST_ELECTRON__!.showNotification(title, body, data);
+    bridge("showNotification")?.(title, body, data);
   } else if (hasBrowserNotificationPermission()) {
     if (document.hasFocus()) return;
     const n = new Notification(title, { body, icon: "/icon-192.png", tag: data?.conversationId });
@@ -57,25 +65,25 @@ export async function notifyNative(title: string, body: string, data?: { convers
 
 export async function updateBadge(count: number) {
   if (isElectron()) {
-    window.__CODECAST_ELECTRON__!.setBadgeCount(count);
+    bridge("setBadgeCount")?.(count);
   }
 }
 
 export async function onDeepLink(cb: (urls: string[]) => void) {
   if (isElectron()) {
-    window.__CODECAST_ELECTRON__!.onDeepLink((url) => cb([url]));
+    bridge("onDeepLink")?.((url: string) => cb([url]));
   }
 }
 
 export function onUpdateStatus(cb: (status: { status: string; version?: string; percent?: number }) => void) {
   if (isElectron()) {
-    window.__CODECAST_ELECTRON__!.onUpdateStatus(cb);
+    bridge("onUpdateStatus")?.(cb);
   }
 }
 
 export function restartForUpdate() {
   if (isElectron()) {
-    window.__CODECAST_ELECTRON__!.restartForUpdate();
+    bridge("restartForUpdate")?.();
   }
 }
 
@@ -100,7 +108,7 @@ export async function checkForUpdates() {
 
 export async function getAppVersion(): Promise<string | null> {
   if (isElectron()) {
-    return window.__CODECAST_ELECTRON__!.getVersion();
+    return bridge("getVersion")?.() ?? null;
   }
   return null;
 }
