@@ -502,9 +502,11 @@ export const update = mutation({
         if (!existing.some((id) => id === conv._id)) {
           updates.conversation_ids = [...existing, conv._id];
         }
-        await ctx.db.patch(conv._id, { active_task_id: task._id });
-        if (task.plan_id && !conv.active_plan_id) {
-          await ctx.db.patch(conv._id, { active_plan_id: task.plan_id });
+        if (!conv.active_task_id || conv.active_task_id === task._id) {
+          await ctx.db.patch(conv._id, { active_task_id: task._id });
+          if (task.plan_id && !conv.active_plan_id) {
+            await ctx.db.patch(conv._id, { active_plan_id: task.plan_id });
+          }
         }
       }
     }

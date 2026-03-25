@@ -149,7 +149,8 @@ export default defineSchema({
       v.literal("claude_code"),
       v.literal("codex"),
       v.literal("cursor"),
-      v.literal("gemini")
+      v.literal("gemini"),
+      v.literal("cowork")
     ),
     session_id: v.string(),
     slug: v.optional(v.string()),
@@ -260,6 +261,7 @@ export default defineSchema({
 
   messages: defineTable({
     conversation_id: v.id("conversations"),
+    from_user_id: v.optional(v.id("users")),
     message_uuid: v.optional(v.string()),
     role: v.union(
       v.literal("user"),

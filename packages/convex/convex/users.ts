@@ -2,6 +2,7 @@ import { mutation, query, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
+import { hasRecentPendingDaemonCommand } from "./daemonCommandUtils";
 
 export const getCurrentUser = query({
   args: {},
@@ -257,6 +258,17 @@ export const resumeSession = mutation({
     }
 
     const agentType = conversation.agent_type === "codex" ? "codex" : conversation.agent_type === "gemini" ? "gemini" : "claude";
+    const pendingCommands = await ctx.db
+      .query("daemon_commands")
+      .withIndex("by_user_pending", (q) => q.eq("user_id", authUserId).eq("executed_at", undefined))
+      .collect();
+
+    if (hasRecentPendingDaemonCommand(pendingCommands as any, {
+      conversationId: args.conversation_id.toString(),
+      command: "resume_session",
+    })) {
+      return { deduplicated: true };
+    }
 
     const commandId = await ctx.db.insert("daemon_commands", {
       user_id: authUserId,
@@ -1871,5 +1883,4 @@ export const getCommandResult = query({
     };
   },
 });
-
 

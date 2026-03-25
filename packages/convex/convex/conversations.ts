@@ -7,6 +7,7 @@ import { checkRateLimit } from "./rateLimit";
 import { verifyApiToken } from "./apiTokens";
 import { internal } from "./_generated/api";
 import { resetConversationPendingMessages } from "./pendingMessages";
+import { hasRecentPendingDaemonCommand } from "./daemonCommandUtils";
 import {
   isTeamMember,
   canTeamMemberAccess,
@@ -608,7 +609,7 @@ export const createQuickSession = mutation({
       short_id: conversationId.toString().slice(0, 7),
     });
 
-    const daemonAgentType = agentType === "claude_code" ? "claude" : agentType === "codex" ? "codex" : agentType === "cursor" ? "cursor" : "gemini";
+    const daemonAgentType = agentType === "codex" ? "codex" : agentType === "gemini" ? "gemini" : "claude";
     const daemonArgs: Record<string, any> = {
       agent_type: daemonAgentType,
       project_path: args.project_path || args.git_root,
@@ -2141,9 +2142,12 @@ export const listRecentSessions = query({
   handler: async (ctx) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return [];
+    const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
     const results = await ctx.db
       .query("conversations")
-      .withIndex("by_user_updated", (q) => q.eq("user_id", userId))
+      .withIndex("by_user_updated", (q) =>
+        q.eq("user_id", userId).gte("updated_at", thirtyDaysAgo)
+      )
       .order("desc")
       .filter((q) =>
         q.and(
@@ -2154,7 +2158,7 @@ export const listRecentSessions = query({
           )
         )
       )
-      .take(200);
+      .take(100);
     return results.map((c) => ({
       _id: c._id,
       session_id: c.session_id,
@@ -5675,7 +5679,7 @@ export const reconfigureSession = mutation({
 
     const updated = { ...conv, ...patch };
     const agentType = updated.agent_type || "claude_code";
-    const daemonAgentType = agentType === "claude_code" ? "claude" : agentType === "codex" ? "codex" : agentType === "cursor" ? "cursor" : "gemini";
+    const daemonAgentType = agentType === "codex" ? "codex" : agentType === "gemini" ? "gemini" : "claude";
     await ctx.db.insert("daemon_commands", {
       user_id: userId,
       command: "start_session",
@@ -6247,6 +6251,19 @@ export const restartSession = mutation({
     if (!conv.session_id) throw new Error("No session to restart");
 
     const now = Date.now();
+    const pendingCommands = await ctx.db
+      .query("daemon_commands")
+      .withIndex("by_user_pending", (q) => q.eq("user_id", userId).eq("executed_at", undefined))
+      .collect();
+
+    if (hasRecentPendingDaemonCommand(pendingCommands as any, {
+      conversationId: args.conversation_id.toString(),
+      command: "resume_session",
+      now,
+    })) {
+      await resetConversationPendingMessages(ctx, args.conversation_id);
+      return;
+    }
 
     await ctx.db.insert("daemon_commands", {
       user_id: userId,
@@ -6283,6 +6300,19 @@ export const repairSession = mutation({
     if (!conv.session_id) throw new Error("No session to repair");
 
     const now = Date.now();
+    const pendingCommands = await ctx.db
+      .query("daemon_commands")
+      .withIndex("by_user_pending", (q) => q.eq("user_id", userId).eq("executed_at", undefined))
+      .collect();
+
+    if (hasRecentPendingDaemonCommand(pendingCommands as any, {
+      conversationId: args.conversation_id.toString(),
+      command: "resume_session",
+      now,
+    })) {
+      await resetConversationPendingMessages(ctx, args.conversation_id);
+      return;
+    }
 
     await ctx.db.insert("daemon_commands", {
       user_id: userId,
@@ -6334,7 +6364,7 @@ export const switchSessionProject = mutation({
     });
 
     const agentType = conv.agent_type || "claude_code";
-    const daemonAgentType = agentType === "claude_code" ? "claude" : agentType === "codex" ? "codex" : agentType === "cursor" ? "cursor" : "gemini";
+    const daemonAgentType = agentType === "codex" ? "codex" : agentType === "gemini" ? "gemini" : "claude";
     await ctx.db.insert("daemon_commands", {
       user_id: userId,
       command: "start_session",

@@ -11,6 +11,7 @@ type DataContextOpts = {
   project_path?: string;
   workspace?: "personal" | "team";
   team_id?: Id<"teams">;
+  active_team_id?: Id<"teams">;
 };
 
 const SCOPED_TABLES = new Set([
@@ -134,8 +135,10 @@ async function resolveWorkspace(ctx: { db: any }, opts: DataContextOpts): Promis
       .collect();
     const result = resolveTeamForPath(mappings, opts.project_path, undefined);
     if (result.teamId) return { type: "team", teamId: result.teamId };
+    if (opts.active_team_id) return { type: "team", teamId: opts.active_team_id };
     return { type: "personal", userId: opts.userId };
   }
+  if (opts.active_team_id) return { type: "team", teamId: opts.active_team_id };
   return { type: "unscoped" };
 }
 

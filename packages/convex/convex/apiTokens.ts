@@ -206,7 +206,7 @@ export async function verifyApiToken(
     return null;
   }
 
-  if (updateLastUsed) {
+  if (updateLastUsed && Date.now() - (tokenDoc.last_used_at || 0) > 60_000) {
     try {
       await ctx.db.patch(tokenDoc._id, {
         last_used_at: Date.now(),

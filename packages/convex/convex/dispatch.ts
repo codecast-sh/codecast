@@ -4,6 +4,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id } from "./_generated/dataModel";
 import { checkRateLimit } from "./rateLimit";
 import { resolveTeamForPath } from "./privacy";
+import { hasRecentPendingDaemonCommand } from "./daemonCommandUtils";
 
 type TableConfig =
   | {
@@ -233,6 +234,16 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     const conv = await ctx.db.get(convId as Id<"conversations">);
     if (!conv || conv.user_id.toString() !== userId.toString()) throw new Error("Unauthorized");
     const agentType = conv.agent_type === "codex" ? "codex" : conv.agent_type === "gemini" ? "gemini" : "claude";
+    const pendingCommands = await ctx.db
+      .query("daemon_commands")
+      .withIndex("by_user_pending", (q) => q.eq("user_id", userId).eq("executed_at", undefined))
+      .collect();
+    if (hasRecentPendingDaemonCommand(pendingCommands as any, {
+      conversationId: convId,
+      command: "resume_session",
+    })) {
+      return { deduplicated: true };
+    }
     const commandId = await ctx.db.insert("daemon_commands", {
       user_id: userId,
       command: "resume_session" as const,
