@@ -851,8 +851,7 @@ function classifyUserMessage(
   if (t.startsWith('{') && t.includes('__cc_poll')) {
     try { if (JSON.parse(t).__cc_poll) return { kind: 'poll_response' }; } catch {}
   }
-  const prevAssistant = immediatePrev?.role === 'assistant' ? immediatePrev : contextPrev?.role === 'assistant' ? contextPrev : null;
-  if (prevAssistant?.tool_calls?.some(tc => tc.name === 'AskUserQuestion')) {
+  if (immediatePrev?.role === 'assistant' && immediatePrev?.tool_calls?.some(tc => tc.name === 'AskUserQuestion')) {
     return { kind: 'poll_response' };
   }
   if (!stripSystemTags(t).trim()) return { kind: 'noise' };
@@ -5423,11 +5422,13 @@ const ForkReplyInput = memo(function ForkReplyInput({ userName, userAvatar, onFo
 });
 
 const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, onSendAndDismiss, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, isSessionStarting, isSessionReady, sessionId, agentType, agentStatus, deliveryStatus, pendingPermissionsCount, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onSendEscape, onOpenNavigator, onPopulateInput, permissionMode, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch, onGateSend, skills, filePaths, mentionItems, onMentionQuery }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; onSendAndDismiss?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; isSessionStarting?: boolean; isSessionReady?: boolean; sessionId?: string; agentType?: string; agentStatus?: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "starting" | "resuming"; deliveryStatus?: string; pendingPermissionsCount?: number; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string) => void) | null>; permissionMode?: string; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void>; onGateSend?: (content: string) => Promise<void>; skills?: SkillItem[]; filePaths?: string[]; mentionItems?: MentionItem[]; onMentionQuery?: (q: string) => void }) {
+  const sacredKey = sessionId || conversationId;
+  const sacredKeyRef = useRef(sacredKey);
   const convIdRef = useRef(conversationId);
   const cached = useInboxStore.getState().getDraft(conversationId);
-  const [message, _setMessage] = useState(() => sacredInputs.get(conversationId)?.text ?? cached?.draft_message ?? initialDraft ?? "");
+  const [message, _setMessage] = useState(() => sacredInputs.get(sacredKey)?.text ?? cached?.draft_message ?? initialDraft ?? "");
   const setMessage = useCallback((val: string) => {
-    sacredInputs.set(convIdRef.current, { text: val });
+    sacredInputs.set(sacredKeyRef.current, { text: val });
     _setMessage(val);
   }, []);
   const messageRef = useRef(message);
@@ -5824,21 +5825,25 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
   }, []);
 
   useWatchEffect(() => {
-    if (convIdRef.current !== conversationId) {
+    const keyChanged = sacredKeyRef.current !== sacredKey;
+    if (keyChanged) {
       if (draftTimerRef.current) {
         clearTimeout(draftTimerRef.current);
         draftTimerRef.current = null;
       }
-      sacredInputs.set(convIdRef.current, { text: messageRef.current });
+      sacredInputs.set(sacredKeyRef.current, { text: messageRef.current });
       saveDraftSnapshot(convIdRef.current);
+      sacredKeyRef.current = sacredKey;
       convIdRef.current = conversationId;
-      const sacred = sacredInputs.get(conversationId);
+      const sacred = sacredInputs.get(sacredKey);
       const storeDraft = useInboxStore.getState().getDraft(conversationId)?.draft_message;
       const newDraft = sacred?.text ?? storeDraft ?? "";
-      sacredInputs.set(conversationId, { text: newDraft });
+      sacredInputs.set(sacredKey, { text: newDraft });
       _setMessage(newDraft);
+    } else if (convIdRef.current !== conversationId) {
+      convIdRef.current = conversationId;
     }
-  }, [conversationId, saveDraftSnapshot]);
+  }, [sacredKey, conversationId, saveDraftSnapshot]);
 
   useMountEffect(() => () => {
     if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
@@ -5980,14 +5985,16 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
         headers: { "Content-Type": file.type },
         body: file,
       });
+      if (!result.ok) throw new Error(`Upload failed: ${result.status} ${result.statusText}`);
       const { storageId } = await result.json();
       setPastedImages(prev => {
         const next = prev.map(img => img.previewUrl === previewUrl ? { ...img, storageId, uploading: false } : img);
         updateDraft(message, next.map(i => ({ storageId: i.storageId as string, previewUrl: i.previewUrl, name: i.file.name })));
         return next;
       });
-    } catch {
-      toast.error("Failed to upload image");
+    } catch (err: any) {
+      console.error("[uploadImage] failed:", err);
+      toast.error(err?.message?.includes("Authentication") ? "Upload failed: not authenticated" : `Failed to upload image: ${err?.message || "unknown error"}`);
       URL.revokeObjectURL(previewUrl);
       setPastedImages(prev => prev.filter(img => img.previewUrl !== previewUrl));
     }

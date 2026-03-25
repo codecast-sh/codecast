@@ -382,10 +382,12 @@ export default function TaskDetailPage() {
     try {
       const uploadUrl = await generateUploadUrl({});
       const result = await fetch(uploadUrl, { method: "POST", headers: { "Content-Type": file.type }, body: file });
+      if (!result.ok) throw new Error(`Upload failed: ${result.status} ${result.statusText}`);
       const { storageId } = await result.json();
       setCommentImages(prev => prev.map(img => img.previewUrl === previewUrl ? { ...img, storageId, uploading: false } : img));
-    } catch {
-      toast.error("Failed to upload image");
+    } catch (err: any) {
+      console.error("[uploadCommentImage] failed:", err);
+      toast.error(`Failed to upload image: ${err?.message || "unknown error"}`);
       URL.revokeObjectURL(previewUrl);
       setCommentImages(prev => prev.filter(img => img.previewUrl !== previewUrl));
     }
