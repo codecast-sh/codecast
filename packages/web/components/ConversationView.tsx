@@ -3720,10 +3720,10 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
   }, [effectivelyCollapsed, content]);
 
   useWatchEffect(() => {
-    if (!effectivelyCollapsed && contentRef.current && !contentExpanded) {
+    if (!effectivelyCollapsed && contentRef.current) {
       setIsOverflowing(contentRef.current.scrollHeight > USER_CONTENT_MAX_HEIGHT);
     }
-  }, [content, effectivelyCollapsed, contentExpanded]);
+  }, [content, effectivelyCollapsed]);
 
   useWatchEffect(() => {
     if (!fullscreen) return;
@@ -3950,7 +3950,7 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
           Collapse
         </button>
       )}
-      {!effectivelyCollapsed && (isOverflowing || contentExpanded) && (
+      {!effectivelyCollapsed && isOverflowing && (
         <div className="flex items-center gap-3 mt-2 ml-8">
           <button
             onClick={() => setContentExpanded(e => !e)}
@@ -7243,6 +7243,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
   const timelineRef = useRef<any[]>([]);
 
+  const injectSession = useInboxStore((s) => s.injectSession);
+
   const doFork = useCallback(async (messageUuid: string) => {
     if (!conversation?._id) return;
     const sourceConvId = conversation._id;
@@ -7252,11 +7254,24 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         conversation_id: sourceConvId.toString(),
         message_uuid: messageUuid,
       });
-      forkRouter.push(`/conversation/${result.conversation_id}`);
+      const forkId = result.conversation_id.toString();
+      injectSession({
+        _id: forkId,
+        session_id: `forked-${(conversation as any).session_id}-${forkId}`,
+        title: conversation.title ? `Fork: ${conversation.title}` : "Fork",
+        updated_at: Date.now(),
+        project_path: (conversation as any).project_path,
+        git_root: (conversation as any).git_root,
+        agent_type: conversation.agent_type || "claude_code",
+        message_count: 0,
+        is_idle: true,
+        has_pending: false,
+      });
+      forkRouter.push(`/conversation/${forkId}`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to fork");
     }
-  }, [conversation?._id, forkFromMessage, forkRouter]);
+  }, [conversation?._id, conversation?.title, conversation?.agent_type, forkFromMessage, forkRouter, injectSession]);
 
   const handleForkFromMessage = useCallback(async (messageUuid: string) => {
     const tl = timelineRef.current;
@@ -7291,7 +7306,19 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         conversation_id: conversation._id.toString(),
         message_uuid: lastMsg.message_uuid,
       });
-      const forkId = result.conversation_id;
+      const forkId = result.conversation_id.toString();
+      injectSession({
+        _id: forkId,
+        session_id: `forked-${(conversation as any).session_id}-${forkId}`,
+        title: conversation.title ? `Fork: ${conversation.title}` : "Fork",
+        updated_at: Date.now(),
+        project_path: (conversation as any).project_path,
+        git_root: (conversation as any).git_root,
+        agent_type: conversation.agent_type || "claude_code",
+        message_count: 0,
+        is_idle: true,
+        has_pending: false,
+      });
       const clientId = addOptimisticMsg(forkId, content);
       try {
         await sendInlineMessage({ conversation_id: forkId as Id<"conversations">, content, client_id: clientId });
