@@ -1188,16 +1188,53 @@ export const getConversationWithMeta = query({
     const { children: childConversations, map: childByParentUuid, agentNameMap } =
       await findChildConversations(ctx, args.conversation_id, []);
 
-    let forkedFromDetails = null;
+    let forkedFromDetails: {
+      conversation_id: any;
+      title: string;
+      share_token?: string;
+      username: string;
+      message_count?: number;
+    } | null = null;
+    let forkSiblings: Array<{
+      _id: any;
+      title: string;
+      short_id?: string;
+      started_at: number;
+      username: string;
+      parent_message_uuid?: string;
+      agent_type?: string;
+      message_count?: number;
+    }> = [];
     if (conversation.forked_from) {
       const originalConv = await ctx.db.get(conversation.forked_from);
       if (originalConv) {
         const originalUser = await ctx.db.get(originalConv.user_id);
         forkedFromDetails = {
           conversation_id: originalConv._id,
+          title: originalConv.title || "New Session",
           share_token: originalConv.share_token,
           username: originalUser?.name || originalUser?.email?.split("@")[0] || "Unknown",
+          message_count: originalConv.message_count,
         };
+        const siblings = await ctx.db
+          .query("conversations")
+          .withIndex("by_forked_from", (q) => q.eq("forked_from", conversation.forked_from!))
+          .collect();
+        forkSiblings = await Promise.all(
+          siblings.map(async (sib) => {
+            const sibUser = await ctx.db.get(sib.user_id);
+            return {
+              _id: sib._id,
+              title: sib.title || "New Session",
+              short_id: sib.short_id,
+              started_at: sib.started_at,
+              username: sibUser?.name || sibUser?.email?.split("@")[0] || "Unknown",
+              parent_message_uuid: sib.parent_message_uuid,
+              agent_type: sib.agent_type,
+              message_count: sib.message_count,
+            };
+          })
+        );
       }
     }
 
@@ -1270,6 +1307,7 @@ export const getConversationWithMeta = query({
       forked_from: conversation.forked_from,
       forked_from_details: forkedFromDetails,
       fork_children: forkChildrenDetails,
+      fork_siblings: forkSiblings,
       parent_conversation_id: parentConversationId,
       active_plan,
       active_task,
@@ -3878,6 +3916,8 @@ export const forkFromMessage = mutation({
       subtitle: original.subtitle,
       project_hash: original.project_hash,
       project_path: original.project_path,
+      git_root: original.git_root,
+      git_branch: original.git_branch,
       model: original.model,
       started_at: now,
       updated_at: now,
@@ -3895,6 +3935,7 @@ export const forkFromMessage = mutation({
     for (const msg of messagesToCopy) {
       await ctx.db.insert("messages", {
         conversation_id: newConversationId,
+        from_user_id: msg.from_user_id,
         message_uuid: msg.message_uuid,
         role: msg.role,
         content: msg.content,
@@ -5338,7 +5379,7 @@ export const listIdleSessions = query({
     );
 
     const AGENT_STATUS_FRESH_MS = 5 * 60 * 1000;
-    const agentStatusMap = new Map<string, "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "stopped">();
+    const agentStatusMap = new Map<string, "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "stopped" | "starting" | "resuming">();
     for (const s of managedSessions) {
       if (s.conversation_id && s.agent_status && s.agent_status_updated_at &&
           (now - s.agent_status_updated_at) < AGENT_STATUS_FRESH_MS) {

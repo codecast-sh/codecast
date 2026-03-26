@@ -527,6 +527,7 @@ export const getUserStats = query({
 export const getUserAbstractActivity = query({
   args: {
     user_id: v.id("users"),
+    team_id: v.optional(v.id("teams")),
   },
   handler: async (ctx, args) => {
     const user = await ctx.db.get(args.user_id);
@@ -536,11 +537,19 @@ export const getUserAbstractActivity = query({
     const oneWeekAgo = now - 7 * 24 * 60 * 60 * 1000;
     const oneMonthAgo = now - 30 * 24 * 60 * 60 * 1000;
 
-    const recentConversations = await ctx.db
-      .query("conversations")
-      .withIndex("by_user_id", (q) => q.eq("user_id", args.user_id))
-      .order("desc")
-      .take(10);
+    const recentConversations = args.team_id
+      ? await ctx.db
+          .query("conversations")
+          .withIndex("by_team_user_updated", (q: any) =>
+            q.eq("team_id", args.team_id).eq("user_id", args.user_id)
+          )
+          .order("desc")
+          .take(10)
+      : await ctx.db
+          .query("conversations")
+          .withIndex("by_user_id", (q) => q.eq("user_id", args.user_id))
+          .order("desc")
+          .take(10);
 
     const weekConversations = recentConversations.filter(c => c.started_at > oneWeekAgo);
     const monthConversations = recentConversations.filter(c => c.started_at > oneMonthAgo);
@@ -733,6 +742,143 @@ export const getUserDocs = query({
         created_at: d.created_at || d._creationTime,
         updated_at: d.updated_at,
       }));
+  },
+});
+
+export const getUserProfileFeed = query({
+  args: {
+    user_id: v.id("users"),
+    team_id: v.optional(v.id("teams")),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+    const user = await ctx.db.get(args.user_id);
+    if (!user) return [];
+    const limit = Math.min(args.limit ?? 30, 50);
+
+    type FeedItem = {
+      type: string;
+      timestamp: number;
+      title: string;
+      preview?: string;
+      entity_id?: string;
+      entity_type?: string;
+      entity_title?: string;
+      entity_short_id?: string;
+      meta?: Record<string, any>;
+    };
+    const items: FeedItem[] = [];
+
+    const recentConvos = args.team_id
+      ? await ctx.db
+          .query("conversations")
+          .withIndex("by_team_user_updated", (q: any) =>
+            q.eq("team_id", args.team_id).eq("user_id", args.user_id)
+          )
+          .order("desc")
+          .take(15)
+      : await ctx.db
+          .query("conversations")
+          .withIndex("by_user_id", (q) => q.eq("user_id", args.user_id))
+          .order("desc")
+          .take(15);
+
+    for (const c of recentConvos) {
+      const msgs = await ctx.db
+        .query("messages")
+        .withIndex("by_conversation_role_timestamp", (q: any) =>
+          q.eq("conversation_id", c._id).eq("role", "user")
+        )
+        .order("desc")
+        .take(3);
+      for (const m of msgs) {
+        if (m.from_user_id && String(m.from_user_id) !== String(args.user_id)) continue;
+        const content = m.content || "";
+        items.push({
+          type: "message",
+          timestamp: m.timestamp || m._creationTime,
+          title: "Sent a message",
+          preview: content.length > 120 ? content.slice(0, 120) + "..." : content,
+          entity_id: String(c._id),
+          entity_type: "session",
+          entity_title: c.title || "Untitled",
+          meta: { message_count: c.message_count, project: c.project_path?.split("/").pop() },
+        });
+      }
+    }
+
+    const tasks = await ctx.db
+      .query("tasks")
+      .withIndex("by_user_id", (q: any) => q.eq("user_id", args.user_id))
+      .order("desc")
+      .take(20);
+    for (const t of tasks as any[]) {
+      if (args.team_id && t.team_id && String(t.team_id) !== String(args.team_id)) continue;
+      items.push({
+        type: "task",
+        timestamp: t.updated_at || t.created_at || t._creationTime,
+        title: t.status === "done" ? "Completed task" : t.updated_at > t.created_at + 1000 ? "Updated task" : "Created task",
+        entity_id: String(t._id),
+        entity_type: "task",
+        entity_title: t.title,
+        entity_short_id: t.short_id,
+        meta: { status: t.status, priority: t.priority },
+      });
+    }
+
+    const docs = await ctx.db
+      .query("docs")
+      .withIndex("by_user_id", (q: any) => q.eq("user_id", args.user_id))
+      .order("desc")
+      .take(15);
+    for (const d of docs as any[]) {
+      if (d.archived_at) continue;
+      if (args.team_id && d.team_id && String(d.team_id) !== String(args.team_id)) continue;
+      items.push({
+        type: "doc",
+        timestamp: d.updated_at || d.created_at || d._creationTime,
+        title: d.updated_at > (d.created_at || d._creationTime) + 1000 ? "Edited doc" : "Created doc",
+        entity_id: String(d._id),
+        entity_type: "doc",
+        entity_title: d.title || "Untitled",
+        meta: { doc_type: d.doc_type },
+      });
+    }
+
+    const teamEvents = await ctx.db
+      .query("team_activity_events")
+      .withIndex("by_actor", (q) => q.eq("actor_user_id", args.user_id))
+      .order("desc")
+      .take(20);
+    for (const e of teamEvents) {
+      if (args.team_id && String(e.team_id) !== String(args.team_id)) continue;
+      const typeMap: Record<string, string> = {
+        commit_pushed: "Pushed a commit",
+        pr_created: "Opened a PR",
+        pr_merged: "Merged a PR",
+        session_started: "Started a session",
+        session_completed: "Completed a session",
+      };
+      if (!typeMap[e.event_type]) continue;
+      items.push({
+        type: e.event_type,
+        timestamp: e.timestamp,
+        title: typeMap[e.event_type],
+        preview: e.title,
+        entity_id: e.related_conversation_id ? String(e.related_conversation_id) : undefined,
+        entity_type: e.related_conversation_id ? "session" : undefined,
+        meta: {
+          branch: e.metadata?.git_branch,
+          files_changed: e.metadata?.files_changed,
+          pr_number: e.related_pr_id,
+        },
+      });
+    }
+
+    items.sort((a, b) => b.timestamp - a.timestamp);
+    return items.slice(0, limit);
   },
 });
 
