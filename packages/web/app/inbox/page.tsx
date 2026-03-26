@@ -5,7 +5,7 @@ import { QueuePageClient } from "./QueuePageClient";
 export default function QueuePage() {
   return (
     <AuthGuard>
-      <ErrorBoundary name="Inbox">
+      <ErrorBoundary name="Inbox" level="inline">
         <QueuePageClient />
       </ErrorBoundary>
     </AuthGuard>

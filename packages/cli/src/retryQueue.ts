@@ -2,7 +2,7 @@ import fs from "fs";
 
 export interface RetryOperation {
   id: string;
-  type: "createConversation" | "addMessage";
+  type: "createConversation" | "addMessage" | "addMessages";
   params: Record<string, unknown>;
   attempts: number;
   nextRetryAt: number;
@@ -13,7 +13,7 @@ export interface RetryOperation {
 
 export interface DroppedOperation {
   id: string;
-  type: "createConversation" | "addMessage";
+  type: "createConversation" | "addMessage" | "addMessages";
   params: Record<string, unknown>;
   attempts: number;
   createdAt: number;

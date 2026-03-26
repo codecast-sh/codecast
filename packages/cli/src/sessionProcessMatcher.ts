@@ -54,7 +54,7 @@ export function matchStartedConversation(
 
   if (tmuxSessionName) {
     for (const [conversationId, entry] of startedEntries) {
-      if (entry.tmuxSession === tmuxSessionName) {
+      if (entry.tmuxSession === tmuxSessionName && now - entry.startedAt < ttlMs) {
         return conversationId;
       }
     }

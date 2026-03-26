@@ -156,6 +156,8 @@ export type TaskItem = {
   status: string;
   priority: string;
   source: string;
+  team_id?: string;
+  project_path?: string;
   triage_status?: string;
   labels?: string[];
   blocked_by?: string[];
@@ -234,6 +236,7 @@ export type DocViewPrefs = {
   project?: string;
   label?: string;
   scope?: string;
+  source?: string;
 };
 
 export type ClientUI = {
@@ -1154,12 +1157,23 @@ export const useInboxStore = create<InboxStoreState>(
 
   setCurrentSession: (id: string) => {
     const state = get();
-    set({
+    const session = state.sessions[id];
+    const updates: Record<string, any> = {
       currentSessionId: id,
       selectedPlanId: null,
       viewingDismissedId: null,
       clientState: { ...state.clientState, current_conversation_id: id },
-    });
+    };
+    if (session) {
+      updates.currentConversation = {
+        conversationId: id,
+        projectPath: session.project_path,
+        gitRoot: session.git_root,
+        agentType: session.agent_type,
+        source: state.currentConversation.source || "inbox",
+      };
+    }
+    set(updates);
     get()._dispatch("patch", [], {
       client_state: { _: { current_conversation_id: id } },
     }).catch(() => {});
@@ -1778,6 +1792,7 @@ export const store = new Proxy({} as StoreProxy, {
 // -- IndexedDB cache: wire patch-driven writes + hydrate on load --
 
 if (typeof window !== "undefined") {
+  (window as any).store = useInboxStore;
   (useInboxStore.getState() as any)._setIDBWrite(writePatchesToIDB);
 
   setHydrating(true);

@@ -25,6 +25,51 @@ export const recordTouch = internalMutation({
   },
 });
 
+const touchEntryValidator = v.object({
+  file_path: v.string(),
+  operation: v.union(
+    v.literal("read"),
+    v.literal("edit"),
+    v.literal("write"),
+    v.literal("delete"),
+    v.literal("glob"),
+    v.literal("grep")
+  ),
+  line_range: v.optional(v.string()),
+  message_index: v.number(),
+  timestamp: v.number(),
+});
+
+export const recordTouches = mutation({
+  args: {
+    api_token: v.string(),
+    conversation_id: v.id("conversations"),
+    touches: v.array(touchEntryValidator),
+  },
+  handler: async (ctx, args) => {
+    const result = await verifyApiToken(ctx, args.api_token);
+    if (!result) return { error: "Unauthorized" };
+
+    const conv = await ctx.db.get(args.conversation_id);
+    if (!conv) return { error: "Conversation not found" };
+
+    let inserted = 0;
+    for (const touch of args.touches) {
+      await ctx.db.insert("file_touches", {
+        conversation_id: args.conversation_id,
+        user_id: result.userId,
+        file_path: touch.file_path,
+        operation: touch.operation,
+        line_range: touch.line_range,
+        message_index: touch.message_index,
+        timestamp: touch.timestamp,
+      });
+      inserted++;
+    }
+    return { inserted };
+  },
+});
+
 export const findByFile = mutation({
   args: {
     api_token: v.string(),
@@ -116,22 +161,39 @@ export const findSimilar = mutation({
     }
 
     if (args.session_id) {
-      const allConvs = await ctx.db
-        .query("conversations")
-        .withIndex("by_user_id", (q) => q.eq("user_id", result.userId))
-        .order("desc")
-        .take(500);
+      let sourceConv: Doc<"conversations"> | null = null;
 
-      const sourceConv = allConvs.find(
-        (c) => c._id.toString().startsWith(args.session_id!) ||
-               c.session_id?.startsWith(args.session_id!)
-      ) ?? null;
+      try {
+        sourceConv = await ctx.db.get(args.session_id as Id<"conversations">);
+      } catch {
+      }
 
       if (!sourceConv) {
-        if (allConvs.length > 0) {
-          return { error: `Session "${args.session_id}" not found in ${allConvs.length} conversations. Sample: ${allConvs[0]._id.toString().slice(0, 10)}` };
-        }
-        return { error: `No conversations found for user` };
+        sourceConv = await ctx.db
+          .query("conversations")
+          .withIndex("by_session_id", (q) => q.eq("session_id", args.session_id!))
+          .first();
+      }
+
+      if (!sourceConv) {
+        const recentConvs = await ctx.db
+          .query("conversations")
+          .withIndex("by_user_id", (q) => q.eq("user_id", result.userId))
+          .order("desc")
+          .take(200);
+
+        sourceConv = recentConvs.find(
+          (c) => c._id.toString().startsWith(args.session_id!) ||
+                 c.session_id?.startsWith(args.session_id!)
+        ) ?? null;
+      }
+
+      if (!sourceConv) {
+        return { error: `Session "${args.session_id}" not found` };
+      }
+
+      if (sourceConv.user_id.toString() !== result.userId.toString()) {
+        return { error: "Unauthorized" };
       }
 
       const sourceTouches = await ctx.db
@@ -225,50 +287,35 @@ export const getConversationTouches = mutation({
       return { error: "Unauthorized" };
     }
 
-    const conv = await ctx.db
-      .query("conversations")
-      .filter((q) => {
-        const idMatch = q.eq(q.field("_id"), args.conversation_id as any);
-        const sessionMatch = q.eq(q.field("session_id"), args.conversation_id);
-        return q.or(idMatch, sessionMatch);
-      })
-      .first();
+    let conv: Doc<"conversations"> | null = null;
+
+    try {
+      conv = await ctx.db.get(args.conversation_id as Id<"conversations">);
+    } catch {
+    }
 
     if (!conv) {
-      const allConvs = await ctx.db
+      conv = await ctx.db
+        .query("conversations")
+        .withIndex("by_session_id", (q) => q.eq("session_id", args.conversation_id))
+        .first();
+    }
+
+    if (!conv) {
+      const recentConvs = await ctx.db
         .query("conversations")
         .withIndex("by_user_id", (q) => q.eq("user_id", result.userId))
-        .take(1000);
+        .order("desc")
+        .take(200);
 
-      const match = allConvs.find(
+      conv = recentConvs.find(
         (c) => c._id.toString().includes(args.conversation_id) ||
                c.session_id?.includes(args.conversation_id)
-      );
+      ) ?? null;
+    }
 
-      if (!match) {
-        return { error: "Conversation not found" };
-      }
-
-      const touches = await ctx.db
-        .query("file_touches")
-        .withIndex("by_conversation", (q) => q.eq("conversation_id", match._id))
-        .collect();
-
-      const fileStats = new Map<string, { reads: number; edits: number; writes: number }>();
-      for (const t of touches) {
-        const stats = fileStats.get(t.file_path) || { reads: 0, edits: 0, writes: 0 };
-        if (t.operation === "read") stats.reads++;
-        else if (t.operation === "edit") stats.edits++;
-        else if (t.operation === "write") stats.writes++;
-        fileStats.set(t.file_path, stats);
-      }
-
-      const files = Array.from(fileStats.entries()).map(([path, stats]) => ({
-        file_path: path,
-        ...stats,
-      }));
-
-      return { files, count: files.length };
+    if (!conv) {
+      return { error: "Conversation not found" };
     }
 
     if (conv.user_id.toString() !== result.userId.toString()) {

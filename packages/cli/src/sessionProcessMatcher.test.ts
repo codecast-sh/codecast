@@ -65,19 +65,35 @@ describe("isResumeInvocation", () => {
 });
 
 describe("matchStartedConversation", () => {
-  test("matches by tmux session first", () => {
+  test("matches by tmux session first when within TTL", () => {
     const match = matchStartedConversation(
       [
         ["conv-old", { tmuxSession: "cc-codex-old", projectPath: "/tmp", startedAt: 1000 }],
-        ["conv-new", { tmuxSession: "cc-codex-abc", projectPath: "/repo", startedAt: 2000 }],
+        ["conv-new", { tmuxSession: "cc-codex-abc", projectPath: "/repo", startedAt: 4500 }],
       ],
       {
         tmuxSessionName: "cc-codex-abc",
         projectPath: "/tmp",
         now: 5000,
+        ttlMs: 1000,
       }
     );
     expect(match).toBe("conv-new");
+  });
+
+  test("rejects stale tmux session name match outside TTL", () => {
+    const match = matchStartedConversation(
+      [
+        ["conv-stale", { tmuxSession: "cc-codex-abc", projectPath: "/repo", startedAt: 1000 }],
+      ],
+      {
+        tmuxSessionName: "cc-codex-abc",
+        projectPath: "/other",
+        now: 5000,
+        ttlMs: 300,
+      }
+    );
+    expect(match).toBeNull();
   });
 
   test("falls back to fresh project-path match when tmux is missing", () => {

@@ -1,4 +1,4 @@
-import { ReactNode, useState, useCallback, useRef, useMemo } from "react";
+import { ReactNode, useState, useCallback, useRef, useLayoutEffect } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useEventListener } from "../hooks/useEventListener";
@@ -6,7 +6,7 @@ import { useConvexSync } from "../hooks/useConvexSync";
 import { usePathname, useRouter } from "next/navigation";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { Panel, Group, Separator } from "react-resizable-panels";
+import { Panel, Group, Separator, usePanelRef } from "react-resizable-panels";
 import { UserMenu } from "./UserMenu";
 import { Sidebar } from "./Sidebar";
 import { GlobalSearch } from "./GlobalSearch";
@@ -25,7 +25,6 @@ import { CliOfflineBanner } from "./CliOfflineBanner";
 import { TmuxMissingBanner } from "./TmuxMissingBanner";
 import { FindBar } from "./FindBar";
 import { KeyboardShortcutsPanel, ShortcutsToggleButton } from "./KeyboardShortcutsHelp";
-import { NewSessionModal } from "./ConversationList";
 import { CreatePalette } from "./CreatePalette";
 import { useInboxStore } from "../store/inboxStore";
 import { useShortcutAction, useShortcutContext, useGlobalShortcutActions } from "../shortcuts";
@@ -67,10 +66,7 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
   const [isMobile, setIsMobile] = useState(false);
   const pathname = usePathname();
   const router = useRouter();
-  const openNewSession = useInboxStore((state) => state.openNewSession);
-  const newSessionOpen = useInboxStore((state) => state.newSession.isOpen);
-  const closeNewSession = useInboxStore((state) => state.closeNewSession);
-  const currentConvContext = useInboxStore((s) => s.currentConversation);
+  const openComposePalette = useInboxStore((state) => state.openComposePalette);
   const [desktopClass, setDesktopClass] = useState("");
   const [isDesktopApp, setIsDesktopApp] = useState(false);
   const [zoomHeight, setZoomHeight] = useState("100vh");
@@ -119,6 +115,11 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
   const showSessionList = sidePanelOpen && !isOnInboxPage && !isMobile && !isZenMode;
   const showConversationColumn = sidePanelOpen && !!sidePanelSessionId && !isOnInboxPage && !isMobile;
 
+  const sidebarPanelRef = usePanelRef();
+  const sessionListPanelRef = usePanelRef();
+  const conversationPanelRef = usePanelRef();
+  const shouldCollapseSidebar = hideSidebar || isZenMode || sidebarCollapsed || isMobile;
+
   useMountEffect(() => {
     setIsMobile(window.innerWidth < 768);
   });
@@ -141,46 +142,76 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
     }
   }, [isOnInboxPage]);
 
+  useLayoutEffect(() => {
+    if (shouldCollapseSidebar) sidebarPanelRef.current?.collapse();
+    else sidebarPanelRef.current?.expand();
+  }, [shouldCollapseSidebar]);
+
+  useLayoutEffect(() => {
+    if (!showSessionList) sessionListPanelRef.current?.collapse();
+    else sessionListPanelRef.current?.expand();
+  }, [showSessionList]);
+
+  useLayoutEffect(() => {
+    if (!showConversationColumn) conversationPanelRef.current?.collapse();
+    else conversationPanelRef.current?.expand();
+  }, [showConversationColumn]);
+
   const handleQuickCreate = useCallback(() => {
     soundNewSession();
-    const path = directoryFilter || currentConvContext.projectPath || currentConvContext.gitRoot;
-    const agentType = (currentConvContext.agentType || "claude_code") as "claude_code" | "codex" | "cursor" | "gemini";
+    const store = useInboxStore.getState();
+    if (store.showMySessions) store.setShowMySessions(false);
+    const ctx = store.currentConversation;
+    const path = directoryFilter || ctx.projectPath || ctx.gitRoot;
+    const agentType = (ctx.agentType || "claude_code") as "claude_code" | "codex" | "cursor" | "gemini";
     const sessionId = nanoid(10);
     const now = Date.now();
+    const gitRoot = ctx.gitRoot || path;
 
-    const store = useInboxStore.getState();
     store.setConversationMeta(sessionId, {
       _id: sessionId, _creationTime: now, user_id: "", agent_type: agentType,
-      session_id: sessionId, project_path: path, git_root: currentConvContext.gitRoot || path,
+      session_id: sessionId, project_path: path, git_root: gitRoot,
       started_at: now, updated_at: now, message_count: 0, status: "active",
       title: "New session", messages: [],
     });
     store.createSession({
       agent_type: agentType,
       project_path: path,
-      git_root: currentConvContext.gitRoot || path,
+      git_root: gitRoot,
       session_id: sessionId,
     });
 
-    if (isInboxRoute) {
-      store.setCurrentSession(sessionId);
-    } else {
-      router.push(`/conversation/${sessionId}?focus=1`);
-    }
-  }, [currentConvContext, directoryFilter, router, isInboxRoute]);
+    useInboxStore.setState({
+      currentSessionId: sessionId,
+      selectedPlanId: null,
+      viewingDismissedId: null,
+      currentConversation: {
+        conversationId: sessionId,
+        projectPath: path,
+        gitRoot: gitRoot,
+        agentType: agentType,
+        source: ctx.source || "inbox",
+      },
+      clientState: { ...store.clientState, current_conversation_id: sessionId },
+    });
+    store._dispatch("patch", [], {
+      client_state: { _: { current_conversation_id: sessionId } },
+    }).catch(() => {});
+  }, [directoryFilter]);
 
   const handleQuickCreateIsolated = useCallback(async () => {
-    const path = directoryFilter || currentConvContext.projectPath || currentConvContext.gitRoot;
+    const ctx = useInboxStore.getState().currentConversation;
+    const path = directoryFilter || ctx.projectPath || ctx.gitRoot;
     if (!path) {
-      openNewSession({ source: isOnInboxPage ? "inbox" : "sessions" });
+      openComposePalette();
       return;
     }
     soundNewSession();
-    const agentType = (currentConvContext.agentType || "claude_code") as "claude_code" | "codex" | "cursor" | "gemini";
+    const agentType = (ctx.agentType || "claude_code") as "claude_code" | "codex" | "cursor" | "gemini";
     const conversationId = await createQuickSession({
       agent_type: agentType,
       project_path: path,
-      git_root: currentConvContext.gitRoot || path,
+      git_root: ctx.gitRoot || path,
       isolated: true,
     });
     if (isInboxRoute) {
@@ -188,36 +219,15 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
     } else {
       router.push(`/conversation/${conversationId}?focus=1`);
     }
-  }, [currentConvContext, directoryFilter, router, isInboxRoute, createQuickSession, openNewSession]);
+  }, [directoryFilter, router, isInboxRoute, createQuickSession, openComposePalette]);
 
   useGlobalShortcutActions();
   useShortcutContext('desktop', isDesktopApp);
   const switcherState = useSessionSwitcher();
 
   useShortcutAction('session.create', useCallback(() => {
-    const store = useInboxStore.getState();
-    if (isOnInboxPage) {
-      handleQuickCreate();
-    } else {
-      if (store.showMySessions) store.setShowMySessions(false);
-      soundNewSession();
-      const path = directoryFilter || currentConvContext.projectPath || currentConvContext.gitRoot;
-      const agentType = (currentConvContext.agentType || "claude_code") as "claude_code" | "codex" | "cursor" | "gemini";
-      const sid = nanoid(10);
-      const now = Date.now();
-      store.setConversationMeta(sid, {
-        _id: sid, _creationTime: now, user_id: "", agent_type: agentType,
-        session_id: sid, project_path: path, git_root: currentConvContext.gitRoot || path,
-        started_at: now, updated_at: now, message_count: 0, status: "active",
-        title: "New session", messages: [],
-      });
-      store.createSession({
-        agent_type: agentType, project_path: path,
-        git_root: currentConvContext.gitRoot || path, session_id: sid,
-      });
-      useInboxStore.setState({ sidePanelSessionId: sid });
-    }
-  }, [isOnInboxPage, directoryFilter, currentConvContext, handleQuickCreate]));
+    handleQuickCreate();
+  }, [handleQuickCreate]));
 
   useShortcutAction('session.createIsolated', useCallback(() => {
     handleQuickCreateIsolated();
@@ -244,53 +254,25 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
   }, []));
 
   const handleLayoutChange = (newLayout: { [key: string]: number }) => {
+    if ((newLayout.sidebar ?? 0) < 1) return;
     updateLayout("dashboard", { sidebar: newLayout.sidebar || 25, main: newLayout.main || 75 });
   };
 
+  const handleSidebarResize = useCallback(({ inPixels }: { asPercentage: number; inPixels: number }) => {
+    if (inPixels === 0 && !sidebarCollapsed) updateUI({ sidebar_collapsed: true });
+    else if (inPixels > 0 && sidebarCollapsed) updateUI({ sidebar_collapsed: false });
+  }, [sidebarCollapsed, updateUI]);
+
+  const safeChildren = <ErrorBoundary name="PageContent" level="inline">{children}</ErrorBoundary>;
+
   const pageContent = isFullWidthPage ? (
-    <div className="h-full">{children}</div>
+    <div className="h-full">{safeChildren}</div>
   ) : (
     <div data-main-scroll className="h-full overflow-y-auto px-3 sm:px-6 lg:px-8 py-4">
-      <div className="max-w-4xl mx-auto h-full">{children}</div>
+      <div className="max-w-4xl mx-auto h-full">{safeChildren}</div>
     </div>
   );
 
-  const conversationPanel = useMemo(() => (
-    <Panel id="conversation-column" minSize="20%" maxSize="70%" defaultSize="40%">
-      <ErrorBoundary name="ConversationColumn" level="panel"><ConversationColumn /></ErrorBoundary>
-    </Panel>
-  ), []);
-
-  const mainContent = showConversationColumn ? (
-    <Group orientation="horizontal" className="h-full" defaultLayout={{ "main-content": 60, "conversation-column": 40 }}>
-      <Panel id="main-content" minSize="20%">{pageContent}</Panel>
-      <Separator className={separatorClass} />
-      {conversationPanel}
-    </Group>
-  ) : pageContent;
-
-  const rightArea = showSessionList ? (
-    <Group orientation="horizontal" className="h-full" defaultLayout={{ "right-content": 70, "session-list": 30 }}>
-      <Panel id="right-content" minSize={400}><div className="h-full">{mainContent}</div></Panel>
-      <Separator className={separatorClass} />
-      <Panel id="session-list" minSize={200} maxSize="50%" defaultSize="30%" collapsible collapsedSize={0}>
-        <ErrorBoundary name="SessionList" level="panel">
-          <div className="w-full h-full border-l border-sol-border/30">
-            <SessionListPanel
-              onSessionSelect={selectPanelSession}
-              activeSessionId={sidePanelSessionId}
-              onCollapse={toggleSidePanel}
-            />
-          </div>
-        </ErrorBoundary>
-      </Panel>
-    </Group>
-  ) : (
-    <div className="h-full flex">
-      <div className="flex-1 min-w-0 h-full">{mainContent}</div>
-      {showCollapsedRail && <ErrorBoundary name="SessionRail" level="inline"><CollapsedSessionRail /></ErrorBoundary>}
-    </div>
-  );
 
   return (
     <div className="bg-sol-bg flex flex-col overflow-hidden" style={{ height: zoomHeight }}>
@@ -369,10 +351,11 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
           <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
             <button
               onClick={() => {
-                if (directoryFilter || currentConvContext.projectPath || currentConvContext.gitRoot) {
+                const ctx = useInboxStore.getState().currentConversation;
+                if (directoryFilter || ctx.projectPath || ctx.gitRoot) {
                   handleQuickCreate();
                 } else {
-                  openNewSession({});
+                  openComposePalette();
                 }
               }}
               className="hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-sol-cyan/15 text-sol-cyan border border-sol-cyan/30 hover:bg-sol-cyan/25 hover:border-sol-cyan/50 transition-all"
@@ -411,37 +394,57 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
         <TmuxMissingBanner />
       </ErrorBoundary>
 
-      {/* Content area with sidebar and main */}
+      {/* Content area with sidebar and main — single stable panel tree */}
       <div className="flex-1 min-h-0 flex">
         <div className="flex-1 min-w-0">
-          {hideSidebar || isZenMode || sidebarCollapsed || isMobile ? (
-            <div className="h-full">{rightArea}</div>
-          ) : (
-            <Group
-              orientation="horizontal"
-              className="h-full"
-              defaultLayout={layout}
-              onLayoutChange={handleLayoutChange}
-            >
-              <Panel id="sidebar" minSize={180} maxSize="50%" collapsible collapsedSize={0}>
-                <div className="h-full bg-sol-bg-alt overflow-auto">
-                  <ErrorBoundary name="Sidebar" level="panel">
-                    <Sidebar
-                      filter={filter}
-                      onFilterChange={onFilterChange}
-                      directoryFilter={directoryFilter}
-                      onDirectoryFilterChange={onDirectoryFilterChange}
-                      isMobileOpen={isMobileSidebarOpen}
-                      onMobileClose={() => setIsMobileSidebarOpen(false)}
-                    />
-                  </ErrorBoundary>
-                </div>
-              </Panel>
-              <Separator className={separatorClass} />
-              <Panel id="main" minSize={400}>{rightArea}</Panel>
-            </Group>
-          )}
+          <Group orientation="horizontal" className="h-full" defaultLayout={layout} onLayoutChange={handleLayoutChange}>
+            <Panel id="sidebar" panelRef={sidebarPanelRef} minSize={180} maxSize="50%" collapsible collapsedSize={0} onResize={handleSidebarResize}>
+              <div className="h-full bg-sol-bg-alt overflow-auto">
+                <ErrorBoundary name="Sidebar" level="panel">
+                  <Sidebar
+                    filter={filter}
+                    onFilterChange={onFilterChange}
+                    directoryFilter={directoryFilter}
+                    onDirectoryFilterChange={onDirectoryFilterChange}
+                    isMobileOpen={isMobileSidebarOpen}
+                    onMobileClose={() => setIsMobileSidebarOpen(false)}
+                  />
+                </ErrorBoundary>
+              </div>
+            </Panel>
+            <Separator className={`${separatorClass} ${shouldCollapseSidebar ? '!w-0 !opacity-0' : ''}`} disabled={shouldCollapseSidebar} />
+            <Panel id="main" minSize={400}>
+              <Group orientation="horizontal" className="h-full" defaultLayout={{ "right-content": 70, "session-list": 30 }}>
+                <Panel id="right-content" minSize={400}>
+                  <div className="h-full">
+                    <Group orientation="horizontal" className="h-full" defaultLayout={{ "main-content": 60, "conversation-column": 40 }}>
+                      <Panel id="main-content" minSize="20%">{pageContent}</Panel>
+                      <Separator className={`${separatorClass} ${!showConversationColumn ? '!w-0 !opacity-0' : ''}`} disabled={!showConversationColumn} />
+                      <Panel id="conversation-column" panelRef={conversationPanelRef} minSize="20%" maxSize="70%" defaultSize="40%" collapsible collapsedSize={0}>
+                        <ErrorBoundary name="ConversationColumn" level="panel"><ConversationColumn /></ErrorBoundary>
+                      </Panel>
+                    </Group>
+                  </div>
+                </Panel>
+                <Separator className={`${separatorClass} ${!showSessionList ? '!w-0 !opacity-0' : ''}`} disabled={!showSessionList} />
+                <Panel id="session-list" panelRef={sessionListPanelRef} minSize={200} maxSize="50%" defaultSize="30%" collapsible collapsedSize={0}>
+                  {showSessionList && (
+                    <ErrorBoundary name="SessionList" level="panel">
+                      <div className="w-full h-full border-l border-sol-border/30">
+                        <SessionListPanel
+                          onSessionSelect={selectPanelSession}
+                          activeSessionId={sidePanelSessionId}
+                          onCollapse={toggleSidePanel}
+                        />
+                      </div>
+                    </ErrorBoundary>
+                  )}
+                </Panel>
+              </Group>
+            </Panel>
+          </Group>
         </div>
+        {showCollapsedRail && <ErrorBoundary name="SessionRail" level="inline"><CollapsedSessionRail /></ErrorBoundary>}
         <KeyboardShortcutsPanel />
       </div>
 
@@ -472,7 +475,6 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
       <ErrorBoundary name="FindBar" level="inline">
         <FindBar />
       </ErrorBoundary>
-      <NewSessionModal isOpen={newSessionOpen} onClose={closeNewSession} />
       <ErrorBoundary name="CreatePalette" level="inline">
         <CreatePalette />
       </ErrorBoundary>

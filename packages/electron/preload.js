@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld("__CODECAST_ELECTRON__", {
   getShortcuts: () => ipcRenderer.invoke("get-shortcuts"),
   setShortcut: (key, accelerator) => ipcRenderer.invoke("set-shortcut", key, accelerator),
   paletteNavigate: (path) => ipcRenderer.send("palette-navigate", path),
+  paletteNavigateSession: (data) => ipcRenderer.send("palette-navigate-session", data),
   paletteHide: () => ipcRenderer.send("palette-hide"),
   paletteCompose: (initialMessage) => ipcRenderer.send("palette-compose", initialMessage),
   paletteStartSession: (data) => ipcRenderer.send("palette-start-session", data),

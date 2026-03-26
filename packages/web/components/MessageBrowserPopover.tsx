@@ -45,17 +45,23 @@ type CommentEntry = {
   user: { name?: string; github_username?: string; github_avatar_url?: string };
 };
 
-function HoverPreview({ message, rect }: { message: PM; rect: DOMRect }) {
-  const previewWidth = 360;
+type IndexedPM = PM & { originalIndex: number };
+
+function HoverPreview({ message, rect, onMouseEnter, onMouseLeave }: { message: IndexedPM; rect: DOMRect; onMouseEnter: () => void; onMouseLeave: () => void }) {
+  const previewWidth = 420;
   const left = Math.max(8, rect.left - previewWidth - 12);
   const top = Math.max(8, rect.top - 20);
 
   return createPortal(
     <div
-      className="fixed z-[10000] bg-sol-bg border border-sol-border/40 rounded-lg shadow-2xl p-3 max-h-[300px] overflow-y-auto"
+      className="fixed z-[10000] bg-sol-bg border border-sol-border/40 rounded-lg shadow-2xl p-3 max-h-[60vh] overflow-y-auto"
       style={{ top, left, width: previewWidth }}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
     >
       <div className="flex items-center gap-2 mb-2">
+        <span className="text-[10px] text-sol-text-dim tabular-nums">#{message.originalIndex + 1}</span>
+        <span className="text-sol-text-dim/30">·</span>
         <span className="text-sol-text-dim text-[10px]">{formatTimeAgo(message.timestamp)}</span>
         {message.commentCount > 0 && (
           <span className="text-[10px] text-sol-cyan flex items-center gap-0.5">
@@ -104,31 +110,105 @@ function NavDropdown({
   onTabChange: (t: "messages" | "comments") => void;
 }) {
   const [mounted, setMounted] = useState(false);
+  const [search, setSearch] = useState("");
+  const [focusIndex, setFocusIndex] = useState(-1);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [hoveredRect, setHoveredRect] = useState<DOMRect | null>(null);
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [previewMsg, setPreviewMsg] = useState<PM | null>(null);
+  const previewLeaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [previewMsg, setPreviewMsg] = useState<IndexedPM | null>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const currentItemRef = useRef<HTMLDivElement>(null);
   useMountEffect(() => setMounted(true));
 
-  const handleItemHover = useCallback((id: string, el: HTMLElement, msg: PM) => {
+  useEffect(() => {
+    if (mounted) {
+      requestAnimationFrame(() => {
+        currentItemRef.current?.scrollIntoView({ block: "center" });
+      });
+    }
+  }, [mounted]);
+
+  const indexed: IndexedPM[] = messages.map((m, i) => ({ ...m, originalIndex: i }));
+  const filtered = search
+    ? indexed.filter(m => m.display.toLowerCase().includes(search.toLowerCase()))
+    : indexed;
+
+  useEffect(() => { setFocusIndex(-1); }, [search]);
+
+  const navigateToMessage = useCallback((m: PM) => {
+    onPin();
+    if (onScrollToMessage) {
+      onScrollToMessage(m._id);
+    } else {
+      useInboxStore.setState({
+        pendingNavigateId: conversationId,
+        pendingScrollToMessageId: m._id,
+      });
+    }
+  }, [conversationId, onPin, onScrollToMessage]);
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (tab !== "messages") return;
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setFocusIndex(prev => Math.min(prev + 1, filtered.length - 1));
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setFocusIndex(prev => {
+          const next = prev - 1;
+          if (next < 0) searchRef.current?.focus();
+          return Math.max(next, -1);
+        });
+      } else if (e.key === "Enter" && focusIndex >= 0 && focusIndex < filtered.length) {
+        e.preventDefault();
+        navigateToMessage(filtered[focusIndex]);
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [focusIndex, filtered, tab, navigateToMessage]);
+
+  useEffect(() => {
+    if (focusIndex >= 0) {
+      const el = scrollRef.current?.querySelector(`[data-focus-index="${focusIndex}"]`);
+      el?.scrollIntoView({ block: "nearest" });
+    }
+  }, [focusIndex]);
+
+  const handleItemHover = useCallback((id: string, el: HTMLElement, msg: IndexedPM) => {
     setHoveredId(id);
+    if (previewLeaveTimerRef.current) clearTimeout(previewLeaveTimerRef.current);
     if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
     hoverTimerRef.current = setTimeout(() => {
       setHoveredRect(el.getBoundingClientRect());
       setPreviewMsg(msg);
-    }, 400);
+    }, 250);
+  }, []);
+
+  const dismissPreview = useCallback(() => {
+    if (previewLeaveTimerRef.current) clearTimeout(previewLeaveTimerRef.current);
+    previewLeaveTimerRef.current = setTimeout(() => {
+      setPreviewMsg(null);
+      setHoveredRect(null);
+    }, 300);
+  }, []);
+
+  const cancelDismissPreview = useCallback(() => {
+    if (previewLeaveTimerRef.current) clearTimeout(previewLeaveTimerRef.current);
   }, []);
 
   const handleItemLeave = useCallback(() => {
     setHoveredId(null);
     if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
-    setPreviewMsg(null);
-    setHoveredRect(null);
-  }, []);
+    dismissPreview();
+  }, [dismissPreview]);
 
   if (!mounted || typeof document === "undefined") return null;
 
-  const dropdownWidth = 340;
+  const dropdownWidth = 420;
   const margin = 8;
   const left = Math.max(margin, triggerRect.left - dropdownWidth - 8);
   const top = Math.max(margin, triggerRect.top);
@@ -140,89 +220,107 @@ function NavDropdown({
       {pinned && <div className="fixed inset-0 z-[9998] pointer-events-auto" onClick={onClose} />}
       <div
         className="fixed z-[9999] bg-sol-bg border border-sol-border/30 rounded-xl shadow-2xl overflow-hidden flex flex-col"
-        style={{ top, left, width: dropdownWidth, maxHeight: "min(500px, 70vh)" }}
+        style={{ top, left, width: dropdownWidth, maxHeight: "min(600px, 75vh)" }}
         onMouseEnter={onMouseEnter}
         onMouseLeave={onMouseLeave}
+        onClick={onPin}
       >
+        {tab === "messages" && (
+          <div className="px-3 pt-3 pb-2">
+            <input
+              ref={searchRef}
+              type="text"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder={`Search ${messages.length} messages...`}
+              className="w-full bg-sol-bg-alt/60 border border-sol-border/20 rounded-lg px-3 py-1.5 text-[12px] text-sol-text placeholder:text-sol-text-dim/40 outline-none focus:border-sol-cyan/40 transition-colors"
+            />
+          </div>
+        )}
         {hasComments && (
-          <div className="flex border-b border-sol-border/20 px-1 pt-1">
+          <div className="flex border-b border-sol-border/20 px-3">
             <button
               onClick={() => onTabChange("messages")}
-              className={`flex-1 text-[11px] py-1.5 rounded-t transition-colors ${
+              className={`text-[11px] py-1.5 px-2 transition-colors border-b-2 ${
                 tab === "messages"
-                  ? "text-sol-text bg-sol-bg-alt/50 font-medium"
-                  : "text-sol-text-dim hover:text-sol-text-muted"
+                  ? "text-sol-text border-sol-cyan font-medium"
+                  : "text-sol-text-dim hover:text-sol-text-muted border-transparent"
               }`}
             >
               Messages ({messages.length})
             </button>
             <button
               onClick={() => onTabChange("comments")}
-              className={`flex-1 text-[11px] py-1.5 rounded-t transition-colors flex items-center justify-center gap-1 ${
+              className={`text-[11px] py-1.5 px-2 transition-colors border-b-2 flex items-center gap-1 ${
                 tab === "comments"
-                  ? "text-sol-text bg-sol-bg-alt/50 font-medium"
-                  : "text-sol-text-dim hover:text-sol-text-muted"
+                  ? "text-sol-text border-sol-cyan font-medium"
+                  : "text-sol-text-dim hover:text-sol-text-muted border-transparent"
               }`}
             >
-              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
-              </svg>
               Comments ({comments.length})
             </button>
           </div>
         )}
-        <div className="overflow-y-auto flex-1 py-1">
+        <div ref={scrollRef} className="overflow-y-auto flex-1 py-1" style={{ overscrollBehavior: "contain" }}>
           {tab === "messages" ? (
-            messages.map((m) => {
+            filtered.length === 0 ? (
+              <div className="px-3 py-6 text-center text-[12px] text-sol-text-dim/50">
+                {search ? "No matching messages" : "No messages"}
+              </div>
+            ) : (
+            filtered.map((m, filterIdx) => {
               const isCurrent = m._id === currentMessageId;
+              const isFocused = filterIdx === focusIndex;
               const isHovered = m._id === hoveredId;
               return (
                 <div
                   key={m._id}
+                  ref={isCurrent ? currentItemRef : undefined}
+                  data-focus-index={filterIdx}
                   onMouseEnter={(e) => handleItemHover(m._id, e.currentTarget, m)}
                   onMouseLeave={handleItemLeave}
-                  onClick={() => {
-                    onPin();
-                    if (onScrollToMessage) {
-                      onScrollToMessage(m._id);
-                    } else {
-                      useInboxStore.setState({
-                        pendingNavigateId: conversationId,
-                        pendingScrollToMessageId: m._id,
-                      });
-                    }
-                  }}
-                  className={`px-3 py-1.5 cursor-pointer transition-colors flex items-center gap-2 min-w-0 ${
+                  onClick={() => navigateToMessage(m)}
+                  className={`px-3 py-2 cursor-pointer transition-colors border-l-2 ${
                     isCurrent
-                      ? "bg-sol-bg-alt/60"
+                      ? "border-sol-cyan bg-sol-bg-alt/50"
+                      : isFocused
+                      ? "border-sol-text-dim bg-sol-bg-alt/40"
                       : isHovered
-                      ? "bg-sol-bg-alt/40"
-                      : ""
+                      ? "border-transparent bg-sol-bg-alt/30"
+                      : "border-transparent"
                   }`}
                 >
-                  <div className={`flex-1 min-w-0 text-[12px] truncate leading-snug ${
-                    isCurrent
-                      ? "text-sol-text font-medium"
-                      : m.isCmd
-                      ? "text-sol-text-muted font-mono"
-                      : "text-sol-text-muted"
-                  }`}>
-                    {m.display.length > 60 ? m.display.slice(0, 60) + "..." : m.display}
-                  </div>
-                  <div className="flex items-center gap-1.5 flex-shrink-0">
-                    {m.commentCount > 0 && (
-                      <span className="text-[10px] text-sol-cyan flex items-center gap-0.5">
-                        <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
-                        </svg>
-                        {m.commentCount}
-                      </span>
-                    )}
-                    <span className="text-[10px] text-sol-text-dim/60 tabular-nums">{formatTimeAgo(m.timestamp)}</span>
+                  <div className="flex items-start gap-2">
+                    <span className="text-[10px] text-sol-text-dim/40 tabular-nums w-4 text-right flex-shrink-0 pt-[2px]">
+                      {m.originalIndex + 1}
+                    </span>
+                    <div className="flex-1 min-w-0">
+                      <div className={`text-[12px] leading-snug line-clamp-2 ${
+                        isCurrent ? "text-sol-text font-medium" : m.isCmd ? "text-sol-text-muted font-mono" : "text-sol-text-muted"
+                      }`}>
+                        {m.display}
+                      </div>
+                      <div className="flex items-center gap-1.5 mt-1">
+                        <span className="text-[10px] text-sol-text-dim/50 tabular-nums">
+                          {formatTimeAgo(m.timestamp)}
+                        </span>
+                        {m.commentCount > 0 && (
+                          <>
+                            <span className="text-sol-text-dim/20">·</span>
+                            <span className="text-[10px] text-sol-cyan flex items-center gap-0.5">
+                              <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
+                              </svg>
+                              {m.commentCount}
+                            </span>
+                          </>
+                        )}
+                      </div>
+                    </div>
                   </div>
                 </div>
               );
-            })
+            }))
           ) : (
             comments.map((c) => {
               const displayName = c.user?.name || c.user?.github_username || "Unknown";
@@ -260,8 +358,8 @@ function NavDropdown({
                     <span className="text-[11px] text-sol-text-secondary font-medium">{displayName}</span>
                     <span className="text-[10px] text-sol-text-dim/60 ml-auto">{formatTimeAgo(c.created_at)}</span>
                   </div>
-                  <div className="text-[12px] text-sol-text-muted truncate pl-[22px]">
-                    {c.content.length > 80 ? c.content.slice(0, 80) + "..." : c.content}
+                  <div className="text-[12px] text-sol-text-muted line-clamp-2 pl-[22px]">
+                    {c.content}
                   </div>
                 </div>
               );
@@ -270,7 +368,7 @@ function NavDropdown({
         </div>
       </div>
       {previewMsg && hoveredRect && (
-        <HoverPreview message={previewMsg} rect={hoveredRect} />
+        <HoverPreview message={previewMsg} rect={hoveredRect} onMouseEnter={cancelDismissPreview} onMouseLeave={dismissPreview} />
       )}
     </>,
     document.body

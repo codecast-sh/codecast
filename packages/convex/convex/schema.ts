@@ -1411,6 +1411,15 @@ export default defineSchema({
         label: v.optional(v.string()),
         assignee: v.optional(v.string()),
         hide_agent: v.optional(v.boolean()),
+        source: v.optional(v.string()),
+      })),
+      doc_view: v.optional(v.object({
+        doc_type: v.optional(v.string()),
+        sort: v.optional(v.string()),
+        project: v.optional(v.string()),
+        label: v.optional(v.string()),
+        scope: v.optional(v.string()),
+        source: v.optional(v.string()),
       })),
     })),
 

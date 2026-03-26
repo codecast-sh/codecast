@@ -505,6 +505,33 @@ export class SyncService {
     return { inserted: totalInserted, ids: allIds };
   }
 
+  async recordFileTouches(params: {
+    conversationId: string;
+    touches: Array<{
+      file_path: string;
+      operation: "read" | "edit" | "write" | "delete" | "glob" | "grep";
+      line_range?: string;
+      message_index: number;
+      timestamp: number;
+    }>;
+  }): Promise<void> {
+    if (params.touches.length === 0) return;
+
+    const BATCH_SIZE = 50;
+    for (let i = 0; i < params.touches.length; i += BATCH_SIZE) {
+      const batch = params.touches.slice(i, i + BATCH_SIZE);
+      await this.throttle();
+      await this.client.mutation(
+        "fileTouches:recordTouches" as any,
+        {
+          api_token: this.apiToken,
+          conversation_id: params.conversationId,
+          touches: batch,
+        }
+      );
+    }
+  }
+
   async updateSyncCursor(params: {
     filePath: string;
     byteOffset: number;

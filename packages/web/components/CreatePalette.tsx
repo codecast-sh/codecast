@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useCallback } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { nanoid } from "nanoid";
 import { soundNewSession } from "../lib/sounds";
@@ -6,7 +6,7 @@ import { useInboxStore } from "../store/inboxStore";
 import { useConversationMessages } from "../hooks/useConversationMessages";
 import { ConversationView, ConversationData } from "./ConversationView";
 
-function ComposeSession({ sessionId }: { sessionId: string }) {
+function ComposeSession({ sessionId, onMetaEnterSend }: { sessionId: string; onMetaEnterSend?: () => void }) {
   const { conversation, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, loadOlder, loadNewer, jumpToStart, jumpToEnd } = useConversationMessages(sessionId);
 
   return (
@@ -25,6 +25,7 @@ function ComposeSession({ sessionId }: { sessionId: string }) {
       onLoadNewer={loadNewer}
       onJumpToStart={jumpToStart}
       onJumpToEnd={jumpToEnd}
+      onMetaEnterSend={onMetaEnterSend}
     />
   );
 }
@@ -35,6 +36,11 @@ export function CreatePalette() {
   const closePalette = useInboxStore((s) => s.closeComposePalette);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const paletteRef = useRef<HTMLDivElement>(null);
+  const navigateRef = useRef(false);
+
+  const handleMetaEnterSend = useCallback(() => {
+    navigateRef.current = true;
+  }, []);
 
   useWatchEffect(() => {
     (window as any).__CODECAST_COMPOSE_SHOW = (msg?: string) => {
@@ -138,11 +144,17 @@ export function CreatePalette() {
   useWatchEffect(() => {
     if (!sessionId || messageCount === 0 || closingRef.current) return;
     closingRef.current = true;
+    if (navigateRef.current) {
+      useInboxStore.getState().setCurrentSession(sessionId);
+    }
     closePalette();
   }, [messageCount, sessionId, closePalette]);
 
   useWatchEffect(() => {
-    if (!isOpen) closingRef.current = false;
+    if (!isOpen) {
+      closingRef.current = false;
+      navigateRef.current = false;
+    }
   }, [isOpen]);
 
   if (!isOpen || !sessionId) return null;
@@ -155,7 +167,7 @@ export function CreatePalette() {
           ref={paletteRef}
           className="w-[640px] h-[360px] max-h-[75vh] rounded-xl border border-sol-border/80 bg-sol-bg shadow-2xl shadow-black/40 overflow-hidden flex flex-col animate-in fade-in-0 zoom-in-95 slide-in-from-top-2 duration-150"
         >
-          <ComposeSession sessionId={sessionId} />
+          <ComposeSession sessionId={sessionId} onMetaEnterSend={handleMetaEnterSend} />
         </div>
       </div>
     </div>

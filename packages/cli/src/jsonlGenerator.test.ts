@@ -516,6 +516,78 @@ describe("generateClaudeCodeJsonl", () => {
     expect(tr).toBeTruthy();
     expect(tr.is_error).toBe(true);
   });
+
+  test("stripTrailingToolCalls removes dangling tool_use instead of synthesizing results", () => {
+    const data: ExportResult = {
+      conversation: {
+        id: "conv", title: "t", session_id: "session", agent_type: "claude_code",
+        project_path: "/tmp/project", model: "claude-opus-4-6-20260205",
+        message_count: 3, started_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:01.000Z",
+      },
+      messages: [
+        { role: "user", content: "do it", timestamp: "2026-01-01T00:00:00.000Z" },
+        { role: "assistant", content: "sure", timestamp: "2026-01-01T00:00:00.050Z" },
+        { role: "user", content: "now run this", timestamp: "2026-01-01T00:00:00.060Z" },
+        {
+          role: "assistant", content: "running",
+          timestamp: "2026-01-01T00:00:00.100Z",
+          tool_calls: [{ id: "call_dangling", name: "Bash", input: '{"command":"echo"}' }],
+        },
+      ],
+    };
+
+    const { jsonl } = generateClaudeCodeJsonl(data, { stripTrailingToolCalls: true });
+    const lines = jsonl.trim().split("\n").map((l) => JSON.parse(l));
+
+    // Should have NO tool_result with [result unavailable]
+    const allContent = lines.flatMap((l) => {
+      const c = l.message?.content;
+      return Array.isArray(c) ? c : [];
+    });
+    const unavailable = allContent.filter((b: any) =>
+      b.type === "tool_result" && Array.isArray(b.content) &&
+      b.content.some((t: any) => t.text === "[result unavailable]")
+    );
+    expect(unavailable.length).toBe(0);
+
+    // The last assistant message should have its tool_use stripped, keeping only text
+    const assistantEntries = lines.filter((l) => l.message?.role === "assistant");
+    const lastAssistant = assistantEntries[assistantEntries.length - 1];
+    const content = Array.isArray(lastAssistant.message.content) ? lastAssistant.message.content : [];
+    const toolUseBlocks = content.filter((b: any) => b.type === "tool_use");
+    expect(toolUseBlocks.length).toBe(0);
+    const textBlocks = content.filter((b: any) => b.type === "text");
+    expect(textBlocks.length).toBeGreaterThan(0);
+    expect(textBlocks[0].text).toContain("running");
+  });
+
+  test("stripTrailingToolCalls removes entire assistant message if only tool_use blocks", () => {
+    const data: ExportResult = {
+      conversation: {
+        id: "conv", title: "t", session_id: "session", agent_type: "claude_code",
+        project_path: "/tmp/project", model: "claude-opus-4-6-20260205",
+        message_count: 3, started_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:01.000Z",
+      },
+      messages: [
+        { role: "user", content: "do it", timestamp: "2026-01-01T00:00:00.000Z" },
+        { role: "assistant", content: "sure thing", timestamp: "2026-01-01T00:00:00.050Z" },
+        { role: "user", content: "continue", timestamp: "2026-01-01T00:00:00.060Z" },
+        {
+          role: "assistant", content: "",
+          timestamp: "2026-01-01T00:00:00.100Z",
+          tool_calls: [{ id: "call_dangling", name: "Bash", input: '{"command":"echo"}' }],
+        },
+      ],
+    };
+
+    const { jsonl } = generateClaudeCodeJsonl(data, { stripTrailingToolCalls: true });
+    const lines = jsonl.trim().split("\n").map((l) => JSON.parse(l));
+
+    // Last message should be user "continue", not the empty assistant
+    const messages = lines.filter((l) => l.message?.role);
+    const last = messages[messages.length - 1];
+    expect(last.message.role).toBe("user");
+  });
 });
 
 describe("generateCodexJsonl", () => {

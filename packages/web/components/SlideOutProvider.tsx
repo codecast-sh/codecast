@@ -1,15 +1,21 @@
+import { useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { useSlideOutStore } from "../store/slideOutStore";
-import { PlanSlideOut } from "./PlanSlideOut";
-import { TaskSlideOut } from "./TaskSlideOut";
-import { ErrorBoundary } from "./ErrorBoundary";
+
+const ROUTE_MAP: Record<string, string> = { plan: "/plans", task: "/tasks" };
 
 export function SlideOutProvider() {
-  const type = useSlideOutStore((s) => s.type);
+  const router = useRouter();
+  const pendingNav = useSlideOutStore((s) => s.pendingNav);
+  const clearNav = useSlideOutStore((s) => s.clearNav);
 
-  return (
-    <ErrorBoundary name="SlideOut" level="panel">
-      {type === "plan" && <PlanSlideOut />}
-      {type === "task" && <TaskSlideOut />}
-    </ErrorBoundary>
-  );
+  useEffect(() => {
+    if (pendingNav) {
+      const base = ROUTE_MAP[pendingNav.type] || `/${pendingNav.type}s`;
+      router.push(`${base}/${pendingNav.id}`);
+      clearNav();
+    }
+  }, [pendingNav, router, clearNav]);
+
+  return null;
 }

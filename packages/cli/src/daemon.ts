@@ -2378,6 +2378,72 @@ function prepMessageForSync(msg: RawMessage): { messageUuid?: string; role: "hum
   };
 }
 
+type FileTouchEntry = {
+  file_path: string;
+  operation: "read" | "edit" | "write" | "delete" | "glob" | "grep";
+  line_range?: string;
+  message_index: number;
+  timestamp: number;
+};
+
+const FILE_TOOL_OPS: Record<string, FileTouchEntry["operation"]> = {
+  Read: "read",
+  Edit: "edit",
+  Write: "write",
+  Glob: "glob",
+  Grep: "grep",
+};
+
+function extractFileTouches(messages: RawMessage[], startIndex: number): FileTouchEntry[] {
+  const touches: FileTouchEntry[] = [];
+  const seen = new Set<string>();
+
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+    if (!msg.toolCalls) continue;
+
+    for (const tc of msg.toolCalls) {
+      const op = FILE_TOOL_OPS[tc.name];
+      if (!op) continue;
+
+      const filePath = (tc.input?.file_path ?? tc.input?.path) as string | undefined;
+      if (!filePath || typeof filePath !== "string") continue;
+      if (!path.isAbsolute(filePath)) continue;
+
+      const key = `${startIndex + i}:${op}:${filePath}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      const lineRange = tc.input?.offset != null
+        ? `${tc.input.offset}${tc.input.limit ? `-${Number(tc.input.offset) + Number(tc.input.limit)}` : ""}`
+        : undefined;
+
+      touches.push({
+        file_path: filePath,
+        operation: op,
+        line_range: lineRange,
+        message_index: startIndex + i,
+        timestamp: msg.timestamp,
+      });
+    }
+  }
+
+  return touches;
+}
+
+async function syncFileTouches(
+  messages: RawMessage[],
+  conversationId: string,
+  syncService: SyncService,
+  startIndex: number,
+): Promise<void> {
+  const touches = extractFileTouches(messages, startIndex);
+  if (touches.length === 0) return;
+  syncService.recordFileTouches({ conversationId, touches }).catch((err) => {
+    log(`Failed to record ${touches.length} file touches: ${err instanceof Error ? err.message : String(err)}`);
+  });
+}
+
 async function syncMessagesBatch(
   messages: RawMessage[],
   conversationId: string,
@@ -3050,6 +3116,8 @@ async function processSessionFile(
       log(`Failed to recreate conversation and add messages: ${retryErrMsg}`);
     }
   }
+
+    syncFileTouches(messages, conversationId, syncService, 0);
 
     setPosition(filePath, stats.size);
     markSynced(filePath, stats.size, messages.length, conversationId);
@@ -5838,6 +5906,10 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
     try {
       const siteUrl = config.convex_url.replace(".cloud", ".site");
       const data = await fetchExport(siteUrl, config.auth_token, conversationId);
+      if (data.messages.length === 0) {
+        logDelivery(`Reconstitution aborted for ${sessionId.slice(0, 8)}: conversation has 0 messages`);
+        return false;
+      }
       const estimatedTokens = estimateClaudeImportTokens(data);
       const tailMessages = estimatedTokens > 120_000
         ? chooseClaudeTailMessagesForTokenBudget(data, 100_000)
@@ -9186,6 +9258,8 @@ async function main(): Promise<void> {
   let permissionUnsubscribe: (() => void) | null = null;
   let commandUnsubscribe: (() => void) | null = null;
   const processedPermissionIds = new Set<string>();
+  const permissionRetryCount = new Map<string, number>();
+  const PERMISSION_MAX_RETRIES = 3;
   const processedCommandIds = new Set<string>();
   const messageRetryTimers = new Set<string>();
 
@@ -9376,8 +9450,17 @@ async function main(): Promise<void> {
               if (injected) {
                 log(`Injected permission '${key}' for session ${sessionId?.slice(0, 8)}`);
                 processedPermissionIds.add(permission._id);
+                permissionRetryCount.delete(permission._id);
               } else {
-                log(`Failed to inject permission response, will retry on next update`);
+                const retries = (permissionRetryCount.get(permission._id) ?? 0) + 1;
+                permissionRetryCount.set(permission._id, retries);
+                if (retries >= PERMISSION_MAX_RETRIES) {
+                  log(`Permission ${permission._id} failed ${retries} times for session ${sessionId?.slice(0, 8)}, giving up (session will pick up from server)`);
+                  processedPermissionIds.add(permission._id);
+                  permissionRetryCount.delete(permission._id);
+                } else {
+                  log(`Failed to inject permission response for session ${sessionId?.slice(0, 8)}, attempt ${retries}/${PERMISSION_MAX_RETRIES}`);
+                }
               }
             } catch (err) {
               const errMsg = err instanceof Error ? err.message : String(err);

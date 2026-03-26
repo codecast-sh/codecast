@@ -689,6 +689,45 @@ export const getConversations = query({
   },
 });
 
+export const webGet = query({
+  args: {
+    short_id: v.optional(v.string()),
+    id: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return null;
+
+    let conv;
+    if (args.short_id) {
+      conv = await ctx.db
+        .query("conversations")
+        .withIndex("by_short_id", (q) => q.eq("short_id", args.short_id!))
+        .first();
+    } else if (args.id) {
+      try {
+        conv = await ctx.db.get(args.id as Id<"conversations">);
+      } catch {}
+    }
+
+    if (!conv) return null;
+    const isOwner = conv.user_id.toString() === userId.toString();
+    if (!isOwner && !(await canTeamMemberAccess(ctx, userId, conv))) return null;
+
+    return {
+      _id: conv._id,
+      short_id: conv.short_id,
+      title: conv.title,
+      status: conv.status,
+      message_count: conv.message_count,
+      project_path: conv.project_path,
+      model: conv.model,
+      agent_type: conv.agent_type,
+      updated_at: conv.updated_at,
+    };
+  },
+});
+
 export const getConversation = query({
   args: {
     conversation_id: v.id("conversations"),
@@ -710,7 +749,7 @@ export const getConversation = query({
       }
     }
 
-    const limit = args.limit ?? 100;
+    const limit = args.limit ?? 300;
     // Fetch most recent messages (descending), then reverse for display
     const messages = await ctx.db
       .query("messages")
@@ -795,7 +834,7 @@ export const getAllMessages = query({
       return null;
     }
 
-    const messageLimit = Math.min(args.limit ?? 50, 100);
+    const messageLimit = Math.min(args.limit ?? 150, 300);
 
     let messagesQuery = ctx.db
       .query("messages")
@@ -953,8 +992,8 @@ export const getMessagesAroundTimestamp = query({
       return null;
     }
 
-    const limitBefore = Math.min(args.limit_before ?? 50, 100);
-    const limitAfter = Math.min(args.limit_after ?? 50, 100);
+    const limitBefore = Math.min(args.limit_before ?? 150, 300);
+    const limitAfter = Math.min(args.limit_after ?? 150, 300);
 
     const messagesBefore = await ctx.db
       .query("messages")
@@ -1315,7 +1354,7 @@ export const getMoreMessages = query({
       }
     }
 
-    const limit = args.limit ?? 100;
+    const limit = args.limit ?? 300;
     const allMessages = await ctx.db
       .query("messages")
       .withIndex("by_conversation_id", (q) =>
@@ -1359,7 +1398,7 @@ export const getOlderMessages = query({
       }
     }
 
-    const limit = args.limit ?? 100;
+    const limit = args.limit ?? 300;
     // Fetch messages older than the cursor, in descending order (newest of the older ones first)
     const olderMessages = await ctx.db
       .query("messages")
@@ -2067,7 +2106,7 @@ export const getConversationPublic = query({
       return { access_level: "denied" as const, conversation: null };
     }
 
-    const limit = args.limit ?? 100;
+    const limit = args.limit ?? 300;
     let messagesQuery = ctx.db
       .query("messages")
       .withIndex("by_conversation_timestamp", (q) =>

@@ -1268,37 +1268,21 @@ function showStatus(): void {
 }
 
 function stopDaemon(): void {
-  if (!fs.existsSync(PID_FILE)) {
-    console.log("Daemon is not running (no PID file)");
-    return;
-  }
-
-  const pidStr = fs.readFileSync(PID_FILE, "utf-8").trim();
-  const pid = parseInt(pidStr, 10);
-
-  if (isNaN(pid)) {
-    console.log("Invalid PID file, removing it");
-    fs.unlinkSync(PID_FILE);
-    return;
-  }
-
-  try {
-    process.kill(pid, 0);
-  } catch {
-    console.log("Daemon is not running (process not found)");
-    fs.unlinkSync(PID_FILE);
+  const pid = getDaemonPid();
+  if (pid === null) {
+    console.log("Daemon is not running");
     return;
   }
 
   try {
     process.kill(pid, "SIGTERM");
-    fs.unlinkSync(PID_FILE);
+    if (fs.existsSync(PID_FILE)) fs.unlinkSync(PID_FILE);
     console.log("Daemon stopped");
   } catch (err) {
     const error = err as NodeJS.ErrnoException;
     if (error.code === "ESRCH") {
       console.log("Daemon already stopped");
-      fs.unlinkSync(PID_FILE);
+      if (fs.existsSync(PID_FILE)) fs.unlinkSync(PID_FILE);
     } else {
       console.error(`Failed to stop daemon: ${error.message}`);
       process.exit(1);
@@ -1313,9 +1297,9 @@ function startDaemon(): void {
     console.log("Session management features (attach, remote control) will be unavailable.\n");
   }
 
-  if (isDaemonRunning()) {
-    const pid = fs.readFileSync(PID_FILE, "utf-8").trim();
-    console.log(`Daemon is already running (PID: ${pid})`);
+  const existingPid = getDaemonPid();
+  if (existingPid !== null) {
+    console.log(`Daemon is already running (PID: ${existingPid})`);
     return;
   }
 
@@ -6384,6 +6368,56 @@ program
   });
 
 program
+  .command("install")
+  .description("Install all agent snippets interactively")
+  .option("-a, --all", "Install all snippets without prompting")
+  .action(async (options: any) => {
+    const config = readConfig() || {};
+    const targets = getSnippetTargets();
+    const targetList = targets.map(t => t.label).join(", ");
+    const installed: string[] = [];
+
+    const categories = [
+      { key: "memory", label: "Memory", desc: "Search and learn from past conversations", enabledKey: "memory_enabled" as const, versionKey: "memory_version" as const, getVersion: getMemoryVersion, install: installMemorySnippet },
+      { key: "work", label: "Tasks & Plans", desc: "Track work items, create and manage plans", enabledKey: "work_enabled" as const, versionKey: "work_version" as const, getVersion: getWorkVersion, install: installWorkSnippet },
+      { key: "schedule", label: "Scheduled Tasks", desc: "Schedule autonomous follow-up work", enabledKey: "task_enabled" as const, versionKey: "task_version" as const, getVersion: getTaskVersion, install: installTaskSnippet },
+      { key: "workflow", label: "Workflows", desc: "DOT-based workflow templates", enabledKey: "workflow_enabled" as const, versionKey: "workflow_version" as const, getVersion: getWorkflowVersion, install: installWorkflowSnippet },
+    ] as const;
+
+    console.log(`\nAvailable snippets (targets: ${targetList}):\n`);
+    for (const cat of categories) {
+      const status = config[cat.enabledKey] ? fmt.success("installed") : fmt.muted("not installed");
+      console.log(`  ${c.cyan}${cat.label}${c.reset} - ${cat.desc} [${status}]`);
+    }
+    console.log();
+
+    for (const cat of categories) {
+      const shouldInstall = options.all || await confirm({
+        message: `Install ${cat.label}?`,
+        default: true,
+      });
+
+      if (shouldInstall) {
+        const result = cat.install(true);
+        config[cat.enabledKey] = true;
+        (config as any)[cat.versionKey] = cat.getVersion();
+        installed.push(cat.label + (result.updated ? " (updated)" : result.installed ? " (installed)" : " (up to date)"));
+      }
+    }
+
+    writeConfig(config);
+
+    if (installed.length > 0) {
+      console.log(`\n${c.green}Done.${c.reset} ${installed.length} snippet${installed.length > 1 ? "s" : ""} processed:`);
+      for (const name of installed) {
+        console.log(`  ${icons.check} ${name}`);
+      }
+    } else {
+      console.log("\nNo snippets installed.");
+    }
+  });
+
+program
   .command("bookmark")
   .description(
     "Bookmark a specific message in a conversation\n\n" +
@@ -9193,6 +9227,14 @@ plan
     const result = await cliPost("/cli/plans/create", body);
     console.log(`${c.green}ok${c.reset} Created plan ${c.cyan}${result.short_id}${c.reset}: ${title}`);
 
+    if (sessionId) {
+      try {
+        await cliPost("/cli/plans/bind", { short_id: result.short_id, conversation_id: sessionId });
+        console.log(`${c.dim}Session bound to plan ${result.short_id}${c.reset}`);
+      } catch {}
+      writeTaskPulse(sessionId, "", result.short_id);
+    }
+
     if (options.template) {
       const templates: Record<string, Array<{ title: string; description: string; blocked_by?: string[]; labels?: string[] }>> = {
         "plan-implement-verify": [
@@ -9675,6 +9717,7 @@ plan
   .description("Decompose a plan into granular implementation tasks")
   .argument("<plan_id>", "Plan short ID")
   .option("--depth <level>", "Decomposition depth: shallow (5-10 tasks), medium (20-50), deep (100+)", "medium")
+  .option("--dry-run", "Show what tasks would be created without creating them")
   .action(async (planId: string, options: any) => {
     const result = await cliPost("/cli/plans/get", { short_id: planId });
     if (!result) {
@@ -9806,6 +9849,11 @@ Output valid JSON array of task objects. Nothing else.`;
         const hours = Math.floor(totalMinutes / 60);
         const mins = totalMinutes % 60;
         console.log(`\n  ${c.dim}Estimated total: ${hours > 0 ? `${hours}h ` : ""}${mins}m${c.reset}`);
+      }
+
+      if (options.dryRun) {
+        console.log(fmt.muted(`\n  Dry run — no tasks created. Run without --dry-run to create.`));
+        return;
       }
 
       const shouldCreate = await confirm({

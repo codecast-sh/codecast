@@ -96,9 +96,12 @@ const DOC_TYPE_STYLES: Record<string, { label: string; color: string; bg: string
 };
 
 function PersonMention({ attrs }: { attrs: Record<string, any> }) {
+  const profileSlug = attrs.shortId?.startsWith("@")
+    ? attrs.shortId.slice(1)
+    : attrs.id;
   return (
     <a
-      href={`${ROUTE_MAP.person}/${attrs.id}`}
+      href={`${ROUTE_MAP.person}/${profileSlug}`}
       className="mention-inline mention-inline-person"
     >
       {attrs.image ? (

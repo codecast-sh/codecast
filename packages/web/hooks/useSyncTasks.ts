@@ -34,13 +34,16 @@ export function useSyncTasks(statusFilter?: string, triageStatus?: string) {
 }
 
 export function useSyncTaskDetail(id?: string) {
-  const data = useQuery(
-    api.taskMining.webGetTaskDetail,
-    id ? { id: id as any } : "skip"
-  );
+  const isShortId = id?.startsWith("ct-") || id?.startsWith("pl-");
+  const queryArgs = id
+    ? isShortId ? { short_id: id } : { id }
+    : "skip";
+  const data = useQuery(api.tasks.webGet, queryArgs as any);
   const syncRecord = useInboxStore((s) => s.syncRecord);
 
   useConvexSync(data, useCallback((d: any) => {
     if (id && d) syncRecord("tasks", id, d);
   }, [id, syncRecord]));
+
+  return data ?? null;
 }

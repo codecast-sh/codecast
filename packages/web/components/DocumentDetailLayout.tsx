@@ -123,37 +123,39 @@ export function DocumentDetailLayout({
 
       <div className="flex-1 overflow-y-auto">
         <div className="flex flex-col min-h-full">
-        <div className="flex-1 max-w-5xl mx-auto px-10 pt-10 pb-8 w-full">
-          <h1
-            contentEditable={isEditing}
-            suppressContentEditableWarning
-            onBlur={(e) => {
-              const text = e.currentTarget.textContent || "";
-              if (text !== title) onTitleChange(text);
-            }}
-            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); (e.target as HTMLElement).blur(); } }}
-            className={`text-3xl font-bold text-sol-text leading-tight mb-1 break-words ${isEditing ? "outline-none cursor-text" : ""}`}
-          >
-            {title || "Untitled"}
-          </h1>
+        <div className="flex-1 max-w-5xl mx-auto px-10 pt-10 pb-8 w-full flex flex-col">
+          <div>
+            <h1
+              contentEditable={isEditing}
+              suppressContentEditableWarning
+              onBlur={(e) => {
+                const text = e.currentTarget.textContent || "";
+                if (text !== title) onTitleChange(text);
+              }}
+              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); (e.target as HTMLElement).blur(); } }}
+              className={`text-3xl font-bold text-sol-text leading-tight mb-1 break-words ${isEditing ? "outline-none cursor-text" : ""}`}
+            >
+              {title || "Untitled"}
+            </h1>
 
-          <div className="mt-4">
-            <ErrorBoundary name="DocEditor" level="panel">
-              <CollabDocEditor
-                key={docId}
-                docId={docId}
-                markdownContent={markdownContent}
-                onMentionQuery={handleMentionQuery}
-                editable={isEditing}
-                placeholder={placeholder}
-                getMarkdownRef={getMarkdownRef}
-                cliEditedAt={cliEditedAt}
-              />
-            </ErrorBoundary>
+            <div className="mt-4">
+              <ErrorBoundary name="DocEditor" level="panel">
+                <CollabDocEditor
+                  key={docId}
+                  docId={docId}
+                  markdownContent={markdownContent}
+                  onMentionQuery={handleMentionQuery}
+                  editable={isEditing}
+                  placeholder={placeholder}
+                  getMarkdownRef={getMarkdownRef}
+                  cliEditedAt={cliEditedAt}
+                />
+              </ErrorBoundary>
+            </div>
           </div>
 
           {children && (
-            <div className="mt-16 pt-8 border-t border-sol-border/15">
+            <div className="mt-auto pt-8 border-t border-sol-border/15">
               {children}
             </div>
           )}

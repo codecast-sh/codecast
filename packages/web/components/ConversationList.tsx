@@ -1105,9 +1105,7 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onNavi
   const serverTimeFilter = timeFilter === "all" ? null : timeFilter;
   const { conversations, hasMore, loadMore, isLoadingMore, isLoading, hasSubagents } = useConversationsWithError(filter, memberFilter, serverSubagentFilter, directoryFilter, serverTimeFilter);
   const [focusedIndex, setFocusedIndex] = useState(-1);
-  const showNewSession = useInboxStore((s) => s.newSession.isOpen);
-  const openNewSession = useInboxStore((s) => s.openNewSession);
-  const closeNewSession = useInboxStore((s) => s.closeNewSession);
+  const openComposePalette = useInboxStore((s) => s.openComposePalette);
   const listRef = useRef<HTMLDivElement>(null);
   const isHoveredRef = useRef(false);
   const { containerRef: flipContainerRef, beforeReorder } = useFlipAnimation();
@@ -1275,7 +1273,7 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onNavi
       <div className="flex gap-1.5 sm:gap-2 items-center pt-1 sm:pt-2 overflow-x-auto pb-1 scrollbar-auto sm:flex-wrap sm:overflow-x-visible sm:pb-0">
         {filter === "my" && (
           <button
-            onClick={() => openNewSession()}
+            onClick={() => openComposePalette()}
             className="px-2 sm:px-2.5 md:px-3 py-1 sm:py-1.5 text-xs sm:text-sm rounded-lg transition-colors whitespace-nowrap bg-sol-yellow/20 text-sol-yellow border border-sol-yellow/40 hover:bg-sol-yellow/30"
           >
             <span className="flex items-center gap-1">

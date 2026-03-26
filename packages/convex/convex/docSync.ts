@@ -71,8 +71,8 @@ export const submitSnapshot = mutation({
       const doc = await ctx.db.get(args.id as Id<"docs">);
       if (doc) {
         const parsed = JSON.parse(args.content);
-        const text = extractText(parsed);
-        await ctx.db.patch(doc._id, { content: text, updated_at: Date.now() });
+        const md = toMarkdown(parsed).trim();
+        await ctx.db.patch(doc._id, { content: md, updated_at: Date.now() });
 
         const newMentions = extractPersonMentionIds(parsed);
         if (newMentions.size > 0) {
@@ -117,33 +117,102 @@ export const submitSnapshot = mutation({
   },
 });
 
-function extractText(node: any): string {
-  if (node.type === "text") return node.text || "";
+function wrapMarks(text: string, marks?: any[]): string {
+  if (!marks?.length || !text) return text;
+  let out = text;
+  for (const mark of marks) {
+    switch (mark.type) {
+      case "bold": case "strong": out = `**${out}**`; break;
+      case "italic": case "em": out = `*${out}*`; break;
+      case "strike": out = `~~${out}~~`; break;
+      case "code": out = `\`${out}\``; break;
+      case "link": out = `[${out}](${mark.attrs?.href || ""})`; break;
+    }
+  }
+  return out;
+}
+
+function toMarkdown(node: any, ctx: { indent: string; ordered: boolean; itemIndex: number } = { indent: "", ordered: false, itemIndex: 0 }): string {
+  if (node.type === "text") return wrapMarks(node.text || "", node.marks);
   if (node.type === "hardBreak") return "\n";
   if (node.type === "horizontalRule") return "\n---\n\n";
-  if (!node.content) return "";
-  const children = node.content.map(extractText).join("");
+  if (node.type === "mention") return `@${node.attrs?.label || node.attrs?.id || ""}`;
+  if (node.type === "image") {
+    const alt = node.attrs?.alt || "";
+    const src = node.attrs?.src || "";
+    return `![${alt}](${src})`;
+  }
+
+  if (!node.content) {
+    if (node.type === "paragraph") return "\n";
+    return "";
+  }
+
+  const inline = (n: any) => toMarkdown(n, ctx);
+  const children = node.content.map(inline).join("");
+
   switch (node.type) {
     case "heading":
-      return "#".repeat(node.attrs?.level || 1) + " " + children + "\n\n";
+      return "#".repeat(node.attrs?.level || 1) + " " + children.trim() + "\n\n";
     case "paragraph":
       return children + "\n\n";
     case "bulletList":
-    case "orderedList":
+      return node.content.map((li: any, i: number) =>
+        toMarkdown(li, { indent: ctx.indent, ordered: false, itemIndex: i })
+      ).join("") + "\n";
+    case "orderedList": {
+      const start = node.attrs?.start ?? 1;
+      return node.content.map((li: any, i: number) =>
+        toMarkdown(li, { indent: ctx.indent, ordered: true, itemIndex: start + i })
+      ).join("") + "\n";
+    }
     case "taskList":
-      return children + "\n";
-    case "listItem":
-    case "taskItem":
-      return "- " + children.trim() + "\n";
-    case "blockquote":
-      return "> " + children.trim() + "\n\n";
-    case "codeBlock":
-      return "```\n" + children + "\n```\n\n";
-    case "tableRow":
-      return node.content.map(extractText).join(" | ") + "\n";
-    case "tableCell":
-    case "tableHeader":
-      return children.trim();
+      return node.content.map((li: any, i: number) =>
+        toMarkdown(li, { indent: ctx.indent, ordered: false, itemIndex: i })
+      ).join("") + "\n";
+    case "listItem": {
+      const prefix = ctx.ordered ? `${ctx.itemIndex}. ` : "- ";
+      const body = node.content.map((child: any) => {
+        const md = toMarkdown(child, { indent: ctx.indent + "  ", ordered: false, itemIndex: 0 });
+        return md.replace(/\n$/, "");
+      }).join("\n" + ctx.indent + "  ");
+      return ctx.indent + prefix + body.trim() + "\n";
+    }
+    case "taskItem": {
+      const checked = node.attrs?.checked ? "x" : " ";
+      const body = node.content.map((child: any) => {
+        const md = toMarkdown(child, { indent: ctx.indent + "  ", ordered: false, itemIndex: 0 });
+        return md.replace(/\n$/, "");
+      }).join("\n" + ctx.indent + "  ");
+      return ctx.indent + `- [${checked}] ` + body.trim() + "\n";
+    }
+    case "blockquote": {
+      const inner = node.content.map(inline).join("");
+      return inner.trim().split("\n").map((l: string) => "> " + l).join("\n") + "\n\n";
+    }
+    case "codeBlock": {
+      const lang = node.attrs?.language || "";
+      return "```" + lang + "\n" + children + "\n```\n\n";
+    }
+    case "table": {
+      const rows = (node.content || []).map((row: any) =>
+        (row.content || []).map((cell: any) =>
+          (cell.content || []).map(inline).join("").replace(/\n+/g, " ").trim()
+        )
+      );
+      if (rows.length === 0) return "";
+      const colCount = Math.max(...rows.map((r: string[]) => r.length));
+      const padded = rows.map((r: string[]) => {
+        while (r.length < colCount) r.push("");
+        return r;
+      });
+      let md = "| " + padded[0].join(" | ") + " |\n";
+      md += "| " + padded[0].map(() => "---").join(" | ") + " |\n";
+      for (let i = 1; i < padded.length; i++) {
+        md += "| " + padded[i].join(" | ") + " |\n";
+      }
+      return md + "\n";
+    }
     default:
       return children;
   }

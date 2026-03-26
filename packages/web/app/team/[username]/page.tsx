@@ -1,13 +1,87 @@
 import { useState, useCallback } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
+import { ErrorBoundary } from "../../../components/ErrorBoundary";
 import { Card } from "../../../components/ui/card";
 import Link from "next/link";
 import { useParams } from "next/navigation";
+import {
+  Circle,
+  CircleDot,
+  CircleDotDashed,
+  CheckCircle2,
+  XCircle,
+  AlertTriangle,
+  ArrowUp,
+  ArrowDown,
+  Minus,
+  FileText,
+} from "lucide-react";
+import { getLabelColor } from "../../../lib/labelColors";
 
 type VisibilityMode = "detailed" | "summary" | "minimal" | "hidden";
 
+const STATUS_ICON: Record<string, any> = {
+  backlog: CircleDotDashed,
+  open: Circle,
+  in_progress: CircleDot,
+  in_review: CircleDot,
+  done: CheckCircle2,
+  dropped: XCircle,
+};
+
+const STATUS_COLOR: Record<string, string> = {
+  backlog: "text-sol-text-dim",
+  open: "text-sol-blue",
+  in_progress: "text-sol-yellow",
+  in_review: "text-sol-violet",
+  done: "text-sol-green",
+  dropped: "text-sol-text-dim",
+};
+
+const STATUS_LABEL: Record<string, string> = {
+  backlog: "Backlog",
+  open: "Open",
+  in_progress: "In Progress",
+  in_review: "In Review",
+  done: "Done",
+  dropped: "Dropped",
+};
+
+const PRIORITY_ICON: Record<string, any> = {
+  urgent: AlertTriangle,
+  high: ArrowUp,
+  medium: Minus,
+  low: ArrowDown,
+  none: Minus,
+};
+
+const PRIORITY_COLOR: Record<string, string> = {
+  urgent: "text-sol-red",
+  high: "text-sol-orange",
+  medium: "text-sol-text-muted",
+  low: "text-sol-text-dim",
+  none: "text-sol-text-dim",
+};
+
+const DOC_TYPE_COLOR: Record<string, { label: string; color: string; bg: string }> = {
+  plan: { label: "Plan", color: "text-sol-blue", bg: "bg-sol-blue/10 border-sol-blue/30" },
+  design: { label: "Design", color: "text-sol-violet", bg: "bg-sol-violet/10 border-sol-violet/30" },
+  spec: { label: "Spec", color: "text-sol-cyan", bg: "bg-sol-cyan/10 border-sol-cyan/30" },
+  investigation: { label: "Investigation", color: "text-sol-yellow", bg: "bg-sol-yellow/10 border-sol-yellow/30" },
+  handoff: { label: "Handoff", color: "text-sol-orange", bg: "bg-sol-orange/10 border-sol-orange/30" },
+  note: { label: "Note", color: "text-sol-text-muted", bg: "bg-sol-text-muted/10 border-sol-text-muted/30" },
+};
+
 export default function UserProfilePage() {
+  return (
+    <ErrorBoundary name="UserProfile" level="panel">
+      <UserProfileContent />
+    </ErrorBoundary>
+  );
+}
+
+function UserProfileContent() {
   const params = useParams();
   const username = params.username as string;
   const [showTeammateView, setShowTeammateView] = useState(true);
@@ -27,6 +101,14 @@ export default function UserProfilePage() {
   const abstractActivity = useQuery(
     api.users.getUserAbstractActivity,
     profileUser?._id ? { user_id: profileUser._id } : "skip"
+  );
+  const userTasks = useQuery(
+    (api.users as any).getUserTasks,
+    profileUser?._id ? { user_id: profileUser._id, limit: 20 } : "skip"
+  );
+  const userDocs = useQuery(
+    (api.users as any).getUserDocs,
+    profileUser?._id ? { user_id: profileUser._id, limit: 20 } : "skip"
   );
 
   const isOwnProfile = currentUser?._id === profileUser?._id;
@@ -81,12 +163,13 @@ export default function UserProfilePage() {
   };
 
   const daemonStatus = getMemberStatus(profileUser.daemon_last_seen);
+  const activityHidden = profileUser.hide_activity || (shouldShowAsTeammate && visibilityMode === "hidden");
 
   return (
     <div className="max-w-4xl mx-auto p-6">
       <div className="flex items-center justify-between mb-4">
         <Link href="/team" className="text-sol-cyan hover:underline">
-          ← Back to Team
+          &larr; Back to Team
         </Link>
 
         {isOwnProfile && (
@@ -154,6 +237,7 @@ export default function UserProfilePage() {
         </div>
       )}
 
+      {/* Profile Header */}
       <Card className="p-6 bg-sol-bg border-sol-border mb-6">
         <div className="flex items-start gap-6">
           <div className="relative">
@@ -202,7 +286,6 @@ export default function UserProfilePage() {
                   @{profileUser.github_username}
                 </a>
               )}
-              {profileUser.timezone && <div>🌍 {profileUser.timezone}</div>}
             </div>
             <div className="flex items-center gap-4 mt-3">
               {profileUser.status && (
@@ -235,302 +318,7 @@ export default function UserProfilePage() {
         </div>
       </Card>
 
-      {!profileUser.hide_activity && abstractActivity && !(shouldShowAsTeammate && visibilityMode === "hidden") && (
-        <Card className="p-6 bg-sol-bg border-sol-border mb-6">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-semibold text-sol-text">Activity Overview</h2>
-            {abstractActivity.activity_streak > 0 && (
-              <span className="px-2 py-1 bg-sol-orange/20 text-sol-orange text-xs rounded-full font-medium">
-                {abstractActivity.activity_streak} day streak
-              </span>
-            )}
-          </div>
-
-          {abstractActivity.is_currently_active && (
-            <div className="flex items-center gap-2 text-sol-green text-sm mb-4 p-2 bg-sol-green/10 rounded">
-              <span className="w-2 h-2 rounded-full bg-sol-green animate-pulse" />
-              {shouldShowAsTeammate && visibilityMode === "minimal"
-                ? "Currently active"
-                : `Currently working on ${abstractActivity.current_project || 'a session'}`}
-            </div>
-          )}
-
-          <div className="space-y-4">
-            {/* Minimal mode: just show basic counts */}
-            {shouldShowAsTeammate && visibilityMode === "minimal" ? (
-              <div className="text-center py-4">
-                <div className="text-2xl font-bold text-sol-cyan">{abstractActivity.week_sessions}</div>
-                <div className="text-sm text-sol-base01">sessions this week</div>
-                {abstractActivity.recent_projects.length > 0 && (
-                  <div className="text-sm text-sol-base1 mt-2">
-                    Active in {abstractActivity.recent_projects.length} project{abstractActivity.recent_projects.length > 1 ? 's' : ''}
-                  </div>
-                )}
-              </div>
-            ) : shouldShowAsTeammate && visibilityMode === "summary" ? (
-              /* Summary mode: aggregate info without session details */
-              <>
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="text-center">
-                    <div className="text-xl font-bold text-sol-cyan">{abstractActivity.week_sessions}</div>
-                    <div className="text-xs text-sol-base01">Sessions</div>
-                  </div>
-                  <div className="text-center">
-                    <div className="text-xl font-bold text-sol-cyan">{abstractActivity.week_messages}</div>
-                    <div className="text-xs text-sol-base01">Messages</div>
-                  </div>
-                </div>
-                <div className="text-xs text-sol-base01 text-center -mt-2">This week</div>
-
-                {abstractActivity.recent_projects.length > 0 && (
-                  <div className="pt-3 border-t border-sol-border">
-                    <div className="text-sm text-sol-base1 mb-2">Recent Projects</div>
-                    <div className="space-y-2">
-                      {abstractActivity.recent_projects.map((project) => (
-                        <div key={project.name} className="flex items-center justify-between text-sm">
-                          <span className="text-sol-text font-medium">{project.name}</span>
-                          <span className="text-sol-base01 text-xs">
-                            {project.sessions} sessions
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {abstractActivity.team_activity && (
-                  <div className="pt-3 border-t border-sol-border">
-                    <div className="text-sm text-sol-base1 mb-2">Git Activity</div>
-                    <div className="grid grid-cols-3 gap-3 text-sm">
-                      <div className="text-center p-2 bg-sol-base02/50 rounded">
-                        <div className="font-bold text-sol-green">{abstractActivity.team_activity.week_commits}</div>
-                        <div className="text-xs text-sol-base01">Commits</div>
-                      </div>
-                      <div className="text-center p-2 bg-sol-base02/50 rounded">
-                        <div className="font-bold text-sol-violet">{abstractActivity.team_activity.week_prs}</div>
-                        <div className="text-xs text-sol-base01">PRs</div>
-                      </div>
-                      <div className="text-center p-2 bg-sol-base02/50 rounded">
-                        <div className="font-bold text-sol-cyan">{abstractActivity.team_activity.week_files_changed || 0}</div>
-                        <div className="text-xs text-sol-base01">Files Changed</div>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {abstractActivity.peak_hours.length > 0 && (
-                  <div className="pt-3 border-t border-sol-border">
-                    <div className="text-xs text-sol-base01 mb-1">Usually active around</div>
-                    <div className="text-sm text-sol-text">
-                      {abstractActivity.peak_hours.map((h) => {
-                        const period = h >= 12 ? 'PM' : 'AM';
-                        const hour = h % 12 || 12;
-                        return `${hour}${period}`;
-                      }).join(', ')}
-                    </div>
-                  </div>
-                )}
-              </>
-            ) : (
-              /* Detailed mode (or full mode when not teammate view) */
-              <>
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="text-center">
-                    <div className="text-xl font-bold text-sol-cyan">{abstractActivity.week_sessions}</div>
-                    <div className="text-xs text-sol-base01">Sessions</div>
-                  </div>
-                  <div className="text-center">
-                    <div className="text-xl font-bold text-sol-cyan">{abstractActivity.week_messages}</div>
-                    <div className="text-xs text-sol-base01">Messages</div>
-                  </div>
-                </div>
-                <div className="text-xs text-sol-base01 text-center -mt-2">This week</div>
-
-                {abstractActivity.recent_projects.length > 0 && (
-                  <div className="pt-3 border-t border-sol-border">
-                    <div className="text-sm text-sol-base1 mb-2">Recent Projects</div>
-                    <div className="space-y-2">
-                      {abstractActivity.recent_projects.map((project) => (
-                        <div key={project.name} className="flex items-center justify-between text-sm">
-                          <span className="text-sol-text font-medium">{project.name}</span>
-                          <span className="text-sol-base01 text-xs">
-                            {project.sessions} sessions, {project.messages} msgs
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {abstractActivity.recent_sessions && abstractActivity.recent_sessions.length > 0 && (
-                  <div className="pt-3 border-t border-sol-border">
-                    <div className="text-sm text-sol-base1 mb-2">Recent Sessions</div>
-                    <div className="space-y-3">
-                      {abstractActivity.recent_sessions.map((session, i) => (
-                        <div key={i} className="text-sm">
-                          <div className="flex items-center justify-between">
-                            <span className="text-sol-text font-medium truncate flex-1 mr-2">{session.title}</span>
-                            <span className="text-sol-base01 text-xs whitespace-nowrap">
-                              {session.message_count} msgs
-                            </span>
-                          </div>
-                          {session.subtitle && !shouldShowAsTeammate && (
-                            <div className="text-xs text-sol-base01 mt-1 line-clamp-2 whitespace-pre-line">
-                              {session.subtitle}
-                            </div>
-                          )}
-                          <div className="flex items-center gap-2 mt-1 text-xs text-sol-base01">
-                            {session.project && <span className="font-mono">{session.project}</span>}
-                            <span>{getRelativeTime(session.updated_at)}</span>
-                            {session.status === "active" && (
-                              <span className="px-1.5 py-0.5 bg-sol-green/20 text-sol-green rounded text-xs">active</span>
-                            )}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {abstractActivity.team_activity && (
-                  <div className="pt-3 border-t border-sol-border">
-                    <div className="text-sm text-sol-base1 mb-2">Git Activity</div>
-                    <div className="grid grid-cols-3 gap-3 text-sm mb-3">
-                      <div className="text-center p-2 bg-sol-base02/50 rounded">
-                        <div className="font-bold text-sol-green">{abstractActivity.team_activity.week_commits}</div>
-                        <div className="text-xs text-sol-base01">Commits</div>
-                      </div>
-                      <div className="text-center p-2 bg-sol-base02/50 rounded">
-                        <div className="font-bold text-sol-violet">{abstractActivity.team_activity.week_prs}</div>
-                        <div className="text-xs text-sol-base01">PRs</div>
-                      </div>
-                      <div className="text-center p-2 bg-sol-base02/50 rounded">
-                        <div className="font-bold text-sol-cyan">{abstractActivity.team_activity.week_files_changed || 0}</div>
-                        <div className="text-xs text-sol-base01">Files Changed</div>
-                      </div>
-                    </div>
-                    {abstractActivity.team_activity.recent_branches.length > 0 && !shouldShowAsTeammate && (
-                      <div className="mb-3">
-                        <div className="text-xs text-sol-base01 mb-1">Active branches</div>
-                        <div className="flex flex-wrap gap-1">
-                          {abstractActivity.team_activity.recent_branches.map((branch) => (
-                            <span
-                              key={branch}
-                              className="px-2 py-0.5 bg-sol-base02 text-sol-text text-xs rounded font-mono"
-                            >
-                              {branch}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {abstractActivity.recent_commits.length > 0 && !shouldShowAsTeammate && (
-                  <div className="pt-3 border-t border-sol-border">
-                    <div className="text-sm text-sol-base1 mb-2">Recent Commits</div>
-                    <div className="space-y-2">
-                      {abstractActivity.recent_commits.map((commit, i) => (
-                        <div key={i} className="text-sm">
-                          <div className="text-sol-text truncate">{commit.message}</div>
-                          <div className="text-xs text-sol-base01 flex gap-2">
-                            {commit.branch && <span className="font-mono">{commit.branch}</span>}
-                            {commit.filesChanged && <span>{commit.filesChanged} files</span>}
-                            <span>{getRelativeTime(commit.timestamp)}</span>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {abstractActivity.peak_hours.length > 0 && (
-                  <div className="pt-3 border-t border-sol-border">
-                    <div className="text-xs text-sol-base01 mb-1">Usually active around</div>
-                    <div className="text-sm text-sol-text">
-                      {abstractActivity.peak_hours.map((h) => {
-                        const period = h >= 12 ? 'PM' : 'AM';
-                        const hour = h % 12 || 12;
-                        return `${hour}${period}`;
-                      }).join(', ')}
-                    </div>
-                  </div>
-                )}
-              </>
-            )}
-          </div>
-        </Card>
-      )}
-
-      {/* Shared Sessions - visible in all modes except hidden */}
-      {userStats && userActivity && userActivity.length > 0 && !(shouldShowAsTeammate && visibilityMode === "hidden") && (
-        <Card className="p-6 bg-sol-bg border-sol-border mb-6">
-          <h2 className="text-lg font-semibold text-sol-text mb-4">Shared Sessions</h2>
-          <div className="grid grid-cols-3 gap-4 mb-4">
-            <div>
-              <div className="text-2xl font-bold text-sol-cyan">
-                {userStats.total_conversations}
-              </div>
-              <div className="text-sm text-sol-base1">Shared</div>
-            </div>
-            <div>
-              <div className="text-2xl font-bold text-sol-cyan">
-                {userStats.total_messages}
-              </div>
-              <div className="text-sm text-sol-base1">Messages</div>
-            </div>
-            <div>
-              <div className="text-2xl font-bold text-sol-cyan">
-                {userStats.active_conversations}
-              </div>
-              <div className="text-sm text-sol-base1">Active</div>
-            </div>
-          </div>
-          <div className="space-y-3">
-            {userActivity.map((conversation) => (
-              <Link
-                key={conversation._id}
-                href={`/conversation/${conversation._id}`}
-                className="block p-3 rounded-lg bg-sol-bg-alt hover:bg-sol-base02 transition-colors"
-              >
-                <div className="flex items-start justify-between">
-                  <div className="flex-1 min-w-0">
-                    <div className="font-medium text-sol-text truncate">
-                      {conversation.title || "Untitled Conversation"}
-                    </div>
-                    {conversation.subtitle && !(shouldShowAsTeammate && (visibilityMode === "minimal" || visibilityMode === "summary")) && (
-                      <div className="text-sm text-sol-base1 line-clamp-3 whitespace-pre-line">
-                        {conversation.subtitle}
-                      </div>
-                    )}
-                  </div>
-                  <div className="text-xs text-sol-base01 ml-4 whitespace-nowrap">
-                    {getRelativeTime(conversation.updated_at)}
-                  </div>
-                </div>
-                <div className="flex items-center gap-2 mt-1">
-                  <span className="text-xs text-sol-base01">
-                    {conversation.message_count} messages
-                  </span>
-                  <span
-                    className={`text-xs px-2 py-0.5 rounded ${
-                      conversation.status === "active"
-                        ? "bg-sol-green/20 text-sol-green"
-                        : "bg-sol-base02/20 text-sol-base1"
-                    }`}
-                  >
-                    {conversation.status}
-                  </span>
-                </div>
-              </Link>
-            ))}
-          </div>
-        </Card>
-      )}
-
-      {/* Hidden activity message - shown when hide_activity is true, or when previewing "hidden" mode */}
-      {(profileUser.hide_activity || (shouldShowAsTeammate && visibilityMode === "hidden")) && (
+      {activityHidden ? (
         <Card className="p-6 bg-sol-bg border-sol-border">
           <p className="text-sol-base1 text-center">
             {isOwnProfile && showTeammateView
@@ -548,6 +336,226 @@ export default function UserProfilePage() {
             </div>
           )}
         </Card>
+      ) : (
+        <>
+          {/* Activity Overview */}
+          {abstractActivity && (
+            <Card className="p-6 bg-sol-bg border-sol-border mb-6">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-lg font-semibold text-sol-text">Activity Overview</h2>
+                {abstractActivity.activity_streak > 0 && (
+                  <span className="px-2 py-1 bg-sol-orange/20 text-sol-orange text-xs rounded-full font-medium">
+                    {abstractActivity.activity_streak} day streak
+                  </span>
+                )}
+              </div>
+
+              {abstractActivity.is_currently_active && (
+                <div className="flex items-center gap-2 text-sol-green text-sm mb-4 p-2 bg-sol-green/10 rounded">
+                  <span className="w-2 h-2 rounded-full bg-sol-green animate-pulse" />
+                  {shouldShowAsTeammate && visibilityMode === "minimal"
+                    ? "Currently active"
+                    : `Currently working on ${abstractActivity.current_project || 'a session'}`}
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="text-center">
+                  <div className="text-xl font-bold text-sol-cyan">{abstractActivity.week_sessions}</div>
+                  <div className="text-xs text-sol-base01">Sessions</div>
+                </div>
+                <div className="text-center">
+                  <div className="text-xl font-bold text-sol-cyan">{abstractActivity.week_messages}</div>
+                  <div className="text-xs text-sol-base01">Messages</div>
+                </div>
+              </div>
+              <div className="text-xs text-sol-base01 text-center mt-1">This week</div>
+
+              {abstractActivity.recent_projects.length > 0 && (
+                <div className="pt-3 mt-3 border-t border-sol-border">
+                  <div className="text-sm text-sol-base1 mb-2">Recent Projects</div>
+                  <div className="space-y-2">
+                    {abstractActivity.recent_projects.map((project: any) => (
+                      <div key={project.name} className="flex items-center justify-between text-sm">
+                        <span className="text-sol-text font-medium">{project.name}</span>
+                        <span className="text-sol-base01 text-xs">
+                          {project.sessions} sessions{!shouldShowAsTeammate || visibilityMode === "detailed" ? `, ${project.messages} msgs` : ""}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {abstractActivity.team_activity && (
+                <div className="pt-3 mt-3 border-t border-sol-border">
+                  <div className="text-sm text-sol-base1 mb-2">Git Activity</div>
+                  <div className="grid grid-cols-3 gap-3 text-sm">
+                    <div className="text-center p-2 bg-sol-base02/50 rounded">
+                      <div className="font-bold text-sol-green">{abstractActivity.team_activity.week_commits}</div>
+                      <div className="text-xs text-sol-base01">Commits</div>
+                    </div>
+                    <div className="text-center p-2 bg-sol-base02/50 rounded">
+                      <div className="font-bold text-sol-violet">{abstractActivity.team_activity.week_prs}</div>
+                      <div className="text-xs text-sol-base01">PRs</div>
+                    </div>
+                    <div className="text-center p-2 bg-sol-base02/50 rounded">
+                      <div className="font-bold text-sol-cyan">{abstractActivity.team_activity.week_files_changed || 0}</div>
+                      <div className="text-xs text-sol-base01">Files Changed</div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </Card>
+          )}
+
+          {/* Tasks Section */}
+          {userTasks && userTasks.length > 0 && (
+            <Card className="p-6 bg-sol-bg border-sol-border mb-6">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-lg font-semibold text-sol-text">Tasks</h2>
+                <span className="text-xs text-sol-base01">{userTasks.length} tasks</span>
+              </div>
+              <div className="border border-sol-border/20 rounded-lg divide-y divide-sol-border/10 overflow-hidden">
+                {userTasks.map((task: any) => {
+                  const StatusIcon = STATUS_ICON[task.status] || Circle;
+                  const statusColor = STATUS_COLOR[task.status] || "text-sol-text-dim";
+                  const PriorityIcon = PRIORITY_ICON[task.priority] || Minus;
+                  const priorityColor = PRIORITY_COLOR[task.priority] || "text-sol-text-dim";
+                  return (
+                    <Link
+                      key={task._id}
+                      href={`/tasks/${task._id}`}
+                      className="flex items-center gap-3 px-4 py-2.5 hover:bg-sol-bg-alt/50 transition-colors"
+                    >
+                      <StatusIcon className={`w-4 h-4 flex-shrink-0 ${statusColor}`} />
+                      <span className="text-xs font-mono text-sol-text-dim w-16 flex-shrink-0">
+                        {task.short_id}
+                      </span>
+                      <span className="flex-1 text-sm text-sol-text truncate">
+                        {task.title}
+                      </span>
+                      {task.labels && task.labels.length > 0 && (
+                        <div className="flex gap-1 flex-shrink-0">
+                          {task.labels.slice(0, 2).map((l: string) => {
+                            const lc = getLabelColor(l);
+                            return (
+                              <span key={l} className={`text-[10px] px-1.5 py-0.5 rounded-full border ${lc.bg} ${lc.border} ${lc.text}`}>
+                                {l}
+                              </span>
+                            );
+                          })}
+                        </div>
+                      )}
+                      <span className={`text-[10px] px-1.5 py-0 rounded border border-current/20 ${statusColor}`}>
+                        {STATUS_LABEL[task.status] || task.status}
+                      </span>
+                      <PriorityIcon className={`w-3.5 h-3.5 flex-shrink-0 ${priorityColor}`} />
+                    </Link>
+                  );
+                })}
+              </div>
+            </Card>
+          )}
+
+          {/* Docs Section */}
+          {userDocs && userDocs.length > 0 && (
+            <Card className="p-6 bg-sol-bg border-sol-border mb-6">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-lg font-semibold text-sol-text">Docs</h2>
+                <span className="text-xs text-sol-base01">{userDocs.length} docs</span>
+              </div>
+              <div className="border border-sol-border/20 rounded-lg divide-y divide-sol-border/10 overflow-hidden">
+                {userDocs.map((doc: any) => {
+                  const typeConfig = DOC_TYPE_COLOR[doc.doc_type] || DOC_TYPE_COLOR.note;
+                  return (
+                    <Link
+                      key={doc._id}
+                      href={`/docs/${doc._id}`}
+                      className="flex items-center gap-3 px-4 py-2.5 hover:bg-sol-bg-alt/50 transition-colors"
+                    >
+                      <FileText className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
+                      <span className="flex-1 text-sm text-sol-text truncate">
+                        {doc.title || "Untitled"}
+                      </span>
+                      {doc.labels && doc.labels.length > 0 && (
+                        <div className="flex gap-1 flex-shrink-0">
+                          {doc.labels.slice(0, 2).map((l: string) => {
+                            const lc = getLabelColor(l);
+                            return (
+                              <span key={l} className={`text-[10px] px-1.5 py-0.5 rounded-full border ${lc.bg} ${lc.border} ${lc.text}`}>
+                                {l}
+                              </span>
+                            );
+                          })}
+                        </div>
+                      )}
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded-md border ${typeConfig.color} ${typeConfig.bg}`}>
+                        {typeConfig.label}
+                      </span>
+                      <span className="text-xs text-sol-base01 whitespace-nowrap">
+                        {getRelativeTime(doc.updated_at || doc.created_at)}
+                      </span>
+                    </Link>
+                  );
+                })}
+              </div>
+            </Card>
+          )}
+
+          {/* Shared Sessions */}
+          {userStats && userActivity && userActivity.length > 0 && (
+            <Card className="p-6 bg-sol-bg border-sol-border mb-6">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-lg font-semibold text-sol-text">Sessions</h2>
+                <div className="flex items-center gap-4 text-xs text-sol-base01">
+                  <span>{userStats.total_conversations} shared</span>
+                  <span>{userStats.active_conversations} active</span>
+                  <span>{userStats.total_messages} messages</span>
+                </div>
+              </div>
+              <div className="space-y-3">
+                {userActivity.map((conversation: any) => (
+                  <Link
+                    key={conversation._id}
+                    href={`/conversation/${conversation._id}`}
+                    className="block p-3 rounded-lg bg-sol-bg-alt hover:bg-sol-base02 transition-colors"
+                  >
+                    <div className="flex items-start justify-between">
+                      <div className="flex-1 min-w-0">
+                        <div className="font-medium text-sol-text truncate">
+                          {conversation.title || "Untitled Conversation"}
+                        </div>
+                        {conversation.subtitle && !(shouldShowAsTeammate && (visibilityMode === "minimal" || visibilityMode === "summary")) && (
+                          <div className="text-sm text-sol-base1 line-clamp-3 whitespace-pre-line">
+                            {conversation.subtitle}
+                          </div>
+                        )}
+                      </div>
+                      <div className="text-xs text-sol-base01 ml-4 whitespace-nowrap">
+                        {getRelativeTime(conversation.updated_at)}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 mt-1">
+                      <span className="text-xs text-sol-base01">
+                        {conversation.message_count} messages
+                      </span>
+                      <span
+                        className={`text-xs px-2 py-0.5 rounded ${
+                          conversation.status === "active"
+                            ? "bg-sol-green/20 text-sol-green"
+                            : "bg-sol-base02/20 text-sol-base1"
+                        }`}
+                      >
+                        {conversation.status}
+                      </span>
+                    </div>
+                  </Link>
+                ))}
+              </div>
+            </Card>
+          )}
+        </>
       )}
     </div>
   );

@@ -138,7 +138,7 @@ function DroppableSessionRow({ conv, onMobileClose }: { conv: any; onMobileClose
 }
 
 const INITIAL_SESSION_LIMIT = 30;
-const SESSION_PAGE_SIZE = 50;
+const SESSION_PAGE_SIZE = 150;
 
 function RecentSessions({
   groupedSessions,
@@ -288,7 +288,7 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
     () => categorizeSessions(inboxSessions, sessionsWithQueuedMessages).needsInput.length,
     [inboxSessions, sessionsWithQueuedMessages],
   );
-  const openNewSession = useInboxStore((s) => s.openNewSession);
+  const openComposePalette = useInboxStore((s) => s.openComposePalette);
   const hasUsedDesktop = useInboxStore((s) => s.clientState.dismissed?.has_used_desktop ?? false);
 
   useMountEffect(() => {
@@ -619,7 +619,7 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
             <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide px-4 mb-2 flex items-center justify-between">
               <span>Projects</span>
               <button
-                onClick={() => openNewSession()}
+                onClick={() => openComposePalette()}
                 className="text-sol-text-dim hover:text-sol-yellow transition-colors"
                 title="New session..."
               >

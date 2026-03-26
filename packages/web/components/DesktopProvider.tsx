@@ -107,6 +107,25 @@ export function DesktopProvider() {
     };
     window.addEventListener("codecast-navigate", handleNavigate);
 
+    const handleNavigateSession = (e: Event) => {
+      const data = (e as CustomEvent).detail;
+      if (!data?._id) return;
+      const store = useInboxStore.getState();
+      if (!store.sessions[data._id]) {
+        store.injectSession(data);
+      } else {
+        store.setCurrentSession(data._id);
+      }
+      const conversationPath = `/conversation/${data._id}`;
+      const cur = window.location.pathname;
+      if (cur.startsWith("/inbox") || cur.startsWith("/conversation/")) {
+        window.history.pushState({ inboxId: data._id }, "", conversationPath);
+      } else {
+        router.push(conversationPath);
+      }
+    };
+    window.addEventListener("codecast-navigate-session", handleNavigateSession);
+
     checkForUpdates().catch(() => {});
 
     if (isElectron()) {

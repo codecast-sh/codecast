@@ -665,10 +665,10 @@ export const webList = query({
     for (const d of result) {
       if (d.user_id) userIds.add(String(d.user_id));
     }
-    const userMap = new Map<string, { name?: string; image?: string }>();
+    const userMap = new Map<string, { name?: string; image?: string; github_username?: string }>();
     for (const uid of userIds) {
       const u = await ctx.db.get(uid as Id<"users">);
-      if (u) userMap.set(uid, { name: u.name, image: u.image || (u as any).github_avatar_url });
+      if (u) userMap.set(uid, { name: u.name, image: u.image || (u as any).github_avatar_url, github_username: (u as any).github_username });
     }
 
     const planIds = new Set<string>();
@@ -695,7 +695,7 @@ export const webList = query({
       const plan = d.plan_id ? planMap.get(String(d.plan_id)) : (docToPlanMap.get(d._id as string) || undefined);
       return {
         ...d,
-        ...(author ? { author_name: author.name, author_image: author.image } : {}),
+        ...(author ? { author_name: author.name, author_image: author.image, author_username: author.github_username } : {}),
         ...(plan ? { plan_short_id: plan.short_id, plan_status: plan.status } : {}),
       };
     });
@@ -1005,6 +1005,7 @@ export const mentionSearch = query({
     types: v.optional(v.array(v.string())),
     limit: v.optional(v.number()),
     projectPath: v.optional(v.string()),
+    teamId: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -1016,7 +1017,7 @@ export const mentionSearch = query({
       project_path: args.projectPath,
       active_team_id: user?.active_team_id || (user as any)?.team_id,
     });
-    const teamId = db.workspace.type === "team" ? db.workspace.teamId : undefined;
+    const teamId = args.teamId || (db.workspace.type === "team" ? db.workspace.teamId : undefined);
     const q = args.query.toLowerCase();
     const limit = args.limit || 10;
     const types = args.types || ["person", "doc", "task", "session", "plan"];
@@ -1060,6 +1061,7 @@ export const mentionSearch = query({
           label: u.name || u.github_username || "Unknown",
           sublabel: u.github_username ? `@${u.github_username}` : u.email,
           image: u.image || u.github_avatar_url,
+          shortId: u.github_username ? `@${u.github_username}` : undefined,
         });
         count++;
       }
@@ -1067,19 +1069,26 @@ export const mentionSearch = query({
 
     if (types.includes("task")) {
       let tasks;
-      if (q) {
-        tasks = await db.raw
+      if (teamId) {
+        tasks = await ctx.db
+          .query("tasks")
+          .withIndex("by_team_id", (t: any) => t.eq("team_id", teamId))
+          .order("desc")
+          .take(perType * 10);
+        if (q) tasks = tasks.filter((t: any) => t.title?.toLowerCase().includes(q));
+      } else if (q) {
+        tasks = await ctx.db
           .query("tasks")
           .withSearchIndex("search_tasks", (s: any) => s.search("title", args.query).eq("user_id", userId))
           .take(perType * 5);
       } else {
-        tasks = await db.raw
+        tasks = await ctx.db
           .query("tasks")
           .withIndex("by_user_id", (t: any) => t.eq("user_id", userId))
           .order("desc")
           .take(perType * 5);
       }
-      for (const task of scopeByProject(tasks, db.projectPath).slice(0, perType)) {
+      for (const task of tasks.slice(0, perType)) {
         results.push({
           id: String(task._id),
           type: "task",
@@ -1094,7 +1103,14 @@ export const mentionSearch = query({
 
     if (types.includes("doc")) {
       let docs;
-      if (q) {
+      if (teamId) {
+        docs = await ctx.db
+          .query("docs")
+          .withIndex("by_team_id", (d: any) => d.eq("team_id", teamId))
+          .order("desc")
+          .take(perType * 10);
+        if (q) docs = docs.filter((d: any) => d.title?.toLowerCase().includes(q));
+      } else if (q) {
         docs = await db.raw
           .query("docs")
           .withSearchIndex("search_docs", (s: any) => s.search("title", args.query).eq("user_id", userId))
@@ -1106,7 +1122,7 @@ export const mentionSearch = query({
           .order("desc")
           .take(perType * 5);
       }
-      for (const doc of scopeByProject(docs, db.projectPath).filter((d: any) => !d.archived_at).slice(0, perType)) {
+      for (const doc of docs.filter((d: any) => !d.archived_at).slice(0, perType)) {
         results.push({
           id: String(doc._id),
           type: "doc",
@@ -1118,15 +1134,24 @@ export const mentionSearch = query({
     }
 
     if (types.includes("plan")) {
-      const plans = await db.raw
-        .query("plans")
-        .withIndex("by_user_id", (p: any) => p.eq("user_id", userId))
-        .order("desc")
-        .take(perType * 5);
+      let plans;
+      if (teamId) {
+        plans = await ctx.db
+          .query("plans")
+          .withIndex("by_team_id", (p: any) => p.eq("team_id", teamId))
+          .order("desc")
+          .take(perType * 10);
+      } else {
+        plans = await db.raw
+          .query("plans")
+          .withIndex("by_user_id", (p: any) => p.eq("user_id", userId))
+          .order("desc")
+          .take(perType * 5);
+      }
       const filtered = q
         ? plans.filter((p: any) => p.title?.toLowerCase().includes(q))
         : plans;
-      for (const plan of scopeByProject(filtered, db.projectPath).slice(0, perType)) {
+      for (const plan of filtered.slice(0, perType)) {
         results.push({
           id: String(plan._id),
           type: "plan",
@@ -1140,17 +1165,26 @@ export const mentionSearch = query({
     }
 
     if (types.includes("session")) {
-      const sessions = await db.raw
-        .query("conversations")
-        .withIndex("by_user_updated", (c: any) => c.eq("user_id", userId))
-        .order("desc")
-        .take(perType * 5);
+      let sessions;
+      if (teamId) {
+        sessions = await ctx.db
+          .query("conversations")
+          .withIndex("by_team_id", (c: any) => c.eq("team_id", teamId))
+          .order("desc")
+          .take(perType * 10);
+      } else {
+        sessions = await db.raw
+          .query("conversations")
+          .withIndex("by_user_updated", (c: any) => c.eq("user_id", userId))
+          .order("desc")
+          .take(perType * 5);
+      }
       const filtered = q
         ? sessions.filter((s: any) =>
             s.title?.toLowerCase().includes(q) ||
             s.idle_summary?.toLowerCase().includes(q))
         : sessions;
-      for (const sess of scopeByProject(filtered, db.projectPath).slice(0, perType)) {
+      for (const sess of filtered.slice(0, perType)) {
         results.push({
           id: String(sess._id),
           type: "session",

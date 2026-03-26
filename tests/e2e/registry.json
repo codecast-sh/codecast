@@ -11,5 +11,6 @@
   "ccs-69o": "tests/e2e/ccs-69o.test.ts",
   "ccs-8sf": "tests/e2e/ccs-8sf.test.ts",
   "ccs-pjf": "tests/e2e/ccs-pjf.test.ts",
-  "ccs-l4js": "tests/e2e/ccs-l4js.test.ts"
+  "ccs-l4js": "tests/e2e/ccs-l4js.test.ts",
+  "ct-1286": "tests/e2e/ct-1286.test.ts"
 }

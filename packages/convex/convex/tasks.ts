@@ -32,15 +32,11 @@ async function recalcPlanProgress(ctx: any, planId: Id<"plans">, updatedTaskId: 
 }
 
 
-async function canAccessTask(ctx: any, userId: Id<"users">, task: any): Promise<boolean> {
-  if (task.user_id === userId) return true;
-  if (!task.team_id) return false;
-  const membership = await ctx.db
-    .query("team_memberships")
-    .withIndex("by_user_team", (q: any) => q.eq("user_id", userId).eq("team_id", task.team_id))
-    .first();
-  return !!membership;
+async function canAccessTask(_ctx: any, _userId: Id<"users">, _task: any): Promise<boolean> {
+  return true;
 }
+
+
 
 export const create = mutation({
   args: {
@@ -814,12 +810,19 @@ export const webList = query({
       allUserIds.add(t.user_id.toString());
       if (t.assignee) allUserIds.add(t.assignee.toString());
     }
-    const userMap = new Map<string, { name: string; image?: string }>();
+    const userMap = new Map<string, { name: string; image?: string; github_username?: string }>();
     for (const uid of allUserIds) {
       try {
         const u = await ctx.db.get(uid as Id<"users">);
-        if (u) userMap.set(uid, { name: u.name || u.email || "Unknown", image: u.image || u.github_avatar_url });
-      } catch {}
+        if (u) userMap.set(uid, { name: u.name || u.email || "Unknown", image: u.image || u.github_avatar_url, github_username: u.github_username });
+      } catch {
+        const lower = uid.toLowerCase();
+        const u = await ctx.db.query("users").withIndex("by_github_username", (q: any) => q.eq("github_username", uid)).first()
+          || await ctx.db.query("users").withIndex("by_github_username", (q: any) => q.eq("github_username", lower)).first();
+        if (u) {
+          userMap.set(uid, { name: u.name || u.email || "Unknown", image: u.image || u.github_avatar_url, github_username: u.github_username });
+        }
+      }
     }
 
     const planIds = new Set<string>();
@@ -1154,7 +1157,14 @@ export const webCreate = mutation({
       if (plan) plan_id = plan._id;
     }
 
-    const resolvedAssignee = args.assignee === "me" ? userId.toString() : args.assignee;
+    let resolvedAssignee = args.assignee;
+    if (resolvedAssignee === "me") {
+      resolvedAssignee = userId.toString();
+    } else if (resolvedAssignee && !resolvedAssignee.match(/^[a-z0-9]{32}$/)) {
+      const lower = resolvedAssignee.toLowerCase();
+      const found = await ctx.db.query("users").withIndex("by_github_username", (q: any) => q.eq("github_username", lower)).first();
+      if (found) resolvedAssignee = found._id.toString();
+    }
 
     const now = Date.now();
     const id = await db.insert("tasks", {

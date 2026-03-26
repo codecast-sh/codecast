@@ -23,6 +23,7 @@ import { common, createLowlight } from "lowlight";
 import { Editor as HeadlessEditor } from "@tiptap/core";
 import tippy, { type Instance as TippyInstance } from "tippy.js";
 import { useTiptapSync } from "@convex-dev/prosemirror-sync/tiptap";
+import { getVersion, sendableSteps } from "@tiptap/pm/collab";
 import { useQuery, useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { MentionList, type MentionItem } from "./MentionList";
@@ -363,6 +364,18 @@ function EditorInner({
       if (presenceTimerRef.current) clearInterval(presenceTimerRef.current);
       editor.off("selectionUpdate", sendPresence);
       removePresence({ doc_id: docId });
+      if (!editor.isDestroyed) {
+        try {
+          const version = getVersion(editor.state);
+          const content = editor.state.doc.toJSON();
+          const pending = sendableSteps(editor.state);
+          const steps = pending?.steps.map((s) => s.toJSON()) || [];
+          sessionStorage.setItem(
+            `convex-sync-${docId}`,
+            JSON.stringify({ content, version, steps })
+          );
+        } catch {}
+      }
     };
   });
 
@@ -385,6 +398,34 @@ function markdownToJson(markdown: string, extensions: any[]): any {
   const json = editor.getJSON();
   editor.destroy();
   return json;
+}
+
+function DocSkeleton() {
+  const lines = [85, 100, 72, 100, 90, 60, 100, 95, 45];
+  return (
+    <div className="py-4 space-y-[1.15em] animate-in fade-in duration-300">
+      {lines.map((w, i) => (
+        <div
+          key={i}
+          className="h-[0.9em] rounded-sm"
+          style={{
+            width: `${w}%`,
+            background: "linear-gradient(90deg, var(--sol-border) 0%, transparent 50%, var(--sol-border) 100%)",
+            backgroundSize: "200% 100%",
+            animation: `doc-skeleton-shimmer 1.8s ease-in-out infinite`,
+            animationDelay: `${i * 80}ms`,
+            opacity: 1 - i * 0.06,
+          }}
+        />
+      ))}
+      <style>{`
+        @keyframes doc-skeleton-shimmer {
+          0% { background-position: 200% 0; }
+          100% { background-position: -200% 0; }
+        }
+      `}</style>
+    </div>
+  );
 }
 
 export function CollabDocEditor({
@@ -410,7 +451,7 @@ export function CollabDocEditor({
   if (sync.isLoading) {
     return (
       <div className={`doc-editor ${className}`}>
-        <div className="text-sol-text-dim text-sm py-8">Loading editor...</div>
+        <DocSkeleton />
       </div>
     );
   }
@@ -425,7 +466,7 @@ export function CollabDocEditor({
     }
     return (
       <div className={`doc-editor ${className}`}>
-        <div className="text-sol-text-dim text-sm py-8">Initializing collaborative editing...</div>
+        <DocSkeleton />
       </div>
     );
   }

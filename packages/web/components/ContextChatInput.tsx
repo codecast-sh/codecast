@@ -49,10 +49,27 @@ export function ContextChatInput({
     const text = message.trim();
     if (!text) return;
 
-    const body = getContextBody();
+    const MAX_CONTEXT_CHARS = 200_000;
+    const rawBody = getContextBody();
+    const truncated = rawBody.length > MAX_CONTEXT_CHARS;
+    const body = truncated ? rawBody.slice(0, MAX_CONTEXT_CHARS) : rawBody;
+
+    const readCmd: Record<string, string> = {
+      doc: `cast doc get ${linkedObjectId || "<id>"}`,
+      task: `cast task context ${linkedObjectId || "<id>"}`,
+      plan: `cast plan show ${linkedObjectId || "<id>"}`,
+    };
+    const instructions: Record<string, string> = {
+      doc: `The user is discussing this doc. To edit: \`cast doc edit ${linkedObjectId || "<id>"}\`. To read full: \`${readCmd.doc}\`.`,
+      task: `The user is discussing this task. To update: \`cast task update ${linkedObjectId || "<id>"}\`. To comment: \`cast task comment ${linkedObjectId || "<id>"} "msg"\`. To complete: \`cast task done ${linkedObjectId || "<id>"}\`.`,
+      plan: `The user is discussing this plan. To update: \`cast plan update ${linkedObjectId || "<id>"}\`. To view status: \`cast plan status ${linkedObjectId || "<id>"}\`. To decompose into tasks: \`cast plan decompose ${linkedObjectId || "<id>"}\`.`,
+      workflow: "The user is discussing this workflow.",
+    };
+    const hint = instructions[contextType] || "";
+    const truncNote = truncated ? `\n[Content truncated. Run \`${readCmd[contextType] || ""}\` to read full content.]` : "";
     const contextBlock = body
-      ? `<context type="${contextType}" title="${contextTitle}">\n${body}\n</context>\n\n`
-      : `[Viewing ${contextType}: ${contextTitle}]\n\n`;
+      ? `<context type="${contextType}" title="${contextTitle}">\n${hint}\n${body}${truncNote}\n</context>\n\n`
+      : `<context type="${contextType}" title="${contextTitle}">\n${hint}\n</context>\n\n`;
     const fullMessage = contextBlock + text;
 
     const store = useInboxStore.getState();
@@ -96,7 +113,7 @@ export function ContextChatInput({
     if (convexId) {
       store.resolveSessionId(sid, convexId);
       store.sendMessage(convexId, fullMessage);
-      useInboxStore.setState({ sidePanelSessionId: convexId, sidePanelOpen: false });
+      useInboxStore.setState({ sidePanelSessionId: convexId, sidePanelOpen: true });
       if (linkedObjectId) {
         store._dispatch("linkConversation", [contextType, linkedObjectId, convexId]);
       }

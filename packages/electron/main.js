@@ -333,6 +333,17 @@ ipcMain.on("palette-navigate", (_e, navPath) => {
   }
 });
 
+ipcMain.on("palette-navigate-session", (_e, data) => {
+  hidePalette();
+  if (mainWindow) {
+    mainWindow.show();
+    mainWindow.focus();
+    mainWindow.webContents.executeJavaScript(
+      `window.dispatchEvent(new CustomEvent('codecast-navigate-session', { detail: ${JSON.stringify(data)} }))`
+    );
+  }
+});
+
 ipcMain.on("palette-hide", () => {
   hidePalette();
 });
@@ -369,12 +380,19 @@ ipcMain.handle("set-shortcut", (_e, key, accelerator) => {
   return shortcuts;
 });
 
+function tryRegister(accelerator, name, callback) {
+  const ok = globalShortcut.register(accelerator, callback);
+  if (!ok) console.warn(`[shortcuts] failed: ${name} (${accelerator})`);
+  return ok;
+}
+
 function registerShortcuts() {
   globalShortcut.unregisterAll();
   const shortcuts = loadSettings();
+  const failed = [];
 
   if (shortcuts.toggleWindow) {
-    globalShortcut.register(shortcuts.toggleWindow, () => {
+    if (!tryRegister(shortcuts.toggleWindow, "toggleWindow", () => {
       if (!mainWindow) return;
       if (mainWindow.isVisible() && mainWindow.isFocused()) {
         mainWindow.hide();
@@ -382,17 +400,17 @@ function registerShortcuts() {
         mainWindow.show();
         mainWindow.focus();
       }
-    });
+    })) failed.push(`Toggle Window (${shortcuts.toggleWindow})`);
   }
 
   if (shortcuts.togglePalette) {
-    globalShortcut.register(shortcuts.togglePalette, () => {
+    if (!tryRegister(shortcuts.togglePalette, "togglePalette", () => {
       togglePalette();
-    });
+    })) failed.push(`Command Palette (${shortcuts.togglePalette})`);
   }
 
   if (shortcuts.toggleCompose) {
-    globalShortcut.register(shortcuts.toggleCompose, () => {
+    if (!tryRegister(shortcuts.toggleCompose, "toggleCompose", () => {
       if (!paletteWindow) {
         createPaletteWindow();
         paletteWindow.once("ready-to-show", () => {
@@ -403,11 +421,11 @@ function registerShortcuts() {
       }
       showPalette();
       paletteWindow.webContents.send("compose-show");
-    });
+    })) failed.push(`Compose (${shortcuts.toggleCompose})`);
   }
 
   if (shortcuts.toggleEnv) {
-    globalShortcut.register(shortcuts.toggleEnv, () => {
+    if (!tryRegister(shortcuts.toggleEnv, "toggleEnv", () => {
       if (!mainWindow) return;
       currentBaseUrl = currentBaseUrl === PROD_URL ? LOCAL_URL : PROD_URL;
       const env = currentBaseUrl === PROD_URL ? "prod" : "local";
@@ -426,7 +444,14 @@ function registerShortcuts() {
         paletteWindow = null;
       }
       createPaletteWindow();
-    });
+    })) failed.push(`Toggle Env (${shortcuts.toggleEnv})`);
+  }
+
+  if (failed.length > 0) {
+    showNativeNotification(
+      "Shortcut conflict",
+      `Could not register: ${failed.join(", ")}. Another app may be using these shortcuts.`
+    );
   }
 }
 

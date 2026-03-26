@@ -338,6 +338,7 @@ function truncate(text: string, max = 2000): string {
 export interface GenerateClaudeCodeJsonlOptions {
   tailMessages?: number;
   sessionId?: string;
+  stripTrailingToolCalls?: boolean;
 }
 
 type ExportedToolResult = NonNullable<ExportedMessage["tool_results"]>[number];
@@ -501,21 +502,43 @@ export function generateClaudeCodeJsonl(
   }
 
   if (expectedToolUseIds.size > 0) {
-    const trUuid = uuidv4();
-    const trContent = Array.from(expectedToolUseIds).map((toolId) => ({
-      type: "tool_result" as const,
-      tool_use_id: toolId,
-      content: [{ type: "text" as const, text: "[result unavailable]" }],
-      is_error: true,
-    }));
-    const lastMsg = messages[messages.length - 1];
-    lines.push(JSON.stringify({
-      parentUuid, isSidechain: false, userType: "external", cwd, sessionId,
-      version: "2.1.29", gitBranch: "main", type: "user",
-      message: { role: "user", content: trContent },
-      uuid: trUuid, timestamp: lastMsg?.timestamp || data.conversation.updated_at,
-    }));
-    parentUuid = trUuid;
+    if (options.stripTrailingToolCalls) {
+      // Strip the trailing assistant message's dangling tool_use blocks entirely.
+      // This produces a cleaner JSONL that Claude Code can resume without choking
+      // on incomplete tool exchanges (common in forked/materialized sessions).
+      for (let i = lines.length - 1; i >= 0; i--) {
+        try {
+          const parsed = JSON.parse(lines[i]);
+          if (parsed.message?.role === "assistant") {
+            const content = Array.isArray(parsed.message.content) ? parsed.message.content : [];
+            const cleaned = content.filter((b: any) => b.type !== "tool_use" || !expectedToolUseIds.has(b.id));
+            if (cleaned.length === 0 || (cleaned.length === 1 && cleaned[0].type === "text" && !cleaned[0].text?.trim())) {
+              lines.splice(i, 1);
+            } else {
+              parsed.message.content = cleaned;
+              lines[i] = JSON.stringify(parsed);
+            }
+            break;
+          }
+        } catch {}
+      }
+    } else {
+      const trUuid = uuidv4();
+      const trContent = Array.from(expectedToolUseIds).map((toolId) => ({
+        type: "tool_result" as const,
+        tool_use_id: toolId,
+        content: [{ type: "text" as const, text: "[result unavailable]" }],
+        is_error: true,
+      }));
+      const lastMsg = messages[messages.length - 1];
+      lines.push(JSON.stringify({
+        parentUuid, isSidechain: false, userType: "external", cwd, sessionId,
+        version: "2.1.29", gitBranch: "main", type: "user",
+        message: { role: "user", content: trContent },
+        uuid: trUuid, timestamp: lastMsg?.timestamp || data.conversation.updated_at,
+      }));
+      parentUuid = trUuid;
+    }
     expectedToolUseIds = new Set();
   }
 

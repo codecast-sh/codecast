@@ -441,14 +441,29 @@ export const updatePrivacySettings = mutation({
 
 export const getUserByUsername = query({
   args: {
-    username: v.string(),
+    username: v.optional(v.string()),
+    user_id: v.optional(v.id("users")),
   },
   handler: async (ctx, args) => {
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_github_username", (q) => q.eq("github_username", args.username))
-      .unique();
-    return user;
+    if (args.user_id) {
+      return ctx.db.get(args.user_id);
+    }
+    if (args.username) {
+      const byUsername = await ctx.db
+        .query("users")
+        .withIndex("by_github_username", (q) => q.eq("github_username", args.username))
+        .unique();
+      if (byUsername) return byUsername;
+      const asId = ctx.db.normalizeId("users", args.username);
+      if (asId) return ctx.db.get(asId);
+      const lower = args.username.toLowerCase();
+      const all = await ctx.db.query("users").take(200);
+      return all.find((u) =>
+        u.name?.toLowerCase() === lower ||
+        u.github_username?.toLowerCase() === lower
+      ) || null;
+    }
+    return null;
   },
 });
 
@@ -659,6 +674,65 @@ export const getUserAbstractActivity = query({
       team_activity: teamActivityStats,
       share_session_metadata: shareMetadata,
     };
+  },
+});
+
+export const getUserTasks = query({
+  args: {
+    user_id: v.id("users"),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+    const user = await ctx.db.get(args.user_id);
+    if (!user || user.hide_activity) return [];
+    const limit = Math.min(args.limit ?? 20, 50);
+    const tasks = await ctx.db
+      .query("tasks")
+      .withIndex("by_user_id", (q: any) => q.eq("user_id", args.user_id))
+      .order("desc")
+      .take(limit);
+    return tasks.map((t: any) => ({
+      _id: t._id,
+      short_id: t.short_id,
+      title: t.title,
+      status: t.status,
+      priority: t.priority,
+      labels: t.labels,
+      created_at: t.created_at || t._creationTime,
+      updated_at: t.updated_at,
+      closed_at: t.closed_at,
+    }));
+  },
+});
+
+export const getUserDocs = query({
+  args: {
+    user_id: v.id("users"),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+    const user = await ctx.db.get(args.user_id);
+    if (!user || user.hide_activity) return [];
+    const limit = Math.min(args.limit ?? 20, 50);
+    const docs = await ctx.db
+      .query("docs")
+      .withIndex("by_user_id", (q: any) => q.eq("user_id", args.user_id))
+      .order("desc")
+      .take(limit);
+    return docs
+      .filter((d: any) => !d.archived_at)
+      .map((d: any) => ({
+        _id: d._id,
+        title: d.title,
+        doc_type: d.doc_type,
+        labels: d.labels,
+        created_at: d.created_at || d._creationTime,
+        updated_at: d.updated_at,
+      }));
   },
 });
 

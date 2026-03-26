@@ -145,8 +145,8 @@ export function useConversationMessages(
       ? {
           conversation_id: convId,
           center_timestamp: jumpTimestamp ?? effectiveTargetTimestamp!,
-          limit_before: jumpTimestamp !== null ? 0 : 50,
-          limit_after: jumpTimestamp !== null ? 100 : 50,
+          limit_before: jumpTimestamp !== null ? 0 : 150,
+          limit_after: jumpTimestamp !== null ? 300 : 150,
         }
       : "skip"
   );
@@ -169,14 +169,14 @@ export function useConversationMessages(
   const olderInTarget = useQuery(
     api.conversations.getAllMessages,
     canQuery && targetMode && targetLoadOlderTs !== undefined
-      ? { conversation_id: convId, limit: 50, before_timestamp: targetLoadOlderTs }
+      ? { conversation_id: convId, limit: 150, before_timestamp: targetLoadOlderTs }
       : "skip"
   );
 
   const newerInTarget = useQuery(
     api.conversations.getMessagesAroundTimestamp,
     canQuery && targetMode && targetLoadNewerTs !== undefined
-      ? { conversation_id: convId, center_timestamp: targetLoadNewerTs, limit_before: 0, limit_after: 50 }
+      ? { conversation_id: convId, center_timestamp: targetLoadNewerTs, limit_before: 0, limit_after: 150 }
       : "skip"
   );
 
@@ -329,7 +329,7 @@ export function useConversationMessages(
   const conversation: Record<string, any> | null = useMemo(() => {
     if (!storeMeta) return null;
     if (targetMode && !targetAroundData && rawMessages.length === 0) return null;
-    if (useNormalMode && mergedMessages.length === 0 && (storeMeta?.message_count ?? 0) > 0) return null;
+    if (useNormalMode && mergedMessages.length === 0 && (storeMeta?.message_count ?? 0) > 0 && !storePagination?.initialized) return null;
     return {
       ...storeMeta,
       messages: rawMessages,
@@ -337,7 +337,7 @@ export function useConversationMessages(
       compaction_count: compactionCount,
       child_conversation_map: childConversationMap,
     };
-  }, [storeMeta, rawMessages, loadedStartIndex, compactionCount, childConversationMap, targetMode, targetAroundData, mergedMessages.length, useNormalMode]);
+  }, [storeMeta, rawMessages, loadedStartIndex, compactionCount, childConversationMap, targetMode, targetAroundData, mergedMessages.length, useNormalMode, storePagination?.initialized]);
 
   // =============================================
   // Target search (auto-load older to find target)

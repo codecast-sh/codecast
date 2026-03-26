@@ -13,7 +13,7 @@ export function DetailSplitLayout({
 }) {
   return (
     <Group orientation="horizontal" className="h-full" defaultLayout={{ "detail-list": 30, "detail-content": 70 }}>
-      <Panel id="detail-list" minSize={30} maxSize="80%" className="overflow-hidden">
+      <Panel id="detail-list" minSize={48} maxSize="80%" collapsible collapsedSize={0} className="overflow-hidden">
         <div className="h-full cq-container">{list}</div>
       </Panel>
       <Separator className={separatorClass} />

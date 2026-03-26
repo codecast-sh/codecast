@@ -6,13 +6,17 @@ import { useInboxStore } from "../store/inboxStore";
 
 const api = _api as any;
 
-export function useMentionQuery(projectPath?: string | null) {
+export function useMentionQuery(opts?: { projectPath?: string | null; teamId?: string | null }) {
   const storeSession = useInboxStore((s) => {
     const id = s.currentSessionId;
     return id ? s.sessions[id] : null;
   });
-  const resolvedPath = projectPath || storeSession?.project_path || storeSession?.git_root || null;
-  const mentionResults = useQuery(api.docs.mentionSearch, { query: "", limit: 50, ...(resolvedPath ? { projectPath: resolvedPath } : {}) });
+  const resolvedPath = opts?.projectPath || storeSession?.project_path || storeSession?.git_root || null;
+  const mentionResults = useQuery(api.docs.mentionSearch, {
+    query: "", limit: 50,
+    ...(resolvedPath ? { projectPath: resolvedPath } : {}),
+    ...(opts?.teamId ? { teamId: opts.teamId } : {}),
+  });
   const ref = useRef<MentionItem[]>([]);
   if (mentionResults) ref.current = mentionResults;
 

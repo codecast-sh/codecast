@@ -2,6 +2,7 @@ import { Component, ReactNode } from "react";
 import { RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { captureError } from "@/lib/analytics";
+import { copyToClipboard } from "@/lib/utils";
 
 interface ErrorBoundaryProps {
   children: ReactNode;
@@ -53,8 +54,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
         action: {
           label: "Copy stack",
           onClick: () => {
-            navigator.clipboard.writeText(fullTrace);
-            toast.success("Stack trace copied to clipboard");
+            copyToClipboard(fullTrace).then(() => toast.success("Stack trace copied to clipboard"));
           },
         },
       });

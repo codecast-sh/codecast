@@ -17,6 +17,7 @@ import "../../../components/editor/editor.css";
 import { toast } from "sonner";
 import { AuthGuard } from "../../../components/AuthGuard";
 import { DashboardLayout } from "../../../components/DashboardLayout";
+import { ErrorBoundary } from "../../../components/ErrorBoundary";
 import { ContextChatInput } from "../../../components/ContextChatInput";
 import { SessionCardInner } from "../../../components/ActivityFeed";
 
@@ -181,13 +182,17 @@ function Dropdown({
 }
 
 
-function UserBadge({ name, image }: { name: string; image?: string }) {
-  return (
-    <span className="inline-flex items-center gap-1.5 flex-shrink-0">
+function UserBadge({ name, image, username }: { name: string; image?: string; username?: string }) {
+  const content = (
+    <span className={`inline-flex items-center gap-1.5 flex-shrink-0 ${username ? "hover:opacity-80 cursor-pointer" : ""}`}>
       <Avatar name={name} image={image} />
       <span className="text-xs text-sol-text font-medium">{name.split(" ")[0]}</span>
     </span>
   );
+  if (username) {
+    return <Link href={`/team/${username}`}>{content}</Link>;
+  }
+  return content;
 }
 
 function HistoryItem({ entry }: { entry: any }) {
@@ -195,7 +200,7 @@ function HistoryItem({ entry }: { entry: any }) {
   return (
     <div className="flex items-center gap-2 text-[11px] py-1 min-w-0">
       {entry.actor ? (
-        <UserBadge name={entry.actor.name} image={entry.actor.image} />
+        <UserBadge name={entry.actor.name} image={entry.actor.image} username={entry.actor.github_username} />
       ) : (
         <span className="inline-flex items-center gap-1.5 flex-shrink-0">
           <div className="w-5 h-5 rounded-full flex-shrink-0 bg-sol-bg-highlight border border-sol-border/50 flex items-center justify-center">
@@ -217,7 +222,7 @@ function HistoryItem({ entry }: { entry: any }) {
         <>
           <span className="text-gray-400">assigned to</span>
           {entry.new_value_resolved ? (
-            <UserBadge name={entry.new_value_resolved.name} image={entry.new_value_resolved.image} />
+            <UserBadge name={entry.new_value_resolved.name} image={entry.new_value_resolved.image} username={entry.new_value_resolved.github_username} />
           ) : entry.new_value ? (
             <code className="text-[10px] px-1.5 py-0.5 rounded bg-sol-bg-highlight text-gray-500 font-mono">{entry.new_value.slice(0, 8)}...</code>
           ) : (
@@ -333,24 +338,38 @@ function ExecutionDetailsSection({ data }: { data: any }) {
 }
 
 export default function TaskDetailPage() {
-  const handleMentionQuery = useMentionQuery();
+  return (
+    <AuthGuard>
+      <DashboardLayout>
+        <DetailSplitLayout list={<TaskListContent />}>
+          <ErrorBoundary name="TaskDetail" level="panel">
+            <TaskDetailContent />
+          </ErrorBoundary>
+        </DetailSplitLayout>
+      </DashboardLayout>
+    </AuthGuard>
+  );
+}
+
+function TaskDetailContent() {
   const params = useParams();
   const router = useRouter();
   const id = params.id as string;
 
-  useSyncTaskDetail(id);
+  const directData = useSyncTaskDetail(id);
   useSyncTasks();
 
   const allTasks = useInboxStore((s) => s.tasks);
-  const data = allTasks[id] as TaskDetail | undefined;
+  const data = (allTasks[id] || Object.values(allTasks).find((t: any) => t.short_id === id) || directData) as TaskDetail | undefined;
+  const taskTeamId = data?.team_id as string | undefined;
+  const handleMentionQuery = useMentionQuery(taskTeamId ? { teamId: taskTeamId } : undefined);
   const updateTask = useInboxStore((s) => s.updateTask);
   const openSidePanel = useInboxStore((s) => s.openSidePanel);
   const webUpdate = useMutation(api.tasks.webUpdate);
   const webAddComment = useMutation(api.tasks.webAddComment);
   const currentUser = useQuery(api.users.getCurrentUser);
-  const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id);
-  const effectiveTeamId = (activeTeamId || (currentUser as any)?.team_id) as any;
-  const teamMembers = useQuery(api.teams.getTeamMembers, effectiveTeamId ? { team_id: effectiveTeamId } : "skip");
+  const teamMembers = useQuery(api.teams.getTeamMembers, taskTeamId ? { team_id: taskTeamId } : "skip");
+  const teamInfo = useQuery(api.teams.getTeam, taskTeamId ? { team_id: taskTeamId } : "skip");
   const [comment, setComment] = useState("");
   const [submittingComment, setSubmittingComment] = useState(false);
   const [commentImages, setCommentImages] = useState<Array<{ file: File; previewUrl: string; storageId?: string; uploading: boolean }>>([]);
@@ -365,8 +384,6 @@ export default function TaskDetailPage() {
   const paletteOpen = useInboxStore((s) => s.palette.open);
   const shortcutsPanelOpen = useInboxStore(s => s.shortcutsPanelOpen);
   const [commentOpen, setCommentOpen] = useState(false);
-
-  const sidebar = <TaskListContent />;
 
   const handleUpdate = useCallback(async (fields: Record<string, any>) => {
     if (!data?.short_id) return;
@@ -503,24 +520,13 @@ export default function TaskDetailPage() {
   }, [paletteOpen, shortcutsPanelOpen, data, openCmd, startEditTitle, router]);
 
   if (!data) {
-    return (
-      <AuthGuard>
-        <DashboardLayout>
-          <DetailSplitLayout list={sidebar}>
-            <div className="flex items-center justify-center h-64 text-sol-text-dim text-sm">Loading...</div>
-          </DetailSplitLayout>
-        </DashboardLayout>
-      </AuthGuard>
-    );
+    return <div className="flex items-center justify-center h-64 text-sol-text-dim text-sm">Loading...</div>;
   }
 
   const status = STATUS_MAP[data.status] || STATUS_MAP.open;
   const StatusIcon = status.icon;
 
   return (
-    <AuthGuard>
-      <DashboardLayout>
-        <DetailSplitLayout list={sidebar}>
         <div
           className="flex-1 h-full flex flex-col relative min-w-0"
           onDragEnter={(e) => { e.preventDefault(); dragCounterRef.current++; setIsDragging(true); }}
@@ -558,6 +564,16 @@ export default function TaskDetailPage() {
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 text-xs text-sol-text-dim mb-1">
                 <span className="font-mono">{data.short_id}</span>
+                {teamInfo && (
+                  <span className="px-1.5 py-0.5 rounded bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20">
+                    {teamInfo.name}
+                  </span>
+                )}
+                {!taskTeamId && (
+                  <span className="px-1.5 py-0.5 rounded bg-sol-text-dim/10 text-sol-text-dim border border-sol-text-dim/20">
+                    Personal
+                  </span>
+                )}
                 {data.source === "insight" && (
                   <span className="px-1.5 py-0.5 rounded bg-sol-violet/10 text-sol-violet border border-sol-violet/20">
                     mined
@@ -646,10 +662,10 @@ export default function TaskDetailPage() {
                     {data.labels.map((l: string) => {
                       const lc = getLabelColor(l);
                       return (
-                        <span key={l} className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full border ${lc.bg} ${lc.border} ${lc.text}`}>
+                        <Link key={l} href={`/tasks?label=${encodeURIComponent(l)}`} className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full border ${lc.bg} ${lc.border} ${lc.text} hover:brightness-90 transition-all cursor-pointer`}>
                           <span className={`w-1.5 h-1.5 rounded-full ${lc.dot}`} />
                           {l}
-                        </span>
+                        </Link>
                       );
                     })}
                   </div>
@@ -931,8 +947,5 @@ export default function TaskDetailPage() {
         {/* Unified palette is global via DashboardLayout */}
 
         </div>
-        </DetailSplitLayout>
-      </DashboardLayout>
-    </AuthGuard>
   );
 }

@@ -663,7 +663,18 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
     (conv: { _id: string; session_id?: string; title?: string; updated_at: number; project_path?: string; git_root?: string; agent_type?: string; message_count?: number; is_idle?: boolean }) => {
       const conversationPath = `/conversation/${conv._id}`;
       if (standalone && isElectron()) {
-        window.__CODECAST_ELECTRON__?.paletteNavigate?.(conversationPath);
+        window.__CODECAST_ELECTRON__?.paletteNavigateSession?.({
+          _id: conv._id,
+          session_id: conv.session_id || conv._id,
+          title: conv.title,
+          updated_at: conv.updated_at,
+          project_path: conv.project_path,
+          git_root: conv.git_root,
+          agent_type: conv.agent_type || "claude_code",
+          message_count: conv.message_count || 0,
+          is_idle: conv.is_idle ?? true,
+          has_pending: false,
+        });
         return;
       }
       const store = useInboxStore.getState();
