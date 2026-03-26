@@ -136,7 +136,10 @@ export function UserMenu() {
       {urlBarOpen && <UrlBarModal onClose={() => setUrlBarOpen(false)} />}
       {open && (
         <div className="absolute right-0 mt-2 w-56 bg-sol-base02 bg-sol-bg border border-sol-base01 border-sol-border rounded-lg shadow-lg py-1 z-50">
-          <div className="px-4 py-3 border-b border-sol-base01 border-sol-border">
+          <button
+            onClick={() => { setOpen(false); router.push(`/team/${user?.github_username || user?._id || ""}`); }}
+            className="w-full px-4 py-3 border-b border-sol-base01 border-sol-border text-left hover:bg-sol-bg-alt transition-colors"
+          >
             <div className="flex items-center gap-2">
               <p className="text-sm font-medium text-sol-text">{displayName}</p>
               {isAdmin && (
@@ -146,7 +149,13 @@ export function UserMenu() {
             {user?.email && (
               <p className="text-xs text-sol-base0 truncate">{user.email}</p>
             )}
-          </div>
+          </button>
+          <button
+            onClick={() => { setOpen(false); router.push(`/team/${user?.github_username || user?._id || ""}`); }}
+            className={menuBtnClass}
+          >
+            Profile
+          </button>
           <button
             onClick={() => { setOpen(false); router.push("/timeline"); }}
             className={menuBtnClass}

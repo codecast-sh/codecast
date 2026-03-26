@@ -18,7 +18,6 @@ import { TeamSwitcher } from "./TeamSwitcher";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { soundNewSession } from "../lib/sounds";
 import { Plus, PanelLeft, PanelRight } from "lucide-react";
-import { nanoid } from "nanoid";
 import { SetupPromptBanner } from "./SetupPromptBanner";
 import { DesktopAppBanner } from "./DesktopAppBanner";
 import { CliOfflineBanner } from "./CliOfflineBanner";
@@ -163,41 +162,27 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
     if (store.showMySessions) store.setShowMySessions(false);
     const ctx = store.currentConversation;
     const path = directoryFilter || ctx.projectPath || ctx.gitRoot;
-    const agentType = (ctx.agentType || "claude_code") as "claude_code" | "codex" | "cursor" | "gemini";
-    const sessionId = nanoid(10);
+    if (!path) return;
+    const agentType = ctx.agentType || "claude_code";
+    const sessionId = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
     const now = Date.now();
-    const gitRoot = ctx.gitRoot || path;
-
     store.setConversationMeta(sessionId, {
       _id: sessionId, _creationTime: now, user_id: "", agent_type: agentType,
-      session_id: sessionId, project_path: path, git_root: gitRoot,
+      session_id: sessionId, project_path: path, git_root: path,
       started_at: now, updated_at: now, message_count: 0, status: "active",
       title: "New session", messages: [],
     });
     store.createSession({
       agent_type: agentType,
       project_path: path,
-      git_root: gitRoot,
+      git_root: path,
       session_id: sessionId,
     });
-
-    useInboxStore.setState({
-      currentSessionId: sessionId,
-      selectedPlanId: null,
-      viewingDismissedId: null,
-      currentConversation: {
-        conversationId: sessionId,
-        projectPath: path,
-        gitRoot: gitRoot,
-        agentType: agentType,
-        source: ctx.source || "inbox",
-      },
-      clientState: { ...store.clientState, current_conversation_id: sessionId },
-    });
-    store._dispatch("patch", [], {
-      client_state: { _: { current_conversation_id: sessionId } },
-    }).catch(() => {});
-  }, [directoryFilter]);
+    store.setCurrentSession(sessionId);
+    if (!isInboxRoute) {
+      store.openSidePanel(sessionId);
+    }
+  }, [directoryFilter, isInboxRoute]);
 
   const handleQuickCreateIsolated = useCallback(async () => {
     const ctx = useInboxStore.getState().currentConversation;

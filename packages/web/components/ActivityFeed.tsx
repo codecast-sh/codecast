@@ -817,16 +817,18 @@ interface ActivityFeedProps {
   compact?: boolean;
   directoryFilter?: string | null;
   onNavigate?: (conversationId: string) => void;
+  initialActorId?: string;
+  hidePeopleRow?: boolean;
 }
 
 const WINDOW_STEPS: WindowHours[] = [168, 720];
 
 type DigestScope = "day" | "week" | "month";
 
-export function ActivityFeed({ mode, teamId, compact, directoryFilter, onNavigate }: ActivityFeedProps) {
+export function ActivityFeed({ mode, teamId, compact, directoryFilter, onNavigate, initialActorId, hidePeopleRow }: ActivityFeedProps) {
   const [windowIdx, setWindowIdx] = useState(0);
   const windowHours = WINDOW_STEPS[windowIdx];
-  const [actorFilter, setActorFilter] = useState<Id<"users"> | undefined>(undefined);
+  const [actorFilter, setActorFilter] = useState<Id<"users"> | undefined>(initialActorId as Id<"users"> | undefined);
   const [projectFilter, setProjectFilter] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<"feed" | "raw">("feed");
   const [digestScope, setDigestScope] = useState<DigestScope>("day");
@@ -924,7 +926,7 @@ export function ActivityFeed({ mode, teamId, compact, directoryFilter, onNavigat
           setDigestScope={setDigestScope}
           compact={compact}
         />
-        {mode === "team" && (
+        {mode === "team" && !hidePeopleRow && (
           <PeopleRow people={digest.people} onSelect={setActorFilter} selectedId={actorFilter} />
         )}
         <ConversationList filter={mode === "team" ? "team" : "my"} directoryFilter={directoryFilter} memberFilter={actorFilter?.toString() ?? null} onNavigate={onNavigate} />
@@ -953,7 +955,7 @@ export function ActivityFeed({ mode, teamId, compact, directoryFilter, onNavigat
         </button>
       )}
 
-      {mode === "team" && (
+      {mode === "team" && !hidePeopleRow && (
         <PeopleRow people={digest.people} onSelect={setActorFilter} selectedId={actorFilter} />
       )}
 

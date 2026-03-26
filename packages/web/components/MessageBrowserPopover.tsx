@@ -47,33 +47,41 @@ type CommentEntry = {
 
 type IndexedPM = PM & { originalIndex: number };
 
-function HoverPreview({ message, rect, onMouseEnter, onMouseLeave }: { message: IndexedPM; rect: DOMRect; onMouseEnter: () => void; onMouseLeave: () => void }) {
+function HoverPreview({ message, rect, onMouseEnter, onMouseLeave, onDropdownEnter, onDropdownLeave }: { message: IndexedPM; rect: DOMRect; onMouseEnter: () => void; onMouseLeave: () => void; onDropdownEnter: () => void; onDropdownLeave: () => void }) {
   const previewWidth = 420;
-  const left = Math.max(8, rect.left - previewWidth - 12);
+  const bridgePad = 20;
+  const left = Math.max(8, rect.left - previewWidth - bridgePad);
   const top = Math.max(8, rect.top - 20);
 
   return createPortal(
     <div
-      className="fixed z-[10000] bg-sol-bg border border-sol-border/40 rounded-lg shadow-2xl p-3 max-h-[60vh] overflow-y-auto"
-      style={{ top, left, width: previewWidth }}
-      onMouseEnter={onMouseEnter}
-      onMouseLeave={onMouseLeave}
+      className="fixed z-[10000]"
+      style={{ top, left, width: previewWidth + bridgePad, paddingRight: bridgePad }}
+      onMouseEnter={() => { onMouseEnter(); onDropdownEnter(); }}
+      onMouseLeave={() => { onMouseLeave(); onDropdownLeave(); }}
     >
-      <div className="flex items-center gap-2 mb-2">
-        <span className="text-[10px] text-sol-text-dim tabular-nums">#{message.originalIndex + 1}</span>
-        <span className="text-sol-text-dim/30">·</span>
-        <span className="text-sol-text-dim text-[10px]">{formatTimeAgo(message.timestamp)}</span>
-        {message.commentCount > 0 && (
-          <span className="text-[10px] text-sol-cyan flex items-center gap-0.5">
-            <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
-            </svg>
-            {message.commentCount}
-          </span>
-        )}
-      </div>
-      <div className="text-[13px] text-sol-text whitespace-pre-wrap break-words leading-relaxed">
-        {message.display}
+      <div
+        className="bg-sol-bg border border-sol-border/40 rounded-lg shadow-2xl flex flex-col"
+        style={{ width: previewWidth, maxHeight: "60vh" }}
+      >
+        <div className="flex items-center gap-2 p-3 pb-1 flex-shrink-0">
+          <span className="text-[10px] text-sol-text-dim tabular-nums">#{message.originalIndex + 1}</span>
+          <span className="text-sol-text-dim/30">·</span>
+          <span className="text-sol-text-dim text-[10px]">{formatTimeAgo(message.timestamp)}</span>
+          {message.commentCount > 0 && (
+            <span className="text-[10px] text-sol-cyan flex items-center gap-0.5">
+              <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
+              </svg>
+              {message.commentCount}
+            </span>
+          )}
+        </div>
+        <div className="px-3 pb-3 overflow-y-auto flex-1 min-h-0">
+          <div className="text-[13px] text-sol-text whitespace-pre-wrap break-words leading-relaxed">
+            {message.display}
+          </div>
+        </div>
       </div>
     </div>,
     document.body
@@ -193,7 +201,7 @@ function NavDropdown({
     previewLeaveTimerRef.current = setTimeout(() => {
       setPreviewMsg(null);
       setHoveredRect(null);
-    }, 300);
+    }, 500);
   }, []);
 
   const cancelDismissPreview = useCallback(() => {
@@ -368,7 +376,7 @@ function NavDropdown({
         </div>
       </div>
       {previewMsg && hoveredRect && (
-        <HoverPreview message={previewMsg} rect={hoveredRect} onMouseEnter={cancelDismissPreview} onMouseLeave={dismissPreview} />
+        <HoverPreview message={previewMsg} rect={hoveredRect} onMouseEnter={cancelDismissPreview} onMouseLeave={dismissPreview} onDropdownEnter={onMouseEnter} onDropdownLeave={onMouseLeave} />
       )}
     </>,
     document.body

@@ -94,9 +94,7 @@ export type Message = {
   images?: any[];
   subtype?: string;
   _isOptimistic?: true;
-  _isQueued?: true;
   _clientId?: string;
-  _isFailed?: true;
   client_id?: string;
 };
 
@@ -463,10 +461,11 @@ interface InboxStoreState {
   pinSession: (id: string) => void;
   renameSession: (id: string, title: string) => void;
   switchProject: (convId: string, path: string) => void;
-  sendMessage: (convId: string, content: string, imageIds?: string[], images?: Array<{ media_type: string; storage_id?: string }>) => Promise<any>;
+  sendMessage: (convId: string, content: string, imageIds?: string[], images?: Array<{ media_type: string; storage_id?: string }>) => void;
   resumeSession: (convId: string) => Promise<any>;
   sendEscape: (convId: string) => void;
   createSession: (opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string }) => Promise<any>;
+  quickSwitchProject: (projectPath: string, opts?: { agentType?: string }) => string;
   switchAgent: (currentId: string, targetAgentType: string) => string | null;
 
   // -- Generic sync --
@@ -501,8 +500,7 @@ interface InboxStoreState {
   setMessages: (convId: string, msgs: Message[], meta?: Partial<PaginationState>) => void;
   mergeMessages: (convId: string, msgs: Message[], direction: "prepend" | "append", meta?: Partial<PaginationState>) => void;
   addOptimisticMessage: (convId: string, content: string, images?: Array<{ media_type: string; storage_id?: string }>) => string;
-  markOptimisticAsQueued: (convId: string, content: string) => void;
-  markOptimisticAsFailed: (convId: string, clientId: string) => void;
+  removeOptimisticMessage: (convId: string, clientId: string) => void;
   setPagination: (convId: string, update: Partial<PaginationState>) => void;
   initPagination: (convId: string) => void;
 
@@ -616,9 +614,6 @@ const DEFAULT_PAGINATION: PaginationState = {
   initialized: false,
 };
 
-function stripImageRef(s: string): string {
-  return s.replace(/\[Image[:\s][^\]]*\]/gi, "").trim();
-}
 
 function rekeyId(draft: any, oldId: string, newId: string) {
   if (oldId === newId) return;
@@ -952,7 +947,7 @@ export const useInboxStore = create<InboxStoreState>(
     this.conversations[convId].git_root = path;
   }),
 
-  sendMessage: action(function (this: Draft, convId: string, content: string, _imageIds?: string[], images?: Array<{ media_type: string; storage_id?: string }>) {
+  sendMessage: (convId: string, content: string, imageIds?: string[], images?: Array<{ media_type: string; storage_id?: string }>) => {
     const id = `optimistic_${Date.now()}_${Math.random().toString(36).slice(2)}`;
     const msg = {
       _id: id,
@@ -963,33 +958,112 @@ export const useInboxStore = create<InboxStoreState>(
       _clientId: id,
       ...(images && images.length > 0 ? { images } : {}),
     };
-    if (!this.pendingMessages[convId]) this.pendingMessages[convId] = [];
-    this.pendingMessages[convId].push(msg);
-  }),
+    const state = get();
+    const pending = state.pendingMessages[convId] || [];
+    set({
+      pendingMessages: { ...state.pendingMessages, [convId]: [...pending, msg] },
+    });
+    get()._dispatch("sendMessage", [convId, content, imageIds, id]).catch(() => {});
+  },
 
   resumeSession: action(function (_convId: string) {}),
 
   sendEscape: action(function (_convId: string) {}),
 
-  createSession: action(function (this: Draft, opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string }) {
+  createSession: (opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string }) => {
     const sessionId = opts.session_id || (Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2));
     if (!opts.session_id) opts.session_id = sessionId;
     const now = Date.now();
-    this.sessions[sessionId] = {
-      _id: sessionId,
-      session_id: sessionId,
-      title: "New session",
-      updated_at: now,
-      started_at: now,
-      project_path: opts.project_path,
-      git_root: opts.git_root,
-      agent_type: opts.agent_type,
-      message_count: 0,
-      is_idle: true,
-      has_pending: false,
-      last_user_message: null,
+    const state = get();
+    set({
+      sessions: {
+        ...state.sessions,
+        [sessionId]: {
+          _id: sessionId,
+          session_id: sessionId,
+          title: "New session",
+          updated_at: now,
+          started_at: now,
+          project_path: opts.project_path,
+          git_root: opts.git_root,
+          agent_type: opts.agent_type,
+          message_count: 0,
+          is_idle: true,
+          has_pending: false,
+          last_user_message: null,
+        } as InboxSession,
+      },
+    });
+    return get()._dispatch("createSession", [opts]).catch(() => {});
+  },
+
+  quickSwitchProject: (projectPath: string, opts?: { agentType?: string }) => {
+    const state = get();
+    const agentType = opts?.agentType || state.currentConversation.agentType || "claude_code";
+    const sessionId = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+    const now = Date.now();
+    const oldId = state.currentSessionId;
+    const oldSession = oldId ? state.sessions[oldId] : null;
+
+    const newSessions = { ...state.sessions };
+    const newPending = { ...state.pending };
+    const newConversations = { ...state.conversations };
+    const dispatchConvos: Record<string, any> = {};
+
+    if (oldId && oldSession) {
+      delete newSessions[oldId];
+      newPending[`sessions:${oldId}`] = { type: "exclude", expiresAt: now + 15_000 };
+      if (newConversations[oldId]) {
+        newConversations[oldId] = { ...newConversations[oldId], inbox_dismissed_at: now };
+      }
+      dispatchConvos[oldId] = { inbox_dismissed_at: now };
+    }
+
+    newSessions[sessionId] = {
+      _id: sessionId, session_id: sessionId, title: "New session",
+      updated_at: now, started_at: now, project_path: projectPath,
+      git_root: projectPath, agent_type: agentType, message_count: 0,
+      is_idle: true, has_pending: false, last_user_message: null,
     } as InboxSession;
-  }),
+
+    get().setConversationMeta(sessionId, {
+      _id: sessionId, _creationTime: now, user_id: "", agent_type: agentType,
+      session_id: sessionId, project_path: projectPath, git_root: projectPath,
+      started_at: now, updated_at: now, message_count: 0, status: "active",
+      title: "New session", messages: [],
+    });
+
+    get().createSession({
+      agent_type: agentType,
+      project_path: projectPath,
+      git_root: projectPath,
+      session_id: sessionId,
+    });
+
+    set({
+      sessions: newSessions,
+      pending: newPending,
+      conversations: newConversations,
+      currentSessionId: sessionId,
+      selectedPlanId: null,
+      viewingDismissedId: null,
+      currentConversation: {
+        conversationId: sessionId,
+        projectPath,
+        gitRoot: projectPath,
+        agentType,
+        source: state.currentConversation.source || "inbox",
+      },
+      clientState: { ...state.clientState, current_conversation_id: sessionId },
+    });
+
+    get()._dispatch("patch", [], {
+      conversations: dispatchConvos,
+      client_state: { _: { current_conversation_id: sessionId } },
+    }).catch(() => {});
+
+    return sessionId;
+  },
 
   updateClientUI: action(function (this: Draft, partial: Partial<ClientUI>) {
     if (!this.clientState.ui) this.clientState.ui = {};
@@ -1324,17 +1398,12 @@ export const useInboxStore = create<InboxStoreState>(
   setMessages: sync(function (this: Draft, convId: string, msgs: Message[], meta?: Partial<PaginationState>) {
     const pending = this.pendingMessages[convId] || [];
     if (pending.length > 0) {
-      const serverUserMsgs = msgs.filter((m: Message) => m.role === "user");
-      this.pendingMessages[convId] = pending.filter((m: Message) => {
-        if (m._clientId) {
-          return !serverUserMsgs.some((s: Message) => s.client_id === m._clientId);
-        }
-        const stripped = stripImageRef(m.content || "");
-        return !serverUserMsgs.some((s: Message) =>
-          stripImageRef(s.content || "") === stripped &&
-          Math.abs(s.timestamp - m.timestamp) < 120_000
-        );
-      });
+      const confirmedIds = new Set(
+        msgs.filter((m: Message) => m.client_id).map((m: Message) => m.client_id)
+      );
+      this.pendingMessages[convId] = pending.filter(
+        (m: Message) => !m._clientId || !confirmedIds.has(m._clientId)
+      );
     }
     this.messages[convId] = msgs;
     this.pagination[convId] = { ...(this.pagination[convId] || DEFAULT_PAGINATION), ...meta };
@@ -1372,33 +1441,11 @@ export const useInboxStore = create<InboxStoreState>(
     return id;
   },
 
-  markOptimisticAsQueued: (convId: string, content: string) => {
+  removeOptimisticMessage: (convId: string, clientId: string) => {
     const state = get();
-    const stripped = stripImageRef(content);
-    const promote = (m: Message) => {
-      if (m._isOptimistic && m.role === "user" && stripImageRef(m.content || "") === stripped) {
-        const { _isOptimistic, ...rest } = m;
-        return { ...rest, _isQueued: true as const };
-      }
-      return m;
-    };
     const pending = state.pendingMessages[convId];
     if (pending) {
-      set({ pendingMessages: { ...state.pendingMessages, [convId]: pending.map(promote) } });
-    }
-  },
-
-  markOptimisticAsFailed: (convId: string, clientId: string) => {
-    const state = get();
-    const mark = (m: Message): Message => {
-      if (m._clientId === clientId || m._id === clientId) {
-        return { ...m, _isFailed: true as const };
-      }
-      return m;
-    };
-    const pending = state.pendingMessages[convId];
-    if (pending) {
-      set({ pendingMessages: { ...state.pendingMessages, [convId]: pending.map(mark) } });
+      set({ pendingMessages: { ...state.pendingMessages, [convId]: pending.filter((m: Message) => m._clientId !== clientId && m._id !== clientId) } });
     }
   },
 

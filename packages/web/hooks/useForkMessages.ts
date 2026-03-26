@@ -10,7 +10,7 @@ export function useForkMessages(forkConvId: string | null) {
     forkConvId ? s.messages[forkConvId] : undefined
   );
 
-  const shouldSkip = !forkConvId || !!cached || !isConvexId(forkConvId);
+  const shouldSkip = !forkConvId || !isConvexId(forkConvId);
 
   const result = useQuery(
     api.conversations.getForkBranchMessages,

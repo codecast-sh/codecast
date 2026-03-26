@@ -64,7 +64,6 @@ import { soundSend } from "../lib/sounds";
 import { useForkNavigationStore } from "../store/forkNavigationStore";
 import { buildCompositeTimeline } from "../lib/compositeTimeline";
 import { useMessageSelection } from "../hooks/useMessageSelection";
-import { useForkMessages } from "../hooks/useForkMessages";
 import { BranchSelector } from "./BranchSelector";
 import { ForkTreePanel } from "./ForkTreePanel";
 import { getApplyPatchInput, parseApplyPatchSections } from "../lib/applyPatchParser";
@@ -130,7 +129,6 @@ type Message = {
   images?: ImageData[];
   subtype?: string;
   _isOptimistic?: true;
-  _isQueued?: true;
   usage?: {
     input_tokens: number;
     output_tokens: number;
@@ -169,9 +167,21 @@ export type ConversationData = {
   forked_from?: string;
   forked_from_details?: {
     conversation_id: string;
+    title?: string;
     share_token?: string;
     username: string;
+    message_count?: number;
   } | null;
+  fork_siblings?: Array<{
+    _id: string;
+    title: string;
+    short_id?: string;
+    started_at: number;
+    username: string;
+    parent_message_uuid?: string;
+    message_count?: number;
+    agent_type?: string;
+  }>;
   is_favorite?: boolean;
   workflow_run_id?: string | null;
   is_workflow_primary?: boolean;
@@ -292,7 +302,6 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
   );
   const openComposePalette = useInboxStore((s) => s.openComposePalette);
   const isolated = useInboxStore((s) => s.isolatedWorktreeMode);
-  const reconfigureSession = useMutation(api.conversations.reconfigureSession);
 
   const recentProjects = freshProjects ?? cachedProjects;
 
@@ -308,28 +317,14 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
 
   const visibleProjects = otherProjects.slice(0, 6);
 
-  const handleSwitch = useCallback(async (projectPath: string, forceIsolated?: boolean) => {
+  const handleSwitch = useCallback((projectPath: string, forceIsolated?: boolean) => {
     const trimmed = projectPath.trim();
     if (!trimmed) return;
     if (trimmed === currentPath && !forceIsolated) return;
-    try {
-      const id = storeSession?._id || conversation._id;
-      const store = useInboxStore.getState();
-      store.updateSessionProject(id, trimmed);
-      store.updateConversationMeta(id, { project_path: trimmed, git_root: trimmed });
-
-      if (isConvexId(id)) {
-        reconfigureSession({
-          conversation_id: id as Id<"conversations">,
-          project_path: trimmed,
-          git_root: trimmed,
-          isolated: (forceIsolated ?? isolated) || undefined,
-        }).catch(() => {});
-      }
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to switch project");
-    }
-  }, [storeSession, conversation._id, reconfigureSession, currentPath, isolated]);
+    useInboxStore.getState().quickSwitchProject(trimmed, {
+      agentType: storeSession?.agent_type || conversation.agent_type,
+    });
+  }, [storeSession?.agent_type, conversation.agent_type, currentPath]);
 
   return (
     <TooltipProvider delayDuration={200}>
@@ -3697,11 +3692,11 @@ function TeammateMessageCard({ teammateId, color, summary, content }: { teammate
   );
 }
 
-function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, userName, avatarUrl, onOpenComments, isHighlighted, shareSelectionMode, isSelectedForShare, onToggleShareSelection, onStartShareSelection, onForkFromMessage, forkChildren, messageUuid, images, onBranchSwitch, activeBranchId, loadingBranchId, isPending, isQueued, mainMessageCount }: { content: string; timestamp: number; messageId: string; conversationId?: Id<"conversations">; collapsed?: boolean; userName?: string; avatarUrl?: string | null; onOpenComments?: () => void; isHighlighted?: boolean; shareSelectionMode?: boolean; isSelectedForShare?: boolean; onToggleShareSelection?: () => void; onStartShareSelection?: (messageId: string) => void; onForkFromMessage?: (messageUuid: string) => void; forkChildren?: Array<{ _id: string; title: string; short_id?: string; started_at?: number; username?: string; message_count?: number; agent_type?: string }>; messageUuid?: string; images?: ImageData[]; onBranchSwitch?: (convId: string | null) => void; activeBranchId?: string | null; loadingBranchId?: string | null; isPending?: boolean; isQueued?: boolean; mainMessageCount?: number }) {
+function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, userName, avatarUrl, onOpenComments, isHighlighted, shareSelectionMode, isSelectedForShare, onToggleShareSelection, onStartShareSelection, onForkFromMessage, forkChildren, messageUuid, images, onBranchSwitch, activeBranchId, loadingBranchId, isPending, mainMessageCount }: { content: string; timestamp: number; messageId: string; conversationId?: Id<"conversations">; collapsed?: boolean; userName?: string; avatarUrl?: string | null; onOpenComments?: () => void; isHighlighted?: boolean; shareSelectionMode?: boolean; isSelectedForShare?: boolean; onToggleShareSelection?: () => void; onStartShareSelection?: (messageId: string) => void; onForkFromMessage?: (messageUuid: string) => void; forkChildren?: Array<{ _id: string; title: string; short_id?: string; started_at?: number; username?: string; message_count?: number; agent_type?: string }>; messageUuid?: string; images?: ImageData[]; onBranchSwitch?: (convId: string | null) => void; activeBranchId?: string | null; loadingBranchId?: string | null; isPending?: boolean; mainMessageCount?: number }) {
   const [isExpanded, setIsExpanded] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
   const [isTruncated, setIsTruncated] = useState(false);
-  const [contentExpanded, setContentExpanded] = useState(false);
+  const [contentExpanded, setContentExpanded] = useState(true);
   const [isOverflowing, setIsOverflowing] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const rawContent = content
@@ -3776,7 +3771,7 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
   };
 
   return (
-    <div id={`msg-${messageId}`} className={`group relative scroll-mt-20 bg-sol-blue/10 -mx-4 px-4 py-4 rounded-lg border border-sol-blue/30 ${effectivelyCollapsed ? "mb-2" : "mb-6"} transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg message-highlight" : ""} ${shareSelectionMode ? "cursor-pointer" : ""} ${isSelectedForShare ? "bg-sol-cyan/10 border-2 border-sol-cyan ring-2 ring-sol-cyan/30" : ""} ${isPending ? "opacity-80 pending-stripes" : isQueued ? "opacity-90 queued-pulse" : ""}`} style={{ '--image-fade-bg': 'color-mix(in srgb, var(--sol-blue) 10%, var(--sol-bg))' } as React.CSSProperties} onClick={shareSelectionMode ? onToggleShareSelection : undefined}>
+    <div id={`msg-${messageId}`} className={`group relative scroll-mt-20 bg-sol-blue/10 -mx-4 px-4 py-4 rounded-lg border border-sol-blue/30 ${effectivelyCollapsed ? "mb-2" : "mb-6"} transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg message-highlight" : ""} ${shareSelectionMode ? "cursor-pointer" : ""} ${isSelectedForShare ? "bg-sol-cyan/10 border-2 border-sol-cyan ring-2 ring-sol-cyan/30" : ""} ${isPending ? "opacity-80 pending-stripes" : ""}`} style={{ '--image-fade-bg': 'color-mix(in srgb, var(--sol-blue) 10%, var(--sol-bg))' } as React.CSSProperties} onClick={shareSelectionMode ? onToggleShareSelection : undefined}>
       <div className={`absolute -top-2 right-0 transition-opacity flex gap-0.5 z-10 bg-sol-bg rounded shadow-md px-0.5 ${shareSelectionMode ? "opacity-0 pointer-events-none" : "opacity-0 group-hover:opacity-100"}`}>
         {onStartShareSelection && (
           <button
@@ -4129,7 +4124,7 @@ function AssistantBlock({
   const COLLAPSED_LINES = 2;
   const CONTENT_MAX_HEIGHT = 800;
 
-  const [contentExpanded, setContentExpanded] = useState(false);
+  const [contentExpanded, setContentExpanded] = useState(true);
   const [isOverflowing, setIsOverflowing] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -4780,7 +4775,7 @@ function CompactionSummaryBlock({ content }: { content: string }) {
 const PLAN_MAX_HEIGHT = 1800;
 
 function PlanBlock({ content, timestamp, collapsed, messageId, conversationId, onOpenComments, onStartShareSelection }: { content: string; timestamp: number; collapsed?: boolean; messageId?: string; conversationId?: Id<"conversations">; onOpenComments?: () => void; onStartShareSelection?: (messageId: string) => void }) {
-  const [isExpanded, setIsExpanded] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(true);
   const [fullscreen, setFullscreen] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
   const [isOverflowing, setIsOverflowing] = useState(false);
@@ -5452,7 +5447,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
   const resumeSessionMutation = useMutation(api.users.resumeSession);
   const restartSessionMutation = useMutation(api.conversations.restartSession);
   const addOptimistic = useInboxStore((s) => s.addOptimisticMessage);
-  const markAsQueued = useInboxStore((s) => s.markOptimisticAsQueued);
+  const removeOptimistic = useInboxStore((s) => s.removeOptimisticMessage);
   const sentContentRef = useRef<string | null>(null);
 
   type AutocompleteTrigger = { type: "/" | "@"; startPos: number } | null;
@@ -5614,10 +5609,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
   useWatchEffect(() => {
     if (!sentAt || !pendingMessageId) return;
     if (messageStatus?.status === "delivered") {
-      if (sentContentRef.current) {
-        markAsQueued(conversationId, sentContentRef.current);
-        sentContentRef.current = null;
-      }
+      sentContentRef.current = null;
       setPendingMessageId(null);
       setSentAt(null);
       setShowStuckBanner(false);
@@ -5629,7 +5621,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
       }
     }, stuckThresholdMs);
     return () => clearTimeout(timer);
-  }, [sentAt, pendingMessageId, messageStatus?.status, conversationId, markAsQueued, stuckThresholdMs]);
+  }, [sentAt, pendingMessageId, messageStatus?.status, stuckThresholdMs]);
 
   // Removed: generic 60s timeout was showing "not responding" even when no message was sent.
   // The banner should only show when we sent a message and it wasn't delivered (handled by the effects above).
@@ -6151,12 +6143,18 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
 
     if (convIdRef.current !== targetConvId) {
       console.warn("[MessageInput] conversationId changed between submit and send:", { targetConvId, current: convIdRef.current, sessionId });
+      removeOptimistic(targetConvId, clientId);
+      toast.error("Session changed — message not sent");
+      return;
     }
 
     try {
       const resolvedId = targetCanQuery ? targetConvId : await waitForConvexId(targetConvId);
       if (convIdRef.current !== targetConvId) {
         console.warn("[MessageInput] conversationId drifted during waitForConvexId:", { targetConvId, resolvedId, current: convIdRef.current });
+        removeOptimistic(targetConvId, clientId);
+        toast.error("Session changed — message not sent");
+        return;
       }
       const msgId = await sendMessage({
         conversation_id: resolvedId as Id<"conversations">,
@@ -6170,7 +6168,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
       setShowStuckBanner(false);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to send message");
-      useInboxStore.getState().markOptimisticAsFailed(targetConvId, clientId);
+      removeOptimistic(targetConvId, clientId);
     }
   };
 
@@ -6193,6 +6191,8 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
         const expanded = await expandMentionsInMessage(next);
         if (convIdRef.current !== queueTargetConvId) {
           console.warn("[MessageInput] conversationId changed during queue drain:", { queueTargetConvId, current: convIdRef.current });
+          removeOptimistic(queueTargetConvId, clientId);
+          return;
         }
         const resolvedId = queueCanQuery ? queueTargetConvId : await waitForConvexId(queueTargetConvId);
         const msgId = await sendMessage({
@@ -6206,7 +6206,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
         setShowStuckBanner(false);
       } catch (error) {
         toast.error(error instanceof Error ? error.message : "Failed to send queued message");
-        useInboxStore.getState().markOptimisticAsFailed(queueTargetConvId, clientId);
+        removeOptimistic(queueTargetConvId, clientId);
       } finally {
         queueDrainingRef.current = false;
       }
@@ -6523,7 +6523,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
                     <span className="w-2 h-2 rounded-full bg-sol-cyan/50 animate-pulse" />
                     Sending queued ({queuedMessages.length})...
                   </span>
-                ) : agentStatus === "idle" || agentStatus === "connected" ? (
+                ) : agentStatus === "idle" ? (
                   "\u00A0"
                 ) : isThinking ? (
                   <span className="flex items-center gap-1.5">
@@ -6934,6 +6934,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const [showThinking, setShowThinking] = useState(false);
   const [expandedSequences, setExpandedSequences] = useState<Set<string>>(new Set());
   const [diffExpanded, setDiffExpanded] = useState(false);
+  const forkRouter = useRouter();
   const renamingSessionId = useInboxStore((s) => s.renamingSessionId);
   const isRenaming = renamingSessionId === conversation?._id;
   const [renameDraft, setRenameDraft] = useState("");
@@ -7017,15 +7018,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const addOptimisticMsg = useInboxStore((s) => s.addOptimisticMessage);
   const activeBranches = useInboxStore((s) => s.activeBranches);
   const optimisticForkChildren = useInboxStore((s) => s.optimisticForkChildren);
-  const firstActiveForkId = useMemo(() => {
-    const entries = Object.entries(activeBranches);
-    if (entries.length === 0) return null;
-    const [, convId] = entries[0];
-    const allForks = [...(conversation?.fork_children || []), ...optimisticForkChildren];
-    if (!allForks.some(f => f._id === convId)) return null;
-    return convId;
-  }, [activeBranches, conversation?.fork_children, optimisticForkChildren]);
-  const effectiveConversationId = firstActiveForkId || conversation?._id;
+  const effectiveConversationId = conversation?._id;
 
   const handleSendInlineMessage = useCallback(async (content: string) => {
     if (!conversation || !effectiveConversationId) return;
@@ -7036,6 +7029,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       await sendInlineMessage({ conversation_id: effectiveConversationId as Id<"conversations">, content, client_id: clientId });
     } catch {
       toast.error("Failed to send message");
+      useInboxStore.getState().removeOptimisticMessage(effectiveConversationId, clientId);
     }
   }, [conversation, effectiveConversationId, sendInlineMessage, addOptimisticMsg, setUserScrolled]);
   const managedSession = useQuery(
@@ -7226,9 +7220,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   // Fork navigation state (data in inbox store, UI state in forkNavigationStore)
   const inboxMessages = useInboxStore((s) => s.messages);
   const forkSwitchBranch = useInboxStore((s) => s.switchBranch);
-  const forkClearBranch = useInboxStore((s) => s.clearBranch);
-  const forkSetMessages = useInboxStore((s) => s.setMessages);
-  const resolveForkSessionId = useInboxStore((s) => s.resolveForkSessionId);
   const forkTreePanelOpen = useForkNavigationStore((s) => s.treePanelOpen);
   const toggleTreePanel = useForkNavigationStore((s) => s.toggleTreePanel);
   const forkSetSelectedIndex = useForkNavigationStore((s) => s.setSelectedIndex);
@@ -7254,38 +7245,18 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
   const doFork = useCallback(async (messageUuid: string) => {
     if (!conversation?._id) return;
-    const sourceConvId = effectiveConversationId || conversation._id;
-    const forkSessionId = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    addOptimisticFork({
-      _id: forkSessionId,
-      title: conversation.title ? `Fork: ${conversation.title}` : "Fork",
-      started_at: Date.now(),
-      username: conversation.user?.name || conversation.user?.email?.split("@")[0],
-      parent_message_uuid: messageUuid,
-      message_count: 0,
-      agent_type: conversation.agent_type,
-    });
-    forkSetMessages(forkSessionId, []);
-    forkSwitchBranch(messageUuid, forkSessionId);
-    const url = new URL(window.location.href);
-    url.searchParams.set('branch', forkSessionId);
-    window.history.replaceState({}, '', url.toString());
-    toast.success("Forked -- switched to branch");
+    const sourceConvId = conversation._id;
+    toast.success("Creating fork...");
     try {
       const result = await forkFromMessage({
         conversation_id: sourceConvId.toString(),
         message_uuid: messageUuid,
-        session_id: forkSessionId,
       });
-      resolveForkSessionId(forkSessionId, result.conversation_id);
-      const resolvedUrl = new URL(window.location.href);
-      resolvedUrl.searchParams.set('branch', result.conversation_id);
-      window.history.replaceState({}, '', resolvedUrl.toString());
+      forkRouter.push(`/conversation/${result.conversation_id}`);
     } catch (err) {
-      forkClearBranch(messageUuid);
       toast.error(err instanceof Error ? err.message : "Failed to fork");
     }
-  }, [conversation?._id, conversation?.title, conversation?.user, conversation?.agent_type, effectiveConversationId, forkFromMessage, forkSwitchBranch, forkClearBranch, forkSetMessages, addOptimisticFork, resolveForkSessionId]);
+  }, [conversation?._id, forkFromMessage, forkRouter]);
 
   const handleForkFromMessage = useCallback(async (messageUuid: string) => {
     const tl = timelineRef.current;
@@ -7315,27 +7286,23 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       toast.error("No messages to fork from");
       return;
     }
-    await doFork(lastMsg.message_uuid);
-    requestAnimationFrame(async () => {
-      const branches = useInboxStore.getState().activeBranches;
-      const forkId = Object.values(branches)[0];
-      if (!forkId) return;
+    try {
+      const result = await forkFromMessage({
+        conversation_id: conversation._id.toString(),
+        message_uuid: lastMsg.message_uuid,
+      });
+      const forkId = result.conversation_id;
       const clientId = addOptimisticMsg(forkId, content);
-      for (let i = 0; i < 20; i++) {
-        const resolved = useInboxStore.getState().getConvexId(forkId);
-        if (resolved) {
-          try {
-            await sendInlineMessage({ conversation_id: resolved as Id<"conversations">, content, client_id: clientId });
-          } catch {
-            toast.error("Failed to send message to fork");
-          }
-          return;
-        }
-        await new Promise((r) => setTimeout(r, 250));
+      try {
+        await sendInlineMessage({ conversation_id: forkId as Id<"conversations">, content, client_id: clientId });
+      } catch {
+        toast.error("Failed to send message to fork");
       }
-      toast.error("Fork timed out");
-    });
-  }, [conversation, doFork, addOptimisticMsg, sendInlineMessage]);
+      forkRouter.push(`/conversation/${forkId}`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to fork");
+    }
+  }, [conversation, forkFromMessage, addOptimisticMsg, sendInlineMessage, forkRouter]);
 
   // Preload branch from URL param
   const urlBranchPreloaded = useRef(false);
@@ -7351,7 +7318,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     }
   }, [conversation?.fork_children, forkSwitchBranch]);
 
-  const { isLoading: isForkLoading } = useForkMessages(firstActiveForkId);
   const [loadingBranchId, setLoadingBranchId] = useState<string | null>(null);
 
   // Merge messages, commits, and PRs into a single timeline (with fork branch support)
@@ -8037,27 +8003,16 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     enabled: isOwner,
   });
 
-  // Fork navigation: handle branch switching
-  const handleBranchSwitch = useCallback((messageUuid: string, convId: string | null) => {
+  // Fork navigation: navigate to branch conversation
+  const handleBranchSwitch = useCallback((_messageUuid: string, convId: string | null) => {
     if (convId === null) {
-      forkClearBranch(messageUuid);
-      setLoadingBranchId(null);
+      if (conversation?.forked_from) {
+        forkRouter.push(`/conversation/${conversation.forked_from}`);
+      }
     } else {
-      forkSwitchBranch(messageUuid, convId);
-      if (!inboxMessages[convId]) {
-        setLoadingBranchId(convId);
-      }
+      forkRouter.push(`/conversation/${convId}`);
     }
-    if (typeof window !== 'undefined') {
-      const url = new URL(window.location.href);
-      if (convId) {
-        url.searchParams.set('branch', convId);
-      } else {
-        url.searchParams.delete('branch');
-      }
-      window.history.replaceState({}, '', url.toString());
-    }
-  }, [forkSwitchBranch, forkClearBranch, inboxMessages]);
+  }, [conversation?.forked_from, forkRouter]);
 
   // Clear loading state when fork messages arrive
   useWatchEffect(() => {
@@ -8066,23 +8021,11 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     }
   }, [loadingBranchId, inboxMessages]);
 
-  // Fork tree panel: handle switching to a different conversation
+  // Fork tree panel: navigate to selected conversation
   const handleTreeSwitchConversation = useCallback((convId: string) => {
-    if (convId === conversation?._id?.toString()) {
-      Object.keys(activeBranches).forEach(uuid => forkClearBranch(uuid));
-      return;
-    }
-    const forkChild = conversation?.fork_children?.find(f => f._id === convId);
-    if (forkChild && forkChild.parent_message_uuid) {
-      Object.keys(activeBranches).forEach(uuid => forkClearBranch(uuid));
-      forkSwitchBranch(forkChild.parent_message_uuid, convId);
-      if (!inboxMessages[convId]) {
-        setLoadingBranchId(convId);
-      }
-      return;
-    }
-    window.location.href = `/conversation/${convId}`;
-  }, [conversation?._id, conversation?.fork_children, activeBranches, forkClearBranch, forkSwitchBranch, inboxMessages]);
+    if (convId === conversation?._id?.toString()) return;
+    forkRouter.push(`/conversation/${convId}`);
+  }, [conversation?._id, forkRouter]);
 
   // Active branch IDs for tree panel highlighting
   const activeBranchIdSet = useMemo(
@@ -8295,7 +8238,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         setUserScrolled(true);
       }
 
-      if (isNearBottom && scrolledDown) {
+      if (scrollHeight - scrollTop - clientHeight < 5) {
         setUserScrolled(false);
       }
 
@@ -8378,10 +8321,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     scrollAnchorRef.current = null;
     if (delta <= 0) return;
     paginationCooldownRef.current = true;
-    scrollContainer.scrollTop += delta; // += keeps current position, doesn't reset it
-    requestAnimationFrame(() => {
+    scrollContainer.scrollTop += delta;
+    setTimeout(() => {
       paginationCooldownRef.current = false;
-    });
+    }, 200);
   }, [timeline.length]);
 
   const [initialScrollDone, setInitialScrollDone] = useState(false);
@@ -8449,7 +8392,12 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     const sc = containerRef.current;
     if (!sc) return;
     const onWheel = (e: WheelEvent) => {
-      if (e.deltaY < 0) setUserScrolled(true);
+      if (e.deltaY < 0) {
+        setUserScrolled(true);
+      } else if (e.deltaY > 0) {
+        const dist = sc.scrollHeight - sc.scrollTop - sc.clientHeight;
+        if (dist < 150) setUserScrolled(false);
+      }
     };
     sc.addEventListener('wheel', onWheel, { passive: true });
     return () => sc.removeEventListener('wheel', onWheel);
@@ -8851,7 +8799,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           const userOnlyImages = msg.images?.filter(img => !img.tool_use_id) ?? [];
           if (!msg.content?.trim() && userOnlyImages.length === 0) return null;
           const userName = conversation?.user?.name || conversation?.user?.email?.split("@")[0];
-          return <UserPrompt key={msg._id} content={msg.content || ""} images={msg.images} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={collapsed} userName={userName} avatarUrl={conversation?.user?.avatar_url} onOpenComments={() => setCommentMessageId(msg._id as Id<"messages">)} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={() => handleToggleMessageSelection(msg._id)} onStartShareSelection={handleStartShareSelection} onForkFromMessage={handleForkFromMessage} forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined} onBranchSwitch={msg.message_uuid ? (convId) => handleBranchSwitch(msg.message_uuid!, convId) : undefined} activeBranchId={msg.message_uuid ? activeBranches[msg.message_uuid] : undefined} loadingBranchId={loadingBranchId} isPending={!!msg._isOptimistic} isQueued={!!msg._isQueued} mainMessageCount={msg.message_uuid ? conversation?.main_message_counts_by_fork?.[msg.message_uuid] : undefined} />;
+          return <UserPrompt key={msg._id} content={msg.content || ""} images={msg.images} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={collapsed} userName={userName} avatarUrl={conversation?.user?.avatar_url} onOpenComments={() => setCommentMessageId(msg._id as Id<"messages">)} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={() => handleToggleMessageSelection(msg._id)} onStartShareSelection={handleStartShareSelection} onForkFromMessage={handleForkFromMessage} forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined} onBranchSwitch={msg.message_uuid ? (convId) => handleBranchSwitch(msg.message_uuid!, convId) : undefined} activeBranchId={msg.message_uuid ? activeBranches[msg.message_uuid] : undefined} loadingBranchId={loadingBranchId} isPending={!!msg._isOptimistic} mainMessageCount={msg.message_uuid ? conversation?.main_message_counts_by_fork?.[msg.message_uuid] : undefined} />;
         }
       }
     }
@@ -9556,6 +9504,66 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         {subHeaderContent}
       </header>
 
+      {/* Top-level branch bar: visible when conversation has forks or is a fork */}
+      {conversation && (
+        (conversation.fork_children && conversation.fork_children.length > 0) ||
+        conversation.forked_from
+      ) && (() => {
+        const isAFork = !!conversation.forked_from;
+        const parentDetails = (conversation as any).forked_from_details;
+        const siblings: Array<{ _id: string; title: string; message_count?: number; agent_type?: string }> =
+          isAFork ? ((conversation as any).fork_siblings || []) : (conversation.fork_children || []);
+        return (
+          <div className="flex items-center gap-1.5 px-4 py-1.5 border-b border-sol-border/30 bg-sol-bg-alt/50 text-xs overflow-x-auto">
+            <svg className="w-3.5 h-3.5 text-purple-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 3v12M6 15a3 3 0 103 3V6a3 3 0 10-3-3m12 12a3 3 0 10-3-3V6" />
+            </svg>
+            <button
+              onClick={() => {
+                if (isAFork && parentDetails?.conversation_id) {
+                  forkRouter.push(`/conversation/${parentDetails.conversation_id}`);
+                }
+              }}
+              className={`px-2 py-0.5 rounded border transition-all flex items-center gap-1.5 whitespace-nowrap ${
+                !isAFork
+                  ? "bg-sol-cyan/10 text-sol-cyan border-sol-cyan/30 font-medium"
+                  : "text-sol-text-dim border-sol-border/50 hover:border-sol-border hover:text-sol-text-secondary cursor-pointer"
+              }`}
+            >
+              <span>main</span>
+              {!isAFork && conversation.message_count != null && (
+                <span className="text-[10px] tabular-nums text-sol-cyan/70">{conversation.message_count}</span>
+              )}
+              {isAFork && parentDetails?.message_count != null && (
+                <span className="text-[10px] tabular-nums text-sol-text-dim">{parentDetails.message_count}</span>
+              )}
+            </button>
+            {siblings.map((sib) => {
+              const isThisFork = sib._id === conversation._id.toString();
+              const label = sib.title || "fork";
+              return (
+                <button
+                  key={sib._id}
+                  onClick={() => {
+                    if (!isThisFork) forkRouter.push(`/conversation/${sib._id}`);
+                  }}
+                  className={`px-2 py-0.5 rounded border transition-all flex items-center gap-1.5 max-w-[200px] whitespace-nowrap ${
+                    isThisFork
+                      ? "bg-purple-500/10 text-purple-400 border-purple-500/30 font-medium"
+                      : "text-sol-text-dim border-sol-border/50 hover:border-sol-border hover:text-sol-text-secondary cursor-pointer"
+                  }`}
+                >
+                  <span className="truncate">{label}</span>
+                  {sib.message_count != null && (
+                    <span className={`text-[10px] tabular-nums ${isThisFork ? "text-purple-400/70" : "text-sol-text-dim"}`}>{sib.message_count}</span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        );
+      })()}
+
       {stickyMsgVisible && activeStickyMsg && (
         <div
           ref={stickyElRef}
@@ -9774,7 +9782,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
       {showMessageInput && conversation && !(pendingPermissions && pendingPermissions.length > 0) && (
         <div ref={messageInputRef} className="relative">
-          {!isOwner && !firstActiveForkId ? (
+          {!isOwner ? (
             <ForkReplyInput
               userName={conversation.user?.name || conversation.user?.email?.split("@")[0] || "Teammate"}
               userAvatar={conversation.user?.avatar_url}
@@ -9812,7 +9820,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   </div>
                 )
               )}
-              <MessageInput conversationId={firstActiveForkId || conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} onSendAndDismiss={onSendAndDismiss} onMetaEnterSend={onMetaEnterSend} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} isSessionStarting={isSessionStarting} isSessionReady={isSessionReady} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={isSessionDisconnected ? undefined : managedSession?.agent_status as any} deliveryStatus={managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={handleForkFromMessage} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onGateSend={workflowRun?.status === "paused" ? handleGateRespond : undefined} skills={sessionSkills} filePaths={sessionFilePaths} mentionItems={mentionItems} onMentionQuery={handleMentionQuery} />
+              <MessageInput conversationId={conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} onSendAndDismiss={onSendAndDismiss} onMetaEnterSend={onMetaEnterSend} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} isSessionStarting={isSessionStarting} isSessionReady={isSessionReady} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={isSessionDisconnected ? undefined : managedSession?.agent_status as any} deliveryStatus={managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={handleForkFromMessage} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onGateSend={workflowRun?.status === "paused" ? handleGateRespond : undefined} skills={sessionSkills} filePaths={sessionFilePaths} mentionItems={mentionItems} onMentionQuery={handleMentionQuery} />
             </>
           )}
           {navigatorOpen && navigatorUserMessages && navigatorUserMessages.length > 0 && (

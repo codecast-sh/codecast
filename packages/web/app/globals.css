@@ -718,11 +718,6 @@ pre[class*="language-"] {
   );
 }
 
-/* Queued message: confirmed sent, waiting for sync */
-.queued-pulse {
-  border-style: dashed;
-}
-
 /* WKWebView fix: force resize cursor on panel handles */
 [data-panel-resize-handle-id] {
   cursor: col-resize !important;
