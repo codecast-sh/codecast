@@ -1411,6 +1411,7 @@ export default defineSchema({
         label: v.optional(v.string()),
         assignee: v.optional(v.string()),
         hide_agent: v.optional(v.boolean()),
+        source: v.optional(v.string()),
       })),
     })),
 
