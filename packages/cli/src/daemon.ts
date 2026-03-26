@@ -1071,6 +1071,15 @@ async function executeRemoteCommand(
         const isolated: boolean = parsed.isolated === true;
         const worktreeName: string | undefined = parsed.worktree_name;
 
+        if (conversationId) {
+          const lastStart = sessionStartCooldowns.get(conversationId);
+          if (lastStart && Date.now() - lastStart < SESSION_START_COOLDOWN_MS) {
+            error = `Session start cooldown active for ${conversationId.slice(0, 12)}, last started ${Date.now() - lastStart}ms ago`;
+            log(`[REMOTE] ${error}`);
+            break;
+          }
+        }
+
         const shortId = Math.random().toString(36).slice(2, 8);
         const tmuxSession = `cc-${agentType}-${shortId}`;
 
@@ -1215,6 +1224,7 @@ async function executeRemoteCommand(
           result = JSON.stringify(resultObj);
           log(`[REMOTE] Started ${agentType} session in tmux: ${tmuxSession} (cwd: ${cwd})`);
           if (conversationId) {
+            sessionStartCooldowns.set(conversationId, Date.now());
             const initialManagedSessionId = getInitialManagedSessionId(agentType, expectedSessionId);
             startedSessionTmux.set(conversationId, {
               tmuxSession,
@@ -1463,6 +1473,7 @@ async function executeRemoteCommand(
           error = "Missing conversation_id";
           break;
         }
+        sessionStartCooldowns.delete(conversationId);
 
         const killThreadId = appServerConversations.get(conversationId);
         if (killThreadId && codexAppServerInstance?.running) {
@@ -5421,6 +5432,20 @@ class PersistedStartedSessions extends Map<string, StartedSessionInfo> {
     this.load();
   }
 
+  get(key: string): StartedSessionInfo | undefined {
+    const entry = super.get(key);
+    if (entry && Date.now() - entry.startedAt >= STARTED_SESSION_TTL_MS) {
+      super.delete(key);
+      this.save();
+      return undefined;
+    }
+    return entry;
+  }
+
+  has(key: string): boolean {
+    return this.get(key) !== undefined;
+  }
+
   set(key: string, value: StartedSessionInfo): this {
     super.set(key, value);
     this.save();
@@ -5431,6 +5456,23 @@ class PersistedStartedSessions extends Map<string, StartedSessionInfo> {
     const result = super.delete(key);
     if (result) this.save();
     return result;
+  }
+
+  entries(): IterableIterator<[string, StartedSessionInfo]> {
+    this.pruneExpired();
+    return super.entries();
+  }
+
+  private pruneExpired(): void {
+    const now = Date.now();
+    let pruned = false;
+    for (const [k, v] of super.entries()) {
+      if (now - v.startedAt >= STARTED_SESSION_TTL_MS) {
+        super.delete(k);
+        pruned = true;
+      }
+    }
+    if (pruned) this.save();
   }
 
   private save(): void {
@@ -5465,6 +5507,8 @@ loadPersistedAppServerThreadRegistrations();
 const startedSessionTmux = new PersistedStartedSessions();
 const restartingSessionIds = new Map<string, number>();
 const RESTART_GUARD_TTL_MS = 60_000;
+const sessionStartCooldowns = new Map<string, number>();
+const SESSION_START_COOLDOWN_MS = 5_000;
 
 // Prevent concurrent resume attempts on the same session
 const resumeInFlight = new Map<string, Promise<boolean>>();
@@ -5674,9 +5718,8 @@ async function discoverAndLinkSession(
         }
       } catch {}
     }
-    // If process verification fails but there's exactly one candidate, use it
     if (!linkedSessionId && candidates.length === 1) {
-      linkedSessionId = candidates[0];
+      log(`[DISCOVER] Single candidate ${candidates[0].slice(0, 8)} for ${conversationId.slice(0, 12)} but process verification failed, skipping unsafe fallback`);
     }
     if (linkedSessionId) {
       const startedEntry = startedSessionTmux.get(conversationId);
@@ -5704,7 +5747,7 @@ async function discoverAndLinkSession(
       return;
     }
   }
-  log(`[DISCOVER] Timed out discovering session for conversation ${conversationId.slice(0, 12)}`);
+  log(`[DISCOVER] Timed out discovering session for conversation ${conversationId.slice(0, 12)}, entry will expire via TTL`);
 }
 
 function remapConversationSession(
@@ -5842,6 +5885,23 @@ function slugify(text: string, maxLen = 30): string {
     .replace(/-+$/, "");
 }
 
+const rapidCrashCounts = new Map<string, { count: number; lastCrashAt: number }>();
+const RAPID_CRASH_WINDOW_MS = 15_000;
+const MAX_RAPID_CRASHES = 3;
+
+function recordRapidCrash(sessionId: string): void {
+  const now = Date.now();
+  const entry = rapidCrashCounts.get(sessionId);
+  if (entry && now - entry.lastCrashAt < RAPID_CRASH_WINDOW_MS * 4) {
+    entry.count++;
+    entry.lastCrashAt = now;
+  } else {
+    rapidCrashCounts.set(sessionId, { count: 1, lastCrashAt: now });
+  }
+  const updated = rapidCrashCounts.get(sessionId)!;
+  logDelivery(`Rapid crash #${updated.count} for ${sessionId.slice(0, 8)}`);
+}
+
 async function autoResumeSession(sessionId: string, content: string, titleCache: TitleCache, nonInteractive = false, cwdOverride?: string, conversationId?: string): Promise<boolean> {
   // Deduplicate concurrent resume attempts on the same session
   const existing = resumeInFlight.get(sessionId);
@@ -5899,6 +5959,12 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
     logDelivery(`Skipping auto-resume for ${sessionId.slice(0, 8)}: prior fatal reason=${priorFatalReason}`);
     return false;
   }
+  const crashEntry = rapidCrashCounts.get(sessionId);
+  if (crashEntry && crashEntry.count >= MAX_RAPID_CRASHES && Date.now() - crashEntry.lastCrashAt < RAPID_CRASH_WINDOW_MS * 4) {
+    logDelivery(`Skipping auto-resume for ${sessionId.slice(0, 8)}: ${crashEntry.count} rapid crashes detected, marking fatal`);
+    resumeFatalReasons.set(sessionId, "rapid_crash_loop" as any);
+    return false;
+  }
   let sessionFile = findSessionFile(sessionId);
   const config = readConfig();
   if (!sessionFile && conversationId && config?.auth_token && config?.convex_url) {
@@ -5914,7 +5980,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
       const tailMessages = estimatedTokens > 120_000
         ? chooseClaudeTailMessagesForTokenBudget(data, 100_000)
         : undefined;
-      const { jsonl, sessionId: newId } = generateClaudeCodeJsonl(data, { tailMessages });
+      const { jsonl, sessionId: newId } = generateClaudeCodeJsonl(data, { tailMessages, stripTrailingToolCalls: true });
       const result = writeClaudeCodeSession(jsonl, newId, data.conversation.project_path || undefined);
       logDelivery(`Reconstituted ${sessionId.slice(0, 8)} as ${newId.slice(0, 8)} (${data.messages.length} msgs)`);
       if (conversationId) {
@@ -6068,6 +6134,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
               resumeFatalReasons.set(sessionId, fatalReason);
             }
             logDelivery(`Auto-resume FATAL (non-interactive) for ${shortId}: ${paneContent.slice(0, 300)}`);
+            recordRapidCrash(sessionId);
             try { await tmuxExec(["kill-session", "-t", tmuxSession]); } catch {}
             try { fs.unlinkSync(tmpFile); } catch {}
             return false;
@@ -6082,6 +6149,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
 
       resumeSessionCache.set(sessionId, tmuxSession);
       resumeFatalReasons.delete(sessionId);
+      rapidCrashCounts.delete(sessionId);
       if (syncServiceRef && conversationId) {
         syncServiceRef.registerManagedSession(sessionId, process.pid, tmuxSession, conversationId).catch(() => {});
         syncServiceRef.updateSessionAgentStatus(conversationId, "connected").catch(() => {});
@@ -6148,11 +6216,13 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
               resumeFatalReasons.set(sessionId, fatalReason);
             }
             logDelivery(`Auto-resume FATAL for ${shortId}: agent crashed. Pane: ${paneContent.slice(0, 300)}`);
+            recordRapidCrash(sessionId);
             try { await tmuxExec(["kill-session", "-t", tmuxSession]); } catch {}
             return false;
           }
           if (promptPattern.test(paneContent) && await isTmuxAgentAlive(tmuxSession)) {
             resumeFatalReasons.delete(sessionId);
+            rapidCrashCounts.delete(sessionId);
             logDelivery(`Agent ${shortId} ready (prompt visible) after ${Date.now() - startTime}ms`);
             ready = true;
             break;
@@ -6160,6 +6230,13 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
       } catch {}
     }
     if (!ready) {
+      const aliveAfterTimeout = await isTmuxAgentAlive(tmuxSession);
+      if (!aliveAfterTimeout) {
+        logDelivery(`Agent ${shortId} startup timed out AND agent is dead after ${Date.now() - startTime}ms (max=${maxPollMs}ms, jsonl=${Math.round(jsonlSize / 1024)}KB)`);
+        recordRapidCrash(sessionId);
+        try { await tmuxExec(["kill-session", "-t", tmuxSession]); } catch {}
+        return false;
+      }
       logDelivery(`Agent ${shortId} startup timed out after ${Date.now() - startTime}ms (max=${maxPollMs}ms, jsonl=${Math.round(jsonlSize / 1024)}KB), proceeding anyway`);
     }
 
@@ -6272,11 +6349,11 @@ async function repairAndResumeSession(
           const TOKEN_BUDGET = 100_000;
           tailMessages = chooseClaudeTailMessagesForTokenBudget(exportData, TOKEN_BUDGET);
           if (shouldMaterializeFreshClaudeSession(failureReason)) {
-            const generated = generateClaudeCodeJsonl(exportData, { tailMessages });
+            const generated = generateClaudeCodeJsonl(exportData, { tailMessages, stripTrailingToolCalls: true });
             jsonl = generated.jsonl;
             targetSessionId = generated.sessionId;
           } else {
-            ({ jsonl } = generateClaudeCodeJsonl(exportData, { tailMessages, sessionId }));
+            ({ jsonl } = generateClaudeCodeJsonl(exportData, { tailMessages, sessionId, stripTrailingToolCalls: true }));
           }
         }
 
@@ -6358,13 +6435,54 @@ async function repairAndResumeSession(
           }
         }
 
+        // Also strip trailing incomplete tool exchanges: if the last assistant
+        // message has tool_use blocks without matching tool_result, remove them.
+        // This prevents resume crashes from mid-tool-call state.
+        const finalLines = removed > 0 ? cleanLines : lines;
+        let trailingStripped = false;
+        for (let i = finalLines.length - 1; i >= 0; i--) {
+          try {
+            const parsed = JSON.parse(finalLines[i]);
+            if (parsed.message?.role === "user") {
+              const userContent = Array.isArray(parsed.message.content) ? parsed.message.content : [];
+              const hasOnlyUnavailableResults = userContent.length > 0 && userContent.every(
+                (c: any) => c.type === "tool_result" && Array.isArray(c.content) &&
+                  c.content.some((t: any) => t.text === "[result unavailable]")
+              );
+              if (hasOnlyUnavailableResults) {
+                finalLines.splice(i, 1);
+                removed++;
+                trailingStripped = true;
+                continue;
+              }
+              break;
+            }
+            if (parsed.message?.role === "assistant") {
+              const content = Array.isArray(parsed.message.content) ? parsed.message.content : [];
+              const hasToolUse = content.some((c: any) => c.type === "tool_use");
+              if (hasToolUse) {
+                const cleaned = content.filter((c: any) => c.type !== "tool_use");
+                if (cleaned.length === 0 || (cleaned.length === 1 && cleaned[0].type === "text" && !cleaned[0].text?.trim())) {
+                  finalLines.splice(i, 1);
+                } else {
+                  parsed.message.content = cleaned;
+                  finalLines[i] = JSON.stringify(parsed);
+                }
+                removed++;
+                trailingStripped = true;
+              }
+              break;
+            }
+          } catch {}
+        }
+
         if (removed > 0) {
           const bakPath = sessionFile.path + ".bak";
           if (!fs.existsSync(bakPath)) {
             fs.copyFileSync(sessionFile.path, bakPath);
           }
-          fs.writeFileSync(sessionFile.path, cleanLines.join("\n") + "\n");
-          log(`Surgical cleanup: removed ${removed} corrupt entries from ${sessionId.slice(0, 8)}`);
+          fs.writeFileSync(sessionFile.path, finalLines.join("\n") + "\n");
+          log(`Surgical cleanup: removed ${removed} entries from ${sessionId.slice(0, 8)}${trailingStripped ? " (incl. trailing tool calls)" : ""}`);
 
           const resumed = await autoResumeSession(sessionId, content, titleCache, nonInteractive, cwdOverride, convId);
           if (resumed) {
@@ -6557,7 +6675,7 @@ async function materializeSession(
 
       const TOKEN_BUDGET = 100_000;
       const tailMessages = chooseClaudeTailMessagesForTokenBudget(exportData, TOKEN_BUDGET);
-      const { jsonl, sessionId } = generateClaudeCodeJsonl(exportData, { tailMessages });
+      const { jsonl, sessionId } = generateClaudeCodeJsonl(exportData, { tailMessages, stripTrailingToolCalls: true });
       const projectPath = exportData.conversation.project_path || undefined;
       const { filePath: matFilePath } = writeClaudeCodeSession(jsonl, sessionId, projectPath);
       setPosition(matFilePath, fs.statSync(matFilePath).size);
@@ -7893,17 +8011,15 @@ function startWatchdog(
 
     // Prune started session entries if tmux session is dead or agent has crashed
     for (const [convId, entry] of startedSessionTmux.entries()) {
-      if (now - entry.startedAt > STARTED_SESSION_TTL_MS) {
-        try {
-          await tmuxExec(["has-session", "-t", entry.tmuxSession], { timeout: 3000, killSignal: "SIGKILL" });
-          if (!(await isTmuxAgentAlive(entry.tmuxSession))) {
-            log(`Pruning started session ${entry.tmuxSession}: agent dead (zombie shell)`);
-            try { await tmuxExec(["kill-session", "-t", entry.tmuxSession]); } catch {}
-            deleteStartedSession(convId);
-          }
-        } catch {
+      try {
+        await tmuxExec(["has-session", "-t", entry.tmuxSession], { timeout: 3000, killSignal: "SIGKILL" });
+        if (now - entry.startedAt > 30_000 && !(await isTmuxAgentAlive(entry.tmuxSession))) {
+          log(`Pruning started session ${entry.tmuxSession}: agent dead (zombie shell)`);
+          try { await tmuxExec(["kill-session", "-t", entry.tmuxSession]); } catch {}
           deleteStartedSession(convId);
         }
+      } catch {
+        deleteStartedSession(convId);
       }
     }
 
@@ -9204,6 +9320,22 @@ async function main(): Promise<void> {
 
   codexWatcher.start();
 
+  const CODEX_POLL_INTERVAL_MS = 10_000;
+  const codexPollInterval = setInterval(() => {
+    if (isSyncPaused()) return;
+    const state = readDaemonState();
+    if (state?.authExpired) return;
+    for (const [filePath, sync] of codexSyncs) {
+      try {
+        const stats = fs.statSync(filePath);
+        const lastPos = getPosition(filePath);
+        if (stats.size > lastPos) {
+          sync.invalidate();
+        }
+      } catch {}
+    }
+  }, CODEX_POLL_INTERVAL_MS);
+
   const geminiWatcher = new GeminiWatcher();
   const geminiSyncs = new Map<string, InvalidateSync>();
 
@@ -9569,6 +9701,7 @@ async function main(): Promise<void> {
     clearInterval(reconciliationInterval);
     clearInterval(eventLoopMonitorInterval);
     clearInterval(statusCleanupInterval);
+    clearInterval(codexPollInterval);
     log("Watchdog and reconciliation stopped");
 
     statusWatcher.close();
