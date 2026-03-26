@@ -1413,6 +1413,9 @@ export default defineSchema({
         hide_agent: v.optional(v.boolean()),
         source: v.optional(v.string()),
       })),
+      doc_view: v.optional(v.object({
+        doc_type: v.optional(v.string()),
+      })),
     })),
 
     layouts: v.optional(v.object({
