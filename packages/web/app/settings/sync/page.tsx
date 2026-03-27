@@ -47,6 +47,7 @@ export default function SyncPage() {
   const [editMode, setEditMode] = useState(false);
   const [newProject, setNewProject] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
+  const [isUnsyncing, setIsUnsyncing] = useState(false);
   const [pendingUnsync, setPendingUnsync] = useState<{
     path: string;
     sessionCount: number;
@@ -139,23 +140,27 @@ export default function SyncPage() {
   };
 
   const executeUnsync = async (deleteConversations: boolean) => {
-    if (!pendingUnsync) return;
+    if (!pendingUnsync || isUnsyncing) return;
     const { path, action } = pendingUnsync;
 
-    if (action === "unsync") {
-      const newProjects = syncProjects.filter(p => p !== path);
-      await updateSyncSettings({ sync_projects: newProjects });
-      const existingMapping = mappingsByPath.get(path);
-      if (existingMapping) {
+    setIsUnsyncing(true);
+    try {
+      if (action === "unsync") {
+        const newProjects = syncProjects.filter(p => p !== path);
+        await updateSyncSettings({ sync_projects: newProjects });
+        const existingMapping = mappingsByPath.get(path);
+        if (existingMapping) {
+          await removeDirectoryMapping({ path_prefix: path, delete_conversations: deleteConversations });
+        } else if (deleteConversations) {
+          await deleteConversationsForPath({ path_prefix: path });
+        }
+      } else {
         await removeDirectoryMapping({ path_prefix: path, delete_conversations: deleteConversations });
-      } else if (deleteConversations) {
-        await deleteConversationsForPath({ path_prefix: path });
       }
-    } else {
-      await removeDirectoryMapping({ path_prefix: path, delete_conversations: deleteConversations });
+      setPendingUnsync(null);
+    } finally {
+      setIsUnsyncing(false);
     }
-
-    setPendingUnsync(null);
   };
 
   const handleVisibilityChange = async (teamId: Id<"teams">, visibility: TeamVisibility) => {
@@ -526,6 +531,7 @@ export default function SyncPage() {
               variant="outline"
               onClick={() => setPendingUnsync(null)}
               className="border-sol-border text-sol-base1"
+              disabled={isUnsyncing}
             >
               Cancel
             </Button>
@@ -533,14 +539,16 @@ export default function SyncPage() {
               variant="outline"
               onClick={() => executeUnsync(false)}
               className="border-sol-cyan text-sol-cyan hover:bg-sol-cyan/10"
+              disabled={isUnsyncing}
             >
-              Keep Conversations
+              {isUnsyncing ? "Removing..." : "Keep Conversations"}
             </Button>
             <Button
               onClick={() => executeUnsync(true)}
               className="bg-red-600 text-white hover:bg-red-700"
+              disabled={isUnsyncing}
             >
-              Delete Conversations
+              {isUnsyncing ? "Deleting..." : "Delete Conversations"}
             </Button>
           </DialogFooter>
         </DialogContent>

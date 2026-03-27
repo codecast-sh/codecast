@@ -16,6 +16,7 @@ import {
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useInboxStore } from "../../../store/inboxStore";
 import { TeamIcon, TEAM_ICONS, TEAM_COLORS, colorBgClassMap } from "../../../components/TeamIcon";
+import { ChevronDown } from "lucide-react";
 
 export default function TeamPage() {
   const user = useQuery(api.users.getCurrentUser);
@@ -401,13 +402,14 @@ export default function TeamPage() {
                           member.role === "admin" ? "member" : "admin"
                         )}
                         disabled={roleChangeInProgress === member._id}
-                        className={`px-2 py-1 rounded text-xs font-medium cursor-pointer transition-colors ${
+                        className={`px-2 py-1 rounded text-xs font-medium cursor-pointer transition-colors flex items-center gap-1 border ${
                           member.role === "admin"
-                            ? "bg-sol-cyan/20 text-sol-cyan hover:bg-sol-cyan/30"
-                            : "bg-sol-base02/20 text-sol-base1 hover:bg-sol-base02/30"
+                            ? "bg-sol-cyan/20 text-sol-cyan border-sol-cyan/30 hover:bg-sol-cyan/30"
+                            : "bg-sol-base02/20 text-sol-base1 border-sol-base01/30 hover:bg-sol-base02/30 hover:text-sol-text"
                         }`}
                       >
                         {roleChangeInProgress === member._id ? "..." : member.role}
+                        <ChevronDown className="w-3 h-3 opacity-60" />
                       </button>
                     ) : (
                       <span className={`px-2 py-1 rounded text-xs font-medium ${

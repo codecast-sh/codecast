@@ -22,7 +22,6 @@ export default function UserProfilePage() {
 }
 
 const NOISE_VERBS = new Set(["started", "finished"]);
-const NOISE_BRANCHES = new Set(["main", "master"]);
 
 function fmtK(n: number): string {
   if (n >= 1000) return `${(n / 1000).toFixed(1).replace(/\.0$/, "")}k`;
@@ -137,7 +136,7 @@ function UserProfileContent() {
           {days.map(([date, items]) => (
             <div key={date}>
               <DayHeader date={date} count={items.length} items={items} />
-              <div>{items.map((item: any, i: number) => <FeedRow key={`${item.type}-${item.timestamp}-${i}`} item={item} router={router} idx={i} />)}</div>
+              <div>{items.map((item: any, i: number) => <FeedRow key={`${item.type}-${item.timestamp}-${i}`} item={item} router={router} />)}</div>
             </div>
           ))}
           {filtered && filtered.length === 0 && <div className="text-[11px] text-sol-base01/30 text-center py-16">No recent activity</div>}
@@ -207,7 +206,7 @@ function ActivityHeatmap({ data }: { data: any[] }) {
     const today = new Date(); today.setHours(0, 0, 0, 0);
     const weeks = 26;
     const startDay = new Date(today);
-    startDay.setDate(startDay.getDate() - (weeks * 7 - 1) - startDay.getDay());
+    startDay.setDate(startDay.getDate() - startDay.getDay() - (weeks - 1) * 7);
 
     const rows: Array<Array<{ date: string; hours: number; sessions: number }>> = [];
     for (let w = 0; w < weeks; w++) {
@@ -496,21 +495,10 @@ function fmtAge(ts: number): string {
 
 /* ─── Feed Components ─── */
 
-const VERB_COLORS: Record<string, string> = {
-  messaged: "text-sol-blue/80", created: "text-sol-yellow/75", updated: "text-sol-yellow/50",
-  completed: "text-sol-green/85", wrote: "text-sol-cyan/65", edited: "text-sol-cyan/45",
-  pushed: "text-sol-green/60", "opened PR": "text-sol-violet/70", "merged PR": "text-sol-green/70",
-};
-
 const VERB_ACCENTS: Record<string, string> = {
   messaged: "border-l-sol-blue/40", created: "border-l-sol-yellow/40", updated: "border-l-sol-yellow/20",
   completed: "border-l-sol-green/50", wrote: "border-l-sol-cyan/35", edited: "border-l-sol-cyan/20",
   pushed: "border-l-sol-green/30", "opened PR": "border-l-sol-violet/40", "merged PR": "border-l-sol-green/40",
-};
-
-const TYPE_ICONS: Record<string, string> = {
-  message: "\u25B8", task: "\u25A0", doc: "\u25C6",
-  commit_pushed: "\u2022", pr_created: "\u2191", pr_merged: "\u2713",
 };
 
 const TASK_STATUS_DOTS: Record<string, string> = {
@@ -525,100 +513,57 @@ function stripSystemMarkup(text: string): string {
     .trim();
 }
 
-function FeedRow({ item, router, idx }: { item: any; router: ReturnType<typeof useRouter>; idx: number }) {
+function FeedRow({ item, router }: { item: any; router: ReturnType<typeof useRouter> }) {
   const href = item.entity_type === "session" ? `/conversation/${item.entity_id}`
     : item.entity_type === "task" ? `/tasks/${item.entity_id}`
     : item.entity_type === "doc" ? `/docs/${item.entity_id}` : null;
 
-  const verbColor = VERB_COLORS[item.verb] || "text-sol-base01/50";
   const accent = VERB_ACCENTS[item.verb] || "border-l-sol-base01/15";
   const isLive = item.meta?.status === "active" && (Date.now() - item.timestamp < 3600000);
-  const branch = item.meta?.branch && !NOISE_BRANCHES.has(item.meta.branch) ? item.meta.branch : null;
-  const durMs = item.meta?.duration_ms;
-  const durStr = durMs ? (durMs < 3600000 ? `${Math.round(durMs / 60000)}m` : `${(durMs / 3600000).toFixed(1)}h`) : null;
-  const typeIcon = TYPE_ICONS[item.type] || TYPE_ICONS[item.entity_type] || "";
-  const zebraClass = idx % 2 === 0 ? "" : "bg-sol-bg-alt/20";
 
   const cleanPreview = useMemo(() => {
     if (!item.preview) return null;
-    return stripSystemMarkup(item.preview);
+    const cleaned = stripSystemMarkup(item.preview);
+    return cleaned || null;
   }, [item.preview]);
 
+  const isMessage = item.type === "message";
+  const primary = isMessage ? (cleanPreview || item.entity_title || item.verb) : (item.entity_title || cleanPreview || item.verb);
+  const secondary = isMessage && cleanPreview && item.entity_title ? item.entity_title : (!isMessage && item.entity_title && cleanPreview ? cleanPreview : null);
+
   return (
-    <div className={`border-l-2 ${accent} hover:bg-sol-bg-alt/60 transition-colors ${href ? "cursor-pointer" : ""} group py-[3px] pl-2 pr-1 ${zebraClass}`} onClick={href ? () => router.push(href) : undefined}>
-      <div className="flex items-baseline gap-0">
-        {/* Time -- wider, more visible */}
-        <span className="w-[48px] flex-shrink-0 text-[10px] tabular-nums text-sol-base01/28 text-right pr-2 select-none leading-none">{fmtTime(item.timestamp)}</span>
+    <div className={`border-l-2 ${accent} hover:bg-sol-bg-alt/60 transition-colors ${href ? "cursor-pointer" : ""} group py-[5px] pl-2.5 pr-2`} onClick={href ? () => router.push(href) : undefined}>
+      <div className="flex items-baseline gap-1.5 min-w-0">
+        <span className="flex-shrink-0 text-[10px] tabular-nums text-sol-base01/25 select-none">{fmtTime(item.timestamp)}</span>
 
-        {/* Type icon */}
-        <span className={`w-[14px] flex-shrink-0 text-[8px] ${verbColor} select-none leading-none`}>{typeIcon}</span>
+        {item.entity_type === "task" && item.meta?.status && (
+          <span className={`flex-shrink-0 inline-block w-1.5 h-1.5 rounded-full ${TASK_STATUS_DOTS[item.meta.status] || "bg-sol-base01/20"}`} title={item.meta.status} />
+        )}
 
-        {/* Content */}
-        <span className="min-w-0 flex-1 text-[11.5px] leading-[1.55] overflow-hidden whitespace-nowrap text-ellipsis">
-          {item.verb === "completed" && <span className="text-sol-green/70 mr-0.5">&#10003;</span>}
-          <span className={`font-semibold ${verbColor}`}>{item.verb}</span>
-          {item.count && item.count > 5 && <span className="text-sol-base01/25 text-[9px] ml-0.5">{item.count}x</span>}
-          {" "}
+        {isLive && isMessage && (
+          <span className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-sol-green animate-pulse inline-block" />
+        )}
 
-          {/* Task status dot */}
-          {item.entity_type === "task" && item.meta?.status && (
-            <span className={`inline-block w-1.5 h-1.5 rounded-full ${TASK_STATUS_DOTS[item.meta.status] || "bg-sol-base01/20"} mr-1 align-middle`} title={item.meta.status} />
-          )}
-
-          {/* Doc type chip */}
-          {item.entity_type === "doc" && item.meta?.doc_type && item.meta.doc_type !== "note" && (
-            <span className="inline-block text-[8.5px] font-semibold uppercase tracking-wider text-sol-cyan/45 bg-sol-cyan/10 px-1 py-px rounded mr-1 align-baseline">{item.meta.doc_type}</span>
-          )}
-
-          {/* Task short ID */}
-          {item.entity_type === "task" && item.entity_short_id && <span className="text-sol-base01/30 font-mono text-[9.5px] mr-0.5">{item.entity_short_id}</span>}
-
-          {/* Entity title -- stronger contrast */}
-          {item.entity_title && (
-            <span className="text-sol-text/85 font-medium group-hover:text-sol-text transition-colors group-hover:underline decoration-sol-base01/20 underline-offset-2">{item.entity_title}</span>
-          )}
-
-          {/* LIVE badge */}
-          {isLive && item.type === "message" && (
-            <span className="inline-flex items-center gap-0.5 ml-1.5 align-baseline">
-              <span className="w-1.5 h-1.5 rounded-full bg-sol-green animate-pulse inline-block" />
-              <span className="text-sol-green/80 text-[8px] font-bold tracking-wider">LIVE</span>
-            </span>
-          )}
-
-          {/* Project -- more prominent */}
-          {item.meta?.project && item.meta.project !== "unknown" && (
-            <span className="text-sol-base01/28 text-[9.5px] font-mono ml-1.5 bg-sol-base02/30 px-1 rounded">{item.meta.project}</span>
-          )}
-
-          {/* Duration */}
-          {durStr && <span className="text-sol-base01/25 text-[9px] ml-1 tabular-nums">{durStr}</span>}
-
-          {/* Branch */}
-          {branch && <span className="text-sol-base01/22 font-mono text-[9px] ml-1">{branch}</span>}
-
-          {/* Message count -- spelled out */}
-          {item.meta?.message_count && item.meta.message_count > 20 && (
-            <span className="text-sol-base01/20 text-[9px] tabular-nums ml-1">{item.meta.message_count} msgs</span>
-          )}
-
-          {/* Files changed */}
-          {item.meta?.files_changed && <span className="text-sol-base01/20 text-[9px] ml-1">{item.meta.files_changed} files</span>}
-
-          {/* Non-message preview */}
-          {item.type !== "message" && item.preview && !item.entity_title && <span className="text-sol-text/50 ml-0.5">{stripSystemMarkup(item.preview)}</span>}
-
-          {/* Priority */}
-          {item.meta?.priority === "high" && <span className="inline-block w-1.5 h-1.5 rounded-full bg-sol-red/40 ml-1 align-middle" title="high priority" />}
-          {item.meta?.priority === "urgent" && <span className="inline-block w-2 h-2 rounded-full bg-sol-red/60 ml-1 align-middle" title="urgent" />}
+        <span className={`min-w-0 flex-1 text-[12px] leading-snug font-medium truncate group-hover:text-sol-text transition-colors ${isMessage && cleanPreview ? "text-sol-text/90" : isMessage ? "text-sol-text/50 italic" : "text-sol-text/90"}`}>
+          {item.verb === "completed" && <span className="text-sol-green/70 mr-1">&#10003;</span>}
+          {item.entity_type === "task" && item.entity_short_id && <span className="text-sol-base01/35 font-mono text-[10px] mr-1 not-italic">{item.entity_short_id}</span>}
+          {primary}
         </span>
+
+        {isMessage && secondary && (
+          <span className="flex-shrink-0 text-[9.5px] text-sol-base01/30 truncate max-w-[180px]">{secondary}</span>
+        )}
+
+        {item.meta?.project && item.meta.project !== "unknown" && (
+          <span className="flex-shrink-0 text-[9px] font-mono text-sol-base01/25">{item.meta.project}</span>
+        )}
+
+        {item.meta?.priority === "high" && <span className="flex-shrink-0 inline-block w-1.5 h-1.5 rounded-full bg-sol-red/40" title="high priority" />}
+        {item.meta?.priority === "urgent" && <span className="flex-shrink-0 inline-block w-2 h-2 rounded-full bg-sol-red/60" title="urgent" />}
       </div>
 
-      {/* Message preview -- quote style, cleaned up, more readable */}
-      {item.type === "message" && cleanPreview && (
-        <div className="pl-[62px] mt-0.5 mb-0.5">
-          <p className="text-[11px] text-sol-text/50 leading-snug line-clamp-2 border-l-2 border-sol-blue/15 pl-2 py-px">{cleanPreview}</p>
-        </div>
+      {!isMessage && secondary && (
+        <p className="text-[11px] text-sol-text/40 leading-snug line-clamp-2 mt-0.5 ml-[calc(theme(spacing.2.5)+3ch+theme(spacing.1.5))]">{secondary}</p>
       )}
     </div>
   );
