@@ -864,7 +864,8 @@ export const getUserProfileFeed = query({
       );
       if (userMsgs.length > 0) {
         const latest = userMsgs[0];
-        const content = latest.content || "";
+        const withContent = userMsgs.find((m: any) => m.content && m.content.trim().length > 0);
+        const content = (withContent?.content || latest.content || "").trim();
         items.push({
           type: "message",
           timestamp: latest.timestamp || latest._creationTime,
@@ -1445,13 +1446,26 @@ export const getRecentProjectPaths = query({
       }
     }
 
-    return Array.from(pathCounts.entries())
-      .sort((a, b) => b[1].count - a[1].count)
-      .slice(0, limit)
+    const entries = Array.from(pathCounts.entries());
+    const maxCount = Math.max(1, ...entries.map(([, s]) => s.count));
+    const now = Date.now();
+    const ageRange = now - threeWeeksAgo;
+
+    return entries
       .map(([path, stats]) => ({
         path,
         count: stats.count,
         lastActive: stats.lastActive,
+        score:
+          0.65 * (stats.count / maxCount) +
+          0.35 * ((stats.lastActive - threeWeeksAgo) / ageRange),
+      }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit)
+      .map(({ path, count, lastActive }) => ({
+        path,
+        count,
+        lastActive,
       }));
   },
 });

@@ -50,10 +50,7 @@ export const submitSnapshot = mutation({
         q.eq("id", args.id).eq("version", args.version),
       )
       .first();
-    if (existing) {
-      if (existing.content === args.content) return;
-      throw new Error(`Snapshot ${args.id} at version ${args.version} already exists with different content`);
-    }
+    if (existing) return;
     await ctx.db.insert("doc_snapshots", {
       id: args.id,
       version: args.version,
