@@ -689,21 +689,21 @@ export const getUserActivityHeatmap = query({
     const cutoff = now - days * 24 * 60 * 60 * 1000;
     const MAX_SESSION_MS = 8 * 3600000;
 
-    const conversations = args.team_id
+    const MAX_CONVOS = 150;
+    const raw = args.team_id
       ? await ctx.db
           .query("conversations")
           .withIndex("by_team_user_updated", (q: any) =>
-            q.eq("team_id", args.team_id).eq("user_id", args.user_id).gte("updated_at", cutoff)
+            q.eq("team_id", args.team_id).eq("user_id", args.user_id)
           )
-          .collect()
+          .order("desc")
+          .take(MAX_CONVOS)
       : await ctx.db
           .query("conversations")
           .withIndex("by_user_id", (q) => q.eq("user_id", args.user_id))
-          .collect();
-
-    const filtered = args.team_id
-      ? conversations
-      : conversations.filter((c) => c.updated_at >= cutoff);
+          .order("desc")
+          .take(MAX_CONVOS);
+    const filtered = raw.filter((c) => c.updated_at >= cutoff);
 
     const buckets: Record<string, { hours: number; sessions: number }> = {};
     for (const c of filtered) {

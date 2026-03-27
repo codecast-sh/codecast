@@ -47,11 +47,6 @@ function UserProfileContent() {
     profileUser?._id ? { user_id: profileUser._id, team_id: teamId, limit: 80 } : "skip"
   );
 
-  const heatmap = useQuery(
-    (api.users as any).getUserActivityHeatmap,
-    profileUser?._id ? { user_id: profileUser._id, team_id: teamId, days: 180 } : "skip"
-  );
-
   const filtered = useMemo(() => feed?.filter((i: any) => !NOISE_VERBS.has(i.verb)) ?? null, [feed]);
   const days = useMemo(() => filtered ? groupByDay(filtered) : [], [filtered]);
 
@@ -122,8 +117,12 @@ function UserProfileContent() {
         </div>
       </div>
 
-      {/* Activity heatmap */}
-      {heatmap && <ActivityHeatmap data={heatmap} />}
+      {/* Activity heatmap -- isolated so errors don't crash the feed */}
+      {profileUser?._id && (
+        <ErrorBoundary name="ActivityHeatmap" level="inline">
+          <ActivityHeatmapLoader userId={profileUser._id} teamId={teamId} />
+        </ErrorBoundary>
+      )}
 
       {/* View toggle */}
       <div className="flex items-center gap-0 mt-2 mb-1 border-b border-sol-border/10">
@@ -184,6 +183,15 @@ const HEAT_COLORS = [
   "bg-sol-green/60",
   "bg-sol-green/80",
 ];
+
+function ActivityHeatmapLoader({ userId, teamId }: { userId: Id<"users">; teamId?: Id<"teams"> }) {
+  const heatmap = useQuery(
+    api.users.getUserActivityHeatmap,
+    { user_id: userId, team_id: teamId, days: 90 }
+  );
+  if (!heatmap) return null;
+  return <ActivityHeatmap data={heatmap} />;
+}
 
 function ActivityHeatmap({ data }: { data: any[] }) {
   const { grid, maxHours, totalHours, totalSessions } = useMemo(() => {
