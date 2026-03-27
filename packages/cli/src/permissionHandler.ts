@@ -16,18 +16,18 @@ export async function handlePermissionRequest(
   log: (msg: string) => void
 ): Promise<PermissionDecision | null> {
   try {
-    await syncService.createPermissionRequest({
+    const permissionId = await syncService.createPermissionRequest({
       conversation_id: conversationId,
       session_id: sessionId,
       tool_name: prompt.tool_name,
       arguments_preview: prompt.arguments_preview,
     });
 
-    log(`Created permission request for tool: ${prompt.tool_name}`);
+    log(`Created permission request ${permissionId} for tool: ${prompt.tool_name}`);
 
     const startTime = Date.now();
     while (Date.now() - startTime < TIMEOUT_MS) {
-      const decision = await syncService.getPermissionDecision(sessionId);
+      const decision = await syncService.getPermissionDecision(sessionId, permissionId);
 
       if (decision) {
         const approved = decision.status === "approved";

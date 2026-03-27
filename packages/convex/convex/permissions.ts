@@ -84,6 +84,9 @@ export const updatePermissionStatus = mutation({
     }
 
     if (permission.status !== "pending") {
+      if (permission.status === args.status) {
+        return args.permission_id;
+      }
       throw new Error("Permission already resolved");
     }
 
@@ -130,12 +133,30 @@ export const getPendingPermissions = query({
 export const getPermissionDecision = query({
   args: {
     session_id: v.string(),
+    permission_id: v.optional(v.id("pending_permissions")),
     api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!authUserId) {
       return null;
+    }
+
+    if (args.permission_id) {
+      const permission = await ctx.db.get(args.permission_id);
+      if (!permission || permission.status === "pending") {
+        return null;
+      }
+      const conversation = await ctx.db.get(permission.conversation_id);
+      if (!conversation || conversation.user_id.toString() !== authUserId.toString()) {
+        return null;
+      }
+      return {
+        _id: permission._id,
+        status: permission.status,
+        resolved_at: permission.resolved_at,
+        tool_name: permission.tool_name,
+      };
     }
 
     const permissions = await ctx.db

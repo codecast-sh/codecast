@@ -751,7 +751,7 @@ export class SyncService {
     }
   }
 
-  async getPermissionDecision(sessionId: string): Promise<{
+  async getPermissionDecision(sessionId: string, permissionId?: string): Promise<{
     _id: string;
     status: "approved" | "denied";
     resolved_at?: number;
@@ -762,6 +762,7 @@ export class SyncService {
         "permissions:getPermissionDecision" as any,
         {
           session_id: sessionId,
+          ...(permissionId ? { permission_id: permissionId } : {}),
           api_token: this.apiToken,
         }
       );
