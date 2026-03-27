@@ -77,6 +77,7 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
   const zoomRef = useRef(1);
   const headerRef = useRef<HTMLElement>(null);
   const prevWasInboxRef = useRef(false);
+  const prevPathnameRef = useRef(pathname);
   usePrefetch();
   useSyncInboxSessions();
 
@@ -134,31 +135,58 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
       const store = useInboxStore.getState();
       const current = store.currentSessionId;
       if (current) {
-        store.selectPanelSession(current);
+        store.openSidePanel(current);
       } else {
         store.clearSidePanelSession();
       }
     }
   }, [isOnInboxPage]);
 
+  useWatchEffect(() => {
+    const prev = prevPathnameRef.current;
+    prevPathnameRef.current = pathname;
+    if (!prev || prev === pathname) return;
+    const wasConvPage = prev.includes("/conversation/");
+    const isNowConvPage = pathname?.includes("/conversation/");
+    if (wasConvPage && !isNowConvPage) {
+      const sessionId = prev.split("/conversation/")[1]?.split("?")[0];
+      if (sessionId) {
+        useInboxStore.getState().openSidePanel(sessionId);
+      }
+    }
+  }, [pathname]);
+
+  const resolveNewSessionContext = useCallback(() => {
+    const store = useInboxStore.getState();
+    if (directoryFilter) {
+      return { path: directoryFilter, gitRoot: currentConvContext.gitRoot || directoryFilter, agentType: currentConvContext.agentType };
+    }
+    const liveId = store.currentSessionId;
+    const liveSess = liveId ? (store.sessions[liveId] ?? store.dismissedSessions[liveId]) : null;
+    if (liveSess?.project_path) {
+      return { path: liveSess.project_path, gitRoot: liveSess.git_root || liveSess.project_path, agentType: liveSess.agent_type };
+    }
+    return { path: currentConvContext.projectPath || currentConvContext.gitRoot, gitRoot: currentConvContext.gitRoot || currentConvContext.projectPath, agentType: currentConvContext.agentType };
+  }, [directoryFilter, currentConvContext]);
+
   const handleQuickCreate = useCallback(() => {
     soundNewSession();
-    const path = directoryFilter || currentConvContext.projectPath || currentConvContext.gitRoot;
-    const agentType = (currentConvContext.agentType || "claude_code") as "claude_code" | "codex" | "cursor" | "gemini";
+    const { path, gitRoot, agentType: rawAgent } = resolveNewSessionContext();
+    const agentType = (rawAgent || "claude_code") as "claude_code" | "codex" | "cursor" | "gemini";
     const sessionId = nanoid(10);
     const now = Date.now();
 
     const store = useInboxStore.getState();
     store.setConversationMeta(sessionId, {
       _id: sessionId, _creationTime: now, user_id: "", agent_type: agentType,
-      session_id: sessionId, project_path: path, git_root: currentConvContext.gitRoot || path,
+      session_id: sessionId, project_path: path, git_root: gitRoot || path,
       started_at: now, updated_at: now, message_count: 0, status: "active",
       title: "New session", messages: [],
     });
     store.createSession({
       agent_type: agentType,
       project_path: path,
-      git_root: currentConvContext.gitRoot || path,
+      git_root: gitRoot || path,
       session_id: sessionId,
     });
 
@@ -167,20 +195,20 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
     } else {
       router.push(`/conversation/${sessionId}?focus=1`);
     }
-  }, [currentConvContext, directoryFilter, router, isInboxRoute]);
+  }, [resolveNewSessionContext, router, isInboxRoute]);
 
   const handleQuickCreateIsolated = useCallback(async () => {
-    const path = directoryFilter || currentConvContext.projectPath || currentConvContext.gitRoot;
+    const { path, gitRoot, agentType: rawAgent } = resolveNewSessionContext();
     if (!path) {
       openNewSession({ source: isOnInboxPage ? "inbox" : "sessions" });
       return;
     }
     soundNewSession();
-    const agentType = (currentConvContext.agentType || "claude_code") as "claude_code" | "codex" | "cursor" | "gemini";
+    const agentType = (rawAgent || "claude_code") as "claude_code" | "codex" | "cursor" | "gemini";
     const conversationId = await createQuickSession({
       agent_type: agentType,
       project_path: path,
-      git_root: currentConvContext.gitRoot || path,
+      git_root: gitRoot || path,
       isolated: true,
     });
     if (isInboxRoute) {
@@ -188,7 +216,7 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
     } else {
       router.push(`/conversation/${conversationId}?focus=1`);
     }
-  }, [currentConvContext, directoryFilter, router, isInboxRoute, createQuickSession, openNewSession]);
+  }, [resolveNewSessionContext, router, isInboxRoute, createQuickSession, openNewSession]);
 
   useGlobalShortcutActions();
   useShortcutContext('desktop', isDesktopApp);
@@ -201,23 +229,23 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
     } else {
       if (store.showMySessions) store.setShowMySessions(false);
       soundNewSession();
-      const path = directoryFilter || currentConvContext.projectPath || currentConvContext.gitRoot;
-      const agentType = (currentConvContext.agentType || "claude_code") as "claude_code" | "codex" | "cursor" | "gemini";
+      const { path, gitRoot, agentType: rawAgent } = resolveNewSessionContext();
+      const agentType = (rawAgent || "claude_code") as "claude_code" | "codex" | "cursor" | "gemini";
       const sid = nanoid(10);
       const now = Date.now();
       store.setConversationMeta(sid, {
         _id: sid, _creationTime: now, user_id: "", agent_type: agentType,
-        session_id: sid, project_path: path, git_root: currentConvContext.gitRoot || path,
+        session_id: sid, project_path: path, git_root: gitRoot || path,
         started_at: now, updated_at: now, message_count: 0, status: "active",
         title: "New session", messages: [],
       });
       store.createSession({
         agent_type: agentType, project_path: path,
-        git_root: currentConvContext.gitRoot || path, session_id: sid,
+        git_root: gitRoot || path, session_id: sid,
       });
       useInboxStore.setState({ sidePanelSessionId: sid });
     }
-  }, [isOnInboxPage, directoryFilter, currentConvContext, handleQuickCreate]));
+  }, [isOnInboxPage, resolveNewSessionContext, handleQuickCreate]));
 
   useShortcutAction('session.createIsolated', useCallback(() => {
     handleQuickCreateIsolated();
@@ -369,7 +397,7 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
           <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
             <button
               onClick={() => {
-                if (directoryFilter || currentConvContext.projectPath || currentConvContext.gitRoot) {
+                if (resolveNewSessionContext().path) {
                   handleQuickCreate();
                 } else {
                   openNewSession({});
