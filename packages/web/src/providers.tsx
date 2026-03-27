@@ -6,7 +6,6 @@ import { NavigationProgress } from "@/components/NavigationProgress";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { Toaster } from "@/components/ui/sonner";
 import { DesktopProvider } from "@/components/DesktopProvider";
-import { SlideOutProvider } from "@/components/SlideOutProvider";
 import { ShortcutProvider } from "@/shortcuts";
 import { useLocalStorageMigration } from "@/hooks/useLocalStorageMigration";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
@@ -54,9 +53,6 @@ export function Providers({ children }: { children: ReactNode }) {
         {children}
         <ErrorBoundary name="DesktopProvider" level="inline">
           <DesktopProvider />
-        </ErrorBoundary>
-        <ErrorBoundary name="SlideOut" level="inline">
-          <SlideOutProvider />
         </ErrorBoundary>
         <PrefsMigration />
         <AnalyticsIdentify />

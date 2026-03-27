@@ -1,7 +1,7 @@
 import React, { useState, useCallback } from "react";
 import { useQuery } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
-import { useSlideOutStore } from "../store/slideOutStore";
+import Link from "next/link";
 import {
   Target,
   Circle,
@@ -14,6 +14,8 @@ import {
   ArrowUp,
   Minus,
   ArrowDown,
+  ChevronDown,
+  ExternalLink,
 } from "lucide-react";
 import { Popover, PopoverContent, PopoverAnchor } from "./ui/popover";
 
@@ -263,14 +265,147 @@ export function EntityAwareLink({ href, children, ...props }: any) {
   return <a href={href} {...props}>{children}</a>;
 }
 
+const CROSSHATCH_BG = [
+  "repeating-linear-gradient(45deg, transparent, transparent 4px, rgba(255,255,255,0.04) 4px, rgba(255,255,255,0.04) 5px)",
+  "repeating-linear-gradient(-45deg, transparent, transparent 4px, rgba(255,255,255,0.04) 4px, rgba(255,255,255,0.04) 5px)",
+].join(", ");
+
+function InlineTaskExpand({ task }: { task: any }) {
+  const sc = TASK_STATUS_CONFIG[task.status] || TASK_STATUS_CONFIG.open;
+  const StatusIcon = sc.icon;
+  const pc = PRIORITY_CONFIG[task.priority || "medium"];
+  const PriorityIcon = pc?.icon || Minus;
+
+  return (
+    <div
+      className="mt-1 rounded-lg border border-sol-border/20 overflow-hidden"
+      style={{ background: CROSSHATCH_BG }}
+    >
+      <div className="px-3 py-2.5 space-y-2">
+        <div className="text-xs font-medium text-sol-text leading-snug">
+          {task.title}
+        </div>
+        <div className="flex items-center gap-3">
+          <span className={`inline-flex items-center gap-1 text-[10px] font-medium ${sc.color}`}>
+            <StatusIcon className="w-2.5 h-2.5" />
+            {sc.label}
+          </span>
+          {pc && (
+            <span className={`inline-flex items-center gap-1 text-[10px] ${pc.color}`}>
+              <PriorityIcon className="w-2.5 h-2.5" />
+              {pc.label}
+            </span>
+          )}
+        </div>
+        {task.description && (
+          <p className="text-[11px] text-sol-text-muted line-clamp-3 leading-relaxed">
+            {stripMarkdown(task.description).slice(0, 200)}
+          </p>
+        )}
+        {task.plan && (
+          <div className="flex items-center gap-1.5">
+            <Target className="w-2.5 h-2.5 text-sol-cyan flex-shrink-0" />
+            <span className="text-[10px] text-sol-cyan truncate">{task.plan.title}</span>
+          </div>
+        )}
+        <Link
+          href={`/tasks/${task._id}`}
+          className="flex items-center gap-1 text-[10px] text-sol-cyan hover:text-sol-text transition-colors pt-1 border-t border-sol-border/10"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <ExternalLink className="w-2.5 h-2.5" />
+          Open full task
+        </Link>
+      </div>
+    </div>
+  );
+}
+
+function InlinePlanExpand({ plan }: { plan: any }) {
+  const statusColor = STATUS_COLOR[plan.status || "active"] || "text-gray-400";
+  const statusLabel = STATUS_LABEL[plan.status] || plan.status;
+  const tasks = plan.tasks || [];
+  const doneCount = tasks.filter((t: any) => t.status === "done").length;
+  const total = tasks.length;
+  const pct = total > 0 ? Math.round((doneCount / total) * 100) : 0;
+
+  return (
+    <div
+      className="mt-1 rounded-lg border border-sol-border/20 overflow-hidden"
+      style={{ background: CROSSHATCH_BG }}
+    >
+      <div className="px-3 py-2.5 space-y-2">
+        <div className="text-xs font-medium text-sol-text leading-snug">
+          {plan.title}
+        </div>
+        <span className={`text-[10px] font-medium ${statusColor}`}>{statusLabel}</span>
+        {plan.goal && (
+          <p className="text-[11px] text-sol-text-muted line-clamp-2 leading-relaxed">
+            {stripMarkdown(plan.goal).slice(0, 200)}
+          </p>
+        )}
+        {total > 0 && (
+          <div className="flex items-center gap-2">
+            <div className="flex-1 h-1.5 rounded-full bg-white/5 overflow-hidden">
+              <div
+                className="h-full rounded-full bg-sol-green transition-all"
+                style={{ width: `${pct}%` }}
+              />
+            </div>
+            <span className="text-[10px] text-sol-text-dim font-mono">
+              {doneCount}/{total}
+            </span>
+          </div>
+        )}
+        {tasks.length > 0 && (
+          <div className="space-y-0.5 max-h-[100px] overflow-y-auto">
+            {tasks.slice(0, 5).map((t: any) => {
+              const Icon = STATUS_ICON[t.status] || Circle;
+              const color = STATUS_COLOR[t.status] || "text-gray-400";
+              return (
+                <div key={t._id} className="flex items-center gap-1.5 py-0.5 text-[10px]">
+                  <Icon className={`w-2.5 h-2.5 flex-shrink-0 ${color}`} />
+                  <span className={`truncate ${t.status === "done" ? "line-through text-sol-text-dim" : "text-sol-text-muted"}`}>
+                    {t.title}
+                  </span>
+                </div>
+              );
+            })}
+            {tasks.length > 5 && (
+              <div className="text-[10px] text-sol-text-dim">+{tasks.length - 5} more</div>
+            )}
+          </div>
+        )}
+        <Link
+          href={`/plans/${plan._id}`}
+          className="flex items-center gap-1 text-[10px] text-sol-cyan hover:text-sol-text transition-colors pt-1 border-t border-sol-border/10"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <ExternalLink className="w-2.5 h-2.5" />
+          Open full plan
+        </Link>
+      </div>
+    </div>
+  );
+}
+
+const TASK_STATUS_CONFIG: Record<string, { icon: any; label: string; color: string }> = {
+  draft: { icon: CircleDotDashed, label: "Draft", color: "text-gray-400" },
+  open: { icon: Circle, label: "Open", color: "text-sol-blue" },
+  in_progress: { icon: CircleDot, label: "In Progress", color: "text-sol-yellow" },
+  in_review: { icon: CircleDot, label: "In Review", color: "text-sol-violet" },
+  done: { icon: CheckCircle2, label: "Done", color: "text-sol-green" },
+  dropped: { icon: XCircle, label: "Dropped", color: "text-gray-500" },
+};
+
 export function EntityIdPill({ shortId }: { shortId: string }) {
   const id = shortId.toLowerCase().trim();
   const prefix = id.split("-")[0];
   const isTask = prefix === "ct";
   const isPlan = prefix === "pl";
-  const openSlideOut = useSlideOutStore((s) => s.open);
 
   const [hoverOpen, setHoverOpen] = useState(false);
+  const [expanded, setExpanded] = useState(false);
   const hoverTimeout = { current: null as ReturnType<typeof setTimeout> | null };
 
   const task = useQuery(api.tasks.webGet, isTask ? { short_id: id } : "skip");
@@ -288,8 +423,9 @@ export function EntityIdPill({ shortId }: { shortId: string }) {
     : "bg-sol-yellow/10 text-sol-yellow border-sol-yellow/20 hover:bg-sol-yellow/20";
 
   const handleMouseEnter = useCallback(() => {
+    if (expanded) return;
     hoverTimeout.current = setTimeout(() => setHoverOpen(true), 250);
-  }, []);
+  }, [expanded]);
 
   const handleMouseLeave = useCallback(() => {
     if (hoverTimeout.current) clearTimeout(hoverTimeout.current);
@@ -299,39 +435,44 @@ export function EntityIdPill({ shortId }: { shortId: string }) {
   const handleClick = useCallback(() => {
     setHoverOpen(false);
     if (hoverTimeout.current) clearTimeout(hoverTimeout.current);
-    if (!entity?._id) return;
-    openSlideOut(isTask ? "task" : "plan", entity._id);
-  }, [openSlideOut, entity, isTask]);
+    setExpanded((v) => !v);
+  }, []);
 
   return (
-    <Popover open={hoverOpen} onOpenChange={setHoverOpen}>
-      <PopoverAnchor asChild>
-        <button
+    <span style={{ display: expanded ? "block" : "inline" }}>
+      <Popover open={hoverOpen && !expanded} onOpenChange={setHoverOpen}>
+        <PopoverAnchor asChild>
+          <button
+            onClick={handleClick}
+            onMouseEnter={handleMouseEnter}
+            onMouseLeave={handleMouseLeave}
+            className={`inline-flex items-center gap-1 px-1.5 py-0 rounded text-[11px] font-mono leading-[1.4] ${colors} border transition-colors cursor-pointer align-baseline`}
+          >
+            <Icon className="w-2.5 h-2.5 flex-shrink-0" />
+            <span>{id}</span>
+            <ChevronDown className={`w-2 h-2 flex-shrink-0 transition-transform ${expanded ? "rotate-180" : ""}`} />
+          </button>
+        </PopoverAnchor>
+        <PopoverContent
+          className="w-64 bg-sol-bg border border-sol-border shadow-xl p-3 cursor-pointer"
+          side="top"
+          align="start"
+          sideOffset={6}
           onClick={handleClick}
           onMouseEnter={handleMouseEnter}
           onMouseLeave={handleMouseLeave}
-          className={`inline-flex items-center gap-1 px-1.5 py-0 rounded text-[11px] font-mono leading-[1.4] ${colors} border transition-colors cursor-pointer align-baseline`}
+          onOpenAutoFocus={(e) => e.preventDefault()}
         >
-          <Icon className="w-2.5 h-2.5 flex-shrink-0" />
-          <span>{id}</span>
-        </button>
-      </PopoverAnchor>
-      <PopoverContent
-        className="w-64 bg-sol-bg border border-sol-border shadow-xl p-3 cursor-pointer"
-        side="top"
-        align="start"
-        sideOffset={6}
-        onClick={handleClick}
-        onMouseEnter={handleMouseEnter}
-        onMouseLeave={handleMouseLeave}
-        onOpenAutoFocus={(e) => e.preventDefault()}
-      >
-        {entity ? (
-          isTask ? <TaskHoverContent task={entity} /> : <PlanHoverContent plan={entity} />
-        ) : (
-          <div className="text-[11px] text-gray-500">{id}</div>
-        )}
-      </PopoverContent>
-    </Popover>
+          {entity ? (
+            isTask ? <TaskHoverContent task={entity} /> : <PlanHoverContent plan={entity} />
+          ) : (
+            <div className="text-[11px] text-gray-500">{id}</div>
+          )}
+        </PopoverContent>
+      </Popover>
+      {expanded && entity && (
+        isTask ? <InlineTaskExpand task={entity} /> : <InlinePlanExpand plan={entity} />
+      )}
+    </span>
   );
 }

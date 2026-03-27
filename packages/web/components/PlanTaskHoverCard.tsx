@@ -1,5 +1,6 @@
 import { useState, useCallback } from "react";
 import { useQuery } from "convex/react";
+import { useRouter } from "next/navigation";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import Link from "next/link";
@@ -12,7 +13,6 @@ import {
   XCircle,
 } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
-import { useSlideOutStore } from "../store/slideOutStore";
 
 const api = _api as any;
 
@@ -105,7 +105,7 @@ export function PlanBadge({
 }) {
   const [hoverOpen, setHoverOpen] = useState(false);
   const hoverTimeout = { current: null as ReturnType<typeof setTimeout> | null };
-  const openSlideOut = useSlideOutStore((s) => s.open);
+  const router = useRouter();
 
   const handleMouseEnter = useCallback(() => {
     hoverTimeout.current = setTimeout(() => setHoverOpen(true), 300);
@@ -119,8 +119,8 @@ export function PlanBadge({
   const handleClick = useCallback(() => {
     setHoverOpen(false);
     if (hoverTimeout.current) clearTimeout(hoverTimeout.current);
-    openSlideOut("plan", plan._id);
-  }, [openSlideOut, plan._id]);
+    router.push(`/plans/${plan._id}`);
+  }, [router, plan._id]);
 
   return (
     <Popover open={hoverOpen} onOpenChange={setHoverOpen}>
@@ -158,11 +158,11 @@ export function TaskBadge({
 }) {
   const Icon = STATUS_ICON[task.status || "open"] || Circle;
   const color = STATUS_COLOR[task.status || "open"] || "text-sol-text-dim";
-  const openSlideOut = useSlideOutStore((s) => s.open);
+  const router = useRouter();
 
   return (
     <button
-      onClick={() => openSlideOut("task", task._id)}
+      onClick={() => router.push(`/tasks/${task._id}`)}
       className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] flex-shrink-0 bg-sol-yellow/10 text-sol-yellow border border-sol-yellow/20 hover:bg-sol-yellow/20 transition-colors max-w-[200px] ${className || ""}`}
     >
       <Icon className={`w-2.5 h-2.5 flex-shrink-0 ${color}`} />
