@@ -351,8 +351,10 @@ ipcMain.on("palette-compose", (_e, initialMessage) => {
 ipcMain.on("palette-start-session", (_e, data) => {
   hidePalette();
   if (mainWindow) {
-    mainWindow.show();
-    mainWindow.focus();
+    if (data?.navigate) {
+      mainWindow.show();
+      mainWindow.focus();
+    }
     mainWindow.webContents.executeJavaScript(
       `window.__CODECAST_START_SESSION && window.__CODECAST_START_SESSION(${JSON.stringify(data)})`
     );

@@ -528,7 +528,7 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
     setComposeMsg("");
   }, []);
 
-  const handleComposeSubmit = useCallback(() => {
+  const handleComposeSubmit = useCallback((navigate = false) => {
     const msg = composeMsg.trim();
     if (!msg) return;
     if (standalone && isElectron()) {
@@ -536,6 +536,7 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
         message: msg,
         agentType: composeAgent,
         projectPath: composeProject || projects[0] || undefined,
+        navigate,
       });
     } else {
       closePalette();
@@ -851,7 +852,7 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
-                handleComposeSubmit();
+                handleComposeSubmit(e.metaKey || e.ctrlKey);
               }
             }}
             placeholder="Send a message..."
@@ -860,9 +861,15 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
         </div>
 
         <div className="px-3 py-2 border-t border-sol-border/60 flex items-center justify-between text-[10px] text-sol-text-dim bg-sol-bg-alt/40">
-          <span className="flex items-center gap-1">
-            <kbd className="px-1.5 py-0.5 bg-sol-bg rounded border border-sol-border/80 text-sol-text-secondary">&#9166;</kbd>
-            start session
+          <span className="flex items-center gap-2">
+            <span className="flex items-center gap-1">
+              <kbd className="px-1.5 py-0.5 bg-sol-bg rounded border border-sol-border/80 text-sol-text-secondary">&#9166;</kbd>
+              send
+            </span>
+            <span className="flex items-center gap-1">
+              <kbd className="px-1.5 py-0.5 bg-sol-bg rounded border border-sol-border/80 text-sol-text-secondary">&#8984;&#9166;</kbd>
+              send &amp; open
+            </span>
           </span>
           <span className="flex items-center gap-1">
             <kbd className="px-1.5 py-0.5 bg-sol-bg rounded border border-sol-border/80 text-sol-text-secondary">ESC</kbd>

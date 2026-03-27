@@ -11,7 +11,7 @@ declare global {
       setShortcut: (key: string, accelerator: string) => Promise<Record<string, string>>;
       paletteNavigate: (path: string) => void;
       paletteHide: () => void;
-      paletteStartSession: (data: { message: string; agentType: string; projectPath?: string }) => void;
+      paletteStartSession: (data: { message: string; agentType: string; projectPath?: string; navigate?: boolean }) => void;
       onPaletteShow: (cb: () => void) => () => void;
       onComposeShow: (cb: () => void) => () => void;
       platform: string;
