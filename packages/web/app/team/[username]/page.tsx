@@ -1,5 +1,5 @@
 "use client";
-import { useMemo, useState, useRef, useCallback } from "react";
+import { useMemo, useState, useRef, useCallback, useEffect } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { ErrorBoundary } from "../../../components/ErrorBoundary";
@@ -296,12 +296,16 @@ function TimelineChart({ data }: { data: Array<{ date: string; hours: number; se
     e.preventDefault();
   }, []);
 
+  useEffect(() => {
+    if (containerRef.current) containerRef.current.scrollLeft = containerRef.current.scrollWidth;
+  }, [allDays.length]);
+
   if (allDays.length === 0) return <div className="text-[11px] text-sol-base01/30 text-center py-16">No data</div>;
 
-  const barW = Math.max(4, 12 * zoomLevel);
+  const barW = Math.max(6, 14 * zoomLevel);
   const gap = Math.max(1, 2 * zoomLevel);
   const chartW = allDays.length * (barW + gap);
-  const chartH = 160;
+  const chartH = 220;
   const padTop = 10;
   const padBot = 24;
   const plotH = chartH - padTop - padBot;
