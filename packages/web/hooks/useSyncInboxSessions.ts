@@ -49,7 +49,8 @@ export function useSyncInboxSessions() {
     _setDispatch((action, args, patches) => dispatchRef.current({ action, args, patches }));
   });
 
-  useConvexSync(activeSessions, useCallback((sessions: any) => {
+  useConvexSync(activeSessions, useCallback((data: any) => {
+    const sessions = data.sessions ?? data;
     const prev = prevIdleMapRef.current;
     if (prev) {
       const queued = useInboxStore.getState().sessionsWithQueuedMessages;
@@ -63,6 +64,9 @@ export function useSyncInboxSessions() {
     }
     prevIdleMapRef.current = new Map(sessions.map((s: any) => [s._id.toString(), !!s.is_idle]));
     syncTable("sessions", sessions as unknown as InboxSession[]);
+    if (typeof data.hidden_count === "number") {
+      useInboxStore.setState({ hiddenSessionCount: data.hidden_count });
+    }
   }, [syncTable]));
 
   useConvexSync(dismissedQuery, useCallback((data: any) => {
@@ -76,7 +80,8 @@ export function useSyncInboxSessions() {
   // eslint-disable-next-line no-restricted-syntax -- navigation side effect on session list change
   useEffect(() => {
     if (!activeSessions || !dismissedQuery) return;
-    const activeIds = new Set<string>(activeSessions.map((s: any) => s._id.toString()));
+    const sessionsList = (activeSessions as any).sessions ?? activeSessions;
+    const activeIds = new Set<string>(sessionsList.map((s: any) => s._id.toString()));
     const prev = prevActiveIdsRef.current;
     if (prev) {
       const currentSessionId = useInboxStore.getState().currentSessionId;

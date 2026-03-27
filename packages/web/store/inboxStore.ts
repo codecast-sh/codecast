@@ -409,6 +409,7 @@ interface InboxStoreState {
   setShowMySessions: (show: boolean) => void;
   showAllSessions: boolean;
   toggleShowAllSessions: () => void;
+  hiddenSessionCount: number;
   mruStack: string[];
 
   messages: Record<string, Message[]>;
@@ -673,6 +674,7 @@ export const useInboxStore = create<InboxStoreState>(
   setShowMySessions: (show: boolean) => set({ showMySessions: show }),
   showAllSessions: false,
   toggleShowAllSessions: () => set({ showAllSessions: !get().showAllSessions }),
+  hiddenSessionCount: 0,
   mruStack: [],
 
   messages: {},

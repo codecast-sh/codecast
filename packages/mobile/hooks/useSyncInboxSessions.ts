@@ -17,7 +17,8 @@ export function useSyncInboxSessions() {
 
   useEffect(() => {
     if (activeSessions) {
-      syncTable("sessions", activeSessions as unknown as InboxSession[]);
+      const sessions = (activeSessions as any).sessions ?? activeSessions;
+      syncTable("sessions", sessions as unknown as InboxSession[]);
     }
   }, [activeSessions, syncTable]);
 

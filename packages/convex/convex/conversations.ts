@@ -5364,6 +5364,7 @@ export const listIdleSessions = query({
       }
     }
 
+    let hiddenCount = 0;
     const results = [];
     for (const conv of conversations) {
       if (conv.is_subagent || conv.is_workflow_sub || (conv.parent_conversation_id && !conv.parent_message_uuid)) continue;
@@ -5399,10 +5400,13 @@ export const listIdleSessions = query({
       }
 
       const pinned = !!conv.inbox_pinned_at;
-      if (!args.show_all && clusterCutoff > 0 && conv.updated_at < clusterCutoff && !hasPending && !pinned) continue;
-
       const dismissed = conv.inbox_dismissed_at && conv.inbox_dismissed_at >= conv.updated_at;
       if (dismissed && !pinned) continue;
+
+      if (!args.show_all && clusterCutoff > 0 && conv.updated_at < clusterCutoff && !hasPending && !pinned) {
+        hiddenCount++;
+        continue;
+      }
 
       const daemonAlive = liveConvIds.has(conv._id.toString()) ||
         (userDaemonAlive && (now - conv.updated_at) < 10 * 60 * 1000);

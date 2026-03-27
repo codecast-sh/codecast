@@ -791,6 +791,7 @@ export function SessionListPanel({
 }) {
   const showAll = useInboxStore((s) => s.showAllSessions);
   const toggleShowAll = useInboxStore((s) => s.toggleShowAllSessions);
+  const hiddenCount = useInboxStore((s) => s.hiddenSessionCount);
   const sessions = useInboxStore((s) => s.sessions);
   const stashSession = useInboxStore((s) => s.stashSession);
   const deferSession = useInboxStore((s) => s.deferSession);
@@ -903,9 +904,11 @@ export function SessionListPanel({
           <span className="text-xs font-medium text-sol-text-dim uppercase tracking-wide">
             {sortedSessions.length} Session{sortedSessions.length !== 1 ? "s" : ""}
           </span>
-          <button onClick={toggleShowAll} className="text-[10px] text-sol-text-dim hover:text-sol-cyan transition-colors">
-            {showAll ? "Recent only" : "Show all"}
-          </button>
+          {(showAll || hiddenCount > 0) && (
+            <button onClick={toggleShowAll} className="text-[10px] text-sol-text-dim hover:text-sol-cyan transition-colors">
+              {showAll ? "Recent only" : `Show all (+${hiddenCount})`}
+            </button>
+          )}
         </div>
       </div>
       <div className="flex-1 overflow-y-auto scrollbar-auto">
