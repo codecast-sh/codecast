@@ -684,45 +684,36 @@ export const getUserActivityHeatmap = query({
     const user = await ctx.db.get(args.user_id);
     if (!user || user.hide_activity) return [];
 
-    const days = args.days ?? 365;
+    const numDays = args.days ?? 365;
     const now = Date.now();
-    const cutoff = now - days * 24 * 60 * 60 * 1000;
+    const cutoff = now - numDays * 24 * 60 * 60 * 1000;
     const MAX_SESSION_MS = 8 * 3600000;
 
-    const BATCH = 20;
-    const MAX_BATCHES = 50;
+    const events = args.team_id
+      ? await ctx.db.query("team_activity_events")
+          .withIndex("by_team_timestamp", (q) =>
+            q.eq("team_id", args.team_id!).gte("timestamp", cutoff)
+          )
+          .collect()
+      : await ctx.db.query("team_activity_events")
+          .withIndex("by_actor", (q) => q.eq("actor_user_id", args.user_id))
+          .collect();
+
     const buckets: Record<string, { hours: number; sessions: number }> = {};
-    let totalSeen = 0;
-    let cursor: number | undefined;
-
-    for (let batch = 0; batch < MAX_BATCHES; batch++) {
-      const q = args.team_id
-        ? ctx.db.query("conversations").withIndex("by_team_user_updated", (q: any) =>
-            cursor !== undefined
-              ? q.eq("team_id", args.team_id).eq("user_id", args.user_id).lt("updated_at", cursor)
-              : q.eq("team_id", args.team_id).eq("user_id", args.user_id)
-          ).order("desc")
-        : ctx.db.query("conversations").withIndex("by_user_id", (q) =>
-            q.eq("user_id", args.user_id)
-          ).order("desc");
-
-      const page = await q.take(BATCH);
-      if (page.length === 0) break;
-
-      let hitCutoff = false;
-      for (const c of page) {
-        if (!c.started_at || !c.updated_at) continue;
-        if (c.updated_at < cutoff) { hitCutoff = true; break; }
-        const durationMs = Math.min(c.updated_at - c.started_at, MAX_SESSION_MS);
-        const date = new Date(c.started_at).toISOString().split("T")[0];
-        if (!buckets[date]) buckets[date] = { hours: 0, sessions: 0 };
-        buckets[date].hours += durationMs / 3600000;
+    for (const e of events) {
+      if (String(e.actor_user_id) !== String(args.user_id)) continue;
+      if (e.timestamp < cutoff) continue;
+      if (e.event_type !== "session_completed" && e.event_type !== "session_started") continue;
+      const durMs = e.metadata?.duration_ms;
+      const hours = durMs ? Math.min(durMs, MAX_SESSION_MS) / 3600000 : (e.event_type === "session_started" ? 0.5 : 0);
+      const date = new Date(e.timestamp).toISOString().split("T")[0];
+      if (!buckets[date]) buckets[date] = { hours: 0, sessions: 0 };
+      if (e.event_type === "session_completed") {
+        buckets[date].hours += hours;
         buckets[date].sessions++;
+      } else {
+        if (!buckets[date].sessions) { buckets[date].sessions++; buckets[date].hours += 0.5; }
       }
-
-      totalSeen += page.length;
-      cursor = page[page.length - 1].updated_at;
-      if (hitCutoff || page.length < BATCH) break;
     }
 
     return Object.entries(buckets)
