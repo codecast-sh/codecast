@@ -1,5 +1,5 @@
 "use client";
-import { useMemo, useState, useRef, useCallback, useEffect } from "react";
+import { useMemo, useState, useRef, useEffect } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { ErrorBoundary } from "../../../components/ErrorBoundary";
@@ -64,7 +64,7 @@ function UserProfileContent() {
 
   const heatmap = useQuery(
     api.users.getUserActivityHeatmap,
-    profileUser?._id ? { user_id: profileUser._id, team_id: teamId, days: 90 } : "skip"
+    profileUser?._id ? { user_id: profileUser._id, days: 180 } : "skip"
   );
 
   const heatmapData = useMemo(() => heatmap || null, [heatmap]);
@@ -298,8 +298,18 @@ function ActivityHeatmap({ data }: { data: any[] }) {
 
 function TimelineChart({ data }: { data: Array<{ date: string; hours: number; sessions: number }> }) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const [zoomLevel, setZoomLevel] = useState(1);
-  const [hoveredBar, setHoveredBar] = useState<{ idx: number; x: number; y: number } | null>(null);
+  const [containerW, setContainerW] = useState(800);
+  const [hovered, setHovered] = useState<{ idx: number; x: number; y: number } | null>(null);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const measure = () => setContainerW(el.clientWidth);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   const sorted = useMemo(() => [...data].sort((a, b) => a.date.localeCompare(b.date)), [data]);
 
@@ -322,95 +332,93 @@ function TimelineChart({ data }: { data: Array<{ date: string; hours: number; se
 
   const maxH = useMemo(() => Math.max(...allDays.map(d => d.hours), 1), [allDays]);
 
-  const handleWheel = useCallback((e: React.WheelEvent) => {
-    if (e.deltaY < 0) setZoomLevel(z => Math.min(z * 1.3, 8));
-    else setZoomLevel(z => Math.max(z / 1.3, 1));
-    e.preventDefault();
-  }, []);
-
-  useEffect(() => {
-    if (containerRef.current) containerRef.current.scrollLeft = containerRef.current.scrollWidth;
-  }, [allDays.length]);
-
   if (allDays.length === 0) return <div className="text-[11px] text-sol-base01/30 text-center py-16">No data</div>;
 
-  const barW = Math.max(6, 14 * zoomLevel);
-  const gap = Math.max(1, 2 * zoomLevel);
-  const chartW = allDays.length * (barW + gap);
-  const chartH = 220;
-  const padTop = 10;
-  const padBot = 24;
+  const chartH = 180;
+  const padTop = 12;
+  const padBot = 28;
+  const padLeft = 32;
+  const padRight = 8;
+  const plotW = containerW - padLeft - padRight;
   const plotH = chartH - padTop - padBot;
+  const stepX = plotW / Math.max(allDays.length - 1, 1);
+
+  const toX = (i: number) => padLeft + i * stepX;
+  const toY = (h: number) => padTop + plotH - (h / maxH) * plotH;
+
+  const linePath = allDays.map((d, i) => `${i === 0 ? "M" : "L"}${toX(i).toFixed(1)},${toY(d.hours).toFixed(1)}`).join(" ");
+  const areaPath = `${linePath} L${toX(allDays.length - 1).toFixed(1)},${toY(0).toFixed(1)} L${toX(0).toFixed(1)},${toY(0).toFixed(1)} Z`;
 
   const yTicks = [0, maxH * 0.25, maxH * 0.5, maxH * 0.75, maxH];
+
+  const monthLabels = useMemo(() => {
+    const labels: { label: string; x: number }[] = [];
+    const mn = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    let lastM = -1;
+    for (let i = 0; i < allDays.length; i++) {
+      const d = new Date(allDays[i].date + "T12:00:00");
+      if (d.getMonth() !== lastM) { lastM = d.getMonth(); labels.push({ label: mn[d.getMonth()], x: toX(i) }); }
+    }
+    return labels;
+  }, [allDays, containerW]);
 
   return (
     <div className="mt-3">
       <div className="flex items-baseline justify-between mb-2">
-        <span className="text-[9px] text-sol-base01/30 uppercase tracking-widest font-bold">Agent Hours Per Day</span>
-        <span className="text-[9px] text-sol-base01/25">Scroll to zoom</span>
+        <span className="text-[9px] text-sol-base01/30 uppercase tracking-widest font-bold">Sessions Per Day</span>
+        <span className="text-[9px] text-sol-base01/25 tabular-nums">{allDays.length} days</span>
       </div>
-      <div className="flex">
-        {/* Y axis labels */}
-        <div className="flex flex-col justify-between pr-1 flex-shrink-0" style={{ height: chartH, paddingTop: padTop, paddingBottom: padBot }}>
-          {[...yTicks].reverse().map((v, i) => (
-            <span key={i} className="text-[8px] text-sol-base01/25 tabular-nums text-right w-[24px] leading-none">{v.toFixed(0)}h</span>
+      <div ref={containerRef} className="w-full relative" onMouseLeave={() => setHovered(null)}>
+        <svg width={containerW} height={chartH} className="block">
+          {/* Y grid lines */}
+          {yTicks.map((v, i) => {
+            const y = toY(v);
+            return (
+              <g key={i}>
+                <line x1={padLeft} x2={containerW - padRight} y1={y} y2={y} stroke="currentColor" className="text-sol-border/8" strokeWidth={0.5} strokeDasharray={i === 0 ? "none" : "2,3"} />
+                <text x={padLeft - 4} y={y + 3} textAnchor="end" className="fill-sol-base01/25" style={{ fontSize: 8 }}>{v.toFixed(0)}h</text>
+              </g>
+            );
+          })}
+          {/* X month labels */}
+          {monthLabels.map((m, i) => (
+            <text key={i} x={m.x} y={chartH - 6} textAnchor="start" className="fill-sol-base01/25" style={{ fontSize: 9 }}>{m.label}</text>
           ))}
-        </div>
-        {/* Chart area */}
-        <div ref={containerRef} className="flex-1 overflow-x-auto" onWheel={handleWheel} style={{ scrollBehavior: "smooth" }}>
-          <svg width={chartW} height={chartH} className="block" onMouseLeave={() => setHoveredBar(null)}>
-            {/* Horizontal grid lines */}
-            {yTicks.map((v, i) => {
-              const y = padTop + plotH - (v / maxH) * plotH;
-              return <line key={i} x1={0} x2={chartW} y1={y} y2={y} stroke="currentColor" className="text-sol-border/10" strokeWidth={0.5} />;
-            })}
-            {/* Bars */}
-            {allDays.map((day, i) => {
-              const x = i * (barW + gap);
-              const h = day.hours > 0 ? Math.max(2, (day.hours / maxH) * plotH) : 0;
-              const y = padTop + plotH - h;
-              const isToday = day.date === new Date().toISOString().split("T")[0];
-              return (
-                <g key={i}>
-                  <rect
-                    x={x} y={y} width={barW} height={h}
-                    rx={barW > 6 ? 2 : 1}
-                    fill={isToday ? "#268bd2" : day.hours > 0 ? "#859900" : "transparent"}
-                    opacity={hoveredBar?.idx === i ? 1 : 0.7}
-                    className="cursor-crosshair transition-opacity"
-                    onMouseEnter={(e) => {
-                      const r = (e.target as SVGRectElement).getBoundingClientRect();
-                      setHoveredBar({ idx: i, x: r.left + r.width / 2, y: r.top });
-                    }}
-                  />
-                  {/* X axis date labels - show weekly or as zoom allows */}
-                  {(i % Math.max(1, Math.round(7 / zoomLevel)) === 0) && (
-                    <text x={x + barW / 2} y={chartH - 4} textAnchor="middle" className="fill-sol-base01/20" style={{ fontSize: Math.min(9, 7 * zoomLevel) }}>
-                      {fmtChartDate(day.date)}
-                    </text>
-                  )}
-                </g>
-              );
-            })}
-          </svg>
-          {/* Tooltip */}
-          {hoveredBar && (
-            <div className="fixed z-50 px-2 py-1 bg-sol-base03 text-sol-base2 text-[10px] rounded shadow-lg pointer-events-none whitespace-nowrap" style={{ left: hoveredBar.x, top: hoveredBar.y - 4, transform: "translate(-50%, -100%)" }}>
-              {allDays[hoveredBar.idx].date}: {allDays[hoveredBar.idx].hours.toFixed(1)}h, {allDays[hoveredBar.idx].sessions} sessions
-            </div>
+          {/* Area fill */}
+          <path d={areaPath} fill="#859900" opacity={0.12} />
+          {/* Line */}
+          <path d={linePath} fill="none" stroke="#859900" strokeWidth={1.5} opacity={0.7} />
+          {/* Data points on active days */}
+          {allDays.map((d, i) => d.sessions > 0 ? (
+            <circle
+              key={i}
+              cx={toX(i)} cy={toY(d.hours)}
+              r={d.sessions > 10 ? 3 : d.sessions > 3 ? 2.5 : 2}
+              fill="#859900"
+              opacity={hovered?.idx === i ? 1 : 0.6}
+              className="cursor-crosshair"
+              onMouseEnter={(e) => {
+                const r = (e.target as SVGCircleElement).getBoundingClientRect();
+                setHovered({ idx: i, x: r.left + r.width / 2, y: r.top });
+              }}
+            />
+          ) : null)}
+          {/* Hover vertical line */}
+          {hovered && (
+            <line x1={toX(hovered.idx)} x2={toX(hovered.idx)} y1={padTop} y2={padTop + plotH} stroke="#859900" strokeWidth={0.5} opacity={0.4} strokeDasharray="3,3" />
           )}
-        </div>
+        </svg>
+        {/* Tooltip */}
+        {hovered && (
+          <div className="fixed z-50 px-2 py-1 bg-sol-base03 text-sol-base2 text-[10px] rounded shadow-lg pointer-events-none whitespace-nowrap" style={{ left: hovered.x, top: hovered.y - 4, transform: "translate(-50%, -100%)" }}>
+            {allDays[hovered.idx].date}: {allDays[hovered.idx].hours.toFixed(1)}h, {allDays[hovered.idx].sessions} sessions
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
-function fmtChartDate(dateStr: string): string {
-  const [, m, d] = dateStr.split("-").map(Number);
-  const mn = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-  return `${mn[m - 1]} ${d}`;
-}
 
 /* ─── Work Tab Components ─── */
 

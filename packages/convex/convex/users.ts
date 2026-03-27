@@ -703,23 +703,16 @@ export const getUserActivityHeatmap = query({
     const now = Date.now();
     const cutoff = now - numDays * 24 * 60 * 60 * 1000;
 
-    const insights = args.team_id
-      ? await ctx.db.query("session_insights")
-          .withIndex("by_team_generated_at", (q: any) =>
-            q.eq("team_id", args.team_id).gte("generated_at", cutoff)
-          )
-          .collect()
-      : await ctx.db.query("session_insights")
-          .withIndex("by_actor_generated_at", (q) =>
-            q.eq("actor_user_id", args.user_id).gte("generated_at", cutoff)
-          )
-          .collect();
+    const insights = await ctx.db.query("session_insights")
+      .withIndex("by_actor_generated_at", (q) =>
+        q.eq("actor_user_id", args.user_id).gte("generated_at", cutoff)
+      )
+      .collect();
 
     const buckets: Record<string, { hours: number; sessions: number }> = {};
     const seenConvos = new Set<string>();
 
     for (const ins of insights) {
-      if (args.team_id && String(ins.actor_user_id) !== String(args.user_id)) continue;
       const cid = String(ins.conversation_id);
       if (seenConvos.has(cid)) continue;
       seenConvos.add(cid);
@@ -740,6 +733,65 @@ export const getUserActivityHeatmap = query({
         sessions: data.sessions,
       }))
       .sort((a, b) => a.date.localeCompare(b.date));
+  },
+});
+
+export const getUserTasks = query({
+  args: {
+    user_id: v.id("users"),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+    const user = await ctx.db.get(args.user_id);
+    if (!user || user.hide_activity) return [];
+    const limit = Math.min(args.limit ?? 20, 50);
+    const tasks = await ctx.db
+      .query("tasks")
+      .withIndex("by_user_id", (q: any) => q.eq("user_id", args.user_id))
+      .order("desc")
+      .take(limit);
+    return tasks.map((t: any) => ({
+      _id: t._id,
+      short_id: t.short_id,
+      title: t.title,
+      status: t.status,
+      priority: t.priority,
+      labels: t.labels,
+      created_at: t.created_at || t._creationTime,
+      updated_at: t.updated_at,
+      closed_at: t.closed_at,
+    }));
+  },
+});
+
+export const getUserDocs = query({
+  args: {
+    user_id: v.id("users"),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+    const user = await ctx.db.get(args.user_id);
+    if (!user || user.hide_activity) return [];
+    const limit = Math.min(args.limit ?? 20, 50);
+    const docs = await ctx.db
+      .query("docs")
+      .withIndex("by_user_id", (q: any) => q.eq("user_id", args.user_id))
+      .order("desc")
+      .take(limit);
+    return docs
+      .filter((d: any) => !d.archived_at)
+      .map((d: any) => ({
+        _id: d._id,
+        title: d.title,
+        doc_type: d.doc_type,
+        labels: d.labels,
+        created_at: d.created_at || d._creationTime,
+        updated_at: d.updated_at,
+      }));
   },
 });
 
