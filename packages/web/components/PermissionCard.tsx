@@ -3,7 +3,6 @@ import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useEventListener } from "../hooks/useEventListener";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
-import { toast } from "sonner";
 
 type Permission = {
   _id: Id<"pending_permissions">;
@@ -75,20 +74,23 @@ export function PermissionStack({ permissions }: { permissions: Permission[] }) 
   const updatePermissionStatus = useMutation(api.permissions.updatePermissionStatus);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState(false);
+  const [inflight, setInflight] = useState<Set<string>>(new Set());
 
   const pending = permissions.filter((p) => p.status === "pending");
 
   const handleApprove = useCallback(async (id: Id<"pending_permissions">) => {
-    await updatePermissionStatus({ permission_id: id, status: "approved" }).catch((err) => {
-      toast.error(`Failed: ${err instanceof Error ? err.message : String(err)}`);
-    });
-  }, [updatePermissionStatus]);
+    if (inflight.has(id)) return;
+    setInflight((s) => new Set(s).add(id));
+    await updatePermissionStatus({ permission_id: id, status: "approved" }).catch(() => {});
+    setInflight((s) => { const n = new Set(s); n.delete(id); return n; });
+  }, [updatePermissionStatus, inflight]);
 
   const handleDeny = useCallback(async (id: Id<"pending_permissions">) => {
-    await updatePermissionStatus({ permission_id: id, status: "denied" }).catch((err) => {
-      toast.error(`Failed: ${err instanceof Error ? err.message : String(err)}`);
-    });
-  }, [updatePermissionStatus]);
+    if (inflight.has(id)) return;
+    setInflight((s) => new Set(s).add(id));
+    await updatePermissionStatus({ permission_id: id, status: "denied" }).catch(() => {});
+    setInflight((s) => { const n = new Set(s); n.delete(id); return n; });
+  }, [updatePermissionStatus, inflight]);
 
   const handleApproveAll = useCallback(async () => {
     await Promise.all(
@@ -164,13 +166,15 @@ export function PermissionStack({ permissions }: { permissions: Permission[] }) 
           <div className="flex items-center gap-1 flex-shrink-0">
             <button
               onClick={() => handleApprove(p._id)}
-              className="px-2.5 py-0.5 text-[11px] font-medium rounded border border-sol-green/40 text-sol-green hover:bg-sol-green hover:text-sol-bg transition-colors"
+              disabled={inflight.has(p._id)}
+              className="px-2.5 py-0.5 text-[11px] font-medium rounded border border-sol-green/40 text-sol-green hover:bg-sol-green hover:text-sol-bg transition-colors disabled:opacity-40 disabled:pointer-events-none"
             >
-              Approve
+              {inflight.has(p._id) ? "..." : "Approve"}
             </button>
             <button
               onClick={() => handleDeny(p._id)}
-              className="px-2.5 py-0.5 text-[11px] font-medium rounded border border-sol-red/30 text-sol-text-dim hover:bg-sol-red hover:text-sol-bg transition-colors"
+              disabled={inflight.has(p._id)}
+              className="px-2.5 py-0.5 text-[11px] font-medium rounded border border-sol-red/30 text-sol-text-dim hover:bg-sol-red hover:text-sol-bg transition-colors disabled:opacity-40 disabled:pointer-events-none"
             >
               Deny
             </button>
