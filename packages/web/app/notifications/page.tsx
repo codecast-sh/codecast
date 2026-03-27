@@ -98,6 +98,13 @@ const typeLabels: Record<string, string> = {
   team_invite: "team invite",
   task_completed: "task done",
   task_failed: "task failed",
+  task_assigned: "assigned to you",
+  task_status_changed: "status changed",
+  task_commented: "commented",
+  doc_updated: "doc updated",
+  doc_commented: "commented on doc",
+  plan_status_changed: "plan updated",
+  plan_task_completed: "plan task done",
 };
 
 const typeColors: Record<string, string> = {
@@ -111,11 +118,19 @@ const typeColors: Record<string, string> = {
   team_invite: "text-sol-violet",
   task_completed: "text-sol-green",
   task_failed: "text-red-400",
+  task_assigned: "text-sol-yellow",
+  task_status_changed: "text-sol-yellow",
+  task_commented: "text-sol-cyan",
+  doc_updated: "text-sol-violet",
+  doc_commented: "text-sol-cyan",
+  plan_status_changed: "text-sol-green",
+  plan_task_completed: "text-sol-green",
 };
 
-type FilterTab = "all" | "unread" | "sessions" | "social";
+type FilterTab = "all" | "unread" | "sessions" | "social" | "tasks";
 
 const socialTypes = new Set(["mention", "comment_reply", "conversation_comment", "team_invite"]);
+const taskTypes = new Set(["task_assigned", "task_status_changed", "task_commented", "task_completed", "task_failed", "plan_status_changed", "plan_task_completed", "doc_updated", "doc_commented"]);
 
 function sessionLabel(conversation: { title?: string; project_path?: string; agent_type?: string } | null): string | null {
   if (!conversation) return null;
@@ -134,8 +149,18 @@ export default function NotificationsPage() {
   const markAllAsRead = useMutation(api.notifications.markAllAsRead);
   const [activeTab, setActiveTab] = useState<FilterTab>("all");
 
-  const handleNotificationClick = async (notificationId: Id<"notifications">, conversationId?: Id<"conversations">) => {
+  const handleNotificationClick = async (
+    notificationId: Id<"notifications">,
+    conversationId?: Id<"conversations">,
+    entityType?: string,
+    entityId?: string
+  ) => {
     await markAsRead({ notificationId });
+    if (entityType && entityId) {
+      const routes: Record<string, string> = { task: "/tasks/", doc: "/docs/", plan: "/plans/" };
+      const base = routes[entityType];
+      if (base) { router.push(`${base}${entityId}`); return; }
+    }
     if (conversationId) {
       router.push(`/conversation/${conversationId}`);
     } else {
@@ -143,19 +168,21 @@ export default function NotificationsPage() {
     }
   };
 
-  const filteredNotifications = (notifications || []).filter((n) => {
+  const filteredNotifications = (notifications || []).filter((n: any) => {
     if (activeTab === "unread") return !n.read;
     if (activeTab === "sessions") return sessionTypes.has(n.type) || n.type === "team_session_start";
     if (activeTab === "social") return socialTypes.has(n.type);
+    if (activeTab === "tasks") return taskTypes.has(n.type);
     return true;
   });
 
-  const unreadCount = notifications?.filter((n) => !n.read).length || 0;
+  const unreadCount = notifications?.filter((n: any) => !n.read).length || 0;
 
   const tabs: { key: FilterTab; label: string }[] = [
     { key: "all", label: "All" },
     { key: "unread", label: `Unread${unreadCount > 0 ? ` (${unreadCount})` : ""}` },
     { key: "sessions", label: "Sessions" },
+    { key: "tasks", label: "Tasks" },
     { key: "social", label: "Social" },
   ];
 
@@ -224,7 +251,7 @@ export default function NotificationsPage() {
             </div>
           ) : (
             <div className="space-y-px rounded-lg border border-sol-border overflow-hidden">
-              {filteredNotifications.map((notification) => {
+              {filteredNotifications.map((notification: any) => {
                 const label = sessionLabel(notification.conversation);
                 const actorName = notification.actor?.name || notification.actor?.github_username;
                 const agentType = notification.conversation?.agent_type || "claude_code";
@@ -235,7 +262,7 @@ export default function NotificationsPage() {
                 return (
                   <button
                     key={notification._id}
-                    onClick={() => handleNotificationClick(notification._id, notification.conversation_id)}
+                    onClick={() => handleNotificationClick(notification._id, notification.conversation_id, (notification as any).entity_type, (notification as any).entity_id)}
                     className={`w-full px-5 py-4 text-left border-b border-sol-border/40 last:border-b-0 hover:bg-sol-bg-alt transition-colors ${
                       !notification.read ? "bg-sol-bg-alt/40" : "bg-sol-bg"
                     }`}

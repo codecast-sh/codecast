@@ -98,6 +98,13 @@ const typeLabels: Record<string, string> = {
   team_invite: "team invite",
   task_completed: "task done",
   task_failed: "task failed",
+  task_assigned: "assigned to you",
+  task_status_changed: "status changed",
+  task_commented: "commented",
+  doc_updated: "doc updated",
+  doc_commented: "commented on doc",
+  plan_status_changed: "plan updated",
+  plan_task_completed: "plan task done",
 };
 
 const typeColors: Record<string, string> = {
@@ -111,6 +118,13 @@ const typeColors: Record<string, string> = {
   team_invite: "text-sol-violet",
   task_completed: "text-sol-green",
   task_failed: "text-red-400",
+  task_assigned: "text-sol-yellow",
+  task_status_changed: "text-sol-yellow",
+  task_commented: "text-sol-cyan",
+  doc_updated: "text-sol-violet",
+  doc_commented: "text-sol-cyan",
+  plan_status_changed: "text-sol-green",
+  plan_task_completed: "text-sol-green",
 };
 
 function sessionLabel(conversation: { title?: string; project_path?: string; agent_type?: string } | null): string | null {
@@ -145,8 +159,18 @@ export function NotificationBell() {
     }
   }, [isOpen, markAllAsRead, unreadCount]);
 
-  const handleNotificationClick = async (notificationId: Id<"notifications">, conversationId?: Id<"conversations">) => {
+  const handleNotificationClick = async (
+    notificationId: Id<"notifications">,
+    conversationId?: Id<"conversations">,
+    entityType?: string,
+    entityId?: string
+  ) => {
     await markAsRead({ notificationId });
+    if (entityType && entityId) {
+      const routes: Record<string, string> = { task: "/tasks/", doc: "/docs/", plan: "/plans/" };
+      const base = routes[entityType];
+      if (base) { router.push(`${base}${entityId}`); setIsOpen(false); return; }
+    }
     if (conversationId) {
       router.push(`/conversation/${conversationId}`);
     } else {
@@ -194,7 +218,7 @@ export function NotificationBell() {
                 No notifications yet
               </div>
             ) : (
-              recentNotifications.map((notification) => {
+              recentNotifications.map((notification: any) => {
                 const label = sessionLabel(notification.conversation);
                 const actorName = notification.actor?.name || notification.actor?.github_username;
                 const agentType = notification.conversation?.agent_type || "claude_code";
@@ -205,7 +229,7 @@ export function NotificationBell() {
                 return (
                   <button
                     key={notification._id}
-                    onClick={() => handleNotificationClick(notification._id, notification.conversation_id)}
+                    onClick={() => handleNotificationClick(notification._id, notification.conversation_id, (notification as any).entity_type, (notification as any).entity_id)}
                     className={`w-full px-5 py-4 text-left border-b border-sol-border/50 hover:bg-sol-bg-alt transition-colors ${
                       !notification.read ? 'bg-sol-bg-alt/40' : ''
                     }`}
