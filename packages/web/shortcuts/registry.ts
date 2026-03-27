@@ -125,6 +125,7 @@ function parseKeyCombo(combo: string): ParsedKey {
 }
 
 function normalizeEventKey(e: KeyboardEvent): string {
+  if (!e.key) return '';
   const key = e.key.toLowerCase();
   if (key === ' ') return 'space';
   return key;

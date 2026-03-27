@@ -95,7 +95,7 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
         return (
           <button
             key={member._id}
-            onClick={() => handleMemberClick(member._id)}
+            onClick={() => router.push(`/team/${member.github_username || member._id}`)}
             className="relative group"
             title={`${displayName} - ${lastSeenText}`}
           >
@@ -119,8 +119,14 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
             {online && !isSelected && (
               <span className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-emerald-400 border-2 border-sol-bg rounded-full" />
             )}
-            <div className="absolute top-full right-0 mt-2 px-2.5 py-1.5 bg-sol-bg-alt border border-sol-border rounded text-xs opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50 shadow-lg max-w-[320px]">
-              <div className="font-medium text-sol-text whitespace-nowrap">{displayName}</div>
+            <div className="absolute top-full right-0 mt-2 px-2.5 py-1.5 bg-sol-bg-alt border border-sol-border rounded text-xs opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none group-hover:pointer-events-auto z-50 shadow-lg max-w-[320px]">
+              <a
+                href={`/team/${member.github_username || member._id}`}
+                onClick={(e) => { e.stopPropagation(); router.push(`/team/${member.github_username || member._id}`); e.preventDefault(); }}
+                className="font-medium text-sol-text whitespace-nowrap hover:text-sol-cyan transition-colors cursor-pointer block"
+              >
+                {displayName}
+              </a>
               <div className={`whitespace-nowrap ${online ? "text-emerald-400" : "text-sol-text-muted"}`}>
                 {lastSeenText}
               </div>
