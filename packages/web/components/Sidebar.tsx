@@ -337,13 +337,26 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
   );
 
   const computedDirectories = useMemo(() => {
+    const stripWorktreeSuffix = (p: string): string => {
+      const patterns = [
+        /\/\.conductor\/[^/]+$/,
+        /\/\.codecast\/worktrees\/[^/]+$/,
+      ];
+      for (const re of patterns) {
+        const stripped = p.replace(re, '');
+        if (stripped !== p) return stripped;
+      }
+      return p;
+    };
+
     const normalizeToRoot = (path: string): string => {
-      const parts = path.split('/');
+      const cleaned = stripWorktreeSuffix(path);
+      const parts = cleaned.split('/');
       const srcIndex = parts.findIndex(p => p === 'src' || p === 'projects' || p === 'repos' || p === 'code');
       if (srcIndex >= 0 && srcIndex < parts.length - 1) {
         return parts.slice(0, srcIndex + 2).join('/');
       }
-      return path;
+      return cleaned;
     };
 
     const deriveGitRoot = (c: ConversationItem): string | null => {

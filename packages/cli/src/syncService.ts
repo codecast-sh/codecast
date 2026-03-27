@@ -65,6 +65,7 @@ export interface GitInfo {
   diff?: string;
   diffStaged?: string;
   root?: string;
+  repoRoot?: string;
   worktreeName?: string;
   worktreeBranch?: string;
   worktreePath?: string;
@@ -183,7 +184,7 @@ export class SyncService {
           git_status: gitInfo?.status,
           git_diff: gitInfo?.diff,
           git_diff_staged: gitInfo?.diffStaged,
-          git_root: gitInfo?.root,
+          git_root: gitInfo?.repoRoot || gitInfo?.root,
           cli_flags: params.cliFlags,
           worktree_name: gitInfo?.worktreeName,
           worktree_branch: gitInfo?.worktreeBranch,

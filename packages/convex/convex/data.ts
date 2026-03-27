@@ -25,7 +25,7 @@ export function scopeByProject<T extends Record<string, any>>(
   projectPath?: string | null
 ): T[] {
   if (!projectPath) return items;
-  return items.filter(item => !item.project_path || item.project_path.startsWith(projectPath));
+  return items.filter(item => !item.project_path || item.project_path.startsWith(projectPath) || (item.git_root && item.git_root.startsWith(projectPath)));
 }
 
 export async function createDataContext(ctx: { db: any }, opts: DataContextOpts) {
@@ -172,7 +172,7 @@ function wrapPersonalQuery(inner: any): any {
 }
 
 function wrapProjectQuery(inner: any, projectPath: string): any {
-  const matchesProject = (d: any) => !d.project_path || d.project_path.startsWith(projectPath);
+  const matchesProject = (d: any) => !d.project_path || d.project_path.startsWith(projectPath) || (d.git_root && d.git_root.startsWith(projectPath));
   const wrap = (q: any) => ({
     filter: (fn: any) => wrap(q.filter(fn)),
     order: (dir: any) => wrap(q.order(dir)),

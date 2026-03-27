@@ -38,7 +38,7 @@
       "icon": "assets/icon.icns",
       "darkModeSupport": true,
       "minimumSystemVersion": "10.15",
-      "identity": null,
+      "identity": "Developer ID Application: Ashot Petrosian (WRG9THCK9Q)",
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
       "entitlements": "entitlements.mac.plist",

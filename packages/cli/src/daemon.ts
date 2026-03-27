@@ -2086,6 +2086,7 @@ interface GitInfo {
   diff?: string;
   diffStaged?: string;
   root?: string;
+  repoRoot?: string;
   worktreeName?: string;
   worktreeBranch?: string;
   worktreePath?: string;
@@ -2152,7 +2153,10 @@ function getGitInfo(projectPath: string): GitInfo | undefined {
   const diffStaged = execGit("diff --cached");
   const root = execGit("rev-parse --show-toplevel");
 
-  const worktreeMatch = projectPath.match(/(?:\.codecast\/worktrees|\.conductor)\/([^/]+)/);
+  const commonDir = execGit("rev-parse --path-format=absolute --git-common-dir");
+  const repoRoot = commonDir?.endsWith("/.git") ? commonDir.slice(0, -5) : root;
+
+  const worktreeMatch = projectPath.match(/(?:\.codecast\/worktrees|\.conductor|\.claude-worktrees\/[^/]+)\/([^/]+)/);
   const worktreeName = worktreeMatch ? worktreeMatch[1] : undefined;
 
   return {
@@ -2163,6 +2167,7 @@ function getGitInfo(projectPath: string): GitInfo | undefined {
     diff: diff ? diff.slice(0, 100000) : undefined,
     diffStaged: diffStaged ? diffStaged.slice(0, 100000) : undefined,
     root,
+    repoRoot,
     worktreeName,
     worktreeBranch: worktreeName ? branch : undefined,
     worktreePath: worktreeName ? projectPath : undefined,
@@ -6962,7 +6967,7 @@ async function repairProjectPaths(syncService: SyncService): Promise<void> {
         if (!projectPath) continue;
 
         const gitInfo = getGitInfo(projectPath);
-        const result = await syncService.updateProjectPath(sessionId, projectPath, gitInfo?.root);
+        const result = await syncService.updateProjectPath(sessionId, projectPath, gitInfo?.repoRoot || gitInfo?.root);
         if (result?.updated) {
           repaired++;
           log(`Repaired path for ${sessionId.slice(0, 8)}: ${projectPath}`);

@@ -153,7 +153,19 @@ function ActivityHeatmapLoader({ userId, teamId }: { userId: Id<"users">; teamId
 }
 
 function ActivityHeatmap({ data }: { data: any[] }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [containerW, setContainerW] = useState(800);
   const [tooltip, setTooltip] = useState<{ x: number; y: number; text: string } | null>(null);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const measure = () => setContainerW(el.clientWidth);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   const { grid, maxHours, totalHours, totalSessions, months } = useMemo(() => {
     const map: Record<string, { hours: number; sessions: number }> = {};
@@ -193,8 +205,8 @@ function ActivityHeatmap({ data }: { data: any[] }) {
     return { grid: rows, maxHours: max, totalHours: totalH, totalSessions: totalS, months: monthLabels };
   }, [data]);
 
-  const cellSize = 11;
   const gap = 2;
+  const cellSize = Math.max(8, Math.floor((containerW - grid.length * gap) / grid.length));
   const step = cellSize + gap;
   const svgW = grid.length * step;
   const svgH = 7 * step;
@@ -214,7 +226,7 @@ function ActivityHeatmap({ data }: { data: any[] }) {
         <span className="text-[9px] text-sol-base01/30 uppercase tracking-widest font-bold">Agent Activity</span>
         <span className="text-[9px] text-sol-base01/35 tabular-nums">{totalHours.toFixed(0)}h across {totalSessions} sessions</span>
       </div>
-      <div className="w-full overflow-x-auto relative" onMouseLeave={() => setTooltip(null)}>
+      <div ref={containerRef} className="w-full overflow-x-auto relative" onMouseLeave={() => setTooltip(null)}>
         {/* Month labels */}
         <div className="flex" style={{ width: svgW, height: 14 }}>
           {months.map((m, i) => (
