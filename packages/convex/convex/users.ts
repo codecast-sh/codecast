@@ -703,28 +703,43 @@ export const getUserActivityHeatmap = query({
     const now = Date.now();
     const cutoff = now - numDays * 24 * 60 * 60 * 1000;
 
-    const insights = await ctx.db.query("session_insights")
-      .withIndex("by_actor_generated_at", (q) =>
-        q.eq("actor_user_id", args.user_id).gte("generated_at", cutoff)
-      )
-      .collect();
-
     const buckets: Record<string, { hours: number; sessions: number }> = {};
     const seenConvos = new Set<string>();
+
+    const [insights, events] = await Promise.all([
+      ctx.db.query("session_insights")
+        .withIndex("by_actor_generated_at", (q) =>
+          q.eq("actor_user_id", args.user_id).gte("generated_at", cutoff)
+        )
+        .collect(),
+      ctx.db.query("team_activity_events")
+        .withIndex("by_actor", (q) => q.eq("actor_user_id", args.user_id))
+        .collect(),
+    ]);
 
     for (const ins of insights) {
       const cid = String(ins.conversation_id);
       if (seenConvos.has(cid)) continue;
       seenConvos.add(cid);
-
       const date = new Date(ins.generated_at).toISOString().split("T")[0];
       if (!buckets[date]) buckets[date] = { hours: 0, sessions: 0 };
       buckets[date].sessions++;
       buckets[date].hours += 0.5;
     }
 
-    // hours = sessions * 0.5h avg - can't read conversation docs (3MB+ each)
-    // session count from insights is accurate; hours is an estimate
+    for (const e of events) {
+      if (e.timestamp < cutoff) continue;
+      if (e.event_type === "session_started" || e.event_type === "session_completed") {
+        const sid = e.related_conversation_id ? String(e.related_conversation_id) : `evt-${e._id}`;
+        if (seenConvos.has(sid)) continue;
+        seenConvos.add(sid);
+        const date = new Date(e.timestamp).toISOString().split("T")[0];
+        if (!buckets[date]) buckets[date] = { hours: 0, sessions: 0 };
+        buckets[date].sessions++;
+        const durMs = e.event_type === "session_completed" && e.metadata?.duration_ms;
+        buckets[date].hours += durMs ? Math.min(durMs, 8 * 3600000) / 3600000 : 0.5;
+      }
+    }
 
     return Object.entries(buckets)
       .map(([date, data]) => ({
