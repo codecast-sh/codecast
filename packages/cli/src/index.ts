@@ -1268,41 +1268,38 @@ function showStatus(): void {
 }
 
 function stopDaemon(): void {
-  if (!fs.existsSync(PID_FILE)) {
-    console.log("Daemon is not running (no PID file)");
-    return;
-  }
+  let killedAny = false;
 
-  const pidStr = fs.readFileSync(PID_FILE, "utf-8").trim();
-  const pid = parseInt(pidStr, 10);
+  if (fs.existsSync(PID_FILE)) {
+    const pidStr = fs.readFileSync(PID_FILE, "utf-8").trim();
+    const pid = parseInt(pidStr, 10);
 
-  if (isNaN(pid)) {
-    console.log("Invalid PID file, removing it");
-    fs.unlinkSync(PID_FILE);
-    return;
-  }
-
-  try {
-    process.kill(pid, 0);
-  } catch {
-    console.log("Daemon is not running (process not found)");
-    fs.unlinkSync(PID_FILE);
-    return;
-  }
-
-  try {
-    process.kill(pid, "SIGTERM");
-    fs.unlinkSync(PID_FILE);
-    console.log("Daemon stopped");
-  } catch (err) {
-    const error = err as NodeJS.ErrnoException;
-    if (error.code === "ESRCH") {
-      console.log("Daemon already stopped");
+    if (isNaN(pid)) {
       fs.unlinkSync(PID_FILE);
     } else {
-      console.error(`Failed to stop daemon: ${error.message}`);
-      process.exit(1);
+      try {
+        process.kill(pid, "SIGTERM");
+        killedAny = true;
+      } catch {}
+      try { fs.unlinkSync(PID_FILE); } catch {}
     }
+  }
+
+  try {
+    const pgrepOut = execSync(`pgrep -f 'daemon\\.ts$' 2>/dev/null || true`, { encoding: "utf-8", timeout: 3000 });
+    const pids = pgrepOut.trim().split("\n").map(Number).filter(p => p && p !== process.pid);
+    for (const orphanPid of pids) {
+      try {
+        process.kill(orphanPid, "SIGTERM");
+        killedAny = true;
+      } catch {}
+    }
+  } catch {}
+
+  if (killedAny) {
+    console.log("Daemon stopped");
+  } else {
+    console.log("Daemon is not running");
   }
 }
 

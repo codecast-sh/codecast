@@ -1580,6 +1580,17 @@ async function executeRemoteCommand(
           result = JSON.stringify({ skipped: true, reason: "resume_in_flight" });
           break;
         }
+        if (conversationId) {
+          const convFailures = conversationResumeFailures.get(conversationId);
+          if (convFailures && convFailures.count >= CONVERSATION_RESUME_MAX_FAILURES) {
+            if (Date.now() - convFailures.lastFailure < CONVERSATION_RESUME_COOLDOWN_MS) {
+              log(`[REMOTE] Resume circuit breaker for conv=${conversationId.slice(0, 12)}: ${convFailures.count} failures, cooling down`);
+              result = JSON.stringify({ skipped: true, reason: "circuit_breaker" });
+              break;
+            }
+            conversationResumeFailures.delete(conversationId);
+          }
+        }
         restartingSessionIds.set(sessionId, Date.now());
         let resumed = false;
         if (forceReconstitute) {
@@ -1604,6 +1615,7 @@ async function executeRemoteCommand(
             }
           }
           restartingSessionIds.delete(sessionId);
+          if (conversationId) conversationResumeFailures.delete(conversationId);
           result = JSON.stringify({ resumed: true, session_id: sessionId });
           log(`[REMOTE] Force-resume succeeded for ${sessionId.slice(0, 8)}`);
         } else if (conversationId && projectPath) {
@@ -1633,6 +1645,7 @@ async function executeRemoteCommand(
                     syncServiceRef.updateSessionAgentStatus(conversationId, "connected").catch(() => {});
                   }
                   restartingSessionIds.delete(sessionId);
+                  if (conversationId) conversationResumeFailures.delete(conversationId);
                   result = JSON.stringify({ reconstituted: true, session_id: newSessionId });
                   log(`[REMOTE] Reconstituted + resumed session ${sessionId.slice(0, 8)}`);
                   reconstituted = true;
@@ -1685,6 +1698,10 @@ async function executeRemoteCommand(
           }
         } else {
           error = `Failed to resume session ${sessionId.slice(0, 8)} — session file may not exist locally`;
+        }
+        if (!resumed && conversationId) {
+          const prev = conversationResumeFailures.get(conversationId) || { count: 0, lastFailure: 0 };
+          conversationResumeFailures.set(conversationId, { count: prev.count + 1, lastFailure: Date.now() });
         }
         break;
       }
@@ -5412,6 +5429,9 @@ const resumeInFlightStarted = new Map<string, number>();
 const RESUME_IN_FLIGHT_TIMEOUT_MS = 120_000;
 type ResumeFatalReason = "missing_conversation" | "session_not_found";
 const resumeFatalReasons = new Map<string, ResumeFatalReason>();
+const conversationResumeFailures = new Map<string, { count: number; lastFailure: number }>();
+const CONVERSATION_RESUME_MAX_FAILURES = 3;
+const CONVERSATION_RESUME_COOLDOWN_MS = 5 * 60 * 1000; // 5 min cooldown after max failures
 
 const sessionDeliveryFailures = new Map<string, { count: number; lastFailure: number }>();
 const SESSION_CIRCUIT_BREAKER_THRESHOLD = 3;
@@ -5846,6 +5866,10 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
     try {
       const siteUrl = config.convex_url.replace(".cloud", ".site");
       const data = await fetchExport(siteUrl, config.auth_token, conversationId);
+      if (data.messages.length === 0) {
+        logDelivery(`Reconstitution skipped for ${sessionId.slice(0, 8)}: conversation has 0 messages`);
+        return false;
+      }
       const estimatedTokens = estimateClaudeImportTokens(data);
       const tailMessages = estimatedTokens > 120_000
         ? chooseClaudeTailMessagesForTokenBudget(data, 100_000)
@@ -7835,10 +7859,22 @@ function startWatchdog(
 ): NodeJS.Timeout {
   log("Watchdog started");
   let watchdogRunning = false;
+  let watchdogStartedAt = 0;
+  const WATCHDOG_TIMEOUT_MS = 4 * 60 * 1000; // 4 minutes - must complete before next 5-min interval
 
   return setInterval(async () => {
-    if (watchdogRunning || isInWakeGrace()) return;
+    if (isInWakeGrace()) return;
+    if (watchdogRunning) {
+      const elapsed = Date.now() - watchdogStartedAt;
+      if (elapsed > WATCHDOG_TIMEOUT_MS) {
+        log(`[WARN] Watchdog stalled for ${Math.round(elapsed / 1000)}s, force-resetting`);
+        watchdogRunning = false;
+      } else {
+        return;
+      }
+    }
     watchdogRunning = true;
+    watchdogStartedAt = Date.now();
     try {
     const state = readDaemonState();
     const now = Date.now();
@@ -9132,8 +9168,12 @@ async function main(): Promise<void> {
     log(`[codex-app-server] "${binary}" not installed -- codex sessions will return install instructions`);
   });
 
-  codexAppServerInstance.start();
-  log("[codex-app-server] started");
+  try {
+    codexAppServerInstance.start();
+    log("[codex-app-server] started");
+  } catch (err: any) {
+    log(`[codex-app-server] failed to start: ${err?.message ?? err} -- codex features disabled`);
+  }
 
   const codexWatcher = new CodexWatcher();
   const codexSyncs = new Map<string, InvalidateSync>();

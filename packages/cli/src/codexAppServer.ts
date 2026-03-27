@@ -259,13 +259,30 @@ export class CodexAppServer extends EventEmitter {
     const args = ["app-server", "--session-source", this.sessionSource];
     this.log(`[codex-app-server] spawning: ${this.codexBinary} ${args.join(" ")}`);
 
-    const child = spawn(this.codexBinary, args, {
-      stdio: ["pipe", "pipe", "pipe"],
-      env: {
-        ...process.env,
-        PATH: [process.env.HOME + "/.bun/bin", process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":"),
-      },
-    });
+    let child: ChildProcess;
+    try {
+      child = spawn(this.codexBinary, args, {
+        stdio: ["pipe", "pipe", "pipe"],
+        env: {
+          ...process.env,
+          PATH: [process.env.HOME + "/.bun/bin", process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":"),
+        },
+      });
+    } catch (err: any) {
+      const msg = err?.message ?? String(err);
+      const isNotFound = err?.code === "ENOENT" || msg.includes("not found in") || msg.includes("ENOENT");
+      this.log(`[codex-app-server] spawn failed: ${msg}`);
+      if (isNotFound) {
+        this._binaryMissing = true;
+        this.stopped = true;
+        this.log(`[codex-app-server] binary "${this.codexBinary}" not found in PATH, disabling`);
+        this.emit("binaryNotFound", this.codexBinary);
+      } else {
+        this.emit("error", err instanceof Error ? err : new Error(msg));
+        this.scheduleRestart();
+      }
+      return;
+    }
 
     this.process = child;
 
