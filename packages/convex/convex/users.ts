@@ -671,6 +671,60 @@ export const getUserAbstractActivity = query({
   },
 });
 
+export const getUserActivityHeatmap = query({
+  args: {
+    user_id: v.id("users"),
+    team_id: v.optional(v.id("teams")),
+    days: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+
+    const user = await ctx.db.get(args.user_id);
+    if (!user || user.hide_activity) return [];
+
+    const days = args.days ?? 365;
+    const now = Date.now();
+    const cutoff = now - days * 24 * 60 * 60 * 1000;
+    const MAX_SESSION_MS = 8 * 3600000;
+
+    const conversations = args.team_id
+      ? await ctx.db
+          .query("conversations")
+          .withIndex("by_team_user_updated", (q: any) =>
+            q.eq("team_id", args.team_id).eq("user_id", args.user_id).gte("updated_at", cutoff)
+          )
+          .collect()
+      : await ctx.db
+          .query("conversations")
+          .withIndex("by_user_id", (q) => q.eq("user_id", args.user_id))
+          .collect();
+
+    const filtered = args.team_id
+      ? conversations
+      : conversations.filter((c) => c.updated_at >= cutoff);
+
+    const buckets: Record<string, { hours: number; sessions: number }> = {};
+    for (const c of filtered) {
+      if (!c.started_at || !c.updated_at) continue;
+      const durationMs = Math.min(c.updated_at - c.started_at, MAX_SESSION_MS);
+      const date = new Date(c.started_at).toISOString().split("T")[0];
+      if (!buckets[date]) buckets[date] = { hours: 0, sessions: 0 };
+      buckets[date].hours += durationMs / 3600000;
+      buckets[date].sessions++;
+    }
+
+    return Object.entries(buckets)
+      .map(([date, data]) => ({
+        date,
+        hours: Math.round(data.hours * 100) / 100,
+        sessions: data.sessions,
+      }))
+      .sort((a, b) => a.date.localeCompare(b.date));
+  },
+});
+
 export const getUserProfileFeed = query({
   args: {
     user_id: v.id("users"),
@@ -730,12 +784,12 @@ export const getUserProfileFeed = query({
           type: "message",
           timestamp: latest.timestamp || latest._creationTime,
           verb: "messaged",
-          preview: content.length > 100 ? content.slice(0, 100) + "..." : content,
+          preview: content.length > 300 ? content.slice(0, 300) + "..." : content,
           entity_id: String(c._id),
           entity_type: "session",
           entity_title: c.title || "Untitled",
           count: userMsgs.length > 1 ? userMsgs.length : undefined,
-          meta: { message_count: c.message_count, project: c.project_path?.split("/").pop(), status: c.status },
+          meta: { message_count: c.message_count, project: c.project_path?.split("/").pop(), status: c.status, duration_ms: c.started_at && c.updated_at ? c.updated_at - c.started_at : undefined },
         });
       }
     }
