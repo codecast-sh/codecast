@@ -822,6 +822,31 @@ export function SessionListPanel({
     [sessions, sessionsWithQueuedMessages],
   );
 
+  const [projectFilter, setProjectFilter] = useState<string | null>(null);
+
+  const activeSessions = useMemo(() => [...pinned, ...newSessions, ...needsInput, ...working], [pinned, newSessions, needsInput, working]);
+
+  const projectCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const s of activeSessions) {
+      const name = getProjectName(s.git_root, s.project_path);
+      if (name !== "unknown") counts[name] = (counts[name] || 0) + 1;
+    }
+    return Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  }, [activeSessions]);
+
+  const filterByProject = useCallback((items: InboxSession[]) => {
+    if (!projectFilter) return items;
+    return items.filter((s) => getProjectName(s.git_root, s.project_path) === projectFilter);
+  }, [projectFilter]);
+
+  const filteredPinned = useMemo(() => filterByProject(pinned), [filterByProject, pinned]);
+  const filteredNew = useMemo(() => filterByProject(newSessions), [filterByProject, newSessions]);
+  const filteredNeedsInput = useMemo(() => filterByProject(needsInput), [filterByProject, needsInput]);
+  const filteredWorking = useMemo(() => filterByProject(working), [filterByProject, working]);
+  const filteredDismissed = useMemo(() => filterByProject(dismissedList), [filterByProject, dismissedList]);
+  const filteredCount = filteredPinned.length + filteredNew.length + filteredNeedsInput.length + filteredWorking.length;
+
   const collapsedSections = useInboxStore((s) => s.collapsedSections);
   const toggleSection = useInboxStore((s) => s.toggleCollapsedSection);
   const [expandedSubSessions, setExpandedSubSessions] = useState<Record<string, boolean>>({});
@@ -899,24 +924,42 @@ export function SessionListPanel({
 
   return (
     <div className="h-full w-full flex flex-col bg-sol-bg-alt overflow-hidden">
-      <div className="px-3 py-2 border-b border-sol-border/50 flex-shrink-0">
-        <div className="flex items-center justify-between">
-          <span className="text-xs font-medium text-sol-text-dim uppercase tracking-wide">
-            {sortedSessions.length} Session{sortedSessions.length !== 1 ? "s" : ""}
-          </span>
+      <div className="px-3 py-2 border-b border-sol-border/50 flex-shrink-0 flex items-center gap-2 min-w-0">
+        <span className="text-xs font-medium text-sol-text-dim uppercase tracking-wide flex-shrink-0">
+          {projectFilter ? filteredCount : activeSessions.length} Session{(projectFilter ? filteredCount : activeSessions.length) !== 1 ? "s" : ""}
+        </span>
+        {projectCounts.length > 1 && (
+          <div className="flex gap-1 overflow-x-auto scrollbar-none min-w-0">
+            {projectCounts.map(([name, count]) => (
+              <button
+                key={name}
+                onClick={() => setProjectFilter((prev) => prev === name ? null : name)}
+                className={`flex-shrink-0 px-1.5 py-0.5 rounded-full text-[10px] transition-all ${
+                  projectFilter === name
+                    ? "bg-sol-cyan/15 text-sol-cyan ring-1 ring-sol-cyan/30"
+                    : "text-sol-text-dim/30 hover:text-sol-text-dim/50"
+                }`}
+              >
+                {name}
+                <span className="ml-0.5 opacity-50">{count}</span>
+              </button>
+            ))}
+          </div>
+        )}
+        <div className="flex-shrink-0 ml-auto">
           {(showAll || hiddenCount > 0) && (
-            <button onClick={toggleShowAll} className="text-[10px] text-sol-text-dim hover:text-sol-cyan transition-colors">
-              {showAll ? "Recent only" : `Show all (+${hiddenCount})`}
+            <button onClick={toggleShowAll} className="text-[10px] text-sol-text-dim hover:text-sol-cyan transition-colors whitespace-nowrap">
+              {showAll ? "Recent only" : `+${hiddenCount}`}
             </button>
           )}
         </div>
       </div>
       <div className="flex-1 overflow-y-auto scrollbar-auto">
-        <NeedsAttentionSection />
-        {renderSection("Pinned", pinned, "text-sol-magenta")}
-        {renderSection("New", newSessions, "text-sol-blue")}
-        {renderSection("Needs Input", needsInput, "text-sol-yellow")}
-        {renderSection("Working", working, "text-sol-green", "working")}
+        {!projectFilter && <NeedsAttentionSection />}
+        {renderSection("Pinned", filteredPinned, "text-sol-magenta")}
+        {renderSection("New", filteredNew, "text-sol-blue")}
+        {renderSection("Needs Input", filteredNeedsInput, "text-sol-yellow")}
+        {renderSection("Working", filteredWorking, "text-sol-green", "working")}
         {sortedSessions.length === 0 && (
           <div className="px-3 py-8 text-center text-sm text-sol-text-dim">
             No active sessions
@@ -928,16 +971,16 @@ export function SessionListPanel({
             className="w-full px-3 py-1.5 bg-sol-bg border-b border-sol-border/30 flex items-center justify-between"
           >
             <span className="text-[10px] font-semibold uppercase tracking-wider text-sol-text-dim">
-              Dismissed{dismissedList.length > 0 ? ` (${dismissedList.length})` : ""}
+              Dismissed{filteredDismissed.length > 0 ? ` (${filteredDismissed.length})` : ""}
             </span>
             <svg className={`w-3 h-3 transition-transform text-sol-text-dim ${collapsedSections.dismissed ? "" : "rotate-180"}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
             </svg>
           </button>
-          {!collapsedSections.dismissed && dismissedList.length > 0 && (() => {
-            const allDismissedIds = new Set(dismissedList.map((s) => s._id));
+          {!collapsedSections.dismissed && filteredDismissed.length > 0 && (() => {
+            const allDismissedIds = new Set(filteredDismissed.map((s) => s._id));
             const subMap = new Map<string, InboxSession[]>();
-            for (const s of dismissedList) {
+            for (const s of filteredDismissed) {
               if (s.parent_conversation_id && allDismissedIds.has(s.parent_conversation_id)) {
                 if (!subMap.has(s.parent_conversation_id)) subMap.set(s.parent_conversation_id, []);
                 subMap.get(s.parent_conversation_id)!.push(s);
@@ -949,7 +992,7 @@ export function SessionListPanel({
             const subsWithParent = new Set(Array.from(subMap.values()).flat().map((s) => s._id));
             const orphanedSub = (s: InboxSession) =>
               !subsWithParent.has(s._id) && s.parent_conversation_id && sessions[s.parent_conversation_id];
-            const topLevel = dismissedList.filter((s) => !subsWithParent.has(s._id) && !orphanedSub(s));
+            const topLevel = filteredDismissed.filter((s) => !subsWithParent.has(s._id) && !orphanedSub(s));
             return (
             <div>
               {topLevel.map((session) => (

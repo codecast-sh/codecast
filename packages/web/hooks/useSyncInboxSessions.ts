@@ -51,9 +51,9 @@ export function useSyncInboxSessions() {
 
   useConvexSync(activeSessions, useCallback((data: any) => {
     const sessions = data.sessions ?? data;
+    const queued = useInboxStore.getState().sessionsWithQueuedMessages;
     const prev = prevIdleMapRef.current;
     if (prev) {
-      const queued = useInboxStore.getState().sessionsWithQueuedMessages;
       for (const s of sessions) {
         const id = s._id.toString();
         if (isSessionWaitingForInput(s as InboxSession, queued) && prev.has(id) && !prev.get(id)) {
@@ -62,7 +62,7 @@ export function useSyncInboxSessions() {
         }
       }
     }
-    prevIdleMapRef.current = new Map(sessions.map((s: any) => [s._id.toString(), !!s.is_idle]));
+    prevIdleMapRef.current = new Map(sessions.map((s: any) => [s._id.toString(), isSessionWaitingForInput(s as InboxSession, queued)]));
     syncTable("sessions", sessions as unknown as InboxSession[]);
     if (typeof data.hidden_count === "number") {
       useInboxStore.setState({ hiddenSessionCount: data.hidden_count });

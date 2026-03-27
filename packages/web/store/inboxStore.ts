@@ -300,7 +300,9 @@ export function sortSessions(sessions: Record<string, InboxSession>): InboxSessi
     const bNew = b.message_count === 0;
     if (aNew !== bNew) return aNew ? -1 : 1;
     if (aWaitingForInput !== bWaitingForInput) return aWaitingForInput ? -1 : 1;
-    if (a.is_idle !== b.is_idle) return a.is_idle ? -1 : 1;
+    const aIdle = isSessionEffectivelyIdle(a);
+    const bIdle = isSessionEffectivelyIdle(b);
+    if (aIdle !== bIdle) return aIdle ? -1 : 1;
     return 0;
   });
   return list;
@@ -316,11 +318,20 @@ export function isSessionInterrupted(session: Pick<InboxSession, "last_user_mess
   return isInterruptControlMessage(session.last_user_message);
 }
 
+const ACTIVE_AGENT_STATUSES: Set<string> = new Set(["working", "compacting", "thinking", "connected", "starting", "resuming"]);
+
+export function isSessionEffectivelyIdle(
+  session: Pick<InboxSession, "is_idle" | "agent_status">,
+): boolean {
+  if (session.agent_status) return !ACTIVE_AGENT_STATUSES.has(session.agent_status);
+  return session.is_idle;
+}
+
 export function isSessionWaitingForInput(
-  session: Pick<InboxSession, "_id" | "is_idle" | "message_count" | "is_pinned" | "last_user_message">,
+  session: Pick<InboxSession, "_id" | "is_idle" | "agent_status" | "message_count" | "is_pinned" | "last_user_message">,
   sessionsWithQueuedMessages?: Set<string>,
 ): boolean {
-  return session.is_idle &&
+  return isSessionEffectivelyIdle(session) &&
     session.message_count > 0 &&
     !session.is_pinned &&
     !sessionsWithQueuedMessages?.has(session._id) &&
