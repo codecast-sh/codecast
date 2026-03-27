@@ -2,13 +2,15 @@
 import { useCallback, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useInboxStore, DocDetail } from "../../../store/inboxStore";
-import { useSyncDocs, useSyncDocDetail } from "../../../hooks/useSyncDocs";
+import { useSyncDocDetail } from "../../../hooks/useSyncDocs";
 import { DetailSplitLayout } from "../../../components/DetailSplitLayout";
 import { DocListContent } from "../page";
 import { useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { DocumentDetailLayout } from "../../../components/DocumentDetailLayout";
+import { ErrorBoundary } from "../../../components/ErrorBoundary";
 import { SessionCardInner } from "../../../components/ActivityFeed";
+import { WatchButton } from "../../../components/WatchButton";
 import { Badge } from "../../../components/ui/badge";
 import "../../../components/editor/editor.css";
 import {
@@ -114,23 +116,29 @@ function DocTypeSelector({
 }
 
 export default function DocDetailPage() {
+  return (
+    <DetailSplitLayout list={<DocListContent />}>
+      <ErrorBoundary name="DocDetail" level="panel">
+        <DocDetailContent />
+      </ErrorBoundary>
+    </DetailSplitLayout>
+  );
+}
+
+function DocDetailContent() {
   const params = useParams();
   const router = useRouter();
   const id = params.id as string;
 
   useSyncDocDetail(id);
-  useSyncDocs();
 
-  const allDocs = useInboxStore((s) => s.docs);
   const detail = useInboxStore((s) => s.docDetails[id]) as DocDetail | undefined;
-  const listItem = allDocs[id];
-  const data = detail || (listItem as DocDetail | undefined);
+  const listItem = useInboxStore((s) => s.docs[id]) as DocDetail | undefined;
+  const data = detail || listItem;
   const updateDoc = useInboxStore((s) => s.updateDoc);
   const pinDoc = useInboxStore((s) => s.pinDoc);
   const openSidePanel = useInboxStore((s) => s.openSidePanel);
   const promoteToPlan = useMutation(api.docs.webPromoteToPlan);
-
-  const sidebar = <DocListContent />;
 
   const handleTitleChange = useCallback(
     (title: string) => {
@@ -169,11 +177,9 @@ export default function DocDetailPage() {
 
   if (!data) {
     return (
-      <DetailSplitLayout list={sidebar}>
-        <div className="flex items-center justify-center h-64 text-sol-text-dim text-sm">
-          Loading...
-        </div>
-      </DetailSplitLayout>
+      <div className="flex items-center justify-center h-64 text-sol-text-dim text-sm">
+        Loading...
+      </div>
     );
   }
 
@@ -186,12 +192,11 @@ export default function DocDetailPage() {
     relatedTasks.length > 0;
 
   return (
-    <DetailSplitLayout list={sidebar}>
     <div className="h-full min-w-0">
         <DocumentDetailLayout
           docId={doc._id}
           title={(doc as any).display_title ?? doc.title}
-          markdownContent={doc.content}
+          markdownContent={listItem?.content || doc.content || ""}
           onTitleChange={handleTitleChange}
           backHref="/docs"
           linkedObjectId={doc._id}
@@ -201,6 +206,7 @@ export default function DocDetailPage() {
             <>
               <DocTypeSelector value={doc.doc_type} onChange={handleTypeChange} />
               {doc.pinned && <Pin className="w-3 h-3 text-sol-yellow" />}
+              <WatchButton entityType="doc" entityId={doc._id} />
             </>
           }
           topBarRight={
@@ -223,16 +229,21 @@ export default function DocDetailPage() {
           }
           metaContent={
             <div className="flex items-center gap-4 text-xs text-sol-text-dim flex-wrap">
-              {(doc as any).author_image && (
-                <span className="flex items-center gap-1.5">
-                  <img
-                    src={(doc as any).author_image}
-                    alt={(doc as any).author_name || ""}
-                    className="w-4 h-4 rounded-full object-cover"
-                  />
-                  <span className="text-sol-text-muted">{(doc as any).author_name}</span>
-                </span>
-              )}
+              {(doc as any).author_image && (() => {
+                const authorContent = (
+                  <span className="flex items-center gap-1.5 hover:opacity-80">
+                    <img
+                      src={(doc as any).author_image}
+                      alt={(doc as any).author_name || ""}
+                      className="w-4 h-4 rounded-full object-cover"
+                    />
+                    <span className="text-sol-text-muted">{(doc as any).author_name}</span>
+                  </span>
+                );
+                return (doc as any).author_username
+                  ? <Link href={`/team/${(doc as any).author_username}`}>{authorContent}</Link>
+                  : authorContent;
+              })()}
               <span className="flex items-center gap-1">
                 <Clock className="w-3 h-3" />
                 {formatDate(doc.created_at)}
@@ -244,13 +255,14 @@ export default function DocDetailPage() {
                 <span className="flex items-center gap-1.5">
                   <Tag className="w-3 h-3" />
                   {doc.labels.map((l: string) => (
-                    <Badge
-                      key={l}
-                      variant="outline"
-                      className="text-[10px] border-sol-border/50 text-sol-text-muted"
-                    >
-                      {l}
-                    </Badge>
+                    <Link key={l} href={`/docs?label=${encodeURIComponent(l)}`}>
+                      <Badge
+                        variant="outline"
+                        className="text-[10px] border-sol-border/50 text-sol-text-muted hover:brightness-90 transition-all cursor-pointer"
+                      >
+                        {l}
+                      </Badge>
+                    </Link>
                   ))}
                 </span>
               )}
@@ -343,6 +355,5 @@ export default function DocDetailPage() {
           )}
         </DocumentDetailLayout>
     </div>
-    </DetailSplitLayout>
   );
 }

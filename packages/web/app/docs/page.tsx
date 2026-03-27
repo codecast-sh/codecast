@@ -12,6 +12,8 @@ import {
   Pin,
   FolderOpen,
   Tag,
+  User,
+  Bot,
 } from "lucide-react";
 
 export const DOC_TYPE_CONFIG: Record<string, { label: string; color: string; dot: string }> = {
@@ -52,15 +54,25 @@ export function DocRow({ doc }: { doc: DocItem; state: ItemRowState }) {
           {doc.plan_short_id}
         </Link>
       )}
-      {doc.labels && doc.labels.length > 0 && doc.labels.slice(0, 2).map((l) => {
-        const lc = getLabelColor(l);
-        return (
-          <span key={l} className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full border flex-shrink-0 cq-hide-compact ${lc.bg} ${lc.border} ${lc.text}`}>
-            <span className={`w-1.5 h-1.5 rounded-full ${lc.dot}`} />
-            {l}
-          </span>
-        );
-      })}
+      {doc.labels && doc.labels.length > 0 && (
+        <div className="flex items-center gap-1 flex-shrink min-w-0 overflow-hidden flex-nowrap cq-hide-compact">
+          {doc.labels.slice(0, 2).map((l) => {
+            const lc = getLabelColor(l);
+            return (
+              <span key={l} className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0 rounded-full border whitespace-nowrap ${lc.bg} ${lc.border} ${lc.text}`}>
+                <span className={`w-1.5 h-1.5 rounded-full ${lc.dot}`} />
+                {l}
+              </span>
+            );
+          })}
+          {doc.labels.slice(2).map((l) => {
+            const lc = getLabelColor(l);
+            return (
+              <span key={l} className={`w-2 h-2 rounded-full flex-shrink-0 ${lc.dot}`} title={l} />
+            );
+          })}
+        </div>
+      )}
       <span className="text-[10px] text-gray-500 flex-shrink-0 tabular-nums cq-hide-minimal">{cfg.label}</span>
       <span className="text-xs text-gray-500 w-8 text-right tabular-nums flex-shrink-0 cq-hide-minimal">{ageStr}</span>
     </>
@@ -85,12 +97,14 @@ function useDocUrlState() {
     const s = searchParams.get("sort");
     const p = searchParams.get("project");
     const l = searchParams.get("label");
-    if (t || s || p || l) {
+    const src = searchParams.get("source");
+    if (t || s || p || l || src) {
       const prefs: Record<string, any> = {};
       if (t) prefs.doc_type = t;
       if (s) prefs.sort = s;
       if (p) prefs.project = p;
       if (l) prefs.label = l;
+      if (src) prefs.source = src;
       updateClientUI({ doc_view: { ...docView, ...prefs } as DocViewPrefs });
     }
   }, []);
@@ -100,6 +114,7 @@ function useDocUrlState() {
   const sort = (docView?.sort || "updated") as "updated" | "created" | "type" | "project";
   const project = docView?.project ?? "";
   const label = docView?.label ?? "";
+  const source = docView?.source ?? "";
 
   const setParam = useCallback((updates: Record<string, string>) => {
     const prefs: Record<string, any> = {};
@@ -119,12 +134,12 @@ function useDocUrlState() {
     }
   }, [searchParams, router, docView, updateClientUI, isDetailPage]);
 
-  return { docType, sort, project, label, setParam };
+  return { docType, sort, project, label, source, setParam };
 }
 
 export function DocListContent() {
   const params = useParams();
-  const { docType, sort: sortBy, project: projectFilter, label: labelFilter, setParam } = useDocUrlState();
+  const { docType, sort: sortBy, project: projectFilter, label: labelFilter, source: sourceFilter, setParam } = useDocUrlState();
   const docs = useInboxStore((s) => s.docs);
   const docProjectPaths = useInboxStore((s) => s.docProjectPaths);
   const [showCreate, setShowCreate] = useState(false);
@@ -141,10 +156,12 @@ export function DocListContent() {
 
   const filteredDocs = useMemo(() => {
     let list = docsList;
+    if (sourceFilter === "human") list = list.filter((d) => d.source === "human");
+    else if (sourceFilter === "bot") list = list.filter((d) => d.source !== "human");
     if (labelFilter) list = list.filter((d) => d.labels?.includes(labelFilter));
     if (projectFilter) list = list.filter((d) => d.source_file?.startsWith(projectFilter));
     return list;
-  }, [docsList, labelFilter, projectFilter]);
+  }, [docsList, sourceFilter, labelFilter, projectFilter]);
 
   const typeCounts = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -252,6 +269,31 @@ export function DocListContent() {
         { value: "project", label: "Group by project" },
       ]}
       onSortChange={(sort) => setParam({ sort })}
+      headerExtra={
+        <div className="flex items-center rounded-md border border-sol-border/40 overflow-hidden">
+          <button
+            onClick={() => setParam({ source: "" })}
+            className={`px-2 py-1.5 text-xs transition-colors ${!sourceFilter ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"}`}
+            title="All docs"
+          >
+            All
+          </button>
+          <button
+            onClick={() => setParam({ source: "human" })}
+            className={`px-2 py-1.5 transition-colors border-l border-sol-border/40 ${sourceFilter === "human" ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"}`}
+            title="Human-created docs"
+          >
+            <User className="w-3.5 h-3.5" />
+          </button>
+          <button
+            onClick={() => setParam({ source: "bot" })}
+            className={`px-2 py-1.5 transition-colors border-l border-sol-border/40 ${sourceFilter === "bot" ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"}`}
+            title="Bot-created docs"
+          >
+            <Bot className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      }
       filters={{
         hasActive: !!(projectFilter || labelFilter),
         defs: [

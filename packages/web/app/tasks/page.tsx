@@ -67,17 +67,19 @@ export const PRIORITY_CONFIG: Record<TaskPriority, { icon: typeof Minus; label: 
 
 const STATUS_ORDER: TaskStatus[] = ["backlog", "open", "in_progress", "in_review", "done", "dropped"];
 
-function CreatorAvatar({ creator }: { creator?: { name: string; image?: string } }) {
+function CreatorAvatar({ creator }: { creator?: { name: string; image?: string; github_username?: string } }) {
   if (!creator) return null;
-  if (creator.image) {
-    return <img src={creator.image} alt={creator.name} title={creator.name} className="w-5 h-5 rounded-full flex-shrink-0" />;
-  }
-  const initials = creator.name.split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase();
-  return (
+  const avatar = creator.image ? (
+    <img src={creator.image} alt={creator.name} title={creator.name} className="w-5 h-5 rounded-full flex-shrink-0" />
+  ) : (
     <div className="w-5 h-5 rounded-full flex-shrink-0 bg-sol-bg-highlight border border-sol-border/50 flex items-center justify-center text-[8px] font-medium text-sol-text-muted" title={creator.name}>
-      {initials}
+      {creator.name.split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase()}
     </div>
   );
+  if (creator.github_username) {
+    return <Link href={`/team/${creator.github_username}`} onClick={e => e.stopPropagation()} className="hover:opacity-80">{avatar}</Link>;
+  }
+  return avatar;
 }
 
 export function TaskRow({ task, state, triageMode, onTriage }: { task: TaskItem; state: ItemRowState; triageMode?: boolean; onTriage?: (task: TaskItem, action: "active" | "dismissed") => void }) {
@@ -187,17 +189,22 @@ export function TaskRow({ task, state, triageMode, onTriage }: { task: TaskItem;
           })}
         </div>
       )}
-      {task.assignee_info && (
-        <div className="flex items-center gap-1 flex-shrink-0 cq-hide-compact" title={`Assigned: ${task.assignee_info.name}`}>
-          {task.assignee_info.image ? (
-            <img src={task.assignee_info.image} alt={task.assignee_info.name} className="w-5 h-5 rounded-full ring-1 ring-sol-cyan/30" />
-          ) : (
-            <div className="w-5 h-5 rounded-full bg-sol-cyan/10 border border-sol-cyan/30 flex items-center justify-center text-[8px] font-medium text-sol-cyan">
-              {task.assignee_info.name.split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase()}
-            </div>
-          )}
-        </div>
-      )}
+      {task.assignee_info && (() => {
+        const avatar = task.assignee_info.image ? (
+          <img src={task.assignee_info.image} alt={task.assignee_info.name} className="w-5 h-5 rounded-full ring-1 ring-sol-cyan/30" />
+        ) : (
+          <div className="w-5 h-5 rounded-full bg-sol-cyan/10 border border-sol-cyan/30 flex items-center justify-center text-[8px] font-medium text-sol-cyan">
+            {task.assignee_info.name.split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase()}
+          </div>
+        );
+        return (
+          <div className="flex items-center gap-1 flex-shrink-0 cq-hide-compact" title={`Assigned: ${task.assignee_info.name}`}>
+            {(task.assignee_info as any).github_username ? (
+              <Link href={`/team/${(task.assignee_info as any).github_username}`} onClick={e => e.stopPropagation()} className="hover:opacity-80">{avatar}</Link>
+            ) : avatar}
+          </div>
+        );
+      })()}
       {triageMode && onTriage ? (
         <div className="flex items-center gap-1 flex-shrink-0">
           <button
@@ -460,15 +467,18 @@ function KanbanCard({
           {(task as any).activeSession && (
             <ActiveSessionBadge session={(task as any).activeSession} compact />
           )}
-          {assignee ? (
-            assignee.image ? (
+          {assignee ? (() => {
+            const av = assignee.image ? (
               <img src={assignee.image} alt={assignee.name} className="w-4 h-4 rounded-full" title={assignee.name} />
             ) : (
               <div className="w-4 h-4 rounded-full bg-sol-bg-highlight border border-sol-border/50 flex items-center justify-center text-[7px] font-medium text-sol-text-muted" title={assignee.name}>
                 {assignee.name.split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase()}
               </div>
-            )
-          ) : null}
+            );
+            return (assignee as any).github_username
+              ? <Link href={`/team/${(assignee as any).github_username}`} onClick={e => e.stopPropagation()} className="hover:opacity-80">{av}</Link>
+              : av;
+          })() : null}
         </div>
       </div>
       <p className="text-[13px] text-sol-text leading-snug mb-3 line-clamp-3 font-medium">{task.title}</p>

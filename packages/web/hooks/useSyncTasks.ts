@@ -43,4 +43,6 @@ export function useSyncTaskDetail(id?: string) {
   useConvexSync(data, useCallback((d: any) => {
     if (id && d) syncRecord("tasks", id, d);
   }, [id, syncRecord]));
+
+  return data;
 }
