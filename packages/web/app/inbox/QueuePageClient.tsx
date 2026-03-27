@@ -24,7 +24,7 @@ import { PlanContextPanel } from "../../components/PlanContextPanel";
 import { WorkflowContextPanel } from "../../components/WorkflowContextPanel";
 import { toast } from "sonner";
 import { undoableStashSession } from "../../store/undoActions";
-import { cleanUserMessage, formatIdleDuration, getProjectName, DraftPlansSection, SessionListPanel } from "../../components/GlobalSessionPanel";
+import { cleanUserMessage, formatIdleDuration, getProjectName, SessionListPanel } from "../../components/GlobalSessionPanel";
 
 const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, onSendAndAdvance, onSendAndDismiss, lastUserMessage, sessionError, onBack, targetMessageId }: { sessionId: string; isIdle: boolean; onSendAndAdvance: () => void; onSendAndDismiss?: () => void; lastUserMessage?: string | null; sessionError?: string; onBack?: () => void; targetMessageId?: string }) {
   const {
@@ -188,102 +188,6 @@ const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, o
 function Prefetch({ sessionId }: { sessionId: string }) {
   useConversationMessages(sessionId);
   return null;
-}
-
-function InboxPlanView({ planId }: { planId: string }) {
-  const plan = useQuery(api.plans.webGet, { id: planId });
-  const router = useRouter();
-
-  if (plan === undefined) {
-    return (
-      <div className="h-full flex items-center justify-center text-sol-text-dim">
-        <div className="flex items-center gap-2">
-          <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none">
-            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-          </svg>
-          <span className="text-sm">Loading plan...</span>
-        </div>
-      </div>
-    );
-  }
-
-  if (plan === null) {
-    return (
-      <div className="h-full flex items-center justify-center text-sol-text-dim text-sm">
-        Plan not found
-      </div>
-    );
-  }
-
-  const hasTasks = (plan.tasks || []).length > 0;
-  const progress = plan.progress;
-
-  return (
-    <div className="h-full overflow-y-auto" data-main-scroll>
-      <div className="max-w-4xl mx-auto px-6 py-6">
-        <div className="flex items-center gap-3 mb-1">
-          <span className={`text-xs px-2 py-0.5 rounded-md border ${
-            plan.status === "active" ? "text-sol-green border-sol-green/30 bg-sol-green/10"
-            : plan.status === "completed" ? "text-sol-cyan border-sol-cyan/30 bg-sol-cyan/10"
-            : "text-sol-text-dim border-sol-border/40 bg-sol-bg-alt"
-          }`}>
-            {plan.status}
-          </span>
-          <span className="text-[10px] text-sol-text-dim font-mono">{plan.short_id}</span>
-          <button
-            onClick={() => router.push(`/plans/${plan._id}`)}
-            className="ml-auto text-xs text-sol-text-dim hover:text-sol-cyan transition-colors"
-          >
-            Open full view
-          </button>
-        </div>
-        <h1 className="text-xl font-semibold text-sol-text mb-3">{plan.title}</h1>
-
-        {plan.goal && (
-          <p className="text-sm text-sol-text-muted mb-4 leading-relaxed">{plan.goal}</p>
-        )}
-
-        {progress && progress.total > 0 && (
-          <div className="mb-4">
-            <div className="flex items-center gap-2 text-xs text-sol-text-dim mb-1">
-              <span>{progress.done}/{progress.total} tasks</span>
-              <span>{Math.round((progress.done / progress.total) * 100)}%</span>
-            </div>
-            <div className="w-full h-1.5 bg-sol-bg-alt rounded-full overflow-hidden">
-              <div
-                className="h-full bg-sol-cyan rounded-full transition-all"
-                style={{ width: `${(progress.done / progress.total) * 100}%` }}
-              />
-            </div>
-          </div>
-        )}
-
-        {hasTasks && (
-          <div className="space-y-2">
-            {(plan.tasks as any[]).map((task: any) => (
-              <div key={task.short_id} className="flex items-center gap-2 px-3 py-2 rounded border border-sol-border/20 bg-sol-bg-alt/40">
-                <span className={`w-2 h-2 rounded-full flex-shrink-0 ${
-                  task.status === "done" ? "bg-sol-green"
-                  : task.status === "in_progress" ? "bg-sol-cyan"
-                  : task.status === "blocked" ? "bg-sol-red"
-                  : "bg-sol-text-dim/30"
-                }`} />
-                <span className="text-sm text-sol-text truncate flex-1">{task.title}</span>
-                <span className="text-[10px] text-sol-text-dim capitalize">{task.status?.replace("_", " ")}</span>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {plan.doc_content && (
-          <div className="mt-4 prose prose-sm prose-invert max-w-none text-sol-text-muted">
-            <pre className="whitespace-pre-wrap text-sm">{plan.doc_content}</pre>
-          </div>
-        )}
-      </div>
-    </div>
-  );
 }
 
 function SessionCard({
@@ -712,8 +616,6 @@ export function QueuePageClient({ initialSessionId }: { initialSessionId?: strin
   const currentSessionId = useInboxStore((s) => s.currentSessionId);
   const advanceToNext = useInboxStore((s) => s.advanceToNext);
   const setCurrentSession = useInboxStore((s) => s.setCurrentSession);
-  const selectedPlanId = useInboxStore((s) => s.selectedPlanId);
-  const setSelectedPlan = useInboxStore((s) => s.setSelectedPlan);
   const viewingDismissedId = useInboxStore((s) => s.viewingDismissedId);
   const setViewingDismissedId = useInboxStore((s) => s.setViewingDismissedId);
   const touchMru = useInboxStore((s) => s.touchMru);
@@ -849,12 +751,6 @@ export function QueuePageClient({ initialSessionId }: { initialSessionId?: strin
     }
   }, [sessions, dismissedSessions, setCurrentSession, setViewingDismissedId, showMySessions, setShowMySessions]);
 
-  const handlePlanSelect = useCallback((planId: string) => {
-    setSelectedPlan(planId);
-    if (showMySessions) setShowMySessions(false);
-    window.history.replaceState({ planId }, "", `/plans/${planId}`);
-  }, [setSelectedPlan, showMySessions, setShowMySessions]);
-
   const viewingDismissedSession = viewingDismissedId
     ? dismissedSessions[viewingDismissedId] ?? null
     : null;
@@ -880,9 +776,9 @@ export function QueuePageClient({ initialSessionId }: { initialSessionId?: strin
   }, [currentSession?._id, currentSession?.project_path, currentSession?.git_root, currentSession?.agent_type, setCurrentConversation, touchMru]);
 
   useWatchEffect(() => {
-    if (currentSessionId || currentSession || showMySessions || selectedPlanId || viewingDismissedId || pendingInjectId) return;
+    if (currentSessionId || currentSession || showMySessions || viewingDismissedId || pendingInjectId) return;
     if (sortedSessions.length > 0) setCurrentSession(sortedSessions[0]._id);
-  }, [currentSessionId, currentSession, showMySessions, selectedPlanId, viewingDismissedId, pendingInjectId, sortedSessions, setCurrentSession]);
+  }, [currentSessionId, currentSession, showMySessions, viewingDismissedId, pendingInjectId, sortedSessions, setCurrentSession]);
 
   // Sync URL when current session changes (but not before initial param is resolved)
   useWatchEffect(() => {
@@ -957,8 +853,6 @@ export function QueuePageClient({ initialSessionId }: { initialSessionId?: strin
             </ErrorBoundary>
           </div>
         </div>
-      ) : selectedPlanId ? (
-        <InboxPlanView key={selectedPlanId} planId={selectedPlanId} />
       ) : viewingDismissedSession ? (
         <ErrorBoundary name="Conversation" level="inline" key={`eb-${viewingDismissedRenderKey}`}>
           <InboxConversation
@@ -1033,7 +927,7 @@ export function QueuePageClient({ initialSessionId }: { initialSessionId?: strin
             <>
               <div className="fixed inset-0 z-40 bg-black/50" onClick={() => setMobileSessionsOpen(false)} />
               <div className="fixed inset-y-0 right-0 z-50 w-[80vw] max-w-xs shadow-xl animate-slide-in-right">
-                <SessionListPanel onSessionSelect={handleSessionSelect} onPlanSelect={handlePlanSelect} activeSessionId={viewingDismissedId ?? currentSessionId} activePlanId={selectedPlanId} />
+                <SessionListPanel onSessionSelect={handleSessionSelect} activeSessionId={viewingDismissedId ?? currentSessionId} />
               </div>
             </>
           )}
@@ -1045,7 +939,7 @@ export function QueuePageClient({ initialSessionId }: { initialSessionId?: strin
           </Panel>
           <Separator className="relative z-10 w-px bg-black/10 cursor-col-resize before:absolute before:inset-y-0 before:-left-[2px] before:-right-[2px] before:content-[''] before:transition-colors before:duration-150 hover:before:bg-sol-cyan data-[resize-handle-active]:before:bg-sol-cyan" />
           <Panel id="inbox-sidebar" defaultSize="24%" minSize={200} maxSize="45%" collapsible collapsedSize={0}>
-            <SessionListPanel onSessionSelect={handleSessionSelect} onPlanSelect={handlePlanSelect} activeSessionId={viewingDismissedId ?? currentSessionId} activePlanId={selectedPlanId} />
+            <SessionListPanel onSessionSelect={handleSessionSelect} activeSessionId={viewingDismissedId ?? currentSessionId} />
           </Panel>
         </Group>
       ) : (

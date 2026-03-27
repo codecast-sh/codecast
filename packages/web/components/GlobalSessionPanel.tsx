@@ -780,121 +780,13 @@ function NeedsAttentionSection() {
   );
 }
 
-export function DraftPlansSection({ onPlanSelect, activePlanId }: { onPlanSelect?: (id: string) => void; activePlanId?: string | null }) {
-  const draftPlans = useQuery(api.plans.webList, { status: "draft", limit: 20 });
-  const updatePlan = useMutation(api.plans.webUpdate);
-  const [collapsed, setCollapsed] = useState(false);
-  const router = useRouter();
-
-  if (!draftPlans || draftPlans.length === 0) return null;
-
-  const handleActivate = async (shortId: string) => {
-    try {
-      await updatePlan({ short_id: shortId, status: "active" });
-      toast.success("Plan activated");
-    } catch {
-      toast.error("Failed to activate plan");
-    }
-  };
-
-  const handleDismiss = async (shortId: string) => {
-    try {
-      await updatePlan({ short_id: shortId, status: "abandoned" });
-      toast.success("Plan dismissed");
-    } catch {
-      toast.error("Failed to dismiss plan");
-    }
-  };
-
-  const handleClick = (plan: any) => {
-    if (onPlanSelect) {
-      onPlanSelect(plan._id);
-    } else {
-      router.push(`/plans/${plan._id}`);
-    }
-  };
-
-  return (
-    <div className="border-b border-sol-border/30">
-      <button
-        onClick={() => setCollapsed(!collapsed)}
-        className="w-full px-3 py-1.5 bg-sol-bg border-b border-sol-border/30 flex items-center justify-between"
-      >
-        <span className="text-[10px] font-semibold uppercase tracking-wider text-sol-text-dim/70">
-          Draft Plans ({draftPlans.length})
-        </span>
-        <svg
-          className={`w-3 h-3 text-sol-text-dim/40 transition-transform ${collapsed ? "" : "rotate-180"}`}
-          fill="none" stroke="currentColor" viewBox="0 0 24 24"
-        >
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-        </svg>
-      </button>
-      {!collapsed && draftPlans.map((plan: any) => {
-        const isActive = activePlanId === plan._id;
-        return (
-          <div
-            key={plan.short_id}
-            onClick={() => handleClick(plan)}
-            className={`group px-3 py-2 border-b border-sol-border/15 transition-colors cursor-pointer ${
-              isActive
-                ? "bg-sol-cyan/[0.08] border-l-2 border-l-sol-cyan/60 opacity-100"
-                : "hover:bg-sol-bg-alt/60 opacity-70 hover:opacity-100"
-            }`}
-          >
-            <div className={`text-sm truncate leading-tight ${isActive ? "text-sol-text font-medium" : "text-sol-text-muted"}`}>{plan.title}</div>
-            <div className="flex items-center gap-1.5 mt-1">
-              <span className="text-[10px] text-sol-text-dim font-mono">{plan.short_id}</span>
-              <span className="text-[10px] text-sol-text-dim/60 capitalize">{plan.source}</span>
-              {plan.progress && (
-                <span className="text-[10px] text-sol-text-dim tabular-nums">
-                  {plan.progress.total} task{plan.progress.total !== 1 ? "s" : ""}
-                </span>
-              )}
-              {plan._creationTime && (
-                <span className="text-[10px] text-sol-text-dim tabular-nums">
-                  {formatIdleDuration(plan._creationTime)}
-                </span>
-              )}
-            </div>
-            <div className="flex items-center gap-1 mt-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
-              <button
-                onClick={(e) => { e.stopPropagation(); handleActivate(plan.short_id); }}
-                className="px-1.5 py-0.5 rounded text-[10px] font-medium text-sol-green border border-sol-green/30 bg-sol-green/10 hover:bg-sol-green/20 transition-colors"
-              >
-                Activate
-              </button>
-              <button
-                onClick={(e) => { e.stopPropagation(); handleDismiss(plan.short_id); }}
-                className="px-1.5 py-0.5 rounded text-[10px] font-medium text-sol-text-dim border border-sol-border/40 hover:border-sol-red/30 hover:text-sol-red hover:bg-sol-red/10 transition-colors"
-              >
-                Dismiss
-              </button>
-              <button
-                onClick={(e) => { e.stopPropagation(); router.push(`/plans/${plan._id}`); }}
-                className="px-1.5 py-0.5 rounded text-[10px] font-medium text-sol-text-dim border border-sol-border/40 hover:border-sol-cyan/30 hover:text-sol-cyan hover:bg-sol-cyan/10 transition-colors"
-              >
-                Open
-              </button>
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
 export function SessionListPanel({
   onSessionSelect,
-  onPlanSelect,
   activeSessionId,
-  activePlanId,
   onCollapse,
 }: {
   onSessionSelect?: (id: string) => void;
-  onPlanSelect?: (id: string) => void;
   activeSessionId?: string | null;
-  activePlanId?: string | null;
   onCollapse?: () => void;
 }) {
   const showAll = useInboxStore((s) => s.showAllSessions);
@@ -1018,7 +910,6 @@ export function SessionListPanel({
       </div>
       <div className="flex-1 overflow-y-auto scrollbar-auto">
         <NeedsAttentionSection />
-        <DraftPlansSection onPlanSelect={onPlanSelect} activePlanId={activePlanId} />
         {renderSection("Pinned", pinned, "text-sol-magenta")}
         {renderSection("New", newSessions, "text-sol-blue")}
         {renderSection("Needs Input", needsInput, "text-sol-yellow")}

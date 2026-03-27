@@ -180,6 +180,7 @@ export type TaskItem = {
   estimated_minutes?: number;
   actual_minutes?: number;
   started_at?: number;
+  team_id?: string;
   workflow_run_id?: string;
   workflow_node_id?: string;
 };
@@ -233,6 +234,7 @@ export type DocViewPrefs = {
   sort?: string;
   project?: string;
   label?: string;
+  source?: string;
   scope?: string;
 };
 
@@ -397,7 +399,6 @@ interface InboxStoreState {
   dismissedSessions: Record<string, InboxSession>;
   pending: Record<string, PendingEntry>;
   currentSessionId: string | null;
-  selectedPlanId: string | null;
   showDismissed: boolean;
   collapsedSections: Record<string, boolean>;
   viewingDismissedId: string | null;
@@ -480,7 +481,6 @@ interface InboxStoreState {
   navigateUp: () => void;
   navigateDown: () => void;
   setCurrentSession: (id: string) => void;
-  setSelectedPlan: (id: string | null) => void;
   clearSelection: () => void;
   setShowDismissed: (show: boolean) => void;
   toggleCollapsedSection: (key: string) => void;
@@ -663,7 +663,6 @@ export const useInboxStore = create<InboxStoreState>(
   dismissedSessions: {},
   pending: {},
   currentSessionId: null,
-  selectedPlanId: null,
   showDismissed: false,
   collapsedSections: {},
   viewingDismissedId: null,
@@ -1156,7 +1155,6 @@ export const useInboxStore = create<InboxStoreState>(
     const state = get();
     set({
       currentSessionId: id,
-      selectedPlanId: null,
       viewingDismissedId: null,
       clientState: { ...state.clientState, current_conversation_id: id },
     });
@@ -1165,13 +1163,7 @@ export const useInboxStore = create<InboxStoreState>(
     }).catch(() => {});
   },
 
-  setSelectedPlan: action(function (this: Draft, id: string | null) {
-    this.selectedPlanId = id;
-    this.viewingDismissedId = null;
-  }),
-
   clearSelection: action(function (this: Draft) {
-    this.selectedPlanId = null;
     this.viewingDismissedId = null;
   }),
 
