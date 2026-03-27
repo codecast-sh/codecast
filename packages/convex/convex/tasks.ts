@@ -5,6 +5,61 @@ import { Id } from "./_generated/dataModel";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { createDataContext } from "./data";
 import { nextShortId } from "./counters";
+import { internal } from "./_generated/api";
+
+async function resolveAssigneeToUserId(
+  ctx: any,
+  assignee: string,
+  teamId?: Id<"teams">
+): Promise<Id<"users"> | null> {
+  if (!assignee) return null;
+  const direct = await ctx.db.get(assignee as any);
+  if (direct && direct.name !== undefined) return direct._id;
+  if (!teamId) return null;
+  const memberships = await ctx.db
+    .query("team_memberships")
+    .withIndex("by_team_id", (q: any) => q.eq("team_id", teamId))
+    .collect();
+  for (const m of memberships) {
+    const u = await ctx.db.get(m.user_id);
+    if (u && (u.github_username === assignee || u.name === assignee)) {
+      return u._id;
+    }
+  }
+  return null;
+}
+
+async function notifySubscribers(
+  ctx: any,
+  eventType: string,
+  actorUserId: Id<"users">,
+  task: { _id: Id<"tasks">; short_id: string; title: string },
+  message: string,
+  conversationId?: Id<"conversations">
+) {
+  await ctx.runMutation(internal.notificationRouter.emit, {
+    event_type: eventType,
+    actor_user_id: actorUserId,
+    entity_type: "task",
+    entity_id: task._id.toString(),
+    message,
+    conversation_id: conversationId,
+  });
+}
+
+async function subscribeUser(
+  ctx: any,
+  userId: Id<"users">,
+  taskId: Id<"tasks">,
+  reason: "creator" | "assignee" | "commenter" | "mentioned" | "watching"
+) {
+  await ctx.runMutation(internal.notificationRouter.ensureSubscribed, {
+    user_id: userId,
+    entity_type: "task",
+    entity_id: taskId.toString(),
+    reason,
+  });
+}
 
 async function recalcPlanProgress(ctx: any, planId: Id<"plans">, updatedTaskId: Id<"tasks">, newStatus: string) {
   const plan = await ctx.db.get(planId);
@@ -161,6 +216,16 @@ export const create = mutation({
         if (plan_id && !conv.active_plan_id) {
           await ctx.db.patch(created_from_conversation, { active_plan_id: plan_id });
         }
+      }
+    }
+
+    await subscribeUser(ctx, auth.userId, id, "creator");
+    if (args.assignee) {
+      const createdTask = await ctx.db.get(id) as any;
+      const assigneeId = await resolveAssigneeToUserId(ctx, args.assignee, createdTask?.team_id);
+      if (assigneeId && assigneeId.toString() !== auth.userId.toString()) {
+        await subscribeUser(ctx, assigneeId, id, "assignee");
+        await notifySubscribers(ctx, "task_assigned", auth.userId, { _id: id, short_id, title: args.title }, `assigned you to ${short_id}: ${args.title}`);
       }
     }
 
@@ -543,8 +608,25 @@ export const update = mutation({
 
     await ctx.db.patch(task._id, updates);
 
-    if (args.status && args.status !== task.status && task.plan_id) {
-      await recalcPlanProgress(ctx, task.plan_id, task._id, args.status);
+    if (args.status && args.status !== task.status) {
+      if (task.plan_id) {
+        await recalcPlanProgress(ctx, task.plan_id, task._id, args.status);
+      }
+      await notifySubscribers(ctx, "task_status_changed", auth.userId, task as any, `changed ${task.short_id} to ${args.status}`, linkedConvId);
+    }
+    if (args.assignee !== undefined && args.assignee !== task.assignee) {
+      const assigneeId = await resolveAssigneeToUserId(ctx, args.assignee || "", task.team_id);
+      if (assigneeId && assigneeId.toString() !== auth.userId.toString()) {
+        await subscribeUser(ctx, assigneeId, task._id, "assignee");
+        await ctx.runMutation(internal.notificationRouter.emit, {
+          event_type: "task_assigned",
+          actor_user_id: auth.userId,
+          entity_type: "task",
+          entity_id: task._id.toString(),
+          message: `assigned you to ${task.short_id}: ${task.title}`,
+          direct_recipient_id: assigneeId,
+        });
+      }
     }
 
     return {
@@ -592,6 +674,9 @@ export const addComment = mutation({
       comment_type: (args.comment_type || "note") as any,
       created_at: Date.now(),
     });
+
+    await subscribeUser(ctx, auth.userId, task._id, "commenter");
+    await notifySubscribers(ctx, "task_commented", auth.userId, task as any, `commented on ${task.short_id}: ${args.text.slice(0, 100)}`, conversation_id);
 
     return { id };
   },
@@ -814,12 +899,19 @@ export const webList = query({
       allUserIds.add(t.user_id.toString());
       if (t.assignee) allUserIds.add(t.assignee.toString());
     }
-    const userMap = new Map<string, { name: string; image?: string }>();
+    const userMap = new Map<string, { name: string; image?: string; github_username?: string }>();
     for (const uid of allUserIds) {
       try {
         const u = await ctx.db.get(uid as Id<"users">);
-        if (u) userMap.set(uid, { name: u.name || u.email || "Unknown", image: u.image || u.github_avatar_url });
-      } catch {}
+        if (u) userMap.set(uid, { name: u.name || u.email || "Unknown", image: u.image || u.github_avatar_url, github_username: u.github_username });
+      } catch {
+        const lower = uid.toLowerCase();
+        const u = await ctx.db.query("users").withIndex("by_github_username", (q: any) => q.eq("github_username", uid)).first()
+          || await ctx.db.query("users").withIndex("by_github_username", (q: any) => q.eq("github_username", lower)).first();
+        if (u) {
+          userMap.set(uid, { name: u.name || u.email || "Unknown", image: u.image || u.github_avatar_url, github_username: u.github_username });
+        }
+      }
     }
 
     const planIds = new Set<string>();
@@ -1008,8 +1100,27 @@ export const webUpdate = mutation({
 
     await ctx.db.patch(task._id, updates);
 
-    if (args.status && args.status !== task.status && task.plan_id) {
-      await recalcPlanProgress(ctx, task.plan_id, task._id, args.status);
+    if (args.status && args.status !== task.status) {
+      if (task.plan_id) {
+        await recalcPlanProgress(ctx, task.plan_id, task._id, args.status);
+      }
+      await notifySubscribers(ctx, "task_status_changed", userId, task as any, `changed ${task.short_id} to ${args.status}`);
+    }
+    if (args.assignee !== undefined && resolvedAssignee !== task.assignee) {
+      const assigneeUserId = resolvedAssignee === userId?.toString()
+        ? userId
+        : await resolveAssigneeToUserId(ctx, resolvedAssignee || "", task.team_id);
+      if (assigneeUserId && assigneeUserId.toString() !== userId.toString()) {
+        await subscribeUser(ctx, assigneeUserId, task._id, "assignee");
+        await ctx.runMutation(internal.notificationRouter.emit, {
+          event_type: "task_assigned",
+          actor_user_id: userId,
+          entity_type: "task",
+          entity_id: task._id.toString(),
+          message: `assigned you to ${task.short_id}: ${task.title}`,
+          direct_recipient_id: assigneeUserId,
+        });
+      }
     }
 
     return { success: true };
@@ -1043,6 +1154,9 @@ export const webAddComment = mutation({
       image_storage_ids: args.image_storage_ids,
       created_at: Date.now(),
     });
+
+    await subscribeUser(ctx, userId, task._id, "commenter");
+    await notifySubscribers(ctx, "task_commented", userId, task as any, `commented on ${task.short_id}: ${args.text.slice(0, 100)}`);
 
     return { success: true };
   },
@@ -1154,7 +1268,14 @@ export const webCreate = mutation({
       if (plan) plan_id = plan._id;
     }
 
-    const resolvedAssignee = args.assignee === "me" ? userId.toString() : args.assignee;
+    let resolvedAssignee = args.assignee;
+    if (resolvedAssignee === "me") {
+      resolvedAssignee = userId.toString();
+    } else if (resolvedAssignee && !resolvedAssignee.match(/^[a-z0-9]{32}$/)) {
+      const lower = resolvedAssignee.toLowerCase();
+      const found = await ctx.db.query("users").withIndex("by_github_username", (q: any) => q.eq("github_username", lower)).first();
+      if (found) resolvedAssignee = found._id.toString();
+    }
 
     const now = Date.now();
     const id = await db.insert("tasks", {
@@ -1498,8 +1619,9 @@ export const batchUpdateStatus = mutation({
 
       await ctx.db.patch(task._id, updates);
 
-      if (task.plan_id && args.status !== task.status) {
-        affectedPlans.add(`${task.plan_id}:${task._id}:${args.status}`);
+      if (args.status !== task.status) {
+        if (task.plan_id) affectedPlans.add(`${task.plan_id}:${task._id}:${args.status}`);
+        await notifySubscribers(ctx, "task_status_changed", auth.userId, task as any, `changed ${task.short_id} to ${args.status}`);
       }
 
       results.push({ short_id, success: true });
@@ -1551,6 +1673,22 @@ export const batchAssign = mutation({
       }
 
       await ctx.db.patch(task._id, { assignee: args.assignee, updated_at: now });
+
+      if (args.assignee !== task.assignee) {
+        const assigneeId = await resolveAssigneeToUserId(ctx, args.assignee, task.team_id);
+        if (assigneeId && assigneeId.toString() !== auth.userId.toString()) {
+          await subscribeUser(ctx, assigneeId, task._id, "assignee");
+          await ctx.runMutation(internal.notificationRouter.emit, {
+            event_type: "task_assigned",
+            actor_user_id: auth.userId,
+            entity_type: "task",
+            entity_id: task._id.toString(),
+            message: `assigned you to ${task.short_id}: ${task.title}`,
+            direct_recipient_id: assigneeId,
+          });
+        }
+      }
+
       results.push({ short_id, success: true });
     }
 

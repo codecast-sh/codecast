@@ -31,6 +31,9 @@ export default defineSchema({
       permission_request: v.boolean(),
       session_idle: v.optional(v.boolean()),
       session_error: v.optional(v.boolean()),
+      task_activity: v.optional(v.boolean()),
+      doc_activity: v.optional(v.boolean()),
+      plan_activity: v.optional(v.boolean()),
     })),
     pr_auto_comment_enabled: v.optional(v.boolean()),
     bio: v.optional(v.string()),
@@ -718,11 +721,25 @@ export default defineSchema({
       v.literal("session_error"),
       v.literal("team_session_start"),
       v.literal("task_completed"),
-      v.literal("task_failed")
+      v.literal("task_failed"),
+      v.literal("task_assigned"),
+      v.literal("task_status_changed"),
+      v.literal("task_commented"),
+      v.literal("doc_updated"),
+      v.literal("doc_commented"),
+      v.literal("plan_status_changed"),
+      v.literal("plan_task_completed")
     ),
     actor_user_id: v.optional(v.id("users")),
     comment_id: v.optional(v.id("comments")),
     conversation_id: v.optional(v.id("conversations")),
+    entity_type: v.optional(v.union(
+      v.literal("task"),
+      v.literal("doc"),
+      v.literal("plan"),
+      v.literal("conversation")
+    )),
+    entity_id: v.optional(v.string()),
     message: v.string(),
     read: v.boolean(),
     created_at: v.number(),
@@ -1493,6 +1510,29 @@ export default defineSchema({
   })
     .index("by_user_id", ["user_id"])
     .index("by_team_id", ["team_id"]),
+
+  entity_subscriptions: defineTable({
+    user_id: v.id("users"),
+    entity_type: v.union(
+      v.literal("task"),
+      v.literal("doc"),
+      v.literal("plan"),
+      v.literal("conversation")
+    ),
+    entity_id: v.string(),
+    reason: v.union(
+      v.literal("creator"),
+      v.literal("assignee"),
+      v.literal("mentioned"),
+      v.literal("commenter"),
+      v.literal("watching")
+    ),
+    muted: v.boolean(),
+    created_at: v.number(),
+  })
+    .index("by_entity", ["entity_type", "entity_id"])
+    .index("by_user", ["user_id", "entity_type"])
+    .index("by_user_entity", ["user_id", "entity_type", "entity_id"]),
 
   counters: defineTable({
     name: v.string(),

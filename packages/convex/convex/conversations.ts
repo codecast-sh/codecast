@@ -689,6 +689,45 @@ export const getConversations = query({
   },
 });
 
+export const webGet = query({
+  args: {
+    short_id: v.optional(v.string()),
+    id: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return null;
+
+    let conv;
+    if (args.short_id) {
+      conv = await ctx.db
+        .query("conversations")
+        .withIndex("by_short_id", (q) => q.eq("short_id", args.short_id!))
+        .first();
+    } else if (args.id) {
+      try {
+        conv = await ctx.db.get(args.id as Id<"conversations">);
+      } catch {}
+    }
+
+    if (!conv) return null;
+    const isOwner = conv.user_id.toString() === userId.toString();
+    if (!isOwner && !(await canTeamMemberAccess(ctx, userId, conv))) return null;
+
+    return {
+      _id: conv._id,
+      short_id: conv.short_id,
+      title: conv.title,
+      status: conv.status,
+      message_count: conv.message_count,
+      project_path: conv.project_path,
+      model: conv.model,
+      agent_type: conv.agent_type,
+      updated_at: conv.updated_at,
+    };
+  },
+});
+
 export const getConversation = query({
   args: {
     conversation_id: v.id("conversations"),

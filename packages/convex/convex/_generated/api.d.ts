@@ -38,6 +38,7 @@ import type * as images from "../images.js";
 import type * as managedSessions from "../managedSessions.js";
 import type * as messages from "../messages.js";
 import type * as migrations from "../migrations.js";
+import type * as notificationRouter from "../notificationRouter.js";
 import type * as notifications from "../notifications.js";
 import type * as orchestrationEvents from "../orchestrationEvents.js";
 import type * as patterns from "../patterns.js";
@@ -101,6 +102,7 @@ declare const fullApi: ApiFromModules<{
   managedSessions: typeof managedSessions;
   messages: typeof messages;
   migrations: typeof migrations;
+  notificationRouter: typeof notificationRouter;
   notifications: typeof notifications;
   orchestrationEvents: typeof orchestrationEvents;
   patterns: typeof patterns;

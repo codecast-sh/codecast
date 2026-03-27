@@ -48,6 +48,13 @@ export const addComment = mutation({
     const actor = await ctx.db.get(userId);
     const actorName = actor?.name || actor?.github_username || actor?.email || "Someone";
 
+    await ctx.runMutation(internal.notificationRouter.ensureSubscribed, {
+      user_id: userId,
+      entity_type: "conversation",
+      entity_id: args.conversation_id.toString(),
+      reason: "commenter",
+    });
+
     const mentionRegex = /@(\w+)/g;
     const mentions = Array.from(args.content.matchAll(mentionRegex)).map(match => match[1]);
 
@@ -65,15 +72,21 @@ export const addComment = mutation({
         );
 
         if (mentionedUser && mentionedUser._id.toString() !== userId.toString()) {
-          await ctx.db.insert("notifications", {
-            recipient_user_id: mentionedUser._id,
-            type: "mention",
+          await ctx.runMutation(internal.notificationRouter.ensureSubscribed, {
+            user_id: mentionedUser._id,
+            entity_type: "conversation",
+            entity_id: args.conversation_id.toString(),
+            reason: "mentioned",
+          });
+          await ctx.runMutation(internal.notificationRouter.emit, {
+            event_type: "mention",
             actor_user_id: userId,
-            comment_id: commentId,
-            conversation_id: args.conversation_id,
+            entity_type: "conversation",
+            entity_id: args.conversation_id.toString(),
             message: `${actorName} mentioned you in a comment`,
-            read: false,
-            created_at: Date.now(),
+            conversation_id: args.conversation_id,
+            comment_id: commentId,
+            direct_recipient_id: mentionedUser._id,
           });
         }
       }
@@ -82,27 +95,27 @@ export const addComment = mutation({
     if (args.parent_comment_id) {
       const parentComment = await ctx.db.get(args.parent_comment_id);
       if (parentComment && parentComment.user_id.toString() !== userId.toString()) {
-        await ctx.db.insert("notifications", {
-          recipient_user_id: parentComment.user_id,
-          type: "comment_reply",
+        await ctx.runMutation(internal.notificationRouter.emit, {
+          event_type: "comment_reply",
           actor_user_id: userId,
-          comment_id: commentId,
-          conversation_id: args.conversation_id,
+          entity_type: "conversation",
+          entity_id: args.conversation_id.toString(),
           message: `${actorName} replied to your comment`,
-          read: false,
-          created_at: Date.now(),
+          conversation_id: args.conversation_id,
+          comment_id: commentId,
+          direct_recipient_id: parentComment.user_id,
         });
       }
     } else if (conversation.user_id.toString() !== userId.toString()) {
-      await ctx.db.insert("notifications", {
-        recipient_user_id: conversation.user_id,
-        type: "conversation_comment",
+      await ctx.runMutation(internal.notificationRouter.emit, {
+        event_type: "conversation_comment",
         actor_user_id: userId,
-        comment_id: commentId,
-        conversation_id: args.conversation_id,
+        entity_type: "conversation",
+        entity_id: args.conversation_id.toString(),
         message: `${actorName} commented on your conversation`,
-        read: false,
-        created_at: Date.now(),
+        conversation_id: args.conversation_id,
+        comment_id: commentId,
+        direct_recipient_id: conversation.user_id,
       });
     }
 

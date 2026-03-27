@@ -2,7 +2,7 @@ import { v } from "convex/values";
 import { internalMutation, internalQuery, internalAction, action, query } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { Id } from "./_generated/dataModel";
+import { Id, Doc } from "./_generated/dataModel";
 import { createDataContext } from "./data";
 import { nextShortId } from "./counters";
 
@@ -1356,18 +1356,37 @@ export const webGetDocDetail = query({
 
 export const webGetTaskDetail = query({
   args: {
-    id: v.id("tasks"),
+    id: v.string(),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return null;
 
-    const task = await ctx.db.get(args.id);
+    let task: Doc<"tasks"> | null = null;
+    if (args.id.startsWith("ct-") || args.id.startsWith("pl-")) {
+      task = await ctx.db
+        .query("tasks")
+        .withIndex("by_short_id", (q) => q.eq("short_id", args.id))
+        .first();
+    } else {
+      try {
+        task = await ctx.db.get(args.id as Id<"tasks">);
+      } catch {
+        task = await ctx.db
+          .query("tasks")
+          .withIndex("by_short_id", (q) => q.eq("short_id", args.id))
+          .first();
+      }
+    }
     if (!task) return null;
 
-    const user = await ctx.db.get(userId);
-    const team_id = user?.active_team_id;
-    if (task.user_id !== userId && task.team_id !== team_id) return null;
+    if (task.user_id !== userId && task.team_id) {
+      const membership = await ctx.db
+        .query("team_memberships")
+        .withIndex("by_user_team", (q: any) => q.eq("user_id", userId).eq("team_id", task!.team_id))
+        .first();
+      if (!membership) return null;
+    }
 
     const comments = await ctx.db
       .query("task_comments")
@@ -1495,13 +1514,18 @@ export const webGetTaskDetail = query({
       _id: taskUser._id,
       name: taskUser.name || taskUser.email || "Unknown",
       image: taskUser.image || taskUser.github_avatar_url,
+      github_username: taskUser.github_username,
     } : null;
 
     // Get assignee info
     let assignee_info = null;
     if (task.assignee) {
-      const assigneeUser = await ctx.db.get(task.assignee as any);
-      if (assigneeUser) assignee_info = { name: (assigneeUser as any).name || (assigneeUser as any).email || "Unknown", image: (assigneeUser as any).image || (assigneeUser as any).github_avatar_url };
+      try {
+        const assigneeUser = await ctx.db.get(task.assignee as any);
+        if (assigneeUser) assignee_info = { name: (assigneeUser as any).name || (assigneeUser as any).email || "Unknown", image: (assigneeUser as any).image || (assigneeUser as any).github_avatar_url, github_username: (assigneeUser as any).github_username };
+      } catch {
+        assignee_info = { name: task.assignee as string };
+      }
     }
 
     // Get audit history
@@ -1512,22 +1536,22 @@ export const webGetTaskDetail = query({
 
     // Resolve user names/images for history entries
     const historyUserIds = [...new Set(history.filter(h => h.user_id).map(h => h.user_id!))];
-    const historyUsers = new Map<string, { name: string; image?: string }>();
+    const historyUsers = new Map<string, { name: string; image?: string; github_username?: string }>();
     for (const uid of historyUserIds) {
       const u = await ctx.db.get(uid);
-      if (u) historyUsers.set(uid.toString(), { name: u.name || u.email || "Unknown", image: u.image || u.github_avatar_url });
+      if (u) historyUsers.set(uid.toString(), { name: u.name || u.email || "Unknown", image: u.image || u.github_avatar_url, github_username: u.github_username });
     }
 
     const assigneeIds = [...new Set(
       history.filter(h => h.field === "assignee")
         .flatMap(h => [h.old_value, h.new_value].filter(Boolean))
     )];
-    const assigneeNames = new Map<string, { name: string; image?: string }>();
+    const assigneeNames = new Map<string, { name: string; image?: string; github_username?: string }>();
     for (const aid of assigneeIds) {
       if (!aid) continue;
       try {
         const u = await ctx.db.get(aid as any);
-        if (u) assigneeNames.set(aid, { name: (u as any).name || (u as any).email || "Unknown", image: (u as any).image || (u as any).github_avatar_url });
+        if (u) assigneeNames.set(aid, { name: (u as any).name || (u as any).email || "Unknown", image: (u as any).image || (u as any).github_avatar_url, github_username: (u as any).github_username });
       } catch {}
     }
 

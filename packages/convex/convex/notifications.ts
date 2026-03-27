@@ -145,11 +145,25 @@ export const create = mutation({
       v.literal("session_error"),
       v.literal("team_session_start"),
       v.literal("task_completed"),
-      v.literal("task_failed")
+      v.literal("task_failed"),
+      v.literal("task_assigned"),
+      v.literal("task_status_changed"),
+      v.literal("task_commented"),
+      v.literal("doc_updated"),
+      v.literal("doc_commented"),
+      v.literal("plan_status_changed"),
+      v.literal("plan_task_completed")
     ),
     actor_user_id: v.optional(v.id("users")),
     comment_id: v.optional(v.id("comments")),
     conversation_id: v.optional(v.id("conversations")),
+    entity_type: v.optional(v.union(
+      v.literal("task"),
+      v.literal("doc"),
+      v.literal("plan"),
+      v.literal("conversation")
+    )),
+    entity_id: v.optional(v.string()),
     message: v.string(),
   },
   handler: async (ctx, args) => {
@@ -169,6 +183,8 @@ export const create = mutation({
       actor_user_id: args.actor_user_id,
       comment_id: args.comment_id,
       conversation_id: args.conversation_id,
+      entity_type: args.entity_type,
+      entity_id: args.entity_id,
       message: args.message,
       read: false,
       created_at: Date.now(),
@@ -353,5 +369,64 @@ export const createSessionNotification = mutation({
     }
 
     return { notificationId };
+  },
+});
+
+const ENTITY_TYPE_VALIDATOR = v.union(
+  v.literal("task"),
+  v.literal("doc"),
+  v.literal("plan"),
+  v.literal("conversation")
+);
+
+export const isWatching = query({
+  args: {
+    entity_type: ENTITY_TYPE_VALIDATOR,
+    entity_id: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return false;
+    const sub = await ctx.db
+      .query("entity_subscriptions")
+      .withIndex("by_user_entity", (q: any) =>
+        q.eq("user_id", userId).eq("entity_type", args.entity_type).eq("entity_id", args.entity_id)
+      )
+      .first();
+    return sub ? !sub.muted : false;
+  },
+});
+
+export const toggleWatch = mutation({
+  args: {
+    entity_type: ENTITY_TYPE_VALIDATOR,
+    entity_id: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+    const existing = await ctx.db
+      .query("entity_subscriptions")
+      .withIndex("by_user_entity", (q: any) =>
+        q.eq("user_id", userId).eq("entity_type", args.entity_type).eq("entity_id", args.entity_id)
+      )
+      .first();
+    if (existing) {
+      if (existing.reason === "watching") {
+        await ctx.db.delete(existing._id);
+        return { watching: false };
+      }
+      await ctx.db.patch(existing._id, { muted: !existing.muted });
+      return { watching: existing.muted };
+    }
+    await ctx.db.insert("entity_subscriptions", {
+      user_id: userId,
+      entity_type: args.entity_type,
+      entity_id: args.entity_id,
+      reason: "watching",
+      muted: false,
+      created_at: Date.now(),
+    });
+    return { watching: true };
   },
 });
