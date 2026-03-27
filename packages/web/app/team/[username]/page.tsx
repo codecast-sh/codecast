@@ -6,6 +6,9 @@ import { ErrorBoundary } from "../../../components/ErrorBoundary";
 import { DashboardLayout } from "../../../components/DashboardLayout";
 import { useParams, useRouter } from "next/navigation";
 import { useInboxStore } from "../../../store/inboxStore";
+import Link from "next/link";
+import { FileText, CheckCircle2, Circle, CircleDot, CircleDotDashed, XCircle } from "lucide-react";
+import { getLabelColor } from "../../../lib/labelColors";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 
 export default function UserProfilePage() {
@@ -30,7 +33,7 @@ function UserProfileContent() {
   const params = useParams();
   const username = params.username as string;
   const router = useRouter();
-  const [view, setView] = useState<"feed" | "timeline">("feed");
+  const [view, setView] = useState<"feed" | "timeline" | "work">("feed");
 
   const profileUser = useQuery(api.users.getUserByUsername, { username });
   const currentUser = useQuery(api.users.getCurrentUser);
@@ -45,6 +48,15 @@ function UserProfileContent() {
   const feed = useQuery(
     api.users.getUserProfileFeed,
     profileUser?._id ? { user_id: profileUser._id, team_id: teamId, limit: 200 } : "skip"
+  );
+
+  const userTasks = useQuery(
+    api.users.getUserTasks,
+    profileUser?._id ? { user_id: profileUser._id, limit: 30 } : "skip"
+  );
+  const userDocs = useQuery(
+    api.users.getUserDocs,
+    profileUser?._id ? { user_id: profileUser._id, limit: 20 } : "skip"
   );
 
   const filtered = useMemo(() => feed?.filter((i: any) => !NOISE_VERBS.has(i.verb)) ?? null, [feed]);
@@ -115,6 +127,7 @@ function UserProfileContent() {
       {/* View toggle */}
       <div className="flex items-center gap-0 mt-2 mb-1 border-b border-sol-border/10">
         <button onClick={() => setView("feed")} className={`px-3 py-1.5 text-[10px] font-semibold tracking-wide transition-colors border-b-2 ${view === "feed" ? "text-sol-text border-sol-yellow/60" : "text-sol-base01/35 border-transparent hover:text-sol-base01/60"}`}>Feed</button>
+        <button onClick={() => setView("work")} className={`px-3 py-1.5 text-[10px] font-semibold tracking-wide transition-colors border-b-2 ${view === "work" ? "text-sol-text border-sol-violet/60" : "text-sol-base01/35 border-transparent hover:text-sol-base01/60"}`}>Work</button>
         <button onClick={() => setView("timeline")} className={`px-3 py-1.5 text-[10px] font-semibold tracking-wide transition-colors border-b-2 ${view === "timeline" ? "text-sol-text border-sol-cyan/60" : "text-sol-base01/35 border-transparent hover:text-sol-base01/60"}`}>Timeline</button>
       </div>
 
@@ -123,12 +136,30 @@ function UserProfileContent() {
         <div className="mt-1">
           {days.map(([date, items]) => (
             <div key={date}>
-              <DayHeader date={date} count={items.length} />
-              <div>{items.map((item: any, i: number) => <FeedRow key={`${item.type}-${item.timestamp}-${i}`} item={item} router={router} />)}</div>
+              <DayHeader date={date} count={items.length} items={items} />
+              <div>{items.map((item: any, i: number) => <FeedRow key={`${item.type}-${item.timestamp}-${i}`} item={item} router={router} idx={i} />)}</div>
             </div>
           ))}
           {filtered && filtered.length === 0 && <div className="text-[11px] text-sol-base01/30 text-center py-16">No recent activity</div>}
           {!filtered && <div className="text-[11px] text-sol-base01/20 text-center py-16 animate-pulse">Loading...</div>}
+        </div>
+      )}
+
+      {/* Work view — tasks + docs */}
+      {view === "work" && (
+        <div className="mt-2 space-y-6">
+          <WorkSection
+            title="Tasks"
+            items={userTasks}
+            renderItem={(t: any) => <TaskWorkRow key={t._id} task={t} />}
+            emptyText="No tasks"
+          />
+          <WorkSection
+            title="Documents"
+            items={userDocs}
+            renderItem={(d: any) => <DocWorkRow key={d._id} doc={d} />}
+            emptyText="No documents"
+          />
         </div>
       )}
 
@@ -381,6 +412,80 @@ function fmtChartDate(dateStr: string): string {
   return `${mn[m - 1]} ${d}`;
 }
 
+/* ─── Work Tab Components ─── */
+
+const TASK_STATUS_ICON: Record<string, { icon: typeof Circle; color: string }> = {
+  backlog: { icon: CircleDotDashed, color: "text-sol-base01/40" },
+  open: { icon: Circle, color: "text-sol-blue" },
+  in_progress: { icon: CircleDot, color: "text-sol-yellow" },
+  in_review: { icon: CircleDot, color: "text-sol-violet" },
+  done: { icon: CheckCircle2, color: "text-sol-green" },
+  dropped: { icon: XCircle, color: "text-sol-base01/30" },
+};
+
+function WorkSection({ title, items, renderItem, emptyText }: { title: string; items: any[] | undefined; renderItem: (item: any) => React.ReactNode; emptyText: string }) {
+  if (!items) return <div className="text-[11px] text-sol-base01/20 text-center py-6 animate-pulse">Loading {title.toLowerCase()}...</div>;
+  return (
+    <div>
+      <div className="flex items-center gap-2 mb-2">
+        <span className="text-[9px] font-bold text-sol-base01/30 uppercase tracking-widest">{title}</span>
+        <div className="flex-1 h-px bg-sol-border/10" />
+        <span className="text-[9px] tabular-nums text-sol-base01/22">{items.length}</span>
+      </div>
+      {items.length === 0 ? (
+        <div className="text-[11px] text-sol-base01/30 text-center py-8">{emptyText}</div>
+      ) : (
+        <div className="space-y-px">{items.map(renderItem)}</div>
+      )}
+    </div>
+  );
+}
+
+function TaskWorkRow({ task }: { task: any }) {
+  const cfg = TASK_STATUS_ICON[task.status] || TASK_STATUS_ICON.open;
+  const Icon = cfg.icon;
+  const age = fmtAge(task.updated_at || task.created_at);
+  return (
+    <Link href={`/tasks/${task.short_id || task._id}`} className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-sol-bg-alt/50 transition-colors group">
+      <Icon className={`w-3.5 h-3.5 flex-shrink-0 ${cfg.color}`} />
+      <span className="text-[10px] font-mono text-sol-base01/35 w-14 flex-shrink-0">{task.short_id}</span>
+      <span className="flex-1 text-[12px] text-sol-text/80 truncate group-hover:text-sol-text transition-colors">{task.title}</span>
+      {task.labels?.slice(0, 2).map((l: string) => {
+        const lc = getLabelColor(l);
+        return <span key={l} className={`w-2 h-2 rounded-full flex-shrink-0 ${lc.dot}`} title={l} />;
+      })}
+      <span className="text-[10px] text-sol-base01/25 tabular-nums flex-shrink-0">{age}</span>
+    </Link>
+  );
+}
+
+function DocWorkRow({ doc }: { doc: any }) {
+  const age = fmtAge(doc.updated_at || doc.created_at);
+  return (
+    <Link href={`/docs/${doc._id}`} className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-sol-bg-alt/50 transition-colors group">
+      <FileText className="w-3.5 h-3.5 flex-shrink-0 text-sol-cyan/50" />
+      <span className="flex-1 text-[12px] text-sol-text/80 truncate group-hover:text-sol-text transition-colors">{doc.title || "Untitled"}</span>
+      {doc.doc_type && doc.doc_type !== "note" && (
+        <span className="text-[8.5px] font-semibold uppercase tracking-wider text-sol-cyan/40 bg-sol-cyan/8 px-1 py-px rounded">{doc.doc_type}</span>
+      )}
+      {doc.labels?.slice(0, 2).map((l: string) => {
+        const lc = getLabelColor(l);
+        return <span key={l} className={`w-2 h-2 rounded-full flex-shrink-0 ${lc.dot}`} title={l} />;
+      })}
+      <span className="text-[10px] text-sol-base01/25 tabular-nums flex-shrink-0">{age}</span>
+    </Link>
+  );
+}
+
+function fmtAge(ts: number): string {
+  const diff = Date.now() - ts;
+  if (diff < 60000) return "now";
+  if (diff < 3600000) return `${Math.floor(diff / 60000)}m`;
+  if (diff < 86400000) return `${Math.floor(diff / 3600000)}h`;
+  if (diff < 604800000) return `${Math.floor(diff / 86400000)}d`;
+  return `${Math.floor(diff / 604800000)}w`;
+}
+
 /* ─── Feed Components ─── */
 
 const VERB_COLORS: Record<string, string> = {
@@ -395,7 +500,24 @@ const VERB_ACCENTS: Record<string, string> = {
   pushed: "border-l-sol-green/30", "opened PR": "border-l-sol-violet/40", "merged PR": "border-l-sol-green/40",
 };
 
-function FeedRow({ item, router }: { item: any; router: ReturnType<typeof useRouter> }) {
+const TYPE_ICONS: Record<string, string> = {
+  message: "\u25B8", task: "\u25A0", doc: "\u25C6",
+  commit_pushed: "\u2022", pr_created: "\u2191", pr_merged: "\u2713",
+};
+
+const TASK_STATUS_DOTS: Record<string, string> = {
+  done: "bg-sol-green", in_progress: "bg-sol-yellow", open: "bg-sol-blue",
+  in_review: "bg-sol-violet", blocked: "bg-sol-red", backlog: "bg-sol-base01/30",
+};
+
+function stripSystemMarkup(text: string): string {
+  return text
+    .replace(/<[^>]+>/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function FeedRow({ item, router, idx }: { item: any; router: ReturnType<typeof useRouter>; idx: number }) {
   const href = item.entity_type === "session" ? `/conversation/${item.entity_id}`
     : item.entity_type === "task" ? `/tasks/${item.entity_id}`
     : item.entity_type === "doc" ? `/docs/${item.entity_id}` : null;
@@ -406,53 +528,121 @@ function FeedRow({ item, router }: { item: any; router: ReturnType<typeof useRou
   const branch = item.meta?.branch && !NOISE_BRANCHES.has(item.meta.branch) ? item.meta.branch : null;
   const durMs = item.meta?.duration_ms;
   const durStr = durMs ? (durMs < 3600000 ? `${Math.round(durMs / 60000)}m` : `${(durMs / 3600000).toFixed(1)}h`) : null;
+  const typeIcon = TYPE_ICONS[item.type] || TYPE_ICONS[item.entity_type] || "";
+  const zebraClass = idx % 2 === 0 ? "" : "bg-sol-bg-alt/20";
+
+  const cleanPreview = useMemo(() => {
+    if (!item.preview) return null;
+    return stripSystemMarkup(item.preview);
+  }, [item.preview]);
 
   return (
-    <div className={`border-l-2 ${accent} hover:bg-sol-bg-alt/50 transition-colors ${href ? "cursor-pointer" : ""} group py-[2px] pl-2 pr-1`} onClick={href ? () => router.push(href) : undefined}>
+    <div className={`border-l-2 ${accent} hover:bg-sol-bg-alt/60 transition-colors ${href ? "cursor-pointer" : ""} group py-[3px] pl-2 pr-1 ${zebraClass}`} onClick={href ? () => router.push(href) : undefined}>
       <div className="flex items-baseline gap-0">
-        <span className="w-[42px] flex-shrink-0 text-[10px] tabular-nums text-sol-base01/22 text-right pr-2 select-none leading-none">{fmtTime(item.timestamp)}</span>
-        <span className="min-w-0 flex-1 text-[11.5px] leading-[1.5] overflow-hidden whitespace-nowrap text-ellipsis">
-          {item.verb === "completed" && <span className="text-sol-green/60 mr-0.5">&#10003;</span>}
+        {/* Time -- wider, more visible */}
+        <span className="w-[48px] flex-shrink-0 text-[10px] tabular-nums text-sol-base01/28 text-right pr-2 select-none leading-none">{fmtTime(item.timestamp)}</span>
+
+        {/* Type icon */}
+        <span className={`w-[14px] flex-shrink-0 text-[8px] ${verbColor} select-none leading-none`}>{typeIcon}</span>
+
+        {/* Content */}
+        <span className="min-w-0 flex-1 text-[11.5px] leading-[1.55] overflow-hidden whitespace-nowrap text-ellipsis">
+          {item.verb === "completed" && <span className="text-sol-green/70 mr-0.5">&#10003;</span>}
           <span className={`font-semibold ${verbColor}`}>{item.verb}</span>
           {item.count && item.count > 5 && <span className="text-sol-base01/25 text-[9px] ml-0.5">{item.count}x</span>}
           {" "}
+
+          {/* Task status dot */}
+          {item.entity_type === "task" && item.meta?.status && (
+            <span className={`inline-block w-1.5 h-1.5 rounded-full ${TASK_STATUS_DOTS[item.meta.status] || "bg-sol-base01/20"} mr-1 align-middle`} title={item.meta.status} />
+          )}
+
+          {/* Doc type chip */}
           {item.entity_type === "doc" && item.meta?.doc_type && item.meta.doc_type !== "note" && (
-            <span className="inline-block text-[8.5px] font-semibold uppercase tracking-wider text-sol-cyan/40 bg-sol-cyan/8 px-1 py-px rounded mr-1 align-baseline">{item.meta.doc_type}</span>
+            <span className="inline-block text-[8.5px] font-semibold uppercase tracking-wider text-sol-cyan/45 bg-sol-cyan/10 px-1 py-px rounded mr-1 align-baseline">{item.meta.doc_type}</span>
           )}
+
+          {/* Task short ID */}
           {item.entity_type === "task" && item.entity_short_id && <span className="text-sol-base01/30 font-mono text-[9.5px] mr-0.5">{item.entity_short_id}</span>}
+
+          {/* Entity title -- stronger contrast */}
           {item.entity_title && (
-            <span className="text-sol-text/75 font-medium group-hover:text-sol-text transition-colors group-hover:underline decoration-sol-base01/20 underline-offset-2">{item.entity_title}</span>
+            <span className="text-sol-text/85 font-medium group-hover:text-sol-text transition-colors group-hover:underline decoration-sol-base01/20 underline-offset-2">{item.entity_title}</span>
           )}
+
+          {/* LIVE badge */}
           {isLive && item.type === "message" && (
             <span className="inline-flex items-center gap-0.5 ml-1.5 align-baseline">
-              <span className="w-1 h-1 rounded-full bg-sol-green animate-pulse inline-block" />
-              <span className="text-sol-green/70 text-[8px] font-bold tracking-wider">LIVE</span>
+              <span className="w-1.5 h-1.5 rounded-full bg-sol-green animate-pulse inline-block" />
+              <span className="text-sol-green/80 text-[8px] font-bold tracking-wider">LIVE</span>
             </span>
           )}
-          {item.meta?.project && item.meta.project !== "unknown" && <span className="text-sol-base01/20 text-[9.5px] font-mono ml-1.5">{item.meta.project}</span>}
-          {durStr && <span className="text-sol-base01/18 text-[9px] ml-1">{durStr}</span>}
+
+          {/* Project -- more prominent */}
+          {item.meta?.project && item.meta.project !== "unknown" && (
+            <span className="text-sol-base01/28 text-[9.5px] font-mono ml-1.5 bg-sol-base02/30 px-1 rounded">{item.meta.project}</span>
+          )}
+
+          {/* Duration */}
+          {durStr && <span className="text-sol-base01/25 text-[9px] ml-1 tabular-nums">{durStr}</span>}
+
+          {/* Branch */}
           {branch && <span className="text-sol-base01/22 font-mono text-[9px] ml-1">{branch}</span>}
-          {item.meta?.message_count && item.meta.message_count > 20 && <span className="text-sol-base01/18 text-[9px] tabular-nums ml-1">{item.meta.message_count}m</span>}
-          {item.meta?.files_changed && <span className="text-sol-base01/20 text-[9px] ml-1">{item.meta.files_changed}f</span>}
-          {item.type !== "message" && item.preview && !item.entity_title && <span className="text-sol-text/50 ml-0.5">{item.preview}</span>}
-          {item.meta?.priority === "high" && <span className="inline-block w-1 h-1 rounded-full bg-sol-red/50 ml-1 align-middle" />}
-          {item.meta?.priority === "urgent" && <span className="inline-block w-1.5 h-1.5 rounded-full bg-sol-red/70 ml-1 align-middle" />}
+
+          {/* Message count -- spelled out */}
+          {item.meta?.message_count && item.meta.message_count > 20 && (
+            <span className="text-sol-base01/20 text-[9px] tabular-nums ml-1">{item.meta.message_count} msgs</span>
+          )}
+
+          {/* Files changed */}
+          {item.meta?.files_changed && <span className="text-sol-base01/20 text-[9px] ml-1">{item.meta.files_changed} files</span>}
+
+          {/* Non-message preview */}
+          {item.type !== "message" && item.preview && !item.entity_title && <span className="text-sol-text/50 ml-0.5">{stripSystemMarkup(item.preview)}</span>}
+
+          {/* Priority */}
+          {item.meta?.priority === "high" && <span className="inline-block w-1.5 h-1.5 rounded-full bg-sol-red/40 ml-1 align-middle" title="high priority" />}
+          {item.meta?.priority === "urgent" && <span className="inline-block w-2 h-2 rounded-full bg-sol-red/60 ml-1 align-middle" title="urgent" />}
         </span>
       </div>
-      {/* Full message text */}
-      {item.type === "message" && item.preview && (
-        <div className="pl-[42px] mt-px">
-          <p className="text-[10.5px] text-sol-text/40 leading-snug line-clamp-2">{item.preview}</p>
+
+      {/* Message preview -- quote style, cleaned up, more readable */}
+      {item.type === "message" && cleanPreview && (
+        <div className="pl-[62px] mt-0.5 mb-0.5">
+          <p className="text-[11px] text-sol-text/50 leading-snug line-clamp-2 border-l-2 border-sol-blue/15 pl-2 py-px">{cleanPreview}</p>
         </div>
       )}
     </div>
   );
 }
 
-function DayHeader({ date, count }: { date: string; count: number }) {
+function DayHeader({ date, count, items }: { date: string; count: number; items: any[] }) {
+  const totalHours = useMemo(() => {
+    const seen = new Set<string>();
+    let h = 0;
+    for (const item of items) {
+      if (item.type !== "message" || !item.meta?.duration_ms || !item.entity_id) continue;
+      if (seen.has(item.entity_id)) continue;
+      seen.add(item.entity_id);
+      h += Math.min(item.meta.duration_ms, 8 * 3600000) / 3600000;
+    }
+    return h;
+  }, [items]);
+
+  const sessions = useMemo(() => {
+    const seen = new Set<string>();
+    for (const item of items) {
+      if (item.type === "message" && item.entity_id) seen.add(item.entity_id);
+    }
+    return seen.size;
+  }, [items]);
+
   return (
     <div className="flex items-center gap-2 mt-4 mb-1 first:mt-1">
-      <span className="text-[9px] font-bold text-sol-base01/30 uppercase tracking-widest select-none">{fmtDayLabel(date)}</span>
+      <span className="text-[9px] font-bold text-sol-base01/35 uppercase tracking-widest select-none">{fmtDayLabel(date)}</span>
+      {totalHours > 0 && (
+        <span className="text-[9px] text-sol-green/40 tabular-nums">{totalHours.toFixed(1)}h / {sessions}s</span>
+      )}
       <div className="flex-1 h-px bg-sol-border/10" />
       <span className="text-[9px] tabular-nums text-sol-base01/22 select-none">{count}</span>
     </div>
@@ -476,8 +666,9 @@ function fmtDayLabel(dateStr: string): string {
   const date = new Date(y, m - 1, d);
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const diff = today.getTime() - date.getTime();
-  if (diff < 86400000) return "Today";
-  if (diff < 172800000) return "Yesterday";
+  const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  if (diff < 86400000) return `Today, ${dayNames[date.getDay()]}`;
+  if (diff < 172800000) return `Yesterday, ${dayNames[date.getDay()]}`;
   const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
   const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   return `${days[date.getDay()]} ${months[date.getMonth()]} ${date.getDate()}`;
