@@ -6060,15 +6060,8 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
     if (syncServiceRef && conversationId) {
       syncServiceRef.registerManagedSession(sessionId, process.pid, tmuxSession, conversationId).catch(() => {});
       syncServiceRef.updateSessionAgentStatus(conversationId, "resuming").catch(() => {});
-      const existing = resumeHeartbeatIntervals.get(sessionId);
-      if (existing) clearInterval(existing);
-      const interval = setInterval(async () => {
-        try {
-          const result = await syncServiceRef!.heartbeatManagedSession(sessionId);
-          await processHeartbeatResponse(sessionId, result);
-        } catch {}
-      }, 30000);
-      resumeHeartbeatIntervals.set(sessionId, interval);
+      stopManagedSessionHeartbeat(sessionId);
+      ensureManagedSessionHeartbeat(sessionId);
 
       // Start tmux pane monitoring for Codex permission prompts
       if (agentType === "codex" && conversationId) {
@@ -6120,10 +6113,21 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
       } catch {}
     }
     if (!ready) {
-      logDelivery(`Agent ${shortId} startup timed out after ${Date.now() - startTime}ms (max=${maxPollMs}ms, jsonl=${Math.round(jsonlSize / 1024)}KB), proceeding anyway`);
+      const alive = await isTmuxAgentAlive(tmuxSession).catch(() => false);
+      if (!alive) {
+        logDelivery(`Agent ${shortId} startup timed out after ${Date.now() - startTime}ms and agent is not alive, marking stopped`);
+        try { await tmuxExec(["kill-session", "-t", tmuxSession]); } catch {}
+        resumeSessionCache.delete(sessionId);
+        stopManagedSessionHeartbeat(sessionId);
+        if (syncServiceRef && conversationId) {
+          sendAgentStatus(syncServiceRef, conversationId, sessionId, "stopped");
+        }
+        return false;
+      }
+      logDelivery(`Agent ${shortId} startup timed out after ${Date.now() - startTime}ms (max=${maxPollMs}ms, jsonl=${Math.round(jsonlSize / 1024)}KB) but agent process alive, proceeding`);
     }
 
-    // Transition to "connected" now that the agent prompt is visible (or timed out)
+    // Transition to "connected" now that the agent prompt is visible (or timed out with live process)
     if (syncServiceRef && conversationId) {
       syncServiceRef.updateSessionAgentStatus(conversationId, "connected").catch(() => {});
     }
