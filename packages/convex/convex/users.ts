@@ -704,30 +704,41 @@ export const getUserActivityHeatmap = query({
     const cutoff = now - numDays * 24 * 60 * 60 * 1000;
     const MAX_SESSION_MS = 8 * 3600000;
 
+    const allEvents = args.team_id
+      ? await ctx.db.query("team_activity_events")
+          .withIndex("by_team_timestamp", (q) =>
+            q.eq("team_id", args.team_id!).gte("timestamp", cutoff)
+          )
+          .collect()
+      : await ctx.db.query("team_activity_events")
+          .withIndex("by_actor", (q) => q.eq("actor_user_id", args.user_id))
+          .collect();
+
     const buckets: Record<string, { hours: number; sessions: number }> = {};
-    let paginationCursor: string | null = null;
-    const MAX_PAGES = 50;
+    const seenSessions = new Set<string>();
 
-    for (let page = 0; page < MAX_PAGES; page++) {
-      const result = await ctx.db.query("conversations")
-        .withIndex("by_user_updated", (q) =>
-          q.eq("user_id", args.user_id).gte("updated_at", cutoff)
-        )
-        .order("desc")
-        .paginate({ numItems: 50, cursor: paginationCursor as any ?? null });
+    for (const e of allEvents) {
+      if (String(e.actor_user_id) !== String(args.user_id)) continue;
+      if (e.timestamp < cutoff) continue;
 
-      for (const c of result.page) {
-        if (args.team_id && c.team_id && String(c.team_id) !== String(args.team_id)) continue;
-        if (!c.started_at || !c.updated_at) continue;
-        const durationMs = Math.min(c.updated_at - c.started_at, MAX_SESSION_MS);
-        const date = new Date(c.started_at).toISOString().split("T")[0];
-        if (!buckets[date]) buckets[date] = { hours: 0, sessions: 0 };
-        buckets[date].hours += durationMs / 3600000;
-        buckets[date].sessions++;
+      const date = new Date(e.timestamp).toISOString().split("T")[0];
+      if (!buckets[date]) buckets[date] = { hours: 0, sessions: 0 };
+
+      if (e.event_type === "session_completed") {
+        const durMs = e.metadata?.duration_ms;
+        if (durMs) buckets[date].hours += Math.min(durMs, MAX_SESSION_MS) / 3600000;
+        const sid = e.related_conversation_id ? String(e.related_conversation_id) : `complete-${e._id}`;
+        if (!seenSessions.has(sid)) { seenSessions.add(sid); buckets[date].sessions++; }
+      } else if (e.event_type === "session_started") {
+        const sid = e.related_conversation_id ? String(e.related_conversation_id) : `start-${e._id}`;
+        if (!seenSessions.has(sid)) {
+          seenSessions.add(sid);
+          buckets[date].sessions++;
+          if (!buckets[date].hours) buckets[date].hours += 0.25;
+        }
+      } else if (e.event_type === "commit_pushed" || e.event_type === "pr_created" || e.event_type === "pr_merged") {
+        buckets[date].hours += 0.1;
       }
-
-      if (result.isDone || !result.continueCursor) break;
-      paginationCursor = result.continueCursor;
     }
 
     return Object.entries(buckets)
