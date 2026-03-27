@@ -441,14 +441,29 @@ export const updatePrivacySettings = mutation({
 
 export const getUserByUsername = query({
   args: {
-    username: v.string(),
+    username: v.optional(v.string()),
+    user_id: v.optional(v.id("users")),
   },
   handler: async (ctx, args) => {
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_github_username", (q) => q.eq("github_username", args.username))
-      .unique();
-    return user;
+    if (args.user_id) {
+      return ctx.db.get(args.user_id);
+    }
+    if (args.username) {
+      const byUsername = await ctx.db
+        .query("users")
+        .withIndex("by_github_username", (q) => q.eq("github_username", args.username))
+        .unique();
+      if (byUsername) return byUsername;
+      const asId = ctx.db.normalizeId("users", args.username);
+      if (asId) return ctx.db.get(asId);
+      const lower = args.username.toLowerCase();
+      const all = await ctx.db.query("users").take(200);
+      return all.find((u) =>
+        u.name?.toLowerCase() === lower ||
+        u.github_username?.toLowerCase() === lower
+      ) || null;
+    }
+    return null;
   },
 });
 
@@ -689,31 +704,30 @@ export const getUserActivityHeatmap = query({
     const cutoff = now - numDays * 24 * 60 * 60 * 1000;
     const MAX_SESSION_MS = 8 * 3600000;
 
-    const events = args.team_id
-      ? await ctx.db.query("team_activity_events")
-          .withIndex("by_team_timestamp", (q) =>
-            q.eq("team_id", args.team_id!).gte("timestamp", cutoff)
-          )
-          .collect()
-      : await ctx.db.query("team_activity_events")
-          .withIndex("by_actor", (q) => q.eq("actor_user_id", args.user_id))
-          .collect();
-
     const buckets: Record<string, { hours: number; sessions: number }> = {};
-    for (const e of events) {
-      if (String(e.actor_user_id) !== String(args.user_id)) continue;
-      if (e.timestamp < cutoff) continue;
-      if (e.event_type !== "session_completed" && e.event_type !== "session_started") continue;
-      const durMs = e.metadata?.duration_ms;
-      const hours = durMs ? Math.min(durMs, MAX_SESSION_MS) / 3600000 : (e.event_type === "session_started" ? 0.5 : 0);
-      const date = new Date(e.timestamp).toISOString().split("T")[0];
-      if (!buckets[date]) buckets[date] = { hours: 0, sessions: 0 };
-      if (e.event_type === "session_completed") {
-        buckets[date].hours += hours;
+    let paginationCursor: string | null = null;
+    const MAX_PAGES = 50;
+
+    for (let page = 0; page < MAX_PAGES; page++) {
+      const result = await ctx.db.query("conversations")
+        .withIndex("by_user_updated", (q) =>
+          q.eq("user_id", args.user_id).gte("updated_at", cutoff)
+        )
+        .order("desc")
+        .paginate({ numItems: 50, cursor: paginationCursor as any ?? null });
+
+      for (const c of result.page) {
+        if (args.team_id && c.team_id && String(c.team_id) !== String(args.team_id)) continue;
+        if (!c.started_at || !c.updated_at) continue;
+        const durationMs = Math.min(c.updated_at - c.started_at, MAX_SESSION_MS);
+        const date = new Date(c.started_at).toISOString().split("T")[0];
+        if (!buckets[date]) buckets[date] = { hours: 0, sessions: 0 };
+        buckets[date].hours += durationMs / 3600000;
         buckets[date].sessions++;
-      } else {
-        if (!buckets[date].sessions) { buckets[date].sessions++; buckets[date].hours += 0.5; }
       }
+
+      if (result.isDone || !result.continueCursor) break;
+      paginationCursor = result.continueCursor;
     }
 
     return Object.entries(buckets)
