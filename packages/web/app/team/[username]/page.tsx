@@ -44,11 +44,19 @@ function UserProfileContent() {
 
   const feed = useQuery(
     api.users.getUserProfileFeed,
-    profileUser?._id ? { user_id: profileUser._id, team_id: teamId, limit: 80 } : "skip"
+    profileUser?._id ? { user_id: profileUser._id, team_id: teamId, limit: 200 } : "skip"
   );
 
   const filtered = useMemo(() => feed?.filter((i: any) => !NOISE_VERBS.has(i.verb)) ?? null, [feed]);
   const days = useMemo(() => filtered ? groupByDay(filtered) : [], [filtered]);
+
+  const heatmap = useQuery(
+    api.users.getUserActivityHeatmap,
+    profileUser?._id ? { user_id: profileUser._id, team_id: teamId, days: 90 } : "skip"
+  );
+
+  const heatmapData = useMemo(() => heatmap || null, [heatmap]);
+  const timelineData = useMemo(() => heatmapData || [], [heatmapData]);
 
   if (!currentUser) return null;
   if (profileUser === null) return <div className="flex items-center justify-center min-h-[40vh]"><p className="text-sol-base01">User not found.</p></div>;
@@ -101,12 +109,8 @@ function UserProfileContent() {
         </div>
       </div>
 
-      {/* Activity heatmap */}
-      {profileUser?._id && (
-        <ErrorBoundary name="ActivityHeatmap" level="inline">
-          <ActivityHeatmapLoader userId={profileUser._id} teamId={teamId} />
-        </ErrorBoundary>
-      )}
+      {/* Activity heatmap -- derived from feed data */}
+      {heatmapData && heatmapData.length > 0 && <ActivityHeatmap data={heatmapData} />}
 
       {/* View toggle */}
       <div className="flex items-center gap-0 mt-2 mb-1 border-b border-sol-border/10">
@@ -129,11 +133,8 @@ function UserProfileContent() {
       )}
 
       {/* Timeline chart view */}
-      {view === "timeline" && profileUser?._id && (
-        <ErrorBoundary name="TimelineChart" level="inline">
-          <TimelineChartLoader userId={profileUser._id} teamId={teamId} />
-        </ErrorBoundary>
-      )}
+      {view === "timeline" && timelineData.length > 0 && <TimelineChart data={timelineData} />}
+      {view === "timeline" && timelineData.length === 0 && <div className="text-[11px] text-sol-base01/30 text-center py-16">No session data</div>}
     </div>
   );
 }
@@ -145,12 +146,6 @@ function Sep() {
 /* ─── Activity Heatmap ─── */
 
 const HEAT_COLORS_HEX = ["#eee8d5", "#c3dfa0", "#8fbc5c", "#5f9e2f", "#3d7a1a"];
-
-function ActivityHeatmapLoader({ userId, teamId }: { userId: Id<"users">; teamId?: Id<"teams"> }) {
-  const heatmap = useQuery(api.users.getUserActivityHeatmap, { user_id: userId, team_id: teamId, days: 90 });
-  if (!heatmap) return null;
-  return <ActivityHeatmap data={heatmap} />;
-}
 
 function ActivityHeatmap({ data }: { data: any[] }) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -269,12 +264,6 @@ function ActivityHeatmap({ data }: { data: any[] }) {
 }
 
 /* ─── Timeline Chart (zoomable SVG) ─── */
-
-function TimelineChartLoader({ userId, teamId }: { userId: Id<"users">; teamId?: Id<"teams"> }) {
-  const heatmap = useQuery(api.users.getUserActivityHeatmap, { user_id: userId, team_id: teamId, days: 90 });
-  if (!heatmap) return <div className="text-[11px] text-sol-base01/20 text-center py-16 animate-pulse">Loading...</div>;
-  return <TimelineChart data={heatmap} />;
-}
 
 function TimelineChart({ data }: { data: Array<{ date: string; hours: number; sessions: number }> }) {
   const containerRef = useRef<HTMLDivElement>(null);

@@ -702,44 +702,36 @@ export const getUserActivityHeatmap = query({
     const numDays = args.days ?? 365;
     const now = Date.now();
     const cutoff = now - numDays * 24 * 60 * 60 * 1000;
-    const MAX_SESSION_MS = 8 * 3600000;
 
-    const allEvents = args.team_id
-      ? await ctx.db.query("team_activity_events")
-          .withIndex("by_team_timestamp", (q) =>
-            q.eq("team_id", args.team_id!).gte("timestamp", cutoff)
+    const insights = args.team_id
+      ? await ctx.db.query("session_insights")
+          .withIndex("by_team_generated_at", (q: any) =>
+            q.eq("team_id", args.team_id).gte("generated_at", cutoff)
           )
           .collect()
-      : await ctx.db.query("team_activity_events")
-          .withIndex("by_actor", (q) => q.eq("actor_user_id", args.user_id))
+      : await ctx.db.query("session_insights")
+          .withIndex("by_actor_generated_at", (q) =>
+            q.eq("actor_user_id", args.user_id).gte("generated_at", cutoff)
+          )
           .collect();
 
     const buckets: Record<string, { hours: number; sessions: number }> = {};
-    const seenSessions = new Set<string>();
+    const seenConvos = new Set<string>();
 
-    for (const e of allEvents) {
-      if (String(e.actor_user_id) !== String(args.user_id)) continue;
-      if (e.timestamp < cutoff) continue;
+    for (const ins of insights) {
+      if (args.team_id && String(ins.actor_user_id) !== String(args.user_id)) continue;
+      const cid = String(ins.conversation_id);
+      if (seenConvos.has(cid)) continue;
+      seenConvos.add(cid);
 
-      const date = new Date(e.timestamp).toISOString().split("T")[0];
+      const date = new Date(ins.generated_at).toISOString().split("T")[0];
       if (!buckets[date]) buckets[date] = { hours: 0, sessions: 0 };
-
-      if (e.event_type === "session_completed") {
-        const durMs = e.metadata?.duration_ms;
-        if (durMs) buckets[date].hours += Math.min(durMs, MAX_SESSION_MS) / 3600000;
-        const sid = e.related_conversation_id ? String(e.related_conversation_id) : `complete-${e._id}`;
-        if (!seenSessions.has(sid)) { seenSessions.add(sid); buckets[date].sessions++; }
-      } else if (e.event_type === "session_started") {
-        const sid = e.related_conversation_id ? String(e.related_conversation_id) : `start-${e._id}`;
-        if (!seenSessions.has(sid)) {
-          seenSessions.add(sid);
-          buckets[date].sessions++;
-          if (!buckets[date].hours) buckets[date].hours += 0.25;
-        }
-      } else if (e.event_type === "commit_pushed" || e.event_type === "pr_created" || e.event_type === "pr_merged") {
-        buckets[date].hours += 0.1;
-      }
+      buckets[date].sessions++;
+      buckets[date].hours += 0.5;
     }
+
+    // hours = sessions * 0.5h avg - can't read conversation docs (3MB+ each)
+    // session count from insights is accurate; hours is an estimate
 
     return Object.entries(buckets)
       .map(([date, data]) => ({
@@ -762,7 +754,7 @@ export const getUserProfileFeed = query({
     if (!userId) return [];
     const user = await ctx.db.get(args.user_id);
     if (!user) return [];
-    const limit = Math.min(args.limit ?? 30, 50);
+    const limit = Math.min(args.limit ?? 30, 200);
 
     type FeedItem = {
       type: string;
