@@ -4927,6 +4927,8 @@ const heartbeatHealthCheckCounter = new Map<string, number>();
 const healthCheckDeadStrikes = new Map<string, number>();
 const HEALTH_CHECK_EVERY_N_HEARTBEATS = 3;
 const HEALTH_CHECK_DEAD_STRIKES_TO_KILL = 3;
+const postDeliveryDeadStrikes = new Map<string, number>();
+const POST_DELIVERY_DEAD_STRIKES_TO_KILL = 2;
 
 async function killSessionBySessionId(sessionId: string, reason: string): Promise<void> {
   const cache = readConversationCache();
@@ -4969,6 +4971,7 @@ async function killSessionBySessionId(sessionId: string, reason: string): Promis
   resumeInFlight.delete(sessionId);
   resumeInFlightStarted.delete(sessionId);
   dismissedIdleSince.delete(sessionId);
+  postDeliveryDeadStrikes.delete(sessionId);
 
   if (conversationId && syncServiceRef) {
     syncServiceRef.markSessionCompleted(conversationId).catch(() => {});
@@ -6367,10 +6370,24 @@ async function postDeliveryHealthCheck(
     return;
   }
 
-  // Session exists - check if agent process is still alive
+  // Session exists - check if agent process is still alive (use strike system to avoid false-negative kills)
   const alive = await isTmuxAgentAlive(tmuxSession);
   if (!alive) {
-    log(`Health check: agent process dead in ${tmuxSession} for ${sessionId.slice(0, 8)}`);
+    const strikes = (postDeliveryDeadStrikes.get(sessionId) || 0) + 1;
+    postDeliveryDeadStrikes.set(sessionId, strikes);
+    if (strikes < POST_DELIVERY_DEAD_STRIKES_TO_KILL) {
+      log(`Health check: agent appears dead in ${tmuxSession} for ${sessionId.slice(0, 8)} (strike ${strikes}/${POST_DELIVERY_DEAD_STRIKES_TO_KILL}), rechecking in 5s`);
+      await new Promise(resolve => setTimeout(resolve, 5000));
+      const aliveRetry = await isTmuxAgentAlive(tmuxSession);
+      if (aliveRetry) {
+        postDeliveryDeadStrikes.delete(sessionId);
+        log(`Health check: session ${sessionId.slice(0, 8)} recovered on recheck`);
+        try { await syncService.setSessionError(conversationId); } catch {}
+        return;
+      }
+    }
+    postDeliveryDeadStrikes.delete(sessionId);
+    log(`Health check: agent confirmed dead in ${tmuxSession} for ${sessionId.slice(0, 8)} (${strikes} strikes)`);
     try { await tmuxExec(["kill-session", "-t", tmuxSession]); } catch {}
     resumeSessionCache.delete(sessionId);
     stopCodexPermissionPoller(sessionId);
@@ -6389,6 +6406,7 @@ async function postDeliveryHealthCheck(
       } catch {}
     }
   } else {
+    postDeliveryDeadStrikes.delete(sessionId);
     log(`Health check: session ${sessionId.slice(0, 8)} is healthy`);
     try { await syncService.setSessionError(conversationId); } catch {}
   }
@@ -7073,7 +7091,12 @@ async function isTmuxAgentAlive(tmuxSession: string): Promise<boolean> {
       if (/Segmentation fault|panic:|SIGABRT|core dumped|exited with/.test(trimmed)) return false;
       if (/-(?:ba)?sh:.*(?:No such file|command not found)/.test(trimmed)) return false;
       if (hasProcess) return true;
-      if (/[$%#]\s*$/.test(trimmed)) return false;
+      // Only trust shell prompt as death signal if the pane looks like a bare shell --
+      // agents running bash commands can leave a $ prompt visible in the last 10 lines
+      // while still actively working above
+      const lines = trimmed.split("\n").filter(l => l.trim());
+      const looksLikeBareShell = lines.length <= 3 && /[$%#]\s*$/.test(trimmed);
+      if (looksLikeBareShell) return false;
       return true;
     } catch {}
     return hasProcess;
@@ -7082,22 +7105,28 @@ async function isTmuxAgentAlive(tmuxSession: string): Promise<boolean> {
   }
 }
 
-async function hasAgentProcessInTree(rootPid: number): Promise<boolean> {
+async function hasAgentProcessInTree(rootPid: number, maxDepth = 4): Promise<boolean> {
+  const visited = new Set<number>();
+  async function scan(pids: number[], depth: number): Promise<boolean> {
+    if (depth > maxDepth || pids.length === 0) return false;
+    for (const pid of pids) {
+      if (visited.has(pid)) continue;
+      visited.add(pid);
+      if (isAgentProcess(pid)) return true;
+    }
+    for (const pid of pids) {
+      try {
+        const { stdout } = await execAsync(`pgrep -P ${pid}`, { timeout: 3000, killSignal: "SIGKILL" });
+        const children = stdout.trim().split(/\s+/).filter(Boolean).map(Number);
+        if (await scan(children, depth + 1)) return true;
+      } catch {}
+    }
+    return false;
+  }
   try {
     const { stdout } = await execAsync(`pgrep -P ${rootPid}`, { timeout: 3000, killSignal: "SIGKILL" });
     const childPids = stdout.trim().split(/\s+/).filter(Boolean).map(Number);
-    for (const cpid of childPids) {
-      if (isAgentProcess(cpid)) return true;
-    }
-    for (const cpid of childPids) {
-      try {
-        const { stdout: gcOut } = await execAsync(`pgrep -P ${cpid}`, { timeout: 2000, killSignal: "SIGKILL" });
-        const gcPids = gcOut.trim().split(/\s+/).filter(Boolean).map(Number);
-        for (const gcpid of gcPids) {
-          if (isAgentProcess(gcpid)) return true;
-        }
-      } catch {}
-    }
+    return scan(childPids, 1);
   } catch {}
   return false;
 }
@@ -7256,11 +7285,11 @@ function acquireLock(): boolean {
 
 function findStaleSessionFiles(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): string[] {
   const claudeProjectsDir = path.join(process.env.HOME || "", ".claude", "projects");
-  const staleFiles: string[] = [];
+  const staleFiles: { path: string; mtimeMs: number }[] = [];
   const now = Date.now();
 
   if (!fs.existsSync(claudeProjectsDir)) {
-    return staleFiles;
+    return [];
   }
 
   try {
@@ -7278,16 +7307,13 @@ function findStaleSessionFiles(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): stri
           const fileStat = fs.statSync(filePath);
           const fileAge = now - fileStat.mtimeMs;
 
-          // Skip files older than maxAge (default 7 days)
           if (fileAge > maxAgeMs) continue;
 
-          // Check sync ledger for this file
           const syncRecord = getSyncRecord(filePath);
           if (shouldTreatClaudeFileAsStale(fileStat, syncRecord)) {
-            staleFiles.push(filePath);
+            staleFiles.push({ path: filePath, mtimeMs: fileStat.mtimeMs });
           }
         } catch {
-          // Skip files we can't stat
         }
       }
     }
@@ -7295,7 +7321,8 @@ function findStaleSessionFiles(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): stri
     log(`Watchdog: Error scanning for stale files: ${err instanceof Error ? err.message : String(err)}`);
   }
 
-  return staleFiles;
+  staleFiles.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  return staleFiles.map(f => f.path);
 }
 
 export function shouldTreatClaudeFileAsStale(
@@ -7330,11 +7357,11 @@ export function isAppServerManagedCodexSessionHead(headContent: string): boolean
 
 function findStaleCodexSessionFiles(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): string[] {
   const codexSessionsDir = path.join(process.env.HOME || "", ".codex", "sessions");
-  const staleFiles: string[] = [];
+  const staleFiles: { path: string; mtimeMs: number }[] = [];
   const now = Date.now();
 
   if (!fs.existsSync(codexSessionsDir)) {
-    return staleFiles;
+    return [];
   }
 
   const scanDir = (dir: string): void => {
@@ -7359,7 +7386,7 @@ function findStaleCodexSessionFiles(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000):
           if (fileStat.size !== lastPosition) {
             const headContent = readFileHead(fullPath, 2048);
             if (isAppServerManagedCodexSessionHead(headContent)) continue;
-            staleFiles.push(fullPath);
+            staleFiles.push({ path: fullPath, mtimeMs: fileStat.mtimeMs });
           }
         } catch {
           continue;
@@ -7369,7 +7396,8 @@ function findStaleCodexSessionFiles(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000):
   };
 
   scanDir(codexSessionsDir);
-  return staleFiles;
+  staleFiles.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  return staleFiles.map(f => f.path);
 }
 
 function detectCursorPath(): string {
@@ -7519,6 +7547,7 @@ interface StaleCursorSession {
   sessionId: string;
   workspacePath: string;
   dbPath: string;
+  mtimeMs: number;
 }
 
 function findStaleCursorSessions(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): StaleCursorSession[] {
@@ -7561,12 +7590,14 @@ function findStaleCursorSessions(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): St
         sessionId: workspaceHash,
         workspacePath,
         dbPath,
+        mtimeMs: stat.mtimeMs,
       });
     } catch {
       continue;
     }
   }
 
+  staleSessions.sort((a, b) => b.mtimeMs - a.mtimeMs);
   return staleSessions;
 }
 
@@ -7574,11 +7605,11 @@ function findStaleCursorTranscriptFiles(
   maxAgeMs: number = 7 * 24 * 60 * 60 * 1000
 ): string[] {
   const cursorProjectsDir = path.join(process.env.HOME || "", ".cursor", "projects");
-  const staleFiles: string[] = [];
+  const staleFiles: { path: string; mtimeMs: number }[] = [];
   const now = Date.now();
 
   if (!fs.existsSync(cursorProjectsDir)) {
-    return staleFiles;
+    return [];
   }
 
   const scanDir = (dir: string): void => {
@@ -7604,7 +7635,7 @@ function findStaleCursorTranscriptFiles(
 
           const lastPosition = getPosition(fullPath);
           if (fileStat.size !== lastPosition) {
-            staleFiles.push(fullPath);
+            staleFiles.push({ path: fullPath, mtimeMs: fileStat.mtimeMs });
           }
         } catch {
           continue;
@@ -7614,7 +7645,8 @@ function findStaleCursorTranscriptFiles(
   };
 
   scanDir(cursorProjectsDir);
-  return staleFiles;
+  staleFiles.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  return staleFiles.map(f => f.path);
 }
 
 interface WatchdogDependencies {
@@ -7912,10 +7944,24 @@ function startWatchdog(
       }
     }
 
-    const staleClaudeFiles = findStaleSessionFiles();
-    const staleCodexFiles = findStaleCodexSessionFiles();
-    const staleCursorSessions = findStaleCursorSessions();
-    const staleCursorTranscriptFiles = findStaleCursorTranscriptFiles();
+    const WATCHDOG_CONCURRENCY = 20;
+    const WATCHDOG_MAX_STALE_PER_TYPE = 200;
+
+    async function runConcurrent<T>(items: T[], fn: (item: T) => Promise<void>, concurrency: number): Promise<void> {
+      let i = 0;
+      const next = async (): Promise<void> => {
+        while (i < items.length) {
+          const idx = i++;
+          await fn(items[idx]);
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, () => next()));
+    }
+
+    const staleClaudeFiles = findStaleSessionFiles().slice(0, WATCHDOG_MAX_STALE_PER_TYPE);
+    const staleCodexFiles = findStaleCodexSessionFiles().slice(0, WATCHDOG_MAX_STALE_PER_TYPE);
+    const staleCursorSessions = findStaleCursorSessions().slice(0, WATCHDOG_MAX_STALE_PER_TYPE);
+    const staleCursorTranscriptFiles = findStaleCursorTranscriptFiles().slice(0, WATCHDOG_MAX_STALE_PER_TYPE);
     const totalStale =
       staleClaudeFiles.length +
       staleCodexFiles.length +
@@ -7926,12 +7972,12 @@ function startWatchdog(
       return;
     }
 
-    log(`Watchdog: Detected ${totalStale} files needing sync`);
+    log(`Watchdog: Detected ${totalStale} files needing sync (concurrent=${WATCHDOG_CONCURRENCY}, cap=${WATCHDOG_MAX_STALE_PER_TYPE})`);
 
     const currentRestarts = state?.watchdogRestarts || 0;
     saveDaemonState({ watchdogRestarts: currentRestarts + 1 });
 
-    for (const filePath of staleClaudeFiles) {
+    await runConcurrent(staleClaudeFiles, async (filePath) => {
       const parts = filePath.split(path.sep);
       const sessionId = resolveSessionId(filePath);
       const projectDirName = parts[parts.length - 2];
@@ -7939,11 +7985,11 @@ function startWatchdog(
       const projectPath = decoded && fs.existsSync(decoded) ? decoded : projectDirName.replace(/-/g, path.sep).replace(/^-/, "");
 
       if (deps.config.excluded_paths && isPathExcluded(projectPath, deps.config.excluded_paths)) {
-        continue;
+        return;
       }
 
       if (!isProjectAllowedToSync(projectPath, deps.config)) {
-        continue;
+        return;
       }
 
       log(`Watchdog: Syncing stale session ${sessionId}`);
@@ -7961,9 +8007,9 @@ function startWatchdog(
         deps.titleCache,
         deps.updateState
       );
-    }
+    }, WATCHDOG_CONCURRENCY);
 
-    for (const filePath of staleCodexFiles) {
+    await runConcurrent(staleCodexFiles, async (filePath) => {
       const filename = path.basename(filePath, ".jsonl");
       const match = filename.match(
         /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i
@@ -7984,15 +8030,15 @@ function startWatchdog(
         deps.titleCache,
         deps.updateState
       );
-    }
+    }, WATCHDOG_CONCURRENCY);
 
-    for (const cursorSession of staleCursorSessions) {
+    await runConcurrent(staleCursorSessions, async (cursorSession) => {
       if (deps.config.excluded_paths && isPathExcluded(cursorSession.workspacePath, deps.config.excluded_paths)) {
-        continue;
+        return;
       }
 
       if (!isProjectAllowedToSync(cursorSession.workspacePath, deps.config)) {
-        continue;
+        return;
       }
 
       log(`Watchdog: Syncing stale Cursor session ${cursorSession.sessionId}`);
@@ -8009,22 +8055,22 @@ function startWatchdog(
         deps.pendingMessages,
         deps.updateState
       );
-    }
+    }, WATCHDOG_CONCURRENCY);
 
-    for (const filePath of staleCursorTranscriptFiles) {
+    await runConcurrent(staleCursorTranscriptFiles, async (filePath) => {
       const sessionId = path.basename(filePath, ".txt");
       const workspacePath = findWorkspacePathForCursorConversation(sessionId);
 
       if (workspacePath) {
         if (deps.config.excluded_paths && isPathExcluded(workspacePath, deps.config.excluded_paths)) {
-          continue;
+          return;
         }
 
         if (!isProjectAllowedToSync(workspacePath, deps.config)) {
-          continue;
+          return;
         }
       } else if (deps.config.sync_mode === "selected") {
-        continue;
+        return;
       }
 
       log(`Watchdog: Syncing stale Cursor transcript ${sessionId}`);
@@ -8040,7 +8086,7 @@ function startWatchdog(
         deps.pendingMessages,
         deps.updateState
       );
-    }
+    }, WATCHDOG_CONCURRENCY);
 
     log(`Watchdog: Sync completed for ${totalStale} files`);
     } finally { watchdogRunning = false; }
