@@ -24,6 +24,8 @@ export function KeyCap({ children, size = "sm" }: { children: React.ReactNode; s
 const SECTION_ORDER: { when: string | undefined; label: string; accent: string }[] = [
   { when: undefined, label: "Global", accent: "bg-sol-cyan" },
   { when: "conversation", label: "Conversation", accent: "bg-sol-blue" },
+  { when: "diff", label: "Diff", accent: "bg-sol-green" },
+  { when: "list", label: "List", accent: "bg-sol-orange" },
   { when: "review", label: "Review", accent: "bg-sol-violet" },
   { when: "desktop", label: "Desktop", accent: "bg-sol-yellow" },
 ];

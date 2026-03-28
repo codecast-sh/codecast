@@ -15,6 +15,7 @@ import { WorkflowContextPanel } from "./WorkflowContextPanel";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { undoableStashSession } from "../store/undoActions";
+import { formatShortcutLabel } from "../shortcuts";
 import { X, ChevronsLeft, ChevronsRight } from "lucide-react";
 import { TaskStatusBadge } from "./TaskStatusBadge";
 
@@ -620,7 +621,7 @@ export function SessionCard({
                     </svg>
                   </button>
                 </TooltipTrigger>
-                <TooltipContent side="left">{session.is_pinned ? "Unpin" : "Pin"}</TooltipContent>
+                <TooltipContent side="left">{session.is_pinned ? "Unpin" : "Pin"} ({formatShortcutLabel('session.pin')})</TooltipContent>
               </Tooltip>
             </TooltipProvider>
           )}
@@ -637,7 +638,7 @@ export function SessionCard({
                     </svg>
                   </button>
                 </TooltipTrigger>
-                <TooltipContent side="left">Defer</TooltipContent>
+                <TooltipContent side="left">Defer ({formatShortcutLabel('session.deferAdvance')})</TooltipContent>
               </Tooltip>
             </TooltipProvider>
           )}
@@ -654,7 +655,7 @@ export function SessionCard({
                     </svg>
                   </button>
                 </TooltipTrigger>
-                <TooltipContent side="left">Dismiss</TooltipContent>
+                <TooltipContent side="left">Dismiss ({formatShortcutLabel('session.stash')})</TooltipContent>
               </Tooltip>
             </TooltipProvider>
           )}
@@ -675,7 +676,7 @@ export function SessionCard({
                     </svg>
                   </button>
                 </TooltipTrigger>
-                <TooltipContent side="left">Kill</TooltipContent>
+                <TooltipContent side="left">Kill ({formatShortcutLabel('session.kill')})</TooltipContent>
               </Tooltip>
             </TooltipProvider>
           )}
@@ -924,7 +925,7 @@ export function SessionListPanel({
 
   return (
     <div className="h-full w-full flex flex-col bg-sol-bg-alt overflow-hidden">
-      <div className="px-3 py-2 border-b border-sol-border/50 flex-shrink-0 flex items-center gap-2 min-w-0">
+      <div className="px-3 py-0.5 sm:py-1 border-b border-sol-border/50 flex-shrink-0 flex items-center gap-2 min-h-[31px] min-w-0">
         <span className="text-xs font-medium text-sol-text-dim uppercase tracking-wide flex-shrink-0">
           {projectFilter ? filteredCount : activeSessions.length} Session{(projectFilter ? filteredCount : activeSessions.length) !== 1 ? "s" : ""}
         </span>
@@ -934,10 +935,10 @@ export function SessionListPanel({
               <button
                 key={name}
                 onClick={() => setProjectFilter((prev) => prev === name ? null : name)}
-                className={`flex-shrink-0 px-1.5 py-0.5 rounded-full text-[10px] transition-all ${
+                className={`flex-shrink-0 px-2 py-0.5 rounded-full text-[10px] transition-all ${
                   projectFilter === name
-                    ? "bg-sol-cyan/15 text-sol-cyan ring-1 ring-sol-cyan/30"
-                    : "text-sol-text-dim/30 hover:text-sol-text-dim/50"
+                    ? "bg-sol-cyan/20 text-sol-cyan"
+                    : "bg-gray-400/10 text-gray-400 hover:bg-gray-400/20 hover:text-gray-500"
                 }`}
               >
                 {name}

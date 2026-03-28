@@ -24,11 +24,11 @@ import { DesktopAppBanner } from "./DesktopAppBanner";
 import { CliOfflineBanner } from "./CliOfflineBanner";
 import { TmuxMissingBanner } from "./TmuxMissingBanner";
 import { FindBar } from "./FindBar";
-import { KeyboardShortcutsPanel, ShortcutsToggleButton } from "./KeyboardShortcutsHelp";
+import { KeyboardShortcutsPanel } from "./KeyboardShortcutsHelp";
 import { NewSessionModal } from "./ConversationList";
 import { CreatePalette } from "./CreatePalette";
 import { useInboxStore } from "../store/inboxStore";
-import { useShortcutAction, useShortcutContext, useGlobalShortcutActions } from "../shortcuts";
+import { useShortcutAction, useShortcutContext, useGlobalShortcutActions, formatShortcutLabel } from "../shortcuts";
 import { usePrefetch } from "../hooks/usePrefetch";
 import { desktopHeaderClass, setupDesktopDrag, isElectron } from "../lib/desktop";
 import { CollapsedSessionRail, SessionListPanel, ConversationColumn } from "./GlobalSessionPanel";
@@ -333,7 +333,7 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
             <button
               onClick={() => updateUI({ sidebar_collapsed: !sidebarCollapsed })}
               className="hidden md:flex items-center p-1.5 rounded-md text-sol-text-dim/60 hover:text-sol-text-muted transition-colors"
-              title={sidebarCollapsed ? "Show sidebar" : "Hide sidebar"}
+              title={`${sidebarCollapsed ? "Show sidebar" : "Hide sidebar"} (${formatShortcutLabel('sidebar.toggleLeft')})`}
             >
               <PanelLeft className="w-[18px] h-[18px]" />
             </button>
@@ -393,6 +393,8 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
             </ErrorBoundary>
           </div>
 
+          <div className="hidden md:block flex-shrink-0 mx-1" style={{ width: 1, minWidth: 1, height: 20, backgroundColor: "var(--sol-text-dim)", opacity: 0.35 }} />
+
           {/* Right section: Actions */}
           <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
             <button
@@ -403,13 +405,11 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
                   openNewSession({});
                 }
               }}
-              className="hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-sol-cyan/15 text-sol-cyan border border-sol-cyan/30 hover:bg-sol-cyan/25 hover:border-sol-cyan/50 transition-all"
-              title="New session (Ctrl+N)"
+              className="hidden md:flex items-center justify-center w-7 h-7 rounded-full border border-sol-text-dim/20 bg-sol-text-dim/8 text-sol-text-dim/50 hover:bg-sol-text-dim/15 hover:text-sol-text-dim/70 hover:border-sol-text-dim/30 transition-colors"
+              title={`New session (${formatShortcutLabel('session.create')})`}
             >
-              <Plus className="w-4 h-4" />
-              New
+              <Plus className="w-[18px] h-[18px]" />
             </button>
-            <ShortcutsToggleButton />
             <ThemeToggle />
             <ErrorBoundary name="NotificationBell" level="inline">
               <NotificationBell />
@@ -419,12 +419,8 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
             </ErrorBoundary>
             <button
               onClick={toggleSidePanel}
-              className={`hidden md:flex items-center p-1.5 rounded-md transition-colors ${
-                sidePanelOpen
-                  ? "text-sol-cyan"
-                  : "text-sol-text-dim/60 hover:text-sol-text-muted"
-              }`}
-              title="Toggle sessions panel"
+              className="hidden md:flex items-center p-1.5 rounded-md text-sol-text-dim/60 hover:text-sol-text-muted transition-colors"
+              title={`Toggle sessions panel (${formatShortcutLabel('sidebar.toggleRight')})`}
             >
               <PanelRight className="w-[18px] h-[18px]" />
             </button>

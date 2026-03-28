@@ -10,6 +10,7 @@ export type ShortcutAction =
   | 'session.create'
   | 'session.createIsolated'
   | 'session.rename'
+  | 'session.mruSwitch'
   | 'ui.zenToggle'
   | 'ui.toggleShortcutsHelp'
   | 'ui.undo'
@@ -24,18 +25,34 @@ export type ShortcutAction =
   | 'conv.toggleDiff'
   | 'conv.toggleTree'
   | 'conv.copyLink'
+  | 'conv.collapseAll'
   | 'msg.next'
   | 'msg.prev'
   | 'msg.fork'
   | 'msg.clearSelection'
   | 'msg.queue'
+  | 'msg.sendAdvance'
+  | 'msg.sendDismiss'
+  | 'permission.approve'
+  | 'permission.deny'
   | 'review.nextFile'
   | 'review.prevFile'
   | 'review.comment'
   | 'compose.focus'
   | 'sidebar.toggleLeft'
   | 'sidebar.toggleRight'
-  | 'create.open';
+  | 'create.open'
+  | 'diff.prevChange'
+  | 'diff.nextChange'
+  | 'diff.toggleFileTree'
+  | 'list.down'
+  | 'list.up'
+  | 'list.open'
+  | 'list.select'
+  | 'list.preview'
+  | 'list.search'
+  | 'list.edit'
+  | 'list.actions';
 
 export interface ShortcutDef {
   key: string;
@@ -62,6 +79,7 @@ export const SHORTCUTS: ShortcutDef[] = [
   { key: 'ctrl+n', action: 'session.create', skipInputCheck: true, description: 'New session' },
   { key: 'ctrl+shift+n', action: 'session.createIsolated', skipInputCheck: true, description: 'New isolated session' },
   { key: 'ctrl+shift+e', action: 'session.rename', skipInputCheck: true, description: 'Rename session' },
+  { key: 'ctrl+tab', action: 'session.mruSwitch', skipInputCheck: true, description: 'Switch session (MRU)' },
 
   { key: 'ctrl+.', action: 'ui.zenToggle', skipInputCheck: true, description: 'Toggle zen mode' },
   { key: '?', action: 'ui.toggleShortcutsHelp', description: 'Toggle shortcuts help' },
@@ -83,12 +101,17 @@ export const SHORTCUTS: ShortcutDef[] = [
   { key: 'd', action: 'conv.toggleDiff', when: 'conversation', description: 'Toggle diff panel' },
   { key: 't', action: 'conv.toggleTree', when: 'conversation', description: 'Toggle tree panel' },
   { key: 'meta+shift+l', action: 'conv.copyLink', when: 'conversation', skipInputCheck: true, description: 'Copy conversation link' },
+  { key: 'ctrl+shift+c', mac: 'meta+shift+c', action: 'conv.collapseAll', when: 'conversation', skipInputCheck: true, description: 'Collapse/expand all' },
 
   { key: 'escape', action: 'msg.clearSelection', when: 'conversation', skipInputCheck: true, description: 'Clear selection' },
   { key: 'alt+j', action: 'msg.next', when: 'conversation', description: 'Next user message' },
   { key: 'alt+k', action: 'msg.prev', when: 'conversation', description: 'Previous user message' },
   { key: 'alt+f', action: 'msg.fork', when: 'conversation', description: 'Fork from message' },
   { key: 'ctrl+enter', action: 'msg.queue', when: 'conversation', skipInputCheck: true, description: 'Queue message' },
+  { key: 'alt+enter', action: 'msg.sendAdvance', when: 'conversation', skipInputCheck: true, description: 'Send and advance' },
+  { key: 'alt+shift+enter', action: 'msg.sendDismiss', when: 'conversation', skipInputCheck: true, description: 'Send and dismiss' },
+  { key: 'y', action: 'permission.approve', when: 'conversation', description: 'Approve permission' },
+  { key: 'n', action: 'permission.deny', when: 'conversation', description: 'Deny permission' },
 
   { key: 'ctrl+m', action: 'compose.focus', skipInputCheck: true, description: 'Focus message input' },
   { key: 'ctrl+[', action: 'sidebar.toggleLeft', skipInputCheck: true, description: 'Toggle left sidebar' },
@@ -99,6 +122,19 @@ export const SHORTCUTS: ShortcutDef[] = [
   { key: 'c', action: 'review.comment', when: 'review', description: 'Comment on line' },
 
   { key: 'c', action: 'create.open', description: 'Create task or plan' },
+
+  { key: '[', action: 'diff.prevChange', when: 'diff', description: 'Previous change' },
+  { key: ']', action: 'diff.nextChange', when: 'diff', description: 'Next change' },
+  { key: 'f', action: 'diff.toggleFileTree', when: 'diff', description: 'Toggle file tree' },
+
+  { key: 'j', action: 'list.down', when: 'list', description: 'Move down' },
+  { key: 'k', action: 'list.up', when: 'list', description: 'Move up' },
+  { key: 'enter', action: 'list.open', when: 'list', description: 'Open item' },
+  { key: 'x', action: 'list.select', when: 'list', description: 'Toggle select' },
+  { key: 'space', action: 'list.preview', when: 'list', description: 'Preview' },
+  { key: '/', action: 'list.search', when: 'list', description: 'Search' },
+  { key: 'e', action: 'list.edit', when: 'list', description: 'Edit name' },
+  { key: 'd', action: 'list.actions', when: 'list', description: 'Actions menu' },
 ];
 
 interface ParsedKey {
@@ -171,6 +207,12 @@ export function formatShortcutParts(def: ShortcutDef): string[] {
       default: return part.toUpperCase();
     }
   });
+}
+
+export function formatShortcutLabel(action: ShortcutAction): string | null {
+  const defs = getShortcutsForAction(action);
+  if (defs.length === 0) return null;
+  return formatShortcutParts(defs[0]).join('');
 }
 
 export function getShortcutsByContext(when?: string): ShortcutDef[] {

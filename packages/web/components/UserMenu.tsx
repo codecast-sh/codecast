@@ -5,6 +5,7 @@ import { useAuthActions } from "@convex-dev/auth/react";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useRouter } from "next/navigation";
+import { useInboxStore } from "../store/inboxStore";
 
 function UrlBarModal({ onClose }: { onClose: () => void }) {
   const router = useRouter();
@@ -95,6 +96,7 @@ export function UserMenu() {
   const { signOut } = useAuthActions();
   const router = useRouter();
   const user = useQuery(api.users.getCurrentUser);
+  const toggleShortcutsPanel = useInboxStore(s => s.toggleShortcutsPanel);
 
   useEventListener("mousedown", useCallback((e: MouseEvent) => {
     if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
@@ -108,7 +110,6 @@ export function UserMenu() {
   };
 
   const displayName = user?.name || user?.email?.split("@")[0] || "User";
-  const initials = displayName.slice(0, 1).toUpperCase();
   const isAdmin = user?.role === "admin";
   const isLocal = typeof window !== "undefined" && window.location.hostname.includes("local.");
   const menuBtnClass = "w-full px-4 py-2 text-left text-sm text-sol-base1 text-sol-text hover:bg-slate-700 hover:bg-sol-bg-alt transition-colors";
@@ -181,6 +182,12 @@ export function UserMenu() {
             Documents
           </button>
           <div className="border-t border-sol-border my-1" />
+          <button
+            onClick={() => { setOpen(false); toggleShortcutsPanel(); }}
+            className={menuBtnClass}
+          >
+            Keyboard shortcuts
+          </button>
           <button
             onClick={() => { setOpen(false); router.push("/settings"); }}
             className={menuBtnClass}
