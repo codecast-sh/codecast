@@ -6,9 +6,12 @@ import { ErrorBoundary } from "../../../components/ErrorBoundary";
 import { DashboardLayout } from "../../../components/DashboardLayout";
 import { useParams, useRouter } from "next/navigation";
 import { useInboxStore } from "../../../store/inboxStore";
+import { useTheme } from "../../../components/ThemeProvider";
 import Link from "next/link";
 import { FileText, CheckCircle2, Circle, CircleDot, CircleDotDashed, XCircle } from "lucide-react";
 import { getLabelColor } from "../../../lib/labelColors";
+import { MarkdownRenderer } from "../../../components/tools/MarkdownRenderer";
+import { cleanContent } from "../../../lib/conversationProcessor";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 
 export default function UserProfilePage() {
@@ -136,7 +139,7 @@ function UserProfileContent() {
           {days.map(([date, items]) => (
             <div key={date}>
               <DayHeader date={date} count={items.length} items={items} />
-              <div>{items.map((item: any, i: number) => <FeedRow key={`${item.type}-${item.timestamp}-${i}`} item={item} router={router} />)}</div>
+              <div className="space-y-1">{items.map((item: any, i: number) => <FeedRow key={`${item.type}-${item.timestamp}-${i}`} item={item} router={router} />)}</div>
             </div>
           ))}
           {filtered && filtered.length === 0 && <div className="text-[11px] text-sol-base01/30 text-center py-16">No recent activity</div>}
@@ -175,9 +178,12 @@ function Sep() {
 
 /* ─── Activity Heatmap ─── */
 
-const HEAT_COLORS_HEX = ["#eee8d5", "#c3dfa0", "#8fbc5c", "#5f9e2f", "#3d7a1a"];
+const HEAT_COLORS_LIGHT = ["#eee8d5", "#c3dfa0", "#8fbc5c", "#5f9e2f", "#3d7a1a"];
+const HEAT_COLORS_DARK = ["#073642", "#2d5016", "#3d7a1a", "#5f9e2f", "#8fbc5c"];
 
 function ActivityHeatmap({ data }: { data: any[] }) {
+  const { theme } = useTheme();
+  const colors = theme === "dark" ? HEAT_COLORS_DARK : HEAT_COLORS_LIGHT;
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerW, setContainerW] = useState(800);
   const [tooltip, setTooltip] = useState<{ x: number; y: number; text: string } | null>(null);
@@ -237,12 +243,12 @@ function ActivityHeatmap({ data }: { data: any[] }) {
   const svgH = 7 * step;
 
   const getColor = (hours: number) => {
-    if (hours <= 0) return HEAT_COLORS_HEX[0];
+    if (hours <= 0) return colors[0];
     const r = hours / maxHours;
-    if (r < 0.15) return HEAT_COLORS_HEX[1];
-    if (r < 0.4) return HEAT_COLORS_HEX[2];
-    if (r < 0.7) return HEAT_COLORS_HEX[3];
-    return HEAT_COLORS_HEX[4];
+    if (r < 0.15) return colors[1];
+    if (r < 0.4) return colors[2];
+    if (r < 0.7) return colors[3];
+    return colors[4];
   };
 
   return (
@@ -279,7 +285,7 @@ function ActivityHeatmap({ data }: { data: any[] }) {
         {/* Legend */}
         <div className="flex items-center gap-1 mt-1.5">
           <span className="text-[8px] text-sol-base01/25">Less</span>
-          {HEAT_COLORS_HEX.map((c, i) => <div key={i} style={{ background: c, width: 10, height: 10, borderRadius: 2 }} />)}
+          {colors.map((c, i) => <div key={i} style={{ background: c, width: 10, height: 10, borderRadius: 2 }} />)}
           <span className="text-[8px] text-sol-base01/25">More</span>
         </div>
         {/* Tooltip */}
@@ -506,11 +512,15 @@ const TASK_STATUS_DOTS: Record<string, string> = {
   in_review: "bg-sol-violet", blocked: "bg-sol-red", backlog: "bg-sol-base01/30",
 };
 
-function stripSystemMarkup(text: string): string {
-  return text
-    .replace(/<[^>]+>/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
+
+function fmtDuration(ms: number): string {
+  if (!ms || ms < 0) return "";
+  const mins = Math.floor(ms / 60000);
+  if (mins < 1) return "<1m";
+  if (mins < 60) return `${mins}m`;
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return m > 0 ? `${h}h ${m}m` : `${h}h`;
 }
 
 function FeedRow({ item, router }: { item: any; router: ReturnType<typeof useRouter> }) {
@@ -523,48 +533,70 @@ function FeedRow({ item, router }: { item: any; router: ReturnType<typeof useRou
 
   const cleanPreview = useMemo(() => {
     if (!item.preview) return null;
-    const cleaned = stripSystemMarkup(item.preview);
+    const cleaned = cleanContent(item.preview);
     return cleaned || null;
   }, [item.preview]);
 
   const isMessage = item.type === "message";
-  const primary = isMessage ? (cleanPreview || item.entity_title || item.verb) : (item.entity_title || cleanPreview || item.verb);
-  const secondary = isMessage && cleanPreview && item.entity_title ? item.entity_title : (!isMessage && item.entity_title && cleanPreview ? cleanPreview : null);
+
+  if (isMessage) {
+    if (!cleanPreview) return null;
+    const meta = item.meta || {};
+    const project = meta.project && meta.project !== "unknown" ? meta.project : null;
+    const duration = meta.duration_ms ? fmtDuration(meta.duration_ms) : null;
+    const msgCount = meta.message_count;
+
+    return (
+      <div
+        className={`bg-sol-blue/10 border border-sol-blue/30 rounded-lg p-3 hover:border-sol-blue/50 transition-colors ${href ? "cursor-pointer" : ""} group`}
+        onClick={href ? () => router.push(href) : undefined}
+      >
+        {cleanPreview && (
+          <div className="text-sol-text text-sm break-words">
+            <MarkdownRenderer content={cleanPreview} className="prose prose-invert prose-sm max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0" />
+          </div>
+        )}
+        <div className="flex items-center gap-2 mt-2 flex-wrap">
+          {item.entity_title && (
+            <span className="text-[11px] font-medium text-sol-blue/80 truncate max-w-[250px]">{item.entity_title}</span>
+          )}
+          {isLive && (
+            <span className="flex items-center gap-1 text-[10px] text-sol-green">
+              <span className="w-1.5 h-1.5 rounded-full bg-sol-green animate-pulse inline-block" />
+              live
+            </span>
+          )}
+          {meta.status && !isLive && (
+            <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${
+              meta.status === "stopped" ? "bg-sol-base01/15 text-sol-base01/50" :
+              meta.status === "idle" ? "bg-sol-yellow/15 text-sol-yellow/70" :
+              "bg-sol-base01/10 text-sol-base01/40"
+            }`}>{meta.status}</span>
+          )}
+          <span className="flex-1" />
+          {project && <span className="text-[10px] font-mono text-sol-base01/35">{project}</span>}
+          {msgCount && <span className="text-[10px] text-sol-base01/30">{msgCount} msgs</span>}
+          {duration && <span className="text-[10px] text-sol-base01/30">{duration}</span>}
+          <span className="text-[10px] tabular-nums text-sol-base01/25">{fmtTime(item.timestamp)}</span>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className={`border-l-2 ${accent} hover:bg-sol-bg-alt/60 transition-colors ${href ? "cursor-pointer" : ""} group py-[5px] pl-2.5 pr-2`} onClick={href ? () => router.push(href) : undefined}>
+    <div className={`border-l-2 ${accent} hover:bg-sol-bg-alt/60 transition-colors ${href ? "cursor-pointer" : ""} group py-[3px] pl-2.5 pr-2`} onClick={href ? () => router.push(href) : undefined}>
       <div className="flex items-baseline gap-1.5 min-w-0">
         <span className="flex-shrink-0 text-[10px] tabular-nums text-sol-base01/25 select-none">{fmtTime(item.timestamp)}</span>
-
         {item.entity_type === "task" && item.meta?.status && (
           <span className={`flex-shrink-0 inline-block w-1.5 h-1.5 rounded-full ${TASK_STATUS_DOTS[item.meta.status] || "bg-sol-base01/20"}`} title={item.meta.status} />
         )}
-
-        {isLive && isMessage && (
-          <span className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-sol-green animate-pulse inline-block" />
-        )}
-
-        <span className={`min-w-0 flex-1 text-[12px] leading-snug font-medium truncate group-hover:text-sol-text transition-colors ${isMessage && cleanPreview ? "text-sol-text/90" : isMessage ? "text-sol-text/50 italic" : "text-sol-text/90"}`}>
-          {item.verb === "completed" && <span className="text-sol-green/70 mr-1">&#10003;</span>}
-          {item.entity_type === "task" && item.entity_short_id && <span className="text-sol-base01/35 font-mono text-[10px] mr-1 not-italic">{item.entity_short_id}</span>}
-          {primary}
+        <span className="text-[10px] text-sol-base01/30 italic">{item.verb}</span>
+        <span className="min-w-0 flex-1 text-[11px] leading-snug truncate text-sol-text/50 group-hover:text-sol-text/70 transition-colors">
+          {item.entity_type === "task" && item.entity_short_id && <span className="text-sol-base01/35 font-mono text-[10px] mr-1">{item.entity_short_id}</span>}
+          {item.entity_title || item.verb}
         </span>
-
-        {isMessage && secondary && (
-          <span className="flex-shrink-0 text-[9.5px] text-sol-base01/30 truncate max-w-[180px]">{secondary}</span>
-        )}
-
-        {item.meta?.project && item.meta.project !== "unknown" && (
-          <span className="flex-shrink-0 text-[9px] font-mono text-sol-base01/25">{item.meta.project}</span>
-        )}
-
         {item.meta?.priority === "high" && <span className="flex-shrink-0 inline-block w-1.5 h-1.5 rounded-full bg-sol-red/40" title="high priority" />}
-        {item.meta?.priority === "urgent" && <span className="flex-shrink-0 inline-block w-2 h-2 rounded-full bg-sol-red/60" title="urgent" />}
       </div>
-
-      {!isMessage && secondary && (
-        <p className="text-[11px] text-sol-text/40 leading-snug line-clamp-2 mt-0.5 ml-[calc(theme(spacing.2.5)+3ch+theme(spacing.1.5))]">{secondary}</p>
-      )}
     </div>
   );
 }

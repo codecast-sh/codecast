@@ -830,7 +830,7 @@ export function ActivityFeed({ mode, teamId, compact, directoryFilter, onNavigat
   const windowHours = WINDOW_STEPS[windowIdx];
   const [actorFilter, setActorFilter] = useState<Id<"users"> | undefined>(initialActorId as Id<"users"> | undefined);
   const [projectFilter, setProjectFilter] = useState<string | null>(null);
-  const [viewMode, setViewMode] = useState<"feed" | "raw">("feed");
+  const [viewMode, setViewMode] = useState<"feed" | "raw">("raw");
   const [digestScope, setDigestScope] = useState<DigestScope>("day");
 
   const tz = useMemo(() => Intl.DateTimeFormat().resolvedOptions().timeZone, []);

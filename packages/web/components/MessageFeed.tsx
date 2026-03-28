@@ -5,6 +5,7 @@ import { useWatchEffect } from "../hooks/useWatchEffect";
 import Link from "next/link";
 import { LoadingSkeleton } from "./LoadingSkeleton";
 import { EmptyState } from "./EmptyState";
+import { MarkdownRenderer } from "./tools/MarkdownRenderer";
 
 type FeedMessage = {
   _id: string;
@@ -46,92 +47,36 @@ function getRelativeTime(timestamp: number): string {
   });
 }
 
-function truncateContent(content: string | undefined, maxLength: number = 500): string {
-  if (!content) return "";
-  const cleaned = content.trim();
-  if (cleaned.length <= maxLength) return cleaned;
-  return cleaned.slice(0, maxLength) + "...";
-}
-
 function MessageCard({ message }: { message: FeedMessage }) {
   const isUser = message.role === "user";
-  const contentPreview = truncateContent(message.content);
+  const content = message.content?.trim() || "";
 
   return (
-    <Link href={`/conversation/${message.conversation_id}`} className="group block">
-      <div
-        className={`relative border rounded-xl p-4 transition-all duration-200 shadow-sm hover:shadow-md ${
-          isUser
-            ? "bg-white border-sol-blue/40 hover:border-sol-blue/60"
-            : "bg-sol-bg-alt/60 border-sol-border/40 hover:border-sol-violet/40"
-        }`}
-      >
-        <div className="flex items-start gap-3">
-          <div
-            className={`flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center ${
-              isUser
-                ? "bg-sol-blue/40 text-sol-blue"
-                : "bg-sol-violet/40 text-sol-violet"
-            }`}
-          >
-            {isUser ? (
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"
-                />
-              </svg>
-            ) : (
-              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M17.3041 3.541h-3.6718l6.696 16.918H24L17.3041 3.541Zm-10.6082 0L0 20.459h3.7442l1.3693-3.5527h7.0052l1.3693 3.5528h3.7442L10.5363 3.5409H6.696Zm-.3712 10.2232 2.2914-5.9456 2.2914 5.9456H6.3247Z" />
-              </svg>
-            )}
-          </div>
-
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center justify-between gap-2 mb-1">
-              <div className="flex items-center gap-2 min-w-0">
-                <span
-                  className={`text-xs font-medium ${
-                    isUser ? "text-sol-blue" : "text-sol-violet"
-                  }`}
-                >
-                  {isUser ? "User" : "Assistant"}
-                </span>
-                {message.has_tool_calls && (
-                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-sol-yellow/20 text-sol-yellow border border-sol-yellow/30">
-                    tools
-                  </span>
-                )}
-              </div>
-              <span className="text-[11px] text-sol-text-dim/60 shrink-0">
-                {getRelativeTime(message.timestamp)}
-              </span>
-            </div>
-
-            {contentPreview && (
-              <p className="text-sol-text text-sm leading-relaxed line-clamp-6 mb-2 whitespace-pre-wrap">
-                {contentPreview}
-              </p>
-            )}
-
-            <div className="flex items-center gap-2 text-xs text-sol-text-muted">
-              <span className="truncate max-w-[300px] font-medium transition-colors">
-                {message.conversation_title}
-              </span>
-              {!message.is_own && (
-                <>
-                  <span className="text-sol-text-dim">by</span>
-                  <span>{message.author_name}</span>
-                </>
-              )}
-            </div>
-          </div>
-        </div>
+    <div className="relative border-l-2 border-sol-border/30 pl-4 py-1 group">
+      <div className="flex items-center gap-2 mb-1.5">
+        <Link
+          href={`/conversation/${message.conversation_id}`}
+          className="text-xs font-medium text-sol-text-muted hover:text-sol-blue transition-colors truncate max-w-[400px]"
+        >
+          {message.conversation_title}
+        </Link>
+        {!message.is_own && (
+          <span className="text-[11px] text-sol-text-dim">
+            {message.author_name}
+          </span>
+        )}
+        <span className="text-[11px] text-sol-text-dim/50 ml-auto shrink-0">
+          {getRelativeTime(message.timestamp)}
+        </span>
       </div>
-    </Link>
+      {content && (
+        isUser ? (
+          <MarkdownRenderer content={content} className="text-sm !prose-sm [&>*:first-child]:mt-0 [&>*:last-child]:mb-0" />
+        ) : (
+          <MarkdownRenderer content={content} className="text-sm !prose-sm [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 opacity-70" />
+        )
+      )}
+    </div>
   );
 }
 
@@ -144,7 +89,7 @@ export function MessageFeed({ filter }: MessageFeedProps) {
   const [loadedMessages, setLoadedMessages] = useState<FeedMessage[]>([]);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [prevFilter, setPrevFilter] = useState(filter);
-  const [showOnlyUser, setShowOnlyUser] = useState(false);
+  const [showOnlyUser, setShowOnlyUser] = useState(true);
 
   // Reset when filter changes
   if (filter !== prevFilter) {

@@ -4,7 +4,7 @@ import { useLayoutEffect, useRef, useState, useMemo, useImperativeHandle, forwar
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useEventListener } from "../hooks/useEventListener";
 import { useWatchEffect } from "../hooks/useWatchEffect";
-import { useShortcutContext, useShortcutAction } from "../shortcuts";
+import { useShortcutContext, useShortcutAction, formatShortcutLabel } from "../shortcuts";
 import { useConvexSync } from "../hooks/useConvexSync";
 import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
@@ -42,6 +42,7 @@ import {
   DropdownMenuSub,
   DropdownMenuSubTrigger,
   DropdownMenuSubContent,
+  DropdownMenuShortcut,
 } from "./ui/dropdown-menu";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "./ui/tooltip";
 import { useMutation, useQuery, useConvex } from "convex/react";
@@ -70,7 +71,7 @@ import { getApplyPatchInput, parseApplyPatchSections } from "../lib/applyPatchPa
 import { setupDesktopDrag, desktopHeaderClass } from "../lib/desktop";
 import { MessageNavButton } from "./MessageBrowserPopover";
 import type { MentionItem } from "./editor/MentionList";
-import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Hash, FolderOpen, Keyboard, ListChecks, Target } from "lucide-react";
+import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2 } from "lucide-react";
 
 const sacredInputs = new Map<string, { text: string; images?: any[] }>();
 
@@ -1020,6 +1021,8 @@ function ConversationMetadata({
   messageCount,
   shortId,
   conversationId,
+  latestTodos,
+  taskStats,
 }: {
   agentType?: string;
   model?: string;
@@ -1027,8 +1030,14 @@ function ConversationMetadata({
   messageCount?: number;
   shortId?: string;
   conversationId?: string;
+  latestTodos?: any[] | null;
+  taskStats?: { total: number; completed: number } | null;
 }) {
   if (!agentType && !model && !startedAt && !messageCount) return null;
+
+  const todoCompleted = latestTodos?.filter((t: any) => t.status === 'completed').length ?? 0;
+  const todoTotal = latestTodos?.length ?? 0;
+  const todoInProgress = latestTodos?.filter((t: any) => t.status === 'in_progress').length ?? 0;
 
   return (
     <div className="flex items-center gap-1 text-[10px] sm:text-xs text-sol-text-dim flex-wrap">
@@ -1066,6 +1075,22 @@ function ConversationMetadata({
         <div className="hidden sm:flex items-center gap-1.5 flex-shrink-0">
           <span className="text-sol-text-dim">&middot;</span>
           <span>{formatDuration(startedAt)}</span>
+        </div>
+      )}
+      {todoTotal > 0 && (
+        <div className="flex items-center gap-1.5 flex-shrink-0" title={`${todoCompleted}/${todoTotal} done${todoInProgress ? `, ${todoInProgress} in progress` : ''}`}>
+          <span className="text-sol-text-dim">&middot;</span>
+          <span className={todoCompleted === todoTotal ? 'text-emerald-400' : 'text-sol-cyan'}>
+            {todoCompleted}/{todoTotal} todos
+          </span>
+        </div>
+      )}
+      {taskStats && (
+        <div className="flex items-center gap-1.5 flex-shrink-0" title={`${taskStats.completed}/${taskStats.total} tasks completed`}>
+          <span className="text-sol-text-dim">&middot;</span>
+          <span className={taskStats.completed === taskStats.total ? 'text-emerald-400' : 'text-violet-400'}>
+            {taskStats.completed}/{taskStats.total} tasks
+          </span>
         </div>
       )}
     </div>
@@ -7880,40 +7905,21 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     }
   }, [buildResumeCommand]);
 
-  // Extract todos and usage from messages using reducer
-  const { latestTodos, latestUsage } = useMemo(() => {
-    if (!messages || messages.length === 0) {
-      return { latestTodos: undefined, latestUsage: undefined };
-    }
-
+  // Extract usage from loaded messages (local)
+  const latestUsage = useMemo(() => {
+    if (!messages || messages.length === 0) return undefined;
     const state = createReducer();
     reducer(state, messages);
-
-    return {
-      latestTodos: state.latestTodos,
-      latestUsage: state.latestUsage,
-    };
+    return state.latestUsage;
   }, [messages]);
 
-  const taskStats = useMemo(() => {
-    if (!messages || messages.length === 0) return null;
-    let total = 0;
-    let completed = 0;
-    for (const msg of messages) {
-      if (msg.tool_calls) {
-        for (const tc of msg.tool_calls) {
-          if (tc.name === "TaskCreate") total++;
-          if (tc.name === "TaskUpdate") {
-            try {
-              const inp = JSON.parse(tc.input);
-              if (inp.status === "completed") completed++;
-            } catch {}
-          }
-        }
-      }
-    }
-    return total > 0 ? { total, completed } : null;
-  }, [messages]);
+  // Fetch tool stats from backend (scans ALL messages, not just loaded window)
+  const toolStats = useQuery(
+    api.conversations.getConversationToolStats,
+    conversation?._id && isConvexId(conversation._id) ? { conversation_id: conversation._id } : "skip"
+  );
+  const latestTodos = toolStats?.latestTodos ?? null;
+  const taskStats = toolStats?.taskStats ?? null;
 
   const getItemKey = useCallback((index: number) => {
     const item = timeline[index];
@@ -9004,11 +9010,23 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         </div>
       )}
       <header ref={headerRef} className={`border-b border-black/10 bg-sol-bg-alt shrink-0 relative ${embedded ? "sticky top-0 z-20 bg-sol-bg-alt" : ""} ${!embedded || isZenMode ? deskClass : ""} ${isImageLightboxActive ? "invisible" : ""} ${hideHeader ? "hidden" : ""}`}>
-        {typeof window !== "undefined" && window.location.hostname.includes("local.") && useInboxStore.getState().clientState.ui?.zen_mode && (
-          <div className="absolute top-0 left-0 w-0 h-0 border-t-[20px] border-r-[20px] border-t-emerald-500 border-r-transparent z-30" />
-        )}
         <div className="px-2 py-0.5 sm:py-1">
           <div className="flex items-center gap-2 min-w-0 select-none">
+            {isZenMode && (
+              <TooltipProvider delayDuration={300}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      onClick={() => useInboxStore.getState().updateClientUI({ zen_mode: false })}
+                      className="p-1 rounded text-sol-text-dim/20 hover:text-sol-text-dim/50 transition-colors"
+                    >
+                      <Maximize2 className="w-3 h-3 -scale-x-100" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">Exit zen mode ({formatShortcutLabel('ui.zenToggle')})</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            )}
             {headerLeft}
             {isRenaming ? (
               <input
@@ -9092,6 +9110,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                 messageCount={conversation.message_count}
                 shortId={conversation.short_id}
                 conversationId={conversation._id}
+                latestTodos={latestTodos}
+                taskStats={taskStats}
               />
             )}
 
@@ -9258,7 +9278,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                       </svg>
                     </button>
                   </TooltipTrigger>
-                  <TooltipContent side="bottom">{collapsed ? "Expand messages" : "Collapse messages"}</TooltipContent>
+                  <TooltipContent side="bottom">{collapsed ? "Expand messages" : "Collapse messages"} ({formatShortcutLabel('conv.collapseAll')})</TooltipContent>
                 </Tooltip>
 
                 {managedSession?.tmux_session && (
@@ -9337,6 +9357,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
                         </svg>
                         Rename
+                        <DropdownMenuShortcut>{formatShortcutLabel('session.rename')}</DropdownMenuShortcut>
                       </DropdownMenuItem>
                     )}
                     {conversation?.session_id && (
@@ -9466,6 +9487,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
                           </svg>
                           Fork tree
+                          <DropdownMenuShortcut>{formatShortcutLabel('conv.toggleTree')}</DropdownMenuShortcut>
                         </DropdownMenuItem>
                       </>
                     )}
@@ -9507,9 +9529,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                         Tasks: {taskStats.completed}/{taskStats.total}
                       </DropdownMenuItem>
                     )}
-                    {latestTodos && latestTodos.todos.length > 0 && (
+                    {latestTodos && latestTodos.length > 0 && (
                       <DropdownMenuItem disabled>
-                        Todos: {latestTodos.todos.filter(t => t.status === 'completed').length}/{latestTodos.todos.length}
+                        Todos: {latestTodos.filter((t: any) => t.status === 'completed').length}/{latestTodos.length}
                       </DropdownMenuItem>
                     )}
                     {latestUsage && (

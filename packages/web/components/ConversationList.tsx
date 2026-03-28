@@ -507,10 +507,8 @@ function ConversationCard({ conv, filter, isFocused, onNavigate, hasTeam }: {
   hasTeam: boolean;
 }) {
   const router = useRouter();
-  const [expanded, setExpanded] = useState(false);
 
   const isOthersRestrictedView = (conv.visibility_mode === "detailed" || conv.visibility_mode === "summary") && !conv.is_own;
-  const hasExpandableContent = !!(conv.subtitle || (conv.message_alternates && conv.message_alternates.length > 2));
 
   return (
     <Link
@@ -606,7 +604,7 @@ function ConversationCard({ conv, filter, isFocused, onNavigate, hasTeam }: {
               </div>
             )}
 
-            <ConvSubtitleSection conv={conv} expanded={expanded} />
+            <ConvSubtitleSection conv={conv} expanded />
 
             <div className="flex items-center gap-1.5 sm:gap-2 text-[11px] sm:text-xs flex-wrap text-sol-text-dim select-none">
               {(filter === "team" || !conv.is_own) && (
@@ -698,14 +696,6 @@ function ConversationCard({ conv, filter, isFocused, onNavigate, hasTeam }: {
                 <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20 text-[10px] font-medium max-w-[120px] truncate" title={(conv as any).active_plan.title}>
                   {(conv as any).active_plan.title}
                 </span>
-              )}
-              {hasExpandableContent && (
-                <button
-                  onClick={(e) => { e.preventDefault(); e.stopPropagation(); setExpanded(!expanded); }}
-                  className="text-[10px] text-sol-text-dim/40 hover:text-sol-cyan/60 transition-colors ml-auto"
-                >
-                  {expanded ? "↑ less" : "↓ more"}
-                </button>
               )}
             </div>
           </div>

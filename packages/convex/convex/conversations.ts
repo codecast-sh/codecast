@@ -1277,6 +1277,57 @@ export const getConversationWithMeta = query({
   },
 });
 
+export const getConversationToolStats = query({
+  args: {
+    conversation_id: v.id("conversations"),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthUserId(ctx);
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation) return null;
+
+    const isOwner = authUserId && conversation.user_id.toString() === authUserId.toString();
+    if (!isOwner) {
+      const isShared = !!conversation.share_token;
+      const hasTeamAccess = authUserId ? await canTeamMemberAccess(ctx, authUserId, conversation) : false;
+      if (!hasTeamAccess && !isShared) return null;
+    }
+
+    let latestTodos: any[] | null = null;
+    let taskTotal = 0;
+    let taskCompleted = 0;
+
+    for await (const msg of ctx.db
+      .query("messages")
+      .withIndex("by_conversation_role_timestamp", (q: any) =>
+        q.eq("conversation_id", args.conversation_id).eq("role", "assistant")
+      )
+      .order("desc")) {
+      if (!msg.tool_calls) continue;
+      for (const tc of msg.tool_calls) {
+        if (tc.name === "TodoWrite" && !latestTodos) {
+          try {
+            const input = JSON.parse(tc.input);
+            if (input.todos) latestTodos = input.todos;
+          } catch {}
+        }
+        if (tc.name === "TaskCreate") taskTotal++;
+        if (tc.name === "TaskUpdate") {
+          try {
+            const inp = JSON.parse(tc.input);
+            if (inp.status === "completed") taskCompleted++;
+          } catch {}
+        }
+      }
+    }
+
+    return {
+      latestTodos,
+      taskStats: taskTotal > 0 ? { total: taskTotal, completed: taskCompleted } : null,
+    };
+  },
+});
+
 export const getConversationMessages = query({
   args: {
     conversation_id: v.id("conversations"),

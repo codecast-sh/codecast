@@ -844,38 +844,71 @@ export const getUserProfileFeed = query({
             q.eq("team_id", args.team_id).eq("user_id", args.user_id)
           )
           .order("desc")
-          .take(15)
+          .take(30)
       : await ctx.db
           .query("conversations")
           .withIndex("by_user_id", (q) => q.eq("user_id", args.user_id))
           .order("desc")
-          .take(15);
+          .take(30);
+
+    const NOISE_PREFIXES = ["[Request interrupted", "This session is being continued", "Your task is to create a detailed summary", "Full transcript available at:", "Read the output file to retrieve the result:"];
+    const COMMAND_RE = /^(<command-name>|<command-message>|<local-command-stdout>|<local-command-stderr>|Caveat:|\/[a-z][\w-]*)/i;
+    const SKILL_RE = /Base directory for this skill:\s/;
+    function stripTags(s: string): string {
+      return s
+        .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "")
+        .replace(/<task-reminder>[\s\S]*?<\/task-reminder>/g, "")
+        .replace(/<task-notification>[\s\S]*?<\/task-notification>/g, "")
+        .replace(/<local-command-stdout>[\s\S]*?<\/local-command-stdout>/g, "")
+        .replace(/<local-command-stderr>[\s\S]*?<\/local-command-stderr>/g, "")
+        .replace(/<\/?(?:command-(?:name|message|args)|antml:[a-z_]+)[^>]*>/g, "")
+        .replace(/^\s*Caveat:.*$/gm, "")
+        .trim();
+    }
+    function isNoise(content: string): boolean {
+      if (!content) return true;
+      const t = content.trim();
+      if (!t) return true;
+      if (COMMAND_RE.test(t)) return true;
+      if (SKILL_RE.test(t)) return true;
+      if (t.startsWith("<task-notification>") && !t.replace(/<task-notification>[\s\S]*?<\/task-notification>/g, "").trim()) return true;
+      if (t.startsWith("{") && t.includes("__cc_poll")) return true;
+      if (t.includes("Your task is to create a detailed summary of the conversation so far")) return true;
+      const stripped = stripTags(t);
+      if (!stripped) return true;
+      if (NOISE_PREFIXES.some(p => stripped.startsWith(p))) return true;
+      return false;
+    }
 
     for (const c of recentConvos) {
-      const msgs = await ctx.db
+      if ((c as any).parent_conversation_id) continue;
+      const allMsgs = await ctx.db
         .query("messages")
-        .withIndex("by_conversation_role_timestamp", (q: any) =>
-          q.eq("conversation_id", c._id).eq("role", "user")
+        .withIndex("by_conversation_timestamp", (q: any) =>
+          q.eq("conversation_id", c._id)
         )
         .order("desc")
-        .take(5);
-      const userMsgs = msgs.filter((m: any) =>
-        !m.from_user_id || String(m.from_user_id) === String(args.user_id)
-      );
-      if (userMsgs.length > 0) {
-        const latest = userMsgs[0];
-        const withContent = userMsgs.find((m: any) => m.content && m.content.trim().length > 0);
-        const content = (withContent?.content || latest.content || "").trim();
+        .take(40);
+      const sessionMeta = { message_count: c.message_count, project: c.project_path?.split("/").pop(), status: c.status, duration_ms: c.started_at && c.updated_at ? c.updated_at - c.started_at : undefined };
+      for (let i = 0; i < allMsgs.length; i++) {
+        const m = allMsgs[i];
+        if (m.role !== "user") continue;
+        if (m.from_user_id && String(m.from_user_id) !== String(args.user_id)) continue;
+        if (!m.content || isNoise(m.content)) continue;
+        if (m.tool_results && m.tool_results.length > 0 && (!m.content || !m.content.trim())) continue;
+        const prev = allMsgs[i + 1];
+        if (prev?.role === "assistant" && prev?.tool_calls?.some((tc: any) => tc.name === "Task" || tc.name === "Agent")) continue;
+        const content = stripTags(m.content);
+        if (!content) continue;
         items.push({
           type: "message",
-          timestamp: latest.timestamp || latest._creationTime,
+          timestamp: m.timestamp || m._creationTime,
           verb: "messaged",
-          preview: content.length > 300 ? content.slice(0, 300) + "..." : content,
+          preview: content,
           entity_id: String(c._id),
           entity_type: "session",
           entity_title: c.title || "Untitled",
-          count: userMsgs.length > 1 ? userMsgs.length : undefined,
-          meta: { message_count: c.message_count, project: c.project_path?.split("/").pop(), status: c.status, duration_ms: c.started_at && c.updated_at ? c.updated_at - c.started_at : undefined },
+          meta: sessionMeta,
         });
       }
     }
@@ -1267,13 +1300,15 @@ export const removeDirectoryTeamMapping = mutation({
 
     let conversationsDeleted = 0;
     let messagesDeleted = 0;
+    let hasMore = false;
     if (args.delete_conversations) {
       const result = await deleteConversationsForPathInternal(ctx, userId, args.path_prefix);
       conversationsDeleted = result.conversationsDeleted;
       messagesDeleted = result.messagesDeleted;
+      hasMore = result.hasMore;
     }
 
-    return { success: true, conversationsDeleted, messagesDeleted };
+    return { success: true, conversationsDeleted, messagesDeleted, hasMore };
   },
 });
 
@@ -1287,24 +1322,32 @@ async function deleteConversationsForPathInternal(
     .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
     .take(500);
 
-  let conversationsDeleted = 0;
-  let messagesDeleted = 0;
-  for (const conv of convos) {
+  const matching = convos.filter((conv: any) => {
     const projectPath = conv.git_root || conv.project_path;
-    if (projectPath && (projectPath === pathPrefix || projectPath.startsWith(pathPrefix + "/"))) {
-      const msgs = await ctx.db
-        .query("messages")
-        .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conv._id))
-        .take(1000);
-      for (const msg of msgs) {
-        await ctx.db.delete(msg._id);
-        messagesDeleted++;
-      }
-      await ctx.db.delete(conv._id);
-      conversationsDeleted++;
-    }
+    return projectPath && (projectPath === pathPrefix || projectPath.startsWith(pathPrefix + "/"));
+  });
+
+  if (matching.length === 0) {
+    return { conversationsDeleted: 0, messagesDeleted: 0, hasMore: false };
   }
-  return { conversationsDeleted, messagesDeleted };
+
+  const conv = matching[0];
+  const MSG_BATCH = 100;
+  const msgs = await ctx.db
+    .query("messages")
+    .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conv._id))
+    .take(MSG_BATCH);
+
+  for (const msg of msgs) {
+    await ctx.db.delete(msg._id);
+  }
+
+  if (msgs.length === MSG_BATCH) {
+    return { conversationsDeleted: 0, messagesDeleted: msgs.length, hasMore: true };
+  }
+
+  await ctx.db.delete(conv._id);
+  return { conversationsDeleted: 1, messagesDeleted: msgs.length, hasMore: matching.length > 1 };
 }
 
 export const countConversationsForPath = query({

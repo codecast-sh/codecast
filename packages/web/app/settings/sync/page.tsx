@@ -4,7 +4,8 @@ import { Card } from "../../../components/ui/card";
 import { Input } from "../../../components/ui/input";
 import { Button } from "../../../components/ui/button";
 import { Label } from "../../../components/ui/label";
-import { useState } from "react";
+import { useState, useRef } from "react";
+import { toast } from "sonner";
 import { GitBranch, Folder, Check, Search, Eye, EyeOff, ChevronDown, AlertTriangle } from "lucide-react";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import {
@@ -48,6 +49,7 @@ export default function SyncPage() {
   const [newProject, setNewProject] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [isUnsyncing, setIsUnsyncing] = useState(false);
+  const unsyncingRef = useRef(false);
   const [pendingUnsync, setPendingUnsync] = useState<{
     path: string;
     sessionCount: number;
@@ -140,9 +142,10 @@ export default function SyncPage() {
   };
 
   const executeUnsync = async (deleteConversations: boolean) => {
-    if (!pendingUnsync || isUnsyncing) return;
+    if (!pendingUnsync || unsyncingRef.current) return;
     const { path, action } = pendingUnsync;
 
+    unsyncingRef.current = true;
     setIsUnsyncing(true);
     try {
       if (action === "unsync") {
@@ -150,15 +153,33 @@ export default function SyncPage() {
         await updateSyncSettings({ sync_projects: newProjects });
         const existingMapping = mappingsByPath.get(path);
         if (existingMapping) {
-          await removeDirectoryMapping({ path_prefix: path, delete_conversations: deleteConversations });
+          const first = await removeDirectoryMapping({ path_prefix: path, delete_conversations: deleteConversations });
+          let hasMore = first?.hasMore;
+          while (hasMore) {
+            const next = await deleteConversationsForPath({ path_prefix: path });
+            hasMore = next?.hasMore;
+          }
         } else if (deleteConversations) {
-          await deleteConversationsForPath({ path_prefix: path });
+          let hasMore = true;
+          while (hasMore) {
+            const next = await deleteConversationsForPath({ path_prefix: path });
+            hasMore = next?.hasMore ?? false;
+          }
         }
       } else {
-        await removeDirectoryMapping({ path_prefix: path, delete_conversations: deleteConversations });
+        const first = await removeDirectoryMapping({ path_prefix: path, delete_conversations: deleteConversations });
+        let hasMore = first?.hasMore;
+        while (hasMore) {
+          const next = await deleteConversationsForPath({ path_prefix: path });
+          hasMore = next?.hasMore;
+        }
       }
       setPendingUnsync(null);
+    } catch (err) {
+      console.error("Failed to unsync project:", err);
+      toast.error("Failed to remove sync. The project may have too many conversations to delete at once.");
     } finally {
+      unsyncingRef.current = false;
       setIsUnsyncing(false);
     }
   };
