@@ -7848,6 +7848,7 @@ schedule
   .option("--project <path>", "Project path for agent cwd")
   .option("--agent <type>", "Agent type: claude (default) or codex", "claude")
   .option("--max-runtime <duration>", "Max runtime (default: 10m)")
+  .option("--thread", "Post results back to the current conversation thread")
   .action(async (prompt, options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
@@ -7893,11 +7894,15 @@ schedule
 
     let context_summary: string | undefined;
     let originating_conversation_id: string | undefined;
-    if (options.context === "current") {
+    let target_conversation_id: string | undefined;
+
+    const needsSession = options.context === "current" || options.thread;
+    if (needsSession) {
       const sessionId = findCurrentSessionFromProcess(getRealCwd());
       if (sessionId) {
-        console.log(fmt.muted(`Capturing context from session ${sessionId.slice(0, 8)}...`));
-        // Look up conversation ID from session
+        if (options.context === "current") {
+          console.log(fmt.muted(`Capturing context from session ${sessionId.slice(0, 8)}...`));
+        }
         try {
           const resp = await fetch(`${siteUrl}/cli/sessions`, {
             method: "POST",
@@ -7907,8 +7912,15 @@ schedule
           const data = await resp.json();
           if (data?.conversation_id) {
             originating_conversation_id = data.conversation_id;
+            if (options.thread) {
+              target_conversation_id = data.conversation_id;
+            }
           }
         } catch {}
+      }
+      if (options.thread && !target_conversation_id) {
+        console.error("Could not resolve current conversation for --thread");
+        process.exit(1);
       }
     }
 
@@ -7922,6 +7934,7 @@ schedule
           prompt,
           context_summary,
           originating_conversation_id,
+          target_conversation_id,
           project_path: options.project || getRealCwd(),
           agent_type: options.agent,
           schedule_type,

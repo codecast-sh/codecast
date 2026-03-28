@@ -245,8 +245,14 @@ export class TaskScheduler {
     parts.push("");
     parts.push("---");
     parts.push("Instructions:");
-    parts.push(`- When done, run: cast task complete ${task._id} --summary "brief description of what was done"`);
-    parts.push('- To schedule follow-up: cast task add "..." --in <time>');
+    if (task.target_conversation_id) {
+      parts.push(`- Your summary will be posted as a message in the originating conversation thread.`);
+      parts.push(`- When done, run: cast schedule complete ${task._id} --summary "your full response to post in the thread"`);
+      parts.push(`- Write the summary as if you are replying directly to the user in their conversation.`);
+    } else {
+      parts.push(`- When done, run: cast schedule complete ${task._id} --summary "brief description of what was done"`);
+    }
+    parts.push('- To schedule follow-up: cast schedule add "..." --in <time>');
     if (task.originating_conversation_id) {
       parts.push(`- Run \`cast read ${task.originating_conversation_id}\` for full original context`);
     }

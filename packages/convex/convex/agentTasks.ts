@@ -15,6 +15,7 @@ export const createTask = mutation({
     prompt: v.string(),
     context_summary: v.optional(v.string()),
     originating_conversation_id: v.optional(v.string()),
+    target_conversation_id: v.optional(v.string()),
     project_path: v.optional(v.string()),
     agent_type: v.optional(v.string()),
     schedule_type: v.union(v.literal("once"), v.literal("recurring"), v.literal("event")),
@@ -50,6 +51,9 @@ export const createTask = mutation({
       context_summary: args.context_summary,
       originating_conversation_id: args.originating_conversation_id
         ? args.originating_conversation_id as Id<"conversations">
+        : undefined,
+      target_conversation_id: args.target_conversation_id
+        ? args.target_conversation_id as Id<"conversations">
         : undefined,
       project_path: args.project_path,
       agent_type: args.agent_type || "claude",
@@ -217,6 +221,23 @@ export const completeTaskRun = mutation({
     }
 
     await ctx.db.patch(args.task_id, updates);
+
+    if (task.target_conversation_id && args.summary) {
+      const targetConv = await ctx.db.get(task.target_conversation_id);
+      if (targetConv) {
+        await ctx.db.insert("messages", {
+          conversation_id: task.target_conversation_id,
+          role: "assistant",
+          content: args.summary,
+          subtype: "scheduled_task_result",
+          timestamp: now,
+        });
+        await ctx.db.patch(task.target_conversation_id, {
+          updated_at: now,
+          message_count: targetConv.message_count + 1,
+        });
+      }
+    }
 
     // Create notification
     const user = await ctx.db.get(auth.userId);

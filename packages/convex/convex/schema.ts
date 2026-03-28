@@ -831,6 +831,7 @@ export default defineSchema({
     prompt: v.string(),
     context_summary: v.optional(v.string()),
     originating_conversation_id: v.optional(v.id("conversations")),
+    target_conversation_id: v.optional(v.id("conversations")),
     project_path: v.optional(v.string()),
     agent_type: v.optional(v.string()),
 
