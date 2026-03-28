@@ -51,11 +51,16 @@ export const submitSnapshot = mutation({
       )
       .first();
     if (existing) return;
-    await ctx.db.insert("doc_snapshots", {
-      id: args.id,
-      version: args.version,
-      content: args.content,
-    });
+    try {
+      await ctx.db.insert("doc_snapshots", {
+        id: args.id,
+        version: args.version,
+        content: args.content,
+      });
+    } catch (e: any) {
+      if (e.message?.includes("duplicate") || e.message?.includes("conflict")) return;
+      throw e;
+    }
     if (args.version > 1) {
       const oldSnapshots = await ctx.db
         .query("doc_snapshots")
