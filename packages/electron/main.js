@@ -3,6 +3,8 @@ const { autoUpdater } = require("electron-updater");
 const path = require("path");
 const fs = require("fs");
 
+app.name = "Codecast";
+
 let notificationRefs = [];
 
 function showNativeNotification(title, body, onClick) {
@@ -226,6 +228,36 @@ function hidePalette() {
   paletteWindow.hide();
 }
 
+function navigateMain(navPath) {
+  if (!mainWindow) return;
+  mainWindow.show();
+  mainWindow.focus();
+  mainWindow.webContents.executeJavaScript(
+    `window.dispatchEvent(new CustomEvent('codecast-navigate', { detail: ${JSON.stringify(navPath)} }))`
+  );
+}
+
+function toggleEnvironment() {
+  if (!mainWindow) return;
+  currentBaseUrl = currentBaseUrl === PROD_URL ? LOCAL_URL : PROD_URL;
+  const env = currentBaseUrl === PROD_URL ? "prod" : "local";
+  mainWindow.loadURL(currentBaseUrl);
+  mainWindow.webContents.once("did-finish-load", () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    mainWindow.webContents.executeJavaScript(
+      "document.documentElement.classList.add('electron-desktop')"
+    );
+    mainWindow.webContents.executeJavaScript(
+      `document.title = '[${env.toUpperCase()}] ' + document.title`
+    );
+  });
+  if (paletteWindow) {
+    paletteWindow.destroy();
+    paletteWindow = null;
+  }
+  createPaletteWindow();
+}
+
 function createTray() {
   const icon = nativeImage.createFromPath(path.join(__dirname, "assets", "trayTemplate@2x.png"));
   icon.setTemplateImage(true);
@@ -233,10 +265,14 @@ function createTray() {
   const menu = Menu.buildFromTemplate([
     { label: "Show Codecast", click: () => { mainWindow?.show(); mainWindow?.focus(); } },
     { type: "separator" },
-    { label: "Dashboard", click: () => { mainWindow?.show(); mainWindow?.focus(); mainWindow?.webContents.executeJavaScript("window.dispatchEvent(new CustomEvent('codecast-navigate', { detail: '/dashboard' }))"); } },
-    { label: "Inbox", click: () => { mainWindow?.show(); mainWindow?.focus(); mainWindow?.webContents.executeJavaScript("window.dispatchEvent(new CustomEvent('codecast-navigate', { detail: '/inbox' }))"); } },
+    { label: "Dashboard", click: () => navigateMain("/dashboard") },
+    { label: "Inbox", click: () => navigateMain("/inbox") },
+    { label: "Tasks", click: () => navigateMain("/tasks") },
     { type: "separator" },
-    { label: "Quit", click: () => app.quit() },
+    { label: "New Session", click: () => { mainWindow?.show(); mainWindow?.focus(); mainWindow?.webContents.executeJavaScript("window.__CODECAST_COMPOSE_SHOW && window.__CODECAST_COMPOSE_SHOW('')"); } },
+    { label: "Command Palette", click: () => togglePalette() },
+    { type: "separator" },
+    { label: "Quit Codecast", click: () => app.quit() },
   ]);
   tray.setContextMenu(menu);
   tray.setToolTip("Codecast");
@@ -249,11 +285,36 @@ function buildAppMenu() {
       submenu: [
         { role: "about" },
         { type: "separator" },
+        { label: "Check for Updates...", click: () => autoUpdater.checkForUpdatesAndNotify() },
+        { type: "separator" },
+        { label: "Settings...", accelerator: "CommandOrControl+,", click: () => navigateMain("/settings") },
+        { type: "separator" },
+        { role: "services" },
+        { type: "separator" },
         { role: "hide" },
         { role: "hideOthers" },
         { role: "unhide" },
         { type: "separator" },
         { role: "quit" },
+      ],
+    },
+    {
+      label: "File",
+      submenu: [
+        {
+          label: "New Session",
+          accelerator: "CommandOrControl+N",
+          click: () => {
+            if (!mainWindow) return;
+            mainWindow.show();
+            mainWindow.focus();
+            mainWindow.webContents.executeJavaScript(
+              "window.__CODECAST_COMPOSE_SHOW ? window.__CODECAST_COMPOSE_SHOW('') : window.dispatchEvent(new CustomEvent('codecast-navigate', { detail: '/inbox' }))"
+            );
+          },
+        },
+        { type: "separator" },
+        { role: "close" },
       ],
     },
     {
@@ -265,7 +326,22 @@ function buildAppMenu() {
         { role: "cut" },
         { role: "copy" },
         { role: "paste" },
+        { role: "pasteAndMatchStyle" },
+        { role: "delete" },
         { role: "selectAll" },
+      ],
+    },
+    {
+      label: "Go",
+      submenu: [
+        { label: "Dashboard", click: () => navigateMain("/dashboard") },
+        { label: "Inbox", click: () => navigateMain("/inbox") },
+        { label: "Tasks", click: () => navigateMain("/tasks") },
+        { label: "Plans", click: () => navigateMain("/plans") },
+        { label: "Docs", click: () => navigateMain("/docs") },
+        { type: "separator" },
+        { label: "Back", accelerator: "CommandOrControl+[", click: () => mainWindow?.webContents.goBack() },
+        { label: "Forward", accelerator: "CommandOrControl+]", click: () => mainWindow?.webContents.goForward() },
       ],
     },
     {
@@ -273,20 +349,14 @@ function buildAppMenu() {
       submenu: [
         { role: "reload" },
         { role: "forceReload" },
-        { role: "toggleDevTools" },
         { type: "separator" },
-        {
-          label: "Back",
-          accelerator: "CommandOrControl+[",
-          click: () => mainWindow?.webContents.goBack(),
-        },
-        {
-          label: "Forward",
-          accelerator: "CommandOrControl+]",
-          click: () => mainWindow?.webContents.goForward(),
-        },
+        { role: "resetZoom" },
+        { role: "zoomIn" },
+        { role: "zoomOut" },
         { type: "separator" },
         { role: "togglefullscreen" },
+        { type: "separator" },
+        { role: "toggleDevTools" },
       ],
     },
     {
@@ -294,7 +364,19 @@ function buildAppMenu() {
       submenu: [
         { role: "minimize" },
         { role: "zoom" },
+        { type: "separator" },
+        { label: "Command Palette", click: () => togglePalette() },
+        { label: "Switch Environment", click: () => toggleEnvironment() },
+        { type: "separator" },
+        { role: "front" },
+        { type: "separator" },
         { role: "close" },
+      ],
+    },
+    {
+      role: "help",
+      submenu: [
+        { label: "Codecast Website", click: () => shell.openExternal("https://codecast.sh") },
       ],
     },
   ];
@@ -409,34 +491,27 @@ function registerShortcuts() {
   }
 
   if (shortcuts.toggleEnv) {
-    globalShortcut.register(shortcuts.toggleEnv, () => {
-      if (!mainWindow) return;
-      currentBaseUrl = currentBaseUrl === PROD_URL ? LOCAL_URL : PROD_URL;
-      const env = currentBaseUrl === PROD_URL ? "prod" : "local";
-      mainWindow.loadURL(currentBaseUrl);
-      mainWindow.webContents.once("did-finish-load", () => {
-        if (!mainWindow || mainWindow.isDestroyed()) return;
-        mainWindow.webContents.executeJavaScript(
-          "document.documentElement.classList.add('electron-desktop')"
-        );
-        mainWindow.webContents.executeJavaScript(
-          `document.title = '[${env.toUpperCase()}] ' + document.title`
-        );
-      });
-      if (paletteWindow) {
-        paletteWindow.destroy();
-        paletteWindow = null;
-      }
-      createPaletteWindow();
-    });
+    globalShortcut.register(shortcuts.toggleEnv, () => toggleEnvironment());
   }
 }
 
 app.whenReady().then(() => {
+  app.setAboutPanelOptions({
+    applicationName: "Codecast",
+    copyright: "Codecast",
+    website: "https://codecast.sh",
+  });
   createWindow();
   createTray();
   buildAppMenu();
   createPaletteWindow();
+  if (app.dock) {
+    app.dock.setMenu(Menu.buildFromTemplate([
+      { label: "New Session", click: () => { mainWindow?.show(); mainWindow?.focus(); mainWindow?.webContents.executeJavaScript("window.__CODECAST_COMPOSE_SHOW && window.__CODECAST_COMPOSE_SHOW('')"); } },
+      { label: "Dashboard", click: () => navigateMain("/dashboard") },
+      { label: "Inbox", click: () => navigateMain("/inbox") },
+    ]));
+  }
   registerShortcuts();
 
   // No startup notification needed -- macOS registers the app when
