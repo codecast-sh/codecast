@@ -117,7 +117,6 @@ function resolveLocalRepo(remotePath: string): string | null {
   const home = process.env.HOME || "/tmp";
   const candidates = [
     path.join(home, "src", repoName),
-    path.join(home, "Documents", "GitHub", repoName),
     path.join(home, "projects", repoName),
     path.join(home, "code", repoName),
     path.join(home, "repos", repoName),
