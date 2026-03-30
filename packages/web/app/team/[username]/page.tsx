@@ -63,6 +63,7 @@ function UserProfileContent() {
 
   const filtered = useMemo(() => feed?.filter((i: any) => !NOISE_VERBS.has(i.verb)) ?? null, [feed]);
   const days = useMemo(() => filtered ? groupByDay(filtered) : [], [filtered]);
+  const groupedDays = useMemo(() => days.map(([date, items]) => [date, groupItemsBySessions(items)] as const), [days]);
 
   const heatmap = useQuery(
     api.users.getUserActivityHeatmap,
@@ -136,10 +137,18 @@ function UserProfileContent() {
       {/* Feed view */}
       {view === "feed" && (
         <div className="mt-1">
-          {days.map(([date, items]) => (
+          {groupedDays.map(([date, groups]) => (
             <div key={date}>
-              <DayHeader date={date} count={items.length} items={items} />
-              <div className="space-y-1">{items.map((item: any, i: number) => <FeedRow key={`${item.type}-${item.timestamp}-${i}`} item={item} router={router} />)}</div>
+              <DayHeader date={date} count={groups.reduce((n: number, g: SessionGroupData | EventItem) => n + (g.type === "session" ? g.messages.length : 1), 0)} items={groups.flatMap((g: SessionGroupData | EventItem) => g.type === "session" ? g.messages : [g.item])} />
+              <div className="space-y-2">
+                {groups.map((group: SessionGroupData | EventItem, gi: number) =>
+                  group.type === "session" ? (
+                    <SessionGroup key={`sg-${group.sessionId}-${gi}`} group={group} router={router} />
+                  ) : (
+                    <EventRow key={`ev-${group.item.timestamp}-${gi}`} item={group.item} router={router} />
+                  )
+                )}
+              </div>
             </div>
           ))}
           {filtered && filtered.length === 0 && <div className="text-[11px] text-sol-base01/30 text-center py-16">No recent activity</div>}
@@ -501,17 +510,16 @@ function fmtAge(ts: number): string {
 
 /* ─── Feed Components ─── */
 
-const VERB_ACCENTS: Record<string, string> = {
-  messaged: "border-l-sol-blue/40", created: "border-l-sol-yellow/40", updated: "border-l-sol-yellow/20",
-  completed: "border-l-sol-green/50", wrote: "border-l-sol-cyan/35", edited: "border-l-sol-cyan/20",
-  pushed: "border-l-sol-green/30", "opened PR": "border-l-sol-violet/40", "merged PR": "border-l-sol-green/40",
-};
-
 const TASK_STATUS_DOTS: Record<string, string> = {
   done: "bg-sol-green", in_progress: "bg-sol-yellow", open: "bg-sol-blue",
   in_review: "bg-sol-violet", blocked: "bg-sol-red", backlog: "bg-sol-base01/30",
 };
 
+const VERB_ICONS: Record<string, string> = {
+  created: "text-sol-yellow/50", completed: "text-sol-green/60", wrote: "text-sol-cyan/50",
+  edited: "text-sol-cyan/40", updated: "text-sol-yellow/30", pushed: "text-sol-green/40",
+  "opened PR": "text-sol-violet/50", "merged PR": "text-sol-green/50",
+};
 
 function fmtDuration(ms: number): string {
   if (!ms || ms < 0) return "";
@@ -520,116 +528,190 @@ function fmtDuration(ms: number): string {
   if (mins < 60) return `${mins}m`;
   const h = Math.floor(mins / 60);
   const m = mins % 60;
-  return m > 0 ? `${h}h ${m}m` : `${h}h`;
+  return m > 0 ? `${h}h${m}m` : `${h}h`;
 }
 
-function FeedRow({ item, router }: { item: any; router: ReturnType<typeof useRouter> }) {
-  const href = item.entity_type === "session" ? `/conversation/${item.entity_id}`
-    : item.entity_type === "task" ? `/tasks/${item.entity_id}`
-    : item.entity_type === "doc" ? `/docs/${item.entity_id}` : null;
+type SessionGroupData = {
+  type: "session";
+  sessionId: string;
+  title: string;
+  meta: Record<string, any>;
+  messages: any[];
+};
 
-  const accent = VERB_ACCENTS[item.verb] || "border-l-sol-base01/15";
-  const isLive = item.meta?.status === "active" && (Date.now() - item.timestamp < 3600000);
+type EventItem = {
+  type: "event";
+  item: any;
+};
 
-  const cleanPreview = useMemo(() => {
-    if (!item.preview) return null;
-    const cleaned = cleanContent(item.preview);
-    return cleaned || null;
-  }, [item.preview]);
+function groupItemsBySessions(items: any[]): (SessionGroupData | EventItem)[] {
+  const result: (SessionGroupData | EventItem)[] = [];
+  let currentSession: SessionGroupData | null = null;
 
-  const isMessage = item.type === "message";
-
-  if (isMessage) {
-    if (!cleanPreview) return null;
-    const meta = item.meta || {};
-    const project = meta.project && meta.project !== "unknown" ? meta.project : null;
-    const duration = meta.duration_ms ? fmtDuration(meta.duration_ms) : null;
-    const msgCount = meta.message_count;
-
-    return (
-      <div
-        className={`bg-sol-blue/10 border border-sol-blue/30 rounded-lg p-3 hover:border-sol-blue/50 transition-colors ${href ? "cursor-pointer" : ""} group`}
-        onClick={href ? () => router.push(href) : undefined}
-      >
-        {cleanPreview && (
-          <div className="text-sol-text text-sm break-words">
-            <MarkdownRenderer content={cleanPreview} className="prose prose-invert prose-sm max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0" />
-          </div>
-        )}
-        <div className="flex items-center gap-2 mt-2 flex-wrap">
-          {item.entity_title && (
-            <span className="text-[11px] font-medium text-sol-blue/80 truncate max-w-[250px]">{item.entity_title}</span>
-          )}
-          {isLive && (
-            <span className="flex items-center gap-1 text-[10px] text-sol-green">
-              <span className="w-1.5 h-1.5 rounded-full bg-sol-green animate-pulse inline-block" />
-              live
-            </span>
-          )}
-          {meta.status && !isLive && (
-            <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${
-              meta.status === "stopped" ? "bg-sol-base01/15 text-sol-base01/50" :
-              meta.status === "idle" ? "bg-sol-yellow/15 text-sol-yellow/70" :
-              "bg-sol-base01/10 text-sol-base01/40"
-            }`}>{meta.status}</span>
-          )}
-          <span className="flex-1" />
-          {project && <span className="text-[10px] font-mono text-sol-base01/35">{project}</span>}
-          {msgCount && <span className="text-[10px] text-sol-base01/30">{msgCount} msgs</span>}
-          {duration && <span className="text-[10px] text-sol-base01/30">{duration}</span>}
-          <span className="text-[10px] tabular-nums text-sol-base01/25">{fmtTime(item.timestamp)}</span>
-        </div>
-      </div>
-    );
+  for (const item of items) {
+    if (item.type === "message" && item.entity_id) {
+      if (currentSession && currentSession.sessionId === item.entity_id) {
+        currentSession.messages.push(item);
+      } else {
+        currentSession = {
+          type: "session",
+          sessionId: item.entity_id,
+          title: item.entity_title || "Untitled",
+          meta: item.meta || {},
+          messages: [item],
+        };
+        result.push(currentSession);
+      }
+    } else {
+      currentSession = null;
+      result.push({ type: "event", item });
+    }
   }
+  return result;
+}
+
+function SessionGroup({ group, router }: { group: SessionGroupData; router: ReturnType<typeof useRouter> }) {
+  const href = `/conversation/${group.sessionId}`;
+  const meta = group.meta;
+  const project = meta.project && meta.project !== "unknown" ? meta.project : null;
+  const duration = meta.duration_ms ? fmtDuration(meta.duration_ms) : null;
+  const msgCount = meta.message_count;
+  const isLive = meta.status === "active" && group.messages.length > 0 && (Date.now() - group.messages[0].timestamp < 3600000);
+  const lastTs = group.messages[0]?.timestamp;
+  const displayTitle = group.title === "Untitled" && project ? project : group.title;
+
+  const statusDot = isLive
+    ? "bg-sol-green animate-pulse"
+    : meta.status === "stopped" ? "bg-sol-base01/20"
+    : meta.status === "idle" ? "bg-sol-yellow/40"
+    : "bg-sol-blue/25";
 
   return (
-    <div className={`border-l-2 ${accent} hover:bg-sol-bg-alt/60 transition-colors ${href ? "cursor-pointer" : ""} group py-[3px] pl-2.5 pr-2`} onClick={href ? () => router.push(href) : undefined}>
-      <div className="flex items-baseline gap-1.5 min-w-0">
-        <span className="flex-shrink-0 text-[10px] tabular-nums text-sol-base01/25 select-none">{fmtTime(item.timestamp)}</span>
-        {item.entity_type === "task" && item.meta?.status && (
-          <span className={`flex-shrink-0 inline-block w-1.5 h-1.5 rounded-full ${TASK_STATUS_DOTS[item.meta.status] || "bg-sol-base01/20"}`} title={item.meta.status} />
-        )}
-        <span className="text-[10px] text-sol-base01/30 italic">{item.verb}</span>
-        <span className="min-w-0 flex-1 text-[11px] leading-snug truncate text-sol-text/50 group-hover:text-sol-text/70 transition-colors">
-          {item.entity_type === "task" && item.entity_short_id && <span className="text-sol-base01/35 font-mono text-[10px] mr-1">{item.entity_short_id}</span>}
-          {item.entity_title || item.verb}
+    <div className={`rounded-lg overflow-hidden border ${isLive ? "border-sol-green/20 bg-sol-green/[0.03]" : "border-sol-border/8 bg-sol-bg-alt/20"} transition-colors hover:border-sol-border/20`}>
+      <div
+        className="flex items-center gap-2 px-3 py-2 cursor-pointer group"
+        onClick={() => router.push(href)}
+      >
+        <span className={`w-2 h-2 rounded-full flex-shrink-0 ${statusDot}`} />
+        <span className="text-[12px] font-medium text-sol-text/75 truncate group-hover:text-sol-text transition-colors">
+          {displayTitle}
         </span>
-        {item.meta?.priority === "high" && <span className="flex-shrink-0 inline-block w-1.5 h-1.5 rounded-full bg-sol-red/40" title="high priority" />}
+        {isLive && <span className="text-[8px] font-bold text-sol-green uppercase tracking-widest">live</span>}
+        <span className="flex-1" />
+        {project && project !== displayTitle && (
+          <span className="text-[9px] font-mono text-sol-cyan/50 bg-sol-cyan/8 px-1.5 py-0.5 rounded flex-shrink-0">{project}</span>
+        )}
+        <div className="flex items-center gap-1.5 flex-shrink-0">
+          {msgCount && <span className="text-[9px] text-sol-base01/30 tabular-nums">{msgCount}</span>}
+          {duration && <span className="text-[9px] text-sol-base01/25 tabular-nums">{duration}</span>}
+          {lastTs && <span className="text-[9px] text-sol-base01/20 tabular-nums">{fmtTime(lastTs)}</span>}
+        </div>
+      </div>
+      <div>
+        {group.messages.map((msg, i) => (
+          <MessageRow key={`${msg.timestamp}-${i}`} item={msg} isFirst={i === 0} total={group.messages.length} router={router} />
+        ))}
       </div>
     </div>
   );
 }
 
-function DayHeader({ date, count, items }: { date: string; count: number; items: any[] }) {
-  const totalHours = useMemo(() => {
+function MessageRow({ item, isFirst, router }: { item: any; isFirst: boolean; total?: number; router: ReturnType<typeof useRouter> }) {
+  const [expanded, setExpanded] = useState(false);
+  const href = `/conversation/${item.entity_id}`;
+
+  const cleanPreview = useMemo(() => {
+    if (!item.preview) return null;
+    return cleanContent(item.preview) || null;
+  }, [item.preview]);
+
+  if (!cleanPreview) return null;
+
+  const lineCount = cleanPreview.split("\n").length;
+  const isLong = cleanPreview.length > 280 || lineCount > 4;
+  const shouldTruncate = isLong && !expanded;
+
+  return (
+    <div
+      className={`flex cursor-pointer hover:bg-sol-blue/[0.04] transition-colors border-t border-sol-border/5`}
+      onClick={() => router.push(href)}
+    >
+      <div className={`w-[3px] flex-shrink-0 ${isFirst ? "bg-sol-blue/50" : "bg-sol-blue/15"}`} />
+      <div className={`flex-1 min-w-0 px-3 ${isFirst ? "py-2.5" : "py-1.5"}`}>
+        <div className={`break-words ${shouldTruncate ? "max-h-[4.5em] overflow-hidden" : ""} ${isFirst ? "text-sol-text text-[13px]" : "text-sol-text/70 text-[12px]"}`}>
+          <MarkdownRenderer
+            content={shouldTruncate ? cleanPreview.slice(0, 250) + "..." : cleanPreview}
+            className={`prose prose-invert prose-sm max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_p]:my-0.5 [&_pre]:max-h-[6em] [&_pre]:overflow-hidden [&_code]:text-[11px] [&_ul]:my-0.5 [&_ol]:my-0.5`}
+          />
+        </div>
+        <div className="flex items-center gap-2 mt-1">
+          {isLong && (
+            <button
+              className="text-[9px] text-sol-blue/50 hover:text-sol-blue/80 transition-colors"
+              onClick={(e) => { e.stopPropagation(); setExpanded(!expanded); }}
+            >
+              {expanded ? "less" : `more`}
+            </button>
+          )}
+          <span className="flex-1" />
+          <span className="text-[9px] text-sol-base01/18 tabular-nums select-none">{fmtTime(item.timestamp)}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function EventRow({ item, router }: { item: any; router: ReturnType<typeof useRouter> }) {
+  const href = item.entity_type === "task" ? `/tasks/${item.entity_id}`
+    : item.entity_type === "doc" ? `/docs/${item.entity_id}` : null;
+
+  const verbColor = VERB_ICONS[item.verb] || "text-sol-base01/25";
+  const isTask = item.entity_type === "task";
+  const isDoc = item.entity_type === "doc";
+
+  return (
+    <div
+      className={`flex items-center gap-1.5 py-[3px] px-2 rounded hover:bg-sol-bg-alt/30 transition-colors ${href ? "cursor-pointer" : ""} group`}
+      onClick={href ? () => router.push(href) : undefined}
+    >
+      <span className="text-[9px] text-sol-base01/18 tabular-nums w-8 text-right flex-shrink-0 select-none">{fmtTime(item.timestamp)}</span>
+      {isTask && item.meta?.status && (
+        <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${TASK_STATUS_DOTS[item.meta.status] || "bg-sol-base01/20"}`} />
+      )}
+      {isDoc && <FileText className="w-3 h-3 flex-shrink-0 text-sol-cyan/30" />}
+      <span className={`text-[9px] flex-shrink-0 ${verbColor}`}>{item.verb}</span>
+      <span className="text-[11px] text-sol-text/40 truncate flex-1 group-hover:text-sol-text/60 transition-colors leading-tight">
+        {isTask && item.entity_short_id && <span className="font-mono text-[9px] text-sol-base01/25 mr-1">{item.entity_short_id}</span>}
+        {item.entity_title || item.verb}
+      </span>
+      {item.meta?.priority === "high" && <span className="w-1.5 h-1.5 rounded-full bg-sol-red/40 flex-shrink-0" />}
+    </div>
+  );
+}
+
+function DayHeader({ date, items }: { date: string; count?: number; items: any[] }) {
+  const { totalHours, sessions, messages } = useMemo(() => {
     const seen = new Set<string>();
-    let h = 0;
+    let h = 0, msgs = 0;
     for (const item of items) {
-      if (item.type !== "message" || !item.meta?.duration_ms || !item.entity_id) continue;
-      if (seen.has(item.entity_id)) continue;
+      if (item.type !== "message") continue;
+      msgs++;
+      if (!item.meta?.duration_ms || !item.entity_id || seen.has(item.entity_id)) continue;
       seen.add(item.entity_id);
       h += Math.min(item.meta.duration_ms, 8 * 3600000) / 3600000;
     }
-    return h;
-  }, [items]);
-
-  const sessions = useMemo(() => {
-    const seen = new Set<string>();
-    for (const item of items) {
-      if (item.type === "message" && item.entity_id) seen.add(item.entity_id);
-    }
-    return seen.size;
+    return { totalHours: h, sessions: seen.size, messages: msgs };
   }, [items]);
 
   return (
-    <div className="flex items-center gap-2 mt-4 mb-1 first:mt-1">
-      <span className="text-[9px] font-bold text-sol-base01/35 uppercase tracking-widest select-none">{fmtDayLabel(date)}</span>
-      {totalHours > 0 && (
-        <span className="text-[9px] text-sol-green/40 tabular-nums">{totalHours.toFixed(1)}h / {sessions}s</span>
-      )}
-      <div className="flex-1 h-px bg-sol-border/10" />
-      <span className="text-[9px] tabular-nums text-sol-base01/22 select-none">{count}</span>
+    <div className="flex items-baseline gap-2 mt-5 mb-1.5 first:mt-1">
+      <span className="text-[10px] font-bold text-sol-text/50 uppercase tracking-wider select-none">{fmtDayLabel(date)}</span>
+      <div className="flex-1 h-px bg-sol-border/10 translate-y-[-1px]" />
+      <div className="flex items-baseline gap-2 text-[9px] tabular-nums text-sol-base01/30 select-none">
+        {sessions > 0 && <span>{sessions} session{sessions !== 1 ? "s" : ""}</span>}
+        {messages > 0 && <span>{messages} msg{messages !== 1 ? "s" : ""}</span>}
+        {totalHours > 0 && <span className="text-sol-green/35">{totalHours.toFixed(1)}h</span>}
+      </div>
     </div>
   );
 }
