@@ -168,19 +168,6 @@ export default function ProfilePage() {
       </Card>
 
       <Card className="p-6 bg-sol-bg border-sol-border">
-        <h2 className="text-lg font-semibold text-sol-text mb-4">Preferences</h2>
-        <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <div>
-              <span className="text-sol-base1">Sound effects</span>
-              <p className="text-xs text-sol-base01 mt-0.5">Play subtle sounds for session events</p>
-            </div>
-            <SoundsToggle />
-          </div>
-        </div>
-      </Card>
-
-      <Card className="p-6 bg-sol-bg border-sol-border">
         <h2 className="text-lg font-semibold text-sol-text mb-4">Daemon</h2>
         <div className="space-y-3">
           <div className="flex items-center justify-between">
@@ -199,6 +186,19 @@ export default function ProfilePage() {
           </div>
         </div>
       </Card>
+
+      <Card className="p-6 bg-sol-bg border-sol-border">
+        <h2 className="text-lg font-semibold text-sol-text mb-4">Preferences</h2>
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <span className="text-sol-base1">Sound effects</span>
+              <p className="text-xs text-sol-base01 mt-0.5">Play sounds for session events</p>
+            </div>
+            <SoundsToggle />
+          </div>
+        </div>
+      </Card>
     </div>
   );
 }
@@ -213,3 +213,4 @@ function SoundsToggle() {
     />
   );
 }
+

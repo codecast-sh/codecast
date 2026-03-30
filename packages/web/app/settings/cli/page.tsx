@@ -107,6 +107,7 @@ export default function CliSettingsPage() {
           <p><span className="text-sol-cyan">cast status</span> <span className="text-sol-base1">- Check daemon status</span></p>
         </div>
       </div>
+
     </div>
   );
 }

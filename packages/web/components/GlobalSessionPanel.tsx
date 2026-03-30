@@ -18,6 +18,7 @@ import { undoableStashSession } from "../store/undoActions";
 import { formatShortcutLabel } from "../shortcuts";
 import { X, ChevronsLeft, ChevronsRight } from "lucide-react";
 import { TaskStatusBadge } from "./TaskStatusBadge";
+import { useTipActions, checkMilestone, InlineTips } from "../tips";
 
 const NOISE_PREFIXES = ["[Request interrupted", "This session is being continued", "Your task is to create a detailed summary", "Please continue the conversation", "<task-notification>", "Implement the following plan"];
 
@@ -284,6 +285,7 @@ export function SessionCard({
   onNavigateToSession?: (id: string) => void;
   variant?: "default" | "working" | "dismissed";
 }) {
+  const tipActions = useTipActions();
   const project = getProjectName(session.git_root, session.project_path);
   const isWorking = variant === "working";
   const isDismissed = variant === "dismissed";
@@ -612,7 +614,7 @@ export function SessionCard({
               <Tooltip>
                 <TooltipTrigger asChild>
                   <button
-                    onClick={(e) => { e.stopPropagation(); onPin(session._id); }}
+                    onClick={(e) => { e.stopPropagation(); onPin(session._id); tipActions.whisper('session.pin', e); if (!session.is_pinned) checkMilestone('m-first-pin'); }}
                     className={`p-1 rounded transition-colors ${session.is_pinned ? 'text-sol-magenta' : 'text-sol-text-dim hover:text-sol-magenta'}`}
                   >
                     <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill={session.is_pinned ? "currentColor" : "none"} stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
@@ -630,7 +632,7 @@ export function SessionCard({
               <Tooltip>
                 <TooltipTrigger asChild>
                   <button
-                    onClick={(e) => { e.stopPropagation(); onDefer(session._id); }}
+                    onClick={(e) => { e.stopPropagation(); onDefer(session._id); tipActions.whisper('session.deferAdvance', e); }}
                     className="p-1 rounded text-sol-text-dim hover:text-sol-yellow transition-colors"
                   >
                     <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -647,7 +649,7 @@ export function SessionCard({
               <Tooltip>
                 <TooltipTrigger asChild>
                   <button
-                    onClick={(e) => { e.stopPropagation(); onDismiss(session._id); }}
+                    onClick={(e) => { e.stopPropagation(); onDismiss(session._id); tipActions.whisper('session.stash', e); checkMilestone('m-first-stash'); }}
                     className="p-1 rounded text-sol-text-dim hover:text-sol-red transition-colors"
                   >
                     <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -930,7 +932,7 @@ export function SessionListPanel({
           {projectFilter ? filteredCount : activeSessions.length} Session{(projectFilter ? filteredCount : activeSessions.length) !== 1 ? "s" : ""}
         </span>
         {projectCounts.length > 1 && (
-          <div className="flex gap-1 overflow-x-auto scrollbar-none min-w-0">
+          <div className="flex gap-1 overflow-x-auto min-w-0" style={{ scrollbarWidth: 'none' }}>
             {projectCounts.map(([name, count]) => (
               <button
                 key={name}
@@ -956,6 +958,7 @@ export function SessionListPanel({
         </div>
       </div>
       <div className="flex-1 overflow-y-auto scrollbar-auto">
+        <InlineTips />
         {!projectFilter && <NeedsAttentionSection />}
         {renderSection("Pinned", filteredPinned, "text-sol-magenta")}
         {renderSection("New", filteredNew, "text-sol-blue")}

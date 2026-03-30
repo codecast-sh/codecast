@@ -27,15 +27,16 @@ import { FindBar } from "./FindBar";
 import { KeyboardShortcutsPanel } from "./KeyboardShortcutsHelp";
 import { NewSessionModal } from "./ConversationList";
 import { CreatePalette } from "./CreatePalette";
-import { useInboxStore } from "../store/inboxStore";
+import { useInboxStore, isSessionEffectivelyIdle } from "../store/inboxStore";
 import { useShortcutAction, useShortcutContext, useGlobalShortcutActions, formatShortcutLabel } from "../shortcuts";
 import { usePrefetch } from "../hooks/usePrefetch";
 import { desktopHeaderClass, setupDesktopDrag, isElectron } from "../lib/desktop";
 import { CollapsedSessionRail, SessionListPanel, ConversationColumn } from "./GlobalSessionPanel";
 import { useSyncInboxSessions } from "../hooks/useSyncInboxSessions";
-import { isInboxRoute as isInboxRoutePath, isInboxSessionView } from "../lib/inboxRouting";
+import { isInboxSessionView } from "../lib/inboxRouting";
 import { useSessionSwitcher } from "../hooks/useSessionSwitcher";
 import { SessionSwitcher } from "./SessionSwitcher";
+import { useTipActions } from "../tips";
 
 interface DashboardLayoutProps {
   children: ReactNode;
@@ -80,6 +81,12 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
   const prevPathnameRef = useRef(pathname);
   usePrefetch();
   useSyncInboxSessions();
+  const tipActions = useTipActions();
+
+  const recalcHeight = useCallback(() => {
+    if (typeof window === 'undefined') return;
+    setZoomHeight(`${window.innerHeight}px`);
+  }, []);
 
   const serverClientState = useQuery(api.client_state.get, {});
   const createQuickSession = useMutation(api.conversations.createQuickSession);
@@ -90,9 +97,12 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
   useMountEffect(() => {
     setDesktopClass(desktopHeaderClass());
     setIsDesktopApp(isElectron());
+    recalcHeight();
     const timer = setTimeout(() => { setDesktopClass(desktopHeaderClass()); setIsDesktopApp(isElectron()); }, 500);
     return () => clearTimeout(timer);
   });
+
+  useEventListener('resize', recalcHeight);
 
   useWatchEffect(() => {
     const header = headerRef.current;
@@ -104,7 +114,6 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
   const isOnCommitPage = pathname?.includes("/commit/") ?? false;
   const isOnPRPage = pathname?.includes("/pr/") ?? false;
   const inboxSource = useInboxStore((s) => s.currentConversation?.source);
-  const isInboxRoute = isInboxRoutePath(pathname);
   const isOnInboxPage = isInboxSessionView(pathname, inboxSource);
   const isOnTasksPage = pathname === "/tasks" || (pathname?.startsWith("/tasks/") ?? false);
   const isOnWorkflowsPage = pathname === "/workflows" || (pathname?.startsWith("/workflows/") ?? false);
@@ -116,6 +125,13 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
   const sidePanelSessionId = useInboxStore(s => s.sidePanelSessionId);
   const toggleSidePanel = useInboxStore(s => s.toggleSidePanel);
   const selectPanelSession = useInboxStore(s => s.selectPanelSession);
+  const inboxSessions = useInboxStore((s) => s.sessions);
+  const activeAgentCount = useMemo(() => {
+    return Object.values(inboxSessions).filter(
+      (s) => !isSessionEffectivelyIdle(s) && s.message_count > 0
+    ).length;
+  }, [inboxSessions]);
+
   const showCollapsedRail = !sidePanelOpen && !isOnInboxPage && !isMobile && !isZenMode;
   const showSessionList = sidePanelOpen && !isOnInboxPage && !isMobile && !isZenMode;
   const showConversationColumn = sidePanelOpen && !!sidePanelSessionId && !isOnInboxPage && !isMobile;
@@ -161,7 +177,7 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
     if (directoryFilter) {
       return { path: directoryFilter, gitRoot: currentConvContext.gitRoot || directoryFilter, agentType: currentConvContext.agentType };
     }
-    const liveId = store.currentSessionId;
+    const liveId = (store.sidePanelOpen && store.sidePanelSessionId) || store.currentSessionId;
     const liveSess = liveId ? (store.sessions[liveId] ?? store.dismissedSessions[liveId]) : null;
     if (liveSess?.project_path) {
       return { path: liveSess.project_path, gitRoot: liveSess.git_root || liveSess.project_path, agentType: liveSess.agent_type };
@@ -170,13 +186,14 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
   }, [directoryFilter, currentConvContext]);
 
   const handleQuickCreate = useCallback(() => {
+    const store = useInboxStore.getState();
+    if (!isOnInboxPage && store.showMySessions) store.setShowMySessions(false);
     soundNewSession();
     const { path, gitRoot, agentType: rawAgent } = resolveNewSessionContext();
     const agentType = (rawAgent || "claude_code") as "claude_code" | "codex" | "cursor" | "gemini";
     const sessionId = nanoid(10);
     const now = Date.now();
 
-    const store = useInboxStore.getState();
     store.setConversationMeta(sessionId, {
       _id: sessionId, _creationTime: now, user_id: "", agent_type: agentType,
       session_id: sessionId, project_path: path, git_root: gitRoot || path,
@@ -190,12 +207,14 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
       session_id: sessionId,
     });
 
-    if (isInboxRoute) {
+    if (isOnInboxPage) {
       store.setCurrentSession(sessionId);
+    } else if (store.sidePanelOpen) {
+      useInboxStore.setState({ sidePanelSessionId: sessionId });
     } else {
       router.push(`/conversation/${sessionId}?focus=1`);
     }
-  }, [resolveNewSessionContext, router, isInboxRoute]);
+  }, [resolveNewSessionContext, router, isOnInboxPage]);
 
   const handleQuickCreateIsolated = useCallback(async () => {
     const { path, gitRoot, agentType: rawAgent } = resolveNewSessionContext();
@@ -211,41 +230,21 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
       git_root: gitRoot || path,
       isolated: true,
     });
-    if (isInboxRoute) {
-      useInboxStore.getState().setCurrentSession(conversationId as string);
+    const store = useInboxStore.getState();
+    if (isOnInboxPage) {
+      store.setCurrentSession(conversationId as string);
+    } else if (store.sidePanelOpen) {
+      useInboxStore.setState({ sidePanelSessionId: conversationId as string });
     } else {
       router.push(`/conversation/${conversationId}?focus=1`);
     }
-  }, [resolveNewSessionContext, router, isInboxRoute, createQuickSession, openNewSession]);
+  }, [resolveNewSessionContext, router, isOnInboxPage, createQuickSession, openNewSession]);
 
   useGlobalShortcutActions();
   useShortcutContext('desktop', isDesktopApp);
   const switcherState = useSessionSwitcher();
 
-  useShortcutAction('session.create', useCallback(() => {
-    const store = useInboxStore.getState();
-    if (isOnInboxPage) {
-      handleQuickCreate();
-    } else {
-      if (store.showMySessions) store.setShowMySessions(false);
-      soundNewSession();
-      const { path, gitRoot, agentType: rawAgent } = resolveNewSessionContext();
-      const agentType = (rawAgent || "claude_code") as "claude_code" | "codex" | "cursor" | "gemini";
-      const sid = nanoid(10);
-      const now = Date.now();
-      store.setConversationMeta(sid, {
-        _id: sid, _creationTime: now, user_id: "", agent_type: agentType,
-        session_id: sid, project_path: path, git_root: gitRoot || path,
-        started_at: now, updated_at: now, message_count: 0, status: "active",
-        title: "New session", messages: [],
-      });
-      store.createSession({
-        agent_type: agentType, project_path: path,
-        git_root: gitRoot || path, session_id: sid,
-      });
-      useInboxStore.setState({ sidePanelSessionId: sid });
-    }
-  }, [isOnInboxPage, resolveNewSessionContext, handleQuickCreate]));
+  useShortcutAction('session.create', handleQuickCreate);
 
   useShortcutAction('session.createIsolated', useCallback(() => {
     handleQuickCreateIsolated();
@@ -255,21 +254,21 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
     const r = Math.round(Math.min(zoomRef.current + 0.1, 2) * 10) / 10;
     zoomRef.current = r;
     document.documentElement.style.zoom = String(r);
-    setZoomHeight(`calc(100vh / ${r})`);
-  }, []));
+    requestAnimationFrame(recalcHeight);
+  }, [recalcHeight]));
 
   useShortcutAction('zoom.out', useCallback(() => {
     const r = Math.round(Math.max(zoomRef.current - 0.1, 0.5) * 10) / 10;
     zoomRef.current = r;
     document.documentElement.style.zoom = String(r);
-    setZoomHeight(`calc(100vh / ${r})`);
-  }, []));
+    requestAnimationFrame(recalcHeight);
+  }, [recalcHeight]));
 
   useShortcutAction('zoom.reset', useCallback(() => {
     zoomRef.current = 1;
     document.documentElement.style.zoom = '1';
-    setZoomHeight('100vh');
-  }, []));
+    requestAnimationFrame(recalcHeight);
+  }, [recalcHeight]));
 
   const handleLayoutChange = (newLayout: { [key: string]: number }) => {
     updateLayout("dashboard", { sidebar: newLayout.sidebar || 25, main: newLayout.main || 75 });
@@ -331,7 +330,7 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
           {/* Left section: Sidebar toggle + nav */}
           <div className="flex items-center gap-1 flex-shrink-0">
             <button
-              onClick={() => updateUI({ sidebar_collapsed: !sidebarCollapsed })}
+              onClick={(e) => { updateUI({ sidebar_collapsed: !sidebarCollapsed }); tipActions.whisper('sidebar.toggleLeft', e); }}
               className="hidden md:flex items-center p-1.5 rounded-md text-sol-text-dim/60 hover:text-sol-text-muted transition-colors"
               title={`${sidebarCollapsed ? "Show sidebar" : "Hide sidebar"} (${formatShortcutLabel('sidebar.toggleLeft')})`}
             >
@@ -397,13 +396,34 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
 
           {/* Right section: Actions */}
           <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
+            {activeAgentCount > 0 && (
+              <button
+                onClick={() => { if (!sidePanelOpen) toggleSidePanel(); }}
+                className="hidden md:flex items-center gap-1.5 px-2 py-0.5 rounded-full cursor-default select-none transition-all duration-300"
+                style={{
+                  background: 'color-mix(in srgb, var(--sol-green) 12%, transparent)',
+                  border: '1px solid color-mix(in srgb, var(--sol-green) 20%, transparent)',
+                  boxShadow: '0 0 10px color-mix(in srgb, var(--sol-green) 12%, transparent)',
+                }}
+                title={`${activeAgentCount} agent${activeAgentCount !== 1 ? 's' : ''} running`}
+              >
+                <span className="relative flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-sol-green opacity-40" style={{ animationDuration: '1.5s' }} />
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-sol-green" />
+                </span>
+                <span className="text-[11px] font-mono font-bold tabular-nums" style={{ color: 'var(--sol-green)' }}>
+                  {activeAgentCount}
+                </span>
+              </button>
+            )}
             <button
-              onClick={() => {
+              onClick={(e) => {
                 if (resolveNewSessionContext().path) {
                   handleQuickCreate();
                 } else {
                   openNewSession({});
                 }
+                tipActions.whisper('session.create', e);
               }}
               className="hidden md:flex items-center justify-center w-7 h-7 rounded-full border border-sol-text-dim/20 bg-sol-text-dim/8 text-sol-text-dim/50 hover:bg-sol-text-dim/15 hover:text-sol-text-dim/70 hover:border-sol-text-dim/30 transition-colors"
               title={`New session (${formatShortcutLabel('session.create')})`}
@@ -418,7 +438,7 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
               <UserMenu />
             </ErrorBoundary>
             <button
-              onClick={toggleSidePanel}
+              onClick={(e) => { toggleSidePanel(); tipActions.whisper('sidebar.toggleRight', e); }}
               className="hidden md:flex items-center p-1.5 rounded-md text-sol-text-dim/60 hover:text-sol-text-muted transition-colors"
               title={`Toggle sessions panel (${formatShortcutLabel('sidebar.toggleRight')})`}
             >

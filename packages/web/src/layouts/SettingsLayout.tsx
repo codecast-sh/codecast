@@ -13,7 +13,7 @@ const baseTabs = [
   { name: "CLI", path: "/settings/cli", icon: Terminal },
   { name: "Agents", path: "/settings/agents", icon: Bot },
   { name: "Sync & Privacy", path: "/settings/sync", icon: RefreshCw },
-  { name: "Profile", path: "/settings/profile", icon: User },
+  { name: "General", path: "/settings/profile", icon: User },
   { name: "Accounts", path: "/settings/accounts", icon: KeyRound },
   { name: "Team", path: "/settings/team", icon: Users },
   { name: "Integrations", path: "/settings/integrations/github-app", icon: Plug },

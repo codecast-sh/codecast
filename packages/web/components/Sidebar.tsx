@@ -268,6 +268,7 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
   const isWorkflows = pathname === "/workflows" || pathname?.startsWith("/workflows/");
   const { user: currentUser } = useCurrentUser();
   const isAdmin = currentUser?.role === "admin";
+  const teamMembers = useInboxStore((s) => s.teamMembers);
   const [currentTime, setCurrentTime] = useState(Date.now());
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id) as Id<"teams"> | undefined;
   const teamsQuery = useQuery(api.teams.getUserTeams);
@@ -349,8 +350,9 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
       return p;
     };
 
-    const normalizeToRoot = (path: string): string => {
+    const normalizeToRoot = (path: string): string | null => {
       const cleaned = stripWorktreeSuffix(path);
+      if (/^\/(tmp|var|private\/tmp)\//.test(cleaned)) return null;
       const parts = cleaned.split('/');
       const srcIndex = parts.findIndex(p => p === 'src' || p === 'projects' || p === 'repos' || p === 'code');
       if (srcIndex >= 0 && srcIndex < parts.length - 1) {
@@ -365,31 +367,33 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
       return normalizeToRoot(rawPath);
     };
 
-    const dirLastUpdated = new Map<string, number>();
+    const dirStats = new Map<string, { updatedAt: number; count: number }>();
     for (const c of filteredConversations) {
       const dir = deriveGitRoot(c);
       if (dir) {
-        const existing = dirLastUpdated.get(dir) || 0;
-        if (c.updated_at > existing) {
-          dirLastUpdated.set(dir, c.updated_at);
+        const existing = dirStats.get(dir);
+        if (existing) {
+          existing.count++;
+          if (c.updated_at > existing.updatedAt) existing.updatedAt = c.updated_at;
+        } else {
+          dirStats.set(dir, { updatedAt: c.updated_at, count: 1 });
         }
       }
     }
-    const byName = new Map<string, { path: string; updatedAt: number }>();
-    for (const [path, updatedAt] of dirLastUpdated) {
+    const byName = new Map<string, { path: string; updatedAt: number; count: number }>();
+    for (const [path, stats] of dirStats) {
       const name = path.split('/').filter(Boolean).pop() || path;
       const existing = byName.get(name);
-      const maxUpdated = Math.max(updatedAt, existing?.updatedAt ?? 0);
       const preferSrc = path.includes('/src/') && (!existing || !existing.path.includes('/src/'));
       const existingIsSrc = existing?.path.includes('/src/') && !path.includes('/src/');
-      if (!existing || preferSrc || (updatedAt > (existing?.updatedAt ?? 0) && !existingIsSrc)) {
-        byName.set(name, { path, updatedAt: maxUpdated });
+      if (!existing || preferSrc || (stats.updatedAt > (existing?.updatedAt ?? 0) && !existingIsSrc)) {
+        byName.set(name, { path, updatedAt: Math.max(stats.updatedAt, existing?.updatedAt ?? 0), count: stats.count + (existing?.count ?? 0) });
       } else {
-        byName.set(name, { ...existing!, updatedAt: maxUpdated });
+        byName.set(name, { ...existing!, updatedAt: Math.max(stats.updatedAt, existing.updatedAt), count: existing.count + stats.count });
       }
     }
     return Array.from(byName.values())
-      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .sort((a, b) => b.count - a.count || b.updatedAt - a.updatedAt)
       .map(v => v.path);
   }, [filteredConversations]);
 
@@ -439,7 +443,7 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
               </>
             )}
           </button>
-          {(activeTeamId || (teams && teams.length > 0)) && (
+          {activeTeam && (
             <Link
               href="/team/activity"
               className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-4 py-2.5 transition-colors motion-reduce:transition-none text-left ${
@@ -447,20 +451,12 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
                   ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
                   : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60"
               }`}
-              title={activeTeam?.name || teams?.[0]?.name || "Team"}
+              title={activeTeam.name}
             >
-              {activeTeam ? (
-                <TeamIcon icon={activeTeam.icon} color={activeTeam.icon_color} className="w-5 h-5 flex-shrink-0" />
-              ) : teams?.[0] ? (
-                <TeamIcon icon={teams[0].icon} color={teams[0].icon_color} className="w-5 h-5 flex-shrink-0" />
-              ) : (
-                <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
-                </svg>
-              )}
+              <TeamIcon icon={activeTeam.icon} color={activeTeam.icon_color} className="w-5 h-5 flex-shrink-0" />
               {!isNarrow && (
                 <>
-                  <span>{activeTeam?.name || teams?.[0]?.name || "Team"}</span>
+                  <span>{activeTeam.name}</span>
                   {teamUnreadCount !== undefined && teamUnreadCount > 0 && !isTeamActivity && (
                     <span className="-ml-0.5 min-w-[20px] h-[20px] px-1.5 flex items-center justify-center text-xs font-semibold bg-sol-cyan text-sol-bg rounded-full">
                       {teamUnreadCount}
@@ -696,7 +692,7 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
         </a>
       )}
       {createModal === "task" && (
-        <CreateTaskModal onClose={() => closeCreateModal()} />
+        <CreateTaskModal onClose={() => closeCreateModal()} teamMembers={teamMembers} currentUser={currentUser} />
       )}
       {createModal === "plan" && (
         <CreateDocModal onClose={() => closeCreateModal()} initialType="plan" />

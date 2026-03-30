@@ -19,6 +19,7 @@ export default defineConfig({
       "next/navigation": path.resolve(__dirname, "src/compat/next-navigation.ts"),
       "next/link": path.resolve(__dirname, "src/compat/next-link.tsx"),
     },
+    dedupe: ["convex", "react", "react-dom"],
   },
   css: {
     postcss: "./postcss.config.mjs",
