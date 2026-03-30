@@ -863,6 +863,11 @@ function classifyUserMessage(
       const cmdMatch = t.match(/<command-(?:name|message)>([^<]*)<\/command-(?:name|message)>/);
       return { kind: 'skill_expansion', cmdName: cmdMatch?.[1]?.replace(/^\//, "") };
     }
+    if (immediatePrev?.role === 'user' && immediatePrev?.content && isCommandMessage(immediatePrev.content)) {
+      const cmdMatch = t.match(/<command-(?:name|message)>([^<]*)<\/command-(?:name|message)>/) ||
+                       immediatePrev.content.match(/<command-(?:name|message)>([^<]*)<\/command-(?:name|message)>/);
+      return { kind: 'skill_expansion', cmdName: cmdMatch?.[1]?.replace(/^\//, "") };
+    }
     return { kind: 'command' };
   }
   if (agentType === "codex" && isCodexTurnAbortedMessage(t)) return { kind: 'interrupt', tone: 'amber' };
@@ -5231,16 +5236,19 @@ function MessageNavigator({ userMessages, onRewind, onFork, onClose, forkPointMa
       }
       if (e.key === "j" || e.key === "ArrowDown") {
         e.preventDefault();
+        e.stopPropagation();
         setSelectedIdx(i => Math.min(i + 1, userMessages.length - 1));
         return;
       }
       if (e.key === "k" || e.key === "ArrowUp") {
         e.preventDefault();
+        e.stopPropagation();
         setSelectedIdx(i => Math.max(i - 1, 0));
         return;
       }
       if ((e.key === "h" || e.key === "ArrowLeft") && hasBranches) {
         e.preventDefault();
+        e.stopPropagation();
         setBranchIdx(i => {
           const newIdx = Math.max(i - 1, -1);
           const uuid = selectedMsg?.message_uuid;
@@ -5253,6 +5261,7 @@ function MessageNavigator({ userMessages, onRewind, onFork, onClose, forkPointMa
       }
       if ((e.key === "l" || e.key === "ArrowRight") && hasBranches) {
         e.preventDefault();
+        e.stopPropagation();
         setBranchIdx(i => {
           const newIdx = Math.min(i + 1, forks.length - 1);
           const uuid = selectedMsg?.message_uuid;
@@ -5265,12 +5274,14 @@ function MessageNavigator({ userMessages, onRewind, onFork, onClose, forkPointMa
       }
       if (e.key === "Enter") {
         e.preventDefault();
+        e.stopPropagation();
         const indexFromEnd = userMessages.length - 1 - selectedIdx;
         onRewind(userMessages[selectedIdx], indexFromEnd);
         return;
       }
       if (e.key === "f" || e.key === "F") {
         e.preventDefault();
+        e.stopPropagation();
         onFork(userMessages[selectedIdx]);
         return;
       }
@@ -7467,7 +7478,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     setNavigatorOpen(false);
     handleForkFromMessage(msg.message_uuid);
     if (effectiveIsOwner && conversation.status === "active") {
-      rewindSession({ conversation_id: (effectiveConversationId || conversation._id) as Id<"conversations">, steps_back: indexFromEnd });
+      rewindSession({ conversation_id: (effectiveConversationId || conversation._id) as Id<"conversations">, steps_back: indexFromEnd + 1 });
     }
   }, [handleForkFromMessage, conversation, effectiveIsOwner, rewindSession, effectiveConversationId]);
 
@@ -7506,21 +7517,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         break;
       }
       map.set(msg._id, classifyUserMessage(msg, conversation?.agent_type, immediatePrev, contextPrev));
-    }
-    let prevUserMsgId: string | null = null;
-    for (let i = 0; i < timeline.length; i++) {
-      const item = timeline[i];
-      if (item.type !== 'message') continue;
-      const msg = item.data as Message;
-      if (msg.role !== 'user') continue;
-      const kind = map.get(msg._id);
-      if (kind?.kind === 'skill_expansion' && prevUserMsgId) {
-        const prevKind = map.get(prevUserMsgId);
-        if (prevKind?.kind === 'command') {
-          map.set(prevUserMsgId, { kind: 'noise' });
-        }
-      }
-      prevUserMsgId = msg._id;
     }
     return map;
   }, [timeline, conversation?.agent_type]);
@@ -8671,10 +8667,13 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     };
   }, [truncatedTitle, conversation]);
 
+  const forkMessages = firstActiveForkId ? inboxMessages[firstActiveForkId] : undefined;
+
   const toolCallMap = useMemo(() => {
     const map: Record<string, string> = {};
-    if (conversation?.messages) {
-      for (const msg of conversation.messages) {
+    const sources = [conversation?.messages, forkMessages].filter(Boolean) as Message[][];
+    for (const msgs of sources) {
+      for (const msg of msgs) {
         if (msg.tool_calls) {
           for (const tc of msg.tool_calls) {
             map[tc.id] = tc.name;
@@ -8683,12 +8682,13 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       }
     }
     return map;
-  }, [conversation?.messages]);
+  }, [conversation?.messages, forkMessages]);
 
   const globalToolResultMap = useMemo(() => {
     const map: Record<string, ToolResult> = {};
-    if (conversation?.messages) {
-      for (const msg of conversation.messages) {
+    const sources = [conversation?.messages, forkMessages].filter(Boolean) as Message[][];
+    for (const msgs of sources) {
+      for (const msg of msgs) {
         if (msg.tool_results) {
           for (const tr of msg.tool_results) {
             map[tr.tool_use_id] = tr;
@@ -8697,12 +8697,13 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       }
     }
     return map;
-  }, [conversation?.messages]);
+  }, [conversation?.messages, forkMessages]);
 
   const globalImageMap = useMemo(() => {
     const map: Record<string, ImageData> = {};
-    if (conversation?.messages) {
-      for (const msg of conversation.messages) {
+    const sources = [conversation?.messages, forkMessages].filter(Boolean) as Message[][];
+    for (const msgs of sources) {
+      for (const msg of msgs) {
         if (msg.images) {
           for (const img of msg.images) {
             if (img.tool_use_id) {
@@ -8713,7 +8714,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       }
     }
     return map;
-  }, [conversation?.messages]);
+  }, [conversation?.messages, forkMessages]);
 
   const taskSubjectMap = useMemo(() => {
     const createInputs: Record<string, string> = {};
@@ -8840,9 +8841,19 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         case 'empty':
         case 'poll_response':
           return null;
-        case 'command':
+        case 'command': {
           if (collapsed) return null;
-          return <CommandStatusLine key={msg._id} content={msg.content!} timestamp={msg.timestamp} />;
+          const cmdType = getCommandType(msg.content!);
+          if (cmdType === "output" || cmdType === "error" || cmdType === "caveat") {
+            return <CommandStatusLine key={msg._id} content={msg.content!} timestamp={msg.timestamp} />;
+          }
+          const cmdNameMatch = msg.content!.match(/<command-(?:name|message)>([^<]*)<\/command-(?:name|message)>/);
+          const cmdN = cmdNameMatch?.[1]?.replace(/^\//, "");
+          const cmdRest = cleanContent(msg.content!);
+          const cmdDisplay = cmdN ? (cmdRest ? `/${cmdN} ${cmdRest}` : `/${cmdN}`) : (cmdRest || msg.content!);
+          const cmdUserName = conversation?.user?.name || conversation?.user?.email?.split("@")[0];
+          return <UserPrompt key={msg._id} content={cmdDisplay} images={msg.images} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={collapsed} userName={cmdUserName} avatarUrl={conversation?.user?.avatar_url} onOpenComments={() => setCommentMessageId(msg._id as Id<"messages">)} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={() => handleToggleMessageSelection(msg._id)} onStartShareSelection={handleStartShareSelection} onForkFromMessage={handleForkFromMessage} forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined} onBranchSwitch={msg.message_uuid ? (convId) => handleBranchSwitch(msg.message_uuid!, convId) : undefined} activeBranchId={msg.message_uuid ? activeBranches[msg.message_uuid] : undefined} loadingBranchId={loadingBranchId} isPending={!!msg._isOptimistic} isQueued={!!msg._isQueued} mainMessageCount={msg.message_uuid ? conversation?.main_message_counts_by_fork?.[msg.message_uuid] : undefined} />;
+        }
         case 'interrupt':
           if (collapsed) return null;
           return <InterruptStatusLine key={msg._id} label={kind.tone === 'amber' ? "turn aborted" : undefined} tone={kind.tone} />;

@@ -64,7 +64,7 @@ export function BranchSelector({
           <span>main</span>
           {mainMessageCount != null && (
             <span className={`text-[10px] tabular-nums ${!activeBranchId ? "text-sol-cyan/70" : "text-sol-text-dim"}`}>
-              {mainMessageCount}
+              {mainMessageCount} msgs
             </span>
           )}
         </button>
@@ -98,16 +98,26 @@ export function BranchSelector({
                 <span className="truncate">{label}</span>
                 {fork.message_count != null && (
                   <span className={`text-[10px] tabular-nums flex-shrink-0 ${isActive ? "text-sol-cyan/70" : "text-sol-text-dim"}`}>
-                    {fork.message_count}
+                    {fork.message_count} msgs
                   </span>
                 )}
               </button>
 
-              {isHovered && !isActive && (
-                <div className="absolute left-0 top-full mt-1 z-50 px-2.5 py-1.5 rounded bg-sol-bg-alt border border-sol-border shadow-lg text-[10px] text-sol-text-secondary whitespace-nowrap pointer-events-none">
-                  <div className="font-medium text-sol-text truncate max-w-[200px]">{fork.title}</div>
-                  {fork.username && <div className="text-sol-text-dim">{fork.username}</div>}
-                  {fork.started_at && <div className="text-sol-text-dim">{relativeTime(fork.started_at)}</div>}
+              {isHovered && (
+                <div className="absolute left-0 top-full mt-1 z-50 px-3 py-2 rounded-lg bg-sol-bg border border-sol-border shadow-xl text-[11px] text-sol-text-secondary whitespace-nowrap pointer-events-none ring-1 ring-black/5">
+                  <div className="font-medium text-sol-text truncate max-w-[240px]">{fork.title || "Untitled fork"}</div>
+                  <div className="flex items-center gap-2 mt-1 text-sol-text-dim">
+                    {fork.username && <span>{fork.username}</span>}
+                    {fork.username && fork.started_at && <span className="text-sol-border">·</span>}
+                    {fork.started_at && <span>{relativeTime(fork.started_at)}</span>}
+                  </div>
+                  {(fork.message_count != null || fork.agent_type) && (
+                    <div className="flex items-center gap-2 mt-1 text-sol-text-dim">
+                      {fork.agent_type && <span className="text-sol-cyan">{fork.agent_type}</span>}
+                      {fork.agent_type && fork.message_count != null && <span className="text-sol-border">·</span>}
+                      {fork.message_count != null && <span>{fork.message_count} messages</span>}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
