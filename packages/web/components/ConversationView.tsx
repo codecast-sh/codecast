@@ -60,6 +60,7 @@ import { EntityIdPill, EntityAwareCode, EntityAwareLink, renderWithMentions } fr
 import { remarkEntityIds } from "../lib/remarkEntityIds";
 import { ConversationTree } from "./ConversationTree";
 import { useInboxStore, isConvexId, type ForkChild } from "../store/inboxStore";
+import { useCurrentUser } from "../hooks/useCurrentUser";
 import { soundSend } from "../lib/sounds";
 import { useForkNavigationStore } from "../store/forkNavigationStore";
 import { buildCompositeTimeline } from "../lib/compositeTimeline";
@@ -1040,7 +1041,7 @@ function ConversationMetadata({
   const todoInProgress = latestTodos?.filter((t: any) => t.status === 'in_progress').length ?? 0;
 
   return (
-    <div className="flex items-center gap-1 text-[10px] sm:text-xs text-sol-text-dim flex-wrap">
+    <div className="flex items-center gap-1 text-[10px] sm:text-xs text-sol-text-dim min-w-0 overflow-hidden">
       {agentType && (
         <div
           className="flex items-center flex-shrink-0 cursor-default"
@@ -5459,6 +5460,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
   const [sentAt, setSentAt] = useState<number | null>(null);
   const [showStuckBanner, setShowStuckBanner] = useState(false);
   const [isResuming, setIsResuming] = useState(false);
+  const [optimisticSending, setOptimisticSending] = useState(false);
   const [showModeLabel, setShowModeLabel] = useState(false);
   const [modeTooltip, setModeTooltip] = useState(false);
   const modeLabelTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -6140,6 +6142,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
     const storageIds = finalImages.map(img => img.storageId!);
     const optimisticImages = finalImages.map(img => ({ media_type: img.file.type, storage_id: img.storageId as string }));
     sendingRef.current = true;
+    if (isInactive) setOptimisticSending(true);
     if (draftTimerRef.current) {
       clearTimeout(draftTimerRef.current);
       draftTimerRef.current = null;
@@ -6158,13 +6161,21 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
     const expandedContent = await expandMentionsInMessage(trimmed);
 
     if (convIdRef.current !== targetConvId) {
-      console.warn("[MessageInput] conversationId changed between submit and send:", { targetConvId, current: convIdRef.current, sessionId });
+      console.warn("[MessageInput] conversationId changed between submit and send — aborting:", { targetConvId, current: convIdRef.current, sessionId });
+      toast.error("Session changed — message not sent");
+      useInboxStore.getState().markOptimisticAsFailed(targetConvId, clientId);
+      setOptimisticSending(false);
+      return;
     }
 
     try {
       const resolvedId = targetCanQuery ? targetConvId : await waitForConvexId(targetConvId);
       if (convIdRef.current !== targetConvId) {
-        console.warn("[MessageInput] conversationId drifted during waitForConvexId:", { targetConvId, resolvedId, current: convIdRef.current });
+        console.warn("[MessageInput] conversationId drifted during waitForConvexId — aborting:", { targetConvId, resolvedId, current: convIdRef.current });
+        toast.error("Session changed — message not sent");
+        useInboxStore.getState().markOptimisticAsFailed(targetConvId, clientId);
+        setOptimisticSending(false);
+        return;
       }
       const msgId = await sendMessage({
         conversation_id: resolvedId as Id<"conversations">,
@@ -6173,12 +6184,14 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
         client_id: clientId,
       });
       setPendingMessageId(msgId);
+      setOptimisticSending(false);
       setSentAt(Date.now());
       sentContentRef.current = trimmed;
       setShowStuckBanner(false);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to send message");
       useInboxStore.getState().markOptimisticAsFailed(targetConvId, clientId);
+      setOptimisticSending(false);
     }
   };
 
@@ -6200,7 +6213,10 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
       try {
         const expanded = await expandMentionsInMessage(next);
         if (convIdRef.current !== queueTargetConvId) {
-          console.warn("[MessageInput] conversationId changed during queue drain:", { queueTargetConvId, current: convIdRef.current });
+          console.warn("[MessageInput] conversationId changed during queue drain — aborting:", { queueTargetConvId, current: convIdRef.current });
+          toast.error("Session changed — queued message not sent");
+          useInboxStore.getState().markOptimisticAsFailed(queueTargetConvId, clientId);
+          return;
         }
         const resolvedId = queueCanQuery ? queueTargetConvId : await waitForConvexId(queueTargetConvId);
         const msgId = await sendMessage({
@@ -6444,7 +6460,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
       {lightboxImageIndex === null && <div className="h-16 bg-gradient-to-t from-sol-bg via-sol-bg/80 to-transparent -mt-16 relative" />}
       <div className={`pb-4 pointer-events-auto ${lightboxImageIndex === null ? "bg-sol-bg" : ""}`}>
         <div className="relative">
-          {(isFocused || shortcutTooltip || showStuckBanner || isSessionStarting || isSessionReady || isInactive || isSessionDisconnected || (pendingMessageId || existingPending) || (agentStatus && agentStatus !== "idle") || (!agentStatus && (isWaitingForResponse || isThinking || isConversationLive))) && (
+          {(isFocused || shortcutTooltip || showStuckBanner || isSessionStarting || isSessionReady || isInactive || optimisticSending || isSessionDisconnected || (pendingMessageId || existingPending) || (agentStatus && agentStatus !== "idle") || (!agentStatus && (isWaitingForResponse || isThinking || isConversationLive))) && (
             <div className={`mx-auto px-4 mb-1 flex justify-between items-center ${isExpanded ? "max-w-4xl" : "max-w-md"} ${lightboxImageIndex !== null ? "hidden" : ""}`}>
               <p className="text-[11px] text-sol-text-dim/70 pl-1">
                 {((isSessionStarting && !agentStatus) || isAgentStarting) && !showStuckBanner ? (
@@ -6576,7 +6592,12 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
                       Session disconnected
                     </span>
                   )
-                ) : isInactive ? "Session inactive — message to resume in new terminal" : "\u00A0"}
+                ) : optimisticSending ? (
+                  <span className="flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-sol-cyan/50 animate-pulse" />
+                    Resuming session...
+                  </span>
+                ) : isInactive ? "Session inactive — message to resume" : "\u00A0"}
               </p>
               <div className="flex items-center gap-2">
                 <CyclingShortcutHint />
@@ -7017,7 +7038,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const toggleFavoriteMutation = useMutation(api.conversations.toggleFavorite);
   const restartSession = useMutation(api.conversations.restartSession);
   const repairSession = useMutation(api.conversations.repairSession);
-  const promoteToPlan = useMutation(api.plans.webPromoteSession);
+
   const addOptimisticMsg = useInboxStore((s) => s.addOptimisticMessage);
   const activeBranches = useInboxStore((s) => s.activeBranches);
   const optimisticForkChildren = useInboxStore((s) => s.optimisticForkChildren);
@@ -7030,6 +7051,15 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     return convId;
   }, [activeBranches, conversation?.fork_children, optimisticForkChildren]);
   const effectiveConversationId = firstActiveForkId || conversation?._id;
+
+  const { user: currentUser } = useCurrentUser();
+  const isForkOwner = useMemo(() => {
+    if (!firstActiveForkId || !currentUser?._id) return false;
+    const allForks = [...(conversation?.fork_children || []), ...optimisticForkChildren];
+    const fork = allForks.find((f: any) => f._id === firstActiveForkId) as any;
+    return fork?.user_id?.toString() === currentUser._id.toString();
+  }, [firstActiveForkId, currentUser?._id, conversation?.fork_children, optimisticForkChildren]);
+  const effectiveIsOwner = isOwner || isForkOwner;
 
   const handleSendInlineMessage = useCallback(async (content: string) => {
     if (!conversation || !effectiveConversationId) return;
@@ -7044,7 +7074,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   }, [conversation, effectiveConversationId, sendInlineMessage, addOptimisticMsg, setUserScrolled]);
   const managedSession = useQuery(
     api.managedSessions.isSessionManaged,
-    conversation && isOwner && conversation.status === "active" && effectiveConversationId && isConvexId(effectiveConversationId)
+    conversation && effectiveConversationId && isConvexId(effectiveConversationId) && (
+      (isOwner && conversation.status === "active") || !!firstActiveForkId
+    )
       ? { conversation_id: effectiveConversationId as Id<"conversations"> }
       : "skip"
   );
@@ -7087,14 +7119,14 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const [optimisticMode, setOptimisticMode] = useState<string | null>(null);
   const optimisticTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const handleCycleMode = useCallback(() => {
-    if (!conversation || !isOwner || conversation.status !== "active") return;
+    if (!conversation || !effectiveIsOwner || conversation.status !== "active") return;
     sendKeys({ conversation_id: (effectiveConversationId || conversation._id) as Id<"conversations">, keys: "BTab" });
     const currentMode = optimisticMode || managedSession?.permission_mode || "default";
     const nextIdx = (CC_MODE_ORDER.indexOf(currentMode) + 1) % CC_MODE_ORDER.length;
     setOptimisticMode(CC_MODE_ORDER[nextIdx]);
     clearTimeout(optimisticTimerRef.current);
     optimisticTimerRef.current = setTimeout(() => setOptimisticMode(null), 8000);
-  }, [conversation, isOwner, sendKeys, optimisticMode, managedSession?.permission_mode, effectiveConversationId]);
+  }, [conversation, effectiveIsOwner, sendKeys, optimisticMode, managedSession?.permission_mode, effectiveConversationId]);
   useWatchEffect(() => {
     if (optimisticMode && managedSession?.permission_mode === optimisticMode) {
       setOptimisticMode(null);
@@ -7106,7 +7138,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const forkSelectedIndex = useForkNavigationStore((s) => s.selectedIndex);
 
   useWatchEffect(() => {
-    if (!conversation || !isOwner || conversation.status !== "active") return;
+    if (!conversation || !effectiveIsOwner || conversation.status !== "active") return;
     const handler = (e: KeyboardEvent) => {
       if (e.key !== "Tab" || !e.shiftKey) return;
       const target = e.target as HTMLElement;
@@ -7116,7 +7148,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [conversation, isOwner, handleCycleMode]);
+  }, [conversation, effectiveIsOwner, handleCycleMode]);
 
   const messages = conversation?.messages || [];
 
@@ -7257,12 +7289,13 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
   const timelineRef = useRef<any[]>([]);
 
-  const doFork = useCallback(async (messageUuid: string) => {
-    if (!conversation?._id) return;
+  const doFork = useCallback(async (messageUuid: string): Promise<{ forkSessionId: string; conversationId: string } | null> => {
+    if (!conversation?._id) return null;
     const sourceConvId = effectiveConversationId || conversation._id;
     const forkSessionId = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     addOptimisticFork({
       _id: forkSessionId,
+      user_id: currentUser?._id?.toString(),
       title: conversation.title ? `Fork: ${conversation.title}` : "Fork",
       started_at: Date.now(),
       username: conversation.user?.name || conversation.user?.email?.split("@")[0],
@@ -7286,9 +7319,11 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       const resolvedUrl = new URL(window.location.href);
       resolvedUrl.searchParams.set('branch', result.conversation_id);
       window.history.replaceState({}, '', resolvedUrl.toString());
+      return { forkSessionId, conversationId: result.conversation_id };
     } catch (err) {
       forkClearBranch(messageUuid);
       toast.error(err instanceof Error ? err.message : "Failed to fork");
+      return null;
     }
   }, [conversation?._id, conversation?.title, conversation?.user, conversation?.agent_type, effectiveConversationId, forkFromMessage, forkSwitchBranch, forkClearBranch, forkSetMessages, addOptimisticFork, resolveForkSessionId]);
 
@@ -7320,26 +7355,14 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       toast.error("No messages to fork from");
       return;
     }
-    await doFork(lastMsg.message_uuid);
-    requestAnimationFrame(async () => {
-      const branches = useInboxStore.getState().activeBranches;
-      const forkId = Object.values(branches)[0];
-      if (!forkId) return;
-      const clientId = addOptimisticMsg(forkId, content);
-      for (let i = 0; i < 20; i++) {
-        const resolved = useInboxStore.getState().getConvexId(forkId);
-        if (resolved) {
-          try {
-            await sendInlineMessage({ conversation_id: resolved as Id<"conversations">, content, client_id: clientId });
-          } catch {
-            toast.error("Failed to send message to fork");
-          }
-          return;
-        }
-        await new Promise((r) => setTimeout(r, 250));
-      }
-      toast.error("Fork timed out");
-    });
+    const forkResult = await doFork(lastMsg.message_uuid);
+    if (!forkResult) return;
+    const clientId = addOptimisticMsg(forkResult.conversationId, content);
+    try {
+      await sendInlineMessage({ conversation_id: forkResult.conversationId as Id<"conversations">, content, client_id: clientId });
+    } catch {
+      toast.error("Failed to send message to fork");
+    }
   }, [conversation, doFork, addOptimisticMsg, sendInlineMessage]);
 
   // Preload branch from URL param
@@ -7423,10 +7446,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   );
 
   const handleSendEscape = useCallback(() => {
-    if (!conversation || !isOwner || conversation.status !== "active" || !effectiveConversationId) return;
+    if (!conversation || !effectiveIsOwner || conversation.status !== "active" || !effectiveConversationId) return;
     sendEscape({ conversation_id: effectiveConversationId as Id<"conversations"> });
     toast.info("Escape sent to session");
-  }, [conversation, isOwner, sendEscape, effectiveConversationId]);
+  }, [conversation, effectiveIsOwner, sendEscape, effectiveConversationId]);
 
   const handleMessageSent = useCallback(() => {
     setUserScrolled(false);
@@ -7443,10 +7466,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     if (!msg.message_uuid || !conversation) return;
     setNavigatorOpen(false);
     handleForkFromMessage(msg.message_uuid);
-    if (isOwner && conversation.status === "active") {
+    if (effectiveIsOwner && conversation.status === "active") {
       rewindSession({ conversation_id: (effectiveConversationId || conversation._id) as Id<"conversations">, steps_back: indexFromEnd });
     }
-  }, [handleForkFromMessage, conversation, isOwner, rewindSession, effectiveConversationId]);
+  }, [handleForkFromMessage, conversation, effectiveIsOwner, rewindSession, effectiveConversationId]);
 
   const handleNavigatorFork = useCallback((msg: NavUserMessage) => {
     if (!msg.message_uuid) return;
@@ -8607,30 +8630,33 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const title = cleanTitle(conversation?.title || "New Session");
   const truncatedTitle = title.length > 60 ? title.slice(0, 57) + "..." : title;
   const latestMessageTimestamp = useMemo(() => {
-    if (!conversation?.messages || conversation.messages.length === 0) return undefined;
-    for (let i = conversation.messages.length - 1; i >= 0; i--) {
-      const message = conversation.messages[i];
-      if (message.role !== "system") return message.timestamp;
-    }
-    return conversation.messages[conversation.messages.length - 1]?.timestamp;
-  }, [conversation?.messages]);
-  const lastActivityAt = latestMessageTimestamp ?? conversation?.updated_at ?? conversation?.started_at ?? 0;
-  const lastMessageRole = useMemo(() => {
-    if (!conversation?.messages || conversation.messages.length === 0) return undefined;
-    for (let i = conversation.messages.length - 1; i >= 0; i--) {
-      if (conversation.messages[i].role !== "system") return conversation.messages[i].role;
+    for (let i = timeline.length - 1; i >= 0; i--) {
+      const item = timeline[i];
+      if (item.type === 'message' && (item.data as Message).role !== 'system') {
+        return item.timestamp;
+      }
     }
     return undefined;
-  }, [conversation?.messages]);
+  }, [timeline]);
+  const lastActivityAt = latestMessageTimestamp ?? conversation?.updated_at ?? conversation?.started_at ?? 0;
+  const lastMessageRole = useMemo(() => {
+    for (let i = timeline.length - 1; i >= 0; i--) {
+      const item = timeline[i];
+      if (item.type === 'message' && (item.data as Message).role !== 'system') {
+        return (item.data as Message).role;
+      }
+    }
+    return undefined;
+  }, [timeline]);
   const [now, setNow] = useState(Date.now());
   useMountEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 10_000);
     return () => clearInterval(id);
   });
-  const isSessionConnected = !!conversation && conversation.status === "active" && (now - lastActivityAt) < 5 * 60 * 1000;
+  const isSessionConnected = !!conversation && (conversation.status === "active" || !!firstActiveForkId) && (now - lastActivityAt) < 5 * 60 * 1000;
   const isWorking = isSessionConnected && (now - lastActivityAt) < 45 * 1000 && lastMessageRole === "assistant";
   const isConversationLive = isWorking;
-  const isSessionDisconnected = !!conversation && conversation.status === "active" && managedSession !== undefined && managedSession.managed === false && !isSessionConnected;
+  const isSessionDisconnected = !!conversation && (conversation.status === "active" || !!firstActiveForkId) && managedSession !== undefined && managedSession.managed === false && !isSessionConnected;
   const sessionAge = now - (conversation?.started_at ?? 0);
   const isNewEmptySession = !!conversation && conversation.status === "active" && (conversation.message_count ?? 0) === 0;
   const isSessionStarting = isNewEmptySession && !managedSession?.managed && sessionAge < 10_000;
@@ -9011,7 +9037,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       )}
       <header ref={headerRef} className={`border-b border-black/10 bg-sol-bg-alt shrink-0 relative ${embedded ? "sticky top-0 z-20 bg-sol-bg-alt" : ""} ${!embedded || isZenMode ? deskClass : ""} ${isImageLightboxActive ? "invisible" : ""} ${hideHeader ? "hidden" : ""}`}>
         <div className="px-2 py-0.5 sm:py-1">
-          <div className="flex items-center gap-2 min-w-0 select-none">
+          <div className="flex items-center gap-2 min-w-0 select-none overflow-hidden">
             {isZenMode && (
               <TooltipProvider delayDuration={300}>
                 <Tooltip>
@@ -9306,7 +9332,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                     </button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
-                    {isOwner && conversation?.session_id && (
+                    {effectiveIsOwner && conversation?.session_id && (
                       <>
                         <DropdownMenuItem onSelect={() => {
                           setTimeout(async () => {
@@ -9389,25 +9415,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                           <path strokeLinecap="round" strokeLinejoin="round" d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
                         </svg>
                         {conversation.is_favorite ? "Remove from favorites" : "Add to favorites"}
-                      </DropdownMenuItem>
-                    )}
-                    {isOwner && !(conversation as any).active_plan_id && (
-                      <DropdownMenuItem onSelect={() => {
-                        setTimeout(async () => {
-                          try {
-                            const result = await promoteToPlan({ conversation_id: conversation._id });
-                            if (result.already_exists) {
-                              toast.info("Session already linked to a plan");
-                            } else {
-                              toast.success(`Plan ${result.short_id} created`);
-                            }
-                          } catch { toast.error("Failed to create plan"); }
-                        });
-                      }}>
-                        <svg className="w-3 h-3 mr-1.5 text-sol-cyan" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
-                        </svg>
-                        Promote to plan
                       </DropdownMenuItem>
                     )}
                     <DropdownMenuSeparator />
@@ -9547,7 +9554,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
               </div>
               </TooltipProvider>
             )}
-            {headerEnd}
+            {headerEnd && <div className="flex-shrink-0">{headerEnd}</div>}
           </div>
         </div>
         {conversation && (
@@ -9791,7 +9798,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
       {showMessageInput && conversation && !(pendingPermissions && pendingPermissions.length > 0) && (
         <div ref={messageInputRef} className="relative">
-          {!isOwner && !firstActiveForkId ? (
+          {!effectiveIsOwner ? (
             <ForkReplyInput
               userName={conversation.user?.name || conversation.user?.email?.split("@")[0] || "Teammate"}
               userAvatar={conversation.user?.avatar_url}

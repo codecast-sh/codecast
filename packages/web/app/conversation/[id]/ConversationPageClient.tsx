@@ -1,4 +1,4 @@
-import { useMutation, useQuery } from "convex/react";
+import { useMutation, useQuery, useConvexAuth } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useState, useMemo, useCallback } from "react";
@@ -393,6 +393,7 @@ export default function ConversationPage() {
   const params = useParams();
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { isAuthenticated, isLoading: authLoading } = useConvexAuth();
   const id = params.id as string;
   const highlightQuery = searchParams.get("highlight") || undefined;
   const [targetMessageId, setTargetMessageId] = useState<string | undefined>(() => {
@@ -462,21 +463,20 @@ export default function ConversationPage() {
   const storeHasSession = useInboxStore((s) => !!(s.sessions[id] || s.conversations[id]));
   const resolvedStoreId = useInboxStore((s) => isUUID ? s.getConvexId(id) : undefined);
 
-  if (storeHasSession) {
-    return <QueuePageClient initialSessionId={id} />;
-  }
-
-  if (resolvedStoreId) {
-    return <QueuePageClient initialSessionId={resolvedStoreId} />;
+  if (storeHasSession || resolvedStoreId || redirectId) {
+    if (authLoading) return <ConversationLoadingSkeleton />;
+    if (!isAuthenticated) {
+      router.replace("/");
+      return <ConversationLoadingSkeleton />;
+    }
+    if (storeHasSession) return <QueuePageClient initialSessionId={id} />;
+    if (resolvedStoreId) return <QueuePageClient initialSessionId={resolvedStoreId} />;
+    if (redirectId) return <QueuePageClient initialSessionId={redirectId} />;
   }
 
   if (!isUUID && !isValidConvexId) {
     router.replace("/inbox");
     return <ConversationLoadingSkeleton />;
-  }
-
-  if (redirectId) {
-    return <QueuePageClient initialSessionId={redirectId} />;
   }
 
   if (isUUID) {

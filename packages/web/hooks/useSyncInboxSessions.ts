@@ -1,7 +1,7 @@
 import { useRef, useCallback, useEffect } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { useInboxStore, InboxSession, isSessionWaitingForInput } from "../store/inboxStore";
+import { useInboxStore, InboxSession, isSessionWaitingForInput, isSub } from "../store/inboxStore";
 import { soundIdle } from "../lib/sounds";
 import { useConvexSync } from "./useConvexSync";
 import { useMountEffect } from "./useMountEffect";
@@ -55,6 +55,7 @@ export function useSyncInboxSessions() {
     const prev = prevIdleMapRef.current;
     if (prev) {
       for (const s of sessions) {
+        if (isSub(s as InboxSession)) continue;
         const id = s._id.toString();
         if (isSessionWaitingForInput(s as InboxSession, queued) && prev.has(id) && !prev.get(id)) {
           soundIdle();
