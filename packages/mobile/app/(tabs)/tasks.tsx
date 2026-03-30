@@ -17,13 +17,16 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import FontAwesome from "@expo/vector-icons/FontAwesome";
 import { Theme, Spacing } from "@/constants/Theme";
-import { useInboxStore, type TaskItem, type PlanItem } from "@codecast/web/store/inboxStore";
+import { useInboxStore, type TaskItem, type PlanItem, type DocItem } from "@codecast/web/store/inboxStore";
 import { useSyncTasks } from "@/hooks/useSyncTasks";
 import { useSyncPlans } from "@/hooks/useSyncPlans";
+import { useSyncDocs } from "@/hooks/useSyncDocs";
 import { TaskItemRow, STATUS_CONFIG, PRIORITY_CONFIG, PRIORITY_ORDER, showTaskActions } from "@/components/TaskItem";
 import { PlanItemRow, PLAN_STATUS_CONFIG, PLAN_STATUS_ORDER } from "@/components/PlanItem";
+import { DocItemRow, DOC_TYPE_CONFIG, DOC_TYPES } from "@/components/DocItem";
 
-type Segment = "tasks" | "plans";
+type Segment = "tasks" | "plans" | "docs";
+type SourceFilter = "" | "human" | "bot";
 type TaskStatus = "backlog" | "open" | "in_progress" | "in_review" | "done" | "dropped";
 
 const ACTIVE_STATUSES: TaskStatus[] = ["open", "in_progress", "in_review"];
@@ -137,6 +140,7 @@ function CreateTaskModal({
 
 export default function TasksScreen() {
   const [segment, setSegment] = useState<Segment>("tasks");
+  const [sourceFilter, setSourceFilter] = useState<SourceFilter>("");
   const [refreshing, setRefreshing] = useState(false);
   const [showDone, setShowDone] = useState(false);
   const [searchInput, setSearchInput] = useState("");
@@ -146,17 +150,26 @@ export default function TasksScreen() {
 
   const { ready: tasksReady } = useSyncTasks();
   const { ready: plansReady } = useSyncPlans();
+  const { ready: docsReady } = useSyncDocs();
 
   const tasks = useInboxStore((s) => s.tasks);
   const plans = useInboxStore((s) => s.plans);
+  const docs = useInboxStore((s) => s.docs);
   const updateTask = useInboxStore((s) => s.updateTask);
   const createTask = useInboxStore((s) => s.createTask);
 
   const tasksList = useMemo(() => Object.values(tasks), [tasks]);
   const plansList = useMemo(() => Object.values(plans), [plans]);
+  const docsList = useMemo(() => Object.values(docs), [docs]);
+
+  const applySourceFilter = useCallback(<T extends { source?: string }>(list: T[]): T[] => {
+    if (sourceFilter === "human") return list.filter((i) => i.source === "human");
+    if (sourceFilter === "bot") return list.filter((i) => i.source !== "human");
+    return list;
+  }, [sourceFilter]);
 
   const filteredTasks = useMemo(() => {
-    let list = tasksList;
+    let list = applySourceFilter(tasksList);
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       list = list.filter(
@@ -168,7 +181,7 @@ export default function TasksScreen() {
       );
     }
     return list;
-  }, [tasksList, searchQuery]);
+  }, [tasksList, searchQuery, applySourceFilter]);
 
   const groupedTasks = useMemo(() => {
     const groups: Record<string, TaskItem[]> = {};
@@ -187,9 +200,11 @@ export default function TasksScreen() {
     return groups;
   }, [filteredTasks]);
 
+  const filteredPlans = useMemo(() => applySourceFilter(plansList), [plansList, applySourceFilter]);
+
   const groupedPlans = useMemo(() => {
     const groups: Record<string, PlanItem[]> = {};
-    for (const p of plansList) {
+    for (const p of filteredPlans) {
       if (!groups[p.status]) groups[p.status] = [];
       groups[p.status].push(p);
     }
@@ -197,17 +212,46 @@ export default function TasksScreen() {
       groups[key].sort((a, b) => b.updated_at - a.updated_at);
     }
     return groups;
-  }, [plansList]);
+  }, [filteredPlans]);
+
+  const filteredDocs = useMemo(() => {
+    let list = applySourceFilter(docsList);
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      list = list.filter(
+        (d) =>
+          d.title?.toLowerCase().includes(q) ||
+          d.doc_type?.toLowerCase().includes(q) ||
+          d.labels?.some((l: string) => l.toLowerCase().includes(q)),
+      );
+    }
+    return list;
+  }, [docsList, searchQuery, applySourceFilter]);
+
+  const groupedDocs = useMemo(() => {
+    const groups: Record<string, DocItem[]> = {};
+    for (const d of filteredDocs) {
+      const key = d.doc_type || "note";
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(d);
+    }
+    for (const key of Object.keys(groups)) {
+      groups[key].sort((a, b) => b.updated_at - a.updated_at);
+    }
+    return groups;
+  }, [filteredDocs]);
 
   const activeTaskCount = useMemo(
-    () => tasksList.filter((t) => ACTIVE_STATUSES.includes(t.status as TaskStatus)).length,
-    [tasksList],
+    () => filteredTasks.filter((t) => ACTIVE_STATUSES.includes(t.status as TaskStatus)).length,
+    [filteredTasks],
   );
 
   const activePlanCount = useMemo(
-    () => plansList.filter((p) => p.status === "active" || p.status === "draft").length,
-    [plansList],
+    () => filteredPlans.filter((p) => p.status === "active" || p.status === "draft").length,
+    [filteredPlans],
   );
+
+  const docCount = useMemo(() => filteredDocs.length, [filteredDocs]);
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
@@ -283,24 +327,51 @@ export default function TasksScreen() {
     [groupedPlans, router],
   );
 
+  const renderDocSection = useCallback(
+    (docType: string) => {
+      const items = groupedDocs[docType];
+      if (!items?.length) return null;
+      const cfg = DOC_TYPE_CONFIG[docType] ?? DOC_TYPE_CONFIG.note;
+      return (
+        <RNView key={docType}>
+          <RNView style={styles.sectionHeader}>
+            <FontAwesome name={cfg.icon} size={11} color={cfg.color} />
+            <RNText style={[styles.sectionTitle, { color: cfg.color }]}>
+              {cfg.label} ({items.length})
+            </RNText>
+          </RNView>
+          {items.map((d) => (
+            <DocItemRow
+              key={d._id}
+              doc={d}
+              onPress={() => router.push(`/doc/${d._id}` as any)}
+            />
+          ))}
+        </RNView>
+      );
+    },
+    [groupedDocs, router],
+  );
+
   return (
     <SafeAreaView style={styles.container} edges={["top"]}>
       <RNView style={styles.header}>
         <RNText style={styles.headerTitle}>
-          {segment === "tasks" ? "Tasks" : "Plans"}
+          {segment === "tasks" ? "Tasks" : segment === "plans" ? "Plans" : "Docs"}
         </RNText>
-        {(segment === "tasks" ? activeTaskCount : activePlanCount) > 0 && (
-          <RNView style={styles.countBadge}>
-            <RNText style={styles.countBadgeText}>
-              {segment === "tasks" ? activeTaskCount : activePlanCount}
-            </RNText>
-          </RNView>
-        )}
+        {(() => {
+          const count = segment === "tasks" ? activeTaskCount : segment === "plans" ? activePlanCount : docCount;
+          return count > 0 ? (
+            <RNView style={styles.countBadge}>
+              <RNText style={styles.countBadgeText}>{count}</RNText>
+            </RNView>
+          ) : null;
+        })()}
       </RNView>
 
       <RNView style={styles.segmentBar}>
         <RNView style={styles.segmentContainer}>
-          {(["tasks", "plans"] as Segment[]).map((s) => (
+          {(["tasks", "plans", "docs"] as Segment[]).map((s) => (
             <TouchableOpacity
               key={s}
               style={[styles.segmentBtn, segment === s && styles.segmentBtnActive]}
@@ -308,29 +379,50 @@ export default function TasksScreen() {
               activeOpacity={0.7}
             >
               <RNText style={[styles.segmentText, segment === s && styles.segmentTextActive]}>
-                {s === "tasks" ? "Tasks" : "Plans"}
+                {s === "tasks" ? "Tasks" : s === "plans" ? "Plans" : "Docs"}
               </RNText>
             </TouchableOpacity>
           ))}
         </RNView>
       </RNView>
 
-      {segment === "tasks" && (
-        <RNView style={styles.searchContainer}>
+      <RNView style={styles.filterBar}>
+        <RNView style={styles.sourceFilterRow}>
+          {([["", "All"], ["human", "Human"], ["bot", "Bot"]] as const).map(([key, label]) => (
+            <TouchableOpacity
+              key={key}
+              style={[styles.sourceBtn, sourceFilter === key && styles.sourceBtnActive]}
+              onPress={() => setSourceFilter(key as SourceFilter)}
+              activeOpacity={0.7}
+            >
+              {key === "human" ? (
+                <FontAwesome name="user" size={11} color={sourceFilter === key ? Theme.text : Theme.textMuted0} />
+              ) : key === "bot" ? (
+                <FontAwesome name="bolt" size={11} color={sourceFilter === key ? Theme.cyan : Theme.textMuted0} />
+              ) : (
+                <RNText style={[styles.sourceText, sourceFilter === key && styles.sourceTextActive]}>
+                  {label}
+                </RNText>
+              )}
+            </TouchableOpacity>
+          ))}
+        </RNView>
+
+        {(segment === "tasks" || segment === "docs") && (
           <RNView style={styles.searchInputRow}>
             <FontAwesome name="search" size={13} color={Theme.textMuted0} style={{ marginRight: 8 }} />
             <TextInput
               style={styles.searchInput}
               value={searchInput}
               onChangeText={handleSearchChange}
-              placeholder="Filter tasks..."
+              placeholder={segment === "tasks" ? "Filter tasks..." : "Filter docs..."}
               placeholderTextColor={Theme.textMuted0}
               autoCorrect={false}
               autoCapitalize="none"
             />
           </RNView>
-        </RNView>
-      )}
+        )}
+      </RNView>
 
       <ScrollView
         refreshControl={
@@ -350,7 +442,7 @@ export default function TasksScreen() {
                 <FontAwesome name="check-square-o" size={32} color={Theme.textMuted0} />
                 <RNText style={styles.emptyText}>No tasks</RNText>
                 <RNText style={styles.emptySubtext}>
-                  {searchQuery ? "Try a different search" : "Create a task to get started"}
+                  {searchQuery || sourceFilter ? "Try a different filter" : "Create a task to get started"}
                 </RNText>
               </RNView>
             ) : (
@@ -380,20 +472,40 @@ export default function TasksScreen() {
               </>
             )}
           </>
-        ) : (
+        ) : segment === "plans" ? (
           <>
             {!plansReady ? (
               <RNView style={styles.emptyState}>
                 <ActivityIndicator size="small" color={Theme.textMuted} />
               </RNView>
-            ) : plansList.length === 0 ? (
+            ) : filteredPlans.length === 0 ? (
               <RNView style={styles.emptyState}>
                 <FontAwesome name="map-o" size={32} color={Theme.textMuted0} />
                 <RNText style={styles.emptyText}>No plans</RNText>
-                <RNText style={styles.emptySubtext}>Plans group tasks toward a goal</RNText>
+                <RNText style={styles.emptySubtext}>
+                  {sourceFilter ? "Try a different filter" : "Plans group tasks toward a goal"}
+                </RNText>
               </RNView>
             ) : (
               PLAN_STATUS_ORDER.map((s) => renderPlanSection(s))
+            )}
+          </>
+        ) : (
+          <>
+            {!docsReady ? (
+              <RNView style={styles.emptyState}>
+                <ActivityIndicator size="small" color={Theme.textMuted} />
+              </RNView>
+            ) : filteredDocs.length === 0 ? (
+              <RNView style={styles.emptyState}>
+                <FontAwesome name="file-text-o" size={32} color={Theme.textMuted0} />
+                <RNText style={styles.emptyText}>No docs</RNText>
+                <RNText style={styles.emptySubtext}>
+                  {searchQuery || sourceFilter ? "Try a different filter" : "Documents created by you or your agents"}
+                </RNText>
+              </RNView>
+            ) : (
+              DOC_TYPES.filter((t) => groupedDocs[t]?.length).map((t) => renderDocSection(t))
             )}
           </>
         )}
@@ -480,13 +592,41 @@ const styles = StyleSheet.create({
   segmentTextActive: {
     color: Theme.text,
   },
-  searchContainer: {
+  filterBar: {
     backgroundColor: Theme.bgAlt,
     paddingHorizontal: Spacing.md,
     paddingTop: Spacing.xs,
     paddingBottom: Spacing.xs,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: Theme.borderLight,
+    gap: 6,
+  },
+  sourceFilterRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 0,
+    borderRadius: 6,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.borderLight,
+    overflow: "hidden",
+    alignSelf: "flex-start",
+  },
+  sourceBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRightWidth: StyleSheet.hairlineWidth,
+    borderRightColor: Theme.borderLight,
+  },
+  sourceBtnActive: {
+    backgroundColor: Theme.bgHighlight,
+  },
+  sourceText: {
+    fontSize: 12,
+    fontWeight: "500",
+    color: Theme.textMuted0,
+  },
+  sourceTextActive: {
+    color: Theme.text,
   },
   searchInputRow: {
     flexDirection: "row",
