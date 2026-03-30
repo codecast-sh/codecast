@@ -36,16 +36,18 @@ function CreateTaskModal({
 }: {
   visible: boolean;
   onClose: () => void;
-  onCreate: (title: string, priority: string) => void;
+  onCreate: (title: string, priority: string, description?: string) => void;
 }) {
   const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
   const [priority, setPriority] = useState("medium");
 
   const handleSubmit = () => {
     const trimmed = title.trim();
     if (!trimmed) return;
-    onCreate(trimmed, priority);
+    onCreate(trimmed, priority, description.trim() || undefined);
     setTitle("");
+    setDescription("");
     setPriority("medium");
     onClose();
   };
@@ -76,8 +78,18 @@ function CreateTaskModal({
             placeholderTextColor={Theme.textMuted0}
             autoFocus
             autoCorrect={false}
-            returnKeyType="done"
-            onSubmitEditing={handleSubmit}
+            returnKeyType="next"
+          />
+
+          <RNText style={modalStyles.label}>Description</RNText>
+          <TextInput
+            style={[modalStyles.input, { minHeight: 80, textAlignVertical: "top" }]}
+            value={description}
+            onChangeText={setDescription}
+            placeholder="Add details..."
+            placeholderTextColor={Theme.textMuted0}
+            multiline
+            autoCorrect={false}
           />
 
           <RNText style={modalStyles.label}>Priority</RNText>
@@ -151,6 +163,7 @@ export default function TasksScreen() {
         (t) =>
           t.title.toLowerCase().includes(q) ||
           t.short_id.toLowerCase().includes(q) ||
+          t.description?.toLowerCase().includes(q) ||
           t.labels?.some((l) => l.toLowerCase().includes(q)),
       );
     }
@@ -202,8 +215,8 @@ export default function TasksScreen() {
   }, []);
 
   const handleCreateTask = useCallback(
-    (title: string, priority: string) => {
-      createTask({ title, priority, status: "open" }).catch((err: Error) =>
+    (title: string, priority: string, description?: string) => {
+      createTask({ title, priority, description, status: "open" }).catch((err: Error) =>
         Alert.alert("Error", err.message),
       );
     },
@@ -276,11 +289,13 @@ export default function TasksScreen() {
         <RNText style={styles.headerTitle}>
           {segment === "tasks" ? "Tasks" : "Plans"}
         </RNText>
-        <RNView style={styles.countBadge}>
-          <RNText style={styles.countBadgeText}>
-            {segment === "tasks" ? activeTaskCount : activePlanCount}
-          </RNText>
-        </RNView>
+        {(segment === "tasks" ? activeTaskCount : activePlanCount) > 0 && (
+          <RNView style={styles.countBadge}>
+            <RNText style={styles.countBadgeText}>
+              {segment === "tasks" ? activeTaskCount : activePlanCount}
+            </RNText>
+          </RNView>
+        )}
       </RNView>
 
       <RNView style={styles.segmentBar}>
@@ -289,7 +304,7 @@ export default function TasksScreen() {
             <TouchableOpacity
               key={s}
               style={[styles.segmentBtn, segment === s && styles.segmentBtnActive]}
-              onPress={() => setSegment(s)}
+              onPress={() => { setSegment(s); setSearchInput(""); setSearchQuery(""); }}
               activeOpacity={0.7}
             >
               <RNText style={[styles.segmentText, segment === s && styles.segmentTextActive]}>

@@ -12,9 +12,12 @@ import {
   Platform,
 } from "react-native";
 import { useLocalSearchParams, useRouter, Stack } from "expo-router";
+import { useMutation } from "convex/react";
+import { api } from "@codecast/convex/convex/_generated/api";
 import FontAwesome from "@expo/vector-icons/FontAwesome";
 import { Theme, Spacing } from "@/constants/Theme";
 import { useInboxStore } from "@codecast/web/store/inboxStore";
+import { useSyncTasks } from "@/hooks/useSyncTasks";
 import {
   STATUS_CONFIG,
   STATUS_ORDER,
@@ -29,6 +32,7 @@ export default function TaskDetailScreen() {
   const router = useRouter();
   const tasks = useInboxStore((s) => s.tasks);
   const updateTask = useInboxStore((s) => s.updateTask);
+  const { ready: tasksReady } = useSyncTasks();
 
   const task = useMemo(() => {
     return Object.values(tasks).find((t) => t.short_id === id);
@@ -36,20 +40,21 @@ export default function TaskDetailScreen() {
 
   const [commentText, setCommentText] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const addTaskComment = useInboxStore((s) => s.addTaskComment);
+  const webAddComment = useMutation(api.tasks.webAddComment);
 
   const status = task ? (STATUS_CONFIG[task.status as TaskStatus] ?? STATUS_CONFIG.open) : STATUS_CONFIG.open;
   const priority = task ? (PRIORITY_CONFIG[task.priority as TaskPriority] ?? PRIORITY_CONFIG.medium) : PRIORITY_CONFIG.medium;
 
   const handleStatusPress = useCallback(() => {
     if (!task) return;
-    const options = STATUS_ORDER.map((s) => STATUS_CONFIG[s].label);
+    const available = STATUS_ORDER.filter((s) => s !== task.status);
+    const options = available.map((s) => STATUS_CONFIG[s].label);
     options.push("Cancel");
     ActionSheetIOS.showActionSheetWithOptions(
       { options, cancelButtonIndex: options.length - 1, title: "Change Status" },
       (idx) => {
-        if (idx < STATUS_ORDER.length) {
-          updateTask(task.short_id, { status: STATUS_ORDER[idx] });
+        if (idx < available.length) {
+          updateTask(task.short_id, { status: available[idx] });
         }
       },
     );
@@ -57,7 +62,7 @@ export default function TaskDetailScreen() {
 
   const handlePriorityPress = useCallback(() => {
     if (!task) return;
-    const prios = Object.keys(PRIORITY_CONFIG) as TaskPriority[];
+    const prios = (Object.keys(PRIORITY_CONFIG) as TaskPriority[]).filter((p) => p !== task.priority);
     const options = prios.map((p) => PRIORITY_CONFIG[p].label);
     options.push("Cancel");
     ActionSheetIOS.showActionSheetWithOptions(
@@ -74,16 +79,16 @@ export default function TaskDetailScreen() {
     if (!task || !commentText.trim()) return;
     setSubmitting(true);
     try {
-      await addTaskComment(task.short_id, commentText.trim());
+      await webAddComment({ short_id: task.short_id, text: commentText.trim() });
       setCommentText("");
     } catch (err) {
       Alert.alert("Error", err instanceof Error ? err.message : "Failed to add comment");
     } finally {
       setSubmitting(false);
     }
-  }, [task, commentText, addTaskComment]);
+  }, [task, commentText, webAddComment]);
 
-  const hasSynced = Object.keys(tasks).length > 0;
+  const hasSynced = tasksReady;
 
   if (!task) {
     return (
@@ -249,11 +254,15 @@ export default function TaskDetailScreen() {
               multiline
             />
             <TouchableOpacity
-              style={[styles.commentSend, !commentText.trim() && { opacity: 0.3 }]}
+              style={[styles.commentSend, (!commentText.trim() || submitting) && { opacity: 0.3 }]}
               onPress={handleAddComment}
               disabled={!commentText.trim() || submitting}
             >
-              <FontAwesome name="send" size={14} color={Theme.accent} />
+              {submitting ? (
+                <ActivityIndicator size="small" color={Theme.accent} />
+              ) : (
+                <FontAwesome name="arrow-up" size={14} color={Theme.accent} />
+              )}
             </TouchableOpacity>
           </RNView>
         </RNView>

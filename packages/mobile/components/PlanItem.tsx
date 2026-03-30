@@ -74,7 +74,7 @@ export function PlanItemRow({
 const styles = StyleSheet.create({
   row: {
     paddingHorizontal: Spacing.lg,
-    paddingVertical: 12,
+    paddingVertical: 10,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: Theme.bgHighlight,
   },

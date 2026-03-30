@@ -8,9 +8,12 @@ import {
   ActivityIndicator,
 } from "react-native";
 import { useLocalSearchParams, useRouter, Stack } from "expo-router";
+import { useQuery } from "convex/react";
+import { api } from "@codecast/convex/convex/_generated/api";
 import FontAwesome from "@expo/vector-icons/FontAwesome";
 import { Theme, Spacing } from "@/constants/Theme";
 import { useInboxStore } from "@codecast/web/store/inboxStore";
+import { useSyncPlans } from "@/hooks/useSyncPlans";
 import { PLAN_STATUS_CONFIG } from "@/components/PlanItem";
 import { TaskItemRow, showTaskActions } from "@/components/TaskItem";
 
@@ -22,10 +25,13 @@ export default function PlanDetailScreen() {
   const plans = useInboxStore((s) => s.plans);
   const tasks = useInboxStore((s) => s.tasks);
   const updateTask = useInboxStore((s) => s.updateTask);
+  const { ready: plansReady } = useSyncPlans();
 
   const plan = useMemo(() => {
     return Object.values(plans).find((p) => p.short_id === id);
   }, [plans, id]);
+
+  const planDetail = useQuery(api.plans.webGet, id ? { short_id: id } : "skip");
 
   const planTasks = useMemo(() => {
     if (!plan) return [];
@@ -41,7 +47,7 @@ export default function PlanDetailScreen() {
     [planTasks],
   );
 
-  const hasSynced = Object.keys(plans).length > 0;
+  const hasSynced = plansReady;
 
   if (!plan) {
     return (
@@ -103,6 +109,13 @@ export default function PlanDetailScreen() {
           <RNView style={styles.section}>
             <RNText style={styles.sectionLabel}>Goal</RNText>
             <RNText style={styles.goalText}>{plan.goal}</RNText>
+          </RNView>
+        )}
+
+        {planDetail?.doc_content && (
+          <RNView style={styles.section}>
+            <RNText style={styles.sectionLabel}>Description</RNText>
+            <RNText style={styles.bodyText}>{planDetail.doc_content}</RNText>
           </RNView>
         )}
 
@@ -246,6 +259,11 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: Theme.text,
     lineHeight: 22,
+  },
+  bodyText: {
+    fontSize: 14,
+    color: Theme.text,
+    lineHeight: 21,
   },
   progressContainer: {
     gap: 8,
