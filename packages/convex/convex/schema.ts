@@ -241,6 +241,7 @@ export default defineSchema({
     .index("by_parent_message_uuid", ["parent_message_uuid"])
     .index("by_parent_conversation_id", ["parent_conversation_id"])
     .index("by_user_pinned", ["user_id", "inbox_pinned_at"])
+    .index("by_user_dismissed", ["user_id", "inbox_dismissed_at"])
     .index("by_workflow_run", ["workflow_run_id"])
     .searchIndex("search_title", {
       searchField: "title",

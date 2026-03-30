@@ -1097,67 +1097,6 @@ export const webCreate = mutation({
   },
 });
 
-export const webPromoteSession = mutation({
-  args: {
-    conversation_id: v.id("conversations"),
-    title: v.optional(v.string()),
-    workspace: v.optional(v.union(v.literal("personal"), v.literal("team"))),
-    team_id: v.optional(v.id("teams")),
-  },
-  handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Unauthorized");
-
-    const conv = await ctx.db.get(args.conversation_id);
-    if (!conv || conv.user_id !== userId) throw new Error("Conversation not found");
-
-    if (conv.active_plan_id) {
-      const existingPlan = await ctx.db.get(conv.active_plan_id);
-      if (existingPlan) {
-        return { id: existingPlan._id, short_id: existingPlan.short_id, already_exists: true };
-      }
-    }
-
-    const db = await createDataContext(ctx, { userId, workspace: args.workspace as any, team_id: args.team_id });
-    const short_id = await nextShortId(ctx.db, "pl");
-
-    const title = args.title || conv.title || "Untitled Plan";
-
-    const id = await db.insert("plans", {
-      project_id: (conv as any).project_id,
-      short_id,
-      title,
-      goal: (conv as any).headline || (conv as any).subtitle,
-      status: "active" as any,
-      source: "session" as any,
-      owner_id: userId,
-      task_ids: [],
-      progress: { total: 0, done: 0, in_progress: 0, open: 0 },
-      progress_log: [],
-      decision_log: [],
-      discoveries: [],
-      context_pointers: [],
-      session_ids: [args.conversation_id],
-      current_session_id: args.conversation_id,
-      created_from_conversation_id: args.conversation_id,
-    });
-
-    const docId = await db.insert("docs", {
-      title,
-      content: "",
-      doc_type: "plan",
-      source: "human",
-      plan_id: id,
-      project_id: (conv as any).project_id,
-    });
-    await ctx.db.patch(id, { doc_id: docId });
-
-    await ctx.db.patch(args.conversation_id, { active_plan_id: id });
-
-    return { id, short_id, doc_id: docId, already_exists: false };
-  },
-});
-
 export const webUpdate = mutation({
   args: {
     short_id: v.string(),

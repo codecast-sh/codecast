@@ -919,6 +919,7 @@ export const getAllMessages = query({
         const forkUser = await ctx.db.get(fork.user_id);
         return {
           _id: fork._id,
+          user_id: fork.user_id,
           title: fork.title || "New Session",
           short_id: fork.short_id,
           started_at: fork.started_at,
@@ -1222,6 +1223,7 @@ export const getConversationWithMeta = query({
         const forkUser = await ctx.db.get(fork.user_id);
         return {
           _id: fork._id,
+          user_id: fork.user_id,
           title: fork.title || "New Session",
           short_id: fork.short_id,
           started_at: fork.started_at,
@@ -6013,79 +6015,29 @@ export const listDismissedSessions = query({
     if (!userId) return [];
 
     const now = Date.now();
-    const HEARTBEAT_ALIVE_MS = 90 * 1000;
-    const WINDOW_MS = 48 * 60 * 60 * 1000;
+    const WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
     const cutoff = now - WINDOW_MS;
 
     const conversations = await ctx.db
       .query("conversations")
-      .withIndex("by_user_updated", (q) =>
-        q.eq("user_id", userId).gte("updated_at", cutoff)
+      .withIndex("by_user_dismissed", (q) =>
+        q.eq("user_id", userId).gte("inbox_dismissed_at", cutoff)
       )
       .order("desc")
-      .filter((q) =>
-        q.or(
-          q.eq(q.field("status"), "active"),
-          q.eq(q.field("status"), "completed")
-        )
-      )
-      .take(100);
-
-    const managedSessions = await ctx.db
-      .query("managed_sessions")
-      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
-      .collect();
-    const liveConvIds = new Set(
-      managedSessions
-        .filter((s) => now - s.last_heartbeat < HEARTBEAT_ALIVE_MS && s.conversation_id)
-        .map((s) => s.conversation_id!.toString())
-    );
+      .take(200);
 
     const NOISE_TITLE_PREFIXES = ["[Using:", "[Request", "[SUGGESTION MODE:"];
-
-    const activeParentIds = new Set<string>();
-    for (const c of conversations) {
-      if (c.is_subagent || c.is_workflow_sub || (c.parent_conversation_id && !c.parent_message_uuid)) continue;
-      const dismissed = c.inbox_dismissed_at && c.inbox_dismissed_at >= c.updated_at;
-      if (!dismissed) activeParentIds.add(c._id.toString());
-    }
-
     const results = [];
 
     for (const conv of conversations) {
-      const isSubagent = !!(conv.is_subagent || (conv.parent_conversation_id && !conv.parent_message_uuid));
-
-      if (isSubagent) {
-        const isAlive = conv.status === "active" && (conv.updated_at > now - 5 * 60 * 1000 || liveConvIds.has(conv._id.toString()));
-        if (isAlive) continue;
-        if (conv.parent_conversation_id && activeParentIds.has(conv.parent_conversation_id.toString())) continue;
-
-        results.push({
-          _id: conv._id,
-          session_id: conv.session_id,
-          title: conv.title,
-          subtitle: conv.subtitle,
-          updated_at: conv.updated_at,
-          project_path: conv.project_path,
-          git_root: conv.git_root,
-          git_branch: conv.git_branch,
-          agent_type: conv.agent_type,
-          message_count: conv.message_count,
-          idle_summary: conv.idle_summary,
-          is_idle: true,
-          has_pending: false,
-          is_subagent: true,
-          parent_conversation_id: conv.parent_conversation_id?.toString(),
-        });
-        continue;
-      }
+      if (conv.is_subagent || conv.is_workflow_sub || (conv.parent_conversation_id && !conv.parent_message_uuid)) continue;
+      if (!conv.inbox_dismissed_at || conv.inbox_dismissed_at < conv.updated_at) continue;
+      if (conv.inbox_killed_at) continue;
 
       const title = conv.title?.trim() || "";
       if (title.toLowerCase() === "warmup") continue;
       if (NOISE_TITLE_PREFIXES.some((p) => title.startsWith(p))) continue;
 
-      if (!conv.inbox_dismissed_at || conv.inbox_dismissed_at < conv.updated_at) continue;
-      if (conv.inbox_killed_at) continue;
       const isDismissedCompleted = conv.status === "completed";
 
       let implementationSession: { _id: string; title?: string } | undefined;

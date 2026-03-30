@@ -50,6 +50,10 @@ export const notifyTeamSessionStart = internalMutation({
       return;
     }
 
+    if (conversation.is_subagent || conversation.is_workflow_sub || (conversation.parent_conversation_id && !conversation.parent_message_uuid)) {
+      return;
+    }
+
     const STALE_MS = 5 * 60 * 1000;
     if (conversation.started_at && Date.now() - conversation.started_at > STALE_MS) {
       return;

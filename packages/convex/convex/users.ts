@@ -1476,9 +1476,24 @@ export const getRecentProjectPaths = query({
       .order("desc")
       .take(200);
 
+    const normalizeProjectPath = (raw: string): string | null => {
+      let p = raw;
+      p = p.replace(/\/\.conductor\/[^/]+$/, '');
+      p = p.replace(/\/\.codecast\/worktrees\/[^/]+$/, '');
+      if (/^\/(tmp|var|private\/tmp)\//.test(p)) return null;
+      const parts = p.split('/');
+      const srcIdx = parts.findIndex(s => s === 'src' || s === 'projects' || s === 'repos' || s === 'code');
+      if (srcIdx >= 0 && srcIdx < parts.length - 1) {
+        return parts.slice(0, srcIdx + 2).join('/');
+      }
+      return p;
+    };
+
     const pathCounts = new Map<string, { count: number; lastActive: number }>();
     for (const conv of conversations) {
-      const path = conv.git_root || conv.project_path;
+      const raw = conv.git_root || conv.project_path;
+      if (!raw) continue;
+      const path = normalizeProjectPath(raw);
       if (!path) continue;
       const existing = pathCounts.get(path);
       if (existing) {
