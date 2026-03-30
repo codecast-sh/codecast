@@ -101,6 +101,8 @@ function RootLayoutNav() {
                 <Stack.Screen name="auth/login" options={{ title: 'Login', headerShown: false }} />
                 <Stack.Screen name="auth/signup" options={{ title: 'Sign Up', headerShown: false }} />
                 <Stack.Screen name="session/[id]" options={{ title: 'Conversation' }} />
+                <Stack.Screen name="task/[id]" options={{ title: 'Task' }} />
+                <Stack.Screen name="plan/[id]" options={{ title: 'Plan' }} />
                 <Stack.Screen name="modal" options={{ presentation: 'modal' }} />
               </Stack>
             </AuthGate>

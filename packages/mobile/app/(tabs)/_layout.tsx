@@ -90,11 +90,17 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
+        name="tasks"
+        options={{
+          title: 'Tasks',
+          headerShown: false,
+          tabBarIcon: ({ color }) => <TabBarIcon name="check-square-o" color={color} />,
+        }}
+      />
+      <Tabs.Screen
         name="index"
         options={{
-          title: 'Sessions',
-          headerShown: false,
-          tabBarIcon: ({ color }) => <TabBarIcon name="list" color={color} />,
+          href: null,
         }}
       />
       <Tabs.Screen
