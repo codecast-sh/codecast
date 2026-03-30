@@ -660,8 +660,8 @@ function useTaskUrlState() {
     ? ((searchParams.get("view") || "list") as "list" | "kanban")
     : (taskView?.view ?? "list");
   const sort = hasUrlParams
-    ? ((searchParams.get("sort") || "status") as "status" | "priority" | "created" | "updated" | "plan")
-    : ((taskView?.sort || "status") as "status" | "priority" | "created" | "updated" | "plan");
+    ? ((searchParams.get("sort") || "status") as "status" | "priority" | "created" | "updated" | "plan" | "assignee")
+    : ((taskView?.sort || "status") as "status" | "priority" | "created" | "updated" | "plan" | "assignee");
   const priority = hasUrlParams
     ? (searchParams.get("priority") || "")
     : (taskView?.priority ?? "");
@@ -671,6 +671,9 @@ function useTaskUrlState() {
   const assignee = hasUrlParams
     ? (searchParams.get("assignee") || "")
     : (taskView?.assignee ?? "");
+  const statuses = hasUrlParams
+    ? (searchParams.get("statuses") || "")
+    : (taskView?.statuses ?? "");
   const sourceFilter = hasUrlParams
     ? (searchParams.get("source") || "")
     : (taskView?.source ?? "");
@@ -692,13 +695,13 @@ function useTaskUrlState() {
     }
   }, [searchParams, router, taskView, updateClientUI, isDetailPage]);
 
-  return { status, view, sort, priority, label, assignee, sourceFilter, setParam };
+  return { status, view, sort, priority, label, assignee, statuses, sourceFilter, setParam };
 }
 
 export function TaskListContent() {
   const router = useRouter();
   const params = useParams();
-  const { status: urlStatus, view: viewMode, sort: sortBy, priority: priorityFilter, label: labelFilter, assignee: assigneeFilter, sourceFilter, setParam } = useTaskUrlState();
+  const { status: urlStatus, view: viewMode, sort: sortBy, priority: priorityFilter, label: labelFilter, assignee: assigneeFilter, statuses: statusesFilter, sourceFilter, setParam } = useTaskUrlState();
   const setTaskFilter = useInboxStore((s) => s.setTaskFilter);
   const tasks = useInboxStore((s) => s.tasks);
   const showCreate = useInboxStore((s) => s.createModal === 'task');
@@ -756,12 +759,16 @@ export function TaskListContent() {
     if (sourceFilter === "human") list = list.filter((t) => t.source === "human");
     else if (sourceFilter === "bot") list = list.filter((t) => t.source !== "human");
     else if (sourceFilter === "dismissed") list = list.filter((t) => t.triage_status === "dismissed");
+    if (statusesFilter) {
+      const set = new Set(statusesFilter.split(","));
+      list = list.filter((t) => set.has(t.status));
+    }
     if (priorityFilter) list = list.filter((t) => t.priority === priorityFilter);
     if (labelFilter) list = list.filter((t) => t.labels?.includes(labelFilter));
     if (assigneeFilter === "_unassigned") list = list.filter((t) => !t.assignee);
     else if (assigneeFilter) list = list.filter((t) => t.assignee === assigneeFilter);
     return list;
-  }, [tasksList, priorityFilter, labelFilter, assigneeFilter, sourceFilter]);
+  }, [tasksList, priorityFilter, labelFilter, assigneeFilter, statusesFilter, sourceFilter]);
 
   const sortWithinGroup = useCallback((tasks: TaskItem[]) => {
     return [...tasks].sort((a, b) => {
@@ -796,9 +803,36 @@ export function TaskListContent() {
     return ordered;
   }, [filteredTasks, sortBy, sortWithinGroup]);
 
+  const assigneeGroups = useMemo(() => {
+    if (sortBy !== "assignee") return null;
+    const byAssignee: Record<string, { info: TaskItem["assignee_info"]; tasks: TaskItem[] }> = {};
+    const unassigned: TaskItem[] = [];
+    for (const t of filteredTasks) {
+      if (t.assignee && t.assignee_info) {
+        const key = t.assignee;
+        if (!byAssignee[key]) byAssignee[key] = { info: t.assignee_info, tasks: [] };
+        byAssignee[key].tasks.push(t);
+      } else {
+        unassigned.push(t);
+      }
+    }
+    const ordered = Object.values(byAssignee)
+      .sort((a, b) => (a.info?.name || "").localeCompare(b.info?.name || ""));
+    if (unassigned.length > 0) {
+      ordered.push({ info: undefined, tasks: unassigned });
+    }
+    for (const g of ordered) {
+      g.tasks = sortWithinGroup(g.tasks);
+    }
+    return ordered;
+  }, [filteredTasks, sortBy, sortWithinGroup]);
+
   const flatTasks = useMemo(() => {
     if (sortBy === "plan" && planGroups) {
       return planGroups.flatMap((g) => g.tasks);
+    }
+    if (sortBy === "assignee" && assigneeGroups) {
+      return assigneeGroups.flatMap((g) => g.tasks);
     }
     if (sortBy !== "status") {
       const sorted = [...filteredTasks];
@@ -815,7 +849,7 @@ export function TaskListContent() {
       return acc;
     }, {});
     return STATUS_ORDER.flatMap((s) => grouped[s] || []);
-  }, [filteredTasks, statusFilter, sortBy, planGroups]);
+  }, [filteredTasks, statusFilter, sortBy, planGroups, assigneeGroups]);
 
   const kanbanGrouped = useMemo(() => {
     return filteredTasks.reduce((acc: Record<string, TaskItem[]>, t) => {
@@ -844,6 +878,23 @@ export function TaskListContent() {
         items: g.tasks,
       }));
     }
+    if (sortBy === "assignee" && assigneeGroups) {
+      return assigneeGroups.map((g) => ({
+        key: g.info ? g.tasks[0]?.assignee || "__unknown" : "__unassigned",
+        label: g.info?.name || "Unassigned",
+        icon: g.info?.image ? (
+          <img src={g.info.image} alt={g.info.name} className="w-4 h-4 rounded-full" />
+        ) : (
+          <User className="w-3.5 h-3.5 text-sol-text-dim" />
+        ),
+        extra: g.info && (g.info as any).github_username ? (
+          <Link href={`/team/${(g.info as any).github_username}`} onClick={(e) => e.stopPropagation()} className="text-[10px] text-sol-cyan hover:underline flex-shrink-0">
+            Profile
+          </Link>
+        ) : undefined,
+        items: g.tasks,
+      }));
+    }
     if (statusFilter || sortBy !== "status") return null;
     return STATUS_ORDER
       .filter((s) => kanbanGrouped[s]?.length)
@@ -852,7 +903,7 @@ export function TaskListContent() {
         const Icon = cfg.icon;
         return { key: s, label: cfg.label, icon: <Icon className={`w-3.5 h-3.5 ${cfg.color}`} />, items: kanbanGrouped[s] };
       });
-  }, [sortBy, planGroups, statusFilter, kanbanGrouped]);
+  }, [sortBy, planGroups, assigneeGroups, statusFilter, kanbanGrouped]);
 
   const taskCounts = useMemo(() => {
     const counts: Record<string, number> = { active: 0 };
@@ -887,14 +938,23 @@ export function TaskListContent() {
           sortOptions={[
             { value: "status", label: "Group by status" },
             { value: "plan", label: "Group by plan" },
+            { value: "assignee", label: "Group by assignee" },
             { value: "priority", label: "Sort by priority" },
             { value: "updated", label: "Sort by updated" },
             { value: "created", label: "Sort by created" },
           ]}
           onSortChange={setSortBy}
           filters={{
-            hasActive: !!(priorityFilter || labelFilter || assigneeFilter),
+            hasActive: !!(statusesFilter || priorityFilter || labelFilter || assigneeFilter),
             defs: [
+              {
+                key: "statuses", label: "Status", icon: <Circle className="w-3 h-3" />, value: statusesFilter, multi: true,
+                options: [
+                  { key: "", label: "Any" },
+                  ...STATUS_ORDER.map((s) => ({ key: s, label: STATUS_CONFIG[s].label, icon: STATUS_CONFIG[s].icon, color: STATUS_CONFIG[s].color })),
+                ],
+                onChange: (v: string) => setParam({ statuses: v }),
+              },
               {
                 key: "priority", label: "Priority", icon: <ArrowUp className="w-3 h-3" />, value: priorityFilter,
                 options: [
@@ -921,7 +981,7 @@ export function TaskListContent() {
                 onChange: (v: string) => setParam({ assignee: v }),
               },
             ],
-            onClear: () => setParam({ priority: "", label: "", assignee: "" }),
+            onClear: () => setParam({ statuses: "", priority: "", label: "", assignee: "" }),
           }}
           groups={listGroups}
           flatItems={flatTasks}

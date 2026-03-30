@@ -32,6 +32,7 @@ export interface ListFilterDef {
   value: string;
   options: { key: string; label: string; icon?: any; color?: string }[];
   onChange: (v: string) => void;
+  multi?: boolean;
 }
 
 export interface ListGroup<T> {
@@ -485,6 +486,7 @@ export function GenericListView<T>({
               value={f.value}
               options={f.options}
               onChange={f.onChange}
+              multi={f.multi}
             />
           ))}
           {filters.hasActive && (
