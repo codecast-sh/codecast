@@ -1,4 +1,4 @@
-import { create as mutativeCreate, apply, type Patch } from "mutative";
+import { create as mutativeCreate, type Patch } from "mutative";
 
 type DispatchFn = (action: string, args: any, patches?: any) => Promise<any>;
 type IDBWriteFn = (patches: Patch[], state: any) => void;
@@ -119,7 +119,7 @@ export function mutativeMiddleware(config: any): any {
 
       wrapped[key] = (...args: any[]) => {
         const state = get();
-        const [nextState, patches, inversePatches] = mutativeCreate(
+        const [nextState, patches] = mutativeCreate(
           state,
           (draft: any) => {
             (val as Function).apply(draft, args);
@@ -138,9 +138,7 @@ export function mutativeMiddleware(config: any): any {
         if (isAct && dispatchFn) {
           const grouped =
             patches.length > 0 ? groupPatchesByTable(patches) : undefined;
-          return dispatchFn(key, args, grouped).catch(() => {
-            set(apply(get(), inversePatches), true);
-          });
+          return dispatchFn(key, args, grouped).catch(() => {});
         }
       };
     }

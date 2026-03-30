@@ -119,6 +119,7 @@ export type ConversationMeta = Record<string, any>;
 
 export type ForkChild = {
   _id: string;
+  user_id?: string;
   title: string;
   short_id?: string;
   started_at?: number;
@@ -268,6 +269,14 @@ export type ClientDismissed = {
   tmux_missing?: number;
 };
 
+export type ClientTips = {
+  seen?: string[];
+  dismissed?: string[];
+  completed?: string[];
+  level?: 'all' | 'subtle' | 'none';
+  _inlineSuppressed?: boolean;
+};
+
 export type ClientState = {
   current_conversation_id?: string;
   show_dismissed?: boolean;
@@ -276,6 +285,7 @@ export type ClientState = {
   ui?: ClientUI;
   layouts?: ClientLayouts;
   dismissed?: ClientDismissed;
+  tips?: ClientTips;
   drafts?: Record<string, Record<string, any> | null>;
 
   // deprecated: backward compat
@@ -314,10 +324,6 @@ export function isInterruptControlMessage(raw: string | null | undefined): boole
   return trimmed.startsWith("[Request interrupted") || trimmed.startsWith("[Request cancelled");
 }
 
-export function isSessionInterrupted(session: Pick<InboxSession, "last_user_message">): boolean {
-  return isInterruptControlMessage(session.last_user_message);
-}
-
 const ACTIVE_AGENT_STATUSES: Set<string> = new Set(["working", "compacting", "thinking", "connected", "starting", "resuming"]);
 
 export function isSessionEffectivelyIdle(
@@ -328,14 +334,13 @@ export function isSessionEffectivelyIdle(
 }
 
 export function isSessionWaitingForInput(
-  session: Pick<InboxSession, "_id" | "is_idle" | "agent_status" | "message_count" | "is_pinned" | "last_user_message">,
+  session: Pick<InboxSession, "_id" | "is_idle" | "agent_status" | "message_count" | "is_pinned">,
   sessionsWithQueuedMessages?: Set<string>,
 ): boolean {
   return isSessionEffectivelyIdle(session) &&
     session.message_count > 0 &&
     !session.is_pinned &&
-    !sessionsWithQueuedMessages?.has(session._id) &&
-    !isSessionInterrupted(session);
+    !sessionsWithQueuedMessages?.has(session._id);
 }
 
 export function getSessionRenderKey(
@@ -545,6 +550,7 @@ interface InboxStoreState {
   updateClientUI: (partial: Partial<ClientUI>) => void;
   updateClientLayout: (key: keyof ClientLayouts, value: any) => void;
   updateClientDismissed: (key: keyof ClientDismissed, value: any) => void;
+  updateClientTips: (partial: Partial<ClientTips>) => void;
 
   // -- Recent projects cache --
   recentProjects: Array<{ path: string; count: number; lastActive: number }>;
@@ -761,49 +767,35 @@ export const useInboxStore = create<InboxStoreState>(
   // ACTIONS (wrapped by middleware: mutative draft + server dispatch)
   // =====================
 
-  stashSession: (id: string) => {
+  stashSession: action(function (this: Draft, id: string) {
     soundDismiss();
-    const state = get();
     const now = Date.now();
-    const sessionValues = Object.values(state.sessions) as InboxSession[];
+    const sessionValues = Object.values(this.sessions) as InboxSession[];
     const childIds = sessionValues
       .filter((s) => s.parent_conversation_id === id)
       .map((s) => s._id);
     const allIds = [id, ...childIds];
-    const newSessions = { ...state.sessions };
-    const newPending = { ...state.pending };
-    const newConversations = { ...state.conversations };
-    const dispatchConvos: Record<string, any> = {};
-    for (const sid of allIds) {
-      delete newSessions[sid];
-      newPending[`sessions:${sid}`] = { type: "exclude", expiresAt: now + 15_000 };
-      const wasPinned = state.sessions[sid]?.is_pinned;
-      if (newConversations[sid]) {
-        newConversations[sid] = { ...newConversations[sid], inbox_dismissed_at: now, ...(wasPinned ? { inbox_pinned_at: null } : {}) };
-      }
-      dispatchConvos[sid] = { inbox_dismissed_at: now, ...(state.sessions[sid]?.is_pinned ? { inbox_pinned_at: null } : {}) };
-    }
-    let newSessionId = state.currentSessionId;
-    if (state.currentSessionId && allIds.includes(state.currentSessionId)) {
+    let newSessionId = this.currentSessionId;
+    if (this.currentSessionId && allIds.includes(this.currentSessionId)) {
       const removedSet = new Set(allIds);
-      const ordered = visualOrderSessions(state.sessions, state.sessionsWithQueuedMessages);
-      const idx = ordered.findIndex(s => s._id === state.currentSessionId);
+      const ordered = visualOrderSessions(this.sessions as Record<string, InboxSession>, this.sessionsWithQueuedMessages);
+      const idx = ordered.findIndex(s => s._id === this.currentSessionId);
       const next = ordered.slice(idx + 1).find(s => !removedSet.has(s._id))
         ?? ordered.find(s => !removedSet.has(s._id));
       newSessionId = next?._id ?? null;
     }
-    set({
-      sessions: newSessions,
-      pending: newPending,
-      conversations: newConversations,
-      currentSessionId: newSessionId,
-      clientState: { ...state.clientState, current_conversation_id: newSessionId ?? undefined },
-    });
-    get()._dispatch("patch", [], {
-      conversations: dispatchConvos,
-      client_state: { _: { current_conversation_id: newSessionId ?? null } },
-    }).catch(() => {});
-  },
+    for (const sid of allIds) {
+      const wasPinned = this.sessions[sid]?.is_pinned;
+      delete this.sessions[sid];
+      this.pending[`sessions:${sid}`] = { type: "exclude", expiresAt: now + 15_000 };
+      if (this.conversations[sid]) {
+        (this.conversations[sid] as any).inbox_dismissed_at = now;
+        if (wasPinned) (this.conversations[sid] as any).inbox_pinned_at = null;
+      }
+    }
+    this.currentSessionId = newSessionId;
+    this.clientState.current_conversation_id = newSessionId ?? undefined;
+  }),
 
   switchAgent: (currentId: string, targetAgentType: string) => {
     const state = get();
@@ -857,97 +849,42 @@ export const useInboxStore = create<InboxStoreState>(
     return sessionId;
   },
 
-  unstashSession: (id: string) => {
-    const state = get();
-    const childIds = Object.values(state.dismissedSessions as Record<string, InboxSession>)
+  unstashSession: action(function (this: Draft, id: string) {
+    const childIds = Object.values(this.dismissedSessions as Record<string, InboxSession>)
       .filter((s) => s.parent_conversation_id === id)
       .map((s) => s._id);
     const allIds = [id, ...childIds];
-    const newSessions = { ...state.sessions };
-    const newDismissedSessions = { ...state.dismissedSessions };
-    const newConversations = { ...state.conversations };
-    const newPending = { ...state.pending };
-    const dispatchConvos: Record<string, any> = {};
     for (const sid of allIds) {
-      if (newConversations[sid]) {
-        newConversations[sid] = { ...newConversations[sid], inbox_dismissed_at: null };
+      if (this.conversations[sid]) (this.conversations[sid] as any).inbox_dismissed_at = null;
+      delete this.pending[`sessions:${sid}`];
+      if (this.dismissedSessions[sid]) {
+        this.sessions[sid] = this.dismissedSessions[sid];
+        delete this.dismissedSessions[sid];
       }
-      delete newPending[`sessions:${sid}`];
-      if (newDismissedSessions[sid]) {
-        newSessions[sid] = newDismissedSessions[sid];
-        delete newDismissedSessions[sid];
-      }
-      dispatchConvos[sid] = { inbox_dismissed_at: null };
     }
-    set({
-      sessions: newSessions,
-      dismissedSessions: newDismissedSessions,
-      conversations: newConversations,
-      pending: newPending,
-      currentSessionId: id,
-      viewingDismissedId: null,
-      clientState: { ...state.clientState, current_conversation_id: id },
-    });
-    get()._dispatch("patch", [], {
-      conversations: dispatchConvos,
-      client_state: { _: { current_conversation_id: id } },
-    }).catch(() => {});
-  },
+    this.currentSessionId = id;
+    this.viewingDismissedId = null;
+    this.clientState.current_conversation_id = id;
+  }),
 
-  deferSession: (id: string) => {
-    const state = get();
-    const newSessions = { ...state.sessions };
-    if (newSessions[id]) {
-      newSessions[id] = { ...newSessions[id], is_deferred: true };
-    }
-    const newConversations = { ...state.conversations };
-    if (newConversations[id]) {
-      newConversations[id] = { ...newConversations[id], inbox_deferred_at: Date.now() };
-    }
-    const newPending = { ...state.pending };
-    newPending[`sessions:${id}:is_deferred`] = { type: "field", value: true, expiresAt: Date.now() + 15_000 };
-    set({ sessions: newSessions, conversations: newConversations, pending: newPending });
-    get()._dispatch("patch", [], {
-      conversations: { [id]: { inbox_deferred_at: Date.now() } },
-    }).catch(() => {});
-  },
+  deferSession: action(function (this: Draft, id: string) {
+    if (this.sessions[id]) this.sessions[id].is_deferred = true;
+    if (this.conversations[id]) (this.conversations[id] as any).inbox_deferred_at = Date.now();
+    this.pending[`sessions:${id}:is_deferred`] = { type: "field", value: true, expiresAt: Date.now() + 15_000 };
+  }),
 
-  pinSession: (id: string) => {
-    const state = get();
-    const isPinned = state.sessions[id]?.is_pinned;
-    const newPinned = !isPinned;
+  pinSession: action(function (this: Draft, id: string) {
+    const newPinned = !this.sessions[id]?.is_pinned;
     const pinnedAt = newPinned ? Date.now() : null;
-    const newSessions = { ...state.sessions };
-    if (newSessions[id]) {
-      newSessions[id] = { ...newSessions[id], is_pinned: newPinned };
-    }
-    const newConversations = { ...state.conversations };
-    if (newConversations[id]) {
-      newConversations[id] = { ...newConversations[id], inbox_pinned_at: pinnedAt };
-    }
-    const newPending = { ...state.pending };
-    newPending[`sessions:${id}:is_pinned`] = { type: "field", value: newPinned, expiresAt: Date.now() + 15_000 };
-    set({ sessions: newSessions, conversations: newConversations, pending: newPending });
-    get()._dispatch("patch", [], {
-      conversations: { [id]: { inbox_pinned_at: pinnedAt } },
-    }).catch(() => {});
-  },
+    if (this.sessions[id]) this.sessions[id].is_pinned = newPinned;
+    if (this.conversations[id]) (this.conversations[id] as any).inbox_pinned_at = pinnedAt;
+    this.pending[`sessions:${id}:is_pinned`] = { type: "field", value: newPinned, expiresAt: Date.now() + 15_000 };
+  }),
 
-  renameSession: (id: string, title: string) => {
-    const state = get();
-    const newSessions = { ...state.sessions };
-    if (newSessions[id]) {
-      newSessions[id] = { ...newSessions[id], title };
-    }
-    const newConversations = { ...state.conversations };
-    if (newConversations[id]) {
-      newConversations[id] = { ...newConversations[id], title };
-    }
-    set({ sessions: newSessions, conversations: newConversations });
-    get()._dispatch("patch", [], {
-      conversations: { [id]: { title } },
-    }).catch(() => {});
-  },
+  renameSession: action(function (this: Draft, id: string, title: string) {
+    if (this.sessions[id]) this.sessions[id].title = title;
+    if (this.conversations[id]) this.conversations[id].title = title;
+  }),
 
   switchProject: action(function (this: Draft, convId: string, path: string) {
     if (this.sessions[convId]) {
@@ -1001,7 +938,7 @@ export const useInboxStore = create<InboxStoreState>(
   }),
 
   updateClientUI: action(function (this: Draft, partial: Partial<ClientUI>) {
-    if (!this.clientState.ui) this.clientState.ui = {};
+    if (!this.clientState.ui) this.clientState.ui = {} as ClientUI;
     Object.assign(this.clientState.ui, partial);
   }),
 
@@ -1014,6 +951,24 @@ export const useInboxStore = create<InboxStoreState>(
     if (!this.clientState.dismissed) this.clientState.dismissed = {};
     (this.clientState.dismissed as any)[key] = value;
   }),
+
+  updateClientTips: (partial: Partial<ClientTips>) => {
+    const cs = get().clientState;
+    const prev = cs.tips ?? {};
+    const next = { ...prev };
+    if (partial.seen) next.seen = partial.seen;
+    if (partial.dismissed) next.dismissed = partial.dismissed;
+    if (partial.completed) next.completed = partial.completed;
+    if (partial.level !== undefined) next.level = partial.level;
+    if (partial._inlineSuppressed !== undefined) next._inlineSuppressed = partial._inlineSuppressed;
+    set({ clientState: { ...cs, tips: next } });
+    const serverPartial = { ...partial };
+    delete serverPartial._inlineSuppressed;
+    if (Object.keys(serverPartial).length > 0) {
+      const dispatch = () => get()._dispatch("patch", [], { client_state: { _: { tips: serverPartial } } });
+      dispatch().catch(() => setTimeout(() => dispatch().catch(() => {}), 3000));
+    }
+  },
 
   // =====================
   // GENERIC SYNC
@@ -1096,6 +1051,14 @@ export const useInboxStore = create<InboxStoreState>(
         dashboard: serverState.layout,
       } : undefined),
       dismissed: { ...prev.dismissed, ...serverState.dismissed },
+      tips: {
+        ...serverState.tips,
+        ...(initialized && prev.tips?.level !== undefined ? { level: prev.tips.level } : {}),
+        seen: [...new Set([...(serverState.tips?.seen ?? []), ...(prev.tips?.seen ?? [])])],
+        dismissed: [...new Set([...(serverState.tips?.dismissed ?? []), ...(prev.tips?.dismissed ?? [])])],
+        completed: [...new Set([...(serverState.tips?.completed ?? []), ...(prev.tips?.completed ?? [])])],
+        _inlineSuppressed: prev.tips?._inlineSuppressed,
+      },
       drafts: initialized ? prev.drafts : serverState.drafts,
     };
     this.clientStateInitialized = true;
@@ -1164,17 +1127,12 @@ export const useInboxStore = create<InboxStoreState>(
     get().setCurrentSession(ordered[newIdx]._id);
   },
 
-  setCurrentSession: (id: string) => {
-    const state = get();
-    set({
-      currentSessionId: id,
-      viewingDismissedId: null,
-      clientState: { ...state.clientState, current_conversation_id: id },
-    });
-    get()._dispatch("patch", [], {
-      client_state: { _: { current_conversation_id: id } },
-    }).catch(() => {});
-  },
+  setCurrentSession: action(function (this: Draft, id: string) {
+    this.currentSessionId = id;
+    this.viewingDismissedId = null;
+    this.activeBranches = {};
+    this.clientState.current_conversation_id = id;
+  }),
 
   clearSelection: action(function (this: Draft) {
     this.viewingDismissedId = null;
@@ -1280,32 +1238,20 @@ export const useInboxStore = create<InboxStoreState>(
     set({ mruStack: [id, ...filtered] });
   },
 
-  markKilling: (id: string) => {
-    const state = get();
-    const newSessions = { ...state.sessions };
-    delete newSessions[id];
-    const newPending = { ...state.pending };
-    newPending[`sessions:${id}`] = { type: "exclude", expiresAt: Date.now() + 10_000 };
-    let newSessionId = state.currentSessionId;
-    if (state.currentSessionId === id) {
-      const ordered = visualOrderSessions(state.sessions, state.sessionsWithQueuedMessages);
+  markKilling: action(function (this: Draft, id: string) {
+    let newSessionId = this.currentSessionId;
+    if (this.currentSessionId === id) {
+      const ordered = visualOrderSessions(this.sessions as Record<string, InboxSession>, this.sessionsWithQueuedMessages);
       const idx = ordered.findIndex(s => s._id === id);
       const next = ordered.slice(idx + 1).find(s => s._id !== id)
         ?? ordered.find(s => s._id !== id);
       newSessionId = next?._id ?? null;
     }
-    set({
-      sessions: newSessions,
-      pending: newPending,
-      currentSessionId: newSessionId,
-      clientState: { ...state.clientState, current_conversation_id: newSessionId ?? undefined },
-    });
-    if (state.currentSessionId === id) {
-      get()._dispatch("patch", [], {
-        client_state: { _: { current_conversation_id: newSessionId ?? null } },
-      }).catch(() => {});
-    }
-  },
+    delete this.sessions[id];
+    this.pending[`sessions:${id}`] = { type: "exclude", expiresAt: Date.now() + 10_000 };
+    this.currentSessionId = newSessionId;
+    this.clientState.current_conversation_id = newSessionId ?? undefined;
+  }),
 
 
   // =====================
