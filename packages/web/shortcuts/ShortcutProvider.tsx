@@ -5,6 +5,7 @@ import { useEventListener } from "../hooks/useEventListener";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { ShortcutAction, SHORTCUTS, matchShortcut } from "./registry";
+import { onShortcutUsed } from "../tips/useTips";
 
 type Handler = () => boolean | void;
 
@@ -66,6 +67,7 @@ export function ShortcutProvider({ children }: { children: ReactNode }) {
       if (handled) {
         e.preventDefault();
         e.stopImmediatePropagation();
+        onShortcutUsed(def.action);
         return;
       }
     }

@@ -50,6 +50,10 @@
     "src/**/*.tsx",
     "store/**/*.ts",
     "store/**/*.tsx",
+    "shortcuts/**/*.ts",
+    "shortcuts/**/*.tsx",
+    "tips/**/*.ts",
+    "tips/**/*.tsx",
     "vite-env.d.ts",
     ".next/types/**/*.ts"
   ],

@@ -9,6 +9,7 @@ import { isInboxSessionView } from "../lib/inboxRouting";
 import { useShortcutAction } from "./ShortcutProvider";
 import { performUndo, performRedo } from "../store/undoStack";
 import { undoableStashSession, undoableDeferSession, undoablePinSession } from "../store/undoActions";
+import { checkMilestone } from "../tips/useTips";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 
 const api = _typedApi as any;
@@ -65,13 +66,18 @@ export function useGlobalShortcutActions() {
   useShortcutAction('session.pin', useCallback(() => {
     const store = useInboxStore.getState();
     const currentId = isOnInboxPage ? store.currentSessionId : store.sidePanelSessionId;
-    if (currentId) undoablePinSession(currentId);
+    if (currentId) {
+      const session = store.sessions[currentId];
+      if (session && !session.is_pinned) checkMilestone('m-first-pin');
+      undoablePinSession(currentId);
+    }
   }, [isOnInboxPage]));
 
   useShortcutAction('session.stash', useCallback(() => {
     const store = useInboxStore.getState();
     const currentId = isOnInboxPage ? store.currentSessionId : store.sidePanelSessionId;
     if (!currentId) return;
+    checkMilestone('m-first-stash');
     const ordered = store.visualOrder();
     undoableStashSession(currentId);
     if (!isOnInboxPage) {
@@ -129,6 +135,7 @@ export function useGlobalShortcutActions() {
   useShortcutAction('ui.zenToggle', useCallback(() => {
     const store = useInboxStore.getState();
     const zen = store.clientState.ui?.zen_mode ?? false;
+    if (!zen) checkMilestone('m-first-zen');
     store.updateClientUI({ zen_mode: !zen });
   }, []));
 

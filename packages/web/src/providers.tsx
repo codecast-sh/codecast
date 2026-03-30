@@ -7,6 +7,7 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { Toaster } from "@/components/ui/sonner";
 import { DesktopProvider } from "@/components/DesktopProvider";
 import { ShortcutProvider } from "@/shortcuts";
+import { TipProvider } from "@/tips/TipProvider";
 import { useLocalStorageMigration } from "@/hooks/useLocalStorageMigration";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { identifyUser, resetUser } from "@/lib/analytics";
@@ -49,6 +50,7 @@ export function Providers({ children }: { children: ReactNode }) {
     <ConvexAuthProvider client={convex}>
       <ThemeProvider>
         <ShortcutProvider>
+        <TipProvider>
         <NavigationProgress />
         {children}
         <ErrorBoundary name="DesktopProvider" level="inline">
@@ -57,6 +59,7 @@ export function Providers({ children }: { children: ReactNode }) {
         <PrefsMigration />
         <AnalyticsIdentify />
         <Toaster position="bottom-right" />
+        </TipProvider>
         </ShortcutProvider>
       </ThemeProvider>
     </ConvexAuthProvider>
