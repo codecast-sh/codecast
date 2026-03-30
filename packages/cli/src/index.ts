@@ -821,9 +821,19 @@ esac
 
 STATUS_DIR="$HOME/.codecast/agent-status"
 mkdir -p "$STATUS_DIR"
-PERM_FIELD=""
-[ -n "$PERM_MODE" ] && PERM_FIELD=",\\"permission_mode\\":\\"$PERM_MODE\\""
-echo "{\\"status\\":\\"$STATUS\\",\\"ts\\":$(date +%s)$PERM_FIELD$EXTRA}" > "$STATUS_DIR/$SESSION_ID.json"
+CC_STATUS="$STATUS" CC_PERM_MODE="$PERM_MODE" CC_EXTRA="$EXTRA" python3 -c "
+import json, time, os
+d = {'status': os.environ['CC_STATUS'], 'ts': int(time.time())}
+pm = os.environ.get('CC_PERM_MODE', '')
+if pm: d['permission_mode'] = pm
+ex = os.environ.get('CC_EXTRA', '')
+if ex:
+    try:
+        parsed = json.loads('{' + ex.lstrip(',') + '}')
+        d.update(parsed)
+    except: pass
+print(json.dumps(d))
+" > "$STATUS_DIR/$SESSION_ID.json"
 exit 0
 `;
 
@@ -1310,9 +1320,9 @@ function startDaemon(): void {
     console.log("Session management features (attach, remote control) will be unavailable.\n");
   }
 
-  if (isDaemonRunning()) {
-    const pid = fs.readFileSync(PID_FILE, "utf-8").trim();
-    console.log(`Daemon is already running (PID: ${pid})`);
+  const existingPid = getDaemonPid();
+  if (existingPid) {
+    console.log(`Daemon is already running (PID: ${existingPid})`);
     return;
   }
 

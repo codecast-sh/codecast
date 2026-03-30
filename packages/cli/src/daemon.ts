@@ -281,6 +281,7 @@ interface DaemonState {
   watchdogRestarts?: number;
   lastHeartbeatTick?: number;
   runtimeVersion?: string;
+  lastSelfHealRestart?: number;
 }
 
 const AUTH_FAILURE_THRESHOLD = 5;
@@ -294,6 +295,8 @@ const LOG_QUEUE_FILE = path.join(process.env.HOME || "", ".codecast", "log-queue
 const EVENT_LOOP_CHECK_INTERVAL_MS = 30 * 1000; // 30 seconds
 const EVENT_LOOP_LAG_THRESHOLD_MS = 60 * 1000; // 1 minute of lag = frozen
 const HEARTBEAT_STALE_THRESHOLD_MS = 15 * 60 * 1000; // external watchdog: 15 min = deadlocked
+const STUCK_CONNECTION_THRESHOLD_MS = 3 * 60 * 1000; // 3 min disconnected = stuck, trigger self-heal
+const SELF_HEAL_COOLDOWN_MS = 10 * 60 * 1000; // 10 min between self-heal restarts
 
 type LogLevel = "debug" | "info" | "warn" | "error";
 
@@ -773,6 +776,7 @@ function isAutostartEnabled(): boolean {
 }
 
 const processedPollCommandIds = new Set<string>();
+let backendDownSince = 0;
 
 async function pollDaemonCommands(): Promise<void> {
   const config = readConfig();
@@ -791,7 +795,26 @@ async function pollDaemonCommands(): Promise<void> {
         has_tmux: hasTmux(),
       }),
     });
-    if (!response.ok) return;
+    if (!response.ok) {
+      if (backendDownSince === 0) backendDownSince = Date.now();
+      return;
+    }
+    if (backendDownSince > 0) {
+      const downFor = Date.now() - backendDownSince;
+      backendDownSince = 0;
+      if (downFor > STUCK_CONNECTION_THRESHOLD_MS) {
+        const state = readDaemonState();
+        const lastHeal = state.lastSelfHealRestart || 0;
+        if (Date.now() - lastHeal > SELF_HEAL_COOLDOWN_MS) {
+          const downSec = Math.round(downFor / 1000);
+          logLifecycle("self_heal_restart", `Backend recovered after ${downSec}s down, restarting`);
+          sendLogImmediate("warn", `[LIFECYCLE] self_heal_restart: backend recovered after ${downSec}s down`, { error_code: "self_heal_restart" });
+          saveDaemonState({ lastSelfHealRestart: Date.now() });
+          flushRemoteLogs().then(() => triggerSelfRestart()).catch(() => triggerSelfRestart());
+          return;
+        }
+      }
+    }
     const data = await response.json();
     if (data.commands && data.commands.length > 0) {
       log(`[POLL] Received ${data.commands.length} command(s): ${data.commands.map((c: any) => c.command).join(", ")}`);
@@ -801,7 +824,9 @@ async function pollDaemonCommands(): Promise<void> {
         await executeRemoteCommand(cmd.id, cmd.command, config, cmd.args);
       }
     }
-  } catch {}
+  } catch {
+    if (backendDownSince === 0) backendDownSince = Date.now();
+  }
 }
 
 async function sendHeartbeat(): Promise<void> {
@@ -2481,6 +2506,62 @@ function readFileHeadAndTail(filePath: string, headBytes: number = 8192, tailByt
   return head + "\n" + tail;
 }
 
+const bakImageRecoveryDone = new Set<string>();
+
+function recoverImagesFromBackup(
+  messages: ParsedMessage[],
+  bakPath: string,
+  logFn: (msg: string) => void,
+): ParsedMessage[] {
+  const unavailableToolIds = new Set<string>();
+  for (const msg of messages) {
+    if (!msg.toolResults) continue;
+    for (const tr of msg.toolResults) {
+      if (tr.content === "[result unavailable]") {
+        unavailableToolIds.add(tr.toolUseId);
+      }
+    }
+  }
+  if (unavailableToolIds.size === 0) return messages;
+
+  let bakContent: string;
+  try {
+    bakContent = fs.readFileSync(bakPath, "utf-8");
+  } catch {
+    return messages;
+  }
+
+  const bakMessages = parseSessionFile(bakContent);
+  const imageMap = new Map<string, { mediaType: string; data: string; toolUseId?: string }>();
+  for (const bm of bakMessages) {
+    if (!bm.images) continue;
+    for (const img of bm.images) {
+      if (img.toolUseId && unavailableToolIds.has(img.toolUseId)) {
+        imageMap.set(img.toolUseId, img);
+      }
+    }
+  }
+
+  if (imageMap.size === 0) return messages;
+  logFn(`Recovered ${imageMap.size} images from backup file`);
+
+  for (const msg of messages) {
+    if (!msg.toolResults) continue;
+    const recovered: typeof msg.images = [];
+    for (const tr of msg.toolResults) {
+      const img = imageMap.get(tr.toolUseId);
+      if (img) {
+        recovered.push(img);
+      }
+    }
+    if (recovered.length > 0) {
+      msg.images = [...(msg.images || []), ...recovered];
+    }
+  }
+
+  return messages;
+}
+
 async function processSessionFile(
   filePath: string,
   sessionId: string,
@@ -2532,6 +2613,12 @@ async function processSessionFile(
 
     const newContent = buffer.toString("utf-8");
     let messages = parseSessionFile(newContent);
+
+    const bakPath = filePath + ".bak";
+    if (!bakImageRecoveryDone.has(filePath) && fs.existsSync(bakPath)) {
+      bakImageRecoveryDone.add(filePath);
+      messages = recoverImagesFromBackup(messages, bakPath, log);
+    }
 
     if (permissionJustResolved.has(sessionId)) {
       const before = messages.length;
@@ -7194,6 +7281,14 @@ function spawnReplacement(): boolean {
   } catch {
     return false;
   }
+}
+
+function triggerSelfRestart(): void {
+  if (!isManagedByLaunchd()) {
+    const spawned = spawnReplacement();
+    if (spawned) skipRespawn = true;
+  }
+  setTimeout(() => process.exit(0), 500);
 }
 
 const CRASH_FILE = path.join(CONFIG_DIR, "crash-count.json");
