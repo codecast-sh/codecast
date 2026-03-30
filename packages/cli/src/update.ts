@@ -2,7 +2,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 
-const VERSION = "1.1.2";
+const VERSION = "1.1.3";
 const MEMORY_VERSION = "3";
 const TASK_VERSION = "1";
 const WORK_VERSION = "5";
