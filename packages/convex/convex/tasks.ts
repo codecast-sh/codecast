@@ -3,7 +3,7 @@ import { mutation, query } from "./_generated/server";
 import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { createDataContext } from "./data";
+import { createDataContext, scopeByProject } from "./data";
 import { nextShortId } from "./counters";
 import { internal } from "./_generated/api";
 
@@ -827,6 +827,7 @@ export const webList = query({
     triage_status: v.optional(v.string()),
     team_id: v.optional(v.id("teams")),
     workspace: v.optional(v.union(v.literal("personal"), v.literal("team"))),
+    project_path: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -843,24 +844,21 @@ export const webList = query({
         .query("tasks")
         .withIndex("by_team_id", (q) => q.eq("team_id", args.team_id!))
         .collect();
-      if (args.status) {
-        tasks = tasks.filter((t) => t.status === args.status);
-      }
-    } else if (args.workspace === "personal") {
+    } else {
       tasks = await ctx.db
         .query("tasks")
         .withIndex("by_user_id", (q) => q.eq("user_id", userId))
         .collect();
-      tasks = tasks.filter((t: any) => !t.team_id);
-      if (args.status) {
-        tasks = tasks.filter((t) => t.status === args.status);
+      if (args.workspace === "personal") {
+        tasks = tasks.filter((t: any) => !t.team_id);
       }
-    } else {
-      const db = await createDataContext(ctx, { userId, workspace: args.workspace, team_id: args.team_id });
-      tasks = await db.query("tasks").collect();
-      if (args.status) {
-        tasks = tasks.filter((t) => t.status === args.status);
-      }
+    }
+    if (args.project_path) {
+      tasks = scopeByProject(tasks, args.project_path);
+    }
+
+    if (args.status) {
+      tasks = tasks.filter((t) => t.status === args.status);
     }
 
     if (!args.status) {
