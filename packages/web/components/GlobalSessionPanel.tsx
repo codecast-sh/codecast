@@ -826,6 +826,7 @@ export function SessionListPanel({
   );
 
   const [projectFilter, setProjectFilter] = useState<string | null>(null);
+  const setActiveProjectPath = useInboxStore((s) => s.setActiveProjectPath);
 
   const activeSessions = useMemo(() => [...pinned, ...newSessions, ...needsInput, ...working], [pinned, newSessions, needsInput, working]);
 
@@ -836,6 +837,17 @@ export function SessionListPanel({
       if (name !== "unknown") counts[name] = (counts[name] || 0) + 1;
     }
     return Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  }, [activeSessions]);
+
+  const projectPathByName = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const s of activeSessions) {
+      const name = getProjectName(s.git_root, s.project_path);
+      if (name !== "unknown" && !map[name]) {
+        map[name] = s.git_root || s.project_path || "";
+      }
+    }
+    return map;
   }, [activeSessions]);
 
   const filterByProject = useCallback((items: InboxSession[]) => {
@@ -936,7 +948,11 @@ export function SessionListPanel({
             {projectCounts.map(([name, count]) => (
               <button
                 key={name}
-                onClick={() => setProjectFilter((prev) => prev === name ? null : name)}
+                onClick={() => {
+                  const next = projectFilter === name ? null : name;
+                  setProjectFilter(next);
+                  setActiveProjectPath(next ? (projectPathByName[next] || null) : null);
+                }}
                 className={`flex-shrink-0 px-2 py-0.5 rounded-full text-[10px] transition-all ${
                   projectFilter === name
                     ? "bg-sol-cyan/20 text-sol-cyan"

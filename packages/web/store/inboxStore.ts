@@ -221,6 +221,7 @@ export type DocDetail = DocItem & {
 
 export type TaskViewPrefs = {
   status?: string;
+  statuses?: string;
   view?: "list" | "kanban";
   sort?: string;
   priority?: string;
@@ -556,6 +557,10 @@ interface InboxStoreState {
   recentProjects: Array<{ path: string; count: number; lastActive: number }>;
   setRecentProjects: (projects: Array<{ path: string; count: number; lastActive: number }>) => void;
 
+  // -- Active project scope (non-persisted, resets on reload) --
+  activeProjectPath: string | null;
+  setActiveProjectPath: (path: string | null) => void;
+
   // -- Sidebar nav expanded sections --
   sidebarNavExpanded: Record<string, boolean>;
   toggleSidebarNav: (section: string) => void;
@@ -762,6 +767,8 @@ export const useInboxStore = create<InboxStoreState>(
   optimisticForkChildren: [],
   recentProjects: [],
   setRecentProjects: (projects: Array<{ path: string; count: number; lastActive: number }>) => set({ recentProjects: projects }),
+  activeProjectPath: null,
+  setActiveProjectPath: (path: string | null) => set({ activeProjectPath: path }),
 
   // =====================
   // ACTIONS (wrapped by middleware: mutative draft + server dispatch)

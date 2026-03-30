@@ -14,7 +14,7 @@ export function useSyncDocs(typeFilter?: string, searchQuery?: string, projectFi
     workspaceArgs === "skip" ? "skip"
       : searchQuery
         ? { query: searchQuery, doc_type: typeFilter || undefined, scope: scope || undefined, ...workspaceArgs }
-        : { doc_type: typeFilter || undefined, project_path: projectFilter || undefined, scope: scope || undefined, ...workspaceArgs }
+        : { doc_type: typeFilter || undefined, scope: scope || undefined, ...workspaceArgs, ...(projectFilter ? { project_path: projectFilter } : {}) }
   );
   const syncTable = useInboxStore((s) => s.syncTable);
 
