@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { mutation, query } from "./_generated/server";
+import { mutation, query, internalQuery, internalMutation } from "./_generated/server";
 import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
 import { getAuthUserId } from "@convex-dev/auth/server";
@@ -515,7 +515,7 @@ export const update = mutation({
     labels: v.optional(v.array(v.string())),
     project_id: v.optional(v.string()),
     project_path: v.optional(v.string()),
-    team_id: v.optional(v.string()),
+    team_id: v.optional(v.id("teams")),
     plan_id: v.optional(v.string()),
     blocked_by: v.optional(v.array(v.string())),
     blocks: v.optional(v.array(v.string())),
@@ -554,7 +554,7 @@ export const update = mutation({
     if (args.labels) updates.labels = args.labels;
     if (args.project_id !== undefined) updates.project_id = args.project_id || undefined;
     if (args.project_path !== undefined) updates.project_path = args.project_path || undefined;
-    if (args.team_id) updates.team_id = args.team_id as any;
+    if (args.team_id) updates.team_id = args.team_id;
     if (args.plan_id) {
       const plan = await ctx.db
         .query("plans")
@@ -1507,6 +1507,68 @@ export const updateExecutionStatus = mutation({
     });
 
     return { success: true };
+  },
+});
+
+// TEMP DIAGNOSTIC: check task data by short_id (no auth needed)
+export const _debugGetTask = internalQuery({
+  args: { short_id: v.string() },
+  handler: async (ctx, args) => {
+    const task = await ctx.db
+      .query("tasks")
+      .withIndex("by_short_id", (q: any) => q.eq("short_id", args.short_id))
+      .first();
+    if (!task) return null;
+    return {
+      short_id: task.short_id,
+      team_id: task.team_id,
+      team_id_type: typeof task.team_id,
+      project_path: task.project_path,
+      user_id: task.user_id,
+      status: task.status,
+    };
+  },
+});
+
+export const _debugListByTeam = internalQuery({
+  args: { team_id: v.id("teams") },
+  handler: async (ctx, args) => {
+    const tasks = await ctx.db
+      .query("tasks")
+      .withIndex("by_team_id", (q: any) => q.eq("team_id", args.team_id))
+      .take(20);
+    return tasks.map((t: any) => ({ short_id: t.short_id, team_id: t.team_id, title: t.title?.slice(0, 40) }));
+  },
+});
+
+export const _repairTeamId = internalMutation({
+  args: {
+    short_ids: v.array(v.string()),
+    team_id: v.id("teams"),
+    project_path: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const teamDoc = await ctx.db.get(args.team_id);
+    if (!teamDoc) return [{ error: "team not found" }];
+    const results = [];
+    for (const sid of args.short_ids) {
+      const task = await ctx.db
+        .query("tasks")
+        .withIndex("by_short_id", (q: any) => q.eq("short_id", sid))
+        .first();
+      if (task) {
+        // Clear team_id first to force Convex to re-index, then set properly
+        await ctx.db.patch(task._id, { team_id: undefined } as any);
+        await ctx.db.patch(task._id, {
+          team_id: teamDoc._id,
+          ...(args.project_path ? { project_path: args.project_path } : {}),
+        } as any);
+        results.push({ short_id: sid, fixed: true, team_id: String(teamDoc._id) });
+      } else {
+        results.push({ short_id: sid, fixed: false, error: "not found" });
+      }
+    }
+    return results;
   },
 });
 
