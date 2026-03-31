@@ -1619,13 +1619,13 @@ async function executeRemoteCommand(
         let resumed = false;
         if (forceReconstitute) {
           log(`[REMOTE] Force-reconstituting session ${sessionId.slice(0, 8)} from DB${projectPath ? ` in ${projectPath}` : ""}`);
-          resumed = await repairAndResumeSession(sessionId, "", readTitleCache(), false, projectPath, conversationId);
+          resumed = await repairAndResumeSession(sessionId, "", readTitleCache(), projectPath, conversationId);
         } else {
           log(`[REMOTE] Force-resuming session ${sessionId.slice(0, 8)}${projectPath ? ` in ${projectPath}` : ""}`);
-          resumed = await autoResumeSession(sessionId, "", readTitleCache(), false, projectPath, conversationId);
+          resumed = await autoResumeSession(sessionId, "", readTitleCache(), projectPath, conversationId);
           if (!resumed) {
             log(`[REMOTE] Auto-resume failed for ${sessionId.slice(0, 8)}, attempting repair...`);
-            resumed = await repairAndResumeSession(sessionId, "", readTitleCache(), false, projectPath, conversationId);
+            resumed = await repairAndResumeSession(sessionId, "", readTitleCache(), projectPath, conversationId);
           }
         }
         if (resumed) {
@@ -5635,7 +5635,7 @@ async function handleDeadSession(sessionId: string, tmuxSession: string): Promis
     await syncServiceRef.setSessionError(conversationId, "Session crashed — reconstituting from database").catch(() => {});
   }
 
-  const repaired = await repairAndResumeSession(sessionId, "", readTitleCache(), false, undefined, conversationId);
+  const repaired = await repairAndResumeSession(sessionId, "", readTitleCache(), undefined, conversationId);
   if (repaired) {
     log(`[HEARTBEAT-HEALTH] Reconstituted session ${sessionId.slice(0, 8)}`);
     if (conversationId && syncServiceRef) {
@@ -5888,7 +5888,7 @@ function slugify(text: string, maxLen = 30): string {
     .replace(/-+$/, "");
 }
 
-async function autoResumeSession(sessionId: string, content: string, titleCache: TitleCache, nonInteractive = false, cwdOverride?: string, conversationId?: string): Promise<boolean> {
+async function autoResumeSession(sessionId: string, content: string, titleCache: TitleCache, cwdOverride?: string, conversationId?: string): Promise<boolean> {
   // Deduplicate concurrent resume attempts on the same session
   const existing = resumeInFlight.get(sessionId);
   if (existing) {
@@ -5924,7 +5924,7 @@ async function autoResumeSession(sessionId: string, content: string, titleCache:
       }
     }
   }
-  const promise = autoResumeSessionInner(sessionId, content, titleCache, nonInteractive, cwdOverride, conversationId);
+  const promise = autoResumeSessionInner(sessionId, content, titleCache, cwdOverride, conversationId);
   resumeInFlight.set(sessionId, promise);
   resumeInFlightStarted.set(sessionId, Date.now());
   try {
@@ -5935,7 +5935,7 @@ async function autoResumeSession(sessionId: string, content: string, titleCache:
   }
 }
 
-async function autoResumeSessionInner(sessionId: string, content: string, titleCache: TitleCache, nonInteractive = false, cwdOverride?: string, conversationId?: string): Promise<boolean> {
+async function autoResumeSessionInner(sessionId: string, content: string, titleCache: TitleCache, cwdOverride?: string, conversationId?: string): Promise<boolean> {
   if (!hasTmux()) {
     logDelivery(`Cannot auto-resume ${sessionId.slice(0, 8)}: tmux not installed`);
     return false;
@@ -6086,55 +6086,6 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
     await setTmuxSessionOption(tmuxSession, "@codecast_session_id", sessionId);
     await setTmuxSessionOption(tmuxSession, "@codecast_agent_type", agentType);
 
-    // For non-interactive mode (materialized sessions), use -p flag to process message and exit
-    if (nonInteractive && agentType === "claude") {
-      const tmpFile = path.join(os.tmpdir(), `codecast-msg-${shortId}.txt`);
-      fs.writeFileSync(tmpFile, content);
-      const nonInteractiveCmd = `env -u CLAUDECODE ${resumeCmd} -p "$(cat '${tmpFile}')" --output-format stream-json --verbose && rm -f '${tmpFile}'`;
-      await tmuxExec(["send-keys", "-t", tmuxSession, "-l", nonInteractiveCmd]);
-      await tmuxExec(["send-keys", "-t", tmuxSession, "Enter"]);
-      logDelivery(`Auto-resumed ${agentType} ${shortId} in tmux=${tmuxSession} (non-interactive) cwd=${cwd}`);
-
-      // Poll briefly for fatal errors before declaring success
-      const fatalErrors = [
-        "No conversation found",
-        "Session not found",
-        "command not found",
-        "cannot be launched inside another",
-        "is not an object",
-        "ENOENT",
-      ];
-      for (let i = 0; i < 20; i++) {
-        await new Promise(resolve => setTimeout(resolve, 500));
-        try {
-          const { stdout: paneContent } = await tmuxExec(["capture-pane", "-p", "-J", "-t", tmuxSession, "-S", "-20"]);
-          if (fatalErrors.some(e => paneContent.includes(e))) {
-            const fatalReason = classifyClaudeResumeFatalReason(paneContent);
-            if (fatalReason) {
-              resumeFatalReasons.set(sessionId, fatalReason);
-            }
-            logDelivery(`Auto-resume FATAL (non-interactive) for ${shortId}: ${paneContent.slice(0, 300)}`);
-            try { await tmuxExec(["kill-session", "-t", tmuxSession]); } catch {}
-            try { fs.unlinkSync(tmpFile); } catch {}
-            return false;
-          }
-          // If we see JSON output streaming, agent is working
-          if (paneContent.includes('"type":"result"') || paneContent.includes('"type":"assistant"')) {
-            logDelivery(`Agent ${shortId} (non-interactive) producing output after ${(i + 1) * 500}ms`);
-            break;
-          }
-        } catch {}
-      }
-
-      resumeSessionCache.set(sessionId, tmuxSession);
-      resumeFatalReasons.delete(sessionId);
-      if (syncServiceRef && conversationId) {
-        syncServiceRef.registerManagedSession(sessionId, process.pid, tmuxSession, conversationId).catch(() => {});
-        syncServiceRef.updateSessionAgentStatus(conversationId, "connected").catch(() => {});
-      }
-      return true;
-    }
-
     // Prefix with env -u CLAUDECODE to prevent "cannot launch inside another Claude Code session" error
     await tmuxExec(["send-keys", "-t", tmuxSession, "-l", `env -u CLAUDECODE ${resumeCmd}`]);
     await tmuxExec(["send-keys", "-t", tmuxSession, "Enter"]);
@@ -6263,7 +6214,6 @@ async function repairAndResumeSession(
   sessionId: string,
   content: string,
   titleCache: TitleCache,
-  nonInteractive: boolean,
   cwdOverride?: string,
   conversationId?: string
 ): Promise<boolean> {
@@ -6343,7 +6293,7 @@ async function repairAndResumeSession(
           }
           log(`Materialized fresh Claude session ${targetSessionId.slice(0, 8)} from stale ${sessionId.slice(0, 8)} (${exportData.messages.length} messages, tail=${tailMessages})`);
 
-          const resumed = await autoResumeSession(targetSessionId, content, titleCache, nonInteractive, cwdOverride || projectPath, convId);
+          const resumed = await autoResumeSession(targetSessionId, content, titleCache, cwdOverride || projectPath, convId);
           if (resumed) {
             log(`Repair + resume succeeded for ${sessionId.slice(0, 8)} via fresh session ${targetSessionId.slice(0, 8)}`);
             success = true;
@@ -6369,7 +6319,7 @@ async function repairAndResumeSession(
           log(`Wrote new session file for ${sessionId.slice(0, 8)}`);
         }
 
-        const resumed = await autoResumeSession(sessionId, content, titleCache, nonInteractive, cwdOverride || projectPath, convId);
+        const resumed = await autoResumeSession(sessionId, content, titleCache, cwdOverride || projectPath, convId);
         if (resumed) {
           log(`Repair + resume succeeded for ${sessionId.slice(0, 8)}`);
           success = true;
@@ -6416,7 +6366,7 @@ async function repairAndResumeSession(
           fs.writeFileSync(sessionFile.path, cleanLines.join("\n") + "\n");
           log(`Surgical cleanup: removed ${removed} corrupt entries from ${sessionId.slice(0, 8)}`);
 
-          const resumed = await autoResumeSession(sessionId, content, titleCache, nonInteractive, cwdOverride, convId);
+          const resumed = await autoResumeSession(sessionId, content, titleCache, cwdOverride, convId);
           if (resumed) {
             log(`Surgical repair + resume succeeded for ${sessionId.slice(0, 8)}`);
             success = true;
@@ -6475,7 +6425,7 @@ async function postDeliveryHealthCheck(
   } catch {
     log(`Health check: tmux session ${tmuxSession} is dead after delivery for ${sessionId.slice(0, 8)}`);
 
-    const repaired = await repairAndResumeSession(sessionId, content, titleCache, false, undefined, conversationId);
+    const repaired = await repairAndResumeSession(sessionId, content, titleCache, undefined, conversationId);
     if (repaired) {
       log(`Health check: repaired and re-delivered message for ${sessionId.slice(0, 8)}`);
       try { await syncService.setSessionError(conversationId); } catch {}
@@ -6513,7 +6463,7 @@ async function postDeliveryHealthCheck(
     const hbInterval = resumeHeartbeatIntervals.get(sessionId);
     if (hbInterval) { clearInterval(hbInterval); resumeHeartbeatIntervals.delete(sessionId); }
 
-    const repaired = await repairAndResumeSession(sessionId, content, titleCache, false, undefined, conversationId);
+    const repaired = await repairAndResumeSession(sessionId, content, titleCache, undefined, conversationId);
     if (repaired) {
       log(`Health check: repaired crashed session ${sessionId.slice(0, 8)}`);
       try { await syncService.setSessionError(conversationId); } catch {}
