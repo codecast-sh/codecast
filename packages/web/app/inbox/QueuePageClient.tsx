@@ -5,7 +5,6 @@ import { useEventListener } from "../../hooks/useEventListener";
 import { useShortcutContext } from "../../shortcuts";
 import { useQuery, useMutation } from "convex/react";
 import { useSearchParams, useRouter } from "next/navigation";
-import { Panel, Group, Separator } from "react-resizable-panels";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { DashboardLayout } from "../../components/DashboardLayout";
@@ -600,9 +599,7 @@ export function QueuePageClient({ initialSessionId }: { initialSessionId?: strin
   const searchParams = useSearchParams();
   const router = useRouter();
 
-  const sidePanelOpen = useInboxStore((s) => s.sidePanelOpen);
-
-  // Auto-open session panel when entering inbox
+  // Auto-open session panel when entering inbox (DashboardLayout renders it)
   useMountEffect(() => {
     if (!useInboxStore.getState().sidePanelOpen) {
       useInboxStore.setState({ sidePanelOpen: true });
@@ -626,13 +623,7 @@ export function QueuePageClient({ initialSessionId }: { initialSessionId?: strin
   const shortcutsHidden = useInboxStore(s => s.clientState.ui?.inbox_shortcuts_hidden ?? false);
   const showShortcuts = !shortcutsHidden;
 
-  const DEFAULT_INBOX_LAYOUT = { main: 76, sidebar: 24 };
-  const inboxLayoutPref = useInboxStore(s => s.clientState.layouts?.inbox ?? DEFAULT_INBOX_LAYOUT);
-  const updateLayout = useInboxStore(s => s.updateClientLayout);
-  const inboxLayout = { "inbox-main": inboxLayoutPref.main, "inbox-sidebar": inboxLayoutPref.sidebar };
-  const handleInboxLayoutChange = useCallback((layout: { [key: string]: number }) => {
-    updateLayout("inbox", { main: layout["inbox-main"] || 76, sidebar: layout["inbox-sidebar"] || 24 });
-  }, [updateLayout]);
+
 
   const isPopstateRef = useRef(false);
   const lastAppliedParamId = useRef<string | null>(null);
@@ -932,20 +923,8 @@ export function QueuePageClient({ initialSessionId }: { initialSessionId?: strin
             </>
           )}
         </div>
-      ) : sidePanelOpen ? (
-        <Group orientation="horizontal" className="flex-1 min-h-0" defaultLayout={inboxLayout} onLayoutChange={handleInboxLayoutChange}>
-          <Panel id="inbox-main" defaultSize="76%" minSize={400}>
-            {inboxContent}
-          </Panel>
-          <Separator className="relative z-10 w-px bg-black/10 cursor-col-resize before:absolute before:inset-y-0 before:-left-[2px] before:-right-[2px] before:content-[''] before:transition-colors before:duration-150 hover:before:bg-sol-cyan data-[resize-handle-active]:before:bg-sol-cyan" />
-          <Panel id="inbox-sidebar" defaultSize="24%" minSize={200} maxSize="45%" collapsible collapsedSize={0}>
-            <SessionListPanel onSessionSelect={handleSessionSelect} activeSessionId={viewingDismissedId ?? currentSessionId} />
-          </Panel>
-        </Group>
       ) : (
-        <div className="flex-1 min-h-0">
-          {inboxContent}
-        </div>
+        <div className="flex-1 min-h-0">{inboxContent}</div>
       )}
       {showShortcuts && !isMobileInbox && (
         <div className="flex-shrink-0 px-3 py-1 border-t border-sol-border/30 bg-sol-bg-alt/30 flex items-center gap-3 text-[10px] text-sol-text-dim">

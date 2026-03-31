@@ -132,9 +132,32 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
     ).length;
   }, [inboxSessions]);
 
-  const showCollapsedRail = !sidePanelOpen && !isOnInboxPage && !isMobile && !isZenMode;
-  const showSessionList = sidePanelOpen && !isOnInboxPage && !isMobile && !isZenMode;
-  const showConversationColumn = sidePanelOpen && !!sidePanelSessionId && !isOnInboxPage && !isMobile;
+  const showCollapsedRail = !sidePanelOpen && !sidePanelSessionId && !isMobile && !isZenMode;
+  const showSessionList = sidePanelOpen && !isMobile && !isZenMode;
+  const showConversationColumn = !!sidePanelSessionId && !isOnInboxPage && !isMobile;
+
+  const currentSessionId = useInboxStore(s => s.currentSessionId);
+  const viewingDismissedId = useInboxStore(s => s.viewingDismissedId);
+
+  const handleInboxSessionSelect = useCallback((id: string) => {
+    const store = useInboxStore.getState();
+    if (store.sessions[id]) {
+      store.setCurrentSession(id);
+      if (store.showMySessions) store.setShowMySessions(false);
+    } else if (store.dismissedSessions[id]) {
+      store.setViewingDismissedId(id);
+      if (store.showMySessions) store.setShowMySessions(false);
+    } else {
+      useInboxStore.setState({ pendingNavigateId: id, showMySessions: false });
+    }
+  }, []);
+
+  const sessionListActiveId = isOnInboxPage
+    ? (viewingDismissedId ?? currentSessionId)
+    : sidePanelSessionId;
+  const sessionListOnSelect = isOnInboxPage
+    ? handleInboxSessionSelect
+    : selectPanelSession;
 
   useMountEffect(() => {
     setIsMobile(window.innerWidth < 768);
@@ -304,8 +327,8 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
         <ErrorBoundary name="SessionList" level="panel">
           <div className="w-full h-full border-l border-sol-border/30">
             <SessionListPanel
-              onSessionSelect={selectPanelSession}
-              activeSessionId={sidePanelSessionId}
+              onSessionSelect={sessionListOnSelect}
+              activeSessionId={sessionListActiveId}
               onCollapse={toggleSidePanel}
             />
           </div>
