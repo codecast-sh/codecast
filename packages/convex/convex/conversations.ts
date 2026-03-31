@@ -5610,7 +5610,7 @@ export const listIdleSessions = query({
       return b.started_at - a.started_at;
     });
 
-    return results;
+    return { sessions: results, hidden_count: hiddenCount };
   },
 });
 

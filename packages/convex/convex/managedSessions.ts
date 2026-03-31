@@ -179,8 +179,13 @@ export const heartbeat = mutation({
       throw new Error("Unauthorized");
     }
 
+    const now = Date.now();
+    const ACTIVE_STATUSES = new Set(["working", "compacting", "thinking", "connected", "starting", "resuming"]);
+    const refreshStatus = session.agent_status && ACTIVE_STATUSES.has(session.agent_status);
+
     await ctx.db.patch(session._id, {
-      last_heartbeat: Date.now(),
+      last_heartbeat: now,
+      ...(refreshStatus ? { agent_status_updated_at: now } : {}),
     });
 
     let dismissed = false;
