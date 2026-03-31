@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 import * as fs from "fs";
-import * as os from "os";
 import * as path from "path";
 import { Database } from "bun:sqlite";
 import { execSync, execFileSync, exec, execFile, spawn } from "child_process";
@@ -1659,7 +1658,7 @@ async function executeRemoteCommand(
                 setPosition(reconFilePath, fs.statSync(reconFilePath).size);
                 log(`[REMOTE] Reconstituted JSONL for ${sessionId.slice(0, 8)} (${exportData.messages.length} msgs, tail=${tailMessages})`);
 
-                const reconResumed = await autoResumeSession(newSessionId, "", readTitleCache(), false, cwd, conversationId);
+                const reconResumed = await autoResumeSession(newSessionId, "", readTitleCache(), cwd, conversationId);
                 if (reconResumed) {
                   const cache = readConversationCache();
                   cache[newSessionId] = conversationId;
@@ -6946,7 +6945,7 @@ async function deliverMessage(
   if (!tmuxAvailable) {
     logDelivery(`CANNOT auto-resume: tmux is not installed. Install with: brew install tmux`);
   }
-  const resumed = await autoResumeSession(sessionId, content, titleCache, isMaterialized, undefined, conversationId);
+  const resumed = await autoResumeSession(sessionId, content, titleCache, undefined, conversationId);
   if (resumed) {
     resetSessionDeliveryFailures(sessionId);
     materializedSessions.delete(sessionId);
@@ -6967,7 +6966,7 @@ async function deliverMessage(
 
   // Auto-resume failed - try repair (regenerate JSONL from Convex)
   logDelivery(`Auto-resume failed for ${sessionId.slice(0, 8)}, attempting repair...`);
-  const repaired = await repairAndResumeSession(sessionId, content, titleCache, isMaterialized, undefined, conversationId);
+  const repaired = await repairAndResumeSession(sessionId, content, titleCache, undefined, conversationId);
   if (repaired) {
     resetSessionDeliveryFailures(sessionId);
     materializedSessions.delete(sessionId);
