@@ -15,6 +15,7 @@ import { Theme, Spacing } from "@/constants/Theme";
 import { useInboxStore } from "@codecast/web/store/inboxStore";
 import { useSyncDocs } from "@/hooks/useSyncDocs";
 import { DOC_TYPE_CONFIG } from "@/components/DocItem";
+import { MarkdownContent } from "@/components/MarkdownRenderer";
 
 export default function DocDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -119,7 +120,7 @@ export default function DocDetailScreen() {
         {content ? (
           <RNView style={styles.section}>
             <RNText style={styles.sectionLabel}>Content</RNText>
-            <RNText style={styles.bodyText}>{content}</RNText>
+            <MarkdownContent text={content} baseStyle={styles.bodyText} />
           </RNView>
         ) : (
           <RNView style={styles.emptyContent}>
