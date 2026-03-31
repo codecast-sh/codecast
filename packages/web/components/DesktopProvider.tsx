@@ -22,8 +22,9 @@ export function DesktopProvider() {
   const sessions = useInboxStore((s) => s.sessions);
   const prevCountRef = useRef<number | null>(null);
   const initRef = useRef(false);
-  const [updateReady, setUpdateReady] = useState<string | null>(null);
+  const [updateStatus, setUpdateStatus] = useState<{ status: string; version?: string; percent?: number } | null>(null);
   const [dismissed, setDismissed] = useState(false);
+  const dismissedStatusRef = useRef<string | null>(null);
 
   useWatchEffect(() => {
     if (!isDesktop()) return;
@@ -111,32 +112,53 @@ export function DesktopProvider() {
 
     if (isElectron()) {
       onUpdateStatus((status) => {
-        if (status.status === "ready" && status.version) {
-          setUpdateReady(status.version);
+        setUpdateStatus(status);
+        if (status.status !== dismissedStatusRef.current) {
+          setDismissed(false);
         }
       });
     }
   }, [router]);
 
-  if (!updateReady || dismissed) return null;
+  if (!updateStatus || dismissed) return null;
+
+  const { status, version, percent } = updateStatus;
+  if (status !== "available" && status !== "downloading" && status !== "ready") return null;
 
   return (
-    <div className="fixed bottom-4 right-4 z-50 flex items-center gap-3 rounded-lg border border-sol-border bg-sol-bg-alt px-4 py-3 shadow-lg">
-      <span className="text-sm text-sol-text">
-        New desktop version ready
-      </span>
-      <button
-        onClick={() => restartForUpdate()}
-        className="rounded-md bg-sol-cyan px-3 py-1 text-xs font-medium text-sol-bg hover:opacity-90 transition-opacity"
-      >
-        Restart
-      </button>
-      <button
-        onClick={() => setDismissed(true)}
-        className="text-sol-text-muted hover:text-sol-text transition-colors text-xs"
-      >
-        Later
-      </button>
+    <div className="fixed top-0 left-0 right-0 z-[9998] pointer-events-none">
+      <div className="pointer-events-auto mx-auto max-w-xl mt-12 px-3">
+        <div className="relative overflow-hidden rounded-lg border border-sol-cyan/30 bg-sol-bg-alt/95 backdrop-blur-md shadow-lg shadow-sol-cyan/5">
+          {status === "downloading" && (
+            <div
+              className="absolute bottom-0 left-0 h-[2px] bg-sol-cyan/60 transition-all duration-300"
+              style={{ width: `${percent ?? 0}%` }}
+            />
+          )}
+          <div className="flex items-center gap-3 px-4 py-2.5">
+            <div className="w-1.5 h-1.5 rounded-full flex-shrink-0 animate-pulse bg-sol-cyan" />
+            <span className="text-xs text-sol-text flex-1">
+              {status === "available" && `v${version} available — downloading`}
+              {status === "downloading" && `Downloading v${version}${percent != null ? ` — ${percent}%` : ""}`}
+              {status === "ready" && `v${version} ready to install`}
+            </span>
+            {status === "ready" && (
+              <button
+                onClick={() => restartForUpdate()}
+                className="rounded-md bg-sol-cyan px-3 py-1 text-[11px] font-medium text-sol-bg hover:opacity-90 transition-opacity"
+              >
+                Restart
+              </button>
+            )}
+            <button
+              onClick={() => { setDismissed(true); dismissedStatusRef.current = status; }}
+              className="text-sol-text-dim hover:text-sol-text transition-colors text-xs leading-none"
+            >
+              &times;
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
