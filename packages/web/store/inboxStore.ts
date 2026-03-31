@@ -1665,11 +1665,14 @@ export const useInboxStore = create<InboxStoreState>(
   },
 
   toggleSidePanel: () => {
-    const { sidePanelOpen } = get();
+    const { sidePanelOpen, sidePanelSessionId, currentSessionId } = get();
     if (sidePanelOpen) {
       set({ sidePanelOpen: false });
     } else {
-      set({ sidePanelOpen: true });
+      set({
+        sidePanelOpen: true,
+        sidePanelSessionId: sidePanelSessionId || currentSessionId,
+      });
     }
   },
 
