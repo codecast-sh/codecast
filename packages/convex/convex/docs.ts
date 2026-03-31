@@ -559,7 +559,11 @@ export const webList = query({
         .withIndex("by_team_id", (q) => q.eq("team_id", args.team_id!))
         .order("desc")
         .take(fetchLimit);
-      userDocs = [];
+      userDocs = await ctx.db
+        .query("docs")
+        .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+        .order("desc")
+        .take(fetchLimit);
     } else if (args.workspace === "personal") {
       userDocs = await ctx.db
         .query("docs")
@@ -590,13 +594,14 @@ export const webList = query({
       if (!seen.has(String(td._id))) allDocs.push(td);
     }
 
-    const allConvIds = new Set<string>();
+    const needsConvLookup = new Set<string>();
     for (const d of allDocs) {
+      if (d.team_id && d.project_path) continue;
       const cid = d.conversation_id || (d.related_conversation_ids?.[0]);
-      if (cid) allConvIds.add(String(cid));
+      if (cid) needsConvLookup.add(String(cid));
     }
     const convMap = new Map<string, any>();
-    for (const cid of allConvIds) {
+    for (const cid of needsConvLookup) {
       const conv = await ctx.db.get(cid as Id<"conversations">);
       if (conv) convMap.set(cid, conv);
     }
@@ -622,7 +627,10 @@ export const webList = query({
       });
       projectPaths = dedupeProjectPaths([...new Set(unscopedDocs.map((d) => d.project_path).filter(Boolean))] as string[], unscopedDocs, convMap);
     } else if (args.workspace === "team" && args.team_id) {
-      docs = allDocs;
+      docs = allDocs.filter((d) => {
+        const effectiveTeamId = resolveConvTeamId(d, convMap);
+        return effectiveTeamId && String(effectiveTeamId) === String(args.team_id);
+      });
     } else if (args.workspace === "personal") {
       docs = allDocs.filter((d) => {
         const effectiveTeamId = resolveConvTeamId(d, convMap);
