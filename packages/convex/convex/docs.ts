@@ -544,7 +544,7 @@ export const webList = query({
     };
 
     const queryLimit = args.limit || 100;
-    const fetchLimit = queryLimit * 3;
+    const fetchLimit = queryLimit * 2;
 
     // Workspace-scoped fetching
     let userDocs: any[];
@@ -594,16 +594,20 @@ export const webList = query({
       if (!seen.has(String(td._id))) allDocs.push(td);
     }
 
+    const MAX_CONV_LOOKUPS = 50;
     const needsConvLookup = new Set<string>();
     for (const d of allDocs) {
-      if (d.team_id && d.project_path) continue;
+      if (d.team_id) continue;
       const cid = d.conversation_id || (d.related_conversation_ids?.[0]);
       if (cid) needsConvLookup.add(String(cid));
     }
     const convMap = new Map<string, any>();
+    let lookupCount = 0;
     for (const cid of needsConvLookup) {
+      if (lookupCount >= MAX_CONV_LOOKUPS) break;
       const conv = await ctx.db.get(cid as Id<"conversations">);
       if (conv) convMap.set(cid, conv);
+      lookupCount++;
     }
 
     if (args.scope === "projects" || args.project_path) {
