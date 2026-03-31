@@ -38,9 +38,24 @@ const ICON_EMOJI: Record<string, string> = {
 type Segment = "tasks" | "plans" | "docs";
 type SourceFilter = "" | "human" | "bot";
 type TaskStatus = "backlog" | "open" | "in_progress" | "in_review" | "done" | "dropped";
+type GroupBy = "status" | "assignee" | "priority" | "plan";
+type SortBy = "priority" | "updated" | "created";
 
 const ACTIVE_STATUSES: TaskStatus[] = ["open", "in_progress", "in_review"];
 const TERMINAL_STATUSES: TaskStatus[] = ["done", "dropped"];
+
+const GROUP_BY_OPTIONS: { key: GroupBy; label: string; icon: React.ComponentProps<typeof FontAwesome>["name"] }[] = [
+  { key: "status", label: "Status", icon: "circle-o" },
+  { key: "assignee", label: "Assignee", icon: "user" },
+  { key: "priority", label: "Priority", icon: "arrow-up" },
+  { key: "plan", label: "Plan", icon: "map-o" },
+];
+
+const SORT_OPTIONS: { key: SortBy; label: string }[] = [
+  { key: "priority", label: "Priority" },
+  { key: "updated", label: "Recently Updated" },
+  { key: "created", label: "Recently Created" },
+];
 
 function CreateTaskModal({
   visible,
@@ -156,6 +171,11 @@ export default function TasksScreen() {
   const [searchInput, setSearchInput] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [showCreate, setShowCreate] = useState(false);
+  const [groupBy, setGroupBy] = useState<GroupBy>("status");
+  const [sortBy, setSortBy] = useState<SortBy>("priority");
+  const [statusFilter, setStatusFilter] = useState<TaskStatus | "">("");
+  const [priorityFilter, setPriorityFilter] = useState<string>("");
+  const [assigneeFilter, setAssigneeFilter] = useState<string>("");
   const router = useRouter();
 
   const { teamId, activeTeam, validTeams } = useActiveTeam();
@@ -198,6 +218,12 @@ export default function TasksScreen() {
 
   const filteredTasks = useMemo(() => {
     let list = applySourceFilter(tasksList);
+    if (statusFilter) list = list.filter((t) => t.status === statusFilter);
+    if (priorityFilter) list = list.filter((t) => t.priority === priorityFilter);
+    if (assigneeFilter) {
+      if (assigneeFilter === "_unassigned") list = list.filter((t) => !t.assignee);
+      else list = list.filter((t) => t.assignee === assigneeFilter || t.assignee_info?.name === assigneeFilter);
+    }
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       list = list.filter(
@@ -209,24 +235,86 @@ export default function TasksScreen() {
       );
     }
     return list;
-  }, [tasksList, searchQuery, applySourceFilter]);
+  }, [tasksList, searchQuery, applySourceFilter, statusFilter, priorityFilter, assigneeFilter]);
+
+  const sortTasks = useCallback((list: TaskItem[]) => {
+    return [...list].sort((a, b) => {
+      if (sortBy === "priority") return (PRIORITY_ORDER[a.priority] ?? 3) - (PRIORITY_ORDER[b.priority] ?? 3) || b.updated_at - a.updated_at;
+      if (sortBy === "created") return b.created_at - a.created_at;
+      return b.updated_at - a.updated_at;
+    });
+  }, [sortBy]);
 
   const groupedTasks = useMemo(() => {
     const groups: Record<string, TaskItem[]> = {};
     for (const t of filteredTasks) {
-      const s = t.status;
-      if (!groups[s]) groups[s] = [];
-      groups[s].push(t);
+      let key: string;
+      if (groupBy === "assignee") key = t.assignee_info?.name || "Unassigned";
+      else if (groupBy === "priority") key = t.priority || "none";
+      else if (groupBy === "plan") key = t.plan?.title || "No Plan";
+      else key = t.status;
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(t);
     }
     for (const key of Object.keys(groups)) {
-      groups[key].sort(
-        (a, b) =>
-          (PRIORITY_ORDER[a.priority] ?? 3) - (PRIORITY_ORDER[b.priority] ?? 3) ||
-          b.updated_at - a.updated_at,
-      );
+      groups[key] = sortTasks(groups[key]);
     }
     return groups;
-  }, [filteredTasks]);
+  }, [filteredTasks, groupBy, sortTasks]);
+
+  const uniqueAssignees = useMemo(() => {
+    const names = new Set<string>();
+    for (const t of tasksList) {
+      if (t.assignee_info?.name) names.add(t.assignee_info.name);
+    }
+    return Array.from(names).sort();
+  }, [tasksList]);
+
+  const showGroupByPicker = useCallback(() => {
+    const options = [...GROUP_BY_OPTIONS.map((o) => o.label), "Cancel"];
+    ActionSheetIOS.showActionSheetWithOptions(
+      { options, cancelButtonIndex: options.length - 1, title: "Group By" },
+      (idx) => { if (idx < GROUP_BY_OPTIONS.length) setGroupBy(GROUP_BY_OPTIONS[idx].key); },
+    );
+  }, []);
+
+  const showSortPicker = useCallback(() => {
+    const options = [...SORT_OPTIONS.map((o) => o.label), "Cancel"];
+    ActionSheetIOS.showActionSheetWithOptions(
+      { options, cancelButtonIndex: options.length - 1, title: "Sort By" },
+      (idx) => { if (idx < SORT_OPTIONS.length) setSortBy(SORT_OPTIONS[idx].key); },
+    );
+  }, []);
+
+  const showStatusFilterPicker = useCallback(() => {
+    const statuses: TaskStatus[] = ["open", "in_progress", "in_review", "backlog", "done", "dropped"];
+    const options = ["All Statuses", ...statuses.map((s) => STATUS_CONFIG[s].label), "Cancel"];
+    ActionSheetIOS.showActionSheetWithOptions(
+      { options, cancelButtonIndex: options.length - 1, title: "Filter by Status" },
+      (idx) => { setStatusFilter(idx === 0 ? "" : idx <= statuses.length ? statuses[idx - 1] : statusFilter); },
+    );
+  }, [statusFilter]);
+
+  const showPriorityFilterPicker = useCallback(() => {
+    const priorities = ["urgent", "high", "medium", "low"];
+    const options = ["All Priorities", ...priorities.map((p) => PRIORITY_CONFIG[p as keyof typeof PRIORITY_CONFIG].label), "Cancel"];
+    ActionSheetIOS.showActionSheetWithOptions(
+      { options, cancelButtonIndex: options.length - 1, title: "Filter by Priority" },
+      (idx) => { setPriorityFilter(idx === 0 ? "" : idx <= priorities.length ? priorities[idx - 1] : priorityFilter); },
+    );
+  }, [priorityFilter]);
+
+  const showAssigneeFilterPicker = useCallback(() => {
+    const options = ["All Assignees", "Unassigned", ...uniqueAssignees, "Cancel"];
+    ActionSheetIOS.showActionSheetWithOptions(
+      { options, cancelButtonIndex: options.length - 1, title: "Filter by Assignee" },
+      (idx) => {
+        if (idx === 0) setAssigneeFilter("");
+        else if (idx === 1) setAssigneeFilter("_unassigned");
+        else if (idx > 1 && idx <= uniqueAssignees.length + 1) setAssigneeFilter(uniqueAssignees[idx - 2]);
+      },
+    );
+  }, [uniqueAssignees]);
 
   const filteredPlans = useMemo(() => applySourceFilter(plansList), [plansList, applySourceFilter]);
 
@@ -302,17 +390,34 @@ export default function TasksScreen() {
     debounceRef.current = setTimeout(() => setSearchQuery(text.trim()), 200);
   }, []);
 
-  const renderTaskSection = useCallback(
-    (status: TaskStatus) => {
-      const items = groupedTasks[status];
+  const renderTaskGroup = useCallback(
+    (groupKey: string) => {
+      const items = groupedTasks[groupKey];
       if (!items?.length) return null;
-      const cfg = STATUS_CONFIG[status];
+      let icon: React.ComponentProps<typeof FontAwesome>["name"] = "circle-o";
+      let color = Theme.textMuted0;
+      let label = groupKey;
+      if (groupBy === "status") {
+        const cfg = STATUS_CONFIG[groupKey as TaskStatus];
+        if (cfg) { icon = cfg.icon; color = cfg.color; label = cfg.label; }
+      } else if (groupBy === "priority") {
+        const cfg = PRIORITY_CONFIG[groupKey as keyof typeof PRIORITY_CONFIG];
+        if (cfg) { icon = cfg.icon; color = cfg.color; label = cfg.label; }
+      } else if (groupBy === "assignee") {
+        icon = groupKey === "Unassigned" ? "user-o" : "user";
+        color = groupKey === "Unassigned" ? Theme.textMuted0 : Theme.accent;
+        label = groupKey;
+      } else if (groupBy === "plan") {
+        icon = groupKey === "No Plan" ? "file-o" : "map-o";
+        color = groupKey === "No Plan" ? Theme.textMuted0 : Theme.cyan;
+        label = groupKey;
+      }
       return (
-        <RNView key={status}>
+        <RNView key={groupKey}>
           <RNView style={styles.sectionHeader}>
-            <FontAwesome name={cfg.icon} size={11} color={cfg.color} />
-            <RNText style={[styles.sectionTitle, { color: cfg.color }]}>
-              {cfg.label} ({items.length})
+            <FontAwesome name={icon} size={11} color={color} />
+            <RNText style={[styles.sectionTitle, { color }]}>
+              {label} ({items.length})
             </RNText>
           </RNView>
           {items.map((t) => (
@@ -326,8 +431,18 @@ export default function TasksScreen() {
         </RNView>
       );
     },
-    [groupedTasks, router, updateTask],
+    [groupedTasks, groupBy, router, updateTask],
   );
+
+  const taskGroupOrder = useMemo(() => {
+    if (groupBy === "status") return [...ACTIVE_STATUSES, "backlog"];
+    if (groupBy === "priority") return ["urgent", "high", "medium", "low", "none"];
+    return Object.keys(groupedTasks).sort((a, b) => {
+      if (a === "Unassigned" || a === "No Plan") return 1;
+      if (b === "Unassigned" || b === "No Plan") return -1;
+      return a.localeCompare(b);
+    });
+  }, [groupBy, groupedTasks]);
 
   const renderPlanSection = useCallback(
     (status: string) => {
@@ -452,7 +567,49 @@ export default function TasksScreen() {
               )}
             </TouchableOpacity>
           ))}
+          {segment === "tasks" && (
+            <RNView style={styles.filterActions}>
+              <TouchableOpacity style={styles.filterActionBtn} onPress={showGroupByPicker} activeOpacity={0.7}>
+                <FontAwesome name="th-list" size={12} color={groupBy !== "status" ? Theme.accent : Theme.textMuted0} />
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.filterActionBtn} onPress={showSortPicker} activeOpacity={0.7}>
+                <FontAwesome name="sort-amount-desc" size={12} color={sortBy !== "priority" ? Theme.accent : Theme.textMuted0} />
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.filterActionBtn} onPress={showStatusFilterPicker} activeOpacity={0.7}>
+                <FontAwesome name="circle-o" size={12} color={statusFilter ? Theme.accent : Theme.textMuted0} />
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.filterActionBtn} onPress={showPriorityFilterPicker} activeOpacity={0.7}>
+                <FontAwesome name="arrow-up" size={12} color={priorityFilter ? Theme.accent : Theme.textMuted0} />
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.filterActionBtn} onPress={showAssigneeFilterPicker} activeOpacity={0.7}>
+                <FontAwesome name="user-o" size={12} color={assigneeFilter ? Theme.accent : Theme.textMuted0} />
+              </TouchableOpacity>
+            </RNView>
+          )}
         </RNView>
+
+        {segment === "tasks" && (statusFilter || priorityFilter || assigneeFilter) && (
+          <RNView style={styles.activeFiltersRow}>
+            {statusFilter ? (
+              <TouchableOpacity style={styles.activeFilterChip} onPress={() => setStatusFilter("")} activeOpacity={0.7}>
+                <RNText style={styles.activeFilterText}>{STATUS_CONFIG[statusFilter]?.label}</RNText>
+                <FontAwesome name="times" size={9} color={Theme.textMuted} />
+              </TouchableOpacity>
+            ) : null}
+            {priorityFilter ? (
+              <TouchableOpacity style={styles.activeFilterChip} onPress={() => setPriorityFilter("")} activeOpacity={0.7}>
+                <RNText style={styles.activeFilterText}>{PRIORITY_CONFIG[priorityFilter as keyof typeof PRIORITY_CONFIG]?.label}</RNText>
+                <FontAwesome name="times" size={9} color={Theme.textMuted} />
+              </TouchableOpacity>
+            ) : null}
+            {assigneeFilter ? (
+              <TouchableOpacity style={styles.activeFilterChip} onPress={() => setAssigneeFilter("")} activeOpacity={0.7}>
+                <RNText style={styles.activeFilterText}>{assigneeFilter === "_unassigned" ? "Unassigned" : assigneeFilter}</RNText>
+                <FontAwesome name="times" size={9} color={Theme.textMuted} />
+              </TouchableOpacity>
+            ) : null}
+          </RNView>
+        )}
 
         {(segment === "tasks" || segment === "docs") && (
           <RNView style={styles.searchInputRow}>
@@ -493,10 +650,9 @@ export default function TasksScreen() {
               </RNView>
             ) : (
               <>
-                {ACTIVE_STATUSES.map((s) => renderTaskSection(s))}
-                {renderTaskSection("backlog")}
+                {taskGroupOrder.map((key) => renderTaskGroup(key))}
 
-                {TERMINAL_STATUSES.some((s) => groupedTasks[s]?.length) && (
+                {groupBy === "status" && TERMINAL_STATUSES.some((s) => groupedTasks[s]?.length) && (
                   <>
                     <TouchableOpacity
                       style={styles.doneToggle}
@@ -512,7 +668,7 @@ export default function TasksScreen() {
                         {showDone ? "Hide completed" : "Show completed"}
                       </RNText>
                     </TouchableOpacity>
-                    {showDone && TERMINAL_STATUSES.map((s) => renderTaskSection(s))}
+                    {showDone && TERMINAL_STATUSES.map((s) => renderTaskGroup(s))}
                   </>
                 )}
               </>
@@ -698,6 +854,38 @@ const styles = StyleSheet.create({
   },
   sourceTextActive: {
     color: Theme.text,
+  },
+  filterActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginLeft: "auto",
+    gap: 2,
+  },
+  filterActionBtn: {
+    padding: 6,
+    borderRadius: 6,
+  },
+  activeFiltersRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 6,
+    paddingBottom: 4,
+  },
+  activeFilterChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    backgroundColor: Theme.accent + "18",
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.accent + "40",
+  },
+  activeFilterText: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: Theme.accent,
   },
   searchInputRow: {
     flexDirection: "row",
