@@ -11,19 +11,29 @@ import {
   KeyboardAvoidingView,
   Platform,
   Alert,
+  ActionSheetIOS,
   ActivityIndicator,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
+import { useMutation } from "convex/react";
+import { api } from "@codecast/convex/convex/_generated/api";
 import FontAwesome from "@expo/vector-icons/FontAwesome";
 import { Theme, Spacing } from "@/constants/Theme";
 import { useInboxStore, type TaskItem, type PlanItem, type DocItem } from "@codecast/web/store/inboxStore";
 import { useSyncTasks } from "@/hooks/useSyncTasks";
 import { useSyncPlans } from "@/hooks/useSyncPlans";
 import { useSyncDocs } from "@/hooks/useSyncDocs";
+import { useActiveTeam } from "@/hooks/useWorkspaceArgs";
 import { TaskItemRow, STATUS_CONFIG, PRIORITY_CONFIG, PRIORITY_ORDER, showTaskActions } from "@/components/TaskItem";
 import { PlanItemRow, PLAN_STATUS_CONFIG, PLAN_STATUS_ORDER } from "@/components/PlanItem";
 import { DocItemRow, DOC_TYPE_CONFIG, DOC_TYPES } from "@/components/DocItem";
+
+const ICON_EMOJI: Record<string, string> = {
+  rocket: "🚀", flame: "🔥", zap: "⚡", star: "⭐", diamond: "💎", crown: "👑",
+  shield: "🛡️", sword: "⚔️", anchor: "⚓", compass: "🧭", mountain: "⛰️", tree: "🌲",
+  sun: "☀️", moon: "🌙", cloud: "☁️", bolt: "🔩", atom: "⚛️", dna: "🧬",
+};
 
 type Segment = "tasks" | "plans" | "docs";
 type SourceFilter = "" | "human" | "bot";
@@ -147,6 +157,24 @@ export default function TasksScreen() {
   const [searchQuery, setSearchQuery] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const router = useRouter();
+
+  const { teamId, activeTeam, validTeams } = useActiveTeam();
+  const saveActiveTeam = useMutation(api.teams.setActiveTeam);
+
+  const showWorkspacePicker = useCallback(() => {
+    const options = [
+      "Personal",
+      ...validTeams.map((t) => `${ICON_EMOJI[t.icon || ""] || ""} ${t.name}`.trim()),
+      "Cancel",
+    ];
+    ActionSheetIOS.showActionSheetWithOptions(
+      { options, cancelButtonIndex: options.length - 1, title: "Switch Workspace" },
+      (idx) => {
+        if (idx === 0) saveActiveTeam({ team_id: undefined as any });
+        else if (idx > 0 && idx <= validTeams.length) saveActiveTeam({ team_id: validTeams[idx - 1]._id });
+      },
+    );
+  }, [validTeams, saveActiveTeam]);
 
   const { ready: tasksReady } = useSyncTasks();
   const { ready: plansReady } = useSyncPlans();
@@ -356,17 +384,35 @@ export default function TasksScreen() {
   return (
     <SafeAreaView style={styles.container} edges={["top"]}>
       <RNView style={styles.header}>
-        <RNText style={styles.headerTitle}>
-          {segment === "tasks" ? "Tasks" : segment === "plans" ? "Plans" : "Docs"}
-        </RNText>
-        {(() => {
-          const count = segment === "tasks" ? activeTaskCount : segment === "plans" ? activePlanCount : docCount;
-          return count > 0 ? (
-            <RNView style={styles.countBadge}>
-              <RNText style={styles.countBadgeText}>{count}</RNText>
-            </RNView>
-          ) : null;
-        })()}
+        <RNView style={styles.headerLeft}>
+          <RNText style={styles.headerTitle}>
+            {segment === "tasks" ? "Tasks" : segment === "plans" ? "Plans" : "Docs"}
+          </RNText>
+          {(() => {
+            const count = segment === "tasks" ? activeTaskCount : segment === "plans" ? activePlanCount : docCount;
+            return count > 0 ? (
+              <RNView style={styles.countBadge}>
+                <RNText style={styles.countBadgeText}>{count}</RNText>
+              </RNView>
+            ) : null;
+          })()}
+        </RNView>
+        <TouchableOpacity style={styles.workspaceBtn} onPress={showWorkspacePicker} activeOpacity={0.7}>
+          {teamId && activeTeam ? (
+            <>
+              <RNText style={styles.workspaceIcon}>
+                {ICON_EMOJI[activeTeam.icon || ""] || ""}
+              </RNText>
+              <RNText style={styles.workspaceName} numberOfLines={1}>{activeTeam.name}</RNText>
+            </>
+          ) : (
+            <>
+              <FontAwesome name="user" size={11} color={Theme.textMuted} />
+              <RNText style={styles.workspaceName}>Personal</RNText>
+            </>
+          )}
+          <FontAwesome name="chevron-down" size={8} color={Theme.textMuted0} />
+        </TouchableOpacity>
       </RNView>
 
       <RNView style={styles.segmentBar}>
@@ -539,11 +585,16 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: "row",
     alignItems: "center",
+    justifyContent: "space-between",
     paddingHorizontal: Spacing.lg,
     paddingVertical: Spacing.md,
     backgroundColor: Theme.bgAlt,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: Theme.borderLight,
+  },
+  headerLeft: {
+    flexDirection: "row",
+    alignItems: "center",
     gap: 8,
   },
   headerTitle: {
@@ -563,6 +614,26 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "700",
     color: Theme.bg,
+  },
+  workspaceBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.borderLight,
+    backgroundColor: Theme.bg,
+  },
+  workspaceIcon: {
+    fontSize: 13,
+  },
+  workspaceName: {
+    fontSize: 13,
+    fontWeight: "500",
+    color: Theme.textMuted,
+    maxWidth: 100,
   },
   segmentBar: {
     backgroundColor: Theme.bgAlt,
