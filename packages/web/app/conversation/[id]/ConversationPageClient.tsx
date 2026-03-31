@@ -440,30 +440,10 @@ export default function ConversationPage() {
       : (isValidConvexId ? { conversation_id: id as Id<"conversations"> } : "skip")
   );
 
-  const redirectId = useMemo(() => {
-    if (isUUID) {
-      if (sessionLookup === undefined || sessionLookup === null) {
-        const hasLocalSession = useInboxStore.getState().conversations[id];
-        if (hasLocalSession) return id;
-        return null;
-      }
-      if (publicData === undefined) return null;
-      if (publicData.access_level === "owner" || publicData.access_level === "team") {
-        return resolvedConvexId || id;
-      }
-      return null;
-    }
-    if (publicData === undefined) return null;
-    if (publicData.access_level === "owner" || publicData.access_level === "team") {
-      return id;
-    }
-    return null;
-  }, [isUUID, sessionLookup, publicData, resolvedConvexId, id]);
-
   const storeHasSession = useInboxStore((s) => !!(s.sessions[id] || s.conversations[id]));
   const resolvedStoreId = useInboxStore((s) => isUUID ? s.getConvexId(id) : undefined);
 
-  if (storeHasSession || resolvedStoreId || redirectId) {
+  if (storeHasSession || resolvedStoreId) {
     if (authLoading) return <ConversationLoadingSkeleton />;
     if (!isAuthenticated) {
       router.replace("/");
@@ -471,7 +451,6 @@ export default function ConversationPage() {
     }
     if (storeHasSession) return <QueuePageClient initialSessionId={id} />;
     if (resolvedStoreId) return <QueuePageClient initialSessionId={resolvedStoreId} />;
-    if (redirectId) return <QueuePageClient initialSessionId={redirectId} />;
   }
 
   if (!isUUID && !isValidConvexId) {
@@ -490,7 +469,7 @@ export default function ConversationPage() {
     if (publicData === undefined) {
       return <ConversationLoadingSkeleton />;
     }
-    if (publicData.access_level === "shared") {
+    if (publicData.access_level === "shared" || publicData.access_level === "team" || publicData.access_level === "owner") {
       return <SharedView id={effectiveId} highlightQuery={highlightQuery} onClearHighlight={handleClearHighlight} />;
     }
     return <DeniedView />;
@@ -508,7 +487,7 @@ export default function ConversationPage() {
     return <DeniedView />;
   }
 
-  if (publicData.access_level === "shared") {
+  if (publicData.access_level === "shared" || publicData.access_level === "team" || publicData.access_level === "owner") {
     return <SharedView id={id} highlightQuery={highlightQuery} onClearHighlight={handleClearHighlight} />;
   }
 
