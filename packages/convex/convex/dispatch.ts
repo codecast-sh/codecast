@@ -214,7 +214,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       conversation_id: convId as Id<"conversations">,
       from_user_id: userId,
       content,
-      image_storage_ids: imageIds as any,
+      image_storage_ids: imageIds?.length ? imageIds as any : undefined,
       client_id: clientId,
       status: "pending" as const,
       created_at: Date.now(),
