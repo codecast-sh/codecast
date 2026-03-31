@@ -80,6 +80,8 @@ export function ContextChatInput({
       messages: [],
     });
 
+    const clientId = store.addOptimisticMessage(sid, fullMessage);
+
     setMessage("");
     setSelectedAgent(null);
     if (textareaRef.current) {
@@ -95,7 +97,7 @@ export function ContextChatInput({
 
     if (convexId) {
       store.resolveSessionId(sid, convexId);
-      store.sendMessage(convexId, fullMessage);
+      store._dispatch("sendMessage", [convexId, fullMessage, undefined, clientId]);
       useInboxStore.setState({ sidePanelSessionId: convexId, sidePanelOpen: false });
       if (linkedObjectId) {
         store._dispatch("linkConversation", [contextType, linkedObjectId, convexId]);

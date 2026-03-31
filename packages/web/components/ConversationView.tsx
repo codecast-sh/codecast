@@ -6127,26 +6127,28 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
       if (onPopulateInput) onPopulateInput.current = null;
       await onForkFromMessage(selectedMessageUuid);
       setTimeout(() => { if (onPopulateInput) onPopulateInput.current = savedPopulateFn; }, 200);
-      requestAnimationFrame(async () => {
-        try {
-          const branches = useInboxStore.getState().activeBranches;
-          const forkId = Object.values(branches)[0];
-          if (!forkId) return;
-          const clientId = addOptimistic(forkId, content);
-          onMessageSent?.();
-          const resolvedForkId = await waitForConvexId(forkId);
-          const msgId = await sendMessage({
-            conversation_id: resolvedForkId as Id<"conversations">,
-            content,
-            client_id: clientId,
-          });
-          setPendingMessageId(msgId);
-          setSentAt(Date.now());
-          sentContentRef.current = content;
-        } catch (error) {
-          toast.error(error instanceof Error ? error.message : "Failed to send rewrite");
-        }
-      });
+      const branches = useInboxStore.getState().activeBranches;
+      const forkId = Object.values(branches)[0];
+      if (!forkId) {
+        addOptimistic(conversationId, content);
+        toast.error("Fork not ready — message saved locally");
+        return;
+      }
+      const clientId = addOptimistic(forkId, content);
+      onMessageSent?.();
+      try {
+        const resolvedId = await waitForConvexId(forkId);
+        const msgId = await sendMessage({
+          conversation_id: resolvedId as Id<"conversations">,
+          content,
+          client_id: clientId,
+        });
+        setPendingMessageId(msgId);
+        setSentAt(Date.now());
+        sentContentRef.current = content;
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "Failed to send rewrite");
+      }
       return;
     }
 
