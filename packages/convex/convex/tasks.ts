@@ -15,6 +15,9 @@ async function resolveAssigneeToUserId(
   if (!assignee) return null;
   const direct = await ctx.db.get(assignee as any);
   if (direct && direct.name !== undefined) return direct._id;
+  const lower = assignee.toLowerCase();
+  const byGh = await ctx.db.query("users").withIndex("by_github_username", (q: any) => q.eq("github_username", lower)).first();
+  if (byGh) return byGh._id;
   if (!teamId) return null;
   const memberships = await ctx.db
     .query("team_memberships")
@@ -22,11 +25,26 @@ async function resolveAssigneeToUserId(
     .collect();
   for (const m of memberships) {
     const u = await ctx.db.get(m.user_id);
-    if (u && (u.github_username === assignee || u.name === assignee)) {
+    if (u && (u.github_username === assignee || u.name === assignee || u.name?.toLowerCase() === lower)) {
       return u._id;
     }
   }
   return null;
+}
+
+async function resolveAssigneeStr(
+  ctx: any,
+  assignee: string | undefined,
+  userId: Id<"users">
+): Promise<string | undefined> {
+  if (!assignee) return undefined;
+  if (assignee === "me") return userId.toString();
+  if (assignee.startsWith("agent:")) return assignee;
+  if (/^[a-z0-9]{32}$/.test(assignee)) return assignee;
+  const lower = assignee.toLowerCase();
+  const found = await ctx.db.query("users").withIndex("by_github_username", (q: any) => q.eq("github_username", lower)).first();
+  if (found) return found._id.toString();
+  return assignee;
 }
 
 async function notifySubscribers(
@@ -164,6 +182,8 @@ export const create = mutation({
       if (plan) plan_id = plan._id;
     }
 
+    const resolvedAssignee = await resolveAssigneeStr(ctx, args.assignee, auth.userId);
+
     const id = await db.insert("tasks", {
       project_id,
       parent_id: args.parent_id as any,
@@ -174,7 +194,7 @@ export const create = mutation({
       task_type: (args.task_type || "task") as any,
       status: (args.status || "open") as any,
       priority: (args.priority || "medium") as any,
-      assignee: args.assignee,
+      assignee: resolvedAssignee,
       labels: args.labels,
       blocked_by: args.blocked_by,
       blocks: [],
@@ -220,12 +240,20 @@ export const create = mutation({
     }
 
     await subscribeUser(ctx, auth.userId, id, "creator");
-    if (args.assignee) {
+    if (resolvedAssignee) {
       const createdTask = await ctx.db.get(id) as any;
-      const assigneeId = await resolveAssigneeToUserId(ctx, args.assignee, createdTask?.team_id);
-      if (assigneeId && assigneeId.toString() !== auth.userId.toString()) {
+      const assigneeId = await resolveAssigneeToUserId(ctx, resolvedAssignee, createdTask?.team_id);
+      if (assigneeId) {
         await subscribeUser(ctx, assigneeId, id, "assignee");
-        await notifySubscribers(ctx, "task_assigned", auth.userId, { _id: id, short_id, title: args.title }, `assigned you to ${short_id}: ${args.title}`);
+        await ctx.runMutation(internal.notificationRouter.emit, {
+          event_type: "task_assigned",
+          actor_user_id: auth.userId,
+          entity_type: "task",
+          entity_id: id.toString(),
+          message: `assigned you to ${short_id}: ${args.title}`,
+          direct_recipient_id: assigneeId,
+          actor_is_agent: true,
+        });
       }
     }
 
@@ -487,6 +515,7 @@ export const update = mutation({
     labels: v.optional(v.array(v.string())),
     project_id: v.optional(v.string()),
     project_path: v.optional(v.string()),
+    team_id: v.optional(v.string()),
     plan_id: v.optional(v.string()),
     blocked_by: v.optional(v.array(v.string())),
     blocks: v.optional(v.array(v.string())),
@@ -521,10 +550,11 @@ export const update = mutation({
     if (args.priority) updates.priority = args.priority;
     if (args.title) updates.title = args.title;
     if (args.description !== undefined) updates.description = args.description;
-    if (args.assignee !== undefined) updates.assignee = args.assignee;
+    if (args.assignee !== undefined) updates.assignee = await resolveAssigneeStr(ctx, args.assignee, auth.userId) || args.assignee;
     if (args.labels) updates.labels = args.labels;
     if (args.project_id !== undefined) updates.project_id = args.project_id || undefined;
     if (args.project_path !== undefined) updates.project_path = args.project_path || undefined;
+    if (args.team_id) updates.team_id = args.team_id as any;
     if (args.plan_id) {
       const plan = await ctx.db
         .query("plans")
@@ -591,7 +621,7 @@ export const update = mutation({
     if (args.status && args.status !== task.status) trackFields.push(["status", task.status, args.status]);
     if (args.priority && args.priority !== task.priority) trackFields.push(["priority", task.priority, args.priority]);
     if (args.title && args.title !== task.title) trackFields.push(["title", task.title, args.title]);
-    if (args.assignee !== undefined && args.assignee !== task.assignee) trackFields.push(["assignee", task.assignee || "", args.assignee || ""]);
+    if (args.assignee !== undefined && updates.assignee !== task.assignee) trackFields.push(["assignee", task.assignee || "", updates.assignee || ""]);
 
     for (const [field, oldVal, newVal] of trackFields) {
       await ctx.db.insert("task_history", {
@@ -614,9 +644,9 @@ export const update = mutation({
       }
       await notifySubscribers(ctx, "task_status_changed", auth.userId, task as any, `changed ${task.short_id} to ${args.status}`, linkedConvId);
     }
-    if (args.assignee !== undefined && args.assignee !== task.assignee) {
-      const assigneeId = await resolveAssigneeToUserId(ctx, args.assignee || "", task.team_id);
-      if (assigneeId && assigneeId.toString() !== auth.userId.toString()) {
+    if (args.assignee !== undefined && updates.assignee !== task.assignee) {
+      const assigneeId = await resolveAssigneeToUserId(ctx, updates.assignee || "", task.team_id);
+      if (assigneeId) {
         await subscribeUser(ctx, assigneeId, task._id, "assignee");
         await ctx.runMutation(internal.notificationRouter.emit, {
           event_type: "task_assigned",
@@ -625,6 +655,7 @@ export const update = mutation({
           entity_id: task._id.toString(),
           message: `assigned you to ${task.short_id}: ${task.title}`,
           direct_recipient_id: assigneeId,
+          actor_is_agent: true,
         });
       }
     }
@@ -1645,6 +1676,7 @@ export const batchAssign = mutation({
     if (!auth) throw new Error("Unauthorized");
 
     const now = Date.now();
+    const resolvedAssignee = await resolveAssigneeStr(ctx, args.assignee, auth.userId) || args.assignee;
     const results: { short_id: string; success: boolean }[] = [];
 
     for (const short_id of args.short_ids) {
@@ -1657,7 +1689,7 @@ export const batchAssign = mutation({
         continue;
       }
 
-      if (args.assignee !== task.assignee) {
+      if (resolvedAssignee !== task.assignee) {
         await ctx.db.insert("task_history", {
           task_id: task._id,
           user_id: auth.userId,
@@ -1665,16 +1697,16 @@ export const batchAssign = mutation({
           action: "updated",
           field: "assignee",
           old_value: task.assignee || "",
-          new_value: args.assignee,
+          new_value: resolvedAssignee,
           created_at: now,
         });
       }
 
-      await ctx.db.patch(task._id, { assignee: args.assignee, updated_at: now });
+      await ctx.db.patch(task._id, { assignee: resolvedAssignee, updated_at: now });
 
-      if (args.assignee !== task.assignee) {
-        const assigneeId = await resolveAssigneeToUserId(ctx, args.assignee, task.team_id);
-        if (assigneeId && assigneeId.toString() !== auth.userId.toString()) {
+      if (resolvedAssignee !== task.assignee) {
+        const assigneeId = await resolveAssigneeToUserId(ctx, resolvedAssignee, task.team_id);
+        if (assigneeId) {
           await subscribeUser(ctx, assigneeId, task._id, "assignee");
           await ctx.runMutation(internal.notificationRouter.emit, {
             event_type: "task_assigned",
@@ -1683,6 +1715,7 @@ export const batchAssign = mutation({
             entity_id: task._id.toString(),
             message: `assigned you to ${task.short_id}: ${task.title}`,
             direct_recipient_id: assigneeId,
+            actor_is_agent: true,
           });
         }
       }
