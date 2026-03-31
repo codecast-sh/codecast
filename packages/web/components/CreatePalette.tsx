@@ -40,7 +40,7 @@ export function CreatePalette() {
     (window as any).__CODECAST_COMPOSE_SHOW = (msg?: string) => {
       useInboxStore.getState().openComposePalette(msg || "");
     };
-    (window as any).__CODECAST_START_SESSION = async (data: { message: string; agentType: string; projectPath?: string }) => {
+    (window as any).__CODECAST_START_SESSION = async (data: { message: string; agentType: string; projectPath?: string; navigate?: boolean }) => {
       const store = useInboxStore.getState();
       const sid = nanoid(10);
       const now = Date.now();
@@ -58,6 +58,7 @@ export function CreatePalette() {
         fork_count: 0, forked_from_details: null, compaction_count: 0,
         fork_children: [], parent_conversation_id: null,
       });
+      const clientId = store.addOptimisticMessage(sid, data.message);
       store.createSession({
         agent_type: agentType,
         project_path: path,
@@ -66,11 +67,15 @@ export function CreatePalette() {
       }).then((convexId: string) => {
         if (convexId) {
           store.resolveSessionId(sid, convexId);
-          store.sendMessage(convexId, data.message);
-          window.history.pushState({ inboxId: convexId }, "", `/conversation/${convexId}`);
+          store._dispatch("sendMessage", [convexId, data.message, undefined, clientId]);
+          if (data.navigate) {
+            window.history.pushState({ inboxId: convexId }, "", `/conversation/${convexId}`);
+          }
         }
       });
-      store.setCurrentSession(sid);
+      if (data.navigate) {
+        store.setCurrentSession(sid);
+      }
     };
     return () => {
       delete (window as any).__CODECAST_COMPOSE_SHOW;

@@ -440,6 +440,9 @@ ipcMain.on("palette-start-session", (_e, data) => {
     mainWindow.webContents.executeJavaScript(
       `window.__CODECAST_START_SESSION && window.__CODECAST_START_SESSION(${JSON.stringify(data)})`
     );
+    if (!data?.navigate && process.platform === "darwin") {
+      app.hide();
+    }
   }
 });
 
