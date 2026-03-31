@@ -959,16 +959,18 @@ export const useInboxStore = create<InboxStoreState>(
     (this.clientState.dismissed as any)[key] = value;
   }),
 
+  _applyClientTips: sync(function (this: Draft, partial: Partial<ClientTips>) {
+    if (!this.clientState.tips) this.clientState.tips = {} as ClientTips;
+    const tips = this.clientState.tips;
+    if (partial.seen) tips.seen = partial.seen;
+    if (partial.dismissed) tips.dismissed = partial.dismissed;
+    if (partial.completed) tips.completed = partial.completed;
+    if (partial.level !== undefined) tips.level = partial.level;
+    if (partial._inlineSuppressed !== undefined) tips._inlineSuppressed = partial._inlineSuppressed;
+  }),
+
   updateClientTips: (partial: Partial<ClientTips>) => {
-    const cs = get().clientState;
-    const prev = cs.tips ?? {};
-    const next = { ...prev };
-    if (partial.seen) next.seen = partial.seen;
-    if (partial.dismissed) next.dismissed = partial.dismissed;
-    if (partial.completed) next.completed = partial.completed;
-    if (partial.level !== undefined) next.level = partial.level;
-    if (partial._inlineSuppressed !== undefined) next._inlineSuppressed = partial._inlineSuppressed;
-    set({ clientState: { ...cs, tips: next } });
+    (get() as any)._applyClientTips(partial);
     const serverPartial = { ...partial };
     delete serverPartial._inlineSuppressed;
     if (Object.keys(serverPartial).length > 0) {
@@ -1753,7 +1755,20 @@ if (typeof window !== "undefined") {
         const val = cached[key];
         if (val == null) continue;
         const cur = (state as any)[key];
-        if (key === "clientState" && state.clientStateInitialized) continue;
+        if (key === "clientState" && state.clientStateInitialized) {
+          const cachedTips = val?.tips;
+          if (cachedTips) {
+            const cur = state.clientState.tips ?? {} as any;
+            const merged: Record<string, any> = {};
+            let changed = false;
+            for (const k of ["seen", "dismissed", "completed"] as const) {
+              const union = [...new Set([...((cur as any)[k] ?? []), ...(cachedTips[k] ?? [])])];
+              if (union.length > ((cur as any)[k]?.length ?? 0)) { merged[k] = union; changed = true; }
+            }
+            if (changed) state.updateClientTips(merged);
+          }
+          continue;
+        }
         if (key === "collapsedSections" || key === "sidebarNavExpanded") {
           updates[key] = { ...val, ...cur };
         } else if (key === "teamUnreadCount") {
