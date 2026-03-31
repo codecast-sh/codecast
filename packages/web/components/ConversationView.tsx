@@ -6176,23 +6176,8 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
 
     const expandedContent = await expandMentionsInMessage(trimmed);
 
-    if (convIdRef.current !== targetConvId) {
-      console.warn("[MessageInput] conversationId changed between submit and send — aborting:", { targetConvId, current: convIdRef.current, sessionId });
-      toast.error("Session changed — message not sent");
-      useInboxStore.getState().markOptimisticAsFailed(targetConvId, clientId);
-      setOptimisticSending(false);
-      return;
-    }
-
     try {
       const resolvedId = targetCanQuery ? targetConvId : await waitForConvexId(targetConvId);
-      if (convIdRef.current !== targetConvId) {
-        console.warn("[MessageInput] conversationId drifted during waitForConvexId — aborting:", { targetConvId, resolvedId, current: convIdRef.current });
-        toast.error("Session changed — message not sent");
-        useInboxStore.getState().markOptimisticAsFailed(targetConvId, clientId);
-        setOptimisticSending(false);
-        return;
-      }
       const msgId = await sendMessage({
         conversation_id: resolvedId as Id<"conversations">,
         content: expandedContent,
@@ -6228,12 +6213,6 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
     (async () => {
       try {
         const expanded = await expandMentionsInMessage(next);
-        if (convIdRef.current !== queueTargetConvId) {
-          console.warn("[MessageInput] conversationId changed during queue drain — aborting:", { queueTargetConvId, current: convIdRef.current });
-          toast.error("Session changed — queued message not sent");
-          useInboxStore.getState().markOptimisticAsFailed(queueTargetConvId, clientId);
-          return;
-        }
         const resolvedId = queueCanQuery ? queueTargetConvId : await waitForConvexId(queueTargetConvId);
         const msgId = await sendMessage({
           conversation_id: resolvedId as Id<"conversations">,
@@ -9852,7 +9831,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   </div>
                 )
               )}
-              <MessageInput conversationId={firstActiveForkId || conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} onSendAndDismiss={onSendAndDismiss} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} isSessionStarting={isSessionStarting} isSessionReady={isSessionReady} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={isSessionDisconnected ? undefined : managedSession?.agent_status as any} deliveryStatus={managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} hasAskUserQuestion={hasAskUserQuestion} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={handleForkFromMessage} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onGateSend={workflowRun?.status === "paused" ? handleGateRespond : undefined} skills={sessionSkills} filePaths={sessionFilePaths} mentionItemsRef={mentionItemsRef} onMentionQuery={handleMentionQuery} />
+              <MessageInput key={conversation.session_id || conversation._id} conversationId={firstActiveForkId || conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} onSendAndDismiss={onSendAndDismiss} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} isSessionStarting={isSessionStarting} isSessionReady={isSessionReady} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={isSessionDisconnected ? undefined : managedSession?.agent_status as any} deliveryStatus={managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} hasAskUserQuestion={hasAskUserQuestion} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={handleForkFromMessage} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onGateSend={workflowRun?.status === "paused" ? handleGateRespond : undefined} skills={sessionSkills} filePaths={sessionFilePaths} mentionItemsRef={mentionItemsRef} onMentionQuery={handleMentionQuery} />
             </>
           )}
           {navigatorOpen && navigatorUserMessages && navigatorUserMessages.length > 0 && (
