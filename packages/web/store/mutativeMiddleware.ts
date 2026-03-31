@@ -153,7 +153,8 @@ export function mutativeMiddleware(config: any): any {
 
     wrapped._dispatch = (action: string, args: any, patches?: any) => {
       if (!dispatchFn) return Promise.reject(new Error("Dispatch not wired"));
-      return dispatchFn(action, args, patches);
+      const safeArgs = Array.isArray(args) ? args.map((a: any) => a === undefined ? null : a) : args;
+      return dispatchFn(action, safeArgs, patches);
     };
 
     return wrapped;

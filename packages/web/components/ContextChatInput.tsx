@@ -97,8 +97,8 @@ export function ContextChatInput({
 
     if (convexId) {
       store.resolveSessionId(sid, convexId);
-      store._dispatch("sendMessage", [convexId, fullMessage, undefined, clientId]);
-      useInboxStore.setState({ sidePanelSessionId: convexId, sidePanelOpen: false });
+      store._dispatch("sendMessage", [convexId, fullMessage, null, clientId]);
+      useInboxStore.setState({ sidePanelSessionId: convexId });
       if (linkedObjectId) {
         store._dispatch("linkConversation", [contextType, linkedObjectId, convexId]);
       }

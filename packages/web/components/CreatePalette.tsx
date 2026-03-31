@@ -67,7 +67,7 @@ export function CreatePalette() {
       }).then((convexId: string) => {
         if (convexId) {
           store.resolveSessionId(sid, convexId);
-          store._dispatch("sendMessage", [convexId, data.message, undefined, clientId]);
+          store._dispatch("sendMessage", [convexId, data.message, null, clientId]);
           if (data.navigate) {
             window.history.pushState({ inboxId: convexId }, "", `/conversation/${convexId}`);
           }
