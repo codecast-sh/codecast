@@ -108,18 +108,20 @@ export const emit = internalMutation({
     conversation_id: v.optional(v.id("conversations")),
     comment_id: v.optional(v.id("comments")),
     direct_recipient_id: v.optional(v.id("users")),
+    actor_is_agent: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const now = Date.now();
     const actor = await ctx.db.get(args.actor_user_id);
     const actorName = actor?.name || actor?.github_username || "Someone";
+    const skipSelfCheck = args.actor_is_agent === true;
 
     type UserDoc = NonNullable<Awaited<ReturnType<typeof ctx.db.get<"users">>>>;
     const recipients: UserDoc[] = [];
 
     if (args.direct_recipient_id) {
       const u = await ctx.db.get(args.direct_recipient_id);
-      if (u && u._id.toString() !== args.actor_user_id.toString()) {
+      if (u && (skipSelfCheck || u._id.toString() !== args.actor_user_id.toString())) {
         recipients.push(u);
       }
     } else {
@@ -136,7 +138,7 @@ export const emit = internalMutation({
       for (const sub of subs) {
         if (sub.muted) continue;
         const uid = sub.user_id.toString();
-        if (uid === args.actor_user_id.toString() || seen.has(uid)) continue;
+        if ((!skipSelfCheck && uid === args.actor_user_id.toString()) || seen.has(uid)) continue;
         seen.add(uid);
         const u = await ctx.db.get(sub.user_id);
         if (u) recipients.push(u);
