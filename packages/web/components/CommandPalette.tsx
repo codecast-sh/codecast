@@ -14,6 +14,7 @@ import { AgentTypeIcon } from "./AgentTypeIcon";
 import { getLabelColor, DEFAULT_LABELS } from "../lib/labelColors";
 import { toast } from "sonner";
 import { undoableArchiveDoc } from "../store/undoActions";
+import { copyToClipboard } from "../lib/utils";
 import {
   Circle,
   CircleDot,
@@ -706,13 +707,13 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
 
     if (actionKey === "copy") {
       if (targetType === "task" && isTask(target)) {
-        navigator.clipboard.writeText(target.short_id);
+        copyToClipboard(target.short_id);
         toast.success(`Copied ${target.short_id}`);
       } else if (targetType === "plan") {
-        navigator.clipboard.writeText(target.short_id || target._id);
+        copyToClipboard(target.short_id || target._id);
         toast.success(`Copied ${target.short_id || target._id}`);
       } else {
-        navigator.clipboard.writeText(target._id);
+        copyToClipboard(target._id);
         toast.success("Copied ID");
       }
       closePalette();

@@ -7,6 +7,7 @@ import { useInboxStore, TaskItem, DocItem } from "../store/inboxStore";
 import { CommandPaletteShell, PaletteMode } from "./CommandPaletteShell";
 import { toast } from "sonner";
 import { undoableArchiveDoc } from "../store/undoActions";
+import { copyToClipboard } from "../lib/utils";
 import { getLabelColor, DEFAULT_LABELS } from "../lib/labelColors";
 import {
   Circle,
@@ -279,7 +280,7 @@ export function ItemCommandPalette({
             applyTaskUpdate({ triage_status: "dismissed" });
             toast.success(`${label} dismissed`);
           } else if (itemKey === "copy" && count === 1) {
-            navigator.clipboard.writeText((targets[0] as TaskItem).short_id);
+            copyToClipboard((targets[0] as TaskItem).short_id);
             toast.success(`Copied ${(targets[0] as TaskItem).short_id}`);
           } else if (itemKey === "drop") {
             applyTaskUpdate({ status: "dropped" });
@@ -326,7 +327,7 @@ export function ItemCommandPalette({
           pinDoc(doc._id, !doc.pinned);
           toast.success(doc.pinned ? "Unpinned" : "Pinned");
         } else if (itemKey === "copy") {
-          navigator.clipboard.writeText(doc._id);
+          copyToClipboard(doc._id);
           toast.success("Copied ID");
         } else if (itemKey === "archive") {
           undoableArchiveDoc(doc._id);

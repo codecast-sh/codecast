@@ -1,6 +1,7 @@
 import * as Sentry from "@sentry/react";
 import posthog from "posthog-js";
 import { toast } from "sonner";
+import { copyToClipboard } from "./utils";
 
 const SENTRY_DSN = import.meta.env.VITE_SENTRY_DSN;
 const POSTHOG_KEY = import.meta.env.VITE_POSTHOG_KEY;
@@ -99,7 +100,7 @@ export function setupErrorToasts() {
       action: {
         label: "Copy stack",
         onClick: () => {
-          navigator.clipboard.writeText(`${key}\n\n${stack}`);
+          copyToClipboard(`${key}\n\n${stack}`);
           toast.success("Stack trace copied");
         },
       },
@@ -119,7 +120,7 @@ export function setupErrorToasts() {
       action: {
         label: "Copy stack",
         onClick: () => {
-          navigator.clipboard.writeText(`${key}\n\n${err.stack || ""}`);
+          copyToClipboard(`${key}\n\n${err.stack || ""}`);
           toast.success("Stack trace copied");
         },
       },

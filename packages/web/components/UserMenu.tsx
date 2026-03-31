@@ -6,6 +6,7 @@ import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useRouter } from "next/navigation";
 import { useInboxStore } from "../store/inboxStore";
+import { copyToClipboard } from "../lib/utils";
 
 function UrlBarModal({ onClose }: { onClose: () => void }) {
   const router = useRouter();
@@ -37,7 +38,7 @@ function UrlBarModal({ onClose }: { onClose: () => void }) {
   }, [url, router, onClose]);
 
   const handleCopy = useCallback(() => {
-    navigator.clipboard.writeText(url);
+    copyToClipboard(url);
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
   }, [url]);

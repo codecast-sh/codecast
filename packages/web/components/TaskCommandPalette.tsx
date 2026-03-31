@@ -5,6 +5,7 @@ import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, TaskItem } from "../store/inboxStore";
 import { toast } from "sonner";
 import { getLabelColor, DEFAULT_LABELS } from "../lib/labelColors";
+import { copyToClipboard } from "../lib/utils";
 import {
   Circle,
   CircleDot,
@@ -124,7 +125,7 @@ export function TaskCommandPalette({
       { id: "assign", label: "Assign to...", icon: User, shortcut: "A", action: () => setMode("assign") },
       { id: "copy", label: "Copy task ID", icon: Copy, shortcut: "\u2318.", action: () => {
         if (targetTasks.length === 1) {
-          navigator.clipboard.writeText(targetTasks[0].short_id);
+          copyToClipboard(targetTasks[0].short_id);
           toast.success(`Copied ${targetTasks[0].short_id}`);
         }
         onClose();
