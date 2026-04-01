@@ -37,20 +37,34 @@ function getSettingsPath() {
   return path.join(app.getPath("userData"), "settings.json");
 }
 
-function loadSettings() {
+function loadFullSettings() {
   try {
-    const data = fs.readFileSync(getSettingsPath(), "utf8");
-    return { ...DEFAULT_SHORTCUTS, ...JSON.parse(data).shortcuts };
+    return JSON.parse(fs.readFileSync(getSettingsPath(), "utf8"));
   } catch {
-    return { ...DEFAULT_SHORTCUTS };
+    return {};
   }
+}
+
+function loadSettings() {
+  const s = loadFullSettings();
+  return { ...DEFAULT_SHORTCUTS, ...s.shortcuts };
 }
 
 function saveSettings(shortcuts) {
   const settingsPath = getSettingsPath();
-  let existing = {};
-  try { existing = JSON.parse(fs.readFileSync(settingsPath, "utf8")); } catch {}
+  const existing = loadFullSettings();
   existing.shortcuts = shortcuts;
+  fs.writeFileSync(settingsPath, JSON.stringify(existing, null, 2));
+}
+
+function getZoomFactor() {
+  return loadFullSettings().zoomFactor || 1.0;
+}
+
+function saveZoomFactor(factor) {
+  const settingsPath = getSettingsPath();
+  const existing = loadFullSettings();
+  existing.zoomFactor = factor;
   fs.writeFileSync(settingsPath, JSON.stringify(existing, null, 2));
 }
 
@@ -120,9 +134,9 @@ function createWindow() {
     }
   });
 
-  // Inject desktop detection class
+  // Inject desktop detection class + restore zoom preference
   mainWindow.webContents.on("did-finish-load", () => {
-    mainWindow.webContents.setZoomFactor(1.0);
+    mainWindow.webContents.setZoomFactor(getZoomFactor());
     mainWindow.webContents.executeJavaScript(
       "document.documentElement.classList.add('electron-desktop')"
     );
@@ -351,9 +365,23 @@ function buildAppMenu() {
         { role: "reload" },
         { role: "forceReload" },
         { type: "separator" },
-        { role: "resetZoom" },
-        { role: "zoomIn" },
-        { role: "zoomOut" },
+        { label: "Actual Size", accelerator: "CommandOrControl+0", click: () => {
+          if (!mainWindow) return;
+          saveZoomFactor(1.0);
+          mainWindow.webContents.setZoomFactor(1.0);
+        }},
+        { label: "Zoom In", accelerator: "CommandOrControl+=", click: () => {
+          if (!mainWindow) return;
+          const z = Math.min(mainWindow.webContents.getZoomFactor() + 0.1, 3.0);
+          saveZoomFactor(z);
+          mainWindow.webContents.setZoomFactor(z);
+        }},
+        { label: "Zoom Out", accelerator: "CommandOrControl+-", click: () => {
+          if (!mainWindow) return;
+          const z = Math.max(mainWindow.webContents.getZoomFactor() - 0.1, 0.5);
+          saveZoomFactor(z);
+          mainWindow.webContents.setZoomFactor(z);
+        }},
         { type: "separator" },
         { role: "togglefullscreen" },
         { type: "separator" },
