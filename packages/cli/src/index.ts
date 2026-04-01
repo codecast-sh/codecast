@@ -13,6 +13,7 @@ import { ensureTmux, hasTmux, tryInstallTmux } from "./tmux.js";
 import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, ensureCastAlias } from "./update.js";
 import { glob } from "glob";
 import { getPosition, setPosition } from "./positionTracker.js";
+import { encryptToken, decryptToken, isEncryptedToken } from "./tokenEncryption.js";
 import { getAllSyncRecords, findUnsyncedFiles } from "./syncLedger.js";
 import { getLastReconciliation, performReconciliation, repairDiscrepancies } from "./reconciliation.js";
 import { parseSessionFile, extractSlug } from "./parser.js";
@@ -528,7 +529,15 @@ function readConfig(): Config | null {
     return null;
   }
   const content = fs.readFileSync(CONFIG_FILE, "utf-8");
-  return JSON.parse(content) as Config;
+  const config = JSON.parse(content) as Config;
+  if (config.auth_token) {
+    if (isEncryptedToken(config.auth_token)) {
+      config.auth_token = decryptToken(config.auth_token);
+    } else {
+      writeConfig(config);
+    }
+  }
+  return config;
 }
 
 function writeConfig(config: Config): void {
@@ -537,7 +546,11 @@ function writeConfig(config: Config): void {
   if (!config.created_at) {
     config.created_at = config.updated_at;
   }
-  fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2), { mode: 0o600 });
+  const toWrite = { ...config };
+  if (toWrite.auth_token && !isEncryptedToken(toWrite.auth_token)) {
+    toWrite.auth_token = encryptToken(toWrite.auth_token);
+  }
+  fs.writeFileSync(CONFIG_FILE, JSON.stringify(toWrite, null, 2), { mode: 0o600 });
   fs.chmodSync(CONFIG_FILE, 0o600);
 }
 

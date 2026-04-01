@@ -4,6 +4,7 @@ import * as path from "path";
 import * as os from "os";
 import { ConvexHttpClient } from "convex/browser";
 import { hasTmux } from "./tmux.js";
+import { decryptToken, isEncryptedToken } from "./tokenEncryption.js";
 
 const CONFIG_DIR = process.env.HOME + "/.codecast";
 const CONFIG_FILE = path.join(CONFIG_DIR, "config.json");
@@ -19,7 +20,11 @@ interface Config {
 function readConfig(): Config | null {
   try {
     if (fs.existsSync(CONFIG_FILE)) {
-      return JSON.parse(fs.readFileSync(CONFIG_FILE, "utf-8"));
+      const config = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf-8")) as Config;
+      if (config.auth_token && isEncryptedToken(config.auth_token)) {
+        config.auth_token = decryptToken(config.auth_token);
+      }
+      return config;
     }
   } catch {
     return null;

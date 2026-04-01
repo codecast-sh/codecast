@@ -26,6 +26,7 @@ import { GeminiWatcher, type GeminiSessionEvent } from "./geminiWatcher.js";
 import { parseSessionFile, parseCodexSessionFile, parseGeminiSessionFile, parseCursorTranscriptFile, extractSlug, extractParentUuid, extractSummaryTitle, extractCwd, extractCodexCwd, extractGeminiProjectHash, detectCliFlags, type ParsedMessage } from "./parser.js";
 import { extractMessagesFromCursorDb } from "./cursorProcessor.js";
 import { getPosition, setPosition } from "./positionTracker.js";
+import { encryptToken, decryptToken, isEncryptedToken } from "./tokenEncryption.js";
 import { markSynced, getSyncRecord, findUnsyncedFiles, type SyncRecord } from "./syncLedger.js";
 import { SyncService, AuthExpiredError } from "./syncService.js";
 import { redactSecrets, maskToken } from "./redact.js";
@@ -2043,7 +2044,11 @@ function readConfig(): Config | null {
     return null;
   }
   try {
-    return JSON.parse(fs.readFileSync(CONFIG_FILE, "utf-8")) as Config;
+    const config = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf-8")) as Config;
+    if (config.auth_token && isEncryptedToken(config.auth_token)) {
+      config.auth_token = decryptToken(config.auth_token);
+    }
+    return config;
   } catch {
     return null;
   }
@@ -2099,7 +2104,11 @@ function patchConfig(updates: Partial<Config>): void {
   const config = readConfig();
   if (!config) return;
   Object.assign(config, updates);
-  fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2), { mode: 0o600 });
+  const toWrite = { ...config };
+  if (toWrite.auth_token && !isEncryptedToken(toWrite.auth_token)) {
+    toWrite.auth_token = encryptToken(toWrite.auth_token);
+  }
+  fs.writeFileSync(CONFIG_FILE, JSON.stringify(toWrite, null, 2), { mode: 0o600 });
 }
 
 function readConversationCache(): ConversationCache {
