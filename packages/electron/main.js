@@ -74,11 +74,26 @@ function saveZoomFactor(factor) {
   fs.writeFileSync(settingsPath, JSON.stringify(existing, null, 2));
 }
 
-// Single instance lock
-const gotLock = app.requestSingleInstanceLock();
+// Single instance lock — clear stale locks from crashed/updated processes
+let gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
-  app.quit();
-} else {
+  const userDataPath = app.getPath("userData");
+  const lockPath = path.join(userDataPath, "SingletonLock");
+  try {
+    const target = fs.readlinkSync(lockPath);
+    const pid = parseInt(target.split("-").pop(), 10);
+    let alive = false;
+    try { process.kill(pid, 0); alive = true; } catch {}
+    if (!alive) {
+      for (const f of ["SingletonLock", "SingletonSocket", "SingletonCookie"]) {
+        try { fs.unlinkSync(path.join(userDataPath, f)); } catch {}
+      }
+      gotLock = app.requestSingleInstanceLock();
+    }
+  } catch {}
+  if (!gotLock) app.quit();
+}
+if (gotLock) {
   app.on("second-instance", (_e, argv) => {
     const url = argv.find((a) => a.startsWith("codecast://"));
     if (url) handleDeepLink(url);
