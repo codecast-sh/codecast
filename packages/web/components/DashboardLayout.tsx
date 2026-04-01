@@ -274,27 +274,24 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
   }, [handleQuickCreateIsolated]));
 
   useShortcutAction('zoom.in', useCallback(() => {
-    if (isDesktopApp) return;
     const r = Math.round(Math.min(zoomRef.current + 0.1, 2) * 10) / 10;
     zoomRef.current = r;
     document.documentElement.style.zoom = String(r);
     requestAnimationFrame(recalcHeight);
-  }, [recalcHeight, isDesktopApp]));
+  }, [recalcHeight]));
 
   useShortcutAction('zoom.out', useCallback(() => {
-    if (isDesktopApp) return;
     const r = Math.round(Math.max(zoomRef.current - 0.1, 0.5) * 10) / 10;
     zoomRef.current = r;
     document.documentElement.style.zoom = String(r);
     requestAnimationFrame(recalcHeight);
-  }, [recalcHeight, isDesktopApp]));
+  }, [recalcHeight]));
 
   useShortcutAction('zoom.reset', useCallback(() => {
-    if (isDesktopApp) return;
     zoomRef.current = 1;
     document.documentElement.style.zoom = '1';
     requestAnimationFrame(recalcHeight);
-  }, [recalcHeight, isDesktopApp]));
+  }, [recalcHeight]));
 
   const handleLayoutChange = (newLayout: { [key: string]: number }) => {
     updateLayout("dashboard", { sidebar: newLayout.sidebar || 25, main: newLayout.main || 75 });

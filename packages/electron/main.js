@@ -57,30 +57,6 @@ function saveSettings(shortcuts) {
   fs.writeFileSync(settingsPath, JSON.stringify(existing, null, 2));
 }
 
-function getZoomFactor() {
-  const settings = loadFullSettings();
-  if (settings.zoomFactor === 1 && !settings.zoomVersion) {
-    delete settings.zoomFactor;
-    fs.writeFileSync(getSettingsPath(), JSON.stringify(settings, null, 2));
-  }
-  const saved = settings.zoomFactor;
-  if (saved && isFinite(saved) && saved > 0) return saved;
-  const display = mainWindow
-    ? screen.getDisplayMatching(mainWindow.getBounds())
-    : screen.getPrimaryDisplay();
-  const dipWidth = display.workAreaSize.width;
-  if (dipWidth > 2500) return 2.0;
-  if (dipWidth > 2000) return 1.5;
-  return 1.0;
-}
-
-function saveZoomFactor(factor) {
-  const settingsPath = getSettingsPath();
-  const existing = loadFullSettings();
-  existing.zoomFactor = factor;
-  existing.zoomVersion = 2;
-  fs.writeFileSync(settingsPath, JSON.stringify(existing, null, 2));
-}
 
 // Single instance lock — clear stale locks from crashed/updated processes
 let gotLock = app.requestSingleInstanceLock();
@@ -136,7 +112,6 @@ function handleDeepLink(url) {
 }
 
 function createWindow() {
-  const zoom = getZoomFactor();
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
@@ -148,7 +123,6 @@ function createWindow() {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
-      zoomFactor: zoom,
     },
     icon: path.join(__dirname, "assets", "icon.png"),
     show: false,
@@ -158,7 +132,6 @@ function createWindow() {
   mainWindow.loadURL(currentBaseUrl);
 
   mainWindow.once("ready-to-show", () => {
-    mainWindow.webContents.setZoomFactor(getZoomFactor());
     mainWindow.show();
     if (deepLinkUrl) {
       handleDeepLink(deepLinkUrl);
@@ -166,9 +139,7 @@ function createWindow() {
     }
   });
 
-  // Inject desktop detection class + restore zoom preference
   mainWindow.webContents.on("did-finish-load", () => {
-    mainWindow.webContents.setZoomFactor(getZoomFactor());
     mainWindow.webContents.executeJavaScript(
       "document.documentElement.classList.add('electron-desktop')"
     );
@@ -397,23 +368,9 @@ function buildAppMenu() {
         { role: "reload" },
         { role: "forceReload" },
         { type: "separator" },
-        { label: "Actual Size", accelerator: "CommandOrControl+0", click: () => {
-          if (!mainWindow) return;
-          saveZoomFactor(1.0);
-          mainWindow.webContents.setZoomFactor(1.0);
-        }},
-        { label: "Zoom In", accelerator: "CommandOrControl+=", click: () => {
-          if (!mainWindow) return;
-          const z = Math.min(mainWindow.webContents.getZoomFactor() + 0.1, 3.0);
-          saveZoomFactor(z);
-          mainWindow.webContents.setZoomFactor(z);
-        }},
-        { label: "Zoom Out", accelerator: "CommandOrControl+-", click: () => {
-          if (!mainWindow) return;
-          const z = Math.max(mainWindow.webContents.getZoomFactor() - 0.1, 0.5);
-          saveZoomFactor(z);
-          mainWindow.webContents.setZoomFactor(z);
-        }},
+        { role: "resetZoom" },
+        { role: "zoomIn" },
+        { role: "zoomOut" },
         { type: "separator" },
         { role: "togglefullscreen" },
         { type: "separator" },
