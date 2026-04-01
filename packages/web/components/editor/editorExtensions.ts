@@ -19,6 +19,7 @@ import { MentionList, type MentionItem } from "./MentionList";
 import { MentionNodeView } from "./MentionNodeView";
 import { SlashCommandExtension } from "./SlashCommandExtension";
 import { DateMentionExtension } from "./DateMentionExtension";
+import { ImageUploadPlaceholder } from "./ImageUploadPlugin";
 
 const lowlight = createLowlight(common);
 
@@ -116,6 +117,7 @@ export function createBaseExtensions(opts: {
       transformCopiedText: true,
     }) as any,
     DateMentionExtension,
+    ImageUploadPlaceholder,
   ];
 
   if (opts.withTables !== false) {

@@ -501,6 +501,47 @@
   border: 1px solid var(--sol-border);
 }
 
+/* Image upload placeholder */
+.image-upload-placeholder {
+  position: relative;
+  max-width: 100%;
+  min-height: 80px;
+  border-radius: 6px;
+  margin: 0.8em 0;
+  border: 1px solid var(--sol-border);
+  background: var(--sol-bg-alt, #073642);
+  overflow: hidden;
+}
+
+.image-upload-preview {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  filter: blur(2px) brightness(0.5);
+  opacity: 0.6;
+}
+
+.image-upload-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.image-upload-spinner {
+  width: 24px;
+  height: 24px;
+  border: 2px solid rgba(255, 255, 255, 0.15);
+  border-top-color: var(--sol-cyan, #2aa198);
+  border-radius: 50%;
+  animation: img-upload-spin 0.7s linear infinite;
+}
+
+@keyframes img-upload-spin {
+  to { transform: rotate(360deg); }
+}
+
 /* Selection */
 .doc-editor .tiptap ::selection {
   background: rgba(42, 161, 152, 0.25);

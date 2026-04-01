@@ -3,6 +3,7 @@ import { useEditor, EditorContent } from "@tiptap/react";
 import { BubbleToolbar } from "./BubbleToolbar";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { createBaseExtensions, createMentionExtension, type MentionQueryFn } from "./editorExtensions";
+import { uploadImageWithPlaceholder } from "./ImageUploadPlugin";
 import "./editor.css";
 
 interface DocEditorProps {
@@ -63,11 +64,7 @@ export function DocEditor({
             const file = item.getAsFile();
             if (!file) continue;
             event.preventDefault();
-            onImageUploadRef.current(file).then((url) => {
-              if (url) view.dispatch(view.state.tr.replaceSelectionWith(
-                view.state.schema.nodes.image.create({ src: url })
-              ));
-            });
+            uploadImageWithPlaceholder(view, file, view.state.selection.from, onImageUploadRef.current);
             return true;
           }
         }
@@ -81,11 +78,7 @@ export function DocEditor({
         event.preventDefault();
         const pos = view.posAtCoords({ left: event.clientX, top: event.clientY })?.pos ?? view.state.selection.from;
         for (const file of imageFiles) {
-          onImageUploadRef.current(file).then((url) => {
-            if (url) view.dispatch(view.state.tr.insert(
-              pos, view.state.schema.nodes.image.create({ src: url })
-            ));
-          });
+          uploadImageWithPlaceholder(view, file, pos, onImageUploadRef.current);
         }
         return true;
       },

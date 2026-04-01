@@ -31,6 +31,7 @@ import { SlashCommandExtension } from "./SlashCommandExtension";
 import { DateMentionExtension } from "./DateMentionExtension";
 import { EntityIdExtension } from "./EntityIdExtension";
 import { BubbleToolbar } from "./BubbleToolbar";
+import { ImageUploadPlaceholder, uploadImageWithPlaceholder } from "./ImageUploadPlugin";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import type { SyncApi } from "@convex-dev/prosemirror-sync";
 
@@ -251,6 +252,7 @@ function buildExtensions(onMentionQuery: MentionQueryFn, placeholder: string) {
       transformPastedText: true,
       transformCopiedText: true,
     }) as any,
+    ImageUploadPlaceholder,
   ];
 }
 
@@ -454,11 +456,7 @@ export function CollabDocEditor({
                 const file = item.getAsFile();
                 if (!file) continue;
                 event.preventDefault();
-                onImageUploadRef.current(file).then((url) => {
-                  if (url) view.dispatch(view.state.tr.replaceSelectionWith(
-                    view.state.schema.nodes.image.create({ src: url })
-                  ));
-                });
+                uploadImageWithPlaceholder(view, file, view.state.selection.from, onImageUploadRef.current);
                 return true;
               }
             }
@@ -472,11 +470,7 @@ export function CollabDocEditor({
             event.preventDefault();
             const pos = view.posAtCoords({ left: event.clientX, top: event.clientY })?.pos ?? view.state.selection.from;
             for (const file of imageFiles) {
-              onImageUploadRef.current(file).then((url) => {
-                if (url) view.dispatch(view.state.tr.insert(
-                  pos, view.state.schema.nodes.image.create({ src: url })
-                ));
-              });
+              uploadImageWithPlaceholder(view, file, pos, onImageUploadRef.current);
             }
             return true;
           },
