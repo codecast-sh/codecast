@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import * as fs from "fs";
 import * as path from "path";
+import * as http from "http";
 import { Database } from "bun:sqlite";
 import { execSync, execFileSync, exec, execFile, spawn } from "child_process";
 import { watch as chokidarWatch } from "chokidar";
@@ -180,6 +181,7 @@ const LOG_FILE = path.join(CONFIG_DIR, "daemon.log");
 const STATE_FILE = path.join(CONFIG_DIR, "daemon.state");
 const PID_FILE = path.join(CONFIG_DIR, "daemon.pid");
 const VERSION_FILE = path.join(CONFIG_DIR, "daemon.version");
+const HOOK_PORT_FILE = path.join(CONFIG_DIR, "hook-port");
 const STARTED_SESSIONS_FILE = path.join(CONFIG_DIR, "started-sessions.json");
 const APP_SERVER_THREADS_FILE = path.join(CONFIG_DIR, "app-server-threads.json");
 const PID_FILE_STALE_GRACE_MS = 2_000;
@@ -549,6 +551,83 @@ function sendAgentStatus(
   if (status === "stopped") {
     workingPhaseStart.delete(sessionId);
   }
+}
+
+// --- HTTP Hook Server ---
+// Provides an instant push endpoint for agent status notifications.
+// The existing file-based status watcher remains as a fallback.
+
+let hookServer: http.Server | null = null;
+let hookServerPort = 0;
+
+function startHookServer(
+  handleStatus: (sessionId: string, data: HookStatusData) => void,
+): http.Server {
+  const server = http.createServer((req, res) => {
+    if (req.method === "GET" && req.url?.startsWith("/hook/status")) {
+      const url = new URL(req.url, `http://localhost`);
+      const sessionId = url.searchParams.get("session_id");
+      const status = url.searchParams.get("status") as AgentStatus | null;
+      const ts = url.searchParams.get("ts");
+      const permissionMode = url.searchParams.get("permission_mode") as PermissionMode | undefined;
+      const message = url.searchParams.get("message") || undefined;
+      const transcriptPath = url.searchParams.get("transcript_path") || undefined;
+
+      if (!sessionId || !status || !ts) {
+        res.writeHead(400);
+        res.end("missing params");
+        return;
+      }
+
+      const data: HookStatusData = {
+        status,
+        ts: parseInt(ts, 10),
+        ...(permissionMode && { permission_mode: permissionMode }),
+        ...(message && { message }),
+        ...(transcriptPath && { transcript_path: transcriptPath }),
+      };
+
+      handleStatus(sessionId, data);
+
+      res.writeHead(200, { "Content-Type": "text/plain" });
+      res.end("ok");
+      return;
+    }
+
+    if (req.method === "GET" && req.url === "/health") {
+      res.writeHead(200, { "Content-Type": "text/plain" });
+      res.end("ok");
+      return;
+    }
+
+    res.writeHead(404);
+    res.end();
+  });
+
+  server.listen(0, "127.0.0.1", () => {
+    const addr = server.address();
+    if (addr && typeof addr === "object") {
+      hookServerPort = addr.port;
+      try {
+        fs.writeFileSync(HOOK_PORT_FILE, String(hookServerPort));
+      } catch {}
+      log(`Hook server listening on 127.0.0.1:${hookServerPort}`);
+    }
+  });
+
+  server.on("error", (err) => {
+    log(`Hook server error: ${err.message}`);
+  });
+
+  return server;
+}
+
+function stopHookServer(): void {
+  if (hookServer) {
+    hookServer.close();
+    hookServer = null;
+  }
+  try { fs.unlinkSync(HOOK_PORT_FILE); } catch {}
 }
 
 function truncateForNotification(text: string, maxLen = 200): string {
@@ -8584,13 +8663,8 @@ async function main(): Promise<void> {
     }
   } catch {}
 
-  function handleStatusFile(filePath: string) {
+  function handleStatusData(sessionId: string, data: HookStatusData, filePath?: string) {
     try {
-      const basename = path.basename(filePath, ".json");
-      if (!basename || !filePath.endsWith(".json")) return;
-      const sessionId = basename;
-      const raw = fs.readFileSync(filePath, "utf-8");
-      const data = JSON.parse(raw) as HookStatusData;
       if (!data.status || !data.ts) return;
 
       const convId = conversationCache[sessionId];
@@ -8620,11 +8694,11 @@ async function main(): Promise<void> {
         const restartTs = restartingSessionIds.get(sessionId);
         if (restartTs && Date.now() - restartTs < RESTART_GUARD_TTL_MS) {
           log(`Session ended for ${sessionId.slice(0, 8)}, but restart in progress — skipping completion`);
-          try { fs.unlinkSync(filePath); } catch {}
+          if (filePath) try { fs.unlinkSync(filePath); } catch {}
         } else {
           log(`Session ended for ${sessionId.slice(0, 8)}, marking completed`);
           syncService.markSessionCompleted(convId).catch(() => {});
-          try { fs.unlinkSync(filePath); } catch {}
+          if (filePath) try { fs.unlinkSync(filePath); } catch {}
         }
       }
 
@@ -8693,6 +8767,27 @@ async function main(): Promise<void> {
       }
     } catch {}
   }
+
+  function handleStatusFile(filePath: string) {
+    try {
+      const basename = path.basename(filePath, ".json");
+      if (!basename || !filePath.endsWith(".json")) return;
+      const sessionId = basename;
+      const raw = fs.readFileSync(filePath, "utf-8");
+      const data = JSON.parse(raw) as HookStatusData;
+      handleStatusData(sessionId, data, filePath);
+    } catch {}
+  }
+
+  // HTTP hook server -- instant push path (file watcher above is the fallback)
+  hookServer = startHookServer((sessionId, data) => {
+    handleStatusData(sessionId, data);
+    // Also write the file so file-based consumers stay in sync
+    try {
+      fs.mkdirSync(AGENT_STATUS_DIR, { recursive: true });
+      fs.writeFileSync(path.join(AGENT_STATUS_DIR, `${sessionId}.json`), JSON.stringify(data));
+    } catch {}
+  });
 
   function extractToolFromMessage(message: string): string {
     const colonMatch = message.match(/^(\w+):\s/);
@@ -9626,6 +9721,7 @@ async function main(): Promise<void> {
     clearInterval(statusCleanupInterval);
     log("Watchdog and reconciliation stopped");
 
+    stopHookServer();
     statusWatcher.close();
     watcher.stop();
     cursorWatcher.stop();
