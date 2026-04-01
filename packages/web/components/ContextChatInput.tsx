@@ -80,6 +80,21 @@ export function ContextChatInput({
       messages: [],
     });
 
+    store.syncRecord("sessions", sid, {
+      _id: sid,
+      session_id: sid,
+      title: "New session",
+      updated_at: now,
+      started_at: now,
+      project_path: path,
+      git_root: gitRoot || path,
+      agent_type: convexAgentType,
+      message_count: 0,
+      is_idle: true,
+      has_pending: false,
+      last_user_message: null,
+    });
+
     const clientId = store.addOptimisticMessage(sid, fullMessage);
 
     setMessage("");
@@ -88,17 +103,18 @@ export function ContextChatInput({
       textareaRef.current.style.height = "auto";
     }
 
-    const convexId = await store.createSession({
+    useInboxStore.setState({ sidePanelSessionId: sid });
+
+    const convexId = await store._dispatch("createSession", [{
       agent_type: convexAgentType,
       project_path: path,
       git_root: gitRoot || path,
       session_id: sid,
-    });
+    }]);
 
     if (convexId) {
       store.resolveSessionId(sid, convexId);
       store._dispatch("sendMessage", [convexId, fullMessage, null, clientId]);
-      useInboxStore.setState({ sidePanelSessionId: convexId });
       if (linkedObjectId) {
         store._dispatch("linkConversation", [contextType, linkedObjectId, convexId]);
       }
