@@ -870,30 +870,82 @@ export const webList = query({
         .query("tasks")
         .withIndex("by_project_id", (q) => q.eq("project_id", args.project_id as any))
         .collect();
-    } else if (args.workspace === "team" && args.team_id) {
-      tasks = await ctx.db
-        .query("tasks")
-        .withIndex("by_team_id", (q) => q.eq("team_id", args.team_id!))
-        .collect();
+      if (args.status) {
+        tasks = tasks.filter((t) => t.status === args.status);
+      } else {
+        tasks = tasks.filter((t) => t.status !== "done" && t.status !== "dropped");
+      }
     } else {
-      tasks = await ctx.db
-        .query("tasks")
-        .withIndex("by_user_id", (q) => q.eq("user_id", userId))
-        .collect();
-      if (args.workspace === "personal") {
-        tasks = tasks.filter((t: any) => !t.team_id);
+      const statuses = args.status
+        ? [args.status]
+        : ["backlog", "open", "in_progress", "in_review"];
+
+      const seen = new Set<string>();
+      const allTasks: any[] = [];
+      const pushUnique = (t: any) => {
+        const id = String(t._id);
+        if (!seen.has(id)) { seen.add(id); allTasks.push(t); }
+      };
+
+      for (const status of statuses) {
+        const userTasks = await ctx.db.query("tasks")
+          .withIndex("by_user_status", (q: any) => q.eq("user_id", userId).eq("status", status))
+          .order("desc")
+          .take(500);
+        for (const t of userTasks) pushUnique(t);
+
+        if (args.team_id) {
+          const teamTasks = await ctx.db.query("tasks")
+            .withIndex("by_team_status", (q: any) => q.eq("team_id", args.team_id).eq("status", status))
+            .order("desc")
+            .take(500);
+          for (const t of teamTasks) pushUnique(t);
+        }
+      }
+
+      if ((args.workspace === "team" || !args.workspace) && args.team_id) {
+        const needConvLookup = allTasks.filter(t => !t.team_id);
+        const convMap = new Map<string, any>();
+        for (const t of needConvLookup) {
+          const cid = t.conversation_ids?.[0] || t.created_from_conversation;
+          if (cid) {
+            const conv = await ctx.db.get(cid);
+            if (conv) convMap.set(String(cid), conv);
+          }
+        }
+        const teamStr = String(args.team_id);
+        tasks = allTasks.filter(t => {
+          if (String(t.team_id) === teamStr) return true;
+          if (!t.team_id) {
+            const cid = t.conversation_ids?.[0] || t.created_from_conversation;
+            const conv = cid ? convMap.get(String(cid)) : undefined;
+            if (conv) return (!conv.is_private || conv.auto_shared) && String(conv.team_id) === teamStr;
+          }
+          return false;
+        });
+      } else if (args.workspace === "personal") {
+        const needConvLookup = allTasks.filter(t => !t.team_id);
+        const convMap = new Map<string, any>();
+        for (const t of needConvLookup) {
+          const cid = t.conversation_ids?.[0] || t.created_from_conversation;
+          if (cid) {
+            const conv = await ctx.db.get(cid);
+            if (conv) convMap.set(String(cid), conv);
+          }
+        }
+        tasks = allTasks.filter(t => {
+          if (t.team_id) return false;
+          const cid = t.conversation_ids?.[0] || t.created_from_conversation;
+          const conv = cid ? convMap.get(String(cid)) : undefined;
+          if (conv) return conv.is_private && !conv.auto_shared;
+          return true;
+        });
+      } else {
+        tasks = allTasks;
       }
     }
     if (args.project_path) {
       tasks = scopeByProject(tasks, args.project_path);
-    }
-
-    if (args.status) {
-      tasks = tasks.filter((t) => t.status === args.status);
-    }
-
-    if (!args.status) {
-      tasks = tasks.filter((t) => t.status !== "done" && t.status !== "dropped");
     }
 
     if (args.triage_status) {

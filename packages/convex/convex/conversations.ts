@@ -6484,7 +6484,7 @@ export const getUserMessages = query({
       .withIndex("by_conversation_role_timestamp", (q) =>
         q.eq("conversation_id", args.conversation_id).eq("role", "user")
       )
-      .order("asc")
+      .order("desc")
       .take(500);
     return messages
       .filter((m) => {

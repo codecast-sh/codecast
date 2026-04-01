@@ -3,7 +3,7 @@ import { mutation, query, internalMutation, internalQuery } from "./_generated/s
 import { Id } from "./_generated/dataModel";
 import { verifyApiToken } from "./apiTokens";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { createDataContext, scopeByProject } from "./data";
+import { createDataContext, scopeByProject, scopedFetch } from "./data";
 import { resolveTeamForPath } from "./privacy";
 
 function generatePlanShortId(): string {
@@ -534,122 +534,38 @@ export const webList = query({
     let docs;
     let projectPaths: string[] = [];
 
-    const resolveConvTeamId = (d: any, convMap: Map<string, any>) => {
-      const cid = d.conversation_id || (d.related_conversation_ids?.[0]);
-      const conv = cid ? convMap.get(String(cid)) : undefined;
-      if (conv) {
-        return (!conv.is_private || conv.auto_shared) ? conv.team_id : undefined;
-      }
-      return d.team_id;
-    };
-
     const queryLimit = args.limit || 100;
-    const fetchLimit = queryLimit * 2;
-
-    // Workspace-scoped fetching
-    let userDocs: any[];
-    let teamDocs: any[] = [];
     const resolvedTeamId = args.workspace === "team" && args.team_id
       ? args.team_id
       : !args.workspace ? user?.active_team_id : undefined;
 
-    if (args.workspace === "team" && args.team_id) {
-      teamDocs = await ctx.db
-        .query("docs")
-        .withIndex("by_team_id", (q) => q.eq("team_id", args.team_id!))
-        .order("desc")
-        .take(fetchLimit);
-      userDocs = await ctx.db
-        .query("docs")
-        .withIndex("by_user_id", (q) => q.eq("user_id", userId))
-        .order("desc")
-        .take(fetchLimit);
-    } else if (args.workspace === "personal") {
-      userDocs = await ctx.db
-        .query("docs")
-        .withIndex("by_user_id", (q) => q.eq("user_id", userId))
-        .order("desc")
-        .take(fetchLimit);
-      teamDocs = [];
-    } else {
-      // Backwards compat: no workspace arg = merge user + team docs
-      userDocs = await ctx.db
-        .query("docs")
-        .withIndex("by_user_id", (q) => q.eq("user_id", userId))
-        .order("desc")
-        .take(fetchLimit);
-      if (resolvedTeamId) {
-        teamDocs = await ctx.db
-          .query("docs")
-          .withIndex("by_team_id", (q) => q.eq("team_id", resolvedTeamId))
-          .order("desc")
-          .take(fetchLimit);
-      }
-    }
+    // Project scope always shows personal docs regardless of active workspace
+    const effectiveWorkspace = (args.scope === "projects" || args.project_path)
+      ? "personal" as const
+      : args.workspace;
 
-    const seen = new Set<string>();
-    const allDocs = [];
-    for (const d of userDocs) { seen.add(String(d._id)); allDocs.push(d); }
-    for (const td of teamDocs) {
-      if (!seen.has(String(td._id))) allDocs.push(td);
-    }
-
-    const MAX_CONV_LOOKUPS = 50;
-    const needsConvLookup = new Set<string>();
-    for (const d of allDocs) {
-      if (d.team_id) continue;
-      const cid = d.conversation_id || (d.related_conversation_ids?.[0]);
-      if (cid) needsConvLookup.add(String(cid));
-    }
-    const convMap = new Map<string, any>();
-    let lookupCount = 0;
-    for (const cid of needsConvLookup) {
-      if (lookupCount >= MAX_CONV_LOOKUPS) break;
-      const conv = await ctx.db.get(cid as Id<"conversations">);
-      if (conv) convMap.set(cid, conv);
-      lookupCount++;
-    }
+    const { records: scopedDocs, convMap } = await scopedFetch(ctx, "docs", {
+      userId,
+      teamId: resolvedTeamId,
+      workspace: effectiveWorkspace,
+      limit: queryLimit * 2,
+    });
 
     if (args.scope === "projects" || args.project_path) {
-      const baseDocs = userDocs.length > 0 ? userDocs : allDocs;
       if (args.scope === "projects") {
-        docs = baseDocs.filter((d) => {
-          const effectiveTeamId = resolveConvTeamId(d, convMap);
-          return !effectiveTeamId;
-        });
+        docs = scopedDocs;
         if (args.project_path) {
           const filterName = repoName(args.project_path);
           docs = docs.filter((d) => d.project_path && docRepoName(d, convMap) === filterName);
         }
       } else {
         const filterName = repoName(args.project_path!);
-        docs = baseDocs.filter((d) => d.project_path && docRepoName(d, convMap) === filterName);
+        docs = scopedDocs.filter((d) => d.project_path && docRepoName(d, convMap) === filterName);
       }
-      const unscopedDocs = baseDocs.filter((d) => {
-        const effectiveTeamId = resolveConvTeamId(d, convMap);
-        return !effectiveTeamId && !d.archived_at && !isNoiseDoc(d);
-      });
+      const unscopedDocs = scopedDocs.filter((d) => !d.archived_at && !isNoiseDoc(d));
       projectPaths = dedupeProjectPaths([...new Set(unscopedDocs.map((d) => d.project_path).filter(Boolean))] as string[], unscopedDocs, convMap);
-    } else if (args.workspace === "team" && args.team_id) {
-      docs = allDocs.filter((d) => {
-        const effectiveTeamId = resolveConvTeamId(d, convMap);
-        return effectiveTeamId && String(effectiveTeamId) === String(args.team_id);
-      });
-    } else if (args.workspace === "personal") {
-      docs = allDocs.filter((d) => {
-        const effectiveTeamId = resolveConvTeamId(d, convMap);
-        return !effectiveTeamId;
-      });
-    } else if (resolvedTeamId) {
-      docs = allDocs.filter((d) => {
-        const effectiveTeamId = resolveConvTeamId(d, convMap);
-        return String(effectiveTeamId) === String(resolvedTeamId);
-      });
     } else {
-      docs = allDocs.filter((d) => {
-        const effectiveTeamId = resolveConvTeamId(d, convMap);
-        return !effectiveTeamId;
-      });
+      docs = scopedDocs;
     }
 
     if (args.doc_type) {

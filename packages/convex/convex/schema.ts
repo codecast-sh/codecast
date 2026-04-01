@@ -1166,6 +1166,7 @@ export default defineSchema({
     .index("by_parent_id", ["parent_id"])
     .index("by_short_id", ["short_id"])
     .index("by_team_id", ["team_id"])
+    .index("by_team_status", ["team_id", "status"])
     .index("by_workflow_run", ["workflow_run_id"])
     .searchIndex("search_tasks", {
       searchField: "title",

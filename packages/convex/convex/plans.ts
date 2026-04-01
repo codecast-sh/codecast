@@ -3,7 +3,7 @@ import { mutation, query } from "./_generated/server";
 import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { createDataContext, scopeByProject } from "./data";
+import { createDataContext, scopeByProject, scopedFetch } from "./data";
 import { nextShortId } from "./counters";
 
 async function recalcProgress(ctx: any, taskIds: Id<"tasks">[]) {
@@ -1338,19 +1338,13 @@ export const webList = query({
         .query("plans")
         .withIndex("by_project_id", (q) => q.eq("project_id", args.project_id as any))
         .collect();
-    } else if (args.workspace === "team" && args.team_id) {
-      plans = await ctx.db
-        .query("plans")
-        .withIndex("by_team_id", (q) => q.eq("team_id", args.team_id!))
-        .collect();
     } else {
-      plans = await ctx.db
-        .query("plans")
-        .withIndex("by_user_id", (q) => q.eq("user_id", userId))
-        .collect();
-      if (args.workspace === "personal") {
-        plans = plans.filter((p: any) => !p.team_id);
-      }
+      const { records } = await scopedFetch(ctx, "plans", {
+        userId,
+        teamId: args.team_id,
+        workspace: args.workspace,
+      });
+      plans = records;
     }
     if (args.project_path) {
       plans = scopeByProject(plans, args.project_path);

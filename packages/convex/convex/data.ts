@@ -20,6 +20,100 @@ const SCOPED_TABLES = new Set([
 
 export type DataContext = Awaited<ReturnType<typeof createDataContext>>;
 
+// ── Scoped fetch: shared workspace query pattern ──────────────────────
+// Merges user + team records, resolves effective team through conversations,
+// and filters by workspace. Eliminates the duplicate 3-branch fetching logic
+// that each webList was reimplementing independently.
+
+type ScopedFetchOpts = {
+  userId: Id<"users">;
+  teamId?: Id<"teams">;
+  workspace?: "personal" | "team";
+  limit?: number;
+};
+
+function getLinkedConvId(record: any): string | undefined {
+  if (record.conversation_id) return String(record.conversation_id);
+  if (record.created_from_conversation) return String(record.created_from_conversation);
+  if (record.related_conversation_ids?.[0]) return String(record.related_conversation_ids[0]);
+  if (record.conversation_ids?.[0]) return String(record.conversation_ids[0]);
+  return undefined;
+}
+
+export function resolveEffectiveTeam(record: any, convMap: Map<string, any>): Id<"teams"> | undefined {
+  const cid = getLinkedConvId(record);
+  const conv = cid ? convMap.get(cid) : undefined;
+  if (conv) {
+    return (!conv.is_private || conv.auto_shared) ? conv.team_id : undefined;
+  }
+  return record.team_id;
+}
+
+export async function scopedFetch(
+  ctx: { db: any },
+  table: string,
+  opts: ScopedFetchOpts
+): Promise<{ records: any[]; convMap: Map<string, any> }> {
+  const { userId, teamId, workspace } = opts;
+  const fetchLimit = opts.limit || 500;
+
+  let userRecords: any[] = [];
+  let teamRecords: any[] = [];
+
+  if (workspace === "personal") {
+    userRecords = await ctx.db.query(table)
+      .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+      .order("desc")
+      .take(fetchLimit);
+  } else {
+    userRecords = await ctx.db.query(table)
+      .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+      .order("desc")
+      .take(fetchLimit);
+    if (teamId) {
+      teamRecords = await ctx.db.query(table)
+        .withIndex("by_team_id", (q: any) => q.eq("team_id", teamId))
+        .order("desc")
+        .take(fetchLimit);
+    }
+  }
+
+  // Merge + dedupe (user first, then team additions)
+  const seen = new Set<string>();
+  const all: any[] = [];
+  for (const r of userRecords) { seen.add(String(r._id)); all.push(r); }
+  for (const r of teamRecords) {
+    if (!seen.has(String(r._id))) all.push(r);
+  }
+
+  // Batch-resolve linked conversations
+  const convIds = new Set<string>();
+  for (const r of all) {
+    const cid = getLinkedConvId(r);
+    if (cid) convIds.add(cid);
+  }
+  const convMap = new Map<string, any>();
+  for (const cid of convIds) {
+    const conv = await ctx.db.get(cid as any);
+    if (conv) convMap.set(cid, conv);
+  }
+
+  // Filter by effective team
+  let records: any[];
+  if ((workspace === "team" || !workspace) && teamId) {
+    records = all.filter(r => {
+      const eff = resolveEffectiveTeam(r, convMap);
+      return eff && String(eff) === String(teamId);
+    });
+  } else if (workspace === "personal") {
+    records = all.filter(r => !resolveEffectiveTeam(r, convMap));
+  } else {
+    records = all;
+  }
+
+  return { records, convMap };
+}
+
 export function scopeByProject<T extends Record<string, any>>(
   items: T[],
   projectPath?: string | null
