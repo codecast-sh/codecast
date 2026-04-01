@@ -40,6 +40,7 @@ import { performReconciliation, repairDiscrepancies } from "./reconciliation.js"
 import { TaskScheduler } from "./taskScheduler.js";
 import { hasTmux } from "./tmux.js";
 import { formatFeedResults } from "./formatter.js";
+import { collectSessionResources, formatResourcesLog, type SessionResources } from "./resourceMonitor.js";
 import {
   fetchExport,
   generateClaudeCodeJsonl,
@@ -5958,6 +5959,36 @@ function validateProcessCache(): void {
   }
 }
 
+const latestSessionResources = new Map<string, SessionResources>();
+const RESOURCE_MONITOR_INTERVAL_MS = 30_000;
+
+export function getLatestSessionResources(): ReadonlyMap<string, SessionResources> {
+  return latestSessionResources;
+}
+
+async function collectResourceSnapshot(): Promise<void> {
+  if (process.platform !== "darwin") return;
+  if (sessionProcessCache.size === 0) return;
+
+  const sessionPids = new Map<string, number>();
+  for (const [sessionId, info] of sessionProcessCache) {
+    sessionPids.set(sessionId, info.pid);
+  }
+
+  try {
+    const resources = await collectSessionResources(sessionPids);
+    latestSessionResources.clear();
+    for (const [sessionId, r] of resources) {
+      latestSessionResources.set(sessionId, r);
+    }
+    if (resources.size > 0) {
+      log(`[RESOURCES] ${formatResourcesLog(resources)}`);
+    }
+  } catch (err) {
+    log(`[RESOURCES] Collection failed: ${err instanceof Error ? err.message : String(err)}`, "warn");
+  }
+}
+
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function resolveSessionId(filePath: string): string {
@@ -8448,6 +8479,10 @@ async function main(): Promise<void> {
   setInterval(() => {
     checkPlanAutoDispatch().catch(() => {});
   }, 60_000);
+
+  setInterval(() => {
+    collectResourceSnapshot().catch(() => {});
+  }, RESOURCE_MONITOR_INTERVAL_MS);
 
   // Send initial heartbeat
   sendHeartbeat().catch(() => {});
