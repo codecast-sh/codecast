@@ -1,4 +1,10 @@
-const { contextBridge, ipcRenderer } = require("electron");
+const { contextBridge, ipcRenderer, webFrame } = require("electron");
+
+const zoomArg = process.argv.find(a => a.startsWith('--zoom-factor='));
+if (zoomArg) {
+  const z = parseFloat(zoomArg.split('=')[1]);
+  if (z && isFinite(z)) webFrame.setZoomFactor(z);
+}
 
 contextBridge.exposeInMainWorld("__CODECAST_ELECTRON__", {
   getVersion: () => ipcRenderer.invoke("get-app-version"),

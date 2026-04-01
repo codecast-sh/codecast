@@ -111,7 +111,18 @@ function handleDeepLink(url) {
   mainWindow.webContents.send("deep-link", url);
 }
 
+function getAutoZoomFactor() {
+  const display = mainWindow
+    ? screen.getDisplayMatching(mainWindow.getBounds())
+    : screen.getPrimaryDisplay();
+  const dipWidth = display.workAreaSize.width;
+  if (dipWidth >= 2800) return 1.5;
+  if (dipWidth >= 2400) return 1.25;
+  return 1.0;
+}
+
 function createWindow() {
+  const zoom = getAutoZoomFactor();
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
@@ -123,6 +134,8 @@ function createWindow() {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
+      zoomFactor: zoom,
+      additionalArguments: [`--zoom-factor=${zoom}`],
     },
     icon: path.join(__dirname, "assets", "icon.png"),
     show: false,
@@ -140,6 +153,7 @@ function createWindow() {
   });
 
   mainWindow.webContents.on("did-finish-load", () => {
+    mainWindow.webContents.setZoomFactor(getAutoZoomFactor());
     mainWindow.webContents.executeJavaScript(
       "document.documentElement.classList.add('electron-desktop')"
     );
