@@ -1,6 +1,6 @@
 {
   "name": "@codecast/electron",
-  "version": "1.1.37",
+  "version": "1.1.38",
   "description": "Codecast Desktop (Electron)",
   "main": "main.js",
   "private": true,

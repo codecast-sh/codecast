@@ -551,6 +551,7 @@ app.whenReady().then(() => {
   });
   autoUpdater.on("update-downloaded", (info) => {
     mainWindow?.webContents.send("update-status", { status: "ready", version: info.version });
+    setTimeout(() => autoUpdater.quitAndInstall(), 3000);
   });
   autoUpdater.on("error", (err) => {
     console.error("Auto-update error:", err.message);
