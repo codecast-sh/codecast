@@ -510,7 +510,7 @@ function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedW
 
 function ConversationSkeleton() {
   return (
-    <div className="max-w-4xl mx-auto px-4 py-4 space-y-6 animate-pulse motion-reduce:animate-none">
+    <div className="max-w-7xl mx-auto px-4 py-4 space-y-6 animate-pulse motion-reduce:animate-none">
       <div className="bg-sol-blue/10 border border-sol-blue/30 rounded-lg p-4">
         <div className="flex items-center gap-2 mb-2">
           <div className="w-6 h-6 rounded bg-sol-blue/30" />
@@ -2000,7 +2000,7 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
                 </div>
                 {mdFullscreen && createPortal(
                   <div className="fixed inset-0 z-[10001] bg-sol-bg overflow-auto" onClick={() => setMdFullscreen(false)}>
-                    <div className="max-w-4xl mx-auto px-8 py-12" onClick={e => e.stopPropagation()}>
+                    <div className="max-w-7xl mx-auto px-8 py-12" onClick={e => e.stopPropagation()}>
                       <div className="flex items-center justify-between mb-6">
                         <span className="text-sol-text-secondary text-sm font-medium">{filePath.split('/').pop()}</span>
                         <button
@@ -4016,7 +4016,7 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
 
       {fullscreen && createPortal(
         <div className="fixed inset-0 z-[10001] bg-sol-bg overflow-auto" onClick={() => setFullscreen(false)}>
-          <div className="max-w-4xl mx-auto px-8 py-12" onClick={e => e.stopPropagation()}>
+          <div className="max-w-7xl mx-auto px-8 py-12" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-6">
               <span className="text-sol-text-secondary text-sm font-medium">{userName || "You"}</span>
               <button
@@ -4506,7 +4506,7 @@ function AssistantBlock({
 
         {fullscreen && createPortal(
           <div className="fixed inset-0 z-[10001] bg-sol-bg overflow-auto" onClick={() => setFullscreen(false)}>
-            <div className="max-w-4xl mx-auto px-8 py-12" onClick={e => e.stopPropagation()}>
+            <div className="max-w-7xl mx-auto px-8 py-12" onClick={e => e.stopPropagation()}>
               <div className="flex items-center justify-between mb-6">
                 <span className="text-sol-text-secondary text-sm font-medium">Message</span>
                 <button
@@ -4968,7 +4968,7 @@ function PlanBlock({ content, timestamp, collapsed, messageId, conversationId, o
 
       {fullscreen && createPortal(
         <div className="fixed inset-0 z-[10001] bg-sol-bg overflow-auto" onClick={() => setFullscreen(false)}>
-          <div className="max-w-4xl mx-auto px-8 py-12" onClick={e => e.stopPropagation()}>
+          <div className="max-w-7xl mx-auto px-8 py-12" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-6">
               <div className="flex items-center gap-2">
                 <svg className="w-4 h-4 text-sol-cyan" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -5070,7 +5070,7 @@ function GitDiffPanel({
 }) {
   return (
     <div className="border-t border-sol-border bg-sol-bg-alt/30">
-      <div className="max-w-4xl mx-auto px-4 py-2 max-h-96 overflow-y-auto">
+      <div className="max-w-7xl mx-auto px-4 py-2 max-h-96 overflow-y-auto">
         {gitDiffStaged && gitDiffStaged.trim().length > 0 && (
           <div className="mb-2">
             <div className="text-sol-green text-[10px] font-semibold mb-1">Staged</div>
@@ -5297,7 +5297,7 @@ function MessageNavigator({ userMessages, onRewind, onFork, onClose, forkPointMa
 
   return (
     <div className="absolute bottom-full left-0 right-0 mb-2 z-50" style={{ maxHeight: "calc(100vh - 200px)" }}>
-      <div className="mx-auto max-w-5xl px-4 h-full flex flex-col">
+      <div className="mx-auto max-w-7xl px-4 h-full flex flex-col">
         <div className="bg-sol-bg-alt border border-sol-blue/30 rounded-lg shadow-2xl overflow-hidden flex flex-col" style={{ maxHeight: "calc(100vh - 220px)" }}>
           <div ref={listRef} className="flex-1 overflow-y-auto py-2 relative" style={{ maxHeight: "calc(100vh - 280px)" }}>
             {userMessages.map((msg, idx) => {
@@ -5416,7 +5416,7 @@ const ForkReplyInput = memo(function ForkReplyInput({ userName, userAvatar, onFo
           <span className="text-sol-text-dim ml-1">-- reply to fork as your own</span>
         </span>
       </div>
-      <form onSubmit={handleSubmit} className="mx-auto max-w-4xl px-2 sm:px-4 pb-3 pt-1.5">
+      <form onSubmit={handleSubmit} className="mx-auto max-w-7xl px-2 sm:px-4 pb-3 pt-1.5">
         <div className="flex items-end gap-2 border px-4 py-2 rounded-2xl bg-sol-bg-alt border-sol-violet/30 shadow-lg">
           <textarea
             ref={textareaRef}
@@ -6489,7 +6489,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
       <div className={`pb-4 pointer-events-auto ${lightboxImageIndex === null ? "bg-sol-bg" : ""}`}>
         <div className="relative">
           {(isFocused || shortcutTooltip || showStuckBanner || isSessionStarting || isSessionReady || isInactive || optimisticSending || isSessionDisconnected || (pendingMessageId || existingPending) || (agentStatus && agentStatus !== "idle") || (!agentStatus && (isWaitingForResponse || isThinking || isConversationLive))) && (
-            <div className={`mx-auto px-4 mb-1 flex justify-between items-center ${isExpanded ? "max-w-4xl" : "max-w-md"} ${lightboxImageIndex !== null ? "hidden" : ""}`}>
+            <div className={`mx-auto px-4 mb-1 flex justify-between items-center ${isExpanded ? "max-w-7xl" : "max-w-md"} ${lightboxImageIndex !== null ? "hidden" : ""}`}>
               <p className="text-[11px] text-sol-text-dim/70 pl-1">
                 {((isSessionStarting && !agentStatus) || isAgentStarting) && !showStuckBanner ? (
                   <span className="flex items-center gap-1.5">
@@ -6727,7 +6727,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
               idx++;
             }
             return (
-              <div ref={acRef} className={`mx-auto px-2 sm:px-4 mb-1 ${isExpanded ? "max-w-4xl" : "max-w-md"}`}>
+              <div ref={acRef} className={`mx-auto px-2 sm:px-4 mb-1 ${isExpanded ? "max-w-7xl" : "max-w-md"}`}>
                 <div className="bg-sol-bg border border-sol-border/50 rounded-lg shadow-xl py-1.5 max-h-[320px] overflow-y-auto">
                   {grouped.map(group => {
                     const config = typeConfig[group.type] || typeConfig.doc;
@@ -6774,7 +6774,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
               </div>
             );
           })()}
-          <form onSubmit={handleSubmit} className={`mx-auto px-2 sm:px-4 transition-all duration-200 ease-out ${isExpanded ? "max-w-4xl" : "max-w-md"}`}>
+          <form onSubmit={handleSubmit} className={`mx-auto px-2 sm:px-4 transition-all duration-200 ease-out ${isExpanded ? "max-w-7xl" : "max-w-md"}`}>
             <div className={`flex flex-col border px-4 py-2 shadow-lg transition-all duration-300 ${isExpanded ? "rounded-2xl" : "rounded-full"} ${composeMode ? "min-h-[40vh]" : ""} bg-sol-bg-alt ${isSelectionActive ? "border-sol-cyan/40 ring-1 ring-sol-cyan/20" : composeMode ? "border-sol-cyan/20" : "border-sol-border"}`}>
               {isSelectionActive && (
                 <div className="flex items-center gap-2 pb-1.5 mb-1.5 border-b border-sol-cyan/20 text-[10px] text-sol-cyan">
@@ -9679,7 +9679,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
             }
           }}
         >
-          <div className="max-w-4xl mx-auto">
+          <div className="max-w-7xl mx-auto">
             <div className="bg-sol-blue/10 px-4 py-3 rounded-b-lg border border-sol-blue/30 backdrop-blur-md shadow-lg relative group">
               <button
                 className="absolute top-1.5 right-1.5 p-0.5 rounded hover:bg-sol-blue/20 text-sol-text-dim hover:text-sol-text opacity-0 group-hover:opacity-100 transition-opacity"
@@ -9725,7 +9725,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         ) : (
           <>
           {conversation?.parent_conversation_id && !hasMoreAbove && (
-            <div className="max-w-4xl mx-auto px-2 sm:px-3 md:px-4 pt-2 pb-1">
+            <div className="max-w-7xl mx-auto px-2 sm:px-3 md:px-4 pt-2 pb-1">
               <Link
                 href={convLink(conversation.parent_conversation_id)}
                 className="inline-flex items-center gap-1.5 text-xs text-sol-cyan/70 hover:text-sol-cyan transition-colors"
@@ -9792,7 +9792,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   }}
                 >
                   {content && (
-                    <div className={`max-w-4xl mx-auto px-4 sm:px-5 md:px-6 ${collapsed ? "py-0.5" : "py-0.5 sm:py-1"} ${isNew ? "animate-message-in" : ""} ${isForkSelected ? "ring-2 ring-sol-cyan/60 bg-sol-cyan/5 rounded-lg" : ""} ${isBelowForkSelection ? "opacity-30 pointer-events-none" : ""} transition-opacity`}>
+                    <div className={`max-w-7xl mx-auto px-4 sm:px-5 md:px-6 ${collapsed ? "py-0.5" : "py-0.5 sm:py-1"} ${isNew ? "animate-message-in" : ""} ${isForkSelected ? "ring-2 ring-sol-cyan/60 bg-sol-cyan/5 rounded-lg" : ""} ${isBelowForkSelection ? "opacity-30 pointer-events-none" : ""} transition-opacity`}>
                       {content}
                       {virtualItem.index === timeline.length - 1 && !hasMoreBelow && (now - lastActivityAt) > 5 * 60 * 1000 && (
                         <div className="flex items-center gap-3 mt-5 mb-1">
@@ -9841,7 +9841,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
             const continuationChildren = conversation.child_conversations.filter(c => !renderedInlineIds.has(c._id) && !c.is_subagent && c._id !== conversation._id);
             if (continuationChildren.length === 0) return null;
             return (
-              <div className="max-w-4xl mx-auto px-2 sm:px-3 md:px-4 pt-3 pb-8">
+              <div className="max-w-7xl mx-auto px-2 sm:px-3 md:px-4 pt-3 pb-8">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-[11px] text-sol-text-secondary uppercase tracking-wider font-medium">Continued in</span>
                   {continuationChildren.map((child) => (
@@ -10005,7 +10005,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
       {pendingPermissions && pendingPermissions.length > 0 && (
         <div className={`border-t border-sol-border/40 shrink-0 ${embedded ? "-mx-[9999px] px-[9999px]" : ""}`}>
-          <div className="max-w-4xl mx-auto px-2 sm:px-3 md:px-4 py-1.5">
+          <div className="max-w-7xl mx-auto px-2 sm:px-3 md:px-4 py-1.5">
             <PermissionStack permissions={pendingPermissions as any} />
           </div>
         </div>

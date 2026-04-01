@@ -138,9 +138,9 @@ export function ContextChatInput({
     <div className="shrink-0 pointer-events-none sticky bottom-0 z-10">
       <div className="h-16 bg-gradient-to-t from-sol-bg via-sol-bg/80 to-transparent -mt-16 relative" />
       <div className={`pb-4 pointer-events-auto bg-sol-bg`}>
-      <div className={`mx-auto px-2 sm:px-4 transition-all duration-200 ease-out ${isExpanded ? "max-w-4xl" : "max-w-xs"}`}>
+      <div className={`mx-auto px-2 sm:px-4 transition-all duration-200 ease-out ${isExpanded ? "max-w-7xl" : "max-w-xs"}`}>
       {isExpanded && (
-        <div className={`mx-auto px-4 mb-1 flex justify-between items-center ${isExpanded ? "max-w-4xl" : "max-w-md"}`}>
+        <div className={`mx-auto px-4 mb-1 flex justify-between items-center ${isExpanded ? "max-w-7xl" : "max-w-md"}`}>
           <div className="flex items-center gap-1">
             {AGENT_TYPES.map((agent) => (
               <button
