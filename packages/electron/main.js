@@ -122,6 +122,7 @@ function createWindow() {
 
   // Inject desktop detection class
   mainWindow.webContents.on("did-finish-load", () => {
+    mainWindow.webContents.setZoomFactor(1.0);
     mainWindow.webContents.executeJavaScript(
       "document.documentElement.classList.add('electron-desktop')"
     );
