@@ -48,7 +48,7 @@ export function CreatePalette() {
       const path = data.projectPath || store.currentConversation.projectPath || store.currentConversation.gitRoot || store.recentProjects?.[0]?.path;
 
       soundNewSession();
-      store.setConversationMeta(sid, {
+      store.syncRecord("conversations", sid, {
         _id: sid, _creationTime: now, user_id: "", agent_type: agentType,
         session_id: sid, project_path: path, git_root: path,
         started_at: now, updated_at: now, message_count: 0, status: "active",
@@ -97,7 +97,7 @@ export function CreatePalette() {
     const sid = nanoid(10);
     const now = Date.now();
 
-    store.setConversationMeta(sid, {
+    store.syncRecord("conversations", sid, {
       _id: sid, _creationTime: now, user_id: "", agent_type: agentType,
       session_id: sid, project_path: path, git_root: path,
       started_at: now, updated_at: now, message_count: 0, status: "active",

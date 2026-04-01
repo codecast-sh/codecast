@@ -64,7 +64,7 @@ export function ContextChatInput({
     const sid = nanoid(10);
     const now = Date.now();
 
-    store.setConversationMeta(sid, {
+    store.syncRecord("conversations", sid, {
       _id: sid,
       _creationTime: now,
       user_id: "",

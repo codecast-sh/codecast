@@ -486,9 +486,8 @@ interface InboxStoreState {
   switchAgent: (currentId: string, targetAgentType: string) => string | null;
 
   // -- Generic sync --
-  syncTable: (tableName: string, incoming: Array<{ _id: string; [k: string]: any }>, extra?: Record<string, any>) => void;
-  syncRecord: (tableName: string, id: string, record: any) => void;
-  syncClientState: (state: any) => void;
+  syncTable: (field: string, incoming: any, opts?: SyncOpts) => void;
+  syncRecord: (field: string, id: string, record: any) => void;
   addPending: (key: string, entry: PendingEntry) => void;
   clearPending: (key: string) => void;
   sortedSessions: () => InboxSession[];
@@ -522,8 +521,6 @@ interface InboxStoreState {
   initPagination: (convId: string) => void;
 
   // -- Metadata --
-  setConversationMeta: (convId: string, meta: ConversationMeta) => void;
-  updateConversationMeta: (convId: string, partial: Record<string, any>) => void;
   setCurrentConversation: (ctx: CurrentConversationContext) => void;
   clearCurrentConversation: () => void;
 
@@ -575,8 +572,6 @@ interface InboxStoreState {
   docFilter: { type: string; query: string; project: string; scope: string };
   planFilter: { status: string };
 
-  // -- Doc detail sync --
-  syncDocDetail: (id: string, detail: DocDetail) => void;
   setTaskFilter: (filter: Partial<{ status: string }>) => void;
   setDocFilter: (filter: Partial<{ type: string; query: string; project: string; scope: string }>) => void;
   setPlanFilter: (filter: Partial<{ status: string }>) => void;
@@ -613,11 +608,6 @@ interface InboxStoreState {
   teamUnreadCount: number | null;
   favorites: any[];
   bookmarks: any[];
-  syncTeams: (teams: any[]) => void;
-  syncTeamMembers: (members: any[]) => void;
-  syncTeamUnreadCount: (count: number | null) => void;
-  syncFavorites: (favorites: any[]) => void;
-  syncBookmarks: (bookmarks: any[]) => void;
 
   // -- Selectors --
   getSession: (id: string) => InboxSession | undefined;
@@ -639,6 +629,117 @@ const DEFAULT_PAGINATION: PaginationState = {
 function stripImageRef(s: string): string {
   return s.replace(/\[Image[:\s][^\]]*\]/gi, "").trim();
 }
+
+// -- Sync infrastructure --
+
+export type MergePolicy = "replace" | "local_wins" | "set_union" | "deep_merge";
+type MergeFn = (local: any, server: any, initialized: boolean) => any;
+export interface MergeSpecMap { [key: string]: MergePolicy | MergeSpecMap | MergeFn }
+export type MergeSpec = MergePolicy | MergeSpecMap | MergeFn;
+
+export type SyncOpts = {
+  kind?: "collection" | "singleton" | "list" | "scalar";
+  merge?: Record<string, MergeSpec>;
+  altKey?: string;
+  keepSelected?: string;
+  transform?: (draft: any, result: any, incoming: any, initialized: boolean) => void;
+  extra?: Record<string, any>;
+};
+
+function applyMerge(local: any, server: any, spec: MergeSpec, initialized: boolean): any {
+  if (typeof spec === "function") return spec(local, server, initialized);
+  if (typeof spec === "string") {
+    switch (spec) {
+      case "replace": return server;
+      case "local_wins":
+        if (!initialized || local == null) return server;
+        if (typeof local === "object" && typeof server === "object"
+            && !Array.isArray(local) && !Array.isArray(server)) {
+          return { ...server, ...local };
+        }
+        return local;
+      case "set_union":
+        return [...new Set([...(server ?? []), ...(local ?? [])])];
+      case "deep_merge":
+        if (local != null && server != null && typeof local === "object" && typeof server === "object"
+            && !Array.isArray(local) && !Array.isArray(server)) {
+          return { ...local, ...server };
+        }
+        return server ?? local;
+      default: return server;
+    }
+  }
+  const result = { ...server };
+  for (const [key, fieldSpec] of Object.entries(spec as Record<string, MergeSpec>)) {
+    result[key] = applyMerge(local?.[key], server?.[key], fieldSpec, initialized);
+  }
+  return result;
+}
+
+const SYNC_REGISTRY: Record<string, SyncOpts> = {
+  sessions: {
+    altKey: "session_id",
+    keepSelected: "currentSessionId",
+    transform(draft, table, incoming) {
+      for (const s of incoming as any[]) {
+        if (!draft.conversations[s._id]) draft.conversations[s._id] = { _id: s._id };
+      }
+      if (!draft.currentSessionId && !draft.showMySessions &&
+          Object.keys(table).length > 0 && draft.clientStateInitialized) {
+        const persisted = draft.clientState.current_conversation_id;
+        const sorted = sortSessions(table as Record<string, InboxSession>);
+        draft.currentSessionId = (persisted && table[persisted])
+          ? persisted : (sorted[0]?._id ?? null);
+      }
+    },
+  },
+  clientState: {
+    kind: "singleton",
+    merge: {
+      ui: "local_wins",
+      layouts: "deep_merge",
+      dismissed: "deep_merge",
+      drafts: "local_wins",
+      tips: {
+        seen: "set_union",
+        dismissed: "set_union",
+        completed: "set_union",
+        level: "local_wins",
+        _inlineSuppressed: "local_wins",
+      },
+    },
+    transform(draft, result, incoming, initialized) {
+      if (!incoming.ui) {
+        const compat = { sidebar_collapsed: incoming.sidebar_collapsed, zen_mode: incoming.zen_mode };
+        result.ui = result.ui ? { ...compat, ...result.ui } : compat;
+      }
+      if (!incoming.layouts && incoming.layout) {
+        result.layouts = { ...(result.layouts || {}), dashboard: incoming.layout };
+      }
+      if (!initialized) {
+        if (incoming.drafts) {
+          for (const [k, v] of Object.entries(incoming.drafts)) {
+            if (v && typeof v === "object" && !draft.drafts[k]) {
+              draft.drafts[k] = v as Record<string, any>;
+            }
+          }
+        }
+        if (incoming.current_conversation_id && !draft.currentSessionId) {
+          if (draft.sessions[incoming.current_conversation_id]) {
+            draft.currentSessionId = incoming.current_conversation_id;
+          } else {
+            draft.pendingNavigateId = incoming.current_conversation_id;
+          }
+        }
+      }
+    },
+  },
+  teams: { kind: "list" },
+  teamMembers: { kind: "list" },
+  teamUnreadCount: { kind: "scalar" },
+  favorites: { kind: "list" },
+  bookmarks: { kind: "list" },
+};
 
 function rekeyId(draft: any, oldId: string, newId: string) {
   if (oldId === newId) return;
@@ -804,26 +905,21 @@ export const useInboxStore = create<InboxStoreState>(
     this.clientState.current_conversation_id = newSessionId ?? undefined;
   }),
 
-  switchAgent: (currentId: string, targetAgentType: string) => {
-    const state = get();
-    const session = state.sessions[currentId];
+  switchAgent: action(function (this: Draft, currentId: string, targetAgentType: string) {
+    const session = this.sessions[currentId];
     if (!session) return null;
 
     const sessionId = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
     const now = Date.now();
     const agentLabels: Record<string, string> = { claude_code: "Claude", codex: "Codex", cursor: "Cursor", gemini: "Gemini" };
 
-    const newSessions = { ...state.sessions };
-    const newPending = { ...state.pending };
-    const newConversations = { ...state.conversations };
-
-    delete newSessions[currentId];
-    newPending[`sessions:${currentId}`] = { type: "exclude", expiresAt: now + 15_000 };
-    if (newConversations[currentId]) {
-      newConversations[currentId] = { ...newConversations[currentId], inbox_dismissed_at: now };
+    delete this.sessions[currentId];
+    this.pending[`sessions:${currentId}`] = { type: "exclude", expiresAt: now + 15_000 };
+    if (this.conversations[currentId]) {
+      (this.conversations[currentId] as any).inbox_dismissed_at = now;
     }
 
-    newSessions[sessionId] = {
+    this.sessions[sessionId] = {
       _id: sessionId,
       session_id: sessionId,
       title: session.title ? `${agentLabels[targetAgentType] || targetAgentType}: ${session.title}` : "New session",
@@ -838,23 +934,24 @@ export const useInboxStore = create<InboxStoreState>(
       last_user_message: null,
     } as InboxSession;
 
-    set({
-      sessions: newSessions,
-      pending: newPending,
-      conversations: newConversations,
-      currentSessionId: sessionId,
-      viewingDismissedId: null,
-      clientState: { ...state.clientState, current_conversation_id: sessionId },
-    });
-    get().moveDraft(currentId, sessionId);
+    this.currentSessionId = sessionId;
+    this.viewingDismissedId = null;
+    this.clientState.current_conversation_id = sessionId;
 
-    get()._dispatch("patch", [], {
-      conversations: { [currentId]: { inbox_dismissed_at: now } },
-      client_state: { _: { current_conversation_id: sessionId } },
-    }).catch(() => {});
+    const draft = this.drafts[currentId]
+      ?? (this.clientState.drafts?.[currentId] && typeof this.clientState.drafts[currentId] === "object"
+        ? this.clientState.drafts[currentId] as Record<string, any>
+        : undefined);
+    if (draft) {
+      this.drafts[sessionId] = draft;
+      delete this.drafts[currentId];
+      if (!this.clientState.drafts) this.clientState.drafts = {};
+      this.clientState.drafts[sessionId] = draft;
+      this.clientState.drafts[currentId] = null;
+    }
 
     return sessionId;
-  },
+  }),
 
   unstashSession: action(function (this: Draft, id: string) {
     const childIds = Object.values(this.dismissedSessions as Record<string, InboxSession>)
@@ -983,108 +1080,82 @@ export const useInboxStore = create<InboxStoreState>(
   // GENERIC SYNC
   // =====================
 
-  syncTable: sync(function (this: Draft, tableName: string, incoming: Array<{ _id: string; [k: string]: any }>, extra?: Record<string, any>) {
-    const { table, pending } = applySyncTable(tableName, incoming as any, this.pending);
+  syncTable: sync(function (this: Draft, field: string, incoming: any, opts?: SyncOpts) {
+    if (!incoming && incoming !== 0) return;
+    const config = SYNC_REGISTRY[field] ? { ...SYNC_REGISTRY[field], ...opts } : (opts || {});
+    const kind = config.kind ?? "collection";
 
-    if (tableName === "sessions") {
-      const prev = this.sessions;
-      const incomingBySessionId = new Map(incoming.map((s: any) => [s.session_id, s]));
-      for (const [oldId, oldSession] of Object.entries(prev)) {
-        if (isConvexId(oldId)) continue;
-        const match = incomingBySessionId.get((oldSession as InboxSession).session_id || oldId);
-        if (match) {
-          rekeyId(this, oldId, match._id);
-          if (this.currentSessionId === oldId) {
-            this.currentSessionId = match._id;
-          }
-        } else if (!table[oldId]) {
-          table[oldId] = oldSession as any;
-        }
-      }
-      if (this.currentSessionId && !table[this.currentSessionId] && prev[this.currentSessionId]) {
-        table[this.currentSessionId] = prev[this.currentSessionId] as any;
-      }
-      for (const s of incoming) {
-        if (!this.conversations[s._id]) {
-          this.conversations[s._id] = { _id: s._id };
-        }
-      }
-      if (!this.currentSessionId && !this.showMySessions && Object.keys(table).length > 0 && this.clientStateInitialized) {
-        const persisted = this.clientState.current_conversation_id;
-        const sorted = sortSessions(table as Record<string, InboxSession>);
-        this.currentSessionId = (persisted && table[persisted]) ? persisted : (sorted[0]?._id ?? null);
-      }
-      this.sessions = table as any;
-      this.pending = pending as any;
+    if (kind === "scalar" || kind === "list") {
+      (this as any)[field] = incoming;
+      if (config.transform) config.transform(this, incoming, incoming, false);
+      if (config.extra) Object.assign(this, config.extra);
       return;
     }
 
-    const prev = (this as any)[tableName] as Record<string, any> | undefined;
-    if (prev && !extra) {
-      const newKeys = Object.keys(table);
-      if (newKeys.length === Object.keys(prev).length &&
-          newKeys.every(k => prev[k]?.updated_at === (table[k] as any)?.updated_at)) {
-        return;
-      }
+    if (kind === "singleton") {
+      const local = (this as any)[field];
+      const initKey = `${field}Initialized`;
+      const initialized = (this as any)[initKey] ?? false;
+      const result = config.merge
+        ? applyMerge(local, incoming, config.merge, initialized)
+        : incoming;
+      (this as any)[field] = result;
+      if (config.transform) config.transform(this, result, incoming, initialized);
+      if (initKey in this) (this as any)[initKey] = true;
+      if (config.extra) Object.assign(this, config.extra);
+      return;
     }
 
-    (this as any)[tableName] = table;
-    this.pending = pending as any;
-    if (extra) Object.assign(this, extra);
-  }),
+    // collection
+    const { table, pending } = applySyncTable(field, incoming, this.pending);
 
-  syncRecord: sync(function (this: Draft, tableName: string, id: string, record: any) {
-    const existing = (this as any)[tableName]?.[id];
-    (this as any)[tableName] = {
-      ...(this as any)[tableName],
-      [id]: { ...existing, ...record },
-    };
-  }),
-
-  syncClientState: sync(function (this: Draft, serverState: any) {
-    if (!serverState) return;
-    const prev = this.clientState;
-    const serverUi = serverState.ui ?? {
-      sidebar_collapsed: serverState.sidebar_collapsed,
-      zen_mode: serverState.zen_mode,
-    };
-    const initialized = this.clientStateInitialized;
-    this.clientState = {
-      current_conversation_id: serverState.current_conversation_id,
-      show_dismissed: serverState.show_dismissed,
-      dismissed_ids: serverState.dismissed_ids,
-      ui: initialized
-        ? { ...serverUi, ...prev.ui }
-        : serverUi,
-      layouts: serverState.layouts ?? (serverState.layout ? {
-        dashboard: serverState.layout,
-      } : undefined),
-      dismissed: { ...prev.dismissed, ...serverState.dismissed },
-      tips: {
-        ...serverState.tips,
-        ...(initialized && prev.tips?.level !== undefined ? { level: prev.tips.level } : {}),
-        seen: [...new Set([...(serverState.tips?.seen ?? []), ...(prev.tips?.seen ?? [])])],
-        dismissed: [...new Set([...(serverState.tips?.dismissed ?? []), ...(prev.tips?.dismissed ?? [])])],
-        completed: [...new Set([...(serverState.tips?.completed ?? []), ...(prev.tips?.completed ?? [])])],
-        _inlineSuppressed: prev.tips?._inlineSuppressed,
-      },
-      drafts: initialized ? prev.drafts : serverState.drafts,
-    };
-    this.clientStateInitialized = true;
-    if (!initialized && serverState.drafts) {
-      for (const [k, v] of Object.entries(serverState.drafts)) {
-        if (v && typeof v === "object" && !this.drafts[k]) {
-          this.drafts[k] = v as Record<string, any>;
+    if (config.altKey) {
+      const prev = (this as any)[field] || {};
+      const incomingByAlt = new Map(
+        (incoming as any[]).map((r: any) => [r[config.altKey!], r])
+      );
+      for (const [oldId, old] of Object.entries(prev)) {
+        if (isConvexId(oldId)) continue;
+        const match = incomingByAlt.get((old as any)[config.altKey!] || oldId);
+        if (match) {
+          rekeyId(this, oldId, match._id);
+        } else if (!table[oldId]) {
+          table[oldId] = old as any;
         }
       }
     }
-    if (!initialized && serverState.current_conversation_id && !this.currentSessionId) {
-      if (this.sessions[serverState.current_conversation_id]) {
-        this.currentSessionId = serverState.current_conversation_id;
-      } else {
-        this.pendingNavigateId = serverState.current_conversation_id;
+
+    if (config.keepSelected) {
+      const selectedId = (this as any)[config.keepSelected];
+      const prev = (this as any)[field] || {};
+      if (selectedId && !table[selectedId] && prev[selectedId]) {
+        table[selectedId] = prev[selectedId];
       }
     }
+
+    if (!config.altKey && !config.extra && !config.transform) {
+      const prev = (this as any)[field];
+      if (prev) {
+        const newKeys = Object.keys(table);
+        if (newKeys.length === Object.keys(prev).length &&
+            newKeys.every(k => prev[k]?.updated_at === (table[k] as any)?.updated_at)) {
+          return;
+        }
+      }
+    }
+
+    (this as any)[field] = table;
+    this.pending = pending as any;
+    if (config.transform) config.transform(this, table, incoming, false);
+    if (config.extra) Object.assign(this, config.extra);
+  }),
+
+  syncRecord: sync(function (this: Draft, field: string, id: string, record: any) {
+    const existing = (this as any)[field]?.[id];
+    (this as any)[field] = {
+      ...(this as any)[field],
+      [id]: { ...existing, ...record },
+    };
   }),
 
   addPending: sync(function (this: Draft, key: string, entry: PendingEntry) {
@@ -1166,80 +1237,55 @@ export const useInboxStore = create<InboxStoreState>(
     return sessions[currentSessionId] ?? null;
   },
 
-  injectSession: (session: InboxSession) => {
-    const state = get();
-    const newPending = { ...state.pending };
+  injectSession: action(function (this: Draft, session: InboxSession) {
     const excludeKey = `sessions:${session._id}`;
-    if (newPending[excludeKey]) {
-      delete newPending[excludeKey];
-      get()._dispatch("patch", [], { conversations: { [session._id]: { inbox_dismissed_at: null } } }).catch(() => {});
+    if (this.pending[excludeKey]) delete this.pending[excludeKey];
+    this.sessions[session._id] = session;
+    this.currentSessionId = session._id;
+    this.viewingDismissedId = null;
+    this.clientState.current_conversation_id = session._id;
+    if (this.conversations[session._id]) {
+      (this.conversations[session._id] as any).inbox_dismissed_at = null;
     }
-    set({
-      sessions: { ...state.sessions, [session._id]: session },
-      currentSessionId: session._id,
-      pending: newPending,
-      viewingDismissedId: null,
-      clientState: { ...state.clientState, current_conversation_id: session._id },
-    });
-  },
+  }),
 
-  updateSessionProject: (id: string, projectPath: string) => {
-    const { sessions } = get();
-    if (!sessions[id]) return;
-    set({ sessions: { ...sessions, [id]: { ...sessions[id], project_path: projectPath, git_root: projectPath } } });
-  },
+  updateSessionProject: sync(function (this: Draft, id: string, projectPath: string) {
+    if (!this.sessions[id]) return;
+    this.sessions[id].project_path = projectPath;
+    this.sessions[id].git_root = projectPath;
+  }),
 
-  patchSession: (id: string, fields: Partial<InboxSession>) => {
-    const { sessions } = get();
-    if (!sessions[id]) return;
-    set({ sessions: { ...sessions, [id]: { ...sessions[id], ...fields } } });
-  },
+  patchSession: sync(function (this: Draft, id: string, fields: Partial<InboxSession>) {
+    if (!this.sessions[id]) return;
+    Object.assign(this.sessions[id], fields);
+  }),
 
-  setConversationAgent: (id: string, agentType: string) => {
-    const state = get();
-    const updates: Partial<InboxStoreState> = {};
-
-    if (state.sessions[id]) {
-      updates.sessions = {
-        ...state.sessions,
-        [id]: { ...state.sessions[id], agent_type: agentType },
-      };
+  setConversationAgent: sync(function (this: Draft, id: string, agentType: string) {
+    if (this.sessions[id]) this.sessions[id].agent_type = agentType;
+    if (this.conversations[id]) this.conversations[id].agent_type = agentType;
+    if (this.currentConversation.conversationId === id) {
+      this.currentConversation.agentType = agentType;
     }
+  }),
 
-    if (state.conversations[id]) {
-      updates.conversations = {
-        ...state.conversations,
-        [id]: { ...state.conversations[id], agent_type: agentType },
-      };
-    }
-
-    if (state.currentConversation.conversationId === id) {
-      updates.currentConversation = {
-        ...state.currentConversation,
-        agentType,
-      };
-    }
-
-    if (Object.keys(updates).length > 0) {
-      set(updates);
-    }
-  },
-
-  navigateToSession: (id: string) => {
-    const state = get();
-    const newPending = { ...state.pending };
+  navigateToSession: action(function (this: Draft, id: string) {
     const excludeKey = `sessions:${id}`;
-    if (newPending[excludeKey]) {
-      delete newPending[excludeKey];
-      get()._dispatch("patch", [], { conversations: { [id]: { inbox_dismissed_at: null } } }).catch(() => {});
-      set({ pending: newPending });
+    if (this.pending[excludeKey]) {
+      delete this.pending[excludeKey];
+      if (this.conversations[id]) {
+        (this.conversations[id] as any).inbox_dismissed_at = null;
+      }
     }
-    if (state.sessions[id]) {
-      get().setCurrentSession(id);
+    if (this.sessions[id]) {
+      this.currentSessionId = id;
+      this.viewingDismissedId = null;
+      this.activeBranches = {};
+      this.clientState.current_conversation_id = id;
     } else {
-      set({ pendingNavigateId: id, viewingDismissedId: null });
+      this.pendingNavigateId = id;
+      this.viewingDismissedId = null;
     }
-  },
+  }),
 
   touchMru: (id: string) => {
     const { mruStack } = get();
@@ -1369,15 +1415,6 @@ export const useInboxStore = create<InboxStoreState>(
   // =====================
   // METADATA
   // =====================
-
-  setConversationMeta: sync(function (this: Draft, convId: string, meta: ConversationMeta) {
-    this.conversations[convId] = meta;
-  }),
-
-  updateConversationMeta: sync(function (this: Draft, convId: string, partial: Record<string, any>) {
-    if (!this.conversations[convId]) return;
-    Object.assign(this.conversations[convId], partial);
-  }),
 
   setCurrentConversation: (ctx: CurrentConversationContext) => {
     set({ currentConversation: ctx });
@@ -1529,10 +1566,6 @@ export const useInboxStore = create<InboxStoreState>(
   planFilter: { status: "" },
   docProjectPaths: [],
 
-
-  syncDocDetail: sync(function (this: Draft, id: string, detail: DocDetail) {
-    this.docDetails[id] = detail;
-  }),
 
   setTaskFilter: (filter: Partial<{ status: string }>) => {
     set((s: InboxStoreState) => ({
@@ -1691,26 +1724,6 @@ export const useInboxStore = create<InboxStoreState>(
   teamUnreadCount: null,
   favorites: [],
   bookmarks: [],
-
-  syncTeams: sync(function (this: Draft, teams: any[]) {
-    this.teams = teams;
-  }),
-
-  syncTeamMembers: sync(function (this: Draft, members: any[]) {
-    this.teamMembers = members;
-  }),
-
-  syncTeamUnreadCount: sync(function (this: Draft, count: number | null) {
-    this.teamUnreadCount = count;
-  }),
-
-  syncFavorites: sync(function (this: Draft, favorites: any[]) {
-    this.favorites = favorites;
-  }),
-
-  syncBookmarks: sync(function (this: Draft, bookmarks: any[]) {
-    this.bookmarks = bookmarks;
-  }),
 
   // =====================
   // SELECTORS

@@ -102,7 +102,7 @@ export function useConversationMessages(
   );
 
   useConvexSync(remoteMeta, useCallback((meta: any) => {
-    useInboxStore.getState().setConversationMeta(conversationId, meta);
+    useInboxStore.getState().syncRecord("conversations", conversationId, meta);
   }, [conversationId]));
 
   // =============================================

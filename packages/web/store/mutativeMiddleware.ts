@@ -1,6 +1,6 @@
 import { create as mutativeCreate, type Patch } from "mutative";
 
-type DispatchFn = (action: string, args: any, patches?: any) => Promise<any>;
+type DispatchFn = (action: string, args: any, patches?: any, result?: any) => Promise<any>;
 type IDBWriteFn = (patches: Patch[], state: any) => void;
 
 const ACTION_FLAG = Symbol("action");
@@ -119,10 +119,11 @@ export function mutativeMiddleware(config: any): any {
 
       wrapped[key] = (...args: any[]) => {
         const state = get();
+        let returnValue: any;
         const [nextState, patches] = mutativeCreate(
           state,
           (draft: any) => {
-            (val as Function).apply(draft, args);
+            returnValue = (val as Function).apply(draft, args);
           },
           { enablePatches: { pathAsArray: true } }
         );
@@ -138,8 +139,10 @@ export function mutativeMiddleware(config: any): any {
         if (isAct && dispatchFn) {
           const grouped =
             patches.length > 0 ? groupPatchesByTable(patches) : undefined;
-          return dispatchFn(key, args, grouped).catch(() => {});
+          dispatchFn(key, args, grouped, returnValue).catch(() => {});
         }
+
+        return returnValue;
       };
     }
 
@@ -151,10 +154,10 @@ export function mutativeMiddleware(config: any): any {
       idbWriteFn = fn;
     };
 
-    wrapped._dispatch = (action: string, args: any, patches?: any) => {
+    wrapped._dispatch = (action: string, args: any, patches?: any, result?: any) => {
       if (!dispatchFn) return Promise.reject(new Error("Dispatch not wired"));
       const safeArgs = Array.isArray(args) ? args.map((a: any) => a === undefined ? null : a) : args;
-      return dispatchFn(action, safeArgs, patches);
+      return dispatchFn(action, safeArgs, patches, result);
     };
 
     return wrapped;

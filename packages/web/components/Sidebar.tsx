@@ -305,10 +305,10 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
   const bookmarks = bookmarksQuery ?? useInboxStore.getState().bookmarks;
   const toggleBookmark = useMutation(api.bookmarks.toggleBookmark);
 
-  useConvexSync(teamsQuery, useCallback((d: any) => useInboxStore.getState().syncTeams(d), []));
-  useConvexSync(teamUnreadCountQuery, useCallback((d: any) => useInboxStore.getState().syncTeamUnreadCount(d), []));
-  useConvexSync(favoritesQuery, useCallback((d: any) => useInboxStore.getState().syncFavorites(d), []));
-  useConvexSync(bookmarksQuery, useCallback((d: any) => useInboxStore.getState().syncBookmarks(d), []));
+  useConvexSync(teamsQuery, useCallback((d: any) => useInboxStore.getState().syncTable("teams", d), []));
+  useConvexSync(teamUnreadCountQuery, useCallback((d: any) => useInboxStore.getState().syncTable("teamUnreadCount", d), []));
+  useConvexSync(favoritesQuery, useCallback((d: any) => useInboxStore.getState().syncTable("favorites", d), []));
+  useConvexSync(bookmarksQuery, useCallback((d: any) => useInboxStore.getState().syncTable("bookmarks", d), []));
   const { conversations } =
     useQuery(api.conversations.listConversations, {
       filter: "my",

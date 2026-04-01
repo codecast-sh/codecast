@@ -38,6 +38,6 @@ export function usePrefetch() {
 
   useConvexSync(docsResult, useCallback((data: any) => {
     const { docs, projectPaths } = data as any;
-    syncTable("docs", docs as any, { docProjectPaths: projectPaths });
+    syncTable("docs", docs as any, { extra: { docProjectPaths: projectPaths } });
   }, [syncTable]));
 }

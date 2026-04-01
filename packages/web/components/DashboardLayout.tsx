@@ -91,7 +91,7 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
   const serverClientState = useQuery(api.client_state.get, {});
   const createQuickSession = useMutation(api.conversations.createQuickSession);
   useConvexSync(serverClientState, (data) => {
-    useInboxStore.getState().syncClientState(data);
+    useInboxStore.getState().syncTable("clientState", data);
   });
 
   useMountEffect(() => {
@@ -217,7 +217,7 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
     const sessionId = nanoid(10);
     const now = Date.now();
 
-    store.setConversationMeta(sessionId, {
+    store.syncRecord("conversations", sessionId, {
       _id: sessionId, _creationTime: now, user_id: "", agent_type: agentType,
       session_id: sessionId, project_path: path, git_root: gitRoot || path,
       started_at: now, updated_at: now, message_count: 0, status: "active",

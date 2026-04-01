@@ -75,7 +75,7 @@ export function useSyncInboxSessions() {
   }, [syncTable]));
 
   useConvexSync(clientState, useCallback((data: any) => {
-    useInboxStore.getState().syncClientState(data);
+    useInboxStore.getState().syncTable("clientState", data);
   }, []));
 
   // eslint-disable-next-line no-restricted-syntax -- navigation side effect on session list change

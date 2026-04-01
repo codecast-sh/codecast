@@ -14,7 +14,7 @@ export function useSyncTable(
 
   useConvexSync(data, useCallback((d: any) => {
     const items = Array.isArray(d) ? d : [d];
-    syncTable(tableName, items as any, extra);
+    syncTable(tableName, items as any, extra ? { extra } : undefined);
   }, [tableName, syncTable, extra]));
 
   return data;

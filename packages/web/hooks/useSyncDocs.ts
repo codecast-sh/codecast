@@ -23,7 +23,7 @@ export function useSyncDocs(typeFilter?: string, searchQuery?: string, projectFi
       syncTable("docs", data as any);
     } else {
       const { docs, projectPaths } = data as any;
-      syncTable("docs", docs as any, { docProjectPaths: projectPaths });
+      syncTable("docs", docs as any, { extra: { docProjectPaths: projectPaths } });
     }
   }, [syncTable, searchQuery]));
 }
@@ -33,9 +33,9 @@ export function useSyncDocDetail(id?: string) {
     api.taskMining.webGetDocDetail,
     id ? { id: id as any } : "skip"
   );
-  const syncDocDetail = useInboxStore((s) => s.syncDocDetail);
+  const syncRecord = useInboxStore((s) => s.syncRecord);
 
   useConvexSync(data, useCallback((d: any) => {
-    if (id) syncDocDetail(id, d as unknown as DocDetail);
-  }, [id, syncDocDetail]));
+    if (id) syncRecord("docDetails", id, d as unknown as DocDetail);
+  }, [id, syncRecord]));
 }

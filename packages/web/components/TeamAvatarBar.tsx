@@ -43,7 +43,7 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
   const cachedMembers = useInboxStore((s) => s.teamMembers);
   const teamMembers = teamMembersQuery ?? (cachedMembers.length > 0 ? cachedMembers : null);
 
-  useConvexSync(teamMembersQuery, useCallback((d: any) => useInboxStore.getState().syncTeamMembers(d), []));
+  useConvexSync(teamMembersQuery, useCallback((d: any) => useInboxStore.getState().syncTable("teamMembers", d), []));
 
   if (!effectiveTeamId || !teamMembers || teamMembers.length === 0) {
     return null;
