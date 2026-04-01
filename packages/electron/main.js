@@ -58,9 +58,16 @@ function saveSettings(shortcuts) {
 }
 
 function getZoomFactor() {
-  const saved = loadFullSettings().zoomFactor;
-  if (saved) return saved;
-  const display = screen.getPrimaryDisplay();
+  const settings = loadFullSettings();
+  if (settings.zoomFactor === 1 && !settings.zoomVersion) {
+    delete settings.zoomFactor;
+    fs.writeFileSync(getSettingsPath(), JSON.stringify(settings, null, 2));
+  }
+  const saved = settings.zoomFactor;
+  if (saved && isFinite(saved) && saved > 0) return saved;
+  const display = mainWindow
+    ? screen.getDisplayMatching(mainWindow.getBounds())
+    : screen.getPrimaryDisplay();
   const dipWidth = display.workAreaSize.width;
   if (dipWidth > 2500) return 1.5;
   if (dipWidth > 2000) return 1.25;
@@ -71,6 +78,7 @@ function saveZoomFactor(factor) {
   const settingsPath = getSettingsPath();
   const existing = loadFullSettings();
   existing.zoomFactor = factor;
+  existing.zoomVersion = 2;
   fs.writeFileSync(settingsPath, JSON.stringify(existing, null, 2));
 }
 
@@ -148,6 +156,7 @@ function createWindow() {
   mainWindow.loadURL(currentBaseUrl);
 
   mainWindow.once("ready-to-show", () => {
+    mainWindow.webContents.setZoomFactor(getZoomFactor());
     mainWindow.show();
     if (deepLinkUrl) {
       handleDeepLink(deepLinkUrl);
