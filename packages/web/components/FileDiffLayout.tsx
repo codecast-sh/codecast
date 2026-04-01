@@ -17,7 +17,6 @@ import {
   ChevronsDownUp,
   PanelLeftClose,
   PanelLeft,
-  PanelRightClose,
   LayoutList,
   SplitSquareVertical,
 } from "lucide-react";
@@ -883,7 +882,7 @@ export function FileDiffLayout({
                 onClick={onCloseDiffPanel}
                 title="Close diff panel (d)"
               >
-                <PanelRightClose className="h-4 w-4" />
+                <X className="h-4 w-4" />
               </Button>
             )}
           </div>
@@ -925,7 +924,7 @@ export function FileDiffLayout({
             onClick={onCloseDiffPanel}
             title="Close diff panel (d)"
           >
-            <PanelRightClose className="h-4 w-4" />
+            <X className="h-4 w-4" />
           </Button>
         )}
       </div>
@@ -951,7 +950,7 @@ export function FileDiffLayout({
             onClick={onCloseDiffPanel}
             title="Close diff panel (d)"
           >
-            <PanelRightClose className="h-4 w-4" />
+            <X className="h-4 w-4" />
           </Button>
         )}
       </div>

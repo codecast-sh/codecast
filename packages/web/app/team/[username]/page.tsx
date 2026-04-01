@@ -24,6 +24,34 @@ export default function UserProfilePage() {
   );
 }
 
+function ProfileSkeleton() {
+  return (
+    <div className="w-full py-4 px-4 animate-pulse motion-reduce:animate-none">
+      <div className="flex items-center gap-3 pb-3 mb-0">
+        <div className="w-9 h-9 rounded-full bg-sol-base02" />
+        <div className="flex-1 space-y-1.5">
+          <div className="h-3 w-28 bg-sol-base02 rounded" />
+          <div className="h-2 w-44 bg-sol-base02/60 rounded" />
+        </div>
+      </div>
+      <div className="h-16 bg-sol-base02/40 rounded-lg mb-2" />
+      <div className="flex gap-0 border-b border-sol-border/10 mb-2">
+        {["w-10", "w-8", "w-12"].map((w, i) => (
+          <div key={i} className={`${w} h-3 bg-sol-base02/50 rounded mx-3 my-2`} />
+        ))}
+      </div>
+      <div className="space-y-3 mt-3">
+        {[1, 2, 3].map((i) => (
+          <div key={i} className="space-y-1.5">
+            <div className="h-2.5 w-20 bg-sol-base02/40 rounded" />
+            <div className="h-14 bg-sol-base02/30 rounded-lg" />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 const NOISE_VERBS = new Set(["started", "finished"]);
 
 function fmtK(n: number): string {
@@ -73,9 +101,8 @@ function UserProfileContent() {
   const heatmapData = useMemo(() => heatmap || null, [heatmap]);
   const timelineData = useMemo(() => heatmapData || [], [heatmapData]);
 
-  if (!currentUser) return null;
+  if (!currentUser || profileUser === undefined) return <ProfileSkeleton />;
   if (profileUser === null) return <div className="flex items-center justify-center min-h-[40vh]"><p className="text-sol-base01">User not found.</p></div>;
-  if (!profileUser) return null;
 
   const dd = profileUser.daemon_last_seen ? Date.now() - profileUser.daemon_last_seen : Infinity;
   const online = dd < 60000;

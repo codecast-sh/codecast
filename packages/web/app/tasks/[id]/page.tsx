@@ -9,6 +9,7 @@ import { useSyncTasks, useSyncTaskDetail } from "../../../hooks/useSyncTasks";
 import { DetailSplitLayout } from "../../../components/DetailSplitLayout";
 import { TaskListContent } from "../page";
 import { useMentionQuery } from "../../../hooks/useMentionQuery";
+import { useImageUpload } from "../../../hooks/useImageUpload";
 // TaskCommandPalette replaced by unified CommandPalette
 import { WorkflowContextPanel } from "../../../components/WorkflowContextPanel";
 import { MarkdownRenderer } from "../../../components/tools/MarkdownRenderer";
@@ -364,6 +365,7 @@ function TaskDetailContent() {
   const data = (allTasks[id] || Object.values(allTasks).find((t: any) => t.short_id === id) || directData) as TaskDetail | undefined;
   const taskTeamId = data?.team_id as string | undefined;
   const handleMentionQuery = useMentionQuery();
+  const handleImageUpload = useImageUpload();
   const updateTask = useInboxStore((s) => s.updateTask);
   const openSidePanel = useInboxStore((s) => s.openSidePanel);
   const webUpdate = useMutation(api.tasks.webUpdate);
@@ -715,6 +717,7 @@ function TaskDetailContent() {
                 }
               }}
               onMentionQuery={handleMentionQuery}
+              onImageUpload={handleImageUpload}
               editable={true}
               placeholder="Add a description..."
             />

@@ -2,6 +2,7 @@
 import { useRef, useState, useCallback } from "react";
 import { CollabDocEditor } from "./editor/CollabDocEditor";
 import { useMentionQuery } from "../hooks/useMentionQuery";
+import { useImageUpload } from "../hooks/useImageUpload";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { ContextChatInput } from "./ContextChatInput";
 import { ArrowLeft, Edit3, Eye, MoreHorizontal, Copy, Check, X, Link2 } from "lucide-react";
@@ -47,6 +48,7 @@ export function DocumentDetailLayout({
   const [copied, setCopied] = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
   const handleMentionQuery = useMentionQuery();
+  const handleImageUpload = useImageUpload();
   const getMarkdownRef = useRef<(() => string) | null>(null);
   const getContextBody = useCallback(
     () => getMarkdownRef.current?.() ?? markdownContent,
@@ -162,6 +164,7 @@ export function DocumentDetailLayout({
                 docId={docId}
                 markdownContent={markdownContent}
                 onMentionQuery={handleMentionQuery}
+                onImageUpload={handleImageUpload}
                 editable={isEditing}
                 placeholder={placeholder}
                 getMarkdownRef={getMarkdownRef}
