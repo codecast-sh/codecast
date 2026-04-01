@@ -451,3 +451,48 @@ SUMMARY:
 
 The orchestrator will use these findings to create fix tasks or record them in the drive state.`;
 }
+
+// --- Task Prompt Templates ---
+// Per-agent-type templates for spawning agents on tasks via `cast task start`.
+// Uses {{variable}} syntax for mustache-style interpolation.
+
+export interface TaskPromptInput {
+  id: string;
+  slug: string;
+  title: string;
+  description: string | null;
+  priority: string;
+  status: string | null;
+  labels: string[] | null;
+}
+
+const TASK_PROMPT_VARIABLES: Record<string, (t: TaskPromptInput) => string> = {
+  id: (t) => t.id,
+  slug: (t) => t.slug,
+  title: (t) => t.title,
+  description: (t) => t.description || "No description provided.",
+  priority: (t) => t.priority || "none",
+  status: (t) => t.status || "Unknown",
+  labels: (t) => t.labels?.join(", ") || "None",
+};
+
+export const DEFAULT_TASK_PROMPT_TEMPLATE = `Task: "{{title}}" ({{slug}})
+Priority: {{priority}}
+Status: {{status}}
+Labels: {{labels}}
+
+{{description}}
+
+Work in the current workspace. Inspect the relevant code, make the needed changes, verify them when practical, and update the task with a short summary when done:
+\`cast task done {{id}} -m "summary of what you did"\``;
+
+export function renderTaskPromptTemplate(template: string, task: TaskPromptInput): string {
+  return template.replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_match, key: string) => {
+    const fn = TASK_PROMPT_VARIABLES[key.trim()];
+    return fn ? fn(task) : `{{${key}}}`;
+  }).trim();
+}
+
+export function buildTaskPrompt(task: TaskPromptInput, template?: string): string {
+  return renderTaskPromptTemplate(template || DEFAULT_TASK_PROMPT_TEMPLATE, task);
+}

@@ -6,6 +6,7 @@ const MAX_CONTENT_SIZE = 100_000;
 const MAX_TOOL_RESULT_SIZE = 50_000;
 const MAX_TOTAL_MESSAGE_SIZE = 900_000;
 const MAX_IMAGE_SIZE = 5_000_000;
+const MAX_INLINE_IMAGE_SIZE = 500_000;
 const MAX_IMAGES_PER_MESSAGE = 10;
 
 const MIN_REQUEST_INTERVAL_MS = 100;
@@ -381,6 +382,11 @@ export class SyncService {
         const storageId = await this.uploadImage(img.data, img.mediaType);
         if (storageId) {
           images.push({ media_type: img.mediaType, storage_id: storageId, tool_use_id: img.toolUseId });
+        } else {
+          const dataBytes = Buffer.from(img.data, "base64").length;
+          if (dataBytes <= MAX_INLINE_IMAGE_SIZE) {
+            images.push({ media_type: img.mediaType, data: img.data, tool_use_id: img.toolUseId });
+          }
         }
       }
     }
@@ -459,6 +465,11 @@ export class SyncService {
           const storageId = await this.uploadImage(img.data, img.mediaType);
           if (storageId) {
             images.push({ media_type: img.mediaType, storage_id: storageId, tool_use_id: img.toolUseId });
+          } else {
+            const dataBytes = Buffer.from(img.data, "base64").length;
+            if (dataBytes <= MAX_INLINE_IMAGE_SIZE) {
+              images.push({ media_type: img.mediaType, data: img.data, tool_use_id: img.toolUseId });
+            }
           }
         }
       }
