@@ -205,7 +205,7 @@ function PlanHoverContent({ plan }: { plan: any }) {
   );
 }
 
-const MENTION_RE = /@\[([^\]]*?)(?:\s+(ct-\w+|pl-\w+|jx\w+))?\](?:\s*\([^)]*\))?/g;
+const MENTION_RE = /@\[([^\]]*?)(?:\s+(ct-\w+|pl-\w+|jx\w+|doc:\w+))?\](?:\s*\([^)]*\))?/g;
 
 function MentionPill({ name, entityId }: { name: string; entityId?: string }) {
   if (entityId && isEntityId(entityId)) {

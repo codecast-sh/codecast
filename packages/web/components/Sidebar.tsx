@@ -280,6 +280,7 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
   );
   const teamUnreadCount = teamUnreadCountQuery ?? useInboxStore.getState().teamUnreadCount;
   const toggleFavorite = useMutation(api.conversations.toggleFavorite);
+  const createDoc = useMutation(api.docs.webCreate);
   const createModal = useInboxStore((s) => s.createModal);
   const closeCreateModal = useInboxStore((s) => s.closeCreateModal);
   const openCreateModal = useInboxStore((s) => s.openCreateModal);
@@ -485,7 +486,10 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
             isActive={isDocs || isPlans}
             isNarrow={isNarrow}
             onMobileClose={onMobileClose}
-            onAdd={() => openCreateModal("doc")}
+            onAdd={async () => {
+              const result = await createDoc({ title: "", doc_type: "note" });
+              if (result?.id) router.push(`/docs/${result.id}`);
+            }}
             icon={
               <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
@@ -696,9 +700,6 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
       )}
       {createModal === "plan" && (
         <CreateDocModal onClose={() => closeCreateModal()} initialType="plan" />
-      )}
-      {createModal === "doc" && (
-        <CreateDocModal onClose={() => closeCreateModal()} />
       )}
     </nav>
   );

@@ -1,10 +1,11 @@
 "use client";
-import { useState, useCallback, useMemo, useRef, useEffect } from "react";
+import { useCallback, useMemo, useRef, useEffect } from "react";
 import { useRouter, useSearchParams, useParams, usePathname } from "next/navigation";
 import Link from "next/link";
 import { useInboxStore, DocItem, DocViewPrefs } from "../../store/inboxStore";
 import { useSyncDocs } from "../../hooks/useSyncDocs";
-import { CreateDocModal } from "../../components/CreateDocModal";
+import { useMutation } from "convex/react";
+import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { GenericListView, ListGroup, ItemRowState } from "../../components/GenericListView";
 import { getLabelColor, DEFAULT_LABELS } from "../../lib/labelColors";
 import {
@@ -15,6 +16,8 @@ import {
   User,
   Bot,
 } from "lucide-react";
+
+const api = _api as any;
 
 export const DOC_TYPE_CONFIG: Record<string, { label: string; color: string; dot: string }> = {
   note: { label: "Note", color: "text-gray-400", dot: "bg-gray-400" },
@@ -140,9 +143,10 @@ function useDocUrlState() {
 export function DocListContent() {
   const params = useParams();
   const { docType, sort: sortBy, project: projectFilter, label: labelFilter, source: sourceFilter, setParam } = useDocUrlState();
+  const router = useRouter();
+  const createDoc = useMutation(api.docs.webCreate);
   const docs = useInboxStore((s) => s.docs);
   const docProjectPaths = useInboxStore((s) => s.docProjectPaths);
-  const [showCreate, setShowCreate] = useState(false);
 
   useSyncDocs(docType || undefined, undefined, projectFilter || undefined);
 
@@ -315,21 +319,21 @@ export function DocListContent() {
       }}
       groups={listGroups}
       flatItems={flatDocs}
-      disableKeyboard={showCreate}
       renderRow={renderDocRow}
       getItemId={(d) => d._id}
       getItemRoute={(d) => `/docs/${d._id}`}
       getSearchText={(d) => (d as any).display_title || d.title || ""}
       emptyIcon={<FileText className="w-8 h-8 opacity-30" />}
       emptyMessage="No documents found"
-      onCreate={() => setShowCreate(true)}
+      onCreate={async () => {
+        const result = await createDoc({ title: "", doc_type: docType || "note" });
+        if (result?.id) router.push(`/docs/${result.id}`);
+      }}
       paletteShortcuts={[
         { key: "t", mode: "type", label: "type" },
         { key: "l", mode: "labels", label: "labels" },
       ]}
-    >
-      {showCreate && <CreateDocModal onClose={() => setShowCreate(false)} initialType={docType || undefined} />}
-    </GenericListView>
+    />
   );
 }
 

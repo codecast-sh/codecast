@@ -5588,14 +5588,9 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
         inserted = `@${item.label} `;
       } else {
         const truncTitle = item.label.length > 30 ? item.label.slice(0, 30) + "..." : item.label;
-        const id = item.shortId || "";
-        const castCmd = item.type === "task" ? `cast task context ${id}`
-          : item.type === "plan" ? `cast plan show ${id}`
-          : item.type === "session" ? `cast read ${id}`
-          : item.type === "doc" ? `cast doc read ${id}`
-          : "";
+        const id = item.shortId || (item.type === "doc" ? `doc:${item.id}` : "");
         const ref = id ? `@[${truncTitle} ${id}]` : `@[${truncTitle}]`;
-        inserted = castCmd ? `${ref} (${castCmd}) ` : `${ref} `;
+        inserted = `${ref} `;
       }
 
       const newVal = before + inserted + after;
@@ -5733,19 +5728,23 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
   const convex = useConvex();
 
   const expandMentionsInMessage = useCallback(async (text: string): Promise<string> => {
-    const mentionRegex = /@\[([^\]]*?)\s+(ct-\w+|pl-\w+|jx\w+)\](?:\s*\([^)]*\))?/g;
-    const docMentionRegex = /@\[([^\]]*?)\](?:\s*\(cast doc read (\w+)\))?/g;
+    const mentionRegex = /@\[([^\]]*?)\s+(ct-\w+|pl-\w+|jx\w+|doc:\w+)\](?:\s*\([^)]*\))?/g;
+    const docMentionLegacyRegex = /@\[([^\]]*?)\](?:\s*\(cast doc read (\w+)\))/g;
     const mentions: Array<{ type: string; shortId?: string; id?: string; fullMatch: string }> = [];
     let match: RegExpExecArray | null;
     const textCopy = text;
     mentionRegex.lastIndex = 0;
     while ((match = mentionRegex.exec(textCopy)) !== null) {
       const id = match[2];
-      const type = id.startsWith("ct-") ? "task" : id.startsWith("pl-") ? "plan" : "session";
-      mentions.push({ type, shortId: id, fullMatch: match[0] });
+      if (id.startsWith("doc:")) {
+        mentions.push({ type: "doc", id: id.slice(4), fullMatch: match[0] });
+      } else {
+        const type = id.startsWith("ct-") ? "task" : id.startsWith("pl-") ? "plan" : "session";
+        mentions.push({ type, shortId: id, fullMatch: match[0] });
+      }
     }
-    docMentionRegex.lastIndex = 0;
-    while ((match = docMentionRegex.exec(textCopy)) !== null) {
+    docMentionLegacyRegex.lastIndex = 0;
+    while ((match = docMentionLegacyRegex.exec(textCopy)) !== null) {
       if (match![2] && !mentions.some(m => m.fullMatch === match![0])) {
         mentions.push({ type: "doc", id: match![2], fullMatch: match![0] });
       }
@@ -5982,10 +5981,13 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
     }
   }, [composeMode, setMessage]);
 
+  const [isMultiline, setIsMultiline] = useState(false);
   const resetTextareaHeight = () => {
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
-      textareaRef.current.style.height = textareaRef.current.scrollHeight + "px";
+      const sh = textareaRef.current.scrollHeight;
+      textareaRef.current.style.height = sh + "px";
+      setIsMultiline(sh > 36);
     }
   };
 
@@ -6920,15 +6922,17 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
                     rows={1}
                     className={`flex-1 bg-transparent text-sm placeholder:text-sol-text-dim focus:outline-none disabled:opacity-50 resize-none overflow-hidden leading-relaxed py-1 ${isSelectionActive && !isSelectionEditedRef.current ? "text-sol-text-dim italic" : "text-sol-text"}`}
                   />
-                  <div ref={sendRef} className="shrink-0 flex items-center gap-1">
-                    <button
-                      type="button"
-                      onClick={toggleCompose}
-                      className="w-7 h-7 rounded-full transition-colors flex items-center justify-center text-sol-text-dim/40 hover:text-sol-text-dim hover:bg-sol-bg/50"
-                      title="Expand editor (Cmd+Shift+E)"
-                    >
-                      <Maximize2 className="w-3 h-3" />
-                    </button>
+                  <div ref={sendRef} className="shrink-0 flex items-end gap-1">
+                    {isMultiline && (
+                      <button
+                        type="button"
+                        onClick={toggleCompose}
+                        className="w-7 h-7 mb-0.5 rounded-full transition-all flex items-center justify-center text-sol-text-dim/30 hover:text-sol-text-dim hover:bg-sol-bg/50"
+                        title="Expand editor (Cmd+Shift+E)"
+                      >
+                        <Maximize2 className="w-3 h-3" />
+                      </button>
+                    )}
                     <button
                       type="submit"
                       disabled={!canSubmit}
@@ -6979,6 +6983,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
             <ShortcutHint keys={["Shift", "Tab"]} label="Cycle CC mode" />
             <ShortcutHint keys={["Cmd", "Shift", "L"]} label="Copy link" />
             <div className="border-t border-sol-border/20 my-1.5" />
+            <ShortcutHint keys={["Cmd", "Shift", "E"]} label="Compose mode" />
             <ShortcutHint keys={["Shift", "Enter"]} label="New line" />
             <ShortcutHint keys={["Ctrl", "Enter"]} label="Queue message" />
             <ShortcutHint keys={["Alt", "Enter"]} label="Reply and advance" />

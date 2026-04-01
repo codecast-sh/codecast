@@ -18,7 +18,7 @@ import { undoableStashSession } from "../store/undoActions";
 import { formatShortcutLabel } from "../shortcuts";
 import { X, ChevronsLeft, ChevronsRight } from "lucide-react";
 import { TaskStatusBadge } from "./TaskStatusBadge";
-import { useTipActions, checkMilestone, InlineTips } from "../tips";
+import { useTipActions, checkMilestone } from "../tips";
 
 const NOISE_PREFIXES = ["[Request interrupted", "This session is being continued", "Your task is to create a detailed summary", "Please continue the conversation", "<task-notification>", "Implement the following plan"];
 
@@ -974,7 +974,6 @@ export function SessionListPanel({
         </div>
       </div>
       <div className="flex-1 overflow-y-auto scrollbar-auto">
-        <InlineTips />
         {!projectFilter && <NeedsAttentionSection />}
         {renderSection("Pinned", filteredPinned, "text-sol-magenta")}
         {renderSection("New", filteredNew, "text-sol-blue")}
