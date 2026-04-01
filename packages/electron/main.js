@@ -58,7 +58,13 @@ function saveSettings(shortcuts) {
 }
 
 function getZoomFactor() {
-  return loadFullSettings().zoomFactor || 1.0;
+  const saved = loadFullSettings().zoomFactor;
+  if (saved) return saved;
+  const display = screen.getPrimaryDisplay();
+  const dipWidth = display.workAreaSize.width;
+  if (dipWidth > 2500) return 1.5;
+  if (dipWidth > 2000) return 1.25;
+  return 1.0;
 }
 
 function saveZoomFactor(factor) {
@@ -552,11 +558,13 @@ app.whenReady().then(() => {
   // Auto-update
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
+  let pendingVersion;
   autoUpdater.on("update-available", (info) => {
+    pendingVersion = info.version;
     mainWindow?.webContents.send("update-status", { status: "available", version: info.version });
   });
   autoUpdater.on("download-progress", (progress) => {
-    mainWindow?.webContents.send("update-status", { status: "downloading", percent: Math.round(progress.percent) });
+    mainWindow?.webContents.send("update-status", { status: "downloading", version: pendingVersion, percent: Math.round(progress.percent) });
   });
   autoUpdater.on("update-downloaded", (info) => {
     mainWindow?.webContents.send("update-status", { status: "ready", version: info.version });
