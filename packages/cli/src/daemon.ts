@@ -554,8 +554,15 @@ function sendAgentStatus(
 }
 
 // --- HTTP Hook Server ---
-// Provides an instant push endpoint for agent status notifications.
-// The existing file-based status watcher remains as a fallback.
+// Provides a push endpoint for agent status events at localhost:{port}/hook/status.
+// The hook script (codecast-status.sh) sends events here via curl for instant delivery.
+// The file-based chokidar watcher on ~/.codecast/agent-status/ remains as a fallback
+// when the HTTP server is unreachable (e.g. daemon restart, port contention).
+//
+// Permission flow via HTTP: when status=permission_blocked arrives, handleStatusData
+// processes it identically to the file path. The filePath parameter is only used for
+// unlinkSync on "stopped" events; findTranscriptForSession uses sessionId to locate
+// JSONL files independently, so permission handling works without a filePath.
 
 let hookServer: http.Server | null = null;
 let hookServerPort = 0;
@@ -8707,8 +8714,6 @@ async function main(): Promise<void> {
         permissionJustResolved.add(sessionId);
         const transcriptPath = data.transcript_path || findTranscriptForSession(sessionId);
 
-        // Prefer tool name from hook message (direct from PermissionRequest event) over transcript extraction
-        // Transcript can return stale tool_use entries (e.g. ExitPlanMode) that don't match the actual permission
         const hookToolName = data.message?.split(/[:\s]/)[0] || null;
         const toolInfo = !hookToolName ? extractPendingToolUseFromTranscript(transcriptPath || "") : null;
         const toolName = hookToolName || toolInfo?.tool_name || extractToolFromMessage(data.message || "");
@@ -8782,7 +8787,6 @@ async function main(): Promise<void> {
   // HTTP hook server -- instant push path (file watcher above is the fallback)
   hookServer = startHookServer((sessionId, data) => {
     handleStatusData(sessionId, data);
-    // Also write the file so file-based consumers stay in sync
     try {
       fs.mkdirSync(AGENT_STATUS_DIR, { recursive: true });
       fs.writeFileSync(path.join(AGENT_STATUS_DIR, `${sessionId}.json`), JSON.stringify(data));

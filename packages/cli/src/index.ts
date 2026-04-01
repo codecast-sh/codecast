@@ -829,7 +829,6 @@ if [ -f "$HOOK_PORT_FILE" ]; then
     URL="http://127.0.0.1:$PORT/hook/status?session_id=$SESSION_ID&status=$STATUS&ts=$TS"
     [ -n "$PERM_MODE" ] && URL="$URL&permission_mode=$PERM_MODE"
 
-    # URL-encode message and transcript_path if present via EXTRA
     if [ -n "$EXTRA" ]; then
       MSG=$(echo "$EXTRA" | python3 -c "import sys,json; d=json.loads('{'+sys.stdin.read().lstrip(',')+'}'); print(d.get('message',''))" 2>/dev/null)
       TP=$(echo "$EXTRA" | python3 -c "import sys,json; d=json.loads('{'+sys.stdin.read().lstrip(',')+'}'); print(d.get('transcript_path',''))" 2>/dev/null)
@@ -8812,7 +8811,7 @@ work
 
     if (result.plan_id && sessionId) {
       try {
-        await cliPost("/cli/plans/bind", { short_id: result.plan_id, conversation_id: sessionId });
+        await cliPost("/cli/plans/bind", { short_id: result.plan_id, session_id: sessionId });
         console.log(`${c.dim}Session bound to plan ${result.plan_id}${c.reset}`);
       } catch {}
     }
