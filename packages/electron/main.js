@@ -69,8 +69,8 @@ function getZoomFactor() {
     ? screen.getDisplayMatching(mainWindow.getBounds())
     : screen.getPrimaryDisplay();
   const dipWidth = display.workAreaSize.width;
-  if (dipWidth > 2500) return 1.5;
-  if (dipWidth > 2000) return 1.25;
+  if (dipWidth > 2500) return 2.0;
+  if (dipWidth > 2000) return 1.5;
   return 1.0;
 }
 
@@ -136,6 +136,7 @@ function handleDeepLink(url) {
 }
 
 function createWindow() {
+  const zoom = getZoomFactor();
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
@@ -147,6 +148,7 @@ function createWindow() {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
+      zoomFactor: zoom,
     },
     icon: path.join(__dirname, "assets", "icon.png"),
     show: false,
