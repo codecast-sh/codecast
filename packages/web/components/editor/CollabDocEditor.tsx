@@ -43,6 +43,7 @@ interface CollabDocEditorProps {
   docId: string;
   markdownContent: string;
   onMentionQuery: MentionQueryFn;
+  onImageUpload?: (file: File) => Promise<string | null>;
   editable?: boolean;
   className?: string;
   placeholder?: string;
@@ -391,12 +392,15 @@ export function CollabDocEditor({
   docId,
   markdownContent,
   onMentionQuery,
+  onImageUpload,
   editable = true,
   className = "",
   placeholder = "Start writing, use / for commands, @ to mention, # for dates...",
   getMarkdownRef,
   cliEditedAt,
 }: CollabDocEditorProps) {
+  const onImageUploadRef = useRef(onImageUpload);
+  onImageUploadRef.current = onImageUpload;
   const syncApi = api.docSync as unknown as SyncApi;
   const sync = useTiptapSync(syncApi, docId);
   const presences = useQuery(api.docSync.getPresence, { doc_id: docId }) || [];
@@ -441,6 +445,40 @@ export function CollabDocEditor({
         editorProps={{
           attributes: {
             class: "doc-editor-content focus:outline-none",
+          },
+          handlePaste: (view, event) => {
+            const items = event.clipboardData?.items;
+            if (!items || !onImageUploadRef.current) return false;
+            for (const item of Array.from(items)) {
+              if (item.type.startsWith("image/")) {
+                const file = item.getAsFile();
+                if (!file) continue;
+                event.preventDefault();
+                onImageUploadRef.current(file).then((url) => {
+                  if (url) view.dispatch(view.state.tr.replaceSelectionWith(
+                    view.state.schema.nodes.image.create({ src: url })
+                  ));
+                });
+                return true;
+              }
+            }
+            return false;
+          },
+          handleDrop: (view, event) => {
+            const files = event.dataTransfer?.files;
+            if (!files?.length || !onImageUploadRef.current) return false;
+            const imageFiles = Array.from(files).filter(f => f.type.startsWith("image/"));
+            if (!imageFiles.length) return false;
+            event.preventDefault();
+            const pos = view.posAtCoords({ left: event.clientX, top: event.clientY })?.pos ?? view.state.selection.from;
+            for (const file of imageFiles) {
+              onImageUploadRef.current(file).then((url) => {
+                if (url) view.dispatch(view.state.tr.insert(
+                  pos, view.state.schema.nodes.image.create({ src: url })
+                ));
+              });
+            }
+            return true;
           },
         }}
       >

@@ -568,3 +568,20 @@
   from { opacity: 0; transform: translateY(2px); }
   to { opacity: 0.9; transform: translateY(0); }
 }
+
+/* Compose editor overrides */
+.compose-editor .doc-editor-content {
+  min-height: 0;
+  padding: 0;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.compose-editor .doc-editor-content .tiptap {
+  min-height: 0;
+}
+
+.compose-editor {
+  font-size: 13px;
+  line-height: 1.6;
+}

@@ -22,6 +22,11 @@ import { toast } from "sonner";
 import { CodeBlock } from "./CodeBlock";
 import { useDiffViewerStore } from "../store/diffViewerStore";
 
+function copyMessageLink(conversationId: string | undefined, messageId: string) {
+  const url = `${window.location.origin}/conversation/${conversationId}#msg-${messageId}`;
+  setTimeout(() => { copyToClipboard(url).then(() => toast.success("Link copied!")).catch(() => toast.error("Failed to copy link")); });
+}
+
 function extractTextFromHast(node: any): string {
   if (!node) return '';
   if (node.type === 'text') return node.value || '';
@@ -72,7 +77,9 @@ import { getApplyPatchInput, parseApplyPatchSections } from "../lib/applyPatchPa
 import { setupDesktopDrag, desktopHeaderClass } from "../lib/desktop";
 import { MessageNavButton } from "./MessageBrowserPopover";
 import type { MentionItem } from "./editor/MentionList";
-import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2 } from "lucide-react";
+import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2 } from "lucide-react";
+import { ComposeEditor, type ComposeEditorHandle } from "./editor/ComposeEditor";
+import { useMentionQuery } from "../hooks/useMentionQuery";
 
 const sacredInputs = new Map<string, { text: string; images?: any[] }>();
 
@@ -316,7 +323,7 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
       const id = storeSession?._id || conversation._id;
       const store = useInboxStore.getState();
       store.updateSessionProject(id, trimmed);
-      store.updateConversationMeta(id, { project_path: trimmed, git_root: trimmed });
+      store.syncRecord("conversations", id, { project_path: trimmed, git_root: trimmed });
 
       if (isConvexId(id)) {
         reconfigureSession({
@@ -756,12 +763,19 @@ function summarizeBashCommand(cmd: string): string {
   return c.length > 80 ? c.slice(0, 80) + '...' : c;
 }
 
+function unwrapShellCommand(cmd: string): string {
+  const m = cmd.match(/^(?:\/bin\/)?(?:ba)?sh\s+-\S+\s+'([^']*)'\s*$/) ||
+            cmd.match(/^(?:\/bin\/)?(?:ba)?sh\s+-\S+\s+"([^"]*)"\s*$/) ||
+            cmd.match(/^(?:\/bin\/)?(?:ba)?sh\s+-\S+\s+(\S+)\s*$/);
+  return m ? m[1] : cmd;
+}
+
 function parseCastCommand(tool: ToolCall): { category: string; subcommand: string; args: string; fullCmd: string } | null {
   const isBash = tool.name === "Bash" || tool.name === "shell_command" || tool.name === "shell" || tool.name === "exec_command" || tool.name === "container.exec" || tool.name === "commandExecution";
   if (!isBash) return null;
   try {
     const input = JSON.parse(tool.input);
-    const cmd = String(input.command || input.cmd || "").trim();
+    const cmd = unwrapShellCommand(String(input.command || input.cmd || "").trim());
     const match = cmd.match(/^cast\s+(\w[\w-]*)(?:\s+(\w[\w-]*))?(?:\s+([\s\S]*))?$/);
     if (!match) return null;
     return { category: match[1], subcommand: match[2] || "", args: (match[3] || "").trim(), fullCmd: cmd };
@@ -1519,7 +1533,7 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
   const getToolSummary = () => {
     if (isStandardEdit || isRead) return relativePath;
     if (isBash) {
-      const cmd = String(parsedInput.command || parsedInput.cmd || "");
+      const cmd = unwrapShellCommand(String(parsedInput.command || parsedInput.cmd || ""));
       if (cmd) return summarizeBashCommand(cmd);
     }
     if (isGlob && parsedInput.pattern) return String(parsedInput.pattern);
@@ -2047,7 +2061,7 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
             <div className="max-h-80 overflow-auto">
               <div className="px-1.5 sm:px-2 py-1 sm:py-1.5 border-b border-sol-border/20 bg-sol-bg-highlight/30">
                 <pre className="text-[11px] sm:text-xs font-mono text-sol-green whitespace-pre-wrap break-all">
-                  $ {String(parsedInput.command || parsedInput.cmd)}
+                  $ {unwrapShellCommand(String(parsedInput.command || parsedInput.cmd || ""))}
                 </pre>
               </div>
               {processedContent && processedContent.trim() ? (
@@ -3774,10 +3788,7 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
     setTimeout(() => { copyToClipboard(content).then(() => toast.success("Copied!")).catch(() => toast.error("Failed to copy")); });
   };
 
-  const handleCopyLink = () => {
-    const url = `${window.location.origin}${window.location.pathname}#msg-${messageId}`;
-    setTimeout(() => { copyToClipboard(url).then(() => toast.success("Link copied!")).catch(() => toast.error("Failed to copy link")); });
-  };
+  const handleCopyLink = () => copyMessageLink(conversationId, messageId);
 
   const handleToggleBookmark = async () => {
     if (!conversationId) return;
@@ -4225,10 +4236,7 @@ function AssistantBlock({
     setTimeout(() => { copyToClipboard(displayContent || "").then(() => toast.success("Copied!")).catch(() => toast.error("Failed to copy")); });
   };
 
-  const handleCopyLink = () => {
-    const url = `${window.location.origin}${window.location.pathname}#msg-${messageId}`;
-    setTimeout(() => { copyToClipboard(url).then(() => toast.success("Link copied!")).catch(() => toast.error("Failed to copy link")); });
-  };
+  const handleCopyLink = () => copyMessageLink(conversationId, messageId);
 
   const handleToggleBookmark = async () => {
     if (!conversationId) return;
@@ -4834,10 +4842,7 @@ function PlanBlock({ content, timestamp, collapsed, messageId, conversationId, o
     setTimeout(() => { copyToClipboard(content || "").then(() => toast.success("Copied!")).catch(() => toast.error("Failed to copy")); });
   };
 
-  const handleCopyLink = () => {
-    const url = `${window.location.origin}${window.location.pathname}#msg-${messageId}`;
-    setTimeout(() => { copyToClipboard(url).then(() => toast.success("Link copied!")).catch(() => toast.error("Failed to copy link")); });
-  };
+  const handleCopyLink = () => messageId && copyMessageLink(conversationId, messageId);
 
   const handleToggleBookmark = async () => {
     if (!conversationId || !messageId) return;
@@ -5466,6 +5471,10 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
   const sendingRef = useRef(false);
   const [isWaitingForUpload, setIsWaitingForUpload] = useState(false);
   const [isFocused, setIsFocused] = useState(false);
+  const [composeMode, setComposeMode] = useState(false);
+  const [composeHasContent, setComposeHasContent] = useState(false);
+  const composeRef = useRef<ComposeEditorHandle>(null);
+  const composeMentionQuery = useMentionQuery();
   const [shortcutTooltip, setShortcutTooltip] = useState<{ x: number; y: number } | null>(null);
   const [pendingMessageId, setPendingMessageId] = useState<Id<"pending_messages"> | null>(null);
   const [sentAt, setSentAt] = useState<number | null>(null);
@@ -5958,8 +5967,20 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
     setSessionHasQueuedMessages(conversationId, queuedMessages.length > 0);
     return () => setSessionHasQueuedMessages(conversationId, false);
   }, [conversationId, queuedMessages.length, setSessionHasQueuedMessages]);
-  const hasContent = message.trim().length > 0 || pastedImages.length > 0 || queuedMessages.length > 0;
-  const isExpanded = !!onSendAndAdvance || isFocused || message.length > 0 || pastedImages.length > 0 || queuedMessages.length > 0;
+  const hasContent = (composeMode ? composeHasContent : message.trim().length > 0) || pastedImages.length > 0 || queuedMessages.length > 0;
+  const isExpanded = composeMode || !!onSendAndAdvance || isFocused || message.length > 0 || pastedImages.length > 0 || queuedMessages.length > 0;
+
+  const toggleCompose = useCallback(() => {
+    if (composeMode) {
+      const md = composeRef.current?.getMarkdown() || "";
+      setMessage(md);
+      setComposeMode(false);
+      setComposeHasContent(false);
+      requestAnimationFrame(() => textareaRef.current?.focus());
+    } else {
+      setComposeMode(true);
+    }
+  }, [composeMode, setMessage]);
 
   const resetTextareaHeight = () => {
     if (textareaRef.current) {
@@ -6059,6 +6080,10 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setAcTrigger(null);
+    // In compose mode, read content from the TipTap editor
+    const message = composeMode && composeRef.current
+      ? composeRef.current.getMarkdown()
+      : messageRef.current;
     if (onGateSend) {
       const text = message.trim();
       if (!text) return;
@@ -6170,6 +6195,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
     setSelectedQueueIndex(null);
     clearAllImages();
     useInboxStore.getState().clearDraftFinal(targetConvId);
+    if (composeMode) { composeRef.current?.clear(); setComposeMode(false); setComposeHasContent(false); }
     sendingRef.current = false;
     requestAnimationFrame(() => textareaRef.current?.focus());
     onMessageSent?.();
@@ -6415,6 +6441,11 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
           escapeTimerRef.current = setTimeout(() => { escapeTimerRef.current = null; onSendEscape?.(); }, 250);
         }
       }
+      return;
+    }
+    if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "e") {
+      e.preventDefault();
+      toggleCompose();
       return;
     }
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
@@ -6742,7 +6773,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
             );
           })()}
           <form onSubmit={handleSubmit} className={`mx-auto px-2 sm:px-4 transition-all duration-200 ease-out ${isExpanded ? "max-w-4xl" : "max-w-md"}`}>
-            <div className={`flex flex-col border px-4 py-2 shadow-lg transition-all duration-200 ${isExpanded ? "rounded-2xl" : "rounded-full"} bg-sol-bg-alt ${isSelectionActive ? "border-sol-cyan/40 ring-1 ring-sol-cyan/20" : "border-sol-border"}`}>
+            <div className={`flex flex-col border px-4 py-2 shadow-lg transition-all duration-300 ${isExpanded ? "rounded-2xl" : "rounded-full"} ${composeMode ? "min-h-[40vh]" : ""} bg-sol-bg-alt ${isSelectionActive ? "border-sol-cyan/40 ring-1 ring-sol-cyan/20" : composeMode ? "border-sol-cyan/20" : "border-sol-border"}`}>
               {isSelectionActive && (
                 <div className="flex items-center gap-2 pb-1.5 mb-1.5 border-b border-sol-cyan/20 text-[10px] text-sol-cyan">
                   <span className="font-medium">Rewriting message</span>
@@ -6833,41 +6864,90 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
                   )}
                 </div>
               )}
-              <div className="flex items-end gap-2">
-                <textarea
-                  ref={textareaRef}
-                  data-chat-input
-                  data-draft-conv={conversationId}
-                  value={message}
-                  onChange={(e) => handleMessageChange(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  onPaste={handlePaste}
-                  onFocus={() => setIsFocused(true)}
-                  onBlur={() => { setIsFocused(false); setAcTrigger(null); }}
-                  disabled={isWaitingForUpload}
-                  placeholder={onGateSend ? "Send a message to continue the workflow..." : onWorkflowLaunch ? "Goal override (optional) — press send to run workflow..." : agentStatus === "permission_blocked" ? ((pendingPermissionsCount ?? 0) > 0 ? "Approve or deny permission to continue..." : hasAskUserQuestion ? "Answer the question to continue..." : "Send a message...") : "Send a message..."}
-                  rows={1}
-                  className={`flex-1 bg-transparent text-sm placeholder:text-sol-text-dim focus:outline-none disabled:opacity-50 resize-none overflow-hidden leading-relaxed py-1 ${isSelectionActive && !isSelectionEditedRef.current ? "text-sol-text-dim italic" : "text-sol-text"}`}
-                />
-                <div ref={sendRef} className="shrink-0">
-                  <button
-                    type="submit"
-                    disabled={!canSubmit}
-                    className={`w-8 h-8 rounded-full transition-colors flex items-center justify-center border ${!canSubmit ? "border-sol-border/30 text-sol-text-dim/25 cursor-not-allowed" : "border-sol-blue/50 bg-sol-blue/20 text-sol-blue hover:bg-sol-blue/30 hover:border-sol-blue hover:text-sol-blue"}`}
-                  >
-                    {isWaitingForUpload ? (
-                      <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                      </svg>
-                    ) : (
-                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 19V5M5 12l7-7 7 7" />
-                      </svg>
-                    )}
-                  </button>
+              {composeMode ? (
+                <div className="flex flex-col flex-1 min-h-0">
+                  <div className="flex-1 min-h-0 overflow-y-auto">
+                    <ComposeEditor
+                      ref={composeRef}
+                      initialContent={message}
+                      onMentionQuery={composeMentionQuery}
+                      onImagePaste={uploadImage}
+                      onSubmit={() => handleSubmit({ preventDefault: () => {} } as any)}
+                      onExit={toggleCompose}
+                      onContentChange={setComposeHasContent}
+                      placeholder="Compose your message... / for commands, @ to mention"
+                    />
+                  </div>
+                  <div className="flex items-center justify-between pt-2 mt-1 border-t border-sol-border/20">
+                    <span className="text-[10px] text-sol-text-dim/50 select-none">
+                      {navigator.platform?.includes("Mac") ? "Cmd" : "Ctrl"}+Enter send &middot; Esc collapse
+                    </span>
+                    <div ref={sendRef} className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={toggleCompose}
+                        className="w-7 h-7 rounded-full transition-colors flex items-center justify-center text-sol-text-dim hover:text-sol-text hover:bg-sol-bg/50"
+                        title="Collapse editor (Cmd+Shift+E)"
+                      >
+                        <Minimize2 className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={!canSubmit}
+                        className={`w-8 h-8 rounded-full transition-colors flex items-center justify-center border ${!canSubmit ? "border-sol-border/30 text-sol-text-dim/25 cursor-not-allowed" : "border-sol-blue/50 bg-sol-blue/20 text-sol-blue hover:bg-sol-blue/30 hover:border-sol-blue hover:text-sol-blue"}`}
+                      >
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M12 19V5M5 12l7-7 7 7" />
+                        </svg>
+                      </button>
+                    </div>
+                  </div>
                 </div>
-              </div>
+              ) : (
+                <div className="flex items-end gap-2">
+                  <textarea
+                    ref={textareaRef}
+                    data-chat-input
+                    data-draft-conv={conversationId}
+                    value={message}
+                    onChange={(e) => handleMessageChange(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    onPaste={handlePaste}
+                    onFocus={() => setIsFocused(true)}
+                    onBlur={() => { setIsFocused(false); setAcTrigger(null); }}
+                    disabled={isWaitingForUpload}
+                    placeholder={onGateSend ? "Send a message to continue the workflow..." : onWorkflowLaunch ? "Goal override (optional) — press send to run workflow..." : agentStatus === "permission_blocked" ? ((pendingPermissionsCount ?? 0) > 0 ? "Approve or deny permission to continue..." : hasAskUserQuestion ? "Answer the question to continue..." : "Send a message...") : "Send a message..."}
+                    rows={1}
+                    className={`flex-1 bg-transparent text-sm placeholder:text-sol-text-dim focus:outline-none disabled:opacity-50 resize-none overflow-hidden leading-relaxed py-1 ${isSelectionActive && !isSelectionEditedRef.current ? "text-sol-text-dim italic" : "text-sol-text"}`}
+                  />
+                  <div ref={sendRef} className="shrink-0 flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={toggleCompose}
+                      className="w-7 h-7 rounded-full transition-colors flex items-center justify-center text-sol-text-dim/40 hover:text-sol-text-dim hover:bg-sol-bg/50"
+                      title="Expand editor (Cmd+Shift+E)"
+                    >
+                      <Maximize2 className="w-3 h-3" />
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={!canSubmit}
+                      className={`w-8 h-8 rounded-full transition-colors flex items-center justify-center border ${!canSubmit ? "border-sol-border/30 text-sol-text-dim/25 cursor-not-allowed" : "border-sol-blue/50 bg-sol-blue/20 text-sol-blue hover:bg-sol-blue/30 hover:border-sol-blue hover:text-sol-blue"}`}
+                    >
+                      {isWaitingForUpload ? (
+                        <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                        </svg>
+                      ) : (
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M12 19V5M5 12l7-7 7 7" />
+                        </svg>
+                      )}
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           </form>
         </div>
@@ -7619,7 +7699,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     for (const item of timeline) {
       if (item.type === 'message') localIds.add((item.data as Message)._id);
     }
-    for (let i = serverUserMessages.length - 1; i >= 0; i--) {
+    for (let i = 0; i < serverUserMessages.length; i++) {
       const msg = serverUserMessages[i];
       if (!localIds.has(msg._id) && processedServerMsgIds.has(msg._id)) {
         return { id: msg._id, content: msg.content };
@@ -8089,8 +8169,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   }, [isOwner, forkSelectionIdx, toggleTreePanel, conversation?.fork_children, conversation?.forked_from]));
 
   useShortcutAction('conv.copyLink', useCallback(() => {
-    copyToClipboard(window.location.href).then(() => toast.success("Link copied!"));
-  }, []));
+    const url = `${window.location.origin}/conversation/${conversation?._id}`;
+    copyToClipboard(url).then(() => toast.success("Link copied!"));
+  }, [conversation?._id]));
 
   useMountEffect(() => {
     const el = headerRef.current;
