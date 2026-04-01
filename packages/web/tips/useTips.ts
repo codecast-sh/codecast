@@ -135,10 +135,18 @@ export function resetGracePeriod() {
 
 export function checkMilestone(tipId: string) {
   const state = useInboxStore.getState();
+  if (!state.clientStateInitialized) {
+    const unsub = useInboxStore.subscribe((s) => {
+      if (s.clientStateInitialized) {
+        unsub();
+        checkMilestone(tipId);
+      }
+    });
+    return;
+  }
   const tips = state.clientState.tips;
   if (tips?.level === 'none') return;
   if (tips?.seen?.includes(tipId)) return;
-  if (!state.clientStateInitialized) return;
   const tip = getTip(tipId);
   if (!tip) return;
   const seen = [...(tips?.seen ?? []), tipId];
