@@ -112,12 +112,6 @@ function handleDeepLink(url) {
 }
 
 function getAutoZoomFactor() {
-  const display = mainWindow
-    ? screen.getDisplayMatching(mainWindow.getBounds())
-    : screen.getPrimaryDisplay();
-  const dipWidth = display.workAreaSize.width;
-  if (dipWidth >= 2800) return 1.5;
-  if (dipWidth >= 2400) return 1.25;
   return 1.0;
 }
 

@@ -74,7 +74,7 @@ export function ConversationDiffLayout({
   onBack,
   subHeaderContent,
 }: ConversationDiffLayoutProps) {
-  const heightClass = embedded ? "h-full" : "h-screen";
+  const heightClass = "h-full";
   const [isMobile, setIsMobile] = useState(false);
   const layoutPref = useInboxStore(s => s.clientState.layouts?.conversation_diff ?? DEFAULT_DIFF_LAYOUT);
   const updateLayout = useInboxStore(s => s.updateClientLayout);
