@@ -1,14 +1,8 @@
 import { useRef } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
-import { InboxSession } from "../store/inboxStore";
+import { InboxSession, getProjectName } from "../store/inboxStore";
 import { cleanTitle } from "../lib/conversationProcessor";
 import { LivenessDot, sessionLivenessState } from "./LivenessDot";
-
-function getProjectName(gitRoot?: string, projectPath?: string): string {
-  const path = gitRoot || projectPath;
-  if (!path) return "unknown";
-  return path.split("/").filter(Boolean).pop() || "unknown";
-}
 
 function StatusDot({ session }: { session: InboxSession }) {
   return <LivenessDot state={sessionLivenessState(session)} />;

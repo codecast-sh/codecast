@@ -71,7 +71,7 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
   const openNewSession = useInboxStore((state) => state.openNewSession);
   const newSessionOpen = useInboxStore((state) => state.newSession.isOpen);
   const closeNewSession = useInboxStore((state) => state.closeNewSession);
-  const currentConvContext = useInboxStore((s) => s.currentConversation);
+
   const [desktopClass, setDesktopClass] = useState("");
   const [isDesktopApp, setIsDesktopApp] = useState(false);
   const [zoomHeight, setZoomHeight] = useState("100vh");
@@ -198,16 +198,24 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
 
   const resolveNewSessionContext = useCallback(() => {
     const store = useInboxStore.getState();
+    const ctx = store.currentConversation;
     if (directoryFilter) {
-      return { path: directoryFilter, gitRoot: currentConvContext.gitRoot || directoryFilter, agentType: currentConvContext.agentType };
+      return { path: directoryFilter, gitRoot: ctx.gitRoot || directoryFilter, agentType: ctx.agentType };
     }
+    // Clone parameters from the currently viewed session
+    if (ctx.projectPath) {
+      return { path: ctx.projectPath, gitRoot: ctx.gitRoot || ctx.projectPath, agentType: ctx.agentType };
+    }
+    // Fallback: look up the inbox-selected session directly
     const liveId = (store.sidePanelOpen && store.sidePanelSessionId) || store.currentSessionId;
-    const liveSess = liveId ? (store.sessions[liveId] ?? store.dismissedSessions[liveId]) : null;
+    const liveSess = liveId
+      ? (store.sessions[liveId] ?? store.dismissedSessions[liveId] ?? store.conversations[liveId])
+      : null;
     if (liveSess?.project_path) {
       return { path: liveSess.project_path, gitRoot: liveSess.git_root || liveSess.project_path, agentType: liveSess.agent_type };
     }
-    return { path: currentConvContext.projectPath || currentConvContext.gitRoot, gitRoot: currentConvContext.gitRoot || currentConvContext.projectPath, agentType: currentConvContext.agentType };
-  }, [directoryFilter, currentConvContext]);
+    return { path: ctx.gitRoot, gitRoot: ctx.gitRoot, agentType: ctx.agentType };
+  }, [directoryFilter]);
 
   const handleQuickCreate = useCallback(() => {
     const store = useInboxStore.getState();
@@ -442,10 +450,11 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
             )}
             <button
               onClick={(e) => {
-                if (resolveNewSessionContext().path) {
+                const ctx = resolveNewSessionContext();
+                if (ctx.path) {
                   handleQuickCreate();
                 } else {
-                  openNewSession({});
+                  openNewSession({ projectPath: ctx.path, gitRoot: ctx.gitRoot, agentType: ctx.agentType });
                 }
                 tipActions.whisper('session.create', e);
               }}

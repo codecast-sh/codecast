@@ -1,5 +1,5 @@
 import { useRef, useCallback, useState } from "react";
-import { useInboxStore, InboxSession } from "../store/inboxStore";
+import { useInboxStore, InboxSession, getProjectName } from "../store/inboxStore";
 import { useEventListener } from "./useEventListener";
 import { usePathname } from "next/navigation";
 import { isInboxSessionView } from "../lib/inboxRouting";
@@ -31,15 +31,17 @@ export function useSessionSwitcher() {
   const peekTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const getMruSessions = useCallback((): InboxSession[] => {
-    const { sessions, mruStack, sortedSessions } = useInboxStore.getState();
+    const { sessions, mruStack, sortedSessions, activeProjectFilter } = useInboxStore.getState();
+    const matchesFilter = (s: InboxSession) =>
+      !activeProjectFilter || getProjectName(s.git_root, s.project_path) === activeProjectFilter;
     const ordered: InboxSession[] = [];
     const seen = new Set<string>();
     for (const id of mruStack) {
       const s = sessions[id];
-      if (s) { ordered.push(s); seen.add(id); }
+      if (s && matchesFilter(s)) { ordered.push(s); seen.add(id); }
     }
     for (const s of sortedSessions()) {
-      if (!seen.has(s._id)) ordered.push(s);
+      if (!seen.has(s._id) && matchesFilter(s)) ordered.push(s);
     }
     return ordered;
   }, []);

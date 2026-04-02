@@ -4,7 +4,7 @@ import { useCallback } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useMutation } from "convex/react";
 import { api as _typedApi } from "@codecast/convex/convex/_generated/api";
-import { useInboxStore, isConvexId, isSessionWaitingForInput } from "../store/inboxStore";
+import { useInboxStore, isConvexId, isSessionWaitingForInput, getProjectName } from "../store/inboxStore";
 import { isInboxSessionView } from "../lib/inboxRouting";
 import { useShortcutAction } from "./ShortcutProvider";
 import { performUndo, performRedo } from "../store/undoStack";
@@ -47,8 +47,13 @@ export function useGlobalShortcutActions() {
 
   useShortcutAction('session.jumpIdle', useCallback(() => {
     const store = useInboxStore.getState();
+    const filter = store.activeProjectFilter;
     const sorted = store.sortedSessions();
-    const first = sorted.find(s => isSessionWaitingForInput(s));
+    const first = sorted.find(s => {
+      if (!isSessionWaitingForInput(s)) return false;
+      if (filter && getProjectName(s.git_root, s.project_path) !== filter) return false;
+      return true;
+    });
     if (!first) return;
     if (isOnInboxPage) store.setCurrentSession(first._id);
     else store.selectPanelSession(first._id);
@@ -56,8 +61,13 @@ export function useGlobalShortcutActions() {
 
   useShortcutAction('session.jumpPinned', useCallback(() => {
     const store = useInboxStore.getState();
+    const filter = store.activeProjectFilter;
     const sorted = store.sortedSessions();
-    const first = sorted.find(s => s.is_pinned);
+    const first = sorted.find(s => {
+      if (!s.is_pinned) return false;
+      if (filter && getProjectName(s.git_root, s.project_path) !== filter) return false;
+      return true;
+    });
     if (!first) return;
     if (isOnInboxPage) store.setCurrentSession(first._id);
     else store.selectPanelSession(first._id);

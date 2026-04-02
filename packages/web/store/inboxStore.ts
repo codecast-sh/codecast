@@ -18,6 +18,12 @@ export function isConvexId(id: string): boolean {
   return CONVEX_ID_RE.test(id);
 }
 
+export function getProjectName(gitRoot?: string, projectPath?: string): string {
+  const path = gitRoot || projectPath;
+  if (!path) return "unknown";
+  return path.split("/").filter(Boolean).pop() || "unknown";
+}
+
 // -- Types --
 
 export type PlanRef = {
@@ -397,12 +403,14 @@ export function categorizeSessions(
 export function visualOrderSessions(
   sessions: Record<string, InboxSession>,
   sessionsWithQueuedMessages: Set<string>,
+  projectFilter?: string | null,
 ): InboxSession[] {
-  const { pinned, newSessions, needsInput, working, subsByParent } =
+  const { pinned, newSessions, needsInput, working } =
     categorizeSessions(sessions, sessionsWithQueuedMessages);
   const result: InboxSession[] = [];
   for (const section of [pinned, newSessions, needsInput, working]) {
     for (const s of section) {
+      if (projectFilter && getProjectName(s.git_root, s.project_path) !== projectFilter) continue;
       result.push(s);
     }
   }
@@ -556,7 +564,8 @@ interface InboxStoreState {
 
   // -- Active project scope (non-persisted, resets on reload) --
   activeProjectPath: string | null;
-  setActiveProjectPath: (path: string | null) => void;
+  activeProjectFilter: string | null;
+  setActiveProjectFilter: (name: string | null, path?: string | null) => void;
 
   // -- Sidebar nav expanded sections --
   sidebarNavExpanded: Record<string, boolean>;
@@ -869,7 +878,11 @@ export const useInboxStore = create<InboxStoreState>(
   recentProjects: [],
   setRecentProjects: (projects: Array<{ path: string; count: number; lastActive: number }>) => set({ recentProjects: projects }),
   activeProjectPath: null,
-  setActiveProjectPath: (path: string | null) => set({ activeProjectPath: path }),
+  activeProjectFilter: null,
+  setActiveProjectFilter: sync(function (this: Draft, name: string | null, path?: string | null) {
+    this.activeProjectFilter = name;
+    this.activeProjectPath = path ?? null;
+  }),
 
   // =====================
   // ACTIONS (wrapped by middleware: mutative draft + server dispatch)
@@ -886,7 +899,7 @@ export const useInboxStore = create<InboxStoreState>(
     let newSessionId = this.currentSessionId;
     if (this.currentSessionId && allIds.includes(this.currentSessionId)) {
       const removedSet = new Set(allIds);
-      const ordered = visualOrderSessions(this.sessions as Record<string, InboxSession>, this.sessionsWithQueuedMessages);
+      const ordered = visualOrderSessions(this.sessions as Record<string, InboxSession>, this.sessionsWithQueuedMessages, this.activeProjectFilter);
       const idx = ordered.findIndex(s => s._id === this.currentSessionId);
       const next = ordered.slice(idx + 1).find(s => !removedSet.has(s._id))
         ?? ordered.find(s => !removedSet.has(s._id));
@@ -1171,7 +1184,7 @@ export const useInboxStore = create<InboxStoreState>(
   },
 
   visualOrder: () => {
-    return visualOrderSessions(get().sessions, get().sessionsWithQueuedMessages);
+    return visualOrderSessions(get().sessions, get().sessionsWithQueuedMessages, get().activeProjectFilter);
   },
 
   // =====================
@@ -1181,7 +1194,11 @@ export const useInboxStore = create<InboxStoreState>(
   advanceToNext: () => {
     const sorted = get().sortedSessions();
     const currentId = get().currentSessionId;
-    const idleSessions = sorted.filter((s: InboxSession) => isSessionWaitingForInput(s));
+    const filter = get().activeProjectFilter;
+    const idleSessions = sorted.filter((s: InboxSession) =>
+      isSessionWaitingForInput(s) &&
+      (!filter || getProjectName(s.git_root, s.project_path) === filter)
+    );
     const currentIdleIdx = idleSessions.findIndex((s: InboxSession) => s._id === currentId);
     const nextIdle = idleSessions[currentIdleIdx + 1] || idleSessions[0];
     if (nextIdle && nextIdle._id !== currentId) {
@@ -1296,7 +1313,7 @@ export const useInboxStore = create<InboxStoreState>(
   markKilling: action(function (this: Draft, id: string) {
     let newSessionId = this.currentSessionId;
     if (this.currentSessionId === id) {
-      const ordered = visualOrderSessions(this.sessions as Record<string, InboxSession>, this.sessionsWithQueuedMessages);
+      const ordered = visualOrderSessions(this.sessions as Record<string, InboxSession>, this.sessionsWithQueuedMessages, this.activeProjectFilter);
       const idx = ordered.findIndex(s => s._id === id);
       const next = ordered.slice(idx + 1).find(s => s._id !== id)
         ?? ordered.find(s => s._id !== id);
