@@ -134,6 +134,10 @@ export class SyncService {
   }
 
   async uploadImage(base64Data: string, mediaType: string): Promise<string | null> {
+    if (!base64Data) {
+      console.warn("[SyncService] uploadImage called with no data");
+      return null;
+    }
     try {
       const uploadUrl = await this.client.mutation(
         "images:generateUploadUrl" as any,
@@ -141,6 +145,7 @@ export class SyncService {
       );
       const binaryData = Buffer.from(base64Data, "base64");
       if (binaryData.length > MAX_IMAGE_SIZE) {
+        console.warn(`[SyncService] Image too large: ${binaryData.length} bytes > ${MAX_IMAGE_SIZE}`);
         return null;
       }
       const response = await fetch(uploadUrl, {
@@ -149,11 +154,13 @@ export class SyncService {
         body: binaryData,
       });
       if (!response.ok) {
+        console.warn(`[SyncService] Image upload failed: HTTP ${response.status}`);
         return null;
       }
       const result = await response.json();
       return result.storageId;
-    } catch {
+    } catch (err) {
+      console.warn(`[SyncService] Image upload error: ${err instanceof Error ? err.message : String(err)}`);
       return null;
     }
   }
@@ -465,10 +472,12 @@ export class SyncService {
           const storageId = await this.uploadImage(img.data, img.mediaType);
           if (storageId) {
             images.push({ media_type: img.mediaType, storage_id: storageId, tool_use_id: img.toolUseId });
-          } else {
+          } else if (img.data) {
             const dataBytes = Buffer.from(img.data, "base64").length;
             if (dataBytes <= MAX_INLINE_IMAGE_SIZE) {
               images.push({ media_type: img.mediaType, data: img.data, tool_use_id: img.toolUseId });
+            } else {
+              console.warn(`[SyncService] Image dropped: upload failed and too large for inline (${dataBytes} bytes)`);
             }
           }
         }
