@@ -2696,8 +2696,6 @@ async function processSessionFile(
         return;
   }
 
-  const bytesToRead = stats.size - lastPosition;
-
   let fd;
   try {
     fd = fs.openSync(filePath, "r");
@@ -2705,7 +2703,17 @@ async function processSessionFile(
     fs.readSync(fd, buffer, 0, buffer.length, lastPosition);
     fs.closeSync(fd);
 
-    const newContent = buffer.toString("utf-8");
+    const rawContent = buffer.toString("utf-8");
+    // Only process complete lines — a trailing partial line (no newline at end)
+    // may be a large JSONL entry (e.g. screenshot) still being written.
+    // By not advancing the position past incomplete data, we re-read it next poll.
+    const lastNewline = rawContent.lastIndexOf("\n");
+    const newContent = lastNewline >= 0 ? rawContent.slice(0, lastNewline + 1) : "";
+    const bytesConsumed = lastNewline >= 0 ? Buffer.byteLength(rawContent.slice(0, lastNewline + 1), "utf-8") : 0;
+    if (!newContent) {
+      // No complete lines yet — don't advance position
+      return;
+    }
     let messages = parseSessionFile(newContent);
 
     const bakPath = filePath + ".bak";
@@ -2733,7 +2741,7 @@ async function processSessionFile(
       } catch (err: any) {
         if (err.code === 'EACCES' || err.code === 'EPERM') {
           log(`Warning: Permission denied reading ${filePath} for title update. Skipping.`);
-          setPosition(filePath, stats.size);
+          setPosition(filePath, lastPosition + bytesConsumed);
           return;
         }
         throw err;
@@ -2785,7 +2793,7 @@ async function processSessionFile(
     }
 
   if (messages.length === 0) {
-    setPosition(filePath, stats.size);
+    setPosition(filePath, lastPosition + bytesConsumed);
     return;
   }
 
@@ -3022,7 +3030,7 @@ async function processSessionFile(
       if (err instanceof AuthExpiredError) {
         if (handleAuthFailure()) {
           log("⚠️  Authentication expired - sync paused");
-          setPosition(filePath, stats.size);
+          setPosition(filePath, lastPosition + bytesConsumed);
           return;
         }
         // Let it fall through to retry queue
@@ -3056,7 +3064,7 @@ async function processSessionFile(
       } catch (readErr: any) {
         if (readErr.code === 'EACCES' || readErr.code === 'EPERM') {
           log(`Warning: Permission denied reading ${filePath} for retry queue. Skipping.`);
-          setPosition(filePath, stats.size);
+          setPosition(filePath, lastPosition + bytesConsumed);
           return;
         }
         throw readErr;
@@ -3080,7 +3088,7 @@ async function processSessionFile(
         gitInfo,
       }, errMsg);
 
-      setPosition(filePath, stats.size);
+      setPosition(filePath, lastPosition + bytesConsumed);
       return;
     }
   }
@@ -3212,7 +3220,7 @@ async function processSessionFile(
     } catch (readErr: any) {
       if (readErr.code === 'EACCES' || readErr.code === 'EPERM') {
         log(`Warning: Permission denied reading ${filePath} for conversation recreation. Skipping.`);
-        setPosition(filePath, stats.size);
+        setPosition(filePath, lastPosition + bytesConsumed);
         return;
       }
       throw readErr;
@@ -3254,8 +3262,8 @@ async function processSessionFile(
     }
   }
 
-    setPosition(filePath, stats.size);
-    markSynced(filePath, stats.size, messages.length, conversationId);
+    setPosition(filePath, lastPosition + bytesConsumed);
+    markSynced(filePath, lastPosition + bytesConsumed, messages.length, conversationId);
     log(`Synced ${messages.length} messages for session ${sessionId}`);
     syncStats.messagesSynced += messages.length;
     syncStats.sessionsActive.add(sessionId);
@@ -3601,13 +3609,17 @@ async function processCursorTranscriptFile(
     fs.readSync(fd, buffer, 0, buffer.length, lastPosition);
     fs.closeSync(fd);
 
-    const newContent = buffer.toString("utf-8");
+    const rawContent = buffer.toString("utf-8");
+    const lastNewline = rawContent.lastIndexOf("\n");
+    const newContent = lastNewline >= 0 ? rawContent.slice(0, lastNewline + 1) : "";
+    const bytesConsumed = lastNewline >= 0 ? Buffer.byteLength(rawContent.slice(0, lastNewline + 1), "utf-8") : 0;
+    if (!newContent) return;
     const messages = parseCursorTranscriptFile(newContent);
 
     let conversationId = conversationCache[sessionId];
 
     if (messages.length === 0) {
-      setPosition(filePath, stats.size);
+      setPosition(filePath, lastPosition + bytesConsumed);
       return;
     }
 
@@ -3650,7 +3662,7 @@ async function processCursorTranscriptFile(
         if (err instanceof AuthExpiredError) {
           if (handleAuthFailure()) {
             log("⚠️  Authentication expired - sync paused");
-            setPosition(filePath, stats.size);
+            setPosition(filePath, lastPosition + bytesConsumed);
             return;
           }
         }
@@ -3688,7 +3700,7 @@ async function processCursorTranscriptFile(
           gitInfo,
         }, errMsg);
 
-        setPosition(filePath, stats.size);
+        setPosition(filePath, lastPosition + bytesConsumed);
         return;
       }
     }
@@ -3736,8 +3748,8 @@ async function processCursorTranscriptFile(
       }
     }
 
-    setPosition(filePath, stats.size);
-    markSynced(filePath, stats.size, messages.length, conversationId);
+    setPosition(filePath, lastPosition + bytesConsumed);
+    markSynced(filePath, lastPosition + bytesConsumed, messages.length, conversationId);
     log(`Synced ${messages.length} Cursor transcript messages for session ${sessionId}`);
     syncStats.messagesSynced += messages.length;
     syncStats.sessionsActive.add(sessionId);
@@ -3791,7 +3803,11 @@ async function processCodexSession(
     fs.readSync(fd, buffer, 0, buffer.length, lastPosition);
     fs.closeSync(fd);
 
-    const newContent = buffer.toString("utf-8");
+    const rawContent = buffer.toString("utf-8");
+    const lastNewline = rawContent.lastIndexOf("\n");
+    const newContent = lastNewline >= 0 ? rawContent.slice(0, lastNewline + 1) : "";
+    const bytesConsumed = lastNewline >= 0 ? Buffer.byteLength(rawContent.slice(0, lastNewline + 1), "utf-8") : 0;
+    if (!newContent) return;
     let sessionMetaHead: string;
     try {
       sessionMetaHead = readFileHead(filePath, 4096);
@@ -3803,8 +3819,8 @@ async function processCodexSession(
       throw err;
     }
     if (isAppServerManagedCodexSessionHead(sessionMetaHead)) {
-      setPosition(filePath, stats.size);
-      markSynced(filePath, stats.size, 0);
+      setPosition(filePath, lastPosition + bytesConsumed);
+      markSynced(filePath, lastPosition + bytesConsumed, 0);
       log(`Skipping app-server-managed Codex transcript ${sessionId}`);
       return;
     }
@@ -3819,7 +3835,7 @@ async function processCodexSession(
       } catch (err: any) {
         if (err.code === 'EACCES' || err.code === 'EPERM') {
           log(`Warning: Permission denied reading ${filePath} for title update. Skipping.`);
-          setPosition(filePath, stats.size);
+          setPosition(filePath, lastPosition + bytesConsumed);
           return;
         }
         throw err;
@@ -3839,7 +3855,7 @@ async function processCodexSession(
     }
 
     if (messages.length === 0) {
-      setPosition(filePath, stats.size);
+      setPosition(filePath, lastPosition + bytesConsumed);
       return;
     }
 
@@ -3932,7 +3948,7 @@ async function processCodexSession(
         if (err instanceof AuthExpiredError) {
           if (handleAuthFailure()) {
             log("⚠️  Authentication expired - sync paused");
-            setPosition(filePath, stats.size);
+            setPosition(filePath, lastPosition + bytesConsumed);
             return;
           }
           // Let it fall through to retry queue
@@ -3973,7 +3989,7 @@ async function processCodexSession(
           startedAt: firstMsgTimestamp,
         }, errMsg);
 
-        setPosition(filePath, stats.size);
+        setPosition(filePath, lastPosition + bytesConsumed);
         return;
       }
     }
@@ -4015,8 +4031,8 @@ async function processCodexSession(
       }
     }
 
-    setPosition(filePath, stats.size);
-    markSynced(filePath, stats.size, messages.length, conversationId);
+    setPosition(filePath, lastPosition + bytesConsumed);
+    markSynced(filePath, lastPosition + bytesConsumed, messages.length, conversationId);
     log(`Synced ${messages.length} Codex messages for session ${sessionId}`);
     syncStats.messagesSynced += messages.length;
     syncStats.sessionsActive.add(sessionId);
