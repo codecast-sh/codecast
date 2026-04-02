@@ -1453,6 +1453,13 @@ export default defineSchema({
       tmux_missing: v.optional(v.number()),
     })),
 
+    tips: v.optional(v.object({
+      seen: v.optional(v.array(v.string())),
+      dismissed: v.optional(v.array(v.string())),
+      completed: v.optional(v.array(v.string())),
+      level: v.optional(v.union(v.literal("all"), v.literal("subtle"), v.literal("none"))),
+    })),
+
     drafts: v.optional(v.any()),
 
     // deprecated: kept for backward compat during migration
