@@ -133,7 +133,11 @@ function NavDropdown({
   useEffect(() => {
     if (mounted) {
       requestAnimationFrame(() => {
-        currentItemRef.current?.scrollIntoView({ block: "center" });
+        if (currentItemRef.current) {
+          currentItemRef.current.scrollIntoView({ block: "center" });
+        } else if (scrollRef.current) {
+          scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+        }
       });
     }
   }, [mounted]);
@@ -446,6 +450,7 @@ export function MessageNavButton({
           commentCount: commentsByMessage.get(m._id) || 0,
         }))
         .filter((m: PM) => m.display.length > 0 && !isSystemMessage(m.display))
+        .reverse()
     : [];
 
   const total = processed.length;
