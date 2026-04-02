@@ -57,15 +57,24 @@ export const getImageUrls = query({
 });
 
 export const debugMessagesWithImages = query({
-  args: {},
-  handler: async (ctx) => {
-    const messages = await ctx.db.query("messages").order("desc").take(2000);
+  args: {
+    conversation_id: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    let messages;
+    if (args.conversation_id) {
+      messages = await ctx.db.query("messages")
+        .withIndex("by_conversation_timestamp", (q) =>
+          q.eq("conversation_id", args.conversation_id as Id<"conversations">)
+        )
+        .collect();
+    } else {
+      messages = await ctx.db.query("messages").order("desc").take(2000);
+    }
     const withImages = messages.filter(m => m.images && m.images.length > 0);
-    const hasImagesField = messages.filter(m => m.images !== undefined);
     return {
       totalChecked: messages.length,
       withImages: withImages.length,
-      hasImagesField: hasImagesField.length,
       samples: withImages.slice(0, 5).map(m => ({
         id: m._id,
         imagesCount: m.images?.length,
@@ -73,8 +82,11 @@ export const debugMessagesWithImages = query({
           hasStorageId: !!i.storage_id,
           hasData: !!i.data,
           mediaType: i.media_type,
+          toolUseId: i.tool_use_id || null,
         })),
-      }))
+        role: m.role,
+        conversationId: m.conversation_id,
+      })),
     };
   },
 });
