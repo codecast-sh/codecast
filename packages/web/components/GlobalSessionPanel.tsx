@@ -6,7 +6,7 @@ import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { ConversationDiffLayout } from "./ConversationDiffLayout";
 import { ConversationData } from "./ConversationView";
 import { useConversationMessages } from "../hooks/useConversationMessages";
-import { useInboxStore, InboxSession, getSessionRenderKey, isConvexId, categorizeSessions, isInterruptControlMessage } from "../store/inboxStore";
+import { useInboxStore, InboxSession, getSessionRenderKey, isConvexId, categorizeSessions, isInterruptControlMessage, getProjectName } from "../store/inboxStore";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "./ui/tooltip";
 import { cleanTitle } from "../lib/conversationProcessor";
 import { SharePopover } from "./SharePopover";
@@ -54,11 +54,7 @@ export function formatIdleDuration(updatedAt: number): string {
   return `${Math.floor(hours / 24)}d`;
 }
 
-export function getProjectName(gitRoot?: string, projectPath?: string): string {
-  const path = gitRoot || projectPath;
-  if (!path) return "unknown";
-  return path.split("/").filter(Boolean).pop() || "unknown";
-}
+export { getProjectName } from "../store/inboxStore";
 
 // -- InboxConversation (shared) --
 
@@ -396,7 +392,7 @@ export function SessionCard({
                 </span>
               )}
               {session.is_idle && !session.session_error && !session.is_unresponsive && !session.has_pending && session.message_count > 0 && (
-                <span className="w-1.5 h-1.5 rounded-full bg-gray-500/40 ring-1 ring-gray-500/20" title="Session ended" />
+                <span className="w-1.5 h-1.5 rounded-full bg-gray-500/40 ring-1 ring-gray-500/20" title="Session idle" />
               )}
               {session.message_count > 0 && (
                 <span className="text-[9px] text-gray-500 tabular-nums">{session.message_count}</span>
@@ -564,7 +560,7 @@ export function SessionCard({
               <span className="w-1.5 h-1.5 rounded-full bg-sol-yellow animate-pulse" title="Message pending" />
             )}
             {!isWorking && !isDismissed && session.is_idle && !session.is_connected && !session.session_error && !session.is_unresponsive && !session.has_pending && session.message_count > 0 && (
-              <span className="w-1.5 h-1.5 rounded-full bg-sol-text-dim/40 ring-1 ring-sol-text-dim/20" title="Session ended" />
+              <span className="w-1.5 h-1.5 rounded-full bg-sol-text-dim/40 ring-1 ring-sol-text-dim/20" title="Session idle" />
             )}
             {isWorking && (
               <span className="relative flex h-2 w-2" title="Working">
@@ -825,8 +821,8 @@ export function SessionListPanel({
     [sessions, sessionsWithQueuedMessages],
   );
 
-  const [projectFilter, setProjectFilter] = useState<string | null>(null);
-  const setActiveProjectPath = useInboxStore((s) => s.setActiveProjectPath);
+  const projectFilter = useInboxStore((s) => s.activeProjectFilter);
+  const setActiveProjectFilter = useInboxStore((s) => s.setActiveProjectFilter);
 
   const activeSessions = useMemo(() => [...pinned, ...newSessions, ...needsInput, ...working], [pinned, newSessions, needsInput, working]);
 
@@ -950,8 +946,7 @@ export function SessionListPanel({
                 key={name}
                 onClick={() => {
                   const next = projectFilter === name ? null : name;
-                  setProjectFilter(next);
-                  setActiveProjectPath(next ? (projectPathByName[next] || null) : null);
+                  setActiveProjectFilter(next, next ? (projectPathByName[next] || null) : null);
                 }}
                 className={`flex-shrink-0 px-2 py-0.5 rounded-full text-[10px] transition-all ${
                   projectFilter === name

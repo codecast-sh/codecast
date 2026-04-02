@@ -6589,27 +6589,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
                     Working
                   </span>
                 ) : isSessionDisconnected ? (
-                  sessionId && !isResuming ? (
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        if (isResuming) return;
-                        setIsResuming(true);
-                        try {
-                          await restartSessionMutation({ conversation_id: conversationId as Id<"conversations"> });
-                        } catch (err) {
-                          toast.error(err instanceof Error ? err.message : "Failed to restart session");
-                          setIsResuming(false);
-                        }
-                      }}
-                      className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-sol-text-dim/5 hover:bg-sol-text-dim/10 border border-sol-text-dim/20 text-sol-text-dim transition-colors"
-                    >
-                      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                      </svg>
-                      Session ended — send a message to restart
-                    </button>
-                  ) : isResuming ? (
+                  isResuming ? (
                     <span className="flex items-center gap-1.5 text-sol-text-dim">
                       <span className="w-2 h-2 rounded-full bg-sol-text-dim animate-pulse" />
                       Restarting...
@@ -6617,7 +6597,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
                   ) : (
                     <span className="flex items-center gap-1.5 text-sol-text-dim/50">
                       <span className="w-2 h-2 rounded-full bg-sol-text-dim/30" />
-                      Session disconnected
+                      Session idle
                     </span>
                   )
                 ) : optimisticSending ? (
