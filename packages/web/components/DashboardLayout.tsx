@@ -85,7 +85,8 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
 
   const recalcHeight = useCallback(() => {
     if (typeof window === 'undefined') return;
-    setZoomHeight(`${window.innerHeight}px`);
+    const z = zoomRef.current;
+    setZoomHeight(z === 1 ? '100vh' : `calc(100vh / ${z})`);
   }, []);
 
   const serverClientState = useQuery(api.client_state.get, {});
