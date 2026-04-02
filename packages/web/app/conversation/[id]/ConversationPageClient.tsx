@@ -232,7 +232,7 @@ function OwnerView({
   );
 }
 
-function SharedView({ id, highlightQuery, onClearHighlight }: { id: string; highlightQuery?: string; onClearHighlight: () => void }) {
+function SharedView({ id, highlightQuery, onClearHighlight, inApp }: { id: string; highlightQuery?: string; onClearHighlight: () => void; inApp?: boolean }) {
   const router = useRouter();
   const [isForking, setIsForking] = useState(false);
   const [commentsOpen, setCommentsOpen] = useState(false);
@@ -268,7 +268,7 @@ function SharedView({ id, highlightQuery, onClearHighlight }: { id: string; high
 
   const forkCount = conversation.fork_count ?? 0;
 
-  return (
+  const content = (
     <>
       {isSearchingForTarget && (
         <div className="fixed top-16 left-1/2 -translate-x-1/2 z-50 bg-sol-bg-alt border border-sol-border rounded-full px-4 py-2 shadow-lg flex items-center gap-2">
@@ -282,8 +282,8 @@ function SharedView({ id, highlightQuery, onClearHighlight }: { id: string; high
       <ConversationView
         conversation={conversation as ConversationData}
         commits={[]}
-        backHref="/"
-        backLabel="Home"
+        backHref={inApp ? "/inbox" : "/"}
+        backLabel={inApp ? "Inbox" : "Home"}
         showMessageInput={false}
         isOwner={false}
         hasMoreAbove={hasMoreAbove}
@@ -295,7 +295,7 @@ function SharedView({ id, highlightQuery, onClearHighlight }: { id: string; high
         headerExtra={
           <div className="flex items-center gap-2">
             <span className="text-[10px] text-sol-base00 px-2 py-1 bg-sol-base02 rounded">
-              Shared
+              {inApp ? "Team" : "Shared"}
             </span>
             {forkCount > 0 && (
               <span className="text-[10px] text-sol-base00 px-2 py-1 bg-sol-base02 rounded">
@@ -351,6 +351,8 @@ function SharedView({ id, highlightQuery, onClearHighlight }: { id: string; high
       )}
     </>
   );
+
+  return inApp ? <DashboardLayout>{content}</DashboardLayout> : content;
 }
 
 function DeniedView() {
@@ -469,7 +471,13 @@ export default function ConversationPage() {
     if (publicData === undefined) {
       return <ConversationLoadingSkeleton />;
     }
-    if (publicData.access_level === "shared" || publicData.access_level === "team" || publicData.access_level === "owner") {
+    if (publicData.access_level === "owner") {
+      return <OwnerView id={effectiveId} highlightQuery={highlightQuery} onClearHighlight={handleClearHighlight} targetMessageId={targetMessageId} isOwner={true} />;
+    }
+    if (publicData.access_level === "team") {
+      return <SharedView id={effectiveId} highlightQuery={highlightQuery} onClearHighlight={handleClearHighlight} inApp />;
+    }
+    if (publicData.access_level === "shared") {
       return <SharedView id={effectiveId} highlightQuery={highlightQuery} onClearHighlight={handleClearHighlight} />;
     }
     return <DeniedView />;
@@ -487,7 +495,15 @@ export default function ConversationPage() {
     return <DeniedView />;
   }
 
-  if (publicData.access_level === "shared" || publicData.access_level === "team" || publicData.access_level === "owner") {
+  if (publicData.access_level === "owner") {
+    return <OwnerView id={id} highlightQuery={highlightQuery} onClearHighlight={handleClearHighlight} targetMessageId={targetMessageId} isOwner={true} />;
+  }
+
+  if (publicData.access_level === "team") {
+    return <SharedView id={id} highlightQuery={highlightQuery} onClearHighlight={handleClearHighlight} inApp />;
+  }
+
+  if (publicData.access_level === "shared") {
     return <SharedView id={id} highlightQuery={highlightQuery} onClearHighlight={handleClearHighlight} />;
   }
 
