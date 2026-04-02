@@ -9107,7 +9107,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
   return (
     <ImageGalleryProvider>
-    <main className={`relative flex flex-col bg-sol-bg ${embedded ? "h-full" : "h-screen"}`} onDragEnter={handleDragEnter} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
+    <main className="relative flex flex-col bg-sol-bg h-full" onDragEnter={handleDragEnter} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
       {isDragging && (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-sol-bg/80 backdrop-blur-sm" style={{ animation: "fadeIn 150ms ease-out" }}>
           <div className="border-2 border-dashed border-sol-cyan rounded-xl p-12 text-center">
