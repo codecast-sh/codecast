@@ -417,12 +417,13 @@ A draft plan might just have a title and a goal. An active plan accumulates the 
 
 - **Goal + Acceptance Criteria**: What we're trying to achieve and how we know we're done. The briefing.
 - **Tasks**: Ordered, decomposed work items linked to the `tasks` table. The work breakdown.
-- **Progress Log**: Timestamped entries of what happened. The workpad (Symphony's "single persistent workpad" pattern). This is gold for debugging, handoffs, and continuation.
-- **Decision Log**: What was decided and why. Critical for preventing future agents from re-litigating settled questions.
-- **Discoveries**: Things learned during execution that weren't in the original plan. Surprises, findings, insights.
-- **Context Pointers**: Where to look for deeper information (file paths, PR links, doc references). Progressive disclosure.
+- **Comments Timeline**: A unified, chronological log of all plan activity. Each entry is typed:
+  - **progress** — what happened (the workpad). Gold for debugging, handoffs, and continuation.
+  - **decision** — what was decided and why. Prevents future agents from re-litigating settled questions.
+  - **discovery** — things learned during execution. Surprises, findings, insights.
+  - **reference** — where to look for deeper information (file paths, PR links, doc references). Progressive disclosure.
 
-These sections are not enforced at creation time. They accumulate naturally as agents and humans update the plan via CLI commands (`cast plan update --log`, `cast plan decide`, `cast plan discover`).
+These accumulate naturally as agents and humans add comments via `cast plan comment`.
 
 ### Decision 4: Every Entry Point Converges on Same State
 
@@ -472,7 +473,7 @@ Entry points:
 |    - Sets conversation.active_plan_id                        |
 |    - Injects plan context into agent via snippet mechanism   |
 |    - Agent can read full plan via cast plan show              |
-|    - Progress updates via cast plan update --log             |
+|    - Progress updates via cast plan comment                   |
 +-------------------------------------------------------------+
 
 +-------------------------------------------------------------+
@@ -655,12 +656,12 @@ cast plan show <plan_id> --log     # Just the progress log
 cast plan bind <plan_id>           # Bind session, inject context
 cast plan unbind                   # Unbind session
 
-# Update plan (append to structured logs)
-cast plan update <plan_id> --log "Completed auth module refactor"
+# Add comments (unified timeline)
+cast plan comment <plan_id> "Completed auth module refactor"
+cast plan comment <plan_id> "Use jose for JWT" -d -r "Stable, well-documented, in training set"
+cast plan comment <plan_id> "Rate limiting middleware already exists but isn't wired to auth routes" -f
+cast plan comment <plan_id> "Auth module" --ref "packages/api/src/auth/"
 cast plan update <plan_id> --goal "Updated goal text"
-cast plan decide <plan_id> "Use jose for JWT" --rationale "Stable, well-documented, in training set"
-cast plan discover <plan_id> "Rate limiting middleware already exists but isn't wired to auth routes"
-cast plan pointer <plan_id> "Auth module" "packages/api/src/auth/"
 
 # Status transitions
 cast plan activate <plan_id>       # draft -> active
@@ -701,10 +702,9 @@ When a session binds to a plan (via `cast plan bind`, `cast task start`, or orch
 
 1. **`conversation.active_plan_id`** set in Convex
 2. **`conversation.active_task_id`** set if starting a specific task
-3. **Plan context injected** into the agent's context via the existing snippet mechanism (the same way session insights are injected today). This includes: title, goal, acceptance criteria, task list with statuses, recent progress log entries, context pointers.
+3. **Plan context injected** into the agent's context via the existing snippet mechanism (the same way session insights are injected today). This includes: title, goal, acceptance criteria, task list with statuses, recent comments, references.
 4. **Agent can read full plan** via `cast plan show` at any time
-5. **Progress updates** via `cast plan update --log "..."` -- the agent calls this naturally as it works
-6. **Decision/discovery logging** via `cast plan decide` and `cast plan discover`
+5. **Comments** via `cast plan comment "..."` -- the agent calls this naturally as it works (progress, decisions with `-d`, discoveries with `-f`, references with `--ref`)
 7. **When session ends**, `plan.current_session_id` clears but the session is retained in `plan.session_ids`
 8. **Next session** can bind to same plan and pick up with full context from Convex
 
@@ -922,10 +922,10 @@ This is essentially Symphony but with Convex as the tracker instead of Linear. T
 1. Add `plans` table to Convex schema
 2. Add `plan_id` to `tasks` table
 3. Add `active_plan_id` and `active_task_id` to `conversations` table
-4. Convex mutations: `createPlan`, `updatePlan`, `updatePlanStatus`, `addPlanLogEntry`, `addPlanDecision`, `addPlanDiscovery`, `addPlanPointer`, `bindSessionToPlan`, `unbindSessionFromPlan`
+4. Convex mutations: `createPlan`, `updatePlan`, `updatePlanStatus`, `addComment`, `bindSessionToPlan`, `unbindSessionFromPlan`
 5. Convex queries: `getPlan`, `listPlans`, `getPlansByTeam`, `getPlansByProject`, `getPlanWithTasks`
 6. Progress auto-calculation: when task status changes, recalculate parent plan's progress
-7. CLI commands: `cast plan create`, `cast plan ls`, `cast plan show`, `cast plan bind`, `cast plan unbind`, `cast plan update --log`, `cast plan decide`, `cast plan discover`, `cast plan pointer`, `cast plan activate`, `cast plan pause`, `cast plan done`, `cast plan drop`, `cast plan promote`
+7. CLI commands: `cast plan create`, `cast plan ls`, `cast plan show`, `cast plan bind`, `cast plan unbind`, `cast plan comment`, `cast plan update`, `cast plan activate`, `cast plan pause`, `cast plan done`, `cast plan drop`, `cast plan promote`
 8. Enhanced `cast task create --plan` and `cast task start` (auto-binds to plan)
 9. Plan context injection into sessions on bind
 
