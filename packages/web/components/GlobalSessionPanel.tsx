@@ -19,6 +19,12 @@ import { formatShortcutLabel } from "../shortcuts";
 import { X, ChevronsLeft, ChevronsRight } from "lucide-react";
 import { TaskStatusBadge } from "./TaskStatusBadge";
 import { useTipActions, checkMilestone } from "../tips";
+import { TeamIcon, IconColorPicker, getSessionIconDefaults, type TeamIconName, type TeamColorName } from "./TeamIcon";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+} from "./ui/dropdown-menu";
 
 const NOISE_PREFIXES = ["[Request interrupted", "This session is being continued", "Your task is to create a detailed summary", "Please continue the conversation", "<task-notification>", "Implement the following plan"];
 
@@ -290,6 +296,21 @@ export function SessionCard({
   const isSlashCommand = displayTitle.startsWith("/");
   const cleanedUserMsg = cleanUserMessage(session.last_user_message);
 
+  const setConversationIcon = useMutation(api.conversations.setConversationIcon);
+  const iconDefaults = getSessionIconDefaults(session._id);
+  const effectiveIcon = (session.icon || iconDefaults.icon) as TeamIconName;
+  const effectiveColor = (session.icon_color || iconDefaults.color) as TeamColorName;
+
+  const handleIconChange = useCallback(async (icon: string) => {
+    try { await setConversationIcon({ conversation_id: session._id as Id<"conversations">, icon }); }
+    catch { toast.error("Failed to update icon"); }
+  }, [session._id, setConversationIcon]);
+
+  const handleColorChange = useCallback(async (color: string) => {
+    try { await setConversationIcon({ conversation_id: session._id as Id<"conversations">, icon_color: color }); }
+    catch { toast.error("Failed to update color"); }
+  }, [session._id, setConversationIcon]);
+
   const [isDragOver, setIsDragOver] = useState(false);
   const dragCounter = useRef(0);
   const generateUploadUrl = useMutation(api.images.generateUploadUrl);
@@ -366,10 +387,7 @@ export function SessionCard({
           className="w-full text-left cursor-pointer px-2 py-1"
         >
           <div className="flex items-center gap-1.5">
-            <svg className="w-3 h-3 text-violet-400/60 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M6 4v12h12" />
-              <path strokeLinecap="round" strokeLinejoin="round" d="M14 12l4 4-4 4" />
-            </svg>
+            <TeamIcon icon={effectiveIcon} color={effectiveColor} className="w-3 h-3 flex-shrink-0 opacity-50" />
             <span className={`truncate text-xs leading-tight flex-1 ${
               isActive ? "text-violet-300 font-medium" : "text-gray-400 font-normal"
             }`}>
@@ -481,10 +499,23 @@ export function SessionCard({
         onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(globalIndex); } }}
         className="w-full text-left cursor-pointer px-2.5 sm:px-3 py-1.5 sm:py-2"
       >
-        <div className={`truncate leading-tight ${
+        <div className={`flex items-center gap-1.5 leading-tight ${
           isActive ? "text-sm text-sol-text font-semibold" : isWorking ? "text-sm text-sol-text font-medium" : isDismissed ? "text-sm text-sol-text-muted" : "text-sm text-sol-text"
         }`}>
-          {isSlashCommand ? <span className="font-mono text-sol-cyan">{displayTitle}</span> : displayTitle}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                className="flex-shrink-0 rounded hover:bg-sol-bg-highlight/60 p-0.5 transition-colors"
+                onClick={(e) => { e.stopPropagation(); }}
+              >
+                <TeamIcon icon={effectiveIcon} color={effectiveColor} className="w-4 h-4" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-56 p-3">
+              <IconColorPicker currentIcon={effectiveIcon} currentColor={effectiveColor} onIconChange={handleIconChange} onColorChange={handleColorChange} />
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <span className="truncate">{isSlashCommand ? <span className="font-mono text-sol-cyan">{displayTitle}</span> : displayTitle}</span>
         </div>
         {(session.idle_summary || session.subtitle) && !session.implementation_session && (
           <div className="text-[11px] text-sol-text-muted mt-0.5 line-clamp-2 leading-snug whitespace-pre-line">

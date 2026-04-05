@@ -88,6 +88,8 @@ export type InboxSession = {
   workflow_run_status?: string | null;
   forked_from?: string | null;
   parent_message_uuid?: string | null;
+  icon?: string;
+  icon_color?: string;
 };
 
 export type Message = {

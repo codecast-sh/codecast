@@ -219,6 +219,8 @@ export default defineSchema({
     is_workflow_primary: v.optional(v.boolean()),
     available_skills: v.optional(v.string()),
     subagent_description: v.optional(v.string()),
+    icon: v.optional(v.string()),
+    icon_color: v.optional(v.string()),
   })
     .index("by_user_id", ["user_id"])
     .index("by_user_updated", ["user_id", "updated_at"])

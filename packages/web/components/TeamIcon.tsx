@@ -67,6 +67,18 @@ export const colorBgClassMap: Record<TeamColorName, string> = {
   orange: "bg-sol-orange",
 };
 
+export function getSessionIconDefaults(id: string): { icon: TeamIconName; color: TeamColorName } {
+  let hash = 0;
+  for (let i = 0; i < id.length; i++) {
+    hash = ((hash << 5) - hash) + id.charCodeAt(i);
+    hash |= 0;
+  }
+  return {
+    icon: TEAM_ICONS[Math.abs(hash) % TEAM_ICONS.length],
+    color: TEAM_COLORS[Math.abs(hash >> 8) % TEAM_COLORS.length],
+  };
+}
+
 interface TeamIconProps {
   icon?: string | null;
   color?: string | null;
@@ -81,4 +93,47 @@ export function TeamIcon({ icon, color, className }: TeamIconProps) {
     ? colorClassMap[color as TeamColorName]
     : "";
   return <IconComponent className={`${colorClass} ${className || ""}`} />;
+}
+
+export function IconColorPicker({
+  currentIcon,
+  currentColor,
+  onIconChange,
+  onColorChange,
+}: {
+  currentIcon: TeamIconName;
+  currentColor: TeamColorName;
+  onIconChange: (icon: string) => void;
+  onColorChange: (color: string) => void;
+}) {
+  return (
+    <div onClick={(e) => { e.preventDefault(); e.stopPropagation(); }}>
+      <div className="text-xs text-sol-text-dim mb-2">Icon</div>
+      <div className="flex flex-wrap gap-1 mb-3">
+        {TEAM_ICONS.map((icon) => (
+          <button
+            key={icon}
+            onClick={(e) => { e.preventDefault(); e.stopPropagation(); onIconChange(icon); }}
+            className={`p-1 rounded transition-colors ${
+              currentIcon === icon ? "bg-sol-bg-highlight ring-1 ring-sol-base01" : "hover:bg-sol-bg-alt/50"
+            }`}
+          >
+            <TeamIcon icon={icon} color={currentIcon === icon ? currentColor : undefined} className={`w-3.5 h-3.5 ${currentIcon !== icon ? "text-sol-text-dim" : ""}`} />
+          </button>
+        ))}
+      </div>
+      <div className="text-xs text-sol-text-dim mb-2">Color</div>
+      <div className="flex gap-1.5">
+        {TEAM_COLORS.map((color) => (
+          <button
+            key={color}
+            onClick={(e) => { e.preventDefault(); e.stopPropagation(); onColorChange(color); }}
+            className={`w-5 h-5 rounded-full transition-all ${colorBgClassMap[color]} ${
+              currentColor === color ? "ring-2 ring-offset-1 ring-offset-sol-bg ring-sol-base1 scale-110" : "hover:scale-105"
+            }`}
+          />
+        ))}
+      </div>
+    </div>
+  );
 }

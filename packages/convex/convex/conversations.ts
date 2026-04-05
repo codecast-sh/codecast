@@ -4228,6 +4228,25 @@ export const toggleFavorite = mutation({
   },
 });
 
+export const setConversationIcon = mutation({
+  args: {
+    conversation_id: v.id("conversations"),
+    icon: v.optional(v.string()),
+    icon_color: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthUserId(ctx);
+    if (!authUserId) throw new Error("Unauthorized");
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation) throw new Error("Conversation not found");
+    if (conversation.user_id.toString() !== authUserId.toString()) throw new Error("Can only update your own conversations");
+    const patch: Record<string, any> = {};
+    if (args.icon !== undefined) patch.icon = args.icon;
+    if (args.icon_color !== undefined) patch.icon_color = args.icon_color;
+    await ctx.db.patch(args.conversation_id, patch);
+  },
+});
+
 export const listFavorites = query({
   args: {},
   handler: async (ctx) => {
@@ -5637,6 +5656,8 @@ export const listIdleSessions = query({
         workflow_run_id: conv.workflow_run_id || null,
         is_workflow_primary: conv.is_workflow_primary || false,
         workflow_run_status,
+        icon: conv.icon,
+        icon_color: conv.icon_color,
       });
 
       for (const child of subagentChildren) {
@@ -5677,6 +5698,8 @@ export const listIdleSessions = query({
           workflow_run_id: null,
           is_workflow_primary: false,
           workflow_run_status: null,
+          icon: child.icon,
+          icon_color: child.icon_color,
         });
       }
     }
@@ -6155,6 +6178,8 @@ export const listDismissedSessions = query({
         implementation_session: implementationSession,
         worktree_name: conv.worktree_name,
         worktree_branch: conv.worktree_branch,
+        icon: conv.icon,
+        icon_color: conv.icon_color,
       });
     }
 
