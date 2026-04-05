@@ -33,6 +33,7 @@ yarn-error.log*
 
 # Testing
 coverage/
+test-results/
 
 # Turbo
 .turbo/
