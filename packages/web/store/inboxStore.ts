@@ -487,8 +487,8 @@ interface InboxStoreState {
   closeComposePalette: () => void;
 
   // -- Unified command palette --
-  palette: { open: boolean; targets: any[]; targetType: 'task' | 'doc' | 'plan' | null; initialMode: string; initialQuery?: string };
-  openPalette: (opts?: { targets?: any[]; targetType?: 'task' | 'doc' | 'plan'; mode?: string; initialQuery?: string }) => void;
+  palette: { open: boolean; targets: any[]; targetType: 'task' | 'doc' | 'plan' | 'session' | null; initialMode: string; initialQuery?: string };
+  openPalette: (opts?: { targets?: any[]; targetType?: 'task' | 'doc' | 'plan' | 'session'; mode?: string; initialQuery?: string }) => void;
   closePalette: () => void;
   togglePalette: () => void;
 
@@ -907,7 +907,7 @@ export const useInboxStore = create<InboxStoreState>(
 
   palette: { open: false, targets: [], targetType: null, initialMode: 'root' },
 
-  openPalette: (opts?: { targets?: any[]; targetType?: 'task' | 'doc' | 'plan'; mode?: string; initialQuery?: string }) => {
+  openPalette: (opts?: { targets?: any[]; targetType?: 'task' | 'doc' | 'plan' | 'session'; mode?: string; initialQuery?: string }) => {
     set({
       palette: {
         open: true,

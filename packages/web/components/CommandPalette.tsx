@@ -13,8 +13,9 @@ import { useCurrentUser } from "../hooks/useCurrentUser";
 import { AgentTypeIcon } from "./AgentTypeIcon";
 import { getLabelColor, DEFAULT_LABELS } from "../lib/labelColors";
 import { toast } from "sonner";
-import { undoableArchiveDoc } from "../store/undoActions";
+import { undoableArchiveDoc, undoableStashSession, undoableDeferSession } from "../store/undoActions";
 import { copyToClipboard } from "../lib/utils";
+import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import {
   Circle,
   CircleDot,
@@ -28,6 +29,7 @@ import {
   Minus,
   FileText,
   Pin,
+  PinOff,
   Archive,
   Copy,
   Trash2,
@@ -39,6 +41,10 @@ import {
   CornerDownLeft,
   ListTodo,
   Map as MapIcon,
+  Square,
+  Clock,
+  ExternalLink,
+  Pencil,
 } from "lucide-react";
 
 const api = _api as any;
@@ -169,7 +175,7 @@ function ActionSubmenu({
 }: {
   mode: ActionMode;
   targets: any[];
-  targetType: "task" | "doc" | "plan";
+  targetType: "task" | "doc" | "plan" | "session";
   onClose: () => void;
   onBack: () => void;
   teamMembers?: any[];
@@ -472,7 +478,6 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
   const openCreateModal = useInboxStore((s) => s.openCreateModal);
 
   const updateTask = useInboxStore((s) => s.updateTask);
-  const updateDoc = useInboxStore((s) => s.updateDoc);
   const pinDoc = useInboxStore((s) => s.pinDoc);
   const webUpdateTask = useMutation(api.tasks.webUpdate);
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id);
@@ -484,9 +489,25 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
 
   const open = standalone || paletteOpen;
 
+  const killSessionMutation = useMutation(api.conversations.killSession);
+
   const favorites = useQuery(api.conversations.listFavorites, open ? {} : "skip");
   const bookmarks = useQuery(api.bookmarks.listBookmarks, open ? {} : "skip");
   const recentConversations = useQuery(api.conversations.listRecentSessions, open ? {} : "skip") ?? [];
+
+  // Debounced search for async conversation results
+  const [debouncedQuery, setDebouncedQuery] = useState("");
+  useWatchEffect(() => {
+    if (!open) { setDebouncedQuery(""); return; }
+    const timer = setTimeout(() => setDebouncedQuery(query), 250);
+    return () => clearTimeout(timer);
+  }, [query, open]);
+
+  const searchResults = useQuery(
+    api.conversations.searchConversations,
+    open && debouncedQuery.length >= 2 ? { query: debouncedQuery, limit: 10 } : "skip"
+  );
+  const searchData = searchResults && "results" in searchResults ? searchResults : null;
 
   const projects = useMemo(() => {
     const dirMap = new Map<string, number>();
@@ -578,6 +599,25 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
     if (planMatch) {
       storeOpenPalette({ targets: [{ _id: planMatch[1], short_id: planMatch[1] }], targetType: 'plan' });
       return;
+    }
+    // On conversation pages, target the current session
+    const convMatch = pathname?.match(/^\/conversation\/([^/]+)/);
+    if (convMatch) {
+      const id = convMatch[1];
+      const session = state.sessions[id];
+      if (session) {
+        storeOpenPalette({ targets: [session], targetType: 'session' });
+        return;
+      }
+    }
+    // On inbox with a selected session, target it
+    if (isInboxRoute(pathname)) {
+      const currentId = state.currentSessionId;
+      const session = currentId ? state.sessions[currentId] : null;
+      if (session) {
+        storeOpenPalette({ targets: [session], targetType: 'session' });
+        return;
+      }
     }
     // On list pages, return false so GenericListView can handle with focused item
     if (pathname === '/tasks' || pathname === '/docs') return false;
@@ -744,7 +784,41 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
       closePalette();
       return;
     }
-  }, [targets, targetType, closePalette, updateTask, webUpdateTask, pinDoc, router]);
+
+    // Session actions
+    if (targetType === "session") {
+      const session = target as InboxSession;
+      if (actionKey === "session_pin") {
+        useInboxStore.getState().pinSession(session._id);
+        toast.success(session.is_pinned ? "Unpinned" : "Pinned");
+        closePalette();
+      } else if (actionKey === "session_kill") {
+        const convexId = useInboxStore.getState().getConvexId(session._id);
+        if (convexId) {
+          killSessionMutation({ conversation_id: convexId as Id<"conversations">, mark_completed: true }).catch(() => {});
+        }
+        undoableStashSession(session._id, { verb: "Killed" });
+        closePalette();
+      } else if (actionKey === "session_stash") {
+        undoableStashSession(session._id);
+        closePalette();
+      } else if (actionKey === "session_defer") {
+        undoableDeferSession(session._id);
+        closePalette();
+      } else if (actionKey === "session_copy") {
+        copyToClipboard(session._id);
+        toast.success("Copied session ID");
+        closePalette();
+      } else if (actionKey === "session_rename") {
+        // Navigate to the session and let them rename inline
+        navigate(`/conversation/${session._id}`);
+      } else if (actionKey === "session_newtab") {
+        window.open(`/conversation/${session._id}`, "_blank");
+        closePalette();
+      }
+      return;
+    }
+  }, [targets, targetType, closePalette, updateTask, webUpdateTask, pinDoc, router, killSessionMutation, navigate]);
 
   const hasTargets = targets.length > 0 && targetType;
   const target = targets[0] as any;
@@ -752,6 +826,10 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
   const contextLabel = useMemo(() => {
     if (!hasTargets) return "";
     if (targets.length === 1) {
+      if (targetType === "session") {
+        const s = target as InboxSession;
+        return cleanTitle(s.title || "Untitled");
+      }
       if (isTask(target)) return `${target.short_id} \u00B7 ${target.title}`;
       return target.display_title || target.title || "Untitled";
     }
@@ -783,7 +861,25 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
     { key: "copy", label: "Copy plan ID", icon: Copy, shortcut: "\u2318." },
   ], []);
 
-  const actions = targetType === "task" ? taskActions : targetType === "doc" ? docActions : targetType === "plan" ? planActions : [];
+  const sessionActions = useMemo(() => {
+    if (targetType !== "session" || !target) return [];
+    const s = target as InboxSession;
+    return [
+      { key: "session_pin", label: s.is_pinned ? "Unpin session" : "Pin session", icon: s.is_pinned ? PinOff : Pin, shortcut: "P" },
+      { key: "session_kill", label: "Kill session", icon: Square, shortcut: "K" },
+      { key: "session_stash", label: "Dismiss session", icon: Archive, shortcut: "D" },
+      { key: "session_defer", label: "Defer session", icon: Clock, shortcut: "F" },
+      { key: "session_rename", label: "Rename session", icon: Pencil, shortcut: "R" },
+      { key: "session_copy", label: "Copy session ID", icon: Copy, shortcut: "\u2318." },
+      { key: "session_newtab", label: "Open in new tab", icon: ExternalLink, shortcut: "O" },
+    ];
+  }, [targetType, target]);
+
+  const actions = targetType === "task" ? taskActions
+    : targetType === "doc" ? docActions
+    : targetType === "plan" ? planActions
+    : targetType === "session" ? sessionActions
+    : [];
 
   const showFavorites = favorites && favorites.length > 0;
   const showBookmarks = bookmarks && bookmarks.length > 0;
@@ -919,6 +1015,8 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
     <CommandPrimitive
       className="w-[580px] rounded-xl border border-sol-border/80 bg-sol-bg shadow-2xl shadow-black/40 overflow-hidden flex flex-col animate-in fade-in-0 zoom-in-95 slide-in-from-top-2 duration-150"
       filter={(value, search) => {
+        // Async search results and compose are always relevant — bypass cmdk filter
+        if (value.startsWith("__search__") || value.startsWith("__compose__")) return 1;
         const idx = value.indexOf("|||");
         const searchable = idx >= 0 ? value.slice(0, idx) : value;
         return searchable.toLowerCase().includes(search.toLowerCase()) ? 1 : 0;
@@ -1013,7 +1111,7 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
 
         {showRecent && (
           <CommandPrimitive.Group heading="Recent Sessions" className={groupClass}>
-            {recentConversations.map((conv: any) => (
+            {(query ? recentConversations : recentConversations.slice(0, 8)).map((conv: any) => (
               <CommandPrimitive.Item
                 key={`recent-${conv._id}`}
                 value={`session ${cleanTitle(conv.title || "")} ${conv.project_path || ""}|||${conv._id}`}
@@ -1088,8 +1186,8 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
           </CommandPrimitive.Group>
         )}
 
-        <CommandPrimitive.Group className={groupClass}>
-          {query.trim() && (
+        {query.trim() && (
+          <CommandPrimitive.Group className={groupClass}>
             <CommandPrimitive.Item
               value={`__compose__ ${query}`}
               onSelect={() => {
@@ -1109,8 +1207,65 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
               </span>
               <span className="truncate">New session: &ldquo;{query.trim().length > 40 ? query.trim().slice(0, 40) + "..." : query.trim()}&rdquo;</span>
             </CommandPrimitive.Item>
-          )}
-        </CommandPrimitive.Group>
+          </CommandPrimitive.Group>
+        )}
+
+        {/* Async conversation search results */}
+        {debouncedQuery.length >= 2 && (
+          <CommandPrimitive.Group
+            heading={searchData ? `Search Results (${searchData.results?.length || 0})` : "Searching..."}
+            className={groupClass}
+          >
+            {!searchData && (
+              <CommandPrimitive.Item
+                value="__search__ loading"
+                disabled
+                className="px-4 py-3 text-center text-xs text-sol-text-dim animate-pulse cursor-default"
+              >
+                Searching conversations...
+              </CommandPrimitive.Item>
+            )}
+            {searchData?.results?.map((result: any) => (
+              <CommandPrimitive.Item
+                key={`search-${result.conversationId}`}
+                value={`__search__ ${result.title} ${result.matches?.[0]?.content?.slice(0, 100) || ""}|||${result.conversationId}`}
+                onSelect={() => {
+                  const firstMatch = result.matches?.[0];
+                  if (firstMatch) {
+                    navigate(`/conversation/${result.conversationId}#msg-${firstMatch.messageId}`);
+                  } else {
+                    navigate(`/conversation/${result.conversationId}`);
+                  }
+                }}
+                className={itemClass}
+              >
+                <span className="text-sol-text-dim flex-shrink-0">
+                  <NavIcon type="session" />
+                </span>
+                <div className="flex-1 min-w-0">
+                  <div className="truncate text-sm">{cleanTitle(result.title || "Untitled")}</div>
+                  {result.matches?.[0]?.content && (
+                    <div className="truncate text-[11px] text-sol-text-dim mt-0.5">
+                      {result.matches[0].content.slice(0, 80)}
+                    </div>
+                  )}
+                </div>
+                <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">
+                  {result.matches?.length || 0} match{(result.matches?.length || 0) !== 1 ? "es" : ""}
+                </span>
+              </CommandPrimitive.Item>
+            ))}
+            {searchData?.results?.length === 0 && (
+              <CommandPrimitive.Item
+                value="__search__ empty"
+                disabled
+                className="px-4 py-3 text-center text-xs text-sol-text-dim cursor-default"
+              >
+                No conversations matched
+              </CommandPrimitive.Item>
+            )}
+          </CommandPrimitive.Group>
+        )}
       </CommandPrimitive.List>
 
       <div className="px-3 py-2 border-t border-sol-border/60 flex items-center justify-between text-[10px] text-sol-text-dim bg-sol-bg-alt/40">
