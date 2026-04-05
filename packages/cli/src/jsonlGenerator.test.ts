@@ -210,7 +210,7 @@ describe("generateClaudeCodeJsonl", () => {
     }
   });
 
-  test("does not emit thinking blocks (cannot generate valid thinking signatures)", () => {
+  test("emits thinking blocks in assistant content", () => {
     const data: ExportResult = {
       conversation: {
         id: "conv",
@@ -225,18 +225,18 @@ describe("generateClaudeCodeJsonl", () => {
       },
       messages: [
         { role: "user", content: "hi", timestamp: "2026-01-01T00:00:00.000Z" },
-        { role: "assistant", content: "hello", thinking: "secret", timestamp: "2026-01-01T00:00:00.100Z" },
+        { role: "assistant", content: "hello", thinking: "internal reasoning", timestamp: "2026-01-01T00:00:00.100Z" },
       ],
     };
 
     const { jsonl } = generateClaudeCodeJsonl(data);
-    expect(jsonl).not.toContain('"signature":"placeholder"');
-
     const lines = jsonl.trim().split("\n").map((l) => JSON.parse(l));
     const assistant = lines.find((l) => l.type === "assistant") as any;
     expect(assistant?.message?.role).toBe("assistant");
     expect(Array.isArray(assistant?.message?.content)).toBe(true);
-    expect(assistant.message.content.some((b: any) => b?.type === "thinking")).toBe(false);
+    const thinkingBlock = assistant.message.content.find((b: any) => b?.type === "thinking");
+    expect(thinkingBlock).toBeTruthy();
+    expect(thinkingBlock.thinking).toBe("internal reasoning");
   });
 
   test("can truncate to tail messages for Claude imports", () => {
@@ -278,7 +278,7 @@ describe("generateClaudeCodeJsonl", () => {
     expect(chat.some((l) => l.type === "user" && l.message?.content === "u2")).toBe(false);
   });
 
-  test("drops orphan tool_result blocks that do not match immediately previous assistant tool_use ids", () => {
+  test("preserves all tool_result blocks including orphans", () => {
     const data: ExportResult = {
       conversation: {
         id: "conv",
@@ -336,12 +336,11 @@ describe("generateClaudeCodeJsonl", () => {
       }
     }
 
-    expect(toolResultIds).toEqual(["call_1"]);
-    expect(toolResultIds.includes("orphan_0")).toBe(false);
-    expect(toolResultIds.includes("orphan_1")).toBe(false);
+    // All tool results should be preserved — orphans included
+    expect(toolResultIds).toEqual(["orphan_0", "call_1", "orphan_1"]);
   });
 
-  test("does not emit orphan tool_result blocks when truncation starts on a tool result message", () => {
+  test("preserves tool_result blocks even when truncation removes the matching tool_use", () => {
     const data: ExportResult = {
       conversation: {
         id: "conv",
@@ -372,24 +371,28 @@ describe("generateClaudeCodeJsonl", () => {
           role: "user",
           content: "",
           timestamp: "2026-01-01T00:00:00.300Z",
-          tool_results: [{ tool_use_id: "call_2", content: "orphan after truncate" }],
+          tool_results: [{ tool_use_id: "call_2", content: "duplicate result" }],
         },
       ],
     };
 
+    // Truncation to last 1 message keeps only the last user message with tool_result.
+    // The tool_result is preserved as an orphan (matching tool_use was truncated away).
     const { jsonl } = generateClaudeCodeJsonl(data, { tailMessages: 1 });
     const lines = jsonl.trim().split("\n").map((l) => JSON.parse(l));
     const userEntries = lines.filter((l) => l.type === "user");
 
-    const hasToolResult = userEntries.some((entry) => {
+    const toolResults = userEntries.flatMap((entry) => {
       const content = entry?.message?.content;
-      return Array.isArray(content) && content.some((block) => block?.type === "tool_result");
+      if (!Array.isArray(content)) return [];
+      return content.filter((block) => block?.type === "tool_result");
     });
 
-    expect(hasToolResult).toBe(false);
+    expect(toolResults.length).toBe(1);
+    expect(toolResults[0].tool_use_id).toBe("call_2");
   });
 
-  test("merges consecutive assistant messages into a single entry", () => {
+  test("keeps consecutive assistant messages separate to preserve message-level structure", () => {
     const data: ExportResult = {
       conversation: {
         id: "conv", title: "t", session_id: "session", agent_type: "claude_code",
@@ -417,24 +420,27 @@ describe("generateClaudeCodeJsonl", () => {
     const lines = jsonl.trim().split("\n").map((l) => JSON.parse(l));
 
     const assistants = lines.filter((l) => l.type === "assistant");
-    for (let i = 1; i < lines.length; i++) {
-      const prev = lines[i - 1];
-      const cur = lines[i];
-      if (prev.message?.role === "assistant" && cur.message?.role === "assistant") {
-        throw new Error(`Consecutive assistants at indices ${i - 1} and ${i}`);
-      }
-    }
+    // Text-only assistant and tool_use assistant should be separate entries
+    expect(assistants.length).toBe(3);
 
-    const merged = assistants.find((a) => {
+    const textAssistant = assistants.find((a) => {
       const content = a.message?.content;
       return Array.isArray(content) &&
-        content.some((b: any) => b.type === "text" && b.text === "thinking about it") &&
+        content.some((b: any) => b.type === "text" && b.text === "thinking about it");
+    });
+    expect(textAssistant).toBeTruthy();
+
+    const toolAssistant = assistants.find((a) => {
+      const content = a.message?.content;
+      return Array.isArray(content) &&
         content.some((b: any) => b.type === "tool_use" && b.name === "Bash");
     });
-    expect(merged).toBeTruthy();
+    expect(toolAssistant).toBeTruthy();
+    // They should NOT be merged into the same entry
+    expect(textAssistant).not.toBe(toolAssistant);
   });
 
-  test("synthesizes tool_results for unresolved tool_use IDs in user messages", () => {
+  test("emits only the tool_results that exist, does not synthesize placeholders", () => {
     const data: ExportResult = {
       conversation: {
         id: "conv", title: "t", session_id: "session", agent_type: "claude_code",
@@ -476,19 +482,15 @@ describe("generateClaudeCodeJsonl", () => {
       }
     }
 
-    const resultIds = allToolResults.map((r) => r.tool_use_id).sort();
-    expect(resultIds).toEqual(["call_bash", "call_grep", "call_read"]);
+    // Only the actual tool_result should appear — no synthesized placeholders
+    const resultIds = allToolResults.map((r) => r.tool_use_id);
+    expect(resultIds).toEqual(["call_grep"]);
 
     const realResult = allToolResults.find((r) => r.tool_use_id === "call_grep");
     expect(realResult?.is_error).toBeUndefined();
-
-    const syntheticRead = allToolResults.find((r) => r.tool_use_id === "call_read");
-    expect(syntheticRead?.is_error).toBe(true);
-    const syntheticBash = allToolResults.find((r) => r.tool_use_id === "call_bash");
-    expect(syntheticBash?.is_error).toBe(true);
   });
 
-  test("synthesizes tool_results when session ends with dangling tool_use", () => {
+  test("does not add trailing placeholder when session ends with dangling tool_use", () => {
     const data: ExportResult = {
       conversation: {
         id: "conv", title: "t", session_id: "session", agent_type: "claude_code",
@@ -508,13 +510,17 @@ describe("generateClaudeCodeJsonl", () => {
     const { jsonl } = generateClaudeCodeJsonl(data);
     const lines = jsonl.trim().split("\n").map((l) => JSON.parse(l));
 
-    const lastUser = [...lines].reverse().find((l) => l.message?.role === "user");
-    expect(lastUser).toBeTruthy();
-    const content = lastUser!.message.content;
-    expect(Array.isArray(content)).toBe(true);
-    const tr = content.find((b: any) => b.type === "tool_result" && b.tool_use_id === "call_dangling");
-    expect(tr).toBeTruthy();
-    expect(tr.is_error).toBe(true);
+    // The last entry should be the assistant message, not a synthetic user message
+    const chatLines = lines.filter((l) => l.type === "user" || l.type === "assistant");
+    const lastChat = chatLines[chatLines.length - 1];
+    expect(lastChat.type).toBe("assistant");
+
+    // No synthetic tool_result for the dangling tool_use
+    const userWithDangling = lines.find((l) => {
+      const content = l.message?.content;
+      return Array.isArray(content) && content.some((b: any) => b.tool_use_id === "call_dangling");
+    });
+    expect(userWithDangling).toBeUndefined();
   });
 });
 

@@ -92,7 +92,7 @@ export function extractMessages(entries: ClaudeSessionEntry[]): ParsedMessage[] 
 
     if (entry.type === "queue-operation") continue;
 
-    if (entry.isMeta || entry.isCompactSummary || entry.isVisibleInTranscriptOnly) continue;
+    if (entry.isMeta || (entry.isVisibleInTranscriptOnly && !entry.isCompactSummary)) continue;
 
     // Handle old format: type is "human" instead of "user"
     const normalizedType = entry.type === "human" ? "user" : entry.type;

@@ -404,29 +404,25 @@ export function generateClaudeCodeJsonl(
     const uuid = msg.message_uuid || uuidv4();
 
     if (msg.role === "user") {
-      const { matched } = partitionToolResultsByExpected(msg.tool_results, expectedToolUseIds);
-      const unresolved = new Set(expectedToolUseIds);
-      for (const tr of matched) unresolved.delete(tr.tool_use_id);
+      // Match tool_results against expected IDs from preceding assistant tool_use blocks.
+      // Only remove matched IDs — carry unmatched forward for subsequent user messages,
+      // since tool results can be spread across multiple user messages (one per tool_use).
+      const { matched, orphaned } = partitionToolResultsByExpected(msg.tool_results, expectedToolUseIds);
+      for (const tr of matched) expectedToolUseIds.delete(tr.tool_use_id);
 
-      if (matched.length > 0 || unresolved.size > 0) {
+      const allResults = [...matched, ...orphaned];
+
+      if (allResults.length > 0) {
         const content: Array<Record<string, unknown>> = [];
         if (msg.content && msg.content.trim().length > 0) {
           content.push({ type: "text", text: msg.content });
         }
-        for (const tr of matched) {
+        for (const tr of allResults) {
           content.push({
             type: "tool_result",
             tool_use_id: tr.tool_use_id,
-            content: [{ type: "text", text: truncate(tr.content || "") }],
+            content: [{ type: "text", text: tr.content || "" }],
             ...(tr.is_error ? { is_error: true } : {}),
-          });
-        }
-        for (const toolId of unresolved) {
-          content.push({
-            type: "tool_result",
-            tool_use_id: toolId,
-            content: [{ type: "text", text: "[result unavailable]" }],
-            is_error: true,
           });
         }
         lines.push(JSON.stringify({
@@ -434,7 +430,7 @@ export function generateClaudeCodeJsonl(
           version: "2.1.29", gitBranch: "main", type: "user",
           message: { role: "user", content },
           uuid, timestamp: msg.timestamp,
-          toolUseResult: matched.map((tr) => ({ type: "text", text: tr.content || "" })),
+          toolUseResult: allResults.map((tr) => ({ type: "text", text: tr.content || "" })),
         }));
         parentUuid = uuid;
       } else if (msg.content && msg.content.length > 0) {
@@ -447,10 +443,10 @@ export function generateClaudeCodeJsonl(
         }));
         parentUuid = uuid;
       }
-      expectedToolUseIds = new Set();
     } else if (msg.role === "assistant") {
       const contentBlocks: any[] = [];
       const assistantToolUseIds = new Set<string>();
+      if (msg.thinking) contentBlocks.push({ type: "thinking", thinking: msg.thinking });
       if (msg.content) contentBlocks.push({ type: "text", text: msg.content });
       if (msg.tool_calls) {
         for (const tc of msg.tool_calls) {
@@ -478,6 +474,8 @@ export function generateClaudeCodeJsonl(
       parentUuid = uuid;
       for (const id of assistantToolUseIds) expectedToolUseIds.add(id);
 
+      // Handle tool_results that are stored inline on the assistant message
+      // (from incremental sync where results arrive with the assistant turn).
       const { matched: inlineMatched } = partitionToolResultsByExpected(msg.tool_results, expectedToolUseIds);
       if (inlineMatched.length > 0) {
         for (const tr of inlineMatched) expectedToolUseIds.delete(tr.tool_use_id);
@@ -485,7 +483,7 @@ export function generateClaudeCodeJsonl(
         const trContent = inlineMatched.map((tr) => ({
           type: "tool_result" as const,
           tool_use_id: tr.tool_use_id,
-          content: [{ type: "text" as const, text: truncate(tr.content || "") }],
+          content: [{ type: "text" as const, text: tr.content || "" }],
           ...(tr.is_error ? { is_error: true } : {}),
         }));
         lines.push(JSON.stringify({
@@ -500,48 +498,11 @@ export function generateClaudeCodeJsonl(
     }
   }
 
-  if (expectedToolUseIds.size > 0) {
-    const trUuid = uuidv4();
-    const trContent = Array.from(expectedToolUseIds).map((toolId) => ({
-      type: "tool_result" as const,
-      tool_use_id: toolId,
-      content: [{ type: "text" as const, text: "[result unavailable]" }],
-      is_error: true,
-    }));
-    const lastMsg = messages[messages.length - 1];
-    lines.push(JSON.stringify({
-      parentUuid, isSidechain: false, userType: "external", cwd, sessionId,
-      version: "2.1.29", gitBranch: "main", type: "user",
-      message: { role: "user", content: trContent },
-      uuid: trUuid, timestamp: lastMsg?.timestamp || data.conversation.updated_at,
-    }));
-    parentUuid = trUuid;
-    expectedToolUseIds = new Set();
-  }
+  // Note: trailing unresolved tool_use IDs are intentionally left as-is.
+  // The original JSONL files end mid-turn when sessions are interrupted,
+  // and Claude Code handles resuming from that state correctly.
 
-  // Post-process: merge consecutive assistant messages.
-  // Claude CLI crashes (in --chrome/TUI mode) when it encounters two consecutive
-  // assistant JSONL entries — the tool result renderer gets confused about which
-  // tool_use corresponds to which result. Merge their content blocks into one.
-  const merged: string[] = [];
-  for (let i = 0; i < lines.length; i++) {
-    try {
-      const cur = JSON.parse(lines[i]);
-      if (cur.message?.role === "assistant" && merged.length > 0) {
-        const prev = JSON.parse(merged[merged.length - 1]);
-        if (prev.message?.role === "assistant") {
-          const prevContent = Array.isArray(prev.message.content) ? prev.message.content : [];
-          const curContent = Array.isArray(cur.message.content) ? cur.message.content : [];
-          prev.message.content = [...prevContent, ...curContent];
-          merged[merged.length - 1] = JSON.stringify(prev);
-          continue;
-        }
-      }
-    } catch {}
-    merged.push(lines[i]);
-  }
-
-  return { jsonl: merged.join("\n") + "\n", sessionId };
+  return { jsonl: lines.join("\n") + "\n", sessionId };
 }
 
 export function writeClaudeCodeSession(jsonl: string, sessionId: string, projectPath?: string): { sessionId: string; filePath: string } {
