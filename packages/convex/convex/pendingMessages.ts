@@ -87,6 +87,7 @@ export const updateMessageStatus = mutation({
     message_id: v.id("pending_messages"),
     status: v.union(
       v.literal("pending"),
+      v.literal("injected"),
       v.literal("delivered"),
       v.literal("failed"),
       v.literal("undeliverable")
@@ -114,15 +115,25 @@ export const updateMessageStatus = mutation({
       delivered_at: args.delivered_at,
     });
 
-    if (args.status !== "pending") {
-      const remaining = await ctx.db
+    // Only clear has_pending_messages when moving to a terminal state (delivered)
+    // and no other in-flight messages remain
+    if (args.status === "delivered") {
+      const remainingPending = await ctx.db
         .query("pending_messages")
         .withIndex("by_conversation_status", (q) =>
           q.eq("conversation_id", message.conversation_id).eq("status", "pending")
         )
         .first();
-      if (!remaining) {
-        await ctx.db.patch(message.conversation_id, { has_pending_messages: false });
+      if (!remainingPending) {
+        const remainingInjected = await ctx.db
+          .query("pending_messages")
+          .withIndex("by_conversation_status", (q) =>
+            q.eq("conversation_id", message.conversation_id).eq("status", "injected")
+          )
+          .first();
+        if (!remainingInjected) {
+          await ctx.db.patch(message.conversation_id, { has_pending_messages: false });
+        }
       }
     }
 
@@ -170,7 +181,7 @@ export async function resetConversationPendingMessages(
 
   let resetCount = 0;
   for (const msg of messages) {
-    if (msg.status === "failed" || msg.status === "undeliverable") {
+    if (msg.status === "failed" || msg.status === "undeliverable" || msg.status === "injected") {
       await ctx.db.patch(msg._id, { status: "pending", retry_count: 0, delivered_at: undefined });
       resetCount++;
     }
@@ -227,6 +238,7 @@ export const getConversationPendingMessage = query({
 
     const owned = msgs.filter((m) => m.from_user_id.toString() === authUserId.toString());
     const msg = owned.find((m) => m.status === "pending")
+      ?? owned.find((m) => m.status === "injected")
       ?? owned.find((m) => m.status === "failed")
       ?? owned.find((m) => m.status === "undeliverable")
       ?? null;
@@ -286,6 +298,26 @@ export const retryStuckMessages = internalMutation({
       });
     }
 
+    // Reset stale "injected" messages (session may have died before ack)
+    const injectedMessages = await ctx.db
+      .query("pending_messages")
+      .filter((q) =>
+        q.and(
+          q.eq(q.field("status"), "injected"),
+          q.lt(q.field("created_at"), now - 120_000),
+          q.gt(q.field("created_at"), now - 10 * 60_000)
+        )
+      )
+      .collect();
+
+    for (const msg of injectedMessages) {
+      await ctx.db.patch(msg._id, {
+        status: "pending" as const,
+        retry_count: msg.retry_count + 1,
+      });
+      await ctx.db.patch(msg.conversation_id, { has_pending_messages: true });
+    }
+
     const failedMessages = await ctx.db
       .query("pending_messages")
       .filter((q) =>
@@ -304,8 +336,85 @@ export const retryStuckMessages = internalMutation({
       });
     }
 
-    if (pendingMessages.length > 0 || failedMessages.length > 0) {
-      console.log(`retryStuckMessages: bumped ${pendingMessages.length} pending, recovered ${failedMessages.length} failed`);
+    if (pendingMessages.length > 0 || failedMessages.length > 0 || injectedMessages.length > 0) {
+      console.log(`retryStuckMessages: bumped ${pendingMessages.length} pending, recovered ${failedMessages.length} failed, reset ${injectedMessages.length} stale injected`);
     }
+  },
+});
+
+// Ack: mark all "injected" messages for a conversation as "delivered"
+// Called by the daemon when the user's message appears in the synced JSONL
+export const ackInjectedMessages = mutation({
+  args: {
+    conversation_id: v.id("conversations"),
+    api_token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!authUserId) {
+      throw new Error("Authentication failed");
+    }
+
+    const injected = await ctx.db
+      .query("pending_messages")
+      .withIndex("by_conversation_status", (q) =>
+        q.eq("conversation_id", args.conversation_id).eq("status", "injected")
+      )
+      .collect();
+
+    const now = Date.now();
+    for (const msg of injected) {
+      await ctx.db.patch(msg._id, { status: "delivered" as const, delivered_at: now });
+    }
+
+    if (injected.length > 0) {
+      // Check if any pending remain before clearing flag
+      const remainingPending = await ctx.db
+        .query("pending_messages")
+        .withIndex("by_conversation_status", (q) =>
+          q.eq("conversation_id", args.conversation_id).eq("status", "pending")
+        )
+        .first();
+      if (!remainingPending) {
+        await ctx.db.patch(args.conversation_id, { has_pending_messages: false });
+      }
+    }
+
+    return { acked: injected.length };
+  },
+});
+
+// Reset: move "injected" messages back to "pending" (e.g. after session kill)
+export const resetInjectedMessages = mutation({
+  args: {
+    conversation_id: v.id("conversations"),
+    api_token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!authUserId) {
+      throw new Error("Authentication failed");
+    }
+
+    const injected = await ctx.db
+      .query("pending_messages")
+      .withIndex("by_conversation_status", (q) =>
+        q.eq("conversation_id", args.conversation_id).eq("status", "injected")
+      )
+      .collect();
+
+    for (const msg of injected) {
+      await ctx.db.patch(msg._id, {
+        status: "pending" as const,
+        retry_count: msg.retry_count + 1,
+        delivered_at: undefined,
+      });
+    }
+
+    if (injected.length > 0) {
+      await ctx.db.patch(args.conversation_id, { has_pending_messages: true });
+    }
+
+    return { reset: injected.length };
   },
 });

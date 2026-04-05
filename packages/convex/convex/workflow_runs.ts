@@ -393,9 +393,9 @@ export const updateProgress = mutation({
       if (planId) {
         const planUpdates: Record<string, any> = { updated_at: now };
         if (args.run_status === "completed") {
-          const progressLog = ((await ctx.db.get(planId)) as any)?.progress_log || [];
-          progressLog.push({ timestamp: now, entry: "Workflow run completed" });
-          planUpdates.progress_log = progressLog;
+          const entries = ((await ctx.db.get(planId)) as any)?.entries || [];
+          entries.push({ type: "progress", timestamp: now, content: "Workflow run completed" });
+          planUpdates.entries = entries;
         }
         await ctx.db.patch(planId, planUpdates);
       }

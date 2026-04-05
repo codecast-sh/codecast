@@ -393,6 +393,218 @@ export const updateAgentStatus = mutation({
     if (Object.keys(patch).length > 0) {
       await ctx.db.patch(session._id, patch);
     }
+
+    // Active processing states prove the message reached the session — ack injected messages
+    if (args.agent_status === "working" || args.agent_status === "thinking" || args.agent_status === "compacting" || args.agent_status === "permission_blocked") {
+      const injected = await ctx.db
+        .query("pending_messages")
+        .withIndex("by_conversation_status", (q: any) =>
+          q.eq("conversation_id", args.conversation_id).eq("status", "injected")
+        )
+        .collect();
+      const now = Date.now();
+      for (const msg of injected) {
+        await ctx.db.patch(msg._id, { status: "delivered" as const, delivered_at: now });
+      }
+      if (injected.length > 0) {
+        const remainingPending = await ctx.db
+          .query("pending_messages")
+          .withIndex("by_conversation_status", (q: any) =>
+            q.eq("conversation_id", args.conversation_id).eq("status", "pending")
+          )
+          .first();
+        if (!remainingPending) {
+          await ctx.db.patch(args.conversation_id, { has_pending_messages: false });
+        }
+      }
+    }
+  },
+});
+
+export const reportMetrics = mutation({
+  args: {
+    session_id: v.string(),
+    cpu: v.number(),
+    memory: v.number(),
+    pid_count: v.number(),
+    api_token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!authUserId) {
+      throw new Error("Authentication required");
+    }
+
+    const session = await ctx.db
+      .query("managed_sessions")
+      .withIndex("by_session_id", (q: any) => q.eq("session_id", args.session_id))
+      .first();
+
+    if (!session) return;
+    if (session.user_id.toString() !== authUserId.toString()) return;
+
+    await ctx.db.patch(session._id, {
+      current_cpu: args.cpu,
+      current_memory: args.memory,
+      current_pid_count: args.pid_count,
+    });
+
+    const now = Date.now();
+    await ctx.db.insert("session_metrics", {
+      session_id: args.session_id,
+      user_id: authUserId,
+      cpu: args.cpu,
+      memory: args.memory,
+      pid_count: args.pid_count,
+      collected_at: now,
+    });
+
+    // Clean up metrics older than 2 hours
+    const cutoff = now - 2 * 60 * 60 * 1000;
+    const old = await ctx.db
+      .query("session_metrics")
+      .withIndex("by_session_collected", (q: any) =>
+        q.eq("session_id", args.session_id).lt("collected_at", cutoff)
+      )
+      .collect();
+    for (const row of old) {
+      await ctx.db.delete(row._id);
+    }
+  },
+});
+
+export const listActiveSessions = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx as any);
+    if (!userId) throw new Error("Not authenticated");
+
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+    const sessions = await ctx.db
+      .query("managed_sessions")
+      .withIndex("by_user_heartbeat", (q: any) =>
+        q.eq("user_id", userId).gte("last_heartbeat", cutoff)
+      )
+      .collect();
+
+    const results = [];
+    for (const session of sessions) {
+      let conversationTitle: string | undefined;
+      let projectPath: string | undefined;
+      let agentType: string | undefined;
+      let messageCount: number | undefined;
+      let conversationStatus: string | undefined;
+      let model: string | undefined;
+      let gitBranch: string | undefined;
+      let worktreeName: string | undefined;
+      let headline: string | undefined;
+      let isSubagent: boolean | undefined;
+
+      if (session.conversation_id) {
+        const conv = await ctx.db.get(session.conversation_id);
+        if (conv) {
+          if (conv.inbox_killed_at) continue;
+          conversationTitle = conv.title;
+          projectPath = conv.project_path;
+          agentType = conv.agent_type;
+          messageCount = conv.message_count;
+          conversationStatus = conv.status;
+          model = conv.model;
+          gitBranch = conv.git_branch;
+          worktreeName = conv.worktree_name;
+          isSubagent = conv.is_subagent;
+
+          const insight = await ctx.db
+            .query("session_insights")
+            .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", session.conversation_id))
+            .order("desc")
+            .first();
+          if (insight) {
+            headline = insight.headline || insight.summary?.slice(0, 120);
+          }
+        }
+      }
+
+      results.push({
+        _id: session._id,
+        session_id: session.session_id,
+        conversation_id: session.conversation_id,
+        pid: session.pid,
+        tmux_session: session.tmux_session,
+        started_at: session.started_at,
+        last_heartbeat: session.last_heartbeat,
+        agent_status: session.agent_status,
+        agent_status_updated_at: session.agent_status_updated_at,
+        permission_mode: session.permission_mode,
+        current_cpu: session.current_cpu,
+        current_memory: session.current_memory,
+        current_pid_count: session.current_pid_count,
+        conversation_title: conversationTitle,
+        project_path: projectPath,
+        agent_type: agentType,
+        message_count: messageCount,
+        conversation_status: conversationStatus,
+        model,
+        git_branch: gitBranch,
+        worktree_name: worktreeName,
+        headline,
+        is_subagent: isSubagent,
+      });
+    }
+
+    return results;
+  },
+});
+
+export const getSessionMetrics = query({
+  args: {
+    session_id: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx as any);
+    if (!userId) throw new Error("Not authenticated");
+
+    return await ctx.db
+      .query("session_metrics")
+      .withIndex("by_session_collected", (q: any) =>
+        q.eq("session_id", args.session_id)
+      )
+      .collect();
+  },
+});
+
+export const getAggregateMetrics = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx as any);
+    if (!userId) throw new Error("Not authenticated");
+
+    const cutoff = Date.now() - 2 * 60 * 60 * 1000;
+    const rows = await ctx.db
+      .query("session_metrics")
+      .withIndex("by_user_collected", (q: any) =>
+        q.eq("user_id", userId).gte("collected_at", cutoff)
+      )
+      .collect();
+
+    // Bucket by 30-second windows and aggregate across sessions
+    const buckets = new Map<number, { cpu: number; memory: number; pid_count: number; count: number }>();
+    for (const row of rows) {
+      const bucket = Math.round(row.collected_at / 30000) * 30000;
+      const existing = buckets.get(bucket);
+      if (existing) {
+        existing.cpu += row.cpu;
+        existing.memory += row.memory;
+        existing.pid_count += row.pid_count;
+        existing.count++;
+      } else {
+        buckets.set(bucket, { cpu: row.cpu, memory: row.memory, pid_count: row.pid_count, count: 1 });
+      }
+    }
+
+    return Array.from(buckets.entries())
+      .map(([t, v]) => ({ collected_at: t, cpu: v.cpu, memory: v.memory, pid_count: v.pid_count }))
+      .sort((a, b) => a.collected_at - b.collected_at);
   },
 });
 

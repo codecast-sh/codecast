@@ -434,6 +434,7 @@ export const mineTasksFromInsights = internalMutation({
           decision_log: [],
           discoveries: [],
           context_pointers: [],
+          entries: [],
           session_ids: [],
           created_at: now,
           updated_at: now,

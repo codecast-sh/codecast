@@ -1127,6 +1127,43 @@ export const getNewMessages = query({
   },
 });
 
+export const copyAllMessages = query({
+  args: {
+    conversation_id: v.id("conversations"),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthUserId(ctx);
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation) return null;
+
+    const isOwner = authUserId && conversation.user_id.toString() === authUserId.toString();
+    const isShared = !!conversation.share_token;
+    let hasTeamAccess = false;
+    if (authUserId && !isOwner) {
+      hasTeamAccess = await canTeamMemberAccess(ctx, authUserId, conversation);
+    }
+    if (!isOwner && !hasTeamAccess && !isShared) return null;
+
+    const allMessages = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_id", (q) => q.eq("conversation_id", args.conversation_id))
+      .order("asc")
+      .collect();
+
+    return allMessages
+      .filter(isNonEmptyMessage)
+      .map((m) => ({
+        role: m.role,
+        content: m.content || "",
+        thinking: m.thinking || undefined,
+        timestamp: m.timestamp,
+        tool_calls: m.tool_calls,
+        tool_results: m.tool_results,
+        subtype: m.subtype || undefined,
+      }));
+  },
+});
+
 export const listMessages = query({
   args: {
     conversation_id: v.id("conversations"),
@@ -1258,10 +1295,12 @@ export const getConversationWithMeta = query({
       if (task) active_task = { _id: task._id, short_id: task.short_id, title: task.title, status: task.status };
     }
 
+    // Strip large fields that are only needed on-demand (git_diff, git_diff_staged, available_skills)
+    const { git_diff, git_diff_staged, available_skills: _convSkills, ...conversationLight } = conversation;
+
     return {
-      ...conversation,
+      ...conversationLight,
       is_own: !!isOwner,
-      available_skills: resolveUserSkills((user as any)?.available_skills, conversation.project_path) || conversation.available_skills || undefined,
       title,
       effective_team_visibility,
       user: user ? { name: user.name, email: user.email, avatar_url: user.image || user.github_avatar_url || null } : null,
@@ -1275,6 +1314,30 @@ export const getConversationWithMeta = query({
       parent_conversation_id: parentConversationId,
       active_plan,
       active_task,
+    };
+  },
+});
+
+export const getConversationGitDiff = query({
+  args: {
+    conversation_id: v.id("conversations"),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthUserId(ctx);
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation) return null;
+
+    const isOwner = authUserId && conversation.user_id.toString() === authUserId.toString();
+    const isShared = !!conversation.share_token;
+    let hasTeamAccess = false;
+    if (authUserId && !isOwner) {
+      hasTeamAccess = await canTeamMemberAccess(ctx, authUserId, conversation);
+    }
+    if (!isOwner && !hasTeamAccess && !isShared) return null;
+
+    return {
+      git_diff: conversation.git_diff ?? null,
+      git_diff_staged: conversation.git_diff_staged ?? null,
     };
   },
 });
@@ -1323,9 +1386,14 @@ export const getConversationToolStats = query({
       }
     }
 
+    // Merge todos and tasks into unified stats
+    const todoTotal = latestTodos?.length ?? 0;
+    const todoCompleted = latestTodos?.filter((t: any) => t.status === "completed").length ?? 0;
+    const total = todoTotal + taskTotal;
+    const completed = todoCompleted + taskCompleted;
+
     return {
-      latestTodos,
-      taskStats: taskTotal > 0 ? { total: taskTotal, completed: taskCompleted } : null,
+      taskStats: total > 0 ? { total, completed } : null,
     };
   },
 });
@@ -2439,11 +2507,8 @@ export const searchConversations = query({
       });
     }
 
-    // Sort by proximity first (lower = better), then by recency
+    // Sort by recency first, use proximity as tiebreaker
     const sorted = results.sort((a, b) => {
-      if (a.proximityScore !== b.proximityScore) {
-        return a.proximityScore - b.proximityScore;
-      }
       return b.updatedAt - a.updatedAt;
     });
     return { results: sorted.slice(0, limit), totalMatches: searchResults.length };
@@ -3967,6 +4032,20 @@ export const forkFromMessage = mutation({
       fork_count: currentForkCount + 1,
     });
 
+    // Auto-materialize the fork session via daemon
+    const daemonAgentType = agentType === "codex" ? "codex" : agentType === "gemini" ? "gemini" : "claude";
+    await ctx.db.insert("daemon_commands", {
+      user_id: userId,
+      command: "resume_session",
+      args: JSON.stringify({
+        session_id: forkSessionId,
+        agent_type: daemonAgentType,
+        conversation_id: newConversationId,
+        project_path: original.project_path || original.git_root,
+      }),
+      created_at: Date.now(),
+    });
+
     return {
       conversation_id: newConversationId,
       short_id: newConversationId.toString().slice(0, 7),
@@ -5391,7 +5470,7 @@ export const listIdleSessions = query({
     );
 
     const AGENT_STATUS_FRESH_MS = 5 * 60 * 1000;
-    const agentStatusMap = new Map<string, "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "stopped">();
+    const agentStatusMap = new Map<string, "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "stopped" | "starting" | "resuming">();
     for (const s of managedSessions) {
       if (s.conversation_id && s.agent_status && s.agent_status_updated_at &&
           (now - s.agent_status_updated_at) < AGENT_STATUS_FRESH_MS) {
@@ -5406,7 +5485,7 @@ export const listIdleSessions = query({
     );
 
     let clusterCutoff = 0;
-    if (!args.show_all && conversations.length > 0) {
+    if (conversations.length > 0) {
       const sorted = [...conversations].sort((a, b) => b.updated_at - a.updated_at);
       for (let i = 1; i < sorted.length; i++) {
         const gap = sorted[i - 1].updated_at - sorted[i].updated_at;
@@ -5456,15 +5535,18 @@ export const listIdleSessions = query({
       const dismissed = conv.inbox_dismissed_at && conv.inbox_dismissed_at >= conv.updated_at;
       if (dismissed && !pinned) continue;
 
-      if (!args.show_all && clusterCutoff > 0 && conv.updated_at < clusterCutoff && !hasPending && !pinned) {
+      if (clusterCutoff > 0 && conv.updated_at < clusterCutoff && !hasPending && !pinned) {
         hiddenCount++;
-        continue;
+        if (!args.show_all) continue;
       }
 
       const daemonAlive = liveConvIds.has(conv._id.toString()) ||
         (userDaemonAlive && (now - conv.updated_at) < 10 * 60 * 1000);
 
-      const lastRoleIsUser = lastMsgRole === "user";
+      const isInterruptMsg = !!lastUserMessage && (
+        lastUserMessage.startsWith("[Request interrupted") || lastUserMessage.startsWith("[Request cancelled")
+      );
+      const lastRoleIsUser = lastMsgRole === "user" && !isInterruptMsg;
       const recentlyUpdated = (now - conv.updated_at) < 45 * 1000;
 
       const isUnresponsive = conv.status === "active" && !daemonAlive && (
@@ -6486,20 +6568,28 @@ export const getUserMessages = query({
       )
       .order("desc")
       .take(500);
+    // Strip contextual tags that wrap user content so noise-prefix checks
+    // and content truncation operate on the actual user text, not metadata.
+    const stripContextTags = (s: string) =>
+      s.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "")
+       .replace(/<task-notification>[\s\S]*?<\/task-notification>/g, "")
+       .replace(/<task-reminder>[\s\S]*?<\/task-reminder>/g, "")
+       .trim();
+    const NOISE_PREFIXES = [
+      "<command-name>", "<command-message>",
+      "<local-command-stdout>", "<local-command-stderr>", "<local-command-caveat>",
+      "[Request interrupted", "[Request cancelled",
+      "This session is being continued",
+      "Your task is to create a detailed summary",
+      "Please continue the conversation",
+      "Read the output file to retrieve the result:",
+      "Caveat:",
+    ];
     return messages
       .filter((m) => {
         if (!m.content || !m.content.trim()) return false;
-        const t = m.content.trim();
-        const NOISE_PREFIXES = [
-          "<task-notification", "<system-reminder", "<command-name>", "<command-message>",
-          "<local-command-stdout>", "<local-command-stderr>", "<local-command-caveat>",
-          "[Request interrupted", "[Request cancelled",
-          "This session is being continued",
-          "Your task is to create a detailed summary",
-          "Please continue the conversation",
-          "Read the output file to retrieve the result:",
-          "Caveat:",
-        ];
+        const t = stripContextTags(m.content);
+        if (!t) return false;
         if (NOISE_PREFIXES.some((p) => t.startsWith(p))) return false;
         if (t.includes("Your task is to create a detailed summary of the conversation so far")) return false;
         if (m.tool_results && m.tool_results.length > 0 && t.length < 5) return false;
@@ -6508,7 +6598,7 @@ export const getUserMessages = query({
       .map((m) => ({
         _id: m._id,
         message_uuid: m.message_uuid,
-        content: m.content!.slice(0, 500),
+        content: (stripContextTags(m.content!) || m.content!).slice(0, 500),
         timestamp: m.timestamp,
       }));
   },

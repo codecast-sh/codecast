@@ -464,6 +464,7 @@ export default defineSchema({
     client_id: v.optional(v.string()),
     status: v.union(
       v.literal("pending"),
+      v.literal("injected"),
       v.literal("delivered"),
       v.literal("failed"),
       v.literal("undeliverable")
@@ -487,10 +488,25 @@ export default defineSchema({
     agent_status: v.optional(v.union(v.literal("working"), v.literal("idle"), v.literal("permission_blocked"), v.literal("compacting"), v.literal("thinking"), v.literal("connected"), v.literal("stopped"), v.literal("starting"), v.literal("resuming"))),
     agent_status_updated_at: v.optional(v.number()),
     permission_mode: v.optional(v.union(v.literal("default"), v.literal("plan"), v.literal("acceptEdits"), v.literal("bypassPermissions"), v.literal("dontAsk"))),
+    current_cpu: v.optional(v.number()),
+    current_memory: v.optional(v.number()),
+    current_pid_count: v.optional(v.number()),
   })
     .index("by_session_id", ["session_id"])
     .index("by_conversation_id", ["conversation_id"])
-    .index("by_user_id", ["user_id"]),
+    .index("by_user_id", ["user_id"])
+    .index("by_user_heartbeat", ["user_id", "last_heartbeat"]),
+
+  session_metrics: defineTable({
+    session_id: v.string(),
+    user_id: v.id("users"),
+    cpu: v.number(),
+    memory: v.number(),
+    pid_count: v.number(),
+    collected_at: v.number(),
+  })
+    .index("by_session_collected", ["session_id", "collected_at"])
+    .index("by_user_collected", ["user_id", "collected_at"]),
 
   commits: defineTable({
     conversation_id: v.optional(v.id("conversations")),
@@ -955,6 +971,23 @@ export default defineSchema({
       label: v.string(),
       path_or_url: v.string(),
     }))),
+    // Unified comment/entry timeline (replaces progress_log, decision_log, discoveries, context_pointers for new writes)
+    entries: v.optional(v.array(v.object({
+      type: v.union(
+        v.literal("progress"),
+        v.literal("decision"),
+        v.literal("discovery"),
+        v.literal("reference"),
+        v.literal("blocker"),
+        v.literal("note"),
+      ),
+      timestamp: v.number(),
+      session_id: v.optional(v.string()),
+      content: v.string(),
+      author: v.optional(v.string()),
+      rationale: v.optional(v.string()),
+      path_or_url: v.optional(v.string()),
+    }))),
     session_ids: v.optional(v.array(v.id("conversations"))),
     current_session_id: v.optional(v.id("conversations")),
     created_from_conversation_id: v.optional(v.id("conversations")),
@@ -1288,6 +1321,24 @@ export default defineSchema({
     embedding: v.optional(v.array(v.float64())),
 
     cli_edited_at: v.optional(v.number()),
+
+    // Unified comment/entry timeline (symmetric with plans and tasks)
+    entries: v.optional(v.array(v.object({
+      type: v.union(
+        v.literal("progress"),
+        v.literal("decision"),
+        v.literal("discovery"),
+        v.literal("reference"),
+        v.literal("blocker"),
+        v.literal("note"),
+      ),
+      timestamp: v.number(),
+      session_id: v.optional(v.string()),
+      content: v.string(),
+      author: v.optional(v.string()),
+      rationale: v.optional(v.string()),
+      path_or_url: v.optional(v.string()),
+    }))),
 
     created_at: v.number(),
     updated_at: v.number(),

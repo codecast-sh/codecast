@@ -405,6 +405,41 @@ export const update = mutation({
   },
 });
 
+export const addComment = mutation({
+  args: {
+    api_token: v.string(),
+    id: v.id("docs"),
+    content: v.string(),
+    type: v.optional(v.string()),
+    rationale: v.optional(v.string()),
+    path_or_url: v.optional(v.string()),
+    session_id: v.optional(v.string()),
+    author: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token);
+    if (!auth) throw new Error("Unauthorized");
+
+    const doc = await ctx.db.get(args.id);
+    if (!doc || doc.user_id !== auth.userId) throw new Error("Doc not found");
+
+    const entries = (doc as any).entries || [];
+    const entry: Record<string, any> = {
+      type: args.type || "note",
+      timestamp: Date.now(),
+      content: args.content,
+    };
+    if (args.session_id) entry.session_id = args.session_id;
+    if (args.author) entry.author = args.author;
+    if (args.rationale) entry.rationale = args.rationale;
+    if (args.path_or_url) entry.path_or_url = args.path_or_url;
+
+    entries.push(entry);
+    await ctx.db.patch(args.id, { entries, updated_at: Date.now() } as any);
+    return { success: true };
+  },
+});
+
 export const resetSync = mutation({
   args: {
     api_token: v.string(),
@@ -539,8 +574,8 @@ export const webList = query({
       ? args.team_id
       : !args.workspace ? user?.active_team_id : undefined;
 
-    // Project scope always shows personal docs regardless of active workspace
-    const effectiveWorkspace = (args.scope === "projects" || args.project_path)
+    // "projects" scope browses all personal docs; project_path is just a filter within the current workspace
+    const effectiveWorkspace = args.scope === "projects"
       ? "personal" as const
       : args.workspace;
 
@@ -1232,20 +1267,37 @@ export const expandMentions = query({
               }
               md += `\nProgress: ${doneCount}/${taskIds.length} done, ${ipCount} in progress, ${openCount} open\n\n`;
             }
-            // Decisions
-            if ((plan as any).decisions?.length) {
+            // Comments timeline (unified entries + legacy arrays)
+            const entries: any[] = [...((plan as any).entries || [])];
+            const seenKeys = new Set(entries.map((e: any) => `${e.timestamp}:${e.content}`));
+            for (const e of ((plan as any).progress_log || [])) {
+              const key = `${e.timestamp}:${e.entry}`;
+              if (!seenKeys.has(key)) entries.push({ type: "progress", timestamp: e.timestamp, content: e.entry });
+            }
+            for (const e of ((plan as any).decision_log || [])) {
+              const key = `${e.timestamp}:${e.decision}`;
+              if (!seenKeys.has(key)) entries.push({ type: "decision", timestamp: e.timestamp, content: e.decision, rationale: e.rationale });
+            }
+            for (const e of ((plan as any).discoveries || [])) {
+              const key = `${e.timestamp}:${e.finding}`;
+              if (!seenKeys.has(key)) entries.push({ type: "discovery", timestamp: e.timestamp, content: e.finding });
+            }
+            entries.sort((a: any, b: any) => a.timestamp - b.timestamp);
+
+            const decisions = entries.filter((e: any) => e.type === "decision").slice(-5);
+            if (decisions.length) {
               md += `#### Decisions\n\n`;
-              for (const d of (plan as any).decisions.slice(-5)) {
-                md += `- **${d.title || "Decision"}**: ${d.reason || d.content || ""}\n`;
+              for (const d of decisions) {
+                md += `- **${d.content}**${d.rationale ? `: ${d.rationale}` : ""}\n`;
               }
               md += `\n`;
             }
-            // Progress log
-            if ((plan as any).progress_log?.length) {
+            const recentProgress = entries.filter((e: any) => e.type === "progress").slice(-5);
+            if (recentProgress.length) {
               md += `#### Progress Log (recent)\n\n`;
-              for (const entry of (plan as any).progress_log.slice(-5)) {
+              for (const entry of recentProgress) {
                 const ts = entry.timestamp ? new Date(entry.timestamp).toISOString().slice(0, 16).replace("T", " ") : "";
-                md += `**${ts}** ${entry.content || entry.note || ""}\n\n`;
+                md += `**${ts}** ${entry.content}\n\n`;
               }
             }
             // Linked doc content

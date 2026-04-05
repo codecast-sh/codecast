@@ -2940,17 +2940,38 @@ cliRoute("/cli/plans/bind", async (ctx, body) => {
 cliRoute("/cli/plans/unbind", async (ctx, body) => {
   return await ctx.runMutation(api.plans.unbindSession, body);
 });
+// Unified comment route
+cliRoute("/cli/plans/comment", async (ctx, body) => {
+  return await ctx.runMutation(api.plans.addComment, body);
+});
+// Legacy routes — translate to addComment (only pass known args)
 cliRoute("/cli/plans/log", async (ctx, body) => {
-  return await ctx.runMutation(api.plans.addLogEntry, body);
+  return await ctx.runMutation(api.plans.addComment, {
+    api_token: body.api_token, short_id: body.short_id,
+    content: body.entry || body.content, type: "progress",
+    session_id: body.session_id,
+  });
 });
 cliRoute("/cli/plans/decide", async (ctx, body) => {
-  return await ctx.runMutation(api.plans.addDecision, body);
+  return await ctx.runMutation(api.plans.addComment, {
+    api_token: body.api_token, short_id: body.short_id,
+    content: body.decision || body.content, type: "decision",
+    rationale: body.rationale, session_id: body.session_id,
+  });
 });
 cliRoute("/cli/plans/discover", async (ctx, body) => {
-  return await ctx.runMutation(api.plans.addDiscovery, body);
+  return await ctx.runMutation(api.plans.addComment, {
+    api_token: body.api_token, short_id: body.short_id,
+    content: body.finding || body.content, type: "discovery",
+    session_id: body.session_id,
+  });
 });
 cliRoute("/cli/plans/pointer", async (ctx, body) => {
-  return await ctx.runMutation(api.plans.addPointer, body);
+  return await ctx.runMutation(api.plans.addComment, {
+    api_token: body.api_token, short_id: body.short_id,
+    content: body.label || body.content, type: "reference",
+    path_or_url: body.path_or_url,
+  });
 });
 cliRoute("/cli/plans/status", async (ctx, body) => {
   return await ctx.runMutation(api.plans.updateStatus, body);
@@ -3008,6 +3029,9 @@ cliRoute("/cli/docs/update", async (ctx, body) => {
     await ctx.runMutation(api.docs.resetSync, { api_token: body.api_token, id: body.id, content: body.content });
   }
   return result;
+});
+cliRoute("/cli/docs/comment", async (ctx, body) => {
+  return await ctx.runMutation(api.docs.addComment, body);
 });
 cliRoute("/cli/docs/search", async (ctx, body) => {
   return await ctx.runQuery(api.docs.search, body);

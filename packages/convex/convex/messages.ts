@@ -611,6 +611,19 @@ export const addMessages = mutation({
               Math.abs(msgTimestamp - r.timestamp) < (hasContent ? 5 * 60 * 1000 : 30_000)
           );
           if (dup) {
+            // If incoming message has images/tool_results that the existing doesn't, patch them in.
+            // This handles the race where a fast sync path stores the message without images,
+            // and the image-aware sync arrives later matching by content dedup.
+            const patch: Record<string, unknown> = {};
+            if (msg.images && msg.images.length > 0 && (!dup.images || dup.images.length === 0)) {
+              patch.images = msg.images;
+            }
+            if (msg.tool_results && msg.tool_results.length > 0 && (!dup.tool_results || dup.tool_results.length === 0)) {
+              patch.tool_results = safeToolResults;
+            }
+            if (Object.keys(patch).length > 0) {
+              await ctx.db.patch(dup._id, patch);
+            }
             ids.push(dup._id);
             continue;
           }

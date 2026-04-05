@@ -47,6 +47,43 @@ async function canAccessPlan(ctx: any, userId: Id<"users">, plan: any): Promise<
   return !!membership;
 }
 
+// Merge legacy per-type arrays with new unified entries into a single sorted timeline.
+// Deduplicates by timestamp+content to avoid showing entries written to both old and new.
+function mergePlanEntries(plan: any): Array<{
+  type: string; timestamp: number; content: string;
+  session_id?: string; author?: string; rationale?: string; path_or_url?: string;
+}> {
+  const seen = new Set<string>();
+  const all: any[] = [];
+
+  const add = (e: any) => {
+    const key = `${e.timestamp}:${e.content}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    all.push(e);
+  };
+
+  // New unified entries (preferred)
+  for (const e of (plan.entries || [])) add(e);
+
+  // Legacy arrays
+  for (const e of (plan.progress_log || [])) {
+    add({ type: "progress", timestamp: e.timestamp, content: e.entry, session_id: e.session_id });
+  }
+  for (const e of (plan.decision_log || [])) {
+    add({ type: "decision", timestamp: e.timestamp, content: e.decision, rationale: e.rationale, session_id: e.session_id });
+  }
+  for (const e of (plan.discoveries || [])) {
+    add({ type: "discovery", timestamp: e.timestamp, content: e.finding, session_id: e.session_id });
+  }
+  for (const e of (plan.context_pointers || [])) {
+    add({ type: "reference", timestamp: 0, content: e.label, path_or_url: e.path_or_url });
+  }
+
+  all.sort((a, b) => a.timestamp - b.timestamp);
+  return all;
+}
+
 // --- API token mutations ---
 
 export const create = mutation({
@@ -106,6 +143,7 @@ export const create = mutation({
       decision_log: [],
       discoveries: [],
       context_pointers: [],
+      entries: [],
       session_ids: [],
       created_from_conversation_id,
       model_stylesheet: args.model_stylesheet,
@@ -169,7 +207,8 @@ export const createFromTemplate = mutation({
       status: "active",
       progress: { total: template.task_templates.length, done: 0, in_progress: 0, open: template.task_templates.length },
       task_ids: [],
-      progress_log: [{ timestamp: now, entry: `Created from template: ${template.name}` }],
+      progress_log: [],
+      entries: [{ type: "progress", timestamp: now, content: `Created from template: ${template.name}` }],
       created_at: now,
       updated_at: now,
     } as any);
@@ -248,7 +287,8 @@ export const fork = mutation({
       acceptance_criteria: source.acceptance_criteria,
       progress: { total: sourceTasks.length, done: 0, in_progress: 0, open: sourceTasks.length },
       task_ids: [],
-      progress_log: [{ timestamp: now, entry: `Forked from ${args.source_short_id}` }],
+      progress_log: [],
+      entries: [{ type: "progress", timestamp: now, content: `Forked from ${args.source_short_id}` }],
       created_at: now,
       updated_at: now,
     } as any);
@@ -387,6 +427,46 @@ export const updateStatus = mutation({
   },
 });
 
+// Unified comment mutation — replaces addLogEntry, addDecision, addDiscovery, addPointer
+export const addComment = mutation({
+  args: {
+    api_token: v.string(),
+    short_id: v.string(),
+    content: v.string(),
+    type: v.optional(v.string()),
+    rationale: v.optional(v.string()),
+    path_or_url: v.optional(v.string()),
+    session_id: v.optional(v.string()),
+    author: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token);
+    if (!auth) throw new Error("Unauthorized");
+
+    const plan = await ctx.db
+      .query("plans")
+      .withIndex("by_short_id", (q) => q.eq("short_id", args.short_id))
+      .first();
+    if (!plan) throw new Error("Plan not found");
+
+    const entries = (plan as any).entries || [];
+    const entry: Record<string, any> = {
+      type: args.type || "progress",
+      timestamp: Date.now(),
+      content: args.content,
+    };
+    if (args.session_id) entry.session_id = args.session_id;
+    if (args.author) entry.author = args.author;
+    if (args.rationale) entry.rationale = args.rationale;
+    if (args.path_or_url) entry.path_or_url = args.path_or_url;
+
+    entries.push(entry);
+    await ctx.db.patch(plan._id, { entries, updated_at: Date.now() } as any);
+    return { success: true };
+  },
+});
+
+// Legacy mutations — kept for direct callers (addEscalation, updateDriveState, etc.)
 export const addLogEntry = mutation({
   args: {
     api_token: v.string(),
@@ -404,86 +484,9 @@ export const addLogEntry = mutation({
       .first();
     if (!plan) throw new Error("Plan not found");
 
-    const log = plan.progress_log || [];
-    log.push({ timestamp: Date.now(), entry: args.entry, session_id: args.session_id });
-
-    await ctx.db.patch(plan._id, { progress_log: log, updated_at: Date.now() });
-    return { success: true };
-  },
-});
-
-export const addDecision = mutation({
-  args: {
-    api_token: v.string(),
-    short_id: v.string(),
-    decision: v.string(),
-    rationale: v.optional(v.string()),
-    session_id: v.optional(v.string()),
-  },
-  handler: async (ctx, args) => {
-    const auth = await verifyApiToken(ctx, args.api_token);
-    if (!auth) throw new Error("Unauthorized");
-
-    const plan = await ctx.db
-      .query("plans")
-      .withIndex("by_short_id", (q) => q.eq("short_id", args.short_id))
-      .first();
-    if (!plan) throw new Error("Plan not found");
-
-    const log = plan.decision_log || [];
-    log.push({ timestamp: Date.now(), decision: args.decision, rationale: args.rationale, session_id: args.session_id });
-
-    await ctx.db.patch(plan._id, { decision_log: log, updated_at: Date.now() });
-    return { success: true };
-  },
-});
-
-export const addDiscovery = mutation({
-  args: {
-    api_token: v.string(),
-    short_id: v.string(),
-    finding: v.string(),
-    session_id: v.optional(v.string()),
-  },
-  handler: async (ctx, args) => {
-    const auth = await verifyApiToken(ctx, args.api_token);
-    if (!auth) throw new Error("Unauthorized");
-
-    const plan = await ctx.db
-      .query("plans")
-      .withIndex("by_short_id", (q) => q.eq("short_id", args.short_id))
-      .first();
-    if (!plan) throw new Error("Plan not found");
-
-    const discoveries = plan.discoveries || [];
-    discoveries.push({ timestamp: Date.now(), finding: args.finding, session_id: args.session_id });
-
-    await ctx.db.patch(plan._id, { discoveries, updated_at: Date.now() });
-    return { success: true };
-  },
-});
-
-export const addPointer = mutation({
-  args: {
-    api_token: v.string(),
-    short_id: v.string(),
-    label: v.string(),
-    path_or_url: v.string(),
-  },
-  handler: async (ctx, args) => {
-    const auth = await verifyApiToken(ctx, args.api_token);
-    if (!auth) throw new Error("Unauthorized");
-
-    const plan = await ctx.db
-      .query("plans")
-      .withIndex("by_short_id", (q) => q.eq("short_id", args.short_id))
-      .first();
-    if (!plan) throw new Error("Plan not found");
-
-    const pointers = plan.context_pointers || [];
-    pointers.push({ label: args.label, path_or_url: args.path_or_url });
-
-    await ctx.db.patch(plan._id, { context_pointers: pointers, updated_at: Date.now() });
+    const entries = (plan as any).entries || [];
+    entries.push({ type: "progress", timestamp: Date.now(), content: args.entry, session_id: args.session_id });
+    await ctx.db.patch(plan._id, { entries, updated_at: Date.now() } as any);
     return { success: true };
   },
 });
@@ -655,15 +658,15 @@ export const addEscalation = mutation({
     const escalationLog = ((plan as any).escalation_log || []) as any[];
     escalationLog.push(escalation);
 
-    const progressLog = plan.progress_log || [];
+    const entries = (plan as any).entries || [];
     const logEntry = args.task_short_id
       ? `[ESCALATION] ${args.task_short_id}: ${args.reason}`
       : `[ESCALATION] ${args.reason}`;
-    progressLog.push({ timestamp: Date.now(), entry: logEntry });
+    entries.push({ type: "blocker", timestamp: Date.now(), content: logEntry });
 
     await ctx.db.patch(plan._id, {
       escalation_log: escalationLog,
-      progress_log: progressLog,
+      entries,
       updated_at: Date.now(),
     } as any);
 
@@ -696,12 +699,12 @@ export const updateDriveState = mutation({
       total_rounds: args.total_rounds,
     };
 
-    const progressLog = plan.progress_log || [];
-    progressLog.push({ timestamp: Date.now(), entry: `Starting drive round ${args.current_round}/${args.total_rounds}` });
+    const entries = (plan as any).entries || [];
+    entries.push({ type: "progress", timestamp: Date.now(), content: `Starting drive round ${args.current_round}/${args.total_rounds}` });
 
     await ctx.db.patch(plan._id, {
       drive_state,
-      progress_log: progressLog,
+      entries,
       updated_at: Date.now(),
     } as any);
 
@@ -744,15 +747,16 @@ export const recordDriveFindings = mutation({
       drive_state.rounds.push(roundData);
     }
 
-    const progressLog = plan.progress_log || [];
-    progressLog.push({
+    const entries = (plan as any).entries || [];
+    entries.push({
+      type: "progress",
       timestamp: Date.now(),
-      entry: `Drive round ${args.round}: ${args.findings.length} findings, ${args.fixed.length} fixed${args.deferred?.length ? `, ${args.deferred.length} deferred` : ""}`,
+      content: `Drive round ${args.round}: ${args.findings.length} findings, ${args.fixed.length} fixed${args.deferred?.length ? `, ${args.deferred.length} deferred` : ""}`,
     });
 
     await ctx.db.patch(plan._id, {
       drive_state,
-      progress_log: progressLog,
+      entries,
       updated_at: Date.now(),
     } as any);
 
@@ -793,7 +797,10 @@ export const get = query({
       if (doc) doc_content = doc.content;
     }
 
-    return { ...plan, tasks, doc_content };
+    // Merge legacy arrays + new entries into unified comments timeline
+    const comments = mergePlanEntries(plan);
+
+    return { ...plan, tasks, doc_content, comments };
   },
 });
 
@@ -999,24 +1006,29 @@ export const snippet = query({
       }
     }
 
-    if (plan.decision_log?.length) {
+    const comments = mergePlanEntries(plan);
+    const decisions = comments.filter(e => e.type === "decision").slice(-3);
+    const discoveries = comments.filter(e => e.type === "discovery").slice(-3);
+    const references = comments.filter(e => e.type === "reference");
+
+    if (decisions.length) {
       lines.push("Recent Decisions:");
-      for (const d of plan.decision_log.slice(-3)) {
-        lines.push(`  - ${d.decision}${d.rationale ? ` (${d.rationale})` : ""}`);
+      for (const d of decisions) {
+        lines.push(`  - ${d.content}${d.rationale ? ` (${d.rationale})` : ""}`);
       }
     }
 
-    if (plan.discoveries?.length) {
+    if (discoveries.length) {
       lines.push("Discoveries:");
-      for (const d of plan.discoveries.slice(-3)) {
-        lines.push(`  - ${d.finding}`);
+      for (const d of discoveries) {
+        lines.push(`  - ${d.content}`);
       }
     }
 
-    if (plan.context_pointers?.length) {
+    if (references.length) {
       lines.push("Context:");
-      for (const p of plan.context_pointers) {
-        lines.push(`  - ${p.label}: ${p.path_or_url}`);
+      for (const r of references) {
+        lines.push(`  - ${r.content}: ${r.path_or_url}`);
       }
     }
 
@@ -1076,6 +1088,7 @@ export const webCreate = mutation({
       decision_log: [],
       discoveries: [],
       context_pointers: [],
+      entries: [],
       session_ids: [],
       model_stylesheet: args.model_stylesheet,
       fidelity: args.fidelity as any,
@@ -1234,12 +1247,14 @@ export const webGet = query({
     }
 
     const author = await ctx.db.get(plan.user_id);
+    const comments = mergePlanEntries(plan);
 
     return {
       ...plan,
       tasks,
       sessions,
       doc_content,
+      comments,
       author: author ? { name: author.name, image: author.image } : null,
     };
   },
@@ -1451,7 +1466,7 @@ export const webPlanContext = query({
       status: plan.status,
       tasks,
       progress: { total: tasks.length, done, in_progress: inProgress },
-      recent_log: (plan.progress_log || []).slice(-3),
+      recent_log: mergePlanEntries(plan).filter(e => e.type === "progress").slice(-3),
     };
   },
 });
