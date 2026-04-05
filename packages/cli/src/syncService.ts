@@ -643,9 +643,48 @@ export class SyncService {
     } catch {}
   }
 
+  async reportSessionMetrics(sessionId: string, cpu: number, memory: number, pidCount: number): Promise<void> {
+    try {
+      await this.client.mutation("managedSessions:reportMetrics" as any, {
+        session_id: sessionId,
+        cpu,
+        memory,
+        pid_count: pidCount,
+        api_token: this.apiToken,
+      });
+    } catch {}
+  }
+
+  async ackInjectedMessages(conversationId: string): Promise<void> {
+    try {
+      await this.client.mutation("pendingMessages:ackInjectedMessages" as any, {
+        conversation_id: conversationId,
+        api_token: this.apiToken,
+      });
+    } catch (error) {
+      if (isAuthError(error)) {
+        throw new AuthExpiredError();
+      }
+      // Non-critical — don't let ack failures break the sync loop
+    }
+  }
+
+  async resetInjectedMessages(conversationId: string): Promise<void> {
+    try {
+      await this.client.mutation("pendingMessages:resetInjectedMessages" as any, {
+        conversation_id: conversationId,
+        api_token: this.apiToken,
+      });
+    } catch (error) {
+      if (isAuthError(error)) {
+        throw new AuthExpiredError();
+      }
+    }
+  }
+
   async updateMessageStatus(params: {
     messageId: string;
-    status: "pending" | "delivered" | "failed";
+    status: "pending" | "injected" | "delivered" | "failed";
     deliveredAt?: number;
   }): Promise<void> {
     try {

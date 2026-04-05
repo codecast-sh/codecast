@@ -400,11 +400,9 @@ function sendLogImmediate(level: LogLevel, message: string, metadata?: RemoteLog
   }).catch(() => {});
 }
 
-const IDLE_COOLDOWN_MS = 5 * 60_000;
 const IDLE_DEBOUNCE_MS = 5_000;
 const idleTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const lastIdleNotifiedSize = new Map<string, number>();
-const lastErrorNotification = new Map<string, number>();
 const lastWorkingStatusSent = new Map<string, number>();
 const WORKING_STATUS_THROTTLE_MS = 10_000;
 const lastSentAgentStatus = new Map<string, AgentStatus>();
@@ -649,20 +647,6 @@ function truncateForNotification(text: string, maxLen = 200): string {
     result = result.slice(0, maxLen) + "...";
   }
   return result;
-}
-
-function detectErrorInMessage(content: string): string | null {
-  const patterns = [
-    /(?:Error|ERROR|FATAL|FAILED|panic):\s*(.+)/,
-    /(?:compilation failed|build failed|test failed)/i,
-    /exit code (?!0\b)\d+/i,
-    /(?:Traceback|Exception|Unhandled rejection)/i,
-  ];
-  for (const pat of patterns) {
-    const match = content.match(pat);
-    if (match) return match[0].slice(0, 200);
-  }
-  return null;
 }
 
 function extractPendingToolUseFromTranscript(transcriptPath: string): { tool_name: string; arguments_preview: string } | null {
@@ -1301,6 +1285,7 @@ async function executeRemoteCommand(
             if (initialManagedSessionId && syncServiceRef) {
               syncServiceRef.registerManagedSession(initialManagedSessionId, process.pid, undefined, conversationId).catch(() => {});
               syncServiceRef.updateSessionAgentStatus(conversationId, "connected").catch(() => {});
+              ensureManagedSessionHeartbeat(initialManagedSessionId);
             }
             log(`[codex-app-server] registered conv=${conversationId.slice(0, 12)} -> thread=${codexThreadId.slice(0, 8)}`);
           }
@@ -1585,6 +1570,7 @@ async function executeRemoteCommand(
           }
           removeAppServerThreadRegistration(appServerThreads, appServerConversations, conversationId, killThreadId);
           forgetPersistedAppServerConversation(conversationId);
+          stopManagedSessionHeartbeat(killThreadId);
           if (syncServiceRef) {
             syncServiceRef.markSessionCompleted(conversationId).catch(() => {});
             sendAgentStatus(syncServiceRef, conversationId, killThreadId, "stopped");
@@ -1670,6 +1656,12 @@ async function executeRemoteCommand(
               }
             }
           } catch {}
+        }
+
+        // Reset any injected-but-unacked messages back to pending so they
+        // get re-delivered when the session is resumed
+        if (syncServiceRef) {
+          syncServiceRef.resetInjectedMessages(conversationId).catch(() => {});
         }
 
         if (!result) result = sessionId ? "no_process" : "no_session";
@@ -2531,6 +2523,11 @@ async function syncMessagesBatch(
       messages: messages.map(prepMessageForSync),
     });
     resetAuthFailureCount();
+    // If we just synced a user message from the JSONL, ack any injected pending messages
+    // This confirms the session received the injected text
+    if (messages.some(m => m.role === "user")) {
+      syncService.ackInjectedMessages(conversationId).catch(() => {});
+    }
     return { authExpired: false, conversationNotFound: false };
   } catch (err) {
     if (err instanceof AuthExpiredError) {
@@ -2947,6 +2944,7 @@ async function processSessionFile(
       } else {
         const cliFlags = detectCliFlags(headContent + "\n" + newContent);
         let subagentDescription: string | undefined;
+        let subagentAgentType: string | undefined;
         if (isSubagent) {
           try {
             const metaPath = filePath.replace(/\.jsonl$/, ".meta.json");
@@ -2956,6 +2954,7 @@ async function processSessionFile(
                 subagentDescription = meta.description;
                 subagentDescriptions.set(sessionId, meta.description);
               }
+              if (meta.agentType) subagentAgentType = meta.agentType;
             }
           } catch {}
         }
@@ -2983,6 +2982,29 @@ async function processSessionFile(
         log(`Created conversation ${conversationId} for session ${sessionId}`);
         syncStats.conversationsCreated++;
         syncSkillsForConversation(conversationId, actualProjectPath, syncService);
+
+        // Create plan entity for Plan-type subagents and bind to parent conversation
+        if (subagentAgentType === "Plan" && parentConversationId && !planModeSynced.has(sessionId)) {
+          planModeSynced.add(sessionId);
+          const pathParts = filePath.split(path.sep);
+          const subIdx = pathParts.lastIndexOf("subagents");
+          const parentSessionUuid = subIdx >= 1 ? pathParts[subIdx - 1] : undefined;
+          if (parentSessionUuid) {
+            syncService.syncPlanFromPlanMode({
+              sessionId: parentSessionUuid,
+              planContent: `# ${subagentDescription || "Plan"}`,
+              projectPath: actualProjectPath,
+            }).then((planShortId) => {
+              if (planShortId) {
+                planModePlanMap.set(sessionId, planShortId);
+                savePlanModeCache();
+                log(`Created plan ${planShortId} for Plan subagent ${sessionId.slice(0, 8)}, bound to parent ${parentSessionUuid.slice(0, 8)}`);
+              }
+            }).catch((err) => {
+              log(`Failed to create plan for Plan subagent: ${err instanceof Error ? err.message : String(err)}`);
+            });
+          }
+        }
 
         // Detect tmux and register managed session
         findSessionProcess(sessionId, "claude").then((proc) => {
@@ -3330,21 +3352,6 @@ async function processSessionFile(
         }).catch((err) => {
           log(`Permission handling error: ${err instanceof Error ? err.message : String(err)}`);
         });
-      }
-
-      const errorText = detectErrorInMessage(lastAssistantMessage.content);
-      if (errorText && !permissionPrompt && !isSubagent) {
-        const now = Date.now();
-        const lastErr = lastErrorNotification.get(sessionId) ?? 0;
-        if (now - lastErr > IDLE_COOLDOWN_MS) {
-          lastErrorNotification.set(sessionId, now);
-          syncService.createSessionNotification({
-            conversation_id: conversationId,
-            type: "session_error",
-            title: "codecast - Error",
-            message: truncateForNotification(errorText),
-          }).catch(() => {});
-        }
       }
 
       if (!permissionPrompt) {
@@ -5413,6 +5420,7 @@ async function rehydratePersistedAppServerThreads(): Promise<void> {
         persist: false,
         approvalPolicy: rehydratedPolicy,
       });
+      ensureManagedSessionHeartbeat(record.threadId);
       resumed++;
     } catch (err) {
       dropped++;
@@ -5689,6 +5697,12 @@ function ensureManagedSessionHeartbeat(sessionId: string): void {
       const result = await syncServiceRef!.heartbeatManagedSession(sessionId);
       await processHeartbeatResponse(sessionId, result);
     } catch {}
+
+    // Report resource metrics if available
+    const resources = latestSessionResources.get(sessionId);
+    if (resources) {
+      syncServiceRef!.reportSessionMetrics(sessionId, resources.cpu, resources.memory, resources.pidCount).catch(() => {});
+    }
 
     const count = (heartbeatHealthCheckCounter.get(sessionId) || 0) + 1;
     heartbeatHealthCheckCounter.set(sessionId, count);
@@ -6891,9 +6905,9 @@ async function deliverMessage(
         await new Promise(resolve => setTimeout(resolve, 1500));
         const startedTmuxTarget = entry.tmuxSession + ":0.0";
         await injectViaTmux(startedTmuxTarget, content);
-        await syncService.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
+        await syncService.updateMessageStatus({ messageId, status: "injected" });
         syncService.updateSessionAgentStatus(conversationId, "connected").catch(() => {});
-        log(`Delivered message to started session tmux ${entry.tmuxSession} for conversation ${conversationId.slice(0, 12)}`);
+        log(`Injected message to started session tmux ${entry.tmuxSession} for conversation ${conversationId.slice(0, 12)}`);
         const isPollResponse = !!parsePollMessage(content);
         if (content.trimStart().startsWith("/") || isPollResponse) {
           checkForInteractivePrompt(startedTmuxTarget, conversationId, conversationId, syncService, isPollResponse ? 4000 : 2000).catch(() => {});
@@ -6999,7 +7013,7 @@ async function deliverMessage(
         try { await tmuxExec(["kill-session", "-t", cachedTmux]); } catch {}
       } else {
         await injectViaTmux(cachedTmux, content);
-        await syncService.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
+        await syncService.updateMessageStatus({ messageId, status: "injected" });
         syncService.setSessionError(conversationId).catch(() => {});
         const isPollResponse = !!parsePollMessage(content);
         if (content.trimStart().startsWith("/") || isPollResponse) {
@@ -7042,8 +7056,8 @@ async function deliverMessage(
             sessionProcessCache.delete(sessionId);
             agentDetectedDead = true;
           } else {
-            await syncService.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
-            logDelivery(`Delivered via tmux ${tmuxTarget}`);
+            await syncService.updateMessageStatus({ messageId, status: "injected" });
+            logDelivery(`Injected via tmux ${tmuxTarget}`);
             const isPollResponse = !!parsePollMessage(content);
             if (content.trimStart().startsWith("/") || isPollResponse) {
               checkForInteractivePrompt(tmuxTarget, sessionId, conversationId, syncService, isPollResponse ? 4000 : 2000).catch(() => {});
@@ -7061,8 +7075,8 @@ async function deliverMessage(
         logDelivery(`Trying ${termLabel} injection for tty=${proc.tty}`);
         try {
           await injectViaTerminal(proc.tty, content, proc.termProgram);
-          await syncService.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
-          logDelivery(`Delivered via ${termLabel} tty=${proc.tty}`);
+          await syncService.updateMessageStatus({ messageId, status: "injected" });
+          logDelivery(`Injected via ${termLabel} tty=${proc.tty}`);
           return true;
         } catch (err) {
           logDelivery(`${termLabel} injection failed for ${proc.tty}: ${err instanceof Error ? err.message : String(err)}`);
@@ -7091,8 +7105,8 @@ async function deliverMessage(
   if (resumed) {
     resetSessionDeliveryFailures(sessionId);
     materializedSessions.delete(sessionId);
-    await syncService.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
-    logDelivery(`Delivered via auto-resume for session=${sessionId.slice(0, 8)}`);
+    await syncService.updateMessageStatus({ messageId, status: "injected" });
+    logDelivery(`Injected via auto-resume for session=${sessionId.slice(0, 8)}`);
     const isPollResponse = !!parsePollMessage(content);
     if (content.trimStart().startsWith("/") || isPollResponse) {
       const resumeTmux = resumeSessionCache.get(sessionId);
@@ -7112,8 +7126,8 @@ async function deliverMessage(
   if (repaired) {
     resetSessionDeliveryFailures(sessionId);
     materializedSessions.delete(sessionId);
-    await syncService.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
-    logDelivery(`Delivered via repair+resume for session=${sessionId.slice(0, 8)}`);
+    await syncService.updateMessageStatus({ messageId, status: "injected" });
+    logDelivery(`Injected via repair+resume for session=${sessionId.slice(0, 8)}`);
     const isPollResponse = !!parsePollMessage(content);
     if (content.trimStart().startsWith("/") || isPollResponse) {
       const resumeTmux = resumeSessionCache.get(sessionId);
@@ -9282,6 +9296,12 @@ async function main(): Promise<void> {
   codexAppServerInstance.on("exited", () => {
     if (appServerThreads.size > 0 || appServerConversations.size > 0) {
       log(`[codex-app-server] clearing ${appServerThreads.size} live thread registration(s) after exit`);
+      // Notify every active conversation that its session has stopped
+      // before wiping the maps, so the UI doesn't stay stuck on "working"
+      for (const [threadId, entry] of appServerThreads) {
+        sendAgentStatus(syncService, entry.conversationId, threadId, "stopped");
+        stopManagedSessionHeartbeat(threadId);
+      }
     }
     clearLiveAppServerThreadRegistrations();
   });
@@ -9312,6 +9332,8 @@ async function main(): Promise<void> {
     appServerTurnProgress.set(turnId, { threadId, items: [] });
     if (entry) {
       sendAgentStatus(syncService, entry.conversationId, threadId, "working");
+      // Persist early so mid-turn threads survive an app-server crash
+      markAppServerConversationResumable(entry.conversationId, threadId);
     }
   });
 
@@ -9573,7 +9595,7 @@ async function main(): Promise<void> {
                   titleCache
                 );
                 if (delivered) {
-                  logDelivery(`SUCCESS: msg=${msg._id.slice(0, 8)} delivered`);
+                  logDelivery(`SUCCESS: msg=${msg._id.slice(0, 8)} injected`);
                 } else {
                   logDelivery(`FAILED: msg=${msg._id.slice(0, 8)} delivery returned false, scheduling retry ${(msg.retry_count ?? 0) + 1}`);
                   scheduleMessageRetry(msg._id, msg.retry_count ?? 0, msg.conversation_id, messageContent);

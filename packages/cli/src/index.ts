@@ -1901,7 +1901,7 @@ Once you have a task:
 If bound to a plan, keep the bigger picture coherent:
 - Task larger than expected? Suggest splitting it.
 - Your work creates a dependency? Flag it.
-- Making a directional decision? Record it with \`cast plan decide <plan_id> "rationale"\`.
+- Making a directional decision? Record it with \`cast plan comment <plan_id> "decision" -d -r "rationale"\`.
 - Acceptance criteria ambiguous? Ask before assuming.
 
 If blocked, say so explicitly:
@@ -1928,11 +1928,11 @@ cast plan bind/unbind <plan_id>             # Bind/unbind session to plan
 cast plan decompose <plan_id>              # Generate tasks from goal
 cast plan orchestrate <plan_id>            # Spawn agents for ready tasks
 cast plan show/status <plan_id>            # Plan details
-cast plan update <plan_id> -n "note"       # Log progress
-cast plan decide <plan_id> "decision" --rationale "why"
+cast plan comment <plan_id> "note"         # Add comment (progress by default)
+cast plan comment <plan_id> "x" -d -r "y" # Decision with rationale
 cast plan done/drop <plan_id>             # Close or abandon a plan
 cast doc create "Title" [-c content] [-t type]
-cast doc ls/get/edit/search
+cast doc show/ls/edit/search/comment
 \`\`\`
 ${WORK_SNIPPET_END}
 `;
@@ -7878,7 +7878,8 @@ const EVENT_SHORTHANDS: Record<string, { event_type: string; action?: string }> 
 const schedule = program
   .command("schedule")
   .alias("sched")
-  .description("Manage scheduled agent tasks");
+  .description("Manage scheduled agent tasks")
+  .showHelpAfterError(true);
 
 schedule
   .command("add")
@@ -8677,7 +8678,8 @@ function formatAge(ms: number): string {
 const work = program
   .command("task")
   .alias("t")
-  .description("Manage work items (tasks, bugs, features)");
+  .description("Manage work items (tasks, bugs, features)")
+  .showHelpAfterError(true);
 
 work
   .command("create")
@@ -8927,6 +8929,7 @@ work
   .action(async (shortId: string, options: any) => {
     if (!options.blocks && !options.blockedBy) {
       console.error("Specify --blocks or --blocked-by");
+      console.error("Usage: cast task dep <id> --blocks <other_id>");
       process.exit(1);
     }
     const body: Record<string, any> = { short_id: shortId };
@@ -9081,7 +9084,8 @@ const DOC_TYPE_ICONS: Record<string, string> = {
 const doc = program
   .command("doc")
   .alias("d")
-  .description("Create and edit documents");
+  .description("Create and edit documents")
+  .showHelpAfterError(true);
 
 doc
   .command("create")
@@ -9108,8 +9112,12 @@ doc
     if (options.project) body.project_id = options.project;
 
     const sessionId = detectCurrentSessionId();
-    if (sessionId) body.conversation_id = sessionId;
-    body.source = "agent";
+    if (sessionId) {
+      body.conversation_id = sessionId;
+      body.source = "agent";
+    } else {
+      body.source = "human";
+    }
 
     const result = await cliPost("/cli/docs/create", body);
     const id = result.id || result._id;
@@ -9140,7 +9148,8 @@ doc
   });
 
 doc
-  .command("get")
+  .command("show")
+  .alias("get")
   .description("Show a document's content")
   .argument("<id>", "Document ID")
   .action(async (id: string) => {
@@ -9150,6 +9159,40 @@ doc
     if (result.labels?.length) console.log(`Labels: ${result.labels.join(", ")}`);
     console.log("");
     console.log(result.content || "(empty)");
+    if (result.entries?.length) {
+      const ENTRY_ICONS: Record<string, string> = {
+        progress: `${c.blue}↳${c.reset}`,
+        decision: `${c.yellow}◆${c.reset}`,
+        discovery: `${c.green}★${c.reset}`,
+        reference: `${c.cyan}→${c.reset}`,
+        blocker: `${c.red}!${c.reset}`,
+        note: `${c.dim}·${c.reset}`,
+      };
+      console.log(`\n  ${c.bold}Comments (${result.entries.length})${c.reset}`);
+      for (const e of result.entries.slice(-10)) {
+        const ago = formatMs(Date.now() - e.timestamp);
+        const icon = ENTRY_ICONS[e.type] || ENTRY_ICONS.note;
+        const extra = e.rationale ? ` ${c.dim}(${e.rationale})${c.reset}` : "";
+        const ref = e.path_or_url ? ` ${c.dim}→ ${e.path_or_url}${c.reset}` : "";
+        console.log(`  ${icon} ${c.dim}${ago} ago:${c.reset} ${e.content}${extra}${ref}`);
+      }
+    }
+  });
+
+doc
+  .command("comment")
+  .description("Add a comment to a document")
+  .argument("<id>", "Document ID")
+  .argument("<text>", "Comment text")
+  .option("-t, --type <type>", "Comment type: note, progress, decision, discovery, reference, blocker", "note")
+  .option("-a, --author <name>", "Override comment author")
+  .action(async (id: string, text: string, options: any) => {
+    const sessionId = detectCurrentSessionId();
+    const body: Record<string, any> = { id, content: text, type: options.type };
+    if (sessionId) body.session_id = sessionId;
+    if (options.author) body.author = options.author;
+    await cliPost("/cli/docs/comment", body);
+    console.log(`${c.green}ok${c.reset} Comment added to doc ${c.cyan}${id}${c.reset}`);
   });
 
 doc
@@ -9209,7 +9252,8 @@ doc
 const plan = program
   .command("plan")
   .alias("p")
-  .description("Manage multi-session plans");
+  .description("Manage multi-session plans")
+  .showHelpAfterError(true);
 
 plan
   .command("create")
@@ -9247,6 +9291,9 @@ plan
 
     const result = await cliPost("/cli/plans/create", body);
     console.log(`${c.green}ok${c.reset} Created plan ${c.cyan}${result.short_id}${c.reset}: ${title}`);
+    if (sessionId && !options.fromSession) {
+      console.log(fmt.muted(`  Run ${c.cyan}cast plan bind ${result.short_id}${c.reset} to bind this session to the plan`));
+    }
 
     if (options.template) {
       const templates: Record<string, Array<{ title: string; description: string; blocked_by?: string[]; labels?: string[] }>> = {
@@ -9357,29 +9404,23 @@ plan
         console.log(`    ${tIcon} ${c.cyan}${t.short_id}${c.reset} ${t.title} ${c.dim}(${t.status})${c.reset}`);
       }
     }
-    if (p.progress_log?.length) {
-      console.log(`\n  ${c.bold}Progress (recent):${c.reset}`);
-      for (const entry of p.progress_log.slice(-10)) {
-        const ts = new Date(entry.timestamp).toLocaleString();
-        console.log(`    ${c.dim}${ts}:${c.reset} ${entry.entry}`);
-      }
-    }
-    if (p.decision_log?.length) {
-      console.log(`\n  ${c.bold}Decisions:${c.reset}`);
-      for (const d of p.decision_log) {
-        console.log(`    ${d.decision} ${c.dim}(${d.rationale})${c.reset}`);
-      }
-    }
-    if (p.discoveries?.length) {
-      console.log(`\n  ${c.bold}Discoveries:${c.reset}`);
-      for (const d of p.discoveries) {
-        console.log(`    ${d.finding}`);
-      }
-    }
-    if (p.context_pointers?.length) {
-      console.log(`\n  ${c.bold}Context:${c.reset}`);
-      for (const cp of p.context_pointers) {
-        console.log(`    ${cp.label}: ${cp.path_or_url}`);
+    if (p.comments?.length) {
+      const ENTRY_ICONS: Record<string, string> = {
+        progress: `${c.blue}↳${c.reset}`,
+        decision: `${c.yellow}◆${c.reset}`,
+        discovery: `${c.green}★${c.reset}`,
+        reference: `${c.cyan}→${c.reset}`,
+        blocker: `${c.red}!${c.reset}`,
+        note: `${c.dim}·${c.reset}`,
+      };
+      console.log(`\n  ${c.bold}Comments (${p.comments.length}):${c.reset}`);
+      for (const entry of p.comments.slice(-15)) {
+        const ago = formatMs(Date.now() - entry.timestamp);
+        const icon = ENTRY_ICONS[entry.type] || ENTRY_ICONS.note;
+        const extra = entry.rationale ? ` ${c.dim}(${entry.rationale})${c.reset}` : "";
+        const ref = entry.path_or_url ? ` ${c.dim}→ ${entry.path_or_url}${c.reset}` : "";
+        const author = entry.author ? `${entry.author} ` : "";
+        console.log(`    ${icon} ${c.dim}${author}${ago} ago:${c.reset} ${entry.content}${extra}${ref}`);
       }
     }
     console.log();
@@ -9445,6 +9486,7 @@ plan
     }
     if (!options.log && !options.goal && !options.title && bodyContent === undefined) {
       console.error("Specify --log, --goal, --title, --body, or --body-file");
+      console.error(`Usage: cast plan update <plan_id> --goal "..." or cast plan comment <plan_id> "note"`);
       process.exit(1);
     }
   });
@@ -9475,11 +9517,34 @@ plan
   });
 
 plan
-  .command("decide")
-  .description("Log a decision on a plan")
+  .command("comment")
+  .description("Add a comment to a plan")
   .argument("<plan_id>", "Plan short ID")
-  .argument("<decision>", "The decision")
-  .option("--rationale <why>", "Rationale for the decision")
+  .argument("<text>", "Comment text")
+  .option("-t, --type <type>", "Comment type: progress, decision, discovery, reference, blocker, note", "progress")
+  .option("-d, --decision", "Shorthand for --type decision")
+  .option("-f, --finding", "Shorthand for --type discovery")
+  .option("--ref <path_or_url>", "Add a reference pointer (sets type to reference)")
+  .option("-r, --rationale <why>", "Rationale (for decisions)")
+  .option("-a, --author <name>", "Override comment author")
+  .action(async (planId: string, text: string, options: any) => {
+    const sessionId = detectCurrentSessionId();
+    let type = options.type;
+    if (options.decision) type = "decision";
+    if (options.finding) type = "discovery";
+    if (options.ref) type = "reference";
+
+    const body: Record<string, any> = { short_id: planId, content: text, type };
+    if (options.rationale) body.rationale = options.rationale;
+    if (options.ref) body.path_or_url = options.ref;
+    if (sessionId) body.session_id = sessionId;
+    if (options.author) body.author = options.author;
+    await cliPost("/cli/plans/comment", body);
+    console.log(`${c.green}ok${c.reset} Comment added to ${c.cyan}${planId}${c.reset}`);
+  });
+
+// Legacy aliases
+plan.command("decide").argument("<plan_id>").argument("<decision>").option("--rationale <why>")
   .action(async (planId: string, decision: string, options: any) => {
     const sessionId = detectCurrentSessionId();
     const body: Record<string, any> = { short_id: planId, decision };
@@ -9487,31 +9552,22 @@ plan
     if (sessionId) body.session_id = sessionId;
     await cliPost("/cli/plans/decide", body);
     console.log(`${c.green}ok${c.reset} Decision logged to ${c.cyan}${planId}${c.reset}`);
-  });
+  }).description("(alias for: plan comment -d)");
 
-plan
-  .command("discover")
-  .description("Log a discovery on a plan")
-  .argument("<plan_id>", "Plan short ID")
-  .argument("<finding>", "The finding")
+plan.command("discover").argument("<plan_id>").argument("<finding>")
   .action(async (planId: string, finding: string) => {
     const sessionId = detectCurrentSessionId();
     const body: Record<string, any> = { short_id: planId, finding };
     if (sessionId) body.session_id = sessionId;
     await cliPost("/cli/plans/discover", body);
     console.log(`${c.green}ok${c.reset} Discovery logged to ${c.cyan}${planId}${c.reset}`);
-  });
+  }).description("(alias for: plan comment -f)");
 
-plan
-  .command("pointer")
-  .description("Add a context pointer to a plan")
-  .argument("<plan_id>", "Plan short ID")
-  .argument("<label>", "Pointer label")
-  .argument("<path>", "Path or URL")
+plan.command("pointer").argument("<plan_id>").argument("<label>").argument("<path>")
   .action(async (planId: string, label: string, pathOrUrl: string) => {
     await cliPost("/cli/plans/pointer", { short_id: planId, label, path_or_url: pathOrUrl });
     console.log(`${c.green}ok${c.reset} Pointer added to ${c.cyan}${planId}${c.reset}`);
-  });
+  }).description("(alias for: plan comment --ref)");
 
 plan
   .command("activate")
@@ -10393,8 +10449,8 @@ plan
       }
     }
 
-    const progressLog = plan.progress_log || [];
-    const lastOrch = [...progressLog].reverse().find((e: any) => /orchestrat/i.test(e.entry));
+    const comments = plan.comments || [];
+    const lastOrch = [...comments].reverse().find((e: any) => /orchestrat/i.test(e.content));
     if (lastOrch) {
       const ts = new Date(lastOrch.timestamp).toLocaleString();
       console.log(`\n  ${c.dim}Last orchestrated:${c.reset} ${ts}`);
@@ -10533,12 +10589,12 @@ plan
     console.log(`  ${c.dim}Remaining:${c.reset} ${remaining} tasks`);
     console.log(`  ${c.dim}Est time:${c.reset} ${estHrs > 0 ? `${estHrs}h ` : ""}${estMins % 60}m`);
 
-    const progressLog = plan.progress_log || [];
-    if (progressLog.length > 0) {
+    const progressComments = (plan.comments || []).filter((e: any) => e.type === "progress");
+    if (progressComments.length > 0) {
       console.log(`\n  ${c.bold}Recent activity:${c.reset}`);
-      for (const e of progressLog.slice(-10)) {
+      for (const e of progressComments.slice(-10)) {
         const ts = new Date(e.timestamp).toLocaleTimeString();
-        console.log(`  ${c.dim}${ts}${c.reset} ${e.entry}`);
+        console.log(`  ${c.dim}${ts}${c.reset} ${e.content}`);
       }
     }
     console.log();
@@ -10822,7 +10878,7 @@ plan
     if (!plan) { console.error("Plan not found"); process.exit(1); }
 
     const tasks = plan.tasks || [];
-    let progressLog = plan.progress_log;
+    let progressLog = plan.comments || plan.progress_log;
 
     if (options.fromProgress) {
       try {
@@ -11506,7 +11562,8 @@ program
 const workflow = program
   .command("workflow")
   .alias("wf")
-  .description("Manage and run workflow templates (.cast files)");
+  .description("Manage and run workflow templates (.cast files)")
+  .showHelpAfterError(true);
 
 workflow
   .command("run <file>")

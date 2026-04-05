@@ -246,8 +246,8 @@ export function buildRetroPrompt(plan: any, tasks: any[], progressLog?: any[]): 
     `Round ${r.round}: ${r.findings.length} findings, ${r.fixed.length} fixed${r.deferred?.length ? `, ${r.deferred.length} deferred` : ""}`
   ).join("\n") || "No drive rounds";
 
-  const logEntries = (progressLog || plan.progress_log || []).slice(-10)
-    .map((e: any) => `- ${e.entry}`).join("\n");
+  const logEntries = (progressLog || plan.entries || plan.progress_log || []).slice(-10)
+    .map((e: any) => `- ${e.content || e.entry}`).join("\n");
 
   return `Generate a structured retrospective for this plan. Return ONLY valid JSON.
 
