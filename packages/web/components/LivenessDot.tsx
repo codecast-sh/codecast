@@ -1,5 +1,5 @@
-import Link from "next/link";
 import { cn } from "@/lib/utils";
+import { useInboxStore } from "../store/inboxStore";
 
 export type LivenessState =
   | "active"
@@ -126,14 +126,21 @@ export function ActiveSessionBadge({ session, compact, className }: ActiveSessio
     );
   }
 
+  const handleClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    const store = useInboxStore.getState();
+    store.setCurrentSession(session_id);
+    store.selectPanelSession(session_id);
+  };
+
   return (
-    <Link
-      href={`/conversation/${session_id}`}
-      onClick={(e) => e.stopPropagation()}
+    <button
+      onClick={handleClick}
       className={cn("inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] cursor-pointer transition-colors flex-shrink-0", badgeClass, className)}
       title={title || "Active session"}
     >
       {content}
-    </Link>
+    </button>
   );
 }

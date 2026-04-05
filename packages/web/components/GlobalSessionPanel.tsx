@@ -363,6 +363,7 @@ export function SessionCard({
   if (isSubagent) {
     return (
       <div
+        data-session-id={session._id}
         onDragEnter={handleFileDragEnter}
         onDragOver={handleFileDragOver}
         onDragLeave={handleFileDragLeave}
@@ -478,6 +479,7 @@ export function SessionCard({
 
   return (
     <div
+      data-session-id={session._id}
       onDragEnter={handleFileDragEnter}
       onDragOver={handleFileDragOver}
       onDragLeave={handleFileDragLeave}
@@ -911,6 +913,14 @@ export function SessionListPanel({
   const collapsedSections = useInboxStore((s) => s.collapsedSections);
   const toggleSection = useInboxStore((s) => s.toggleCollapsedSection);
   const [expandedSubSessions, setExpandedSubSessions] = useState<Record<string, boolean>>({});
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+
+  // Auto-scroll to the active session when it changes
+  useWatchEffect(() => {
+    if (!activeSessionId || !scrollContainerRef.current) return;
+    const el = scrollContainerRef.current.querySelector(`[data-session-id="${activeSessionId}"]`);
+    if (el) el.scrollIntoView({ block: "nearest" });
+  }, [activeSessionId]);
 
   const renderSection = (label: string, items: InboxSession[], color: string, sectionVariant?: "working") => {
     if (items.length === 0) return null;
@@ -1018,7 +1028,7 @@ export function SessionListPanel({
           )}
         </div>
       </div>
-      <div className="flex-1 overflow-y-auto scrollbar-auto">
+      <div ref={scrollContainerRef} className="flex-1 overflow-y-auto scrollbar-auto">
         {!projectFilter && <NeedsAttentionSection />}
         {renderSection("Pinned", filteredPinned, "text-sol-magenta")}
         {renderSection("New", filteredNew, "text-sol-blue")}

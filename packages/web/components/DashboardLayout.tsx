@@ -439,8 +439,22 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
           <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
             {activeAgentCount > 0 && (
               <button
-                onClick={() => { if (!sidePanelOpen) toggleSidePanel(); }}
-                className="hidden md:flex items-center gap-1.5 px-2 py-0.5 rounded-full cursor-default select-none transition-all duration-300"
+                onClick={() => {
+                  if (!sidePanelOpen) toggleSidePanel();
+                  // Select first working session so the list scrolls to it
+                  const store = useInboxStore.getState();
+                  const firstWorking = Object.values(store.sessions).find(
+                    (s) => !isSessionEffectivelyIdle(s) && s.message_count > 0
+                  );
+                  if (firstWorking) {
+                    if (isOnInboxPage) {
+                      store.setCurrentSession(firstWorking._id);
+                    } else {
+                      store.selectPanelSession(firstWorking._id);
+                    }
+                  }
+                }}
+                className="hidden md:flex items-center gap-1.5 px-2 py-0.5 rounded-full cursor-pointer select-none transition-all duration-300"
                 style={{
                   background: 'color-mix(in srgb, var(--sol-green) 12%, transparent)',
                   border: '1px solid color-mix(in srgb, var(--sol-green) 20%, transparent)',
