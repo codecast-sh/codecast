@@ -4,6 +4,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useInboxStore, isConvexId } from "../store/inboxStore";
 import { useConvexSync } from "./useConvexSync";
+import { loadConversationMessages } from "../store/idbCache";
 
 type Message = {
   _id: string;
@@ -72,6 +73,25 @@ export function useConversationMessages(
   if (!hasTarget && jumpTimestamp === null && targetMode) setTargetMode(false);
 
   // =============================================
+  // IDB HYDRATION: Load cached messages before Convex responds
+  // =============================================
+  const idbHydratedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (idbHydratedRef.current === conversationId) return;
+    idbHydratedRef.current = conversationId;
+    const store = useInboxStore.getState();
+    // Only hydrate from IDB if we don't already have messages in the store
+    if (store.messages[conversationId]?.length > 0) return;
+    loadConversationMessages(conversationId).then((cached) => {
+      if (!cached || cached.messages.length === 0) return;
+      // Don't overwrite if Convex already delivered data while we were loading
+      const current = useInboxStore.getState().messages[conversationId];
+      if (current?.length > 0) return;
+      useInboxStore.getState().setMessages(conversationId, cached.messages, cached.pagination);
+    });
+  }, [conversationId]);
+
+  // =============================================
   // NORMAL MODE: Convex paginated subscription (background sync)
   // =============================================
   const useNormalMode = !targetMode && canQuery;
@@ -116,11 +136,13 @@ export function useConversationMessages(
   // Merge server messages with unconfirmed pending messages (local-first)
   const mergedMessages: Message[] = useMemo(() => {
     if (storePending.length === 0) return storeMessages;
+    // Dedup by both _id (optimistic messages now live in messages[]) and client_id (server-confirmed)
+    const storeIds = new Set(storeMessages.map((m: Message) => m._id));
     const serverClientIds = new Set(
       storeMessages.filter((m: Message) => m.client_id).map((m: Message) => m.client_id)
     );
     const unconfirmed = storePending.filter((m: Message) =>
-      !m._clientId || !serverClientIds.has(m._clientId)
+      !storeIds.has(m._id) && (!m._clientId || !serverClientIds.has(m._clientId))
     );
     if (unconfirmed.length === 0) return storeMessages;
     return [...storeMessages, ...unconfirmed].sort((a: Message, b: Message) => a.timestamp - b.timestamp);

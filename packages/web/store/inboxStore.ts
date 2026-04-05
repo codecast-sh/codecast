@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { mutativeMiddleware, action, sync } from "./mutativeMiddleware";
 import { applySyncTable, type PendingEntry } from "./syncProtocol";
 import { soundDismiss } from "../lib/sounds";
-import { loadCache, writePatchesToIDB, setHydrating } from "./idbCache";
+import { loadCache, writePatchesToIDB, setHydrating, loadConversationMessages, writeConversationMessages } from "./idbCache";
 
 export type { PendingEntry } from "./syncProtocol";
 
@@ -71,7 +71,7 @@ export type InboxSession = {
   is_unresponsive?: boolean;
   is_connected?: boolean;
   has_pending: boolean;
-  agent_status?: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "starting" | "resuming";
+  agent_status?: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "stopped" | "starting" | "resuming";
   is_deferred?: boolean;
   is_pinned?: boolean;
   last_user_message?: string | null;
@@ -86,6 +86,8 @@ export type InboxSession = {
   workflow_run_id?: string | null;
   is_workflow_primary?: boolean;
   workflow_run_status?: string | null;
+  forked_from?: string | null;
+  parent_message_uuid?: string | null;
 };
 
 export type Message = {
@@ -332,6 +334,7 @@ export function isInterruptControlMessage(raw: string | null | undefined): boole
 }
 
 const ACTIVE_AGENT_STATUSES: Set<string> = new Set(["working", "compacting", "thinking", "connected", "starting", "resuming"]);
+const DEAD_AGENT_STATUSES: Set<string> = new Set(["stopped"]);
 
 export function isSessionEffectivelyIdle(
   session: Pick<InboxSession, "is_idle" | "agent_status">,
@@ -344,6 +347,8 @@ export function isSessionWaitingForInput(
   session: Pick<InboxSession, "_id" | "is_idle" | "agent_status" | "message_count" | "is_pinned">,
   sessionsWithQueuedMessages?: Set<string>,
 ): boolean {
+  // Dead sessions (stopped/crashed) aren't waiting for input — they're gone
+  if (session.agent_status && DEAD_AGENT_STATUSES.has(session.agent_status)) return false;
   return isSessionEffectivelyIdle(session) &&
     session.message_count > 0 &&
     !session.is_pinned &&
@@ -361,6 +366,10 @@ export function isSub(s: InboxSession): boolean {
   return !!s.is_subagent || !!s.parent_conversation_id || !!s.worktree_name;
 }
 
+export function isFork(s: InboxSession): boolean {
+  return !!s.forked_from;
+}
+
 export interface CategorizedSessions {
   sorted: InboxSession[];
   pinned: InboxSession[];
@@ -368,6 +377,7 @@ export interface CategorizedSessions {
   needsInput: InboxSession[];
   working: InboxSession[];
   subsByParent: Map<string, InboxSession[]>;
+  forksByParent: Map<string, InboxSession[]>;
 }
 
 export function categorizeSessions(
@@ -387,6 +397,18 @@ export function categorizeSessions(
   for (const subs of subsByParent.values()) {
     subs.sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
   }
+
+  const forksByParent = new Map<string, InboxSession[]>();
+  for (const s of sorted) {
+    if (s.forked_from && allIds.has(s.forked_from)) {
+      if (!forksByParent.has(s.forked_from)) forksByParent.set(s.forked_from, []);
+      forksByParent.get(s.forked_from)!.push(s);
+    }
+  }
+  for (const forks of forksByParent.values()) {
+    forks.sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
+  }
+
   const subsWithParent = new Set(Array.from(subsByParent.values()).flat().map((s) => s._id));
 
   const isTop = (s: InboxSession) => !subsWithParent.has(s._id);
@@ -395,9 +417,10 @@ export function categorizeSessions(
   const newSessions = sorted.filter((s) => s.message_count === 0 && !s.is_pinned && isTop(s))
     .sort((a, b) => (a.is_connected ? 1 : 0) - (b.is_connected ? 1 : 0));
   const needsInput = sorted.filter((s) => isSessionWaitingForInput(s, sessionsWithQueuedMessages) && isTop(s));
-  const working = sorted.filter((s) => (!isSessionWaitingForInput(s, sessionsWithQueuedMessages) && s.message_count > 0 && !s.is_pinned) && isTop(s));
+  const isSessionDead = (s: InboxSession) => s.agent_status != null && DEAD_AGENT_STATUSES.has(s.agent_status);
+  const working = sorted.filter((s) => (!isSessionWaitingForInput(s, sessionsWithQueuedMessages) && !isSessionDead(s) && s.message_count > 0 && !s.is_pinned) && isTop(s));
 
-  return { sorted, pinned, newSessions, needsInput, working, subsByParent };
+  return { sorted, pinned, newSessions, needsInput, working, subsByParent, forksByParent };
 }
 
 export function visualOrderSessions(
@@ -475,6 +498,10 @@ interface InboxStoreState {
   // -- Fork navigation --
   activeBranches: Record<string, string>;
   optimisticForkChildren: ForkChild[];
+  activeForkHighlight: string | null;
+  pendingForkActivation: string | null;
+  setActiveForkHighlight: (id: string | null) => void;
+  setPendingForkActivation: (id: string | null) => void;
 
   // -- Dispatch (provided by middleware) --
   _setDispatch: (fn: (action: string, args: any, patches?: any) => Promise<any>) => void;
@@ -639,6 +666,38 @@ function stripImageRef(s: string): string {
   return s.replace(/\[Image[:\s][^\]]*\]/gi, "").trim();
 }
 
+// Max conversations to keep messages in the Zustand store (in-memory).
+// Others are evicted but remain in IDB for instant reload.
+const MAX_IN_MEMORY_CONVERSATIONS = 5;
+
+function evictInactiveMessages(draft: any, activeConvId: string) {
+  const loaded = Object.keys(draft.messages);
+  if (loaded.length <= MAX_IN_MEMORY_CONVERSATIONS) return;
+
+  const currentConvId = draft.currentConversation?.conversationId;
+  // Never evict the conversation we're currently viewing or the one just loaded
+  const keep = new Set([activeConvId, currentConvId].filter(Boolean));
+
+  // Evict oldest first (by last message timestamp)
+  const candidates = loaded
+    .filter((id: string) => !keep.has(id))
+    .sort((a: string, b: string) => {
+      const aMsgs = draft.messages[a];
+      const bMsgs = draft.messages[b];
+      const aTs = Array.isArray(aMsgs) && aMsgs.length > 0 ? aMsgs[aMsgs.length - 1].timestamp : 0;
+      const bTs = Array.isArray(bMsgs) && bMsgs.length > 0 ? bMsgs[bMsgs.length - 1].timestamp : 0;
+      return aTs - bTs;
+    });
+
+  const toEvict = candidates.slice(0, loaded.length - MAX_IN_MEMORY_CONVERSATIONS);
+  for (const id of toEvict) {
+    delete draft.messages[id];
+    // NEVER evict pendingMessages — these are the user's outbound messages
+    // and must survive until confirmed by the server
+    delete draft.pagination[id];
+  }
+}
+
 // -- Sync infrastructure --
 
 export type MergePolicy = "replace" | "local_wins" | "set_union" | "deep_merge";
@@ -784,6 +843,9 @@ function rekeyId(draft: any, oldId: string, newId: string) {
     draft.currentSessionId = newId;
     draft.clientState.current_conversation_id = newId;
   }
+  if (draft.currentConversation?.conversationId === oldId) {
+    draft.currentConversation.conversationId = newId;
+  }
   if (draft.sidePanelSessionId === oldId) {
     draft.sidePanelSessionId = newId;
   }
@@ -804,7 +866,7 @@ export const useInboxStore = create<InboxStoreState>(
   pendingScrollToMessageId: null,
   showMySessions: false,
   setShowMySessions: (show: boolean) => set({ showMySessions: show }),
-  showAllSessions: false,
+  showAllSessions: true,
   toggleShowAllSessions: () => set({ showAllSessions: !get().showAllSessions }),
   hiddenSessionCount: 0,
   mruStack: [],
@@ -813,7 +875,6 @@ export const useInboxStore = create<InboxStoreState>(
   pendingMessages: {},
   pagination: {},
   conversations: {},
-
   clientState: {},
   clientStateInitialized: false,
 
@@ -875,6 +936,10 @@ export const useInboxStore = create<InboxStoreState>(
 
   activeBranches: {},
   optimisticForkChildren: [],
+  activeForkHighlight: null,
+  pendingForkActivation: null,
+  setActiveForkHighlight: (id: string | null) => set({ activeForkHighlight: id }),
+  setPendingForkActivation: (id: string | null) => set({ pendingForkActivation: id }),
   recentProjects: [],
   setRecentProjects: (projects: Array<{ path: string; count: number; lastActive: number }>) => set({ recentProjects: projects }),
   activeProjectPath: null,
@@ -1228,6 +1293,11 @@ export const useInboxStore = create<InboxStoreState>(
     this.currentSessionId = id;
     this.viewingDismissedId = null;
     this.activeBranches = {};
+    // Preserve pendingForkActivation — it's consumed by ConversationView after parent loads.
+    // Only clear activeForkHighlight if there's no pending fork.
+    if (!this.pendingForkActivation) {
+      this.activeForkHighlight = null;
+    }
     this.clientState.current_conversation_id = id;
   }),
 
@@ -1345,8 +1415,23 @@ export const useInboxStore = create<InboxStoreState>(
         );
       });
     }
-    this.messages[convId] = msgs;
-    this.pagination[convId] = { ...(this.pagination[convId] || DEFAULT_PAGINATION), ...meta };
+    // Always re-append unconfirmed pending messages to the messages array.
+    // This makes it structurally impossible for a sync to hide a pending message —
+    // the message is ALWAYS in the primary data structure that drives rendering.
+    const remaining = this.pendingMessages[convId] || [];
+    if (remaining.length > 0) {
+      const serverIds = new Set(msgs.map((m: Message) => m._id));
+      const toAppend = remaining.filter((m: Message) => !serverIds.has(m._id));
+      this.messages[convId] = toAppend.length > 0
+        ? [...msgs, ...toAppend].sort((a: Message, b: Message) => a.timestamp - b.timestamp)
+        : msgs;
+    } else {
+      this.messages[convId] = msgs;
+    }
+    const pag = { ...(this.pagination[convId] || DEFAULT_PAGINATION), ...meta };
+    this.pagination[convId] = pag;
+    writeConversationMessages(convId, msgs, pag);
+    evictInactiveMessages(this, convId);
   }),
 
   mergeMessages: sync(function (this: Draft, convId: string, msgs: Message[], direction: "prepend" | "append", meta?: Partial<PaginationState>) {
@@ -1359,11 +1444,24 @@ export const useInboxStore = create<InboxStoreState>(
       ? [...unique, ...existing]
       : [...existing, ...unique];
     merged.sort((a: Message, b: Message) => a.timestamp - b.timestamp);
-    this.messages[convId] = merged;
-    if (meta) this.pagination[convId] = { ...(this.pagination[convId] || DEFAULT_PAGINATION), ...meta };
+    // Re-append pending messages to ensure they survive merge operations
+    const remaining = this.pendingMessages[convId] || [];
+    if (remaining.length > 0) {
+      const mergedIds = new Set(merged.map((m: Message) => m._id));
+      const toAppend = remaining.filter((m: Message) => !mergedIds.has(m._id));
+      this.messages[convId] = toAppend.length > 0
+        ? [...merged, ...toAppend].sort((a: Message, b: Message) => a.timestamp - b.timestamp)
+        : merged;
+    } else {
+      this.messages[convId] = merged;
+    }
+    const pag = meta ? { ...(this.pagination[convId] || DEFAULT_PAGINATION), ...meta } : this.pagination[convId];
+    if (meta) this.pagination[convId] = pag;
+    writeConversationMessages(convId, merged, pag);
+    evictInactiveMessages(this, convId);
   }),
 
-  addOptimisticMessage: (convId: string, content: string, images?: Array<{ media_type: string; storage_id?: string }>) => {
+  addOptimisticMessage: sync(function (this: Draft, convId: string, content: string, images?: Array<{ media_type: string; storage_id?: string }>) {
     const id = `optimistic_${Date.now()}_${Math.random().toString(36).slice(2)}`;
     const msg: Message = {
       _id: id,
@@ -1374,15 +1472,17 @@ export const useInboxStore = create<InboxStoreState>(
       _clientId: id,
       ...(images && images.length > 0 ? { images } : {}),
     };
-    const state = get();
-    set({
-      pendingMessages: { ...state.pendingMessages, [convId]: [...(state.pendingMessages[convId] || []), msg] },
-    });
+    // Add to pendingMessages (tracks confirmation lifecycle)
+    if (!this.pendingMessages[convId]) this.pendingMessages[convId] = [];
+    this.pendingMessages[convId].push(msg);
+    // Also add directly to messages array — the message renders from HERE,
+    // making it impossible for any sync operation to hide it
+    if (!this.messages[convId]) this.messages[convId] = [];
+    this.messages[convId] = [...this.messages[convId], msg];
     return id;
-  },
+  }),
 
-  markOptimisticAsQueued: (convId: string, content: string) => {
-    const state = get();
+  markOptimisticAsQueued: sync(function (this: Draft, convId: string, content: string) {
     const stripped = stripImageRef(content);
     const promote = (m: Message) => {
       if (m._isOptimistic && m.role === "user" && stripImageRef(m.content || "") === stripped) {
@@ -1391,25 +1491,24 @@ export const useInboxStore = create<InboxStoreState>(
       }
       return m;
     };
-    const pending = state.pendingMessages[convId];
+    const pending = this.pendingMessages[convId];
     if (pending) {
-      set({ pendingMessages: { ...state.pendingMessages, [convId]: pending.map(promote) } });
+      this.pendingMessages[convId] = pending.map(promote);
     }
-  },
+  }),
 
-  markOptimisticAsFailed: (convId: string, clientId: string) => {
-    const state = get();
+  markOptimisticAsFailed: sync(function (this: Draft, convId: string, clientId: string) {
     const mark = (m: Message): Message => {
       if (m._clientId === clientId || m._id === clientId) {
         return { ...m, _isFailed: true as const };
       }
       return m;
     };
-    const pending = state.pendingMessages[convId];
+    const pending = this.pendingMessages[convId];
     if (pending) {
-      set({ pendingMessages: { ...state.pendingMessages, [convId]: pending.map(mark) } });
+      this.pendingMessages[convId] = pending.map(mark);
     }
-  },
+  }),
 
   setPagination: (convId: string, update: Partial<PaginationState>) => {
     const state = get();
@@ -1562,6 +1661,7 @@ export const useInboxStore = create<InboxStoreState>(
     set({
       activeBranches: {},
       optimisticForkChildren: [],
+      activeForkHighlight: null,
     });
   },
 
@@ -1812,8 +1912,20 @@ if (typeof window !== "undefined") {
       if (Object.keys(updates).length > 0) useInboxStore.setState(updates);
     };
 
+    // Strip stale large fields from cached conversations (git_diff, git_diff_staged, available_skills)
+    if (cached.conversations && typeof cached.conversations === "object") {
+      for (const conv of Object.values(cached.conversations) as any[]) {
+        if (conv) { delete conv.git_diff; delete conv.git_diff_staged; delete conv.available_skills; }
+      }
+    }
+
+    // Don't load messages from monolithic meta blob — they're now loaded
+    // per-conversation from the dedicated IDB table on demand.
+    delete cached.messages;
+    delete cached.pagination;
+
     // Critical path: sidebar + current conversation render immediately
-    apply(["sessions", "dismissedSessions", "clientState", "messages", "pagination",
+    apply(["sessions", "dismissedSessions", "clientState",
            "conversations", "teams", "teamMembers", "teamUnreadCount", "drafts"]);
 
     // Deferred: list views + secondary data render next frame

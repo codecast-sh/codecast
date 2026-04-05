@@ -8,6 +8,7 @@ class CacheDB extends Dexie {
   docs!: Dexie.Table<any, string>;
   plans!: Dexie.Table<any, string>;
   meta!: Dexie.Table<{ key: string; value: any }, string>;
+  conversationMessages!: Dexie.Table<{ convId: string; messages: any[]; latestTimestamp: number; pagination: any }, string>;
 
   constructor() {
     super("codecast-store");
@@ -18,6 +19,15 @@ class CacheDB extends Dexie {
       docs: "_id",
       plans: "_id",
       meta: "key",
+    });
+    this.version(2).stores({
+      sessions: "_id",
+      dismissedSessions: "_id",
+      tasks: "_id",
+      docs: "_id",
+      plans: "_id",
+      meta: "key",
+      conversationMessages: "convId",
     });
   }
 }
@@ -34,8 +44,7 @@ const COLLECTION_TABLES: Record<string, Dexie.Table<any, string>> = {
 
 const META_KEYS = new Set([
   "clientState",
-  "messages",
-  "pagination",
+  // "messages" and "pagination" are now per-conversation in the conversationMessages table
   "conversations",
   "drafts",
   "recentProjects",
@@ -125,5 +134,25 @@ export async function loadCache(): Promise<Record<string, any> | null> {
 
 export function setHydrating(v: boolean) {
   _hydrating = v;
+}
+
+// -- Per-conversation message cache --
+
+export async function loadConversationMessages(convId: string): Promise<{ messages: any[]; pagination: any; latestTimestamp: number } | null> {
+  try {
+    const row = await db.conversationMessages.get(convId);
+    if (!row) return null;
+    return { messages: row.messages, pagination: row.pagination, latestTimestamp: row.latestTimestamp };
+  } catch {
+    return null;
+  }
+}
+
+export function writeConversationMessages(convId: string, messages: any[], pagination: any) {
+  if (_hydrating) return;
+  const latestTimestamp = messages.length > 0
+    ? Math.max(...messages.map((m: any) => m.timestamp || 0))
+    : 0;
+  db.conversationMessages.put({ convId, messages, pagination, latestTimestamp }).catch(() => {});
 }
 

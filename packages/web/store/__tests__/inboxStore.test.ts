@@ -181,7 +181,7 @@ describe("getSessionRenderKey", () => {
 });
 
 describe("categorizeSessions", () => {
-  it("keeps interrupted sessions out of Needs Input", () => {
+  it("puts interrupted sessions in Needs Input", () => {
     const interrupted: InboxSession = {
       ...baseSession,
       _id: "conv-interrupted",
@@ -197,7 +197,7 @@ describe("categorizeSessions", () => {
       last_user_message: "Can you finish the refactor?",
     };
 
-    const { needsInput, working } = categorizeSessions(
+    const { needsInput } = categorizeSessions(
       {
         [interrupted._id]: interrupted,
         [needsReply._id]: needsReply,
@@ -205,7 +205,39 @@ describe("categorizeSessions", () => {
       new Set(),
     );
 
-    expect(needsInput.map((s) => s._id)).toEqual(["conv-needs-reply"]);
-    expect(working.map((s) => s._id)).toContain("conv-interrupted");
+    expect(needsInput.map((s) => s._id)).toContain("conv-interrupted");
+    expect(needsInput.map((s) => s._id)).toContain("conv-needs-reply");
+  });
+
+  it("excludes stopped sessions from Needs Input", () => {
+    const stopped: InboxSession = {
+      ...baseSession,
+      _id: "conv-stopped",
+      session_id: "session-stopped",
+      message_count: 5,
+      agent_status: "stopped",
+      is_idle: true,
+    };
+    const idle: InboxSession = {
+      ...baseSession,
+      _id: "conv-idle",
+      session_id: "session-idle",
+      message_count: 3,
+      agent_status: "idle",
+      is_idle: true,
+    };
+
+    const { needsInput, working } = categorizeSessions(
+      {
+        [stopped._id]: stopped,
+        [idle._id]: idle,
+      },
+      new Set(),
+    );
+
+    expect(needsInput.map((s) => s._id)).not.toContain("conv-stopped");
+    expect(needsInput.map((s) => s._id)).toContain("conv-idle");
+    // stopped sessions shouldn't be in working either
+    expect(working.map((s) => s._id)).not.toContain("conv-stopped");
   });
 });

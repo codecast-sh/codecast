@@ -79,7 +79,6 @@ export function useSessionSwitcher() {
 
     if (e.key === "Tab" && (ctrlHeld.current || e.ctrlKey)) {
       e.preventDefault();
-      e.stopImmediatePropagation();
 
       if (!mruSnap.current.length || tabCount.current === 0) {
         mruSnap.current = getMruSessions();
@@ -124,7 +123,7 @@ export function useSessionSwitcher() {
       updateRender();
       return;
     }
-  }, undefined, { capture: true });
+  }, undefined);
 
   useEventListener("keyup", (e: KeyboardEvent) => {
     if (e.key === "Control") {
@@ -149,7 +148,7 @@ export function useSessionSwitcher() {
 
       tabCount.current = 0;
     }
-  }, undefined, { capture: true });
+  }, undefined);
 
   return renderState;
 }
