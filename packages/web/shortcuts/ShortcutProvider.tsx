@@ -1,11 +1,11 @@
 "use client";
 
 import { createContext, useContext, useCallback, useRef, ReactNode } from "react";
-import { useEventListener } from "../hooks/useEventListener";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { ShortcutAction, SHORTCUTS, matchShortcut } from "./registry";
 import { onShortcutUsed } from "../tips/useTips";
+import { setShortcutHandler } from "./listener";
 
 type Handler = () => boolean | void;
 
@@ -46,32 +46,37 @@ export function ShortcutProvider({ children }: { children: ReactNode }) {
     else contextsRef.current.delete(ctx);
   }, []);
 
-  useEventListener("keydown", (e: KeyboardEvent) => {
-    const inInput = isInputTarget(e);
+  // Bind the keydown logic to the HMR-stable capture listener in listener.ts.
+  // The listener itself never moves in the window event queue, so it always
+  // fires before any useEffect-based addEventListener calls.
+  useMountEffect(() => {
+    setShortcutHandler((e: KeyboardEvent) => {
+      const inInput = isInputTarget(e);
 
-    for (const def of SHORTCUTS) {
-      if (!matchShortcut(e, def)) continue;
-      if (def.when && !contextsRef.current.has(def.when)) continue;
-      if (inInput && !def.skipInputCheck) continue;
+      for (const def of SHORTCUTS) {
+        if (!matchShortcut(e, def)) continue;
+        if (def.when && !contextsRef.current.has(def.when)) continue;
+        if (inInput && !def.skipInputCheck) continue;
 
-      const actionHandlers = handlersRef.current.get(def.action);
-      if (!actionHandlers || actionHandlers.size === 0) continue;
+        const actionHandlers = handlersRef.current.get(def.action);
+        if (!actionHandlers || actionHandlers.size === 0) continue;
 
-      let handled = false;
-      for (const handler of actionHandlers) {
-        const result = handler();
-        if (result === false) continue;
-        handled = true;
-        if (result === true) break;
+        let handled = false;
+        for (const handler of actionHandlers) {
+          const result = handler();
+          if (result === false) continue;
+          handled = true;
+          if (result === true) break;
+        }
+        if (handled) {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          onShortcutUsed(def.action);
+          return;
+        }
       }
-      if (handled) {
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        onShortcutUsed(def.action);
-        return;
-      }
-    }
-  }, undefined, { capture: true });
+    });
+  });
 
   const value: ShortcutContextValue = { registerAction, setContext };
 

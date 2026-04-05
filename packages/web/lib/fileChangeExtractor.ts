@@ -1,5 +1,6 @@
 import type { Doc } from "@codecast/convex/convex/_generated/dataModel";
 import { getApplyPatchInput, parseApplyPatchSections } from "./applyPatchParser";
+import { parseFileChangeSummary, parseUnifiedDiffSections } from "./unifiedDiffParser";
 
 export interface FileChange {
   id: string;
@@ -35,6 +36,7 @@ export function extractFileChanges(messages: Message[]): FileChange[] {
         toolCall.name !== "file_edit" &&
         toolCall.name !== "file_write" &&
         toolCall.name !== "apply_patch" &&
+        toolCall.name !== "fileChange" &&
         toolCall.name !== "Bash"
       ) {
         continue;
@@ -60,6 +62,37 @@ export function extractFileChanges(messages: Message[]): FileChange[] {
             messageId: message._id,
             filePath: section.filePath,
             changeType: isAdd ? "write" : "edit",
+            oldContent: section.oldContent || undefined,
+            newContent: section.newContent,
+            timestamp: message.timestamp,
+          });
+        });
+        continue;
+      }
+
+      if (toolCall.name === "fileChange") {
+        let summary = "";
+        try {
+          const params = JSON.parse(toolCall.input);
+          summary = typeof params.changes === "string" ? params.changes : "";
+        } catch {
+          continue;
+        }
+
+        const result = message.tool_results?.find((item) => item.tool_use_id === toolCall.id);
+        const sections = parseUnifiedDiffSections(result?.content || "", parseFileChangeSummary(summary));
+        if (sections.length === 0) {
+          continue;
+        }
+
+        sections.forEach((section, sectionIndex) => {
+          changes.push({
+            id: `${toolCall.id}:${sectionIndex}`,
+            toolCallId: toolCall.id,
+            sequenceIndex: sequenceIndex++,
+            messageId: message._id,
+            filePath: section.filePath,
+            changeType: section.oldContent ? "edit" : "write",
             oldContent: section.oldContent || undefined,
             newContent: section.newContent,
             timestamp: message.timestamp,

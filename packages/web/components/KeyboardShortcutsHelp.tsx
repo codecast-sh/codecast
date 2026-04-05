@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { X, Keyboard } from "lucide-react";
-import { formatShortcutParts, getShortcutsByContext } from "../shortcuts";
-import type { ShortcutDef } from "../shortcuts";
+import { formatShortcutParts, getShortcutsForAction, getShortcutsByContext } from "../shortcuts";
+import type { ShortcutAction, ShortcutDef } from "../shortcuts";
 import { useInboxStore } from "../store/inboxStore";
 import { useEventListener } from "../hooks/useEventListener";
 
@@ -109,6 +109,19 @@ function ShortcutRow({ def }: { def: ShortcutDef }) {
         ))}
       </span>
     </div>
+  );
+}
+
+export function MenuKeyCaps({ action }: { action: ShortcutAction }) {
+  const defs = getShortcutsForAction(action);
+  if (defs.length === 0) return null;
+  const parts = formatShortcutParts(defs[0]);
+  return (
+    <span className="ml-auto flex items-center gap-[2px]">
+      {parts.map((part, i) => (
+        <KeyCap key={i} size="xs">{part}</KeyCap>
+      ))}
+    </span>
   );
 }
 

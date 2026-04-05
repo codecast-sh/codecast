@@ -17,7 +17,7 @@ import type { SkillItem } from "../lib/conversationProcessor";
 import { createReducer, reducer } from "../lib/messageReducer";
 import { UsageDisplay } from "./UsageDisplay";
 import { ErrorBoundary } from "./ErrorBoundary";
-import { KeyCap } from "./KeyboardShortcutsHelp";
+import { KeyCap, MenuKeyCaps } from "./KeyboardShortcutsHelp";
 import { toast } from "sonner";
 import { CodeBlock } from "./CodeBlock";
 import { useDiffViewerStore } from "../store/diffViewerStore";
@@ -47,7 +47,6 @@ import {
   DropdownMenuSub,
   DropdownMenuSubTrigger,
   DropdownMenuSubContent,
-  DropdownMenuShortcut,
 } from "./ui/dropdown-menu";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "./ui/tooltip";
 import { useMutation, useQuery, useConvex } from "convex/react";
@@ -74,6 +73,7 @@ import { useForkMessages } from "../hooks/useForkMessages";
 import { BranchSelector } from "./BranchSelector";
 import { ForkTreePanel } from "./ForkTreePanel";
 import { getApplyPatchInput, parseApplyPatchSections } from "../lib/applyPatchParser";
+import { parseFileChangeSummary, parseUnifiedDiffSections } from "../lib/unifiedDiffParser";
 import { setupDesktopDrag, desktopHeaderClass } from "../lib/desktop";
 import { MessageNavButton } from "./MessageBrowserPopover";
 import type { MentionItem } from "./editor/MentionList";
@@ -126,6 +126,31 @@ type ImageData = {
   tool_use_id?: string;
 };
 
+function formatMessagePartsForCopy(
+  content: string | undefined,
+  toolCalls: ToolCall[] | undefined,
+  toolResults: ToolResult[] | undefined,
+): string {
+  const parts: string[] = [];
+  if (content?.trim()) {
+    parts.push(content);
+  }
+  if (toolCalls?.length) {
+    for (const tc of toolCalls) {
+      let input = tc.input;
+      try { input = JSON.stringify(JSON.parse(tc.input), null, 2); } catch {}
+      parts.push(`[Tool: ${tc.name}]\n${input}`);
+    }
+  }
+  if (toolResults?.length) {
+    for (const tr of toolResults) {
+      const errPrefix = tr.is_error ? " (error)" : "";
+      parts.push(`[Result${errPrefix}]\n${tr.content}`);
+    }
+  }
+  return parts.join("\n\n");
+}
+
 type Message = {
   _id: string;
   message_uuid?: string;
@@ -166,8 +191,6 @@ export type ConversationData = {
   child_conversation_map?: Record<string, string>;
   git_branch?: string | null;
   git_status?: string | null;
-  git_diff?: string | null;
-  git_diff_staged?: string | null;
   git_remote_url?: string | null;
   project_path?: string | null;
   git_root?: string | null;
@@ -199,7 +222,6 @@ export type ConversationData = {
     agent_type?: string;
   }>;
   main_message_counts_by_fork?: Record<string, number>;
-  available_skills?: string | null;
 };
 
 type CommitFile = {
@@ -882,6 +904,9 @@ function classifyUserMessage(
                        immediatePrev.content.match(/<command-(?:name|message)>([^<]*)<\/command-(?:name|message)>/);
       return { kind: 'skill_expansion', cmdName: cmdMatch?.[1]?.replace(/^\//, "") };
     }
+    // Hide /compact commands — the compact_boundary system message handles the visual separator
+    const cmdName = t.match(/<command-(?:name|message)>\/?compact<\/command-(?:name|message)>/);
+    if (cmdName || t === '/compact') return { kind: 'compaction_prompt' };
     return { kind: 'command' };
   }
   if (agentType === "codex" && isCodexTurnAbortedMessage(t)) return { kind: 'interrupt', tone: 'amber' };
@@ -1041,7 +1066,6 @@ function ConversationMetadata({
   messageCount,
   shortId,
   conversationId,
-  latestTodos,
   taskStats,
 }: {
   agentType?: string;
@@ -1050,14 +1074,9 @@ function ConversationMetadata({
   messageCount?: number;
   shortId?: string;
   conversationId?: string;
-  latestTodos?: any[] | null;
   taskStats?: { total: number; completed: number } | null;
 }) {
   if (!agentType && !model && !startedAt && !messageCount) return null;
-
-  const todoCompleted = latestTodos?.filter((t: any) => t.status === 'completed').length ?? 0;
-  const todoTotal = latestTodos?.length ?? 0;
-  const todoInProgress = latestTodos?.filter((t: any) => t.status === 'in_progress').length ?? 0;
 
   return (
     <div className="flex items-center gap-1 text-[10px] sm:text-xs text-sol-text-dim min-w-0 overflow-hidden">
@@ -1097,18 +1116,10 @@ function ConversationMetadata({
           <span>{formatDuration(startedAt)}</span>
         </div>
       )}
-      {todoTotal > 0 && (
-        <div className="flex items-center gap-1.5 flex-shrink-0" title={`${todoCompleted}/${todoTotal} done${todoInProgress ? `, ${todoInProgress} in progress` : ''}`}>
-          <span className="text-sol-text-dim">&middot;</span>
-          <span className={todoCompleted === todoTotal ? 'text-emerald-400' : 'text-sol-cyan'}>
-            {todoCompleted}/{todoTotal} todos
-          </span>
-        </div>
-      )}
       {taskStats && (
         <div className="flex items-center gap-1.5 flex-shrink-0" title={`${taskStats.completed}/${taskStats.total} tasks completed`}>
           <span className="text-sol-text-dim">&middot;</span>
-          <span className={taskStats.completed === taskStats.total ? 'text-emerald-400' : 'text-violet-400'}>
+          <span className={taskStats.completed === taskStats.total ? 'text-emerald-400' : 'text-sol-violet'}>
             {taskStats.completed}/{taskStats.total} tasks
           </span>
         </div>
@@ -1490,6 +1501,14 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
     () => (tool.name === "apply_patch" ? parseApplyPatchSections(applyPatchInput) : []),
     [tool.name, applyPatchInput],
   );
+  const fileChangePaths = useMemo(
+    () => (tool.name === "fileChange" ? parseFileChangeSummary(String(parsedInput.changes || "")) : []),
+    [tool.name, parsedInput.changes],
+  );
+  const fileChangeDiffs = useMemo(
+    () => (tool.name === "fileChange" ? parseUnifiedDiffSections(result?.content || "", fileChangePaths) : []),
+    [tool.name, result?.content, fileChangePaths],
+  );
 
   // Markdown file detection
   const isMarkdown = isMarkdownFile(filePath);
@@ -1553,12 +1572,13 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
       return getRelativePath(String(parsedInput.file_path || parsedInput.path || ""));
     }
     if (tool.name === "fileChange") {
-      const changes = String(parsedInput.changes || "");
-      const lines = changes.split("\n").filter(l => l.trim());
-      if (lines.length > 0) {
-        const firstFile = lines[0].replace(/^\w+:\s*/, '').trim();
-        const rel = getRelativePath(firstFile);
-        return lines.length > 1 ? `${rel} (+${lines.length - 1})` : rel;
+      if (fileChangeDiffs.length > 0) {
+        const firstPath = getRelativePath(fileChangeDiffs[0].filePath);
+        return fileChangeDiffs.length > 1 ? `${firstPath} (+${fileChangeDiffs.length - 1})` : firstPath;
+      }
+      if (fileChangePaths.length > 0) {
+        const rel = getRelativePath(fileChangePaths[0]);
+        return fileChangePaths.length > 1 ? `${rel} (+${fileChangePaths.length - 1})` : rel;
       }
       return "File changes";
     }
@@ -2027,10 +2047,10 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
                 language={language}
               />
             )
-          ) : tool.name === "apply_patch" ? (
-            applyPatchDiffs.length > 0 ? (
+          ) : tool.name === "apply_patch" || tool.name === "fileChange" ? (
+            (tool.name === "apply_patch" ? applyPatchDiffs : fileChangeDiffs).length > 0 ? (
               <div className="max-h-80 overflow-auto">
-                {applyPatchDiffs.map((diff, idx) => {
+                {(tool.name === "apply_patch" ? applyPatchDiffs : fileChangeDiffs).map((diff, idx) => {
                   const diffLanguage = getFileExtension(diff.filePath);
                   const diffStartLine = diff.hunks[0]?.oldStart || diff.hunks[0]?.newStart || 1;
                   return (
@@ -2048,14 +2068,22 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
                   );
                 })}
               </div>
-            ) : applyPatchInput.trim() ? (
+            ) : tool.name === "apply_patch" && applyPatchInput.trim() ? (
               <div className="max-h-80 overflow-auto">
                 <pre className="p-2 text-xs font-mono overflow-x-auto whitespace-pre-wrap text-sol-text-secondary">
                   {applyPatchInput}
                 </pre>
               </div>
+            ) : tool.name === "fileChange" && processedContent && processedContent.trim() ? (
+              <div className="max-h-80 overflow-auto">
+                <pre className="p-2 text-xs font-mono overflow-x-auto whitespace-pre-wrap text-sol-text-secondary">
+                  {processedContent}
+                </pre>
+              </div>
             ) : (
-              <div className="p-2 text-xs text-sol-text-dim">Patch input unavailable</div>
+              <div className="p-2 text-xs text-sol-text-dim">
+                {tool.name === "fileChange" ? "Patch diff unavailable" : "Patch input unavailable"}
+              </div>
             )
           ) : isBash && (parsedInput.command || parsedInput.cmd) ? (
             <div className="max-h-80 overflow-auto">
@@ -3150,10 +3178,15 @@ function ImageBlock({ image }: { image: ImageData }) {
     image.storage_id ? { storageId: image.storage_id as Id<"_storage"> } : "skip"
   );
   const [loaded, setLoaded] = useState(false);
+  const [errored, setErrored] = useState(false);
   const gallery = useImageGallery();
 
+  // storageUrl: undefined = still loading, null = not found, string = URL
+  const storageResolved = image.storage_id ? storageUrl !== undefined : true;
+  const storageMissing = image.storage_id && storageUrl === null;
+
   const src = image.storage_id
-    ? storageUrl ?? undefined
+    ? (typeof storageUrl === "string" ? storageUrl : undefined)
     : image.data
       ? `data:${image.media_type};base64,${image.data}`
       : undefined;
@@ -3161,6 +3194,11 @@ function ImageBlock({ image }: { image: ImageData }) {
   useWatchEffect(() => {
     if (src && gallery) gallery.register(src);
   }, [src, gallery]);
+
+  // Don't render if storage resolved to missing, image errored, or no source available
+  if (storageMissing || errored || (!src && storageResolved)) {
+    return null;
+  }
 
   if (!src) {
     return (
@@ -3191,6 +3229,7 @@ function ImageBlock({ image }: { image: ImageData }) {
           className="w-full"
           style={loaded ? undefined : { width: 0, height: 0, overflow: 'hidden', position: 'absolute' }}
           onLoad={() => setLoaded(true)}
+          onError={() => setErrored(true)}
         />
       </div>
       {loaded && (
@@ -4179,7 +4218,7 @@ function AssistantBlock({
   const hasContent = displayContent && displayContent.trim().length > 0;
   const hasThinking = thinking && thinking.trim().length > 0;
   const hasToolCalls = toolCalls && toolCalls.length > 0;
-  const hasImages = images && images.length > 0;
+  const hasImages = images?.some(img => !img.tool_use_id) ?? false;
 
   const isRealMessageId = messageId && !messageId.startsWith("optimistic_");
   const commentCount = useQuery(api.comments.getCommentCount,
@@ -4233,7 +4272,9 @@ function AssistantBlock({
   const { text: truncatedContent } = getCollapsedContent();
 
   const handleCopy = () => {
-    setTimeout(() => { copyToClipboard(displayContent || "").then(() => toast.success("Copied!")).catch(() => toast.error("Failed to copy")); });
+    const text = formatMessagePartsForCopy(displayContent, toolCalls, toolResults);
+    if (!text) return;
+    setTimeout(() => { copyToClipboard(text).then(() => toast.success("Copied!")).catch(() => toast.error("Failed to copy")); });
   };
 
   const handleCopyLink = () => copyMessageLink(conversationId, messageId);
@@ -5633,11 +5674,13 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
       forceRestartAttemptedRef.current = false;
       return;
     }
+    const age = Date.now() - existingPending.created_at;
+    // Stale pendings from old sessions are noise — only banner for recent messages
+    if (age > 10 * 60_000) return;
     if (isExistingMessageDead) {
       setShowStuckBanner(true);
       return;
     }
-    const age = Date.now() - existingPending.created_at;
     if (age > stuckThresholdMs) {
       setShowStuckBanner(true);
     } else {
@@ -5645,6 +5688,13 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
       return () => clearTimeout(timer);
     }
   }, [existingPending, pendingMessageId, isWaitingForResponse, stuckThresholdMs, isExistingMessageDead]);
+
+  // Agent actively working proves the message reached the session — clear stale stuck banner
+  useWatchEffect(() => {
+    if (showStuckBanner && agentStatus && (agentStatus === "thinking" || agentStatus === "working" || agentStatus === "compacting" || agentStatus === "permission_blocked")) {
+      setShowStuckBanner(false);
+    }
+  }, [showStuckBanner, agentStatus]);
 
   useWatchEffect(() => {
     if (!sentAt || !pendingMessageId) return;
@@ -7019,6 +7069,12 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const [showThinking, setShowThinking] = useState(false);
   const [expandedSequences, setExpandedSequences] = useState<Set<string>>(new Set());
   const [diffExpanded, setDiffExpanded] = useState(false);
+  const convex = useConvex();
+  const convexConvId = conversation?._id && isConvexId(conversation._id) ? conversation._id as Id<"conversations"> : undefined;
+  const gitDiffData = useQuery(
+    api.conversations.getConversationGitDiff,
+    diffExpanded && convexConvId ? { conversation_id: convexConvId } : "skip"
+  );
   const renamingSessionId = useInboxStore((s) => s.renamingSessionId);
   const isRenaming = renamingSessionId === conversation?._id;
   const [renameDraft, setRenameDraft] = useState("");
@@ -7439,6 +7495,23 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     }
   }, [conversation?.fork_children, forkSwitchBranch]);
 
+  // Activate fork branch when navigated from sidebar (pendingForkActivation)
+  const pendingForkActivation = useInboxStore((s) => s.pendingForkActivation);
+  const setPendingForkActivation = useInboxStore((s) => s.setPendingForkActivation);
+  const setActiveForkHighlight = useInboxStore((s) => s.setActiveForkHighlight);
+  const pendingForkConsumed = useRef<string | null>(null);
+  useWatchEffect(() => {
+    if (!pendingForkActivation || !conversation?.fork_children) return;
+    if (pendingForkConsumed.current === pendingForkActivation) return;
+    const fork = conversation.fork_children.find(f => f._id === pendingForkActivation);
+    if (fork?.parent_message_uuid) {
+      forkSwitchBranch(fork.parent_message_uuid, pendingForkActivation);
+      setActiveForkHighlight(pendingForkActivation);
+      pendingForkConsumed.current = pendingForkActivation;
+      setPendingForkActivation(null);
+    }
+  }, [pendingForkActivation, conversation?.fork_children, forkSwitchBranch, setPendingForkActivation, setActiveForkHighlight]);
+
   const { isLoading: isForkLoading } = useForkMessages(firstActiveForkId);
   const [loadingBranchId, setLoadingBranchId] = useState<string | null>(null);
 
@@ -7572,8 +7645,22 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
   const sessionSkills = useMemo(() => {
     let extracted: Array<{ name: string; description: string }> = [];
-    if (conversation?.available_skills) {
-      try { extracted = JSON.parse(conversation.available_skills); } catch {}
+    // Resolve skills from user-level data + project path (avoids storing per-conversation)
+    const rawSkills = (currentUser as any)?.available_skills;
+    if (rawSkills) {
+      try {
+        const parsed = JSON.parse(rawSkills);
+        if (Array.isArray(parsed)) {
+          extracted = parsed;
+        } else {
+          const global: Array<{ name: string; description: string }> = parsed["global"] || [];
+          const project: Array<{ name: string; description: string }> = conversation?.project_path ? (parsed[conversation.project_path] || []) : [];
+          const seen = new Set<string>();
+          for (const s of [...global, ...project]) {
+            if (!seen.has(s.name)) { seen.add(s.name); extracted.push(s); }
+          }
+        }
+      } catch {}
     }
     if (!extracted.length && conversation?.messages) {
       extracted = extractSkillsFromMessages(conversation.messages);
@@ -7581,7 +7668,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     const builtins = getBuiltinCommands(conversation?.agent_type);
     const names = new Set(extracted.map(s => s.name.toLowerCase()));
     return [...extracted, ...builtins.filter(b => !names.has(b.name.toLowerCase()))];
-  }, [conversation?.available_skills, conversation?.messages, conversation?.agent_type]);
+  }, [currentUser, conversation?.project_path, conversation?.messages, conversation?.agent_type]);
 
   const sessionFilePaths = useMemo(() => {
     if (!conversation?.messages) return [];
@@ -7918,29 +8005,32 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   }, [highlightQuery]);
 
   const handleCopyAll = async () => {
-    if (!conversation || messages.length === 0) {
+    if (!convexConvId) {
       toast.error("No messages to copy");
       return;
     }
 
-    const formattedMessages = messages
-      .filter((msg) => {
-        if (msg.role === "system") return false;
-        if (msg.role === "user") {
-          const kind = userMsgKindMap.get(msg._id);
-          if (!kind || !isStickyWorthy(kind)) return false;
-        }
-        return msg.content && msg.content.trim().length > 0;
-      })
-      .map((msg) => {
-        const timestamp = new Date(msg.timestamp).toLocaleString();
-        const label = msg.role === "user" ? "User" : "Assistant";
-        return `[${timestamp}] ${label}:\n${msg.content}\n`;
-      })
-      .join("\n");
-
     try {
-      await copyToClipboard(formattedMessages);
+      toast.info("Loading all messages...");
+      const allMessages = await convex.query(api.conversations.copyAllMessages, { conversation_id: convexConvId });
+      if (!allMessages || allMessages.length === 0) {
+        toast.error("No messages to copy");
+        return;
+      }
+
+      const formatted = allMessages
+        .filter((msg: any) => msg.role !== "system" && msg.subtype !== "compact_boundary")
+        .map((msg: any) => {
+          const ts = new Date(msg.timestamp).toLocaleString();
+          const label = msg.role === "user" ? "User" : "Assistant";
+          const text = formatMessagePartsForCopy(msg.content, msg.tool_calls, msg.tool_results);
+          if (!text) return null;
+          return `[${ts}] ${label}:\n${text}\n`;
+        })
+        .filter(Boolean)
+        .join("\n");
+
+      await copyToClipboard(formatted);
       toast.success("Conversation copied to clipboard");
     } catch (err) {
       toast.error("Failed to copy to clipboard");
@@ -7986,7 +8076,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     api.conversations.getConversationToolStats,
     conversation?._id && isConvexId(conversation._id) ? { conversation_id: conversation._id } : "skip"
   );
-  const latestTodos = toolStats?.latestTodos ?? null;
   const taskStats = toolStats?.taskStats ?? null;
 
   const getItemKey = useCallback((index: number) => {
@@ -8096,11 +8185,13 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     if (convId === null) {
       forkClearBranch(messageUuid);
       setLoadingBranchId(null);
+      setActiveForkHighlight(null);
     } else {
       forkSwitchBranch(messageUuid, convId);
       if (!inboxMessages[convId]) {
         setLoadingBranchId(convId);
       }
+      setActiveForkHighlight(convId);
     }
     if (typeof window !== 'undefined') {
       const url = new URL(window.location.href);
@@ -8111,7 +8202,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       }
       window.history.replaceState({}, '', url.toString());
     }
-  }, [forkSwitchBranch, forkClearBranch, inboxMessages]);
+  }, [forkSwitchBranch, forkClearBranch, inboxMessages, setActiveForkHighlight]);
 
   // Clear loading state when fork messages arrive
   useWatchEffect(() => {
@@ -8157,6 +8248,22 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     const url = `${window.location.origin}/conversation/${conversation?._id}`;
     copyToClipboard(url).then(() => toast.success("Link copied!"));
   }, [conversation?._id]));
+
+  useShortcutAction('conv.toggleThinking', useCallback(() => {
+    setShowThinking((s) => !s);
+  }, []));
+
+  useShortcutAction('conv.favorite', useCallback(() => {
+    if (!conversation || !isOwner) return;
+    toggleFavoriteMutation({ conversation_id: conversation._id })
+      .then(() => toast.success(conversation.is_favorite ? "Removed from favorites" : "Added to favorites"))
+      .catch(() => toast.error("Failed to update favorite"));
+  }, [conversation, isOwner, toggleFavoriteMutation]));
+
+  useShortcutAction('conv.toggleDiff', useCallback(() => {
+    if (!conversation?.git_branch) return;
+    setDiffExpanded((s) => !s);
+  }, [conversation?.git_branch]));
 
   useMountEffect(() => {
     const el = headerRef.current;
@@ -9197,7 +9304,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                 messageCount={conversation.message_count}
                 shortId={conversation.short_id}
                 conversationId={conversation._id}
-                latestTodos={latestTodos}
                 taskStats={taskStats}
               />
             )}
@@ -9444,7 +9550,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
                         </svg>
                         Rename
-                        <DropdownMenuShortcut>{formatShortcutLabel('session.rename')}</DropdownMenuShortcut>
+                        <MenuKeyCaps action="session.rename" />
                       </DropdownMenuItem>
                     )}
                     {conversation?.session_id && (
@@ -9476,11 +9582,13 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                           <path strokeLinecap="round" strokeLinejoin="round" d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
                         </svg>
                         {conversation.is_favorite ? "Remove from favorites" : "Add to favorites"}
+                        <MenuKeyCaps action="conv.favorite" />
                       </DropdownMenuItem>
                     )}
                     <DropdownMenuSeparator />
                     <DropdownMenuItem onClick={() => setShowThinking((s) => !s)}>
                       {showThinking ? "Hide thinking" : "Show thinking"}
+                      <MenuKeyCaps action="conv.toggleThinking" />
                     </DropdownMenuItem>
                     <DropdownMenuItem onClick={() => {
                       const next = !stickyDisabled;
@@ -9492,6 +9600,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                     {conversation.git_branch && (
                       <DropdownMenuItem onClick={() => setDiffExpanded(!diffExpanded)}>
                         {diffExpanded ? "Hide git diff" : "Show git diff"}
+                        <MenuKeyCaps action="conv.toggleDiff" />
                       </DropdownMenuItem>
                     )}
                     {conversation.parent_conversation_id && (
@@ -9555,7 +9664,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
                           </svg>
                           Fork tree
-                          <DropdownMenuShortcut>{formatShortcutLabel('conv.toggleTree')}</DropdownMenuShortcut>
+                          <MenuKeyCaps action="conv.toggleTree" />
                         </DropdownMenuItem>
                       </>
                     )}
@@ -9595,11 +9704,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                     {taskStats && (
                       <DropdownMenuItem disabled>
                         Tasks: {taskStats.completed}/{taskStats.total}
-                      </DropdownMenuItem>
-                    )}
-                    {latestTodos && latestTodos.length > 0 && (
-                      <DropdownMenuItem disabled>
-                        Todos: {latestTodos.filter((t: any) => t.status === 'completed').length}/{latestTodos.length}
                       </DropdownMenuItem>
                     )}
                     {latestUsage && (
@@ -9684,10 +9788,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         </div>
       )}
 
-      {diffExpanded && conversation && (conversation.git_diff?.trim() || conversation.git_diff_staged?.trim()) && (
+      {diffExpanded && gitDiffData && (gitDiffData.git_diff?.trim() || gitDiffData.git_diff_staged?.trim()) && (
         <GitDiffPanel
-          gitDiff={conversation.git_diff}
-          gitDiffStaged={conversation.git_diff_staged}
+          gitDiff={gitDiffData.git_diff}
+          gitDiffStaged={gitDiffData.git_diff_staged}
         />
       )}
 

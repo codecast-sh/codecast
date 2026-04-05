@@ -233,7 +233,7 @@ export function GenericListView<T>({
       const target = e.target as HTMLElement;
       if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) return;
 
-      const stop = () => { e.preventDefault(); e.stopImmediatePropagation(); };
+      const stop = () => { e.preventDefault(); };
 
       if (shortcutsPanelOpen) return;
 
@@ -310,8 +310,8 @@ export function GenericListView<T>({
       }
     };
 
-    window.addEventListener("keydown", handler, true);
-    return () => window.removeEventListener("keydown", handler, true);
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
   }, [shortcutsPanelOpen, disableKeyboard, paletteIsOpen, editingId, focusedItem, visibleItems, focusIndex, tabs,
     previewId, selectedIds, paletteShortcuts, onTabChange, getItemRoute, getItemId,
     onCreate, openPalette, toggleSelect, router, extraKeyHandler, onItemEdit, renderPreview, getSearchText]);

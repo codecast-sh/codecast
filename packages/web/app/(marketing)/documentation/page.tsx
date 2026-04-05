@@ -545,12 +545,11 @@ $ cast plan show ct-a1b2
 # Bind current session to a plan
 $ cast plan bind ct-a1b2
 
-# Log decisions and discoveries
-$ cast plan decide ct-a1b2 "Use Stripe Checkout" --rationale "Simpler than custom flow, handles SCA"
-$ cast plan discover ct-a1b2 "Stripe webhooks need idempotency keys for retries"
-
-# Add context pointers
-$ cast plan pointer ct-a1b2 "API schema" docs/api.md
+# Add comments (progress, decisions, discoveries, references)
+$ cast plan comment ct-a1b2 "deployed to staging"
+$ cast plan comment ct-a1b2 "Use Stripe Checkout" -d -r "Simpler than custom flow, handles SCA"
+$ cast plan comment ct-a1b2 "Stripe webhooks need idempotency keys" -f
+$ cast plan comment ct-a1b2 "API schema" --ref docs/api.md
 
 # Lifecycle
 $ cast plan activate ct-a1b2
@@ -561,9 +560,9 @@ $ cast plan done ct-a1b2`}</Code>
           <p style={{ color: SOL.base00 }}>
             A typical plan lifecycle: create in <InlineCode>draft</InlineCode>, move
             to <InlineCode>active</InlineCode> when work begins, bind sessions as agents work on it,
-            log decisions and discoveries along the way, and mark <InlineCode>done</InlineCode> when
+            add comments along the way (decisions, discoveries, references), and mark <InlineCode>done</InlineCode> when
             acceptance criteria are met. Plans are visible in the web dashboard with progress bars,
-            linked sessions, and full decision history.
+            linked sessions, and a unified comment timeline.
           </p>
 
           <Heading id="orchestration" level={3}>Orchestration</Heading>
@@ -874,7 +873,7 @@ $ cast schedule add "Check for broken tests" --on push`}</Code>
           <p style={{ color: SOL.base00 }}>
             The Plans page shows all plans with status filters (draft, active, paused, done).
             Each plan displays its goal, acceptance criteria, progress bar, linked sessions,
-            decision log, discoveries, and context pointers. Tasks are visible within their
+            unified comment timeline with decisions, discoveries, and references. Tasks are visible within their
             parent plan or as a standalone list with priority and status filtering.
           </p>
 
@@ -1137,9 +1136,7 @@ $ cast bookmark --delete auth-pattern`}</Code>
                 ["plan ls", "List plans: --active, --draft, --done, --all"],
                 ["plan show <id>", "Plan details with tasks, decisions, progress"],
                 ["plan bind / unbind <id>", "Bind/unbind current session to plan"],
-                ["plan decide <id> ...", "Log decision with --rationale"],
-                ["plan discover <id> ...", "Log discovery"],
-                ["plan pointer <id> ...", "Add context pointer"],
+                ["plan comment <id> <text>", "Add comment: -d decision, -f discovery, --ref pointer"],
                 ["plan activate / pause / done / drop <id>", "Lifecycle transitions"],
               ],
             },

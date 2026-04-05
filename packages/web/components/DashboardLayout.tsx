@@ -133,8 +133,8 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
     ).length;
   }, [inboxSessions]);
 
-  const showCollapsedRail = !sidePanelOpen && !sidePanelSessionId && !isMobile && !isZenMode;
-  const showSessionList = sidePanelOpen && !isMobile && !isZenMode;
+  const showCollapsedRail = !sidePanelOpen && !isMobile;
+  const showSessionList = sidePanelOpen && !isMobile;
   const showConversationColumn = !!sidePanelSessionId && !isOnInboxPage && !isMobile;
 
   const currentSessionId = useInboxStore(s => s.currentSessionId);
@@ -151,6 +151,14 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
     } else {
       useInboxStore.setState({ pendingNavigateId: id, showMySessions: false });
     }
+  }, []);
+
+  const handleInboxForkSelect = useCallback((forkId: string, parentId: string, _parentMessageUuid: string) => {
+    const store = useInboxStore.getState();
+    store.setPendingForkActivation(forkId);
+    store.setActiveForkHighlight(forkId);
+    store.setCurrentSession(parentId);
+    if (store.showMySessions) store.setShowMySessions(false);
   }, []);
 
   const sessionListActiveId = isOnInboxPage
@@ -337,6 +345,7 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
           <div className="w-full h-full border-l border-sol-border/30">
             <SessionListPanel
               onSessionSelect={sessionListOnSelect}
+              onForkSelect={isOnInboxPage ? handleInboxForkSelect : undefined}
               activeSessionId={sessionListActiveId}
               onCollapse={toggleSidePanel}
             />

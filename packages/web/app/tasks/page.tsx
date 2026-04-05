@@ -65,7 +65,7 @@ export const PRIORITY_CONFIG: Record<TaskPriority, { icon: typeof Minus; label: 
   none: { icon: Minus, label: "None", color: "text-sol-text-dim" },
 };
 
-const STATUS_ORDER: TaskStatus[] = ["backlog", "open", "in_progress", "in_review", "done", "dropped"];
+const STATUS_ORDER: TaskStatus[] = ["in_progress", "in_review", "open", "backlog", "done", "dropped"];
 
 function CreatorAvatar({ creator }: { creator?: { name: string; image?: string; github_username?: string } }) {
   if (!creator) return null;

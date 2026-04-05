@@ -6,7 +6,7 @@ import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { ConversationDiffLayout } from "./ConversationDiffLayout";
 import { ConversationData } from "./ConversationView";
 import { useConversationMessages } from "../hooks/useConversationMessages";
-import { useInboxStore, InboxSession, getSessionRenderKey, isConvexId, categorizeSessions, isInterruptControlMessage, getProjectName } from "../store/inboxStore";
+import { useInboxStore, InboxSession, getSessionRenderKey, isConvexId, categorizeSessions, isInterruptControlMessage, getProjectName, isFork } from "../store/inboxStore";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "./ui/tooltip";
 import { cleanTitle } from "../lib/conversationProcessor";
 import { SharePopover } from "./SharePopover";
@@ -534,6 +534,18 @@ export function SessionCard({
             </span>
           )}
           <div className="flex items-center gap-1.5 flex-shrink-0 ml-auto">
+            {isFork(session) && (
+              <span className="inline-flex items-center gap-0.5 px-1 py-0 rounded text-[9px] font-medium bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20" title="Fork">
+                <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                  <circle cx="12" cy="18" r="3" />
+                  <circle cx="6" cy="6" r="3" />
+                  <circle cx="18" cy="6" r="3" />
+                  <path d="M18 9v2c0 .6-.4 1-1 1H7c-.6 0-1-.4-1-1V9" />
+                  <path d="M12 12v3" />
+                </svg>
+                fork
+              </span>
+            )}
             {session.active_plan && (
               <span className="inline-flex items-center gap-0.5 px-1 py-0 rounded text-[9px] font-medium bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20 max-w-[120px] truncate" title={session.active_plan.title}>
                 {session.active_plan.title}
@@ -781,10 +793,12 @@ function NeedsAttentionSection() {
 
 export function SessionListPanel({
   onSessionSelect,
+  onForkSelect,
   activeSessionId,
   onCollapse,
 }: {
   onSessionSelect?: (id: string) => void;
+  onForkSelect?: (forkId: string, parentId: string, parentMessageUuid: string) => void;
   activeSessionId?: string | null;
   onCollapse?: () => void;
 }) {
@@ -810,12 +824,17 @@ export function SessionListPanel({
   }, [killSessionMutation]);
 
   const handleSelect = useCallback((session: InboxSession) => {
+    if (isFork(session) && onForkSelect && session.forked_from && session.parent_message_uuid) {
+      onForkSelect(session._id, session.forked_from, session.parent_message_uuid);
+      return;
+    }
     if (onSessionSelect) {
       onSessionSelect(session._id);
     }
-  }, [onSessionSelect]);
+  }, [onSessionSelect, onForkSelect]);
 
   const sessionsWithQueuedMessages = useInboxStore((s) => s.sessionsWithQueuedMessages);
+  const activeForkHighlight = useInboxStore((s) => s.activeForkHighlight);
   const { sorted: sortedSessions, pinned, newSessions, needsInput, working, subsByParent: globalSubByParent } = useMemo(
     () => categorizeSessions(sessions, sessionsWithQueuedMessages),
     [sessions, sessionsWithQueuedMessages],
@@ -889,7 +908,7 @@ export function SessionListPanel({
               <React.Fragment key={session._id}>
                 <SessionCard
                   session={session}
-                  isActive={session._id === activeSessionId}
+                  isActive={session._id === activeSessionId || session._id === activeForkHighlight}
                   globalIndex={0}
                   onSelect={() => handleSelect(session)}
                   onDismiss={stashSession}
@@ -901,8 +920,8 @@ export function SessionListPanel({
                   <SessionCard
                     key={sub._id}
                     session={sub}
-                    isActive={sub._id === activeSessionId}
-                    isParentActive={session._id === activeSessionId}
+                    isActive={sub._id === activeSessionId || sub._id === activeForkHighlight}
+                    isParentActive={session._id === activeSessionId || session._id === activeForkHighlight}
                     globalIndex={0}
                     onSelect={() => handleSelect(sub)}
                     onDismiss={stashSession}
@@ -961,9 +980,9 @@ export function SessionListPanel({
           </div>
         )}
         <div className="flex-shrink-0 ml-auto">
-          {(showAll || hiddenCount > 0) && (
+          {hiddenCount > 0 && (
             <button onClick={toggleShowAll} className="text-[10px] text-sol-text-dim hover:text-sol-cyan transition-colors whitespace-nowrap">
-              {showAll ? "Recent only" : `+${hiddenCount}`}
+              {showAll ? `−${hiddenCount} old` : `+${hiddenCount} old`}
             </button>
           )}
         </div>

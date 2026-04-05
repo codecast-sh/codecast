@@ -26,6 +26,8 @@ export type ShortcutAction =
   | 'conv.toggleTree'
   | 'conv.copyLink'
   | 'conv.collapseAll'
+  | 'conv.toggleThinking'
+  | 'conv.favorite'
   | 'msg.next'
   | 'msg.prev'
   | 'msg.fork'
@@ -83,8 +85,8 @@ export const SHORTCUTS: ShortcutDef[] = [
 
   { key: 'ctrl+.', action: 'ui.zenToggle', skipInputCheck: true, description: 'Toggle zen mode' },
   { key: '?', action: 'ui.toggleShortcutsHelp', description: 'Toggle shortcuts help' },
-  { key: 'ctrl+z', mac: 'meta+z', action: 'ui.undo', skipInputCheck: true, description: 'Undo' },
-  { key: 'ctrl+shift+z', mac: 'meta+shift+z', action: 'ui.redo', skipInputCheck: true, description: 'Redo' },
+  { key: 'ctrl+z', action: 'ui.undo', skipInputCheck: true, description: 'Undo' },
+  { key: 'ctrl+shift+z', action: 'ui.redo', skipInputCheck: true, description: 'Redo' },
 
   { key: 'meta+shift+alt+1', action: 'nav.inbox', skipInputCheck: true, description: 'Go to inbox' },
 
@@ -100,6 +102,8 @@ export const SHORTCUTS: ShortcutDef[] = [
 
   { key: 'd', action: 'conv.toggleDiff', when: 'conversation', description: 'Toggle diff panel' },
   { key: 't', action: 'conv.toggleTree', when: 'conversation', description: 'Toggle tree panel' },
+  { key: 'h', action: 'conv.toggleThinking', when: 'conversation', description: 'Toggle thinking blocks' },
+  { key: 'f', action: 'conv.favorite', when: 'conversation', description: 'Toggle favorite' },
   { key: 'meta+shift+l', action: 'conv.copyLink', when: 'conversation', skipInputCheck: true, description: 'Copy conversation link' },
   { key: 'ctrl+shift+c', mac: 'meta+shift+c', action: 'conv.collapseAll', when: 'conversation', skipInputCheck: true, description: 'Collapse/expand all' },
 

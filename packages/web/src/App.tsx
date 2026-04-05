@@ -58,6 +58,7 @@ const Roadmap = lazy(() => import("@/app/roadmap/page"));
 const Cli = lazy(() => import("@/app/cli/page"));
 const AdminDaemonLogs = lazy(() => import("@/app/admin/daemon-logs/page"));
 const ConfigPage = lazy(() => import("@/app/config/page"));
+const Sessions = lazy(() => import("@/app/sessions/page"));
 
 const Palette = lazy(() => import("@/app/palette/page"));
 
@@ -145,6 +146,7 @@ export function App() {
             <Route path="orchestration" element={<E name="Orchestration"><Orchestration /></E>} />
             <Route path="roadmap" element={<E name="Roadmap"><Roadmap /></E>} />
             <Route path="cli" element={<E name="Cli"><Cli /></E>} />
+            <Route path="sessions" element={<E name="Sessions"><Sessions /></E>} />
             <Route path="admin/daemon-logs" element={<E name="AdminDaemonLogs"><AdminDaemonLogs /></E>} />
             <Route path="config" element={<E name="ConfigPage"><ConfigPage /></E>} />
 

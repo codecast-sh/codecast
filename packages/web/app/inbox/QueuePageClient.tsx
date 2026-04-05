@@ -742,6 +742,14 @@ export function QueuePageClient({ initialSessionId }: { initialSessionId?: strin
     }
   }, [sessions, dismissedSessions, setCurrentSession, setViewingDismissedId, showMySessions, setShowMySessions]);
 
+  const handleForkSelect = useCallback((forkId: string, parentId: string, _parentMessageUuid: string) => {
+    // Queue fork branch activation, then open the parent conversation
+    useInboxStore.getState().setPendingForkActivation(forkId);
+    useInboxStore.getState().setActiveForkHighlight(forkId);
+    setCurrentSession(parentId);
+    if (showMySessions) setShowMySessions(false);
+  }, [setCurrentSession, showMySessions, setShowMySessions]);
+
   const viewingDismissedSession = viewingDismissedId
     ? dismissedSessions[viewingDismissedId] ?? null
     : null;
@@ -918,7 +926,7 @@ export function QueuePageClient({ initialSessionId }: { initialSessionId?: strin
             <>
               <div className="fixed inset-0 z-40 bg-black/50" onClick={() => setMobileSessionsOpen(false)} />
               <div className="fixed inset-y-0 right-0 z-50 w-[80vw] max-w-xs shadow-xl animate-slide-in-right">
-                <SessionListPanel onSessionSelect={handleSessionSelect} activeSessionId={viewingDismissedId ?? currentSessionId} />
+                <SessionListPanel onSessionSelect={handleSessionSelect} onForkSelect={handleForkSelect} activeSessionId={viewingDismissedId ?? currentSessionId} />
               </div>
             </>
           )}

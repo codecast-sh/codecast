@@ -260,6 +260,7 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
   const router = useRouter();
   const isInbox = pathname === "/conversation" || pathname?.startsWith("/conversation/") || pathname === "/inbox" || pathname?.startsWith("/inbox/");
   const isAdminLogs = pathname?.startsWith("/admin/daemon-logs");
+  const isSessions = pathname?.startsWith("/sessions");
   const isConfig = pathname?.startsWith("/config");
   const isTeamActivity = pathname === "/team/activity" || pathname?.startsWith("/team/activity");
   const isTasks = pathname === "/tasks" || pathname?.startsWith("/tasks/");
@@ -509,6 +510,20 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7.5 21L3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5" />
             </svg>
             {!isNarrow && <span>Workflows</span>}
+          </Link>
+          <Link
+            href="/sessions"
+            className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-4 py-2.5 transition-colors motion-reduce:transition-none ${
+              isSessions
+                ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
+                : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60"
+            }`}
+            title="Sessions"
+          >
+            <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+            </svg>
+            {!isNarrow && <span>Sessions</span>}
           </Link>
           {isAdmin && (
             <Link

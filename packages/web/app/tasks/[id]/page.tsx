@@ -493,7 +493,7 @@ function TaskDetailContent() {
       const target = e.target as HTMLElement;
       if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) return;
 
-      const stop = () => { e.preventDefault(); e.stopImmediatePropagation(); };
+      const stop = () => { e.preventDefault(); };
 
       if (e.key === "k" && (e.metaKey || e.ctrlKey)) {
         stop();
@@ -518,8 +518,8 @@ function TaskDetailContent() {
         router.push("/tasks");
       }
     };
-    window.addEventListener("keydown", handler, true);
-    return () => window.removeEventListener("keydown", handler, true);
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
   }, [paletteOpen, shortcutsPanelOpen, data, openCmd, startEditTitle, router]);
 
   if (!data) {

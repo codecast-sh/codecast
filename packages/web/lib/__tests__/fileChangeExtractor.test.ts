@@ -410,4 +410,106 @@ describe("extractFileChanges", () => {
       newContent: "new",
     });
   });
+
+  it("should extract codex fileChange diffs using the stored summary path", () => {
+    const diff = [
+      "@@ -1,2 +1,2 @@",
+      "-const a = 1;",
+      "+const a = 2;",
+      " export default a;",
+    ].join("\n");
+
+    const messages: Message[] = [
+      {
+        _id: "msg1" as any,
+        _creationTime: 1000,
+        conversation_id: "conv1" as any,
+        role: "assistant",
+        timestamp: 1000,
+        tool_calls: [
+          {
+            id: "fc1",
+            name: "fileChange",
+            input: JSON.stringify({ changes: "updated: /src/a.ts" }),
+          },
+        ],
+        tool_results: [
+          {
+            tool_use_id: "fc1",
+            content: diff,
+          },
+        ],
+      },
+    ];
+
+    const changes = extractFileChanges(messages);
+
+    expect(changes).toHaveLength(1);
+    expect(changes[0]).toMatchObject({
+      id: "fc1:0",
+      toolCallId: "fc1",
+      filePath: "/src/a.ts",
+      changeType: "edit",
+      oldContent: "const a = 1;\nexport default a;",
+      newContent: "const a = 2;\nexport default a;",
+    });
+  });
+
+  it("should extract multi-file codex fileChange diffs with headers", () => {
+    const diff = [
+      "diff --git a/src/a.ts b/src/a.ts",
+      "--- a/src/a.ts",
+      "+++ b/src/a.ts",
+      "@@ -1,1 +1,1 @@",
+      "-const a = 1;",
+      "+const a = 2;",
+      "diff --git a/src/b.ts b/src/b.ts",
+      "--- a/src/b.ts",
+      "+++ b/src/b.ts",
+      "@@ -0,0 +1,1 @@",
+      "+export const b = true;",
+    ].join("\n");
+
+    const messages: Message[] = [
+      {
+        _id: "msg2" as any,
+        _creationTime: 1000,
+        conversation_id: "conv1" as any,
+        role: "assistant",
+        timestamp: 1000,
+        tool_calls: [
+          {
+            id: "fc2",
+            name: "fileChange",
+            input: JSON.stringify({ changes: "updated: /src/a.ts\ncreated: /src/b.ts" }),
+          },
+        ],
+        tool_results: [
+          {
+            tool_use_id: "fc2",
+            content: diff,
+          },
+        ],
+      },
+    ];
+
+    const changes = extractFileChanges(messages);
+
+    expect(changes).toHaveLength(2);
+    expect(changes[0]).toMatchObject({
+      id: "fc2:0",
+      toolCallId: "fc2",
+      filePath: "src/a.ts",
+      changeType: "edit",
+      oldContent: "const a = 1;",
+      newContent: "const a = 2;",
+    });
+    expect(changes[1]).toMatchObject({
+      id: "fc2:1",
+      toolCallId: "fc2",
+      filePath: "src/b.ts",
+      changeType: "write",
+      newContent: "export const b = true;",
+    });
+  });
 });

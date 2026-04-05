@@ -57,13 +57,14 @@ const MD_IMAGE_COLLAPSED_HEIGHT = 100;
 export function CollapsibleImage({ src: rawSrc, alt }: { src?: string | Blob; alt?: string }) {
   const src = typeof rawSrc === 'string' ? rawSrc : undefined;
   const [loaded, setLoaded] = useState(false);
+  const [errored, setErrored] = useState(false);
   const gallery = useImageGallery();
 
   useWatchEffect(() => {
     if (src && gallery) gallery.register(src);
   }, [src, gallery]);
 
-  if (!src) return null;
+  if (!src || errored) return null;
 
   return (
     <span
@@ -86,6 +87,7 @@ export function CollapsibleImage({ src: rawSrc, alt }: { src?: string | Blob; al
           className="w-full"
           style={loaded ? undefined : { width: 0, height: 0, overflow: 'hidden', position: 'absolute' }}
           onLoad={() => setLoaded(true)}
+          onError={() => setErrored(true)}
         />
       </span>
       {loaded && (

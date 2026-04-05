@@ -16,7 +16,6 @@ import {
   XCircle,
   MessageSquare,
   Clock,
-  Lightbulb,
   GitBranch,
   ExternalLink,
   FileText,
@@ -1158,71 +1157,50 @@ export function PlanDetailPanel({ planId }: { planId: string }) {
 
           <PlanTaskSection planShortId={plan.short_id} tasks={plan.tasks || []} sessions={plan.sessions || []} />
 
-          {plan.progress_log?.length > 0 && (
+          {plan.comments?.length > 0 && (
             <div className="mb-6">
               <h2 className="flex items-center gap-2 text-sm font-medium text-sol-text mb-2">
                 <Clock className="w-4 h-4 text-sol-text-dim" />
-                Progress Log
+                Comments ({plan.comments.length})
               </h2>
               <div className="space-y-2">
-                {[...plan.progress_log].reverse().map((entry: any, i: number) => (
-                  <div key={i} className="flex items-start gap-2 text-sm">
-                    <span className="text-[11px] text-sol-text-dim tabular-nums whitespace-nowrap mt-0.5">
-                      {formatTimestamp(entry.timestamp)}
-                    </span>
-                    <span className="text-sol-text-muted">{entry.entry}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {plan.decision_log?.length > 0 && (
-            <div className="mb-6">
-              <h2 className="flex items-center gap-2 text-sm font-medium text-sol-text mb-2">
-                <GitBranch className="w-4 h-4 text-sol-text-dim" />
-                Decisions
-              </h2>
-              <div className="space-y-3">
-                {plan.decision_log.map((d: any, i: number) => (
-                  <div key={i} className="text-sm">
-                    <span className="text-sol-text">{d.decision}</span>
-                    {d.rationale && (
-                      <p className="text-xs text-sol-text-dim mt-0.5">{d.rationale}</p>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {plan.discoveries?.length > 0 && (
-            <div className="mb-6">
-              <h2 className="flex items-center gap-2 text-sm font-medium text-sol-text mb-2">
-                <Lightbulb className="w-4 h-4 text-sol-text-dim" />
-                Discoveries
-              </h2>
-              <div className="space-y-1.5">
-                {plan.discoveries.map((d: any, i: number) => (
-                  <p key={i} className="text-sm text-sol-text-muted">{d.finding}</p>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {plan.context_pointers?.length > 0 && (
-            <div className="mb-6">
-              <h2 className="flex items-center gap-2 text-sm font-medium text-sol-text mb-2">
-                <ExternalLink className="w-4 h-4 text-sol-text-dim" />
-                Context
-              </h2>
-              <div className="space-y-1">
-                {plan.context_pointers.map((cp: any, i: number) => (
-                  <div key={i} className="flex items-center gap-2 text-sm">
-                    <span className="text-sol-text-dim">{cp.label}:</span>
-                    <span className="text-sol-text-muted font-mono text-xs">{cp.path_or_url}</span>
-                  </div>
-                ))}
+                {[...plan.comments].reverse().map((entry: any, i: number) => {
+                  const typeStyles: Record<string, string> = {
+                    progress: "text-sol-accent-blue",
+                    decision: "text-sol-accent-yellow",
+                    discovery: "text-sol-accent-green",
+                    reference: "text-sol-accent-cyan",
+                    blocker: "text-sol-accent-red",
+                    note: "text-sol-text-dim",
+                  };
+                  const typeIcons: Record<string, string> = {
+                    progress: "↳",
+                    decision: "◆",
+                    discovery: "★",
+                    reference: "→",
+                    blocker: "!",
+                    note: "·",
+                  };
+                  return (
+                    <div key={i} className="flex items-start gap-2 text-sm">
+                      <span className={`text-xs mt-0.5 ${typeStyles[entry.type] || typeStyles.note}`}>
+                        {typeIcons[entry.type] || "·"}
+                      </span>
+                      <span className="text-[11px] text-sol-text-dim tabular-nums whitespace-nowrap mt-0.5">
+                        {formatTimestamp(entry.timestamp)}
+                      </span>
+                      <div className="flex-1 min-w-0">
+                        <span className="text-sol-text-muted">{entry.content}</span>
+                        {entry.rationale && (
+                          <p className="text-xs text-sol-text-dim mt-0.5">{entry.rationale}</p>
+                        )}
+                        {entry.path_or_url && (
+                          <p className="text-xs text-sol-text-dim font-mono mt-0.5">→ {entry.path_or_url}</p>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}

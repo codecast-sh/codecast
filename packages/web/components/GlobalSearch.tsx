@@ -232,7 +232,7 @@ export function GlobalSearch() {
       </div>
 
       {isOpen && query.length >= 2 && (
-        <div className="absolute top-full left-1/2 -translate-x-1/2 w-[900px] mt-2 bg-sol-bg border border-sol-border rounded-xl shadow-2xl shadow-black/50 overflow-hidden">
+        <div className="absolute top-full left-1/2 -translate-x-1/2 w-[1200px] mt-2 bg-sol-bg border border-sol-border rounded-xl shadow-2xl shadow-black/50 overflow-hidden">
             {!searchResults ? (
               <div className="px-4 py-8 text-center">
                 <div className="inline-block w-5 h-5 border-2 border-sol-base01 border-t-amber-500 rounded-full animate-spin" />
@@ -243,7 +243,7 @@ export function GlobalSearch() {
                 <p className="text-xs text-sol-text-dim">Try different keywords</p>
               </div>
             ) : (
-              <div className="max-h-[600px] overflow-y-auto">
+              <div className="max-h-[80vh] overflow-y-auto">
                 <div className="px-4 py-2 border-b border-sol-border text-xs text-sol-text-secondary">
                   {totalMatches} match{totalMatches !== 1 ? "es" : ""} in {sessionCount} session{sessionCount !== 1 ? "s" : ""}
                 </div>
