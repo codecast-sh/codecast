@@ -1,4 +1,4 @@
-import { StyleSheet, FlatList, RefreshControl, TouchableOpacity, TextInput, View as RNView, Text as RNText, Modal, Alert, ScrollView, KeyboardAvoidingView, Platform, ActivityIndicator, Image } from 'react-native';
+import { StyleSheet, FlatList, RefreshControl, TouchableOpacity, TextInput, View as RNView, Text as RNText, Modal, Alert, ScrollView, KeyboardAvoidingView, Platform, ActivityIndicator, Image, ActionSheetIOS } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useMutation } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
@@ -311,6 +311,8 @@ export default function InboxScreen() {
   const stashSession = useInboxStore((s) => s.stashSession);
   const unstashSession = useInboxStore((s) => s.unstashSession);
   const pinSession = useInboxStore((s) => s.pinSession);
+  const deferSession = useInboxStore((s) => s.deferSession);
+  const killSession = useMutation(api.conversations.killSession);
 
   const sessionsWithQueuedMessages = useInboxStore((s) => s.sessionsWithQueuedMessages);
   const { sorted: sortedAll, pinned, newSessions, needsInput, working } = useMemo(
@@ -350,6 +352,43 @@ export default function InboxScreen() {
     pinSession(conversationId);
   }, [pinSession]);
 
+  const handleSessionLongPress = useCallback((session: InboxSession) => {
+    const options = [
+      session.is_pinned ? 'Unpin' : 'Pin',
+      'Defer',
+      'Dismiss',
+      'Kill Agent',
+      'Cancel',
+    ];
+    const destructiveButtonIndex = 3;
+    const cancelButtonIndex = 4;
+
+    if (Platform.OS === 'ios') {
+      ActionSheetIOS.showActionSheetWithOptions(
+        { options, cancelButtonIndex, destructiveButtonIndex, title: cleanTitle(session.title) },
+        (index) => {
+          if (index === 0) handlePin(session._id);
+          else if (index === 1) deferSession(session._id);
+          else if (index === 2) handleDismiss(session._id);
+          else if (index === 3) {
+            Alert.alert('Kill Agent', 'Stop this agent session?', [
+              { text: 'Cancel', style: 'cancel' },
+              { text: 'Kill', style: 'destructive', onPress: () => killSession({ conversation_id: session._id as any }) },
+            ]);
+          }
+        },
+      );
+    } else {
+      Alert.alert(cleanTitle(session.title), undefined, [
+        { text: session.is_pinned ? 'Unpin' : 'Pin', onPress: () => handlePin(session._id) },
+        { text: 'Defer', onPress: () => deferSession(session._id) },
+        { text: 'Dismiss', onPress: () => handleDismiss(session._id) },
+        { text: 'Kill Agent', style: 'destructive', onPress: () => killSession({ conversation_id: session._id as any }) },
+        { text: 'Cancel', style: 'cancel' },
+      ]);
+    }
+  }, [handlePin, handleDismiss, deferSession, killSession]);
+
   const onRefresh = useCallback(() => {
     setRefreshing(true);
     setTimeout(() => setRefreshing(false), 1000);
@@ -362,8 +401,9 @@ export default function InboxScreen() {
       onPress={() => router.push(`/session/${s._id}`)}
       onDismiss={() => handleDismiss(s._id)}
       onPin={() => handlePin(s._id)}
+      onLongPress={() => handleSessionLongPress(s)}
     />
-  ), [router, handleDismiss, handlePin]);
+  ), [router, handleDismiss, handlePin, handleSessionLongPress]);
 
   const renderSection = useCallback((label: string, items: InboxSession[], color?: string) => {
     if (items.length === 0) return null;
