@@ -224,6 +224,8 @@ export default defineSchema({
   })
     .index("by_user_id", ["user_id"])
     .index("by_user_updated", ["user_id", "updated_at"])
+    .index("by_user_git_root", ["user_id", "git_root"])
+    .index("by_user_project_path", ["user_id", "project_path"])
     .index("by_user_subagent_updated", ["user_id", "is_subagent", "updated_at"])
     .index("by_user_favorite", ["user_id", "is_favorite"])
     .index("by_user_private", ["user_id", "is_private"])
