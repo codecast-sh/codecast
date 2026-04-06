@@ -1,6 +1,7 @@
 import { StyleSheet, TouchableOpacity, View as RNView, Text as RNText, Animated as RNAnimated } from 'react-native';
 import { useRef, useCallback, useEffect } from 'react';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
+import Feather from '@expo/vector-icons/Feather';
 import { Theme, Spacing } from '@/constants/Theme';
 
 export type SessionData = {
@@ -26,6 +27,7 @@ export type SessionData = {
   session_error?: string;
   author_name?: string | null;
   is_own?: boolean;
+  is_favorite?: boolean;
 };
 
 export function formatRelativeTime(timestamp: number): string {
@@ -145,6 +147,9 @@ export function SessionItem({ session, onPress, onPin }: { session: SessionData;
       <RNView style={styles.conversationHeader}>
         <RNView style={styles.titleRow}>
           <StatusDot session={session} />
+          {session.is_favorite && (
+            <Feather name="star" size={11} color={Theme.accent} style={{ marginRight: 3 }} />
+          )}
           {session.is_pinned && (
             <FontAwesome name="thumb-tack" size={10} color={Theme.magenta} style={{ marginRight: 4 }} />
           )}
