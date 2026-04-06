@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { mutation, query, internalMutation, internalQuery } from "./_generated/server";
 import { Id } from "./_generated/dataModel";
+import { paginationOptsValidator } from "convex/server";
 import { verifyApiToken } from "./apiTokens";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { createDataContext, scopeByProject, scopedFetch } from "./data";
@@ -61,6 +62,146 @@ function docRepoName(d: any, convMap: Map<string, any>): string {
   const root = docGitRoot(d, convMap);
   if (root) return root.split('/').filter(Boolean).pop() || root;
   return d.project_path ? repoName(d.project_path) : "";
+}
+
+function encodeOffsetCursor(offset: number): string {
+  return String(offset);
+}
+
+function decodeOffsetCursor(cursor: string | null): number {
+  const parsed = Number.parseInt(cursor || "0", 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+}
+
+function isNoiseDocForWeb(d: any): boolean {
+  const CONFIG_DOC_NAMES = new Set(["README", "AGENTS", "CLAUDE", "CLAUDE.md", "AGENTS.md", "README.md"]);
+  return CONFIG_DOC_NAMES.has(d.title);
+}
+
+function extractPlanTitleForWeb(d: any) {
+  if (d.source === "plan_mode" && d.content) {
+    const match = d.content.match(/^#\s+(.+)/m);
+    if (match) return { ...d, display_title: match[1].trim(), plan_name: d.title };
+  }
+  return d;
+}
+
+async function buildWebDocList(
+  ctx: any,
+  args: {
+    doc_type?: string;
+    project_id?: string;
+    project_path?: string;
+    scope?: string;
+    team_id?: Id<"teams">;
+    workspace?: "personal" | "team";
+  },
+  requestedCount: number
+) {
+  const userId = await getAuthUserId(ctx);
+  if (!userId) return { docs: [], projectPaths: [] };
+
+  const user = await ctx.db.get(userId);
+  const desiredCount = Math.max(requestedCount, 1);
+  const resolvedTeamId = args.workspace === "team" && args.team_id
+    ? args.team_id
+    : !args.workspace ? user?.active_team_id : undefined;
+  const effectiveWorkspace = args.scope === "projects"
+    ? "personal" as const
+    : args.workspace;
+
+  // Cap fetch to avoid Convex 16MB read limit — docs carry large content fields.
+  // The pagination cursor handles "not enough after filtering" naturally.
+  const fetchLimit = Math.min(Math.max(desiredCount, 50), 200);
+
+  const { records: rawDocs, convMap } = await scopedFetch(ctx, "docs", {
+    userId,
+    teamId: resolvedTeamId,
+    workspace: effectiveWorkspace,
+    limit: fetchLimit,
+  });
+
+  let docs: any[];
+  let projectPaths: string[] = [];
+
+  if (args.scope === "projects" || args.project_path) {
+    if (args.scope === "projects") {
+      docs = rawDocs;
+      if (args.project_path) {
+        const filterName = repoName(args.project_path);
+        docs = docs.filter((d) => d.project_path && docRepoName(d, convMap) === filterName);
+      }
+    } else {
+      const filterName = repoName(args.project_path!);
+      docs = rawDocs.filter((d) => d.project_path && docRepoName(d, convMap) === filterName);
+    }
+    const unscopedDocs = rawDocs.filter((d) => !d.archived_at && !isNoiseDocForWeb(d));
+    projectPaths = dedupeProjectPaths([...new Set(unscopedDocs.map((d) => d.project_path).filter(Boolean))] as string[], unscopedDocs, convMap);
+  } else {
+    docs = rawDocs;
+  }
+
+  if (args.doc_type) {
+    docs = docs.filter((d) => d.doc_type === args.doc_type);
+  }
+
+  docs = docs.filter((d) => !d.archived_at && !isNoiseDocForWeb(d) && d.source !== "plan_mode");
+
+  if (!projectPaths.length) {
+    projectPaths = dedupeProjectPaths([...new Set(docs.map((d) => d.project_path).filter(Boolean))] as string[], docs, convMap);
+  }
+
+  const enriched = docs.map((d) => {
+    const cid = d.conversation_id || (d.related_conversation_ids?.[0]);
+    const conv = cid ? convMap.get(String(cid)) : undefined;
+    if (conv?.started_at) return { ...d, originated_at: conv.started_at };
+    return d;
+  });
+
+  enriched.sort((a: any, b: any) => (b.originated_at || b.created_at) - (a.originated_at || a.created_at));
+
+  const userIds = new Set<string>();
+  for (const d of enriched) {
+    if (d.user_id) userIds.add(String(d.user_id));
+  }
+  const userMap = new Map<string, { name?: string; image?: string; github_username?: string }>();
+  for (const uid of userIds) {
+    const u = await ctx.db.get(uid as Id<"users">);
+    if (u) userMap.set(uid, { name: u.name, image: u.image || (u as any).github_avatar_url, github_username: (u as any).github_username });
+  }
+
+  const planIds = new Set<string>();
+  const docIdsNeedingPlan: string[] = [];
+  for (const d of enriched) {
+    if (d.plan_id) planIds.add(String(d.plan_id));
+    else if (d.doc_type === "plan") docIdsNeedingPlan.push(d._id as string);
+  }
+  const planMap = new Map<string, { short_id: string; status: string }>();
+  for (const pid of planIds) {
+    const p = await ctx.db.get(pid as Id<"plans">);
+    if (p) planMap.set(pid, { short_id: (p as any).short_id, status: (p as any).status });
+  }
+  const docToPlanMap = new Map<string, { short_id: string; status: string }>();
+  for (const docId of docIdsNeedingPlan) {
+    const p = await ctx.db.query("plans").withIndex("by_doc_id", (q: any) => q.eq("doc_id", docId)).first();
+    if (p) {
+      docToPlanMap.set(docId, { short_id: p.short_id, status: p.status as string });
+    }
+  }
+
+  const withAuthors = enriched.map(extractPlanTitleForWeb).map((d: any) => {
+    const author = d.user_id ? userMap.get(String(d.user_id)) : undefined;
+    const plan = d.plan_id ? planMap.get(String(d.plan_id)) : (docToPlanMap.get(d._id as string) || undefined);
+    // Strip content from list results — it's large and not needed for rendering cards
+    const { content: _content, ...rest } = d;
+    return {
+      ...rest,
+      ...(author ? { author_name: author.name, author_image: author.image, author_username: author.github_username } : {}),
+      ...(plan ? { plan_short_id: plan.short_id, plan_status: plan.status } : {}),
+    };
+  });
+
+  return { docs: withAuthors, projectPaths };
 }
 
 type DocNode = { type: string; attrs?: Record<string, any>; content?: DocNode[]; text?: string };
@@ -547,123 +688,35 @@ export const webList = query({
     workspace: v.optional(v.union(v.literal("personal"), v.literal("team"))),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) return { docs: [], projectPaths: [] };
-
-    const user = await ctx.db.get(userId);
-
-    const CONFIG_DOC_NAMES = new Set(["README", "AGENTS", "CLAUDE", "CLAUDE.md", "AGENTS.md", "README.md"]);
-    const isNoiseDoc = (d: any) => {
-      if (CONFIG_DOC_NAMES.has(d.title)) return true;
-      return false;
-    };
-
-    const extractPlanTitle = (d: any) => {
-      if (d.source === "plan_mode" && d.content) {
-        const match = d.content.match(/^#\s+(.+)/m);
-        if (match) return { ...d, display_title: match[1].trim(), plan_name: d.title };
-      }
-      return d;
-    };
-
-    let docs;
-    let projectPaths: string[] = [];
-
     const queryLimit = args.limit || 100;
-    const resolvedTeamId = args.workspace === "team" && args.team_id
-      ? args.team_id
-      : !args.workspace ? user?.active_team_id : undefined;
+    const { docs, projectPaths } = await buildWebDocList(ctx, args, queryLimit);
+    return { docs: docs.slice(0, queryLimit), projectPaths };
+  },
+});
 
-    // "projects" scope browses all personal docs; project_path is just a filter within the current workspace
-    const effectiveWorkspace = args.scope === "projects"
-      ? "personal" as const
-      : args.workspace;
+export const webListPaginated = query({
+  args: {
+    doc_type: v.optional(v.string()),
+    project_id: v.optional(v.string()),
+    project_path: v.optional(v.string()),
+    scope: v.optional(v.string()),
+    team_id: v.optional(v.id("teams")),
+    workspace: v.optional(v.union(v.literal("personal"), v.literal("team"))),
+    paginationOpts: paginationOptsValidator,
+  },
+  handler: async (ctx, args) => {
+    const offset = decodeOffsetCursor(args.paginationOpts.cursor);
+    const limit = Math.max(args.paginationOpts.numItems, 1);
+    const end = offset + limit;
+    const { docs } = await buildWebDocList(ctx, args, end + 1);
+    const page = docs.slice(offset, end);
+    const hasMore = docs.length > end;
 
-    const { records: scopedDocs, convMap } = await scopedFetch(ctx, "docs", {
-      userId,
-      teamId: resolvedTeamId,
-      workspace: effectiveWorkspace,
-      limit: queryLimit * 2,
-    });
-
-    if (args.scope === "projects" || args.project_path) {
-      if (args.scope === "projects") {
-        docs = scopedDocs;
-        if (args.project_path) {
-          const filterName = repoName(args.project_path);
-          docs = docs.filter((d) => d.project_path && docRepoName(d, convMap) === filterName);
-        }
-      } else {
-        const filterName = repoName(args.project_path!);
-        docs = scopedDocs.filter((d) => d.project_path && docRepoName(d, convMap) === filterName);
-      }
-      const unscopedDocs = scopedDocs.filter((d) => !d.archived_at && !isNoiseDoc(d));
-      projectPaths = dedupeProjectPaths([...new Set(unscopedDocs.map((d) => d.project_path).filter(Boolean))] as string[], unscopedDocs, convMap);
-    } else {
-      docs = scopedDocs;
-    }
-
-    if (args.doc_type) {
-      docs = docs.filter((d) => d.doc_type === args.doc_type);
-    }
-
-    docs = docs.filter((d) => !d.archived_at && !isNoiseDoc(d) && d.source !== "plan_mode");
-
-    if (!projectPaths.length) {
-      projectPaths = dedupeProjectPaths([...new Set(docs.map((d) => d.project_path).filter(Boolean))] as string[], docs, convMap);
-    }
-
-    const enriched = docs.map((d) => {
-      const cid = d.conversation_id || (d.related_conversation_ids?.[0]);
-      const conv = cid ? convMap.get(String(cid)) : undefined;
-      if (conv?.started_at) return { ...d, originated_at: conv.started_at };
-      return d;
-    });
-
-    enriched.sort((a: any, b: any) => (b.originated_at || b.created_at) - (a.originated_at || a.created_at));
-    const result = enriched.slice(0, queryLimit);
-
-    // Batch-load user profiles for author attribution
-    const userIds = new Set<string>();
-    for (const d of result) {
-      if (d.user_id) userIds.add(String(d.user_id));
-    }
-    const userMap = new Map<string, { name?: string; image?: string; github_username?: string }>();
-    for (const uid of userIds) {
-      const u = await ctx.db.get(uid as Id<"users">);
-      if (u) userMap.set(uid, { name: u.name, image: u.image || (u as any).github_avatar_url, github_username: (u as any).github_username });
-    }
-
-    const planIds = new Set<string>();
-    const docIdsNeedingPlan: string[] = [];
-    for (const d of result) {
-      if (d.plan_id) planIds.add(String(d.plan_id));
-      else if (d.doc_type === "plan") docIdsNeedingPlan.push(d._id as string);
-    }
-    const planMap = new Map<string, { short_id: string; status: string }>();
-    for (const pid of planIds) {
-      const p = await ctx.db.get(pid as Id<"plans">);
-      if (p) planMap.set(pid, { short_id: (p as any).short_id, status: (p as any).status });
-    }
-    const docToPlanMap = new Map<string, { short_id: string; status: string }>();
-    for (const docId of docIdsNeedingPlan) {
-      const p = await ctx.db.query("plans").withIndex("by_doc_id", (q: any) => q.eq("doc_id", docId)).first();
-      if (p) {
-        docToPlanMap.set(docId, { short_id: p.short_id, status: p.status as string });
-      }
-    }
-
-    const withAuthors = result.map(extractPlanTitle).map((d: any) => {
-      const author = d.user_id ? userMap.get(String(d.user_id)) : undefined;
-      const plan = d.plan_id ? planMap.get(String(d.plan_id)) : (docToPlanMap.get(d._id as string) || undefined);
-      return {
-        ...d,
-        ...(author ? { author_name: author.name, author_image: author.image, author_username: author.github_username } : {}),
-        ...(plan ? { plan_short_id: plan.short_id, plan_status: plan.status } : {}),
-      };
-    });
-
-    return { docs: withAuthors, projectPaths };
+    return {
+      page,
+      isDone: !hasMore,
+      continueCursor: hasMore ? encodeOffsetCursor(end) : "",
+    };
   },
 });
 
