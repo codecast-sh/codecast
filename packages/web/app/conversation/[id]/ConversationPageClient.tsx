@@ -7,15 +7,13 @@ import { useShortcutContext, useShortcutAction } from "../../../shortcuts";
 import { DashboardLayout } from "../../../components/DashboardLayout";
 import { ErrorBoundary } from "../../../components/ErrorBoundary";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
-import { ConversationView, ConversationData } from "../../../components/ConversationView";
+import { ConversationData } from "../../../components/ConversationView";
 import { ConversationDiffLayout } from "../../../components/ConversationDiffLayout";
 import { PlanContextPanel } from "../../../components/PlanContextPanel";
 import { WorkflowContextPanel } from "../../../components/WorkflowContextPanel";
-import { PublicCommentSection } from "../../../components/PublicCommentSection";
 import { SharePopover } from "../../../components/SharePopover";
 import { toast } from "sonner";
 import { useConversationMessages } from "../../../hooks/useConversationMessages";
-import { useSharedConversationMessages } from "../../../hooks/useSharedConversationMessages";
 import { useDiffViewerStore } from "../../../store/diffViewerStore";
 import { useInboxStore } from "../../../store/inboxStore";
 import { useForkNavigationStore } from "../../../store/forkNavigationStore";
@@ -98,6 +96,7 @@ function OwnerView({
   isOwner: boolean;
   autoFocusInput?: boolean;
 }) {
+  const { isAuthenticated } = useConvexAuth();
   const toggleDiffPanel = useDiffViewerStore((state) => state.toggleDiffPanel);
 
   const { conversation, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, loadOlder, loadNewer, jumpToStart, jumpToEnd, isSearchingForTarget } = useConversationMessages(id, targetMessageId, highlightQuery);
@@ -220,6 +219,7 @@ function OwnerView({
           embedded
           targetMessageId={targetMessageId}
           isOwner={isOwner}
+          showMessageInput={isOwner || isAuthenticated}
           autoFocusInput={autoFocusInput}
           fallbackStickyContent={cleanUserMessage(sessionLastUserMessage)}
           subHeaderContent={<>
@@ -230,129 +230,6 @@ function OwnerView({
       </ErrorBoundary>
     </DashboardLayout>
   );
-}
-
-function SharedView({ id, highlightQuery, onClearHighlight, inApp }: { id: string; highlightQuery?: string; onClearHighlight: () => void; inApp?: boolean }) {
-  const router = useRouter();
-  const [isForking, setIsForking] = useState(false);
-  const [commentsOpen, setCommentsOpen] = useState(false);
-
-  const { conversation, hasMoreAbove, isLoadingOlder, loadOlder, jumpToStart, isSearchingForTarget } = useSharedConversationMessages(id, highlightQuery);
-
-  const forkConversation = useMutation(api.conversations.forkConversation);
-  const currentUser = useQuery(api.users.getCurrentUser);
-
-  const commentCount = useQuery(
-    api.publicComments.getPublicComments,
-    conversation ? { conversation_id: conversation._id as Id<"conversations"> } : "skip"
-  );
-
-  const handleFork = async () => {
-    if (isForking || !conversation?.share_token) return;
-    setIsForking(true);
-    try {
-      const newConversationId = await forkConversation({ share_token: conversation.share_token });
-      toast.success("Conversation forked successfully");
-      router.push(`/conversation/${newConversationId}`);
-    } catch (error) {
-      console.error("Fork failed:", error);
-      const message = error instanceof Error ? error.message : "Failed to fork conversation";
-      toast.error(message);
-      setIsForking(false);
-    }
-  };
-
-  if (!conversation) {
-    return <ConversationLoadingSkeleton />;
-  }
-
-  const forkCount = conversation.fork_count ?? 0;
-
-  const content = (
-    <>
-      {isSearchingForTarget && (
-        <div className="fixed top-16 left-1/2 -translate-x-1/2 z-50 bg-sol-bg-alt border border-sol-border rounded-full px-4 py-2 shadow-lg flex items-center gap-2">
-          <svg className="w-4 h-4 animate-spin text-sol-cyan" viewBox="0 0 24 24" fill="none">
-            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-          </svg>
-          <span className="text-sm text-sol-text-secondary">Finding message...</span>
-        </div>
-      )}
-      <ConversationView
-        conversation={conversation as ConversationData}
-        commits={[]}
-        backHref={inApp ? "/inbox" : "/"}
-        backLabel={inApp ? "Inbox" : "Home"}
-        showMessageInput={false}
-        isOwner={false}
-        hasMoreAbove={hasMoreAbove}
-        isLoadingOlder={isLoadingOlder}
-        onLoadOlder={loadOlder}
-        onJumpToStart={jumpToStart}
-        highlightQuery={highlightQuery}
-        onClearHighlight={onClearHighlight}
-        headerExtra={
-          <div className="flex items-center gap-2">
-            <span className="text-[10px] text-sol-base00 px-2 py-1 bg-sol-base02 rounded">
-              {inApp ? "Team" : "Shared"}
-            </span>
-            {forkCount > 0 && (
-              <span className="text-[10px] text-sol-base00 px-2 py-1 bg-sol-base02 rounded">
-                {forkCount} {forkCount === 1 ? "fork" : "forks"}
-              </span>
-            )}
-            <button
-              onClick={handleFork}
-              disabled={isForking || !conversation.share_token}
-              className="text-[10px] text-sol-base0 px-2 py-1 bg-sol-blue/20 hover:bg-sol-blue/30 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {isForking ? "Forking..." : "Fork"}
-            </button>
-          </div>
-        }
-      />
-      {conversation.user_id && (
-        <>
-          <button
-            onClick={() => setCommentsOpen(!commentsOpen)}
-            className="fixed bottom-4 right-4 bg-sol-blue hover:bg-sol-cyan text-white px-4 py-2 rounded-full shadow-lg flex items-center gap-2 text-sm font-medium transition-colors z-40"
-          >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-            </svg>
-            {commentsOpen ? "Hide Comments" : `Comments${commentCount && commentCount.length > 0 ? ` (${commentCount.length})` : ""}`}
-          </button>
-
-          {commentsOpen && (
-            <div className="fixed bottom-0 right-0 left-0 bg-sol-base03 border-t border-sol-border max-h-[60vh] overflow-y-auto shadow-2xl z-50">
-              <div className="max-w-4xl mx-auto w-full px-4 py-4">
-                <div className="flex items-center justify-between mb-4">
-                  <h2 className="text-sol-text text-lg font-medium">Comments</h2>
-                  <button
-                    onClick={() => setCommentsOpen(false)}
-                    className="text-sol-text-dim hover:text-sol-text p-1"
-                    title="Close comments"
-                  >
-                    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                  </button>
-                </div>
-                <PublicCommentSection
-                  conversationId={conversation._id as Id<"conversations">}
-                  conversationOwnerId={conversation.user_id as Id<"users">}
-                  currentUserId={currentUser?._id}
-                />
-              </div>
-            </div>
-          )}
-        </>
-      )}
-    </>
-  );
-
-  return inApp ? <DashboardLayout>{content}</DashboardLayout> : content;
 }
 
 function DeniedView() {
@@ -474,11 +351,8 @@ export default function ConversationPage() {
     if (publicData.access_level === "owner") {
       return <OwnerView id={effectiveId} highlightQuery={highlightQuery} onClearHighlight={handleClearHighlight} targetMessageId={targetMessageId} isOwner={true} />;
     }
-    if (publicData.access_level === "team") {
-      return <SharedView id={effectiveId} highlightQuery={highlightQuery} onClearHighlight={handleClearHighlight} inApp />;
-    }
-    if (publicData.access_level === "shared") {
-      return <SharedView id={effectiveId} highlightQuery={highlightQuery} onClearHighlight={handleClearHighlight} />;
+    if (publicData.access_level === "team" || publicData.access_level === "shared") {
+      return <OwnerView id={effectiveId} highlightQuery={highlightQuery} onClearHighlight={handleClearHighlight} targetMessageId={targetMessageId} isOwner={false} />;
     }
     return <DeniedView />;
   }
@@ -499,12 +373,8 @@ export default function ConversationPage() {
     return <OwnerView id={id} highlightQuery={highlightQuery} onClearHighlight={handleClearHighlight} targetMessageId={targetMessageId} isOwner={true} />;
   }
 
-  if (publicData.access_level === "team") {
-    return <SharedView id={id} highlightQuery={highlightQuery} onClearHighlight={handleClearHighlight} inApp />;
-  }
-
-  if (publicData.access_level === "shared") {
-    return <SharedView id={id} highlightQuery={highlightQuery} onClearHighlight={handleClearHighlight} />;
+  if (publicData.access_level === "team" || publicData.access_level === "shared") {
+    return <OwnerView id={id} highlightQuery={highlightQuery} onClearHighlight={handleClearHighlight} targetMessageId={targetMessageId} isOwner={false} />;
   }
 
   return <DeniedView />;
