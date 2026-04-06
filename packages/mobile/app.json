@@ -21,6 +21,7 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.ashotp.codecast",
       "usesAppleSignIn": true,
+      "associatedDomains": ["applinks:codecast.sh", "applinks:www.codecast.sh"],
       "infoPlist": {
         "UIBackgroundModes": ["remote-notification"],
         "NSFaceIDUsageDescription": "Use Face ID to securely access your account",

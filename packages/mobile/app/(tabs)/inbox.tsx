@@ -1,4 +1,4 @@
-import { StyleSheet, FlatList, RefreshControl, TouchableOpacity, TextInput, View as RNView, Text as RNText, Modal, Alert, ScrollView, KeyboardAvoidingView, Platform, ActivityIndicator, Image } from 'react-native';
+import { StyleSheet, FlatList, RefreshControl, TouchableOpacity, TextInput, View as RNView, Text as RNText, Modal, Alert, ScrollView, KeyboardAvoidingView, Platform, ActivityIndicator, Image, ActionSheetIOS } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useMutation } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
@@ -12,6 +12,7 @@ import {
 } from '@/components/SessionItem';
 import { useInboxStore, type InboxSession, categorizeSessions } from '@codecast/web/store/inboxStore';
 import { useSyncInboxSessions } from '@/hooks/useSyncInboxSessions';
+import { SessionListSkeleton } from '@/components/SkeletonLoader';
 import { useQuery } from 'convex/react';
 
 function DismissedItem({ session, onPress }: { session: SessionData; onPress: () => void }) {
@@ -311,6 +312,7 @@ export default function InboxScreen() {
   const stashSession = useInboxStore((s) => s.stashSession);
   const unstashSession = useInboxStore((s) => s.unstashSession);
   const pinSession = useInboxStore((s) => s.pinSession);
+  const deferSession = useInboxStore((s) => s.deferSession);
 
   const sessionsWithQueuedMessages = useInboxStore((s) => s.sessionsWithQueuedMessages);
   const { sorted: sortedAll, pinned, newSessions, needsInput, working } = useMemo(
@@ -342,6 +344,27 @@ export default function InboxScreen() {
     stashSession(conversationId);
   }, [stashSession]);
 
+  const handleDefer = useCallback((conversationId: string) => {
+    deferSession(conversationId);
+  }, [deferSession]);
+
+  const handleLongPress = useCallback((session: InboxSession) => {
+    const options = [
+      session.is_pinned ? 'Unpin' : 'Pin',
+      'Defer (hide until active)',
+      'Dismiss',
+      'Cancel',
+    ];
+    ActionSheetIOS.showActionSheetWithOptions(
+      { options, cancelButtonIndex: 3, destructiveButtonIndex: 2 },
+      (idx) => {
+        if (idx === 0) pinSession(session._id);
+        else if (idx === 1) handleDefer(session._id);
+        else if (idx === 2) handleDismiss(session._id);
+      },
+    );
+  }, [pinSession, handleDefer, handleDismiss]);
+
   const handleUndismiss = useCallback((conversationId: string) => {
     unstashSession(conversationId);
   }, [unstashSession]);
@@ -362,8 +385,9 @@ export default function InboxScreen() {
       onPress={() => router.push(`/session/${s._id}`)}
       onDismiss={() => handleDismiss(s._id)}
       onPin={() => handlePin(s._id)}
+      onLongPress={() => handleLongPress(s)}
     />
-  ), [router, handleDismiss, handlePin]);
+  ), [router, handleDismiss, handlePin, handleLongPress]);
 
   const renderSection = useCallback((label: string, items: InboxSession[], color?: string) => {
     if (items.length === 0) return null;
@@ -379,7 +403,10 @@ export default function InboxScreen() {
 
   const listData = useMemo(() => {
     const sections: React.ReactNode[] = [];
-    if (activeSessions.length === 0 && Object.keys(sessions).length > 0) {
+    if (Object.keys(sessions).length === 0) {
+      return [<SessionListSkeleton key="skeleton" />];
+    }
+    if (activeSessions.length === 0) {
       return [(
         <RNView key="empty" style={styles.emptyInbox}>
           <FontAwesome name="inbox" size={32} color={Theme.textMuted0} />

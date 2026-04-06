@@ -132,7 +132,7 @@ function StatusDot({ session }: { session: SessionData }) {
   return <RNView style={[styles.statusDot, { backgroundColor: color }]} />;
 }
 
-export function SessionItem({ session, onPress, onPin }: { session: SessionData; onPress: () => void; onPin?: () => void }) {
+export function SessionItem({ session, onPress, onPin, onLongPress }: { session: SessionData; onPress: () => void; onPin?: () => void; onLongPress?: () => void }) {
   const project = projectName(session);
   const agent = agentLabel(session.agent_type ?? "");
   const durationMs = session.updated_at - (session.started_at ?? session.updated_at);
@@ -141,7 +141,7 @@ export function SessionItem({ session, onPress, onPin }: { session: SessionData;
   const showAuthor = session.author_name && session.is_own === false;
 
   return (
-    <TouchableOpacity onPress={onPress} style={styles.conversationContent} activeOpacity={0.6}>
+    <TouchableOpacity onPress={onPress} onLongPress={onLongPress} style={styles.conversationContent} activeOpacity={0.6}>
       <RNView style={styles.conversationHeader}>
         <RNView style={styles.titleRow}>
           <StatusDot session={session} />
@@ -202,11 +202,12 @@ export function SessionItem({ session, onPress, onPin }: { session: SessionData;
   );
 }
 
-export function SwipeableSessionItem({ session, onPress, onDismiss, onPin }: {
+export function SwipeableSessionItem({ session, onPress, onDismiss, onPin, onLongPress }: {
   session: SessionData;
   onPress: () => void;
   onDismiss: () => void;
   onPin?: () => void;
+  onLongPress?: () => void;
 }) {
   const translateX = useRef(new RNAnimated.Value(0)).current;
   const panStartX = useRef(0);
@@ -265,7 +266,7 @@ export function SwipeableSessionItem({ session, onPress, onDismiss, onPin }: {
         onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}
       >
-        <SessionItem session={session} onPress={onPress} onPin={onPin} />
+        <SessionItem session={session} onPress={onPress} onPin={onPin} onLongPress={onLongPress} />
       </RNAnimated.View>
     </RNView>
   );
