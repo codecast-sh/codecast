@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { mutation, query } from "./_generated/server";
+import { internalMutation, mutation, query } from "./_generated/server";
 import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
 import { getAuthUserId } from "@convex-dev/auth/server";
@@ -147,7 +147,29 @@ export const create = mutation({
     const auth = await verifyApiToken(ctx, args.api_token);
     if (!auth) throw new Error("Unauthorized");
 
-    const db = await createDataContext(ctx, { userId: auth.userId, project_path: args.project_path });
+    // Resolve conversation first so we can propagate team_id to the task
+    let conversation_ids: Id<"conversations">[] | undefined;
+    let created_from_conversation: Id<"conversations"> | undefined;
+    let convTeamId: Id<"teams"> | undefined;
+    if (args.conversation_id) {
+      const conv = await ctx.db
+        .query("conversations")
+        .withIndex("by_session_id", (q) => q.eq("session_id", args.conversation_id!))
+        .first();
+      if (conv) {
+        conversation_ids = [conv._id];
+        created_from_conversation = conv._id;
+        if (conv.team_id && (!conv.is_private || conv.auto_shared)) {
+          convTeamId = conv.team_id;
+        }
+      }
+    }
+
+    const db = await createDataContext(ctx, {
+      userId: auth.userId,
+      project_path: args.project_path,
+      ...(convTeamId ? { workspace: "team" as const, team_id: convTeamId } : {}),
+    });
     const now = Date.now();
     const short_id = await nextShortId(ctx.db, "ct");
 
@@ -158,19 +180,6 @@ export const create = mutation({
         .filter((q) => q.eq(q.field("_id"), args.project_id as any))
         .first();
       if (project) project_id = project._id;
-    }
-
-    let conversation_ids: Id<"conversations">[] | undefined;
-    let created_from_conversation: Id<"conversations"> | undefined;
-    if (args.conversation_id) {
-      const conv = await ctx.db
-        .query("conversations")
-        .withIndex("by_session_id", (q) => q.eq("session_id", args.conversation_id!))
-        .first();
-      if (conv) {
-        conversation_ids = [conv._id];
-        created_from_conversation = conv._id;
-      }
     }
 
     let plan_id: Id<"plans"> | undefined;
@@ -1323,12 +1332,13 @@ export const webCreate = mutation({
     team_id: v.optional(v.id("teams")),
     workspace: v.optional(v.union(v.literal("personal"), v.literal("team"))),
     assignee: v.optional(v.string()),
+    project_path: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Unauthorized");
 
-    const db = await createDataContext(ctx, { userId, workspace: args.workspace, team_id: args.team_id });
+    const db = await createDataContext(ctx, { userId, workspace: args.workspace, team_id: args.team_id, project_path: args.project_path });
     const short_id = await nextShortId(ctx.db, "ct");
 
     let project_id: Id<"projects"> | undefined;
@@ -1587,7 +1597,17 @@ export const backfillTeamScope = mutation({
       const patches: Record<string, any> = {};
 
       if (!t.team_id) {
-        const tid = userTeamMap.get(t.user_id.toString());
+        // Prefer conversation's team (matches the webList visibility logic)
+        let tid: any;
+        const cid = (t as any).conversation_ids?.[0] || t.created_from_conversation;
+        if (cid) {
+          const conv = await ctx.db.get(cid) as any;
+          if (conv?.team_id && (!conv.is_private || conv.auto_shared)) {
+            tid = conv.team_id;
+          }
+        }
+        // Fall back to user's active team
+        if (!tid) tid = userTeamMap.get(t.user_id.toString());
         if (tid) patches.team_id = tid;
       }
 
@@ -1618,6 +1638,43 @@ export const backfillTeamScope = mutation({
     }
 
     return { tasksFixed, tasksPromoted, docsFixed, totalTasks: allTasks.length, totalDocs: allDocs.length };
+  },
+});
+
+// Internal version for admin CLI: npx convex run tasks:backfillTaskTeamIds
+// Paginated — pass cursor from previous result to continue.
+export const backfillTaskTeamIds = internalMutation({
+  args: { cursor: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const allUsers = await ctx.db.query("users").collect();
+    const userTeamMap = new Map<string, any>();
+    for (const u of allUsers) {
+      userTeamMap.set(u._id.toString(), (u as any).active_team_id || (u as any).team_id);
+    }
+
+    const page = await ctx.db.query("tasks").paginate({
+      cursor: (args.cursor || null) as any,
+      numItems: 200,
+    });
+
+    let fixed = 0;
+    for (const t of page.page) {
+      if (t.team_id) continue;
+      let tid: any;
+      const cid = (t as any).conversation_ids?.[0] || t.created_from_conversation;
+      if (cid) {
+        const conv = await ctx.db.get(cid) as any;
+        if (conv?.team_id && (!conv.is_private || conv.auto_shared)) {
+          tid = conv.team_id;
+        }
+      }
+      if (!tid) tid = userTeamMap.get(t.user_id.toString());
+      if (tid) {
+        await ctx.db.patch(t._id, { team_id: tid });
+        fixed++;
+      }
+    }
+    return { fixed, isDone: page.isDone, cursor: page.continueCursor };
   },
 });
 
