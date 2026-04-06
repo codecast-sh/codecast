@@ -388,7 +388,6 @@ export function SessionCard({
           className="w-full text-left cursor-pointer px-2 py-1"
         >
           <div className="flex items-center gap-1.5">
-            <TeamIcon icon={effectiveIcon} color={effectiveColor} className="w-3 h-3 flex-shrink-0 opacity-50" />
             <span className={`truncate text-xs leading-tight flex-1 ${
               isActive ? "text-violet-300 font-medium" : "text-gray-400 font-normal"
             }`}>
@@ -422,13 +421,13 @@ export function SessionCard({
             </div>
           </div>
           {cleanedUserMsg && (
-            <div className="text-[10px] text-gray-500 mt-0.5 truncate leading-snug pl-[18px]">
+            <div className="text-[10px] text-gray-500 mt-0.5 truncate leading-snug">
               <span className="text-gray-600 mr-0.5">&gt;</span>
               {cleanedUserMsg}
             </div>
           )}
           {session.active_task && (
-            <div className="flex items-center gap-1 mt-0.5 pl-[18px]">
+            <div className="flex items-center gap-1 mt-0.5">
               <span className="inline-flex items-center px-1 py-0 rounded text-[9px] font-medium bg-violet-900/20 text-violet-400/70 border border-violet-600/20 max-w-[160px] truncate" title={session.active_task.title}>
                 {session.active_task.title}
               </span>
