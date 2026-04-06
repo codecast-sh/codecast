@@ -868,9 +868,10 @@ type UserMessageKind =
   | { kind: 'tool_results_only' }
   | { kind: 'empty' }
   | { kind: 'teammate_events' }
+  | { kind: 'continuation' }
   | { kind: 'poll_response' };
 
-const STICKY_NOISE_PREFIXES = ["[Request interrupted", "This session is being continued", "<task-notification>", "Your task is to create a detailed summary", "Full transcript available at:"];
+const STICKY_NOISE_PREFIXES = ["[Request interrupted", "<task-notification>", "Your task is to create a detailed summary", "Full transcript available at:"];
 
 function classifyUserMessage(
   msg: Message,
@@ -944,6 +945,9 @@ function classifyUserMessage(
   if (!displayable) {
     if (!immediatePrev && !contextPrev) return { kind: 'normal' };
     return hasUserImages ? { kind: 'normal' } : { kind: 'noise' };
+  }
+  if (displayable.startsWith("This session is being continued")) {
+    return { kind: 'continuation' };
   }
   if (STICKY_NOISE_PREFIXES.some(p => displayable.startsWith(p))) {
     return { kind: 'noise' };
@@ -6571,7 +6575,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
                     ) : (
                       <span className="flex items-center gap-1.5 text-sol-yellow">
                         <span className="w-2 h-2 rounded-full bg-sol-yellow animate-pulse" />
-                        Not Connected
+                        Waiting for connection…
                       </span>
                     )
                   ) : (
@@ -7521,15 +7525,36 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     | { type: 'commit'; data: Commit; timestamp: number }
     | { type: 'pull_request'; data: PullRequest; timestamp: number };
 
+  // Pending messages: read directly so they ALWAYS render, regardless of what
+  // setMessages/mergeMessages/buildCompositeTimeline do to the server message arrays.
+  const pendingConvId = effectiveConversationId || conversation?._id || '';
+  const pendingMsgs = useInboxStore((s) => s.pendingMessages[pendingConvId]) ?? [];
+
   const timeline: TimelineItem[] = useMemo(() => {
-    return buildCompositeTimeline(
+    const base = buildCompositeTimeline(
       messages,
       commits,
       pullRequests,
       activeBranches,
       inboxMessages,
     ) as TimelineItem[];
-  }, [messages, commits, pullRequests, activeBranches, inboxMessages]);
+    if (pendingMsgs.length === 0) return base;
+    // Guaranteed render: append any pending messages not already in the timeline.
+    // This is the ONLY merge point — the store never mixes pending into messages[].
+    const seen = new Set<string>();
+    for (const item of base) {
+      if (item.type === 'message') {
+        const m = item.data as any;
+        seen.add(m._id);
+        if (m.client_id) seen.add(m.client_id);
+      }
+    }
+    const toAdd = pendingMsgs.filter((m: any) =>
+      !seen.has(m._id) && (!m._clientId || !seen.has(m._clientId))
+    );
+    if (toAdd.length === 0) return base;
+    return [...base, ...toAdd.map((m: any) => ({ type: 'message' as const, data: m, timestamp: m.timestamp }))];
+  }, [messages, commits, pullRequests, activeBranches, inboxMessages, pendingMsgs]);
   timelineRef.current = timeline;
   scrollCtxRef.current = { messageCount: conversation?.message_count || messages.length, messagesLen: messages.length, timelineLen: timeline.length, loadedStartIndex: conversation?.loaded_start_index ?? 0 };
 
@@ -8121,6 +8146,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       switch (kind?.kind) {
         case 'command': return 30;
         case 'interrupt': return 30;
+        case 'continuation': return 30;
         case 'skill_expansion': return 44;
         case 'task_notification': return 40;
         case 'teammate_events': return 40;
@@ -9014,6 +9040,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         case 'interrupt':
           if (collapsed) return null;
           return <InterruptStatusLine key={msg._id} label={kind.tone === 'amber' ? "turn aborted" : undefined} tone={kind.tone} />;
+        case 'continuation':
+          if (collapsed) return null;
+          return <InterruptStatusLine key={msg._id} label="session continued" tone="sky" />;
         case 'skill_expansion':
           return <SkillExpansionBlock key={msg._id} content={msg.content!} timestamp={msg.timestamp} cmdName={kind.cmdName} collapsed={collapsed} />;
         case 'task_notification':

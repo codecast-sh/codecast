@@ -346,20 +346,26 @@ export function useConversationMessages(
   }, [targetMode, targetHasMoreAbove, hasMoreAbove, storeMeta?.message_count, rawMessages.length]);
 
   // =============================================
-  // Build conversation object FROM STORE (never null if store has meta)
+  // Build conversation object FROM STORE (never null if store has pending)
   // =============================================
+  const hasPending = storePending.length > 0;
   const conversation: Record<string, any> | null = useMemo(() => {
-    if (!storeMeta) return null;
-    if (targetMode && !targetAroundData && rawMessages.length === 0) return null;
-    if (useNormalMode && mergedMessages.length === 0 && (storeMeta?.message_count ?? 0) > 0) return null;
+    // STRUCTURAL INVARIANT: if the user has pending (unsent/unconfirmed) messages,
+    // we MUST return a conversation object so the UI renders them. Returning null
+    // would unmount ConversationView+MessageInput and swallow the message.
+    if (!storeMeta && !hasPending) return null;
+    if (!hasPending) {
+      if (targetMode && !targetAroundData && rawMessages.length === 0) return null;
+      if (useNormalMode && mergedMessages.length === 0 && (storeMeta?.message_count ?? 0) > 0) return null;
+    }
     return {
-      ...storeMeta,
+      ...(storeMeta || { _id: conversationId, status: "active", message_count: 0 }),
       messages: rawMessages,
       loaded_start_index: loadedStartIndex,
       compaction_count: compactionCount,
       child_conversation_map: childConversationMap,
     };
-  }, [storeMeta, rawMessages, loadedStartIndex, compactionCount, childConversationMap, targetMode, targetAroundData, mergedMessages.length, useNormalMode]);
+  }, [storeMeta, rawMessages, loadedStartIndex, compactionCount, childConversationMap, targetMode, targetAroundData, mergedMessages.length, useNormalMode, hasPending, conversationId]);
 
   // =============================================
   // Target search (auto-load older to find target)

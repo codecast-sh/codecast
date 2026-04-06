@@ -681,8 +681,10 @@ function evictInactiveMessages(draft: any, activeConvId: string) {
   const keep = new Set([activeConvId, currentConvId].filter(Boolean));
 
   // Evict oldest first (by last message timestamp)
+  // Never evict conversations with pending messages — the user just sent something
+  // and evicting would make it vanish from the UI
   const candidates = loaded
-    .filter((id: string) => !keep.has(id))
+    .filter((id: string) => !keep.has(id) && !(draft.pendingMessages[id]?.length > 0))
     .sort((a: string, b: string) => {
       const aMsgs = draft.messages[a];
       const bMsgs = draft.messages[b];
@@ -946,10 +948,9 @@ export const useInboxStore = create<InboxStoreState>(
   setRecentProjects: (projects: Array<{ path: string; count: number; lastActive: number }>) => set({ recentProjects: projects }),
   activeProjectPath: null,
   activeProjectFilter: null,
-  setActiveProjectFilter: sync(function (this: Draft, name: string | null, path?: string | null) {
-    this.activeProjectFilter = name;
-    this.activeProjectPath = path ?? null;
-  }),
+  setActiveProjectFilter: (name: string | null, path?: string | null) => {
+    set({ activeProjectFilter: name, activeProjectPath: path ?? null });
+  },
 
   // =====================
   // ACTIONS (wrapped by middleware: mutative draft + server dispatch)
@@ -1403,6 +1404,7 @@ export const useInboxStore = create<InboxStoreState>(
   // =====================
 
   setMessages: sync(function (this: Draft, convId: string, msgs: Message[], meta?: Partial<PaginationState>) {
+    // Prune confirmed messages from pendingMessages
     const pending = this.pendingMessages[convId] || [];
     if (pending.length > 0) {
       const serverUserMsgs = msgs.filter((m: Message) => m.role === "user");
@@ -1417,19 +1419,8 @@ export const useInboxStore = create<InboxStoreState>(
         );
       });
     }
-    // Always re-append unconfirmed pending messages to the messages array.
-    // This makes it structurally impossible for a sync to hide a pending message —
-    // the message is ALWAYS in the primary data structure that drives rendering.
-    const remaining = this.pendingMessages[convId] || [];
-    if (remaining.length > 0) {
-      const serverIds = new Set(msgs.map((m: Message) => m._id));
-      const toAppend = remaining.filter((m: Message) => !serverIds.has(m._id));
-      this.messages[convId] = toAppend.length > 0
-        ? [...msgs, ...toAppend].sort((a: Message, b: Message) => a.timestamp - b.timestamp)
-        : msgs;
-    } else {
-      this.messages[convId] = msgs;
-    }
+    // Server data only — pending messages are merged at read time
+    this.messages[convId] = msgs;
     const pag = { ...(this.pagination[convId] || DEFAULT_PAGINATION), ...meta };
     this.pagination[convId] = pag;
     writeConversationMessages(convId, msgs, pag);
@@ -1446,17 +1437,8 @@ export const useInboxStore = create<InboxStoreState>(
       ? [...unique, ...existing]
       : [...existing, ...unique];
     merged.sort((a: Message, b: Message) => a.timestamp - b.timestamp);
-    // Re-append pending messages to ensure they survive merge operations
-    const remaining = this.pendingMessages[convId] || [];
-    if (remaining.length > 0) {
-      const mergedIds = new Set(merged.map((m: Message) => m._id));
-      const toAppend = remaining.filter((m: Message) => !mergedIds.has(m._id));
-      this.messages[convId] = toAppend.length > 0
-        ? [...merged, ...toAppend].sort((a: Message, b: Message) => a.timestamp - b.timestamp)
-        : merged;
-    } else {
-      this.messages[convId] = merged;
-    }
+    // Server data only — pending messages are merged at read time
+    this.messages[convId] = merged;
     const pag = meta ? { ...(this.pagination[convId] || DEFAULT_PAGINATION), ...meta } : this.pagination[convId];
     if (meta) this.pagination[convId] = pag;
     writeConversationMessages(convId, merged, pag);
@@ -1474,13 +1456,8 @@ export const useInboxStore = create<InboxStoreState>(
       _clientId: id,
       ...(images && images.length > 0 ? { images } : {}),
     };
-    // Add to pendingMessages (tracks confirmation lifecycle)
     if (!this.pendingMessages[convId]) this.pendingMessages[convId] = [];
     this.pendingMessages[convId].push(msg);
-    // Also add directly to messages array — the message renders from HERE,
-    // making it impossible for any sync operation to hide it
-    if (!this.messages[convId]) this.messages[convId] = [];
-    this.messages[convId] = [...this.messages[convId], msg];
     return id;
   }),
 
