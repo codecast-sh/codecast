@@ -4,10 +4,11 @@ import { Card } from "../../../components/ui/card";
 import { Input } from "../../../components/ui/input";
 import { Button } from "../../../components/ui/button";
 import { Label } from "../../../components/ui/label";
-import { useState, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { GitBranch, Folder, Check, Search, Eye, EyeOff, ChevronDown, AlertTriangle } from "lucide-react";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -25,6 +26,279 @@ import {
 import { TeamIcon } from "../../../components/TeamIcon";
 
 type TeamVisibility = "hidden" | "activity" | "summary" | "full";
+type UserTeam = {
+  _id: Id<"teams">;
+  name: string;
+  icon?: string | null;
+  icon_color?: string | null;
+  role?: string;
+  visibility?: TeamVisibility;
+};
+type DirectoryMapping = {
+  _id?: string;
+  path_prefix: string;
+  team_id: Id<"teams">;
+  team_name?: string;
+  auto_share: boolean;
+  created_at?: number;
+};
+type SyncProject = {
+  path: string;
+  is_git_repo: boolean;
+  session_count: number;
+  last_active: number;
+  git_remote_url?: string | null;
+  team_id?: Id<"teams"> | null;
+  auto_share?: boolean;
+};
+type SuggestedProject = {
+  path: string;
+  git_remote_url: string | null;
+  session_count: number;
+  last_active: number;
+  matched_member_count: number;
+  match_type: "github" | "repo_name";
+  match_reason: string;
+  current_team_id: Id<"teams"> | null;
+};
+type TeamProjectSuggestions = {
+  team_id: Id<"teams">;
+  team_name: string;
+  current_visibility: TeamVisibility;
+  suggestions: SuggestedProject[];
+};
+
+function TeamSetupDialog({
+  teams,
+  mappingsByPath,
+  updateDirectoryMapping,
+  setTeamVisibility,
+  getProjectName,
+  getRelativeTime,
+}: {
+  teams: UserTeam[];
+  mappingsByPath: Map<string, DirectoryMapping>;
+  updateDirectoryMapping: ReturnType<typeof useMutation<typeof api.users.updateDirectoryTeamMapping>>;
+  setTeamVisibility: ReturnType<typeof useMutation<typeof api.teams.setTeamVisibility>>;
+  getProjectName: (path: string) => string;
+  getRelativeTime: (timestamp: number) => string;
+}) {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const setupTeamIdParam = searchParams.get("teamId");
+  const setupTeamId = (setupTeamIdParam as Id<"teams"> | null) || null;
+  const teamSetupRequested = searchParams.get("teamSetup") === "1";
+  const teamProjectSuggestions = useQuery(
+    api.users.getSuggestedTeamProjects,
+    setupTeamId ? { team_id: setupTeamId } : "skip",
+  ) as TeamProjectSuggestions | null | undefined;
+  const [teamSetupOpen, setTeamSetupOpen] = useState(false);
+  const [teamSetupSelection, setTeamSetupSelection] = useState<Record<string, boolean>>({});
+  const [teamSetupVisibility, setTeamSetupVisibility] = useState<TeamVisibility>("summary");
+  const [isApplyingTeamSetup, setIsApplyingTeamSetup] = useState(false);
+
+  useEffect(() => {
+    if (teamSetupRequested && setupTeamId) {
+      setTeamSetupOpen(true);
+    }
+  }, [teamSetupRequested, setupTeamId]);
+
+  useEffect(() => {
+    if (!teamProjectSuggestions) return;
+    setTeamSetupVisibility(teamProjectSuggestions.current_visibility || "summary");
+    setTeamSetupSelection(
+      Object.fromEntries(teamProjectSuggestions.suggestions.map((project) => [project.path, true]))
+    );
+  }, [
+    teamProjectSuggestions?.team_id,
+    teamProjectSuggestions?.current_visibility,
+    teamProjectSuggestions?.suggestions.map((project) => project.path).join("|"),
+  ]);
+
+  const setupTeam = teams.find((team) => team._id === (teamProjectSuggestions?.team_id || setupTeamId)) || null;
+
+  const closeTeamSetup = () => {
+    setTeamSetupOpen(false);
+    if (!teamSetupRequested) return;
+    const nextParams = new URLSearchParams(searchParams.toString());
+    nextParams.delete("teamSetup");
+    nextParams.delete("teamId");
+    const nextQuery = nextParams.toString();
+    router.replace(nextQuery ? `/settings/sync?${nextQuery}` : "/settings/sync");
+  };
+
+  const toggleTeamSetupProject = (path: string) => {
+    setTeamSetupSelection((current) => ({
+      ...current,
+      [path]: !current[path],
+    }));
+  };
+
+  const handleApplyTeamSetup = async () => {
+    if (!setupTeamId || !setupTeam) {
+      closeTeamSetup();
+      return;
+    }
+
+    setIsApplyingTeamSetup(true);
+    try {
+      await setTeamVisibility({ team_id: setupTeamId, visibility: teamSetupVisibility });
+      const selectedPaths = Object.entries(teamSetupSelection)
+        .filter(([, selected]) => selected)
+        .map(([path]) => path);
+
+      let queuedProjects = 0;
+      for (const path of selectedPaths) {
+        const existingMapping = mappingsByPath.get(path);
+        if (existingMapping?.team_id === setupTeamId) continue;
+        await updateDirectoryMapping({
+          path_prefix: path,
+          team_id: setupTeamId,
+          auto_share: true,
+        });
+        queuedProjects++;
+      }
+
+      if (queuedProjects > 0) {
+        toast.success(`Queued ${queuedProjects} project${queuedProjects === 1 ? "" : "s"} for ${setupTeam.name}`);
+      } else {
+        toast.success(`Saved ${setupTeam.name} sharing settings`);
+      }
+      closeTeamSetup();
+    } catch (error) {
+      console.error("Failed to save team setup:", error);
+      toast.error("Failed to save team sharing setup");
+    } finally {
+      setIsApplyingTeamSetup(false);
+    }
+  };
+
+  return (
+    <Dialog open={teamSetupOpen} onOpenChange={(open) => !open && closeTeamSetup()}>
+      <DialogContent className="bg-sol-bg border-sol-border max-w-2xl">
+        <DialogHeader>
+          <DialogTitle className="text-sol-text">
+            Set up sharing for {setupTeam?.name || teamProjectSuggestions?.team_name || "your team"}
+          </DialogTitle>
+          <DialogDescription className="text-sol-base1">
+            Codecast matched your recent projects against repos your teammates already share. Pick what to connect now and choose how visible your work should be.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-5 py-1">
+          <div className="space-y-2">
+            <Label className="text-sol-text">Team visibility</Label>
+            <div className="grid grid-cols-2 gap-2">
+              {visibilityOptions.map((option) => (
+                <button
+                  key={option.value}
+                  onClick={() => setTeamSetupVisibility(option.value)}
+                  className={`rounded-lg border px-3 py-3 text-left transition-colors ${
+                    teamSetupVisibility === option.value
+                      ? "border-sol-cyan bg-sol-cyan/10"
+                      : "border-sol-border hover:border-sol-border/80 hover:bg-sol-bg-alt/60"
+                  }`}
+                >
+                  <div className="text-sm font-medium text-sol-text">{option.label}</div>
+                  <div className="mt-1 text-xs text-sol-base1">{option.description}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <Label className="text-sol-text">Suggested projects</Label>
+              <div className="text-xs text-sol-base1">
+                {Object.values(teamSetupSelection).filter(Boolean).length} selected
+              </div>
+            </div>
+
+            {teamProjectSuggestions === undefined ? (
+              <div className="rounded-lg border border-sol-border bg-sol-bg-alt/40 px-4 py-6 text-sm text-sol-base1">
+                Loading project matches...
+              </div>
+            ) : teamProjectSuggestions?.suggestions.length ? (
+              <div className="space-y-2 max-h-[320px] overflow-y-auto pr-1">
+                {teamProjectSuggestions.suggestions.map((project) => {
+                  const selected = !!teamSetupSelection[project.path];
+                  const currentMapping = mappingsByPath.get(project.path);
+                  const currentTeamName = currentMapping?.team_id
+                    ? teams.find((team) => team._id === currentMapping.team_id)?.name
+                    : null;
+
+                  return (
+                    <button
+                      key={project.path}
+                      onClick={() => toggleTeamSetupProject(project.path)}
+                      className={`w-full rounded-lg border px-4 py-3 text-left transition-colors ${
+                        selected
+                          ? "border-sol-cyan bg-sol-cyan/10"
+                          : "border-sol-border hover:border-sol-border/80 hover:bg-sol-bg-alt/50"
+                      }`}
+                    >
+                      <div className="flex items-start gap-3">
+                        <div className={`mt-0.5 flex h-5 w-5 items-center justify-center rounded border ${
+                          selected
+                            ? "border-sol-cyan bg-sol-cyan text-sol-bg"
+                            : "border-sol-border bg-sol-bg-alt"
+                        }`}>
+                          {selected && <Check className="w-3 h-3" />}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <GitBranch className="w-4 h-4 text-sol-cyan flex-shrink-0" />
+                            <div className="truncate text-sm font-medium text-sol-text">{getProjectName(project.path)}</div>
+                            {project.match_type === "github" && (
+                              <span className="rounded border border-sol-cyan/30 bg-sol-cyan/10 px-2 py-0.5 text-[11px] text-sol-cyan">
+                                GitHub match
+                              </span>
+                            )}
+                          </div>
+                          <div className="mt-1 truncate text-xs text-sol-base1">{project.path}</div>
+                          <div className="mt-2 flex flex-wrap gap-2 text-xs text-sol-base1">
+                            <span>{project.match_reason}</span>
+                            <span>{project.session_count} session{project.session_count === 1 ? "" : "s"}</span>
+                            <span>{getRelativeTime(project.last_active)}</span>
+                            {currentTeamName && currentMapping?.team_id !== setupTeamId && (
+                              <span className="text-sol-yellow">Currently mapped to {currentTeamName}</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="rounded-lg border border-sol-border bg-sol-bg-alt/40 px-4 py-6 text-sm text-sol-base1">
+                No repo matches yet. You can still choose a visibility level now and add projects from the list afterward.
+              </div>
+            )}
+          </div>
+        </div>
+
+        <DialogFooter className="gap-2 sm:gap-0">
+          <Button
+            variant="outline"
+            onClick={closeTeamSetup}
+            className="border-sol-border text-sol-base1"
+            disabled={isApplyingTeamSetup}
+          >
+            Later
+          </Button>
+          <Button
+            onClick={handleApplyTeamSetup}
+            className="bg-sol-cyan text-sol-bg hover:bg-sol-cyan/90"
+            disabled={isApplyingTeamSetup || !setupTeamId}
+          >
+            {isApplyingTeamSetup ? "Saving..." : "Save Team Setup"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
 
 const visibilityOptions: { value: TeamVisibility; label: string; description: string; preview: string }[] = [
   { value: "hidden", label: "Hidden", description: "Teammates see nothing", preview: "Your sessions won't appear in the team feed" },
@@ -56,15 +330,14 @@ export default function SyncPage() {
     action: "unsync" | "remove_team";
   } | null>(null);
 
-  if (!user || !syncSettings) {
-    return null;
-  }
-
   const hasTeams = userTeams && userTeams.length > 0;
-  const syncAll = syncSettings.sync_mode === "all";
-  const syncProjects = syncSettings.sync_projects || [];
+  const syncAll = syncSettings?.sync_mode === "all";
+  const syncProjects = syncSettings?.sync_projects || [];
+  const teams = (userTeams?.filter(Boolean) ?? []) as UserTeam[];
+  const mappings = (directoryMappings ?? []) as DirectoryMapping[];
+  const recentProjects = (projects ?? []) as SyncProject[];
 
-  const mappingsByPath = new Map(directoryMappings?.map(m => [m.path_prefix, m]) || []);
+  const mappingsByPath = new Map<string, DirectoryMapping>(mappings.map((mapping) => [mapping.path_prefix, mapping]));
 
   const handleToggleSyncAll = async () => {
     if (syncAll) {
@@ -81,13 +354,17 @@ export default function SyncPage() {
     return syncAll || syncProjects.includes(path);
   };
 
-  const activeTeam = user?.active_team_id ? userTeams?.find(t => t?._id === user.active_team_id) || null : null;
+  const activeTeam = user?.active_team_id ? teams.find((team) => team._id === user.active_team_id) || null : null;
   const teamSharePaths: string[] = (user as any)?.team_share_paths ?? [];
 
-  const getTeamForProject = (path: string): { team: NonNullable<typeof userTeams>[number]; isDefault: boolean } | null => {
+  if (!user || !syncSettings) {
+    return null;
+  }
+
+  const getTeamForProject = (path: string): { team: UserTeam; isDefault: boolean } | null => {
     const mapping = mappingsByPath.get(path);
     if (mapping?.team_id) {
-      const team = userTeams?.find(t => t?._id === mapping.team_id);
+      const team = teams.find((team) => team._id === mapping.team_id);
       if (team) return { team, isDefault: false };
     }
     if (activeTeam && teamSharePaths.length > 0) {
@@ -132,7 +409,7 @@ export default function SyncPage() {
         setPendingUnsync({ path, sessionCount: count, action: "unsync" });
         return;
       }
-      const newProjects = syncProjects.filter(p => p !== path);
+      const newProjects = syncProjects.filter((projectPath: string) => projectPath !== path);
       await updateSyncSettings({ sync_projects: newProjects });
       const existingMapping = mappingsByPath.get(path);
       if (existingMapping) {
@@ -149,7 +426,7 @@ export default function SyncPage() {
     setIsUnsyncing(true);
     try {
       if (action === "unsync") {
-        const newProjects = syncProjects.filter(p => p !== path);
+        const newProjects = syncProjects.filter((projectPath: string) => projectPath !== path);
         await updateSyncSettings({ sync_projects: newProjects });
         const existingMapping = mappingsByPath.get(path);
         if (existingMapping) {
@@ -222,30 +499,28 @@ export default function SyncPage() {
 
   // Merge recent projects with paths from team mappings and sync_projects
   const allProjects = (() => {
-    const projectMap = new Map<string, { path: string; is_git_repo: boolean; session_count: number; last_active: number }>();
+    const projectMap = new Map<string, SyncProject>();
 
-    // Add recent projects
-    projects?.forEach(p => {
-      projectMap.set(p.path, p);
+    recentProjects.forEach((project: SyncProject) => {
+      projectMap.set(project.path, project);
     });
 
-    // Add paths from team mappings that aren't in recent projects
-    directoryMappings?.forEach(m => {
-      if (!projectMap.has(m.path_prefix)) {
-        projectMap.set(m.path_prefix, {
-          path: m.path_prefix,
-          is_git_repo: true, // Assume git repo for mapped paths
+    mappings.forEach((mapping: DirectoryMapping) => {
+      if (!projectMap.has(mapping.path_prefix)) {
+        projectMap.set(mapping.path_prefix, {
+          path: mapping.path_prefix,
+          is_git_repo: true,
           session_count: 0,
-          last_active: m.created_at,
+          last_active: mapping.created_at ?? 0,
         });
       }
     });
 
     // Add paths from sync_projects that aren't already present
-    syncProjects.forEach(p => {
-      if (!projectMap.has(p)) {
-        projectMap.set(p, {
-          path: p,
+    syncProjects.forEach((projectPath: string) => {
+      if (!projectMap.has(projectPath)) {
+        projectMap.set(projectPath, {
+          path: projectPath,
           is_git_repo: true,
           session_count: 0,
           last_active: 0,
@@ -256,10 +531,10 @@ export default function SyncPage() {
     const allPaths = Array.from(projectMap.values());
 
     // Filter out subdirectories of git repos - they should be controlled at the repo level
-    const gitRepoPaths = allPaths.filter(p => p.is_git_repo).map(p => p.path);
-    const filtered = allPaths.filter(project => {
+    const gitRepoPaths = allPaths.filter((project) => project.is_git_repo).map((project) => project.path);
+    const filtered = allPaths.filter((project) => {
       if (project.is_git_repo) return true;
-      const isSubdirOfGitRepo = gitRepoPaths.some(repoPath =>
+      const isSubdirOfGitRepo = gitRepoPaths.some((repoPath) =>
         project.path.startsWith(repoPath + "/")
       );
       return !isSubdirOfGitRepo;
@@ -268,10 +543,10 @@ export default function SyncPage() {
     return filtered.sort((a, b) => b.last_active - a.last_active);
   })();
 
-  const filteredProjects = allProjects.filter(p => {
+  const filteredProjects = allProjects.filter((project) => {
     if (!searchQuery) return true;
-    const name = getProjectName(p.path).toLowerCase();
-    const path = p.path.toLowerCase();
+    const name = getProjectName(project.path).toLowerCase();
+    const path = project.path.toLowerCase();
     const query = searchQuery.toLowerCase();
     return name.includes(query) || path.includes(query);
   });
@@ -326,21 +601,21 @@ export default function SyncPage() {
 
         {hasTeams && (
           <div className="mb-4 space-y-2">
-            {userTeams?.filter(Boolean).map((team) => {
-              const currentVisibility = team!.visibility || "summary";
+            {teams.map((team) => {
+              const currentVisibility = team.visibility || "summary";
               const currentOption = visibilityOptions.find(o => o.value === currentVisibility);
               return (
-                <div key={team!._id} className="px-3 py-2.5 rounded-lg border border-sol-border/40 bg-sol-bg-alt/50">
+                <div key={team._id} className="px-3 py-2.5 rounded-lg border border-sol-border/40 bg-sol-bg-alt/50">
                   <div className="flex items-center gap-3">
                     <div className="flex items-center gap-1.5 flex-shrink-0">
-                      <TeamIcon icon={team!.icon} color={team!.icon_color} className="w-3.5 h-3.5" />
-                      <span className="text-sm font-medium text-sol-text">{team!.name}</span>
+                      <TeamIcon icon={team.icon} color={team.icon_color} className="w-3.5 h-3.5" />
+                      <span className="text-sm font-medium text-sol-text">{team.name}</span>
                     </div>
                     <div className="flex gap-0.5 ml-auto">
                       {visibilityOptions.map((opt) => (
                         <button
                           key={opt.value}
-                          onClick={() => handleVisibilityChange(team!._id, opt.value)}
+                          onClick={() => handleVisibilityChange(team._id, opt.value)}
                           title={currentVisibility === opt.value ? opt.description : `Switch to: ${opt.preview}`}
                           className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
                             currentVisibility === opt.value
@@ -468,14 +743,14 @@ export default function SyncPage() {
                             <EyeOff className="w-4 h-4 mr-2" />
                             Only Me
                           </DropdownMenuItem>
-                          {userTeams?.filter(Boolean).map((t) => (
+                          {teams.map((team) => (
                             <DropdownMenuItem
-                              key={t!._id}
-                              onClick={() => handleTeamChange(project.path, t!._id)}
-                              className={teamResult?.team?._id === t!._id && !teamResult.isDefault ? "bg-sol-base02/30" : ""}
+                              key={team._id}
+                              onClick={() => handleTeamChange(project.path, team._id)}
+                              className={teamResult?.team?._id === team._id && !teamResult?.isDefault ? "bg-sol-base02/30" : ""}
                             >
                               <Eye className="w-4 h-4 mr-2" />
-                              {t!.name}
+                              {team.name}
                             </DropdownMenuItem>
                           ))}
                         </DropdownMenuContent>
@@ -529,6 +804,15 @@ export default function SyncPage() {
           </p>
         </div>
       </Card>
+
+      <TeamSetupDialog
+        teams={teams}
+        mappingsByPath={mappingsByPath}
+        updateDirectoryMapping={updateDirectoryMapping}
+        setTeamVisibility={setTeamVisibility}
+        getProjectName={getProjectName}
+        getRelativeTime={getRelativeTime}
+      />
 
       <Dialog open={!!pendingUnsync} onOpenChange={(open) => !open && setPendingUnsync(null)}>
         <DialogContent className="bg-sol-bg border-sol-border">
