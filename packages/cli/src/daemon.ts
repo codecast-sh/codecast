@@ -8531,6 +8531,38 @@ async function main(): Promise<void> {
   const pendingMessages: PendingMessages = {};
   const activeSessions = new Map<string, ActiveSession>();
 
+  // Warm restart: rebuild resumeSessionCache from surviving tmux sessions.
+  // After daemon restart, in-memory caches are lost but tmux sessions survive.
+  // Scanning them lets us deliver messages on first attempt instead of slow auto-resume.
+  if (hasTmux()) {
+    try {
+      const sessions = tmuxExecSync(["list-sessions", "-F", "#{session_name}"], { timeout: 5000 }).trim().split("\n").filter(Boolean);
+      const ccSessions = sessions.filter(s => s.startsWith("cc-") || s.startsWith("cx-") || s.startsWith("gm-"));
+      let recovered = 0;
+      for (const tmuxSession of ccSessions) {
+        try {
+          const sessionId = await getTmuxSessionOption(tmuxSession, "@codecast_session_id");
+          if (!sessionId) continue;
+          const alive = await isTmuxAgentAlive(tmuxSession);
+          if (!alive) continue;
+          // Found a live agent with session metadata — restore cache
+          resumeSessionCache.set(sessionId, tmuxSession);
+          const convId = conversationCache[sessionId];
+          if (convId && syncServiceRef) {
+            syncServiceRef.registerManagedSession(sessionId, process.pid, tmuxSession, convId).catch(() => {});
+            ensureManagedSessionHeartbeat(sessionId);
+          }
+          recovered++;
+        } catch {}
+      }
+      if (recovered > 0) {
+        log(`[WARM-RESTART] Recovered ${recovered} live session(s) from tmux: ${[...resumeSessionCache.entries()].map(([s, t]) => `${s.slice(0, 8)}→${t}`).join(", ")}`);
+      }
+    } catch (err) {
+      log(`[WARM-RESTART] tmux scan failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   // Sync skills to user profile on startup (global + per-project)
   {
     const globalSkills = readAvailableSkills();
@@ -9536,6 +9568,11 @@ async function main(): Promise<void> {
   }
 
   const messagesInFlight = new Set<string>();
+  // Track messages recently injected to tmux with timestamps, so retries don't re-inject.
+  // Uses a TTL: blocks re-delivery within 60s (the race window), but allows it after
+  // in case the agent dropped the paste or crashed silently after injection.
+  const injectedMessageTs = new Map<string, number>();
+  const INJECTION_DEDUP_TTL_MS = 60_000;
 
   const setupSubscription = () => {
     try {
@@ -9585,6 +9622,18 @@ async function main(): Promise<void> {
 
               syncService.updateSessionAgentStatus(msg.conversation_id, "connected").catch(() => {});
 
+              // If recently injected to tmux, skip re-delivery (prevents retry race causing duplicates).
+              // TTL ensures we allow re-delivery if the agent dropped/crashed after injection.
+              const lastInjectedAt = injectedMessageTs.get(msg._id);
+              if (lastInjectedAt && (Date.now() - lastInjectedAt) < INJECTION_DEDUP_TTL_MS) {
+                logDelivery(`DEDUP: msg=${msg._id.slice(0, 8)} injected ${Math.round((Date.now() - lastInjectedAt) / 1000)}s ago, updating status only`);
+                try {
+                  await syncService.updateMessageStatus({ messageId: msg._id, status: "injected" });
+                } catch {}
+                messagesInFlight.delete(msg._id);
+                continue;
+              }
+
               try {
                 const delivered = await deliverMessage(
                   msg.conversation_id,
@@ -9596,6 +9645,14 @@ async function main(): Promise<void> {
                 );
                 if (delivered) {
                   logDelivery(`SUCCESS: msg=${msg._id.slice(0, 8)} injected`);
+                  injectedMessageTs.set(msg._id, Date.now());
+                  // GC: evict expired entries to prevent unbounded growth
+                  if (injectedMessageTs.size > 500) {
+                    const now = Date.now();
+                    for (const [id, ts] of injectedMessageTs) {
+                      if (now - ts > INJECTION_DEDUP_TTL_MS) injectedMessageTs.delete(id);
+                    }
+                  }
                 } else {
                   logDelivery(`FAILED: msg=${msg._id.slice(0, 8)} delivery returned false, scheduling retry ${(msg.retry_count ?? 0) + 1}`);
                   scheduleMessageRetry(msg._id, msg.retry_count ?? 0, msg.conversation_id, messageContent);
@@ -9694,10 +9751,17 @@ async function main(): Promise<void> {
 
               if (injected) {
                 log(`Injected permission '${key}' for session ${sessionId?.slice(0, 8)}`);
-                processedPermissionIds.add(permission._id);
               } else {
-                log(`Failed to inject permission response, will retry on next update`);
+                // Check if the permission is stale (resolved > 60s ago) — no point retrying
+                const resolvedAge = permission.resolved_at ? Date.now() - permission.resolved_at : Infinity;
+                if (resolvedAge > 60_000) {
+                  log(`Skipping stale permission response for session ${sessionId?.slice(0, 8)} (resolved ${Math.round(resolvedAge / 1000)}s ago)`);
+                } else {
+                  log(`Failed to inject permission response for session ${sessionId?.slice(0, 8)}, will retry on next update`);
+                }
               }
+              // Always mark as processed — if the session process is gone, retrying won't help
+              processedPermissionIds.add(permission._id);
             } catch (err) {
               const errMsg = err instanceof Error ? err.message : String(err);
               log(`Error handling permission response: ${errMsg}`);
