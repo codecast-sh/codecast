@@ -1,0 +1,3 @@
+{
+  "ignore_dirs": [".git", ".conductor", "dist", ".next"]
+}
