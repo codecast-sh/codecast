@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
+import { createPortal } from "react-dom";
 
 type ForkChild = {
   _id: string;
@@ -37,6 +38,22 @@ export function BranchSelector({
   mainMessageCount?: number;
 }) {
   const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const [tooltipPos, setTooltipPos] = useState<{ top: number; left: number } | null>(null);
+  const buttonRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+
+  useEffect(() => {
+    if (!hoveredId || hoveredId === "main") {
+      setTooltipPos(null);
+      return;
+    }
+    const btn = buttonRefs.current[hoveredId];
+    if (btn) {
+      const rect = btn.getBoundingClientRect();
+      setTooltipPos({ top: rect.bottom + 4, left: rect.left });
+    }
+  }, [hoveredId]);
+
+  const hoveredFork = hoveredId && hoveredId !== "main" ? forkChildren.find(f => f._id === hoveredId) : null;
 
   return (
     <div className="mt-3 ml-8 mr-4">
@@ -76,8 +93,9 @@ export function BranchSelector({
           const isHovered = hoveredId === fork._id;
 
           return (
-            <div key={fork._id} className="relative group">
+            <div key={fork._id} className="relative">
               <button
+                ref={(el) => { buttonRefs.current[fork._id] = el; }}
                 onClick={() => onSwitchBranch(fork._id)}
                 onMouseEnter={() => setHoveredId(fork._id)}
                 onMouseLeave={() => setHoveredId(null)}
@@ -102,28 +120,32 @@ export function BranchSelector({
                   </span>
                 )}
               </button>
-
-              {isHovered && (
-                <div className="absolute left-0 top-full mt-1 z-50 px-3 py-2 rounded-lg bg-sol-bg border border-sol-border shadow-xl text-[11px] text-sol-text-secondary whitespace-nowrap pointer-events-none ring-1 ring-black/5">
-                  <div className="font-medium text-sol-text truncate max-w-[240px]">{fork.title || "Untitled fork"}</div>
-                  <div className="flex items-center gap-2 mt-1 text-sol-text-dim">
-                    {fork.username && <span>{fork.username}</span>}
-                    {fork.username && fork.started_at && <span className="text-sol-border">·</span>}
-                    {fork.started_at && <span>{relativeTime(fork.started_at)}</span>}
-                  </div>
-                  {(fork.message_count != null || fork.agent_type) && (
-                    <div className="flex items-center gap-2 mt-1 text-sol-text-dim">
-                      {fork.agent_type && <span className="text-sol-cyan">{fork.agent_type}</span>}
-                      {fork.agent_type && fork.message_count != null && <span className="text-sol-border">·</span>}
-                      {fork.message_count != null && <span>{fork.message_count} messages</span>}
-                    </div>
-                  )}
-                </div>
-              )}
             </div>
           );
         })}
       </div>
+
+      {hoveredFork && tooltipPos && createPortal(
+        <div
+          className="fixed z-[9999] px-3 py-2 rounded-lg bg-sol-bg border border-sol-border shadow-xl text-[11px] text-sol-text-secondary whitespace-nowrap pointer-events-none ring-1 ring-black/5"
+          style={{ top: tooltipPos.top, left: tooltipPos.left }}
+        >
+          <div className="font-medium text-sol-text truncate max-w-[240px]">{hoveredFork.title || "Untitled fork"}</div>
+          <div className="flex items-center gap-2 mt-1 text-sol-text-dim">
+            {hoveredFork.username && <span>{hoveredFork.username}</span>}
+            {hoveredFork.username && hoveredFork.started_at && <span className="text-sol-border">·</span>}
+            {hoveredFork.started_at && <span>{relativeTime(hoveredFork.started_at)}</span>}
+          </div>
+          {(hoveredFork.message_count != null || hoveredFork.agent_type) && (
+            <div className="flex items-center gap-2 mt-1 text-sol-text-dim">
+              {hoveredFork.agent_type && <span className="text-sol-cyan">{hoveredFork.agent_type}</span>}
+              {hoveredFork.agent_type && hoveredFork.message_count != null && <span className="text-sol-border">·</span>}
+              {hoveredFork.message_count != null && <span>{hoveredFork.message_count} messages</span>}
+            </div>
+          )}
+        </div>,
+        document.body
+      )}
     </div>
   );
 }
