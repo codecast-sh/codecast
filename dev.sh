@@ -7,6 +7,7 @@ INSTANCE="${1:-0}"
 BASE_PORT=3200
 PORT=$((BASE_PORT + INSTANCE))
 SHUTTING_DOWN=false
+PIDFILE="/tmp/codecast-dev-${PORT}.pid"
 
 if [ "$INSTANCE" = "0" ]; then
     HOSTNAME="local.codecast.sh"
@@ -73,6 +74,7 @@ cleanup() {
     SHUTTING_DOWN=true
     echo ""
     log "Shutting down..."
+    rm -f "$PIDFILE"
     [ -n "$CONVEX_PID" ] && kill_tree $CONVEX_PID
     kill_web
     sleep 1
@@ -83,6 +85,35 @@ cleanup() {
 }
 
 trap cleanup SIGINT SIGTERM
+
+kill_previous_instance() {
+    if [ -f "$PIDFILE" ]; then
+        local old_pid
+        old_pid=$(cat "$PIDFILE" 2>/dev/null)
+        if [ -n "$old_pid" ] && kill -0 "$old_pid" 2>/dev/null; then
+            log "Killing previous dev.sh instance (pid $old_pid)..."
+            # Kill the process tree (watchdog + convex + vite)
+            kill_tree "$old_pid"
+            # Wait up to 5s for it to die
+            local attempts=0
+            while kill -0 "$old_pid" 2>/dev/null && [ $attempts -lt 10 ]; do
+                sleep 0.5
+                attempts=$((attempts + 1))
+            done
+            # Force kill if still alive
+            if kill -0 "$old_pid" 2>/dev/null; then
+                log_warn "Previous instance didn't exit cleanly, force killing..."
+                kill_tree "$old_pid" 9
+                sleep 1
+            fi
+        fi
+        rm -f "$PIDFILE"
+    fi
+}
+
+write_pidfile() {
+    echo $$ > "$PIDFILE"
+}
 
 check_rapid_restarts() {
     local name=$1 count=$2
@@ -148,8 +179,10 @@ http_is_healthy() {
 
 # --- startup ---
 
+kill_previous_instance
+write_pidfile
+
 log "Clearing old processes..."
-pkill -f "convex dev" 2>/dev/null || true
 kill_port $PORT
 sleep 1
 
@@ -180,6 +213,15 @@ echo ""
 while true; do
     sleep 5
     $SHUTTING_DOWN && break
+
+    # Another dev.sh took over or pidfile gone — exit gracefully
+    if [ ! -f "$PIDFILE" ] || [ "$(cat "$PIDFILE" 2>/dev/null)" != "$$" ]; then
+        log "Another dev.sh instance took over, exiting..."
+        SHUTTING_DOWN=true
+        [ -n "$CONVEX_PID" ] && kill_tree $CONVEX_PID
+        kill_web
+        exit 0
+    fi
 
     if [ -n "$CONVEX_PID" ] && ! kill -0 $CONVEX_PID 2>/dev/null; then
         log_err "Convex died (was pid $CONVEX_PID), restarting..."
