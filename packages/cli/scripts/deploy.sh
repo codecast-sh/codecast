@@ -4,22 +4,34 @@ set -e
 cd "$(dirname "$0")/.."
 
 FORCE_UPDATE=false
+BUMP_TYPE="patch"
+NO_BUMP=false
+
 while [[ $# -gt 0 ]]; do
   case $1 in
     --force)
       FORCE_UPDATE=true
       shift
       ;;
+    --no-bump)
+      NO_BUMP=true
+      shift
+      ;;
+    patch|minor|major)
+      BUMP_TYPE="$1"
+      shift
+      ;;
     *)
-      echo "Unknown option: $1"
-      echo "Usage: ./scripts/deploy.sh [--force]"
-      echo "  --force  Force all remote clients to update immediately"
+      echo "Usage: ./scripts/deploy.sh [patch|minor|major] [--force] [--no-bump]"
+      echo "  patch|minor|major  Version bump type (default: patch)"
+      echo "  --force            Force all remote clients to update immediately"
+      echo "  --no-bump          Skip version bump (used by deploy-all.sh)"
       exit 1
       ;;
   esac
 done
 
-if [[ -z "$AWS_ACCESS_KEY_ID" && -f .env.deploy ]]; then
+if [ -f .env.deploy ]; then
   export $(cat .env.deploy | xargs)
 fi
 
@@ -31,12 +43,22 @@ R2_BUCKET="codecast"
 export AWS_DEFAULT_REGION="auto"
 BINARIES_DIR="../web/binaries"
 
+# Version bump
+if [[ "$NO_BUMP" == "false" ]]; then
+  OLD_VERSION=$(jq -r '.version' package.json)
+  npm version "$BUMP_TYPE" --no-git-tag-version > /dev/null
+  NEW_VERSION=$(jq -r '.version' package.json)
+  sed -i '' "s/const VERSION = \"$OLD_VERSION\"/const VERSION = \"$NEW_VERSION\"/" src/update.ts
+  echo "Version: $OLD_VERSION -> $NEW_VERSION"
+fi
+
+# Verify versions match
 VERSION=$(jq -r '.version' package.json)
 SOURCE_VERSION=$(grep -o 'const VERSION = "[^"]*"' src/update.ts | grep -o '"[^"]*"' | tr -d '"')
 
 if [[ "$VERSION" != "$SOURCE_VERSION" ]]; then
-  echo "ERROR: package.json version ($VERSION) != update.ts VERSION ($SOURCE_VERSION)"
-  echo "Run ./scripts/release.sh instead, or update src/update.ts manually."
+  echo "ERROR: package.json ($VERSION) != update.ts ($SOURCE_VERSION)"
+  echo "Fix src/update.ts or re-run without --no-bump."
   exit 1
 fi
 
@@ -101,6 +123,13 @@ aws s3 cp /tmp/latest.json "s3://$R2_BUCKET/latest.json" \
 echo ""
 echo "Deployed v$VERSION"
 echo "  https://dl.codecast.sh/latest.json"
+
+# Commit version bump
+if [[ "$NO_BUMP" == "false" ]]; then
+  git add package.json src/update.ts
+  git commit -m "chore(cli): bump version to $VERSION"
+  git push
+fi
 
 if [[ "$FORCE_UPDATE" == "true" ]]; then
   echo ""

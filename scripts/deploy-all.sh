@@ -100,9 +100,9 @@ fi
 
 if $CLI_NEEDS_DEPLOY; then
   if $FORCE_CLI; then
-    ./scripts/deploy.sh --force
+    ./scripts/deploy.sh --no-bump --force
   else
-    ./scripts/deploy.sh
+    ./scripts/deploy.sh --no-bump
   fi
   echo "$LAST_CLI_HASH" > "$LAST_CLI_MARKER"
   echo "   ✓ CLI v$CURRENT_VERSION deployed"
