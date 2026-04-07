@@ -361,7 +361,6 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
   }, [storeSession, conversation._id, reconfigureSession, currentPath, isolated]);
 
   return (
-    <TooltipProvider delayDuration={200}>
     <div className="flex flex-col items-center gap-3">
         {currentPath ? (
           <div className="flex items-center gap-2 text-sol-text-muted text-xs cursor-default" title={currentPath}>
@@ -432,7 +431,6 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
       </button>
 
     </div>
-    </TooltipProvider>
   );
 }
 
@@ -7412,36 +7410,53 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const doFork = useCallback(async (messageUuid: string): Promise<{ forkSessionId: string; conversationId: string } | null> => {
     if (!conversation?._id) return null;
     const sourceConvId = effectiveConversationId || conversation._id;
-    const forkSessionId = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    addOptimisticFork({
-      _id: forkSessionId,
-      user_id: currentUser?._id?.toString(),
-      title: conversation.title ? `Fork: ${conversation.title}` : "Fork",
-      started_at: Date.now(),
-      username: conversation.user?.name || conversation.user?.email?.split("@")[0],
-      parent_message_uuid: messageUuid,
-      message_count: 0,
-      agent_type: conversation.agent_type,
-    });
-    forkSetMessages(forkSessionId, []);
-    forkSwitchBranch(messageUuid, forkSessionId);
-    const url = new URL(window.location.href);
-    url.searchParams.set('branch', forkSessionId);
-    window.history.replaceState({}, '', url.toString());
-    toast.success("Forked -- switched to branch");
+    const isNestedFork = sourceConvId.toString() !== conversation._id.toString();
+    // Must be a valid UUID so the daemon can resume without ID remapping
+    const forkSessionId = (typeof crypto !== 'undefined' && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+          const r = Math.random() * 16 | 0;
+          return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+        });
+    if (!isNestedFork) {
+      // Single-level fork: use branch overlay on the root conversation
+      addOptimisticFork({
+        _id: forkSessionId,
+        user_id: currentUser?._id?.toString(),
+        title: conversation.title ? `Fork: ${conversation.title}` : "Fork",
+        started_at: Date.now(),
+        username: conversation.user?.name || conversation.user?.email?.split("@")[0],
+        parent_message_uuid: messageUuid,
+        message_count: 0,
+        agent_type: conversation.agent_type,
+      });
+      forkSetMessages(forkSessionId, []);
+      forkSwitchBranch(messageUuid, forkSessionId);
+      const url = new URL(window.location.href);
+      url.searchParams.set('branch', forkSessionId);
+      window.history.replaceState({}, '', url.toString());
+      toast.success("Forked -- switched to branch");
+    }
     try {
       const result = await forkFromMessage({
         conversation_id: sourceConvId.toString(),
         message_uuid: messageUuid,
         session_id: forkSessionId,
       });
+      if (isNestedFork) {
+        // Nested fork: branch overlay only supports one level, navigate directly
+        window.location.href = `/conversation/${result.conversation_id}`;
+        return null;
+      }
       resolveForkSessionId(forkSessionId, result.conversation_id);
       const resolvedUrl = new URL(window.location.href);
       resolvedUrl.searchParams.set('branch', result.conversation_id);
       window.history.replaceState({}, '', resolvedUrl.toString());
       return { forkSessionId, conversationId: result.conversation_id };
     } catch (err) {
-      forkClearBranch(messageUuid);
+      if (!isNestedFork) {
+        forkClearBranch(messageUuid);
+      }
       toast.error(err instanceof Error ? err.message : "Failed to fork");
       return null;
     }
@@ -9504,6 +9519,20 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                     </button>
                   </TooltipTrigger>
                   <TooltipContent side="bottom">{collapsed ? "Expand messages" : "Collapse messages"} ({formatShortcutLabel('conv.collapseAll')})</TooltipContent>
+                </Tooltip>
+
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      onClick={() => { copyToClipboard(window.location.href).then(() => toast.success("Link copied")).catch(() => toast.error("Failed to copy")); }}
+                      className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary transition-colors"
+                    >
+                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+                      </svg>
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">Copy link{firstActiveForkId ? " (includes branch)" : ""}</TooltipContent>
                 </Tooltip>
 
                 {managedSession?.tmux_session && (

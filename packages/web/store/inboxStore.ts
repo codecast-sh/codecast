@@ -412,8 +412,9 @@ export function categorizeSessions(
   }
 
   const subsWithParent = new Set(Array.from(subsByParent.values()).flat().map((s) => s._id));
+  const forksWithParent = new Set(Array.from(forksByParent.values()).flat().map((s) => s._id));
 
-  const isTop = (s: InboxSession) => !subsWithParent.has(s._id);
+  const isTop = (s: InboxSession) => !subsWithParent.has(s._id) && !forksWithParent.has(s._id);
 
   const pinned = sorted.filter((s) => s.is_pinned && isTop(s));
   const newSessions = sorted.filter((s) => s.message_count === 0 && !s.is_pinned && isTop(s))

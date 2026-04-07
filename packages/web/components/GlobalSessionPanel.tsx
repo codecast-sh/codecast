@@ -867,7 +867,7 @@ export function SessionListPanel({
 
   const sessionsWithQueuedMessages = useInboxStore((s) => s.sessionsWithQueuedMessages);
   const activeForkHighlight = useInboxStore((s) => s.activeForkHighlight);
-  const { sorted: sortedSessions, pinned, newSessions, needsInput, working, subsByParent: globalSubByParent } = useMemo(
+  const { sorted: sortedSessions, pinned, newSessions, needsInput, working, subsByParent: globalSubByParent, forksByParent: globalForksByParent } = useMemo(
     () => categorizeSessions(sessions, sessionsWithQueuedMessages),
     [sessions, sessionsWithQueuedMessages],
   );
@@ -993,6 +993,21 @@ export function SessionListPanel({
                     collapse
                   </button>
                 )}
+                {(globalForksByParent.get(session._id) || []).map((fork) => (
+                  <SessionCard
+                    key={fork._id}
+                    session={fork}
+                    isActive={fork._id === activeForkHighlight}
+                    isParentActive={
+                      session._id === activeForkHighlight ||
+                      (session._id === activeSessionId && !activeForkHighlight)
+                    }
+                    globalIndex={0}
+                    onSelect={() => handleSelect(fork)}
+                    onDismiss={stashSession}
+                    variant={sectionVariant || "default"}
+                  />
+                ))}
               </React.Fragment>
             );
           })}

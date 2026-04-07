@@ -161,6 +161,13 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
     if (store.showMySessions) store.setShowMySessions(false);
   }, []);
 
+  const handleConversationForkSelect = useCallback((forkId: string, parentId: string, _parentMessageUuid: string) => {
+    const store = useInboxStore.getState();
+    store.setPendingForkActivation(forkId);
+    store.setActiveForkHighlight(forkId);
+    router.push(`/conversation/${parentId}?branch=${forkId}`);
+  }, [router]);
+
   const sessionListActiveId = isOnInboxPage
     ? (viewingDismissedId ?? currentSessionId)
     : sidePanelSessionId;
@@ -345,7 +352,7 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
           <div className="w-full h-full border-l border-sol-border/30">
             <SessionListPanel
               onSessionSelect={sessionListOnSelect}
-              onForkSelect={isOnInboxPage ? handleInboxForkSelect : undefined}
+              onForkSelect={isOnInboxPage ? handleInboxForkSelect : handleConversationForkSelect}
               activeSessionId={sessionListActiveId}
               onCollapse={toggleSidePanel}
             />
