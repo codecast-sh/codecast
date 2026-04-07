@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
+import { isConversationTeamVisible } from "./privacy";
 
 export const sendPushNotification = internalAction({
   args: {
@@ -56,6 +57,10 @@ export const notifyTeamSessionStart = internalMutation({
 
     const STALE_MS = 5 * 60 * 1000;
     if (conversation.started_at && Date.now() - conversation.started_at > STALE_MS) {
+      return;
+    }
+
+    if (!(await isConversationTeamVisible(ctx, conversation))) {
       return;
     }
 
