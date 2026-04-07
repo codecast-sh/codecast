@@ -1,8 +1,9 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
+import { execSync } from "child_process";
 
-const VERSION = "1.1.15";
+const VERSION = "1.1.16";
 const MEMORY_VERSION = "3";
 const TASK_VERSION = "1";
 const WORK_VERSION = "5";
@@ -157,6 +158,7 @@ export async function performUpdate(): Promise<{ success: boolean; error?: strin
   }
 
   const platformKey = getPlatformKey();
+  let nodeError = "";
 
   try {
     const response = await fetch(LATEST_URL);
@@ -220,9 +222,28 @@ export async function performUpdate(): Promise<{ success: boolean; error?: strin
     ensureCastAlias();
     return { success: true };
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error("Update failed:", msg);
-    return { success: false, error: msg };
+    nodeError = err instanceof Error ? err.message : String(err);
+    console.error("Update failed:", nodeError);
+    // Fall through to curl fallback
+  }
+
+  // Curl fallback — bypasses Node.js fetch/fs issues
+  try {
+    const currentExe = process.execPath;
+    const tmpFile = currentExe + ".curl-update";
+    const url = `https://dl.codecast.sh/codecast-${platformKey}`;
+    execSync(`curl -fsSL "${url}" -o "${tmpFile}"`, { timeout: 120000, stdio: "ignore" });
+    fs.chmodSync(tmpFile, 0o755);
+    const backupExe = currentExe + ".backup";
+    if (fs.existsSync(backupExe)) fs.unlinkSync(backupExe);
+    fs.renameSync(currentExe, backupExe);
+    fs.renameSync(tmpFile, currentExe);
+    try { fs.unlinkSync(backupExe); } catch {}
+    ensureCastAlias();
+    return { success: true };
+  } catch (curlErr) {
+    const curlMsg = curlErr instanceof Error ? curlErr.message : String(curlErr);
+    return { success: false, error: `node: ${nodeError}; curl: ${curlMsg}` };
   }
 }
 
