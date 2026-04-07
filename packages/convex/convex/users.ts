@@ -208,10 +208,20 @@ export const sendDaemonCommand = mutation({
       v.literal("status"),
       v.literal("restart"),
       v.literal("force_update"),
+      v.literal("reinstall"),
       v.literal("version"),
       v.literal("start_session"),
       v.literal("escape"),
-      v.literal("resume_session")
+      v.literal("resume_session"),
+      v.literal("kill_session"),
+      v.literal("send_keys"),
+      v.literal("rewind"),
+      v.literal("config_list"),
+      v.literal("config_read"),
+      v.literal("config_write"),
+      v.literal("config_create"),
+      v.literal("config_delete"),
+      v.literal("run_workflow")
     ),
     args_json: v.optional(v.string()),
   },
@@ -234,6 +244,55 @@ export const sendDaemonCommand = mutation({
     });
 
     return { command_id: commandId };
+  },
+});
+
+export const sendDaemonCommandToAll = mutation({
+  args: {
+    command: v.union(
+      v.literal("restart"),
+      v.literal("force_update"),
+      v.literal("reinstall")
+    ),
+    max_version: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthUserId(ctx);
+    if (!authUserId) throw new Error("Not authenticated");
+    const currentUser = await ctx.db.get(authUserId);
+    if (!currentUser || currentUser.role !== "admin") throw new Error("Not authorized");
+
+    const allUsers = await ctx.db.query("users").collect();
+    const now = Date.now();
+    const recentlyActive = allUsers.filter(
+      (u) => u.last_heartbeat && now - u.last_heartbeat < 24 * 60 * 60 * 1000
+    );
+
+    let targeted = recentlyActive;
+    if (args.max_version) {
+      targeted = recentlyActive.filter((u) => {
+        if (!u.cli_version) return true;
+        const parts = u.cli_version.split(".").map(Number);
+        const maxParts = args.max_version!.split(".").map(Number);
+        for (let i = 0; i < Math.max(parts.length, maxParts.length); i++) {
+          if ((parts[i] || 0) < (maxParts[i] || 0)) return true;
+          if ((parts[i] || 0) > (maxParts[i] || 0)) return false;
+        }
+        return false;
+      });
+    }
+
+    let sent = 0;
+    for (const user of targeted) {
+      await ctx.db.insert("daemon_commands", {
+        user_id: user._id,
+        command: args.command,
+        created_at: now,
+      });
+      sent++;
+    }
+
+    return { sent, total: recentlyActive.length };
   },
 });
 

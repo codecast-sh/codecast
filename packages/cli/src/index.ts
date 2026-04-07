@@ -7354,6 +7354,34 @@ program
   });
 
 program
+  .command("reinstall-all")
+  .description("Send reinstall command to all daemons below a version (admin only)")
+  .option("--below <version>", "Only target daemons below this version")
+  .action(async (opts) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: cast auth");
+      process.exit(1);
+    }
+    const syncService = new SyncService({
+      convexUrl: config.convex_url,
+      authToken: config.auth_token,
+      userId: config.user_id,
+    });
+    try {
+      const result = await syncService.getClient().mutation(
+        "users:sendDaemonCommandToAll" as any,
+        { command: "reinstall", max_version: opts.below }
+      );
+      console.log(`Sent reinstall to ${result.sent}/${result.total} active daemons`);
+      process.exit(0);
+    } catch (err) {
+      console.error(`Failed: ${err instanceof Error ? err.message : String(err)}`);
+      process.exit(1);
+    }
+  });
+
+program
   .command("ask")
   .description(
     "Natural language query over conversation history\n\n" +
@@ -9954,11 +9982,6 @@ Output valid JSON array of task objects. Nothing else.`;
           titleToId.set(task.title, created.short_id);
           created_count++;
           console.log(`  ${c.green}+${c.reset} ${c.cyan}${created.short_id}${c.reset} ${task.title}`);
-
-          if (task.acceptance_criteria?.length) {
-            const acText = `Acceptance Criteria:\n${task.acceptance_criteria.map((ac: string) => `- [ ] ${ac}`).join("\n")}`;
-            try { await cliPost("/cli/work/comment", { short_id: created.short_id, text: acText, comment_type: "note" }); } catch {}
-          }
 
           if (task.blocked_by?.length) {
             for (const dep of task.blocked_by) {

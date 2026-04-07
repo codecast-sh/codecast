@@ -100,7 +100,8 @@ export default defineSchema({
       v.literal("config_write"),
       v.literal("config_create"),
       v.literal("config_delete"),
-      v.literal("run_workflow")
+      v.literal("run_workflow"),
+      v.literal("reinstall")
     ),
     args: v.optional(v.string()),
     created_at: v.number(),

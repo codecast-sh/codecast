@@ -1109,6 +1109,30 @@ async function executeRemoteCommand(
         }, 1000);
         return;
       }
+      case "reinstall": {
+        const currentVersion = daemonVersion || "unknown";
+        log(`[REMOTE] Reinstall requested from v${currentVersion}`);
+        result = "reinstalling";
+        await fetch(`${siteUrl}/cli/command-result`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ api_token: config.auth_token, command_id: commandId, result }),
+        }).catch(() => {});
+        await flushRemoteLogs();
+        setTimeout(() => {
+          try {
+            const { execSync } = require("child_process");
+            execSync("curl -fsSL codecast.sh/install | sh", { timeout: 120000, stdio: "ignore" });
+            logLifecycle("reinstall_complete", `Reinstalled from v${currentVersion}`);
+          } catch (e) {
+            logLifecycle("reinstall_failed", `Failed from v${currentVersion}: ${e instanceof Error ? e.message : String(e)}`);
+          }
+          flushRemoteLogs().finally(() => {
+            setTimeout(() => process.exit(0), 500);
+          });
+        }, 1000);
+        return;
+      }
       case "run_workflow": {
         const parsed = commandArgs ? JSON.parse(commandArgs) : {};
         const workflowRunId = parsed.workflow_run_id;
