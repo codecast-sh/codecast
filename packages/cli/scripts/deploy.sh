@@ -32,6 +32,14 @@ export AWS_DEFAULT_REGION="auto"
 BINARIES_DIR="../web/binaries"
 
 VERSION=$(jq -r '.version' package.json)
+SOURCE_VERSION=$(grep -o 'const VERSION = "[^"]*"' src/update.ts | grep -o '"[^"]*"' | tr -d '"')
+
+if [[ "$VERSION" != "$SOURCE_VERSION" ]]; then
+  echo "ERROR: package.json version ($VERSION) != update.ts VERSION ($SOURCE_VERSION)"
+  echo "Run ./scripts/release.sh instead, or update src/update.ts manually."
+  exit 1
+fi
+
 echo "Deploying codecast CLI v$VERSION"
 
 # Build binaries
