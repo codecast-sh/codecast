@@ -9076,6 +9076,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         return <CompactionSummaryBlock key={msg._id} content={summaryContent} />;
       }
 
+      // Skip empty "No response requested." messages
+      if (stripSystemTags(msg.content || "").trim() === "No response requested.") return null;
+
       // Find previous VISIBLE non-commit assistant item to determine if this is first in assistant sequence
       // Skip invisible assistant messages (those whose content is only system tags with no tool calls/thinking/images)
       let prevIdx = index - 1;

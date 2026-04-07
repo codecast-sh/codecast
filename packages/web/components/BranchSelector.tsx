@@ -104,7 +104,7 @@ export function BranchSelector({
               </button>
 
               {isHovered && (
-                <div className="absolute left-0 top-full mt-1 z-50 px-3 py-2 rounded-lg bg-sol-bg-highlight border border-sol-border shadow-xl text-[11px] text-sol-text-secondary whitespace-nowrap pointer-events-none ring-1 ring-black/5">
+                <div className="absolute left-0 top-full mt-1 z-50 px-3 py-2 rounded-lg bg-sol-bg border border-sol-border shadow-xl text-[11px] text-sol-text-secondary whitespace-nowrap pointer-events-none ring-1 ring-black/5">
                   <div className="font-medium text-sol-text truncate max-w-[240px]">{fork.title || "Untitled fork"}</div>
                   <div className="flex items-center gap-2 mt-1 text-sol-text-dim">
                     {fork.username && <span>{fork.username}</span>}

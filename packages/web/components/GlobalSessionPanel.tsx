@@ -948,7 +948,10 @@ export function SessionListPanel({
               <React.Fragment key={session._id}>
                 <SessionCard
                   session={session}
-                  isActive={session._id === activeSessionId || session._id === activeForkHighlight}
+                  isActive={
+                    session._id === activeForkHighlight ||
+                    (session._id === activeSessionId && !activeForkHighlight)
+                  }
                   globalIndex={0}
                   onSelect={() => handleSelect(session)}
                   onDismiss={stashSession}
@@ -960,8 +963,14 @@ export function SessionListPanel({
                   <SessionCard
                     key={sub._id}
                     session={sub}
-                    isActive={sub._id === activeSessionId || sub._id === activeForkHighlight}
-                    isParentActive={session._id === activeSessionId || session._id === activeForkHighlight}
+                    isActive={
+                      sub._id === activeForkHighlight ||
+                      (sub._id === activeSessionId && !activeForkHighlight)
+                    }
+                    isParentActive={
+                      session._id === activeForkHighlight ||
+                      (session._id === activeSessionId && !activeForkHighlight)
+                    }
                     globalIndex={0}
                     onSelect={() => handleSelect(sub)}
                     onDismiss={stashSession}
