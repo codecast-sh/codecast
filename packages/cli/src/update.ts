@@ -3,7 +3,7 @@ import * as path from "path";
 import * as os from "os";
 import { execSync } from "child_process";
 
-const VERSION = "1.1.16";
+const VERSION = "1.1.17";
 const MEMORY_VERSION = "3";
 const TASK_VERSION = "1";
 const WORK_VERSION = "5";
@@ -158,9 +158,12 @@ export async function performUpdate(): Promise<{ success: boolean; error?: strin
   }
 
   const platformKey = getPlatformKey();
-  let nodeError = "";
+  const currentExe = process.execPath;
+  const newExe = currentExe + ".new";
+  const backupExe = currentExe + ".backup";
 
   try {
+    // Fetch metadata (small JSON — fine via fetch)
     const response = await fetch(LATEST_URL);
     if (!response.ok) {
       return { success: false, error: `fetch_latest_${response.status}` };
@@ -175,43 +178,28 @@ export async function performUpdate(): Promise<{ success: boolean; error?: strin
 
     console.log(`Downloading cast v${latest.version}...`);
 
-    const binaryResponse = await fetch(binary.url);
-    if (!binaryResponse.ok) {
-      return { success: false, error: `download_${binaryResponse.status}` };
-    }
-
-    const binaryData = await binaryResponse.arrayBuffer();
+    // Download binary via curl (streams to disk, works under launchd)
+    try { fs.unlinkSync(newExe); } catch {}
+    execSync(`curl -fsSL "${binary.url}" -o "${newExe}"`, { timeout: 180000, stdio: "ignore" });
 
     // Verify checksum
-    const hash = await crypto.subtle.digest("SHA-256", binaryData);
+    const downloaded = fs.readFileSync(newExe);
+    const hash = await crypto.subtle.digest("SHA-256", downloaded.buffer);
     const hashHex = Array.from(new Uint8Array(hash))
       .map((b) => b.toString(16).padStart(2, "0"))
       .join("");
 
     if (hashHex !== binary.sha256) {
+      try { fs.unlinkSync(newExe); } catch {}
       return { success: false, error: `checksum_mismatch_${platformKey}` };
     }
 
-    // Get current executable path
-    const currentExe = process.execPath;
-    const backupExe = currentExe + ".backup";
-    const newExe = currentExe + ".new";
-
-    // Write new binary
-    fs.writeFileSync(newExe, Buffer.from(binaryData));
+    // Replace binary
     fs.chmodSync(newExe, 0o755);
-
-    // Backup current and replace
-    if (fs.existsSync(backupExe)) {
-      fs.unlinkSync(backupExe);
-    }
+    if (fs.existsSync(backupExe)) fs.unlinkSync(backupExe);
     fs.renameSync(currentExe, backupExe);
     fs.renameSync(newExe, currentExe);
-
-    // Clean up backup
-    try {
-      fs.unlinkSync(backupExe);
-    } catch {}
+    try { fs.unlinkSync(backupExe); } catch {}
 
     // Update state
     const state = readUpdateState();
@@ -222,28 +210,10 @@ export async function performUpdate(): Promise<{ success: boolean; error?: strin
     ensureCastAlias();
     return { success: true };
   } catch (err) {
-    nodeError = err instanceof Error ? err.message : String(err);
-    console.error("Update failed:", nodeError);
-    // Fall through to curl fallback
-  }
-
-  // Curl fallback — bypasses Node.js fetch/fs issues
-  try {
-    const currentExe = process.execPath;
-    const tmpFile = currentExe + ".curl-update";
-    const url = `https://dl.codecast.sh/codecast-${platformKey}`;
-    execSync(`curl -fsSL "${url}" -o "${tmpFile}"`, { timeout: 120000, stdio: "ignore" });
-    fs.chmodSync(tmpFile, 0o755);
-    const backupExe = currentExe + ".backup";
-    if (fs.existsSync(backupExe)) fs.unlinkSync(backupExe);
-    fs.renameSync(currentExe, backupExe);
-    fs.renameSync(tmpFile, currentExe);
-    try { fs.unlinkSync(backupExe); } catch {}
-    ensureCastAlias();
-    return { success: true };
-  } catch (curlErr) {
-    const curlMsg = curlErr instanceof Error ? curlErr.message : String(curlErr);
-    return { success: false, error: `node: ${nodeError}; curl: ${curlMsg}` };
+    try { fs.unlinkSync(newExe); } catch {}
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("Update failed:", msg);
+    return { success: false, error: msg };
   }
 }
 
