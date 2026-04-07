@@ -422,6 +422,14 @@ const pendingInteractivePrompts = new Map<string, { timestamp: number; options: 
 const AGENT_STATUS_DIR = path.join(process.env.HOME || "", ".codecast", "agent-status");
 const skillsSyncedConversations = new Set<string>();
 
+// Post-compaction message recovery: CC sometimes goes idle after compacting instead of
+// continuing to process the user's message. Track compaction events and recent injections
+// so we can detect this pattern and re-inject the dropped message.
+const recentCompactionTs = new Map<string, number>(); // sessionId -> when compaction was detected
+const recentSessionInjections = new Map<string, { messageId: string; content: string; ts: number }>(); // conversationId -> last injection
+const postCompactionRecoveryTimers = new Map<string, ReturnType<typeof setTimeout>>(); // sessionId -> pending recovery
+const compactionRedeliveryBypass = new Set<string>(); // messageIds that should bypass injection dedup
+
 export function mapCodexAppServerThreadStatusToAgentStatus(status: AppServerThreadStatus | null | undefined): AgentStatus | null {
   if (!status?.type) return null;
   switch (status.type) {
@@ -8841,6 +8849,46 @@ async function main(): Promise<void> {
         }
       }
 
+      // Post-compaction recovery: track compaction events and detect dropped messages.
+      // CC sometimes goes idle after compacting instead of continuing the user's turn.
+      if (data.status === "compacting") {
+        recentCompactionTs.set(sessionId, Date.now());
+      }
+      // Cancel pending recovery if session becomes active again
+      if (data.status !== "idle" && data.status !== "compacting") {
+        const recoveryTimer = postCompactionRecoveryTimers.get(sessionId);
+        if (recoveryTimer) {
+          clearTimeout(recoveryTimer);
+          postCompactionRecoveryTimers.delete(sessionId);
+          log(`Post-compaction recovery cancelled: session ${sessionId.slice(0, 8)} is now ${data.status}`);
+        }
+      }
+      // Detect compaction -> idle pattern: schedule delayed re-injection
+      if (data.status === "idle" && statusChanged) {
+        const compactedAt = recentCompactionTs.get(sessionId);
+        const injection = recentSessionInjections.get(convId);
+        if (compactedAt && (Date.now() - compactedAt) < 60_000 &&
+            injection && (Date.now() - injection.ts) < 120_000) {
+          log(`Post-compaction idle: session ${sessionId.slice(0, 8)} compacted ${Math.round((Date.now() - compactedAt) / 1000)}s ago, scheduling message recovery in 5s`);
+          const timerId = setTimeout(() => {
+            postCompactionRecoveryTimers.delete(sessionId);
+            const currentStatus = lastHookStatus.get(sessionId);
+            if (currentStatus?.status !== "idle") {
+              log(`Post-compaction recovery skipped: session ${sessionId.slice(0, 8)} is now ${currentStatus?.status}`);
+              return;
+            }
+            log(`Post-compaction recovery: re-queuing message ${injection.messageId.slice(0, 8)} for session ${sessionId.slice(0, 8)}`);
+            compactionRedeliveryBypass.add(injection.messageId);
+            syncService.retryMessage(injection.messageId).catch(err => {
+              log(`Post-compaction retry failed: ${err instanceof Error ? err.message : String(err)}`);
+            });
+          }, 5000);
+          postCompactionRecoveryTimers.set(sessionId, timerId);
+        }
+        recentCompactionTs.delete(sessionId);
+        recentSessionInjections.delete(convId);
+      }
+
       if (statusChanged || modeChanged) {
         sendAgentStatus(syncService, convId, sessionId, data.status, data.ts * 1000, data.permission_mode);
         log(`Hook status: ${data.status}${data.permission_mode ? ` mode=${data.permission_mode}` : ''} for session ${sessionId.slice(0, 8)}`);
@@ -9703,8 +9751,10 @@ async function main(): Promise<void> {
 
               // If recently injected to tmux, skip re-delivery (prevents retry race causing duplicates).
               // TTL ensures we allow re-delivery if the agent dropped/crashed after injection.
+              // Exception: compaction recovery bypass allows re-delivery of messages dropped during CC compaction.
+              const isCompactionRecovery = compactionRedeliveryBypass.delete(msg._id);
               const lastInjectedAt = injectedMessageTs.get(msg._id);
-              if (lastInjectedAt && (Date.now() - lastInjectedAt) < INJECTION_DEDUP_TTL_MS) {
+              if (lastInjectedAt && (Date.now() - lastInjectedAt) < INJECTION_DEDUP_TTL_MS && !isCompactionRecovery) {
                 logDelivery(`DEDUP: msg=${msg._id.slice(0, 8)} injected ${Math.round((Date.now() - lastInjectedAt) / 1000)}s ago, updating status only`);
                 try {
                   await syncService.updateMessageStatus({ messageId: msg._id, status: "injected" });
@@ -9723,8 +9773,18 @@ async function main(): Promise<void> {
                   titleCache
                 );
                 if (delivered) {
-                  logDelivery(`SUCCESS: msg=${msg._id.slice(0, 8)} injected`);
+                  logDelivery(`SUCCESS: msg=${msg._id.slice(0, 8)} injected${isCompactionRecovery ? " (compaction recovery)" : ""}`);
                   injectedMessageTs.set(msg._id, Date.now());
+                  // Track for post-compaction recovery: if CC compacts and goes idle,
+                  // we can re-inject this message. Skip on recovery re-injections to
+                  // prevent infinite compaction->recovery loops.
+                  if (!isCompactionRecovery) {
+                    recentSessionInjections.set(msg.conversation_id, {
+                      messageId: msg._id,
+                      content: messageContent,
+                      ts: Date.now(),
+                    });
+                  }
                   // GC: evict expired entries to prevent unbounded growth
                   if (injectedMessageTs.size > 500) {
                     const now = Date.now();
