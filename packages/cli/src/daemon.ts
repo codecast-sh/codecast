@@ -6143,17 +6143,25 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
       const tailMessages = estimatedTokens > 120_000
         ? chooseClaudeTailMessagesForTokenBudget(data, 100_000)
         : undefined;
-      const { jsonl, sessionId: newId } = generateClaudeCodeJsonl(data, { tailMessages });
-      const result = writeClaudeCodeSession(jsonl, newId, data.conversation.project_path || undefined);
-      logDelivery(`Reconstituted ${sessionId.slice(0, 8)} as ${newId.slice(0, 8)} (${data.messages.length} msgs)`);
-      if (conversationId) {
-        remapConversationSession(sessionId, newId, conversationId);
+      // Preserve the original sessionId so the JSONL matches what Convex expects
+      // (critical for fork sessions where the session_id was set at fork creation)
+      const { jsonl, sessionId: reconId } = generateClaudeCodeJsonl(data, { tailMessages, sessionId });
+      const result = writeClaudeCodeSession(jsonl, reconId, data.conversation.project_path || undefined);
+      logDelivery(`Reconstituted ${sessionId.slice(0, 8)} (${data.messages.length} msgs)`);
+      if (conversationId && reconId !== sessionId) {
+        remapConversationSession(sessionId, reconId, conversationId);
         if (syncServiceRef) {
-          syncServiceRef.updateSessionId(conversationId, newId).catch(() => {});
+          syncServiceRef.updateSessionId(conversationId, reconId).catch(() => {});
         }
+      } else if (conversationId) {
+        // Ensure cache has the mapping even when sessionId is preserved
+        const cache = readConversationCache();
+        cache[sessionId] = conversationId;
+        saveConversationCache(cache);
+        if (conversationCacheRef) conversationCacheRef[sessionId] = conversationId;
       }
-      sessionId = newId;
-      sessionFile = findSessionFile(newId);
+      sessionId = reconId;
+      sessionFile = findSessionFile(reconId);
       if (!sessionFile) {
         logDelivery(`Reconstituted file not found at expected path: ${result.filePath}`);
         return false;
@@ -6755,7 +6763,9 @@ async function materializeSession(
 
       const TOKEN_BUDGET = 100_000;
       const tailMessages = chooseClaudeTailMessagesForTokenBudget(exportData, TOKEN_BUDGET);
-      const { jsonl, sessionId } = generateClaudeCodeJsonl(exportData, { tailMessages });
+      // Use the conversation's actual session_id so the JSONL matches Convex
+      const convSessionId = exportData.conversation.session_id || undefined;
+      const { jsonl, sessionId } = generateClaudeCodeJsonl(exportData, { tailMessages, sessionId: convSessionId });
       const projectPath = exportData.conversation.project_path || undefined;
       const { filePath: matFilePath } = writeClaudeCodeSession(jsonl, sessionId, projectPath);
       setPosition(matFilePath, fs.statSync(matFilePath).size);
