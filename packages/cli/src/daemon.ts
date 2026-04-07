@@ -8756,13 +8756,18 @@ async function main(): Promise<void> {
       return;
     }
 
-    if (isPathExcluded(event.projectPath, config.excluded_paths)) {
-      log(`Skipping sync for excluded path: ${event.projectPath}`);
+    // event.projectPath is the encoded directory name — decode it to the real
+    // filesystem path so sync_mode:"selected" matching works correctly.
+    const decoded = decodeProjectDirName(event.projectPath);
+    const projectPath = decoded && fs.existsSync(decoded) ? decoded : event.projectPath;
+
+    if (isPathExcluded(projectPath, config.excluded_paths)) {
+      log(`Skipping sync for excluded path: ${projectPath}`);
       return;
     }
 
-    if (!isProjectAllowedToSync(event.projectPath, config)) {
-      log(`Skipping sync for non-selected project: ${event.projectPath}`);
+    if (!isProjectAllowedToSync(projectPath, config)) {
+      log(`Skipping sync for non-selected project: ${projectPath}`);
       return;
     }
 
@@ -8773,7 +8778,7 @@ async function main(): Promise<void> {
         await processSessionFile(
           filePath,
           event.sessionId,
-          event.projectPath,
+          projectPath,
           syncService,
           config.user_id!,
           config.team_id,
@@ -8935,6 +8940,42 @@ async function main(): Promise<void> {
       fs.mkdirSync(AGENT_STATUS_DIR, { recursive: true });
       fs.writeFileSync(path.join(AGENT_STATUS_DIR, `${sessionId}.json`), JSON.stringify(data));
     } catch {}
+
+    // Piggyback message sync onto hook events — fs.watch can miss events on macOS,
+    // so use the reliable hook path to also trigger a transcript re-read.
+    const transcriptPath = data.transcript_path || findTranscriptForSession(sessionId);
+    if (transcriptPath) {
+      const existingSync = fileSyncs.get(transcriptPath);
+      if (existingSync) {
+        existingSync.invalidate();
+      } else {
+        // Session file exists but watcher never saw it — bootstrap the sync
+        const parts = transcriptPath.split(path.sep);
+        const projectDirName = parts[parts.length - 2];
+        const decoded = decodeProjectDirName(projectDirName);
+        const projectPath = decoded && fs.existsSync(decoded) ? decoded : projectDirName.replace(/-/g, path.sep).replace(/^-/, "");
+
+        if (isProjectAllowedToSync(projectPath, config) && !isPathExcluded(projectPath, config.excluded_paths)) {
+          const sync = new InvalidateSync(async () => {
+            await processSessionFile(
+              transcriptPath,
+              sessionId,
+              projectPath,
+              syncService,
+              config.user_id!,
+              config.team_id,
+              conversationCache,
+              retryQueue,
+              pendingMessages,
+              titleCache,
+              updateState
+            );
+          });
+          fileSyncs.set(transcriptPath, sync);
+          sync.invalidate();
+        }
+      }
+    }
   });
 
   function extractToolFromMessage(message: string): string {
