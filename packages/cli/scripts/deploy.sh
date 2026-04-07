@@ -46,8 +46,14 @@ BINARIES_DIR="../web/binaries"
 # Version bump
 if [[ "$NO_BUMP" == "false" ]]; then
   OLD_VERSION=$(jq -r '.version' package.json)
-  npm version "$BUMP_TYPE" --no-git-tag-version > /dev/null
-  NEW_VERSION=$(jq -r '.version' package.json)
+  IFS='.' read -r MAJOR MINOR PATCH <<< "$OLD_VERSION"
+  case "$BUMP_TYPE" in
+    major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+    minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+    patch) PATCH=$((PATCH + 1)) ;;
+  esac
+  NEW_VERSION="$MAJOR.$MINOR.$PATCH"
+  jq --arg v "$NEW_VERSION" '.version = $v' package.json > package.json.tmp && mv package.json.tmp package.json
   sed -i '' "s/const VERSION = \"$OLD_VERSION\"/const VERSION = \"$NEW_VERSION\"/" src/update.ts
   echo "Version: $OLD_VERSION -> $NEW_VERSION"
 fi

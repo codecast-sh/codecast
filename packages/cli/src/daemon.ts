@@ -1086,8 +1086,8 @@ async function executeRemoteCommand(
         // Flush logs before update
         await flushRemoteLogs();
         setTimeout(async () => {
-          const success = await performUpdate();
-          if (success) {
+          const result = await performUpdate();
+          if (result.success) {
             logLifecycle("update_complete", `Binary replaced from v${currentVersion}, restarting`);
             await flushRemoteLogs();
             log("Update successful, restarting...");
@@ -1103,7 +1103,7 @@ async function executeRemoteCommand(
             }
             setTimeout(() => process.exit(0), 500);
           } else {
-            logLifecycle("update_failed", `Update failed from v${currentVersion}`);
+            logLifecycle("update_failed", `Update failed from v${currentVersion} error=${result.error}`);
             await flushRemoteLogs();
           }
         }, 1000);
@@ -7958,8 +7958,8 @@ async function checkForForcedUpdate(syncService: SyncService): Promise<boolean> 
     if (compareVersions(currentVersion, minVersion) < 0) {
       logLifecycle("forced_update_start", `current=${currentVersion} min=${minVersion}`);
       await flushRemoteLogs();
-      const success = await performUpdate();
-      if (success) {
+      const result = await performUpdate();
+      if (result.success) {
         logLifecycle("forced_update_complete", `Binary replaced from v${currentVersion}, target>=${minVersion}`);
         await flushRemoteLogs();
         if (!isManagedByLaunchd()) {
@@ -7968,10 +7968,10 @@ async function checkForForcedUpdate(syncService: SyncService): Promise<boolean> 
         await new Promise(resolve => setTimeout(resolve, 500));
         process.exit(0);
       } else {
-        logLifecycle("forced_update_failed", `current=${currentVersion} target>=${minVersion}`);
+        logLifecycle("forced_update_failed", `current=${currentVersion} target>=${minVersion} error=${result.error}`);
         await flushRemoteLogs();
       }
-      return true;
+      return false;
     }
     return false;
   } catch (err) {
@@ -10175,8 +10175,8 @@ export async function runWatchdog(): Promise<void> {
   if (minCliVersion && compareVersions(version, minCliVersion) < 0) {
     logLine(`Binary outdated: current=${version} min=${minCliVersion}, updating...`);
     await sendWatchdogLog("info", `[LIFECYCLE] watchdog_update_start: current=${version} min=${minCliVersion}`);
-    const success = await performUpdate();
-    if (success) {
+    const result = await performUpdate();
+    if (result.success) {
       logLine("Watchdog update successful");
       await sendWatchdogLog("info", `[LIFECYCLE] watchdog_update_complete: ${version} -> ${minCliVersion}`);
       clearCrashCount();
@@ -10188,8 +10188,8 @@ export async function runWatchdog(): Promise<void> {
         daemonAlive = false;
       }
     } else {
-      logLine("Watchdog update failed");
-      await sendWatchdogLog("warn", `[LIFECYCLE] watchdog_update_failed: current=${version} target>=${minCliVersion}`);
+      logLine(`Watchdog update failed: ${result.error}`);
+      await sendWatchdogLog("warn", `[LIFECYCLE] watchdog_update_failed: current=${version} target>=${minCliVersion} error=${result.error}`);
     }
   }
 
@@ -10220,7 +10220,7 @@ export async function runWatchdog(): Promise<void> {
     const updateCmd = commands.find(c => c.command === "force_update");
     if (updateCmd) {
       logLine("Force update pending, updating before restart...");
-      const success = await performUpdate();
+      const result = await performUpdate();
       // Report result
       await fetch(`${siteUrl}/cli/command-result`, {
         method: "POST",
@@ -10228,11 +10228,11 @@ export async function runWatchdog(): Promise<void> {
         body: JSON.stringify({
           api_token: config.auth_token,
           command_id: updateCmd.id,
-          result: success ? "Updated by watchdog" : undefined,
-          error: success ? undefined : "Watchdog update failed",
+          result: result.success ? "Updated by watchdog" : undefined,
+          error: result.success ? undefined : `Watchdog update failed: ${result.error}`,
         }),
       }).catch(() => {});
-      if (success) {
+      if (result.success) {
         logLine("Update successful");
         clearCrashCount();
       }

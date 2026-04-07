@@ -2,7 +2,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 
-const VERSION = "1.1.14";
+const VERSION = "1.1.15";
 const MEMORY_VERSION = "3";
 const TASK_VERSION = "1";
 const WORK_VERSION = "5";
@@ -151,11 +151,9 @@ export function isDevMode(): boolean {
   return exe.includes("bun") || (!exe.includes("codecast") && !exe.includes("/cast"));
 }
 
-export async function performUpdate(): Promise<boolean> {
+export async function performUpdate(): Promise<{ success: boolean; error?: string }> {
   if (isDevMode()) {
-    console.error("Cannot self-update in dev mode (running via bun)");
-    console.error("Install the binary version: curl -fsSL codecast.sh/install | sh (provides 'cast' command)");
-    return false;
+    return { success: false, error: "dev_mode" };
   }
 
   const platformKey = getPlatformKey();
@@ -163,24 +161,21 @@ export async function performUpdate(): Promise<boolean> {
   try {
     const response = await fetch(LATEST_URL);
     if (!response.ok) {
-      console.error("Failed to fetch update info");
-      return false;
+      return { success: false, error: `fetch_latest_${response.status}` };
     }
 
     const latest: LatestInfo = await response.json();
     const binary = latest.binaries[platformKey];
 
     if (!binary) {
-      console.error(`No binary available for platform: ${platformKey}`);
-      return false;
+      return { success: false, error: `no_binary_${platformKey}` };
     }
 
     console.log(`Downloading cast v${latest.version}...`);
 
     const binaryResponse = await fetch(binary.url);
     if (!binaryResponse.ok) {
-      console.error("Failed to download binary");
-      return false;
+      return { success: false, error: `download_${binaryResponse.status}` };
     }
 
     const binaryData = await binaryResponse.arrayBuffer();
@@ -192,8 +187,7 @@ export async function performUpdate(): Promise<boolean> {
       .join("");
 
     if (hashHex !== binary.sha256) {
-      console.error("Checksum verification failed");
-      return false;
+      return { success: false, error: `checksum_mismatch_${platformKey}` };
     }
 
     // Get current executable path
@@ -224,10 +218,11 @@ export async function performUpdate(): Promise<boolean> {
 
     console.log(`Updated to v${latest.version}`);
     ensureCastAlias();
-    return true;
+    return { success: true };
   } catch (err) {
-    console.error("Update failed:", err);
-    return false;
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("Update failed:", msg);
+    return { success: false, error: msg };
   }
 }
 

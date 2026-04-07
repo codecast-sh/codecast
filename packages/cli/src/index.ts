@@ -2617,7 +2617,7 @@ program
     const available = await checkForUpdates(true);
     if (available) {
       console.log(`Update available: v${getVersion()} -> v${available}, updating...`);
-      const success = await performUpdate();
+      const { success } = await performUpdate();
       if (success) {
         const config = readConfig() || {};
         if (config.memory_enabled) installMemorySnippet(true);
@@ -7288,7 +7288,7 @@ program
       stopDaemon();
     }
 
-    const success = await performUpdate();
+    const { success } = await performUpdate();
     if (success) {
       if (config.memory_enabled) installMemorySnippet(true);
       if (config.task_enabled) installTaskSnippet(true);
@@ -11948,7 +11948,7 @@ checkForUpdates().then(async (available) => {
   }
 
   console.log(`\nAuto-updating to v${available}...`);
-  const success = await performUpdate();
+  const { success } = await performUpdate();
   if (success) {
     if (config?.memory_enabled) installMemorySnippet(true);
     if (config?.task_enabled) installTaskSnippet(true);
