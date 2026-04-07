@@ -2,9 +2,8 @@ import { useCallback, useState, useRef, useMemo, useEffect } from "react";
 import { useQuery, usePaginatedQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
-import { useInboxStore, isConvexId } from "../store/inboxStore";
+import { useInboxStore, isConvexId, ensureHydrated } from "../store/inboxStore";
 import { useConvexSync } from "./useConvexSync";
-import { loadConversationMessages } from "../store/idbCache";
 
 type Message = {
   _id: string;
@@ -72,24 +71,8 @@ export function useConversationMessages(
   if (hasTarget && !targetMode) setTargetMode(true);
   if (!hasTarget && jumpTimestamp === null && targetMode) setTargetMode(false);
 
-  // =============================================
-  // IDB HYDRATION: Load cached messages before Convex responds
-  // =============================================
-  const idbHydratedRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (idbHydratedRef.current === conversationId) return;
-    idbHydratedRef.current = conversationId;
-    const store = useInboxStore.getState();
-    // Only hydrate from IDB if we don't already have messages in the store
-    if (store.messages[conversationId]?.length > 0) return;
-    loadConversationMessages(conversationId).then((cached) => {
-      if (!cached || cached.messages.length === 0) return;
-      // Don't overwrite if Convex already delivered data while we were loading
-      const current = useInboxStore.getState().messages[conversationId];
-      if (current?.length > 0) return;
-      useInboxStore.getState().setMessages(conversationId, cached.messages, cached.pagination);
-    });
-  }, [conversationId]);
+  // IDB hydration — idempotent, no hooks, tracked by module-level Set
+  ensureHydrated(conversationId);
 
   // =============================================
   // NORMAL MODE: Convex paginated subscription (background sync)
@@ -102,15 +85,29 @@ export function useConversationMessages(
     { initialNumItems: 100 }
   );
 
+  // Ref avoids re-creating the sync callback when paginationStatus changes,
+  // which would re-trigger useConvexSync's effect and loop: setMessages → re-render → new callback → effect → setMessages …
+  const paginationStatusRef = useRef(paginationStatus);
+  paginationStatusRef.current = paginationStatus;
+
+  // Sync Convex paginated results → Zustand store.
+  // Guard: skip setMessages when the message list is unchanged to break the
+  // re-render loop (setMessages → Zustand notify → re-render → effect → …).
+  const lastSyncedRef = useRef<{ id: string; len: number; first?: string; last?: string } | null>(null);
+
   useConvexSync(
     useNormalMode && paginationStatus !== "LoadingFirstPage" ? descResults : undefined,
     useCallback((results: any) => {
       const messages: Message[] = [...results].reverse();
+      const sig = { id: conversationId, len: messages.length, first: messages[0]?._id, last: messages[messages.length - 1]?._id };
+      const prev = lastSyncedRef.current;
+      if (prev && prev.id === sig.id && prev.len === sig.len && prev.first === sig.first && prev.last === sig.last) return;
+      lastSyncedRef.current = sig;
       useInboxStore.getState().setMessages(conversationId, messages, {
-        hasMoreAbove: paginationStatus === "CanLoadMore" || paginationStatus === "LoadingMore",
+        hasMoreAbove: paginationStatusRef.current === "CanLoadMore" || paginationStatusRef.current === "LoadingMore",
         initialized: true,
       });
-    }, [conversationId, paginationStatus])
+    }, [conversationId])
   );
 
   // =============================================

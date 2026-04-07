@@ -13,7 +13,7 @@ import { ErrorBoundary } from "../../components/ErrorBoundary";
 import { ConversationDiffLayout } from "../../components/ConversationDiffLayout";
 import { ConversationData } from "../../components/ConversationView";
 import { useConversationMessages } from "../../hooks/useConversationMessages";
-import { useInboxStore, InboxSession, getSessionRenderKey, isConvexId, sortSessions, isInterruptControlMessage } from "../../store/inboxStore";
+import { useInboxStore, InboxSession, getSessionRenderKey, isConvexId, sortSessions, isInterruptControlMessage, ensureHydrated } from "../../store/inboxStore";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "../../components/ui/tooltip";
 import { cleanTitle } from "../../lib/conversationProcessor";
 import { SharePopover } from "../../components/SharePopover";
@@ -183,11 +183,6 @@ const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, o
     </div>
   );
 });
-
-function Prefetch({ sessionId }: { sessionId: string }) {
-  useConversationMessages(sessionId);
-  return null;
-}
 
 function SessionCard({
   session,
@@ -811,13 +806,13 @@ export function QueuePageClient({ initialSessionId }: { initialSessionId?: strin
   });
 
 
-  const prefetchIds: string[] = [];
+  // Warm IDB cache for visible sessions — no hooks, no components
   const seen = new Set<string>();
   if (currentSession) seen.add(currentSession._id);
   for (const s of sortedSessions) {
     if (!seen.has(s._id)) {
       seen.add(s._id);
-      prefetchIds.push(s._id);
+      ensureHydrated(s._id);
     }
   }
 
@@ -951,9 +946,6 @@ export function QueuePageClient({ initialSessionId }: { initialSessionId?: strin
         </div>
       )}
       </div>
-      {prefetchIds.map((id) => (
-        <Prefetch key={id} sessionId={id} />
-      ))}
     </DashboardLayout>
   );
 }

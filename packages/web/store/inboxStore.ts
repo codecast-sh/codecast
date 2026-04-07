@@ -1847,6 +1847,22 @@ export const store = new Proxy({} as StoreProxy, {
   },
 });
 
+// -- Per-conversation IDB hydration (idempotent, no hooks) --
+
+const _idbHydratedSet = new Set<string>();
+export function ensureHydrated(convId: string) {
+  if (_idbHydratedSet.has(convId)) return;
+  _idbHydratedSet.add(convId);
+  const store = useInboxStore.getState();
+  if (store.messages[convId]?.length > 0) return;
+  loadConversationMessages(convId).then((cached) => {
+    if (!cached || cached.messages.length === 0) return;
+    const current = useInboxStore.getState().messages[convId];
+    if (current?.length > 0) return;
+    useInboxStore.getState().setMessages(convId, cached.messages, cached.pagination);
+  });
+}
+
 // -- IndexedDB cache: wire patch-driven writes + hydrate on load --
 
 if (typeof window !== "undefined") {
