@@ -4845,7 +4845,7 @@ async function injectViaTmuxInner(target: string, content: string): Promise<void
   // Check if agent has exited (defense-in-depth: catch race between liveness check and injection)
   try {
     const { stdout: preCheck } = await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", "-10"]);
-    if (/Resume this session with:|claude --resume|codex resume/i.test(preCheck)) {
+    if (/Resume this session with:/i.test(preCheck)) {
       throw new Error("SESSION_EXITED: agent has exited, refusing to inject into bare shell");
     }
 
@@ -6232,13 +6232,12 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
         fs.writeFileSync(newPath, rewritten);
         log(`Copied non-UUID session ${sessionId} to resumable UUID ${newUuid}`);
         resumeId = newUuid;
+        // Remap all caches so subsequent lookups use the new UUID
         if (conversationId) {
-          const cache = readConversationCache();
-          cache[newUuid] = conversationId;
-          saveConversationCache(cache);
-        }
-        if (syncServiceRef && conversationId) {
-          syncServiceRef.updateSessionId(conversationId, newUuid).catch(() => {});
+          remapConversationSession(sessionId, newUuid, conversationId);
+          if (syncServiceRef) {
+            syncServiceRef.updateSessionId(conversationId, newUuid).catch(() => {});
+          }
         }
       } catch (err) {
         log(`Failed to copy session for UUID resume: ${err instanceof Error ? err.message : String(err)}`);
@@ -7357,7 +7356,7 @@ async function isTmuxAgentAlive(tmuxSession: string): Promise<boolean> {
       );
       const trimmed = paneContent.trim();
       if (!trimmed) return false;
-      if (/Resume this session with:|claude --resume|codex resume/i.test(trimmed)) return false;
+      if (/Resume this session with:/i.test(trimmed)) return false;
       if (/Segmentation fault|panic:|SIGABRT|core dumped|exited with/.test(trimmed)) return false;
       if (/-(?:ba)?sh:.*(?:No such file|command not found)/.test(trimmed)) return false;
       if (hasProcess) return true;
