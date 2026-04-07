@@ -1374,11 +1374,9 @@ async function executeRemoteCommand(
         }
         const tmuxTarget = await findTmuxPaneForTty(proc.tty);
         if (tmuxTarget && validateTmuxTarget(tmuxTarget)) {
-          await tmuxExec(["send-keys", "-t", tmuxTarget, "Escape"]);
-          await new Promise(resolve => setTimeout(resolve, 500));
-          await tmuxExec(["send-keys", "-t", tmuxTarget, "Enter"]);
+          await tmuxExec(["send-keys", "-t", tmuxTarget, "Escape", "Escape"]);
           result = "escape_sent";
-          log(`[REMOTE] Sent Escape+Enter to session ${sessionId.slice(0, 8)} via tmux ${tmuxTarget}`);
+          log(`[REMOTE] Sent double Escape to session ${sessionId.slice(0, 8)} via tmux ${tmuxTarget}`);
         } else {
           try {
             process.kill(proc.pid, "SIGINT");
@@ -1424,12 +1422,13 @@ async function executeRemoteCommand(
         const safeSteps = Math.min(Math.max(1, Math.floor(Number(stepsBack))), 50);
 
         const PROMPT_RE = /[❯›]/;
-        const PROMPT_EMPTY_RE = /[❯›]\s*(\n|$)/;
         const BUSY_RE = /⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏|Wandering|Vibing|Coasting|Working|thinking/;
+        const NAVIGATOR_RE = /Enter to continue/;
+        const RESTORE_RE = /Restore conversation/;
 
         const captureLast = async (): Promise<string> => {
           const { stdout } = await tmuxExec(["capture-pane", "-p", "-J", "-t", tmuxTarget, "-S", "-8"]);
-          return stdout.split("\n").slice(-10).join("\n");
+          return stdout.split("\n").slice(-15).join("\n");
         };
 
         const isAtPrompt = async (): Promise<boolean> => {
@@ -1437,20 +1436,26 @@ async function executeRemoteCommand(
           return PROMPT_RE.test(last) && !BUSY_RE.test(last);
         };
 
-        const hasEmptyPrompt = async (): Promise<boolean> => {
-          const last = await captureLast();
-          return PROMPT_EMPTY_RE.test(last);
+        const waitFor = async (test: (text: string) => boolean, label: string, maxWait = 10000): Promise<boolean> => {
+          const start = Date.now();
+          while (Date.now() - start < maxWait) {
+            const last = await captureLast();
+            if (test(last)) return true;
+            await new Promise(r => setTimeout(r, 300));
+          }
+          log(`[REWIND] Timed out waiting for: ${label}`);
+          return false;
         };
 
-        // Step 1: Get to idle prompt
+        // Step 1: Get to idle prompt (double Escape to interrupt if busy)
         if (!(await isAtPrompt())) {
-          log(`[REWIND] Session not at prompt, sending Escape`);
-          await tmuxExec(["send-keys", "-t", tmuxTarget, "Escape"]);
-          let gotPrompt = false;
-          for (let i = 0; i < 60; i++) {
-            await new Promise(r => setTimeout(r, 500));
-            if (await isAtPrompt()) { gotPrompt = true; break; }
-          }
+          log(`[REWIND] Session not at prompt, sending double Escape to interrupt`);
+          await tmuxExec(["send-keys", "-t", tmuxTarget, "Escape", "Escape"]);
+          const gotPrompt = await waitFor(
+            (text) => PROMPT_RE.test(text) && !BUSY_RE.test(text),
+            "prompt after interrupt",
+            30000,
+          );
           if (!gotPrompt) {
             error = "Timed out waiting for prompt after interrupt";
             break;
@@ -1458,30 +1463,53 @@ async function executeRemoteCommand(
           log(`[REWIND] Got prompt after interrupt`);
         }
 
-        // Step 2: Clear any existing text in the prompt
-        for (let attempt = 0; attempt < 3; attempt++) {
-          if (await hasEmptyPrompt()) break;
-          log(`[REWIND] Clearing existing prompt text (attempt ${attempt + 1})`);
-          await tmuxExec(["send-keys", "-t", tmuxTarget, "Escape"]);
-          await new Promise(r => setTimeout(r, 500));
-        }
-
-        // Step 3: Navigate history with Up arrows
-        log(`[REWIND] Sending ${safeSteps} Up arrows`);
-        const upKeys = Array.from({ length: safeSteps }, () => "Up");
-        await tmuxExec(["send-keys", "-t", tmuxTarget, ...upKeys]);
+        // Step 2: Clear any existing text (double Escape clears in CC)
+        log(`[REWIND] Clearing prompt with double Escape`);
+        await tmuxExec(["send-keys", "-t", tmuxTarget, "Escape", "Escape"]);
         await new Promise(r => setTimeout(r, 300));
 
-        // Step 4: Verify prompt has text (history was navigated)
-        if (await hasEmptyPrompt()) {
-          log(`[REWIND] Prompt still empty after Up arrows, no history at position ${safeSteps}`);
+        // Step 3: Navigate history with Up arrows
+        // First Up opens the visual navigator, subsequent Ups move back
+        log(`[REWIND] Sending ${safeSteps} Up arrows to open navigator`);
+        const upKeys = Array.from({ length: safeSteps }, () => "Up");
+        await tmuxExec(["send-keys", "-t", tmuxTarget, ...upKeys]);
+
+        // Step 4: Verify navigator opened
+        const navigatorOpened = await waitFor(
+          (text) => NAVIGATOR_RE.test(text),
+          "navigator to open",
+        );
+        if (!navigatorOpened) {
+          log(`[REWIND] Navigator did not open after ${safeSteps} Up arrows`);
           error = `No message found at history position ${safeSteps}`;
           break;
         }
 
-        // Step 5: Submit with single Enter (no confirmation needed)
-        log(`[REWIND] Submitting rewind`);
+        // Step 5: Select message in navigator (first Enter)
+        log(`[REWIND] Selecting message in navigator`);
         await tmuxExec(["send-keys", "-t", tmuxTarget, "Enter"]);
+
+        // Step 6: Confirm "Restore conversation" (second Enter)
+        const atRestore = await waitFor(
+          (text) => RESTORE_RE.test(text),
+          "restore confirmation",
+        );
+        if (atRestore) {
+          log(`[REWIND] Confirming restore`);
+          await tmuxExec(["send-keys", "-t", tmuxTarget, "Enter"]);
+        } else {
+          log(`[REWIND] No restore confirmation shown, sending Enter anyway`);
+          await tmuxExec(["send-keys", "-t", tmuxTarget, "Enter"]);
+        }
+
+        // Wait for forked session prompt with the rewound message pre-filled
+        // Don't submit — let the user review/edit the message in the web UI
+        await waitFor(
+          (text) => PROMPT_RE.test(text) && !BUSY_RE.test(text),
+          "prompt with rewound message",
+          15000,
+        );
+
         result = "rewind_sent";
         log(`[REWIND] Rewind ${stepsBack} steps sent to session ${sessionId.slice(0, 8)}`);
         break;
