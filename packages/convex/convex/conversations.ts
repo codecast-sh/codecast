@@ -2867,6 +2867,47 @@ export const getConversationBySessionId = query({
   },
 });
 
+// Single resolver for /conversation/[id] links.
+// Accepts any string: Convex document _id, session_id, or UUID.
+// Returns the access level and resolved Convex _id so the frontend
+// doesn't need to guess which ID format was used.
+export const resolveConversation = query({
+  args: { id: v.string() },
+  handler: async (ctx, args) => {
+    let conversation = null;
+
+    // Try as Convex document ID
+    const convId = ctx.db.normalizeId("conversations", args.id);
+    if (convId) {
+      conversation = await ctx.db.get(convId);
+    }
+
+    // Try as session_id
+    if (!conversation) {
+      conversation = await ctx.db
+        .query("conversations")
+        .withIndex("by_session_id", (q) => q.eq("session_id", args.id))
+        .first();
+    }
+
+    if (!conversation) {
+      return { access_level: "not_found" as const, conversation_id: null };
+    }
+
+    const authUserId = await getAuthUserId(ctx);
+    const accessLevel = await checkConversationAccess(ctx, authUserId, conversation);
+
+    if (accessLevel === "denied") {
+      return { access_level: "denied" as const, conversation_id: null };
+    }
+
+    return {
+      access_level: accessLevel,
+      conversation_id: conversation._id.toString(),
+    };
+  },
+});
+
 export const getSessionLinks = mutation({
   args: {
     session_id: v.string(),

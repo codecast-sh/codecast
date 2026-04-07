@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useConvexAuth } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { useState, useMemo, useCallback } from "react";
+import { useState, useCallback } from "react";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { useShortcutContext, useShortcutAction } from "../../../shortcuts";
 import { DashboardLayout } from "../../../components/DashboardLayout";
@@ -18,10 +18,6 @@ import { useDiffViewerStore } from "../../../store/diffViewerStore";
 import { useInboxStore } from "../../../store/inboxStore";
 import { useForkNavigationStore } from "../../../store/forkNavigationStore";
 import { cleanUserMessage } from "../../../components/GlobalSessionPanel";
-import { QueuePageClient } from "../../inbox/QueuePageClient";
-
-const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const CONVEX_ID_REGEX = /^[a-z0-9]{32}$/;
 
 function ConversationLoadingSkeleton() {
   return (
@@ -272,7 +268,6 @@ export default function ConversationPage() {
   const params = useParams();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { isAuthenticated, isLoading: authLoading } = useConvexAuth();
   const id = params.id as string;
   const highlightQuery = searchParams.get("highlight") || undefined;
   const [targetMessageId, setTargetMessageId] = useState<string | undefined>(() => {
@@ -302,80 +297,22 @@ export default function ConversationPage() {
     router.replace(url.pathname + url.search);
   };
 
-  const isUUID = useMemo(() => UUID_REGEX.test(id), [id]);
-  const isValidConvexId = useMemo(() => CONVEX_ID_REGEX.test(id), [id]);
+  // Single resolver handles Convex IDs, session IDs, and UUIDs.
+  const resolved = useQuery(api.conversations.resolveConversation, { id });
 
-  const sessionLookup = useQuery(
-    api.conversations.getConversationBySessionId,
-    isUUID ? { session_id: id } : "skip"
+  if (resolved === undefined) return <ConversationLoadingSkeleton />;
+  if (resolved.access_level === "not_found" || !resolved.conversation_id) return <NotFoundView />;
+  if (resolved.access_level === "denied") return <DeniedView />;
+
+  const isOwner = resolved.access_level === "owner";
+
+  return (
+    <OwnerView
+      id={resolved.conversation_id}
+      highlightQuery={highlightQuery}
+      onClearHighlight={handleClearHighlight}
+      targetMessageId={targetMessageId}
+      isOwner={isOwner}
+    />
   );
-
-  const resolvedConvexId = sessionLookup?._id?.toString();
-
-  const publicData = useQuery(
-    api.conversations.getConversationPublic,
-    isUUID
-      ? (resolvedConvexId ? { conversation_id: resolvedConvexId as Id<"conversations"> } : "skip")
-      : (isValidConvexId ? { conversation_id: id as Id<"conversations"> } : "skip")
-  );
-
-  const storeHasSession = useInboxStore((s) => !!(s.sessions[id] || s.conversations[id]));
-  const resolvedStoreId = useInboxStore((s) => isUUID ? s.getConvexId(id) : undefined);
-
-  if (storeHasSession || resolvedStoreId) {
-    if (authLoading) return <ConversationLoadingSkeleton />;
-    if (!isAuthenticated) {
-      router.replace("/");
-      return <ConversationLoadingSkeleton />;
-    }
-    if (storeHasSession) return <QueuePageClient initialSessionId={id} />;
-    if (resolvedStoreId) return <QueuePageClient initialSessionId={resolvedStoreId} />;
-  }
-
-  if (!isUUID && !isValidConvexId) {
-    router.replace("/inbox");
-    return <ConversationLoadingSkeleton />;
-  }
-
-  if (isUUID) {
-    if (sessionLookup === undefined) {
-      return <ConversationLoadingSkeleton />;
-    }
-    if (sessionLookup === null) {
-      return <NotFoundView />;
-    }
-    const effectiveId = resolvedConvexId || id;
-    if (publicData === undefined) {
-      return <ConversationLoadingSkeleton />;
-    }
-    if (publicData.access_level === "owner") {
-      return <OwnerView id={effectiveId} highlightQuery={highlightQuery} onClearHighlight={handleClearHighlight} targetMessageId={targetMessageId} isOwner={true} />;
-    }
-    if (publicData.access_level === "team" || publicData.access_level === "shared") {
-      return <OwnerView id={effectiveId} highlightQuery={highlightQuery} onClearHighlight={handleClearHighlight} targetMessageId={targetMessageId} isOwner={false} />;
-    }
-    return <DeniedView />;
-  }
-
-  if (publicData === undefined) {
-    return <ConversationLoadingSkeleton />;
-  }
-
-  if (publicData.access_level === "not_found") {
-    return <NotFoundView />;
-  }
-
-  if (publicData.access_level === "denied") {
-    return <DeniedView />;
-  }
-
-  if (publicData.access_level === "owner") {
-    return <OwnerView id={id} highlightQuery={highlightQuery} onClearHighlight={handleClearHighlight} targetMessageId={targetMessageId} isOwner={true} />;
-  }
-
-  if (publicData.access_level === "team" || publicData.access_level === "shared") {
-    return <OwnerView id={id} highlightQuery={highlightQuery} onClearHighlight={handleClearHighlight} targetMessageId={targetMessageId} isOwner={false} />;
-  }
-
-  return <DeniedView />;
 }
