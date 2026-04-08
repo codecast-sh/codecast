@@ -9323,7 +9323,6 @@ async function main(): Promise<void> {
 
   const versionCheckInterval = startVersionChecker(syncService);
   const reconciliationInterval = startReconciliation(syncService, retryQueue);
-  const eventLoopMonitorInterval = startEventLoopMonitor();
 
   const cursorWatcher = new CursorWatcher();
   const cursorSyncs = new Map<string, InvalidateSync>();
