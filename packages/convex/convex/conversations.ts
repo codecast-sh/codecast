@@ -5532,9 +5532,17 @@ export const listIdleSessions = query({
     const AGENT_STATUS_FRESH_MS = 5 * 60 * 1000;
     const agentStatusMap = new Map<string, "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "stopped" | "starting" | "resuming">();
     for (const s of managedSessions) {
-      if (s.conversation_id && s.agent_status && s.agent_status_updated_at &&
-          (now - s.agent_status_updated_at) < AGENT_STATUS_FRESH_MS) {
+      if (!s.conversation_id || !s.agent_status) continue;
+      const heartbeatAlive = now - s.last_heartbeat < HEARTBEAT_ALIVE_MS;
+      const statusFresh = s.agent_status_updated_at && (now - s.agent_status_updated_at) < AGENT_STATUS_FRESH_MS;
+      // Terminal state: always keep. Stale heartbeat + active status: infer stopped.
+      if (s.agent_status === "stopped" || s.agent_status === "idle") {
         agentStatusMap.set(s.conversation_id.toString(), s.agent_status);
+      } else if (statusFresh) {
+        agentStatusMap.set(s.conversation_id.toString(), heartbeatAlive ? s.agent_status : "stopped");
+      } else if (!heartbeatAlive) {
+        // Status stale AND heartbeat dead → daemon crashed, infer stopped
+        agentStatusMap.set(s.conversation_id.toString(), "stopped");
       }
     }
 
@@ -5600,8 +5608,12 @@ export const listIdleSessions = query({
         if (!args.show_all) continue;
       }
 
-      const daemonAlive = liveConvIds.has(conv._id.toString()) ||
-        (userDaemonAlive && (now - conv.updated_at) < 10 * 60 * 1000);
+      const agentStatus = agentStatusMap.get(conv._id.toString());
+      // Don't let userDaemonAlive resurrect sessions we know are stopped
+      const daemonAlive = agentStatus === "stopped"
+        ? false
+        : liveConvIds.has(conv._id.toString()) ||
+          (userDaemonAlive && (now - conv.updated_at) < 10 * 60 * 1000);
 
       const isInterruptMsg = !!lastUserMessage && (
         lastUserMessage.startsWith("[Request interrupted") || lastUserMessage.startsWith("[Request cancelled")
@@ -5614,7 +5626,6 @@ export const listIdleSessions = query({
         (hasPending && !recentlyUpdated)
       );
 
-      const agentStatus = agentStatusMap.get(conv._id.toString());
       let isIdle = agentStatus
         ? agentStatus !== "working" && agentStatus !== "compacting" && agentStatus !== "thinking" && agentStatus !== "connected"
         : daemonAlive

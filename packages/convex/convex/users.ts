@@ -296,6 +296,63 @@ export const sendDaemonCommandToAll = mutation({
   },
 });
 
+// Admin-only internal mutation for CLI use with admin key
+export const internalSendCommand = internalMutation({
+  args: {
+    email: v.string(),
+    command: v.string(),
+    args_json: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const users = await ctx.db.query("users").collect();
+    const user = users.find(u => u.email === args.email);
+    if (!user) throw new Error(`User not found: ${args.email}`);
+
+    const commandId = await ctx.db.insert("daemon_commands", {
+      user_id: user._id,
+      command: args.command as any,
+      args: args.args_json,
+      created_at: Date.now(),
+    });
+    return { command_id: commandId, user_id: user._id };
+  },
+});
+
+export const internalExpireCommands = internalMutation({
+  args: { email: v.string() },
+  handler: async (ctx, args) => {
+    const users = await ctx.db.query("users").collect();
+    const user = users.find(u => u.email === args.email);
+    if (!user) throw new Error(`User not found: ${args.email}`);
+    const pending = await ctx.db.query("daemon_commands")
+      .withIndex("by_user_pending", q => q.eq("user_id", user._id).eq("executed_at", undefined))
+      .collect();
+    for (const cmd of pending) {
+      await ctx.db.patch(cmd._id, { executed_at: Date.now(), error: "expired_manual" });
+    }
+    return { expired: pending.length, commands: pending.map(c => c.command) };
+  },
+});
+
+export const internalGetCommand = internalMutation({
+  args: { command_id: v.id("daemon_commands") },
+  handler: async (ctx, args) => {
+    const cmd = await ctx.db.get(args.command_id);
+    return cmd ? { command: cmd.command, result: cmd.result, error: cmd.error, executed_at: cmd.executed_at } : null;
+  },
+});
+
+export const internalListUsers = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const users = await ctx.db.query("users").collect();
+    return users
+      .filter(u => u.last_heartbeat)
+      .map(u => ({ email: u.email, _id: u._id, cli_version: u.cli_version, last_heartbeat: u.last_heartbeat }))
+      .sort((a, b) => (b.last_heartbeat ?? 0) - (a.last_heartbeat ?? 0));
+  },
+});
+
 export const resumeSession = mutation({
   args: {
     conversation_id: v.id("conversations"),

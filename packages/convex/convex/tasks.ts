@@ -142,6 +142,13 @@ export const create = mutation({
     fidelity: v.optional(v.string()),
     condition: v.optional(v.string()),
     project_path: v.optional(v.string()),
+    steps: v.optional(v.array(v.object({
+      title: v.string(),
+      done: v.optional(v.boolean()),
+      verification: v.optional(v.string()),
+    }))),
+    acceptance_criteria: v.optional(v.array(v.string())),
+    estimated_minutes: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
@@ -224,6 +231,9 @@ export const create = mutation({
       fidelity: args.fidelity,
       condition: args.condition,
       project_path: args.project_path,
+      steps: args.steps,
+      acceptance_criteria: args.acceptance_criteria,
+      estimated_minutes: args.estimated_minutes,
     } as any);
 
     if (plan_id) {
