@@ -684,6 +684,9 @@ function evictInactiveMessages(draft: any, activeConvId: string) {
   // Never evict conversations actively visible in the UI
   const keep = new Set([activeConvId, currentConvId, draft.currentSessionId, draft.sidePanelSessionId, draft.viewingDismissedId].filter(Boolean));
 
+  // Never evict active inbox sessions — clicking them must be instant
+  for (const id of Object.keys(draft.sessions || {})) keep.add(id);
+
   // Evict least-recently-viewed first
   // Never evict conversations with pending messages — the user just sent something
   // and evicting would make it vanish from the UI
@@ -1232,11 +1235,33 @@ export const useInboxStore = create<InboxStoreState>(
   }),
 
   syncRecord: sync(function (this: Draft, field: string, id: string, record: any) {
-    const existing = (this as any)[field]?.[id];
-    (this as any)[field] = {
-      ...(this as any)[field],
-      [id]: { ...existing, ...record },
-    };
+    const collection = (this as any)[field];
+    const existing = collection?.[id];
+
+    // Bail out if every incoming property already matches — avoids creating
+    // a new state reference, which would cascade through useTrackedStore →
+    // storeMeta → conversation prop → ConversationView re-render → Radix
+    // tooltip ref loop under React 19's ref cleanup semantics.
+    if (existing && record) {
+      const keys = Object.keys(record);
+      if (keys.length > 0 && keys.every(k => Object.is(existing[k], record[k]))) {
+        return;
+      }
+    }
+
+    // Mutate draft in-place instead of replacing the collection object.
+    // This ensures mutative only marks the changed subtree as dirty.
+    if (!collection) {
+      (this as any)[field] = { [id]: record };
+    } else if (!existing) {
+      collection[id] = record;
+    } else {
+      for (const key of Object.keys(record)) {
+        if (!Object.is(existing[key], record[key])) {
+          existing[key] = record[key];
+        }
+      }
+    }
   }),
 
   addPending: sync(function (this: Draft, key: string, entry: PendingEntry) {
@@ -1949,6 +1974,11 @@ if (typeof window !== "undefined") {
     // Critical path: sidebar + current conversation render immediately
     apply(["sessions", "dismissedSessions", "clientState",
            "conversations", "teams", "teamMembers", "teamUnreadCount", "drafts"]);
+
+    // Preload messages for all active inbox sessions so clicks are instant
+    for (const id of Object.keys(cached.sessions || {})) {
+      ensureHydrated(id);
+    }
 
     // Deferred: list views + secondary data render next frame
     requestAnimationFrame(() => {
