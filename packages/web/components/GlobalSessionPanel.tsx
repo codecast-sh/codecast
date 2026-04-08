@@ -8,7 +8,7 @@ import { ConversationData } from "./ConversationView";
 import { useConversationMessages } from "../hooks/useConversationMessages";
 import { useInboxStore, useTrackedStore, InboxSession, getSessionRenderKey, isConvexId, categorizeSessions, isInterruptControlMessage, getProjectName, isFork } from "../store/inboxStore";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "./ui/tooltip";
-import { cleanTitle } from "../lib/conversationProcessor";
+import { cleanTitle, msgCountColor } from "../lib/conversationProcessor";
 import { SharePopover } from "./SharePopover";
 import { PlanContextPanel } from "./PlanContextPanel";
 import { WorkflowContextPanel } from "./WorkflowContextPanel";
@@ -19,12 +19,6 @@ import { formatShortcutLabel } from "../shortcuts";
 import { X, ChevronsLeft, ChevronsRight } from "lucide-react";
 import { TaskStatusBadge } from "./TaskStatusBadge";
 import { useTipActions, checkMilestone } from "../tips";
-import { TeamIcon, IconColorPicker, getSessionIconDefaults, type TeamIconName, type TeamColorName } from "./TeamIcon";
-import {
-  DropdownMenu,
-  DropdownMenuTrigger,
-  DropdownMenuContent,
-} from "./ui/dropdown-menu";
 
 const NOISE_PREFIXES = ["[Request interrupted", "This session is being continued", "Your task is to create a detailed summary", "Please continue the conversation", "<task-notification>", "Implement the following plan"];
 
@@ -296,20 +290,6 @@ export function SessionCard({
   const isSlashCommand = displayTitle.startsWith("/");
   const cleanedUserMsg = cleanUserMessage(session.last_user_message);
 
-  const setConversationIcon = useMutation(api.conversations.setConversationIcon);
-  const iconDefaults = getSessionIconDefaults(session._id);
-  const effectiveIcon = (session.icon || iconDefaults.icon) as TeamIconName;
-  const effectiveColor = (session.icon_color || iconDefaults.color) as TeamColorName;
-
-  const handleIconChange = useCallback(async (icon: string) => {
-    try { await setConversationIcon({ conversation_id: session._id as Id<"conversations">, icon }); }
-    catch { toast.error("Failed to update icon"); }
-  }, [session._id, setConversationIcon]);
-
-  const handleColorChange = useCallback(async (color: string) => {
-    try { await setConversationIcon({ conversation_id: session._id as Id<"conversations">, icon_color: color }); }
-    catch { toast.error("Failed to update color"); }
-  }, [session._id, setConversationIcon]);
 
   const [isDragOver, setIsDragOver] = useState(false);
   const dragCounter = useRef(0);
@@ -413,7 +393,7 @@ export function SessionCard({
                 <span className="w-1.5 h-1.5 rounded-full bg-gray-500/40 ring-1 ring-gray-500/20" title="Session idle" />
               )}
               {session.message_count > 0 && (
-                <span className="text-[9px] text-gray-500 tabular-nums">{session.message_count}</span>
+                <span className={`text-[9px] tabular-nums ${msgCountColor(session.message_count)}`}>{session.message_count}</span>
               )}
               <span className="text-[9px] text-gray-500 tabular-nums">
                 {formatIdleDuration(session.updated_at)}
@@ -503,19 +483,6 @@ export function SessionCard({
         <div className={`flex items-center gap-1.5 leading-tight ${
           isActive ? "text-sm text-sol-text font-semibold" : isWorking ? "text-sm text-sol-text font-medium" : isDismissed ? "text-sm text-sol-text-muted" : "text-sm text-sol-text"
         }`}>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button
-                className="flex-shrink-0 rounded hover:bg-sol-bg-highlight/60 p-0.5 transition-colors"
-                onClick={(e) => { e.stopPropagation(); }}
-              >
-                <TeamIcon icon={effectiveIcon} color={effectiveColor} className="w-4 h-4" />
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="w-56 p-3">
-              <IconColorPicker currentIcon={effectiveIcon} currentColor={effectiveColor} onIconChange={handleIconChange} onColorChange={handleColorChange} />
-            </DropdownMenuContent>
-          </DropdownMenu>
           <span className="truncate">{isSlashCommand ? <span className="font-mono text-sol-cyan">{displayTitle}</span> : displayTitle}</span>
         </div>
         {(session.idle_summary || session.subtitle) && !session.implementation_session && (
@@ -561,7 +528,7 @@ export function SessionCard({
             </span>
           )}
           {session.message_count > 0 && (
-            <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">
+            <span className={`text-[10px] tabular-nums flex-shrink-0 ${msgCountColor(session.message_count)}`}>
               {session.message_count} msg{session.message_count !== 1 ? "s" : ""}
             </span>
           )}
