@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useConvexAuth } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useState, useCallback } from "react";
@@ -92,7 +92,6 @@ function OwnerView({
   isOwner: boolean;
   autoFocusInput?: boolean;
 }) {
-  const { isAuthenticated } = useConvexAuth();
   const toggleDiffPanel = useDiffViewerStore((state) => state.toggleDiffPanel);
 
   const { conversation, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, loadOlder, loadNewer, jumpToStart, jumpToEnd, isSearchingForTarget } = useConversationMessages(id, targetMessageId, highlightQuery);
@@ -215,7 +214,7 @@ function OwnerView({
           embedded
           targetMessageId={targetMessageId}
           isOwner={isOwner}
-          showMessageInput={isOwner || isAuthenticated}
+          showMessageInput
           autoFocusInput={autoFocusInput}
           fallbackStickyContent={cleanUserMessage(sessionLastUserMessage)}
           subHeaderContent={<>
@@ -297,18 +296,21 @@ export default function ConversationPage() {
     router.replace(url.pathname + url.search);
   };
 
-  // Single resolver handles Convex IDs, session IDs, and UUIDs.
+  // Local-first: resolve from inbox store instantly when available.
+  // Falls back to server resolver for shared links / external navigation.
+  const localSession = useInboxStore(s => s.sessions[id] ?? s.dismissedSessions[id]);
   const resolved = useQuery(api.conversations.resolveConversation, { id });
+  const effective = resolved ?? (localSession ? { access_level: "owner" as const, conversation_id: localSession._id } : undefined);
 
-  if (resolved === undefined) return <ConversationLoadingSkeleton />;
-  if (resolved.access_level === "not_found" || !resolved.conversation_id) return <NotFoundView />;
-  if (resolved.access_level === "denied") return <DeniedView />;
+  if (effective === undefined) return <ConversationLoadingSkeleton />;
+  if (effective.access_level === "not_found" || !effective.conversation_id) return <NotFoundView />;
+  if (effective.access_level === "denied") return <DeniedView />;
 
-  const isOwner = resolved.access_level === "owner";
+  const isOwner = effective.access_level === "owner";
 
   return (
     <OwnerView
-      id={resolved.conversation_id}
+      id={effective.conversation_id}
       highlightQuery={highlightQuery}
       onClearHighlight={handleClearHighlight}
       targetMessageId={targetMessageId}
