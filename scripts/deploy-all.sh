@@ -217,4 +217,4 @@ echo "  - Desktop: dl.codecast.sh/Codecast-<version>-arm64.dmg (if deployed)"
 echo ""
 echo "Tailing Railway build logs (Ctrl+C to stop)..."
 echo ""
-exec railway logs --build --latest
+exec railway logs --build --lines 50

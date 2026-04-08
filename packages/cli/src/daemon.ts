@@ -5893,6 +5893,7 @@ async function discoverAndLinkSession(
     if (candidates.length === 0) continue;
     // Verify which candidate belongs to this tmux session's process
     let linkedSessionId: string | null = null;
+    let foundInOtherTmux = false;
     for (const sessionId of candidates) {
       try {
         const proc = await findSessionProcess(sessionId, "claude").catch(() => null);
@@ -5901,12 +5902,16 @@ async function discoverAndLinkSession(
           if (tmuxPane && tmuxPane.split(":")[0] === tmuxSession) {
             linkedSessionId = sessionId;
             break;
+          } else if (tmuxPane) {
+            foundInOtherTmux = true;
+            log(`[DISCOVER] Candidate ${sessionId.slice(0, 8)} is in tmux ${tmuxPane.split(":")[0]}, not ${tmuxSession} — skipping`);
           }
         }
       } catch {}
     }
-    // If process verification fails but there's exactly one candidate, use it
-    if (!linkedSessionId && candidates.length === 1) {
+    // Fall back to single candidate only if process wasn't found at all —
+    // if it was found in a different tmux session, it belongs to another conversation
+    if (!linkedSessionId && candidates.length === 1 && !foundInOtherTmux) {
       linkedSessionId = candidates[0];
     }
     if (linkedSessionId) {
