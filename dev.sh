@@ -87,20 +87,18 @@ cleanup() {
 trap cleanup SIGINT SIGTERM
 
 kill_previous_instance() {
+    # Kill pidfile-tracked instance
     if [ -f "$PIDFILE" ]; then
         local old_pid
         old_pid=$(cat "$PIDFILE" 2>/dev/null)
         if [ -n "$old_pid" ] && kill -0 "$old_pid" 2>/dev/null; then
             log "Killing previous dev.sh instance (pid $old_pid)..."
-            # Kill the process tree (watchdog + convex + vite)
             kill_tree "$old_pid"
-            # Wait up to 5s for it to die
             local attempts=0
             while kill -0 "$old_pid" 2>/dev/null && [ $attempts -lt 10 ]; do
                 sleep 0.5
                 attempts=$((attempts + 1))
             done
-            # Force kill if still alive
             if kill -0 "$old_pid" 2>/dev/null; then
                 log_warn "Previous instance didn't exit cleanly, force killing..."
                 kill_tree "$old_pid" 9
@@ -148,6 +146,8 @@ start_web() {
     $SHUTTING_DOWN && return
 
     kill_web
+    # Clear Vite cache on every restart to prevent stale module errors
+    rm -rf "$ROOT_DIR/packages/web/node_modules/.vite"
     cd "$ROOT_DIR/packages/web"
     "$ROOT_DIR/node_modules/.bin/vite" --port $PORT --host 0.0.0.0 &
     cd "$ROOT_DIR"
@@ -183,8 +183,16 @@ kill_previous_instance
 write_pidfile
 
 log "Clearing old processes..."
+# Kill any orphaned convex/vite processes for this port (not just pidfile-tracked ones)
+pkill -f "vite.*--port $PORT" 2>/dev/null || true
 kill_port $PORT
 sleep 1
+
+# Clear Vite's dependency pre-bundle cache to prevent stale module errors
+if [ -d "$ROOT_DIR/packages/web/node_modules/.vite" ]; then
+    log "Clearing Vite cache..."
+    rm -rf "$ROOT_DIR/packages/web/node_modules/.vite"
+fi
 
 if ! grep -q "$HOSTNAME" /etc/hosts 2>/dev/null; then
     log_warn "$HOSTNAME not in /etc/hosts - run: sudo ./setup-hosts.sh"
