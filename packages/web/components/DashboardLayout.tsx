@@ -4,7 +4,7 @@ import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useEventListener } from "../hooks/useEventListener";
 import { useConvexSync } from "../hooks/useConvexSync";
 import { usePathname, useRouter } from "next/navigation";
-import { useQuery, useMutation } from "convex/react";
+import { useQuery, useMutation, useConvexAuth } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Panel, Group, Separator } from "react-resizable-panels";
 import { UserMenu } from "./UserMenu";
@@ -27,7 +27,7 @@ import { FindBar } from "./FindBar";
 import { KeyboardShortcutsPanel } from "./KeyboardShortcutsHelp";
 import { NewSessionModal } from "./ConversationList";
 import { CreatePalette } from "./CreatePalette";
-import { useInboxStore, isSessionEffectivelyIdle } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, isSessionEffectivelyIdle } from "../store/inboxStore";
 import { useShortcutAction, useShortcutContext, useGlobalShortcutActions, formatShortcutLabel } from "../shortcuts";
 import { usePrefetch } from "../hooks/usePrefetch";
 import { desktopHeaderClass, setupDesktopDrag, isElectron } from "../lib/desktop";
@@ -55,22 +55,31 @@ export function DashboardLayout(props: DashboardLayoutProps) {
 }
 
 function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilter, onDirectoryFilterChange, hideSidebar }: DashboardLayoutProps) {
+  const { isAuthenticated, isLoading: isAuthLoading } = useConvexAuth();
+  const isGuest = !isAuthenticated && !isAuthLoading;
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
-  const isZenMode = useInboxStore(s => s.clientState.ui?.zen_mode ?? false);
-  const sidebarCollapsed = useInboxStore(s => s.clientState.ui?.sidebar_collapsed ?? false);
-  const rawLayout = useInboxStore(s => s.clientState.layouts?.dashboard ?? DEFAULT_LAYOUT);
+  const s = useTrackedStore([
+    s => s.clientState.ui?.zen_mode,
+    s => s.clientState.ui?.sidebar_collapsed,
+    s => s.clientState.layouts?.dashboard,
+    s => s.currentConversation?.source,
+    s => s.sidePanelOpen,
+    s => s.sidePanelSessionId,
+    s => s.sessions,
+    s => s.currentSessionId,
+    s => s.viewingDismissedId,
+    s => s.newSession.isOpen,
+  ]);
+  const isZenMode = s.clientState.ui?.zen_mode ?? false;
+  const sidebarCollapsed = s.clientState.ui?.sidebar_collapsed ?? false;
+  const rawLayout = s.clientState.layouts?.dashboard ?? DEFAULT_LAYOUT;
   const layout = {
     sidebar: Math.max(10, Math.min(50, rawLayout.sidebar ?? 25)),
     main: Math.max(30, Math.min(90, rawLayout.main ?? 75)),
   };
-  const updateUI = useInboxStore(s => s.updateClientUI);
-  const updateLayout = useInboxStore(s => s.updateClientLayout);
   const [isMobile, setIsMobile] = useState(false);
   const pathname = usePathname();
   const router = useRouter();
-  const openNewSession = useInboxStore((state) => state.openNewSession);
-  const newSessionOpen = useInboxStore((state) => state.newSession.isOpen);
-  const closeNewSession = useInboxStore((state) => state.closeNewSession);
 
   const [desktopClass, setDesktopClass] = useState("");
   const [isDesktopApp, setIsDesktopApp] = useState(false);
@@ -114,31 +123,22 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
   const isOnConversationPage = pathname?.includes("/conversation/") ?? false;
   const isOnCommitPage = pathname?.includes("/commit/") ?? false;
   const isOnPRPage = pathname?.includes("/pr/") ?? false;
-  const inboxSource = useInboxStore((s) => s.currentConversation?.source);
-  const isOnInboxPage = isInboxSessionView(pathname, inboxSource);
+  const isOnInboxPage = isInboxSessionView(pathname, s.currentConversation?.source);
   const isOnTasksPage = pathname === "/tasks" || (pathname?.startsWith("/tasks/") ?? false);
   const isOnWorkflowsPage = pathname === "/workflows" || (pathname?.startsWith("/workflows/") ?? false);
   const isOnPlansPage = pathname === "/plans" || (pathname?.startsWith("/plans/") ?? false);
   const isOnDocsPage = pathname === "/docs" || (pathname?.startsWith("/docs/") ?? false);
   const isFullWidthPage = isOnConversationPage || isOnCommitPage || isOnPRPage || isOnInboxPage || isOnTasksPage || isOnWorkflowsPage || isOnPlansPage || isOnDocsPage;
 
-  const sidePanelOpen = useInboxStore(s => s.sidePanelOpen);
-  const sidePanelSessionId = useInboxStore(s => s.sidePanelSessionId);
-  const toggleSidePanel = useInboxStore(s => s.toggleSidePanel);
-  const selectPanelSession = useInboxStore(s => s.selectPanelSession);
-  const inboxSessions = useInboxStore((s) => s.sessions);
   const activeAgentCount = useMemo(() => {
-    return Object.values(inboxSessions).filter(
-      (s) => !isSessionEffectivelyIdle(s) && s.message_count > 0
+    return Object.values(s.sessions).filter(
+      (sess) => !isSessionEffectivelyIdle(sess) && sess.message_count > 0
     ).length;
-  }, [inboxSessions]);
+  }, [s.sessions]);
 
-  const showCollapsedRail = !sidePanelOpen && !isMobile;
-  const showSessionList = sidePanelOpen && !isMobile;
-  const showConversationColumn = !!sidePanelSessionId && !isOnInboxPage && !isMobile;
-
-  const currentSessionId = useInboxStore(s => s.currentSessionId);
-  const viewingDismissedId = useInboxStore(s => s.viewingDismissedId);
+  const showCollapsedRail = !s.sidePanelOpen && !isMobile;
+  const showSessionList = s.sidePanelOpen && !isMobile;
+  const showConversationColumn = !!s.sidePanelSessionId && !isOnInboxPage && !isOnConversationPage && !isMobile;
 
   const handleInboxSessionSelect = useCallback((id: string) => {
     const store = useInboxStore.getState();
@@ -169,11 +169,18 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
   }, [router]);
 
   const sessionListActiveId = isOnInboxPage
-    ? (viewingDismissedId ?? currentSessionId)
-    : sidePanelSessionId;
+    ? (s.viewingDismissedId ?? s.currentSessionId)
+    : s.sidePanelSessionId;
+
+  const handleConversationPageSessionSelect = useCallback((id: string) => {
+    router.push(`/conversation/${id}`);
+  }, [router]);
+
   const sessionListOnSelect = isOnInboxPage
     ? handleInboxSessionSelect
-    : selectPanelSession;
+    : isOnConversationPage
+      ? handleConversationPageSessionSelect
+      : s.selectPanelSession;
 
   useMountEffect(() => {
     setIsMobile(window.innerWidth < 768);
@@ -209,7 +216,14 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
         useInboxStore.getState().openSidePanel(sessionId);
       }
     }
-  }, [pathname]);
+    // Arriving at a conversation page (from notification, link, etc.) — open side panel
+    if (isNowConvPage && !isOnInboxPage) {
+      const sessionId = pathname?.split("/conversation/")[1]?.split("?")[0];
+      if (sessionId) {
+        useInboxStore.getState().openSidePanel(sessionId);
+      }
+    }
+  }, [pathname, isOnInboxPage]);
 
   const resolveNewSessionContext = useCallback(() => {
     const store = useInboxStore.getState();
@@ -253,6 +267,11 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
       git_root: gitRoot || path,
       session_id: sessionId,
     });
+    store._dispatch("createSession", [{ agent_type: agentType, project_path: path, git_root: gitRoot || path, session_id: sessionId }])
+      .then((convexId: string) => {
+        if (convexId) useInboxStore.getState().resolveSessionId(sessionId, convexId);
+      })
+      .catch(() => {});
 
     if (isOnInboxPage) {
       store.setCurrentSession(sessionId);
@@ -266,7 +285,7 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
   const handleQuickCreateIsolated = useCallback(async () => {
     const { path, gitRoot, agentType: rawAgent } = resolveNewSessionContext();
     if (!path) {
-      openNewSession({ source: isOnInboxPage ? "inbox" : "sessions" });
+      s.openNewSession({ source: isOnInboxPage ? "inbox" : "sessions" });
       return;
     }
     soundNewSession();
@@ -285,7 +304,7 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
     } else {
       router.push(`/conversation/${conversationId}?focus=1`);
     }
-  }, [resolveNewSessionContext, router, isOnInboxPage, createQuickSession, openNewSession]);
+  }, [resolveNewSessionContext, router, isOnInboxPage, createQuickSession, s.openNewSession]);
 
   useGlobalShortcutActions();
   useShortcutContext('desktop', isDesktopApp);
@@ -318,8 +337,40 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
   }, [recalcHeight]));
 
   const handleLayoutChange = (newLayout: { [key: string]: number }) => {
-    updateLayout("dashboard", { sidebar: newLayout.sidebar || 25, main: newLayout.main || 75 });
+    s.updateClientLayout("dashboard", { sidebar: newLayout.sidebar || 25, main: newLayout.main || 75 });
   };
+
+  // Guest/unauthenticated: minimal layout with branding + join CTA
+  if (isGuest) {
+    return (
+      <div className="bg-sol-bg flex flex-col overflow-hidden" style={{ height: '100vh' }}>
+        <header className="flex-shrink-0 border-b border-black/10 bg-sol-bg z-[100]">
+          <div className="px-3 py-2 flex items-center justify-between">
+            <a href="/" className="text-sol-text font-mono text-sm font-bold tracking-tight hover:text-sol-cyan transition-colors">
+              codecast
+            </a>
+            <div className="flex items-center gap-3">
+              <a
+                href="/login"
+                className="text-xs text-sol-text-muted hover:text-sol-text transition-colors"
+              >
+                Sign in
+              </a>
+              <a
+                href="/signup"
+                className="text-xs font-medium px-3 py-1.5 rounded-full bg-sol-cyan/15 text-sol-cyan border border-sol-cyan/30 hover:bg-sol-cyan/25 transition-colors"
+              >
+                Join Codecast
+              </a>
+            </div>
+          </div>
+        </header>
+        <div className="flex-1 min-h-0">
+          <div className="h-full">{children}</div>
+        </div>
+      </div>
+    );
+  }
 
   const pageContent = isFullWidthPage ? (
     <div className="h-full">{children}</div>
@@ -354,7 +405,7 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
               onSessionSelect={sessionListOnSelect}
               onForkSelect={isOnInboxPage ? handleInboxForkSelect : handleConversationForkSelect}
               activeSessionId={sessionListActiveId}
-              onCollapse={toggleSidePanel}
+              onCollapse={s.toggleSidePanel}
             />
           </div>
         </ErrorBoundary>
@@ -378,7 +429,7 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
           {/* Left section: Sidebar toggle + nav */}
           <div className="flex items-center gap-1 flex-shrink-0">
             <button
-              onClick={(e) => { updateUI({ sidebar_collapsed: !sidebarCollapsed }); tipActions.whisper('sidebar.toggleLeft', e); }}
+              onClick={(e) => { s.updateClientUI({ sidebar_collapsed: !sidebarCollapsed }); tipActions.whisper('sidebar.toggleLeft', e); }}
               className="hidden md:flex items-center p-1.5 rounded-md text-sol-text-dim/60 hover:text-sol-text-muted transition-colors"
               title={`${sidebarCollapsed ? "Show sidebar" : "Hide sidebar"} (${formatShortcutLabel('sidebar.toggleLeft')})`}
             >
@@ -447,7 +498,7 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
             {activeAgentCount > 0 && (
               <button
                 onClick={() => {
-                  if (!sidePanelOpen) toggleSidePanel();
+                  if (!s.sidePanelOpen) s.toggleSidePanel();
                   // Select first working session so the list scrolls to it
                   const store = useInboxStore.getState();
                   const firstWorking = Object.values(store.sessions).find(
@@ -484,7 +535,7 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
                 if (ctx.path) {
                   handleQuickCreate();
                 } else {
-                  openNewSession({ projectPath: ctx.path, gitRoot: ctx.gitRoot, agentType: ctx.agentType });
+                  s.openNewSession({ projectPath: ctx.path, gitRoot: ctx.gitRoot, agentType: ctx.agentType });
                 }
                 tipActions.whisper('session.create', e);
               }}
@@ -501,7 +552,7 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
               <UserMenu />
             </ErrorBoundary>
             <button
-              onClick={(e) => { toggleSidePanel(); tipActions.whisper('sidebar.toggleRight', e); }}
+              onClick={(e) => { s.toggleSidePanel(); tipActions.whisper('sidebar.toggleRight', e); }}
               className="hidden md:flex items-center p-1.5 rounded-md text-sol-text-dim/60 hover:text-sol-text-muted transition-colors"
               title={`Toggle sessions panel (${formatShortcutLabel('sidebar.toggleRight')})`}
             >
@@ -579,7 +630,7 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
       <ErrorBoundary name="FindBar" level="inline">
         <FindBar />
       </ErrorBoundary>
-      <NewSessionModal isOpen={newSessionOpen} onClose={closeNewSession} />
+      <NewSessionModal isOpen={s.newSession.isOpen} onClose={s.closeNewSession} />
       <ErrorBoundary name="CreatePalette" level="inline">
         <CreatePalette />
       </ErrorBoundary>

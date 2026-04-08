@@ -5,6 +5,7 @@ import { useEventListener } from "../hooks/useEventListener";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useRouter } from "next/navigation";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
+import { useInboxStore } from "../store/inboxStore";
 
 function timeAgo(timestamp: number): string {
   const seconds = Math.floor((Date.now() - timestamp) / 1000);
@@ -172,7 +173,8 @@ export function NotificationBell() {
       if (base) { router.push(`${base}${entityId}`); setIsOpen(false); return; }
     }
     if (conversationId) {
-      router.push(`/conversation/${conversationId}`);
+      useInboxStore.setState({ pendingNavigateId: conversationId });
+      router.push('/inbox');
     } else {
       router.push('/inbox');
     }
