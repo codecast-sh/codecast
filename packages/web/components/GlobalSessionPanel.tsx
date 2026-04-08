@@ -463,7 +463,7 @@ export function SessionCard({
       onDragOver={handleFileDragOver}
       onDragLeave={handleFileDragLeave}
       onDrop={handleFileDrop}
-      className={`relative group border-b border-sol-border/30 transition-colors overflow-hidden ${isDragOver ? "ring-1 ring-inset ring-sol-cyan bg-sol-cyan/10" : ""} ${
+      className={`relative group transition-colors overflow-hidden ${isDragOver ? "ring-1 ring-inset ring-sol-cyan bg-sol-cyan/10" : ""} ${
         isActive
           ? "bg-sol-cyan/15 border-l-[3px] border-l-sol-cyan shadow-[inset_0_0_16px_rgba(42,161,152,0.12)]"
           : isWorking
@@ -906,7 +906,7 @@ export function SessionListPanel({
             const visibleSubs = subs.length <= 2 ? subs : subsExpanded ? subs : subs.slice(0, 2);
             const hiddenCount = subs.length - visibleSubs.length;
             return (
-              <React.Fragment key={session._id}>
+              <div key={session._id} className="border-b border-sol-border/30">
                 <SessionCard
                   session={session}
                   isActive={
@@ -969,7 +969,7 @@ export function SessionListPanel({
                     variant={sectionVariant || "default"}
                   />
                 ))}
-              </React.Fragment>
+              </div>
             );
           })}
         </>}
@@ -1054,7 +1054,7 @@ export function SessionListPanel({
             return (
             <div>
               {topLevel.map((session) => (
-                <React.Fragment key={session._id}>
+                <div key={session._id} className="border-b border-sol-border/30">
                   <SessionCard
                     session={session}
                     isActive={session._id === activeSessionId}
@@ -1077,7 +1077,7 @@ export function SessionListPanel({
                       variant="dismissed"
                     />
                   ))}
-                </React.Fragment>
+                </div>
               ))}
             </div>
             );
@@ -1194,10 +1194,13 @@ export const ConversationColumn = memo(function ConversationColumn() {
   }, [s.selectPanelSession]);
 
   const handleExpand = useCallback(() => {
-    if (!s.sidePanelSessionId) return;
-    s.closeSidePanel();
-    router.push(`/conversation/${s.sidePanelSessionId}`);
-  }, [s.sidePanelSessionId, s.closeSidePanel, router]);
+    const sessionId = s.sidePanelSessionId;
+    if (!sessionId) return;
+    // Navigate first — don't clear sidePanelSessionId yet.
+    // DashboardLayout hides ConversationColumn via !isOnConversationPage,
+    // then cleans up panel state once the route lands.
+    router.push(`/conversation/${sessionId}`);
+  }, [s.sidePanelSessionId, router]);
 
   const handleClose = useCallback(() => {
     s.selectPanelSession(null);

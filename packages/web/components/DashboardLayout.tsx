@@ -140,6 +140,15 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
   const showSessionList = s.sidePanelOpen && !isMobile;
   const showConversationColumn = !!s.sidePanelSessionId && !isOnInboxPage && !isOnConversationPage && !isMobile;
 
+  // Clean up stale panel state after navigating to a full conversation page.
+  // The panel is already hidden by !isOnConversationPage — this just prevents
+  // it from reappearing when navigating away later.
+  useWatchEffect(() => {
+    if (isOnConversationPage && s.sidePanelSessionId) {
+      s.closeSidePanel();
+    }
+  }, [isOnConversationPage, s.sidePanelSessionId]);
+
   const handleInboxSessionSelect = useCallback((id: string) => {
     const store = useInboxStore.getState();
     if (store.sessions[id]) {
