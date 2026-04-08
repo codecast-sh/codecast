@@ -165,22 +165,19 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
     const store = useInboxStore.getState();
     store.setPendingForkActivation(forkId);
     store.setActiveForkHighlight(forkId);
-    router.push(`/conversation/${parentId}?branch=${forkId}`);
-  }, [router]);
+    // Conversation pages now render inbox — use store update instead of URL navigation
+    store.setCurrentSession(parentId);
+    if (store.showMySessions) store.setShowMySessions(false);
+  }, []);
 
-  const sessionListActiveId = isOnInboxPage
+  const sessionListActiveId = isOnInboxPage || isOnConversationPage
     ? (s.viewingDismissedId ?? s.currentSessionId)
     : s.sidePanelSessionId;
 
-  const handleConversationPageSessionSelect = useCallback((id: string) => {
-    router.push(`/conversation/${id}`);
-  }, [router]);
-
-  const sessionListOnSelect = isOnInboxPage
+  // Conversation pages now render inbox for owners — use inbox-style selection
+  const sessionListOnSelect = isOnInboxPage || isOnConversationPage
     ? handleInboxSessionSelect
-    : isOnConversationPage
-      ? handleConversationPageSessionSelect
-      : s.selectPanelSession;
+    : s.selectPanelSession;
 
   useMountEffect(() => {
     setIsMobile(window.innerWidth < 768);
@@ -266,21 +263,18 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
       project_path: path,
       git_root: gitRoot || path,
       session_id: sessionId,
-    });
-    store._dispatch("createSession", [{ agent_type: agentType, project_path: path, git_root: gitRoot || path, session_id: sessionId }])
-      .then((convexId: string) => {
-        if (convexId) useInboxStore.getState().resolveSessionId(sessionId, convexId);
-      })
-      .catch(() => {});
+    }).then((convexId: string) => {
+      if (convexId) useInboxStore.getState().resolveSessionId(sessionId, convexId);
+    }).catch(() => {});
 
-    if (isOnInboxPage) {
+    if (isOnInboxPage || isOnConversationPage) {
       store.setCurrentSession(sessionId);
     } else if (store.sidePanelOpen) {
       useInboxStore.setState({ sidePanelSessionId: sessionId });
     } else {
       router.push(`/conversation/${sessionId}?focus=1`);
     }
-  }, [resolveNewSessionContext, router, isOnInboxPage]);
+  }, [resolveNewSessionContext, router, isOnInboxPage, isOnConversationPage]);
 
   const handleQuickCreateIsolated = useCallback(async () => {
     const { path, gitRoot, agentType: rawAgent } = resolveNewSessionContext();
@@ -297,14 +291,14 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
       isolated: true,
     });
     const store = useInboxStore.getState();
-    if (isOnInboxPage) {
+    if (isOnInboxPage || isOnConversationPage) {
       store.setCurrentSession(conversationId as string);
     } else if (store.sidePanelOpen) {
       useInboxStore.setState({ sidePanelSessionId: conversationId as string });
     } else {
       router.push(`/conversation/${conversationId}?focus=1`);
     }
-  }, [resolveNewSessionContext, router, isOnInboxPage, createQuickSession, s.openNewSession]);
+  }, [resolveNewSessionContext, router, isOnInboxPage, isOnConversationPage, createQuickSession, s.openNewSession]);
 
   useGlobalShortcutActions();
   useShortcutContext('desktop', isDesktopApp);

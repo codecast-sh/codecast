@@ -64,18 +64,15 @@ export function CreatePalette() {
         project_path: path,
         git_root: path,
         session_id: sid,
-      });
-      store._dispatch("createSession", [{ agent_type: agentType, project_path: path, git_root: path, session_id: sid }])
-        .then((convexId: string) => {
-          if (convexId) {
-            store.resolveSessionId(sid, convexId);
-            store._dispatch("sendMessage", [convexId, data.message, null, clientId]);
-            if (data.navigate) {
-              window.history.pushState({ inboxId: convexId }, "", `/conversation/${convexId}`);
-            }
+      }).then((convexId: string) => {
+        if (convexId) {
+          store.resolveSessionId(sid, convexId);
+          store._dispatch("sendMessage", [convexId, data.message, null, clientId]);
+          if (data.navigate) {
+            window.history.pushState({ inboxId: convexId }, "", `/conversation/${convexId}`);
           }
-        })
-        .catch((err: any) => console.error("Failed to create session:", err));
+        }
+      }).catch((err: any) => console.error("Failed to create session:", err));
       if (data.navigate) {
         store.setCurrentSession(sid);
       }
@@ -115,12 +112,9 @@ export function CreatePalette() {
       project_path: path,
       git_root: path,
       session_id: sid,
-    });
-    store._dispatch("createSession", [{ agent_type: agentType, project_path: path, git_root: path, session_id: sid }])
-      .then((convexId: string) => {
-        if (convexId) useInboxStore.getState().resolveSessionId(sid, convexId);
-      })
-      .catch(() => {});
+    }).then((convexId: string) => {
+      if (convexId) useInboxStore.getState().resolveSessionId(sid, convexId);
+    }).catch(() => {});
 
     if (initialMessage) {
       store.setDraft(sid, { draft_message: initialMessage });

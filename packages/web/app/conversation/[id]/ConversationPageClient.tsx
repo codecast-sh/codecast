@@ -1,23 +1,18 @@
-import { useMutation, useQuery } from "convex/react";
+import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useState, useCallback } from "react";
-import { useWatchEffect } from "../../../hooks/useWatchEffect";
+import { useMountEffect } from "../../../hooks/useMountEffect";
 import { useShortcutContext, useShortcutAction } from "../../../shortcuts";
 import { DashboardLayout } from "../../../components/DashboardLayout";
 import { ErrorBoundary } from "../../../components/ErrorBoundary";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { ConversationData } from "../../../components/ConversationView";
 import { ConversationDiffLayout } from "../../../components/ConversationDiffLayout";
-import { PlanContextPanel } from "../../../components/PlanContextPanel";
-import { WorkflowContextPanel } from "../../../components/WorkflowContextPanel";
-import { SharePopover } from "../../../components/SharePopover";
-import { toast } from "sonner";
 import { useConversationMessages } from "../../../hooks/useConversationMessages";
 import { useDiffViewerStore } from "../../../store/diffViewerStore";
 import { useInboxStore } from "../../../store/inboxStore";
-import { useForkNavigationStore } from "../../../store/forkNavigationStore";
-import { cleanUserMessage } from "../../../components/GlobalSessionPanel";
+import { QueuePageClient } from "../../inbox/QueuePageClient";
 
 function ConversationLoadingSkeleton() {
   return (
@@ -77,38 +72,24 @@ function ConversationLoadingSkeleton() {
   );
 }
 
-function OwnerView({
+/**
+ * Standalone viewer for non-owner access (shared links, team viewers).
+ * Owner sessions render through QueuePageClient (inbox view) instead.
+ */
+function ViewerView({
   id,
   highlightQuery,
   onClearHighlight,
   targetMessageId,
-  isOwner,
-  autoFocusInput,
 }: {
   id: string;
   highlightQuery?: string;
   onClearHighlight: () => void;
   targetMessageId?: string;
-  isOwner: boolean;
-  autoFocusInput?: boolean;
 }) {
   const toggleDiffPanel = useDiffViewerStore((state) => state.toggleDiffPanel);
 
   const { conversation, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, loadOlder, loadNewer, jumpToStart, jumpToEnd, isSearchingForTarget } = useConversationMessages(id, targetMessageId, highlightQuery);
-  const setCurrentConversation = useInboxStore((s) => s.setCurrentConversation);
-  const sessionLastUserMessage = useInboxStore((s) => s.sessions[conversation?.session_id ?? ""]?.last_user_message);
-
-  useWatchEffect(() => {
-    if (conversation) {
-      setCurrentConversation({
-        conversationId: conversation._id,
-        projectPath: (conversation as any).project_path,
-        gitRoot: (conversation as any).git_root,
-        agentType: conversation.agent_type,
-        source: "sessions",
-      });
-    }
-  }, [conversation?._id, (conversation as any)?.project_path, (conversation as any)?.git_root, conversation?.agent_type, setCurrentConversation]);
 
   const commits = useQuery(api.commits.getCommitsForConversation, {
     conversation_id: id as Id<"conversations">,
@@ -117,72 +98,14 @@ function OwnerView({
     conversation_id: id as Id<"conversations">,
   });
 
-  const setPrivacy = useMutation(api.conversations.setPrivacy);
-  const setTeamVisibility = useMutation(api.conversations.setTeamVisibility);
-  const generateShareLink = useMutation(api.conversations.generateShareLink);
-
-  const [optimisticShare, setOptimisticShare] = useState<{ isPrivate?: boolean; teamVisibility?: string | null } | null>(null);
-
-  useWatchEffect(() => {
-    if (optimisticShare && conversation) {
-      const serverVis = conversation.team_visibility || conversation.effective_team_visibility;
-      const serverMatches =
-        (optimisticShare.isPrivate === undefined || (conversation.is_private !== false) === optimisticShare.isPrivate) &&
-        (optimisticShare.teamVisibility === undefined || serverVis === optimisticShare.teamVisibility);
-      if (serverMatches) setOptimisticShare(null);
-    }
-  }, [conversation?.is_private, conversation?.team_visibility, conversation?.effective_team_visibility, optimisticShare]);
-
-  const effectiveIsPrivate = optimisticShare?.isPrivate !== undefined ? optimisticShare.isPrivate : (conversation?.is_private !== false);
-  const effectiveTeamVisibility = optimisticShare?.teamVisibility !== undefined
-    ? optimisticShare.teamVisibility
-    : (conversation?.team_visibility || conversation?.effective_team_visibility);
-
-  const shareUrl = conversation?.share_token
-    ? `${typeof window !== "undefined" ? window.location.origin : ""}/conversation/${id}`
-    : null;
-
-  const handleSetPrivate = async () => {
-    setOptimisticShare({ isPrivate: true, teamVisibility: "private" });
-    await setPrivacy({ conversation_id: id as Id<"conversations">, is_private: true });
-    toast.success("Made private");
-  };
-
-  const handleSetTeamVisibility = async (mode: "summary" | "full") => {
-    setOptimisticShare({ isPrivate: false, teamVisibility: mode });
-    await setTeamVisibility({ conversation_id: id as Id<"conversations">, team_visibility: mode });
-    toast.success(mode === "full" ? "Sharing full conversation with team" : "Sharing summary with team");
-  };
-
-  const handleGenerateShareLink = async () => {
-    await generateShareLink({ conversation_id: id as Id<"conversations"> });
-    return `${window.location.origin}/conversation/${id}`;
-  };
-
   useShortcutContext('conversation');
   useShortcutAction('conv.toggleDiff', useCallback(() => {
     toggleDiffPanel();
   }, [toggleDiffPanel]));
 
-  const shareControls = conversation && isOwner ? (
-    <SharePopover
-      isPrivate={effectiveIsPrivate}
-      teamVisibility={effectiveTeamVisibility}
-      hasShareToken={!!conversation.share_token}
-      hasTeam={!!(conversation as any).auto_shared}
-      onSetPrivate={handleSetPrivate}
-      onSetTeamVisibility={handleSetTeamVisibility}
-      onGenerateShareLink={handleGenerateShareLink}
-      shareUrl={shareUrl}
-    />
-  ) : null;
-
   if (!conversation) {
     return <ConversationLoadingSkeleton />;
   }
-
-  const activePlanId = (conversation as any)?.active_plan_id;
-  const workflowRunId = (conversation as any)?.workflow_run_id;
 
   return (
     <DashboardLayout>
@@ -200,7 +123,6 @@ function OwnerView({
           conversation={conversation as ConversationData}
           commits={commits || []}
           pullRequests={pullRequests || []}
-          headerExtra={shareControls}
           hasMoreAbove={hasMoreAbove}
           hasMoreBelow={hasMoreBelow}
           isLoadingOlder={isLoadingOlder}
@@ -213,14 +135,7 @@ function OwnerView({
           onClearHighlight={onClearHighlight}
           embedded
           targetMessageId={targetMessageId}
-          isOwner={isOwner}
-          showMessageInput
-          autoFocusInput={autoFocusInput}
-          fallbackStickyContent={cleanUserMessage(sessionLastUserMessage)}
-          subHeaderContent={<>
-            {activePlanId && <PlanContextPanel planId={activePlanId} />}
-            {workflowRunId && <WorkflowContextPanel workflowRunId={workflowRunId} />}
-          </>}
+          isOwner={false}
         />
       </ErrorBoundary>
     </DashboardLayout>
@@ -269,7 +184,7 @@ export default function ConversationPage() {
   const searchParams = useSearchParams();
   const id = params.id as string;
   const highlightQuery = searchParams.get("highlight") || undefined;
-  const [targetMessageId, setTargetMessageId] = useState<string | undefined>(() => {
+  const [targetMessageId] = useState<string | undefined>(() => {
     if (typeof window === "undefined") return undefined;
     const hash = window.location.hash;
     if (hash && hash.startsWith("#msg-")) {
@@ -278,43 +193,45 @@ export default function ConversationPage() {
     return undefined;
   });
 
-  const resetForkNav = useForkNavigationStore((s) => s.reset);
-  const resetForkData = useInboxStore((s) => s.resetForkNav);
-
-  useWatchEffect(() => {
-    resetForkNav();
-    resetForkData();
-    const hash = window.location.hash;
-    if (hash && hash.startsWith("#msg-")) {
-      setTargetMessageId(hash.slice(5));
-    }
-  }, [id]);
-
-  const handleClearHighlight = () => {
-    const url = new URL(window.location.href);
-    url.searchParams.delete("highlight");
-    router.replace(url.pathname + url.search);
-  };
-
   // Local-first: resolve from inbox store instantly when available.
   // Falls back to server resolver for shared links / external navigation.
   const localSession = useInboxStore(s => s.sessions[id] ?? s.dismissedSessions[id]);
   const resolved = useQuery(api.conversations.resolveConversation, { id });
   const effective = resolved ?? (localSession ? { access_level: "owner" as const, conversation_id: localSession._id } : undefined);
 
+  // Transfer URL hash target and highlight to inbox store for owner sessions
+  useMountEffect(() => {
+    if (effective?.access_level !== "owner") return;
+    const pending: Record<string, any> = {};
+    if (targetMessageId) pending.pendingScrollToMessageId = targetMessageId;
+    if (highlightQuery) pending.pendingHighlightQuery = highlightQuery;
+    if (Object.keys(pending).length > 0) {
+      useInboxStore.setState(pending);
+    }
+  });
+
   if (effective === undefined) return <ConversationLoadingSkeleton />;
   if (effective.access_level === "not_found" || !effective.conversation_id) return <NotFoundView />;
   if (effective.access_level === "denied") return <DeniedView />;
 
-  const isOwner = effective.access_level === "owner";
+  // Owner sessions: render through inbox view (no standalone "small input box")
+  if (effective.access_level === "owner") {
+    return <QueuePageClient initialSessionId={effective.conversation_id} />;
+  }
+
+  // Non-owner (shared link / team viewer): standalone read-only view
+  const handleClearHighlight = () => {
+    const url = new URL(window.location.href);
+    url.searchParams.delete("highlight");
+    router.replace(url.pathname + url.search);
+  };
 
   return (
-    <OwnerView
+    <ViewerView
       id={effective.conversation_id}
       highlightQuery={highlightQuery}
       onClearHighlight={handleClearHighlight}
       targetMessageId={targetMessageId}
-      isOwner={isOwner}
     />
   );
 }

@@ -25,7 +25,7 @@ import { toast } from "sonner";
 import { undoableStashSession } from "../../store/undoActions";
 import { cleanUserMessage, formatIdleDuration, getProjectName, SessionListPanel } from "../../components/GlobalSessionPanel";
 
-const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, onSendAndAdvance, onSendAndDismiss, lastUserMessage, sessionError, onBack, targetMessageId }: { sessionId: string; isIdle: boolean; onSendAndAdvance: () => void; onSendAndDismiss?: () => void; lastUserMessage?: string | null; sessionError?: string; onBack?: () => void; targetMessageId?: string }) {
+const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, onSendAndAdvance, onSendAndDismiss, lastUserMessage, sessionError, onBack, targetMessageId, highlightQuery, onClearHighlight }: { sessionId: string; isIdle: boolean; onSendAndAdvance: () => void; onSendAndDismiss?: () => void; lastUserMessage?: string | null; sessionError?: string; onBack?: () => void; targetMessageId?: string; highlightQuery?: string; onClearHighlight?: () => void }) {
   const {
     conversation,
     hasMoreAbove,
@@ -173,6 +173,8 @@ const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, o
           backHref="/inbox"
           onBack={onBack}
           targetMessageId={targetMessageId}
+          highlightQuery={highlightQuery}
+          onClearHighlight={onClearHighlight}
           fallbackStickyContent={isOwnSession ? cleanUserMessage(lastUserMessage) : undefined}
           subHeaderContent={<>
             {activePlanId && <PlanContextPanel planId={activePlanId} />}
@@ -629,6 +631,7 @@ export function QueuePageClient({ initialSessionId }: { initialSessionId?: strin
   // ID we're trying to navigate to that isn't yet in the queue
   const [pendingInjectId, setPendingInjectId] = useState<string | null>(null);
   const [scrollTarget, setScrollTarget] = useState<{ sessionId: string; messageId: string } | null>(null);
+  const [activeHighlight, setActiveHighlight] = useState<string | undefined>(undefined);
 
   const shouldQueryDirect = pendingInjectId && isConvexId(pendingInjectId);
 
@@ -644,6 +647,16 @@ export function QueuePageClient({ initialSessionId }: { initialSessionId?: strin
     if (!paramSessionId || paramSessionId === lastAppliedParamId.current) return;
     if (Object.keys(sessions).length === 0 && !clientStateInitialized) return;
     lastAppliedParamId.current = paramSessionId;
+    // Consume any pending highlight/scroll from the store (set by ConversationPageClient redirect)
+    const store = useInboxStore.getState();
+    if (store.pendingHighlightQuery) {
+      setActiveHighlight(store.pendingHighlightQuery);
+      useInboxStore.setState({ pendingHighlightQuery: null });
+    }
+    if (store.pendingScrollToMessageId) {
+      setScrollTarget({ sessionId: paramSessionId, messageId: store.pendingScrollToMessageId });
+      useInboxStore.setState({ pendingScrollToMessageId: null });
+    }
     if (sessions[paramSessionId]) {
       setCurrentSession(paramSessionId);
       setPendingInjectId(null);
@@ -694,10 +707,13 @@ export function QueuePageClient({ initialSessionId }: { initialSessionId?: strin
   // Handle store-based navigation (from CommandPalette, bookmarks, etc.)
   const pendingNavigateId = useInboxStore((s) => s.pendingNavigateId);
   const pendingScrollToMessageId = useInboxStore((s) => s.pendingScrollToMessageId);
+  const pendingHighlightQuery = useInboxStore((s) => s.pendingHighlightQuery);
   useWatchEffect(() => {
     if (!pendingNavigateId) return;
     const scrollTarget = pendingScrollToMessageId;
-    useInboxStore.setState({ pendingNavigateId: null, pendingScrollToMessageId: null, showMySessions: false });
+    const highlight = pendingHighlightQuery;
+    useInboxStore.setState({ pendingNavigateId: null, pendingScrollToMessageId: null, pendingHighlightQuery: null, showMySessions: false });
+    if (highlight) setActiveHighlight(highlight);
     if (scrollTarget) {
       setScrollTarget({ sessionId: pendingNavigateId, messageId: scrollTarget });
     }
@@ -816,6 +832,16 @@ export function QueuePageClient({ initialSessionId }: { initialSessionId?: strin
     }
   }
 
+  const handleClearHighlight = useCallback(() => {
+    setActiveHighlight(undefined);
+    // Also clean URL param if present
+    const url = new URL(window.location.href);
+    if (url.searchParams.has("highlight")) {
+      url.searchParams.delete("highlight");
+      window.history.replaceState(window.history.state, "", url.pathname + url.search + url.hash);
+    }
+  }, []);
+
   const handleNavigateToConversation = useCallback((conversationId: string) => {
     if (sessions[conversationId]) {
       setCurrentSession(conversationId);
@@ -875,6 +901,8 @@ export function QueuePageClient({ initialSessionId }: { initialSessionId?: strin
             sessionError={currentSession.session_error}
             onBack={handleBack}
             targetMessageId={scrollTarget?.sessionId === currentSession._id ? scrollTarget.messageId : undefined}
+            highlightQuery={activeHighlight}
+            onClearHighlight={handleClearHighlight}
           />
         </ErrorBoundary>
       ) : pendingInjectId ? (
