@@ -3,7 +3,7 @@ import * as path from "path";
 import * as os from "os";
 import { execSync } from "child_process";
 
-const VERSION = "1.1.17";
+const VERSION = "1.1.18";
 const MEMORY_VERSION = "3";
 const TASK_VERSION = "1";
 const WORK_VERSION = "5";
