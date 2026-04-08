@@ -49,7 +49,7 @@ import {
   DropdownMenuSubContent,
 } from "./ui/dropdown-menu";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "./ui/tooltip";
-import { useMutation, useQuery, useConvex } from "convex/react";
+import { useMutation, useQuery, useConvex, useConvexAuth } from "convex/react";
 import { api as _typedApi } from "@codecast/convex/convex/_generated/api";
 const api = _typedApi as any;
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
@@ -916,7 +916,10 @@ function classifyUserMessage(
     if (!stripped || stripped.length < 4 || stripped.startsWith('Read the output file to retrieve the result:') || stripped.startsWith('Full transcript available at:')) return { kind: 'task_notification' };
   }
   if (immediatePrev?.role === 'assistant' && immediatePrev?.tool_calls?.some(tc => tc.name === 'Task' || tc.name === 'Agent')) {
-    return { kind: 'task_prompt' };
+    // Only hide if the message is auto-generated (no human-visible text after stripping system tags).
+    // Genuine user messages typed while an agent is running must render normally.
+    const stripped = stripSystemTags(t).trim();
+    if (!stripped) return { kind: 'task_prompt' };
   }
   if (isCompactionPromptMessage(t)) return { kind: 'compaction_prompt' };
   if (t.startsWith('Read the output file to retrieve the result:') || t.startsWith('Full transcript available at:')) return { kind: 'noise' };
@@ -5420,6 +5423,45 @@ function MessageNavigator({ userMessages, onRewind, onFork, onClose, forkPointMa
         </div>
       </div>
     </div>
+  );
+}
+
+function GuestJoinCTA() {
+  return (
+    <div className="bg-sol-bg border-t border-sol-border/30">
+      <div className="mx-auto max-w-7xl px-2 sm:px-4 py-3 flex items-center justify-between gap-4">
+        <div className="flex items-center gap-2 text-sol-text-dim text-xs">
+          <span className="font-mono font-bold text-sol-text-muted tracking-tight">codecast</span>
+          <span className="opacity-50">|</span>
+          <span>AI session sharing</span>
+        </div>
+        <a
+          href="/signup"
+          className="text-xs font-medium px-4 py-1.5 rounded-full bg-sol-cyan/15 text-sol-cyan border border-sol-cyan/30 hover:bg-sol-cyan/25 transition-colors whitespace-nowrap"
+        >
+          Join to message
+        </a>
+      </div>
+    </div>
+  );
+}
+
+// Isolated component: keeps useConvexAuth() out of ConversationView's render
+// scope so auth-context re-renders don't cascade through the tooltip ref chain.
+function NonOwnerMessageInput({ conversation, onForkReply, autoFocusInput }: {
+  conversation: ConversationData;
+  onForkReply: (content: string) => void;
+  autoFocusInput?: boolean;
+}) {
+  const { isAuthenticated, isLoading } = useConvexAuth();
+  if (!isAuthenticated && !isLoading) return <GuestJoinCTA />;
+  return (
+    <ForkReplyInput
+      userName={conversation.user?.name || conversation.user?.email?.split("@")[0] || "Teammate"}
+      userAvatar={conversation.user?.avatar_url}
+      onForkReply={onForkReply}
+      autoFocusInput={autoFocusInput}
+    />
   );
 }
 
@@ -10025,9 +10067,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       {showMessageInput && conversation && !(pendingPermissions && pendingPermissions.length > 0) && (
         <div ref={messageInputRef} className="relative">
           {!effectiveIsOwner ? (
-            <ForkReplyInput
-              userName={conversation.user?.name || conversation.user?.email?.split("@")[0] || "Teammate"}
-              userAvatar={conversation.user?.avatar_url}
+            <NonOwnerMessageInput
+              conversation={conversation}
               onForkReply={handleForkReply}
               autoFocusInput={autoFocusInput}
             />
@@ -10049,7 +10090,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   ))}
                 </div>
               ) : (
-                conversation.status === "active" && (conversation.message_count ?? 0) === 0 && isOwner && (
+                conversation.status === "active" && (conversation.message_count ?? 0) === 0 && (!conversation.messages || conversation.messages.length === 0) && isOwner && (
                   <div className="absolute left-0 right-0 bottom-full">
                     <AgentSwitcher
                       conversation={conversation}
