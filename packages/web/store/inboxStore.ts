@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { useSyncExternalStore, useRef } from "react";
-import { mutativeMiddleware, action, sync } from "./mutativeMiddleware";
+import { mutativeMiddleware, action, asyncAction, sync } from "./mutativeMiddleware";
 import { applySyncTable, type PendingEntry } from "./syncProtocol";
 import { soundDismiss } from "../lib/sounds";
 import { loadCache, writePatchesToIDB, setHydrating, loadConversationMessages, writeConversationMessages } from "./idbCache";
@@ -458,12 +458,13 @@ interface InboxStoreState {
   pendingNavigateId: string | null;
   renamingSessionId: string | null;
   pendingScrollToMessageId: string | null;
+  pendingHighlightQuery: string | null;
   showMySessions: boolean;
   setShowMySessions: (show: boolean) => void;
   showAllSessions: boolean;
   toggleShowAllSessions: () => void;
   hiddenSessionCount: number;
-  mruStack: string[];
+  _lastViewedAt: Record<string, number>;
 
   messages: Record<string, Message[]>;
   pendingMessages: Record<string, Message[]>;
@@ -673,7 +674,7 @@ function stripImageRef(s: string): string {
 
 // Max conversations to keep messages in the Zustand store (in-memory).
 // Others are evicted but remain in IDB for instant reload.
-const MAX_IN_MEMORY_CONVERSATIONS = 5;
+const MAX_IN_MEMORY_CONVERSATIONS = 50;
 
 function evictInactiveMessages(draft: any, activeConvId: string) {
   const loaded = Object.keys(draft.messages);
@@ -683,18 +684,13 @@ function evictInactiveMessages(draft: any, activeConvId: string) {
   // Never evict conversations actively visible in the UI
   const keep = new Set([activeConvId, currentConvId, draft.currentSessionId, draft.sidePanelSessionId, draft.viewingDismissedId].filter(Boolean));
 
-  // Evict oldest first (by last message timestamp)
+  // Evict least-recently-viewed first
   // Never evict conversations with pending messages — the user just sent something
   // and evicting would make it vanish from the UI
+  const viewedAt = draft._lastViewedAt || {};
   const candidates = loaded
     .filter((id: string) => !keep.has(id) && !(draft.pendingMessages[id]?.length > 0))
-    .sort((a: string, b: string) => {
-      const aMsgs = draft.messages[a];
-      const bMsgs = draft.messages[b];
-      const aTs = Array.isArray(aMsgs) && aMsgs.length > 0 ? aMsgs[aMsgs.length - 1].timestamp : 0;
-      const bTs = Array.isArray(bMsgs) && bMsgs.length > 0 ? bMsgs[bMsgs.length - 1].timestamp : 0;
-      return aTs - bTs;
-    });
+    .sort((a: string, b: string) => (viewedAt[a] ?? 0) - (viewedAt[b] ?? 0));
 
   const toEvict = candidates.slice(0, loaded.length - MAX_IN_MEMORY_CONVERSATIONS);
   for (const id of toEvict) {
@@ -871,12 +867,13 @@ export const useInboxStore = create<InboxStoreState>(
   pendingNavigateId: null,
   renamingSessionId: null,
   pendingScrollToMessageId: null,
+  pendingHighlightQuery: null,
   showMySessions: false,
   setShowMySessions: (show: boolean) => set({ showMySessions: show }),
   showAllSessions: true,
   toggleShowAllSessions: () => set({ showAllSessions: !get().showAllSessions }),
   hiddenSessionCount: 0,
-  mruStack: [],
+  _lastViewedAt: {},
 
   messages: {},
   pendingMessages: {},
@@ -1105,7 +1102,7 @@ export const useInboxStore = create<InboxStoreState>(
 
   sendEscape: action(function (_convId: string) {}),
 
-  createSession: sync(function (this: Draft, opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string }) {
+  createSession: asyncAction(function (this: Draft, opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string }) {
     const sessionId = opts.session_id || (Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2));
     if (!opts.session_id) opts.session_id = sessionId;
     const now = Date.now();
@@ -1381,9 +1378,7 @@ export const useInboxStore = create<InboxStoreState>(
   }),
 
   touchMru: (id: string) => {
-    const { mruStack } = get();
-    const filtered = mruStack.filter((s: string) => s !== id);
-    set({ mruStack: [id, ...filtered] });
+    set({ _lastViewedAt: { ...get()._lastViewedAt, [id]: Date.now() } });
   },
 
   markKilling: action(function (this: Draft, id: string) {
