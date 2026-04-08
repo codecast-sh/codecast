@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { useSyncExternalStore, useRef } from "react";
 import { mutativeMiddleware, action, sync } from "./mutativeMiddleware";
 import { applySyncTable, type PendingEntry } from "./syncProtocol";
 import { soundDismiss } from "../lib/sounds";
@@ -349,8 +350,10 @@ export function isSessionWaitingForInput(
   session: Pick<InboxSession, "_id" | "is_idle" | "agent_status" | "message_count" | "is_pinned">,
   sessionsWithQueuedMessages?: Set<string>,
 ): boolean {
-  // Dead sessions (stopped/crashed) aren't waiting for input — they're gone
-  if (session.agent_status && DEAD_AGENT_STATUSES.has(session.agent_status)) return false;
+  // Dead sessions (stopped/crashed) still need user attention if they have messages
+  if (session.agent_status && DEAD_AGENT_STATUSES.has(session.agent_status)) {
+    return session.message_count > 0 && !session.is_pinned;
+  }
   return isSessionEffectivelyIdle(session) &&
     session.message_count > 0 &&
     !session.is_pinned &&
@@ -420,8 +423,7 @@ export function categorizeSessions(
   const newSessions = sorted.filter((s) => s.message_count === 0 && !s.is_pinned && isTop(s))
     .sort((a, b) => (a.is_connected ? 1 : 0) - (b.is_connected ? 1 : 0));
   const needsInput = sorted.filter((s) => isSessionWaitingForInput(s, sessionsWithQueuedMessages) && isTop(s));
-  const isSessionDead = (s: InboxSession) => s.agent_status != null && DEAD_AGENT_STATUSES.has(s.agent_status);
-  const working = sorted.filter((s) => (!isSessionWaitingForInput(s, sessionsWithQueuedMessages) && !isSessionDead(s) && s.message_count > 0 && !s.is_pinned) && isTop(s));
+  const working = sorted.filter((s) => (!isSessionWaitingForInput(s, sessionsWithQueuedMessages) && s.message_count > 0 && !s.is_pinned) && isTop(s));
 
   return { sorted, pinned, newSessions, needsInput, working, subsByParent, forksByParent };
 }
@@ -678,8 +680,8 @@ function evictInactiveMessages(draft: any, activeConvId: string) {
   if (loaded.length <= MAX_IN_MEMORY_CONVERSATIONS) return;
 
   const currentConvId = draft.currentConversation?.conversationId;
-  // Never evict the conversation we're currently viewing or the one just loaded
-  const keep = new Set([activeConvId, currentConvId].filter(Boolean));
+  // Never evict conversations actively visible in the UI
+  const keep = new Set([activeConvId, currentConvId, draft.currentSessionId, draft.sidePanelSessionId, draft.viewingDismissedId].filter(Boolean));
 
   // Evict oldest first (by last message timestamp)
   // Never evict conversations with pending messages — the user just sent something
@@ -1103,7 +1105,7 @@ export const useInboxStore = create<InboxStoreState>(
 
   sendEscape: action(function (_convId: string) {}),
 
-  createSession: action(function (this: Draft, opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string }) {
+  createSession: sync(function (this: Draft, opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string }) {
     const sessionId = opts.session_id || (Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2));
     if (!opts.session_id) opts.session_id = sessionId;
     const now = Date.now();
@@ -1848,15 +1850,44 @@ export const store = new Proxy({} as StoreProxy, {
   },
 });
 
-// -- Per-conversation IDB hydration (idempotent, no hooks) --
+// =====================
+// TRACKED STORE HOOK
+// =====================
+// Declare what to watch, access the full state.
+// Re-renders only when a dep's return value changes (Object.is).
+//
+//   const s = useTrackedStore([s => s.messages[id], s => s.sessions[id]]);
+//   s.conversations[id]  // full state access
+//   s.getSession(id)     // getters work too
+//
+export function useTrackedStore(deps: Array<(s: InboxStoreState) => any>): InboxStoreState {
+  const prevRef = useRef<{ deps: any[]; state: InboxStoreState } | null>(null);
+  return useSyncExternalStore(useInboxStore.subscribe, () => {
+    const state = useInboxStore.getState();
+    const next = deps.map(d => d(state));
+    const prev = prevRef.current;
+    if (prev && next.length === prev.deps.length &&
+        next.every((v, i) => Object.is(v, prev.deps[i]))) {
+      return prev.state;
+    }
+    prevRef.current = { deps: next, state };
+    return state;
+  });
+}
 
-const _idbHydratedSet = new Set<string>();
+// -- Per-conversation IDB hydration (idempotent, no hooks) --
+// Tracks in-flight hydrations (not "ever hydrated") so evicted conversations
+// can be re-hydrated from IDB when the user switches back to them.
+const _idbHydratingSet = new Set<string>();
 export function ensureHydrated(convId: string) {
-  if (_idbHydratedSet.has(convId)) return;
-  _idbHydratedSet.add(convId);
   const store = useInboxStore.getState();
+  // Already in memory — nothing to hydrate
   if (store.messages[convId]?.length > 0) return;
+  // In-flight hydration — don't double-load
+  if (_idbHydratingSet.has(convId)) return;
+  _idbHydratingSet.add(convId);
   loadConversationMessages(convId).then((cached) => {
+    _idbHydratingSet.delete(convId);
     if (!cached || cached.messages.length === 0) return;
     const current = useInboxStore.getState().messages[convId];
     if (current?.length > 0) return;
