@@ -725,16 +725,14 @@ function log(message: string, level: LogLevel = "info", metadata?: RemoteLog["me
   const line = `[${timestamp}] ${levelTag}${message}\n`;
   fs.appendFileSync(LOG_FILE, line);
 
-  if (level === "warn" || level === "error") {
-    remoteLogQueue.push({
-      level,
-      message: message.slice(0, 2000),
-      metadata,
-      timestamp: Date.now(),
-    });
-    if (remoteLogQueue.length > MAX_LOG_QUEUE_SIZE) {
-      remoteLogQueue.shift();
-    }
+  remoteLogQueue.push({
+    level,
+    message: message.slice(0, 2000),
+    metadata,
+    timestamp: Date.now(),
+  });
+  if (remoteLogQueue.length > MAX_LOG_QUEUE_SIZE) {
+    remoteLogQueue.shift();
   }
 }
 
@@ -8504,7 +8502,10 @@ async function main(): Promise<void> {
     log("⚠️  Sync is PAUSED via environment variable (CODE_CHAT_SYNC_PAUSED or CODECAST_PAUSED)");
   }
 
-  saveDaemonState({ connected: false, runtimeVersion: getVersion() });
+  saveDaemonState({ connected: false, runtimeVersion: getVersion(), lastHeartbeatTick: Date.now() });
+
+  // Start heartbeat immediately so the daemon doesn't appear "blocked" during slow init
+  const eventLoopMonitorInterval = startEventLoopMonitor();
 
   const { config, convexUrl } = await waitForConfig();
   activeConfig = config;
