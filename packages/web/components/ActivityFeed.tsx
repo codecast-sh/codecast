@@ -1,6 +1,6 @@
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import React, { useMemo, useState, useCallback } from "react";
+import React, { useMemo, useState, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { LoadingSkeleton } from "./LoadingSkeleton";
 import { EmptyState } from "./EmptyState";
@@ -832,6 +832,9 @@ export function ActivityFeed({ mode, teamId, compact, directoryFilter, onNavigat
   const [projectFilter, setProjectFilter] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<"feed" | "raw">("raw");
   const [digestScope, setDigestScope] = useState<DigestScope>("day");
+  const FEED_PAGE_SIZE = 15;
+  const [maxFeedItems, setMaxFeedItems] = useState(FEED_PAGE_SIZE);
+  const feedSentinelRef = useRef<HTMLDivElement>(null);
 
   const tz = useMemo(() => Intl.DateTimeFormat().resolvedOptions().timeZone, []);
 
@@ -913,6 +916,43 @@ export function ActivityFeed({ mode, teamId, compact, directoryFilter, onNavigat
     return map;
   }, [filteredFeed, tz]);
 
+  // Paginate feed items across day sections
+  const { visibleDays, hasMoreFeed } = useMemo(() => {
+    const result: Array<{ day: any; items: any[] }> = [];
+    let count = 0;
+    for (const day of filteredDaySummaries) {
+      if (count >= maxFeedItems) break;
+      const dayItems = feedByDay.get(day.date) || [];
+      const remaining = maxFeedItems - count;
+      const visible = dayItems.slice(0, remaining);
+      count += visible.length;
+      if (visible.length > 0) result.push({ day, items: visible });
+    }
+    return { visibleDays: result, hasMoreFeed: count < filteredFeed.length };
+  }, [filteredDaySummaries, feedByDay, maxFeedItems, filteredFeed.length]);
+
+  // IntersectionObserver to load more feed items on scroll
+  useWatchEffect(() => {
+    if (!hasMoreFeed) return;
+    const el = feedSentinelRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          setMaxFeedItems(c => c + FEED_PAGE_SIZE);
+        }
+      },
+      { rootMargin: "400px" }
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [hasMoreFeed]);
+
+  // Reset feed pagination when filters change
+  useWatchEffect(() => {
+    setMaxFeedItems(FEED_PAGE_SIZE);
+  }, [actorFilter, projectFilter, directoryFilter]);
+
   if (digest === undefined) return <LoadingSkeleton />;
 
   if (viewMode === "raw") {
@@ -967,11 +1007,11 @@ export function ActivityFeed({ mode, teamId, compact, directoryFilter, onNavigat
         <EmptyState title="No sessions" description={actorFilter ? "No sessions for this person in this window." : "No sessions found."} />
       ) : (
         <div className={compact ? "space-y-1" : "space-y-2"}>
-          {filteredDaySummaries.map((day: any) => (
+          {visibleDays.map(({ day, items }) => (
             <DaySection
               key={day.date}
               day={day}
-              items={feedByDay.get(day.date) || []}
+              items={items}
               compact={compact}
               showActor={mode === "team"}
               onNavigate={onNavigate}
@@ -980,6 +1020,13 @@ export function ActivityFeed({ mode, teamId, compact, directoryFilter, onNavigat
               onProjectFilter={setProjectFilter}
             />
           ))}
+          {hasMoreFeed && (
+            <div ref={feedSentinelRef} className="flex justify-center py-3">
+              <span className="text-[10px] text-sol-text-dim/30 tabular-nums">
+                {visibleDays.reduce((s, d) => s + d.items.length, 0)} of {filteredFeed.length} sessions
+              </span>
+            </div>
+          )}
         </div>
       )}
     </div>
