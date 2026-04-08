@@ -1909,6 +1909,10 @@ If blocked, say so explicitly:
 - **NEEDS_CONTEXT: <what>** — escalates to the user
 - **DONE_WITH_CONCERNS: <concern>** — completed but flagged for review
 
+### Referencing sessions
+
+When you reference another session in your messages, include its short ID (e.g. \`jx7c6zk\`). These render as interactive cards in the UI showing title, status, message count, and project. Find session IDs via \`cast search\`, \`cast feed\`, or \`cast context\`. Use bare IDs for inline references or \`@[Session Title jx7c6zk]\` for explicit mentions.
+
 ### After compaction
 
 When your context gets compacted, re-read your task or plan context (\`cast task context <id>\` / \`cast plan show <id>\`) to reground yourself. Don't rely on memory of earlier conversation alone.
@@ -9275,6 +9279,26 @@ doc
     }
   });
 
+doc
+  .command("share")
+  .description("Generate a public share link for a document")
+  .argument("<id>", "Document ID")
+  .action(async (id: string) => {
+    const result = await cliPost("/cli/docs/share", { id });
+    if (result?.error) { console.error(result.error); process.exit(1); }
+    const url = `${WEB_URL}/share/doc/${result.share_token}`;
+    console.log(`${c.green}ok${c.reset} ${url}`);
+  });
+
+doc
+  .command("unshare")
+  .description("Remove the public share link for a document")
+  .argument("<id>", "Document ID")
+  .action(async (id: string) => {
+    await cliPost("/cli/docs/unshare", { id });
+    console.log(`${c.green}ok${c.reset} Share link removed`);
+  });
+
 // ── Plans ─────────────────────────────────────────────────
 
 const plan = program
@@ -9569,6 +9593,26 @@ plan
     if (options.author) body.author = options.author;
     await cliPost("/cli/plans/comment", body);
     console.log(`${c.green}ok${c.reset} Comment added to ${c.cyan}${planId}${c.reset}`);
+  });
+
+plan
+  .command("share")
+  .description("Generate a public share link for a plan")
+  .argument("<plan_id>", "Plan short ID")
+  .action(async (planId: string) => {
+    const result = await cliPost("/cli/plans/share", { short_id: planId });
+    if (result?.error) { console.error(result.error); process.exit(1); }
+    const url = `${WEB_URL}/share/plan/${result.share_token}`;
+    console.log(`${c.green}ok${c.reset} ${url}`);
+  });
+
+plan
+  .command("unshare")
+  .description("Remove the public share link for a plan")
+  .argument("<plan_id>", "Plan short ID")
+  .action(async (planId: string) => {
+    await cliPost("/cli/plans/unshare", { short_id: planId });
+    console.log(`${c.green}ok${c.reset} Share link removed`);
   });
 
 // Legacy aliases
