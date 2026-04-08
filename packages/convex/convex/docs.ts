@@ -1593,3 +1593,54 @@ export const webPromoteToPlan = mutation({
     return { plan_id: planId, short_id };
   },
 });
+
+// ── Public Sharing ─────────────────────────────────────────
+
+export const generateShareLink = mutation({
+  args: { id: v.id("docs") },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Unauthorized");
+    const doc = await ctx.db.get(args.id);
+    if (!doc || doc.user_id !== userId) throw new Error("Doc not found");
+    if (doc.share_token) return { share_token: doc.share_token };
+    const share_token = crypto.randomUUID();
+    await ctx.db.patch(args.id, { share_token });
+    return { share_token };
+  },
+});
+
+export const unshare = mutation({
+  args: { id: v.id("docs") },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Unauthorized");
+    const doc = await ctx.db.get(args.id);
+    if (!doc || doc.user_id !== userId) throw new Error("Doc not found");
+    await ctx.db.patch(args.id, { share_token: undefined });
+    return { success: true };
+  },
+});
+
+export const getShared = query({
+  args: { share_token: v.string() },
+  handler: async (ctx, args) => {
+    const doc = await ctx.db
+      .query("docs")
+      .withIndex("by_share_token", (q) => q.eq("share_token", args.share_token))
+      .first();
+    if (!doc) return null;
+    const user = await ctx.db.get(doc.user_id);
+    return {
+      _id: doc._id,
+      title: doc.title,
+      content: doc.content,
+      doc_type: doc.doc_type,
+      labels: doc.labels,
+      entries: doc.entries,
+      created_at: doc.created_at,
+      updated_at: doc.updated_at,
+      user: user ? { name: user.name, image: user.image } : null,
+    };
+  },
+});

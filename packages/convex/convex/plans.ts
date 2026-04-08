@@ -1509,3 +1509,91 @@ export const saveRetro = mutation({
     return { success: true };
   },
 });
+
+// ── Public Sharing ─────────────────────────────────────────
+
+export const generateShareLink = mutation({
+  args: { short_id: v.string() },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Unauthorized");
+    const plan = await ctx.db
+      .query("plans")
+      .withIndex("by_short_id", (q) => q.eq("short_id", args.short_id))
+      .first();
+    if (!plan) throw new Error("Plan not found");
+    if (!(await canAccessPlan(ctx, userId, plan))) throw new Error("Plan not found");
+    if (plan.share_token) return { share_token: plan.share_token };
+    const share_token = crypto.randomUUID();
+    await ctx.db.patch(plan._id, { share_token });
+    return { share_token };
+  },
+});
+
+export const unsharePlan = mutation({
+  args: { short_id: v.string() },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Unauthorized");
+    const plan = await ctx.db
+      .query("plans")
+      .withIndex("by_short_id", (q) => q.eq("short_id", args.short_id))
+      .first();
+    if (!plan) throw new Error("Plan not found");
+    if (!(await canAccessPlan(ctx, userId, plan))) throw new Error("Plan not found");
+    await ctx.db.patch(plan._id, { share_token: undefined });
+    return { success: true };
+  },
+});
+
+export const getShared = query({
+  args: { share_token: v.string() },
+  handler: async (ctx, args) => {
+    const plan = await ctx.db
+      .query("plans")
+      .withIndex("by_share_token", (q) => q.eq("share_token", args.share_token))
+      .first();
+    if (!plan) return null;
+
+    const user = await ctx.db.get(plan.user_id);
+
+    const tasks = [];
+    if (plan.task_ids) {
+      for (const tid of plan.task_ids) {
+        const task = await ctx.db.get(tid);
+        if (task) tasks.push({
+          _id: task._id,
+          title: task.title,
+          status: task.status,
+          priority: (task as any).priority,
+          short_id: (task as any).short_id,
+        });
+      }
+    }
+
+    let doc_content: string | undefined;
+    if (plan.doc_id) {
+      const doc = await ctx.db.get(plan.doc_id);
+      if (doc) doc_content = doc.content;
+    }
+
+    const comments = mergePlanEntries(plan);
+
+    return {
+      _id: plan._id,
+      short_id: plan.short_id,
+      title: plan.title,
+      goal: plan.goal,
+      status: plan.status,
+      acceptance_criteria: plan.acceptance_criteria,
+      progress: plan.progress,
+      drive_state: plan.drive_state,
+      created_at: plan.created_at,
+      updated_at: plan.updated_at,
+      tasks,
+      doc_content,
+      comments,
+      user: user ? { name: user.name, image: user.image } : null,
+    };
+  },
+});

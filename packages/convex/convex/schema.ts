@@ -1060,10 +1060,14 @@ export default defineSchema({
     workflow_id: v.optional(v.id("workflows")),
     workflow_run_id: v.optional(v.id("workflow_runs")),
 
+    // Public sharing
+    share_token: v.optional(v.string()),
+
     created_at: v.number(),
     updated_at: v.number(),
   })
     .index("by_short_id", ["short_id"])
+    .index("by_share_token", ["share_token"])
     .index("by_user_id", ["user_id"])
     .index("by_user_status", ["user_id", "status"])
     .index("by_team_id", ["team_id"])
@@ -1327,6 +1331,9 @@ export default defineSchema({
 
     cli_edited_at: v.optional(v.number()),
 
+    // Public sharing
+    share_token: v.optional(v.string()),
+
     // Unified comment/entry timeline (symmetric with plans and tasks)
     entries: v.optional(v.array(v.object({
       type: v.union(
@@ -1355,6 +1362,7 @@ export default defineSchema({
     .index("by_team_id", ["team_id"])
     .index("by_source_file", ["source_file"])
     .index("by_conversation_id", ["conversation_id"])
+    .index("by_share_token", ["share_token"])
     .searchIndex("search_docs", {
       searchField: "title",
       filterFields: ["user_id", "doc_type", "project_id"],
