@@ -1716,6 +1716,17 @@ async function executeRemoteCommand(
           } catch {}
         }
 
+        // Clear all in-memory state that could block a subsequent resume.
+        // A kill is a clean slate — stale fatal reasons, circuit breakers,
+        // delivery failures, and repair cooldowns must not persist.
+        if (sessionId) {
+          resumeFatalReasons.delete(sessionId);
+          sessionDeliveryFailures.delete(sessionId);
+          repairAttempts.delete(sessionId);
+          conversationResumeFailures.delete(conversationId);
+          if (conversationId) repairAttempts.delete(conversationId);
+        }
+
         // Reset any injected-but-unacked messages back to pending so they
         // get re-delivered when the session is resumed
         if (syncServiceRef) {
@@ -1829,11 +1840,12 @@ async function executeRemoteCommand(
             }
           }
 
-          const resumeFailureReason = resumeFatalReasons.get(sessionId) ?? null;
-          if (!reconstituted && !shouldStartBlankSessionAfterResumeFailure(resumeFailureReason)) {
-            error = `Failed to resume session ${sessionId.slice(0, 8)} — stale session id could not be rematerialized yet`;
-            log(`[REMOTE] Skipping blank-session fallback for ${sessionId.slice(0, 8)} (reason=${resumeFailureReason})`);
-            break;
+          // resume_session is only triggered by explicit user actions (kill & restart,
+          // repair). Always fall through to blank session — the user is asking us to restart,
+          // not silently give up. Clear any stale fatal reason so it doesn't block future
+          // auto-resume attempts either.
+          if (!reconstituted) {
+            resumeFatalReasons.delete(sessionId);
           }
 
           if (!reconstituted) {
