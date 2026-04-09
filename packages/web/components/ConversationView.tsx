@@ -23,7 +23,7 @@ import { CodeBlock } from "./CodeBlock";
 import { useDiffViewerStore } from "../store/diffViewerStore";
 
 function copyMessageLink(conversationId: string | undefined, messageId: string) {
-  const url = `${window.location.origin}/conversation/${conversationId}#msg-${messageId}`;
+  const url = `${shareOrigin()}/conversation/${conversationId}#msg-${messageId}`;
   setTimeout(() => { copyToClipboard(url).then(() => toast.success("Link copied!")).catch(() => toast.error("Failed to copy link")); });
 }
 
@@ -55,7 +55,7 @@ const api = _typedApi as any;
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { CommentPanel } from "./CommentPanel";
 import { PermissionStack } from "./PermissionCard";
-import { copyToClipboard } from "../lib/utils";
+import { copyToClipboard, shareOrigin } from "../lib/utils";
 import { MarkdownRenderer, isMarkdownFile, isPlanFile, CollapsibleImage } from "./tools/MarkdownRenderer";
 import { useImageGallery, ImageGalleryProvider } from "./ImageGallery";
 import { MessageSharePopover } from "./MessageSharePopover";
@@ -7378,7 +7378,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         message_ids: sortedIds as Id<"messages">[],
       });
 
-      const url = `${window.location.origin}/share/message/${token}`;
+      const url = `${shareOrigin()}/share/message/${token}`;
       await copyToClipboard(url);
       toast.success("Share link copied!");
       setShareSelectionMode(false);
@@ -8328,7 +8328,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   }, [isOwner, forkSelectionIdx, toggleTreePanel, conversation?.fork_children, conversation?.forked_from]));
 
   useShortcutAction('conv.copyLink', useCallback(() => {
-    const url = `${window.location.origin}/conversation/${conversation?._id}`;
+    const url = `${shareOrigin()}/conversation/${conversation?._id}`;
     copyToClipboard(url).then(() => toast.success("Link copied!"));
   }, [conversation?._id]));
 

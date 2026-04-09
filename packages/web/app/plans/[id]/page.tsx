@@ -4,6 +4,7 @@ import { useParams } from "next/navigation";
 import { useMutation, useQuery } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useMountEffect } from "../../../hooks/useMountEffect";
+import { shareOrigin } from "../../../lib/utils";
 import { AuthGuard } from "../../../components/AuthGuard";
 import { DashboardLayout } from "../../../components/DashboardLayout";
 import { DocumentDetailLayout } from "../../../components/DocumentDetailLayout";
@@ -119,7 +120,7 @@ export default function PlanDetailPage() {
     if (!plan) return;
     try {
       const result = await generateShareLink({ short_id: plan.short_id });
-      const url = `${window.location.origin}/share/plan/${result.share_token}`;
+      const url = `${shareOrigin()}/share/plan/${result.share_token}`;
       await navigator.clipboard.writeText(url);
       setShareCopied(true);
       toast.success("Share link copied to clipboard");

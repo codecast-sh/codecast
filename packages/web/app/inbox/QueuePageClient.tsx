@@ -12,6 +12,7 @@ import { KeyCap } from "../../components/KeyboardShortcutsHelp";
 import { ErrorBoundary } from "../../components/ErrorBoundary";
 import { ConversationDiffLayout } from "../../components/ConversationDiffLayout";
 import { ConversationData } from "../../components/ConversationView";
+import { shareOrigin } from "../../lib/utils";
 import { useConversationMessages } from "../../hooks/useConversationMessages";
 import { useInboxStore, InboxSession, getSessionRenderKey, isConvexId, sortSessions, isInterruptControlMessage, ensureHydrated } from "../../store/inboxStore";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "../../components/ui/tooltip";
@@ -100,7 +101,7 @@ const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, o
   const convId = conversation._id as Id<"conversations">;
   const isOwnSession = (conversation as any).is_own !== false;
   const shareUrl = conversation.share_token
-    ? `${typeof window !== "undefined" ? window.location.origin : ""}/conversation/${convId}`
+    ? `${shareOrigin()}/conversation/${convId}`
     : null;
   const shareControls = isOwnSession ? (
     <SharePopover
@@ -110,7 +111,7 @@ const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, o
       hasTeam={!!(conversation as any).auto_shared}
       onSetPrivate={async () => { await setPrivacy({ conversation_id: convId, is_private: true }); toast.success("Made private"); }}
       onSetTeamVisibility={async (mode) => { await setTeamVisibility({ conversation_id: convId, team_visibility: mode }); toast.success(mode === "full" ? "Sharing full conversation with team" : "Sharing summary with team"); }}
-      onGenerateShareLink={async () => { await generateShareLink({ conversation_id: convId }); return `${window.location.origin}/conversation/${convId}`; }}
+      onGenerateShareLink={async () => { await generateShareLink({ conversation_id: convId }); return `${shareOrigin()}/conversation/${convId}`; }}
       shareUrl={shareUrl}
     />
   ) : null;
