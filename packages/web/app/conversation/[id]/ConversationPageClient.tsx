@@ -211,8 +211,8 @@ export default function ConversationPage() {
   });
 
   if (effective === undefined) return <ConversationLoadingSkeleton />;
-  if (effective.access_level === "not_found" || !effective.conversation_id) return <NotFoundView />;
   if (effective.access_level === "denied") return <DeniedView />;
+  if (effective.access_level === "not_found" || !effective.conversation_id) return <NotFoundView />;
 
   // Owner sessions: render through inbox view (no standalone "small input box")
   if (effective.access_level === "owner") {
