@@ -6562,7 +6562,12 @@ program
     const snippets = [
       {
         name: "Memory",
-        desc: "Search and learn from past conversations",
+        desc: "Cross-session recall",
+        detail:
+          "Adds `cast search`, `cast context`, and `cast feed` commands to your agent config.\n" +
+          "  Agents use these to find prior conversations relevant to their current task.\n" +
+          "  Nothing runs automatically — agents call these when they need context.\n" +
+          "  Writes to: CLAUDE.md (adds a ## Memory section with command reference)",
         enabledKey: "memory_enabled" as const,
         versionKey: "memory_version" as const,
         getVersion: getMemoryVersion,
@@ -6571,7 +6576,12 @@ program
       },
       {
         name: "Tasks & Plans",
-        desc: "Track work items, plans, and docs",
+        desc: "Work tracking for agents",
+        detail:
+          "Gives agents `cast task` and `cast plan` commands to track what they're working on.\n" +
+          "  Agents create tasks, log progress, and mark work done — you see it on the dashboard.\n" +
+          "  Agents only use this when doing real work (not for questions or quick lookups).\n" +
+          "  Writes to: CLAUDE.md (adds a ## Tasks & Plans section with guidelines and commands)",
         enabledKey: "work_enabled" as const,
         versionKey: "work_version" as const,
         getVersion: getWorkVersion,
@@ -6580,7 +6590,12 @@ program
       },
       {
         name: "Scheduling",
-        desc: "Schedule follow-up work that runs autonomously",
+        desc: "Delayed and recurring agent sessions",
+        detail:
+          "Adds `cast schedule` commands so agents can queue follow-up work.\n" +
+          "  Example: agent finishes a PR and schedules \"check CI in 30m\" — a new session\n" +
+          "  spawns later to verify. Agents only schedule when they have a reason to.\n" +
+          "  Writes to: CLAUDE.md (adds a ## Async Tasks section with schedule commands)",
         enabledKey: "task_enabled" as const,
         versionKey: "task_version" as const,
         getVersion: getTaskVersion,
@@ -6589,7 +6604,12 @@ program
       },
       {
         name: "Workflows",
-        desc: "DOT-based execution graphs with approval gates",
+        desc: "Execution graphs with approval gates",
+        detail:
+          "Adds `cast workflow` commands for running .cast files — directed graphs in DOT syntax.\n" +
+          "  Each node is an agent session, shell command, or human approval gate.\n" +
+          "  Workflows only run when you explicitly invoke them (cast workflow run <file>).\n" +
+          "  Writes to: CLAUDE.md (adds a ## Workflows section with syntax reference)",
         enabledKey: "workflow_enabled" as const,
         versionKey: "workflow_version" as const,
         getVersion: getWorkflowVersion,
@@ -6598,7 +6618,18 @@ program
       },
       {
         name: "Orchestration",
-        desc: "Multi-agent plan execution — agents decompose, implement, review, and critique your plans",
+        desc: "Multi-agent plan execution",
+        detail:
+          "Installs a /orchestrate skill and three agent types (implementer, reviewer, critic).\n" +
+          "  Only activates when you say \"orchestrate this plan\" or invoke /orchestrate.\n" +
+          "  When active, your agent acts as a conductor:\n" +
+          "    — Decomposes the plan into tasks by reading your codebase\n" +
+          "    — Spawns implementer agents in isolated git worktrees (parallel)\n" +
+          "    — Spawns reviewer agents to check each implementation\n" +
+          "    — Runs critic agents for a final integration sweep\n" +
+          "  Also installs two lifecycle hooks (SubagentStop → update task status,\n" +
+          "  PostCompact → re-inject plan context). These only fire during orchestration.\n" +
+          "  Writes to: ~/.claude/skills/, ~/.claude/agents/, ~/.claude/settings.json (hooks)",
         enabledKey: "orch_enabled" as const,
         versionKey: "orch_version" as const,
         getVersion: getWorkVersion,
@@ -6636,8 +6667,13 @@ program
         continue;
       }
 
+      if (s.detail) {
+        console.log(`\n  ${c.bold}${s.name}${c.reset} — ${s.desc}`);
+        console.log(fmt.muted(`  ${s.detail}`));
+      }
+
       const answer = await confirm({
-        message: `${s.name} [${status}] — ${s.desc}`,
+        message: s.detail ? `Enable ${s.name}? [${status}]` : `${s.name} [${status}] — ${s.desc}`,
         default: enabled !== false,
       });
 
