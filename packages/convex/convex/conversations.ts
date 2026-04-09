@@ -1359,8 +1359,9 @@ export const getConversationToolStats = query({
     }
 
     let latestTodos: any[] | null = null;
-    let taskTotal = 0;
-    let taskCompleted = 0;
+    // Collect creates and updates separately since we iterate newest-first
+    const taskCreates: { subject: string }[] = [];
+    const taskStatusMap = new Map<string, string>(); // taskId -> latest status (first seen = newest)
 
     for await (const msg of ctx.db
       .query("messages")
@@ -1376,24 +1377,48 @@ export const getConversationToolStats = query({
             if (input.todos) latestTodos = input.todos;
           } catch {}
         }
-        if (tc.name === "TaskCreate") taskTotal++;
+        if (tc.name === "TaskCreate") {
+          try {
+            const inp = JSON.parse(tc.input);
+            taskCreates.push({ subject: inp.subject || inp.title || inp.description || "" });
+          } catch {}
+        }
         if (tc.name === "TaskUpdate") {
           try {
             const inp = JSON.parse(tc.input);
-            if (inp.status === "completed") taskCompleted++;
+            if (inp.taskId && inp.status && !taskStatusMap.has(inp.taskId)) {
+              taskStatusMap.set(inp.taskId, inp.status);
+            }
           } catch {}
         }
       }
     }
 
-    // Merge todos and tasks into unified stats
-    const todoTotal = latestTodos?.length ?? 0;
-    const todoCompleted = latestTodos?.filter((t: any) => t.status === "completed").length ?? 0;
-    const total = todoTotal + taskTotal;
-    const completed = todoCompleted + taskCompleted;
+    // Reverse creates to get chronological order (IDs are assigned 1, 2, 3, ...)
+    taskCreates.reverse();
+    const normalizeStatus = (s: string) => s === "completed" ? "done" : s === "in_progress" ? "in_progress" : "open";
+    const taskItems = taskCreates
+      .map((tc, i) => {
+        const id = String(i + 1);
+        const rawStatus = taskStatusMap.get(id) ?? "pending";
+        return { id, content: tc.subject, status: normalizeStatus(rawStatus) };
+      })
+      .filter(t => taskStatusMap.get(t.id) !== "deleted");
+
+    // Normalize todo items and merge with task items
+    const todoItems = (latestTodos ?? []).map((t: any, i: number) => ({
+      id: t.id || `todo-${i}`,
+      content: t.content || t.task || t.title || "",
+      status: normalizeStatus(t.status ?? "pending"),
+    }));
+    const items = [...todoItems, ...taskItems];
+    const total = items.length;
+    const done = items.filter(i => i.status === "done").length;
+    const in_progress = items.filter(i => i.status === "in_progress").length;
+    const open = total - done - in_progress;
 
     return {
-      taskStats: total > 0 ? { total, completed } : null,
+      taskStats: total > 0 ? { total, done, in_progress, open, items } : null,
     };
   },
 });
