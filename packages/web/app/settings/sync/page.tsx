@@ -3,12 +3,10 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { Card } from "../../../components/ui/card";
 import { Input } from "../../../components/ui/input";
 import { Button } from "../../../components/ui/button";
-import { Label } from "../../../components/ui/label";
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { GitBranch, Folder, Check, Search, Eye, EyeOff, ChevronDown, AlertTriangle } from "lucide-react";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
-import { useRouter, useSearchParams } from "next/navigation";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -24,6 +22,7 @@ import {
   DialogFooter,
 } from "../../../components/ui/dialog";
 import { TeamIcon } from "../../../components/TeamIcon";
+import { TeamSetupDialog } from "../../../components/TeamSetupDialog";
 
 type TeamVisibility = "hidden" | "activity" | "summary" | "full";
 type UserTeam = {
@@ -51,254 +50,6 @@ type SyncProject = {
   team_id?: Id<"teams"> | null;
   auto_share?: boolean;
 };
-type SuggestedProject = {
-  path: string;
-  git_remote_url: string | null;
-  session_count: number;
-  last_active: number;
-  matched_member_count: number;
-  match_type: "github" | "repo_name";
-  match_reason: string;
-  current_team_id: Id<"teams"> | null;
-};
-type TeamProjectSuggestions = {
-  team_id: Id<"teams">;
-  team_name: string;
-  current_visibility: TeamVisibility;
-  suggestions: SuggestedProject[];
-};
-
-function TeamSetupDialog({
-  teams,
-  mappingsByPath,
-  updateDirectoryMapping,
-  setTeamVisibility,
-  getProjectName,
-  getRelativeTime,
-}: {
-  teams: UserTeam[];
-  mappingsByPath: Map<string, DirectoryMapping>;
-  updateDirectoryMapping: ReturnType<typeof useMutation<typeof api.users.updateDirectoryTeamMapping>>;
-  setTeamVisibility: ReturnType<typeof useMutation<typeof api.teams.setTeamVisibility>>;
-  getProjectName: (path: string) => string;
-  getRelativeTime: (timestamp: number) => string;
-}) {
-  const router = useRouter();
-  const searchParams = useSearchParams();
-  const setupTeamIdParam = searchParams.get("teamId");
-  const setupTeamId = (setupTeamIdParam as Id<"teams"> | null) || null;
-  const teamSetupRequested = searchParams.get("teamSetup") === "1";
-  const teamProjectSuggestions = useQuery(
-    api.users.getSuggestedTeamProjects,
-    setupTeamId ? { team_id: setupTeamId } : "skip",
-  ) as TeamProjectSuggestions | null | undefined;
-  const [teamSetupOpen, setTeamSetupOpen] = useState(false);
-  const [teamSetupSelection, setTeamSetupSelection] = useState<Record<string, boolean>>({});
-  const [teamSetupVisibility, setTeamSetupVisibility] = useState<TeamVisibility>("summary");
-  const [isApplyingTeamSetup, setIsApplyingTeamSetup] = useState(false);
-
-  useEffect(() => {
-    if (teamSetupRequested && setupTeamId) {
-      setTeamSetupOpen(true);
-    }
-  }, [teamSetupRequested, setupTeamId]);
-
-  useEffect(() => {
-    if (!teamProjectSuggestions) return;
-    setTeamSetupVisibility(teamProjectSuggestions.current_visibility || "summary");
-    setTeamSetupSelection(
-      Object.fromEntries(teamProjectSuggestions.suggestions.map((project) => [project.path, true]))
-    );
-  }, [
-    teamProjectSuggestions?.team_id,
-    teamProjectSuggestions?.current_visibility,
-    teamProjectSuggestions?.suggestions.map((project) => project.path).join("|"),
-  ]);
-
-  const setupTeam = teams.find((team) => team._id === (teamProjectSuggestions?.team_id || setupTeamId)) || null;
-
-  const closeTeamSetup = () => {
-    setTeamSetupOpen(false);
-    if (!teamSetupRequested) return;
-    const nextParams = new URLSearchParams(searchParams.toString());
-    nextParams.delete("teamSetup");
-    nextParams.delete("teamId");
-    const nextQuery = nextParams.toString();
-    router.replace(nextQuery ? `/settings/sync?${nextQuery}` : "/settings/sync");
-  };
-
-  const toggleTeamSetupProject = (path: string) => {
-    setTeamSetupSelection((current) => ({
-      ...current,
-      [path]: !current[path],
-    }));
-  };
-
-  const handleApplyTeamSetup = async () => {
-    if (!setupTeamId || !setupTeam) {
-      closeTeamSetup();
-      return;
-    }
-
-    setIsApplyingTeamSetup(true);
-    try {
-      await setTeamVisibility({ team_id: setupTeamId, visibility: teamSetupVisibility });
-      const selectedPaths = Object.entries(teamSetupSelection)
-        .filter(([, selected]) => selected)
-        .map(([path]) => path);
-
-      let queuedProjects = 0;
-      for (const path of selectedPaths) {
-        const existingMapping = mappingsByPath.get(path);
-        if (existingMapping?.team_id === setupTeamId) continue;
-        await updateDirectoryMapping({
-          path_prefix: path,
-          team_id: setupTeamId,
-          auto_share: true,
-        });
-        queuedProjects++;
-      }
-
-      if (queuedProjects > 0) {
-        toast.success(`Queued ${queuedProjects} project${queuedProjects === 1 ? "" : "s"} for ${setupTeam.name}`);
-      } else {
-        toast.success(`Saved ${setupTeam.name} sharing settings`);
-      }
-      closeTeamSetup();
-    } catch (error) {
-      console.error("Failed to save team setup:", error);
-      toast.error("Failed to save team sharing setup");
-    } finally {
-      setIsApplyingTeamSetup(false);
-    }
-  };
-
-  return (
-    <Dialog open={teamSetupOpen} onOpenChange={(open) => !open && closeTeamSetup()}>
-      <DialogContent className="bg-sol-bg border-sol-border max-w-2xl">
-        <DialogHeader>
-          <DialogTitle className="text-sol-text">
-            Set up sharing for {setupTeam?.name || teamProjectSuggestions?.team_name || "your team"}
-          </DialogTitle>
-          <DialogDescription className="text-sol-base1">
-            Codecast matched your recent projects against repos your teammates already share. Pick what to connect now and choose how visible your work should be.
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="space-y-5 py-1">
-          <div className="space-y-2">
-            <Label className="text-sol-text">Team visibility</Label>
-            <div className="grid grid-cols-2 gap-2">
-              {visibilityOptions.map((option) => (
-                <button
-                  key={option.value}
-                  onClick={() => setTeamSetupVisibility(option.value)}
-                  className={`rounded-lg border px-3 py-3 text-left transition-colors ${
-                    teamSetupVisibility === option.value
-                      ? "border-sol-cyan bg-sol-cyan/10"
-                      : "border-sol-border hover:border-sol-border/80 hover:bg-sol-bg-alt/60"
-                  }`}
-                >
-                  <div className="text-sm font-medium text-sol-text">{option.label}</div>
-                  <div className="mt-1 text-xs text-sol-base1">{option.description}</div>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <Label className="text-sol-text">Suggested projects</Label>
-              <div className="text-xs text-sol-base1">
-                {Object.values(teamSetupSelection).filter(Boolean).length} selected
-              </div>
-            </div>
-
-            {teamProjectSuggestions === undefined ? (
-              <div className="rounded-lg border border-sol-border bg-sol-bg-alt/40 px-4 py-6 text-sm text-sol-base1">
-                Loading project matches...
-              </div>
-            ) : teamProjectSuggestions?.suggestions.length ? (
-              <div className="space-y-2 max-h-[320px] overflow-y-auto pr-1">
-                {teamProjectSuggestions.suggestions.map((project) => {
-                  const selected = !!teamSetupSelection[project.path];
-                  const currentMapping = mappingsByPath.get(project.path);
-                  const currentTeamName = currentMapping?.team_id
-                    ? teams.find((team) => team._id === currentMapping.team_id)?.name
-                    : null;
-
-                  return (
-                    <button
-                      key={project.path}
-                      onClick={() => toggleTeamSetupProject(project.path)}
-                      className={`w-full rounded-lg border px-4 py-3 text-left transition-colors ${
-                        selected
-                          ? "border-sol-cyan bg-sol-cyan/10"
-                          : "border-sol-border hover:border-sol-border/80 hover:bg-sol-bg-alt/50"
-                      }`}
-                    >
-                      <div className="flex items-start gap-3">
-                        <div className={`mt-0.5 flex h-5 w-5 items-center justify-center rounded border ${
-                          selected
-                            ? "border-sol-cyan bg-sol-cyan text-sol-bg"
-                            : "border-sol-border bg-sol-bg-alt"
-                        }`}>
-                          {selected && <Check className="w-3 h-3" />}
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2">
-                            <GitBranch className="w-4 h-4 text-sol-cyan flex-shrink-0" />
-                            <div className="truncate text-sm font-medium text-sol-text">{getProjectName(project.path)}</div>
-                            {project.match_type === "github" && (
-                              <span className="rounded border border-sol-cyan/30 bg-sol-cyan/10 px-2 py-0.5 text-[11px] text-sol-cyan">
-                                GitHub match
-                              </span>
-                            )}
-                          </div>
-                          <div className="mt-1 truncate text-xs text-sol-base1">{project.path}</div>
-                          <div className="mt-2 flex flex-wrap gap-2 text-xs text-sol-base1">
-                            <span>{project.match_reason}</span>
-                            <span>{project.session_count} session{project.session_count === 1 ? "" : "s"}</span>
-                            <span>{getRelativeTime(project.last_active)}</span>
-                            {currentTeamName && currentMapping?.team_id !== setupTeamId && (
-                              <span className="text-sol-yellow">Currently mapped to {currentTeamName}</span>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-            ) : (
-              <div className="rounded-lg border border-sol-border bg-sol-bg-alt/40 px-4 py-6 text-sm text-sol-base1">
-                No repo matches yet. You can still choose a visibility level now and add projects from the list afterward.
-              </div>
-            )}
-          </div>
-        </div>
-
-        <DialogFooter className="gap-2 sm:gap-0">
-          <Button
-            variant="outline"
-            onClick={closeTeamSetup}
-            className="border-sol-border text-sol-base1"
-            disabled={isApplyingTeamSetup}
-          >
-            Later
-          </Button>
-          <Button
-            onClick={handleApplyTeamSetup}
-            className="bg-sol-cyan text-sol-bg hover:bg-sol-cyan/90"
-            disabled={isApplyingTeamSetup || !setupTeamId}
-          >
-            {isApplyingTeamSetup ? "Saving..." : "Save Team Setup"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
 
 const visibilityOptions: { value: TeamVisibility; label: string; description: string; preview: string }[] = [
   { value: "hidden", label: "Hidden", description: "Teammates see nothing", preview: "Your sessions won't appear in the team feed" },
@@ -805,14 +556,7 @@ export default function SyncPage() {
         </div>
       </Card>
 
-      <TeamSetupDialog
-        teams={teams}
-        mappingsByPath={mappingsByPath}
-        updateDirectoryMapping={updateDirectoryMapping}
-        setTeamVisibility={setTeamVisibility}
-        getProjectName={getProjectName}
-        getRelativeTime={getRelativeTime}
-      />
+      <TeamSetupDialog />
 
       <Dialog open={!!pendingUnsync} onOpenChange={(open) => !open && setPendingUnsync(null)}>
         <DialogContent className="bg-sol-bg border-sol-border">
