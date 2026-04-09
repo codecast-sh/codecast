@@ -897,10 +897,6 @@ export const webList = query({
         tasks = tasks.filter((t) => t.status !== "done" && t.status !== "dropped");
       }
     } else {
-      const statuses = args.status
-        ? [args.status]
-        : ["backlog", "open", "in_progress", "in_review"];
-
       const seen = new Set<string>();
       const allTasks: any[] = [];
       const pushUnique = (t: any) => {
@@ -909,87 +905,47 @@ export const webList = query({
       };
 
       if (args.workspace === "team" && args.team_id) {
-        // TEAM VIEW: tasks with explicit team_id + orphaned tasks attributed via conversation.
-        const teamStr = String(args.team_id);
-        for (const status of statuses) {
-          // Primary: tasks with team_id set
-          const teamTasks = await ctx.db.query("tasks")
-            .withIndex("by_team_status", (q: any) => q.eq("team_id", args.team_id).eq("status", status))
-            .order("desc")
-            .take(500);
-          for (const t of teamTasks) pushUnique(t);
+        // TEAM VIEW: fetch ALL tasks for this team — no per-status limits.
+        // Client does all filtering (status, source, assignee, priority).
+        const teamTasks = await ctx.db.query("tasks")
+          .withIndex("by_team_id", (q: any) => q.eq("team_id", args.team_id))
+          .collect();
+        for (const t of teamTasks) pushUnique(t);
 
-          // Secondary: current user's tasks without team_id (legacy data)
-          const userTasks = await ctx.db.query("tasks")
-            .withIndex("by_user_status", (q: any) => q.eq("user_id", userId).eq("status", status))
-            .order("desc")
-            .take(500);
-          for (const t of userTasks) {
-            if (!t.team_id) pushUnique(t);
-          }
-        }
-        // Filter orphaned tasks: keep only those whose conversation belongs to this team
-        const orphaned = allTasks.filter(t => !t.team_id);
-        if (orphaned.length > 0) {
-          const convMap = new Map<string, any>();
-          for (const t of orphaned) {
-            const cid = t.conversation_ids?.[0] || t.created_from_conversation;
-            if (cid && !convMap.has(String(cid))) {
-              const conv = await ctx.db.get(cid);
-              if (conv) convMap.set(String(cid), conv);
-            }
-          }
-          const removeIds = new Set<string>();
-          for (const t of orphaned) {
-            const cid = t.conversation_ids?.[0] || t.created_from_conversation;
-            const conv = cid ? convMap.get(String(cid)) : undefined;
-            // Attribute to team if conversation belongs to this team (no privacy gate)
-            if (!conv || String(conv.team_id) !== teamStr) {
-              removeIds.add(String(t._id));
-            }
-          }
-          if (removeIds.size > 0) {
-            allTasks.splice(0, allTasks.length, ...allTasks.filter(t => !removeIds.has(String(t._id))));
-          }
+        // Also include tasks assigned to current user in this team
+        // (covers edge case where assignee is set but team_id isn't)
+        const assignedTasks = await ctx.db.query("tasks")
+          .withIndex("by_assignee_status", (q: any) => q.eq("assignee", String(userId)))
+          .collect();
+        const teamStr = String(args.team_id);
+        for (const t of assignedTasks) {
+          if (String(t.team_id) === teamStr) pushUnique(t);
         }
       } else if (args.workspace === "personal") {
-        // PERSONAL VIEW: user's own tasks that don't belong to any team.
-        for (const status of statuses) {
-          const userTasks = await ctx.db.query("tasks")
-            .withIndex("by_user_status", (q: any) => q.eq("user_id", userId).eq("status", status))
-            .order("desc")
-            .take(500);
-          for (const t of userTasks) pushUnique(t);
+        // PERSONAL VIEW: all user's tasks that don't belong to any team.
+        const userTasks = await ctx.db.query("tasks")
+          .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+          .collect();
+        for (const t of userTasks) {
+          if (!t.team_id) pushUnique(t);
         }
-        // Exclude tasks that belong to a team (explicitly or via conversation)
-        const orphaned = allTasks.filter(t => !t.team_id);
-        const convTeamIds = new Map<string, boolean>();
-        for (const t of orphaned) {
-          const cid = t.conversation_ids?.[0] || t.created_from_conversation;
-          if (cid && !convTeamIds.has(String(cid))) {
-            const conv = await ctx.db.get(cid) as any;
-            convTeamIds.set(String(cid), !!conv?.team_id);
-          }
-        }
-        allTasks.splice(0, allTasks.length, ...allTasks.filter(t => {
-          if (t.team_id) return false;
-          const cid = t.conversation_ids?.[0] || t.created_from_conversation;
-          return !cid || !convTeamIds.get(String(cid));
-        }));
       } else {
-        // UNSCOPED: all user's tasks (fallback, shouldn't happen from frontend)
-        for (const status of statuses) {
-          const userTasks = await ctx.db.query("tasks")
-            .withIndex("by_user_status", (q: any) => q.eq("user_id", userId).eq("status", status))
-            .order("desc")
-            .take(500);
-          for (const t of userTasks) pushUnique(t);
-        }
+        // UNSCOPED: all user's tasks
+        const userTasks = await ctx.db.query("tasks")
+          .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+          .collect();
+        for (const t of userTasks) pushUnique(t);
       }
       tasks = allTasks;
     }
     if (args.project_path) {
       tasks = scopeByProject(tasks, args.project_path);
+    }
+
+    // Status filtering (supports comma-separated values from frontend)
+    if (args.status) {
+      const statusSet = new Set(args.status.split(","));
+      tasks = tasks.filter((t: any) => statusSet.has(t.status));
     }
 
     if (args.triage_status) {
@@ -2166,4 +2122,5 @@ export const getDependencyChain = query({
     };
   },
 });
+
 

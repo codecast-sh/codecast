@@ -718,8 +718,7 @@ export function TaskListContent() {
 
   useWatchEffect(() => { setTaskFilter({ status: urlStatus }); }, [urlStatus]);
 
-  const triageStatus = sourceFilter === "bot" ? "suggested" : sourceFilter === "dismissed" ? "dismissed" : undefined;
-  const { hasMore, loadMore } = useSyncTasks(statusFilter || undefined, triageStatus);
+  const { hasMore, loadMore } = useSyncTasks();
   const currentUser = useQuery(api.users.getCurrentUser);
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id);
   const effectiveTeamId = (activeTeamId || (currentUser as any)?.team_id) as any;
@@ -756,19 +755,33 @@ export function TaskListContent() {
 
   const filteredTasks = useMemo(() => {
     let list = tasksList;
-    if (sourceFilter === "human") list = list.filter((t) => t.source !== "insight");
-    else if (sourceFilter === "bot") list = list.filter((t) => t.source === "insight");
-    else if (sourceFilter === "dismissed") list = list.filter((t) => t.triage_status === "dismissed");
-    if (statusesFilter) {
+
+    // Triage + source filtering
+    if (sourceFilter === "human") {
+      list = list.filter((t) => t.source !== "insight" && (!t.triage_status || t.triage_status === "active"));
+    } else if (sourceFilter === "bot") {
+      list = list.filter((t) => t.source === "insight" && t.triage_status === "suggested");
+    } else if (sourceFilter === "dismissed") {
+      list = list.filter((t) => t.triage_status === "dismissed");
+    } else {
+      // Default: only active triage (hide suggested/dismissed)
+      list = list.filter((t) => !t.triage_status || t.triage_status === "active");
+    }
+
+    // Status filtering: tab bar (single) or dropdown (multi)
+    if (statusFilter) {
+      list = list.filter((t) => t.status === statusFilter);
+    } else if (statusesFilter) {
       const set = new Set(statusesFilter.split(","));
       list = list.filter((t) => set.has(t.status));
     }
+
     if (priorityFilter) list = list.filter((t) => t.priority === priorityFilter);
     if (labelFilter) list = list.filter((t) => t.labels?.includes(labelFilter));
     if (assigneeFilter === "_unassigned") list = list.filter((t) => !t.assignee);
     else if (assigneeFilter) list = list.filter((t) => t.assignee === assigneeFilter);
     return list;
-  }, [tasksList, priorityFilter, labelFilter, assigneeFilter, statusesFilter, sourceFilter]);
+  }, [tasksList, priorityFilter, labelFilter, assigneeFilter, statusFilter, statusesFilter, sourceFilter]);
 
   const sortWithinGroup = useCallback((tasks: TaskItem[]) => {
     return [...tasks].sort((a, b) => {
@@ -909,6 +922,8 @@ export function TaskListContent() {
   const taskCounts = useMemo(() => {
     const counts: Record<string, number> = { active: 0 };
     for (const t of tasksList) {
+      // Only count active triage tasks (matches default filter)
+      if (t.triage_status && t.triage_status !== "active") continue;
       counts[t.status] = (counts[t.status] || 0) + 1;
       if (t.status !== "done" && t.status !== "dropped") counts.active++;
     }

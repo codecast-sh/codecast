@@ -1210,6 +1210,7 @@ export default defineSchema({
     .index("by_team_id", ["team_id"])
     .index("by_team_status", ["team_id", "status"])
     .index("by_workflow_run", ["workflow_run_id"])
+    .index("by_assignee_status", ["assignee", "status"])
     .searchIndex("search_tasks", {
       searchField: "title",
       filterFields: ["user_id", "project_id", "status"],
