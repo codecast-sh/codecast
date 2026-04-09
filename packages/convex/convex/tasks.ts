@@ -250,13 +250,10 @@ export const create = mutation({
       }
     }
 
-    if (created_from_conversation) {
+    if (created_from_conversation && plan_id) {
       const conv = await ctx.db.get(created_from_conversation);
-      if (conv) {
-        await ctx.db.patch(created_from_conversation, { active_task_id: id });
-        if (plan_id && !conv.active_plan_id) {
-          await ctx.db.patch(created_from_conversation, { active_plan_id: plan_id });
-        }
+      if (conv && !conv.active_plan_id) {
+        await ctx.db.patch(created_from_conversation, { active_plan_id: plan_id });
       }
     }
 
@@ -618,7 +615,8 @@ export const update = mutation({
         if (!existing.some((id) => id === conv._id)) {
           updates.conversation_ids = [...existing, conv._id];
         }
-        if (!conv.active_task_id || conv.active_task_id === task._id) {
+        // Only bind conversation to task on explicit start (cast task start)
+        if (args.status === "in_progress" && (!conv.active_task_id || conv.active_task_id === task._id)) {
           await ctx.db.patch(conv._id, { active_task_id: task._id });
           if (task.plan_id && !conv.active_plan_id) {
             await ctx.db.patch(conv._id, { active_plan_id: task.plan_id });
