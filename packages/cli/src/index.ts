@@ -376,6 +376,8 @@ interface Config {
   plan_version?: string;
   workflow_enabled?: boolean;
   workflow_version?: string;
+  orch_enabled?: boolean;
+  orch_version?: string;
   claude_args?: string;
   codex_args?: string;
   sync_mode?: "all" | "selected";
@@ -2220,6 +2222,123 @@ function installWorkflowSnippet(update = false): { installed: boolean; updated: 
   return { installed: anyInstalled, updated: anyUpdated };
 }
 
+function installOrchestration(update = false): { installed: boolean; updated: boolean } {
+  const orchSrc = path.resolve(__dirname, "..", "orchestration");
+  if (!fs.existsSync(orchSrc)) {
+    return { installed: false, updated: false };
+  }
+
+  const claudeDir = path.join(os.homedir(), ".claude");
+  const orchDest = path.join(os.homedir(), ".codecast", "orchestration");
+  let anyChange = false;
+
+  // Copy skill
+  const skillSrc = path.join(orchSrc, "skills", "orchestrate", "SKILL.md");
+  const skillDest = path.join(claudeDir, "skills", "codecast-orchestrate", "SKILL.md");
+  if (fs.existsSync(skillSrc)) {
+    fs.mkdirSync(path.dirname(skillDest), { recursive: true });
+    const srcContent = fs.readFileSync(skillSrc, "utf-8");
+    const destExists = fs.existsSync(skillDest);
+    if (!destExists || (update && fs.readFileSync(skillDest, "utf-8") !== srcContent)) {
+      fs.writeFileSync(skillDest, srcContent, { mode: 0o644 });
+      anyChange = true;
+    }
+  }
+
+  // Copy agents
+  const agentsSrc = path.join(orchSrc, "agents");
+  if (fs.existsSync(agentsSrc)) {
+    const agentsDir = path.join(claudeDir, "agents");
+    fs.mkdirSync(agentsDir, { recursive: true });
+    for (const file of fs.readdirSync(agentsSrc).filter(f => f.endsWith(".md"))) {
+      const src = path.join(agentsSrc, file);
+      const dest = path.join(agentsDir, file);
+      const srcContent = fs.readFileSync(src, "utf-8");
+      const destExists = fs.existsSync(dest);
+      if (!destExists || (update && fs.readFileSync(dest, "utf-8") !== srcContent)) {
+        fs.writeFileSync(dest, srcContent, { mode: 0o644 });
+        anyChange = true;
+      }
+    }
+  }
+
+  // Copy hook scripts
+  const scriptsSrc = path.join(orchSrc, "scripts");
+  if (fs.existsSync(scriptsSrc)) {
+    const scriptsDest = path.join(orchDest, "scripts");
+    fs.mkdirSync(scriptsDest, { recursive: true });
+    for (const file of fs.readdirSync(scriptsSrc).filter(f => f.endsWith(".sh"))) {
+      const src = path.join(scriptsSrc, file);
+      const dest = path.join(scriptsDest, file);
+      const srcContent = fs.readFileSync(src, "utf-8");
+      const destExists = fs.existsSync(dest);
+      if (!destExists || (update && fs.readFileSync(dest, "utf-8") !== srcContent)) {
+        fs.writeFileSync(dest, srcContent, { mode: 0o755 });
+        anyChange = true;
+      }
+    }
+  }
+
+  // Merge hooks into settings
+  const hooksSrc = path.join(orchSrc, "hooks.json");
+  if (fs.existsSync(hooksSrc)) {
+    const settingsPath = path.join(claudeDir, "settings.json");
+    let settings: any = {};
+    if (fs.existsSync(settingsPath)) {
+      try { settings = JSON.parse(fs.readFileSync(settingsPath, "utf-8")); } catch {}
+    }
+    if (!settings.hooks) settings.hooks = {};
+
+    const orchHooks = JSON.parse(fs.readFileSync(hooksSrc, "utf-8")).hooks;
+    const ORCH_MARKER = "/.codecast/orchestration/";
+
+    for (const [event, handlers] of Object.entries(orchHooks) as [string, any][]) {
+      if (!settings.hooks[event]) settings.hooks[event] = [];
+      settings.hooks[event] = settings.hooks[event].filter((h: any) =>
+        !h.hooks?.some((hh: any) => hh.command?.includes(ORCH_MARKER))
+      );
+      settings.hooks[event].push(...handlers);
+    }
+
+    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), { mode: 0o600 });
+    anyChange = true;
+  }
+
+  return { installed: anyChange && !update, updated: anyChange && update };
+}
+
+function uninstallOrchestration(): void {
+  const claudeDir = path.join(os.homedir(), ".claude");
+  const ORCH_MARKER = "/.codecast/orchestration/";
+
+  const skillDir = path.join(claudeDir, "skills", "codecast-orchestrate");
+  if (fs.existsSync(skillDir)) fs.rmSync(skillDir, { recursive: true });
+
+  for (const name of ["implementer.md", "reviewer.md", "critic.md"]) {
+    const agentPath = path.join(claudeDir, "agents", name);
+    if (fs.existsSync(agentPath)) fs.unlinkSync(agentPath);
+  }
+
+  const settingsPath = path.join(claudeDir, "settings.json");
+  if (fs.existsSync(settingsPath)) {
+    try {
+      const settings = JSON.parse(fs.readFileSync(settingsPath, "utf-8"));
+      if (settings.hooks) {
+        for (const event of Object.keys(settings.hooks)) {
+          settings.hooks[event] = settings.hooks[event].filter((h: any) =>
+            !h.hooks?.some((hh: any) => hh.command?.includes(ORCH_MARKER))
+          );
+          if (settings.hooks[event].length === 0) delete settings.hooks[event];
+        }
+        fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), { mode: 0o600 });
+      }
+    } catch {}
+  }
+
+  const orchDest = path.join(os.homedir(), ".codecast", "orchestration");
+  if (fs.existsSync(orchDest)) fs.rmSync(orchDest, { recursive: true });
+}
+
 async function promptMemoryEnablement(): Promise<void> {
   const config = readConfig() || {};
 
@@ -2628,6 +2747,7 @@ program
         if (config.task_enabled) installTaskSnippet(true);
         if (config.work_enabled) installWorkSnippet(true);
         if (config.workflow_enabled) installWorkflowSnippet(true);
+        if (config.orch_enabled) installOrchestration(true);
         installSessionRegisterHook();
         installStatusHook();
   installTaskPulseHook();
@@ -6476,6 +6596,15 @@ program
         install: installWorkflowSnippet,
         reEnable: "cast workflow install",
       },
+      {
+        name: "Orchestration",
+        desc: "Multi-agent plan execution — agents decompose, implement, review, and critique your plans",
+        enabledKey: "orch_enabled" as const,
+        versionKey: "orch_version" as const,
+        getVersion: getWorkVersion,
+        install: installOrchestration,
+        reEnable: "cast install",
+      },
     ];
 
     if (options.disable) {
@@ -7401,6 +7530,7 @@ program
       if (config.task_enabled) installTaskSnippet(true);
       if (config.work_enabled) installWorkSnippet(true);
       if (config.workflow_enabled) installWorkflowSnippet(true);
+      if (config.orch_enabled) installOrchestration(true);
       installSessionRegisterHook();
       installStatusHook();
   installTaskPulseHook();
@@ -12124,6 +12254,7 @@ checkForUpdates().then(async (available) => {
     if (config?.task_enabled) installTaskSnippet(true);
     if (config?.work_enabled) installWorkSnippet(true);
     if (config?.workflow_enabled) installWorkflowSnippet(true);
+    if (config?.orch_enabled) installOrchestration(true);
     installSessionRegisterHook();
     installStatusHook();
   installTaskPulseHook();
