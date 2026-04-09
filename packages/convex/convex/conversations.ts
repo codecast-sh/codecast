@@ -3381,6 +3381,7 @@ export const readConversationMessages = query({
       conversation: {
         id: conv._id,
         title,
+        agent_type: conv.agent_type || "claude_code",
         project_path: conv.project_path || null,
         message_count: nonEmptyCount,
         updated_at: new Date(conv.updated_at).toISOString(),

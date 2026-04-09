@@ -1735,6 +1735,9 @@ async function executeRemoteCommand(
         }
         const projectPath = parsed.project_path;
         const forceReconstitute = parsed.force_reconstitute === true;
+        const resumeAgentType: "claude" | "codex" | "cursor" | "gemini" | undefined =
+          parsed.agent_type === "codex" || parsed.agent_type === "cursor" || parsed.agent_type === "gemini"
+            ? parsed.agent_type : undefined;
         // Skip if a resume is already in flight for this session
         if (resumeInFlight.has(sessionId)) {
           log(`[REMOTE] Resume already in flight for ${sessionId.slice(0, 8)}, skipping`);
@@ -1756,13 +1759,13 @@ async function executeRemoteCommand(
         let resumed = false;
         if (forceReconstitute) {
           log(`[REMOTE] Force-reconstituting session ${sessionId.slice(0, 8)} from DB${projectPath ? ` in ${projectPath}` : ""}`);
-          resumed = await repairAndResumeSession(sessionId, "", readTitleCache(), projectPath, conversationId);
+          resumed = await repairAndResumeSession(sessionId, "", readTitleCache(), projectPath, conversationId, resumeAgentType);
         } else {
           log(`[REMOTE] Force-resuming session ${sessionId.slice(0, 8)}${projectPath ? ` in ${projectPath}` : ""}`);
-          resumed = await autoResumeSession(sessionId, "", readTitleCache(), projectPath, conversationId);
+          resumed = await autoResumeSession(sessionId, "", readTitleCache(), projectPath, conversationId, resumeAgentType);
           if (!resumed) {
             log(`[REMOTE] Auto-resume failed for ${sessionId.slice(0, 8)}, attempting repair...`);
-            resumed = await repairAndResumeSession(sessionId, "", readTitleCache(), projectPath, conversationId);
+            resumed = await repairAndResumeSession(sessionId, "", readTitleCache(), projectPath, conversationId, resumeAgentType);
           }
         }
         if (resumed) {
@@ -1789,14 +1792,23 @@ async function executeRemoteCommand(
               const siteUrl = config.convex_url.replace(".cloud", ".site");
               const exportData = await fetchExport(siteUrl, config.auth_token!, conversationId);
               if (exportData.messages.length > 0) {
-                const TOKEN_BUDGET = 100_000;
-                const tailMessages = chooseClaudeTailMessagesForTokenBudget(exportData, TOKEN_BUDGET);
-                const { jsonl } = generateClaudeCodeJsonl(exportData, { tailMessages, sessionId });
-                const { sessionId: newSessionId, filePath: reconFilePath } = writeClaudeCodeSession(jsonl, sessionId, projectPath);
+                const reconAgent = resumeAgentType || "claude";
+                let reconJsonl: string;
+                let newSessionId: string;
+                let reconFilePath: string;
+                if (reconAgent === "codex") {
+                  ({ jsonl: reconJsonl, sessionId: newSessionId } = generateCodexJsonl(exportData, { sessionId }));
+                  reconFilePath = writeCodexSession(reconJsonl, newSessionId);
+                } else {
+                  const TOKEN_BUDGET = 100_000;
+                  const tailMessages = chooseClaudeTailMessagesForTokenBudget(exportData, TOKEN_BUDGET);
+                  ({ jsonl: reconJsonl, sessionId: newSessionId } = generateClaudeCodeJsonl(exportData, { tailMessages, sessionId }));
+                  ({ filePath: reconFilePath } = writeClaudeCodeSession(reconJsonl, newSessionId, projectPath));
+                }
                 setPosition(reconFilePath, fs.statSync(reconFilePath).size);
-                log(`[REMOTE] Reconstituted JSONL for ${sessionId.slice(0, 8)} (${exportData.messages.length} msgs, tail=${tailMessages})`);
+                log(`[REMOTE] Reconstituted ${reconAgent} JSONL for ${sessionId.slice(0, 8)} (${exportData.messages.length} msgs)`);
 
-                const reconResumed = await autoResumeSession(newSessionId, "", readTitleCache(), cwd, conversationId);
+                const reconResumed = await autoResumeSession(newSessionId, "", readTitleCache(), cwd, conversationId, resumeAgentType);
                 if (reconResumed) {
                   const cache = readConversationCache();
                   cache[newSessionId] = conversationId;
@@ -1831,13 +1843,28 @@ async function executeRemoteCommand(
               result = JSON.stringify({ started_fresh: true, tmux_session: existingStarted.tmuxSession, deduplicated: true });
               break;
             }
-            log(`[REMOTE] Starting blank session in ${projectPath}`);
+            const blankAgentType = resumeAgentType || "claude";
+            log(`[REMOTE] Starting blank ${blankAgentType} session in ${projectPath}`);
             const shortId = Math.random().toString(36).slice(2, 8);
-            const tmuxSession = `cc-claude-${shortId}`;
-            let extraFlags = config.claude_args || "";
+            const tmuxSession = `cc-${blankAgentType}-${shortId}`;
+            let blankBinary: string;
+            let extraFlags: string;
+            if (blankAgentType === "codex") {
+              blankBinary = "codex";
+              extraFlags = config.codex_args || "";
+            } else if (blankAgentType === "cursor") {
+              blankBinary = "cursor-agent";
+              extraFlags = "";
+            } else if (blankAgentType === "gemini") {
+              blankBinary = "gemini";
+              extraFlags = "";
+            } else {
+              blankBinary = "claude";
+              extraFlags = config.claude_args || "";
+            }
             const blankArgs = extraFlags ? extraFlags.split(/\s+/).filter(Boolean) : [];
             const safeBlankArgs = sanitizeBinaryArgs(blankArgs);
-            const blankCmdText = `env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT ${["claude", ...safeBlankArgs].join(" ")}`;
+            const blankCmdText = `env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT ${[blankBinary, ...safeBlankArgs].join(" ")}`;
             try {
               tmuxExecSync(["new-session", "-d", "-s", tmuxSession, "-c", cwd], { timeout: 5000 });
               tmuxExecSync(["send-keys", "-t", tmuxSession, "-l", blankCmdText], { timeout: 5000 });
@@ -1846,7 +1873,7 @@ async function executeRemoteCommand(
                 tmuxSession,
                 projectPath: cwd,
                 startedAt: Date.now(),
-                agentType: "claude",
+                agentType: blankAgentType,
               });
               discoverAndLinkSession(conversationId, tmuxSession, cwd).catch(err => {
                 log(`Session discovery failed for ${conversationId.slice(0, 12)}: ${err}`);
@@ -6106,7 +6133,7 @@ function slugify(text: string, maxLen = 30): string {
     .replace(/-+$/, "");
 }
 
-async function autoResumeSession(sessionId: string, content: string, titleCache: TitleCache, cwdOverride?: string, conversationId?: string): Promise<boolean> {
+async function autoResumeSession(sessionId: string, content: string, titleCache: TitleCache, cwdOverride?: string, conversationId?: string, agentTypeHint?: "claude" | "codex" | "cursor" | "gemini"): Promise<boolean> {
   // Deduplicate concurrent resume attempts on the same session
   const existing = resumeInFlight.get(sessionId);
   if (existing) {
@@ -6142,7 +6169,7 @@ async function autoResumeSession(sessionId: string, content: string, titleCache:
       }
     }
   }
-  const promise = autoResumeSessionInner(sessionId, content, titleCache, cwdOverride, conversationId);
+  const promise = autoResumeSessionInner(sessionId, content, titleCache, cwdOverride, conversationId, agentTypeHint);
   resumeInFlight.set(sessionId, promise);
   resumeInFlightStarted.set(sessionId, Date.now());
   try {
@@ -6153,7 +6180,7 @@ async function autoResumeSession(sessionId: string, content: string, titleCache:
   }
 }
 
-async function autoResumeSessionInner(sessionId: string, content: string, titleCache: TitleCache, cwdOverride?: string, conversationId?: string): Promise<boolean> {
+async function autoResumeSessionInner(sessionId: string, content: string, titleCache: TitleCache, cwdOverride?: string, conversationId?: string, agentTypeHint?: "claude" | "codex" | "cursor" | "gemini"): Promise<boolean> {
   if (!hasTmux()) {
     logDelivery(`Cannot auto-resume ${sessionId.slice(0, 8)}: tmux not installed`);
     return false;
@@ -6174,14 +6201,21 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
         logDelivery(`Reconstitution skipped for ${sessionId.slice(0, 8)}: conversation has 0 messages`);
         return false;
       }
-      const estimatedTokens = estimateClaudeImportTokens(data);
-      const tailMessages = estimatedTokens > 120_000
-        ? chooseClaudeTailMessagesForTokenBudget(data, 100_000)
-        : undefined;
-      // Preserve the original sessionId so the JSONL matches what Convex expects
-      // (critical for fork sessions where the session_id was set at fork creation)
-      const { jsonl, sessionId: reconId } = generateClaudeCodeJsonl(data, { tailMessages, sessionId });
-      const result = writeClaudeCodeSession(jsonl, reconId, data.conversation.project_path || undefined);
+      const reconAgentType = agentTypeHint || (data.conversation.agent_type === "codex" ? "codex" : undefined) || "claude";
+      let jsonl: string;
+      let reconId: string;
+      if (reconAgentType === "codex") {
+        ({ jsonl, sessionId: reconId } = generateCodexJsonl(data, { sessionId }));
+      } else {
+        const estimatedTokens = estimateClaudeImportTokens(data);
+        const tailMessages = estimatedTokens > 120_000
+          ? chooseClaudeTailMessagesForTokenBudget(data, 100_000)
+          : undefined;
+        ({ jsonl, sessionId: reconId } = generateClaudeCodeJsonl(data, { tailMessages, sessionId }));
+      }
+      const result = reconAgentType === "codex"
+        ? { sessionId: reconId, filePath: writeCodexSession(jsonl, reconId) }
+        : writeClaudeCodeSession(jsonl, reconId, data.conversation.project_path || undefined);
       logDelivery(`Reconstituted ${sessionId.slice(0, 8)} (${data.messages.length} msgs)`);
       if (conversationId && reconId !== sessionId) {
         remapConversationSession(sessionId, reconId, conversationId);
@@ -6440,7 +6474,8 @@ async function repairAndResumeSession(
   content: string,
   titleCache: TitleCache,
   cwdOverride?: string,
-  conversationId?: string
+  conversationId?: string,
+  agentTypeHint?: "claude" | "codex" | "cursor" | "gemini"
 ): Promise<boolean> {
   const existing = repairInFlight.get(sessionId);
   if (existing) return existing;
@@ -6482,7 +6517,7 @@ async function repairAndResumeSession(
           return false;
         }
         const sessionFile = findSessionFile(sessionId);
-        const agentType = sessionFile?.agentType ?? "claude";
+        const agentType = agentTypeHint || sessionFile?.agentType || "claude";
         const isCodexSession = agentType === "codex";
         const failureReason = !isCodexSession ? resumeFatalReasons.get(sessionId) ?? null : null;
         const projectPath = cwdOverride || exportData.conversation.project_path || undefined;
