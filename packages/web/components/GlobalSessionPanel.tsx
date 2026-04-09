@@ -991,7 +991,7 @@ export function SessionListPanel({
           {s.activeProjectFilter ? filteredCount : activeSessions.length} Session{(s.activeProjectFilter ? filteredCount : activeSessions.length) !== 1 ? "s" : ""}
         </span>
         {projectCounts.length > 1 && (
-          <div className="flex gap-1 overflow-x-auto min-w-0" style={{ scrollbarWidth: 'none' }}>
+          <div className="flex gap-1 overflow-x-auto min-w-0 pr-3" style={{ scrollbarWidth: 'none', maskImage: 'linear-gradient(to right, black calc(100% - 20px), transparent)', WebkitMaskImage: 'linear-gradient(to right, black calc(100% - 20px), transparent)' }}>
             {projectCounts.map(([name, count]) => (
               <button
                 key={name}

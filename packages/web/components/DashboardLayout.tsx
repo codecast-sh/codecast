@@ -343,31 +343,10 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
     s.updateClientLayout("dashboard", { sidebar: newLayout.sidebar || 25, main: newLayout.main || 75 });
   };
 
-  // Guest/unauthenticated: minimal layout with branding + join CTA
+  // Guest/unauthenticated: minimal layout, no top header — branding lives in the bottom bar
   if (isGuest) {
     return (
       <div className="bg-sol-bg flex flex-col overflow-hidden" style={{ height: '100vh' }}>
-        <header className="flex-shrink-0 border-b border-black/10 bg-sol-bg z-[100]">
-          <div className="px-3 py-2 flex items-center justify-between">
-            <a href="/" className="text-sol-text font-mono text-sm font-bold tracking-tight hover:text-sol-cyan transition-colors">
-              codecast
-            </a>
-            <div className="flex items-center gap-3">
-              <a
-                href="/login"
-                className="text-xs text-sol-text-muted hover:text-sol-text transition-colors"
-              >
-                Sign in
-              </a>
-              <a
-                href="/signup"
-                className="text-xs font-medium px-3 py-1.5 rounded-full bg-sol-cyan/15 text-sol-cyan border border-sol-cyan/30 hover:bg-sol-cyan/25 transition-colors"
-              >
-                Join Codecast
-              </a>
-            </div>
-          </div>
-        </header>
         <div className="flex-1 min-h-0">
           <div className="h-full">{children}</div>
         </div>

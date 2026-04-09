@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { LogoIcon } from "./Logo";
 import { useRouter } from "next/navigation";
 import { useLayoutEffect, useRef, useState, useMemo, useImperativeHandle, forwardRef, useCallback, memo } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
@@ -82,6 +83,16 @@ import { ComposeEditor, type ComposeEditorHandle } from "./editor/ComposeEditor"
 import { useMentionQuery } from "../hooks/useMentionQuery";
 
 const sacredInputs = new Map<string, { text: string; images?: any[] }>();
+
+/** Ensure a value is a string before rendering as a React child.
+ *  Guards against intermittent race conditions where content fields
+ *  are briefly non-string during store hydration or subscription updates. */
+function safeString(value: any): string {
+  if (typeof value === 'string') return value;
+  if (value == null) return '';
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  try { return JSON.stringify(value); } catch { return String(value); }
+}
 
 function renderMarkdownPre(node: any, children: any, props: any) {
   const codeElement = node?.children?.[0];
@@ -1280,9 +1291,9 @@ function TaskToolBlock({ tool, result, childConversationId, childConversations }
                 <div className={`text-xs max-h-96 overflow-y-auto ${
                   result.is_error ? "text-sol-red font-mono whitespace-pre-wrap" : "text-sol-text-secondary prose prose-sm prose-invert max-w-none [&_pre]:bg-sol-bg/50 [&_pre]:border [&_pre]:border-sol-border/30 [&_pre]:rounded [&_pre]:text-[11px] [&_code]:text-[11px] [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0 [&_h1]:text-sm [&_h2]:text-xs [&_h3]:text-xs [&_h1]:mt-2 [&_h2]:mt-2 [&_h3]:mt-1"
                 }`}>
-                  {result.is_error ? result.content : (
+                  {result.is_error ? safeString(result.content) : (
                     <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={[rehypeHighlight]} components={{ code: EntityAwareCode, a: EntityAwareLink }}>
-                      {result.content}
+                      {safeString(result.content)}
                     </ReactMarkdown>
                   )}
                 </div>
@@ -1741,7 +1752,8 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
   }, [parsedInput.tabId, result?.content, tool.name]);
 
   // Process result content - strip line numbers for Read tool, strip Tab Context from MCP chrome results
-  const processedContent = result ? (isRead ? stripLineNumbers(result.content) : tool.name.startsWith("mcp__claude-in-chrome__") ? result.content.replace(/\n?\n?Tab Context:[\s\S]*$/, "").trim() : result.content) : "";
+  const rawResultContent = result ? safeString(result.content) : "";
+  const processedContent = result ? (isRead ? stripLineNumbers(rawResultContent) : tool.name.startsWith("mcp__claude-in-chrome__") ? rawResultContent.replace(/\n?\n?Tab Context:[\s\S]*$/, "").trim() : rawResultContent) : "";
 
   const isCodeTool = isBash || isEdit || isRead || isGlob || isGrep || isCodeSearch;
   const isMarkdownResult = result && !isCodeTool && typeof processedContent === 'string' && (
@@ -4210,7 +4222,8 @@ function AssistantBlock({
   const [fullscreen, setFullscreen] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
 
-  const strippedContent = content ? stripSystemTags(content) : content;
+  const safeContent = content ? safeString(content) : content;
+  const strippedContent = safeContent ? stripSystemTags(safeContent) : safeContent;
   const displayContent = strippedContent && agentNameToChildMap
     ? linkifyMentions(strippedContent, agentNameToChildMap)
     : strippedContent;
@@ -5381,7 +5394,7 @@ function MessageNavigator({ userMessages, onRewind, onFork, onClose, forkPointMa
                     <span className={`text-xs font-mono mt-0.5 shrink-0 w-6 text-right ${isSelected ? "text-sol-blue" : "text-sol-blue/40"}`}>{idx + 1}</span>
                     <div className="flex-1 min-w-0">
                       <span className={`text-sm leading-relaxed ${isSelected ? "text-sol-text" : "text-sol-text-secondary"}`} style={{ display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
-                        {msg.content}
+                        {safeString(msg.content)}
                       </span>
                       {msgHasBranches && isSelected && (
                         <div className="flex items-center gap-1 mt-1.5">
@@ -5430,11 +5443,12 @@ function GuestJoinCTA() {
   return (
     <div className="bg-sol-bg border-t border-sol-border/30">
       <div className="mx-auto max-w-7xl px-2 sm:px-4 py-3 flex items-center justify-between gap-4">
-        <div className="flex items-center gap-2 text-sol-text-dim text-xs">
+        <a href="/" className="flex items-center gap-2 text-sol-text-dim text-xs hover:text-sol-text transition-colors">
+          <LogoIcon size={20} />
           <span className="font-mono font-bold text-sol-text-muted tracking-tight">codecast</span>
           <span className="opacity-50">|</span>
           <span>AI session sharing</span>
-        </div>
+        </a>
         <a
           href="/signup"
           className="text-xs font-medium px-4 py-1.5 rounded-full bg-sol-cyan/15 text-sol-cyan border border-sol-cyan/30 hover:bg-sol-cyan/25 transition-colors whitespace-nowrap"
