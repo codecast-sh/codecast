@@ -8952,7 +8952,7 @@ work
   .argument("<short_id>", "Task short ID")
   .action(async (shortId: string) => {
     const sessionId = detectCurrentSessionId();
-    const body: Record<string, any> = { short_id: shortId, status: "in_progress" };
+    const body: Record<string, any> = { short_id: shortId, status: "in_progress", assignee: "me" };
     if (sessionId) body.conversation_id = sessionId;
     const result = await cliPost("/cli/work/update", body);
     console.log(`${c.green}ok${c.reset} Started ${c.cyan}${shortId}${c.reset}`);
