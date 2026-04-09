@@ -1900,11 +1900,33 @@ export const getSuggestedTeamProjects = query({
       })
       .slice(0, 8);
 
+    // Collect team repos the user doesn't have locally
+    const userRepoKeys = new Set<string>();
+    for (const project of projectMap.values()) {
+      if (project.repo_key) userRepoKeys.add(project.repo_key);
+    }
+
+    const teamOnlyRepos: { repo_key: string; repo_name: string; member_count: number }[] = [];
+    for (const [key, signal] of repoKeySignals) {
+      if (!userRepoKeys.has(key)) {
+        const name = key.split("/").pop() || key;
+        teamOnlyRepos.push({
+          repo_key: key,
+          repo_name: name,
+          member_count: signal.members.size,
+        });
+      }
+    }
+    teamOnlyRepos.sort((a, b) => b.member_count - a.member_count);
+
     return {
       team_id: teamId,
       team_name: team?.name || "Team",
+      team_icon: team?.icon || null,
+      team_icon_color: team?.icon_color || null,
       current_visibility: membership.visibility || "summary",
       suggestions,
+      team_only_repos: teamOnlyRepos.slice(0, 6),
     };
   },
 });
