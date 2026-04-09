@@ -95,7 +95,8 @@ if $CLI_NEEDS_DEPLOY; then
     ./scripts/deploy.sh
   fi
   CURRENT_VERSION=$(grep '"version"' package.json | head -1 | sed 's/.*"version": "\(.*\)".*/\1/')
-  echo "$LAST_CLI_HASH" > "$LAST_CLI_MARKER"
+  # Re-read hash AFTER deploy.sh (which may have committed a version bump)
+  echo "$(git log -1 --format=%H -- .)" > "$LAST_CLI_MARKER"
   echo "   ✓ CLI v$CURRENT_VERSION deployed"
 else
   echo "   CLI v$CURRENT_VERSION already deployed, no code changes - skipping"
