@@ -906,62 +906,38 @@ export const webList = query({
         if (!seen.has(id)) { seen.add(id); allTasks.push(t); }
       };
 
-      for (const status of statuses) {
-        const userTasks = await ctx.db.query("tasks")
-          .withIndex("by_user_status", (q: any) => q.eq("user_id", userId).eq("status", status))
-          .order("desc")
-          .take(500);
-        for (const t of userTasks) pushUnique(t);
-
-        if (args.team_id) {
+      if (args.workspace === "team" && args.team_id) {
+        // TEAM VIEW: only tasks explicitly belonging to this team.
+        // team_id is set at creation time by createDataContext.
+        for (const status of statuses) {
           const teamTasks = await ctx.db.query("tasks")
             .withIndex("by_team_status", (q: any) => q.eq("team_id", args.team_id).eq("status", status))
             .order("desc")
             .take(500);
           for (const t of teamTasks) pushUnique(t);
         }
-      }
-
-      if ((args.workspace === "team" || !args.workspace) && args.team_id) {
-        const needConvLookup = allTasks.filter(t => !t.team_id);
-        const convMap = new Map<string, any>();
-        for (const t of needConvLookup) {
-          const cid = t.conversation_ids?.[0] || t.created_from_conversation;
-          if (cid) {
-            const conv = await ctx.db.get(cid);
-            if (conv) convMap.set(String(cid), conv);
-          }
-        }
-        const teamStr = String(args.team_id);
-        tasks = allTasks.filter(t => {
-          if (String(t.team_id) === teamStr) return true;
-          if (!t.team_id) {
-            const cid = t.conversation_ids?.[0] || t.created_from_conversation;
-            const conv = cid ? convMap.get(String(cid)) : undefined;
-            if (conv) return (!conv.is_private || conv.auto_shared) && String(conv.team_id) === teamStr;
-          }
-          return false;
-        });
       } else if (args.workspace === "personal") {
-        const needConvLookup = allTasks.filter(t => !t.team_id);
-        const convMap = new Map<string, any>();
-        for (const t of needConvLookup) {
-          const cid = t.conversation_ids?.[0] || t.created_from_conversation;
-          if (cid) {
-            const conv = await ctx.db.get(cid);
-            if (conv) convMap.set(String(cid), conv);
-          }
+        // PERSONAL VIEW: user's own tasks that don't belong to any team.
+        for (const status of statuses) {
+          const userTasks = await ctx.db.query("tasks")
+            .withIndex("by_user_status", (q: any) => q.eq("user_id", userId).eq("status", status))
+            .order("desc")
+            .take(500);
+          for (const t of userTasks) pushUnique(t);
         }
-        tasks = allTasks.filter(t => {
-          if (t.team_id) return false;
-          const cid = t.conversation_ids?.[0] || t.created_from_conversation;
-          const conv = cid ? convMap.get(String(cid)) : undefined;
-          if (conv) return conv.is_private && !conv.auto_shared;
-          return true;
-        });
+        // Exclude tasks that belong to a team
+        allTasks.splice(0, allTasks.length, ...allTasks.filter(t => !t.team_id));
       } else {
-        tasks = allTasks;
+        // UNSCOPED: all user's tasks (fallback, shouldn't happen from frontend)
+        for (const status of statuses) {
+          const userTasks = await ctx.db.query("tasks")
+            .withIndex("by_user_status", (q: any) => q.eq("user_id", userId).eq("status", status))
+            .order("desc")
+            .take(500);
+          for (const t of userTasks) pushUnique(t);
+        }
       }
+      tasks = allTasks;
     }
     if (args.project_path) {
       tasks = scopeByProject(tasks, args.project_path);
