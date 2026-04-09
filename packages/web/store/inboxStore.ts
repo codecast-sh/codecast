@@ -172,6 +172,7 @@ export type TaskItem = {
   labels?: string[];
   blocked_by?: string[];
   blocks?: string[];
+  user_id?: string;
   assignee?: string;
   assignee_info?: { name: string; image?: string } | null;
   confidence?: number;

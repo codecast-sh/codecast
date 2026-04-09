@@ -766,7 +766,7 @@ export function TaskListContent() {
     if (priorityFilter) list = list.filter((t) => t.priority === priorityFilter);
     if (labelFilter) list = list.filter((t) => t.labels?.includes(labelFilter));
     if (assigneeFilter === "_unassigned") list = list.filter((t) => !t.assignee);
-    else if (assigneeFilter) list = list.filter((t) => t.assignee === assigneeFilter);
+    else if (assigneeFilter) list = list.filter((t) => t.assignee === assigneeFilter || (!t.assignee && t.user_id === assigneeFilter));
     return list;
   }, [tasksList, priorityFilter, labelFilter, assigneeFilter, statusesFilter, sourceFilter]);
 
@@ -808,10 +808,12 @@ export function TaskListContent() {
     const byAssignee: Record<string, { info: TaskItem["assignee_info"]; tasks: TaskItem[] }> = {};
     const unassigned: TaskItem[] = [];
     for (const t of filteredTasks) {
-      if (t.assignee && t.assignee_info) {
-        const key = t.assignee;
-        if (!byAssignee[key]) byAssignee[key] = { info: t.assignee_info, tasks: [] };
-        byAssignee[key].tasks.push(t);
+      // Fall back to creator (user_id) when no explicit assignee is set
+      const ownerKey = t.assignee || t.user_id;
+      const ownerInfo = t.assignee_info || t.creator;
+      if (ownerKey && ownerInfo) {
+        if (!byAssignee[ownerKey]) byAssignee[ownerKey] = { info: ownerInfo, tasks: [] };
+        byAssignee[ownerKey].tasks.push(t);
       } else {
         unassigned.push(t);
       }

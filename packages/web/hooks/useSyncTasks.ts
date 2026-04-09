@@ -16,8 +16,7 @@ export function useSyncTasks(statusFilter?: string, triageStatus?: string) {
       status: statusFilter || undefined,
       ...workspaceArgs,
       limit: numItems,
-      ...(triageStatus ? { triage_status: triageStatus } : {}),
-      include_derived: true,
+      ...(triageStatus ? { triage_status: triageStatus, include_derived: true } : {}),
     }
   );
 
