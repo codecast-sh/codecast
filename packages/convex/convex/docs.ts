@@ -110,9 +110,9 @@ async function buildWebDocList(
     ? "personal" as const
     : args.workspace;
 
-  // Cap fetch to avoid Convex 16MB read limit — docs carry large content fields.
-  // The pagination cursor handles "not enough after filtering" naturally.
-  const fetchLimit = Math.min(Math.max(desiredCount, 50), 200);
+  // Cap fetch to avoid Convex read byte limit — docs carry large content fields.
+  // Keep minimum low to avoid "Too many bytes" errors on accounts with large docs.
+  const fetchLimit = Math.min(Math.max(desiredCount, 25), 100);
 
   const { records: rawDocs, convMap } = await scopedFetch(ctx, "docs", {
     userId,
@@ -192,8 +192,8 @@ async function buildWebDocList(
   const withAuthors = enriched.map(extractPlanTitleForWeb).map((d: any) => {
     const author = d.user_id ? userMap.get(String(d.user_id)) : undefined;
     const plan = d.plan_id ? planMap.get(String(d.plan_id)) : (docToPlanMap.get(d._id as string) || undefined);
-    // Strip content from list results — it's large and not needed for rendering cards
-    const { content: _content, ...rest } = d;
+    // Strip heavy fields from list results — not needed for rendering cards
+    const { content: _content, embedding: _embedding, entries: _entries, ...rest } = d;
     return {
       ...rest,
       ...(author ? { author_name: author.name, author_image: author.image, author_username: author.github_username } : {}),
