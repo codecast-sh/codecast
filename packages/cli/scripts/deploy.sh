@@ -5,7 +5,6 @@ cd "$(dirname "$0")/.."
 
 FORCE_UPDATE=false
 BUMP_TYPE="patch"
-NO_BUMP=false
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -13,19 +12,14 @@ while [[ $# -gt 0 ]]; do
       FORCE_UPDATE=true
       shift
       ;;
-    --no-bump)
-      NO_BUMP=true
-      shift
-      ;;
     patch|minor|major)
       BUMP_TYPE="$1"
       shift
       ;;
     *)
-      echo "Usage: ./scripts/deploy.sh [patch|minor|major] [--force] [--no-bump]"
+      echo "Usage: ./scripts/deploy.sh [patch|minor|major] [--force]"
       echo "  patch|minor|major  Version bump type (default: patch)"
       echo "  --force            Force all remote clients to update immediately"
-      echo "  --no-bump          Skip version bump (used by deploy-all.sh)"
       exit 1
       ;;
   esac
@@ -43,30 +37,19 @@ R2_BUCKET="codecast"
 export AWS_DEFAULT_REGION="auto"
 BINARIES_DIR="../web/binaries"
 
-# Version bump
-if [[ "$NO_BUMP" == "false" ]]; then
-  OLD_VERSION=$(jq -r '.version' package.json)
-  IFS='.' read -r MAJOR MINOR PATCH <<< "$OLD_VERSION"
-  case "$BUMP_TYPE" in
-    major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
-    minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
-    patch) PATCH=$((PATCH + 1)) ;;
-  esac
-  NEW_VERSION="$MAJOR.$MINOR.$PATCH"
-  jq --arg v "$NEW_VERSION" '.version = $v' package.json > package.json.tmp && mv package.json.tmp package.json
-  sed -i '' "s/const VERSION = \"$OLD_VERSION\"/const VERSION = \"$NEW_VERSION\"/" src/update.ts
-  echo "Version: $OLD_VERSION -> $NEW_VERSION"
-fi
+# Version bump (package.json is the single source of truth — update.ts imports it)
+OLD_VERSION=$(jq -r '.version' package.json)
+IFS='.' read -r MAJOR MINOR PATCH <<< "$OLD_VERSION"
+case "$BUMP_TYPE" in
+  major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+  minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+  patch) PATCH=$((PATCH + 1)) ;;
+esac
+NEW_VERSION="$MAJOR.$MINOR.$PATCH"
+jq --arg v "$NEW_VERSION" '.version = $v' package.json > package.json.tmp && mv package.json.tmp package.json
+echo "Version: $OLD_VERSION -> $NEW_VERSION"
 
-# Verify versions match
-VERSION=$(jq -r '.version' package.json)
-SOURCE_VERSION=$(grep -o 'const VERSION = "[^"]*"' src/update.ts | grep -o '"[^"]*"' | tr -d '"')
-
-if [[ "$VERSION" != "$SOURCE_VERSION" ]]; then
-  echo "ERROR: package.json ($VERSION) != update.ts ($SOURCE_VERSION)"
-  echo "Fix src/update.ts or re-run without --no-bump."
-  exit 1
-fi
+VERSION="$NEW_VERSION"
 
 echo "Deploying codecast CLI v$VERSION"
 
@@ -131,11 +114,9 @@ echo "Deployed v$VERSION"
 echo "  https://dl.codecast.sh/latest.json"
 
 # Commit version bump
-if [[ "$NO_BUMP" == "false" ]]; then
-  git add package.json src/update.ts
-  git commit -m "chore(cli): bump version to $VERSION"
-  git push
-fi
+git add package.json
+git commit -m "chore(cli): bump version to $VERSION"
+git push
 
 if [[ "$FORCE_UPDATE" == "true" ]]; then
   echo ""
