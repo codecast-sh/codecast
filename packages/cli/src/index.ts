@@ -6430,6 +6430,109 @@ program
   });
 
 program
+  .command("install")
+  .description("Install or manage all CLAUDE.md snippets")
+  .option("--all", "Enable all snippets without prompting")
+  .option("--disable", "Disable all snippets")
+  .action(async (options) => {
+    const config = readConfig() || {};
+    const targets = getSnippetTargets();
+    const targetList = targets.map(t => t.label).join(", ");
+
+    const snippets = [
+      {
+        name: "Memory",
+        desc: "Search and learn from past conversations",
+        enabledKey: "memory_enabled" as const,
+        versionKey: "memory_version" as const,
+        getVersion: getMemoryVersion,
+        install: installMemorySnippet,
+        reEnable: "cast memory",
+      },
+      {
+        name: "Tasks & Plans",
+        desc: "Track work items, plans, and docs",
+        enabledKey: "work_enabled" as const,
+        versionKey: "work_version" as const,
+        getVersion: getWorkVersion,
+        install: installWorkSnippet,
+        reEnable: "cast task install",
+      },
+      {
+        name: "Scheduling",
+        desc: "Schedule follow-up work that runs autonomously",
+        enabledKey: "task_enabled" as const,
+        versionKey: "task_version" as const,
+        getVersion: getTaskVersion,
+        install: installTaskSnippet,
+        reEnable: "cast schedule install",
+      },
+      {
+        name: "Workflows",
+        desc: "DOT-based execution graphs with approval gates",
+        enabledKey: "workflow_enabled" as const,
+        versionKey: "workflow_version" as const,
+        getVersion: getWorkflowVersion,
+        install: installWorkflowSnippet,
+        reEnable: "cast workflow install",
+      },
+    ];
+
+    if (options.disable) {
+      for (const s of snippets) {
+        (config as any)[s.enabledKey] = false;
+      }
+      writeConfig(config);
+      console.log("All snippets disabled.");
+      console.log(`Run ${fmt.cmd("cast install")} to re-enable.`);
+      return;
+    }
+
+    console.log(`\n${c.bold}Codecast Agent Snippets${c.reset}`);
+    console.log(fmt.muted(`Installs instructions into ${targetList}\n`));
+
+    let anyInstalled = false;
+
+    for (const s of snippets) {
+      const enabled = (config as any)[s.enabledKey];
+      const status = enabled === true ? fmt.success("enabled") : enabled === false ? fmt.muted("disabled") : fmt.muted("not set up");
+
+      if (options.all) {
+        const result = s.install(true);
+        (config as any)[s.enabledKey] = true;
+        (config as any)[s.versionKey] = s.getVersion();
+        const verb = result.updated ? "updated" : result.installed ? "installed" : "up to date";
+        console.log(`  ${icons.check} ${s.name} — ${verb}`);
+        anyInstalled = true;
+        continue;
+      }
+
+      const answer = await confirm({
+        message: `${s.name} [${status}] — ${s.desc}`,
+        default: enabled !== false,
+      });
+
+      if (answer) {
+        const result = s.install(true);
+        (config as any)[s.enabledKey] = true;
+        (config as any)[s.versionKey] = s.getVersion();
+        const verb = result.updated ? "updated" : result.installed ? "installed" : "up to date";
+        console.log(`  ${icons.check} ${verb}`);
+        anyInstalled = true;
+      } else {
+        (config as any)[s.enabledKey] = false;
+        console.log(`  ${icons.cross} skipped`);
+      }
+    }
+
+    writeConfig(config);
+    if (anyInstalled) {
+      console.log(`\n${fmt.success("Done.")} Snippets installed in ${targetList}`);
+    }
+    console.log();
+  });
+
+program
   .command("bookmark")
   .description(
     "Bookmark a specific message in a conversation\n\n" +
