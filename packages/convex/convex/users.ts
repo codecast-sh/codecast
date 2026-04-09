@@ -500,7 +500,11 @@ export const updateNotificationPreferences = mutation({
       permission_request: v.boolean(),
       session_idle: v.optional(v.boolean()),
       session_error: v.optional(v.boolean()),
+      task_activity: v.optional(v.boolean()),
+      doc_activity: v.optional(v.boolean()),
+      plan_activity: v.optional(v.boolean()),
     })),
+    muted_members: v.optional(v.array(v.id("users"))),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -513,6 +517,9 @@ export const updateNotificationPreferences = mutation({
     }
     if (args.notification_preferences !== undefined) {
       updateData.notification_preferences = args.notification_preferences;
+    }
+    if (args.muted_members !== undefined) {
+      updateData.muted_members = args.muted_members;
     }
     await ctx.db.patch(userId, updateData);
   },

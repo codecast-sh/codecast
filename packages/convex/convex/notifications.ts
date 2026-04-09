@@ -97,6 +97,10 @@ export const notifyTeamSessionStart = internalMutation({
     const now = Date.now();
 
     for (const member of teamMembers) {
+      // Skip if this member has muted the actor
+      if (member.muted_members?.includes(args.user_id)) {
+        continue;
+      }
       if (
         member.push_token &&
         member.notifications_enabled &&
@@ -183,6 +187,11 @@ export const create = mutation({
 
     const prefs = recipient.notification_preferences;
     if (args.type === "mention" && prefs && !prefs.mention) {
+      return null;
+    }
+
+    // Skip if recipient has muted this actor
+    if (args.actor_user_id && recipient.muted_members?.includes(args.actor_user_id)) {
       return null;
     }
 

@@ -53,6 +53,7 @@ export default defineSchema({
     sync_mode: v.optional(v.union(v.literal("all"), v.literal("selected"))),
     sync_projects: v.optional(v.array(v.string())),
     team_share_paths: v.optional(v.array(v.string())),
+    muted_members: v.optional(v.array(v.id("users"))),
     team_conversations_last_seen: v.optional(v.number()),
     cli_version: v.optional(v.string()),
     cli_platform: v.optional(v.string()),
