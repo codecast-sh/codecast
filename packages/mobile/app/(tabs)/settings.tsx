@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react';
-import { StyleSheet, TouchableOpacity, Switch, Alert, ScrollView, View as RNView, Text as RNText, TextInput, ActionSheetIOS, KeyboardAvoidingView, Platform, Share, Clipboard } from 'react-native';
+import { StyleSheet, TouchableOpacity, Switch, Alert, ScrollView, View as RNView, Text as RNText, TextInput, ActionSheetIOS, KeyboardAvoidingView, Platform, Share, Clipboard, Image } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useAuth } from '@/lib/auth';
 import { useQuery, useMutation } from 'convex/react';
@@ -142,13 +142,18 @@ export default function SettingsScreen() {
     }
   };
 
-  const handleToggleNotificationType = async (type: 'team_session_start' | 'mention' | 'permission_request' | 'session_idle' | 'session_error') => {
+  const teamMembers = useQuery(api.teams.getTeamMembers, activeTeamId ? { team_id: activeTeamId } : "skip");
+
+  const handleToggleNotificationType = async (type: 'team_session_start' | 'mention' | 'permission_request' | 'session_idle' | 'session_error' | 'task_activity' | 'doc_activity' | 'plan_activity') => {
     const currentPrefs = currentUser?.notification_preferences || {
       team_session_start: true,
       mention: true,
       permission_request: true,
       session_idle: true,
       session_error: true,
+      task_activity: true,
+      doc_activity: true,
+      plan_activity: true,
     };
 
     try {
@@ -158,11 +163,27 @@ export default function SettingsScreen() {
           ...currentPrefs,
           session_idle: currentPrefs.session_idle ?? true,
           session_error: currentPrefs.session_error ?? true,
+          task_activity: currentPrefs.task_activity ?? true,
+          doc_activity: currentPrefs.doc_activity ?? true,
+          plan_activity: currentPrefs.plan_activity ?? true,
           [type]: !currentVal,
         },
       });
     } catch (error) {
       Alert.alert('Error', 'Failed to update notification preferences');
+    }
+  };
+
+  const handleToggleMuteMember = async (memberId: Id<"users">) => {
+    const currentMuted = currentUser?.muted_members ?? [];
+    const isMuted = currentMuted.includes(memberId);
+    const newMuted = isMuted
+      ? currentMuted.filter((id: Id<"users">) => id !== memberId)
+      : [...currentMuted, memberId];
+    try {
+      await updateNotificationPreferences({ muted_members: newMuted });
+    } catch (error) {
+      Alert.alert('Error', 'Failed to update mute settings');
     }
   };
 
@@ -425,6 +446,95 @@ export default function SettingsScreen() {
                   ios_backgroundColor={Theme.bgHighlight}
                 />
               </RNView>
+
+              <RNView style={styles.settingDivider} />
+              <RNView style={styles.setting}>
+                <RNView style={styles.settingText}>
+                  <RNText style={styles.settingLabel}>Task Activity</RNText>
+                  <RNText style={styles.settingDescription}>
+                    Updates on tasks you're watching
+                  </RNText>
+                </RNView>
+                <Switch
+                  value={currentUser?.notification_preferences?.task_activity ?? true}
+                  onValueChange={() => handleToggleNotificationType('task_activity')}
+                  trackColor={{ false: Theme.bgHighlight, true: Theme.accent }}
+                  thumbColor="#fff"
+                  ios_backgroundColor={Theme.bgHighlight}
+                />
+              </RNView>
+
+              <RNView style={styles.settingDivider} />
+              <RNView style={styles.setting}>
+                <RNView style={styles.settingText}>
+                  <RNText style={styles.settingLabel}>Doc Activity</RNText>
+                  <RNText style={styles.settingDescription}>
+                    Updates on docs you're watching
+                  </RNText>
+                </RNView>
+                <Switch
+                  value={currentUser?.notification_preferences?.doc_activity ?? true}
+                  onValueChange={() => handleToggleNotificationType('doc_activity')}
+                  trackColor={{ false: Theme.bgHighlight, true: Theme.accent }}
+                  thumbColor="#fff"
+                  ios_backgroundColor={Theme.bgHighlight}
+                />
+              </RNView>
+
+              <RNView style={styles.settingDivider} />
+              <RNView style={styles.setting}>
+                <RNView style={styles.settingText}>
+                  <RNText style={styles.settingLabel}>Plan Activity</RNText>
+                  <RNText style={styles.settingDescription}>
+                    Updates on plans you're watching
+                  </RNText>
+                </RNView>
+                <Switch
+                  value={currentUser?.notification_preferences?.plan_activity ?? true}
+                  onValueChange={() => handleToggleNotificationType('plan_activity')}
+                  trackColor={{ false: Theme.bgHighlight, true: Theme.accent }}
+                  thumbColor="#fff"
+                  ios_backgroundColor={Theme.bgHighlight}
+                />
+              </RNView>
+
+              {teamMembers && teamMembers.length > 0 && (
+                <>
+                  <RNView style={{ paddingHorizontal: Spacing.lg, paddingTop: 16, paddingBottom: 4 }}>
+                    <RNText style={{ fontSize: 12, fontWeight: '600', color: Theme.textMuted, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                      Team Members
+                    </RNText>
+                  </RNView>
+                  {teamMembers
+                    .filter((m: any) => m != null && m._id !== currentUser?._id)
+                    .map((member: any, idx: number) => (
+                      <RNView key={member._id}>
+                        {idx > 0 && <RNView style={styles.settingDivider} />}
+                        <RNView style={styles.setting}>
+                          <RNView style={{ flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: Spacing.md }}>
+                            {member.github_avatar_url ? (
+                              <Image source={{ uri: member.github_avatar_url }} style={{ width: 32, height: 32, borderRadius: 16, marginRight: Spacing.sm }} />
+                            ) : (
+                              <RNView style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: Theme.bgHighlight, alignItems: 'center', justifyContent: 'center', marginRight: Spacing.sm }}>
+                                <RNText style={{ fontSize: 14, fontWeight: '600', color: Theme.text }}>
+                                  {member.name?.[0]?.toUpperCase() || '?'}
+                                </RNText>
+                              </RNView>
+                            )}
+                            <RNText style={styles.settingLabel} numberOfLines={1}>{member.name || member.email}</RNText>
+                          </RNView>
+                          <Switch
+                            value={!(currentUser?.muted_members ?? []).includes(member._id)}
+                            onValueChange={() => handleToggleMuteMember(member._id)}
+                            trackColor={{ false: Theme.bgHighlight, true: Theme.accent }}
+                            thumbColor="#fff"
+                            ios_backgroundColor={Theme.bgHighlight}
+                          />
+                        </RNView>
+                      </RNView>
+                    ))}
+                </>
+              )}
             </>
           )}
         </RNView>
