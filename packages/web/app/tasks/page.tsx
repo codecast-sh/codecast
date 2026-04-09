@@ -756,8 +756,8 @@ export function TaskListContent() {
 
   const filteredTasks = useMemo(() => {
     let list = tasksList;
-    if (sourceFilter === "human") list = list.filter((t) => t.source === "human");
-    else if (sourceFilter === "bot") list = list.filter((t) => t.source !== "human");
+    if (sourceFilter === "human") list = list.filter((t) => t.source !== "insight");
+    else if (sourceFilter === "bot") list = list.filter((t) => t.source === "insight");
     else if (sourceFilter === "dismissed") list = list.filter((t) => t.triage_status === "dismissed");
     if (statusesFilter) {
       const set = new Set(statusesFilter.split(","));
@@ -766,7 +766,7 @@ export function TaskListContent() {
     if (priorityFilter) list = list.filter((t) => t.priority === priorityFilter);
     if (labelFilter) list = list.filter((t) => t.labels?.includes(labelFilter));
     if (assigneeFilter === "_unassigned") list = list.filter((t) => !t.assignee);
-    else if (assigneeFilter) list = list.filter((t) => t.assignee === assigneeFilter || (!t.assignee && t.user_id === assigneeFilter));
+    else if (assigneeFilter) list = list.filter((t) => t.assignee === assigneeFilter);
     return list;
   }, [tasksList, priorityFilter, labelFilter, assigneeFilter, statusesFilter, sourceFilter]);
 
@@ -808,10 +808,9 @@ export function TaskListContent() {
     const byAssignee: Record<string, { info: TaskItem["assignee_info"]; tasks: TaskItem[] }> = {};
     const unassigned: TaskItem[] = [];
     for (const t of filteredTasks) {
-      // Fall back to creator (user_id) when no explicit assignee is set
-      const ownerKey = t.assignee || t.user_id;
-      const ownerInfo = t.assignee_info || t.creator;
-      if (ownerKey && ownerInfo) {
+      if (t.assignee && t.assignee_info) {
+        const ownerKey = t.assignee;
+        const ownerInfo = t.assignee_info;
         if (!byAssignee[ownerKey]) byAssignee[ownerKey] = { info: ownerInfo, tasks: [] };
         byAssignee[ownerKey].tasks.push(t);
       } else {
