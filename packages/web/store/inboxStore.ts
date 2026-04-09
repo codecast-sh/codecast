@@ -280,6 +280,7 @@ export type ClientDismissed = {
   setup_prompt?: number;
   cli_offline?: number;
   tmux_missing?: number;
+  team_sharing_prompt?: number;
 };
 
 export type ClientTips = {
