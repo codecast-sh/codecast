@@ -10,6 +10,7 @@ import { useInboxStore, useTrackedStore, InboxSession, getSessionRenderKey, isCo
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "./ui/tooltip";
 import { cleanTitle, msgCountColor } from "../lib/conversationProcessor";
 import { SharePopover } from "./SharePopover";
+import { shareOrigin } from "../lib/utils";
 import { PlanContextPanel } from "./PlanContextPanel";
 import { WorkflowContextPanel } from "./WorkflowContextPanel";
 import { useRouter } from "next/navigation";
@@ -152,7 +153,7 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
 
   const convId = conversation._id as Id<"conversations">;
   const shareUrl = conversation.share_token
-    ? `${typeof window !== "undefined" ? window.location.origin : ""}/conversation/${convId}`
+    ? `${shareOrigin()}/conversation/${convId}`
     : null;
   const shareControls = (
     <SharePopover
@@ -162,7 +163,7 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
       hasTeam={!!(conversation as any).auto_shared}
       onSetPrivate={async () => { await setPrivacy({ conversation_id: convId, is_private: true }); toast.success("Made private"); }}
       onSetTeamVisibility={async (mode) => { await setTeamVisibility({ conversation_id: convId, team_visibility: mode }); toast.success(mode === "full" ? "Sharing full conversation with team" : "Sharing summary with team"); }}
-      onGenerateShareLink={async () => { await generateShareLink({ conversation_id: convId }); return `${window.location.origin}/conversation/${convId}`; }}
+      onGenerateShareLink={async () => { await generateShareLink({ conversation_id: convId }); return `${shareOrigin()}/conversation/${convId}`; }}
       shareUrl={shareUrl}
     />
   );
@@ -385,15 +386,15 @@ export function SessionCard({
               )}
               {!session.is_idle && !session.session_error && !session.is_unresponsive && !session.has_pending && (
                 <span className="relative flex h-1.5 w-1.5" title="Live">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-                  <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-400" />
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-sol-green opacity-75" />
+                  <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-sol-green" />
                 </span>
               )}
               {session.is_idle && !session.session_error && !session.is_unresponsive && !session.has_pending && session.message_count > 0 && (
                 <span className="w-1.5 h-1.5 rounded-full bg-gray-500/40 ring-1 ring-gray-500/20" title="Session idle" />
               )}
               {session.message_count > 0 && (
-                <span className={`text-[9px] tabular-nums ${msgCountColor(session.message_count)}`}>{session.message_count}</span>
+                <span className="text-[9px] tabular-nums text-sol-text-dim/50">{session.message_count}</span>
               )}
               <span className="text-[9px] text-gray-500 tabular-nums">
                 {formatIdleDuration(session.updated_at)}
@@ -873,6 +874,12 @@ export function SessionListPanel({
   const filteredCount = filteredPinned.length + filteredNew.length + filteredNeedsInput.length + filteredWorking.length;
 
   const [expandedSubSessions, setExpandedSubSessions] = useState<Record<string, boolean>>({});
+  const [showSubagents, setShowSubagents] = useState(true);
+  const totalSubagentCount = useMemo(() => {
+    let count = 0;
+    for (const subs of globalSubByParent.values()) count += subs.length;
+    return count;
+  }, [globalSubByParent]);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll to the active session when it changes
@@ -920,7 +927,7 @@ export function SessionListPanel({
                   onPin={s.pinSession}
                   variant={sectionVariant || "default"}
                 />
-                {visibleSubs.map((sub) => (
+                {showSubagents && visibleSubs.map((sub) => (
                   <SessionCard
                     key={sub._id}
                     session={sub}
@@ -938,7 +945,7 @@ export function SessionListPanel({
                     variant={sectionVariant || "default"}
                   />
                 ))}
-                {hiddenCount > 0 && (
+                {showSubagents && hiddenCount > 0 && (
                   <button
                     onClick={() => setExpandedSubSessions((prev) => ({ ...prev, [session._id]: true }))}
                     className="w-full px-2 py-0.5 text-[10px] text-gray-500 hover:text-violet-400 transition-colors text-left pl-[26px]"
@@ -946,7 +953,7 @@ export function SessionListPanel({
                     +{hiddenCount} more sub-session{hiddenCount > 1 ? "s" : ""}
                   </button>
                 )}
-                {subsExpanded && subs.length > 2 && (
+                {showSubagents && subsExpanded && subs.length > 2 && (
                   <button
                     onClick={() => setExpandedSubSessions((prev) => ({ ...prev, [session._id]: false }))}
                     className="w-full px-2 py-0.5 text-[10px] text-gray-500 hover:text-violet-400 transition-colors text-left pl-[26px]"
@@ -1004,7 +1011,12 @@ export function SessionListPanel({
             ))}
           </div>
         )}
-        <div className="flex-shrink-0 ml-auto">
+        <div className="flex items-center gap-2 flex-shrink-0 ml-auto">
+          {totalSubagentCount > 0 && (
+            <button onClick={() => setShowSubagents(v => !v)} className="text-[10px] text-sol-text-dim hover:text-sol-cyan transition-colors whitespace-nowrap">
+              {showSubagents ? `−${totalSubagentCount} sub` : `+${totalSubagentCount} sub`}
+            </button>
+          )}
           {s.hiddenSessionCount > 0 && (
             <button onClick={s.toggleShowAllSessions} className="text-[10px] text-sol-text-dim hover:text-sol-cyan transition-colors whitespace-nowrap">
               {s.showAllSessions ? `−${s.hiddenSessionCount} old` : `+${s.hiddenSessionCount} old`}
@@ -1064,7 +1076,7 @@ export function SessionListPanel({
                     onKill={handleKillDismissed}
                     variant="dismissed"
                   />
-                  {subMap.get(session._id)?.map((sub) => (
+                  {showSubagents && subMap.get(session._id)?.map((sub) => (
                     <SessionCard
                       key={sub._id}
                       session={sub}
