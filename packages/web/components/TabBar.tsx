@@ -1,5 +1,5 @@
 import { useCallback, useRef, useEffect } from "react";
-import { useRouter, usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { X, Plus } from "lucide-react";
 import { useInboxStore, useTrackedStore, type AppTab } from "../store/inboxStore";
 
@@ -30,8 +30,8 @@ export function pathLabel(path: string): string {
 }
 
 export function TabBar() {
-  const router = useRouter();
   const pathname = usePathname();
+  const router = useRouter();
   const s = useTrackedStore([
     (s) => s.tabs,
     (s) => s.activeTabId,
@@ -60,60 +60,68 @@ export function TabBar() {
   }, [pathname, activeTabId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Keyboard shortcuts: Cmd+T, Cmd+W, Cmd+Shift+[, Cmd+Shift+]
+  const routerRef = useRef(router);
+  routerRef.current = router;
+
   useEffect(() => {
+    function switchToTab(id: string) {
+      const state = useInboxStore.getState();
+      state.saveCurrentTabState();
+      state.switchTab(id);
+      const tab = state.tabs.find((t: AppTab) => t.id === id);
+      if (tab) routerRef.current.push(tab.path);
+    }
+
     const handler = (e: KeyboardEvent) => {
       const meta = e.metaKey || e.ctrlKey;
       if (!meta) return;
 
-      // Cmd+T — new tab
       if (e.key === "t" && !e.shiftKey) {
         e.preventDefault();
-        s.saveCurrentTabState();
-        s.openTab({ path: pathname, title: pathLabel(pathname), makeActive: true });
+        const state = useInboxStore.getState();
+        state.saveCurrentTabState();
+        state.openTab({ path: window.location.pathname, title: pathLabel(window.location.pathname), makeActive: true });
         return;
       }
 
-      // Cmd+W — close tab (only if >1 tabs)
       if (e.key === "w" && !e.shiftKey) {
         const state = useInboxStore.getState();
-        if (state.tabs.length <= 1) return; // let browser handle if only 1 tab
+        if (state.tabs.length <= 1) return;
         e.preventDefault();
         const curId = state.activeTabId;
         if (curId) {
           const idx = state.tabs.findIndex((t: AppTab) => t.id === curId);
-          s.closeTab(curId);
+          state.closeTab(curId);
           const remaining = state.tabs.filter((t: AppTab) => t.id !== curId);
           const next = remaining[Math.min(idx, remaining.length - 1)];
-          if (next) router.push(next.path);
+          if (next) routerRef.current.push(next.path);
         }
         return;
       }
 
-      // Cmd+Shift+[ — previous tab
       if ((e.code === "BracketLeft" || e.key === "{" || e.key === "[") && e.shiftKey) {
         e.preventDefault();
         const state = useInboxStore.getState();
         if (state.tabs.length <= 1) return;
         const idx = state.tabs.findIndex((t: AppTab) => t.id === state.activeTabId);
         const prev = state.tabs[(idx - 1 + state.tabs.length) % state.tabs.length];
-        if (prev) { s.saveCurrentTabState(); s.switchTab(prev.id); router.push(prev.path); }
+        if (prev) switchToTab(prev.id);
         return;
       }
 
-      // Cmd+Shift+] — next tab
       if ((e.code === "BracketRight" || e.key === "}" || e.key === "]") && e.shiftKey) {
         e.preventDefault();
         const state = useInboxStore.getState();
         if (state.tabs.length <= 1) return;
         const idx = state.tabs.findIndex((t: AppTab) => t.id === state.activeTabId);
         const next = state.tabs[(idx + 1) % state.tabs.length];
-        if (next) { s.saveCurrentTabState(); s.switchTab(next.id); router.push(next.path); }
+        if (next) switchToTab(next.id);
         return;
       }
     };
     window.addEventListener("keydown", handler, true);
     return () => window.removeEventListener("keydown", handler, true);
-  }, [pathname, router, s]);
+  }, []);
 
   const handleSwitch = useCallback(
     (tab: AppTab) => {
@@ -132,14 +140,14 @@ export function TabBar() {
       if (tabs.length <= 1) return;
       const idx = tabs.findIndex((t: AppTab) => t.id === id);
       const wasActive = activeTabId === id;
-      s.closeTab(id);
+      useInboxStore.getState().closeTab(id);
       if (wasActive) {
         const remaining = tabs.filter((t: AppTab) => t.id !== id);
         const next = remaining[Math.min(idx, remaining.length - 1)];
         if (next) router.push(next.path);
       }
     },
-    [router, s],
+    [router],
   );
 
   const handleNewTab = useCallback(() => {
