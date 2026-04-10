@@ -97,7 +97,7 @@ const ICON_COLORS = ["cyan", "blue", "violet", "magenta", "green", "yellow", "or
 
 // Map web icon names to Feather equivalents
 const featherIconMap: Record<string, string> = {
-  rocket: "send", flame: "zap", zap: "zap", star: "star", diamond: "diamond",
+  rocket: "send", flame: "zap", zap: "zap", star: "star", diamond: "octagon",
   crown: "award", shield: "shield", sword: "crosshair", anchor: "anchor",
   compass: "compass", mountain: "triangle", tree: "git-branch",
   sun: "sun", moon: "moon", cloud: "cloud", bolt: "zap",
@@ -118,8 +118,8 @@ function getSessionIconDefaults(id: string): { icon: string; color: string } {
     hash |= 0;
   }
   return {
-    icon: SESSION_ICONS[Math.abs(hash) % SESSION_ICONS.length],
-    color: ICON_COLORS[Math.abs(hash >> 8) % ICON_COLORS.length],
+    icon: SESSION_ICONS[(hash >>> 0) % SESSION_ICONS.length],
+    color: ICON_COLORS[((hash >>> 8) & 0xFF) % ICON_COLORS.length],
   };
 }
 
