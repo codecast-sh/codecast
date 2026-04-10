@@ -12,23 +12,32 @@ export type DocTreeNode = {
   children: DocTreeNode[];
 };
 
-/** Build a tree from the flat docs record, sorted by sort_order then created_at */
+/** Build a tree from human-created docs, sorted by sort_order then created_at */
 function buildDocTree(docs: Record<string, DocItem>): {
   roots: DocTreeNode[];
   recentHuman: DocItem[];
 } {
+  // Only show human-created docs in the sidebar tree
   const all = Object.values(docs).filter(
-    (d) => d.doc_type !== "plan" && !d.source?.includes("plan_mode")
+    (d) =>
+      d.source === "human" &&
+      d.doc_type !== "plan" &&
+      !d.source?.includes("plan_mode")
   );
+
+  // Index by id for fast parent lookup
+  const byId = new Set(all.map((d) => d._id));
 
   const byParent = new Map<string | null, DocItem[]>();
   for (const doc of all) {
-    const pid = doc.parent_id ?? null;
+    // If parent exists but was filtered out (e.g. bot-created), treat as root
+    const pid = doc.parent_id && byId.has(doc.parent_id) ? doc.parent_id : null;
     const arr = byParent.get(pid) ?? [];
     arr.push(doc);
     byParent.set(pid, arr);
   }
 
+  // Stable sort: sort_order first, then created_at (never changes)
   const sortDocs = (items: DocItem[]) =>
     items.sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.created_at - b.created_at);
 
@@ -44,7 +53,6 @@ function buildDocTree(docs: Record<string, DocItem>): {
 
   // Recent human-created docs (top 5, regardless of hierarchy position)
   const recentHuman = all
-    .filter((d) => d.source === "human")
     .sort((a, b) => b.updated_at - a.updated_at)
     .slice(0, 5);
 
