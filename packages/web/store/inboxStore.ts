@@ -55,6 +55,24 @@ export type PlanItem = {
   updated_at: number;
 };
 
+export type ProjectItem = {
+  _id: string;
+  short_id?: string;
+  title: string;
+  description?: string;
+  status: string;
+  color?: string;
+  icon?: string;
+  target_date?: number;
+  labels?: string[];
+  task_counts: { total: number; done: number; in_progress: number };
+  plan_count: number;
+  doc_count: number;
+  active_plan_count: number;
+  created_at: number;
+  updated_at: number;
+};
+
 export type InboxSession = {
   _id: string;
   session_id: string;
@@ -183,6 +201,7 @@ export type TaskItem = {
   plan?: PlanRef;
   activeSession?: { session_id: string; title?: string; agent_status?: string; agent_type?: string } | null;
   source_agent_type?: string | null;
+  origin_session?: { conversation_id: string; session_id: string; title?: string } | null;
   session_count?: number;
   steps?: TaskStep[];
   acceptance_criteria?: string[];
@@ -221,6 +240,9 @@ export type DocItem = {
   plan_id?: string;
   plan_short_id?: string;
   plan_status?: string;
+  parent_id?: string | null;
+  sort_order?: number;
+  linked_doc_ids?: string[];
   created_at: number;
   updated_at: number;
 };
@@ -256,6 +278,15 @@ export type PlanViewPrefs = {
   source?: string;
 };
 
+export type SavedView = {
+  id: string;
+  name: string;
+  page: "tasks" | "docs" | "plans";
+  prefs: TaskViewPrefs | DocViewPrefs | PlanViewPrefs;
+  team_id?: string;
+  created_at: number;
+};
+
 export type ClientUI = {
   theme?: "light" | "dark";
   sidebar_collapsed?: boolean;
@@ -270,6 +301,7 @@ export type ClientUI = {
   task_view?: TaskViewPrefs;
   doc_view?: DocViewPrefs;
   plan_view?: PlanViewPrefs;
+  saved_views?: SavedView[];
   show_subagents?: boolean;
   show_old_sessions?: boolean;
 };
@@ -598,6 +630,10 @@ interface InboxStoreState {
   updateClientDismissed: (key: keyof ClientDismissed, value: any) => void;
   updateClientTips: (partial: Partial<ClientTips>) => void;
 
+  // -- Saved views --
+  saveView: (view: Omit<SavedView, "id" | "created_at" | "team_id">) => void;
+  deleteView: (id: string) => void;
+
   // -- Recent projects cache --
   recentProjects: Array<{ path: string; count: number; lastActive: number }>;
   setRecentProjects: (projects: Array<{ path: string; count: number; lastActive: number }>) => void;
@@ -611,10 +647,11 @@ interface InboxStoreState {
   sidebarNavExpanded: Record<string, boolean>;
   toggleSidebarNav: (section: string) => void;
 
-  // -- Task / Doc / Plan state --
+  // -- Task / Doc / Plan / Project state --
   tasks: Record<string, TaskItem>;
   docs: Record<string, DocItem>;
   plans: Record<string, PlanItem>;
+  projects: Record<string, ProjectItem>;
   docProjectPaths: string[];
   docDetails: Record<string, DocDetail>;
   taskFilter: { status: string };
@@ -777,7 +814,7 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
   clientState: {
     kind: "singleton",
     merge: {
-      ui: "local_wins",
+      ui: "deep_merge",
       layouts: "deep_merge",
       dismissed: "deep_merge",
       drafts: "local_wins",
@@ -1130,20 +1167,69 @@ export const useInboxStore = create<InboxStoreState>(
     } as InboxSession;
   }),
 
-  updateClientUI: action(function (this: Draft, partial: Partial<ClientUI>) {
+  _applyClientUI: sync(function (this: Draft, partial: Partial<ClientUI>) {
     if (!this.clientState.ui) this.clientState.ui = {} as ClientUI;
     Object.assign(this.clientState.ui, partial);
   }),
 
-  updateClientLayout: action(function (this: Draft, key: string, value: any) {
+  updateClientUI: (partial: Partial<ClientUI>) => {
+    (get() as any)._applyClientUI(partial);
+    if (Object.keys(partial).length > 0) {
+      const dispatch = () => get()._dispatch("patch", [], { client_state: { _: { ui: partial } } });
+      dispatch().catch(() => setTimeout(() => dispatch().catch(() => {}), 3000));
+    }
+  },
+
+  _applySavedViews: sync(function (this: Draft, views: SavedView[]) {
+    if (!this.clientState.ui) this.clientState.ui = {} as ClientUI;
+    this.clientState.ui.saved_views = views;
+  }),
+
+  saveView: (view: Omit<SavedView, "id" | "created_at" | "team_id">) => {
+    const state = get();
+    const current = state.clientState.ui?.saved_views ?? [];
+    const newView: SavedView = {
+      ...view,
+      id: `sv_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      team_id: state.clientState.ui?.active_team_id,
+      created_at: Date.now(),
+    };
+    const newViews = [...current, newView];
+    (state as any)._applySavedViews(newViews);
+    const dispatch = () => get()._dispatch("patch", [], { client_state: { _: { ui: { saved_views: newViews } } } });
+    dispatch().catch(() => setTimeout(() => dispatch().catch(() => {}), 3000));
+  },
+
+  deleteView: (id: string) => {
+    const state = get();
+    const current = state.clientState.ui?.saved_views ?? [];
+    const newViews = current.filter((v: SavedView) => v.id !== id);
+    (state as any)._applySavedViews(newViews);
+    const dispatch = () => get()._dispatch("patch", [], { client_state: { _: { ui: { saved_views: newViews } } } });
+    dispatch().catch(() => setTimeout(() => dispatch().catch(() => {}), 3000));
+  },
+
+  _applyClientLayout: sync(function (this: Draft, key: string, value: any) {
     if (!this.clientState.layouts) this.clientState.layouts = {};
     (this.clientState.layouts as any)[key] = value;
   }),
 
-  updateClientDismissed: action(function (this: Draft, key: string, value: any) {
+  updateClientLayout: (key: string, value: any) => {
+    (get() as any)._applyClientLayout(key, value);
+    const dispatch = () => get()._dispatch("patch", [], { client_state: { _: { layouts: { [key]: value } } } });
+    dispatch().catch(() => setTimeout(() => dispatch().catch(() => {}), 3000));
+  },
+
+  _applyClientDismissed: sync(function (this: Draft, key: string, value: any) {
     if (!this.clientState.dismissed) this.clientState.dismissed = {};
     (this.clientState.dismissed as any)[key] = value;
   }),
+
+  updateClientDismissed: (key: string, value: any) => {
+    (get() as any)._applyClientDismissed(key, value);
+    const dispatch = () => get()._dispatch("patch", [], { client_state: { _: { dismissed: { [key]: value } } } });
+    dispatch().catch(() => setTimeout(() => dispatch().catch(() => {}), 3000));
+  },
 
   _applyClientTips: sync(function (this: Draft, partial: Partial<ClientTips>) {
     if (!this.clientState.tips) this.clientState.tips = {} as ClientTips;
@@ -1684,6 +1770,7 @@ export const useInboxStore = create<InboxStoreState>(
   tasks: {},
   docs: {},
   plans: {},
+  projects: {},
   docDetails: {},
   taskFilter: { status: "" },
   docFilter: { type: "", query: "", project: "", scope: "" },
@@ -1938,6 +2025,7 @@ if (typeof window !== "undefined") {
         if (val == null) continue;
         const cur = (state as any)[key];
         if (key === "clientState" && state.clientStateInitialized) {
+          // Merge tips (set_union)
           const cachedTips = val?.tips;
           if (cachedTips) {
             const cur = state.clientState.tips ?? {} as any;
@@ -1948,6 +2036,16 @@ if (typeof window !== "undefined") {
               if (union.length > ((cur as any)[k]?.length ?? 0)) { merged[k] = union; changed = true; }
             }
             if (changed) state.updateClientTips(merged);
+          }
+          // Merge ui fields that may only exist in IDB (saved_views, etc.)
+          const cachedUI = val?.ui;
+          if (cachedUI) {
+            const curUI = state.clientState.ui ?? {};
+            const uiPatch: Record<string, any> = {};
+            for (const [uk, uv] of Object.entries(cachedUI)) {
+              if (uv != null && (curUI as any)[uk] == null) uiPatch[uk] = uv;
+            }
+            if (Object.keys(uiPatch).length > 0) state.updateClientUI(uiPatch);
           }
           continue;
         }
@@ -1961,7 +2059,10 @@ if (typeof window !== "undefined") {
           if (Object.keys(cur || {}).length === 0) updates[key] = val;
         }
       }
-      if (Object.keys(updates).length > 0) useInboxStore.setState(updates);
+      if (Object.keys(updates).length > 0) {
+        if (updates.clientState) updates.clientStateInitialized = true;
+        useInboxStore.setState(updates);
+      }
     };
 
     // Strip stale large fields from cached conversations (git_diff, git_diff_staged, available_skills)
@@ -1987,7 +2088,7 @@ if (typeof window !== "undefined") {
 
     // Deferred: list views + secondary data render next frame
     requestAnimationFrame(() => {
-      apply(["tasks", "docs", "plans", "favorites", "bookmarks",
+      apply(["tasks", "docs", "plans", "projects", "favorites", "bookmarks",
              "recentProjects", "collapsedSections", "sidebarNavExpanded"]);
     });
   });
