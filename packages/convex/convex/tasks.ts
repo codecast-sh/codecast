@@ -1032,11 +1032,11 @@ export const webList = query({
         sourceConvIds.add(t.created_from_conversation.toString());
       }
     }
-    const sourceAgentMap = new Map<string, string>();
+    const sourceConvMap = new Map<string, { agent_type?: string; session_id?: string; title?: string }>();
     for (const cid of sourceConvIds) {
       try {
         const c = await ctx.db.get(cid as Id<"conversations">);
-        if (c?.agent_type) sourceAgentMap.set(cid, c.agent_type);
+        if (c) sourceConvMap.set(cid, { agent_type: c.agent_type, session_id: c.session_id, title: c.title || undefined });
       } catch {}
     }
 
@@ -1046,7 +1046,11 @@ export const webList = query({
       assignee_info: t.assignee ? userMap.get(t.assignee.toString()) || null : null,
       plan: t.plan_id ? planMap.get(t.plan_id.toString()) || null : null,
       activeSession: activeTaskMap.get(t._id.toString()) || null,
-      source_agent_type: t.created_from_conversation ? sourceAgentMap.get(t.created_from_conversation.toString()) || null : null,
+      source_agent_type: t.created_from_conversation ? sourceConvMap.get(t.created_from_conversation.toString())?.agent_type || null : null,
+      origin_session: t.created_from_conversation ? (() => {
+        const sc = sourceConvMap.get(t.created_from_conversation.toString());
+        return sc?.session_id ? { conversation_id: t.created_from_conversation.toString(), session_id: sc.session_id, title: sc.title } : null;
+      })() : null,
       session_count: (t.conversation_ids || []).length,
     }));
     return { items, hasMore: false };

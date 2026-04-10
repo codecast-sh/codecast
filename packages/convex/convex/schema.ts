@@ -1305,6 +1305,12 @@ export default defineSchema({
       v.literal("note")
     ),
 
+    // Hierarchy: parent doc for nesting (Notion-like pages-within-pages)
+    parent_id: v.optional(v.id("docs")),
+    sort_order: v.optional(v.number()),
+    // Explicit doc-to-doc links (wiki-style [[links]])
+    linked_doc_ids: v.optional(v.array(v.id("docs"))),
+
     project_id: v.optional(v.id("projects")),
     task_ids: v.optional(v.array(v.id("tasks"))),
     conversation_id: v.optional(v.id("conversations")),
@@ -1360,6 +1366,7 @@ export default defineSchema({
   })
     .index("by_user_id", ["user_id"])
     .index("by_user_type", ["user_id", "doc_type"])
+    .index("by_parent_id", ["parent_id"])
     .index("by_project_id", ["project_id"])
     .index("by_team_id", ["team_id"])
     .index("by_source_file", ["source_file"])
@@ -1478,53 +1485,12 @@ export default defineSchema({
     show_dismissed: v.optional(v.boolean()),
     dismissed_ids: v.optional(v.array(v.string())),
 
-    ui: v.optional(v.object({
-      theme: v.optional(v.union(v.literal("dark"), v.literal("light"))),
-      sidebar_collapsed: v.optional(v.boolean()),
-      zen_mode: v.optional(v.boolean()),
-      sticky_headers_disabled: v.optional(v.boolean()),
-      diff_panel_open: v.optional(v.boolean()),
-      file_diff_view_mode: v.optional(v.union(v.literal("unified"), v.literal("split"))),
-      active_team_id: v.optional(v.string()),
-      active_filter: v.optional(v.union(v.literal("my"), v.literal("team"))),
-      inbox_shortcuts_hidden: v.optional(v.boolean()),
-      workspace_initialized: v.optional(v.boolean()),
-      task_view: v.optional(v.object({
-        status: v.optional(v.string()),
-        view: v.optional(v.union(v.literal("list"), v.literal("kanban"))),
-        sort: v.optional(v.string()),
-        priority: v.optional(v.string()),
-        label: v.optional(v.string()),
-        assignee: v.optional(v.string()),
-        hide_agent: v.optional(v.boolean()),
-        source: v.optional(v.string()),
-      })),
-      doc_view: v.optional(v.object({
-        doc_type: v.optional(v.string()),
-      })),
-    })),
-
-    layouts: v.optional(v.object({
-      dashboard: v.optional(v.object({ sidebar: v.number(), main: v.number() })),
-      inbox: v.optional(v.object({ main: v.number(), sidebar: v.number() })),
-      conversation_diff: v.optional(v.object({ content: v.number(), diff: v.number() })),
-      file_diff: v.optional(v.object({ tree: v.number(), content: v.number() })),
-    })),
-
-    dismissed: v.optional(v.object({
-      desktop_app: v.optional(v.boolean()),
-      has_used_desktop: v.optional(v.boolean()),
-      setup_prompt: v.optional(v.number()),
-      cli_offline: v.optional(v.number()),
-      tmux_missing: v.optional(v.number()),
-    })),
-
-    tips: v.optional(v.object({
-      seen: v.optional(v.array(v.string())),
-      dismissed: v.optional(v.array(v.string())),
-      completed: v.optional(v.array(v.string())),
-      level: v.optional(v.union(v.literal("all"), v.literal("subtle"), v.literal("none"))),
-    })),
+    // Client preference bags — typed on the client via ClientUI/ClientLayouts/etc.
+    // Using v.any() so new prefs don't require schema migrations.
+    ui: v.optional(v.any()),
+    layouts: v.optional(v.any()),
+    dismissed: v.optional(v.any()),
+    tips: v.optional(v.any()),
 
     drafts: v.optional(v.any()),
 
