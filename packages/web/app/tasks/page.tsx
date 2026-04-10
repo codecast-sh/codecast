@@ -753,14 +753,15 @@ export function TaskListContent() {
   // Active tasks = not suggested-insight and not dismissed.
   // "human" = created via web UI, "agent" = created via cast CLI in a session.
   // Insight suggestions are tucked away behind a separate triage link.
-  const isActive = (t: TaskItem) => t.triage_status !== "suggested" && t.triage_status !== "dismissed";
+  const isActive = (t: TaskItem) => t.triage_status !== "suggested" && t.triage_status !== "dismissed" && t.source !== "insight";
+  const isTriage = (t: TaskItem) => t.source === "insight" ? t.triage_status !== "dismissed" : t.triage_status === "suggested";
   const sourceFilteredTasks = useMemo(() => {
     if (sourceFilter === "human") {
       return tasksList.filter((t) => t.source === "human" && isActive(t));
     } else if (sourceFilter === "agent") {
       return tasksList.filter((t) => t.source === "agent" && isActive(t));
     } else if (sourceFilter === "triage") {
-      return tasksList.filter((t) => t.triage_status === "suggested");
+      return tasksList.filter(isTriage);
     } else if (sourceFilter === "dismissed") {
       return tasksList.filter((t) => t.triage_status === "dismissed");
     } else {
@@ -769,7 +770,7 @@ export function TaskListContent() {
   }, [tasksList, sourceFilter]);
 
   const suggestedCount = useMemo(() => {
-    return tasksList.filter((t) => t.triage_status === "suggested").length;
+    return tasksList.filter(isTriage).length;
   }, [tasksList]);
 
   const filteredTasks = useMemo(() => {
