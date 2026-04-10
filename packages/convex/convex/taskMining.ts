@@ -243,6 +243,7 @@ export const mineTasksFromInsights = internalMutation({
         created_from_conversation: insight.conversation_id,
         created_from_insight: insight._id,
         source: "insight" as const,
+        triage_status: "suggested" as const,
         confidence: insight.confidence,
         is_private: insight.is_private,
         team_visibility: insight.team_visibility,
