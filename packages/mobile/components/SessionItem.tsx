@@ -205,13 +205,17 @@ export function SwipeableSessionItem({ session, onPress, onDismiss, onPin, onLon
   const panStartX = useRef(0);
   const dismissed = useRef(false);
 
+  const didSwipe = useRef(false);
+
   const handleTouchStart = useCallback((e: any) => {
     panStartX.current = e.nativeEvent.pageX;
     dismissed.current = false;
+    didSwipe.current = false;
   }, []);
 
   const handleTouchMove = useCallback((e: any) => {
     const dx = e.nativeEvent.pageX - panStartX.current;
+    if (Math.abs(dx) > 5) didSwipe.current = true;
     if (dx < 0) translateX.setValue(dx);
     if (dx > 0) translateX.setValue(dx);
   }, [translateX]);
@@ -267,7 +271,7 @@ export function SwipeableSessionItem({ session, onPress, onDismiss, onPin, onLon
         onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}
       >
-        <SessionItem session={session} onPress={onPress} onPin={onPin} onLongPress={onLongPress} />
+        <SessionItem session={session} onPress={() => { if (!didSwipe.current) onPress(); }} onPin={onPin} onLongPress={onLongPress} />
       </RNAnimated.View>
     </RNView>
   );
