@@ -1,11 +1,14 @@
 import { X, Monitor, ArrowRight } from "lucide-react";
 import { isDesktop } from "../lib/desktop";
-import { useInboxStore } from "../store/inboxStore";
+import { useTrackedStore } from "../store/inboxStore";
 
 export function DesktopAppBanner() {
-  const initialized = useInboxStore(s => s.clientStateInitialized);
-  const dismissed = useInboxStore(s => s.clientState.dismissed?.desktop_app ?? false);
-  const updateDismissed = useInboxStore(s => s.updateClientDismissed);
+  const s = useTrackedStore([
+    s => s.clientStateInitialized,
+    s => s.clientState.dismissed?.desktop_app,
+  ]);
+  const initialized = s.clientStateInitialized;
+  const dismissed = s.clientState.dismissed?.desktop_app ?? false;
 
   if (!initialized || dismissed) return null;
   if (isDesktop()) return null;
@@ -29,7 +32,7 @@ export function DesktopAppBanner() {
             <ArrowRight className="w-3 h-3" />
           </a>
           <button
-            onClick={() => updateDismissed("desktop_app", true)}
+            onClick={() => s.updateClientDismissed("desktop_app", true)}
             className="p-1 text-sol-text-dim hover:text-sol-text transition-colors"
             aria-label="Dismiss"
           >

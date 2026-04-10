@@ -4,22 +4,34 @@ set -e
 cd "$(dirname "$0")/.."
 
 FORCE_UPDATE=false
+BUMP_TYPE="patch"
+NO_BUMP=false
+
 while [[ $# -gt 0 ]]; do
   case $1 in
     --force)
       FORCE_UPDATE=true
       shift
       ;;
+    --no-bump)
+      NO_BUMP=true
+      shift
+      ;;
+    patch|minor|major)
+      BUMP_TYPE="$1"
+      shift
+      ;;
     *)
-      echo "Unknown option: $1"
-      echo "Usage: ./scripts/deploy.sh [--force]"
-      echo "  --force  Force all remote clients to update immediately"
+      echo "Usage: ./scripts/deploy.sh [patch|minor|major] [--force] [--no-bump]"
+      echo "  patch|minor|major  Version bump type (default: patch)"
+      echo "  --force            Force all remote clients to update immediately"
+      echo "  --no-bump          Redeploy current version (recovery after partial failure)"
       exit 1
       ;;
   esac
 done
 
-if [[ -z "$AWS_ACCESS_KEY_ID" && -f .env.deploy ]]; then
+if [ -f .env.deploy ]; then
   export $(cat .env.deploy | xargs)
 fi
 
@@ -31,7 +43,23 @@ R2_BUCKET="codecast"
 export AWS_DEFAULT_REGION="auto"
 BINARIES_DIR="../web/binaries"
 
-VERSION=$(jq -r '.version' package.json)
+# Version bump (package.json is the single source of truth — update.ts imports it)
+if [[ "$NO_BUMP" == "true" ]]; then
+  VERSION=$(jq -r '.version' package.json)
+  echo "Redeploying v$VERSION (no bump)"
+else
+  OLD_VERSION=$(jq -r '.version' package.json)
+  IFS='.' read -r MAJOR MINOR PATCH <<< "$OLD_VERSION"
+  case "$BUMP_TYPE" in
+    major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+    minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+    patch) PATCH=$((PATCH + 1)) ;;
+  esac
+  VERSION="$MAJOR.$MINOR.$PATCH"
+  jq --arg v "$VERSION" '.version = $v' package.json > package.json.tmp && mv package.json.tmp package.json
+  echo "Version: $OLD_VERSION -> $VERSION"
+fi
+
 echo "Deploying codecast CLI v$VERSION"
 
 # Build binaries
@@ -93,6 +121,13 @@ aws s3 cp /tmp/latest.json "s3://$R2_BUCKET/latest.json" \
 echo ""
 echo "Deployed v$VERSION"
 echo "  https://dl.codecast.sh/latest.json"
+
+# Commit version bump
+if [[ "$NO_BUMP" == "false" ]]; then
+  git add package.json
+  git commit -m "chore(cli): bump version to $VERSION"
+  git push
+fi
 
 if [[ "$FORCE_UPDATE" == "true" ]]; then
   echo ""

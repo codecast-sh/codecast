@@ -84,17 +84,7 @@ if [[ -n "$REMOTE_VERSION" && "$CURRENT_VERSION" != "$REMOTE_VERSION" ]]; then
   echo "   Version mismatch ($CURRENT_VERSION local vs $REMOTE_VERSION remote) - deploying..."
   CLI_NEEDS_DEPLOY=true
 elif [[ "$LAST_CLI_HASH" != "$PREV_CLI_HASH" ]]; then
-  echo "   Code changed since last deploy but version not bumped."
-  # Auto-bump patch version
-  IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
-  NEW_PATCH=$((PATCH + 1))
-  NEW_VERSION="$MAJOR.$MINOR.$NEW_PATCH"
-  echo "   Auto-bumping version: $CURRENT_VERSION -> $NEW_VERSION"
-  sed -i '' "s/\"version\": \"$CURRENT_VERSION\"/\"version\": \"$NEW_VERSION\"/" package.json
-  sed -i '' "s/const VERSION = \"$CURRENT_VERSION\"/const VERSION = \"$NEW_VERSION\"/" src/update.ts
-  CURRENT_VERSION="$NEW_VERSION"
-  git add package.json src/update.ts
-  git commit -m "chore(cli): bump version to $NEW_VERSION"
+  echo "   Code changed since last deploy - deploying..."
   CLI_NEEDS_DEPLOY=true
 fi
 
@@ -104,7 +94,9 @@ if $CLI_NEEDS_DEPLOY; then
   else
     ./scripts/deploy.sh
   fi
-  echo "$LAST_CLI_HASH" > "$LAST_CLI_MARKER"
+  CURRENT_VERSION=$(grep '"version"' package.json | head -1 | sed 's/.*"version": "\(.*\)".*/\1/')
+  # Re-read hash AFTER deploy.sh (which may have committed a version bump)
+  echo "$(git log -1 --format=%H -- .)" > "$LAST_CLI_MARKER"
   echo "   ✓ CLI v$CURRENT_VERSION deployed"
 else
   echo "   CLI v$CURRENT_VERSION already deployed, no code changes - skipping"
@@ -217,4 +209,4 @@ echo "  - Desktop: dl.codecast.sh/Codecast-<version>-arm64.dmg (if deployed)"
 echo ""
 echo "Tailing Railway build logs (Ctrl+C to stop)..."
 echo ""
-exec railway logs --build --latest
+exec railway logs --build --lines 50

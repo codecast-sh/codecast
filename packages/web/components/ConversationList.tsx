@@ -1099,6 +1099,7 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onNavi
   const openNewSession = useInboxStore((s) => s.openNewSession);
   const closeNewSession = useInboxStore((s) => s.closeNewSession);
   const listRef = useRef<HTMLDivElement>(null);
+  const sentinelRef = useRef<HTMLDivElement>(null);
   const isHoveredRef = useRef(false);
   const { containerRef: flipContainerRef, beforeReorder } = useFlipAnimation();
   const getConvKey = useCallback((c: Conversation) => c._id, []);
@@ -1122,20 +1123,16 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onNavi
 
   useWatchEffect(() => {
     if (!hasMore || isLoadingMore) return;
-
-    const scrollContainer = document.querySelector("[data-main-scroll]") as HTMLElement | null;
-    if (!scrollContainer) return;
-
-    const onScroll = () => {
-      const { scrollTop, scrollHeight, clientHeight } = scrollContainer;
-      if (scrollHeight - scrollTop - clientHeight < 400) {
-        loadMore();
-      }
-    };
-
-    scrollContainer.addEventListener("scroll", onScroll, { passive: true });
-    onScroll();
-    return () => scrollContainer.removeEventListener("scroll", onScroll);
+    const el = sentinelRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) loadMore();
+      },
+      { rootMargin: "400px" }
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
   }, [hasMore, isLoadingMore, loadMore]);
 
   const { filteredConversations, counts } = useMemo(() => {
@@ -1434,17 +1431,16 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onNavi
       ))}
       </div>
 
-      {(hasMore || isLoadingMore) && (
+      {hasMore && <div ref={sentinelRef} className="h-px" />}
+      {isLoadingMore && (
         <div className="flex justify-center pt-4 pb-8">
-          {isLoadingMore && (
-            <span className="flex items-center gap-2 text-sol-text-muted">
-              <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-              </svg>
-              Loading...
-            </span>
-          )}
+          <span className="flex items-center gap-2 text-sol-text-muted text-[11px]">
+            <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+            </svg>
+            Loading more...
+          </span>
         </div>
       )}
     </div>

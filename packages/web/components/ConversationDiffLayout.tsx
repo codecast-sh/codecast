@@ -37,6 +37,7 @@ interface ConversationDiffLayoutProps {
   onClearHighlight?: () => void;
   targetMessageId?: string;
   isOwner?: boolean;
+  showMessageInput?: boolean;
   onSendAndAdvance?: () => void;
   onSendAndDismiss?: () => void;
   autoFocusInput?: boolean;
@@ -66,6 +67,7 @@ export function ConversationDiffLayout({
   targetMessageId,
   onClearHighlight,
   isOwner,
+  showMessageInput,
   onSendAndAdvance,
   onSendAndDismiss,
   autoFocusInput,
@@ -174,6 +176,7 @@ export function ConversationDiffLayout({
     embedded,
     targetMessageId,
     isOwner,
+    showMessageInput,
     onSendAndAdvance,
     onSendAndDismiss,
     autoFocusInput,

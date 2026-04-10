@@ -24,5 +24,11 @@
     "@tanstack/react-virtual": "^3.13.18",
     "convex": "^1.31.6",
     "nanoid": "^5.1.7"
+  },
+  "overrides": {
+    "@radix-ui/react-slot": "1.2.4"
+  },
+  "resolutions": {
+    "@radix-ui/react-slot": "1.2.4"
   }
 }

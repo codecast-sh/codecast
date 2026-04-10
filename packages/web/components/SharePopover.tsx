@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
-import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "./ui/tooltip";
+import { Tooltip, TooltipTrigger, TooltipContent } from "./ui/tooltip";
 import { copyToClipboard } from "../lib/utils";
 import { toast } from "sonner";
 
@@ -101,9 +101,9 @@ export function SharePopover({
 
   return (
     <Popover open={isOpen} onOpenChange={setIsOpen}>
-      <TooltipProvider delayDuration={300}>
-        <Tooltip>
-          <TooltipTrigger asChild>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className="inline-flex">
             <PopoverTrigger asChild>
               <button
                 className={`flex items-center gap-1 p-1 rounded hover:bg-sol-bg-alt transition-colors text-xs ${status.label ? "" : "text-sol-text-dim hover:text-sol-text-secondary"}`}
@@ -114,10 +114,10 @@ export function SharePopover({
                 {status.label && <span className={`hidden sm:inline ${status.color}`}>{status.label}</span>}
               </button>
             </PopoverTrigger>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">{tooltipLabel}</TooltipContent>
-        </Tooltip>
-      </TooltipProvider>
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">{tooltipLabel}</TooltipContent>
+      </Tooltip>
       <PopoverContent
         align="end"
         className="w-72 bg-sol-bg border-sol-border p-0"

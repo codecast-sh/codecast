@@ -4,6 +4,7 @@ import { useFonts } from 'expo-font';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import * as SecureStore from 'expo-secure-store';
+import * as Linking from 'expo-linking';
 import { useEffect, useRef } from 'react';
 import 'react-native-reanimated';
 import { ConvexProvider } from 'convex/react';
@@ -133,12 +134,64 @@ function AnalyticsIdentify() {
   return null;
 }
 
+function mapWebUrlToRoute(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    if (parsed.hostname !== 'codecast.sh' && parsed.hostname !== 'www.codecast.sh') return null;
+    const path = parsed.pathname;
+    // Web /conversation/xxx -> mobile /session/xxx
+    const convMatch = path.match(/^\/conversation\/([a-z0-9]+)/);
+    if (convMatch) return `/session/${convMatch[1]}`;
+    // /share/xxx -> /session/xxx (share tokens resolve to conversations)
+    const shareMatch = path.match(/^\/share\/([a-zA-Z0-9]+)/);
+    if (shareMatch) return `/session/${shareMatch[1]}`;
+    // /tasks/xxx -> /task/xxx
+    const taskMatch = path.match(/^\/tasks?\/([a-z0-9-]+)/);
+    if (taskMatch) return `/task/${taskMatch[1]}`;
+    // /plans/xxx -> /plan/xxx
+    const planMatch = path.match(/^\/plans?\/([a-z0-9-]+)/);
+    if (planMatch) return `/plan/${planMatch[1]}`;
+    // /docs/xxx -> /doc/xxx
+    const docMatch = path.match(/^\/docs?\/([a-z0-9-]+)/);
+    if (docMatch) return `/doc/${docMatch[1]}`;
+    // /join/xxx -> handled by web, but open team tab
+    if (path.startsWith('/join/')) return '/(tabs)/team';
+    return null;
+  } catch (_e) {
+    return null;
+  }
+}
+
 function AuthGate({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading } = useAuth();
   const segments = useSegments();
   const router = useRouter();
 
   usePushNotifications();
+
+  // Handle deep links from web URLs
+  useEffect(() => {
+    if (!isAuthenticated) return;
+
+    function handleUrl(event: { url: string }) {
+      const route = mapWebUrlToRoute(event.url);
+      if (route) router.push(route as any);
+    }
+
+    const subscription = Linking.addEventListener('url', handleUrl);
+
+    // Handle initial URL (app opened via link)
+    Linking.getInitialURL().then((url) => {
+      if (url) {
+        const route = mapWebUrlToRoute(url);
+        if (route) {
+          setTimeout(() => router.push(route as any), 500);
+        }
+      }
+    });
+
+    return () => subscription.remove();
+  }, [isAuthenticated, router]);
 
   useEffect(() => {
     if (isLoading) return;

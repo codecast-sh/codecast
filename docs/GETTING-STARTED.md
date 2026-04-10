@@ -311,7 +311,7 @@ CONVEX_CLOUD_URL       # alias for CONVEX_CLOUD_ORIGIN
 | `./init.sh` | First-time setup (install, env files, smoke test) |
 | `sudo ./setup-hosts.sh` | Add local domains to `/etc/hosts`, install nginx |
 | `./check.sh` | Health check |
-| `./scripts/deploy.sh` | Deploy CLI binaries to S3 |
+| `./scripts/deploy.sh` | Bump version, build, and deploy CLI binaries |
 | `./scripts/deploy-all.sh` | Full deployment (Convex + web + CLI) |
 | `./scripts/backup-convex.sh` | Backup Convex data (set `BACKUP_DIR`, `RETENTION_DAYS` to override defaults) |
 | `./scripts/run-e2e-suite.sh` | Run E2E test suite |
