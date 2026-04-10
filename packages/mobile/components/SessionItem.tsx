@@ -250,16 +250,25 @@ export function SwipeableSessionItem({ session, onPress, onDismiss, onPin, onLon
     }
   }, [translateX, onDismiss, onPin]);
 
+  const swipeBehindOpacity = translateX.interpolate({
+    inputRange: [-400, -1, 0, 1, 400],
+    outputRange: [1, 1, 0, 0, 0],
+  });
+  const swipeBehindPinOpacity = translateX.interpolate({
+    inputRange: [-400, -1, 0, 1, 400],
+    outputRange: [0, 0, 0, 1, 1],
+  });
+
   return (
     <RNView style={styles.swipeContainer}>
-      <RNView style={styles.swipeBehind}>
+      <RNAnimated.View style={[styles.swipeBehind, { opacity: swipeBehindOpacity }]}>
         <FontAwesome name="archive" size={16} color="#fff" />
         <RNText style={styles.swipeBehindText}>Dismiss</RNText>
-      </RNView>
-      <RNView style={styles.swipeBehindPin}>
+      </RNAnimated.View>
+      <RNAnimated.View style={[styles.swipeBehindPin, { opacity: swipeBehindPinOpacity }]}>
         <FontAwesome name="thumb-tack" size={16} color="#fff" />
         <RNText style={styles.swipeBehindText}>{session.is_pinned ? "Unpin" : "Pin"}</RNText>
-      </RNView>
+      </RNAnimated.View>
       <RNAnimated.View
         style={[styles.conversationItem, { transform: [{ translateX }] }]}
         onTouchStart={handleTouchStart}
