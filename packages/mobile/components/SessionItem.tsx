@@ -72,6 +72,14 @@ export function agentLabel(agentType: string): string {
   }
 }
 
+const projectColors = [Theme.blue, Theme.cyan, Theme.violet, Theme.magenta, Theme.green, Theme.orange];
+
+export function projectColor(name: string): string {
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) hash = ((hash << 5) - hash + name.charCodeAt(i)) | 0;
+  return projectColors[Math.abs(hash) % projectColors.length];
+}
+
 export function agentColor(agentType: string): string {
   switch (agentType) {
     case "claude_code": return Theme.orange;
@@ -154,7 +162,7 @@ export function SessionItem({ session, onPress, onPin, onLongPress }: { session:
         </RNView>
         <RNView style={styles.rightMeta}>
           {sLabel && <RNText style={[styles.statusBadge, { color: sColor }]}>{sLabel}</RNText>}
-          <RNText style={styles.messageCount}>{session.message_count}</RNText>
+          <RNText style={styles.timeText}>{formatRelativeTime(session.updated_at)}</RNText>
         </RNView>
       </RNView>
 
@@ -172,31 +180,15 @@ export function SessionItem({ session, onPress, onPin, onLongPress }: { session:
       )}
 
       <RNView style={styles.conversationMeta}>
+        {project && (
+          <RNText style={[styles.projectBadge, { color: projectColor(project), backgroundColor: projectColor(project) + '28' }]} numberOfLines={1}>{project}</RNText>
+        )}
         {showAuthor && (
-          <>
-            <RNText style={styles.authorText}>{session.author_name}</RNText>
-            <RNText style={styles.metaSeparator}>·</RNText>
-          </>
+          <RNText style={styles.authorText}>{session.author_name}</RNText>
         )}
         {agent ? (
-          <>
-            <RNText style={[styles.agentBadge, { color: agentColor(session.agent_type ?? "") }]}>{agent}</RNText>
-            <RNText style={styles.metaSeparator}>·</RNText>
-          </>
+          <RNText style={[styles.agentBadge, { color: agentColor(session.agent_type ?? "") }]}>{agent}</RNText>
         ) : null}
-        <RNText style={styles.metaText}>{formatRelativeTime(session.updated_at)}</RNText>
-        {durationMs > 60000 && (
-          <>
-            <RNText style={styles.metaSeparator}>·</RNText>
-            <RNText style={styles.metaText}>{formatDuration(durationMs)}</RNText>
-          </>
-        )}
-        {project && (
-          <>
-            <RNText style={styles.metaSeparator}>·</RNText>
-            <RNText style={styles.projectText} numberOfLines={1}>{project}</RNText>
-          </>
-        )}
       </RNView>
     </TouchableOpacity>
   );
@@ -352,6 +344,22 @@ export const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.3,
   },
+  projectBadge: {
+    fontSize: 11,
+    fontWeight: '600',
+    maxWidth: 130,
+    letterSpacing: 0.2,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 6,
+    overflow: 'hidden',
+    marginRight: 2,
+  },
+  timeText: {
+    fontSize: 11,
+    color: Theme.textMuted0,
+    fontWeight: '400',
+  },
   messageCount: {
     fontSize: 11,
     color: Theme.textMuted0,
@@ -381,6 +389,8 @@ export const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     marginLeft: 15,
+    marginTop: 2,
+    gap: 6,
   },
   authorText: {
     fontSize: 12,
