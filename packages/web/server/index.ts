@@ -21,8 +21,8 @@ const BINARIES: Record<string, string> = {
   "codecast-windows-x64.exe": "https://dl.codecast.sh/codecast-windows-x64.exe",
 };
 
-const MAC_DMG_URL = "https://dl.codecast.sh/Codecast-1.1.43-arm64.dmg";
-const MAC_DMG_VERSION = "1.1.43";
+const MAC_DMG_URL = "https://dl.codecast.sh/Codecast-1.1.51-arm64.dmg";
+const MAC_DMG_VERSION = "1.1.51";
 
 app.get("/api/health", (c) =>
   c.json({

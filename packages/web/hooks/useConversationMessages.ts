@@ -2,9 +2,8 @@ import { useCallback, useState, useRef, useMemo, useEffect } from "react";
 import { useQuery, usePaginatedQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
-import { useInboxStore, isConvexId } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, isConvexId, ensureHydrated } from "../store/inboxStore";
 import { useConvexSync } from "./useConvexSync";
-import { loadConversationMessages } from "../store/idbCache";
 
 const EMPTY_MESSAGES: Message[] = [];
 const EMPTY_PENDING: Message[] = [];
@@ -75,24 +74,8 @@ export function useConversationMessages(
   if (hasTarget && !targetMode) setTargetMode(true);
   if (!hasTarget && jumpTimestamp === null && targetMode) setTargetMode(false);
 
-  // =============================================
-  // IDB HYDRATION: Load cached messages before Convex responds
-  // =============================================
-  const idbHydratedRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (idbHydratedRef.current === conversationId) return;
-    idbHydratedRef.current = conversationId;
-    const store = useInboxStore.getState();
-    // Only hydrate from IDB if we don't already have messages in the store
-    if (store.messages[conversationId]?.length > 0) return;
-    loadConversationMessages(conversationId).then((cached) => {
-      if (!cached || cached.messages.length === 0) return;
-      // Don't overwrite if Convex already delivered data while we were loading
-      const current = useInboxStore.getState().messages[conversationId];
-      if (current?.length > 0) return;
-      useInboxStore.getState().setMessages(conversationId, cached.messages, cached.pagination);
-    });
-  }, [conversationId]);
+  // IDB hydration — idempotent, no hooks, tracked by module-level Set
+  ensureHydrated(conversationId);
 
   // =============================================
   // NORMAL MODE: Convex paginated subscription (background sync)
@@ -105,15 +88,29 @@ export function useConversationMessages(
     { initialNumItems: 100 }
   );
 
+  // Ref avoids re-creating the sync callback when paginationStatus changes,
+  // which would re-trigger useConvexSync's effect and loop: setMessages → re-render → new callback → effect → setMessages …
+  const paginationStatusRef = useRef(paginationStatus);
+  paginationStatusRef.current = paginationStatus;
+
+  // Sync Convex paginated results → Zustand store.
+  // Guard: skip setMessages when the message list is unchanged to break the
+  // re-render loop (setMessages → Zustand notify → re-render → effect → …).
+  const lastSyncedRef = useRef<{ id: string; len: number; first?: string; last?: string } | null>(null);
+
   useConvexSync(
     useNormalMode && paginationStatus !== "LoadingFirstPage" ? descResults : undefined,
     useCallback((results: any) => {
       const messages: Message[] = [...results].reverse();
+      const sig = { id: conversationId, len: messages.length, first: messages[0]?._id, last: messages[messages.length - 1]?._id };
+      const prev = lastSyncedRef.current;
+      if (prev && prev.id === sig.id && prev.len === sig.len && prev.first === sig.first && prev.last === sig.last) return;
+      lastSyncedRef.current = sig;
       useInboxStore.getState().setMessages(conversationId, messages, {
-        hasMoreAbove: paginationStatus === "CanLoadMore" || paginationStatus === "LoadingMore",
+        hasMoreAbove: paginationStatusRef.current === "CanLoadMore" || paginationStatusRef.current === "LoadingMore",
         initialized: true,
       });
-    }, [conversationId, paginationStatus])
+    }, [conversationId])
   );
 
   // =============================================
@@ -131,10 +128,26 @@ export function useConversationMessages(
   // =============================================
   // READ FROM STORE (primary source of truth - never waits on Convex)
   // =============================================
-  const storeMessages = useInboxStore((s) => s.messages[conversationId]) ?? EMPTY_MESSAGES;
-  const storePending = useInboxStore((s) => s.pendingMessages[conversationId]) ?? EMPTY_PENDING;
-  const storeMeta = useInboxStore((s) => s.conversations[conversationId]);
-  const storePagination = useInboxStore((s) => s.pagination[conversationId]);
+  const s = useTrackedStore([
+    s => s.messages[conversationId],
+    s => s.pendingMessages[conversationId],
+    s => s.conversations[conversationId],
+    s => s.sessions[conversationId],
+    s => s.pagination[conversationId],
+  ]);
+  const storeMessages = s.messages[conversationId] ?? EMPTY_MESSAGES;
+  const storePending = s.pendingMessages[conversationId] ?? EMPTY_PENDING;
+  const _convMeta = s.conversations[conversationId];
+  const _sessMeta = s.sessions[conversationId] ?? s.dismissedSessions[conversationId];
+  // Merge session data as defaults so the minimal conversations seed ({ _id }) doesn't
+  // shadow real session fields like message_count before getConversationWithMeta resolves.
+  // Must be memoized: the spread creates a new object every render, which breaks
+  // downstream useMemo referential stability and triggers infinite tooltip ref cycles.
+  const storeMeta = useMemo(
+    () => _convMeta && _sessMeta ? { ..._sessMeta, ..._convMeta } : _convMeta ?? _sessMeta,
+    [_convMeta, _sessMeta],
+  );
+  const storePagination = s.pagination[conversationId];
 
   // Merge server messages with unconfirmed pending messages (local-first)
   const mergedMessages: Message[] = useMemo(() => {
@@ -353,14 +366,15 @@ export function useConversationMessages(
   // =============================================
   const hasPending = storePending.length > 0;
   const conversation: Record<string, any> | null = useMemo(() => {
-    // STRUCTURAL INVARIANT: if the user has pending (unsent/unconfirmed) messages,
-    // we MUST return a conversation object so the UI renders them. Returning null
-    // would unmount ConversationView+MessageInput and swallow the message.
     if (!storeMeta && !hasPending) return null;
-    if (!hasPending) {
-      if (targetMode && !targetAroundData && rawMessages.length === 0) return null;
-      if (useNormalMode && mergedMessages.length === 0 && (storeMeta?.message_count ?? 0) > 0) return null;
-    }
+    if (!hasPending && targetMode && !targetAroundData && rawMessages.length === 0) return null;
+    // Don't return an empty conversation while messages are still loading —
+    // otherwise ConversationView shows the "new session" AgentSwitcher + input flash.
+    // The message_count check catches known-nonempty conversations; the !initialized
+    // check catches cases where message_count is undefined/0 but messages haven't loaded yet.
+    if (!hasPending && rawMessages.length === 0 && (
+      (storeMeta?.message_count ?? 0) > 0 || (!storePagination?.initialized && storeMeta?.message_count !== 0)
+    )) return null;
     return {
       ...(storeMeta || { _id: conversationId, status: "active", message_count: 0 }),
       messages: rawMessages,
@@ -368,7 +382,7 @@ export function useConversationMessages(
       compaction_count: compactionCount,
       child_conversation_map: childConversationMap,
     };
-  }, [storeMeta, rawMessages, loadedStartIndex, compactionCount, childConversationMap, targetMode, targetAroundData, mergedMessages.length, useNormalMode, hasPending, conversationId]);
+  }, [storeMeta, rawMessages, loadedStartIndex, compactionCount, childConversationMap, targetMode, targetAroundData, hasPending, conversationId, storePagination?.initialized]);
 
   // =============================================
   // Target search (auto-load older to find target)

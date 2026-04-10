@@ -30,11 +30,11 @@ export default function JoinTeamPage() {
     setError("");
 
     try {
-      await joinTeam({
+      const teamId = await joinTeam({
         invite_code: inviteCode.trim().toUpperCase(),
         user_id: user._id,
       });
-      router.push("/settings/team");
+      router.push(`/settings/sync?teamSetup=1&teamId=${teamId}`);
     } catch (err) {
       if (err instanceof Error) {
         setError(err.message);

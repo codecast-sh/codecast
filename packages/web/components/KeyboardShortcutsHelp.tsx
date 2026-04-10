@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { X, Keyboard } from "lucide-react";
 import { formatShortcutParts, getShortcutsForAction, getShortcutsByContext } from "../shortcuts";
 import type { ShortcutAction, ShortcutDef } from "../shortcuts";
-import { useInboxStore } from "../store/inboxStore";
+import { useTrackedStore } from "../store/inboxStore";
 import { useEventListener } from "../hooks/useEventListener";
 
 const KEYCAP_FONT = '-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif';
@@ -31,13 +31,14 @@ const SECTION_ORDER: { when: string | undefined; label: string; accent: string }
 ];
 
 export function KeyboardShortcutsPanel() {
-  const isOpen = useInboxStore(s => s.shortcutsPanelOpen);
-  const toggle = useInboxStore(s => s.toggleShortcutsPanel);
+  const s = useTrackedStore([
+    s => s.shortcutsPanelOpen,
+  ]);
 
   useEventListener("keydown", (e: KeyboardEvent) => {
-    if (isOpen && e.key === "Escape") {
+    if (s.shortcutsPanelOpen && e.key === "Escape") {
       e.stopPropagation();
-      toggle();
+      s.toggleShortcutsPanel();
     }
   });
 
@@ -58,7 +59,7 @@ export function KeyboardShortcutsPanel() {
   return (
     <div
       className="h-full shrink-0 overflow-hidden transition-[width] duration-200 ease-out"
-      style={{ width: isOpen ? 320 : 0 }}
+      style={{ width: s.shortcutsPanelOpen ? 320 : 0 }}
     >
       <div className="h-full w-[320px] bg-sol-bg border-l border-sol-border/60 flex flex-col">
         <div className="flex items-center justify-between px-4 py-3 border-b border-sol-border/40">
@@ -67,7 +68,7 @@ export function KeyboardShortcutsPanel() {
             <span className="text-sm font-semibold text-sol-text tracking-tight">Shortcuts</span>
           </div>
           <button
-            onClick={toggle}
+            onClick={s.toggleShortcutsPanel}
             className="p-1 rounded text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt transition-colors"
           >
             <X className="w-3.5 h-3.5" />
@@ -126,10 +127,10 @@ export function MenuKeyCaps({ action }: { action: ShortcutAction }) {
 }
 
 export function ShortcutsToggleButton() {
-  const toggle = useInboxStore(s => s.toggleShortcutsPanel);
+  const s = useTrackedStore([]);
   return (
     <button
-      onClick={toggle}
+      onClick={s.toggleShortcutsPanel}
       className="p-1.5 rounded-md text-sol-text-dim/60 hover:text-sol-text-muted transition-colors"
       title="Keyboard shortcuts (?)"
     >

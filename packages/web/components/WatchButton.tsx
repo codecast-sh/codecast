@@ -9,17 +9,17 @@ export function WatchButton({
   entityType: "task" | "doc" | "plan" | "conversation";
   entityId: string;
 }) {
-  const isWatching = useQuery((api as any).notifications.isWatching, {
-    entity_type: entityType,
-    entity_id: entityId,
-  });
+  const isWatching = useQuery(
+    (api as any).notifications.isWatching,
+    entityId ? { entity_type: entityType, entity_id: entityId } : "skip"
+  );
   const toggleWatch = useMutation((api as any).notifications.toggleWatch);
 
   return (
     <button
       onClick={(e) => {
         e.stopPropagation();
-        toggleWatch({ entity_type: entityType, entity_id: entityId });
+        if (entityId) toggleWatch({ entity_type: entityType, entity_id: entityId });
       }}
       className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border transition-colors text-xs ${
         isWatching

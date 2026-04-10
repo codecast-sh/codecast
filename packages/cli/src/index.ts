@@ -376,6 +376,8 @@ interface Config {
   plan_version?: string;
   workflow_enabled?: boolean;
   workflow_version?: string;
+  orch_enabled?: boolean;
+  orch_version?: string;
   claude_args?: string;
   codex_args?: string;
   sync_mode?: "all" | "selected";
@@ -1909,6 +1911,10 @@ If blocked, say so explicitly:
 - **NEEDS_CONTEXT: <what>** — escalates to the user
 - **DONE_WITH_CONCERNS: <concern>** — completed but flagged for review
 
+### Referencing sessions
+
+When you reference another session in your messages, include its short ID (e.g. \`jx7c6zk\`). These render as interactive cards in the UI showing title, status, message count, and project. Find session IDs via \`cast search\`, \`cast feed\`, or \`cast context\`. Use bare IDs for inline references or \`@[Session Title jx7c6zk]\` for explicit mentions.
+
 ### After compaction
 
 When your context gets compacted, re-read your task or plan context (\`cast task context <id>\` / \`cast plan show <id>\`) to reground yourself. Don't rely on memory of earlier conversation alone.
@@ -2214,6 +2220,123 @@ function installWorkflowSnippet(update = false): { installed: boolean; updated: 
   }
 
   return { installed: anyInstalled, updated: anyUpdated };
+}
+
+function installOrchestration(update = false): { installed: boolean; updated: boolean } {
+  const orchSrc = path.resolve(__dirname, "..", "orchestration");
+  if (!fs.existsSync(orchSrc)) {
+    return { installed: false, updated: false };
+  }
+
+  const claudeDir = path.join(os.homedir(), ".claude");
+  const orchDest = path.join(os.homedir(), ".codecast", "orchestration");
+  let anyChange = false;
+
+  // Copy skill
+  const skillSrc = path.join(orchSrc, "skills", "orchestrate", "SKILL.md");
+  const skillDest = path.join(claudeDir, "skills", "codecast-orchestrate", "SKILL.md");
+  if (fs.existsSync(skillSrc)) {
+    fs.mkdirSync(path.dirname(skillDest), { recursive: true });
+    const srcContent = fs.readFileSync(skillSrc, "utf-8");
+    const destExists = fs.existsSync(skillDest);
+    if (!destExists || (update && fs.readFileSync(skillDest, "utf-8") !== srcContent)) {
+      fs.writeFileSync(skillDest, srcContent, { mode: 0o644 });
+      anyChange = true;
+    }
+  }
+
+  // Copy agents
+  const agentsSrc = path.join(orchSrc, "agents");
+  if (fs.existsSync(agentsSrc)) {
+    const agentsDir = path.join(claudeDir, "agents");
+    fs.mkdirSync(agentsDir, { recursive: true });
+    for (const file of fs.readdirSync(agentsSrc).filter(f => f.endsWith(".md"))) {
+      const src = path.join(agentsSrc, file);
+      const dest = path.join(agentsDir, file);
+      const srcContent = fs.readFileSync(src, "utf-8");
+      const destExists = fs.existsSync(dest);
+      if (!destExists || (update && fs.readFileSync(dest, "utf-8") !== srcContent)) {
+        fs.writeFileSync(dest, srcContent, { mode: 0o644 });
+        anyChange = true;
+      }
+    }
+  }
+
+  // Copy hook scripts
+  const scriptsSrc = path.join(orchSrc, "scripts");
+  if (fs.existsSync(scriptsSrc)) {
+    const scriptsDest = path.join(orchDest, "scripts");
+    fs.mkdirSync(scriptsDest, { recursive: true });
+    for (const file of fs.readdirSync(scriptsSrc).filter(f => f.endsWith(".sh"))) {
+      const src = path.join(scriptsSrc, file);
+      const dest = path.join(scriptsDest, file);
+      const srcContent = fs.readFileSync(src, "utf-8");
+      const destExists = fs.existsSync(dest);
+      if (!destExists || (update && fs.readFileSync(dest, "utf-8") !== srcContent)) {
+        fs.writeFileSync(dest, srcContent, { mode: 0o755 });
+        anyChange = true;
+      }
+    }
+  }
+
+  // Merge hooks into settings
+  const hooksSrc = path.join(orchSrc, "hooks.json");
+  if (fs.existsSync(hooksSrc)) {
+    const settingsPath = path.join(claudeDir, "settings.json");
+    let settings: any = {};
+    if (fs.existsSync(settingsPath)) {
+      try { settings = JSON.parse(fs.readFileSync(settingsPath, "utf-8")); } catch {}
+    }
+    if (!settings.hooks) settings.hooks = {};
+
+    const orchHooks = JSON.parse(fs.readFileSync(hooksSrc, "utf-8")).hooks;
+    const ORCH_MARKER = "/.codecast/orchestration/";
+
+    for (const [event, handlers] of Object.entries(orchHooks) as [string, any][]) {
+      if (!settings.hooks[event]) settings.hooks[event] = [];
+      settings.hooks[event] = settings.hooks[event].filter((h: any) =>
+        !h.hooks?.some((hh: any) => hh.command?.includes(ORCH_MARKER))
+      );
+      settings.hooks[event].push(...handlers);
+    }
+
+    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), { mode: 0o600 });
+    anyChange = true;
+  }
+
+  return { installed: anyChange && !update, updated: anyChange && update };
+}
+
+function uninstallOrchestration(): void {
+  const claudeDir = path.join(os.homedir(), ".claude");
+  const ORCH_MARKER = "/.codecast/orchestration/";
+
+  const skillDir = path.join(claudeDir, "skills", "codecast-orchestrate");
+  if (fs.existsSync(skillDir)) fs.rmSync(skillDir, { recursive: true });
+
+  for (const name of ["implementer.md", "reviewer.md", "critic.md"]) {
+    const agentPath = path.join(claudeDir, "agents", name);
+    if (fs.existsSync(agentPath)) fs.unlinkSync(agentPath);
+  }
+
+  const settingsPath = path.join(claudeDir, "settings.json");
+  if (fs.existsSync(settingsPath)) {
+    try {
+      const settings = JSON.parse(fs.readFileSync(settingsPath, "utf-8"));
+      if (settings.hooks) {
+        for (const event of Object.keys(settings.hooks)) {
+          settings.hooks[event] = settings.hooks[event].filter((h: any) =>
+            !h.hooks?.some((hh: any) => hh.command?.includes(ORCH_MARKER))
+          );
+          if (settings.hooks[event].length === 0) delete settings.hooks[event];
+        }
+        fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), { mode: 0o600 });
+      }
+    } catch {}
+  }
+
+  const orchDest = path.join(os.homedir(), ".codecast", "orchestration");
+  if (fs.existsSync(orchDest)) fs.rmSync(orchDest, { recursive: true });
 }
 
 async function promptMemoryEnablement(): Promise<void> {
@@ -2617,13 +2740,14 @@ program
     const available = await checkForUpdates(true);
     if (available) {
       console.log(`Update available: v${getVersion()} -> v${available}, updating...`);
-      const success = await performUpdate();
+      const { success } = await performUpdate();
       if (success) {
         const config = readConfig() || {};
         if (config.memory_enabled) installMemorySnippet(true);
         if (config.task_enabled) installTaskSnippet(true);
         if (config.work_enabled) installWorkSnippet(true);
         if (config.workflow_enabled) installWorkflowSnippet(true);
+        if (config.orch_enabled) installOrchestration(true);
         installSessionRegisterHook();
         installStatusHook();
   installTaskPulseHook();
@@ -6426,6 +6550,154 @@ program
   });
 
 program
+  .command("install")
+  .description("Install or manage all CLAUDE.md snippets")
+  .option("--all", "Enable all snippets without prompting")
+  .option("--disable", "Disable all snippets")
+  .action(async (options) => {
+    const config = readConfig() || {};
+    const targets = getSnippetTargets();
+    const targetList = targets.map(t => t.label).join(", ");
+
+    const snippets = [
+      {
+        name: "Memory",
+        desc: "Cross-session recall",
+        detail:
+          "Adds `cast search`, `cast context`, and `cast feed` commands to your agent config.\n" +
+          "  Agents use these to find prior conversations relevant to their current task.\n" +
+          "  Nothing runs automatically — agents call these when they need context.\n" +
+          "  Writes to: CLAUDE.md (adds a ## Memory section with command reference)",
+        enabledKey: "memory_enabled" as const,
+        versionKey: "memory_version" as const,
+        getVersion: getMemoryVersion,
+        install: installMemorySnippet,
+        reEnable: "cast memory",
+      },
+      {
+        name: "Tasks & Plans",
+        desc: "Work tracking for agents",
+        detail:
+          "Gives agents `cast task` and `cast plan` commands to track what they're working on.\n" +
+          "  Agents create tasks, log progress, and mark work done — you see it on the dashboard.\n" +
+          "  Agents only use this when doing real work (not for questions or quick lookups).\n" +
+          "  Writes to: CLAUDE.md (adds a ## Tasks & Plans section with guidelines and commands)",
+        enabledKey: "work_enabled" as const,
+        versionKey: "work_version" as const,
+        getVersion: getWorkVersion,
+        install: installWorkSnippet,
+        reEnable: "cast task install",
+      },
+      {
+        name: "Scheduling",
+        desc: "Delayed and recurring agent sessions",
+        detail:
+          "Adds `cast schedule` commands so agents can queue follow-up work.\n" +
+          "  Example: agent finishes a PR and schedules \"check CI in 30m\" — a new session\n" +
+          "  spawns later to verify. Agents only schedule when they have a reason to.\n" +
+          "  Writes to: CLAUDE.md (adds a ## Async Tasks section with schedule commands)",
+        enabledKey: "task_enabled" as const,
+        versionKey: "task_version" as const,
+        getVersion: getTaskVersion,
+        install: installTaskSnippet,
+        reEnable: "cast schedule install",
+      },
+      {
+        name: "Workflows",
+        desc: "Execution graphs with approval gates",
+        detail:
+          "Adds `cast workflow` commands for running .cast files — directed graphs in DOT syntax.\n" +
+          "  Each node is an agent session, shell command, or human approval gate.\n" +
+          "  Workflows only run when you explicitly invoke them (cast workflow run <file>).\n" +
+          "  Writes to: CLAUDE.md (adds a ## Workflows section with syntax reference)",
+        enabledKey: "workflow_enabled" as const,
+        versionKey: "workflow_version" as const,
+        getVersion: getWorkflowVersion,
+        install: installWorkflowSnippet,
+        reEnable: "cast workflow install",
+      },
+      {
+        name: "Orchestration",
+        desc: "Multi-agent plan execution",
+        detail:
+          "Installs a /orchestrate skill and three agent types (implementer, reviewer, critic).\n" +
+          "  Only activates when you say \"orchestrate this plan\" or invoke /orchestrate.\n" +
+          "  When active, your agent acts as a conductor:\n" +
+          "    — Decomposes the plan into tasks by reading your codebase\n" +
+          "    — Spawns implementer agents in isolated git worktrees (parallel)\n" +
+          "    — Spawns reviewer agents to check each implementation\n" +
+          "    — Runs critic agents for a final integration sweep\n" +
+          "  Also installs two lifecycle hooks (SubagentStop → update task status,\n" +
+          "  PostCompact → re-inject plan context). These only fire during orchestration.\n" +
+          "  Writes to: ~/.claude/skills/, ~/.claude/agents/, ~/.claude/settings.json (hooks)",
+        enabledKey: "orch_enabled" as const,
+        versionKey: "orch_version" as const,
+        getVersion: getWorkVersion,
+        install: installOrchestration,
+        reEnable: "cast install",
+      },
+    ];
+
+    if (options.disable) {
+      for (const s of snippets) {
+        (config as any)[s.enabledKey] = false;
+      }
+      writeConfig(config);
+      console.log("All snippets disabled.");
+      console.log(`Run ${fmt.cmd("cast install")} to re-enable.`);
+      return;
+    }
+
+    console.log(`\n${c.bold}Codecast Agent Snippets${c.reset}`);
+    console.log(fmt.muted(`Installs instructions into ${targetList}\n`));
+
+    let anyInstalled = false;
+
+    for (const s of snippets) {
+      const enabled = (config as any)[s.enabledKey];
+      const status = enabled === true ? fmt.success("enabled") : enabled === false ? fmt.muted("disabled") : fmt.muted("not set up");
+
+      if (options.all) {
+        const result = s.install(true);
+        (config as any)[s.enabledKey] = true;
+        (config as any)[s.versionKey] = s.getVersion();
+        const verb = result.updated ? "updated" : result.installed ? "installed" : "up to date";
+        console.log(`  ${icons.check} ${s.name} — ${verb}`);
+        anyInstalled = true;
+        continue;
+      }
+
+      if (s.detail) {
+        console.log(`\n  ${c.bold}${s.name}${c.reset} — ${s.desc}`);
+        console.log(fmt.muted(`  ${s.detail}`));
+      }
+
+      const answer = await confirm({
+        message: s.detail ? `Enable ${s.name}? [${status}]` : `${s.name} [${status}] — ${s.desc}`,
+        default: enabled !== false,
+      });
+
+      if (answer) {
+        const result = s.install(true);
+        (config as any)[s.enabledKey] = true;
+        (config as any)[s.versionKey] = s.getVersion();
+        const verb = result.updated ? "updated" : result.installed ? "installed" : "up to date";
+        console.log(`  ${icons.check} ${verb}`);
+        anyInstalled = true;
+      } else {
+        (config as any)[s.enabledKey] = false;
+        console.log(`  ${icons.cross} skipped`);
+      }
+    }
+
+    writeConfig(config);
+    if (anyInstalled) {
+      console.log(`\n${fmt.success("Done.")} Snippets installed in ${targetList}`);
+    }
+    console.log();
+  });
+
+program
   .command("bookmark")
   .description(
     "Bookmark a specific message in a conversation\n\n" +
@@ -7288,12 +7560,13 @@ program
       stopDaemon();
     }
 
-    const success = await performUpdate();
+    const { success } = await performUpdate();
     if (success) {
       if (config.memory_enabled) installMemorySnippet(true);
       if (config.task_enabled) installTaskSnippet(true);
       if (config.work_enabled) installWorkSnippet(true);
       if (config.workflow_enabled) installWorkflowSnippet(true);
+      if (config.orch_enabled) installOrchestration(true);
       installSessionRegisterHook();
       installStatusHook();
   installTaskPulseHook();
@@ -7349,6 +7622,34 @@ program
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       console.error(`Failed to set min version: ${errMsg}`);
+      process.exit(1);
+    }
+  });
+
+program
+  .command("reinstall-all")
+  .description("Send reinstall command to all daemons below a version (admin only)")
+  .option("--below <version>", "Only target daemons below this version")
+  .action(async (opts) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: cast auth");
+      process.exit(1);
+    }
+    const syncService = new SyncService({
+      convexUrl: config.convex_url,
+      authToken: config.auth_token,
+      userId: config.user_id,
+    });
+    try {
+      const result = await syncService.getClient().mutation(
+        "users:sendDaemonCommandToAll" as any,
+        { command: "reinstall", max_version: opts.below }
+      );
+      console.log(`Sent reinstall to ${result.sent}/${result.total} active daemons`);
+      process.exit(0);
+    } catch (err) {
+      console.error(`Failed: ${err instanceof Error ? err.message : String(err)}`);
       process.exit(1);
     }
   });
@@ -8817,7 +9118,7 @@ work
   .argument("<short_id>", "Task short ID")
   .action(async (shortId: string) => {
     const sessionId = detectCurrentSessionId();
-    const body: Record<string, any> = { short_id: shortId, status: "in_progress" };
+    const body: Record<string, any> = { short_id: shortId, status: "in_progress", assignee: "me" };
     if (sessionId) body.conversation_id = sessionId;
     const result = await cliPost("/cli/work/update", body);
     console.log(`${c.green}ok${c.reset} Started ${c.cyan}${shortId}${c.reset}`);
@@ -9247,6 +9548,26 @@ doc
     }
   });
 
+doc
+  .command("share")
+  .description("Generate a public share link for a document")
+  .argument("<id>", "Document ID")
+  .action(async (id: string) => {
+    const result = await cliPost("/cli/docs/share", { id });
+    if (result?.error) { console.error(result.error); process.exit(1); }
+    const url = `${WEB_URL}/share/doc/${result.share_token}`;
+    console.log(`${c.green}ok${c.reset} ${url}`);
+  });
+
+doc
+  .command("unshare")
+  .description("Remove the public share link for a document")
+  .argument("<id>", "Document ID")
+  .action(async (id: string) => {
+    await cliPost("/cli/docs/unshare", { id });
+    console.log(`${c.green}ok${c.reset} Share link removed`);
+  });
+
 // ── Plans ─────────────────────────────────────────────────
 
 const plan = program
@@ -9541,6 +9862,26 @@ plan
     if (options.author) body.author = options.author;
     await cliPost("/cli/plans/comment", body);
     console.log(`${c.green}ok${c.reset} Comment added to ${c.cyan}${planId}${c.reset}`);
+  });
+
+plan
+  .command("share")
+  .description("Generate a public share link for a plan")
+  .argument("<plan_id>", "Plan short ID")
+  .action(async (planId: string) => {
+    const result = await cliPost("/cli/plans/share", { short_id: planId });
+    if (result?.error) { console.error(result.error); process.exit(1); }
+    const url = `${WEB_URL}/share/plan/${result.share_token}`;
+    console.log(`${c.green}ok${c.reset} ${url}`);
+  });
+
+plan
+  .command("unshare")
+  .description("Remove the public share link for a plan")
+  .argument("<plan_id>", "Plan short ID")
+  .action(async (planId: string) => {
+    await cliPost("/cli/plans/unshare", { short_id: planId });
+    console.log(`${c.green}ok${c.reset} Share link removed`);
   });
 
 // Legacy aliases
@@ -9954,11 +10295,6 @@ Output valid JSON array of task objects. Nothing else.`;
           titleToId.set(task.title, created.short_id);
           created_count++;
           console.log(`  ${c.green}+${c.reset} ${c.cyan}${created.short_id}${c.reset} ${task.title}`);
-
-          if (task.acceptance_criteria?.length) {
-            const acText = `Acceptance Criteria:\n${task.acceptance_criteria.map((ac: string) => `- [ ] ${ac}`).join("\n")}`;
-            try { await cliPost("/cli/work/comment", { short_id: created.short_id, text: acText, comment_type: "note" }); } catch {}
-          }
 
           if (task.blocked_by?.length) {
             for (const dep of task.blocked_by) {
@@ -11948,12 +12284,13 @@ checkForUpdates().then(async (available) => {
   }
 
   console.log(`\nAuto-updating to v${available}...`);
-  const success = await performUpdate();
+  const { success } = await performUpdate();
   if (success) {
     if (config?.memory_enabled) installMemorySnippet(true);
     if (config?.task_enabled) installTaskSnippet(true);
     if (config?.work_enabled) installWorkSnippet(true);
     if (config?.workflow_enabled) installWorkflowSnippet(true);
+    if (config?.orch_enabled) installOrchestration(true);
     installSessionRegisterHook();
     installStatusHook();
   installTaskPulseHook();

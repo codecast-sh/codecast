@@ -7,6 +7,7 @@ INSTANCE="${1:-0}"
 BASE_PORT=3200
 PORT=$((BASE_PORT + INSTANCE))
 SHUTTING_DOWN=false
+PIDFILE="/tmp/codecast-dev-${PORT}.pid"
 
 if [ "$INSTANCE" = "0" ]; then
     HOSTNAME="local.codecast.sh"
@@ -73,6 +74,7 @@ cleanup() {
     SHUTTING_DOWN=true
     echo ""
     log "Shutting down..."
+    rm -f "$PIDFILE"
     [ -n "$CONVEX_PID" ] && kill_tree $CONVEX_PID
     kill_web
     sleep 1
@@ -83,6 +85,33 @@ cleanup() {
 }
 
 trap cleanup SIGINT SIGTERM
+
+kill_previous_instance() {
+    # Kill pidfile-tracked instance
+    if [ -f "$PIDFILE" ]; then
+        local old_pid
+        old_pid=$(cat "$PIDFILE" 2>/dev/null)
+        if [ -n "$old_pid" ] && kill -0 "$old_pid" 2>/dev/null; then
+            log "Killing previous dev.sh instance (pid $old_pid)..."
+            kill_tree "$old_pid"
+            local attempts=0
+            while kill -0 "$old_pid" 2>/dev/null && [ $attempts -lt 10 ]; do
+                sleep 0.5
+                attempts=$((attempts + 1))
+            done
+            if kill -0 "$old_pid" 2>/dev/null; then
+                log_warn "Previous instance didn't exit cleanly, force killing..."
+                kill_tree "$old_pid" 9
+                sleep 1
+            fi
+        fi
+        rm -f "$PIDFILE"
+    fi
+}
+
+write_pidfile() {
+    echo $$ > "$PIDFILE"
+}
 
 check_rapid_restarts() {
     local name=$1 count=$2
@@ -117,6 +146,8 @@ start_web() {
     $SHUTTING_DOWN && return
 
     kill_web
+    # Clear Vite cache on every restart to prevent stale module errors
+    rm -rf "$ROOT_DIR/packages/web/node_modules/.vite"
     cd "$ROOT_DIR/packages/web"
     "$ROOT_DIR/node_modules/.bin/vite" --port $PORT --host 0.0.0.0 &
     cd "$ROOT_DIR"
@@ -148,10 +179,20 @@ http_is_healthy() {
 
 # --- startup ---
 
+kill_previous_instance
+write_pidfile
+
 log "Clearing old processes..."
-pkill -f "convex dev" 2>/dev/null || true
+# Kill any orphaned convex/vite processes for this port (not just pidfile-tracked ones)
+pkill -f "vite.*--port $PORT" 2>/dev/null || true
 kill_port $PORT
 sleep 1
+
+# Clear Vite's dependency pre-bundle cache to prevent stale module errors
+if [ -d "$ROOT_DIR/packages/web/node_modules/.vite" ]; then
+    log "Clearing Vite cache..."
+    rm -rf "$ROOT_DIR/packages/web/node_modules/.vite"
+fi
 
 if ! grep -q "$HOSTNAME" /etc/hosts 2>/dev/null; then
     log_warn "$HOSTNAME not in /etc/hosts - run: sudo ./setup-hosts.sh"
@@ -180,6 +221,15 @@ echo ""
 while true; do
     sleep 5
     $SHUTTING_DOWN && break
+
+    # Another dev.sh took over or pidfile gone — exit gracefully
+    if [ ! -f "$PIDFILE" ] || [ "$(cat "$PIDFILE" 2>/dev/null)" != "$$" ]; then
+        log "Another dev.sh instance took over, exiting..."
+        SHUTTING_DOWN=true
+        [ -n "$CONVEX_PID" ] && kill_tree $CONVEX_PID
+        kill_web
+        exit 0
+    fi
 
     if [ -n "$CONVEX_PID" ] && ! kill -0 $CONVEX_PID 2>/dev/null; then
         log_err "Convex died (was pid $CONVEX_PID), restarting..."

@@ -1,6 +1,6 @@
 import { findAndReplace } from "mdast-util-find-and-replace";
 
-const ENTITY_ID_RE = /\b(ct|pl)-[a-z0-9]+\b/gi;
+const ENTITY_ID_RE = /\b(?:(?:ct|pl)-[a-z0-9]+|jx[a-z0-9]{5,})\b/gi;
 const MENTION_RE = /@\[([^\]]*?)(?:\s+(ct-\w+|pl-\w+|jx\w+|doc:\w+))?\](?:\s*\([^)]*\))?/g;
 
 export function remarkEntityIds() {
@@ -9,7 +9,7 @@ export function remarkEntityIds() {
       [
         MENTION_RE,
         (_match: string, name: string, entityId?: string) => {
-          if (entityId && /^(ct|pl)-/.test(entityId)) {
+          if (entityId && (/^(ct|pl)-/.test(entityId) || /^jx[a-z0-9]/i.test(entityId))) {
             return {
               type: "link",
               url: `entity://${entityId.toLowerCase()}`,

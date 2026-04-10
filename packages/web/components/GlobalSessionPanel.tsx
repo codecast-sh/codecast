@@ -6,10 +6,11 @@ import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { ConversationDiffLayout } from "./ConversationDiffLayout";
 import { ConversationData } from "./ConversationView";
 import { useConversationMessages } from "../hooks/useConversationMessages";
-import { useInboxStore, InboxSession, getSessionRenderKey, isConvexId, categorizeSessions, isInterruptControlMessage, getProjectName, isFork } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, InboxSession, getSessionRenderKey, isConvexId, categorizeSessions, isInterruptControlMessage, getProjectName, isFork } from "../store/inboxStore";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "./ui/tooltip";
-import { cleanTitle } from "../lib/conversationProcessor";
+import { cleanTitle, msgCountColor } from "../lib/conversationProcessor";
 import { SharePopover } from "./SharePopover";
+import { shareOrigin } from "../lib/utils";
 import { PlanContextPanel } from "./PlanContextPanel";
 import { WorkflowContextPanel } from "./WorkflowContextPanel";
 import { useRouter } from "next/navigation";
@@ -19,12 +20,6 @@ import { formatShortcutLabel } from "../shortcuts";
 import { X, ChevronsLeft, ChevronsRight } from "lucide-react";
 import { TaskStatusBadge } from "./TaskStatusBadge";
 import { useTipActions, checkMilestone } from "../tips";
-import { TeamIcon, IconColorPicker, getSessionIconDefaults, type TeamIconName, type TeamColorName } from "./TeamIcon";
-import {
-  DropdownMenu,
-  DropdownMenuTrigger,
-  DropdownMenuContent,
-} from "./ui/dropdown-menu";
 
 const NOISE_PREFIXES = ["[Request interrupted", "This session is being continued", "Your task is to create a detailed summary", "Please continue the conversation", "<task-notification>", "Implement the following plan"];
 
@@ -158,7 +153,7 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
 
   const convId = conversation._id as Id<"conversations">;
   const shareUrl = conversation.share_token
-    ? `${typeof window !== "undefined" ? window.location.origin : ""}/conversation/${convId}`
+    ? `${shareOrigin()}/conversation/${convId}`
     : null;
   const shareControls = (
     <SharePopover
@@ -168,7 +163,7 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
       hasTeam={!!(conversation as any).auto_shared}
       onSetPrivate={async () => { await setPrivacy({ conversation_id: convId, is_private: true }); toast.success("Made private"); }}
       onSetTeamVisibility={async (mode) => { await setTeamVisibility({ conversation_id: convId, team_visibility: mode }); toast.success(mode === "full" ? "Sharing full conversation with team" : "Sharing summary with team"); }}
-      onGenerateShareLink={async () => { await generateShareLink({ conversation_id: convId }); return `${window.location.origin}/conversation/${convId}`; }}
+      onGenerateShareLink={async () => { await generateShareLink({ conversation_id: convId }); return `${shareOrigin()}/conversation/${convId}`; }}
       shareUrl={shareUrl}
     />
   );
@@ -296,20 +291,6 @@ export function SessionCard({
   const isSlashCommand = displayTitle.startsWith("/");
   const cleanedUserMsg = cleanUserMessage(session.last_user_message);
 
-  const setConversationIcon = useMutation(api.conversations.setConversationIcon);
-  const iconDefaults = getSessionIconDefaults(session._id);
-  const effectiveIcon = (session.icon || iconDefaults.icon) as TeamIconName;
-  const effectiveColor = (session.icon_color || iconDefaults.color) as TeamColorName;
-
-  const handleIconChange = useCallback(async (icon: string) => {
-    try { await setConversationIcon({ conversation_id: session._id as Id<"conversations">, icon }); }
-    catch { toast.error("Failed to update icon"); }
-  }, [session._id, setConversationIcon]);
-
-  const handleColorChange = useCallback(async (color: string) => {
-    try { await setConversationIcon({ conversation_id: session._id as Id<"conversations">, icon_color: color }); }
-    catch { toast.error("Failed to update color"); }
-  }, [session._id, setConversationIcon]);
 
   const [isDragOver, setIsDragOver] = useState(false);
   const dragCounter = useRef(0);
@@ -405,15 +386,15 @@ export function SessionCard({
               )}
               {!session.is_idle && !session.session_error && !session.is_unresponsive && !session.has_pending && (
                 <span className="relative flex h-1.5 w-1.5" title="Live">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-                  <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-400" />
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-sol-green opacity-75" />
+                  <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-sol-green" />
                 </span>
               )}
               {session.is_idle && !session.session_error && !session.is_unresponsive && !session.has_pending && session.message_count > 0 && (
                 <span className="w-1.5 h-1.5 rounded-full bg-gray-500/40 ring-1 ring-gray-500/20" title="Session idle" />
               )}
               {session.message_count > 0 && (
-                <span className="text-[9px] text-gray-500 tabular-nums">{session.message_count}</span>
+                <span className="text-[9px] tabular-nums text-sol-text-dim/50">{session.message_count}</span>
               )}
               <span className="text-[9px] text-gray-500 tabular-nums">
                 {formatIdleDuration(session.updated_at)}
@@ -483,7 +464,7 @@ export function SessionCard({
       onDragOver={handleFileDragOver}
       onDragLeave={handleFileDragLeave}
       onDrop={handleFileDrop}
-      className={`relative group border-b border-sol-border/30 transition-colors overflow-hidden ${isDragOver ? "ring-1 ring-inset ring-sol-cyan bg-sol-cyan/10" : ""} ${
+      className={`relative group transition-colors overflow-hidden ${isDragOver ? "ring-1 ring-inset ring-sol-cyan bg-sol-cyan/10" : ""} ${
         isActive
           ? "bg-sol-cyan/15 border-l-[3px] border-l-sol-cyan shadow-[inset_0_0_16px_rgba(42,161,152,0.12)]"
           : isWorking
@@ -503,19 +484,6 @@ export function SessionCard({
         <div className={`flex items-center gap-1.5 leading-tight ${
           isActive ? "text-sm text-sol-text font-semibold" : isWorking ? "text-sm text-sol-text font-medium" : isDismissed ? "text-sm text-sol-text-muted" : "text-sm text-sol-text"
         }`}>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button
-                className="flex-shrink-0 rounded hover:bg-sol-bg-highlight/60 p-0.5 transition-colors"
-                onClick={(e) => { e.stopPropagation(); }}
-              >
-                <TeamIcon icon={effectiveIcon} color={effectiveColor} className="w-4 h-4" />
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="w-56 p-3">
-              <IconColorPicker currentIcon={effectiveIcon} currentColor={effectiveColor} onIconChange={handleIconChange} onColorChange={handleColorChange} />
-            </DropdownMenuContent>
-          </DropdownMenu>
           <span className="truncate">{isSlashCommand ? <span className="font-mono text-sol-cyan">{displayTitle}</span> : displayTitle}</span>
         </div>
         {(session.idle_summary || session.subtitle) && !session.implementation_session && (
@@ -561,7 +529,7 @@ export function SessionCard({
             </span>
           )}
           {session.message_count > 0 && (
-            <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">
+            <span className={`text-[10px] tabular-nums flex-shrink-0 ${msgCountColor(session.message_count)}`}>
               {session.message_count} msg{session.message_count !== 1 ? "s" : ""}
             </span>
           )}
@@ -834,16 +802,17 @@ export function SessionListPanel({
   activeSessionId?: string | null;
   onCollapse?: () => void;
 }) {
-  const showAll = useInboxStore((s) => s.showAllSessions);
-  const toggleShowAll = useInboxStore((s) => s.toggleShowAllSessions);
-  const hiddenCount = useInboxStore((s) => s.hiddenSessionCount);
-  const sessions = useInboxStore((s) => s.sessions);
-  const stashSession = useInboxStore((s) => s.stashSession);
-  const deferSession = useInboxStore((s) => s.deferSession);
-  const pinSession = useInboxStore((s) => s.pinSession);
-  const unstashSession = useInboxStore((s) => s.unstashSession);
-  const dismissedSessions = useInboxStore((s) => s.dismissedSessions);
-  const dismissedList = useMemo(() => Object.values(dismissedSessions), [dismissedSessions]);
+  const s = useTrackedStore([
+    s => s.showAllSessions,
+    s => s.hiddenSessionCount,
+    s => s.sessions,
+    s => s.dismissedSessions,
+    s => s.sessionsWithQueuedMessages,
+    s => s.activeForkHighlight,
+    s => s.activeProjectFilter,
+    s => s.collapsedSections,
+  ]);
+  const dismissedList = useMemo(() => Object.values(s.dismissedSessions), [s.dismissedSessions]);
   const killSessionMutation = useMutation(api.conversations.killSession);
   const handleKillDismissed = useCallback((id: string) => {
     if (isConvexId(id)) {
@@ -865,15 +834,10 @@ export function SessionListPanel({
     }
   }, [onSessionSelect, onForkSelect]);
 
-  const sessionsWithQueuedMessages = useInboxStore((s) => s.sessionsWithQueuedMessages);
-  const activeForkHighlight = useInboxStore((s) => s.activeForkHighlight);
-  const { sorted: sortedSessions, pinned, newSessions, needsInput, working, subsByParent: globalSubByParent } = useMemo(
-    () => categorizeSessions(sessions, sessionsWithQueuedMessages),
-    [sessions, sessionsWithQueuedMessages],
+  const { sorted: sortedSessions, pinned, newSessions, needsInput, working, subsByParent: globalSubByParent, forksByParent: globalForksByParent } = useMemo(
+    () => categorizeSessions(s.sessions, s.sessionsWithQueuedMessages),
+    [s.sessions, s.sessionsWithQueuedMessages],
   );
-
-  const projectFilter = useInboxStore((s) => s.activeProjectFilter);
-  const setActiveProjectFilter = useInboxStore((s) => s.setActiveProjectFilter);
 
   const activeSessions = useMemo(() => [...pinned, ...newSessions, ...needsInput, ...working], [pinned, newSessions, needsInput, working]);
 
@@ -898,9 +862,9 @@ export function SessionListPanel({
   }, [activeSessions]);
 
   const filterByProject = useCallback((items: InboxSession[]) => {
-    if (!projectFilter) return items;
-    return items.filter((s) => getProjectName(s.git_root, s.project_path) === projectFilter);
-  }, [projectFilter]);
+    if (!s.activeProjectFilter) return items;
+    return items.filter((sess) => getProjectName(sess.git_root, sess.project_path) === s.activeProjectFilter);
+  }, [s.activeProjectFilter]);
 
   const filteredPinned = useMemo(() => filterByProject(pinned), [filterByProject, pinned]);
   const filteredNew = useMemo(() => filterByProject(newSessions), [filterByProject, newSessions]);
@@ -909,9 +873,13 @@ export function SessionListPanel({
   const filteredDismissed = useMemo(() => filterByProject(dismissedList), [filterByProject, dismissedList]);
   const filteredCount = filteredPinned.length + filteredNew.length + filteredNeedsInput.length + filteredWorking.length;
 
-  const collapsedSections = useInboxStore((s) => s.collapsedSections);
-  const toggleSection = useInboxStore((s) => s.toggleCollapsedSection);
   const [expandedSubSessions, setExpandedSubSessions] = useState<Record<string, boolean>>({});
+  const [showSubagents, setShowSubagents] = useState(true);
+  const totalSubagentCount = useMemo(() => {
+    let count = 0;
+    for (const subs of globalSubByParent.values()) count += subs.length;
+    return count;
+  }, [globalSubByParent]);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll to the active session when it changes
@@ -924,11 +892,11 @@ export function SessionListPanel({
   const renderSection = (label: string, items: InboxSession[], color: string, sectionVariant?: "working") => {
     if (items.length === 0) return null;
     const key = label.toLowerCase().replace(/\s+/g, "_");
-    const collapsed = !!collapsedSections[key];
+    const collapsed = !!s.collapsedSections[key];
     return (
       <div>
         <button
-          onClick={() => toggleSection(key)}
+          onClick={() => s.toggleCollapsedSection(key)}
           className="w-full px-3 py-1.5 bg-sol-bg border-b border-sol-border/30 flex items-center justify-between"
         >
           <span className={`text-[10px] font-semibold uppercase tracking-wider ${color}`}>
@@ -945,30 +913,39 @@ export function SessionListPanel({
             const visibleSubs = subs.length <= 2 ? subs : subsExpanded ? subs : subs.slice(0, 2);
             const hiddenCount = subs.length - visibleSubs.length;
             return (
-              <React.Fragment key={session._id}>
+              <div key={session._id} className="border-b border-sol-border/30">
                 <SessionCard
                   session={session}
-                  isActive={session._id === activeSessionId || session._id === activeForkHighlight}
+                  isActive={
+                    session._id === s.activeForkHighlight ||
+                    (session._id === activeSessionId && !s.activeForkHighlight)
+                  }
                   globalIndex={0}
                   onSelect={() => handleSelect(session)}
-                  onDismiss={stashSession}
-                  onDefer={deferSession}
-                  onPin={pinSession}
+                  onDismiss={s.stashSession}
+                  onDefer={s.deferSession}
+                  onPin={s.pinSession}
                   variant={sectionVariant || "default"}
                 />
-                {visibleSubs.map((sub) => (
+                {showSubagents && visibleSubs.map((sub) => (
                   <SessionCard
                     key={sub._id}
                     session={sub}
-                    isActive={sub._id === activeSessionId || sub._id === activeForkHighlight}
-                    isParentActive={session._id === activeSessionId || session._id === activeForkHighlight}
+                    isActive={
+                      sub._id === s.activeForkHighlight ||
+                      (sub._id === activeSessionId && !s.activeForkHighlight)
+                    }
+                    isParentActive={
+                      session._id === s.activeForkHighlight ||
+                      (session._id === activeSessionId && !s.activeForkHighlight)
+                    }
                     globalIndex={0}
                     onSelect={() => handleSelect(sub)}
-                    onDismiss={stashSession}
+                    onDismiss={s.stashSession}
                     variant={sectionVariant || "default"}
                   />
                 ))}
-                {hiddenCount > 0 && (
+                {showSubagents && hiddenCount > 0 && (
                   <button
                     onClick={() => setExpandedSubSessions((prev) => ({ ...prev, [session._id]: true }))}
                     className="w-full px-2 py-0.5 text-[10px] text-gray-500 hover:text-violet-400 transition-colors text-left pl-[26px]"
@@ -976,7 +953,7 @@ export function SessionListPanel({
                     +{hiddenCount} more sub-session{hiddenCount > 1 ? "s" : ""}
                   </button>
                 )}
-                {subsExpanded && subs.length > 2 && (
+                {showSubagents && subsExpanded && subs.length > 2 && (
                   <button
                     onClick={() => setExpandedSubSessions((prev) => ({ ...prev, [session._id]: false }))}
                     className="w-full px-2 py-0.5 text-[10px] text-gray-500 hover:text-violet-400 transition-colors text-left pl-[26px]"
@@ -984,7 +961,22 @@ export function SessionListPanel({
                     collapse
                   </button>
                 )}
-              </React.Fragment>
+                {(globalForksByParent.get(session._id) || []).map((fork) => (
+                  <SessionCard
+                    key={fork._id}
+                    session={fork}
+                    isActive={fork._id === s.activeForkHighlight}
+                    isParentActive={
+                      session._id === s.activeForkHighlight ||
+                      (session._id === activeSessionId && !s.activeForkHighlight)
+                    }
+                    globalIndex={0}
+                    onSelect={() => handleSelect(fork)}
+                    onDismiss={s.stashSession}
+                    variant={sectionVariant || "default"}
+                  />
+                ))}
+              </div>
             );
           })}
         </>}
@@ -996,19 +988,19 @@ export function SessionListPanel({
     <div className="h-full w-full flex flex-col bg-sol-bg-alt overflow-hidden">
       <div className="px-3 py-0.5 sm:py-1 border-b border-sol-border/50 flex-shrink-0 flex items-center gap-2 min-h-[31px] min-w-0">
         <span className="text-xs font-medium text-sol-text-dim uppercase tracking-wide flex-shrink-0">
-          {projectFilter ? filteredCount : activeSessions.length} Session{(projectFilter ? filteredCount : activeSessions.length) !== 1 ? "s" : ""}
+          {s.activeProjectFilter ? filteredCount : activeSessions.length} Session{(s.activeProjectFilter ? filteredCount : activeSessions.length) !== 1 ? "s" : ""}
         </span>
         {projectCounts.length > 1 && (
-          <div className="flex gap-1 overflow-x-auto min-w-0" style={{ scrollbarWidth: 'none' }}>
+          <div className="flex gap-1 overflow-x-auto min-w-0 pr-3" style={{ scrollbarWidth: 'none', maskImage: 'linear-gradient(to right, black calc(100% - 20px), transparent)', WebkitMaskImage: 'linear-gradient(to right, black calc(100% - 20px), transparent)' }}>
             {projectCounts.map(([name, count]) => (
               <button
                 key={name}
                 onClick={() => {
-                  const next = projectFilter === name ? null : name;
-                  setActiveProjectFilter(next, next ? (projectPathByName[next] || null) : null);
+                  const next = s.activeProjectFilter === name ? null : name;
+                  s.setActiveProjectFilter(next, next ? (projectPathByName[next] || null) : null);
                 }}
                 className={`flex-shrink-0 px-2 py-0.5 rounded-full text-[10px] transition-all ${
-                  projectFilter === name
+                  s.activeProjectFilter === name
                     ? "bg-sol-cyan/20 text-sol-cyan"
                     : "bg-gray-400/10 text-gray-400 hover:bg-gray-400/20 hover:text-gray-500"
                 }`}
@@ -1019,16 +1011,21 @@ export function SessionListPanel({
             ))}
           </div>
         )}
-        <div className="flex-shrink-0 ml-auto">
-          {hiddenCount > 0 && (
-            <button onClick={toggleShowAll} className="text-[10px] text-sol-text-dim hover:text-sol-cyan transition-colors whitespace-nowrap">
-              {showAll ? `−${hiddenCount} old` : `+${hiddenCount} old`}
+        <div className="flex items-center gap-2 flex-shrink-0 ml-auto">
+          {totalSubagentCount > 0 && (
+            <button onClick={() => setShowSubagents(v => !v)} className="text-[10px] text-sol-text-dim hover:text-sol-cyan transition-colors whitespace-nowrap">
+              {showSubagents ? `−${totalSubagentCount} sub` : `+${totalSubagentCount} sub`}
+            </button>
+          )}
+          {s.hiddenSessionCount > 0 && (
+            <button onClick={s.toggleShowAllSessions} className="text-[10px] text-sol-text-dim hover:text-sol-cyan transition-colors whitespace-nowrap">
+              {s.showAllSessions ? `−${s.hiddenSessionCount} old` : `+${s.hiddenSessionCount} old`}
             </button>
           )}
         </div>
       </div>
       <div ref={scrollContainerRef} className="flex-1 overflow-y-auto scrollbar-auto">
-        {!projectFilter && <NeedsAttentionSection />}
+        {!s.activeProjectFilter && <NeedsAttentionSection />}
         {renderSection("Pinned", filteredPinned, "text-sol-magenta")}
         {renderSection("New", filteredNew, "text-sol-blue")}
         {renderSection("Needs Input", filteredNeedsInput, "text-sol-yellow")}
@@ -1040,46 +1037,46 @@ export function SessionListPanel({
         )}
         <div className="border-t border-sol-border/30">
           <button
-            onClick={() => toggleSection("dismissed")}
+            onClick={() => s.toggleCollapsedSection("dismissed")}
             className="w-full px-3 py-1.5 bg-sol-bg border-b border-sol-border/30 flex items-center justify-between"
           >
             <span className="text-[10px] font-semibold uppercase tracking-wider text-sol-text-dim">
               Dismissed{filteredDismissed.length > 0 ? ` (${filteredDismissed.length})` : ""}
             </span>
-            <svg className={`w-3 h-3 transition-transform text-sol-text-dim ${collapsedSections.dismissed ? "" : "rotate-180"}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className={`w-3 h-3 transition-transform text-sol-text-dim ${s.collapsedSections.dismissed ? "" : "rotate-180"}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
             </svg>
           </button>
-          {!collapsedSections.dismissed && filteredDismissed.length > 0 && (() => {
-            const allDismissedIds = new Set(filteredDismissed.map((s) => s._id));
+          {!s.collapsedSections.dismissed && filteredDismissed.length > 0 && (() => {
+            const allDismissedIds = new Set(filteredDismissed.map((sess) => sess._id));
             const subMap = new Map<string, InboxSession[]>();
-            for (const s of filteredDismissed) {
-              if (s.parent_conversation_id && allDismissedIds.has(s.parent_conversation_id)) {
-                if (!subMap.has(s.parent_conversation_id)) subMap.set(s.parent_conversation_id, []);
-                subMap.get(s.parent_conversation_id)!.push(s);
+            for (const sess of filteredDismissed) {
+              if (sess.parent_conversation_id && allDismissedIds.has(sess.parent_conversation_id)) {
+                if (!subMap.has(sess.parent_conversation_id)) subMap.set(sess.parent_conversation_id, []);
+                subMap.get(sess.parent_conversation_id)!.push(sess);
               }
             }
             for (const subs of subMap.values()) {
               subs.sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
             }
-            const subsWithParent = new Set(Array.from(subMap.values()).flat().map((s) => s._id));
-            const orphanedSub = (s: InboxSession) =>
-              !subsWithParent.has(s._id) && s.parent_conversation_id && sessions[s.parent_conversation_id];
-            const topLevel = filteredDismissed.filter((s) => !subsWithParent.has(s._id) && !orphanedSub(s));
+            const subsWithParent = new Set(Array.from(subMap.values()).flat().map((sess) => sess._id));
+            const orphanedSub = (sess: InboxSession) =>
+              !subsWithParent.has(sess._id) && sess.parent_conversation_id && s.sessions[sess.parent_conversation_id];
+            const topLevel = filteredDismissed.filter((sess) => !subsWithParent.has(sess._id) && !orphanedSub(sess));
             return (
             <div>
               {topLevel.map((session) => (
-                <React.Fragment key={session._id}>
+                <div key={session._id} className="border-b border-sol-border/30">
                   <SessionCard
                     session={session}
                     isActive={session._id === activeSessionId}
                     globalIndex={-1}
                     onSelect={() => handleSelect(session)}
-                    onRestore={(id) => unstashSession(id)}
+                    onRestore={(id) => s.unstashSession(id)}
                     onKill={handleKillDismissed}
                     variant="dismissed"
                   />
-                  {subMap.get(session._id)?.map((sub) => (
+                  {showSubagents && subMap.get(session._id)?.map((sub) => (
                     <SessionCard
                       key={sub._id}
                       session={sub}
@@ -1087,12 +1084,12 @@ export function SessionListPanel({
                       isParentActive={session._id === activeSessionId}
                       globalIndex={-1}
                       onSelect={() => handleSelect(sub)}
-                      onRestore={(id) => unstashSession(id)}
+                      onRestore={(id) => s.unstashSession(id)}
                       onKill={handleKillDismissed}
                       variant="dismissed"
                     />
                   ))}
-                </React.Fragment>
+                </div>
               ))}
             </div>
             );
@@ -1117,22 +1114,22 @@ export function SessionListPanel({
 // -- CollapsedSessionRail --
 
 export function CollapsedSessionRail() {
-  const sessions = useInboxStore((s) => s.sessions);
-  const selectPanelSession = useInboxStore((s) => s.selectPanelSession);
-  const toggleSidePanel = useInboxStore((s) => s.toggleSidePanel);
-  const queuedSet = useInboxStore((s) => s.sessionsWithQueuedMessages);
+  const s = useTrackedStore([
+    s => s.sessions,
+    s => s.sessionsWithQueuedMessages,
+  ]);
 
   const { pinned, needsInput, working, newSessions } = useMemo(
-    () => categorizeSessions(sessions, queuedSet),
-    [sessions, queuedSet],
+    () => categorizeSessions(s.sessions, s.sessionsWithQueuedMessages),
+    [s.sessions, s.sessionsWithQueuedMessages],
   );
 
-  const getStatusStyle = (s: InboxSession): { bg: string; pulse: boolean } => {
-    if (s.session_error) return { bg: "#dc322f", pulse: false };
-    if (s.is_unresponsive) return { bg: "#cb4b16", pulse: false };
-    if (s.is_pinned && s.is_idle) return { bg: "#d33682", pulse: false };
-    if (!s.is_idle && s.message_count > 0) return { bg: "#859900", pulse: true };
-    if (s.is_idle && s.message_count > 0) return { bg: "#b58900", pulse: false };
+  const getStatusStyle = (sess: InboxSession): { bg: string; pulse: boolean } => {
+    if (sess.session_error) return { bg: "#dc322f", pulse: false };
+    if (sess.is_unresponsive) return { bg: "#cb4b16", pulse: false };
+    if (sess.is_pinned && sess.is_idle) return { bg: "#d33682", pulse: false };
+    if (!sess.is_idle && sess.message_count > 0) return { bg: "#859900", pulse: true };
+    if (sess.is_idle && sess.message_count > 0) return { bg: "#b58900", pulse: false };
     return { bg: "rgba(38, 139, 210, 0.4)", pulse: false };
   };
 
@@ -1142,24 +1139,24 @@ export function CollapsedSessionRail() {
   return (
     <div
       className="w-[30px] h-full flex-shrink-0 bg-sol-bg-alt/30 border-l border-sol-border/20 hover:bg-sol-bg-alt/60 transition-colors cursor-pointer flex flex-col"
-      onClick={toggleSidePanel}
+      onClick={s.toggleSidePanel}
     >
       <TooltipProvider delayDuration={150}>
         <div className="flex flex-col items-center gap-[6px] pt-3">
           {groups.map((group, gi) => (
             <div key={gi} className={`flex flex-col items-center gap-[6px] ${gi > 0 ? "mt-2" : ""}`}>
-              {group.map((s) => {
-                const status = getStatusStyle(s);
+              {group.map((sess) => {
+                const status = getStatusStyle(sess);
                 return (
-                  <Tooltip key={s._id}>
+                  <Tooltip key={sess._id}>
                     <TooltipTrigger asChild>
                       <button
                         className={`w-1.5 h-1.5 rounded-full flex-shrink-0 transition-all hover:scale-[2] cursor-pointer ${status.pulse ? "animate-pulse" : ""}`}
                         style={{ backgroundColor: status.bg }}
-                        onClick={(e) => { e.stopPropagation(); selectPanelSession(s._id); }}
+                        onClick={(e) => { e.stopPropagation(); s.selectPanelSession(sess._id); }}
                       />
                     </TooltipTrigger>
-                    <TooltipContent side="left">{cleanTitle(s.title || "New Session")}</TooltipContent>
+                    <TooltipContent side="left">{cleanTitle(sess.title || "New Session")}</TooltipContent>
                   </Tooltip>
                 );
               })}
@@ -1176,7 +1173,7 @@ export function CollapsedSessionRail() {
       )}
       <div className={`${needsInputCount > 0 ? "" : "mt-auto"} mb-2 flex justify-center`}>
         <button
-          onClick={(e) => { e.stopPropagation(); toggleSidePanel(); }}
+          onClick={(e) => { e.stopPropagation(); s.toggleSidePanel(); }}
           className="p-0.5 rounded text-sol-text-dim/30 hover:text-sol-text-dim transition-colors"
           title="Expand session list"
         >
@@ -1190,46 +1187,49 @@ export function CollapsedSessionRail() {
 // -- ConversationColumn (session panel for non-inbox pages) --
 
 export const ConversationColumn = memo(function ConversationColumn() {
-  const sidePanelSessionId = useInboxStore(s => s.sidePanelSessionId);
-  const sessions = useInboxStore(s => s.sessions);
-  const dismissedSessions = useInboxStore(s => s.dismissedSessions);
-  const selectPanelSession = useInboxStore(s => s.selectPanelSession);
-  const closeSidePanel = useInboxStore(s => s.closeSidePanel);
+  const s = useTrackedStore([
+    s => s.sidePanelSessionId,
+    s => s.sessions,
+    s => s.dismissedSessions,
+  ]);
   const router = useRouter();
 
-  const session = sidePanelSessionId ? (sessions[sidePanelSessionId] ?? dismissedSessions[sidePanelSessionId] ?? null) : null;
+  const session = s.sidePanelSessionId ? (s.sessions[s.sidePanelSessionId] ?? s.dismissedSessions[s.sidePanelSessionId] ?? null) : null;
   const sessionRenderKey = getSessionRenderKey(session);
 
   useWatchEffect(() => {
-    if (sidePanelSessionId && !session) selectPanelSession(null);
-  });
+    if (s.sidePanelSessionId && !session) s.selectPanelSession(null);
+  }, [s.sidePanelSessionId, session]);
 
   const handleBack = useCallback(() => {
-    selectPanelSession(null);
-  }, [selectPanelSession]);
+    s.selectPanelSession(null);
+  }, [s.selectPanelSession]);
 
   const handleExpand = useCallback(() => {
-    if (!sidePanelSessionId) return;
-    closeSidePanel();
-    router.push(`/conversation/${sidePanelSessionId}`);
-  }, [sidePanelSessionId, closeSidePanel, router]);
+    const sessionId = s.sidePanelSessionId;
+    if (!sessionId) return;
+    // Navigate first — don't clear sidePanelSessionId yet.
+    // DashboardLayout hides ConversationColumn via !isOnConversationPage,
+    // then cleans up panel state once the route lands.
+    router.push(`/conversation/${sessionId}`);
+  }, [s.sidePanelSessionId, router]);
 
   const handleClose = useCallback(() => {
-    selectPanelSession(null);
-  }, [selectPanelSession]);
+    s.selectPanelSession(null);
+  }, [s.selectPanelSession]);
 
   const handleSendAndDismiss = useCallback(() => {
-    if (sidePanelSessionId) undoableStashSession(sidePanelSessionId);
-  }, [sidePanelSessionId]);
+    if (s.sidePanelSessionId) undoableStashSession(s.sidePanelSessionId);
+  }, [s.sidePanelSessionId]);
 
-  if (!session || !sidePanelSessionId) return null;
+  if (!session || !s.sidePanelSessionId) return null;
 
   return (
     <div className="h-full flex flex-col">
       <div className="h-full">
         <InboxConversation
-          key={sessionRenderKey || sidePanelSessionId}
-          sessionId={sidePanelSessionId}
+          key={sessionRenderKey || s.sidePanelSessionId}
+          sessionId={s.sidePanelSessionId}
           isIdle={session.is_idle}
           onSendAndAdvance={() => {}}
           onSendAndDismiss={handleSendAndDismiss}

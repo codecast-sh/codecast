@@ -166,6 +166,9 @@ type ConversationData = {
   updated_at?: number;
   is_favorite?: boolean;
   share_token?: string | null;
+  is_private?: boolean;
+  team_visibility?: string | null;
+  team_id?: string | null;
   session_id?: string;
   messages: Message[];
   has_more_above?: boolean;
@@ -192,7 +195,7 @@ type ConversationData = {
   git_diff_staged?: string | null;
   loaded_start_index?: number;
   child_conversation_map?: Record<string, string>;
-  child_conversations?: Array<{ _id: string; title: string }>;
+  child_conversations?: Array<{ _id: string; title: string; is_subagent?: boolean; first_message_preview?: string }>;
   short_id?: string;
 };
 
@@ -3279,6 +3282,8 @@ export default function SessionDetailScreen() {
 
   const toggleFavoriteConversation = useMutation(api.conversations.toggleFavorite);
   const generateShareLink = useMutation(api.conversations.generateShareLink);
+  const setPrivacy = useMutation(api.conversations.setPrivacy);
+  const setTeamVisibility = useMutation(api.conversations.setTeamVisibility);
 
   const handleToggleFavorite = useCallback(async () => {
     if (!id) return;
@@ -3290,17 +3295,53 @@ export default function SessionDetailScreen() {
 
   const handleShareConversation = useCallback(async () => {
     if (!conversation || !id) return;
-    try {
-      let token = conversation.share_token;
-      if (!token) {
-        token = await generateShareLink({ conversation_id: id as Id<"conversations"> });
-      }
-      if (token) {
-        const url = `https://codecast.sh/share/${token}`;
-        await Share.share({ message: url, url });
-      }
-    } catch {}
-  }, [conversation, id, generateShareLink]);
+    const convId = id as Id<"conversations">;
+    const isPrivate = conversation.is_private !== false;
+    const hasTeam = !!conversation.team_id;
+    const vis = conversation.team_visibility || 'summary';
+
+    const options: string[] = [];
+    if (!isPrivate) options.push('Make Private');
+    if (hasTeam && (isPrivate || vis !== 'summary')) options.push('Share with Team (Summary)');
+    if (hasTeam && (isPrivate || vis !== 'full')) options.push('Share with Team (Full)');
+    options.push(conversation.share_token ? 'Copy Share Link' : 'Generate & Copy Share Link');
+    if (conversation.share_token) options.push('Share Link via...');
+    options.push('Cancel');
+
+    ActionSheetIOS.showActionSheetWithOptions(
+      { options, cancelButtonIndex: options.length - 1, title: 'Sharing' },
+      async (idx) => {
+        const label = options[idx];
+        try {
+          if (label === 'Make Private') {
+            await setPrivacy({ conversation_id: convId, is_private: true });
+            showToast('Made private');
+          } else if (label === 'Share with Team (Summary)') {
+            await setTeamVisibility({ conversation_id: convId, team_visibility: 'summary' });
+            showToast('Sharing summary with team');
+          } else if (label === 'Share with Team (Full)') {
+            await setTeamVisibility({ conversation_id: convId, team_visibility: 'full' });
+            showToast('Sharing full conversation with team');
+          } else if (label === 'Copy Share Link' || label === 'Generate & Copy Share Link') {
+            let token = conversation.share_token;
+            if (!token) {
+              token = await generateShareLink({ conversation_id: convId });
+            }
+            if (token) {
+              const url = `https://codecast.sh/share/${token}`;
+              Clipboard.setString(url);
+              showToast('Share link copied');
+            }
+          } else if (label === 'Share Link via...') {
+            const url = `https://codecast.sh/share/${conversation.share_token}`;
+            await Share.share({ message: url, url });
+          }
+        } catch (_e) {
+          showToast('Failed to update sharing');
+        }
+      },
+    );
+  }, [conversation, id, generateShareLink, setPrivacy, setTeamVisibility, showToast]);
 
   const searchLower = searchQuery.toLowerCase();
   const searchMatchIds = useMemo(() => {
@@ -3966,25 +4007,7 @@ export default function SessionDetailScreen() {
           onContentSizeChange={(_w, h) => {
             lastContentHeightRef.current = h;
           }}
-          ListHeaderComponent={
-            conversation.child_conversations && conversation.child_conversations.length > 0 ? (
-              <RNView style={styles.subagentLinksContainer}>
-                <RNText style={styles.subagentLinksLabel}>SUBAGENTS</RNText>
-                <RNView style={styles.subagentLinksRow}>
-                  {conversation.child_conversations.map(child => (
-                    <Pressable
-                      key={child._id}
-                      onPress={() => router.push(`/session/${child._id}`)}
-                      style={styles.subagentLink}
-                    >
-                      <FontAwesome name="arrow-right" size={8} color={Theme.cyan} style={{ opacity: 0.7 }} />
-                      <RNText style={styles.subagentLinkText} numberOfLines={1}>{child.title}</RNText>
-                    </Pressable>
-                  ))}
-                </RNView>
-              </RNView>
-            ) : null
-          }
+          ListHeaderComponent={null}
           ListFooterComponent={
             <>
               <RNView style={{ height: floatingHeaderHeight }} />
@@ -6058,38 +6081,6 @@ const styles = StyleSheet.create({
   loadMorePillText: {
     fontSize: 11,
     color: Theme.textMuted0,
-  },
-  subagentLinksContainer: {
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-  },
-  subagentLinksLabel: {
-    fontSize: 10,
-    color: Theme.textDim,
-    letterSpacing: 0.5,
-    marginBottom: 6,
-  },
-  subagentLinksRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 6,
-  },
-  subagentLink: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 4,
-    backgroundColor: Theme.cyan + '10',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Theme.cyan + '20',
-    maxWidth: 200,
-  },
-  subagentLinkText: {
-    fontSize: 11,
-    color: Theme.cyan,
-    opacity: 0.7,
   },
   scrollProgressTrackWrap: {
     position: 'absolute',

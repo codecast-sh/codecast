@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { LogoIcon } from "./Logo";
 import { useRouter } from "next/navigation";
 import { useLayoutEffect, useRef, useState, useMemo, useImperativeHandle, forwardRef, useCallback, memo } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
@@ -23,7 +24,7 @@ import { CodeBlock } from "./CodeBlock";
 import { useDiffViewerStore } from "../store/diffViewerStore";
 
 function copyMessageLink(conversationId: string | undefined, messageId: string) {
-  const url = `${window.location.origin}/conversation/${conversationId}#msg-${messageId}`;
+  const url = `${shareOrigin()}/conversation/${conversationId}#msg-${messageId}`;
   setTimeout(() => { copyToClipboard(url).then(() => toast.success("Link copied!")).catch(() => toast.error("Failed to copy link")); });
 }
 
@@ -49,13 +50,13 @@ import {
   DropdownMenuSubContent,
 } from "./ui/dropdown-menu";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "./ui/tooltip";
-import { useMutation, useQuery, useConvex } from "convex/react";
+import { useMutation, useQuery, useConvex, useConvexAuth } from "convex/react";
 import { api as _typedApi } from "@codecast/convex/convex/_generated/api";
 const api = _typedApi as any;
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { CommentPanel } from "./CommentPanel";
 import { PermissionStack } from "./PermissionCard";
-import { copyToClipboard } from "../lib/utils";
+import { copyToClipboard, shareOrigin } from "../lib/utils";
 import { MarkdownRenderer, isMarkdownFile, isPlanFile, CollapsibleImage } from "./tools/MarkdownRenderer";
 import { useImageGallery, ImageGalleryProvider } from "./ImageGallery";
 import { MessageSharePopover } from "./MessageSharePopover";
@@ -77,7 +78,7 @@ import { parseFileChangeSummary, parseUnifiedDiffSections } from "../lib/unified
 import { setupDesktopDrag, desktopHeaderClass } from "../lib/desktop";
 import { MessageNavButton } from "./MessageBrowserPopover";
 import type { MentionItem } from "./editor/MentionList";
-import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2 } from "lucide-react";
+import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight } from "lucide-react";
 import { ComposeEditor, type ComposeEditorHandle } from "./editor/ComposeEditor";
 import { useMentionQuery } from "../hooks/useMentionQuery";
 
@@ -85,6 +86,16 @@ const sacredInputs = new Map<string, { text: string; images?: any[] }>();
 const EMPTY_PENDING: any[] = [];
 const EMPTY_MATCH_IDS: string[] = [];
 const EMPTY_MATCH_INSTANCES: { messageId: string; localIndex: number }[] = [];
+
+/** Ensure a value is a string before rendering as a React child.
+ *  Guards against intermittent race conditions where content fields
+ *  are briefly non-string during store hydration or subscription updates. */
+function safeString(value: any): string {
+  if (typeof value === 'string') return value;
+  if (value == null) return '';
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  try { return JSON.stringify(value); } catch { return String(value); }
+}
 
 function renderMarkdownPre(node: any, children: any, props: any) {
   const codeElement = node?.children?.[0];
@@ -331,7 +342,10 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
   useConvexSync(freshProjects, setRecentProjects);
 
   const currentConvContext = useInboxStore((s) => s.currentConversation);
-  const currentPath = storeSession?.project_path || storeSession?.git_root || conversation.git_root || conversation.project_path || currentConvContext?.projectPath || currentConvContext?.gitRoot;
+  const derivedPath = storeSession?.project_path || storeSession?.git_root || conversation.git_root || conversation.project_path || currentConvContext?.projectPath || currentConvContext?.gitRoot;
+  // Local override immune to server sync — prevents snap-back on click
+  const [localPath, setLocalPath] = useState<string | null>(null);
+  const currentPath = localPath ?? derivedPath;
   const currentName = currentPath?.split("/").filter(Boolean).pop() || "unknown";
 
   const otherProjects = useMemo(() => {
@@ -344,6 +358,7 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
     const trimmed = projectPath.trim();
     if (!trimmed) return;
     if (trimmed === currentPath && !forceIsolated) return;
+    setLocalPath(trimmed);
     try {
       const id = storeSession?._id || conversation._id;
       const store = useInboxStore.getState();
@@ -364,7 +379,6 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
   }, [storeSession, conversation._id, reconfigureSession, currentPath, isolated]);
 
   return (
-    <TooltipProvider delayDuration={200}>
     <div className="flex flex-col items-center gap-3">
         {currentPath ? (
           <div className="flex items-center gap-2 text-sol-text-muted text-xs cursor-default" title={currentPath}>
@@ -435,7 +449,6 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
       </button>
 
     </div>
-    </TooltipProvider>
   );
 }
 
@@ -921,7 +934,10 @@ function classifyUserMessage(
     if (!stripped || stripped.length < 4 || stripped.startsWith('Read the output file to retrieve the result:') || stripped.startsWith('Full transcript available at:')) return { kind: 'task_notification' };
   }
   if (immediatePrev?.role === 'assistant' && immediatePrev?.tool_calls?.some(tc => tc.name === 'Task' || tc.name === 'Agent')) {
-    return { kind: 'task_prompt' };
+    // Only hide if the message is auto-generated (no human-visible text after stripping system tags).
+    // Genuine user messages typed while an agent is running must render normally.
+    const stripped = stripSystemTags(t).trim();
+    if (!stripped) return { kind: 'task_prompt' };
   }
   if (isCompactionPromptMessage(t)) return { kind: 'compaction_prompt' };
   if (t.startsWith('Read the output file to retrieve the result:') || t.startsWith('Full transcript available at:')) return { kind: 'noise' };
@@ -949,7 +965,7 @@ function classifyUserMessage(
     if (!immediatePrev && !contextPrev) return { kind: 'normal' };
     return hasUserImages ? { kind: 'normal' } : { kind: 'noise' };
   }
-  if (displayable.startsWith("This session is being continued")) {
+  if (displayable.startsWith("This session is being continued") || displayable.startsWith("Please continue the conversation")) {
     return { kind: 'continuation' };
   }
   if (STICKY_NOISE_PREFIXES.some(p => displayable.startsWith(p))) {
@@ -1073,7 +1089,6 @@ function ConversationMetadata({
   messageCount,
   shortId,
   conversationId,
-  taskStats,
 }: {
   agentType?: string;
   model?: string;
@@ -1081,7 +1096,6 @@ function ConversationMetadata({
   messageCount?: number;
   shortId?: string;
   conversationId?: string;
-  taskStats?: { total: number; completed: number } | null;
 }) {
   if (!agentType && !model && !startedAt && !messageCount) return null;
 
@@ -1123,12 +1137,66 @@ function ConversationMetadata({
           <span>{formatDuration(startedAt)}</span>
         </div>
       )}
-      {taskStats && (
-        <div className="flex items-center gap-1.5 flex-shrink-0" title={`${taskStats.completed}/${taskStats.total} tasks completed`}>
-          <span className="text-sol-text-dim">&middot;</span>
-          <span className={taskStats.completed === taskStats.total ? 'text-emerald-400' : 'text-sol-violet'}>
-            {taskStats.completed}/{taskStats.total} tasks
-          </span>
+    </div>
+  );
+}
+
+const INLINE_TASK_STATUS: Record<string, { icon: typeof Circle; color: string }> = {
+  open: { icon: Circle, color: "text-sol-blue" },
+  in_progress: { icon: CircleDot, color: "text-sol-yellow" },
+  done: { icon: CheckCircle2, color: "text-sol-green" },
+};
+
+function TaskProgressRow({ taskStats }: { taskStats: { total: number; done: number; in_progress: number; open: number; items: { id: string; content: string; status: string }[] } }) {
+  const [expanded, setExpanded] = useState(false);
+  const { total, done, in_progress } = taskStats;
+  const donePct = (done / total) * 100;
+  const ipPct = (in_progress / total) * 100;
+  const isComplete = done === total;
+
+  return (
+    <div className="mt-0.5">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="flex items-center gap-2 w-full px-1 py-0.5 rounded hover:bg-sol-bg-alt/60 transition-colors group cursor-pointer"
+      >
+        {expanded ? <ChevronDown className="w-3 h-3 text-sol-text-dim flex-shrink-0" /> : <ChevronRight className="w-3 h-3 text-sol-text-dim flex-shrink-0" />}
+        {isComplete ? (
+          <CheckCircle2 className="w-3 h-3 text-sol-green flex-shrink-0" />
+        ) : in_progress > 0 ? (
+          <CircleDot className="w-3 h-3 text-sol-yellow animate-pulse flex-shrink-0" />
+        ) : (
+          <Circle className="w-3 h-3 text-sol-text-dim flex-shrink-0" />
+        )}
+        <div className="flex-1 h-1.5 bg-sol-border/30 rounded-full overflow-hidden min-w-[60px] max-w-[120px]">
+          <div className="h-full flex">
+            <div
+              className={`h-full ${isComplete ? "bg-sol-green" : "bg-sol-green/80"}`}
+              style={{ width: `${donePct}%` }}
+            />
+            {ipPct > 0 && (
+              <div className="h-full bg-sol-yellow/60" style={{ width: `${ipPct}%` }} />
+            )}
+          </div>
+        </div>
+        <span className={`text-[10px] tabular-nums flex-shrink-0 ${isComplete ? "text-sol-green" : "text-sol-text-dim"}`}>
+          {done}/{total} tasks
+        </span>
+      </button>
+      {expanded && (
+        <div className="ml-4 mt-0.5 border-l border-sol-border/20 pl-2">
+          {taskStats.items.map((item) => {
+            const cfg = INLINE_TASK_STATUS[item.status] || INLINE_TASK_STATUS.open;
+            const Icon = cfg.icon;
+            return (
+              <div key={item.id} className="flex items-center gap-1.5 py-0.5">
+                <Icon className={`w-3 h-3 flex-shrink-0 ${cfg.color}`} />
+                <span className={`text-[11px] truncate ${item.status === "done" ? "text-sol-text-dim line-through" : "text-sol-text-muted"}`}>
+                  {item.content}
+                </span>
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
@@ -1282,9 +1350,9 @@ function TaskToolBlock({ tool, result, childConversationId, childConversations }
                 <div className={`text-xs max-h-96 overflow-y-auto ${
                   result.is_error ? "text-sol-red font-mono whitespace-pre-wrap" : "text-sol-text-secondary prose prose-sm prose-invert max-w-none [&_pre]:bg-sol-bg/50 [&_pre]:border [&_pre]:border-sol-border/30 [&_pre]:rounded [&_pre]:text-[11px] [&_code]:text-[11px] [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0 [&_h1]:text-sm [&_h2]:text-xs [&_h3]:text-xs [&_h1]:mt-2 [&_h2]:mt-2 [&_h3]:mt-1"
                 }`}>
-                  {result.is_error ? result.content : (
+                  {result.is_error ? safeString(result.content) : (
                     <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={[rehypeHighlight]} components={{ code: EntityAwareCode, a: EntityAwareLink }}>
-                      {result.content}
+                      {safeString(result.content)}
                     </ReactMarkdown>
                   )}
                 </div>
@@ -1743,7 +1811,8 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
   }, [parsedInput.tabId, result?.content, tool.name]);
 
   // Process result content - strip line numbers for Read tool, strip Tab Context from MCP chrome results
-  const processedContent = result ? (isRead ? stripLineNumbers(result.content) : tool.name.startsWith("mcp__claude-in-chrome__") ? result.content.replace(/\n?\n?Tab Context:[\s\S]*$/, "").trim() : result.content) : "";
+  const rawResultContent = result ? safeString(result.content) : "";
+  const processedContent = result ? (isRead ? stripLineNumbers(rawResultContent) : tool.name.startsWith("mcp__claude-in-chrome__") ? rawResultContent.replace(/\n?\n?Tab Context:[\s\S]*$/, "").trim() : rawResultContent) : "";
 
   const isCodeTool = isBash || isEdit || isRead || isGlob || isGrep || isCodeSearch;
   const isMarkdownResult = result && !isCodeTool && typeof processedContent === 'string' && (
@@ -4212,7 +4281,8 @@ function AssistantBlock({
   const [fullscreen, setFullscreen] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
 
-  const strippedContent = content ? stripSystemTags(content) : content;
+  const safeContent = content ? safeString(content) : content;
+  const strippedContent = safeContent ? stripSystemTags(safeContent) : safeContent;
   const displayContent = strippedContent && agentNameToChildMap
     ? linkifyMentions(strippedContent, agentNameToChildMap)
     : strippedContent;
@@ -5383,7 +5453,7 @@ function MessageNavigator({ userMessages, onRewind, onFork, onClose, forkPointMa
                     <span className={`text-xs font-mono mt-0.5 shrink-0 w-6 text-right ${isSelected ? "text-sol-blue" : "text-sol-blue/40"}`}>{idx + 1}</span>
                     <div className="flex-1 min-w-0">
                       <span className={`text-sm leading-relaxed ${isSelected ? "text-sol-text" : "text-sol-text-secondary"}`} style={{ display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
-                        {msg.content}
+                        {safeString(msg.content)}
                       </span>
                       {msgHasBranches && isSelected && (
                         <div className="flex items-center gap-1 mt-1.5">
@@ -5425,6 +5495,46 @@ function MessageNavigator({ userMessages, onRewind, onFork, onClose, forkPointMa
         </div>
       </div>
     </div>
+  );
+}
+
+function GuestJoinCTA() {
+  return (
+    <div className="bg-sol-bg border-t border-sol-border/30">
+      <div className="mx-auto max-w-7xl px-2 sm:px-4 py-3 flex items-center justify-between gap-4">
+        <a href="/" className="flex items-center gap-2 text-sol-text-dim text-xs hover:text-sol-text transition-colors">
+          <LogoIcon size={20} />
+          <span className="font-mono font-bold text-sol-text-muted tracking-tight">codecast</span>
+          <span className="opacity-50">|</span>
+          <span>AI session sharing</span>
+        </a>
+        <a
+          href="/signup"
+          className="text-xs font-medium px-4 py-1.5 rounded-full bg-sol-cyan/15 text-sol-cyan border border-sol-cyan/30 hover:bg-sol-cyan/25 transition-colors whitespace-nowrap"
+        >
+          Join to message
+        </a>
+      </div>
+    </div>
+  );
+}
+
+// Isolated component: keeps useConvexAuth() out of ConversationView's render
+// scope so auth-context re-renders don't cascade through the tooltip ref chain.
+function NonOwnerMessageInput({ conversation, onForkReply, autoFocusInput }: {
+  conversation: ConversationData;
+  onForkReply: (content: string) => void;
+  autoFocusInput?: boolean;
+}) {
+  const { isAuthenticated, isLoading } = useConvexAuth();
+  if (!isAuthenticated && !isLoading) return <GuestJoinCTA />;
+  return (
+    <ForkReplyInput
+      userName={conversation.user?.name || conversation.user?.email?.split("@")[0] || "Teammate"}
+      userAvatar={conversation.user?.avatar_url}
+      onForkReply={onForkReply}
+      autoFocusInput={autoFocusInput}
+    />
   );
 }
 
@@ -6662,7 +6772,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
                     <span className="w-2 h-2 rounded-full bg-sol-cyan/50 animate-pulse" />
                     Resuming session...
                   </span>
-                ) : isInactive ? "Session inactive — message to resume" : "\u00A0"}
+                ) : isInactive ? "Session idle — message to resume" : "\u00A0"}
               </p>
               <div className="flex items-center gap-2">
                 <CyclingShortcutHint />
@@ -7341,7 +7451,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         message_ids: sortedIds as Id<"messages">[],
       });
 
-      const url = `${window.location.origin}/share/message/${token}`;
+      const url = `${shareOrigin()}/share/message/${token}`;
       await copyToClipboard(url);
       toast.success("Share link copied!");
       setShareSelectionMode(false);
@@ -7415,36 +7525,53 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const doFork = useCallback(async (messageUuid: string): Promise<{ forkSessionId: string; conversationId: string } | null> => {
     if (!conversation?._id) return null;
     const sourceConvId = effectiveConversationId || conversation._id;
-    const forkSessionId = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    addOptimisticFork({
-      _id: forkSessionId,
-      user_id: currentUser?._id?.toString(),
-      title: conversation.title ? `Fork: ${conversation.title}` : "Fork",
-      started_at: Date.now(),
-      username: conversation.user?.name || conversation.user?.email?.split("@")[0],
-      parent_message_uuid: messageUuid,
-      message_count: 0,
-      agent_type: conversation.agent_type,
-    });
-    forkSetMessages(forkSessionId, []);
-    forkSwitchBranch(messageUuid, forkSessionId);
-    const url = new URL(window.location.href);
-    url.searchParams.set('branch', forkSessionId);
-    window.history.replaceState({}, '', url.toString());
-    toast.success("Forked -- switched to branch");
+    const isNestedFork = sourceConvId.toString() !== conversation._id.toString();
+    // Must be a valid UUID so the daemon can resume without ID remapping
+    const forkSessionId = (typeof crypto !== 'undefined' && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+          const r = Math.random() * 16 | 0;
+          return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+        });
+    if (!isNestedFork) {
+      // Single-level fork: use branch overlay on the root conversation
+      addOptimisticFork({
+        _id: forkSessionId,
+        user_id: currentUser?._id?.toString(),
+        title: conversation.title ? `Fork: ${conversation.title}` : "Fork",
+        started_at: Date.now(),
+        username: conversation.user?.name || conversation.user?.email?.split("@")[0],
+        parent_message_uuid: messageUuid,
+        message_count: 0,
+        agent_type: conversation.agent_type,
+      });
+      forkSetMessages(forkSessionId, []);
+      forkSwitchBranch(messageUuid, forkSessionId);
+      const url = new URL(window.location.href);
+      url.searchParams.set('branch', forkSessionId);
+      window.history.replaceState({}, '', url.toString());
+      toast.success("Forked -- switched to branch");
+    }
     try {
       const result = await forkFromMessage({
         conversation_id: sourceConvId.toString(),
         message_uuid: messageUuid,
         session_id: forkSessionId,
       });
+      if (isNestedFork) {
+        // Nested fork: branch overlay only supports one level, navigate directly
+        window.location.href = `/conversation/${result.conversation_id}`;
+        return null;
+      }
       resolveForkSessionId(forkSessionId, result.conversation_id);
       const resolvedUrl = new URL(window.location.href);
       resolvedUrl.searchParams.set('branch', result.conversation_id);
       window.history.replaceState({}, '', resolvedUrl.toString());
       return { forkSessionId, conversationId: result.conversation_id };
     } catch (err) {
-      forkClearBranch(messageUuid);
+      if (!isNestedFork) {
+        forkClearBranch(messageUuid);
+      }
       toast.error(err instanceof Error ? err.message : "Failed to fork");
       return null;
     }
@@ -8274,7 +8401,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   }, [isOwner, forkSelectionIdx, toggleTreePanel, conversation?.fork_children, conversation?.forked_from]));
 
   useShortcutAction('conv.copyLink', useCallback(() => {
-    const url = `${window.location.origin}/conversation/${conversation?._id}`;
+    const url = `${shareOrigin()}/conversation/${conversation?._id}`;
     copyToClipboard(url).then(() => toast.success("Link copied!"));
   }, [conversation?._id]));
 
@@ -9079,6 +9206,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         return <CompactionSummaryBlock key={msg._id} content={summaryContent} />;
       }
 
+      // Skip empty "No response requested." messages
+      if (stripSystemTags(msg.content || "").trim() === "No response requested.") return null;
+
       // Find previous VISIBLE non-commit assistant item to determine if this is first in assistant sequence
       // Skip invisible assistant messages (those whose content is only system tags with no tool calls/thinking/images)
       let prevIdx = index - 1;
@@ -9336,7 +9466,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                 messageCount={conversation.message_count}
                 shortId={conversation.short_id}
                 conversationId={conversation._id}
-                taskStats={taskStats}
               />
             )}
 
@@ -9504,6 +9633,20 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                     </button>
                   </TooltipTrigger>
                   <TooltipContent side="bottom">{collapsed ? "Expand messages" : "Collapse messages"} ({formatShortcutLabel('conv.collapseAll')})</TooltipContent>
+                </Tooltip>
+
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      onClick={() => { copyToClipboard(window.location.href).then(() => toast.success("Link copied")).catch(() => toast.error("Failed to copy")); }}
+                      className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary transition-colors"
+                    >
+                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+                      </svg>
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">Copy link{firstActiveForkId ? " (includes branch)" : ""}</TooltipContent>
                 </Tooltip>
 
                 {managedSession?.tmux_session && (
@@ -9735,7 +9878,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                     )}
                     {taskStats && (
                       <DropdownMenuItem disabled>
-                        Tasks: {taskStats.completed}/{taskStats.total}
+                        Tasks: {taskStats.done}/{taskStats.total}
                       </DropdownMenuItem>
                     )}
                     {latestUsage && (
@@ -9753,6 +9896,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
             )}
             {headerEnd && <div className="flex-shrink-0">{headerEnd}</div>}
           </div>
+          {taskStats && <TaskProgressRow taskStats={taskStats} />}
         </div>
         {conversation && (
           <div className="absolute top-full right-3 mt-12 z-30">
@@ -9996,9 +10140,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       {showMessageInput && conversation && !(pendingPermissions && pendingPermissions.length > 0) && (
         <div ref={messageInputRef} className="relative">
           {!effectiveIsOwner ? (
-            <ForkReplyInput
-              userName={conversation.user?.name || conversation.user?.email?.split("@")[0] || "Teammate"}
-              userAvatar={conversation.user?.avatar_url}
+            <NonOwnerMessageInput
+              conversation={conversation}
               onForkReply={handleForkReply}
               autoFocusInput={autoFocusInput}
             />
@@ -10020,7 +10163,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   ))}
                 </div>
               ) : (
-                conversation.status === "active" && (conversation.message_count ?? 0) === 0 && isOwner && (
+                conversation.status === "active" && (conversation.message_count ?? 0) === 0 && (!conversation.messages || conversation.messages.length === 0) && isOwner && (
                   <div className="absolute left-0 right-0 bottom-full">
                     <AgentSwitcher
                       conversation={conversation}
@@ -10033,7 +10176,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   </div>
                 )
               )}
-              <MessageInput key={conversation.session_id || conversation._id} conversationId={firstActiveForkId || conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} onSendAndDismiss={onSendAndDismiss} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} isSessionStarting={isSessionStarting} isSessionReady={isSessionReady} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={isSessionDisconnected ? undefined : managedSession?.agent_status as any} deliveryStatus={managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} hasAskUserQuestion={hasAskUserQuestion} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={handleForkFromMessage} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onGateSend={workflowRun?.status === "paused" ? handleGateRespond : undefined} skills={sessionSkills} filePaths={sessionFilePaths} mentionItemsRef={mentionItemsRef} onMentionQuery={handleMentionQuery} />
+              <MessageInput key={conversation.session_id || conversation._id} conversationId={firstActiveForkId || conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} onSendAndDismiss={onSendAndDismiss} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} isSessionStarting={isSessionStarting} isSessionReady={isSessionReady} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={isSessionDisconnected || conversation.status !== "active" ? undefined : managedSession?.agent_status as any} deliveryStatus={managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} hasAskUserQuestion={hasAskUserQuestion} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={handleForkFromMessage} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onGateSend={workflowRun?.status === "paused" ? handleGateRespond : undefined} skills={sessionSkills} filePaths={sessionFilePaths} mentionItemsRef={mentionItemsRef} onMentionQuery={handleMentionQuery} />
             </>
           )}
           {navigatorOpen && navigatorUserMessages && navigatorUserMessages.length > 0 && (

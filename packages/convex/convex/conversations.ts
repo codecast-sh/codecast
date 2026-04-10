@@ -1359,8 +1359,9 @@ export const getConversationToolStats = query({
     }
 
     let latestTodos: any[] | null = null;
-    let taskTotal = 0;
-    let taskCompleted = 0;
+    // Collect creates and updates separately since we iterate newest-first
+    const taskCreates: { subject: string }[] = [];
+    const taskStatusMap = new Map<string, string>(); // taskId -> latest status (first seen = newest)
 
     for await (const msg of ctx.db
       .query("messages")
@@ -1376,24 +1377,48 @@ export const getConversationToolStats = query({
             if (input.todos) latestTodos = input.todos;
           } catch {}
         }
-        if (tc.name === "TaskCreate") taskTotal++;
+        if (tc.name === "TaskCreate") {
+          try {
+            const inp = JSON.parse(tc.input);
+            taskCreates.push({ subject: inp.subject || inp.title || inp.description || "" });
+          } catch {}
+        }
         if (tc.name === "TaskUpdate") {
           try {
             const inp = JSON.parse(tc.input);
-            if (inp.status === "completed") taskCompleted++;
+            if (inp.taskId && inp.status && !taskStatusMap.has(inp.taskId)) {
+              taskStatusMap.set(inp.taskId, inp.status);
+            }
           } catch {}
         }
       }
     }
 
-    // Merge todos and tasks into unified stats
-    const todoTotal = latestTodos?.length ?? 0;
-    const todoCompleted = latestTodos?.filter((t: any) => t.status === "completed").length ?? 0;
-    const total = todoTotal + taskTotal;
-    const completed = todoCompleted + taskCompleted;
+    // Reverse creates to get chronological order (IDs are assigned 1, 2, 3, ...)
+    taskCreates.reverse();
+    const normalizeStatus = (s: string) => s === "completed" ? "done" : s === "in_progress" ? "in_progress" : "open";
+    const taskItems = taskCreates
+      .map((tc, i) => {
+        const id = String(i + 1);
+        const rawStatus = taskStatusMap.get(id) ?? "pending";
+        return { id, content: tc.subject, status: normalizeStatus(rawStatus) };
+      })
+      .filter(t => taskStatusMap.get(t.id) !== "deleted");
+
+    // Normalize todo items and merge with task items
+    const todoItems = (latestTodos ?? []).map((t: any, i: number) => ({
+      id: t.id || `todo-${i}`,
+      content: t.content || t.task || t.title || "",
+      status: normalizeStatus(t.status ?? "pending"),
+    }));
+    const items = [...todoItems, ...taskItems];
+    const total = items.length;
+    const done = items.filter(i => i.status === "done").length;
+    const in_progress = items.filter(i => i.status === "in_progress").length;
+    const open = total - done - in_progress;
 
     return {
-      taskStats: total > 0 ? { total, completed } : null,
+      taskStats: total > 0 ? { total, done, in_progress, open, items } : null,
     };
   },
 });
@@ -2867,6 +2892,47 @@ export const getConversationBySessionId = query({
   },
 });
 
+// Single resolver for /conversation/[id] links.
+// Accepts any string: Convex document _id, session_id, or UUID.
+// Returns the access level and resolved Convex _id so the frontend
+// doesn't need to guess which ID format was used.
+export const resolveConversation = query({
+  args: { id: v.string() },
+  handler: async (ctx, args) => {
+    let conversation = null;
+
+    // Try as Convex document ID
+    const convId = ctx.db.normalizeId("conversations", args.id);
+    if (convId) {
+      conversation = await ctx.db.get(convId);
+    }
+
+    // Try as session_id
+    if (!conversation) {
+      conversation = await ctx.db
+        .query("conversations")
+        .withIndex("by_session_id", (q) => q.eq("session_id", args.id))
+        .first();
+    }
+
+    if (!conversation) {
+      return { access_level: "not_found" as const, conversation_id: null };
+    }
+
+    const authUserId = await getAuthUserId(ctx);
+    const accessLevel = await checkConversationAccess(ctx, authUserId, conversation);
+
+    if (accessLevel === "denied") {
+      return { access_level: "denied" as const, conversation_id: null };
+    }
+
+    return {
+      access_level: accessLevel,
+      conversation_id: conversation._id.toString(),
+    };
+  },
+});
+
 export const getSessionLinks = mutation({
   args: {
     session_id: v.string(),
@@ -3340,6 +3406,7 @@ export const readConversationMessages = query({
       conversation: {
         id: conv._id,
         title,
+        agent_type: conv.agent_type || "claude_code",
         project_path: conv.project_path || null,
         message_count: nonEmptyCount,
         updated_at: new Date(conv.updated_at).toISOString(),
@@ -5491,9 +5558,17 @@ export const listIdleSessions = query({
     const AGENT_STATUS_FRESH_MS = 5 * 60 * 1000;
     const agentStatusMap = new Map<string, "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "stopped" | "starting" | "resuming">();
     for (const s of managedSessions) {
-      if (s.conversation_id && s.agent_status && s.agent_status_updated_at &&
-          (now - s.agent_status_updated_at) < AGENT_STATUS_FRESH_MS) {
+      if (!s.conversation_id || !s.agent_status) continue;
+      const heartbeatAlive = now - s.last_heartbeat < HEARTBEAT_ALIVE_MS;
+      const statusFresh = s.agent_status_updated_at && (now - s.agent_status_updated_at) < AGENT_STATUS_FRESH_MS;
+      // Terminal state: always keep. Stale heartbeat + active status: infer stopped.
+      if (s.agent_status === "stopped" || s.agent_status === "idle") {
         agentStatusMap.set(s.conversation_id.toString(), s.agent_status);
+      } else if (statusFresh) {
+        agentStatusMap.set(s.conversation_id.toString(), heartbeatAlive ? s.agent_status : "stopped");
+      } else if (!heartbeatAlive) {
+        // Status stale AND heartbeat dead → daemon crashed, infer stopped
+        agentStatusMap.set(s.conversation_id.toString(), "stopped");
       }
     }
 
@@ -5559,8 +5634,12 @@ export const listIdleSessions = query({
         if (!args.show_all) continue;
       }
 
-      const daemonAlive = liveConvIds.has(conv._id.toString()) ||
-        (userDaemonAlive && (now - conv.updated_at) < 10 * 60 * 1000);
+      const agentStatus = agentStatusMap.get(conv._id.toString());
+      // Don't let userDaemonAlive resurrect sessions we know are stopped
+      const daemonAlive = agentStatus === "stopped"
+        ? false
+        : liveConvIds.has(conv._id.toString()) ||
+          (userDaemonAlive && (now - conv.updated_at) < 10 * 60 * 1000);
 
       const isInterruptMsg = !!lastUserMessage && (
         lastUserMessage.startsWith("[Request interrupted") || lastUserMessage.startsWith("[Request cancelled")
@@ -5573,7 +5652,6 @@ export const listIdleSessions = query({
         (hasPending && !recentlyUpdated)
       );
 
-      const agentStatus = agentStatusMap.get(conv._id.toString());
       let isIdle = agentStatus
         ? agentStatus !== "working" && agentStatus !== "compacting" && agentStatus !== "thinking" && agentStatus !== "connected"
         : daemonAlive
