@@ -48,8 +48,6 @@ const DEFAULT_WIDTH = 520;
 const DEFAULT_HEIGHT = 480;
 const CASCADE_OFFSET = 32;
 const TASKBAR_HEIGHT = 44;
-const MIN_WINDOW_W = 360;
-const MIN_WINDOW_H = 280;
 
 // ── Helpers ────────────────────────────────────────────────────────────
 
@@ -61,23 +59,38 @@ function nextCascadePosition(windows: Record<string, WindowState>): { x: number;
   };
 }
 
-/** Compute a grid layout for N windows */
+/** Compute a grid layout for N windows that fills the viewport evenly */
 function tileLayout(n: number, vw: number, vh: number): WindowBounds[] {
   if (n === 0) return [];
-  const usableH = vh - TASKBAR_HEIGHT;
-  const cols = Math.ceil(Math.sqrt(n));
-  const rows = Math.ceil(n / cols);
-  const cellW = Math.floor(vw / cols);
-  const cellH = Math.floor(usableH / rows);
+  const usableH = vh;
+
+  // Try every possible column count. Pick the one whose smallest cell
+  // dimension (min of cellW, cellH) is maximized — i.e. the "most square" fit.
+  let bestCols = 1;
+  let bestScore = 0;
+  for (let c = 1; c <= n; c++) {
+    const r = Math.ceil(n / c);
+    const cellW = vw / c;
+    const cellH = usableH / r;
+    const score = Math.min(cellW, cellH);
+    if (score > bestScore) {
+      bestScore = score;
+      bestCols = c;
+    }
+  }
+  const bestRows = Math.ceil(n / bestCols);
+
+  const cellW = Math.floor(vw / bestCols);
+  const cellH = Math.floor(usableH / bestRows);
   const result: WindowBounds[] = [];
   for (let i = 0; i < n; i++) {
-    const col = i % cols;
-    const row = Math.floor(i / cols);
+    const col = i % bestCols;
+    const row = Math.floor(i / bestCols);
     result.push({
       x: col * cellW,
       y: row * cellH,
-      width: Math.max(cellW, MIN_WINDOW_W),
-      height: Math.max(cellH, MIN_WINDOW_H),
+      width: cellW,
+      height: cellH,
     });
   }
   return result;
@@ -85,7 +98,7 @@ function tileLayout(n: number, vw: number, vh: number): WindowBounds[] {
 
 function cascadeLayout(n: number, vw: number, vh: number): WindowBounds[] {
   const w = Math.min(DEFAULT_WIDTH, vw - 100);
-  const h = Math.min(DEFAULT_HEIGHT, vh - TASKBAR_HEIGHT - 100);
+  const h = Math.min(DEFAULT_HEIGHT, vh - 100);
   return Array.from({ length: n }, (_, i) => ({
     x: 40 + i * CASCADE_OFFSET,
     y: 40 + i * CASCADE_OFFSET,
@@ -96,25 +109,25 @@ function cascadeLayout(n: number, vw: number, vh: number): WindowBounds[] {
 
 function horizontalLayout(n: number, vw: number, vh: number): WindowBounds[] {
   if (n === 0) return [];
-  const usableH = vh - TASKBAR_HEIGHT;
+  const usableH = vh;
   const cellW = Math.floor(vw / n);
   return Array.from({ length: n }, (_, i) => ({
     x: i * cellW,
     y: 0,
-    width: Math.max(cellW, MIN_WINDOW_W),
+    width: cellW,
     height: usableH,
   }));
 }
 
 function verticalLayout(n: number, vw: number, vh: number): WindowBounds[] {
   if (n === 0) return [];
-  const usableH = vh - TASKBAR_HEIGHT;
+  const usableH = vh;
   const cellH = Math.floor(usableH / n);
   return Array.from({ length: n }, (_, i) => ({
     x: 0,
     y: i * cellH,
     width: vw,
-    height: Math.max(cellH, MIN_WINDOW_H),
+    height: cellH,
   }));
 }
 
@@ -190,7 +203,7 @@ export const useWindowManager = create<WindowManagerState>((set, get) => ({
           x: 0,
           y: 0,
           width: viewport.width,
-          height: viewport.height - TASKBAR_HEIGHT,
+          height: viewport.height,
           zIndex: get().nextZIndex,
         },
       },

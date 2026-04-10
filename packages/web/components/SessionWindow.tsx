@@ -32,10 +32,12 @@ export const SessionWindow = memo(function SessionWindow({ win, isFocused }: Ses
     if (win.maximized) {
       restoreWindow(win.id);
     } else {
-      maximizeWindow(win.id, {
-        width: window.innerWidth,
-        height: window.innerHeight,
-      });
+      // Use the parent container dimensions, not the viewport
+      const parent = rndRef.current?.resizableElement?.current?.parentElement;
+      const vp = parent
+        ? { width: parent.clientWidth, height: parent.clientHeight }
+        : { width: window.innerWidth, height: window.innerHeight };
+      maximizeWindow(win.id, vp);
     }
   }, [win.id, win.maximized, maximizeWindow, restoreWindow]);
 
@@ -75,10 +77,10 @@ export const SessionWindow = memo(function SessionWindow({ win, isFocused }: Ses
       disableDragging={win.maximized}
     >
       <div
-        className={`h-full flex flex-col rounded-lg overflow-hidden shadow-2xl border transition-shadow duration-150 ${
+        className={`session-window h-full flex flex-col rounded-lg overflow-hidden shadow-2xl border transition-shadow duration-150 ${
           isFocused
-            ? "border-sol-cyan/40 shadow-[0_8px_40px_rgba(0,0,0,0.45)]"
-            : "border-sol-border/30 shadow-[0_4px_20px_rgba(0,0,0,0.3)]"
+            ? "session-window--focused border-sol-cyan/40 shadow-[0_8px_40px_rgba(0,0,0,0.45)]"
+            : "session-window--blurred border-sol-border/30 shadow-[0_4px_20px_rgba(0,0,0,0.3)]"
         }`}
         style={{ background: "var(--sol-bg)" }}
         onMouseDown={handleMouseDown}
