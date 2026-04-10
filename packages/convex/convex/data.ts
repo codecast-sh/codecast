@@ -30,6 +30,7 @@ type ScopedFetchOpts = {
   teamId?: Id<"teams">;
   workspace?: "personal" | "team";
   limit?: number;
+  stripFields?: string[];
 };
 
 function getLinkedConvId(record: any): string | undefined {
@@ -59,16 +60,29 @@ export async function scopedFetch(
   opts: ScopedFetchOpts
 ): Promise<{ records: any[]; convMap: Map<string, any> }> {
   const { userId, teamId, workspace } = opts;
-
-  // When no limit is specified, fetch ALL records via .collect().
-  // Pass an explicit limit for tables with large records (e.g. docs with content)
-  // to stay under the Convex 16MB read limit.
   const fetchLimit = opts.limit;
+  const strip = opts.stripFields;
 
   let userRecords: any[] = [];
   let teamRecords: any[] = [];
 
-  const runQuery = (q: any) => fetchLimit ? q.take(fetchLimit) : q.collect();
+  // When stripFields is set, iterate with `for await` so only one full record
+  // is in the V8 heap at a time — heavy fields are dropped before accumulating.
+  const runQuery = async (q: any): Promise<any[]> => {
+    if (strip) {
+      const results: any[] = [];
+      for await (const r of q) {
+        const light: any = {};
+        for (const k of Object.keys(r)) {
+          if (!strip.includes(k)) light[k] = r[k];
+        }
+        results.push(light);
+        if (fetchLimit && results.length >= fetchLimit) break;
+      }
+      return results;
+    }
+    return fetchLimit ? q.take(fetchLimit) : q.collect();
+  };
 
   if (workspace === "personal") {
     userRecords = await runQuery(
