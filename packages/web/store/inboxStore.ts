@@ -330,6 +330,16 @@ export type ClientTips = {
   _inlineSuppressed?: boolean;
 };
 
+export type AppTab = {
+  id: string;
+  title: string;
+  path: string;
+  sessionId?: string;
+  sidePanelSessionId?: string;
+  sidePanelOpen?: boolean;
+  createdAt: number;
+};
+
 export type ClientState = {
   current_conversation_id?: string;
   show_dismissed?: boolean;
@@ -340,6 +350,8 @@ export type ClientState = {
   dismissed?: ClientDismissed;
   tips?: ClientTips;
   drafts?: Record<string, Record<string, any> | null>;
+  tabs?: AppTab[];
+  activeTabId?: string;
 
   // deprecated: backward compat
   sidebar_collapsed?: boolean;
@@ -634,6 +646,15 @@ interface InboxStoreState {
   saveView: (view: Omit<SavedView, "id" | "created_at" | "team_id">) => void;
   deleteView: (id: string) => void;
 
+  // -- Tabs --
+  tabs: AppTab[];
+  activeTabId: string | null;
+  openTab: (opts: { path: string; title: string; sessionId?: string; makeActive?: boolean }) => string;
+  closeTab: (id: string) => void;
+  switchTab: (id: string) => void;
+  updateTab: (id: string, patch: Partial<AppTab>) => void;
+  saveCurrentTabState: (patch?: Partial<AppTab>) => void;
+
   // -- Recent projects cache --
   recentProjects: Array<{ path: string; count: number; lastActive: number }>;
   setRecentProjects: (projects: Array<{ path: string; count: number; lastActive: number }>) => void;
@@ -681,8 +702,8 @@ interface InboxStoreState {
 
   // -- Task / Doc mutations (action + side effect) --
   updateTaskStatus: (shortId: string, status: string) => Promise<any>;
-  updateTask: (shortId: string, fields: { status?: string; priority?: string; title?: string; description?: string; labels?: string[]; triage_status?: string }) => Promise<any>;
-  createTask: (opts: { title: string; description?: string; task_type?: string; priority?: string; status?: string; project_id?: string; labels?: string[] }) => Promise<any>;
+  updateTask: (shortId: string, fields: { status?: string; priority?: string; title?: string; description?: string; labels?: string[]; triage_status?: string; assignee?: string; execution_status?: string; project_id?: string; project_path?: string }) => Promise<any>;
+  createTask: (opts: { title: string; description?: string; task_type?: string; priority?: string; status?: string; project_id?: string; labels?: string[]; assignee?: string; plan_id?: string; team_id?: string; workspace?: string; project_path?: string }) => Promise<any>;
   addTaskComment: (shortId: string, text: string, commentType?: string) => Promise<any>;
   updateDoc: (id: string, fields: { content?: string; title?: string; doc_type?: string; labels?: string[] }) => void;
   pinDoc: (id: string, pinned: boolean) => Promise<any>;
@@ -818,6 +839,8 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
       layouts: "deep_merge",
       dismissed: "deep_merge",
       drafts: "local_wins",
+      tabs: "deep_merge",
+      activeTabId: "deep_merge",
       tips: {
         seen: "set_union",
         dismissed: "set_union",
@@ -833,6 +856,13 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
       }
       if (!incoming.layouts && incoming.layout) {
         result.layouts = { ...(result.layouts || {}), dashboard: incoming.layout };
+      }
+      // Hydrate tabs from server on first sync
+      if (incoming.tabs && Array.isArray(incoming.tabs) && draft.tabs.length === 0) {
+        draft.tabs = incoming.tabs;
+      }
+      if (incoming.activeTabId && !draft.activeTabId) {
+        draft.activeTabId = incoming.activeTabId;
       }
       if (!initialized) {
         if (incoming.drafts) {
@@ -1927,6 +1957,87 @@ export const useInboxStore = create<InboxStoreState>(
   },
 
   // =====================
+  // TABS
+  // =====================
+
+  tabs: [],
+  activeTabId: null,
+
+  _applyTabs: sync(function (this: Draft, tabs: AppTab[], activeTabId: string | null) {
+    this.tabs = tabs;
+    this.activeTabId = activeTabId;
+  }),
+
+  openTab: (opts) => {
+    const { tabs, sidePanelSessionId, sidePanelOpen } = get();
+    const id = `tab_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const tab: AppTab = {
+      id,
+      title: opts.title,
+      path: opts.path,
+      sessionId: opts.sessionId,
+      sidePanelSessionId: sidePanelSessionId ?? undefined,
+      sidePanelOpen: sidePanelOpen || undefined,
+      createdAt: Date.now(),
+    };
+    const newTabs = [...tabs, tab];
+    const newActiveId = opts.makeActive !== false ? id : get().activeTabId;
+    (get() as any)._applyTabs(newTabs, newActiveId);
+    const dispatch = () => get()._dispatch("patch", [], { client_state: { _: { tabs: newTabs, activeTabId: newActiveId } } });
+    dispatch().catch(() => setTimeout(() => dispatch().catch(() => {}), 3000));
+    return id;
+  },
+
+  closeTab: (id) => {
+    const { tabs, activeTabId } = get();
+    const idx = tabs.findIndex((t: AppTab) => t.id === id);
+    if (idx === -1) return;
+    const newTabs = tabs.filter((t: AppTab) => t.id !== id);
+    let newActiveId = activeTabId;
+    if (activeTabId === id) {
+      const nextTab = newTabs[Math.min(idx, newTabs.length - 1)];
+      newActiveId = nextTab?.id ?? null;
+    }
+    (get() as any)._applyTabs(newTabs, newActiveId);
+    const dispatch = () => get()._dispatch("patch", [], { client_state: { _: { tabs: newTabs, activeTabId: newActiveId } } });
+    dispatch().catch(() => setTimeout(() => dispatch().catch(() => {}), 3000));
+  },
+
+  switchTab: (id) => {
+    const { tabs, activeTabId } = get();
+    if (activeTabId === id) return;
+    if (activeTabId) get().saveCurrentTabState();
+    const target = tabs.find((t: AppTab) => t.id === id);
+    (get() as any)._applyTabs(tabs, id);
+    if (target) {
+      set({
+        sidePanelSessionId: target.sidePanelSessionId ?? null,
+        sidePanelOpen: target.sidePanelOpen ?? false,
+      });
+    }
+    get()._dispatch("patch", [], { client_state: { _: { activeTabId: id } } }).catch(() => {});
+  },
+
+  updateTab: (id, patch) => {
+    const { tabs } = get();
+    const newTabs = tabs.map((t: AppTab) => t.id === id ? { ...t, ...patch } : t);
+    set({ tabs: newTabs });
+  },
+
+  saveCurrentTabState: (patch) => {
+    const { tabs, activeTabId, sidePanelSessionId, sidePanelOpen } = get();
+    if (!activeTabId) return;
+    const newTabs = tabs.map((t: AppTab) => t.id === activeTabId ? {
+      ...t,
+      sidePanelSessionId: sidePanelSessionId ?? undefined,
+      sidePanelOpen: sidePanelOpen || undefined,
+      path: typeof window !== "undefined" ? window.location.pathname : t.path,
+      ...patch,
+    } : t);
+    set({ tabs: newTabs });
+  },
+
+  // =====================
   // CACHED QUERY DATA
   // =====================
 
@@ -2077,9 +2188,10 @@ if (typeof window !== "undefined") {
     delete cached.messages;
     delete cached.pagination;
 
-    // Critical path: sidebar + current conversation render immediately
+    // Critical path: sidebar + current conversation + tabs render immediately
     apply(["sessions", "dismissedSessions", "clientState",
-           "conversations", "teams", "teamMembers", "teamUnreadCount", "drafts"]);
+           "conversations", "teams", "teamMembers", "teamUnreadCount", "drafts",
+           "tabs", "activeTabId"]);
 
     // Preload messages for all active inbox sessions so clicks are instant
     for (const id of Object.keys(cached.sessions || {})) {

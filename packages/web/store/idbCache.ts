@@ -67,6 +67,8 @@ const META_KEYS = new Set([
   "teamUnreadCount",
   "favorites",
   "bookmarks",
+  "tabs",
+  "activeTabId",
 ]);
 
 let _hydrating = false;

@@ -1493,6 +1493,8 @@ export default defineSchema({
     tips: v.optional(v.any()),
 
     drafts: v.optional(v.any()),
+    tabs: v.optional(v.any()),
+    activeTabId: v.optional(v.string()),
 
     // deprecated: kept for backward compat during migration
     sidebar_collapsed: v.optional(v.boolean()),
