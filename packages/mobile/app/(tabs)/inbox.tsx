@@ -586,7 +586,7 @@ export default function InboxScreen() {
           onPress={() => setShowNewSession(true)}
           activeOpacity={0.8}
         >
-          <FontAwesome name="plus" size={16} color={Theme.textMuted} />
+          <FontAwesome name="plus" size={18} color="#fff" />
         </TouchableOpacity>
       </RNView>
     </SafeAreaView>
@@ -602,10 +602,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: Spacing.lg,
-    paddingVertical: Spacing.md,
+    paddingTop: Spacing.md,
+    paddingBottom: Spacing.xs,
     backgroundColor: Theme.bgAlt,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: Theme.borderLight,
     gap: 8,
   },
   headerTitle: {
@@ -703,8 +702,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.md,
     paddingTop: Spacing.xs,
     paddingBottom: Spacing.xs,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: Theme.borderLight,
   },
   searchInputRow: {
     flexDirection: 'row',
@@ -795,18 +792,16 @@ const styles = StyleSheet.create({
     elevation: 100,
   },
   fab: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: Theme.bgAlt,
-    borderWidth: 1,
-    borderColor: Theme.border,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: Theme.accent,
     alignItems: 'center',
     justifyContent: 'center',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 4,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.25,
+    shadowRadius: 6,
+    elevation: 6,
   },
 });

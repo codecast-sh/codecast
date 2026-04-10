@@ -399,7 +399,8 @@ export const upsertSessionInsight = internalMutation({
         if (args.blockers?.length) contentParts.push(`## Blockers\n${args.blockers.map((b) => `- ${b}`).join("\n")}`);
         if (conv.project_path) contentParts.push(`## Project\n\`${conv.project_path}\``);
 
-        const convTeamId = conv && (!conv.is_private || conv.auto_shared) ? conv.team_id : args.team_id;
+        const convTeamId = conv && (!conv.is_private || conv.auto_shared
+          || (conv.team_visibility && conv.team_visibility !== "private")) ? conv.team_id : args.team_id;
         const existingDoc = await ctx.db
           .query("docs")
           .withIndex("by_conversation_id", (q) => q.eq("conversation_id", args.conversation_id))

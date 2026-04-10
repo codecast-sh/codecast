@@ -16,6 +16,7 @@ import { WorkflowContextPanel } from "./WorkflowContextPanel";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { undoableStashSession } from "../store/undoActions";
+import { soundKill } from "../lib/sounds";
 import { formatShortcutLabel } from "../shortcuts";
 import { X, ChevronsLeft, ChevronsRight } from "lucide-react";
 import { TaskStatusBadge } from "./TaskStatusBadge";
@@ -803,7 +804,7 @@ export function SessionListPanel({
   onCollapse?: () => void;
 }) {
   const s = useTrackedStore([
-    s => s.showAllSessions,
+    s => s.clientState.ui,
     s => s.hiddenSessionCount,
     s => s.sessions,
     s => s.dismissedSessions,
@@ -815,6 +816,7 @@ export function SessionListPanel({
   const dismissedList = useMemo(() => Object.values(s.dismissedSessions), [s.dismissedSessions]);
   const killSessionMutation = useMutation(api.conversations.killSession);
   const handleKillDismissed = useCallback((id: string) => {
+    soundKill();
     if (isConvexId(id)) {
       killSessionMutation({ conversation_id: id as Id<"conversations">, mark_completed: true }).catch(() => {});
     }
@@ -874,7 +876,8 @@ export function SessionListPanel({
   const filteredCount = filteredPinned.length + filteredNew.length + filteredNeedsInput.length + filteredWorking.length;
 
   const [expandedSubSessions, setExpandedSubSessions] = useState<Record<string, boolean>>({});
-  const [showSubagents, setShowSubagents] = useState(true);
+  const showSubagents = s.clientState.ui?.show_subagents ?? true;
+  const showAllSessions = s.clientState.ui?.show_old_sessions ?? true;
   const totalSubagentCount = useMemo(() => {
     let count = 0;
     for (const subs of globalSubByParent.values()) count += subs.length;
@@ -1013,13 +1016,13 @@ export function SessionListPanel({
         )}
         <div className="flex items-center gap-2 flex-shrink-0 ml-auto">
           {totalSubagentCount > 0 && (
-            <button onClick={() => setShowSubagents(v => !v)} className="text-[10px] text-sol-text-dim hover:text-sol-cyan transition-colors whitespace-nowrap">
+            <button onClick={() => s.updateClientUI({ show_subagents: !showSubagents })} className="text-[10px] text-sol-text-dim hover:text-sol-cyan transition-colors whitespace-nowrap">
               {showSubagents ? `−${totalSubagentCount} sub` : `+${totalSubagentCount} sub`}
             </button>
           )}
           {s.hiddenSessionCount > 0 && (
-            <button onClick={s.toggleShowAllSessions} className="text-[10px] text-sol-text-dim hover:text-sol-cyan transition-colors whitespace-nowrap">
-              {s.showAllSessions ? `−${s.hiddenSessionCount} old` : `+${s.hiddenSessionCount} old`}
+            <button onClick={() => s.updateClientUI({ show_old_sessions: !showAllSessions })} className="text-[10px] text-sol-text-dim hover:text-sol-cyan transition-colors whitespace-nowrap">
+              {showAllSessions ? `−${s.hiddenSessionCount} old` : `+${s.hiddenSessionCount} old`}
             </button>
           )}
         </div>

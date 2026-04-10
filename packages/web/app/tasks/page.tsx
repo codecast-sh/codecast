@@ -117,7 +117,7 @@ export function TaskRow({ task, state, triageMode, onTriage }: { task: TaskItem;
           <StatusIcon className={`w-4 h-4 ${status.color}`} />
         )}
       </button>
-      <span className="text-xs font-mono text-sol-text-dim w-16 flex-shrink-0 cq-hide-minimal">{task.short_id}</span>
+      <span className="text-xs font-mono text-sol-text-dim w-16 flex-shrink-0 cq-hide-compact">{task.short_id}</span>
       {state.isEditing ? (
         <input
           autoFocus
@@ -225,13 +225,13 @@ export function TaskRow({ task, state, triageMode, onTriage }: { task: TaskItem;
       ) : (
         <button
           onClick={(e) => { e.stopPropagation(); state.onOpenPalette("priority"); }}
-          className="flex-shrink-0 hover:scale-125 transition-transform cq-hide-minimal"
+          className="flex-shrink-0 hover:scale-125 transition-transform cq-hide-compact"
           title="Set priority (p)"
         >
           <PriorityIcon className={`w-3.5 h-3.5 ${priority.color}`} />
         </button>
       )}
-      <span className="text-xs text-sol-text-dim w-8 text-right tabular-nums cq-hide-minimal">{ageStr}</span>
+      <span className="text-xs text-sol-text-dim w-8 text-right tabular-nums cq-hide-compact">{ageStr}</span>
     </>
   );
 }
@@ -753,20 +753,28 @@ export function TaskListContent() {
     return [...set].sort();
   }, [tasksList]);
 
-  const filteredTasks = useMemo(() => {
-    let list = tasksList;
-
-    // Triage + source filtering
+  // Source filtering applied before other filters.
+  // Default ("") shows ALL active-triage tasks. "human" narrows to human-created only.
+  const sourceFilteredTasks = useMemo(() => {
     if (sourceFilter === "human") {
-      list = list.filter((t) => t.source !== "insight" && (!t.triage_status || t.triage_status === "active"));
+      return tasksList.filter((t) => t.source === "human" && (!t.triage_status || t.triage_status === "active"));
     } else if (sourceFilter === "bot") {
-      list = list.filter((t) => t.source === "insight" && t.triage_status === "suggested");
+      return tasksList.filter((t) => t.source === "insight" && t.triage_status === "suggested");
     } else if (sourceFilter === "dismissed") {
-      list = list.filter((t) => t.triage_status === "dismissed");
+      return tasksList.filter((t) => t.triage_status === "dismissed");
     } else {
-      // Default: only active triage (hide suggested/dismissed)
-      list = list.filter((t) => !t.triage_status || t.triage_status === "active");
+      // Default: show everything with active triage
+      return tasksList.filter((t) => !t.triage_status || t.triage_status === "active");
     }
+  }, [tasksList, sourceFilter]);
+
+  const hiddenAgentCount = useMemo(() => {
+    if (sourceFilter !== "human") return 0;
+    return tasksList.filter((t) => t.source !== "human" && (!t.triage_status || t.triage_status === "active")).length;
+  }, [tasksList, sourceFilter]);
+
+  const filteredTasks = useMemo(() => {
+    let list = sourceFilteredTasks;
 
     // Status filtering: tab bar (single) or dropdown (multi)
     if (statusFilter) {
@@ -781,7 +789,7 @@ export function TaskListContent() {
     if (assigneeFilter === "_unassigned") list = list.filter((t) => !t.assignee);
     else if (assigneeFilter) list = list.filter((t) => t.assignee === assigneeFilter);
     return list;
-  }, [tasksList, priorityFilter, labelFilter, assigneeFilter, statusFilter, statusesFilter, sourceFilter]);
+  }, [sourceFilteredTasks, priorityFilter, labelFilter, assigneeFilter, statusFilter, statusesFilter]);
 
   const sortWithinGroup = useCallback((tasks: TaskItem[]) => {
     return [...tasks].sort((a, b) => {
@@ -921,14 +929,12 @@ export function TaskListContent() {
 
   const taskCounts = useMemo(() => {
     const counts: Record<string, number> = { active: 0 };
-    for (const t of tasksList) {
-      // Only count active triage tasks (matches default filter)
-      if (t.triage_status && t.triage_status !== "active") continue;
+    for (const t of sourceFilteredTasks) {
       counts[t.status] = (counts[t.status] || 0) + 1;
       if (t.status !== "done" && t.status !== "dropped") counts.active++;
     }
     return counts;
-  }, [tasksList]);
+  }, [sourceFilteredTasks]);
 
   const isBotView = sourceFilter === "bot";
   const renderTaskRow = useCallback((task: TaskItem, state: ItemRowState) => (
@@ -1022,6 +1028,15 @@ export function TaskListContent() {
             <TaskPreviewPanel taskId={task._id} onClose={onClose} onOpen={onOpen} />
           )}
           onItemEdit={handleTitleEdit}
+          listFooter={hiddenAgentCount > 0 ? (
+            <div className="px-6 py-2.5 border-t border-sol-border/15 flex items-center gap-2 text-xs text-sol-text-dim">
+              <Bot className="w-3.5 h-3.5 opacity-40" />
+              <span>{hiddenAgentCount} agent {hiddenAgentCount === 1 ? "item" : "items"} not shown</span>
+              <button onClick={() => setParam({ source: "all" })} className="text-sol-cyan hover:underline ml-0.5">
+                Show all
+              </button>
+            </div>
+          ) : undefined}
           headerExtra={
             <>
               <div className="flex items-center rounded-md border border-sol-border/40 overflow-hidden">

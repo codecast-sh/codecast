@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useCallback } from "react";
 import { useQuery } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../store/inboxStore";
@@ -9,20 +9,16 @@ const api = _api as any;
 
 /**
  * Fetches ALL tasks for the current workspace (team or personal) into the store.
- * No status/project filtering at the query level — the store holds the complete
- * dataset and all filtering happens client-side. This prevents the task list
- * from jumping when navigating sessions or changing filters.
+ * No pagination, no limits — every task is loaded and kept in the store.
+ * All filtering happens client-side.
  */
 export function useSyncTasks() {
-  const [numItems, setNumItems] = useState(5000);
   const activeTeamId = useInboxStore(
     (s) => s.clientState.ui?.active_team_id
   ) as Id<"teams"> | undefined;
   const initialized = useInboxStore((s) => s.clientStateInitialized);
   const syncTable = useInboxStore((s) => s.syncTable);
 
-  // Stable workspace args: team_id only, NO project_path, NO status filter.
-  // Everything is fetched once and cached; all filtering is client-side.
   const stableArgs = !initialized ? "skip" : activeTeamId
     ? { team_id: activeTeamId, workspace: "team" as const }
     : { workspace: "personal" as const };
@@ -31,7 +27,6 @@ export function useSyncTasks() {
     stableArgs === "skip" ? "skip" : {
       ...stableArgs,
       include_derived: true,
-      limit: numItems,
     }
   );
 
@@ -39,12 +34,7 @@ export function useSyncTasks() {
     syncTable("tasks", data.items ?? data);
   }, [syncTable]));
 
-  const hasMore = result?.hasMore ?? false;
-  const loadMore = useCallback(() => {
-    setNumItems(n => n + 2000);
-  }, []);
-
-  return { hasMore, loadMore };
+  return { hasMore: false, loadMore: () => {} };
 }
 
 export function useSyncTaskDetail(id?: string) {

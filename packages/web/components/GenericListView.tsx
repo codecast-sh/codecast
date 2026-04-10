@@ -97,6 +97,7 @@ export interface GenericListViewProps<T> {
 
   getSearchText?: (item: T) => string;
   headerExtra?: ReactNode;
+  listFooter?: ReactNode;
   customContent?: (helpers: { openPaletteForItems: (items: T[], mode?: string) => void }) => ReactNode;
   extraShortcuts?: { key: string; label: string }[];
   extraKeyHandler?: (e: KeyboardEvent, stop: () => void) => boolean;
@@ -132,6 +133,7 @@ export function GenericListView<T>({
   onItemEdit,
   getSearchText,
   headerExtra,
+  listFooter,
   customContent,
   extraShortcuts,
   extraKeyHandler,
@@ -547,6 +549,8 @@ export function GenericListView<T>({
                 {displayFlatItems.map((item, i) => renderItemRow(item, i))}
               </div>
             )}
+
+            {listFooter}
 
             {hasMore && onLoadMore && (
               <div ref={loadMoreRef} className="px-6 py-3 border-t border-sol-border/20">

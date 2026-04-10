@@ -21,7 +21,7 @@ function deepMerge(target: any, source: any): any {
 }
 
 export function useSyncInboxSessions() {
-  const showAll = useInboxStore((s) => s.showAllSessions);
+  const showAll = useInboxStore((s) => s.clientState.ui?.show_old_sessions ?? true);
   const activeSessions = useQuery(api.conversations.listIdleSessions, { show_all: showAll });
   const dismissedQuery = useQuery(api.conversations.listDismissedSessions, {});
   const clientState = useQuery(api.client_state.get, {});

@@ -44,7 +44,11 @@ export function resolveEffectiveTeam(record: any, convMap: Map<string, any>): Id
   const cid = getLinkedConvId(record);
   const conv = cid ? convMap.get(cid) : undefined;
   if (conv) {
-    return (!conv.is_private || conv.auto_shared) ? conv.team_id : undefined;
+    if (!conv.is_private || conv.auto_shared) return conv.team_id;
+    // Match isConversationTeamVisible: team_visibility override makes
+    // private conversations (and their linked records) team-visible.
+    if (conv.team_visibility && conv.team_visibility !== "private") return conv.team_id;
+    return undefined;
   }
   return record.team_id;
 }
@@ -55,26 +59,29 @@ export async function scopedFetch(
   opts: ScopedFetchOpts
 ): Promise<{ records: any[]; convMap: Map<string, any> }> {
   const { userId, teamId, workspace } = opts;
-  const fetchLimit = opts.limit || 500;
+
+  // When no limit is specified, fetch ALL records via .collect().
+  // Pass an explicit limit for tables with large records (e.g. docs with content)
+  // to stay under the Convex 16MB read limit.
+  const fetchLimit = opts.limit;
 
   let userRecords: any[] = [];
   let teamRecords: any[] = [];
 
+  const runQuery = (q: any) => fetchLimit ? q.take(fetchLimit) : q.collect();
+
   if (workspace === "personal") {
-    userRecords = await ctx.db.query(table)
-      .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
-      .order("desc")
-      .take(fetchLimit);
+    userRecords = await runQuery(
+      ctx.db.query(table).withIndex("by_user_id", (q: any) => q.eq("user_id", userId)).order("desc")
+    );
   } else {
-    userRecords = await ctx.db.query(table)
-      .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
-      .order("desc")
-      .take(fetchLimit);
+    userRecords = await runQuery(
+      ctx.db.query(table).withIndex("by_user_id", (q: any) => q.eq("user_id", userId)).order("desc")
+    );
     if (teamId) {
-      teamRecords = await ctx.db.query(table)
-        .withIndex("by_team_id", (q: any) => q.eq("team_id", teamId))
-        .order("desc")
-        .take(fetchLimit);
+      teamRecords = await runQuery(
+        ctx.db.query(table).withIndex("by_team_id", (q: any) => q.eq("team_id", teamId)).order("desc")
+      );
     }
   }
 
