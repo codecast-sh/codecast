@@ -3045,7 +3045,7 @@ export default function SessionDetailScreen() {
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(highlightMessageParam || null);
   const [jumpingToStart, setJumpingToStart] = useState(false);
   const [jumpingToEnd, setJumpingToEnd] = useState(false);
-  const [floatingHeaderHeight, setFloatingHeaderHeight] = useState(152);
+  const [floatingHeaderHeight, setFloatingHeaderHeight] = useState(52);
   const floatingHeaderY = useRef(new Animated.Value(0)).current;
   const floatingHeaderOffsetRef = useRef(0);
   const lastScrollYRef = useRef(0);
@@ -4031,6 +4031,7 @@ export default function SessionDetailScreen() {
         </Animated.View>
         <FlatList
           ref={flatListRef}
+          style={{ flex: 1 }}
           data={invertedMessages}
           inverted={true}
           removeClippedSubviews={false}
