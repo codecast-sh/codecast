@@ -146,14 +146,14 @@ function formatDuration(startMs: number, endMs: number): string {
   return remMins > 0 ? `${hours}h ${remMins}m` : `${hours}h`;
 }
 
-const JUNK_PROJECTS = new Set(["unknown", "src", "home", "tmp", "var", "users", "opt", "usr", "app", "root"]);
+const JUNK_WORKSPACES = new Set(["unknown", "src", "home", "tmp", "var", "users", "opt", "usr", "app", "root"]);
 
-function extractProject(projectPath: string | undefined): string | undefined {
+function extractWorkspace(projectPath: string | undefined): string | undefined {
   if (!projectPath) return undefined;
   const parts = projectPath.split("/").filter(Boolean);
   if (parts.length < 3) return undefined;
   const name = parts[parts.length - 1];
-  if (!name || JUNK_PROJECTS.has(name.toLowerCase())) return undefined;
+  if (!name || JUNK_WORKSPACES.has(name.toLowerCase())) return undefined;
   if (name.length < 2 || name.length > 40) return undefined;
   if (!/[-_a-zA-Z]/.test(name[0])) return undefined;
   return name;
@@ -218,7 +218,7 @@ function useProjectColors(items: any[]) {
     const map: Record<string, string> = {};
     let idx = 0;
     for (const item of items) {
-      const proj = extractProject(item.project_path);
+      const proj = extractWorkspace(item.project_path);
       if (proj && !map[proj]) {
         map[proj] = PROJECT_PALETTE[idx % PROJECT_PALETTE.length];
         idx++;
@@ -426,7 +426,7 @@ export function SessionCardInner({ item, compact, showActor, onNavigate, project
   const [deepDive, setDeepDive] = useState(false);
   const actorName = item.actor?.name || "Unknown";
   const actorId = item.actor?._id;
-  const project = extractProject(item.project_path);
+  const project = extractWorkspace(item.project_path);
   const outcome = OUTCOME_STYLES[item.outcome_type] || OUTCOME_STYLES.unknown;
   const isActive = item.status === "active";
   const isTrivial = (item.message_count || 0) < 3;
@@ -687,7 +687,7 @@ function DaySection({ day, items, compact, showActor, onNavigate, projectColors,
     const projSet = new Set<string>();
     const actorSet = new Set<string>();
     for (const i of items) {
-      const p = extractProject(i.project_path);
+      const p = extractWorkspace(i.project_path);
       if (p) projSet.add(p);
       if (i.actor?._id) actorSet.add(i.actor._id.toString());
     }
@@ -769,7 +769,7 @@ function DaySection({ day, items, compact, showActor, onNavigate, projectColors,
                 compact={compact}
                 showActor={showActor}
                 onNavigate={onNavigate}
-                projectColor={projectColors[extractProject(item.project_path) || ""]}
+                projectColor={projectColors[extractWorkspace(item.project_path) || ""]}
               />
             ))}
           </div>
@@ -890,7 +890,7 @@ export function ActivityFeed({ mode, teamId, compact, directoryFilter, onNavigat
         return parts.includes(filterName!);
       });
     }
-    if (projectFilter) items = items.filter((item: any) => extractProject(item.project_path) === projectFilter);
+    if (projectFilter) items = items.filter((item: any) => extractWorkspace(item.project_path) === projectFilter);
     return items;
   }, [digest?.feed, actorFilter, directoryFilter, projectFilter]);
 

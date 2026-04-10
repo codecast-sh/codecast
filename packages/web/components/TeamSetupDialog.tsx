@@ -48,9 +48,9 @@ const VISIBILITY_LEVELS = [
     label: "Activity Only",
     Icon: BarChart2,
     accent: "sol-yellow",
-    description: "Teammates see project names and session counts",
+    description: "Teammates see workspace names and session counts",
     detail:
-      'Like a status light — teammates know you\'re active in a project, but can\'t see any session content.',
+      'Like a status light — teammates know you\'re active in a workspace, but can\'t see any session content.',
     preview: '"3 sessions in codecast today"',
   },
   {
@@ -60,12 +60,12 @@ const VISIBILITY_LEVELS = [
     accent: "sol-base01",
     description: "Your work is invisible to the team",
     detail:
-      "You can see teammates' shared sessions, but they won't see any of yours. Good for confidential or personal projects.",
+      "You can see teammates' shared sessions, but they won't see any of yours. Good for confidential or personal workspaces.",
     preview: "Teammates see: nothing",
   },
 ];
 
-type SuggestedProject = {
+type SuggestedWorkspace = {
   path: string;
   git_remote_url: string | null;
   session_count: number;
@@ -88,11 +88,11 @@ type SuggestionsResult = {
   team_icon?: string | null;
   team_icon_color?: string | null;
   current_visibility: TeamVisibility;
-  suggestions: SuggestedProject[];
+  suggestions: SuggestedWorkspace[];
   team_only_repos: TeamOnlyRepo[];
 };
 
-type UserProject = {
+type UserWorkspace = {
   path: string;
   is_git_repo: boolean;
   git_remote_url?: string;
@@ -116,7 +116,7 @@ export function TeamSetupDialog() {
   const allProjects = useQuery(
     api.users.getRecentProjectsWithGitInfo,
     setupTeamId ? { limit: 30 } : "skip",
-  ) as UserProject[] | undefined;
+  ) as UserWorkspace[] | undefined;
 
   const setTeamVisibilityMut = useMutation(api.teams.setTeamVisibility);
   const updateDirectoryMapping = useMutation(api.users.updateDirectoryTeamMapping);
@@ -140,7 +140,7 @@ export function TeamSetupDialog() {
     setVisibility(suggestions.current_visibility || "summary");
   }, [suggestions?.team_id, suggestions?.current_visibility]);
 
-  // Build selection map: pre-select suggested (teammate-matched) projects
+  // Build selection map: pre-select suggested (teammate-matched) workspaces
   const suggestedPaths = useMemo(
     () => new Set(suggestions?.suggestions.map((s) => s.path) ?? []),
     [suggestions?.suggestions],
@@ -150,7 +150,7 @@ export function TeamSetupDialog() {
     if (!allProjects) return;
     const initial: Record<string, boolean> = {};
     for (const p of allProjects) {
-      // Pre-select projects that teammates already share, or that are already mapped to this team
+      // Pre-select workspaces that teammates already share, or that are already mapped to this team
       initial[p.path] =
         suggestedPaths.has(p.path) ||
         (p.team_id?.toString() === setupTeamId?.toString() && p.auto_share);
@@ -184,8 +184,8 @@ export function TeamSetupDialog() {
 
       let mapped = 0;
       for (const path of paths) {
-        const project = allProjects?.find((p) => p.path === path);
-        if (project?.team_id?.toString() === setupTeamId.toString() && project?.auto_share) {
+        const ws = allProjects?.find((p) => p.path === path);
+        if (ws?.team_id?.toString() === setupTeamId.toString() && ws?.auto_share) {
           continue; // already mapped
         }
         await updateDirectoryMapping({
@@ -198,7 +198,7 @@ export function TeamSetupDialog() {
 
       const teamName = suggestions?.team_name || "team";
       if (mapped > 0) {
-        toast.success(`Sharing ${mapped} project${mapped === 1 ? "" : "s"} with ${teamName}`);
+        toast.success(`Sharing ${mapped} workspace${mapped === 1 ? "" : "s"} with ${teamName}`);
       } else {
         toast.success(`Saved ${teamName} settings`);
       }
@@ -211,7 +211,7 @@ export function TeamSetupDialog() {
     }
   };
 
-  const toggleProject = (path: string) => {
+  const toggleWorkspace = (path: string) => {
     setSelectedPaths((prev) => ({ ...prev, [path]: !prev[path] }));
   };
 
@@ -220,18 +220,18 @@ export function TeamSetupDialog() {
   const teamName = suggestions?.team_name || "your team";
   const teamOnlyRepos = suggestions?.team_only_repos ?? [];
 
-  // Separate projects into matched (teammates share) and other
-  const matchedProjects: UserProject[] = [];
-  const otherProjects: UserProject[] = [];
+  // Separate workspaces into matched (teammates share) and other
+  const matchedWorkspaces: UserWorkspace[] = [];
+  const otherWorkspaces: UserWorkspace[] = [];
   for (const p of allProjects ?? []) {
     if (suggestedPaths.has(p.path)) {
-      matchedProjects.push(p);
+      matchedWorkspaces.push(p);
     } else {
-      otherProjects.push(p);
+      otherWorkspaces.push(p);
     }
   }
 
-  const getProjectName = (path: string) => {
+  const getWorkspaceName = (path: string) => {
     const parts = path.split("/");
     return parts[parts.length - 1] || path;
   };
@@ -262,7 +262,7 @@ export function TeamSetupDialog() {
           <div className="h-px flex-1 bg-sol-border" />
           <StepIndicator
             number={2}
-            label="Projects"
+            label="Workspaces"
             active={step === "projects"}
             completed={false}
           />
@@ -361,39 +361,39 @@ export function TeamSetupDialog() {
           <>
             <DialogHeader className="px-6 pt-2">
               <DialogTitle className="text-sol-text text-lg">
-                Share projects with {teamName}
+                Share workspaces with {teamName}
               </DialogTitle>
               <DialogDescription className="text-sol-base1 text-sm">
-                Select projects to automatically share with the team. New
-                sessions in shared projects will appear in the team feed.
+                Select workspaces to automatically share with the team. New
+                sessions in shared workspaces will appear in the team feed.
               </DialogDescription>
             </DialogHeader>
 
             <div className="flex-1 overflow-y-auto px-6 py-2 space-y-5 min-h-0">
-              {/* Matched projects — teammates already share these */}
-              {matchedProjects.length > 0 && (
-                <ProjectSection
+              {/* Matched workspaces — teammates already share these */}
+              {matchedWorkspaces.length > 0 && (
+                <WorkspaceSection
                   title="Shared by teammates"
                   subtitle="Your teammates already share these repos. Pre-selected for you."
-                  projects={matchedProjects}
+                  workspaces={matchedWorkspaces}
                   selectedPaths={selectedPaths}
-                  onToggle={toggleProject}
-                  getProjectName={getProjectName}
+                  onToggle={toggleWorkspace}
+                  getWorkspaceName={getWorkspaceName}
                   getRelativeTime={getRelativeTime}
                   getSuggestion={getSuggestion}
                   setupTeamId={setupTeamId}
                 />
               )}
 
-              {/* Other projects */}
-              {otherProjects.length > 0 && (
-                <ProjectSection
-                  title="Your other projects"
-                  subtitle="Select any additional projects you'd like to share."
-                  projects={otherProjects}
+              {/* Other workspaces */}
+              {otherWorkspaces.length > 0 && (
+                <WorkspaceSection
+                  title="Your other workspaces"
+                  subtitle="Select any additional workspaces you'd like to share."
+                  workspaces={otherWorkspaces}
                   selectedPaths={selectedPaths}
-                  onToggle={toggleProject}
-                  getProjectName={getProjectName}
+                  onToggle={toggleWorkspace}
+                  getWorkspaceName={getWorkspaceName}
                   getRelativeTime={getRelativeTime}
                   getSuggestion={getSuggestion}
                   setupTeamId={setupTeamId}
@@ -403,18 +403,18 @@ export function TeamSetupDialog() {
               {/* Loading state */}
               {allProjects === undefined && (
                 <div className="rounded-lg border border-sol-border bg-sol-bg-alt/40 px-4 py-8 text-center text-sm text-sol-base1">
-                  Loading your projects...
+                  Loading your workspaces...
                 </div>
               )}
 
-              {/* No local projects — show CLI install guidance */}
+              {/* No local workspaces — show CLI install guidance */}
               {allProjects && allProjects.length === 0 && (
                 <div className="rounded-lg border border-sol-border bg-sol-bg-alt/40 px-4 py-5 space-y-3">
                   <div className="text-sm text-sol-text font-medium">
-                    No projects found yet
+                    No workspaces found yet
                   </div>
                   <p className="text-xs text-sol-base1 leading-relaxed">
-                    Projects appear here once you start sessions with the
+                    Workspaces appear here once you start sessions with the
                     Codecast CLI. Install and authenticate, then your repos will
                     be available to share.
                   </p>
@@ -494,7 +494,7 @@ export function TeamSetupDialog() {
               </Button>
               <div className="flex items-center gap-3 sm:ml-auto">
                 <span className="text-xs text-sol-base01">
-                  {selectedCount} project{selectedCount === 1 ? "" : "s"} selected
+                  {selectedCount} workspace{selectedCount === 1 ? "" : "s"} selected
                 </span>
                 <Button
                   onClick={handleSave}
@@ -549,27 +549,27 @@ function StepIndicator({
   );
 }
 
-// ── Project list section ────────────────────────────────────────────
+// ── Workspace list section ──────────────────────────────────────────
 
-function ProjectSection({
+function WorkspaceSection({
   title,
   subtitle,
-  projects,
+  workspaces,
   selectedPaths,
   onToggle,
-  getProjectName,
+  getWorkspaceName,
   getRelativeTime,
   getSuggestion,
   setupTeamId,
 }: {
   title: string;
   subtitle: string;
-  projects: UserProject[];
+  workspaces: UserWorkspace[];
   selectedPaths: Record<string, boolean>;
   onToggle: (path: string) => void;
-  getProjectName: (path: string) => string;
+  getWorkspaceName: (path: string) => string;
   getRelativeTime: (ts: number) => string;
-  getSuggestion: (path: string) => SuggestedProject | undefined;
+  getSuggestion: (path: string) => SuggestedWorkspace | undefined;
   setupTeamId: Id<"teams"> | null;
 }) {
   return (
@@ -579,17 +579,17 @@ function ProjectSection({
         <p className="text-xs text-sol-text-dim mt-0.5">{subtitle}</p>
       </div>
       <div className="space-y-1.5 max-h-[240px] overflow-y-auto pr-0.5">
-        {projects.map((project) => {
-          const selected = !!selectedPaths[project.path];
-          const suggestion = getSuggestion(project.path);
+        {workspaces.map((ws) => {
+          const selected = !!selectedPaths[ws.path];
+          const suggestion = getSuggestion(ws.path);
           const alreadyMapped =
-            project.team_id?.toString() === setupTeamId?.toString() &&
-            project.auto_share;
+            ws.team_id?.toString() === setupTeamId?.toString() &&
+            ws.auto_share;
 
           return (
             <button
-              key={project.path}
-              onClick={() => onToggle(project.path)}
+              key={ws.path}
+              onClick={() => onToggle(ws.path)}
               className={`w-full rounded-lg border px-4 py-3 text-left transition-colors ${
                 selected
                   ? "border-sol-cyan bg-sol-cyan/[0.06]"
@@ -610,7 +610,7 @@ function ProjectSection({
                   <div className="flex items-center gap-2">
                     <GitBranch className="w-4 h-4 text-sol-cyan shrink-0" />
                     <span className="truncate text-sm font-medium text-sol-text">
-                      {getProjectName(project.path)}
+                      {getWorkspaceName(ws.path)}
                     </span>
                     {suggestion?.match_type === "github" && (
                       <span className="rounded border border-sol-cyan/30 bg-sol-cyan/10 px-1.5 py-0.5 text-[10px] text-sol-cyan whitespace-nowrap">
@@ -624,7 +624,7 @@ function ProjectSection({
                     )}
                   </div>
                   <div className="mt-0.5 truncate text-xs text-sol-text-dim">
-                    {project.path}
+                    {ws.path}
                   </div>
                   <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-sol-base01">
                     {suggestion && (
@@ -634,11 +634,11 @@ function ProjectSection({
                       </span>
                     )}
                     <span>
-                      {project.session_count} session
-                      {project.session_count === 1 ? "" : "s"}
+                      {ws.session_count} session
+                      {ws.session_count === 1 ? "" : "s"}
                     </span>
-                    {project.last_active > 0 && (
-                      <span>{getRelativeTime(project.last_active)}</span>
+                    {ws.last_active > 0 && (
+                      <span>{getRelativeTime(ws.last_active)}</span>
                     )}
                   </div>
                 </div>
