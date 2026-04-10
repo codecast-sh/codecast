@@ -2,9 +2,8 @@ import { ReactNode, useState, useCallback, useRef, useMemo } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useEventListener } from "../hooks/useEventListener";
-import { useConvexSync } from "../hooks/useConvexSync";
 import { usePathname, useRouter } from "next/navigation";
-import { useQuery, useMutation, useConvexAuth } from "convex/react";
+import { useMutation, useConvexAuth } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Panel, Group, Separator } from "react-resizable-panels";
 import { UserMenu } from "./UserMenu";
@@ -33,6 +32,7 @@ import { usePrefetch } from "../hooks/usePrefetch";
 import { desktopHeaderClass, setupDesktopDrag, isElectron } from "../lib/desktop";
 import { CollapsedSessionRail, SessionListPanel, ConversationColumn } from "./GlobalSessionPanel";
 import { useSyncInboxSessions } from "../hooks/useSyncInboxSessions";
+import { useSyncDocs } from "../hooks/useSyncDocs";
 import { isInboxSessionView } from "../lib/inboxRouting";
 import { useSessionSwitcher } from "../hooks/useSessionSwitcher";
 import { SessionSwitcher } from "./SessionSwitcher";
@@ -89,6 +89,7 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
   const prevWasInboxRef = useRef(false);
   const prevPathnameRef = useRef(pathname);
   usePrefetch();
+  useSyncDocs();
   useSyncInboxSessions();
   const tipActions = useTipActions();
 
@@ -98,11 +99,7 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
     setZoomHeight(z === 1 ? '100vh' : `calc(100vh / ${z})`);
   }, []);
 
-  const serverClientState = useQuery(api.client_state.get, {});
   const createQuickSession = useMutation(api.conversations.createQuickSession);
-  useConvexSync(serverClientState, (data) => {
-    useInboxStore.getState().syncTable("clientState", data);
-  });
 
   useMountEffect(() => {
     setDesktopClass(desktopHeaderClass());
@@ -128,7 +125,9 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
   const isOnWorkflowsPage = pathname === "/workflows" || (pathname?.startsWith("/workflows/") ?? false);
   const isOnPlansPage = pathname === "/plans" || (pathname?.startsWith("/plans/") ?? false);
   const isOnDocsPage = pathname === "/docs" || (pathname?.startsWith("/docs/") ?? false);
-  const isFullWidthPage = isOnConversationPage || isOnCommitPage || isOnPRPage || isOnInboxPage || isOnTasksPage || isOnWorkflowsPage || isOnPlansPage || isOnDocsPage;
+  const isOnProjectsPage = pathname === "/projects" || (pathname?.startsWith("/projects/") ?? false);
+  const isOnWindowsPage = pathname === "/windows";
+  const isFullWidthPage = isOnConversationPage || isOnCommitPage || isOnPRPage || isOnInboxPage || isOnTasksPage || isOnWorkflowsPage || isOnPlansPage || isOnDocsPage || isOnProjectsPage || isOnWindowsPage;
 
   const activeAgentCount = useMemo(() => {
     return Object.values(s.sessions).filter(
@@ -399,7 +398,7 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
     <Group orientation="horizontal" className="h-full" defaultLayout={{ "right-content": 70, "session-list": 30 }}>
       <Panel id="right-content" minSize={400}><div className="h-full">{mainContent}</div></Panel>
       <Separator className={separatorClass} />
-      <Panel id="session-list" minSize={200} maxSize="50%" defaultSize="30%" collapsible collapsedSize={0}>
+      <Panel id="session-list" minSize={200} maxSize="50%" defaultSize="30%">
         <ErrorBoundary name="SessionList" level="panel">
           <div className="w-full h-full border-l border-sol-border/30">
             <SessionListPanel

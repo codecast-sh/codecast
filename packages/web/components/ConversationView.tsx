@@ -9387,7 +9387,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       )}
       <header ref={headerRef} className={`border-b border-black/10 bg-sol-bg-alt shrink-0 relative ${embedded ? "sticky top-0 z-20 bg-sol-bg-alt" : ""} ${!embedded || isZenMode ? deskClass : ""} ${isImageLightboxActive ? "invisible" : ""} ${hideHeader ? "hidden" : ""}`}>
         <div className="px-2 py-0.5 sm:py-1">
-          <div className="flex items-center gap-2 min-w-0 select-none overflow-hidden">
+          <div className="flex items-center gap-2 min-w-0 select-none">
+            <div className="flex items-center gap-2 min-w-0 overflow-hidden flex-1">
             {isZenMode && (
               <TooltipProvider delayDuration={300}>
                 <Tooltip>
@@ -9914,6 +9915,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
               </div>
               </TooltipProvider>
             )}
+            </div>
             {headerEnd && <div className="flex-shrink-0">{headerEnd}</div>}
           </div>
           {taskStats && <TaskProgressRow taskStats={taskStats} />}

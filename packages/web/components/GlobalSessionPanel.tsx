@@ -1116,7 +1116,7 @@ export function SessionListPanel({
 
 // -- CollapsedSessionRail --
 
-export function CollapsedSessionRail() {
+export function CollapsedSessionRail({ onSessionSelect }: { onSessionSelect?: (id: string) => void } = {}) {
   const s = useTrackedStore([
     s => s.sessions,
     s => s.sessionsWithQueuedMessages,

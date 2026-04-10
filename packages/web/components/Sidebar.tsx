@@ -15,6 +15,7 @@ import { TeamIcon } from "./TeamIcon";
 import { isDesktop } from "../lib/desktop";
 import { CreateTaskModal } from "./CreateTaskModal";
 import { CreateDocModal } from "./CreateDocModal";
+import { SidebarDocTree } from "./SidebarDocTree";
 
 const api = _api as any;
 
@@ -253,11 +254,13 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
   const isInbox = pathname === "/conversation" || pathname?.startsWith("/conversation/") || pathname === "/inbox" || pathname?.startsWith("/inbox/");
   const isAdminLogs = pathname?.startsWith("/admin/daemon-logs");
   const isSessions = pathname?.startsWith("/sessions");
+  const isWindows = pathname?.startsWith("/windows");
   const isConfig = pathname?.startsWith("/config");
   const isTeamActivity = pathname === "/team/activity" || pathname?.startsWith("/team/activity");
   const isTasks = pathname === "/tasks" || pathname?.startsWith("/tasks/");
   const isPlans = pathname === "/plans" || pathname?.startsWith("/plans/");
   const isDocs = pathname === "/docs" || pathname?.startsWith("/docs/");
+  const isProjects = pathname === "/projects" || pathname?.startsWith("/projects/");
   const isWorkflows = pathname === "/workflows" || pathname?.startsWith("/workflows/");
   const { user: currentUser } = useCurrentUser();
   const isAdmin = currentUser?.role === "admin";
@@ -298,6 +301,13 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
   const favorites = favoritesQuery ?? useInboxStore.getState().favorites;
   const bookmarks = bookmarksQuery ?? useInboxStore.getState().bookmarks;
   const toggleBookmark = useMutation(api.bookmarks.toggleBookmark);
+  const allSavedViews = useInboxStore((s) => s.clientState.ui?.saved_views);
+  const savedViews = useMemo(
+    () => allSavedViews?.filter((v: any) => !v.team_id || v.team_id === activeTeamId),
+    [allSavedViews, activeTeamId]
+  );
+  const deleteView = useInboxStore((s) => s.deleteView);
+  const updateClientUI = useInboxStore((s) => s.updateClientUI);
 
   useConvexSync(teamsQuery, useCallback((d: any) => useInboxStore.getState().syncTable("teams", d), []));
   useConvexSync(teamUnreadCountQuery, useCallback((d: any) => useInboxStore.getState().syncTable("teamUnreadCount", d), []));
@@ -473,22 +483,60 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
               </svg>
             }
           />
-          <NavSection
-            label="Docs"
-            href="/docs"
-            isActive={isDocs || isPlans}
-            isNarrow={isNarrow}
-            onMobileClose={onMobileClose}
-            onAdd={async () => {
-              const result = await createDoc({ title: "", doc_type: "note" });
-              if (result?.id) router.push(`/docs/${result.id}`);
-            }}
-            icon={
-              <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-              </svg>
-            }
-          />
+          <Link
+            href="/projects"
+            onClick={onMobileClose}
+            className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-4 py-2.5 transition-colors motion-reduce:transition-none ${
+              isProjects
+                ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
+                : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60"
+            }`}
+            title="Projects"
+          >
+            <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3.75 9.776c.112-.017.227-.026.344-.026h15.812c.117 0 .232.009.344.026m-16.5 0a2.25 2.25 0 00-1.883 2.542l.857 6a2.25 2.25 0 002.227 1.932H19.05a2.25 2.25 0 002.227-1.932l.857-6a2.25 2.25 0 00-1.883-2.542m-16.5 0V6A2.25 2.25 0 016 3.75h3.879a1.5 1.5 0 011.06.44l2.122 2.12a1.5 1.5 0 001.06.44H18A2.25 2.25 0 0120.25 9v.776" />
+            </svg>
+            {!isNarrow && <span>Projects</span>}
+          </Link>
+          {/* Docs section with expandable tree */}
+          <div>
+            <div className={`flex items-center transition-colors motion-reduce:transition-none ${
+              isDocs || isPlans
+                ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
+                : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60"
+            }`}>
+              <Link
+                href="/docs"
+                onClick={onMobileClose}
+                className={`flex-1 flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-4 py-2.5 min-w-0`}
+                title="Docs"
+              >
+                <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                {!isNarrow && <span>Docs</span>}
+              </Link>
+              {!isNarrow && (
+                <button
+                  onClick={async (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const result = await createDoc({ title: "", doc_type: "note" });
+                    if (result?.id) router.push(`/docs/${result.id}`);
+                  }}
+                  className="p-1 mr-2 opacity-60 hover:opacity-100 text-sol-text-dim hover:text-sol-text transition-all"
+                  title="New page"
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                    <path strokeLinecap="round" d="M12 5v14m-7-7h14" />
+                  </svg>
+                </button>
+              )}
+            </div>
+            {!isNarrow && (isDocs || isPlans) && (
+              <SidebarDocTree onMobileClose={onMobileClose} />
+            )}
+          </div>
           <Link
             href="/workflows"
             className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-4 py-2.5 transition-colors motion-reduce:transition-none ${
@@ -516,6 +564,20 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
             </svg>
             {!isNarrow && <span>Sessions</span>}
+          </Link>
+          <Link
+            href="/windows"
+            className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-4 py-2.5 transition-colors motion-reduce:transition-none ${
+              isWindows
+                ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
+                : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60"
+            }`}
+            title="Windows"
+          >
+            <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 5a1 1 0 011-1h4a1 1 0 011 1v5a1 1 0 01-1 1H5a1 1 0 01-1-1V5zm10 0a1 1 0 011-1h4a1 1 0 011 1v3a1 1 0 01-1 1h-4a1 1 0 01-1-1V5zM4 16a1 1 0 011-1h4a1 1 0 011 1v3a1 1 0 01-1 1H5a1 1 0 01-1-1v-3zm10-2a1 1 0 011-1h4a1 1 0 011 1v5a1 1 0 01-1 1h-4a1 1 0 01-1-1v-5z" />
+            </svg>
+            {!isNarrow && <span>Windows</span>}
           </Link>
           {isAdmin && (
             <Link
@@ -549,6 +611,48 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
             {!isNarrow && <span>Config</span>}
           </Link>
         </div>
+
+        {!isNarrow && savedViews && savedViews.length > 0 && (
+          <div className="mt-4">
+            <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide px-4 mb-2 flex items-center gap-1.5">
+              <svg className="w-3.5 h-3.5 text-sol-cyan" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
+              </svg>
+              Saved Views
+            </div>
+            <div className="space-y-0.5">
+              {savedViews.map((view: any) => (
+                <div key={view.id} className="flex items-center group">
+                  <button
+                    onClick={() => {
+                      const pagePrefsKey = view.page === "tasks" ? "task_view" : view.page === "docs" ? "doc_view" : "plan_view";
+                      updateClientUI({ [pagePrefsKey]: view.prefs });
+                      router.push(`/${view.page}`);
+                      onMobileClose?.();
+                    }}
+                    className="flex items-center gap-2 px-4 py-1.5 text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60 transition-colors flex-1 min-w-0 text-left"
+                  >
+                    <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${view.page === "tasks" ? "bg-sol-yellow" : view.page === "docs" ? "bg-sol-violet" : "bg-sol-cyan"}`} />
+                    <span className="truncate text-sm flex-1">{view.name}</span>
+                    <span className="text-[9px] text-sol-text-dim/60 uppercase">{view.page}</span>
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      deleteView(view.id);
+                    }}
+                    className="p-1 rounded opacity-0 group-hover:opacity-100 text-sol-text-dim hover:text-sol-text transition-opacity flex-shrink-0 mr-1"
+                    title="Remove saved view"
+                  >
+                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {!isNarrow && favorites && favorites.length > 0 && (
           <div className="mt-4">

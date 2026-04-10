@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { FilterDropdown } from "./FilterDropdown";
 import { useInboxStore } from "../store/inboxStore";
+import { toast } from "sonner";
 import { KeyCap } from "./KeyboardShortcutsHelp";
 import {
   Plus,
@@ -12,6 +13,7 @@ import {
   Command,
   Check,
   Search,
+  Bookmark,
 } from "lucide-react";
 
 export interface ListTab {
@@ -70,6 +72,7 @@ export interface GenericListViewProps<T> {
     hasActive: boolean;
     defs: ListFilterDef[];
     onClear: () => void;
+    onSaveView?: (name: string) => void;
   };
 
   groups: ListGroup<T>[] | null;
@@ -154,6 +157,8 @@ export function GenericListView<T>({
   const shortcutsPanelOpen = useInboxStore(s => s.shortcutsPanelOpen);
   const [searchQuery, setSearchQuery] = useState("");
   const [showSearch, setShowSearch] = useState(false);
+  const [savingView, setSavingView] = useState(false);
+  const [saveViewName, setSaveViewName] = useState("");
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
 
@@ -519,6 +524,52 @@ export function GenericListView<T>({
             >
               <X className="w-3 h-3" /> Clear
             </button>
+          )}
+          {filters.onSaveView && !savingView && (
+            <button
+              onClick={() => { setSavingView(true); setSaveViewName(""); }}
+              className="text-[10px] text-sol-text-dim hover:text-sol-cyan ml-1 flex items-center gap-1 transition-colors"
+              title="Save current view as a shortcut"
+            >
+              <Bookmark className="w-3 h-3" /> Save View
+            </button>
+          )}
+          {filters.onSaveView && savingView && (
+            <form
+              className="flex items-center gap-1.5 ml-1"
+              onSubmit={(e) => {
+                e.preventDefault();
+                const name = saveViewName.trim();
+                if (name) {
+                  filters.onSaveView!(name);
+                  setSavingView(false);
+                  toast.success(`View "${name}" saved`);
+                }
+              }}
+            >
+              <input
+                autoFocus
+                value={saveViewName}
+                onChange={(e) => setSaveViewName(e.target.value)}
+                placeholder="View name..."
+                className="text-[11px] px-2 py-0.5 rounded bg-sol-bg border border-sol-border/60 text-sol-text outline-none focus:border-sol-cyan w-32"
+                onKeyDown={(e) => { if (e.key === "Escape") setSavingView(false); }}
+              />
+              <button
+                type="submit"
+                disabled={!saveViewName.trim()}
+                className="text-[10px] text-sol-cyan hover:text-sol-cyan/80 disabled:opacity-30 disabled:cursor-default flex items-center gap-0.5"
+              >
+                <Check className="w-3 h-3" /> Save
+              </button>
+              <button
+                type="button"
+                onClick={() => setSavingView(false)}
+                className="text-[10px] text-sol-text-dim hover:text-sol-text"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </form>
           )}
         </div>
       )}
