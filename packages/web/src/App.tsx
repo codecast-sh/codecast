@@ -47,6 +47,8 @@ const Plans = lazy(() => import("@/app/plans/page"));
 const PlanDetail = lazy(() => import("@/app/plans/[id]/page"));
 const Tasks = lazy(() => import("@/app/tasks/page"));
 const TaskDetail = lazy(() => import("@/app/tasks/[id]/page"));
+const Projects = lazy(() => import("@/app/projects/page"));
+const ProjectDetail = lazy(() => import("@/app/projects/[id]/page"));
 const Workflows = lazy(() => import("@/app/workflows/page"));
 
 const Team = lazy(() => import("@/app/team/page"));
@@ -59,6 +61,7 @@ const Cli = lazy(() => import("@/app/cli/page"));
 const AdminDaemonLogs = lazy(() => import("@/app/admin/daemon-logs/page"));
 const ConfigPage = lazy(() => import("@/app/config/page"));
 const Sessions = lazy(() => import("@/app/sessions/page"));
+const Windows = lazy(() => import("@/app/windows/page"));
 
 const Palette = lazy(() => import("@/app/palette/page"));
 
@@ -136,6 +139,8 @@ export function App() {
             <Route path="plans/:id" element={<E name="PlanDetail"><PlanDetail /></E>} />
             <Route path="tasks" element={<E name="Tasks"><Tasks /></E>} />
             <Route path="tasks/:id" element={<E name="TaskDetail"><TaskDetail /></E>} />
+            <Route path="projects" element={<E name="Projects"><Projects /></E>} />
+            <Route path="projects/:id" element={<E name="ProjectDetail"><ProjectDetail /></E>} />
             <Route path="workflows" element={<E name="Workflows"><Workflows /></E>} />
 
             {/* Team */}
@@ -148,6 +153,7 @@ export function App() {
             <Route path="roadmap" element={<E name="Roadmap"><Roadmap /></E>} />
             <Route path="cli" element={<E name="Cli"><Cli /></E>} />
             <Route path="sessions" element={<E name="Sessions"><Sessions /></E>} />
+            <Route path="windows" element={<E name="Windows"><Windows /></E>} />
             <Route path="admin/daemon-logs" element={<E name="AdminDaemonLogs"><AdminDaemonLogs /></E>} />
             <Route path="config" element={<E name="ConfigPage"><ConfigPage /></E>} />
 

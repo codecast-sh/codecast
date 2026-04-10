@@ -47,8 +47,8 @@ export function ShortcutProvider({ children }: { children: ReactNode }) {
   }, []);
 
   // Bind the keydown logic to the HMR-stable capture listener in listener.ts.
-  // The listener itself never moves in the window event queue, so it always
-  // fires before any useEffect-based addEventListener calls.
+  // The listener itself is registered at module-evaluation time (before any
+  // effects), so it always fires first in the capture-phase chain.
   useMountEffect(() => {
     setShortcutHandler((e: KeyboardEvent) => {
       const inInput = isInputTarget(e);
@@ -76,6 +76,7 @@ export function ShortcutProvider({ children }: { children: ReactNode }) {
         }
       }
     });
+    return () => setShortcutHandler(null);
   });
 
   const value: ShortcutContextValue = { registerAction, setContext };
@@ -102,9 +103,12 @@ export function useShortcutAction(action: ShortcutAction, handler: Handler) {
   const handlerRef = useRef(handler);
   handlerRef.current = handler;
 
-  useMountEffect(() => {
+  // useWatchEffect (not useMountEffect) so that when ShortcutProvider remounts
+  // during HMR and produces a new registerAction, children re-register their
+  // handlers in the new handlers Map instead of leaving them orphaned in the old one.
+  useWatchEffect(() => {
     return registerAction(action, () => handlerRef.current());
-  });
+  }, [registerAction, action]);
 }
 
 export function useShortcutContext(ctx: string, active: boolean = true) {
