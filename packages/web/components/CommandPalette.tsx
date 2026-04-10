@@ -186,7 +186,6 @@ function ActionSubmenu({
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
-  const webUpdateTask = useMutation(api.tasks.webUpdate);
   const webUpdatePlan = useMutation(api.plans.webUpdate);
   const assignToAgent = useMutation(api.tasks.assignToAgent);
   const updateTask = useInboxStore((s) => s.updateTask);
@@ -279,7 +278,6 @@ function ActionSubmenu({
       const applyTaskUpdate = (fields: Record<string, any>) => {
         for (const t of targets as TaskItem[]) {
           updateTask(t.short_id, fields);
-          webUpdateTask({ short_id: t.short_id, ...fields }).catch(() => {});
         }
       };
       const label = count === 1 ? (targets[0] as TaskItem).short_id : `${count} tasks`;
@@ -328,7 +326,7 @@ function ActionSubmenu({
       }
     }
     onClose();
-  }, [items, target, targets, targetType, mode, currentLabels, onClose, updateTask, webUpdateTask, webUpdatePlan, assignToAgent, updateDoc, teamMembers, router]);
+  }, [items, target, targets, targetType, mode, currentLabels, onClose, updateTask, webUpdatePlan, assignToAgent, updateDoc, teamMembers, router]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === "Escape" || (e.key === "Backspace" && search === "")) {
@@ -479,7 +477,6 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
 
   const updateTask = useInboxStore((s) => s.updateTask);
   const pinDoc = useInboxStore((s) => s.pinDoc);
-  const webUpdateTask = useMutation(api.tasks.webUpdate);
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id);
   const { user: currentUser } = useCurrentUser();
   const effectiveTeamId = (activeTeamId || (currentUser as any)?.team_id) as string | undefined;
@@ -763,7 +760,6 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
     if (actionKey === "drop" && targetType === "task") {
       for (const t of targets as TaskItem[]) {
         updateTask(t.short_id, { status: "dropped" });
-        webUpdateTask({ short_id: t.short_id, status: "dropped" }).catch(() => {});
       }
       toast.success("Task dropped");
       closePalette();
@@ -818,7 +814,7 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
       }
       return;
     }
-  }, [targets, targetType, closePalette, updateTask, webUpdateTask, pinDoc, router, killSessionMutation, navigate]);
+  }, [targets, targetType, closePalette, updateTask, pinDoc, router, killSessionMutation, navigate]);
 
   const hasTargets = targets.length > 0 && targetType;
   const target = targets[0] as any;
@@ -883,7 +879,7 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
 
   const showFavorites = favorites && favorites.length > 0;
   const showBookmarks = bookmarks && bookmarks.length > 0;
-  const showProjects = projects.length > 0;
+  const showWorkspaces = projects.length > 0;
   const showRecent = recentConversations && recentConversations.length > 0;
 
   const groupClass = "px-1.5 [&_[cmdk-group-heading]]:px-2.5 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-widest [&_[cmdk-group-heading]]:text-sol-text-dim/70";
@@ -1167,12 +1163,12 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
           </CommandPrimitive.Item>
         </CommandPrimitive.Group>
 
-        {showProjects && (
-          <CommandPrimitive.Group heading="Projects" className={groupClass}>
+        {showWorkspaces && (
+          <CommandPrimitive.Group heading="Workspaces" className={groupClass}>
             {projects.map((dir) => (
               <CommandPrimitive.Item
                 key={`proj-${dir}`}
-                value={`project ${getShortPath(dir)} ${dir}`}
+                value={`workspace ${getShortPath(dir)} ${dir}`}
                 onSelect={() => navigate(`/dashboard?dir=${encodeURIComponent(dir)}`)}
                 className={itemClass}
               >

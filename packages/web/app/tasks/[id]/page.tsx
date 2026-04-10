@@ -428,7 +428,6 @@ function TaskDetailContent() {
   const handleMentionQuery = useMentionQuery();
   const handleImageUpload = useImageUpload();
   const updateTask = useInboxStore((s) => s.updateTask);
-  const webUpdate = useMutation(api.tasks.webUpdate);
   const webAddComment = useMutation(api.tasks.webAddComment);
   const currentUser = useQuery(api.users.getCurrentUser);
   const teamMembers = useQuery(api.teams.getTeamMembers, taskTeamId ? { team_id: taskTeamId as any } : "skip");
@@ -448,13 +447,10 @@ function TaskDetailContent() {
   const shortcutsPanelOpen = useInboxStore(s => s.shortcutsPanelOpen);
   const [commentOpen, setCommentOpen] = useState(false);
 
-  const handleUpdate = useCallback(async (fields: Record<string, any>) => {
+  const handleUpdate = useCallback((fields: Record<string, any>) => {
     if (!data?.short_id) return;
     updateTask(data.short_id, fields);
-    try {
-      await webUpdate({ short_id: data.short_id, ...fields });
-    } catch {}
-  }, [data?.short_id, updateTask, webUpdate]);
+  }, [data?.short_id, updateTask]);
 
   const uploadCommentImage = useCallback(async (file: File) => {
     const previewUrl = URL.createObjectURL(file);

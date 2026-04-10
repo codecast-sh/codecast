@@ -719,7 +719,7 @@ export function SessionCard({
 function NeedsAttentionSection() {
   const blockedTasks = useQuery(api.tasks.webList, { execution_status: "blocked", limit: 20 });
   const needsContextTasks = useQuery(api.tasks.webList, { execution_status: "needs_context", limit: 20 });
-  const updateTask = useMutation(api.tasks.webUpdate);
+  const updateTask = useInboxStore((s) => s.updateTask);
   const [collapsed, setCollapsed] = useState(false);
 
   const tasks = useMemo(() => {
@@ -736,13 +736,9 @@ function NeedsAttentionSection() {
 
   if (tasks.length === 0) return null;
 
-  const handleRetry = async (shortId: string) => {
-    try {
-      await updateTask({ short_id: shortId, execution_status: "", status: "open" });
-      toast.success("Task reset for retry");
-    } catch {
-      toast.error("Failed to reset task");
-    }
+  const handleRetry = (shortId: string) => {
+    updateTask(shortId, { execution_status: "", status: "open" });
+    toast.success("Task reset for retry");
   };
 
   return (

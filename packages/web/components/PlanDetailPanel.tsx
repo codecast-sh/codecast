@@ -3,6 +3,7 @@ import { useWatchEffect } from "../hooks/useWatchEffect";
 import Link from "next/link";
 import { useQuery, useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
+import { useInboxStore } from "../store/inboxStore";
 import { Badge } from "./ui/badge";
 import { TaskStatusBadge, getExecStatusConfig } from "./TaskStatusBadge";
 import { LivenessDot, ActiveSessionBadge } from "./LivenessDot";
@@ -558,51 +559,35 @@ export function PlanTaskSection({ planShortId, tasks, sessions }: { planShortId:
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [showFilterBar, setShowFilterBar] = useState(false);
-  const webUpdate = useMutation(api.tasks.webUpdate);
-  const webCreate = useMutation(api.tasks.webCreate);
+  const updateTask = useInboxStore((s) => s.updateTask);
+  const createTask = useInboxStore((s) => s.createTask);
 
-  const cycleStatus = useCallback(async (shortId: string, currentStatus: string) => {
+  const cycleStatus = useCallback((shortId: string, currentStatus: string) => {
     const idx = TASK_STATUS_CYCLE.indexOf(currentStatus);
     const next = TASK_STATUS_CYCLE[(idx + 1) % TASK_STATUS_CYCLE.length];
-    try {
-      await webUpdate({ short_id: shortId, status: next });
-      toast.success(`${shortId} -> ${next}`);
-    } catch {
-      toast.error("Failed to update");
-    }
-  }, [webUpdate]);
+    updateTask(shortId, { status: next });
+    toast.success(`${shortId} -> ${next}`);
+  }, [updateTask]);
 
-  const cyclePriority = useCallback(async (shortId: string, currentPriority: string) => {
+  const cyclePriority = useCallback((shortId: string, currentPriority: string) => {
     const idx = PRIORITY_CYCLE.indexOf(currentPriority || "medium");
     const next = PRIORITY_CYCLE[(idx + 1) % PRIORITY_CYCLE.length];
-    try {
-      await webUpdate({ short_id: shortId, priority: next });
-      toast.success(`${shortId} priority -> ${next}`);
-    } catch {
-      toast.error("Failed to update priority");
-    }
-  }, [webUpdate]);
+    updateTask(shortId, { priority: next });
+    toast.success(`${shortId} priority -> ${next}`);
+  }, [updateTask]);
 
-  const updateTitle = useCallback(async (shortId: string, newTitle: string) => {
-    try {
-      await webUpdate({ short_id: shortId, title: newTitle });
-      toast.success(`${shortId} title updated`);
-    } catch {
-      toast.error("Failed to update title");
-    }
-  }, [webUpdate]);
+  const updateTitle = useCallback((shortId: string, newTitle: string) => {
+    updateTask(shortId, { title: newTitle });
+    toast.success(`${shortId} title updated`);
+  }, [updateTask]);
 
-  const handleAdd = useCallback(async () => {
+  const handleAdd = useCallback(() => {
     if (!newTitle.trim()) return;
-    try {
-      await webCreate({ title: newTitle.trim(), plan_id: planShortId });
-      setNewTitle("");
-      setShowAdd(false);
-      toast.success("Task created");
-    } catch {
-      toast.error("Failed to create task");
-    }
-  }, [newTitle, planShortId, webCreate]);
+    createTask({ title: newTitle.trim(), plan_id: planShortId });
+    setNewTitle("");
+    setShowAdd(false);
+    toast.success("Task created");
+  }, [newTitle, planShortId, createTask]);
 
   const sessionsByTask = new Map<string, any[]>();
   const unlinkedSessions: any[] = [];

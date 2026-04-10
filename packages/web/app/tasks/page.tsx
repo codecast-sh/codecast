@@ -3,7 +3,7 @@ import { useState, useCallback, useMemo } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useRouter, useSearchParams, useParams, usePathname } from "next/navigation";
 import Link from "next/link";
-import { useQuery, useMutation } from "convex/react";
+import { useQuery } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, TaskItem, TaskViewPrefs, ProjectItem } from "../../store/inboxStore";
 import { useSyncTasks, useSyncTaskDetail } from "../../hooks/useSyncTasks";
@@ -724,24 +724,21 @@ export function TaskListContent() {
   const teamMembers = useQuery(api.teams.getTeamMembers, effectiveTeamId ? { team_id: effectiveTeamId } : "skip");
   const PRIORITY_ORDER: Record<string, number> = { urgent: 0, high: 1, medium: 2, low: 3, none: 4 };
 
-  const webUpdate = useMutation(api.tasks.webUpdate);
   const updateTask = useInboxStore((s) => s.updateTask);
 
   const handleTitleEdit = useCallback(
-    async (task: TaskItem, title: string) => {
+    (task: TaskItem, title: string) => {
       updateTask(task.short_id, { title });
-      try { await webUpdate({ short_id: task.short_id, title }); } catch {}
     },
-    [updateTask, webUpdate]
+    [updateTask]
   );
 
   const handleTriage = useCallback(
-    async (task: TaskItem, action: "active" | "dismissed") => {
+    (task: TaskItem, action: "active" | "dismissed") => {
       updateTask(task.short_id, { triage_status: action });
-      try { await webUpdate({ short_id: task.short_id, triage_status: action }); } catch {}
       toast.success(`${task.short_id} ${action === "active" ? "promoted" : "dismissed"}`);
     },
-    [updateTask, webUpdate]
+    [updateTask]
   );
 
   const tasksList = useMemo(() => Object.values(tasks), [tasks]);
@@ -1182,14 +1179,9 @@ export function TaskListContent() {
               onCardClick={(t) => router.push(`/tasks/${t._id}`)}
               onContextMenu={(e, task) => { e.preventDefault(); openPaletteForItems([task]); }}
               onAddTask={() => openCreateModal('task')}
-              onStatusChange={async (task, newStatus) => {
+              onStatusChange={(task, newStatus) => {
                 updateTask(task.short_id, { status: newStatus });
-                try {
-                  await webUpdate({ short_id: task.short_id, status: newStatus });
-                  toast.success(`${task.short_id} \u2192 ${newStatus.replace("_", " ")}`);
-                } catch {
-                  toast.error("Failed to update task");
-                }
+                toast.success(`${task.short_id} \u2192 ${newStatus.replace("_", " ")}`);
               }}
             />
           ) : undefined}

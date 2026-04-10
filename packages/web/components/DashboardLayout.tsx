@@ -36,6 +36,7 @@ import { useSyncDocs } from "../hooks/useSyncDocs";
 import { isInboxSessionView } from "../lib/inboxRouting";
 import { useSessionSwitcher } from "../hooks/useSessionSwitcher";
 import { SessionSwitcher } from "./SessionSwitcher";
+import { TabBar } from "./TabBar";
 import { useTipActions } from "../tips";
 
 interface DashboardLayoutProps {
@@ -361,6 +362,13 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
     s.updateClientLayout("dashboard", { sidebar: newLayout.sidebar || 25, main: newLayout.main || 75 });
   };
 
+  // Must be above the isGuest early return — React requires stable hook count across renders
+  const conversationPanel = useMemo(() => (
+    <Panel id="conversation-column" minSize="20%" maxSize="70%" defaultSize="40%">
+      <ErrorBoundary name="ConversationColumn" level="panel"><ConversationColumn /></ErrorBoundary>
+    </Panel>
+  ), []);
+
   // Guest/unauthenticated: minimal layout, no top header — branding lives in the bottom bar
   if (isGuest) {
     return (
@@ -379,12 +387,6 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
       <div className="max-w-4xl mx-auto h-full">{children}</div>
     </div>
   );
-
-  const conversationPanel = useMemo(() => (
-    <Panel id="conversation-column" minSize="20%" maxSize="70%" defaultSize="40%">
-      <ErrorBoundary name="ConversationColumn" level="panel"><ConversationColumn /></ErrorBoundary>
-    </Panel>
-  ), []);
 
   const mainContent = showConversationColumn ? (
     <Group orientation="horizontal" className="h-full" defaultLayout={{ "main-content": 60, "conversation-column": 40 }}>
@@ -567,6 +569,10 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
         <SetupPromptBanner />
         <CliOfflineBanner />
         <TmuxMissingBanner />
+      </ErrorBoundary>
+
+      <ErrorBoundary name="TabBar" level="inline">
+        <TabBar />
       </ErrorBoundary>
 
       {/* Content area with sidebar and main */}
