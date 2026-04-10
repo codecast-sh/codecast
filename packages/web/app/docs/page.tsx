@@ -2,8 +2,8 @@
 import { useCallback, useMemo, useRef, useEffect } from "react";
 import { useRouter, useSearchParams, useParams, usePathname } from "next/navigation";
 import Link from "next/link";
-import { useInboxStore, DocItem, DocViewPrefs } from "../../store/inboxStore";
-import { useSyncDocs } from "../../hooks/useSyncDocs";
+import { useInboxStore, DocItem, DocViewPrefs, ProjectItem } from "../../store/inboxStore";
+
 import { useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { GenericListView, ListGroup, ItemRowState } from "../../components/GenericListView";
@@ -12,6 +12,7 @@ import {
   FileText,
   Pin,
   FolderOpen,
+  FolderKanban,
   Tag,
   User,
   Bot,
@@ -146,9 +147,13 @@ export function DocListContent() {
   const router = useRouter();
   const createDoc = useMutation(api.docs.webCreate);
   const docs = useInboxStore((s) => s.docs);
+  const projects = useInboxStore((s) => s.projects);
   const docProjectPaths = useInboxStore((s) => s.docProjectPaths);
-
-  useSyncDocs();
+  const saveView = useInboxStore((s) => s.saveView);
+  const docView = useInboxStore((s) => s.clientState.ui?.doc_view);
+  const handleSaveView = useCallback((name: string) => {
+    saveView({ name, page: "docs", prefs: { ...docView, doc_type: docType } as DocViewPrefs });
+  }, [saveView, docView, docType]);
 
   const docsList = useMemo(() => Object.values(docs), [docs]);
 
@@ -202,32 +207,34 @@ export function DocListContent() {
 
   const projectGroups = useMemo(() => {
     if (sortBy !== "project") return null;
-    const byProject: Record<string, DocItem[]> = {};
+    const byProject: Record<string, { project: ProjectItem | undefined; docs: DocItem[] }> = {};
     const ungrouped: DocItem[] = [];
     for (const d of filteredDocs) {
-      const proj = d.source_file?.split("/").slice(0, -1).join("/") || "";
-      if (proj) {
-        if (!byProject[proj]) byProject[proj] = [];
-        byProject[proj].push(d);
+      const pid = (d as any).project_id;
+      if (pid) {
+        if (!byProject[pid]) byProject[pid] = { project: projects[pid], docs: [] };
+        byProject[pid].docs.push(d);
       } else {
         ungrouped.push(d);
       }
     }
-    const ordered = Object.entries(byProject)
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([path, docs]) => ({ path, docs: docs.sort((a, b) => b.updated_at - a.updated_at) }));
+    const ordered = Object.values(byProject)
+      .sort((a, b) => (a.project?.title || "").localeCompare(b.project?.title || ""));
     if (ungrouped.length > 0) {
-      ordered.push({ path: "", docs: ungrouped.sort((a, b) => b.updated_at - a.updated_at) });
+      ordered.push({ project: undefined, docs: ungrouped.sort((a, b) => b.updated_at - a.updated_at) });
+    }
+    for (const g of ordered) {
+      g.docs.sort((a, b) => b.updated_at - a.updated_at);
     }
     return ordered;
-  }, [filteredDocs, sortBy]);
+  }, [filteredDocs, sortBy, projects]);
 
   const flatDocs = useMemo(() => {
     if (sortBy === "type" && typeGroups) {
       return typeGroups.flatMap((g) => g.docs);
     }
     if (sortBy === "project" && projectGroups) {
-      return projectGroups.flatMap((g) => g.docs);
+      return projectGroups.flatMap((g: any) => g.docs);
     }
     const sorted = [...filteredDocs];
     if (sortBy === "created") sorted.sort((a, b) => b.created_at - a.created_at);
@@ -248,10 +255,15 @@ export function DocListContent() {
       });
     }
     if (sortBy === "project" && projectGroups) {
-      return projectGroups.map((g) => ({
-        key: g.path || "__ungrouped",
-        label: g.path ? g.path.split("/").pop()! : "No project",
-        icon: <FolderOpen className="w-3.5 h-3.5 text-sol-text-dim" />,
+      return projectGroups.map((g: any) => ({
+        key: g.project?._id || "__no_project",
+        label: g.project?.title || "No project",
+        icon: <FolderKanban className={`w-3.5 h-3.5 ${g.project ? "text-sol-cyan" : "text-sol-text-dim"}`} />,
+        extra: g.project ? (
+          <Link href={`/projects/${g.project._id}`} onClick={(e: any) => e.stopPropagation()} className="text-[10px] text-sol-cyan hover:underline flex-shrink-0">
+            View project
+          </Link>
+        ) : undefined,
         items: g.docs,
       }));
     }
@@ -320,7 +332,7 @@ export function DocListContent() {
         </div>
       }
       filters={{
-        hasActive: !!(projectFilter || labelFilter),
+        hasActive: !!(projectFilter || labelFilter || sourceFilter || docType),
         defs: [
           {
             key: "project", label: "Project", icon: <FolderOpen className="w-3 h-3" />, value: projectFilter,
@@ -336,7 +348,8 @@ export function DocListContent() {
             onChange: (v: string) => setParam({ label: v }),
           },
         ],
-        onClear: () => setParam({ project: "", label: "" }),
+        onClear: () => setParam({ project: "", label: "", source: "", type: "" }),
+        onSaveView: handleSaveView,
       }}
       groups={listGroups}
       flatItems={flatDocs}

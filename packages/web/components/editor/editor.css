@@ -626,3 +626,33 @@
   font-size: 13px;
   line-height: 1.6;
 }
+
+/* Wiki links — [[Doc Title]] */
+.doc-editor .wiki-link {
+  display: inline;
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 0.9em;
+  text-decoration: none;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  background: color-mix(in srgb, var(--sol-cyan) 12%, transparent);
+  color: var(--sol-cyan);
+  border: 1px solid color-mix(in srgb, var(--sol-cyan) 20%, transparent);
+}
+
+.doc-editor .wiki-link:hover {
+  background: color-mix(in srgb, var(--sol-cyan) 22%, transparent);
+  border-color: color-mix(in srgb, var(--sol-cyan) 40%, transparent);
+}
+
+.doc-editor .wiki-link-note { color: var(--sol-text-muted); border-color: color-mix(in srgb, var(--sol-text-dim) 20%, transparent); background: color-mix(in srgb, var(--sol-text-dim) 8%, transparent); }
+.doc-editor .wiki-link-design { color: var(--sol-violet); border-color: color-mix(in srgb, var(--sol-violet) 20%, transparent); background: color-mix(in srgb, var(--sol-violet) 10%, transparent); }
+.doc-editor .wiki-link-spec { color: var(--sol-cyan); border-color: color-mix(in srgb, var(--sol-cyan) 20%, transparent); background: color-mix(in srgb, var(--sol-cyan) 10%, transparent); }
+.doc-editor .wiki-link-investigation { color: var(--sol-yellow); border-color: color-mix(in srgb, var(--sol-yellow) 20%, transparent); background: color-mix(in srgb, var(--sol-yellow) 10%, transparent); }
+
+/* Wiki link typing state — the [[ trigger highlight */
+.wiki-link-typing {
+  background: color-mix(in srgb, var(--sol-cyan) 8%, transparent);
+  border-radius: 2px;
+}
