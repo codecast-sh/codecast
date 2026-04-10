@@ -141,7 +141,7 @@ export function SessionItem({ session, onPress, onPin, onLongPress }: { session:
   const showAuthor = session.author_name && session.is_own === false;
 
   return (
-    <TouchableOpacity onPress={onPress} onLongPress={onLongPress} style={styles.conversationContent} activeOpacity={0.6}>
+    <TouchableOpacity onPress={onPress} onLongPress={onLongPress} delayLongPress={400} style={styles.conversationContent} activeOpacity={0.6}>
       <RNView style={styles.conversationHeader}>
         <RNView style={styles.titleRow}>
           <StatusDot session={session} />
