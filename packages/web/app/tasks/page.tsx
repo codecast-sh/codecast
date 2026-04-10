@@ -5,7 +5,7 @@ import { useRouter, useSearchParams, useParams, usePathname } from "next/navigat
 import Link from "next/link";
 import { useQuery, useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
-import { useInboxStore, TaskItem } from "../../store/inboxStore";
+import { useInboxStore, TaskItem, TaskViewPrefs, ProjectItem } from "../../store/inboxStore";
 import { useSyncTasks, useSyncTaskDetail } from "../../hooks/useSyncTasks";
 
 import { GenericListView, ListGroup, ItemRowState } from "../../components/GenericListView";
@@ -41,8 +41,10 @@ import {
   EyeOff,
   User,
   Bot,
+  Lightbulb,
   Check,
   MessageSquare,
+  FolderKanban,
 } from "lucide-react";
 
 type TaskStatus = "backlog" | "open" | "in_progress" | "in_review" | "done" | "dropped";
@@ -148,7 +150,7 @@ export function TaskRow({ task, state, triageMode, onTriage }: { task: TaskItem;
         <ActiveSessionBadge session={(task as any).activeSession} className="cq-hide-compact" />
       ) : task.session_count && task.session_count > 0 ? (
         <span className="text-[10px] text-sol-text-dim flex-shrink-0 font-mono cq-hide-compact" title={`${task.session_count} session${task.session_count > 1 ? "s" : ""}`}>
-          <MessageSquare className="w-3 h-3 inline mr-0.5" />{task.session_count}
+          <Link2 className="w-3 h-3 inline mr-0.5" />{task.session_count}
         </span>
       ) : null}
       {(task as any).plan && (
@@ -171,17 +173,8 @@ export function TaskRow({ task, state, triageMode, onTriage }: { task: TaskItem;
         <Link2 className="w-3.5 h-3.5 text-sol-red flex-shrink-0 cq-hide-compact" />
       )}
       {task.labels && task.labels.length > 0 && (
-        <div className="flex items-center gap-1 flex-shrink min-w-0 overflow-hidden flex-nowrap cq-hide-compact">
-          {task.labels.slice(0, 2).map((l: string) => {
-            const lc = getLabelColor(l);
-            return (
-              <span key={l} className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0 rounded-full border whitespace-nowrap ${lc.bg} ${lc.border} ${lc.text}`}>
-                <span className={`w-1.5 h-1.5 rounded-full ${lc.dot}`} />
-                {l}
-              </span>
-            );
-          })}
-          {task.labels.slice(2).map((l: string) => {
+        <div className="flex items-center gap-1 flex-shrink-0 cq-hide-compact">
+          {task.labels.map((l: string) => {
             const lc = getLabelColor(l);
             return (
               <span key={l} className={`w-2 h-2 rounded-full flex-shrink-0 ${lc.dot}`} title={l} />
@@ -660,8 +653,8 @@ function useTaskUrlState() {
     ? ((searchParams.get("view") || "list") as "list" | "kanban")
     : (taskView?.view ?? "list");
   const sort = hasUrlParams
-    ? ((searchParams.get("sort") || "status") as "status" | "priority" | "created" | "updated" | "plan" | "assignee")
-    : ((taskView?.sort || "status") as "status" | "priority" | "created" | "updated" | "plan" | "assignee");
+    ? ((searchParams.get("sort") || "status") as "status" | "priority" | "created" | "updated" | "plan" | "assignee" | "session" | "project")
+    : ((taskView?.sort || "status") as "status" | "priority" | "created" | "updated" | "plan" | "assignee" | "session" | "project");
   const priority = hasUrlParams
     ? (searchParams.get("priority") || "")
     : (taskView?.priority ?? "");
@@ -704,8 +697,11 @@ export function TaskListContent() {
   const { status: urlStatus, view: viewMode, sort: sortBy, priority: priorityFilter, label: labelFilter, assignee: assigneeFilter, statuses: statusesFilter, sourceFilter, setParam } = useTaskUrlState();
   const setTaskFilter = useInboxStore((s) => s.setTaskFilter);
   const tasks = useInboxStore((s) => s.tasks);
+  const projects = useInboxStore((s) => s.projects);
   const showCreate = useInboxStore((s) => s.createModal === 'task');
   const openCreateModal = useInboxStore((s) => s.openCreateModal);
+  const saveView = useInboxStore((s) => s.saveView);
+  const taskView = useInboxStore((s) => s.clientState.ui?.task_view);
   const [hiddenStatuses, setHiddenStatuses] = useState<Set<string>>(new Set(["dropped"]));
 
   const statusFilter = urlStatus;
@@ -715,6 +711,9 @@ export function TaskListContent() {
   }, [setTaskFilter, setParam]);
   const setViewMode = useCallback((v: "list" | "kanban") => setParam({ view: v === "list" ? "" : v }), [setParam]);
   const setSortBy = useCallback((s: string) => setParam({ sort: s === "status" ? "" : s }), [setParam]);
+  const handleSaveView = useCallback((name: string) => {
+    saveView({ name, page: "tasks", prefs: { ...taskView, status: statusFilter } as TaskViewPrefs });
+  }, [saveView, taskView, statusFilter]);
 
   useWatchEffect(() => { setTaskFilter({ status: urlStatus }); }, [urlStatus]);
 
@@ -754,24 +753,27 @@ export function TaskListContent() {
   }, [tasksList]);
 
   // Source filtering applied before other filters.
-  // Default ("") shows ALL active-triage tasks. "human" narrows to human-created only.
+  // Active tasks = not suggested-insight and not dismissed.
+  // "human" = created via web UI, "agent" = created via cast CLI in a session.
+  // Insight suggestions are tucked away behind a separate triage link.
+  const isActive = (t: TaskItem) => t.triage_status !== "suggested" && t.triage_status !== "dismissed";
   const sourceFilteredTasks = useMemo(() => {
     if (sourceFilter === "human") {
-      return tasksList.filter((t) => t.source === "human" && (!t.triage_status || t.triage_status === "active"));
-    } else if (sourceFilter === "bot") {
-      return tasksList.filter((t) => t.source === "insight" && t.triage_status === "suggested");
+      return tasksList.filter((t) => t.source === "human" && isActive(t));
+    } else if (sourceFilter === "agent") {
+      return tasksList.filter((t) => t.source === "agent" && isActive(t));
+    } else if (sourceFilter === "triage") {
+      return tasksList.filter((t) => t.triage_status === "suggested");
     } else if (sourceFilter === "dismissed") {
       return tasksList.filter((t) => t.triage_status === "dismissed");
     } else {
-      // Default: show everything with active triage
-      return tasksList.filter((t) => !t.triage_status || t.triage_status === "active");
+      return tasksList.filter(isActive);
     }
   }, [tasksList, sourceFilter]);
 
-  const hiddenAgentCount = useMemo(() => {
-    if (sourceFilter !== "human") return 0;
-    return tasksList.filter((t) => t.source !== "human" && (!t.triage_status || t.triage_status === "active")).length;
-  }, [tasksList, sourceFilter]);
+  const suggestedCount = useMemo(() => {
+    return tasksList.filter((t) => t.triage_status === "suggested").length;
+  }, [tasksList]);
 
   const filteredTasks = useMemo(() => {
     let list = sourceFilteredTasks;
@@ -793,10 +795,10 @@ export function TaskListContent() {
 
   const sortWithinGroup = useCallback((tasks: TaskItem[]) => {
     return [...tasks].sort((a, b) => {
-      const pd = (PRIORITY_ORDER[a.priority] ?? 3) - (PRIORITY_ORDER[b.priority] ?? 3);
-      if (pd !== 0) return pd;
       const statusIdx = (s: string) => STATUS_ORDER.indexOf(s as TaskStatus);
-      return statusIdx(a.status) - statusIdx(b.status);
+      const sd = statusIdx(a.status) - statusIdx(b.status);
+      if (sd !== 0) return sd;
+      return (PRIORITY_ORDER[a.priority] ?? 3) - (PRIORITY_ORDER[b.priority] ?? 3);
     });
   }, []);
 
@@ -849,12 +851,67 @@ export function TaskListContent() {
     return ordered;
   }, [filteredTasks, sortBy, sortWithinGroup]);
 
+  const sessionGroups = useMemo(() => {
+    if (sortBy !== "session") return null;
+    const bySession: Record<string, { session: NonNullable<TaskItem["origin_session"]>; tasks: TaskItem[] }> = {};
+    const noSession: TaskItem[] = [];
+    for (const t of filteredTasks) {
+      if (t.origin_session) {
+        const key = t.origin_session.session_id;
+        if (!bySession[key]) bySession[key] = { session: t.origin_session, tasks: [] };
+        bySession[key].tasks.push(t);
+      } else {
+        noSession.push(t);
+      }
+    }
+    // Sort groups by most recent task first
+    const ordered = Object.values(bySession)
+      .sort((a, b) => Math.max(...b.tasks.map(t => t.created_at)) - Math.max(...a.tasks.map(t => t.created_at)));
+    if (noSession.length > 0) {
+      ordered.push({ session: { conversation_id: "", session_id: "", title: undefined }, tasks: noSession });
+    }
+    for (const g of ordered) {
+      g.tasks = sortWithinGroup(g.tasks);
+    }
+    return ordered;
+  }, [filteredTasks, sortBy, sortWithinGroup]);
+
+  const projectGroups = useMemo(() => {
+    if (sortBy !== "project") return null;
+    const byProject: Record<string, { project: ProjectItem | undefined; tasks: TaskItem[] }> = {};
+    const noProject: TaskItem[] = [];
+    for (const t of filteredTasks) {
+      const pid = (t as any).project_id;
+      if (pid) {
+        if (!byProject[pid]) byProject[pid] = { project: projects[pid], tasks: [] };
+        byProject[pid].tasks.push(t);
+      } else {
+        noProject.push(t);
+      }
+    }
+    const ordered = Object.values(byProject)
+      .sort((a, b) => (a.project?.title || "").localeCompare(b.project?.title || ""));
+    if (noProject.length > 0) {
+      ordered.push({ project: undefined, tasks: noProject });
+    }
+    for (const g of ordered) {
+      g.tasks = sortWithinGroup(g.tasks);
+    }
+    return ordered;
+  }, [filteredTasks, sortBy, sortWithinGroup, projects]);
+
   const flatTasks = useMemo(() => {
     if (sortBy === "plan" && planGroups) {
       return planGroups.flatMap((g) => g.tasks);
     }
     if (sortBy === "assignee" && assigneeGroups) {
       return assigneeGroups.flatMap((g) => g.tasks);
+    }
+    if (sortBy === "session" && sessionGroups) {
+      return sessionGroups.flatMap((g) => g.tasks);
+    }
+    if (sortBy === "project" && projectGroups) {
+      return projectGroups.flatMap((g) => g.tasks);
     }
     if (sortBy !== "status") {
       const sorted = [...filteredTasks];
@@ -871,7 +928,7 @@ export function TaskListContent() {
       return acc;
     }, {});
     return STATUS_ORDER.flatMap((s) => grouped[s] || []);
-  }, [filteredTasks, statusFilter, sortBy, planGroups, assigneeGroups]);
+  }, [filteredTasks, statusFilter, sortBy, planGroups, assigneeGroups, sessionGroups, projectGroups]);
 
   const kanbanGrouped = useMemo(() => {
     return filteredTasks.reduce((acc: Record<string, TaskItem[]>, t) => {
@@ -917,6 +974,34 @@ export function TaskListContent() {
         items: g.tasks,
       }));
     }
+    if (sortBy === "session" && sessionGroups) {
+      return sessionGroups.map((g) => ({
+        key: g.session.session_id || "__no_session",
+        label: g.session.session_id
+          ? (g.session.title || g.session.session_id.slice(0, 8))
+          : "No originating session",
+        icon: <MessageSquare className={`w-3.5 h-3.5 ${g.session.session_id ? "text-sol-cyan" : "text-sol-text-dim"}`} />,
+        extra: g.session.conversation_id ? (
+          <Link href={`/sessions/${g.session.conversation_id}`} onClick={(e) => e.stopPropagation()} className="text-[10px] text-sol-cyan hover:underline flex-shrink-0">
+            View session
+          </Link>
+        ) : undefined,
+        items: g.tasks,
+      }));
+    }
+    if (sortBy === "project" && projectGroups) {
+      return projectGroups.map((g) => ({
+        key: g.project?._id || "__no_project",
+        label: g.project?.title || "No project",
+        icon: <FolderKanban className={`w-3.5 h-3.5 ${g.project ? "text-sol-cyan" : "text-sol-text-dim"}`} />,
+        extra: g.project ? (
+          <Link href={`/projects/${g.project._id}`} onClick={(e) => e.stopPropagation()} className="text-[10px] text-sol-cyan hover:underline flex-shrink-0">
+            View project
+          </Link>
+        ) : undefined,
+        items: g.tasks,
+      }));
+    }
     if (statusFilter || sortBy !== "status") return null;
     return STATUS_ORDER
       .filter((s) => kanbanGrouped[s]?.length)
@@ -925,7 +1010,7 @@ export function TaskListContent() {
         const Icon = cfg.icon;
         return { key: s, label: cfg.label, icon: <Icon className={`w-3.5 h-3.5 ${cfg.color}`} />, items: kanbanGrouped[s] };
       });
-  }, [sortBy, planGroups, assigneeGroups, statusFilter, kanbanGrouped]);
+  }, [sortBy, planGroups, assigneeGroups, sessionGroups, projectGroups, statusFilter, kanbanGrouped]);
 
   const taskCounts = useMemo(() => {
     const counts: Record<string, number> = { active: 0 };
@@ -936,7 +1021,7 @@ export function TaskListContent() {
     return counts;
   }, [sourceFilteredTasks]);
 
-  const isBotView = sourceFilter === "bot";
+  const isBotView = sourceFilter === "triage";
   const renderTaskRow = useCallback((task: TaskItem, state: ItemRowState) => (
     <TaskRow task={task} state={state} triageMode={isBotView} onTriage={isBotView ? handleTriage : undefined} />
   ), [isBotView, handleTriage]);
@@ -959,15 +1044,17 @@ export function TaskListContent() {
           sortBy={sortBy}
           sortOptions={[
             { value: "status", label: "Group by status" },
+            { value: "project", label: "Group by project" },
             { value: "plan", label: "Group by plan" },
             { value: "assignee", label: "Group by assignee" },
+            { value: "session", label: "Group by session" },
             { value: "priority", label: "Sort by priority" },
             { value: "updated", label: "Sort by updated" },
             { value: "created", label: "Sort by created" },
           ]}
           onSortChange={setSortBy}
           filters={{
-            hasActive: !!(statusesFilter || priorityFilter || labelFilter || assigneeFilter),
+            hasActive: !!(statusesFilter || priorityFilter || labelFilter || assigneeFilter || sourceFilter),
             defs: [
               {
                 key: "statuses", label: "Status", icon: <Circle className="w-3 h-3" />, value: statusesFilter, multi: true,
@@ -1003,7 +1090,8 @@ export function TaskListContent() {
                 onChange: (v: string) => setParam({ assignee: v }),
               },
             ],
-            onClear: () => setParam({ statuses: "", priority: "", label: "", assignee: "" }),
+            onClear: () => setParam({ statuses: "", priority: "", label: "", assignee: "", source: "" }),
+            onSaveView: handleSaveView,
           }}
           groups={listGroups}
           flatItems={flatTasks}
@@ -1028,15 +1116,7 @@ export function TaskListContent() {
             <TaskPreviewPanel taskId={task._id} onClose={onClose} onOpen={onOpen} />
           )}
           onItemEdit={handleTitleEdit}
-          listFooter={hiddenAgentCount > 0 ? (
-            <div className="px-6 py-2.5 border-t border-sol-border/15 flex items-center gap-2 text-xs text-sol-text-dim">
-              <Bot className="w-3.5 h-3.5 opacity-40" />
-              <span>{hiddenAgentCount} agent {hiddenAgentCount === 1 ? "item" : "items"} not shown</span>
-              <button onClick={() => setParam({ source: "all" })} className="text-sol-cyan hover:underline ml-0.5">
-                Show all
-              </button>
-            </div>
-          ) : undefined}
+          listFooter={undefined}
           headerExtra={
             <>
               <div className="flex items-center rounded-md border border-sol-border/40 overflow-hidden">
@@ -1050,18 +1130,28 @@ export function TaskListContent() {
                 <button
                   onClick={() => setParam({ source: "human" })}
                   className={`px-2 py-1.5 transition-colors border-l border-sol-border/40 ${sourceFilter === "human" ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"}`}
-                  title="Human-created tasks"
+                  title="Created via web UI"
                 >
                   <User className="w-3.5 h-3.5" />
                 </button>
                 <button
-                  onClick={() => setParam({ source: "bot" })}
-                  className={`px-2 py-1.5 transition-colors border-l border-sol-border/40 ${sourceFilter === "bot" ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"}`}
-                  title="Bot-created tasks (triage)"
+                  onClick={() => setParam({ source: "agent" })}
+                  className={`px-2 py-1.5 transition-colors border-l border-sol-border/40 ${sourceFilter === "agent" ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"}`}
+                  title="Created via cast CLI in a session"
                 >
                   <Bot className="w-3.5 h-3.5" />
                 </button>
               </div>
+              {suggestedCount > 0 && (
+                <button
+                  onClick={() => setParam({ source: sourceFilter === "triage" ? "" : "triage" })}
+                  className={`flex items-center gap-1.5 px-2 py-1.5 text-xs rounded-md border transition-colors ${sourceFilter === "triage" ? "border-sol-yellow/40 bg-sol-yellow/10 text-sol-yellow" : "border-sol-border/40 text-sol-text-dim hover:text-sol-text"}`}
+                  title="Review suggested insights"
+                >
+                  <Lightbulb className="w-3.5 h-3.5" />
+                  <span>{suggestedCount}</span>
+                </button>
+              )}
               <div className="flex items-center rounded-md border border-sol-border/40 overflow-hidden">
                 <button
                   onClick={() => setViewMode("list")}

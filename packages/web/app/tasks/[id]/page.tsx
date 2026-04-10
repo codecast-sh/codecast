@@ -1,5 +1,5 @@
 "use client";
-import { useState, useCallback, useRef, useMemo } from "react";
+import { useState, useCallback, useRef } from "react";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { useParams, useRouter } from "next/navigation";
 import { useMutation, useQuery } from "convex/react";
@@ -50,6 +50,9 @@ import {
   ImagePlus,
   MessageSquare,
   X,
+  Check,
+  Copy,
+  ExternalLink,
 } from "lucide-react";
 
 const STATUS_OPTIONS = [
@@ -82,6 +85,54 @@ function formatRelative(ts: number) {
   if (ago < 3600000) return `${Math.round(ago / 60000)}m ago`;
   if (ago < 86400000) return `${Math.round(ago / 3600000)}h ago`;
   return `${Math.round(ago / 86400000)}d ago`;
+}
+
+function formatDateFull(ts: number) {
+  return new Date(ts).toLocaleDateString("en-US", {
+    weekday: "long", month: "long", day: "numeric", year: "numeric",
+    hour: "2-digit", minute: "2-digit",
+  });
+}
+
+function TimeAgo({ ts, className }: { ts: number; className?: string }) {
+  return (
+    <span className={className} title={formatDateFull(ts)}>
+      {formatRelative(ts)}
+    </span>
+  );
+}
+
+function CopyButton({ text, label, showLabel, className }: { text: string; label?: string; showLabel?: boolean; className?: string }) {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = useCallback(() => {
+    navigator.clipboard.writeText(text);
+    setCopied(true);
+    toast.success(label ? `${label} copied` : "Copied to clipboard");
+    setTimeout(() => setCopied(false), 2000);
+  }, [text, label]);
+  return (
+    <button
+      onClick={handleCopy}
+      className={className || "p-1 rounded-md text-sol-text-dim hover:text-sol-cyan hover:bg-sol-bg-alt transition-colors"}
+      title={label ? `Copy ${label}` : "Copy"}
+    >
+      {copied ? <Check className="w-3.5 h-3.5 text-sol-green" /> : <Copy className="w-3.5 h-3.5" />}
+      {showLabel && <span>{copied ? "Copied" : label || "Copy"}</span>}
+    </button>
+  );
+}
+
+function ConfidenceBar({ value }: { value: number }) {
+  const pct = Math.round(value * 100);
+  const color = pct >= 80 ? "bg-sol-green" : pct >= 50 ? "bg-sol-yellow" : "bg-sol-orange";
+  return (
+    <div className="flex items-center gap-2 py-1">
+      <div className="w-20 h-1.5 rounded-full bg-sol-bg-highlight overflow-hidden">
+        <div className={`h-full rounded-full ${color} transition-all`} style={{ width: `${pct}%` }} />
+      </div>
+      <span className="text-sol-text-muted text-xs tabular-nums">{pct}%</span>
+    </div>
+  );
 }
 
 function ClaudeIcon({ size = "sm" }: { size?: "sm" | "md" }) {
@@ -239,7 +290,7 @@ function HistoryItem({ entry }: { entry: any }) {
           <span className="text-gray-500">{entry.new_value}</span>
         </>
       )}
-      <span className="ml-auto flex-shrink-0 text-gray-300">{formatRelative(entry.created_at)}</span>
+      <TimeAgo ts={entry.created_at} className="ml-auto flex-shrink-0 text-gray-300" />
     </div>
   );
 }
@@ -252,12 +303,13 @@ function ExecutionDetailsSection({ data }: { data: any }) {
   return (
     <div className="mb-6">
       <h2 className="text-xs font-medium text-sol-text-dim uppercase tracking-wide mb-2 flex items-center gap-1.5">
+        <Zap className="w-3.5 h-3.5" />
         Execution
         {data.execution_status && (
           <TaskStatusBadge status={data.execution_status} type="execution" className="normal-case tracking-normal" />
         )}
       </h2>
-      <div className="border border-sol-border/30 rounded-lg bg-sol-bg-alt/20 p-4 space-y-4">
+      <div className="border border-sol-border/30 rounded-lg bg-sol-bg-alt/20 p-4 space-y-4 border-l-2 border-l-sol-cyan/30">
         {(data.estimated_minutes != null || data.actual_minutes != null) && (
           <div className="flex items-center gap-4 text-xs">
             <Clock className="w-3.5 h-3.5 text-sol-text-dim flex-shrink-0" />
@@ -320,10 +372,19 @@ function ExecutionDetailsSection({ data }: { data: any }) {
               <FileCode className="w-3.5 h-3.5" />
               Files Changed ({data.files_changed.length})
             </div>
-            <div className="space-y-0.5">
-              {data.files_changed.map((f: string) => (
-                <div key={f} className="text-xs font-mono text-sol-text-dim truncate">{f}</div>
-              ))}
+            <div className="space-y-0.5 pl-1 border-l-2 border-sol-border/20">
+              {data.files_changed.map((f: string) => {
+                const parts = f.split("/");
+                const fileName = parts.pop();
+                const dirPath = parts.join("/");
+                return (
+                  <div key={f} className="flex items-center gap-1.5 text-xs font-mono py-0.5 pl-2 hover:bg-sol-bg-alt/20 rounded-r transition-colors group">
+                    <FileText className="w-3 h-3 text-sol-text-dim/50 flex-shrink-0" />
+                    {dirPath && <span className="text-sol-text-dim/50 truncate">{dirPath}/</span>}
+                    <span className="text-sol-text-muted">{fileName}</span>
+                  </div>
+                );
+              })}
             </div>
           </div>
         )}
@@ -367,7 +428,6 @@ function TaskDetailContent() {
   const handleMentionQuery = useMentionQuery();
   const handleImageUpload = useImageUpload();
   const updateTask = useInboxStore((s) => s.updateTask);
-  const openSidePanel = useInboxStore((s) => s.openSidePanel);
   const webUpdate = useMutation(api.tasks.webUpdate);
   const webAddComment = useMutation(api.tasks.webAddComment);
   const currentUser = useQuery(api.users.getCurrentUser);
@@ -545,40 +605,57 @@ function TaskDetailContent() {
         <div className="flex-1 overflow-y-auto">
         <div className="flex flex-col min-h-full">
         <div className="flex-1 max-w-4xl mx-auto px-6 py-6 w-full">
-          <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center justify-between mb-5">
             <Link
               href="/tasks"
-              className="inline-flex items-center gap-1.5 text-sm text-sol-text-dim hover:text-sol-cyan transition-colors"
+              className="inline-flex items-center gap-1.5 text-xs text-sol-text-dim hover:text-sol-cyan transition-colors"
             >
               Tasks
             </Link>
-            <button
-              onClick={() => router.push("/tasks")}
-              className="p-1 rounded-md text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt transition-colors"
-              title="Close"
-            >
-              <X className="w-4 h-4" />
-            </button>
+            <div className="flex items-center gap-1">
+              <CopyButton
+                text={typeof window !== "undefined" ? window.location.href : `/tasks/${id}`}
+                label="Share"
+                showLabel
+                className="flex items-center gap-1.5 px-2 py-1 rounded-md text-xs text-sol-text-dim hover:text-sol-cyan hover:bg-sol-bg-alt transition-colors"
+              />
+              <button
+                onClick={() => router.push("/tasks")}
+                className="p-1 rounded-md text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt transition-colors"
+                title="Close (Esc)"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
           </div>
 
           {/* Title row */}
-          <div className="flex items-start gap-3 mb-3">
-            <StatusIcon className={`w-5 h-5 mt-1.5 flex-shrink-0 ${status.color}`} />
+          <div className="flex items-start gap-3 mb-4">
+            <StatusIcon className={`w-5 h-5 mt-2 flex-shrink-0 ${status.color}`} />
             <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2 text-xs text-sol-text-dim mb-1">
-                <span className="font-mono">{data.short_id}</span>
+              <div className="flex items-center gap-2 text-xs text-sol-text-dim mb-1.5">
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(data.short_id);
+                    toast.success("Task ID copied");
+                  }}
+                  className="font-mono px-1.5 py-0.5 rounded bg-sol-bg-alt border border-sol-border/30 hover:border-sol-cyan/40 hover:text-sol-cyan transition-colors cursor-copy"
+                  title="Click to copy ID"
+                >
+                  {data.short_id}
+                </button>
                 {teamInfo && (
-                  <span className="px-1.5 py-0.5 rounded bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20">
+                  <span className="px-1.5 py-0.5 rounded bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20 text-[10px]">
                     {teamInfo.name}
                   </span>
                 )}
                 {!taskTeamId && (
-                  <span className="px-1.5 py-0.5 rounded bg-sol-text-dim/10 text-sol-text-dim border border-sol-text-dim/20">
+                  <span className="px-1.5 py-0.5 rounded bg-sol-text-dim/10 text-sol-text-dim border border-sol-text-dim/20 text-[10px]">
                     Personal
                   </span>
                 )}
                 {data.source === "insight" && (
-                  <span className="px-1.5 py-0.5 rounded bg-sol-violet/10 text-sol-violet border border-sol-violet/20">
+                  <span className="px-1.5 py-0.5 rounded bg-sol-violet/10 text-sol-violet border border-sol-violet/20 text-[10px]">
                     mined
                   </span>
                 )}
@@ -594,11 +671,11 @@ function TaskDetailContent() {
                     if (e.key === "Enter") commitTitle();
                     if (e.key === "Escape") setEditingTitle(false);
                   }}
-                  className="w-full text-xl font-semibold text-sol-text bg-transparent border-b border-sol-cyan focus:outline-none pb-0.5"
+                  className="w-full text-lg font-semibold text-sol-text bg-transparent border-b border-sol-cyan focus:outline-none pb-0.5"
                 />
               ) : (
                 <h1
-                  className="text-xl font-semibold text-sol-text leading-tight cursor-text hover:text-sol-cyan/90 transition-colors"
+                  className="text-lg font-semibold text-sol-text leading-snug cursor-text hover:text-sol-cyan/90 transition-colors"
                   onClick={startEditTitle}
                   title="Click to edit (e)"
                 >
@@ -608,16 +685,23 @@ function TaskDetailContent() {
             </div>
           </div>
 
-          {/* Properties sidebar-style row (Linear pattern) */}
-          <div className="border-t border-b border-sol-border/30 mb-6">
-            <div className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-0.5 px-4 py-3 text-xs">
-              <span className="text-sol-text-dim py-1">Status</span>
+          {/* Properties grid */}
+          <div className="border-t border-b border-sol-border/30 mb-6 divide-y divide-sol-border/10">
+            {/* Status */}
+            <div className="grid grid-cols-[7rem_1fr] items-center px-4 py-0.5 hover:bg-sol-bg-alt/30 transition-colors">
+              <span className="text-xs text-sol-text-dim">Status</span>
               <Dropdown value={data.status} options={STATUS_OPTIONS} onChange={(v) => handleUpdate({ status: v })} shortcutHint="s to cycle" />
+            </div>
 
-              <span className="text-sol-text-dim py-1">Priority</span>
+            {/* Priority */}
+            <div className="grid grid-cols-[7rem_1fr] items-center px-4 py-0.5 hover:bg-sol-bg-alt/30 transition-colors">
+              <span className="text-xs text-sol-text-dim">Priority</span>
               <Dropdown value={data.priority} options={PRIORITY_OPTIONS} onChange={(v) => handleUpdate({ priority: v })} shortcutHint="p to cycle" />
+            </div>
 
-              <span className="text-sol-text-dim py-1">Assignee</span>
+            {/* Assignee */}
+            <div className="grid grid-cols-[7rem_1fr] items-center px-4 py-0.5 hover:bg-sol-bg-alt/30 transition-colors">
+              <span className="text-xs text-sol-text-dim">Assignee</span>
               <button
                 onClick={() => openCmd("assign")}
                 className="flex items-center gap-1.5 px-2 py-1 rounded-md text-xs hover:bg-sol-bg-alt transition-colors text-left"
@@ -631,79 +715,95 @@ function TaskDetailContent() {
                   <span className="text-sol-text-dim">Unassigned</span>
                 )}
               </button>
+            </div>
 
-              <span className="text-sol-text-dim py-1">Created</span>
-              <span className="flex items-center gap-1 text-sol-text-muted py-1">
-                <Clock className="w-3 h-3" />
+            {/* Created */}
+            <div className="grid grid-cols-[7rem_1fr] items-center px-4 py-1.5 hover:bg-sol-bg-alt/30 transition-colors">
+              <span className="text-xs text-sol-text-dim">Created</span>
+              <span className="flex items-center gap-1.5 text-xs text-sol-text-muted" title={formatDateFull(data.created_at)}>
+                <Clock className="w-3 h-3 text-sol-text-dim" />
                 {formatDate(data.created_at)}
               </span>
-
-              {data.closed_at && (
-                <>
-                  <span className="text-sol-text-dim py-1">Closed</span>
-                  <span className="text-sol-text-muted py-1">{formatDate(data.closed_at)}</span>
-                </>
-              )}
-
-              {(data as any).started_at && (
-                <>
-                  <span className="text-sol-text-dim py-1">Started</span>
-                  <span className="text-sol-text-muted py-1">{formatDate((data as any).started_at)}</span>
-                </>
-              )}
-
-              {data.confidence != null && (
-                <>
-                  <span className="text-sol-text-dim py-1">Confidence</span>
-                  <span className="text-sol-text-muted py-1">{Math.round(data.confidence * 100)}%</span>
-                </>
-              )}
-
-              {data.labels && data.labels.length > 0 && (
-                <>
-                  <span className="text-sol-text-dim py-1">Labels</span>
-                  <div className="flex gap-1 py-1 flex-wrap">
-                    {data.labels.map((l: string) => {
-                      const lc = getLabelColor(l);
-                      return (
-                        <Link key={l} href={`/tasks?label=${encodeURIComponent(l)}`} className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full border ${lc.bg} ${lc.border} ${lc.text} hover:brightness-90 transition-all cursor-pointer`}>
-                          <span className={`w-1.5 h-1.5 rounded-full ${lc.dot}`} />
-                          {l}
-                        </Link>
-                      );
-                    })}
-                  </div>
-                </>
-              )}
-
-              {data.blocked_by && data.blocked_by.length > 0 && (
-                <>
-                  <span className="text-sol-text-dim py-1">Blocked by</span>
-                  <span className="text-sol-red py-1">{data.blocked_by.join(", ")}</span>
-                </>
-              )}
-
-              {data.blocks && data.blocks.length > 0 && (
-                <>
-                  <span className="text-sol-text-dim py-1">Blocks</span>
-                  <span className="text-sol-text-muted py-1">{data.blocks.join(", ")}</span>
-                </>
-              )}
             </div>
+
+            {data.closed_at && (
+              <div className="grid grid-cols-[7rem_1fr] items-center px-4 py-1.5 hover:bg-sol-bg-alt/30 transition-colors">
+                <span className="text-xs text-sol-text-dim">Closed</span>
+                <span className="text-xs text-sol-text-muted" title={formatDateFull(data.closed_at)}>{formatDate(data.closed_at)}</span>
+              </div>
+            )}
+
+            {(data as any).started_at && (
+              <div className="grid grid-cols-[7rem_1fr] items-center px-4 py-1.5 hover:bg-sol-bg-alt/30 transition-colors">
+                <span className="text-xs text-sol-text-dim">Started</span>
+                <span className="text-xs text-sol-text-muted" title={formatDateFull((data as any).started_at)}>{formatDate((data as any).started_at)}</span>
+              </div>
+            )}
+
+            {/* Confidence — visual bar */}
+            {data.confidence != null && (
+              <div className="grid grid-cols-[7rem_1fr] items-center px-4 py-0.5 hover:bg-sol-bg-alt/30 transition-colors">
+                <span className="text-xs text-sol-text-dim">Confidence</span>
+                <ConfidenceBar value={data.confidence} />
+              </div>
+            )}
+
+            {/* Labels */}
+            {data.labels && data.labels.length > 0 && (
+              <div className="grid grid-cols-[7rem_1fr] items-center px-4 py-1.5 hover:bg-sol-bg-alt/30 transition-colors">
+                <span className="text-xs text-sol-text-dim">Labels</span>
+                <div className="flex gap-1.5 flex-wrap">
+                  {data.labels.map((l: string) => {
+                    const lc = getLabelColor(l);
+                    return (
+                      <Link key={l} href={`/tasks?label=${encodeURIComponent(l)}`} className={`inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full border ${lc.bg} ${lc.border} ${lc.text} hover:brightness-110 transition-all cursor-pointer`}>
+                        <span className={`w-1.5 h-1.5 rounded-full ${lc.dot}`} />
+                        {l}
+                      </Link>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Blocked by */}
+            {data.blocked_by && data.blocked_by.length > 0 && (
+              <div className="grid grid-cols-[7rem_1fr] items-center px-4 py-1.5 hover:bg-sol-bg-alt/30 transition-colors">
+                <span className="text-xs text-sol-text-dim">Blocked by</span>
+                <div className="flex gap-1.5 flex-wrap">
+                  {data.blocked_by.map((b: string) => (
+                    <Link key={b} href={`/tasks/${b}`} className="text-xs font-mono text-sol-red hover:underline">{b}</Link>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Blocks */}
+            {data.blocks && data.blocks.length > 0 && (
+              <div className="grid grid-cols-[7rem_1fr] items-center px-4 py-1.5 hover:bg-sol-bg-alt/30 transition-colors">
+                <span className="text-xs text-sol-text-dim">Blocks</span>
+                <div className="flex gap-1.5 flex-wrap">
+                  {data.blocks.map((b: string) => (
+                    <Link key={b} href={`/tasks/${b}`} className="text-xs font-mono text-sol-text-muted hover:underline">{b}</Link>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Source session */}
           {(data.source === "agent" || data.source === "insight") && data.created_from_conversation && (
-            <div className="flex items-center gap-2 text-xs text-sol-text-dim mb-4">
-              <Zap className="w-3 h-3 text-sol-violet" />
+            <Link
+              href={`/conversation/${data.linked_conversations?.[0]?.session_id || ""}`}
+              className="flex items-center gap-2.5 text-xs text-sol-text-dim mb-5 px-3 py-2 rounded-lg border border-sol-border/20 bg-sol-bg-alt/20 hover:bg-sol-bg-alt/40 hover:border-sol-violet/30 transition-colors group"
+            >
+              <Zap className="w-3.5 h-3.5 text-sol-violet flex-shrink-0" />
               <span>Created from</span>
-              <Link
-                href={`/conversation/${data.linked_conversations?.[0]?.session_id || ""}`}
-                className="text-sol-cyan hover:underline"
-              >
+              <span className="text-sol-cyan group-hover:underline truncate">
                 {data.linked_conversations?.[0]?.title || data.linked_conversations?.[0]?.headline || "session"}
-              </Link>
-            </div>
+              </span>
+              <ExternalLink className="w-3 h-3 text-sol-text-dim opacity-0 group-hover:opacity-100 transition-opacity ml-auto flex-shrink-0" />
+            </Link>
           )}
 
           {/* Description */}
@@ -736,10 +836,12 @@ function TaskDetailContent() {
           {/* Source Insight */}
           {data.source_insight && (
             <div className="mb-6">
-              <h2 className="text-xs font-medium text-sol-text-dim uppercase tracking-wide mb-2">Source Insight</h2>
-              <div className="border border-sol-border/30 rounded-lg p-4 bg-sol-bg-alt/20">
+              <h2 className="text-xs font-medium text-sol-text-dim uppercase tracking-wide mb-2 flex items-center gap-1.5">
+                <Zap className="w-3.5 h-3.5" />
+                Source Insight
+              </h2>
+              <div className="border border-sol-border/30 rounded-lg p-4 bg-sol-bg-alt/20 border-l-2 border-l-sol-violet/30">
                 <div className="flex items-center gap-2 mb-2">
-                  <Zap className="w-4 h-4 text-sol-cyan" />
                   <Badge variant="outline" className="text-[10px] text-sol-cyan border-sol-cyan/30">
                     {data.source_insight.outcome_type}
                   </Badge>
@@ -790,31 +892,38 @@ function TaskDetailContent() {
 
           {/* Activity */}
           <div className="mb-6">
-            <h2 className="text-sm font-semibold text-sol-text mb-3">Activity</h2>
-            <div className="space-y-0">
-              {[
-                ...(data.history || []).map((h: any) => ({ type: "history" as const, ts: h.created_at, data: h })),
-                ...(data.comments || []).map((c: any) => ({ type: "comment" as const, ts: c.created_at, data: c })),
-              ]
-                .sort((a, b) => a.ts - b.ts)
-                .map((item) =>
-                  item.type === "history" ? (
-                    <HistoryItem key={item.data._id} entry={item.data} />
-                  ) : (
-                    <div key={item.data._id} className="py-2.5">
-                      <div className="flex items-center gap-2 mb-1.5">
-                        <UserBadge name={item.data.author} image={item.data.author_image} />
-                        {item.data.comment_type !== "note" && (
-                          <Badge variant="outline" className="text-[10px] px-1">{item.data.comment_type}</Badge>
-                        )}
-                        <span className="text-[11px] text-gray-400">{formatRelative(item.data.created_at)}</span>
+            <h2 className="text-xs font-medium text-sol-text-dim uppercase tracking-wide mb-3 flex items-center gap-1.5">
+              <MessageSquare className="w-3.5 h-3.5" />
+              Activity
+            </h2>
+            <div className="relative">
+              {/* Vertical timeline line */}
+              <div className="absolute left-[9px] top-2 bottom-2 w-px bg-sol-border/20" />
+              <div className="space-y-0">
+                {[
+                  ...(data.history || []).map((h: any) => ({ type: "history" as const, ts: h.created_at, data: h })),
+                  ...(data.comments || []).map((c: any) => ({ type: "comment" as const, ts: c.created_at, data: c })),
+                ]
+                  .sort((a, b) => a.ts - b.ts)
+                  .map((item) =>
+                    item.type === "history" ? (
+                      <HistoryItem key={item.data._id} entry={item.data} />
+                    ) : (
+                      <div key={item.data._id} className="py-2.5 relative">
+                        <div className="flex items-center gap-2 mb-1.5">
+                          <UserBadge name={item.data.author} image={item.data.author_image} />
+                          {item.data.comment_type !== "note" && (
+                            <Badge variant="outline" className="text-[10px] px-1">{item.data.comment_type}</Badge>
+                          )}
+                          <TimeAgo ts={item.data.created_at} className="text-[11px] text-gray-400" />
+                        </div>
+                        <div className="ml-[26px] border-l-2 border-sol-border/30 pl-3">
+                          <MarkdownRenderer content={item.data.text} className="text-sm text-sol-text prose-sm prose-invert max-w-none" />
+                        </div>
                       </div>
-                      <div className="ml-[26px] border-l-2 border-sol-border/30 pl-3">
-                        <MarkdownRenderer content={item.data.text} className="text-sm text-sol-text prose-sm prose-invert max-w-none" />
-                      </div>
-                    </div>
-                  )
-                )}
+                    )
+                  )}
+              </div>
             </div>
           </div>
 
@@ -915,14 +1024,34 @@ function TaskDetailContent() {
                   if (!a.is_active && b.is_active) return 1;
                   return (b.updated_at || 0) - (a.updated_at || 0);
                 })
-                .map((conv: any) => (
+                .map((conv: any) => {
+                  const sid = conv._id;
+                  return (
                   <SessionCardInner
                     key={conv._id}
-                    item={{ ...conv, conversation_id: conv._id, status: conv.is_active ? "active" : conv.status }}
+                    item={{ ...conv, conversation_id: sid, status: conv.is_active ? "active" : conv.status }}
                     compact
-                    onNavigate={(id) => openSidePanel(id)}
+                    onNavigate={() => {
+                      const store = useInboxStore.getState();
+                      if (!store.sessions[sid]) {
+                        store.syncRecord('sessions', sid, {
+                          _id: conv._id,
+                          session_id: conv.session_id || conv._id,
+                          title: conv.title,
+                          project_path: conv.project_path,
+                          message_count: conv.message_count || 0,
+                          updated_at: conv.updated_at,
+                          started_at: conv.started_at,
+                          agent_type: conv.agent_type || 'claude',
+                          is_idle: !conv.is_active,
+                          has_pending: false,
+                        });
+                      }
+                      store.openSidePanel(sid);
+                    }}
                   />
-                ))}
+                  );
+                })}
             </div>
           </div>
         )}
