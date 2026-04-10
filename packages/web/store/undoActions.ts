@@ -39,7 +39,8 @@ export function undoableStashSession(id: string, options?: { verb?: string }) {
   const verb = options?.verb || "Dismissed";
   const snap = snapshotSession(state, id);
 
-  useInboxStore.getState().stashSession(id);
+  const isKill = verb === "Killed";
+  useInboxStore.getState().stashSession(id, isKill ? { kill: true } : undefined);
 
   pushUndo({
     label: `${verb} ${label}`,

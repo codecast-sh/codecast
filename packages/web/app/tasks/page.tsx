@@ -117,7 +117,7 @@ export function TaskRow({ task, state, triageMode, onTriage }: { task: TaskItem;
           <StatusIcon className={`w-4 h-4 ${status.color}`} />
         )}
       </button>
-      <span className="text-xs font-mono text-sol-text-dim w-16 flex-shrink-0 cq-hide-minimal">{task.short_id}</span>
+      <span className="text-xs font-mono text-sol-text-dim w-16 flex-shrink-0 cq-hide-compact">{task.short_id}</span>
       {state.isEditing ? (
         <input
           autoFocus
@@ -225,13 +225,13 @@ export function TaskRow({ task, state, triageMode, onTriage }: { task: TaskItem;
       ) : (
         <button
           onClick={(e) => { e.stopPropagation(); state.onOpenPalette("priority"); }}
-          className="flex-shrink-0 hover:scale-125 transition-transform cq-hide-minimal"
+          className="flex-shrink-0 hover:scale-125 transition-transform cq-hide-compact"
           title="Set priority (p)"
         >
           <PriorityIcon className={`w-3.5 h-3.5 ${priority.color}`} />
         </button>
       )}
-      <span className="text-xs text-sol-text-dim w-8 text-right tabular-nums cq-hide-minimal">{ageStr}</span>
+      <span className="text-xs text-sol-text-dim w-8 text-right tabular-nums cq-hide-compact">{ageStr}</span>
     </>
   );
 }

@@ -101,15 +101,13 @@ async function buildWebDocList(
     ? "personal" as const
     : args.workspace;
 
-  // Docs carry large content/embedding fields that count against the Convex
-  // 16MB read limit, even though we strip them before returning.
-  // Cap at 50 per index query to stay safely under the limit.
-  // (50 user + 50 team = 100 max record reads, ~4-8MB typical)
+  // Fetch ALL docs — no per-index cap. Content/embedding fields are stripped
+  // before return so the response stays small. The Convex 16MB read limit
+  // applies to raw DB reads; most teams stay well under with .collect().
   const { records: rawDocs, convMap } = await scopedFetch(ctx, "docs", {
     userId,
     teamId: resolvedTeamId,
     workspace: effectiveWorkspace,
-    limit: 50,
   });
 
   let docs: any[];
@@ -132,10 +130,7 @@ async function buildWebDocList(
     docs = rawDocs;
   }
 
-  if (args.doc_type) {
-    docs = docs.filter((d) => d.doc_type === args.doc_type);
-  }
-
+  // No server-side doc_type filter — all filtering is client-side.
   docs = docs.filter((d) => !d.archived_at && !isNoiseDocForWeb(d) && d.source !== "plan_mode");
 
   if (!projectPaths.length) {
