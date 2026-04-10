@@ -458,8 +458,11 @@ export function SessionCardInner({ item, compact, showActor, onNavigate, project
 
   return (
     <div
-      onClick={() => hasDetail && setExpanded(!expanded)}
-      className={`group relative border border-sol-border/30 bg-white dark:bg-sol-bg-alt rounded-xl shadow-sm overflow-hidden ${compact ? "pl-4 pr-2.5 py-2" : "pl-5 pr-3 py-2.5"} ${isTrivial ? "opacity-50" : ""} ${hasDetail ? "cursor-pointer" : ""} hover:border-sol-yellow/30 hover:shadow-md transition-all`}
+      onClick={() => {
+        if (onNavigate) handleNav();
+        else if (hasDetail) setExpanded(!expanded);
+      }}
+      className={`group relative border border-sol-border/30 bg-white dark:bg-sol-bg-alt rounded-xl shadow-sm overflow-hidden ${compact ? "pl-4 pr-2.5 py-2" : "pl-5 pr-3 py-2.5"} ${isTrivial ? "opacity-50" : ""} ${onNavigate || hasDetail ? "cursor-pointer" : ""} hover:border-sol-yellow/30 hover:shadow-md transition-all`}
     >
       <div className={`absolute left-0 top-0 bottom-0 w-[3px] rounded-l-xl ${outcome.accent}`} />
       {/* Row 1: actor + title + project + time */}

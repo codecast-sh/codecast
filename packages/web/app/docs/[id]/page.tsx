@@ -294,6 +294,27 @@ function DocDetailContent() {
               )}
             </div>
           }
+          footerContent={
+            ((doc as any).related_conversations?.length > 0 || conversation) ? (
+              <div>
+                <h2 className="text-xs font-medium text-sol-text-dim uppercase tracking-wider mb-3">
+                  Sessions
+                </h2>
+                <div className="space-y-1.5">
+                  {((doc as any).related_conversations ||
+                    (conversation ? [conversation] : [])
+                  ).map((conv: any) => (
+                    <SessionCardInner
+                      key={conv._id || conv.session_id}
+                      item={{ ...conv, conversation_id: conv._id }}
+                      compact
+                      onNavigate={(id) => openSidePanel(id)}
+                    />
+                  ))}
+                </div>
+              </div>
+            ) : undefined
+          }
         >
           {hasRelatedContent && (
             <>
@@ -317,26 +338,6 @@ function DocDetailContent() {
                       {(doc as any).active_plan.status}
                     </Badge>
                   </Link>
-                </div>
-              )}
-
-              {((doc as any).related_conversations?.length > 0 || conversation) && (
-                <div className="mb-8">
-                  <h2 className="text-xs font-medium text-sol-text-dim uppercase tracking-wider mb-3">
-                    Sessions
-                  </h2>
-                  <div className="space-y-1.5">
-                    {((doc as any).related_conversations ||
-                      (conversation ? [conversation] : [])
-                    ).map((conv: any) => (
-                      <SessionCardInner
-                        key={conv._id || conv.session_id}
-                        item={{ ...conv, conversation_id: conv._id }}
-                        compact
-                        onNavigate={(id) => openSidePanel(id)}
-                      />
-                    ))}
-                  </div>
                 </div>
               )}
 

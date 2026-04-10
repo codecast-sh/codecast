@@ -88,6 +88,14 @@ export function soundDismiss() {
   } catch {}
 }
 
+export function soundKill() {
+  if (!isEnabled()) return;
+  play([
+    { freq: 587, start: 0, dur: 0.1, gain: 0.6, type: "square" },
+    { freq: 330, start: 0.08, dur: 0.15, gain: 0.5, type: "square" },
+  ], 0.06);
+}
+
 export function soundSend() {
   if (!isEnabled()) return;
   try {

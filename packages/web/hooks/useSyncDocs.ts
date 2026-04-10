@@ -1,14 +1,11 @@
-import { useCallback, useEffect } from "react";
-import { usePaginatedQuery, useQuery } from "convex/react";
+import { useCallback } from "react";
+import { useQuery } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, DocDetail } from "../store/inboxStore";
-import { useWorkspaceArgs } from "./useWorkspaceArgs";
 import { useConvexSync } from "./useConvexSync";
+import { Id } from "@codecast/convex/convex/_generated/dataModel";
 
 const api = _api as any;
-// Small pages to stay under Convex 16MB read limit (docs carry large content).
-// Pages are drained eagerly so the store fills up fast.
-const DOCS_PAGE_SIZE = 50;
 
 function normalizeProjectPath(path: string): string {
   const parts = path.split("/");
@@ -33,49 +30,31 @@ function dedupeProjectPaths(paths: string[]): string[] {
 }
 
 /**
- * Fetches docs into the store via offset-based pagination.
- * Each page stays under the Convex 16MB read limit.
- * Pages are drained eagerly so the store fills up fast.
- * All filtering happens client-side.
+ * Fetches ALL docs for the current workspace into the store.
+ * No pagination, no server-side filters — every doc is loaded and cached.
+ * All filtering (type, source, project, label) happens client-side.
  */
-export function useSyncDocs(typeFilter?: string, searchQuery?: string, projectFilter?: string, scope?: string) {
-  const workspaceArgs = useWorkspaceArgs();
-  const result = useQuery(
-    api.docs.webSearch,
-    workspaceArgs === "skip" || !searchQuery
-      ? "skip"
-      : { query: searchQuery, doc_type: typeFilter || undefined, scope: scope || undefined, ...workspaceArgs }
-  );
-  const paginated = usePaginatedQuery(
-    api.docs.webListPaginated,
-    !searchQuery && workspaceArgs !== "skip"
-      ? { doc_type: typeFilter || undefined, scope: scope || undefined, ...workspaceArgs, ...(projectFilter ? { project_path: projectFilter } : {}) }
-      : "skip",
-    { initialNumItems: DOCS_PAGE_SIZE }
-  );
+export function useSyncDocs() {
+  const activeTeamId = useInboxStore(
+    (s) => s.clientState.ui?.active_team_id
+  ) as Id<"teams"> | undefined;
+  const initialized = useInboxStore((s) => s.clientStateInitialized);
   const syncTable = useInboxStore((s) => s.syncTable);
 
+  const stableArgs = !initialized ? "skip" : activeTeamId
+    ? { team_id: activeTeamId, workspace: "team" as const }
+    : { workspace: "personal" as const };
+
+  const result = useQuery(api.docs.webList,
+    stableArgs === "skip" ? "skip" : stableArgs
+  );
+
   useConvexSync(result, useCallback((data: any) => {
-    if (searchQuery) {
-      syncTable("docs", data as any);
-    }
-  }, [syncTable, searchQuery]));
-
-  useConvexSync(!searchQuery && paginated.status !== "LoadingFirstPage" ? paginated.results : undefined, useCallback((docs: any[]) => {
-    const projectPaths = dedupeProjectPaths(
-      [...new Set(docs.map((d: any) => d.project_path).filter(Boolean))]
-    );
-    syncTable("docs", docs as any, { extra: { docProjectPaths: projectPaths } });
+    const docs = data?.docs ?? data ?? [];
+    const rawPaths: string[] = docs.map((d: any) => d.project_path).filter(Boolean);
+    const projectPaths = dedupeProjectPaths([...new Set(rawPaths)]);
+    syncTable("docs", docs, { extra: { docProjectPaths: projectPaths } });
   }, [syncTable]));
-
-  // Eagerly drain all pages into the store so the list feels fully loaded.
-  // Each page is small (50) to stay under Convex read limits, but we
-  // immediately request the next one as soon as each arrives.
-  useEffect(() => {
-    if (paginated.status === "CanLoadMore") {
-      paginated.loadMore(DOCS_PAGE_SIZE);
-    }
-  }, [paginated.status, paginated.results.length]);
 }
 
 export function useSyncDocDetail(id?: string) {

@@ -22,6 +22,7 @@ interface DocumentDetailLayoutProps {
   topBarRight?: React.ReactNode;
   metaContent?: React.ReactNode;
   children?: React.ReactNode;
+  footerContent?: React.ReactNode;
   contextType?: string;
   linkedObjectId?: string;
   cliEditedAt?: number;
@@ -39,6 +40,7 @@ export function DocumentDetailLayout({
   topBarRight,
   metaContent,
   children,
+  footerContent,
   contextType = "doc",
   linkedObjectId,
   cliEditedAt,
@@ -179,6 +181,11 @@ export function DocumentDetailLayout({
             </div>
           )}
         </div>
+        {footerContent && (
+          <div className="max-w-5xl mx-auto px-10 pb-4 w-full">
+            {footerContent}
+          </div>
+        )}
         <ContextChatInput
           contextType={contextType}
           contextTitle={title || "Untitled"}

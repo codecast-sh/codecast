@@ -148,7 +148,7 @@ export function DocListContent() {
   const docs = useInboxStore((s) => s.docs);
   const docProjectPaths = useInboxStore((s) => s.docProjectPaths);
 
-  useSyncDocs(docType || undefined, undefined, projectFilter || undefined);
+  useSyncDocs();
 
   const docsList = useMemo(() => Object.values(docs), [docs]);
 
@@ -173,10 +173,11 @@ export function DocListContent() {
 
   const filteredDocs = useMemo(() => {
     let list = sourceFilteredDocs;
+    if (docType) list = list.filter((d) => d.doc_type === docType);
     if (labelFilter) list = list.filter((d) => d.labels?.includes(labelFilter));
     if (projectFilter) list = list.filter((d) => d.source_file?.startsWith(projectFilter));
     return list;
-  }, [sourceFilteredDocs, labelFilter, projectFilter]);
+  }, [sourceFilteredDocs, docType, labelFilter, projectFilter]);
 
   const typeCounts = useMemo(() => {
     const counts: Record<string, number> = {};
