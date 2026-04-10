@@ -1,5 +1,5 @@
-import { useCallback } from "react";
-import { useQuery } from "convex/react";
+import { useCallback, useEffect, useRef } from "react";
+import { useQuery, usePaginatedQuery } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, DocDetail } from "../store/inboxStore";
 import { useConvexSync } from "./useConvexSync";
@@ -29,10 +29,12 @@ function dedupeProjectPaths(paths: string[]): string[] {
   return Array.from(byName.values());
 }
 
+const PAGE_SIZE = 200;
+
 /**
- * Fetches ALL docs for the current workspace into the store.
- * No pagination, no server-side filters — every doc is loaded and cached.
- * All filtering (type, source, project, label) happens client-side.
+ * Fetches ALL docs via paginated queries — each page reads a bounded number of
+ * docs so the Convex query stays under the 64MB memory limit.
+ * Results accumulate client-side and are synced to the store as they arrive.
  */
 export function useSyncDocs() {
   const activeTeamId = useInboxStore(
@@ -45,16 +47,30 @@ export function useSyncDocs() {
     ? { team_id: activeTeamId, workspace: "team" as const }
     : { workspace: "personal" as const };
 
-  const result = useQuery(api.docs.webList,
-    stableArgs === "skip" ? "skip" : stableArgs
+  const { results, status, loadMore } = usePaginatedQuery(
+    api.docs.webListPaged,
+    stableArgs === "skip" ? "skip" : stableArgs,
+    { initialNumItems: PAGE_SIZE }
   );
 
-  useConvexSync(result, useCallback((data: any) => {
-    const docs = data?.docs ?? data ?? [];
-    const rawPaths: string[] = docs.map((d: any) => d.project_path).filter(Boolean);
-    const projectPaths = dedupeProjectPaths([...new Set(rawPaths)]);
-    syncTable("docs", docs, { extra: { docProjectPaths: projectPaths } });
-  }, [syncTable]));
+  // Auto-load all remaining pages
+  const loadMoreRef = useRef(loadMore);
+  loadMoreRef.current = loadMore;
+  useEffect(() => {
+    if (status === "CanLoadMore") {
+      loadMoreRef.current(PAGE_SIZE);
+    }
+  }, [status, results?.length]);
+
+  // Sync accumulated results to store
+  useConvexSync(
+    status !== "LoadingFirstPage" ? results : undefined,
+    useCallback((docs: any) => {
+      const rawPaths: string[] = docs.map((d: any) => d.project_path).filter(Boolean);
+      const projectPaths = dedupeProjectPaths([...new Set(rawPaths)]);
+      syncTable("docs", docs, { extra: { docProjectPaths: projectPaths } });
+    }, [syncTable])
+  );
 }
 
 export function useSyncDocDetail(id?: string) {

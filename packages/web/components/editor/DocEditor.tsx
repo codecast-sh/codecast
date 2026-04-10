@@ -3,6 +3,7 @@ import { useEditor, EditorContent } from "@tiptap/react";
 import { BubbleToolbar } from "./BubbleToolbar";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { createBaseExtensions, createMentionExtension, type MentionQueryFn } from "./editorExtensions";
+import { createWikiLinkExtension, type WikiLinkQueryFn } from "./WikiLinkExtension";
 import { uploadImageWithPlaceholder } from "./ImageUploadPlugin";
 import "./editor.css";
 
@@ -10,6 +11,7 @@ interface DocEditorProps {
   content: string;
   onUpdate: (markdown: string) => void;
   onMentionQuery: MentionQueryFn;
+  onWikiLinkQuery?: WikiLinkQueryFn;
   onImageUpload?: (file: File) => Promise<string | null>;
   editable?: boolean;
   className?: string;
@@ -20,10 +22,11 @@ export function DocEditor({
   content,
   onUpdate,
   onMentionQuery,
+  onWikiLinkQuery,
   onImageUpload,
   editable = true,
   className = "",
-  placeholder = "Start writing, use / for commands, @ to mention, # for dates...",
+  placeholder = "Start writing, use / for commands, @ to mention, [[ to link docs...",
 }: DocEditorProps) {
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastSavedRef = useRef(content);
@@ -46,6 +49,7 @@ export function DocEditor({
   const extensions = [
     ...createBaseExtensions({ placeholder }),
     ...(onMentionQuery ? [createMentionExtension(onMentionQuery)] : []),
+    ...(onWikiLinkQuery ? [createWikiLinkExtension(onWikiLinkQuery)] : []),
   ];
 
   const editor = useEditor({
