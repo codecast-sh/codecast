@@ -353,6 +353,7 @@ export const styles = StyleSheet.create({
     paddingVertical: 2,
     borderRadius: 6,
     overflow: 'hidden',
+    marginRight: 2,
   },
   timeText: {
     fontSize: 11,
