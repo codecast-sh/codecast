@@ -2,6 +2,7 @@ import { StyleSheet, FlatList, RefreshControl, TouchableOpacity, TextInput, View
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useMutation } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
+import type { Id } from '@codecast/convex/convex/_generated/dataModel';
 import { useState, useCallback, useRef, useMemo, useEffect } from 'react';
 import { useRouter } from 'expo-router';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
@@ -313,6 +314,7 @@ export default function InboxScreen() {
   const unstashSession = useInboxStore((s) => s.unstashSession);
   const pinSession = useInboxStore((s) => s.pinSession);
   const deferSession = useInboxStore((s) => s.deferSession);
+  const killSession = useMutation(api.conversations.killSession);
 
   const sessionsWithQueuedMessages = useInboxStore((s) => s.sessionsWithQueuedMessages);
   const { sorted: sortedAll, pinned, newSessions, needsInput, working } = useMemo(
@@ -348,22 +350,6 @@ export default function InboxScreen() {
     deferSession(conversationId);
   }, [deferSession]);
 
-  const handleLongPress = useCallback((session: InboxSession) => {
-    const options = [
-      session.is_pinned ? 'Unpin' : 'Pin',
-      'Defer (hide until active)',
-      'Dismiss',
-      'Cancel',
-    ];
-    ActionSheetIOS.showActionSheetWithOptions(
-      { options, cancelButtonIndex: 3, destructiveButtonIndex: 2 },
-      (idx) => {
-        if (idx === 0) pinSession(session._id);
-        else if (idx === 1) handleDefer(session._id);
-        else if (idx === 2) handleDismiss(session._id);
-      },
-    );
-  }, [pinSession, handleDefer, handleDismiss]);
 
   const handleUndismiss = useCallback((conversationId: string) => {
     unstashSession(conversationId);
@@ -372,6 +358,48 @@ export default function InboxScreen() {
   const handlePin = useCallback((conversationId: string) => {
     pinSession(conversationId);
   }, [pinSession]);
+
+  const handleSessionLongPress = useCallback((session: InboxSession) => {
+    const options = [
+      session.is_pinned ? 'Unpin' : 'Pin',
+      'Defer',
+      'Dismiss',
+      'Kill Agent',
+      'Cancel',
+    ];
+    const destructiveButtonIndex = 3;
+    const cancelButtonIndex = 4;
+
+    if (Platform.OS === 'ios') {
+      ActionSheetIOS.showActionSheetWithOptions(
+        { options, cancelButtonIndex, destructiveButtonIndex, title: cleanTitle(session.title) },
+        (index) => {
+          if (index === 0) handlePin(session._id);
+          else if (index === 1) deferSession(session._id);
+          else if (index === 2) handleDismiss(session._id);
+          else if (index === 3) {
+            Alert.alert('Kill Agent', 'Stop this agent session?', [
+              { text: 'Cancel', style: 'cancel' },
+              { text: 'Kill', style: 'destructive', onPress: () => killSession({ conversation_id: session._id as Id<"conversations"> }) },
+            ]);
+          }
+        },
+      );
+    } else {
+      Alert.alert(cleanTitle(session.title), undefined, [
+        { text: session.is_pinned ? 'Unpin' : 'Pin', onPress: () => handlePin(session._id) },
+        { text: 'Defer', onPress: () => deferSession(session._id) },
+        { text: 'Dismiss', onPress: () => handleDismiss(session._id) },
+        { text: 'Kill Agent', style: 'destructive', onPress: () => {
+          Alert.alert('Kill Agent', 'Stop this agent session?', [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Kill', style: 'destructive', onPress: () => killSession({ conversation_id: session._id as Id<"conversations"> }) },
+          ]);
+        }},
+        { text: 'Cancel', style: 'cancel' },
+      ]);
+    }
+  }, [handlePin, handleDismiss, deferSession, killSession]);
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
@@ -385,9 +413,9 @@ export default function InboxScreen() {
       onPress={() => router.push(`/session/${s._id}`)}
       onDismiss={() => handleDismiss(s._id)}
       onPin={() => handlePin(s._id)}
-      onLongPress={() => handleLongPress(s)}
+      onLongPress={() => handleSessionLongPress(s)}
     />
-  ), [router, handleDismiss, handlePin, handleLongPress]);
+  ), [router, handleDismiss, handlePin, handleSessionLongPress]);
 
   const renderSection = useCallback((label: string, items: InboxSession[], color?: string) => {
     if (items.length === 0) return null;
