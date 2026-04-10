@@ -516,7 +516,8 @@ export const mineDocsFromSessions = internalMutation({
         contentParts.push(`## Project\n\`${session.project_path}\``);
 
       const conv = await ctx.db.get(session.conversation_id);
-      const convTeamId = conv && (!conv.is_private || conv.auto_shared) ? conv.team_id : args.team_id;
+      const convTeamId = conv && (!conv.is_private || conv.auto_shared
+        || (conv.team_visibility && conv.team_visibility !== "private")) ? conv.team_id : args.team_id;
 
       await ctx.db.insert("docs", {
         user_id: args.user_id,

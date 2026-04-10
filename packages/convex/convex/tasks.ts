@@ -220,7 +220,7 @@ export const create = mutation({
       created_from_conversation,
       created_from_insight: args.insight_id as any,
       source: (args.source || "human") as any,
-      triage_status: (args.source && args.source !== "human") ? "suggested" : "active",
+      triage_status: args.source === "insight" ? "suggested" : "active",
       confidence: args.confidence,
       attempt_count: 0,
       retry_count: 0,
@@ -967,10 +967,9 @@ export const webList = query({
       });
     }
 
-    const numItems = args.limit || 300;
-    const offset = (args.page || 0) * numItems;
-    const hasMore = offset + numItems < tasks.length;
-    const result = tasks.slice(offset, offset + numItems);
+    // Return ALL tasks — no server-side pagination.
+    // Client-side filtering handles everything; we never want to silently drop items.
+    const result = tasks;
 
     // Enrich with creator and assignee info
     const allUserIds = new Set<string>();
@@ -1050,7 +1049,7 @@ export const webList = query({
       source_agent_type: t.created_from_conversation ? sourceAgentMap.get(t.created_from_conversation.toString()) || null : null,
       session_count: (t.conversation_ids || []).length,
     }));
-    return { items, hasMore };
+    return { items, hasMore: false };
   },
 });
 
@@ -1591,7 +1590,8 @@ export const backfillTeamScope = mutation({
         const cid = (t as any).conversation_ids?.[0] || t.created_from_conversation;
         if (cid) {
           const conv = await ctx.db.get(cid) as any;
-          if (conv?.team_id && (!conv.is_private || conv.auto_shared)) {
+          if (conv?.team_id && (!conv.is_private || conv.auto_shared
+            || (conv.team_visibility && conv.team_visibility !== "private"))) {
             tid = conv.team_id;
           }
         }
@@ -1605,7 +1605,11 @@ export const backfillTeamScope = mutation({
       }
 
       if (!(t as any).triage_status) {
-        patches.triage_status = (t.source === "human" || t.promoted) ? "active" : "suggested";
+        patches.triage_status = (t.source === "insight" && !t.promoted) ? "suggested" : "active";
+      }
+      // Fix agent-sourced tasks incorrectly set to "suggested"
+      if ((t as any).triage_status === "suggested" && t.source === "agent") {
+        patches.triage_status = "active";
       }
 
       if (Object.keys(patches).length > 0) {
@@ -1653,7 +1657,8 @@ export const backfillTaskTeamIds = internalMutation({
       const cid = (t as any).conversation_ids?.[0] || t.created_from_conversation;
       if (cid) {
         const conv = await ctx.db.get(cid) as any;
-        if (conv?.team_id && (!conv.is_private || conv.auto_shared)) {
+        if (conv?.team_id && (!conv.is_private || conv.auto_shared
+          || (conv.team_visibility && conv.team_visibility !== "private"))) {
           tid = conv.team_id;
         }
       }

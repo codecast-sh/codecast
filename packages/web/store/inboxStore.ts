@@ -252,6 +252,10 @@ export type DocViewPrefs = {
   scope?: string;
 };
 
+export type PlanViewPrefs = {
+  source?: string;
+};
+
 export type ClientUI = {
   theme?: "light" | "dark";
   sidebar_collapsed?: boolean;
@@ -265,6 +269,7 @@ export type ClientUI = {
   sounds_enabled?: boolean;
   task_view?: TaskViewPrefs;
   doc_view?: DocViewPrefs;
+  plan_view?: PlanViewPrefs;
 };
 
 export type ClientLayouts = {
