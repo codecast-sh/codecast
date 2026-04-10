@@ -272,16 +272,29 @@ export function useConversationMessages(
   // =============================================
   // Child conversation map
   // =============================================
+  const childByParentUuidMap = useMemo(() => {
+    const entries = storeMeta?.child_by_parent_uuid_entries;
+    if (Array.isArray(entries)) {
+      const map: Record<string, string> = {};
+      for (const [parentUuid, childId] of entries) {
+        if (typeof parentUuid !== "string" || typeof childId !== "string") continue;
+        map[parentUuid] = childId;
+      }
+      return map;
+    }
+    return (storeMeta?.child_by_parent_uuid ?? {}) as Record<string, string>;
+  }, [storeMeta?.child_by_parent_uuid_entries, storeMeta?.child_by_parent_uuid]);
+
   const childConversationMap = useMemo(() => {
-    if (!storeMeta?.child_by_parent_uuid) return {};
+    if (!childByParentUuidMap || Object.keys(childByParentUuidMap).length === 0) return {};
     const map: Record<string, string> = {};
     for (const msg of rawMessages) {
-      if (msg.message_uuid && storeMeta.child_by_parent_uuid[msg.message_uuid]) {
-        map[msg.message_uuid] = storeMeta.child_by_parent_uuid[msg.message_uuid];
+      if (msg.message_uuid && childByParentUuidMap[msg.message_uuid]) {
+        map[msg.message_uuid] = childByParentUuidMap[msg.message_uuid];
       }
     }
     return map;
-  }, [storeMeta?.child_by_parent_uuid, rawMessages]);
+  }, [childByParentUuidMap, rawMessages]);
 
   // =============================================
   // Pagination state + actions
