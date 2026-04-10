@@ -80,6 +80,7 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
     s => s.currentSessionId,
     s => s.viewingDismissedId,
     s => s.newSession.isOpen,
+    s => s.tabs.length,
   ]);
   const isZenMode = s.clientState.ui?.zen_mode ?? false;
   const sidebarCollapsed = s.clientState.ui?.sidebar_collapsed ?? false;
@@ -390,11 +391,14 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
     );
   }
 
-  const pageContent = isFullWidthPage ? (
-    <div className="h-full">{children}</div>
+  const hasTabs = s.tabs.length > 0;
+  const content = hasTabs ? <TabPanes /> : children;
+
+  const pageContent = isFullWidthPage || hasTabs ? (
+    <div className="h-full">{content}</div>
   ) : (
     <div data-main-scroll className="h-full overflow-y-auto px-3 sm:px-6 lg:px-8 py-4">
-      <div className="max-w-4xl mx-auto h-full">{children}</div>
+      <div className="max-w-4xl mx-auto h-full">{content}</div>
     </div>
   );
 
