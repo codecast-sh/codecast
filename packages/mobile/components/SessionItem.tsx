@@ -154,7 +154,7 @@ export function SessionItem({ session, onPress, onPin, onLongPress }: { session:
         </RNView>
         <RNView style={styles.rightMeta}>
           {sLabel && <RNText style={[styles.statusBadge, { color: sColor }]}>{sLabel}</RNText>}
-          {project && <RNText style={styles.projectBadge} numberOfLines={1}>{project}</RNText>}
+          <RNText style={styles.timeText}>{formatRelativeTime(session.updated_at)}</RNText>
         </RNView>
       </RNView>
 
@@ -179,8 +179,12 @@ export function SessionItem({ session, onPress, onPin, onLongPress }: { session:
           </>
         )}
         {agent ? (
-          <RNText style={[styles.agentBadge, { color: agentColor(session.agent_type ?? "") }]}>{agent}</RNText>
+          <>
+            <RNText style={[styles.agentBadge, { color: agentColor(session.agent_type ?? "") }]}>{agent}</RNText>
+            {project && <RNText style={styles.metaSeparator}>·</RNText>}
+          </>
         ) : null}
+        {project && <RNText style={styles.projectBadge} numberOfLines={1}>{project}</RNText>}
       </RNView>
     </TouchableOpacity>
   );
@@ -347,6 +351,11 @@ export const styles = StyleSheet.create({
     paddingVertical: 2,
     borderRadius: 6,
     overflow: 'hidden',
+  },
+  timeText: {
+    fontSize: 11,
+    color: Theme.textMuted0,
+    fontWeight: '400',
   },
   messageCount: {
     fontSize: 11,
