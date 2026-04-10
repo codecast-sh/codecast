@@ -76,6 +76,29 @@ function resolveUserSkills(userSkillsJson: string | undefined, projectPath: stri
   } catch { return userSkillsJson; }
 }
 
+function isValidConvexFieldName(key: string): boolean {
+  for (let i = 0; i < key.length; i++) {
+    const code = key.charCodeAt(i);
+    if (code < 0x20 || code > 0x7e) return false;
+  }
+  return true;
+}
+
+function sanitizeConvexObjectKeys<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeConvexObjectKeys(item)) as T;
+  }
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+      if (!isValidConvexFieldName(key)) continue;
+      out[key] = sanitizeConvexObjectKeys(child);
+    }
+    return out as T;
+  }
+  return value;
+}
+
 function matchChildByPrompt(
   prompt: string,
   subagents: Array<{ _id: string; preview: string }>,
@@ -98,7 +121,7 @@ async function findChildConversations(
 ): Promise<{
   children: Array<{ _id: string; title: string; is_subagent?: boolean; first_message_preview?: string }>;
   map: Record<string, string>;
-  agentNameMap: Record<string, string>;
+  agentNameEntries: Array<[string, string]>;
 }> {
   const map: Record<string, string> = {};
 
@@ -196,7 +219,7 @@ async function findChildConversations(
     }
   }
 
-  return { children, map, agentNameMap };
+  return { children, map, agentNameEntries: Object.entries(agentNameMap) };
 }
 
 function generateShareToken(): string {
@@ -801,7 +824,7 @@ export const getConversation = query({
       if (task) active_task = { _id: task._id, short_id: task.short_id, title: task.title, status: task.status };
     }
 
-    return {
+    return sanitizeConvexObjectKeys({
       ...conversation,
       title,
       messages: sortedMessages,
@@ -810,7 +833,7 @@ export const getConversation = query({
       oldest_timestamp: oldestTimestamp,
       active_plan,
       active_task,
-    };
+    });
   },
 });
 
@@ -883,10 +906,10 @@ export const getAllMessages = query({
       || (conversation.slug ? formatSlugAsTitle(conversation.slug) : null)
       || "New Session";
 
-    const { children: childConversations, map: childConversationMap, agentNameMap } =
+    const { children: childConversations, map: childConversationMap, agentNameEntries } =
       messages.length > 0
         ? await findChildConversations(ctx, args.conversation_id, messages)
-        : { children: [], map: {}, agentNameMap: {} };
+        : { children: [], map: {}, agentNameEntries: [] };
 
     let forkedFromDetails = null;
     if (conversation.forked_from) {
@@ -950,14 +973,14 @@ export const getAllMessages = query({
 
     const oldestTimestamp = messages.length > 0 ? messages[0].timestamp : null;
 
-    return {
+    return sanitizeConvexObjectKeys({
       ...conversation,
       title,
       messages,
       user: user ? { name: user.name, email: user.email, avatar_url: user.image || user.github_avatar_url || null } : null,
       child_conversations: childConversations,
       child_conversation_map: childConversationMap,
-      agent_name_map: agentNameMap,
+      agent_name_entries: agentNameEntries,
       last_timestamp: messages.length > 0 ? messages[messages.length - 1].timestamp : null,
       has_more_above: hasMore,
       oldest_timestamp: oldestTimestamp,
@@ -968,7 +991,7 @@ export const getAllMessages = query({
       fork_children: forkChildrenDetails,
       parent_conversation_id: parentConversationId,
       main_message_counts_by_fork: mainMsgCountsByFork,
-    };
+    });
   },
 });
 
@@ -1066,12 +1089,12 @@ export const getMessagesAroundTimestamp = query({
       }
     }
 
-    const { children: childConversations, map: childConversationMap, agentNameMap } =
+    const { children: childConversations, map: childConversationMap, agentNameEntries } =
       messages.length > 0
         ? await findChildConversations(ctx, args.conversation_id, messages)
-        : { children: [], map: {}, agentNameMap: {} };
+        : { children: [], map: {}, agentNameEntries: [] };
 
-    return {
+    return sanitizeConvexObjectKeys({
       ...conversation,
       title,
       messages,
@@ -1083,8 +1106,8 @@ export const getMessagesAroundTimestamp = query({
       parent_conversation_id: parentConversationId,
       child_conversations: childConversations,
       child_conversation_map: childConversationMap,
-      agent_name_map: agentNameMap,
-    };
+      agent_name_entries: agentNameEntries,
+    });
   },
 });
 
@@ -1120,14 +1143,14 @@ export const getNewMessages = query({
     const hasMore = messages.length > PAGE_LIMIT;
     if (hasMore) messages.length = PAGE_LIMIT;
 
-    const { children: childConversations, map: childConversationMap, agentNameMap } =
+    const { children: childConversations, map: childConversationMap, agentNameEntries } =
       await findChildConversations(ctx, args.conversation_id, messages);
 
     return {
       messages,
       child_conversations: childConversations,
       child_conversation_map: childConversationMap,
-      agent_name_map: agentNameMap,
+      agent_name_entries: agentNameEntries,
       last_timestamp: messages.length > 0 ? messages[messages.length - 1].timestamp : null,
       has_more: hasMore,
       updated_at: conversation.updated_at,
@@ -1232,7 +1255,7 @@ export const getConversationWithMeta = query({
       || (conversation.slug ? formatSlugAsTitle(conversation.slug) : null)
       || "New Session";
 
-    const { children: childConversations, map: childByParentUuid, agentNameMap } =
+    const { children: childConversations, map: childByParentUuid, agentNameEntries } =
       await findChildConversations(ctx, args.conversation_id, []);
 
     let forkedFromDetails = null;
@@ -1307,15 +1330,15 @@ export const getConversationWithMeta = query({
     // Strip large fields that are only needed on-demand (git_diff, git_diff_staged, available_skills)
     const { git_diff, git_diff_staged, available_skills: _convSkills, ...conversationLight } = conversation;
 
-    return {
+    return sanitizeConvexObjectKeys({
       ...conversationLight,
       is_own: !!isOwner,
       title,
       effective_team_visibility,
       user: user ? { name: user.name, email: user.email, avatar_url: user.image || user.github_avatar_url || null } : null,
       child_conversations: childConversations,
-      child_by_parent_uuid: childByParentUuid,
-      agent_name_map: agentNameMap,
+      child_by_parent_uuid_entries: Object.entries(childByParentUuid),
+      agent_name_entries: agentNameEntries,
       fork_count: conversation.fork_count,
       forked_from: conversation.forked_from,
       forked_from_details: forkedFromDetails,
@@ -1323,7 +1346,7 @@ export const getConversationWithMeta = query({
       parent_conversation_id: parentConversationId,
       active_plan,
       active_task,
-    };
+    });
   },
 });
 
@@ -1472,16 +1495,16 @@ export const getConversationMessages = query({
         .collect();
     }
 
-    const { children: childConversations, map: childConversationMap, agentNameMap } =
+    const { children: childConversations, map: childConversationMap, agentNameEntries } =
       messages.length > 0
         ? await findChildConversations(ctx, args.conversation_id, messages)
-        : { children: [], map: {}, agentNameMap: {} };
+        : { children: [], map: {}, agentNameEntries: [] };
 
     return {
       messages,
       child_conversations: childConversations,
       child_conversation_map: childConversationMap,
-      agent_name_map: agentNameMap,
+      agent_name_entries: agentNameEntries,
       last_timestamp: messages.length > 0 ? messages[messages.length - 1].timestamp : null,
     };
   },
@@ -2176,14 +2199,14 @@ export const getSharedConversation = query({
       || (conversation.slug ? formatSlugAsTitle(conversation.slug) : null)
       || "New Session";
 
-    return {
+    return sanitizeConvexObjectKeys({
       ...conversation,
       title,
       messages: sortedMessages,
       user: user ? { name: user.name, email: user.email } : null,
       fork_count: conversation.fork_count,
       forked_from: conversation.forked_from,
-    };
+    });
   },
 });
 
@@ -2314,7 +2337,7 @@ export const getConversationPublic = query({
       }
     }
 
-    return {
+    return sanitizeConvexObjectKeys({
       access_level: accessLevel,
       conversation: {
         ...conversation,
@@ -2327,7 +2350,7 @@ export const getConversationPublic = query({
         forked_from: conversation.forked_from,
         parent_conversation_id: parentConversationId,
       },
-    };
+    });
   },
 });
 

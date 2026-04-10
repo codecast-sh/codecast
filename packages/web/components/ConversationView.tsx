@@ -250,6 +250,7 @@ export type ConversationData = {
   compaction_count?: number;
   loaded_start_index?: number;
   agent_name_map?: Record<string, string>;
+  agent_name_entries?: Array<[string, string]>;
   fork_children?: Array<{
     _id: string;
     title: string;
@@ -7462,7 +7463,18 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
   const messages = conversation?.messages || [];
 
-  const agentNameToChildMap = conversation?.agent_name_map as Record<string, string> | undefined;
+  const agentNameToChildMap = useMemo(() => {
+    const entries = conversation?.agent_name_entries;
+    if (Array.isArray(entries)) {
+      const map: Record<string, string> = {};
+      for (const [name, childId] of entries) {
+        if (typeof name !== "string" || typeof childId !== "string") continue;
+        map[name] = childId;
+      }
+      return map;
+    }
+    return conversation?.agent_name_map as Record<string, string> | undefined;
+  }, [conversation?.agent_name_entries, conversation?.agent_name_map]);
 
   const addOptimisticFork = useInboxStore((s) => s.addOptimisticFork);
   const pruneOptimisticForks = useInboxStore((s) => s.pruneOptimisticForks);
