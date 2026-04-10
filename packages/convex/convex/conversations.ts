@@ -5513,19 +5513,19 @@ export const listIdleSessions = query({
         .map((s) => s.conversation_id!.toString())
     );
 
-    const AGENT_STATUS_FRESH_MS = 5 * 60 * 1000;
     const agentStatusMap = new Map<string, "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "stopped" | "starting" | "resuming">();
     for (const s of managedSessions) {
       if (!s.conversation_id || !s.agent_status) continue;
       const heartbeatAlive = now - s.last_heartbeat < HEARTBEAT_ALIVE_MS;
-      const statusFresh = s.agent_status_updated_at && (now - s.agent_status_updated_at) < AGENT_STATUS_FRESH_MS;
-      // Terminal state: always keep. Stale heartbeat + active status: infer stopped.
       if (s.agent_status === "stopped" || s.agent_status === "idle") {
         agentStatusMap.set(s.conversation_id.toString(), s.agent_status);
-      } else if (statusFresh) {
-        agentStatusMap.set(s.conversation_id.toString(), heartbeatAlive ? s.agent_status : "stopped");
-      } else if (!heartbeatAlive) {
-        // Status stale AND heartbeat dead → daemon crashed, infer stopped
+      } else if (heartbeatAlive) {
+        // Heartbeat alive → daemon is running. Trust last known status even if
+        // agent_status_updated_at is stale (status only updates on transitions,
+        // so a long "working" phase naturally has an old timestamp).
+        agentStatusMap.set(s.conversation_id.toString(), s.agent_status);
+      } else {
+        // Heartbeat dead → daemon crashed or exited, infer stopped
         agentStatusMap.set(s.conversation_id.toString(), "stopped");
       }
     }
