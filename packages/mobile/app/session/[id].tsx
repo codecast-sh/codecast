@@ -10,6 +10,7 @@ try { ImagePicker = require('expo-image-picker'); } catch {}
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import Feather from '@expo/vector-icons/Feather';
 import Svg, { Path } from 'react-native-svg';
+import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { PermissionCard } from '@/components/PermissionCard';
 import { renderInlineMarkdown, MarkdownContent, MarkdownTextBlock, CodeBlockWithCopy, CodeBlockFullscreen, HighlightedCodeText } from '@/components/MarkdownRenderer';
 import { Theme, Spacing } from '@/constants/Theme';
@@ -3284,6 +3285,7 @@ export default function SessionDetailScreen() {
   const generateShareLink = useMutation(api.conversations.generateShareLink);
   const setPrivacy = useMutation(api.conversations.setPrivacy);
   const setTeamVisibility = useMutation(api.conversations.setTeamVisibility);
+  const stashSession = useInboxStore((s) => s.stashSession);
 
   const handleToggleFavorite = useCallback(async () => {
     if (!id) return;
@@ -3471,6 +3473,73 @@ export default function SessionDetailScreen() {
       { text: 'Cancel', style: 'cancel' },
     ]);
   }, [handleCopyAll, handleStartShareSelection, shareSelectionMode, showToast]);
+
+  const handleDismiss = useCallback(() => {
+    if (!id) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    stashSession(id);
+    router.back();
+  }, [id, stashSession, router]);
+
+  const handleMoreActions = useCallback(() => {
+    const options: string[] = [];
+    options.push(conversation?.is_favorite ? 'Unfavorite' : 'Favorite');
+    options.push('Share');
+    options.push('Search');
+    options.push('Copy');
+    if (conversation?.session_id) options.push('Copy Resume Command');
+    options.push(collapsed ? 'Expand Messages' : 'Collapse Messages');
+    const hasDiff = conversation?.git_branch && (conversation?.git_diff?.trim() || conversation?.git_diff_staged?.trim());
+    if (hasDiff) options.push(diffExpanded ? 'Hide Diff' : 'View Diff');
+    const hasTree = treeResult && !('error' in treeResult) && treeResult.tree && treeResult.tree.children.length > 0;
+    if (hasTree) options.push('Fork Tree');
+    options.push('Dismiss');
+    options.push('Cancel');
+
+    const destructiveIndex = options.indexOf('Dismiss');
+
+    if (Platform.OS === 'ios') {
+      ActionSheetIOS.showActionSheetWithOptions(
+        {
+          options,
+          cancelButtonIndex: options.length - 1,
+          destructiveButtonIndex: destructiveIndex,
+        },
+        (idx) => {
+          const label = options[idx];
+          if (label === 'Favorite' || label === 'Unfavorite') handleToggleFavorite();
+          else if (label === 'Share') handleShareConversation();
+          else if (label === 'Search') setSearchVisible(v => !v);
+          else if (label === 'Copy') handleCopyMenu();
+          else if (label === 'Copy Resume Command') handleCopyResume();
+          else if (label === 'Expand Messages' || label === 'Collapse Messages') setCollapsed(c => !c);
+          else if (label === 'View Diff' || label === 'Hide Diff') setDiffExpanded(d => !d);
+          else if (label === 'Fork Tree') setTreeModalVisible(true);
+          else if (label === 'Dismiss') handleDismiss();
+        }
+      );
+      return;
+    }
+
+    Alert.alert('Actions', undefined, [
+      ...options.slice(0, -1).map(label => ({
+        text: label,
+        style: (label === 'Dismiss' ? 'destructive' : 'default') as any,
+        onPress: () => {
+          if (label === 'Favorite' || label === 'Unfavorite') handleToggleFavorite();
+          else if (label === 'Share') handleShareConversation();
+          else if (label === 'Search') setSearchVisible(v => !v);
+          else if (label === 'Copy') handleCopyMenu();
+          else if (label === 'Copy Resume Command') handleCopyResume();
+          else if (label === 'Expand Messages' || label === 'Collapse Messages') setCollapsed(c => !c);
+          else if (label === 'View Diff' || label === 'Hide Diff') setDiffExpanded(d => !d);
+          else if (label === 'Fork Tree') setTreeModalVisible(true);
+          else if (label === 'Dismiss') handleDismiss();
+        },
+      })),
+      { text: 'Cancel', style: 'cancel' },
+    ]);
+  }, [conversation, collapsed, diffExpanded, treeResult, handleToggleFavorite, handleShareConversation, handleCopyMenu, handleCopyResume, handleDismiss]);
 
   const handleConfirmShareSelection = useCallback(async () => {
     if (selectedMessageIds.size === 0) return;
@@ -3823,43 +3892,7 @@ export default function SessionDetailScreen() {
           onLayout={(event) => handleFloatingHeaderLayout(event.nativeEvent.layout.height)}
         >
             <RNView style={styles.floatingSessionCard}>
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.headerToolbar}
-            >
-              <TouchableOpacity onPress={handleToggleFavorite} style={[styles.toolbarButton, conversation.is_favorite && styles.toolbarButtonActive]} activeOpacity={0.7}>
-                <Feather name="star" size={15} color={conversation.is_favorite ? Theme.accent : Theme.textMuted} />
-              </TouchableOpacity>
-              <TouchableOpacity onPress={handleShareConversation} style={styles.toolbarButton} activeOpacity={0.7}>
-                <Feather name="share-2" size={15} color={Theme.textMuted} />
-              </TouchableOpacity>
-              <TouchableOpacity onPress={() => setSearchVisible(v => !v)} style={styles.toolbarButton} activeOpacity={0.7}>
-                <Feather name="search" size={15} color={searchVisible ? Theme.cyan : Theme.textMuted} />
-              </TouchableOpacity>
-              <TouchableOpacity onPress={handleCopyMenu} style={[styles.toolbarButton, shareSelectionMode && styles.toolbarButtonActive]} activeOpacity={0.7}>
-                <Feather name="clipboard" size={15} color={Theme.textMuted} />
-              </TouchableOpacity>
-              {conversation.session_id && (
-                <TouchableOpacity onPress={handleCopyResume} style={styles.toolbarButton} activeOpacity={0.7}>
-                  <Feather name="terminal" size={15} color={Theme.textMuted} />
-                </TouchableOpacity>
-              )}
-              <TouchableOpacity onPress={() => setCollapsed(c => !c)} style={[styles.toolbarButton, collapsed && styles.toolbarButtonActive]} activeOpacity={0.7}>
-                <Feather name={collapsed ? "maximize-2" : "minimize-2"} size={15} color={collapsed ? Theme.cyan : Theme.textMuted} />
-              </TouchableOpacity>
-              {conversation.git_branch && (conversation.git_diff?.trim() || conversation.git_diff_staged?.trim()) && (
-                <TouchableOpacity onPress={() => setDiffExpanded(d => !d)} style={[styles.toolbarButton, diffExpanded && styles.toolbarButtonActive]} activeOpacity={0.7}>
-                  <Feather name="git-commit" size={15} color={diffExpanded ? Theme.green : Theme.textMuted} />
-                </TouchableOpacity>
-              )}
-              {treeResult && !('error' in treeResult) && treeResult.tree && treeResult.tree.children.length > 0 && (
-                <TouchableOpacity onPress={() => setTreeModalVisible(true)} style={styles.toolbarButton} activeOpacity={0.7}>
-                  <Feather name="git-branch" size={15} color={Theme.violet} />
-                </TouchableOpacity>
-              )}
-            </ScrollView>
-            <RNView style={styles.toolbarDivider} />
+            <RNView style={styles.metaRow}>
               <ScrollView
                 horizontal
                 showsHorizontalScrollIndicator={false}
@@ -3935,6 +3968,10 @@ export default function SessionDetailScreen() {
                   </Pressable>
                 )}
               </ScrollView>
+              <TouchableOpacity onPress={handleMoreActions} style={styles.moreActionsButton} activeOpacity={0.7}>
+                <Feather name="more-horizontal" size={18} color={Theme.textMuted} />
+              </TouchableOpacity>
+            </RNView>
             {searchVisible && (
               <RNView style={[styles.searchBar, styles.floatingSearchBar]}>
                 <FontAwesome name="search" size={12} color={Theme.textDim} style={{ marginRight: 8 }} />
@@ -4330,6 +4367,17 @@ const styles = StyleSheet.create({
     flexWrap: 'nowrap',
     marginBottom: 2,
     paddingRight: 8,
+  },
+  metaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingTop: 6,
+  },
+  moreActionsButton: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   floatingLinksRow: {
     flexDirection: 'row',
@@ -5852,36 +5900,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
     color: Theme.cyan,
-  },
-  toolbarDivider: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: Theme.borderLight + '80',
-    marginHorizontal: 8,
-    marginTop: 6,
-    marginBottom: 2,
-  },
-  headerToolbar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flexWrap: 'nowrap',
-    gap: 8,
-    paddingTop: 7,
-    paddingBottom: 2,
-    paddingRight: 8,
-    flexGrow: 1,
-    minWidth: '100%',
-  },
-  toolbarButton: {
-    flexBasis: 0,
-    flexGrow: 1,
-    minWidth: 32,
-    height: 30,
-    borderRadius: 6,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  toolbarButtonActive: {
-    backgroundColor: Theme.cyan + '14',
   },
   gitBranchBadge: {
     flexDirection: 'row',
