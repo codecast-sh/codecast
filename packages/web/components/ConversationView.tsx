@@ -7238,6 +7238,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const jumpDirectionRef = useRef<'start' | 'end' | null>(null);
   const isPaginatingRef = useRef(false);
   const paginationCooldownRef = useRef(false);
+  const isVirtualizerCorrectingRef = useRef(false);
+  const correctingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const paginationPropsRef = useRef({ hasMoreAbove: false, hasMoreBelow: false, isLoadingOlder: false, isLoadingNewer: false, onLoadOlder: undefined as (() => void) | undefined, onLoadNewer: undefined as (() => void) | undefined });
   paginationPropsRef.current = { hasMoreAbove: !!hasMoreAbove, hasMoreBelow: !!hasMoreBelow, isLoadingOlder: !!isLoadingOlder, isLoadingNewer: !!isLoadingNewer, onLoadOlder, onLoadNewer };
   const scrollCtxRef = useRef({ messageCount: 0, messagesLen: 0, timelineLen: 0, loadedStartIndex: 0 });
@@ -8311,6 +8313,24 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     isScrollingResetDelay: 150,
   });
 
+  // Hook into virtualizer's scroll correction to prevent the scroll handler
+  // from falsely clearing userScrolled. When items above the viewport get
+  // measured (e.g. large markdown files grow from 200px estimate to 3000px+),
+  // TanStack adjusts scrollTop upward. The scroll handler sees this as
+  // "scrolled down near bottom" (scrollTop increased, scrollHeight not yet
+  // updated) and clears userScrolled — which lets the ResizeObserver auto-pin
+  // snap to bottom. This flag blocks that false positive.
+  virtualizer.shouldAdjustScrollPositionOnItemSizeChange = (item: any, _delta: number) => {
+    const sc = containerRef.current;
+    const shouldAdjust = sc ? item.start < sc.scrollTop : false;
+    if (shouldAdjust) {
+      isVirtualizerCorrectingRef.current = true;
+      if (correctingTimerRef.current) clearTimeout(correctingTimerRef.current);
+      correctingTimerRef.current = setTimeout(() => { isVirtualizerCorrectingRef.current = false; }, 100);
+    }
+    return shouldAdjust;
+  };
+
   scrollToBottomFnRef.current = () => {
     if (timeline.length > 0) virtualizer.scrollToIndex(timeline.length - 1, { align: "end" });
   };
@@ -8613,7 +8633,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         setUserScrolled(true);
       }
 
-      if (isNearBottom && scrolledDown) {
+      if (isNearBottom && scrolledDown && !isVirtualizerCorrectingRef.current) {
         setUserScrolled(false);
       }
 

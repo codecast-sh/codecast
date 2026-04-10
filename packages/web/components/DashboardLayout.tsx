@@ -174,18 +174,37 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
     const store = useInboxStore.getState();
     store.setPendingForkActivation(forkId);
     store.setActiveForkHighlight(forkId);
-    // Conversation pages now render inbox — use store update instead of URL navigation
-    store.setCurrentSession(parentId);
-    if (store.showMySessions) store.setShowMySessions(false);
-  }, []);
+    if (isOnConversationPage) {
+      // Navigate so both owner and non-owner views update
+      router.push(`/conversation/${parentId}`);
+    } else {
+      store.setCurrentSession(parentId);
+      if (store.showMySessions) store.setShowMySessions(false);
+    }
+  }, [router, isOnConversationPage]);
 
-  const sessionListActiveId = isOnInboxPage || isOnConversationPage
+  // On conversation pages, derive active ID from the URL so non-owner viewers
+  // (ViewerView) get correct sidebar highlighting — they don't set currentSessionId.
+  const conversationPageId = isOnConversationPage && pathname
+    ? pathname.replace('/conversation/', '').split(/[/?#]/)[0]
+    : null;
+
+  const sessionListActiveId = isOnInboxPage
     ? (s.viewingDismissedId ?? s.currentSessionId)
+    : isOnConversationPage
+    ? (conversationPageId ?? s.currentSessionId)
     : s.sidePanelSessionId;
 
-  // Conversation pages now render inbox for owners — use inbox-style selection
-  const sessionListOnSelect = isOnInboxPage || isOnConversationPage
+  // Conversation pages use URL navigation so both owner (QueuePageClient) and
+  // non-owner (ViewerView) views update correctly on sidebar clicks.
+  const handleConversationSessionSelect = useCallback((id: string) => {
+    router.push(`/conversation/${id}`);
+  }, [router]);
+
+  const sessionListOnSelect = isOnInboxPage
     ? handleInboxSessionSelect
+    : isOnConversationPage
+    ? handleConversationSessionSelect
     : s.selectPanelSession;
 
   useMountEffect(() => {

@@ -32,6 +32,12 @@ function dedupeProjectPaths(paths: string[]): string[] {
   return Array.from(byName.values());
 }
 
+/**
+ * Fetches docs into the store via offset-based pagination.
+ * Each page stays under the Convex 16MB read limit.
+ * Pages are drained eagerly so the store fills up fast.
+ * All filtering happens client-side.
+ */
 export function useSyncDocs(typeFilter?: string, searchQuery?: string, projectFilter?: string, scope?: string) {
   const workspaceArgs = useWorkspaceArgs();
   const result = useQuery(

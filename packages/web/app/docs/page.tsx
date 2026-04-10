@@ -158,22 +158,33 @@ export function DocListContent() {
     return [...set].sort();
   }, [docsList]);
 
+  // Source filtering applied before other filters.
+  // Default ("") shows ALL docs. "human" narrows to human-created only.
+  const sourceFilteredDocs = useMemo(() => {
+    if (sourceFilter === "human") return docsList.filter((d) => d.source === "human");
+    if (sourceFilter === "bot") return docsList.filter((d) => d.source !== "human");
+    return docsList; // Default: show everything
+  }, [docsList, sourceFilter]);
+
+  const hiddenAgentCount = useMemo(() => {
+    if (sourceFilter !== "human") return 0;
+    return docsList.filter((d) => d.source !== "human").length;
+  }, [docsList, sourceFilter]);
+
   const filteredDocs = useMemo(() => {
-    let list = docsList;
-    if (sourceFilter === "human") list = list.filter((d) => d.source === "human");
-    else if (sourceFilter === "bot") list = list.filter((d) => d.source !== "human");
+    let list = sourceFilteredDocs;
     if (labelFilter) list = list.filter((d) => d.labels?.includes(labelFilter));
     if (projectFilter) list = list.filter((d) => d.source_file?.startsWith(projectFilter));
     return list;
-  }, [docsList, sourceFilter, labelFilter, projectFilter]);
+  }, [sourceFilteredDocs, labelFilter, projectFilter]);
 
   const typeCounts = useMemo(() => {
     const counts: Record<string, number> = {};
-    for (const d of docsList) {
+    for (const d of sourceFilteredDocs) {
       counts[d.doc_type] = (counts[d.doc_type] || 0) + 1;
     }
     return counts;
-  }, [docsList]);
+  }, [sourceFilteredDocs]);
 
   const typeGroups = useMemo(() => {
     if (sortBy !== "type") return null;
@@ -273,6 +284,15 @@ export function DocListContent() {
         { value: "project", label: "Group by project" },
       ]}
       onSortChange={(sort) => setParam({ sort })}
+      listFooter={hiddenAgentCount > 0 ? (
+        <div className="px-6 py-2.5 border-t border-sol-border/15 flex items-center gap-2 text-xs text-sol-text-dim">
+          <Bot className="w-3.5 h-3.5 opacity-40" />
+          <span>{hiddenAgentCount} agent {hiddenAgentCount === 1 ? "item" : "items"} not shown</span>
+          <button onClick={() => setParam({ source: "all" })} className="text-sol-cyan hover:underline ml-0.5">
+            Show all
+          </button>
+        </div>
+      ) : undefined}
       headerExtra={
         <div className="flex items-center rounded-md border border-sol-border/40 overflow-hidden">
           <button

@@ -90,7 +90,26 @@ export function soundDismiss() {
 
 export function soundSend() {
   if (!isEnabled()) return;
-  play([
-    { freq: 880, start: 0, dur: 0.06, gain: 0.25, type: "sine" },
-  ], 0.03);
+  try {
+    const ac = getCtx();
+    const master = ac.createGain();
+    master.gain.value = 0.04;
+    master.connect(ac.destination);
+
+    // Quick upward sweep — gives a soft "fwip" send feel
+    const osc = ac.createOscillator();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(620, ac.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(1240, ac.currentTime + 0.07);
+
+    const env = ac.createGain();
+    env.gain.setValueAtTime(0, ac.currentTime);
+    env.gain.linearRampToValueAtTime(0.4, ac.currentTime + 0.01);
+    env.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + 0.1);
+
+    osc.connect(env);
+    env.connect(master);
+    osc.start(ac.currentTime);
+    osc.stop(ac.currentTime + 0.12);
+  } catch {}
 }

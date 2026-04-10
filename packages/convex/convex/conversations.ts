@@ -2984,6 +2984,7 @@ export const searchForCLI = query({
     user_only: v.optional(v.boolean()),
     team_id: v.optional(v.id("teams")),
     member_name: v.optional(v.string()),
+    mine_only: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
@@ -3044,7 +3045,9 @@ export const searchForCLI = query({
     }
 
     let filterUserId: string | null = null;
-    if (args.member_name) {
+    if (args.mine_only) {
+      filterUserId = authUserId.toString();
+    } else if (args.member_name) {
       const memberNameLower = args.member_name.toLowerCase();
       const matchingMember = teamUsers.find(u => {
         const name = u.name?.toLowerCase() || "";
@@ -3147,26 +3150,15 @@ export const searchForCLI = query({
         const cliFilter = cliFeedFilters.get(conv.team_id.toString());
         if (!cliFilter || !cliFilter.isVisible(conv)) continue;
         if (!teamUserIds.has(conv.user_id.toString())) continue;
+      } else if (resolvedTeamId) {
+        // Own sessions: filter by team when team is resolved from directory
+        const convTeamId = (conv.team_id ?? conv.active_team_id)?.toString();
+        if (!convTeamId || !effectiveTeamIdSet.has(convTeamId)) continue;
       }
 
-      // Filter by specific member if requested
+      // Filter by specific member (or self via --mine)
       if (filterUserId && conv.user_id.toString() !== filterUserId) {
         continue;
-      }
-
-      // Match sessions at or under the search path (not parent directories)
-      // Skip path filter for other team members since absolute paths differ per user
-      if (projectPath && !filterUserId) {
-        const convPath = conv.project_path || "";
-        const convGitRoot = conv.git_root || "";
-        // Match: exact path, or session is in a subdirectory of search path
-        const isPathMatch = convPath === projectPath ||
-          convPath.startsWith(projectPath + "/") ||
-          convGitRoot === projectPath ||
-          convGitRoot.startsWith(projectPath + "/");
-        if (!isPathMatch) {
-          continue;
-        }
       }
 
       if (startTime && conv.updated_at < startTime) continue;
@@ -4531,6 +4523,7 @@ export const feedForCLI = query({
     project_path: v.optional(v.string()),
     team_id: v.optional(v.id("teams")),
     member_name: v.optional(v.string()),
+    mine_only: v.optional(v.boolean()),
     live_only: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
@@ -4592,7 +4585,9 @@ export const feedForCLI = query({
     const effectiveTeamIdSet = new Set(effectiveTeamIds.map(id => id.toString()));
 
     let filterUserId: string | null = null;
-    if (args.member_name) {
+    if (args.mine_only) {
+      filterUserId = authUserId.toString();
+    } else if (args.member_name) {
       const memberNameLower = args.member_name.toLowerCase();
       const matchingMember = teamUsers.find(u => {
         const name = u.name?.toLowerCase() || "";
@@ -4656,21 +4651,13 @@ export const feedForCLI = query({
       );
       const validConvs = matchedConvs.filter((c): c is NonNullable<typeof c> => c !== null);
 
-      // Filter own conversations by project path if specified
+      // Filter own conversations by team when team is resolved
       queryMatchedOwnConversations = validConvs.filter(c => {
         if (c.user_id.toString() !== authUserId.toString()) return false;
-
-        // Apply project path filter for own conversations
-        if (projectPath) {
-          const convPath = c.project_path || "";
-          const convGitRoot = c.git_root || "";
-          const isPathMatch = convPath === projectPath ||
-            (convPath && convPath.startsWith(projectPath + "/")) ||
-            convGitRoot === projectPath ||
-            (convGitRoot && convGitRoot.startsWith(projectPath + "/"));
-          if (!isPathMatch) return false;
+        if (resolvedTeamId) {
+          const convTeamId = ((c as any).team_id ?? (c as any).active_team_id)?.toString();
+          if (!convTeamId || !effectiveTeamIdSet.has(convTeamId)) return false;
         }
-
         return true;
       });
 
@@ -4684,7 +4671,7 @@ export const feedForCLI = query({
 
     const fetchLimit = query
       ? Math.min(offset + limit + 20, 100)
-      : projectPath ? 200 : Math.min(offset + limit + 50, 200);
+      : Math.min(offset + limit + 50, 200);
     let ownConversations = await ctx.db
       .query("conversations")
       .withIndex("by_user_updated", (q) => q.eq("user_id", authUserId))
@@ -4700,7 +4687,7 @@ export const feedForCLI = query({
 
     // Include non-private team conversations whose team_id matches effective teams
     let teamConversations: typeof ownConversations = [];
-    if (effectiveTeamIds.length > 0) {
+    if (effectiveTeamIds.length > 0 && !args.mine_only) {
       const visibleTeamMembers = teamUsers.filter(u =>
         u._id.toString() !== authUserId.toString() &&
         (u.activity_visibility || "detailed") !== "hidden"
@@ -4736,39 +4723,10 @@ export const feedForCLI = query({
       .filter((c): c is typeof ownConversations[number] => {
         if (filterUserId && c.user_id.toString() !== filterUserId) return false;
 
-        // Path filter: when in a specific project, filter to same git repository
-        if (projectPath && !filterUserId) {
-          const convPath = c.project_path || "";
-          const convGitRoot = c.git_root || "";
-
-          if (isOwnConversation(c)) {
-            // Own conversations: match full path or git root
-            const isPathMatch = convPath === projectPath ||
-              (convPath && convPath.startsWith(projectPath + "/")) ||
-              convGitRoot === projectPath ||
-              (convGitRoot && convGitRoot.startsWith(projectPath + "/"));
-            if (!isPathMatch) return false;
-          } else {
-            // Team conversations: filter to same git repo (different home dirs, but same repo name)
-            // Extract repo name from paths like ~/src/codecast or /Users/jason/code/union-mobile/outreach
-            const getRepoName = (path: string) => {
-              const parts = path.split("/");
-              // Find the last meaningful directory (not ~ or empty)
-              for (let i = parts.length - 1; i >= 0; i--) {
-                if (parts[i] && parts[i] !== "~" && !parts[i].startsWith(".")) {
-                  return parts[i];
-                }
-              }
-              return "";
-            };
-
-            const projectRepo = getRepoName(projectPath);
-            const convRepo = getRepoName(convGitRoot || convPath);
-
-            if (!projectRepo || !convRepo || projectRepo !== convRepo) {
-              return false;
-            }
-          }
+        // Team filter: when team is resolved from directory, filter own sessions by team
+        if (resolvedTeamId && isOwnConversation(c)) {
+          const convTeamId = ((c as any).team_id ?? (c as any).active_team_id)?.toString();
+          if (!convTeamId || !effectiveTeamIdSet.has(convTeamId)) return false;
         }
         if (startTime && c.updated_at < startTime) return false;
         if (endTime && c.updated_at > endTime) return false;
