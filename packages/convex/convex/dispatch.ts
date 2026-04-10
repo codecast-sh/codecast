@@ -239,7 +239,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     const agentType = conv.agent_type === "codex" ? "codex" : conv.agent_type === "gemini" ? "gemini" : "claude";
     const pendingCommands = await ctx.db
       .query("daemon_commands")
-      .withIndex("by_user_pending", (q) => q.eq("user_id", userId).eq("executed_at", undefined))
+      .withIndex("by_user_pending", (q: any) => q.eq("user_id", userId).eq("executed_at", undefined))
       .collect();
     if (hasRecentPendingDaemonCommand(pendingCommands as any, {
       conversationId: convId,
