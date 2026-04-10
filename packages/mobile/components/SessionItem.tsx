@@ -181,19 +181,13 @@ export function SessionItem({ session, onPress, onPin, onLongPress }: { session:
 
       <RNView style={styles.conversationMeta}>
         {project && (
-          <RNText style={[styles.projectBadge, { color: projectColor(project), backgroundColor: projectColor(project) + '18' }]} numberOfLines={1}>{project}</RNText>
+          <RNText style={[styles.projectBadge, { color: projectColor(project), backgroundColor: projectColor(project) + '28' }]} numberOfLines={1}>{project}</RNText>
         )}
         {showAuthor && (
-          <>
-            {project && <RNText style={styles.metaSeparator}>·</RNText>}
-            <RNText style={styles.authorText}>{session.author_name}</RNText>
-          </>
+          <RNText style={styles.authorText}>{session.author_name}</RNText>
         )}
         {agent ? (
-          <>
-            {(project || showAuthor) && <RNText style={styles.metaSeparator}>·</RNText>}
-            <RNText style={[styles.agentBadge, { color: agentColor(session.agent_type ?? "") }]}>{agent}</RNText>
-          </>
+          <RNText style={[styles.agentBadge, { color: agentColor(session.agent_type ?? "") }]}>{agent}</RNText>
         ) : null}
       </RNView>
     </TouchableOpacity>
@@ -394,7 +388,8 @@ export const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     marginLeft: 15,
-    marginTop: 4,
+    marginTop: 2,
+    gap: 6,
   },
   authorText: {
     fontSize: 12,
