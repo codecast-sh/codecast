@@ -154,7 +154,7 @@ export function SessionItem({ session, onPress, onPin, onLongPress }: { session:
         </RNView>
         <RNView style={styles.rightMeta}>
           {sLabel && <RNText style={[styles.statusBadge, { color: sColor }]}>{sLabel}</RNText>}
-          <RNText style={styles.messageCount}>{session.message_count}</RNText>
+          {project && <RNText style={styles.projectBadge} numberOfLines={1}>{project}</RNText>}
         </RNView>
       </RNView>
 
@@ -179,24 +179,8 @@ export function SessionItem({ session, onPress, onPin, onLongPress }: { session:
           </>
         )}
         {agent ? (
-          <>
-            <RNText style={[styles.agentBadge, { color: agentColor(session.agent_type ?? "") }]}>{agent}</RNText>
-            <RNText style={styles.metaSeparator}>·</RNText>
-          </>
+          <RNText style={[styles.agentBadge, { color: agentColor(session.agent_type ?? "") }]}>{agent}</RNText>
         ) : null}
-        <RNText style={styles.metaText}>{formatRelativeTime(session.updated_at)}</RNText>
-        {durationMs > 60000 && (
-          <>
-            <RNText style={styles.metaSeparator}>·</RNText>
-            <RNText style={styles.metaText}>{formatDuration(durationMs)}</RNText>
-          </>
-        )}
-        {project && (
-          <>
-            <RNText style={styles.metaSeparator}>·</RNText>
-            <RNText style={styles.projectText} numberOfLines={1}>{project}</RNText>
-          </>
-        )}
       </RNView>
     </TouchableOpacity>
   );
@@ -351,6 +335,13 @@ export const styles = StyleSheet.create({
     fontWeight: '700',
     textTransform: 'uppercase',
     letterSpacing: 0.3,
+  },
+  projectBadge: {
+    fontSize: 11,
+    color: Theme.accent,
+    fontWeight: '600',
+    maxWidth: 120,
+    letterSpacing: 0.1,
   },
   messageCount: {
     fontSize: 11,
