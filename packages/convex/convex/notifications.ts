@@ -400,9 +400,10 @@ const ENTITY_TYPE_VALIDATOR = v.union(
 export const isWatching = query({
   args: {
     entity_type: ENTITY_TYPE_VALIDATOR,
-    entity_id: v.string(),
+    entity_id: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    if (!args.entity_id) return false;
     const userId = await getAuthUserId(ctx);
     if (!userId) return false;
     const sub = await ctx.db

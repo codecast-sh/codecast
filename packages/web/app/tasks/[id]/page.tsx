@@ -772,38 +772,6 @@ function TaskDetailContent() {
             </div>
           )}
 
-          {/* Linked Sessions */}
-          {data.linked_conversations && data.linked_conversations.length > 0 && (
-            <div className="mb-6">
-              <h2 className="text-xs font-medium text-sol-text-dim uppercase tracking-wide mb-2 flex items-center gap-1.5">
-                <Radio className="w-3.5 h-3.5" />
-                Sessions ({data.linked_conversations.length})
-                {data.linked_conversations.some((c: any) => c.is_active) && (
-                  <span className="ml-1 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 text-[10px]">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                    {data.linked_conversations.filter((c: any) => c.is_active).length} active
-                  </span>
-                )}
-              </h2>
-              <div className="space-y-1.5">
-                {[...data.linked_conversations]
-                  .sort((a: any, b: any) => {
-                    if (a.is_active && !b.is_active) return -1;
-                    if (!a.is_active && b.is_active) return 1;
-                    return (b.updated_at || 0) - (a.updated_at || 0);
-                  })
-                  .map((conv: any) => (
-                    <SessionCardInner
-                      key={conv._id}
-                      item={{ ...conv, conversation_id: conv._id, status: conv.is_active ? "active" : conv.status }}
-                      compact
-                      onNavigate={(id) => openSidePanel(id)}
-                    />
-                  ))}
-              </div>
-            </div>
-          )}
-
           {/* Related Docs */}
           {data.related_docs && data.related_docs.length > 0 && (
             <div className="mb-6">
@@ -928,6 +896,36 @@ function TaskDetailContent() {
           </div>
 
         </div>
+        {data.linked_conversations && data.linked_conversations.length > 0 && (
+          <div className="max-w-4xl mx-auto px-6 pb-4 w-full">
+            <h2 className="text-xs font-medium text-sol-text-dim uppercase tracking-wide mb-2 flex items-center gap-1.5">
+              <Radio className="w-3.5 h-3.5" />
+              Sessions ({data.linked_conversations.length})
+              {data.linked_conversations.some((c: any) => c.is_active) && (
+                <span className="ml-1 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 text-[10px]">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                  {data.linked_conversations.filter((c: any) => c.is_active).length} active
+                </span>
+              )}
+            </h2>
+            <div className="space-y-1.5">
+              {[...data.linked_conversations]
+                .sort((a: any, b: any) => {
+                  if (a.is_active && !b.is_active) return -1;
+                  if (!a.is_active && b.is_active) return 1;
+                  return (b.updated_at || 0) - (a.updated_at || 0);
+                })
+                .map((conv: any) => (
+                  <SessionCardInner
+                    key={conv._id}
+                    item={{ ...conv, conversation_id: conv._id, status: conv.is_active ? "active" : conv.status }}
+                    compact
+                    onNavigate={(id) => openSidePanel(id)}
+                  />
+                ))}
+            </div>
+          </div>
+        )}
         <ContextChatInput
           contextType="task"
           contextTitle={data.title}

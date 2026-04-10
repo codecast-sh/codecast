@@ -5,7 +5,7 @@ import { execSync } from "child_process";
 import pkg from "../package.json";
 
 const VERSION = pkg.version;
-const MEMORY_VERSION = "3";
+const MEMORY_VERSION = "4";
 const TASK_VERSION = "1";
 const WORK_VERSION = "5";
 const PLAN_VERSION = "2";

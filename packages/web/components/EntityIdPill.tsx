@@ -554,7 +554,7 @@ export function EntityIdPill({ shortId }: { shortId: string }) {
   const plan = useQuery(api.plans.webGet, isPlan ? { short_id: id } : "skip");
   const session = useQuery(
     api.conversations.webGet,
-    isSession ? (id.length <= 7 ? { short_id: id } : { id }) : "skip"
+    isSession ? { short_id: id.slice(0, 7) } : "skip"
   );
 
   const entity = isTask ? task : isPlan ? plan : session;

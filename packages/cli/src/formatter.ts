@@ -229,10 +229,7 @@ export function formatSearchResults(result: SearchResult, options: SearchOptions
 
   if (result.total_matches === 0) {
     lines.push("No matches found.");
-    if (options.projectPath) {
-      lines.push(`\nSearching: ${truncatePath(options.projectPath)}`);
-      lines.push("Use -g to search all sessions globally.");
-    }
+    lines.push("Use --mine for only your sessions, -g for all teams.");
     lines.push("</SEARCHRESULTS>");
     return lines.join("\n");
   }
@@ -248,7 +245,7 @@ export function formatSearchResults(result: SearchResult, options: SearchOptions
     const userDisplay = conv.user?.name || conv.user?.email;
     const meta = [
       `${c.cyan}${truncateId(conv.id)}${c.reset}`,
-      `${c.dim}${formatDate(conv.updated_at)}${c.reset}`,
+      `${c.dim}${formatRelativeTime(conv.updated_at)}${c.reset}`,
       `${c.dim}${conv.message_count} msgs${c.reset}`,
       truncatePath(conv.project_path) ? `${c.dim}${truncatePath(conv.project_path)}${c.reset}` : "",
       userDisplay ? `${c.yellow}${userDisplay}${c.reset}` : "",
@@ -273,11 +270,6 @@ export function formatSearchResults(result: SearchResult, options: SearchOptions
     lines.push("  cast read <id> <line>:<line>   # read message range");
     lines.push("  cast read <id>                 # read all messages");
     lines.push("  cast summary <id>              # get session summary");
-  }
-
-  if (options.projectPath) {
-    lines.push(`\nSearching: ${truncatePath(options.projectPath)}`);
-    lines.push("Use -g to search all sessions globally.");
   }
 
   lines.push("</SEARCHRESULTS>");
@@ -640,9 +632,7 @@ export function formatListResults(result: ListResult, options: ListOptions = {})
 
   if (result.conversations.length === 0) {
     lines.push("No sessions found.");
-    if (options.projectPath) {
-      lines.push(`Use -g to view all sessions globally.`);
-    }
+    lines.push("Use --mine for only your sessions, -g for all teams.");
     return lines.join("\n");
   }
 
@@ -690,10 +680,7 @@ export function formatFeedResults(result: FeedResult, options: FeedOptions = {})
 
   if (result.conversations.length === 0) {
     lines.push("No conversations found.");
-    if (options.projectPath) {
-      lines.push(`\nScope: ${truncatePath(options.projectPath)}`);
-      lines.push("Use -g to view all sessions globally.");
-    }
+    lines.push("Use --mine for only your sessions, -g for all teams.");
     lines.push("</FEED>");
     return lines.join("\n");
   }
@@ -707,11 +694,11 @@ export function formatFeedResults(result: FeedResult, options: FeedOptions = {})
     lines.push(header + padding);
 
     const userDisplay = conv.user?.name || conv.user?.email;
-    const liveLabel = conv.is_live ? `${c.green}LIVE ${conv.agent_status || "active"}${c.reset}` : "";
+    const liveLabel = conv.is_live ? `${c.green}[LIVE${conv.agent_status ? " " + conv.agent_status : ""}]${c.reset}` : "";
     const meta = [
       truncateId(conv.id),
       liveLabel,
-      formatDate(conv.updated_at),
+      formatRelativeTime(conv.updated_at),
       `${conv.message_count} msgs`,
       truncatePath(conv.project_path),
       userDisplay ? `${c.yellow}${userDisplay}${c.reset}` : "",
@@ -738,10 +725,6 @@ export function formatFeedResults(result: FeedResult, options: FeedOptions = {})
     lines.push(`Use: cast read ${firstId} <range>        # read messages by line range`);
     lines.push(`     cast read ${firstId} <line> --full   # expand tool calls for a message`);
     lines.push(`     cast feed -p ${page + 1}                  # next page`);
-  }
-
-  if (options.projectPath) {
-    lines.push(`\nScope: ${truncatePath(options.projectPath)}`);
   }
 
   lines.push("</FEED>");

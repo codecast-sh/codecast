@@ -38,6 +38,6 @@ export function remarkEntityIds() {
           children: [{ type: "text", value: match.toLowerCase() }],
         }),
       ],
-    ]);
+    ], { ignore: ['link'] });
   };
 }

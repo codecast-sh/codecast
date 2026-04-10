@@ -67,6 +67,49 @@ function truncatePath(p: string | null, maxLen: number = 38): string {
  * 2. If Claude has --resume flag, extract session ID from it
  * 3. Otherwise, find session file matching Claude's start time
  */
+const UUID_JSONL_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jsonl$/;
+
+/** Read just the first line of a file without loading the whole thing. */
+function readFirstLine(filePath: string): string | null {
+  let fd: number | null = null;
+  try {
+    fd = fs.openSync(filePath, "r");
+    const buf = Buffer.alloc(4096);
+    const bytesRead = fs.readSync(fd, buf, 0, 4096, 0);
+    if (bytesRead === 0) return null;
+    const text = buf.toString("utf-8", 0, bytesRead);
+    return text.split("\n")[0] || null;
+  } catch {
+    return null;
+  } finally {
+    if (fd !== null) try { fs.closeSync(fd); } catch {}
+  }
+}
+
+/**
+ * Get the N most recent session files in a directory, sorted by mtime descending.
+ * Uses `ls -t` for a single-syscall sort instead of stat'ing every file individually.
+ */
+function getRecentSessionFiles(sessionsDir: string, limit: number): Array<{ name: string; path: string; mtime: number }> {
+  try {
+    const output = execSync(`ls -t "${sessionsDir}"`, { encoding: "utf-8", stdio: ["pipe", "pipe", "ignore"] });
+    const files: Array<{ name: string; path: string; mtime: number }> = [];
+    for (const f of output.split("\n")) {
+      if (!UUID_JSONL_PATTERN.test(f)) continue;
+      const filePath = path.join(sessionsDir, f);
+      try {
+        files.push({ name: f, path: filePath, mtime: fs.statSync(filePath).mtime.getTime() });
+      } catch {
+        // File deleted between ls and stat — skip
+      }
+      if (files.length >= limit) break;
+    }
+    return files;
+  } catch {
+    return [];
+  }
+}
+
 function findCurrentSessionFromProcess(projectRoot: string): string | null {
   const debug = !!process.env.DEBUG;
   try {
@@ -143,39 +186,30 @@ function findCurrentSessionFromProcess(projectRoot: string): string | null {
       return null;
     }
 
-    const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jsonl$/;
-    const sessionFiles = fs.readdirSync(sessionsDir)
-      .filter(f => uuidPattern.test(f))
-      .map(f => {
-        const filePath = path.join(sessionsDir, f);
-        const stats = fs.statSync(filePath);
-        // Read first line to get session start timestamp
-        let firstTimestamp: number | null = null;
+    // Only check the 50 most recent files — the target session was just created
+    const recentFiles = getRecentSessionFiles(sessionsDir, 50);
+    const sessionFiles = recentFiles.map(f => {
+      let firstTimestamp: number | null = null;
+      const firstLine = readFirstLine(f.path);
+      if (firstLine) {
         try {
-          const content = fs.readFileSync(filePath, "utf-8");
-          const firstLine = content.split("\n")[0];
-          if (firstLine) {
-            const entry = JSON.parse(firstLine);
-            // Try various timestamp formats
-            if (entry.timestamp && typeof entry.timestamp === "number") {
-              firstTimestamp = entry.timestamp;
-            } else if (entry.snapshot?.timestamp) {
-              firstTimestamp = new Date(entry.snapshot.timestamp).getTime();
-            }
+          const entry = JSON.parse(firstLine);
+          if (entry.timestamp && typeof entry.timestamp === "number") {
+            firstTimestamp = entry.timestamp;
+          } else if (entry.snapshot?.timestamp) {
+            firstTimestamp = new Date(entry.snapshot.timestamp).getTime();
           }
-        } catch {
-          // Use birthtime as fallback
-        }
-        // Always fallback to birthtime if we couldn't parse timestamp
-        if (!firstTimestamp) {
-          firstTimestamp = stats.birthtime.getTime();
-        }
-        return {
-          id: path.basename(f, ".jsonl"),
-          firstTimestamp,
-          birthtime: stats.birthtime.getTime(),
-        };
-      });
+        } catch {}
+      }
+      let birthtime: number;
+      try {
+        birthtime = fs.statSync(f.path).birthtime.getTime();
+      } catch {
+        birthtime = f.mtime;
+      }
+      if (!firstTimestamp) firstTimestamp = birthtime;
+      return { id: path.basename(f.name, ".jsonl"), firstTimestamp, birthtime };
+    });
 
     // Find session that started closest to (and just after) Claude process start
     // Allow 30 second window for process startup
@@ -243,15 +277,7 @@ function detectCurrentSessionId(): string | null {
 
     const now = Date.now();
     const ACTIVE_THRESHOLD = 5 * 60 * 1000;
-    const files = fs.readdirSync(sessionsDir)
-      .filter(f => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jsonl$/.test(f))
-      .map(f => ({
-        name: f,
-        path: path.join(sessionsDir, f),
-        mtime: fs.statSync(path.join(sessionsDir, f)).mtime.getTime()
-      }))
-      .sort((a, b) => b.mtime - a.mtime);
-
+    const files = getRecentSessionFiles(sessionsDir, 50);
     if (files.length === 0) return null;
 
     const activeSessions = files.filter(f => now - f.mtime < ACTIVE_THRESHOLD);
@@ -1816,10 +1842,14 @@ const MEMORY_SNIPPET = `
 You are one session among many. Past conversations contain valuable context about decisions, patterns, and prior work. Search proactively and liberally - when starting tasks, debugging issues, or when the user references previous work. Parallelize searches when exploring multiple topics.
 
 \`\`\`bash
-# Search & Browse
-cast search "auth"                # search current project
-cast search "bug" -g -s 7d        # global, last 7 days
-cast feed                         # browse recent conversations
+# Search & Browse (default: team scope from current directory)
+cast search "auth"                # team-wide search
+cast search "auth" --mine         # only my sessions
+cast search "auth" -m samvit      # specific member
+cast search "auth" -g -s 7d       # all teams, last 7 days
+cast feed                         # team feed
+cast feed --mine                  # only my sessions
+cast feed -m samvit               # specific member
 cast read <id> 15:25              # read messages 15-25
 
 # Analysis
@@ -1836,7 +1866,7 @@ cast decisions list               # view architectural decisions
 cast decisions add "title" --reason "why"
 \`\`\`
 
-Common options: -g (global), -s/-e (start/end: 7d, 2w, yesterday), -p (page), -n (limit)
+Common options: --mine (just me), -m <name> (member), -g (all teams), -s/-e (time range), -p (page), -n (limit)
 ${MEMORY_SNIPPET_END}
 `;
 
@@ -3963,20 +3993,24 @@ program
   .command("search")
   .description(
     "Search conversation history for context\n\n" +
-    "By default uses hybrid search (keyword + semantic).\n" +
+    "By default searches all visible sessions in the team for this directory.\n" +
     "Quotes matter: \"error handling\" matches exact phrase, error handling matches both words anywhere.\n" +
-    "Use -g to search all sessions globally.\n" +
+    "Use --mine to search only your own sessions.\n" +
+    "Use -m <name> to filter by a specific team member.\n" +
+    "Use -g to search across all teams.\n" +
     "Use -u to search only user messages.\n" +
     "Use --keyword for keyword-only, --semantic for semantic-only.\n\n" +
     "Time formats: 2024-01-15, yesterday, 7d, 2w, 24h\n\n" +
     "Examples:\n" +
-    "  cast search auth                 # word match\n" +
-    "  cast search \"error handling\"    # exact phrase match\n" +
-    "  cast search auth -g -s 7d        # global, last 7 days"
+    "  cast search auth                 # team-wide search\n" +
+    "  cast search auth --mine          # only my sessions\n" +
+    "  cast search auth -m samvit       # specific member\n" +
+    "  cast search auth -g -s 7d        # all teams, last 7 days"
   )
   .argument("<query>", "Search query (min 2 characters)")
   .option("-u, --user-only", "Search only user messages (excludes assistant responses)")
-  .option("-g, --global", "Search all sessions (not just current project)")
+  .option("-g, --global", "Search all sessions (not just current team)")
+  .option("--mine", "Show only my sessions")
   .option("-m, --member <name>", "Filter by team member name or email")
   .option("--keyword", "Use keyword-only search (no semantic matching)")
   .option("--semantic", "Use semantic-only search (no keyword matching)")
@@ -4050,6 +4084,7 @@ program
           user_only: userOnly,
           mode,
           member_name: options.member,
+          mine_only: options.mine || undefined,
         }),
       });
 
@@ -4072,18 +4107,21 @@ program
   .command("feed")
   .description(
     "Browse recent conversations like a feed\n\n" +
-    "By default, shows sessions from the current project.\n" +
-    "Use -g to view all sessions globally.\n" +
-    "Use -q to filter by keyword while keeping recency order.\n\n" +
+    "By default, shows all visible sessions in the team for this directory.\n" +
+    "Use --mine to show only your own sessions.\n" +
+    "Use -m <name> to filter by a specific team member.\n" +
+    "Use -g to view sessions across all teams.\n\n" +
     "Time formats: 2024-01-15, yesterday, 7d, 2w, 24h\n\n" +
     "Examples:\n" +
-    "  cast feed                    # recent sessions\n" +
-    "  cast feed -g                 # all projects globally\n" +
+    "  cast feed                    # team feed\n" +
+    "  cast feed --mine             # only my sessions\n" +
+    "  cast feed -m samvit          # specific member\n" +
+    "  cast feed -g                 # all teams\n" +
     "  cast feed -s 7d              # last 7 days\n" +
-    "  cast feed -q auth            # recent sessions mentioning 'auth'\n" +
-    "  cast feed -p 2               # page 2 (skip first 10)"
+    "  cast feed -q auth            # filter by keyword"
   )
-  .option("-g, --global", "Show all sessions (not just current project)")
+  .option("-g, --global", "Show all sessions (not just current team)")
+  .option("--mine", "Show only my sessions")
   .option("-q, --query <text>", "Filter by keyword (keeps recency order)")
   .option("-m, --member <name>", "Filter by team member name or email")
   .option("-n, --limit <n>", "Number of conversations per page", "10")
@@ -4135,6 +4173,7 @@ program
           query: options.query,
           project_path: projectPath,
           member_name: options.member,
+          mine_only: options.mine || undefined,
           ...(options.live ? { live_only: true } : {}),
         }),
       });
@@ -4159,12 +4198,15 @@ program
   .description(
     "Chronological list of sessions with title, summary, and link\n\n" +
     "Examples:\n" +
-    "  cast list                    # recent sessions\n" +
-    "  cast list -g                 # all projects\n" +
-    "  cast list -n 20              # show 20 sessions\n" +
+    "  cast list                    # team sessions\n" +
+    "  cast list --mine             # only my sessions\n" +
+    "  cast list -m samvit          # specific member\n" +
+    "  cast list -g                 # all teams\n" +
     "  cast list -s 7d              # last 7 days"
   )
-  .option("-g, --global", "Show all sessions (not just current project)")
+  .option("-g, --global", "Show all sessions (not just current team)")
+  .option("--mine", "Show only my sessions")
+  .option("-m, --member <name>", "Filter by team member name or email")
   .option("-n, --limit <n>", "Number of sessions to show", "10")
   .option("-p, --page <n>", "Page number", "1")
   .option("-s, --start <date>", "Start date/time (e.g., 7d, 2w, yesterday)")
@@ -4211,6 +4253,8 @@ program
           start_time: startTime,
           end_time: endTime,
           project_path: projectPath,
+          member_name: options.member,
+          mine_only: options.mine || undefined,
         }),
       });
 
@@ -6097,14 +6141,8 @@ program
       const now = Date.now();
       const ACTIVE_THRESHOLD = 5 * 60 * 1000; // 5 minutes
 
-      const files = fs.readdirSync(sessionsDir)
-        .filter(f => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jsonl$/.test(f))
-        .map(f => ({
-          name: f,
-          path: path.join(sessionsDir, f),
-          mtime: fs.statSync(path.join(sessionsDir, f)).mtime.getTime()
-        }))
-        .sort((a, b) => b.mtime - a.mtime);
+      // Only check the 50 most recent files (already sorted by mtime desc)
+      const files = getRecentSessionFiles(sessionsDir, 50);
 
       if (files.length === 0) {
         console.error("No session files found for current project");
@@ -7339,10 +7377,7 @@ program
         const sessionsDir = path.join(process.env.HOME || "", ".claude", "projects", projectDir);
         if (fs.existsSync(sessionsDir)) {
           const now = Date.now();
-          const files = fs.readdirSync(sessionsDir)
-            .filter(f => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jsonl$/.test(f))
-            .map(f => ({ name: f, mtime: fs.statSync(path.join(sessionsDir, f)).mtime.getTime() }))
-            .sort((a, b) => b.mtime - a.mtime);
+          const files = getRecentSessionFiles(sessionsDir, 50);
           const active = files.filter(f => now - f.mtime < 5 * 60 * 1000);
           if (active.length >= 1) {
             sessionId = path.basename(active[0].name, ".jsonl");
@@ -7955,7 +7990,9 @@ program
   .argument("[query]", "Search query describing the work")
   .option("-f, --file <path>", "Find sessions that touched this file")
   .option("-a, --auto", "Infer context from git diff and status")
-  .option("-g, --global", "Search all sessions (not just current project)")
+  .option("-g, --global", "Search all sessions (not just current team)")
+  .option("--mine", "Show only my sessions")
+  .option("-m, --member <name>", "Filter by team member name or email")
   .option("-n, --limit <n>", "Maximum results", "10")
   .action(async (query, options) => {
     const config = readConfig();
@@ -8049,6 +8086,8 @@ program
             limit: limit,
             offset: 0,
             project_path: projectPath,
+            member_name: options.member,
+            mine_only: options.mine || undefined,
           }),
         });
 

@@ -4,7 +4,7 @@ import { Id } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
 import { verifyApiToken } from "./apiTokens";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { createDataContext, scopeByProject, scopedFetch } from "./data";
+import { createDataContext, scopedFetch } from "./data";
 import { resolveTeamForPath } from "./privacy";
 
 function generatePlanShortId(): string {
@@ -64,14 +64,6 @@ function docRepoName(d: any, convMap: Map<string, any>): string {
   return d.project_path ? repoName(d.project_path) : "";
 }
 
-function encodeOffsetCursor(offset: number): string {
-  return String(offset);
-}
-
-function decodeOffsetCursor(cursor: string | null): number {
-  const parsed = Number.parseInt(cursor || "0", 10);
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
-}
 
 function isNoiseDocForWeb(d: any): boolean {
   const CONFIG_DOC_NAMES = new Set(["README", "AGENTS", "CLAUDE", "CLAUDE.md", "AGENTS.md", "README.md"]);
@@ -96,13 +88,12 @@ async function buildWebDocList(
     team_id?: Id<"teams">;
     workspace?: "personal" | "team";
   },
-  requestedCount: number
+  _requestedCount?: number
 ) {
   const userId = await getAuthUserId(ctx);
   if (!userId) return { docs: [], projectPaths: [] };
 
   const user = await ctx.db.get(userId);
-  const desiredCount = Math.max(requestedCount, 1);
   const resolvedTeamId = args.workspace === "team" && args.team_id
     ? args.team_id
     : !args.workspace ? user?.active_team_id : undefined;
@@ -110,15 +101,13 @@ async function buildWebDocList(
     ? "personal" as const
     : args.workspace;
 
-  // Cap fetch to avoid Convex read byte limit — docs carry large content fields.
-  // Keep minimum low to avoid "Too many bytes" errors on accounts with large docs.
-  const fetchLimit = Math.min(Math.max(desiredCount, 25), 100);
-
+  // Fetch ALL docs — no per-index cap. Content/embedding fields are stripped
+  // before return so the response stays small. The Convex 16MB read limit
+  // applies to raw DB reads; most teams stay well under with .collect().
   const { records: rawDocs, convMap } = await scopedFetch(ctx, "docs", {
     userId,
     teamId: resolvedTeamId,
     workspace: effectiveWorkspace,
-    limit: fetchLimit,
   });
 
   let docs: any[];
@@ -141,10 +130,7 @@ async function buildWebDocList(
     docs = rawDocs;
   }
 
-  if (args.doc_type) {
-    docs = docs.filter((d) => d.doc_type === args.doc_type);
-  }
-
+  // No server-side doc_type filter — all filtering is client-side.
   docs = docs.filter((d) => !d.archived_at && !isNoiseDocForWeb(d) && d.source !== "plan_mode");
 
   if (!projectPaths.length) {
@@ -337,7 +323,9 @@ export const create = mutation({
       if (conv) {
         conversation_id = conv._id;
         if (!team_id) {
-          team_id = (!conv.is_private || conv.auto_shared) ? conv.team_id : undefined;
+          const shared = !conv.is_private || conv.auto_shared
+            || (conv.team_visibility && conv.team_visibility !== "private");
+          team_id = shared ? conv.team_id : undefined;
         }
       }
     }
@@ -688,11 +676,21 @@ export const webList = query({
     workspace: v.optional(v.union(v.literal("personal"), v.literal("team"))),
   },
   handler: async (ctx, args) => {
-    const queryLimit = args.limit || 100;
-    const { docs, projectPaths } = await buildWebDocList(ctx, args, queryLimit);
-    return { docs: docs.slice(0, queryLimit), projectPaths };
+    // Return ALL docs — no slicing. Client-side filtering handles the rest.
+    const fetchCount = args.limit || 10000;
+    const { docs, projectPaths } = await buildWebDocList(ctx, args, fetchCount);
+    return { docs, projectPaths };
   },
 });
+
+function encodeOffsetCursor(offset: number): string {
+  return String(offset);
+}
+
+function decodeOffsetCursor(cursor: string | null): number {
+  const parsed = Number.parseInt(cursor || "0", 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+}
 
 export const webListPaginated = query({
   args: {
@@ -813,7 +811,11 @@ export const webSearch = query({
     const resolveTeam = (d: any) => {
       const cid = d.conversation_id || (d.related_conversation_ids?.[0]);
       const conv = cid ? convMap.get(String(cid)) : undefined;
-      if (conv) return (!conv.is_private || conv.auto_shared) ? conv.team_id : undefined;
+      if (conv) {
+        if (!conv.is_private || conv.auto_shared) return conv.team_id;
+        if (conv.team_visibility && conv.team_visibility !== "private") return conv.team_id;
+        return undefined;
+      }
       return d.team_id;
     };
 

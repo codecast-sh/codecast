@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { useSyncExternalStore, useRef } from "react";
 import { mutativeMiddleware, action, asyncAction, sync } from "./mutativeMiddleware";
 import { applySyncTable, type PendingEntry } from "./syncProtocol";
-import { soundDismiss } from "../lib/sounds";
+import { soundDismiss, soundKill } from "../lib/sounds";
 import { loadCache, writePatchesToIDB, setHydrating, loadConversationMessages, writeConversationMessages } from "./idbCache";
 
 export type { PendingEntry } from "./syncProtocol";
@@ -252,6 +252,10 @@ export type DocViewPrefs = {
   scope?: string;
 };
 
+export type PlanViewPrefs = {
+  source?: string;
+};
+
 export type ClientUI = {
   theme?: "light" | "dark";
   sidebar_collapsed?: boolean;
@@ -265,6 +269,9 @@ export type ClientUI = {
   sounds_enabled?: boolean;
   task_view?: TaskViewPrefs;
   doc_view?: DocViewPrefs;
+  plan_view?: PlanViewPrefs;
+  show_subagents?: boolean;
+  show_old_sessions?: boolean;
 };
 
 export type ClientLayouts = {
@@ -463,8 +470,6 @@ interface InboxStoreState {
   pendingHighlightQuery: string | null;
   showMySessions: boolean;
   setShowMySessions: (show: boolean) => void;
-  showAllSessions: boolean;
-  toggleShowAllSessions: () => void;
   hiddenSessionCount: number;
   _lastViewedAt: Record<string, number>;
 
@@ -516,7 +521,7 @@ interface InboxStoreState {
   _dispatch: (action: string, args: any, patches?: any) => Promise<any>;
 
   // -- Wrapped actions (middleware creates aliases from do_* -> *) --
-  stashSession: (id: string) => void;
+  stashSession: (id: string, opts?: { kill?: boolean }) => void;
   unstashSession: (id: string) => void;
   deferSession: (id: string) => void;
   pinSession: (id: string) => void;
@@ -875,8 +880,6 @@ export const useInboxStore = create<InboxStoreState>(
   pendingHighlightQuery: null,
   showMySessions: false,
   setShowMySessions: (show: boolean) => set({ showMySessions: show }),
-  showAllSessions: true,
-  toggleShowAllSessions: () => set({ showAllSessions: !get().showAllSessions }),
   hiddenSessionCount: 0,
   _lastViewedAt: {},
 
@@ -961,8 +964,8 @@ export const useInboxStore = create<InboxStoreState>(
   // ACTIONS (wrapped by middleware: mutative draft + server dispatch)
   // =====================
 
-  stashSession: action(function (this: Draft, id: string) {
-    soundDismiss();
+  stashSession: action(function (this: Draft, id: string, opts?: { kill?: boolean }) {
+    (opts?.kill ? soundKill : soundDismiss)();
     const now = Date.now();
     const sessionValues = Object.values(this.sessions) as InboxSession[];
     const childIds = sessionValues
