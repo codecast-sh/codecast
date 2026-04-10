@@ -1,5 +1,6 @@
 "use client";
 import { useState, useCallback, useRef } from "react";
+import { copyToClipboard } from "../../../lib/utils";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { useParams, useRouter } from "next/navigation";
 import { useMutation, useQuery } from "convex/react";
@@ -50,8 +51,6 @@ import {
   ImagePlus,
   MessageSquare,
   X,
-  Check,
-  Copy,
   ExternalLink,
 } from "lucide-react";
 
@@ -99,26 +98,6 @@ function TimeAgo({ ts, className }: { ts: number; className?: string }) {
     <span className={className} title={formatDateFull(ts)}>
       {formatRelative(ts)}
     </span>
-  );
-}
-
-function CopyButton({ text, label, showLabel, className }: { text: string; label?: string; showLabel?: boolean; className?: string }) {
-  const [copied, setCopied] = useState(false);
-  const handleCopy = useCallback(() => {
-    navigator.clipboard.writeText(text);
-    setCopied(true);
-    toast.success(label ? `${label} copied` : "Copied to clipboard");
-    setTimeout(() => setCopied(false), 2000);
-  }, [text, label]);
-  return (
-    <button
-      onClick={handleCopy}
-      className={className || "p-1 rounded-md text-sol-text-dim hover:text-sol-cyan hover:bg-sol-bg-alt transition-colors"}
-      title={label ? `Copy ${label}` : "Copy"}
-    >
-      {copied ? <Check className="w-3.5 h-3.5 text-sol-green" /> : <Copy className="w-3.5 h-3.5" />}
-      {showLabel && <span>{copied ? "Copied" : label || "Copy"}</span>}
-    </button>
   );
 }
 
@@ -609,12 +588,15 @@ function TaskDetailContent() {
               Tasks
             </Link>
             <div className="flex items-center gap-1">
-              <CopyButton
-                text={typeof window !== "undefined" ? window.location.href : `/tasks/${id}`}
-                label="Share"
-                showLabel
-                className="flex items-center gap-1.5 px-2 py-1 rounded-md text-xs text-sol-text-dim hover:text-sol-cyan hover:bg-sol-bg-alt transition-colors"
-              />
+              <button
+                onClick={() => { copyToClipboard(typeof window !== "undefined" ? window.location.href : `/tasks/${id}`).then(() => toast.success("Link copied")).catch(() => toast.error("Failed to copy")); }}
+                className="p-1 rounded-md text-sol-text-dim hover:text-sol-cyan hover:bg-sol-bg-alt transition-colors"
+                title="Copy link"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+                </svg>
+              </button>
               <button
                 onClick={() => router.push("/tasks")}
                 className="p-1 rounded-md text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt transition-colors"
@@ -632,7 +614,7 @@ function TaskDetailContent() {
               <div className="flex items-center gap-2 text-xs text-sol-text-dim mb-1.5">
                 <button
                   onClick={() => {
-                    navigator.clipboard.writeText(data.short_id);
+                    copyToClipboard(data.short_id);
                     toast.success("Task ID copied");
                   }}
                   className="font-mono px-1.5 py-0.5 rounded bg-sol-bg-alt border border-sol-border/30 hover:border-sol-cyan/40 hover:text-sol-cyan transition-colors cursor-copy"

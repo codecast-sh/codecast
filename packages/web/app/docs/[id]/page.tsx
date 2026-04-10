@@ -5,7 +5,7 @@ import { useInboxStore, DocDetail } from "../../../store/inboxStore";
 import { useSyncDocDetail } from "../../../hooks/useSyncDocs";
 import { DetailSplitLayout } from "../../../components/DetailSplitLayout";
 import { DocListContent } from "../page";
-import { shareOrigin } from "../../../lib/utils";
+import { shareOrigin, copyToClipboard } from "../../../lib/utils";
 import { useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { DocumentDetailLayout } from "../../../components/DocumentDetailLayout";
@@ -157,7 +157,7 @@ function DocDetailContent() {
     try {
       const result = await generateShareLink({ id: data._id as any });
       const url = `${shareOrigin()}/share/doc/${result.share_token}`;
-      await navigator.clipboard.writeText(url);
+      await copyToClipboard(url);
       setShareCopied(true);
       toast.success("Share link copied to clipboard");
       setTimeout(() => setShareCopied(false), 2000);
