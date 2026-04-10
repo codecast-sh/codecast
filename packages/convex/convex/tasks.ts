@@ -1704,6 +1704,24 @@ export const backfillTriageStatus = mutation({
   },
 });
 
+// Backfill: reset all insight-sourced tasks to triage_status "suggested"
+// so they appear in the triage lightbulb, not the main "All" list.
+export const backfillInsightTriageStatus = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const tasks = await ctx.db.query("tasks").collect();
+    let updated = 0;
+    for (const t of tasks) {
+      if (t.source !== "insight") continue;
+      if ((t as any).triage_status === "suggested") continue;
+      if ((t as any).triage_status === "dismissed") continue;
+      await ctx.db.patch(t._id, { triage_status: "suggested" as any, promoted: false });
+      updated++;
+    }
+    return { updated, total: tasks.length };
+  },
+});
+
 export const batchUpdateStatus = mutation({
   args: {
     api_token: v.string(),
