@@ -13,6 +13,7 @@ import {
 } from '@/components/SessionItem';
 import { useInboxStore, type InboxSession, categorizeSessions } from '@codecast/web/store/inboxStore';
 import { useSyncInboxSessions } from '@/hooks/useSyncInboxSessions';
+import { SessionListSkeleton } from '@/components/SkeletonLoader';
 import { useQuery } from 'convex/react';
 
 function DismissedItem({ session, onPress }: { session: SessionData; onPress: () => void }) {
@@ -345,6 +346,11 @@ export default function InboxScreen() {
     stashSession(conversationId);
   }, [stashSession]);
 
+  const handleDefer = useCallback((conversationId: string) => {
+    deferSession(conversationId);
+  }, [deferSession]);
+
+
   const handleUndismiss = useCallback((conversationId: string) => {
     unstashSession(conversationId);
   }, [unstashSession]);
@@ -425,7 +431,10 @@ export default function InboxScreen() {
 
   const listData = useMemo(() => {
     const sections: React.ReactNode[] = [];
-    if (activeSessions.length === 0 && Object.keys(sessions).length > 0) {
+    if (Object.keys(sessions).length === 0) {
+      return [<SessionListSkeleton key="skeleton" />];
+    }
+    if (activeSessions.length === 0) {
       return [(
         <RNView key="empty" style={styles.emptyInbox}>
           <FontAwesome name="inbox" size={32} color={Theme.textMuted0} />

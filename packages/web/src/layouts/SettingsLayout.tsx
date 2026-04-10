@@ -5,7 +5,7 @@ import { DashboardLayout } from "@/components/DashboardLayout";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { Button } from "@/components/ui/button";
 import {
-  Terminal, Bot, RefreshCw, User, KeyRound, Users, Plug, Monitor,
+  Terminal, Bot, RefreshCw, User, KeyRound, Users, Plug, Monitor, Bell,
 } from "lucide-react";
 import { useIsDesktop } from "@/lib/desktop";
 
@@ -15,6 +15,7 @@ const baseTabs = [
   { name: "Sync & Privacy", path: "/settings/sync", icon: RefreshCw },
   { name: "General", path: "/settings/profile", icon: User },
   { name: "Accounts", path: "/settings/accounts", icon: KeyRound },
+  { name: "Notifications", path: "/settings/notifications", icon: Bell },
   { name: "Team", path: "/settings/team", icon: Users },
   { name: "Integrations", path: "/settings/integrations/github-app", icon: Plug },
 ];

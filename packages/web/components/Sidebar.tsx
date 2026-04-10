@@ -6,17 +6,12 @@ import { toast } from "sonner";
 import { useQuery, useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
-import { cleanTitle } from "../lib/conversationProcessor";
+import { cleanTitle, msgCountColor } from "../lib/conversationProcessor";
 import { shouldShowSession } from "../lib/sessionFilters";
 import { useInboxStore, categorizeSessions } from "../store/inboxStore";
 import { useConvexSync } from "../hooks/useConvexSync";
 import { useCurrentUser } from "../hooks/useCurrentUser";
-import { TeamIcon, IconColorPicker, getSessionIconDefaults, type TeamIconName, type TeamColorName } from "./TeamIcon";
-import {
-  DropdownMenu,
-  DropdownMenuTrigger,
-  DropdownMenuContent,
-} from "./ui/dropdown-menu";
+import { TeamIcon } from "./TeamIcon";
 import { isDesktop } from "../lib/desktop";
 import { CreateTaskModal } from "./CreateTaskModal";
 import { CreateDocModal } from "./CreateDocModal";
@@ -59,20 +54,6 @@ function DroppableSessionRow({ conv, onMobileClose }: { conv: any; onMobileClose
   const dragCounter = useRef(0);
   const generateUploadUrl = useMutation(api.images.generateUploadUrl);
   const sendMessage = useMutation(api.pendingMessages.sendMessageToSession);
-  const setConversationIcon = useMutation(api.conversations.setConversationIcon);
-  const defaults = getSessionIconDefaults(conv._id);
-  const effectiveIcon = (conv.icon || defaults.icon) as TeamIconName;
-  const effectiveColor = (conv.icon_color || defaults.color) as TeamColorName;
-
-  const handleIconChange = useCallback(async (icon: string) => {
-    try { await setConversationIcon({ conversation_id: conv._id, icon }); }
-    catch { toast.error("Failed to update icon"); }
-  }, [conv._id, setConversationIcon]);
-
-  const handleColorChange = useCallback(async (color: string) => {
-    try { await setConversationIcon({ conversation_id: conv._id, icon_color: color }); }
-    catch { toast.error("Failed to update color"); }
-  }, [conv._id, setConversationIcon]);
 
   const handleDragEnter = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -132,14 +113,6 @@ function DroppableSessionRow({ conv, onMobileClose }: { conv: any; onMobileClose
           : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50"
       } ${isDragOver ? "ring-1 ring-sol-cyan bg-sol-cyan/10" : ""}`}
     >
-      <TeamIcon
-        icon={effectiveIcon}
-        color={effectiveColor}
-        className={`w-3.5 h-3.5 flex-shrink-0 ${
-          conv.is_subagent || conv.parent_conversation_id || conv.worktree_name
-            ? "opacity-40" : ""
-        }`}
-      />
       {conv.is_active && (
         <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse flex-shrink-0 -ml-1" />
       )}
@@ -149,23 +122,9 @@ function DroppableSessionRow({ conv, onMobileClose }: { conv: any; onMobileClose
           {conv.worktree_name}
         </span>
       )}
-      <span className="text-[10px] text-sol-text-dim flex-shrink-0 tabular-nums">{conv.message_count}</span>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <button
-            className="hidden group-hover:flex items-center p-0.5 rounded hover:bg-sol-bg-highlight text-sol-text-dim hover:text-sol-text transition-colors flex-shrink-0"
-            onClick={(e) => { e.stopPropagation(); }}
-            onPointerDown={(e) => { e.stopPropagation(); }}
-          >
-            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
-            </svg>
-          </button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-56 p-3">
-          <IconColorPicker currentIcon={effectiveIcon} currentColor={effectiveColor} onIconChange={handleIconChange} onColorChange={handleColorChange} />
-        </DropdownMenuContent>
-      </DropdownMenu>
+      {conv.message_count > 0 && (
+        <span className={`text-[10px] flex-shrink-0 tabular-nums ${msgCountColor(conv.message_count)}`}>{conv.message_count}</span>
+      )}
     </Link>
   );
 }
@@ -611,7 +570,7 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
                       <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
                     </svg>
                     <span className="truncate text-sm flex-1">{cleanTitle(fav.title || "New Session")}</span>
-                    <span className="text-[10px] text-sol-text-dim">{fav.message_count}</span>
+                    {fav.message_count > 0 && <span className={`text-[10px] tabular-nums ${msgCountColor(fav.message_count)}`}>{fav.message_count}</span>}
                   </Link>
                   <button
                     onClick={(e) => {

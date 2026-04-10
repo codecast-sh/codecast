@@ -792,7 +792,7 @@ export const findMarkdownWrites = internalQuery({
         const q2 = q.eq("conversation_id", args.conversation_id);
         return args.after_creation ? q2.gt("_creationTime", args.after_creation) : q2;
       })
-      .take(100);
+      .take(20);
 
     let lastCreation = 0;
     for (const msg of msgs) {
@@ -822,7 +822,7 @@ export const findMarkdownWrites = internalQuery({
         }
       }
     }
-    return { writes: results, lastCreation, hasMore: msgs.length === 100 };
+    return { writes: results, lastCreation, hasMore: msgs.length === 20 };
   },
 });
 
@@ -844,8 +844,7 @@ export const insertExtractedDocs = internalMutation({
 
     const existing = await ctx.db
       .query("docs")
-      .withIndex("by_user_id", (q) => q.eq("user_id", args.user_id))
-      .filter((q) => q.eq(q.field("conversation_id"), args.conversation_id))
+      .withIndex("by_conversation_id", (q) => q.eq("conversation_id", args.conversation_id))
       .collect();
     const existingFiles = new Set(existing.map((d) => d.source_file).filter(Boolean));
 

@@ -14,7 +14,7 @@ import { Label } from "./ui/label";
 import { Textarea } from "./ui/textarea";
 import { Switch } from "./ui/switch";
 import { toast } from "sonner";
-import { copyToClipboard } from "../lib/utils";
+import { copyToClipboard, shareOrigin } from "../lib/utils";
 
 interface ShareDialogProps {
   open: boolean;
@@ -43,7 +43,7 @@ export function ShareDialog({
   const publishToDirectory = useMutation(api.conversations.publishToDirectory);
 
   const shareUrl = shareToken
-    ? `${typeof window !== "undefined" ? window.location.origin : ""}/share/${shareToken}`
+    ? `${shareOrigin()}/share/${shareToken}`
     : "";
 
   const handleShare = async () => {

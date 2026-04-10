@@ -72,6 +72,7 @@ const SettingsAccountsLinkGithub = lazy(() => import("@/app/settings/accounts/li
 const SettingsTeam = lazy(() => import("@/app/settings/team/page"));
 const SettingsTeamCreate = lazy(() => import("@/app/settings/team/create/page"));
 const SettingsTeamJoin = lazy(() => import("@/app/settings/team/join/page"));
+const SettingsNotifications = lazy(() => import("@/app/settings/notifications/page"));
 const SettingsIntegrationsGithub = lazy(() => import("@/app/settings/integrations/github-app/page"));
 const SettingsDesktop = lazy(() => import("@/app/settings/desktop/page"));
 
@@ -167,6 +168,7 @@ export function App() {
               <Route path="team" element={<E name="SettingsTeam"><SettingsTeam /></E>} />
               <Route path="team/create" element={<E name="SettingsTeamCreate"><SettingsTeamCreate /></E>} />
               <Route path="team/join" element={<E name="SettingsTeamJoin"><SettingsTeamJoin /></E>} />
+              <Route path="notifications" element={<E name="SettingsNotifications"><SettingsNotifications /></E>} />
               <Route path="integrations/github-app" element={<E name="SettingsIntegrations"><SettingsIntegrationsGithub /></E>} />
               <Route path="desktop" element={<E name="SettingsDesktop"><SettingsDesktop /></E>} />
             </Route>

@@ -53,6 +53,7 @@ export default defineSchema({
     sync_mode: v.optional(v.union(v.literal("all"), v.literal("selected"))),
     sync_projects: v.optional(v.array(v.string())),
     team_share_paths: v.optional(v.array(v.string())),
+    muted_members: v.optional(v.array(v.id("users"))),
     team_conversations_last_seen: v.optional(v.number()),
     cli_version: v.optional(v.string()),
     cli_platform: v.optional(v.string()),
@@ -100,7 +101,8 @@ export default defineSchema({
       v.literal("config_write"),
       v.literal("config_create"),
       v.literal("config_delete"),
-      v.literal("run_workflow")
+      v.literal("run_workflow"),
+      v.literal("reinstall")
     ),
     args: v.optional(v.string()),
     created_at: v.number(),
@@ -224,6 +226,8 @@ export default defineSchema({
   })
     .index("by_user_id", ["user_id"])
     .index("by_user_updated", ["user_id", "updated_at"])
+    .index("by_user_git_root", ["user_id", "git_root"])
+    .index("by_user_project_path", ["user_id", "project_path"])
     .index("by_user_subagent_updated", ["user_id", "is_subagent", "updated_at"])
     .index("by_user_favorite", ["user_id", "is_favorite"])
     .index("by_user_private", ["user_id", "is_private"])
@@ -1057,10 +1061,14 @@ export default defineSchema({
     workflow_id: v.optional(v.id("workflows")),
     workflow_run_id: v.optional(v.id("workflow_runs")),
 
+    // Public sharing
+    share_token: v.optional(v.string()),
+
     created_at: v.number(),
     updated_at: v.number(),
   })
     .index("by_short_id", ["short_id"])
+    .index("by_share_token", ["share_token"])
     .index("by_user_id", ["user_id"])
     .index("by_user_status", ["user_id", "status"])
     .index("by_team_id", ["team_id"])
@@ -1203,6 +1211,7 @@ export default defineSchema({
     .index("by_team_id", ["team_id"])
     .index("by_team_status", ["team_id", "status"])
     .index("by_workflow_run", ["workflow_run_id"])
+    .index("by_assignee_status", ["assignee", "status"])
     .searchIndex("search_tasks", {
       searchField: "title",
       filterFields: ["user_id", "project_id", "status"],
@@ -1324,6 +1333,9 @@ export default defineSchema({
 
     cli_edited_at: v.optional(v.number()),
 
+    // Public sharing
+    share_token: v.optional(v.string()),
+
     // Unified comment/entry timeline (symmetric with plans and tasks)
     entries: v.optional(v.array(v.object({
       type: v.union(
@@ -1352,6 +1364,7 @@ export default defineSchema({
     .index("by_team_id", ["team_id"])
     .index("by_source_file", ["source_file"])
     .index("by_conversation_id", ["conversation_id"])
+    .index("by_share_token", ["share_token"])
     .searchIndex("search_docs", {
       searchField: "title",
       filterFields: ["user_id", "doc_type", "project_id"],

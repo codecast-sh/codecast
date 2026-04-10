@@ -109,7 +109,6 @@ export interface CodexAppServerOptions {
   log: (msg: string) => void;
   onApproval?: (threadId: string, approval: ApprovalRequest) => Promise<boolean>;
   codexBinary?: string;
-  sessionSource?: string;
 }
 
 interface PendingRequest {
@@ -189,14 +188,12 @@ export class CodexAppServer extends EventEmitter {
   private log: (msg: string) => void;
   private onApproval?: (threadId: string, approval: ApprovalRequest) => Promise<boolean>;
   private codexBinary: string;
-  private sessionSource: string;
 
   constructor(opts: CodexAppServerOptions) {
     super();
     this.log = opts.log;
     this.onApproval = opts.onApproval;
     this.codexBinary = opts.codexBinary || "codex";
-    this.sessionSource = opts.sessionSource || "codecast";
   }
 
   start(): void {
@@ -255,9 +252,15 @@ export class CodexAppServer extends EventEmitter {
     this.writeMessage({ jsonrpc: "2.0", id, result });
   }
 
+  private consecutiveQuickExits = 0;
+  private static readonly QUICK_EXIT_THRESHOLD_MS = 3000;
+  private static readonly MAX_CONSECUTIVE_QUICK_EXITS = 5;
+  private lastSpawnTime = 0;
+
   private spawnProcess(): void {
-    const args = ["app-server", "--session-source", this.sessionSource];
+    const args = ["app-server"];
     this.log(`[codex-app-server] spawning: ${this.codexBinary} ${args.join(" ")}`);
+    this.lastSpawnTime = Date.now();
 
     let child: ChildProcess;
     try {
@@ -321,6 +324,19 @@ export class CodexAppServer extends EventEmitter {
 
     child.on("close", (code, signal) => {
       this.log(`[codex-app-server] process exited: code=${code} signal=${signal}`);
+      const uptime = Date.now() - this.lastSpawnTime;
+      if (uptime < CodexAppServer.QUICK_EXIT_THRESHOLD_MS) {
+        this.consecutiveQuickExits++;
+        if (this.consecutiveQuickExits >= CodexAppServer.MAX_CONSECUTIVE_QUICK_EXITS) {
+          this.log(`[codex-app-server] ${this.consecutiveQuickExits} consecutive quick exits (last uptime ${uptime}ms), disabling`);
+          this.stopped = true;
+          this.cleanup();
+          this.emit("closed");
+          return;
+        }
+      } else {
+        this.consecutiveQuickExits = 0;
+      }
       this.emit("exited", code, signal);
       this.cleanup();
       if (!this.stopped) {
@@ -330,9 +346,11 @@ export class CodexAppServer extends EventEmitter {
       }
     });
 
-    this.restartDelay = 1000;
-
-    this.initialize().catch((err) => {
+    this.initialize().then(() => {
+      // Only reset backoff after successful initialization
+      this.restartDelay = 1000;
+      this.consecutiveQuickExits = 0;
+    }).catch((err) => {
       this.log(`[codex-app-server] initialize failed: ${err.message}`);
       this.emit("error", err);
     });

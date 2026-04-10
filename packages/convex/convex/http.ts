@@ -2997,6 +2997,12 @@ cliRoute("/cli/plans/recalc", async (ctx, body) => {
 cliRoute("/cli/plans/save-retro", async (ctx, body) => {
   return await ctx.runMutation(api.plans.saveRetro, body);
 });
+cliRoute("/cli/plans/share", async (ctx, body) => {
+  return await ctx.runMutation(api.plans.generateShareLink, body);
+});
+cliRoute("/cli/plans/unshare", async (ctx, body) => {
+  return await ctx.runMutation(api.plans.unsharePlan, body);
+});
 cliRoute("/cli/orchestration/emit", async (ctx, body) => {
   return await ctx.runMutation(api.orchestrationEvents.emit, body);
 });
@@ -3035,6 +3041,12 @@ cliRoute("/cli/docs/comment", async (ctx, body) => {
 });
 cliRoute("/cli/docs/search", async (ctx, body) => {
   return await ctx.runQuery(api.docs.search, body);
+});
+cliRoute("/cli/docs/share", async (ctx, body) => {
+  return await ctx.runMutation(api.docs.generateShareLink, body);
+});
+cliRoute("/cli/docs/unshare", async (ctx, body) => {
+  return await ctx.runMutation(api.docs.unshare, body);
 });
 cliRoute("/cli/docs/patch", async (ctx, body) => {
   const result = await ctx.runMutation(api.docs.patch, body);

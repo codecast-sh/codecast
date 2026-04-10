@@ -1,5 +1,5 @@
 "use client";
-import { ReactNode, useState, useCallback, useMemo } from "react";
+import { ReactNode, useState, useCallback, useMemo, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { FilterDropdown } from "./FilterDropdown";
@@ -84,6 +84,7 @@ export interface GenericListViewProps<T> {
   onCreate: () => void;
 
   hasMore?: boolean;
+  isLoadingMore?: boolean;
   onLoadMore?: () => void;
 
   paletteTargetType?: 'task' | 'doc';
@@ -122,6 +123,7 @@ export function GenericListView<T>({
   emptyMessage,
   onCreate,
   hasMore,
+  isLoadingMore,
   onLoadMore,
   paletteTargetType,
   paletteShortcuts,
@@ -150,6 +152,8 @@ export function GenericListView<T>({
   const shortcutsPanelOpen = useInboxStore(s => s.shortcutsPanelOpen);
   const [searchQuery, setSearchQuery] = useState("");
   const [showSearch, setShowSearch] = useState(false);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const loadMoreRef = useRef<HTMLDivElement | null>(null);
 
   const displayGroups = useMemo((): ListGroup<T>[] | null => {
     if (!groups) return null;
@@ -317,6 +321,23 @@ export function GenericListView<T>({
     onCreate, openPalette, toggleSelect, router, extraKeyHandler, onItemEdit, renderPreview, getSearchText]);
 
   const previewItem = previewId ? flatItems.find((item) => getItemId(item) === previewId) || null : null;
+
+  useEffect(() => {
+    if (!hasMore || !onLoadMore || isLoadingMore) return;
+    const root = scrollRef.current;
+    const target = loadMoreRef.current;
+    if (!root || !target) return;
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry?.isIntersecting) onLoadMore();
+      },
+      { root, rootMargin: "240px 0px", threshold: 0 }
+    );
+
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [hasMore, onLoadMore, isLoadingMore, visibleItems.length]);
 
   const renderItemRow = (item: T, globalIdx: number) => {
     const id = getItemId(item);
@@ -503,7 +524,7 @@ export function GenericListView<T>({
       {/* Content area */}
       {customContent ? customContent({ openPaletteForItems }) : (
         <div className="flex-1 flex overflow-hidden">
-          <div className="flex-1 overflow-y-auto">
+          <div ref={scrollRef} className="flex-1 overflow-y-auto">
             {visibleItems.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-48 text-sol-text-dim">
                 {emptyIcon}
@@ -528,9 +549,9 @@ export function GenericListView<T>({
             )}
 
             {hasMore && onLoadMore && (
-              <div className="px-6 py-3 border-t border-sol-border/20">
+              <div ref={loadMoreRef} className="px-6 py-3 border-t border-sol-border/20">
                 <button onClick={onLoadMore} className="text-xs text-sol-text-dim hover:text-sol-text transition-colors">
-                  Load more
+                  {isLoadingMore ? "Loading..." : "Load more"}
                 </button>
               </div>
             )}

@@ -72,7 +72,7 @@ export function CreatePalette() {
             window.history.pushState({ inboxId: convexId }, "", `/conversation/${convexId}`);
           }
         }
-      });
+      }).catch((err: any) => console.error("Failed to create session:", err));
       if (data.navigate) {
         store.setCurrentSession(sid);
       }
@@ -112,7 +112,9 @@ export function CreatePalette() {
       project_path: path,
       git_root: path,
       session_id: sid,
-    });
+    }).then((convexId: string) => {
+      if (convexId) useInboxStore.getState().resolveSessionId(sid, convexId);
+    }).catch(() => {});
 
     if (initialMessage) {
       store.setDraft(sid, { draft_message: initialMessage });

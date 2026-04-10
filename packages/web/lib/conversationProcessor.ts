@@ -136,6 +136,14 @@ export function cleanTitle(title: string): string {
   return title.replace(/<[^>]+>/g, "").replace(/<[^>]*$/, "").trim().slice(0, 50) || "Untitled";
 }
 
+/** Tailwind color class for message-count badges — warmer as count grows. */
+export function msgCountColor(count: number): string {
+  if (count >= 200) return "text-sol-orange";
+  if (count >= 50) return "text-sol-yellow";
+  if (count >= 10) return "text-sol-text-muted";
+  return "text-sol-text-dim/50";
+}
+
 export type SkillItem = { name: string; description: string };
 
 export function extractSkillsFromMessages(messages: Array<{ role: string; content?: string; tool_calls?: Array<{ name: string; input: string }> }>): SkillItem[] {

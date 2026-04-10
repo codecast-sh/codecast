@@ -9,11 +9,13 @@ import { Label } from "../../../../components/ui/label";
 import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { TeamIcon, TEAM_ICONS, type TeamIconName } from "../../../../components/TeamIcon";
+import { useInboxStore } from "../../../../store/inboxStore";
 
 export default function CreateTeamPage() {
   const router = useRouter();
   const user = useQuery(api.users.getCurrentUser);
   const createTeam = useMutation(api.teams.createTeam);
+  const updateClientUI = useInboxStore((s) => s.updateClientUI);
 
   const [teamName, setTeamName] = useState("");
   const [selectedIcon, setSelectedIcon] = useState<TeamIconName>(
@@ -34,12 +36,13 @@ export default function CreateTeamPage() {
     setError("");
 
     try {
-      await createTeam({
+      const teamId = await createTeam({
         name: teamName.trim(),
         user_id: user._id,
         icon: selectedIcon,
       });
-      router.push("/settings/team");
+      updateClientUI({ active_team_id: teamId });
+      router.push(`/settings/sync?teamSetup=1&teamId=${teamId}`);
     } catch (err) {
       if (err instanceof Error) {
         setError(err.message);

@@ -109,6 +109,7 @@ interface ReadResult {
   conversation?: {
     id: string;
     title: string;
+    agent_type?: string;
     project_path: string | null;
     message_count: number;
     updated_at: string;
@@ -317,7 +318,7 @@ async function fetchExportViaReadApi(siteUrl: string, apiToken: string, conversa
       id: convMeta.id,
       title: convMeta.title,
       session_id: convMeta.id,
-      agent_type: "claude_code",
+      agent_type: convMeta.agent_type || "claude_code",
       project_path: convMeta.project_path || null,
       model: null,
       message_count: totalCount,

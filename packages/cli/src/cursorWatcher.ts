@@ -38,6 +38,9 @@ export class CursorWatcher extends EventEmitter {
   private workspaceStates: Map<string, WorkspaceState> = new Map();
   private pollFrequencyMs: number;
   private isFirstPoll: boolean = true;
+  // Circuit breaker: suppress error logging for workspaces that fail repeatedly
+  private workspaceErrorCounts: Map<string, number> = new Map();
+  private static readonly ERROR_SUPPRESS_THRESHOLD = 3;
 
   constructor(cursorPath?: string, pollFrequencyMs: number = 2000) {
     super();
@@ -129,9 +132,17 @@ export class CursorWatcher extends EventEmitter {
       for (const workspace of workspaces) {
         try {
           this.checkWorkspaceForChanges(workspace.hash, workspace.dbPath);
+          // Reset error count on success
+          this.workspaceErrorCounts.delete(workspace.hash);
         } catch (err) {
-          const error = err instanceof Error ? err : new Error(String(err));
-          this.emit("error", new Error(`Failed to check workspace ${workspace.hash}: ${error.message}`));
+          const count = (this.workspaceErrorCounts.get(workspace.hash) || 0) + 1;
+          this.workspaceErrorCounts.set(workspace.hash, count);
+          // Only emit errors until threshold, then suppress to avoid log flooding
+          if (count <= CursorWatcher.ERROR_SUPPRESS_THRESHOLD) {
+            const error = err instanceof Error ? err : new Error(String(err));
+            const suffix = count === CursorWatcher.ERROR_SUPPRESS_THRESHOLD ? " (suppressing further errors for this workspace)" : "";
+            this.emit("error", new Error(`Failed to check workspace ${workspace.hash}: ${error.message}${suffix}`));
+          }
         }
       }
     } catch (err) {
