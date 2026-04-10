@@ -7,7 +7,7 @@ import { createDataContext, scopeByProject } from "./data";
 import { nextShortId } from "./counters";
 import { internal } from "./_generated/api";
 
-async function resolveAssigneeToUserId(
+export async function resolveAssigneeToUserId(
   ctx: any,
   assignee: string,
   teamId?: Id<"teams">
@@ -32,7 +32,7 @@ async function resolveAssigneeToUserId(
   return null;
 }
 
-async function resolveAssigneeStr(
+export async function resolveAssigneeStr(
   ctx: any,
   assignee: string | undefined,
   userId: Id<"users">
@@ -47,7 +47,7 @@ async function resolveAssigneeStr(
   return assignee;
 }
 
-async function notifySubscribers(
+export async function notifySubscribers(
   ctx: any,
   eventType: string,
   actorUserId: Id<"users">,
@@ -65,7 +65,7 @@ async function notifySubscribers(
   });
 }
 
-async function subscribeUser(
+export async function subscribeUser(
   ctx: any,
   userId: Id<"users">,
   taskId: Id<"tasks">,
@@ -79,7 +79,7 @@ async function subscribeUser(
   });
 }
 
-async function recalcPlanProgress(ctx: any, planId: Id<"plans">, updatedTaskId: Id<"tasks">, newStatus: string) {
+export async function recalcPlanProgress(ctx: any, planId: Id<"plans">, updatedTaskId: Id<"tasks">, newStatus: string) {
   const plan = await ctx.db.get(planId);
   if (!plan || !plan.task_ids) return;
 
