@@ -6,6 +6,9 @@ import { useInboxStore, isConvexId } from "../store/inboxStore";
 import { useConvexSync } from "./useConvexSync";
 import { loadConversationMessages } from "../store/idbCache";
 
+const EMPTY_MESSAGES: Message[] = [];
+const EMPTY_PENDING: Message[] = [];
+
 type Message = {
   _id: string;
   message_uuid?: string;
@@ -128,8 +131,8 @@ export function useConversationMessages(
   // =============================================
   // READ FROM STORE (primary source of truth - never waits on Convex)
   // =============================================
-  const storeMessages = useInboxStore((s) => s.messages[conversationId]) ?? [];
-  const storePending = useInboxStore((s) => s.pendingMessages[conversationId]) ?? [];
+  const storeMessages = useInboxStore((s) => s.messages[conversationId]) ?? EMPTY_MESSAGES;
+  const storePending = useInboxStore((s) => s.pendingMessages[conversationId]) ?? EMPTY_PENDING;
   const storeMeta = useInboxStore((s) => s.conversations[conversationId]);
   const storePagination = useInboxStore((s) => s.pagination[conversationId]);
 
