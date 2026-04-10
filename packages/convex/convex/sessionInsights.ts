@@ -682,7 +682,7 @@ export const backfillTeamInsights = action({
     window_hours: v.optional(v.number()),
     limit: v.optional(v.number()),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<any> => {
     const user = await ctx.runQuery(api.users.getCurrentUser, {} as any);
     if (!user) throw new Error("Not authenticated");
 
@@ -743,7 +743,7 @@ export const backfillTeamInsightsInternal = internalAction({
     window_hours: v.optional(v.number()),
     limit: v.optional(v.number()),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<any> => {
     const windowHours = Math.max(1, Math.min(args.window_hours ?? 24 * 14, 24 * 30));
     const limit = Math.max(1, Math.min(args.limit ?? 25, 100));
     const since = Date.now() - windowHours * 60 * 60 * 1000;
@@ -794,7 +794,7 @@ export const backfillTimelines = action({
     window_hours: v.optional(v.number()),
     limit: v.optional(v.number()),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<any> => {
     const user = await ctx.runQuery(api.users.getCurrentUser, {} as any);
     if (!user) throw new Error("Not authenticated");
 
