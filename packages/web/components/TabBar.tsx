@@ -128,26 +128,18 @@ export function TabBar() {
       if (tab.id === activeTabId) return;
       s.saveCurrentTabState();
       s.switchTab(tab.id);
-      router.push(tab.path);
     },
-    [activeTabId, router, s],
+    [activeTabId, s],
   );
 
   const handleClose = useCallback(
     (e: React.MouseEvent, id: string) => {
       e.stopPropagation();
-      const { tabs, activeTabId } = useInboxStore.getState();
-      if (tabs.length <= 1) return;
-      const idx = tabs.findIndex((t: AppTab) => t.id === id);
-      const wasActive = activeTabId === id;
-      useInboxStore.getState().closeTab(id);
-      if (wasActive) {
-        const remaining = tabs.filter((t: AppTab) => t.id !== id);
-        const next = remaining[Math.min(idx, remaining.length - 1)];
-        if (next) router.push(next.path);
-      }
+      const state = useInboxStore.getState();
+      if (state.tabs.length <= 1) return;
+      state.closeTab(id);
     },
-    [router],
+    [],
   );
 
   const handleNewTab = useCallback(() => {
