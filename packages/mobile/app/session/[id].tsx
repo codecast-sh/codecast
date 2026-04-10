@@ -2529,8 +2529,8 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
           style={[
             styles.bubbleContent,
             isLongContent && !contentExpanded && styles.bubbleContentCollapsed,
-            !isUser && !contentExpanded && !isLongContent && { maxHeight: ASSISTANT_CONTENT_MAX_HEIGHT, overflow: 'hidden' as const },
-            isUser && !userContentExpanded && !isLongContent && { maxHeight: ASSISTANT_CONTENT_MAX_HEIGHT, overflow: 'hidden' as const },
+            !isUser && !contentExpanded && !isLongContent && estimatedOverflow && { maxHeight: ASSISTANT_CONTENT_MAX_HEIGHT, overflow: 'hidden' as const },
+            isUser && !userContentExpanded && !isLongContent && estimatedOverflow && { maxHeight: ASSISTANT_CONTENT_MAX_HEIGHT, overflow: 'hidden' as const },
           ]}
         >
           {(() => {
