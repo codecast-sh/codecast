@@ -2,6 +2,7 @@ import { StyleSheet, FlatList, RefreshControl, TouchableOpacity, TextInput, View
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useMutation } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
+import type { Id } from '@codecast/convex/convex/_generated/dataModel';
 import { useState, useCallback, useRef, useMemo, useEffect } from 'react';
 import { useRouter } from 'expo-router';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
@@ -373,7 +374,7 @@ export default function InboxScreen() {
           else if (index === 3) {
             Alert.alert('Kill Agent', 'Stop this agent session?', [
               { text: 'Cancel', style: 'cancel' },
-              { text: 'Kill', style: 'destructive', onPress: () => killSession({ conversation_id: session._id as any }) },
+              { text: 'Kill', style: 'destructive', onPress: () => killSession({ conversation_id: session._id as Id<"conversations"> }) },
             ]);
           }
         },
@@ -383,7 +384,12 @@ export default function InboxScreen() {
         { text: session.is_pinned ? 'Unpin' : 'Pin', onPress: () => handlePin(session._id) },
         { text: 'Defer', onPress: () => deferSession(session._id) },
         { text: 'Dismiss', onPress: () => handleDismiss(session._id) },
-        { text: 'Kill Agent', style: 'destructive', onPress: () => killSession({ conversation_id: session._id as any }) },
+        { text: 'Kill Agent', style: 'destructive', onPress: () => {
+          Alert.alert('Kill Agent', 'Stop this agent session?', [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Kill', style: 'destructive', onPress: () => killSession({ conversation_id: session._id as Id<"conversations"> }) },
+          ]);
+        }},
         { text: 'Cancel', style: 'cancel' },
       ]);
     }
