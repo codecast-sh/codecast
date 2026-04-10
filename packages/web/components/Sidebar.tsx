@@ -741,7 +741,7 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
         {!isNarrow && computedDirectories.length > 0 && (
           <div className="mt-4">
             <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide px-4 mb-2 flex items-center justify-between">
-              <span>Projects</span>
+              <span>Workspaces</span>
               <button
                 onClick={() => openNewSession()}
                 className="text-sol-text-dim hover:text-sol-yellow transition-colors"
