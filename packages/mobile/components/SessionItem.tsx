@@ -72,6 +72,14 @@ export function agentLabel(agentType: string): string {
   }
 }
 
+const projectColors = [Theme.blue, Theme.cyan, Theme.violet, Theme.magenta, Theme.green, Theme.orange];
+
+export function projectColor(name: string): string {
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) hash = ((hash << 5) - hash + name.charCodeAt(i)) | 0;
+  return projectColors[Math.abs(hash) % projectColors.length];
+}
+
 export function agentColor(agentType: string): string {
   switch (agentType) {
     case "claude_code": return Theme.orange;
@@ -172,19 +180,21 @@ export function SessionItem({ session, onPress, onPin, onLongPress }: { session:
       )}
 
       <RNView style={styles.conversationMeta}>
+        {project && (
+          <RNText style={[styles.projectBadge, { color: projectColor(project), backgroundColor: projectColor(project) + '18' }]} numberOfLines={1}>{project}</RNText>
+        )}
         {showAuthor && (
           <>
+            {project && <RNText style={styles.metaSeparator}>·</RNText>}
             <RNText style={styles.authorText}>{session.author_name}</RNText>
-            <RNText style={styles.metaSeparator}>·</RNText>
           </>
         )}
         {agent ? (
           <>
+            {(project || showAuthor) && <RNText style={styles.metaSeparator}>·</RNText>}
             <RNText style={[styles.agentBadge, { color: agentColor(session.agent_type ?? "") }]}>{agent}</RNText>
-            {project && <RNText style={styles.metaSeparator}>·</RNText>}
           </>
         ) : null}
-        {project && <RNText style={styles.projectBadge} numberOfLines={1}>{project}</RNText>}
       </RNView>
     </TouchableOpacity>
   );
@@ -341,12 +351,10 @@ export const styles = StyleSheet.create({
     letterSpacing: 0.3,
   },
   projectBadge: {
-    fontSize: 10,
-    color: Theme.accent,
+    fontSize: 11,
     fontWeight: '600',
-    maxWidth: 120,
+    maxWidth: 130,
     letterSpacing: 0.2,
-    backgroundColor: Theme.accent + '18',
     paddingHorizontal: 7,
     paddingVertical: 2,
     borderRadius: 6,
