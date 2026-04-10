@@ -337,11 +337,16 @@ export const styles = StyleSheet.create({
     letterSpacing: 0.3,
   },
   projectBadge: {
-    fontSize: 11,
+    fontSize: 10,
     color: Theme.accent,
     fontWeight: '600',
     maxWidth: 120,
-    letterSpacing: 0.1,
+    letterSpacing: 0.2,
+    backgroundColor: Theme.accent + '18',
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 6,
+    overflow: 'hidden',
   },
   messageCount: {
     fontSize: 11,
@@ -372,6 +377,7 @@ export const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     marginLeft: 15,
+    marginTop: 4,
   },
   authorText: {
     fontSize: 12,
