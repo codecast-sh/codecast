@@ -83,6 +83,9 @@ import { ComposeEditor, type ComposeEditorHandle } from "./editor/ComposeEditor"
 import { useMentionQuery } from "../hooks/useMentionQuery";
 
 const sacredInputs = new Map<string, { text: string; images?: any[] }>();
+const EMPTY_PENDING: any[] = [];
+const EMPTY_MATCH_IDS: string[] = [];
+const EMPTY_MATCH_INSTANCES: { messageId: string; localIndex: number }[] = [];
 
 /** Ensure a value is a string before rendering as a React child.
  *  Guards against intermittent race conditions where content fields
@@ -7655,7 +7658,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   // Pending messages: read directly so they ALWAYS render, regardless of what
   // setMessages/mergeMessages/buildCompositeTimeline do to the server message arrays.
   const pendingConvId = effectiveConversationId || conversation?._id || '';
-  const pendingMsgs = useInboxStore((s) => s.pendingMessages[pendingConvId]) ?? [];
+  const pendingMsgs = useInboxStore((s) => s.pendingMessages[pendingConvId] ?? EMPTY_PENDING);
 
   const timeline: TimelineItem[] = useMemo(() => {
     const base = buildCompositeTimeline(
@@ -7982,8 +7985,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   useWatchEffect(() => {
     if (!highlightQuery || messages.length === 0) {
       setHighlightedMessageId(null);
-      setAllMatchingMessageIds([]);
-      setMatchInstances([]);
+      setAllMatchingMessageIds(EMPTY_MATCH_IDS);
+      setMatchInstances(EMPTY_MATCH_INSTANCES);
       setCurrentMatchIndex(0);
       hasScrolledToHighlight.current = false;
       return;

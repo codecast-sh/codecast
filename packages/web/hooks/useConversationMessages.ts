@@ -5,6 +5,9 @@ import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useInboxStore, useTrackedStore, isConvexId, ensureHydrated } from "../store/inboxStore";
 import { useConvexSync } from "./useConvexSync";
 
+const EMPTY_MESSAGES: Message[] = [];
+const EMPTY_PENDING: Message[] = [];
+
 type Message = {
   _id: string;
   message_uuid?: string;
@@ -132,8 +135,8 @@ export function useConversationMessages(
     s => s.sessions[conversationId],
     s => s.pagination[conversationId],
   ]);
-  const storeMessages = s.messages[conversationId] ?? [];
-  const storePending = s.pendingMessages[conversationId] ?? [];
+  const storeMessages = s.messages[conversationId] ?? EMPTY_MESSAGES;
+  const storePending = s.pendingMessages[conversationId] ?? EMPTY_PENDING;
   const _convMeta = s.conversations[conversationId];
   const _sessMeta = s.sessions[conversationId] ?? s.dismissedSessions[conversationId];
   // Merge session data as defaults so the minimal conversations seed ({ _id }) doesn't
