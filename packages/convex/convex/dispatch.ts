@@ -5,6 +5,9 @@ import { Id } from "./_generated/dataModel";
 import { checkRateLimit } from "./rateLimit";
 import { resolveTeamForPath } from "./privacy";
 import { hasRecentPendingDaemonCommand } from "./daemonCommandUtils";
+import { nextShortId } from "./counters";
+import { resolveAssigneeStr, resolveAssigneeToUserId, recalcPlanProgress, notifySubscribers, subscribeUser } from "./tasks";
+import { internal } from "./_generated/api";
 
 type TableConfig =
   | {
@@ -61,7 +64,7 @@ export const dispatch = mutation({
   },
 });
 
-type HandlerCtx = { db: any; storage?: any };
+type HandlerCtx = { db: any; storage?: any; runMutation?: any };
 type HandlerFn = (ctx: HandlerCtx, userId: Id<"users">, args: any) => Promise<any>;
 
 function deepMergeField(existing: any, incoming: any): any {
@@ -342,6 +345,8 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
 
     const now = Date.now();
     const updates: any = { updated_at: now };
+    const trackFields: [string, any, any][] = [];
+
     for (const [key, val] of Object.entries(fields)) {
       if (key === "status") {
         updates.status = val;
@@ -350,45 +355,78 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
           updates.attempt_count = (task.attempt_count || 0) + 1;
           updates.last_attempted_at = now;
         }
-        if (val !== task.status) {
-          await ctx.db.insert("task_history", {
-            task_id: task._id, user_id: userId, actor_type: "user" as const,
-            action: "updated", field: "status", old_value: task.status, new_value: val,
-            created_at: now,
-          });
-        }
+        if (val !== task.status) trackFields.push(["status", task.status, val]);
       } else if (key === "priority" && val !== task.priority) {
         updates.priority = val;
-        await ctx.db.insert("task_history", {
-          task_id: task._id, user_id: userId, actor_type: "user" as const,
-          action: "updated", field: "priority", old_value: task.priority, new_value: val,
-          created_at: now,
-        });
+        trackFields.push(["priority", task.priority, val]);
       } else if (key === "title" && val !== task.title) {
         updates.title = val;
-        await ctx.db.insert("task_history", {
-          task_id: task._id, user_id: userId, actor_type: "user" as const,
-          action: "updated", field: "title", old_value: task.title, new_value: val,
-          created_at: now,
-        });
+        trackFields.push(["title", task.title, val]);
       } else if (key === "description") {
         updates.description = val;
       } else if (key === "labels") {
         updates.labels = val;
+      } else if (key === "assignee") {
+        updates.assignee = val === "me" ? userId : val;
+        if (updates.assignee !== task.assignee) trackFields.push(["assignee", task.assignee || "", updates.assignee || ""]);
+      } else if (key === "triage_status") {
+        updates.triage_status = val;
+        if (val === "active") updates.promoted = true;
+      } else if (key === "execution_status") {
+        updates.execution_status = val || undefined;
+        if (val !== (task.execution_status || "")) trackFields.push(["execution_status", task.execution_status || "", val || ""]);
+      } else if (key === "project_id") {
+        updates.project_id = val || undefined;
+      } else if (key === "project_path") {
+        updates.project_path = val || undefined;
       }
     }
+
+    for (const [field, oldVal, newVal] of trackFields) {
+      await ctx.db.insert("task_history", {
+        task_id: task._id, user_id: userId, actor_type: "user" as const,
+        action: "updated", field, old_value: String(oldVal), new_value: String(newVal),
+        created_at: now,
+      });
+    }
+
     await ctx.db.patch(task._id, updates);
+
+    if (fields.status && fields.status !== task.status) {
+      if (task.plan_id) {
+        await recalcPlanProgress(ctx, task.plan_id, task._id, fields.status);
+      }
+      await notifySubscribers(ctx, "task_status_changed", userId, task as any, `changed ${task.short_id} to ${fields.status}`);
+    }
+
+    if (fields.assignee !== undefined && updates.assignee !== task.assignee) {
+      const assigneeUserId = await resolveAssigneeToUserId(ctx, updates.assignee || "", task.team_id);
+      if (assigneeUserId && assigneeUserId.toString() !== userId.toString()) {
+        await subscribeUser(ctx, assigneeUserId, task._id, "assignee");
+        await ctx.runMutation(internal.notificationRouter.emit, {
+          event_type: "task_assigned",
+          actor_user_id: userId,
+          entity_type: "task",
+          entity_id: task._id.toString(),
+          message: `assigned ${task.short_id} to you`,
+        });
+      }
+    }
   },
 
   createTask: async (ctx, userId, [opts]: [any]) => {
-    const mappings = await ctx.db
-      .query("directory_team_mappings")
-      .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
-      .collect();
-    const { teamId } = resolveTeamForPath(mappings, opts.project_path, undefined);
-    const chars = "0123456789abcdefghijklmnopqrstuvwxyz";
-    let shortId = "ct-";
-    for (let i = 0; i < 4; i++) shortId += chars[Math.floor(Math.random() * chars.length)];
+    let teamId: Id<"teams"> | undefined;
+    if (opts.team_id) {
+      teamId = opts.team_id as Id<"teams">;
+    } else {
+      const mappings = await ctx.db
+        .query("directory_team_mappings")
+        .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+        .collect();
+      teamId = resolveTeamForPath(mappings, opts.project_path, undefined).teamId;
+    }
+
+    const shortId = await nextShortId(ctx.db, "ct");
 
     let projectId;
     if (opts.project_id) {
@@ -396,11 +434,23 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       if (p) projectId = p._id;
     }
 
+    const resolvedAssignee = await resolveAssigneeStr(ctx, opts.assignee, userId);
+
+    let planId: Id<"plans"> | undefined;
+    if (opts.plan_id) {
+      const plan = await ctx.db
+        .query("plans")
+        .withIndex("by_short_id", (q: any) => q.eq("short_id", opts.plan_id))
+        .first();
+      if (plan) planId = plan._id;
+    }
+
     const now = Date.now();
     const id = await ctx.db.insert("tasks", {
       user_id: userId,
       team_id: teamId,
       project_id: projectId,
+      plan_id: planId,
       short_id: shortId,
       title: opts.title,
       description: opts.description,
@@ -408,11 +458,22 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       status: opts.status || "open",
       priority: opts.priority || "medium",
       labels: opts.labels,
+      assignee: resolvedAssignee,
       source: "human" as const,
       attempt_count: 0,
+      retry_count: 0,
+      max_retries: 3,
       created_at: now,
       updated_at: now,
     });
+
+    if (planId) {
+      const plan = await ctx.db.get(planId);
+      if (plan) {
+        const taskIds = plan.task_ids || [];
+        await ctx.db.patch(planId, { task_ids: [...taskIds, id], updated_at: now });
+      }
+    }
 
     await ctx.db.insert("task_history", {
       task_id: id,
