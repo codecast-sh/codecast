@@ -1,4 +1,4 @@
-import { memo, useCallback, useState, useMemo, useRef, useEffect } from "react";
+import { memo, useCallback, useState, useMemo, useRef, useEffect, type RefObject } from "react";
 import { useWindowManager, TASKBAR_HEIGHT_PX, type ArrangeMode } from "../store/windowManagerStore";
 import { useTrackedStore, isSessionEffectivelyIdle } from "../store/inboxStore";
 import { cleanTitle } from "../lib/conversationProcessor";
@@ -11,23 +11,31 @@ const arrangeOptions: { mode: ArrangeMode; icon: typeof LayoutGrid; label: strin
   { mode: "vertical", icon: Rows, label: "Stack" },
 ];
 
-export const WindowTaskbar = memo(function WindowTaskbar() {
+function getContainerViewport(el: HTMLDivElement | null): { width: number; height: number } {
+  if (el) {
+    const rect = el.getBoundingClientRect();
+    return { width: rect.width, height: rect.height };
+  }
+  return { width: window.innerWidth, height: window.innerHeight };
+}
+
+export const WindowTaskbar = memo(function WindowTaskbar({ containerRef }: { containerRef: RefObject<HTMLDivElement | null> }) {
   const { windows, autoArrange, closeAll, openWindow } = useWindowManager();
   const minimized = Object.values(windows).filter(w => w.minimized);
   const windowCount = Object.keys(windows).length;
   const [pickerOpen, setPickerOpen] = useState(false);
 
   const handleArrange = useCallback((mode: ArrangeMode) => {
-    autoArrange(mode, { width: window.innerWidth, height: window.innerHeight });
-  }, [autoArrange]);
+    autoArrange(mode, getContainerViewport(containerRef.current));
+  }, [autoArrange, containerRef]);
 
   const handleAddSession = useCallback((sessionId: string) => {
     openWindow(sessionId);
     setPickerOpen(false);
     setTimeout(() => {
-      autoArrange("tile", { width: window.innerWidth, height: window.innerHeight });
+      autoArrange("tile", getContainerViewport(containerRef.current));
     }, 0);
-  }, [openWindow, autoArrange]);
+  }, [openWindow, autoArrange, containerRef]);
 
   return (
     <div

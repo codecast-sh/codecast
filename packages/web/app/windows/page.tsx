@@ -1,9 +1,9 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useRef } from "react";
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { SessionWindow } from "@/components/SessionWindow";
 import { WindowTaskbar } from "@/components/WindowTaskbar";
 import { useWindowManager } from "@/store/windowManagerStore";
-import { useTrackedStore, isSessionEffectivelyIdle, categorizeSessions, type InboxSession } from "@/store/inboxStore";
+import { useTrackedStore, isSessionEffectivelyIdle, type InboxSession } from "@/store/inboxStore";
 import { cleanTitle } from "@/lib/conversationProcessor";
 import { Plus, MousePointerClick } from "lucide-react";
 
@@ -15,9 +15,19 @@ export default function WindowsPage() {
   );
 }
 
+/** Get the actual pixel dimensions of an element, falling back to viewport */
+function getContainerViewport(el: HTMLDivElement | null): { width: number; height: number } {
+  if (el) {
+    const rect = el.getBoundingClientRect();
+    return { width: rect.width, height: rect.height };
+  }
+  return { width: window.innerWidth, height: window.innerHeight };
+}
+
 function WindowManagerView() {
   const { windows, focusedWindowId, openWindow, autoArrange } = useWindowManager();
   const s = useTrackedStore([s => s.sessions]);
+  const containerRef = useRef<HTMLDivElement>(null);
 
   const windowList = useMemo(
     () => Object.values(windows).sort((a, b) => a.zIndex - b.zIndex),
@@ -26,7 +36,6 @@ function WindowManagerView() {
 
   const hasWindows = windowList.length > 0;
 
-  // Sessions available to open (not already in a window)
   const openSessionIds = useMemo(
     () => new Set(Object.values(windows).map(w => w.sessionId)),
     [windows],
@@ -39,27 +48,22 @@ function WindowManagerView() {
   const handleOpenSession = useCallback((sessionId: string) => {
     openWindow(sessionId);
     setTimeout(() => {
-      autoArrange("tile", { width: window.innerWidth, height: window.innerHeight });
+      autoArrange("tile", getContainerViewport(containerRef.current));
     }, 0);
   }, [openWindow, autoArrange]);
 
   const handleOpenAll = useCallback(() => {
-    const categorized = categorizeSessions(s.sessions, new Set());
-    const toOpen = [
-      ...categorized.needsInput.filter(sess => !openSessionIds.has(sess._id)),
-      ...categorized.working.filter(sess => !openSessionIds.has(sess._id)),
-    ].slice(0, 8);
-
+    const toOpen = availableSessions.slice(0, 8);
     toOpen.forEach(sess => openWindow(sess._id));
     setTimeout(() => {
-      autoArrange("tile", { width: window.innerWidth, height: window.innerHeight });
+      autoArrange("tile", getContainerViewport(containerRef.current));
     }, 0);
-  }, [s.sessions, openSessionIds, openWindow, autoArrange]);
+  }, [availableSessions, openWindow, autoArrange]);
 
   return (
     <div className="h-full flex flex-col" style={{ background: "var(--sol-bg)" }}>
       {/* Window area */}
-      <div className="flex-1 min-h-0 relative overflow-hidden">
+      <div ref={containerRef} className="flex-1 min-h-0 relative overflow-hidden">
         {hasWindows ? (
           <div className="w-full h-full relative">
             {windowList.map(win => (
@@ -79,7 +83,7 @@ function WindowManagerView() {
         )}
       </div>
 
-      <WindowTaskbar />
+      <WindowTaskbar containerRef={containerRef} />
     </div>
   );
 }
