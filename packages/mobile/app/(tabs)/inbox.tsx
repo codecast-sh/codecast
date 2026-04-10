@@ -604,8 +604,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.lg,
     paddingVertical: Spacing.md,
     backgroundColor: Theme.bgAlt,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: Theme.borderLight,
     gap: 8,
   },
   headerTitle: {
@@ -703,8 +701,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.md,
     paddingTop: Spacing.xs,
     paddingBottom: Spacing.xs,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: Theme.borderLight,
   },
   searchInputRow: {
     flexDirection: 'row',
