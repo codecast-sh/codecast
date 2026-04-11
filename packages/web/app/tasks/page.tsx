@@ -679,6 +679,15 @@ function useTaskUrlState() {
     updateClientUI({ task_view: { ...taskView, ...prefs } });
     if (!isDetailPage) {
       const params = new URLSearchParams(searchParams.toString());
+      // Sync store-only values into URL so they aren't lost when
+      // hasUrlParams flips from false→true on first URL param addition
+      if (taskView) {
+        for (const [k, v] of Object.entries(taskView)) {
+          if (v && typeof v === "string" && !params.has(k)) {
+            params.set(k, v);
+          }
+        }
+      }
       for (const [k, v] of Object.entries(updates)) {
         if (v) params.set(k, v);
         else params.delete(k);
