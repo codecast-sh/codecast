@@ -283,6 +283,9 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
           conversation_ids: [...existing, conversationId as Id<"conversations">],
         });
       }
+      await ctx.db.patch(conversationId as Id<"conversations">, {
+        active_task_id: objectId as Id<"tasks">,
+      });
     } else if (objectType === "plan") {
       const plan = await ctx.db.get(objectId as Id<"plans">);
       if (!plan || plan.user_id.toString() !== userId.toString()) return;
