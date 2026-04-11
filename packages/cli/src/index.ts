@@ -1930,7 +1930,7 @@ You operate within a structured work tracking system. A human monitors your prog
 
 **Create a task** when your work will change code, fix a bug, or produce a deliverable. Run \`cast task create "Title" -p <priority>\` before you start implementing. This is the default — skip it only for simple questions, explanations, or quick lookups that don't produce changes.
 
-**Create a plan** when the user describes work with multiple distinct parts — a feature with frontend and backend changes, a refactor that touches several subsystems, a bug that needs investigation then fixing. Run \`cast plan create "Title" -g "goal"\` and decompose into tasks with \`cast plan decompose <plan_id>\`. Don't create plans for single-task work.
+**Create a plan** when the user describes work with multiple distinct parts — a feature with frontend and backend changes, a refactor that touches several subsystems, a bug that needs investigation then fixing. Run \`cast plan create "Title" -g "goal"\` and add tasks with \`cast task create "Title" --plan <plan_id>\`. Don't create plans for single-task work.
 
 **Check existing work first.** Your context includes an overview of active tasks and plans. Before creating new ones, check if your work already has a task (\`cast task ready\`) or fits under an existing plan. Claim existing tasks with \`cast task start <id>\` rather than creating duplicates.
 
@@ -1959,7 +1959,7 @@ When you reference another session in your messages, include its short ID (e.g. 
 
 ### After compaction
 
-When your context gets compacted, re-read your task or plan context (\`cast task context <id>\` / \`cast plan show <id>\`) to reground yourself. Don't rely on memory of earlier conversation alone.
+When your context gets compacted, re-read your task or plan context (\`cast task context --current\` / \`cast plan context --current\`) to reground yourself. Don't rely on memory of earlier conversation alone.
 
 ### Commands
 
