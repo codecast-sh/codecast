@@ -252,7 +252,6 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
   const pathname = usePathname();
   const router = useRouter();
   const isInbox = pathname === "/conversation" || pathname?.startsWith("/conversation/") || pathname === "/inbox" || pathname?.startsWith("/inbox/");
-  const isAdminLogs = pathname?.startsWith("/admin/daemon-logs");
   const isSessions = pathname?.startsWith("/sessions");
   const isWindows = pathname?.startsWith("/windows");
   const isConfig = pathname?.startsWith("/config");
@@ -263,7 +262,6 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
   const isProjects = pathname === "/projects" || pathname?.startsWith("/projects/");
   const isWorkflows = pathname === "/workflows" || pathname?.startsWith("/workflows/");
   const { user: currentUser } = useCurrentUser();
-  const isAdmin = currentUser?.role === "admin";
   const teamMembers = useInboxStore((s) => s.teamMembers);
   const [currentTime, setCurrentTime] = useState(Date.now());
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id) as Id<"teams"> | undefined;
@@ -579,22 +577,6 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
             </svg>
             {!isNarrow && <span>Windows</span>}
           </Link>
-          {isAdmin && (
-            <Link
-              href="/admin/daemon-logs"
-              className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-4 py-2.5 transition-colors motion-reduce:transition-none ${
-                isAdminLogs
-                  ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
-                  : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60"
-              }`}
-              title="Daemon Logs"
-            >
-              <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-              </svg>
-              {!isNarrow && <span>Logs</span>}
-            </Link>
-          )}
           <Link
             href="/config"
             className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-4 py-2.5 transition-colors motion-reduce:transition-none ${
