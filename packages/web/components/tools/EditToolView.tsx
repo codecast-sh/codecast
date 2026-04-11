@@ -167,7 +167,7 @@ export function EditToolView({ input, output }: ToolViewProps) {
               <div
                 ref={mdRef}
                 className="relative p-4"
-                style={!mdExpanded && mdOverflowing ? { maxHeight: MD_MAX_HEIGHT, overflow: 'hidden' } : undefined}
+                style={!mdExpanded && mdOverflowing ? { maxHeight: MD_MAX_HEIGHT, overflowY: 'hidden' } : undefined}
               >
                 <MarkdownRenderer content={content} filePath={filePath} />
                 {!mdExpanded && mdOverflowing && (
