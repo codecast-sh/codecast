@@ -1,5 +1,4 @@
 import { useCallback, useRef, useEffect } from "react";
-import { usePathname, useRouter } from "next/navigation";
 import { X, Plus } from "lucide-react";
 import { useInboxStore, useTrackedStore, type AppTab } from "../store/inboxStore";
 
@@ -30,8 +29,6 @@ export function pathLabel(path: string): string {
 }
 
 export function TabBar() {
-  const pathname = usePathname();
-  const router = useRouter();
   const s = useTrackedStore([
     (s) => s.tabs,
     (s) => s.activeTabId,
@@ -44,34 +41,14 @@ export function TabBar() {
 
   // Bootstrap: create initial tab if none exist
   useEffect(() => {
-    if (tabs.length === 0 && pathname) {
-      s.openTab({ path: pathname, title: pathLabel(pathname) });
+    if (tabs.length === 0) {
+      const path = window.location.pathname;
+      s.openTab({ path, title: pathLabel(path) });
     }
-  }, [tabs.length, pathname]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Sync current path into active tab on navigation
-  useEffect(() => {
-    if (!activeTabId || !pathname) return;
-    const { tabs } = useInboxStore.getState();
-    const active = tabs.find((t: AppTab) => t.id === activeTabId);
-    if (active && active.path !== pathname) {
-      useInboxStore.getState().updateTab(activeTabId, { path: pathname, title: pathLabel(pathname) });
-    }
-  }, [pathname, activeTabId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [tabs.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Keyboard shortcuts: Cmd+T, Cmd+W, Cmd+Shift+[, Cmd+Shift+]
-  const routerRef = useRef(router);
-  routerRef.current = router;
-
   useEffect(() => {
-    function switchToTab(id: string) {
-      const state = useInboxStore.getState();
-      state.saveCurrentTabState();
-      state.switchTab(id);
-      const tab = state.tabs.find((t: AppTab) => t.id === id);
-      if (tab) routerRef.current.push(tab.path);
-    }
-
     const handler = (e: KeyboardEvent) => {
       const meta = e.metaKey || e.ctrlKey;
       if (!meta) return;
@@ -80,7 +57,8 @@ export function TabBar() {
         e.preventDefault();
         const state = useInboxStore.getState();
         state.saveCurrentTabState();
-        state.openTab({ path: window.location.pathname, title: pathLabel(window.location.pathname), makeActive: true });
+        const path = window.location.pathname;
+        state.openTab({ path, title: pathLabel(path), makeActive: true });
         return;
       }
 
@@ -88,14 +66,7 @@ export function TabBar() {
         const state = useInboxStore.getState();
         if (state.tabs.length <= 1) return;
         e.preventDefault();
-        const curId = state.activeTabId;
-        if (curId) {
-          const idx = state.tabs.findIndex((t: AppTab) => t.id === curId);
-          state.closeTab(curId);
-          const remaining = state.tabs.filter((t: AppTab) => t.id !== curId);
-          const next = remaining[Math.min(idx, remaining.length - 1)];
-          if (next) routerRef.current.push(next.path);
-        }
+        if (state.activeTabId) state.closeTab(state.activeTabId);
         return;
       }
 
@@ -105,7 +76,7 @@ export function TabBar() {
         if (state.tabs.length <= 1) return;
         const idx = state.tabs.findIndex((t: AppTab) => t.id === state.activeTabId);
         const prev = state.tabs[(idx - 1 + state.tabs.length) % state.tabs.length];
-        if (prev) switchToTab(prev.id);
+        if (prev) { state.saveCurrentTabState(); state.switchTab(prev.id); }
         return;
       }
 
@@ -115,7 +86,7 @@ export function TabBar() {
         if (state.tabs.length <= 1) return;
         const idx = state.tabs.findIndex((t: AppTab) => t.id === state.activeTabId);
         const next = state.tabs[(idx + 1) % state.tabs.length];
-        if (next) switchToTab(next.id);
+        if (next) { state.saveCurrentTabState(); state.switchTab(next.id); }
         return;
       }
     };
@@ -143,9 +114,11 @@ export function TabBar() {
   );
 
   const handleNewTab = useCallback(() => {
-    s.saveCurrentTabState();
-    s.openTab({ path: pathname, title: pathLabel(pathname), makeActive: true });
-  }, [pathname, s]);
+    const state = useInboxStore.getState();
+    state.saveCurrentTabState();
+    const path = window.location.pathname;
+    state.openTab({ path, title: pathLabel(path), makeActive: true });
+  }, []);
 
   const handleMiddleClick = useCallback(
     (e: React.MouseEvent, id: string) => {
