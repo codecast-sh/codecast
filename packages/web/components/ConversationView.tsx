@@ -2058,7 +2058,7 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
                 <div
                   ref={mdContainerRef}
                   className="relative p-3"
-                  style={!mdExpanded && mdOverflowing ? { maxHeight: MD_COLLAPSED_HEIGHT, overflow: 'hidden' } : undefined}
+                  style={!mdExpanded && mdOverflowing ? { maxHeight: MD_COLLAPSED_HEIGHT, overflowY: 'hidden' } : undefined}
                 >
                   <MarkdownRenderer content={String(parsedInput.content)} filePath={filePath} />
                   {!mdExpanded && mdOverflowing && (
@@ -4020,7 +4020,7 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
       {displayContent ? <div
         ref={contentRef}
         className={`text-sol-text text-sm pl-8 break-words relative ${effectivelyCollapsed ? "line-clamp-2 whitespace-pre-wrap" : isMarkdown ? "prose prose-invert prose-sm max-w-none" : "whitespace-pre-wrap"}`}
-        style={!effectivelyCollapsed && !contentExpanded && isOverflowing ? { maxHeight: USER_CONTENT_MAX_HEIGHT, overflow: 'hidden' } : undefined}
+        style={!effectivelyCollapsed && !contentExpanded && isOverflowing ? { maxHeight: USER_CONTENT_MAX_HEIGHT, overflowY: 'hidden' } : undefined}
       >
         {(() => {
           const hasTeammate = displayContent.includes('<teammate-message');
@@ -4552,7 +4552,7 @@ function AssistantBlock({
                 <div
                   ref={contentRef}
                   className="relative"
-                  style={!contentExpanded && isOverflowing ? { maxHeight: CONTENT_MAX_HEIGHT, overflow: 'hidden' } : undefined}
+                  style={!contentExpanded && isOverflowing ? { maxHeight: CONTENT_MAX_HEIGHT, overflowY: 'hidden' } : undefined}
                 >
                   {insightParts ? (
                     <div className="space-y-2">
@@ -5048,7 +5048,7 @@ function PlanBlock({ content, timestamp, collapsed, messageId, conversationId, o
         <div
           ref={contentRef}
           className="relative prose prose-invert prose-sm max-w-none"
-          style={!isExpanded && isOverflowing ? { maxHeight: PLAN_MAX_HEIGHT, overflow: 'hidden' } : undefined}
+          style={!isExpanded && isOverflowing ? { maxHeight: PLAN_MAX_HEIGHT, overflowY: 'hidden' } : undefined}
         >
           <ReactMarkdown
             remarkPlugins={entityRemarkPlugins}

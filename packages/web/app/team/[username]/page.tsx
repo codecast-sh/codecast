@@ -665,7 +665,7 @@ function MessageRow({ item, isFirst, router }: { item: any; isFirst: boolean; to
     >
       <div className={`w-[3px] flex-shrink-0 ${isFirst ? "bg-sol-blue/50" : "bg-sol-blue/15"}`} />
       <div className={`flex-1 min-w-0 px-3 ${isFirst ? "py-2.5" : "py-1.5"}`}>
-        <div className={`break-words ${shouldTruncate ? "max-h-[4.5em] overflow-hidden" : ""} ${isFirst ? "text-sol-text text-[13px]" : "text-sol-text/70 text-[12px]"}`}>
+        <div className={`break-words ${shouldTruncate ? "max-h-[4.5em] overflow-y-hidden" : ""} ${isFirst ? "text-sol-text text-[13px]" : "text-sol-text/70 text-[12px]"}`}>
           <MarkdownRenderer
             content={shouldTruncate ? cleanPreview.slice(0, 250) + "..." : cleanPreview}
             className={`prose prose-invert prose-sm max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_p]:my-0.5 [&_pre]:max-h-[6em] [&_pre]:overflow-hidden [&_code]:text-[11px] [&_ul]:my-0.5 [&_ol]:my-0.5`}
