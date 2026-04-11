@@ -1,7 +1,8 @@
 import { useRef, useCallback, useEffect } from "react";
-import { useQuery, useMutation } from "convex/react";
+import { useQuery, useMutation, useConvex } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { useInboxStore, InboxSession, isSessionWaitingForInput, isSub } from "../store/inboxStore";
+import { Id } from "@codecast/convex/convex/_generated/dataModel";
+import { useInboxStore, InboxSession, isSessionWaitingForInput, isSub, isConvexId } from "../store/inboxStore";
 import { soundIdle } from "../lib/sounds";
 import { useConvexSync } from "./useConvexSync";
 import { useMountEffect } from "./useMountEffect";
@@ -21,10 +22,12 @@ function deepMerge(target: any, source: any): any {
 }
 
 export function useSyncInboxSessions() {
+  const convex = useConvex();
   const showAll = useInboxStore((s) => s.clientState.ui?.show_old_sessions ?? true);
   const activeSessions = useQuery(api.conversations.listIdleSessions, { show_all: showAll });
   const dismissedQuery = useQuery(api.conversations.listDismissedSessions, {});
   const clientState = useQuery(api.client_state.get, {});
+  const bgFetchingRef = useRef(new Set<string>());
   const dispatchMutation = useMutation(api.dispatch.dispatch).withOptimisticUpdate(
     (localStore, { patches }) => {
       if (!patches?.client_state) return;
@@ -49,6 +52,34 @@ export function useSyncInboxSessions() {
     _setDispatch((action, args, patches) => dispatchRef.current({ action, args, patches }));
   });
 
+  // Background-sync messages for inbox sessions so clicks are instant.
+  // When session metadata updates arrive, detect sessions with new messages
+  // and fetch the delta from Convex. Results go into the store + IDB via mergeMessages.
+  const bgSyncMessages = useCallback((sessions: any[]) => {
+    const store = useInboxStore.getState();
+    for (const session of sessions) {
+      const id = session._id as string;
+      if (!isConvexId(id) || bgFetchingRef.current.has(id)) continue;
+      const storedMsgs = store.messages[id];
+      const storedCount = storedMsgs?.length ?? 0;
+      const serverCount = session.message_count ?? 0;
+      // Skip if we already have all messages or session is empty
+      if (serverCount === 0 || (storedCount > 0 && storedCount >= serverCount)) continue;
+      const lastTimestamp = storedCount > 0 ? storedMsgs[storedCount - 1].timestamp : 0;
+      bgFetchingRef.current.add(id);
+      convex.query(api.conversations.getNewMessages, {
+        conversation_id: id as Id<"conversations">,
+        after_timestamp: lastTimestamp,
+      }).then((result) => {
+        bgFetchingRef.current.delete(id);
+        if (!result?.messages?.length) return;
+        useInboxStore.getState().mergeMessages(id, result.messages, "append", { initialized: true });
+      }).catch(() => {
+        bgFetchingRef.current.delete(id);
+      });
+    }
+  }, [convex]);
+
   useConvexSync(activeSessions, useCallback((data: any) => {
     const sessions = data.sessions ?? data;
     const queued = useInboxStore.getState().sessionsWithQueuedMessages;
@@ -68,7 +99,8 @@ export function useSyncInboxSessions() {
     if (typeof data.hidden_count === "number") {
       useInboxStore.setState({ hiddenSessionCount: data.hidden_count });
     }
-  }, [syncTable]));
+    bgSyncMessages(sessions);
+  }, [syncTable, bgSyncMessages]));
 
   useConvexSync(dismissedQuery, useCallback((data: any) => {
     syncTable("dismissedSessions", data as unknown as InboxSession[]);
