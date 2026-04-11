@@ -511,57 +511,39 @@ function SessionCard({
       )}
       {(onDismiss || onDefer || onPin) && (
         <div className={`absolute top-0 bottom-0 right-0 flex flex-col items-center justify-between py-1 opacity-0 group-hover:opacity-100 transition-opacity pl-16 pr-2 ${isActive ? '' : 'bg-gradient-to-r from-transparent via-sol-bg-alt/60 to-sol-bg-alt'}`} style={isActive ? { background: 'linear-gradient(to right, transparent, color-mix(in srgb, color-mix(in srgb, var(--sol-cyan) 15%, var(--sol-bg-alt)) 60%, transparent), color-mix(in srgb, var(--sol-cyan) 15%, var(--sol-bg-alt)))' } : undefined}>
-          {onPin && (
-            <TooltipProvider delayDuration={300}>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    onClick={(e) => { e.stopPropagation(); onPin(session._id); }}
-                    className={`p-1 rounded transition-colors ${session.is_pinned ? 'text-sol-magenta' : 'text-sol-text-dim hover:text-sol-magenta'}`}
-                  >
-                    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill={session.is_pinned ? "currentColor" : "none"} stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M12 17v5" />
-                      <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76z" />
-                    </svg>
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="left">{session.is_pinned ? "Unpin" : "Pin"}</TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
+          {onDismiss && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onDismiss(session._id); }}
+              className="flex items-center gap-1 px-1.5 py-0.5 rounded text-xs text-sol-text-dim hover:text-sol-red transition-colors"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 6l12 12M18 6L6 18" />
+              </svg>
+              Dismiss
+            </button>
           )}
           {onDefer && (
-            <TooltipProvider delayDuration={300}>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    onClick={(e) => { e.stopPropagation(); onDefer(session._id); }}
-                    className="p-1 rounded text-sol-text-dim hover:text-sol-yellow transition-colors"
-                  >
-                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v14m0 0l-6-6m6 6l6-6M5 21h14" />
-                    </svg>
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="left">Defer</TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
+            <button
+              onClick={(e) => { e.stopPropagation(); onDefer(session._id); }}
+              className="flex items-center gap-1 px-1.5 py-0.5 rounded text-xs text-sol-text-dim hover:text-sol-yellow transition-colors"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v14m0 0l-6-6m6 6l6-6M5 21h14" />
+              </svg>
+              Defer
+            </button>
           )}
-          {onDismiss && (
-            <TooltipProvider delayDuration={300}>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    onClick={(e) => { e.stopPropagation(); onDismiss(session._id); }}
-                    className="p-1 rounded text-sol-text-dim hover:text-sol-red transition-colors"
-                  >
-                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7l10 10M17 17h-6m6 0v-6" />
-                    </svg>
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="left">Dismiss</TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
+          {onPin && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onPin(session._id); }}
+              className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-xs transition-colors ${session.is_pinned ? 'text-sol-magenta' : 'text-sol-text-dim hover:text-sol-magenta'}`}
+            >
+              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill={session.is_pinned ? "currentColor" : "none"} stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 17v5" />
+                <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76z" />
+              </svg>
+              {session.is_pinned ? "Unpin" : "Pin"}
+            </button>
           )}
         </div>
       )}
