@@ -801,6 +801,7 @@ export function SessionListPanel({
 }) {
   const s = useTrackedStore([
     s => s.clientState.ui,
+    s => s.clientState.show_dismissed,
     s => s.hiddenSessionCount,
     s => s.sessions,
     s => s.dismissedSessions,
@@ -1036,17 +1037,17 @@ export function SessionListPanel({
         )}
         <div className="border-t border-sol-border/30">
           <button
-            onClick={() => s.toggleCollapsedSection("dismissed")}
+            onClick={() => s.toggleShowDismissed()}
             className="w-full px-3 py-1.5 bg-sol-bg border-b border-sol-border/30 flex items-center justify-between"
           >
             <span className="text-[10px] font-semibold uppercase tracking-wider text-sol-text-dim">
               Dismissed{filteredDismissed.length > 0 ? ` (${filteredDismissed.length})` : ""}
             </span>
-            <svg className={`w-3 h-3 transition-transform text-sol-text-dim ${s.collapsedSections.dismissed ? "" : "rotate-180"}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className={`w-3 h-3 transition-transform text-sol-text-dim ${s.clientState.show_dismissed === false ? "" : "rotate-180"}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
             </svg>
           </button>
-          {!s.collapsedSections.dismissed && filteredDismissed.length > 0 && (() => {
+          {s.clientState.show_dismissed !== false && filteredDismissed.length > 0 && (() => {
             const allDismissedIds = new Set(filteredDismissed.map((sess) => sess._id));
             const subMap = new Map<string, InboxSession[]>();
             for (const sess of filteredDismissed) {
