@@ -204,9 +204,17 @@ export const getAllRespondedPermissions = query({
       return [];
     }
 
+    // Only return recently resolved permissions (last 5 minutes).
+    // Older ones are stale — the daemon session has already moved on.
+    const fiveMinutesAgo = Date.now() - 5 * 60 * 1000;
     const permissions = await ctx.db
       .query("pending_permissions")
-      .filter((q) => q.neq(q.field("status"), "pending"))
+      .filter((q) =>
+        q.and(
+          q.neq(q.field("status"), "pending"),
+          q.gte(q.field("resolved_at"), fiveMinutesAgo)
+        )
+      )
       .collect();
 
     const userPermissions = [];

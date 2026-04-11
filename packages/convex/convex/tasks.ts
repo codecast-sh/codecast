@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { mutation, query } from "./_generated/server";
+import { internalMutation, mutation, query } from "./_generated/server";
 import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
 import { getAuthUserId } from "@convex-dev/auth/server";
@@ -7,7 +7,7 @@ import { createDataContext, scopeByProject } from "./data";
 import { nextShortId } from "./counters";
 import { internal } from "./_generated/api";
 
-async function resolveAssigneeToUserId(
+export async function resolveAssigneeToUserId(
   ctx: any,
   assignee: string,
   teamId?: Id<"teams">
@@ -32,7 +32,7 @@ async function resolveAssigneeToUserId(
   return null;
 }
 
-async function resolveAssigneeStr(
+export async function resolveAssigneeStr(
   ctx: any,
   assignee: string | undefined,
   userId: Id<"users">
@@ -47,7 +47,7 @@ async function resolveAssigneeStr(
   return assignee;
 }
 
-async function notifySubscribers(
+export async function notifySubscribers(
   ctx: any,
   eventType: string,
   actorUserId: Id<"users">,
@@ -65,7 +65,7 @@ async function notifySubscribers(
   });
 }
 
-async function subscribeUser(
+export async function subscribeUser(
   ctx: any,
   userId: Id<"users">,
   taskId: Id<"tasks">,
@@ -79,7 +79,7 @@ async function subscribeUser(
   });
 }
 
-async function recalcPlanProgress(ctx: any, planId: Id<"plans">, updatedTaskId: Id<"tasks">, newStatus: string) {
+export async function recalcPlanProgress(ctx: any, planId: Id<"plans">, updatedTaskId: Id<"tasks">, newStatus: string) {
   const plan = await ctx.db.get(planId);
   if (!plan || !plan.task_ids) return;
 
@@ -142,12 +142,43 @@ export const create = mutation({
     fidelity: v.optional(v.string()),
     condition: v.optional(v.string()),
     project_path: v.optional(v.string()),
+    steps: v.optional(v.array(v.object({
+      title: v.string(),
+      done: v.optional(v.boolean()),
+      verification: v.optional(v.string()),
+    }))),
+    acceptance_criteria: v.optional(v.array(v.string())),
+    estimated_minutes: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
     if (!auth) throw new Error("Unauthorized");
 
-    const db = await createDataContext(ctx, { userId: auth.userId, project_path: args.project_path });
+    // Resolve conversation first so we can propagate team_id to the task
+    let conversation_ids: Id<"conversations">[] | undefined;
+    let created_from_conversation: Id<"conversations"> | undefined;
+    let convTeamId: Id<"teams"> | undefined;
+    if (args.conversation_id) {
+      const conv = await ctx.db
+        .query("conversations")
+        .withIndex("by_session_id", (q) => q.eq("session_id", args.conversation_id!))
+        .first();
+      if (conv) {
+        conversation_ids = [conv._id];
+        created_from_conversation = conv._id;
+        // Always propagate team_id from conversation — tasks are work items
+        // tracked at the team level regardless of conversation privacy.
+        if (conv.team_id) {
+          convTeamId = conv.team_id;
+        }
+      }
+    }
+
+    const db = await createDataContext(ctx, {
+      userId: auth.userId,
+      project_path: args.project_path,
+      ...(convTeamId ? { workspace: "team" as const, team_id: convTeamId } : {}),
+    });
     const now = Date.now();
     const short_id = await nextShortId(ctx.db, "ct");
 
@@ -158,19 +189,6 @@ export const create = mutation({
         .filter((q) => q.eq(q.field("_id"), args.project_id as any))
         .first();
       if (project) project_id = project._id;
-    }
-
-    let conversation_ids: Id<"conversations">[] | undefined;
-    let created_from_conversation: Id<"conversations"> | undefined;
-    if (args.conversation_id) {
-      const conv = await ctx.db
-        .query("conversations")
-        .withIndex("by_session_id", (q) => q.eq("session_id", args.conversation_id!))
-        .first();
-      if (conv) {
-        conversation_ids = [conv._id];
-        created_from_conversation = conv._id;
-      }
     }
 
     let plan_id: Id<"plans"> | undefined;
@@ -202,7 +220,7 @@ export const create = mutation({
       created_from_conversation,
       created_from_insight: args.insight_id as any,
       source: (args.source || "human") as any,
-      triage_status: (args.source && args.source !== "human") ? "suggested" : "active",
+      triage_status: args.source === "insight" ? "suggested" : "active",
       confidence: args.confidence,
       attempt_count: 0,
       retry_count: 0,
@@ -215,6 +233,9 @@ export const create = mutation({
       fidelity: args.fidelity,
       condition: args.condition,
       project_path: args.project_path,
+      steps: args.steps,
+      acceptance_criteria: args.acceptance_criteria,
+      estimated_minutes: args.estimated_minutes,
     } as any);
 
     if (plan_id) {
@@ -229,13 +250,10 @@ export const create = mutation({
       }
     }
 
-    if (created_from_conversation) {
+    if (created_from_conversation && plan_id) {
       const conv = await ctx.db.get(created_from_conversation);
-      if (conv) {
-        await ctx.db.patch(created_from_conversation, { active_task_id: id });
-        if (plan_id && !conv.active_plan_id) {
-          await ctx.db.patch(created_from_conversation, { active_plan_id: plan_id });
-        }
+      if (conv && !conv.active_plan_id) {
+        await ctx.db.patch(created_from_conversation, { active_plan_id: plan_id });
       }
     }
 
@@ -597,7 +615,8 @@ export const update = mutation({
         if (!existing.some((id) => id === conv._id)) {
           updates.conversation_ids = [...existing, conv._id];
         }
-        if (!conv.active_task_id || conv.active_task_id === task._id) {
+        // Only bind conversation to task on explicit start (cast task start)
+        if (args.status === "in_progress" && (!conv.active_task_id || conv.active_task_id === task._id)) {
           await ctx.db.patch(conv._id, { active_task_id: task._id });
           if (task.plan_id && !conv.active_plan_id) {
             await ctx.db.patch(conv._id, { active_plan_id: task.plan_id });
@@ -876,10 +895,6 @@ export const webList = query({
         tasks = tasks.filter((t) => t.status !== "done" && t.status !== "dropped");
       }
     } else {
-      const statuses = args.status
-        ? [args.status]
-        : ["backlog", "open", "in_progress", "in_review"];
-
       const seen = new Set<string>();
       const allTasks: any[] = [];
       const pushUnique = (t: any) => {
@@ -887,65 +902,48 @@ export const webList = query({
         if (!seen.has(id)) { seen.add(id); allTasks.push(t); }
       };
 
-      for (const status of statuses) {
-        const userTasks = await ctx.db.query("tasks")
-          .withIndex("by_user_status", (q: any) => q.eq("user_id", userId).eq("status", status))
-          .order("desc")
-          .take(500);
-        for (const t of userTasks) pushUnique(t);
+      if (args.workspace === "team" && args.team_id) {
+        // TEAM VIEW: fetch ALL tasks for this team — no per-status limits.
+        // Client does all filtering (status, source, assignee, priority).
+        const teamTasks = await ctx.db.query("tasks")
+          .withIndex("by_team_id", (q: any) => q.eq("team_id", args.team_id))
+          .collect();
+        for (const t of teamTasks) pushUnique(t);
 
-        if (args.team_id) {
-          const teamTasks = await ctx.db.query("tasks")
-            .withIndex("by_team_status", (q: any) => q.eq("team_id", args.team_id).eq("status", status))
-            .order("desc")
-            .take(500);
-          for (const t of teamTasks) pushUnique(t);
-        }
-      }
-
-      if ((args.workspace === "team" || !args.workspace) && args.team_id) {
-        const needConvLookup = allTasks.filter(t => !t.team_id);
-        const convMap = new Map<string, any>();
-        for (const t of needConvLookup) {
-          const cid = t.conversation_ids?.[0] || t.created_from_conversation;
-          if (cid) {
-            const conv = await ctx.db.get(cid);
-            if (conv) convMap.set(String(cid), conv);
-          }
-        }
+        // Also include tasks assigned to current user in this team
+        // (covers edge case where assignee is set but team_id isn't)
+        const assignedTasks = await ctx.db.query("tasks")
+          .withIndex("by_assignee_status", (q: any) => q.eq("assignee", String(userId)))
+          .collect();
         const teamStr = String(args.team_id);
-        tasks = allTasks.filter(t => {
-          if (String(t.team_id) === teamStr) return true;
-          if (!t.team_id) {
-            const cid = t.conversation_ids?.[0] || t.created_from_conversation;
-            const conv = cid ? convMap.get(String(cid)) : undefined;
-            if (conv) return (!conv.is_private || conv.auto_shared) && String(conv.team_id) === teamStr;
-          }
-          return false;
-        });
-      } else if (args.workspace === "personal") {
-        const needConvLookup = allTasks.filter(t => !t.team_id);
-        const convMap = new Map<string, any>();
-        for (const t of needConvLookup) {
-          const cid = t.conversation_ids?.[0] || t.created_from_conversation;
-          if (cid) {
-            const conv = await ctx.db.get(cid);
-            if (conv) convMap.set(String(cid), conv);
-          }
+        for (const t of assignedTasks) {
+          if (String(t.team_id) === teamStr) pushUnique(t);
         }
-        tasks = allTasks.filter(t => {
-          if (t.team_id) return false;
-          const cid = t.conversation_ids?.[0] || t.created_from_conversation;
-          const conv = cid ? convMap.get(String(cid)) : undefined;
-          if (conv) return conv.is_private && !conv.auto_shared;
-          return true;
-        });
+      } else if (args.workspace === "personal") {
+        // PERSONAL VIEW: all user's tasks that don't belong to any team.
+        const userTasks = await ctx.db.query("tasks")
+          .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+          .collect();
+        for (const t of userTasks) {
+          if (!t.team_id) pushUnique(t);
+        }
       } else {
-        tasks = allTasks;
+        // UNSCOPED: all user's tasks
+        const userTasks = await ctx.db.query("tasks")
+          .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+          .collect();
+        for (const t of userTasks) pushUnique(t);
       }
+      tasks = allTasks;
     }
     if (args.project_path) {
       tasks = scopeByProject(tasks, args.project_path);
+    }
+
+    // Status filtering (supports comma-separated values from frontend)
+    if (args.status) {
+      const statusSet = new Set(args.status.split(","));
+      tasks = tasks.filter((t: any) => statusSet.has(t.status));
     }
 
     if (args.triage_status) {
@@ -969,10 +967,9 @@ export const webList = query({
       });
     }
 
-    const numItems = args.limit || 300;
-    const offset = (args.page || 0) * numItems;
-    const hasMore = offset + numItems < tasks.length;
-    const result = tasks.slice(offset, offset + numItems);
+    // Return ALL tasks — no server-side pagination.
+    // Client-side filtering handles everything; we never want to silently drop items.
+    const result = tasks;
 
     // Enrich with creator and assignee info
     const allUserIds = new Set<string>();
@@ -1035,11 +1032,11 @@ export const webList = query({
         sourceConvIds.add(t.created_from_conversation.toString());
       }
     }
-    const sourceAgentMap = new Map<string, string>();
+    const sourceConvMap = new Map<string, { agent_type?: string; session_id?: string; title?: string }>();
     for (const cid of sourceConvIds) {
       try {
         const c = await ctx.db.get(cid as Id<"conversations">);
-        if (c?.agent_type) sourceAgentMap.set(cid, c.agent_type);
+        if (c) sourceConvMap.set(cid, { agent_type: c.agent_type, session_id: c.session_id, title: c.title || undefined });
       } catch {}
     }
 
@@ -1049,10 +1046,14 @@ export const webList = query({
       assignee_info: t.assignee ? userMap.get(t.assignee.toString()) || null : null,
       plan: t.plan_id ? planMap.get(t.plan_id.toString()) || null : null,
       activeSession: activeTaskMap.get(t._id.toString()) || null,
-      source_agent_type: t.created_from_conversation ? sourceAgentMap.get(t.created_from_conversation.toString()) || null : null,
+      source_agent_type: t.created_from_conversation ? sourceConvMap.get(t.created_from_conversation.toString())?.agent_type || null : null,
+      origin_session: t.created_from_conversation ? (() => {
+        const sc = sourceConvMap.get(t.created_from_conversation.toString());
+        return sc?.session_id ? { conversation_id: t.created_from_conversation.toString(), session_id: sc.session_id, title: sc.title } : null;
+      })() : null,
       session_count: (t.conversation_ids || []).length,
     }));
-    return { items, hasMore };
+    return { items, hasMore: false };
   },
 });
 
@@ -1323,12 +1324,13 @@ export const webCreate = mutation({
     team_id: v.optional(v.id("teams")),
     workspace: v.optional(v.union(v.literal("personal"), v.literal("team"))),
     assignee: v.optional(v.string()),
+    project_path: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Unauthorized");
 
-    const db = await createDataContext(ctx, { userId, workspace: args.workspace, team_id: args.team_id });
+    const db = await createDataContext(ctx, { userId, workspace: args.workspace, team_id: args.team_id, project_path: args.project_path });
     const short_id = await nextShortId(ctx.db, "ct");
 
     let project_id: Id<"projects"> | undefined;
@@ -1587,7 +1589,18 @@ export const backfillTeamScope = mutation({
       const patches: Record<string, any> = {};
 
       if (!t.team_id) {
-        const tid = userTeamMap.get(t.user_id.toString());
+        // Prefer conversation's team (matches the webList visibility logic)
+        let tid: any;
+        const cid = (t as any).conversation_ids?.[0] || t.created_from_conversation;
+        if (cid) {
+          const conv = await ctx.db.get(cid) as any;
+          if (conv?.team_id && (!conv.is_private || conv.auto_shared
+            || (conv.team_visibility && conv.team_visibility !== "private"))) {
+            tid = conv.team_id;
+          }
+        }
+        // Fall back to user's active team
+        if (!tid) tid = userTeamMap.get(t.user_id.toString());
         if (tid) patches.team_id = tid;
       }
 
@@ -1596,7 +1609,11 @@ export const backfillTeamScope = mutation({
       }
 
       if (!(t as any).triage_status) {
-        patches.triage_status = (t.source === "human" || t.promoted) ? "active" : "suggested";
+        patches.triage_status = (t.source === "insight" && !t.promoted) ? "suggested" : "active";
+      }
+      // Fix agent-sourced tasks incorrectly set to "suggested"
+      if ((t as any).triage_status === "suggested" && t.source === "agent") {
+        patches.triage_status = "active";
       }
 
       if (Object.keys(patches).length > 0) {
@@ -1618,6 +1635,44 @@ export const backfillTeamScope = mutation({
     }
 
     return { tasksFixed, tasksPromoted, docsFixed, totalTasks: allTasks.length, totalDocs: allDocs.length };
+  },
+});
+
+// Internal version for admin CLI: npx convex run tasks:backfillTaskTeamIds
+// Paginated — pass cursor from previous result to continue.
+export const backfillTaskTeamIds = internalMutation({
+  args: { cursor: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const allUsers = await ctx.db.query("users").collect();
+    const userTeamMap = new Map<string, any>();
+    for (const u of allUsers) {
+      userTeamMap.set(u._id.toString(), (u as any).active_team_id || (u as any).team_id);
+    }
+
+    const page = await ctx.db.query("tasks").paginate({
+      cursor: (args.cursor || null) as any,
+      numItems: 200,
+    });
+
+    let fixed = 0;
+    for (const t of page.page) {
+      if (t.team_id) continue;
+      let tid: any;
+      const cid = (t as any).conversation_ids?.[0] || t.created_from_conversation;
+      if (cid) {
+        const conv = await ctx.db.get(cid) as any;
+        if (conv?.team_id && (!conv.is_private || conv.auto_shared
+          || (conv.team_visibility && conv.team_visibility !== "private"))) {
+          tid = conv.team_id;
+        }
+      }
+      if (!tid) tid = userTeamMap.get(t.user_id.toString());
+      if (tid) {
+        await ctx.db.patch(t._id, { team_id: tid });
+        fixed++;
+      }
+    }
+    return { fixed, isDone: page.isDone, cursor: page.continueCursor };
   },
 });
 
@@ -1646,6 +1701,24 @@ export const backfillTriageStatus = mutation({
     }
 
     return { updated, skipped, total: tasks.length, done: updated < batchSize };
+  },
+});
+
+// Backfill: reset all insight-sourced tasks to triage_status "suggested"
+// so they appear in the triage lightbulb, not the main "All" list.
+export const backfillInsightTriageStatus = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const tasks = await ctx.db.query("tasks").collect();
+    let updated = 0;
+    for (const t of tasks) {
+      if (t.source !== "insight") continue;
+      if ((t as any).triage_status === "suggested") continue;
+      if ((t as any).triage_status === "dismissed") continue;
+      await ctx.db.patch(t._id, { triage_status: "suggested" as any, promoted: false });
+      updated++;
+    }
+    return { updated, total: tasks.length };
   },
 });
 
@@ -2074,3 +2147,5 @@ export const getDependencyChain = query({
     };
   },
 });
+
+

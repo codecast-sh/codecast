@@ -1,9 +1,10 @@
 import { v } from "convex/values";
 import { mutation, query, internalMutation, internalQuery } from "./_generated/server";
 import { Id } from "./_generated/dataModel";
+import { paginationOptsValidator } from "convex/server";
 import { verifyApiToken } from "./apiTokens";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { createDataContext, scopeByProject, scopedFetch } from "./data";
+import { createDataContext, scopedFetch, resolveEffectiveTeam } from "./data";
 import { resolveTeamForPath } from "./privacy";
 
 function generatePlanShortId(): string {
@@ -61,6 +62,129 @@ function docRepoName(d: any, convMap: Map<string, any>): string {
   const root = docGitRoot(d, convMap);
   if (root) return root.split('/').filter(Boolean).pop() || root;
   return d.project_path ? repoName(d.project_path) : "";
+}
+
+
+function isNoiseDocForWeb(d: any): boolean {
+  const CONFIG_DOC_NAMES = new Set(["README", "AGENTS", "CLAUDE", "CLAUDE.md", "AGENTS.md", "README.md"]);
+  return CONFIG_DOC_NAMES.has(d.title);
+}
+
+function extractPlanTitleForWeb(d: any) {
+  if (d.source === "plan_mode" && d.content) {
+    const match = d.content.match(/^#\s+(.+)/m);
+    if (match) return { ...d, display_title: match[1].trim(), plan_name: d.title };
+  }
+  return d;
+}
+
+async function buildWebDocList(
+  ctx: any,
+  args: {
+    doc_type?: string;
+    project_id?: string;
+    project_path?: string;
+    scope?: string;
+    team_id?: Id<"teams">;
+    workspace?: "personal" | "team";
+  },
+  requestedCount?: number
+) {
+  const userId = await getAuthUserId(ctx);
+  if (!userId) return { docs: [], projectPaths: [] };
+
+  const user = await ctx.db.get(userId);
+  const resolvedTeamId = args.workspace === "team" && args.team_id
+    ? args.team_id
+    : !args.workspace ? user?.active_team_id : undefined;
+  const effectiveWorkspace = args.scope === "projects"
+    ? "personal" as const
+    : args.workspace;
+
+  const { records: rawDocs, convMap } = await scopedFetch(ctx, "docs", {
+    userId,
+    teamId: resolvedTeamId,
+    workspace: effectiveWorkspace,
+    limit: requestedCount,
+    stripFields: ["content", "embedding", "entries"],
+  });
+
+  let docs: any[];
+  let projectPaths: string[] = [];
+
+  if (args.scope === "projects" || args.project_path) {
+    if (args.scope === "projects") {
+      docs = rawDocs;
+      if (args.project_path) {
+        const filterName = repoName(args.project_path);
+        docs = docs.filter((d) => d.project_path && docRepoName(d, convMap) === filterName);
+      }
+    } else {
+      const filterName = repoName(args.project_path!);
+      docs = rawDocs.filter((d) => d.project_path && docRepoName(d, convMap) === filterName);
+    }
+    const unscopedDocs = rawDocs.filter((d) => !d.archived_at && !isNoiseDocForWeb(d));
+    projectPaths = dedupeProjectPaths([...new Set(unscopedDocs.map((d) => d.project_path).filter(Boolean))] as string[], unscopedDocs, convMap);
+  } else {
+    docs = rawDocs;
+  }
+
+  // No server-side doc_type filter — all filtering is client-side.
+  docs = docs.filter((d) => !d.archived_at && !isNoiseDocForWeb(d) && d.source !== "plan_mode");
+
+  if (!projectPaths.length) {
+    projectPaths = dedupeProjectPaths([...new Set(docs.map((d) => d.project_path).filter(Boolean))] as string[], docs, convMap);
+  }
+
+  const enriched = docs.map((d) => {
+    const cid = d.conversation_id || (d.related_conversation_ids?.[0]);
+    const conv = cid ? convMap.get(String(cid)) : undefined;
+    if (conv?.started_at) return { ...d, originated_at: conv.started_at };
+    return d;
+  });
+
+  enriched.sort((a: any, b: any) => (b.originated_at || b.created_at) - (a.originated_at || a.created_at));
+
+  const userIds = new Set<string>();
+  for (const d of enriched) {
+    if (d.user_id) userIds.add(String(d.user_id));
+  }
+  const userMap = new Map<string, { name?: string; image?: string; github_username?: string }>();
+  for (const uid of userIds) {
+    const u = await ctx.db.get(uid as Id<"users">);
+    if (u) userMap.set(uid, { name: u.name, image: u.image || (u as any).github_avatar_url, github_username: (u as any).github_username });
+  }
+
+  const planIds = new Set<string>();
+  const docIdsNeedingPlan: string[] = [];
+  for (const d of enriched) {
+    if (d.plan_id) planIds.add(String(d.plan_id));
+    else if (d.doc_type === "plan") docIdsNeedingPlan.push(d._id as string);
+  }
+  const planMap = new Map<string, { short_id: string; status: string }>();
+  for (const pid of planIds) {
+    const p = await ctx.db.get(pid as Id<"plans">);
+    if (p) planMap.set(pid, { short_id: (p as any).short_id, status: (p as any).status });
+  }
+  const docToPlanMap = new Map<string, { short_id: string; status: string }>();
+  for (const docId of docIdsNeedingPlan) {
+    const p = await ctx.db.query("plans").withIndex("by_doc_id", (q: any) => q.eq("doc_id", docId)).first();
+    if (p) {
+      docToPlanMap.set(docId, { short_id: p.short_id, status: p.status as string });
+    }
+  }
+
+  const withAuthors = enriched.map(extractPlanTitleForWeb).map((d: any) => {
+    const author = d.user_id ? userMap.get(String(d.user_id)) : undefined;
+    const plan = d.plan_id ? planMap.get(String(d.plan_id)) : (docToPlanMap.get(d._id as string) || undefined);
+    return {
+      ...d,
+      ...(author ? { author_name: author.name, author_image: author.image, author_username: author.github_username } : {}),
+      ...(plan ? { plan_short_id: plan.short_id, plan_status: plan.status } : {}),
+    };
+  });
+
+  return { docs: withAuthors, projectPaths };
 }
 
 type DocNode = { type: string; attrs?: Record<string, any>; content?: DocNode[]; text?: string };
@@ -196,7 +320,9 @@ export const create = mutation({
       if (conv) {
         conversation_id = conv._id;
         if (!team_id) {
-          team_id = (!conv.is_private || conv.auto_shared) ? conv.team_id : undefined;
+          const shared = !conv.is_private || conv.auto_shared
+            || (conv.team_visibility && conv.team_visibility !== "private");
+          team_id = shared ? conv.team_id : undefined;
         }
       }
     }
@@ -547,123 +673,130 @@ export const webList = query({
     workspace: v.optional(v.union(v.literal("personal"), v.literal("team"))),
   },
   handler: async (ctx, args) => {
+    const fetchCount = args.limit || undefined;
+    const { docs, projectPaths } = await buildWebDocList(ctx, args, fetchCount);
+    return { docs, projectPaths };
+  },
+});
+
+// Paginated query using Convex's native .paginate() — each page reads a bounded
+// number of docs so the query stays well under the 64MB V8 memory limit.
+// Heavy fields (content, embedding, entries) are stripped per-page.
+export const webListPaged = query({
+  args: {
+    team_id: v.optional(v.id("teams")),
+    workspace: v.optional(v.union(v.literal("personal"), v.literal("team"))),
+    paginationOpts: paginationOptsValidator,
+  },
+  handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
-    if (!userId) return { docs: [], projectPaths: [] };
+    if (!userId) return { page: [], isDone: true, continueCursor: "" };
 
     const user = await ctx.db.get(userId);
-
-    const CONFIG_DOC_NAMES = new Set(["README", "AGENTS", "CLAUDE", "CLAUDE.md", "AGENTS.md", "README.md"]);
-    const isNoiseDoc = (d: any) => {
-      if (CONFIG_DOC_NAMES.has(d.title)) return true;
-      return false;
-    };
-
-    const extractPlanTitle = (d: any) => {
-      if (d.source === "plan_mode" && d.content) {
-        const match = d.content.match(/^#\s+(.+)/m);
-        if (match) return { ...d, display_title: match[1].trim(), plan_name: d.title };
-      }
-      return d;
-    };
-
-    let docs;
-    let projectPaths: string[] = [];
-
-    const queryLimit = args.limit || 100;
-    const resolvedTeamId = args.workspace === "team" && args.team_id
+    const teamId = args.workspace === "team" && args.team_id
       ? args.team_id
-      : !args.workspace ? user?.active_team_id : undefined;
+      : user?.active_team_id;
 
-    // "projects" scope browses all personal docs; project_path is just a filter within the current workspace
-    const effectiveWorkspace = args.scope === "projects"
-      ? "personal" as const
-      : args.workspace;
+    // Pick the right index based on workspace
+    const indexQuery = (args.workspace === "team" && teamId)
+      ? ctx.db.query("docs").withIndex("by_team_id", (q: any) => q.eq("team_id", teamId)).order("desc")
+      : ctx.db.query("docs").withIndex("by_user_id", (q: any) => q.eq("user_id", userId)).order("desc");
 
-    const { records: scopedDocs, convMap } = await scopedFetch(ctx, "docs", {
-      userId,
-      teamId: resolvedTeamId,
-      workspace: effectiveWorkspace,
-      limit: queryLimit * 2,
-    });
+    const result = await indexQuery.paginate(args.paginationOpts);
 
-    if (args.scope === "projects" || args.project_path) {
-      if (args.scope === "projects") {
-        docs = scopedDocs;
-        if (args.project_path) {
-          const filterName = repoName(args.project_path);
-          docs = docs.filter((d) => d.project_path && docRepoName(d, convMap) === filterName);
-        }
-      } else {
-        const filterName = repoName(args.project_path!);
-        docs = scopedDocs.filter((d) => d.project_path && docRepoName(d, convMap) === filterName);
-      }
-      const unscopedDocs = scopedDocs.filter((d) => !d.archived_at && !isNoiseDoc(d));
-      projectPaths = dedupeProjectPaths([...new Set(unscopedDocs.map((d) => d.project_path).filter(Boolean))] as string[], unscopedDocs, convMap);
-    } else {
-      docs = scopedDocs;
+    // Per-page: resolve conversations for team filtering + enrichment
+    const convIds = new Set<string>();
+    for (const d of result.page) {
+      const cid = d.conversation_id || (d.related_conversation_ids as any)?.[0];
+      if (cid) convIds.add(String(cid));
+    }
+    const convMap = new Map<string, any>();
+    for (const cid of convIds) {
+      const conv = await ctx.db.get(cid as Id<"conversations">);
+      if (conv) convMap.set(cid, conv);
     }
 
-    if (args.doc_type) {
-      docs = docs.filter((d) => d.doc_type === args.doc_type);
-    }
-
-    docs = docs.filter((d) => !d.archived_at && !isNoiseDoc(d) && d.source !== "plan_mode");
-
-    if (!projectPaths.length) {
-      projectPaths = dedupeProjectPaths([...new Set(docs.map((d) => d.project_path).filter(Boolean))] as string[], docs, convMap);
-    }
-
-    const enriched = docs.map((d) => {
-      const cid = d.conversation_id || (d.related_conversation_ids?.[0]);
-      const conv = cid ? convMap.get(String(cid)) : undefined;
-      if (conv?.started_at) return { ...d, originated_at: conv.started_at };
-      return d;
-    });
-
-    enriched.sort((a: any, b: any) => (b.originated_at || b.created_at) - (a.originated_at || a.created_at));
-    const result = enriched.slice(0, queryLimit);
-
-    // Batch-load user profiles for author attribution
+    // Per-page: resolve unique authors
     const userIds = new Set<string>();
-    for (const d of result) {
+    const planIds = new Set<string>();
+    const filtered: any[] = [];
+    for (const d of result.page) {
+      if (d.archived_at || d.source === "plan_mode" || isNoiseDocForWeb(d)) continue;
+      // Workspace filter for personal: exclude team-visible docs
+      if (args.workspace === "personal") {
+        const eff = resolveEffectiveTeam(d, convMap);
+        if (eff) continue;
+      }
       if (d.user_id) userIds.add(String(d.user_id));
+      if (d.plan_id) planIds.add(String(d.plan_id));
+      filtered.push(d);
     }
+
     const userMap = new Map<string, { name?: string; image?: string; github_username?: string }>();
     for (const uid of userIds) {
       const u = await ctx.db.get(uid as Id<"users">);
       if (u) userMap.set(uid, { name: u.name, image: u.image || (u as any).github_avatar_url, github_username: (u as any).github_username });
-    }
-
-    const planIds = new Set<string>();
-    const docIdsNeedingPlan: string[] = [];
-    for (const d of result) {
-      if (d.plan_id) planIds.add(String(d.plan_id));
-      else if (d.doc_type === "plan") docIdsNeedingPlan.push(d._id as string);
     }
     const planMap = new Map<string, { short_id: string; status: string }>();
     for (const pid of planIds) {
       const p = await ctx.db.get(pid as Id<"plans">);
       if (p) planMap.set(pid, { short_id: (p as any).short_id, status: (p as any).status });
     }
-    const docToPlanMap = new Map<string, { short_id: string; status: string }>();
-    for (const docId of docIdsNeedingPlan) {
-      const p = await ctx.db.query("plans").withIndex("by_doc_id", (q: any) => q.eq("doc_id", docId)).first();
-      if (p) {
-        docToPlanMap.set(docId, { short_id: p.short_id, status: p.status as string });
-      }
-    }
 
-    const withAuthors = result.map(extractPlanTitle).map((d: any) => {
+    const page = filtered.map((d: any) => {
+      const cid = d.conversation_id || (d.related_conversation_ids as any)?.[0];
+      const conv = cid ? convMap.get(String(cid)) : undefined;
       const author = d.user_id ? userMap.get(String(d.user_id)) : undefined;
-      const plan = d.plan_id ? planMap.get(String(d.plan_id)) : (docToPlanMap.get(d._id as string) || undefined);
+      const plan = d.plan_id ? planMap.get(String(d.plan_id)) : undefined;
+      const { content: _c, embedding: _e, entries: _en, ...rest } = d;
       return {
-        ...d,
+        ...rest,
+        ...(conv?.started_at ? { originated_at: conv.started_at } : {}),
         ...(author ? { author_name: author.name, author_image: author.image, author_username: author.github_username } : {}),
         ...(plan ? { plan_short_id: plan.short_id, plan_status: plan.status } : {}),
       };
     });
 
-    return { docs: withAuthors, projectPaths };
+    return {
+      page,
+      isDone: result.isDone,
+      continueCursor: result.continueCursor,
+    };
+  },
+});
+
+function encodeOffsetCursor(offset: number): string {
+  return String(offset);
+}
+
+function decodeOffsetCursor(cursor: string | null): number {
+  const parsed = Number.parseInt(cursor || "0", 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+}
+
+export const webListPaginated = query({
+  args: {
+    doc_type: v.optional(v.string()),
+    project_id: v.optional(v.string()),
+    project_path: v.optional(v.string()),
+    scope: v.optional(v.string()),
+    team_id: v.optional(v.id("teams")),
+    workspace: v.optional(v.union(v.literal("personal"), v.literal("team"))),
+    paginationOpts: paginationOptsValidator,
+  },
+  handler: async (ctx, args) => {
+    const offset = decodeOffsetCursor(args.paginationOpts.cursor);
+    const limit = Math.max(args.paginationOpts.numItems, 1);
+    const end = offset + limit;
+    const { docs } = await buildWebDocList(ctx, args, end + 1);
+    const page = docs.slice(offset, end);
+    const hasMore = docs.length > end;
+
+    return {
+      page,
+      isDone: !hasMore,
+      continueCursor: hasMore ? encodeOffsetCursor(end) : "",
+    };
   },
 });
 
@@ -760,7 +893,11 @@ export const webSearch = query({
     const resolveTeam = (d: any) => {
       const cid = d.conversation_id || (d.related_conversation_ids?.[0]);
       const conv = cid ? convMap.get(String(cid)) : undefined;
-      if (conv) return (!conv.is_private || conv.auto_shared) ? conv.team_id : undefined;
+      if (conv) {
+        if (!conv.is_private || conv.auto_shared) return conv.team_id;
+        if (conv.team_visibility && conv.team_visibility !== "private") return conv.team_id;
+        return undefined;
+      }
       return d.team_id;
     };
 
@@ -1407,6 +1544,7 @@ export const webCreate = mutation({
     content: v.optional(v.string()),
     doc_type: v.optional(v.string()),
     labels: v.optional(v.array(v.string())),
+    parent_id: v.optional(v.id("docs")),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -1414,6 +1552,18 @@ export const webCreate = mutation({
 
     const user = await ctx.db.get(userId);
     const now = Date.now();
+
+    // If adding under a parent, compute sort_order as last child
+    let sort_order: number | undefined;
+    if (args.parent_id) {
+      const siblings = await ctx.db
+        .query("docs")
+        .withIndex("by_parent_id", (q) => q.eq("parent_id", args.parent_id!))
+        .collect();
+      sort_order = siblings.length > 0
+        ? Math.max(...siblings.map((s) => s.sort_order ?? 0)) + 1
+        : 0;
+    }
 
     const id = await ctx.db.insert("docs", {
       user_id: userId,
@@ -1423,11 +1573,131 @@ export const webCreate = mutation({
       doc_type: (args.doc_type || "note") as any,
       source: "human" as any,
       labels: args.labels,
+      parent_id: args.parent_id,
+      sort_order,
       created_at: now,
       updated_at: now,
     });
 
     return { id };
+  },
+});
+
+/** Move a doc to a new parent (or to root if parent_id is null) and update sort_order */
+export const webMoveDoc = mutation({
+  args: {
+    id: v.id("docs"),
+    parent_id: v.optional(v.id("docs")),
+    sort_order: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Unauthorized");
+
+    const doc = await ctx.db.get(args.id);
+    if (!doc || doc.user_id !== userId) throw new Error("Not found");
+
+    // Prevent circular: can't parent under self or a descendant
+    if (args.parent_id) {
+      let current: Id<"docs"> | undefined = args.parent_id;
+      while (current) {
+        if (current === args.id) throw new Error("Cannot nest a doc under itself");
+        const ancestor: any = await ctx.db.get(current);
+        current = ancestor?.parent_id;
+      }
+    }
+
+    await ctx.db.patch(args.id, {
+      parent_id: args.parent_id,
+      sort_order: args.sort_order ?? 0,
+      updated_at: Date.now(),
+    });
+  },
+});
+
+/** Reorder children within a parent — bulk update sort_order */
+export const webReorderDocs = mutation({
+  args: {
+    items: v.array(v.object({
+      id: v.id("docs"),
+      sort_order: v.number(),
+    })),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Unauthorized");
+
+    for (const item of args.items) {
+      const doc = await ctx.db.get(item.id);
+      if (doc && doc.user_id === userId) {
+        await ctx.db.patch(item.id, { sort_order: item.sort_order });
+      }
+    }
+  },
+});
+
+/** Add/remove a wiki link between two docs */
+export const webToggleDocLink = mutation({
+  args: {
+    doc_id: v.id("docs"),
+    linked_doc_id: v.id("docs"),
+    action: v.union(v.literal("add"), v.literal("remove")),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Unauthorized");
+
+    const doc = await ctx.db.get(args.doc_id);
+    if (!doc || doc.user_id !== userId) throw new Error("Not found");
+
+    const existing = doc.linked_doc_ids ?? [];
+    const linkedStr = String(args.linked_doc_id);
+
+    if (args.action === "add") {
+      if (!existing.some((id) => String(id) === linkedStr)) {
+        await ctx.db.patch(args.doc_id, {
+          linked_doc_ids: [...existing, args.linked_doc_id],
+          updated_at: Date.now(),
+        });
+      }
+    } else {
+      await ctx.db.patch(args.doc_id, {
+        linked_doc_ids: existing.filter((id) => String(id) !== linkedStr),
+        updated_at: Date.now(),
+      });
+    }
+  },
+});
+
+/** Lightweight query for sidebar doc tree — returns id, title, parent_id, sort_order, doc_type only */
+export const webDocTree = query({
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+
+    const user = await ctx.db.get(userId);
+    const teamId = user?.active_team_id;
+
+    const { records } = await scopedFetch(ctx, "docs", {
+      userId,
+      teamId,
+      workspace: teamId ? "team" : "personal",
+      stripFields: ["content", "embedding", "entries", "task_ids", "related_conversation_ids", "labels", "share_token"],
+    });
+
+    return records
+      .filter((d: any) => !d.archived_at && !isNoiseDocForWeb(d) && d.source !== "plan_mode")
+      .map((d: any) => ({
+        _id: d._id,
+        title: d.title,
+        parent_id: d.parent_id ?? null,
+        sort_order: d.sort_order ?? 0,
+        doc_type: d.doc_type,
+        source: d.source,
+        pinned: d.pinned,
+        updated_at: d.updated_at,
+        created_at: d.created_at,
+      }));
   },
 });
 
@@ -1538,5 +1808,56 @@ export const webPromoteToPlan = mutation({
     });
     await ctx.db.patch(args.doc_id, { plan_id: planId, doc_type: "plan" as const });
     return { plan_id: planId, short_id };
+  },
+});
+
+// ── Public Sharing ─────────────────────────────────────────
+
+export const generateShareLink = mutation({
+  args: { id: v.id("docs") },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Unauthorized");
+    const doc = await ctx.db.get(args.id);
+    if (!doc || doc.user_id !== userId) throw new Error("Doc not found");
+    if (doc.share_token) return { share_token: doc.share_token };
+    const share_token = crypto.randomUUID();
+    await ctx.db.patch(args.id, { share_token });
+    return { share_token };
+  },
+});
+
+export const unshare = mutation({
+  args: { id: v.id("docs") },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Unauthorized");
+    const doc = await ctx.db.get(args.id);
+    if (!doc || doc.user_id !== userId) throw new Error("Doc not found");
+    await ctx.db.patch(args.id, { share_token: undefined });
+    return { success: true };
+  },
+});
+
+export const getShared = query({
+  args: { share_token: v.string() },
+  handler: async (ctx, args) => {
+    const doc = await ctx.db
+      .query("docs")
+      .withIndex("by_share_token", (q) => q.eq("share_token", args.share_token))
+      .first();
+    if (!doc) return null;
+    const user = await ctx.db.get(doc.user_id);
+    return {
+      _id: doc._id,
+      title: doc.title,
+      content: doc.content,
+      doc_type: doc.doc_type,
+      labels: doc.labels,
+      entries: doc.entries,
+      created_at: doc.created_at,
+      updated_at: doc.updated_at,
+      user: user ? { name: user.name, image: user.image } : null,
+    };
   },
 });

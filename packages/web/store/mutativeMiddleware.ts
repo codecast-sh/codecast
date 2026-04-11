@@ -4,10 +4,17 @@ type DispatchFn = (action: string, args: any, patches?: any, result?: any) => Pr
 type IDBWriteFn = (patches: Patch[], state: any) => void;
 
 const ACTION_FLAG = Symbol("action");
+const ASYNC_ACTION_FLAG = Symbol("asyncAction");
 const SYNC_FLAG = Symbol("sync");
 
 export function action<T extends (...args: any[]) => any>(fn: T): T {
   (fn as any)[ACTION_FLAG] = true;
+  return fn;
+}
+
+/** Like action(), but returns a Promise that resolves to the server dispatch result. */
+export function asyncAction<T extends (...args: any[]) => any>(fn: T): T {
+  (fn as any)[ASYNC_ACTION_FLAG] = true;
   return fn;
 }
 
@@ -18,6 +25,10 @@ export function sync<T extends (...args: any[]) => any>(fn: T): T {
 
 function isAction(fn: any): boolean {
   return typeof fn === "function" && fn[ACTION_FLAG] === true;
+}
+
+function isAsyncAction(fn: any): boolean {
+  return typeof fn === "function" && fn[ASYNC_ACTION_FLAG] === true;
 }
 
 function isSync(fn: any): boolean {
@@ -110,9 +121,10 @@ export function mutativeMiddleware(config: any): any {
 
     for (const [key, val] of Object.entries(rawStore)) {
       const isAct = isAction(val);
+      const isAsyncAct = isAsyncAction(val);
       const isSyn = isSync(val);
 
-      if (!isAct && !isSyn) {
+      if (!isAct && !isAsyncAct && !isSyn) {
         wrapped[key] = val;
         continue;
       }
@@ -136,10 +148,12 @@ export function mutativeMiddleware(config: any): any {
           (typeof requestIdleCallback === "function" ? requestIdleCallback : setTimeout)(() => fn(p, s));
         }
 
-        if (isAct && dispatchFn) {
+        if ((isAct || isAsyncAct) && dispatchFn) {
           const grouped =
             patches.length > 0 ? groupPatchesByTable(patches) : undefined;
-          dispatchFn(key, args, grouped, returnValue).catch(() => {});
+          const promise = dispatchFn(key, args, grouped, returnValue);
+          if (isAsyncAct) return promise;
+          promise.catch(() => {});
         }
 
         return returnValue;

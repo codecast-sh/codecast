@@ -422,6 +422,14 @@ const pendingInteractivePrompts = new Map<string, { timestamp: number; options: 
 const AGENT_STATUS_DIR = path.join(process.env.HOME || "", ".codecast", "agent-status");
 const skillsSyncedConversations = new Set<string>();
 
+// Post-compaction message recovery: CC sometimes goes idle after compacting instead of
+// continuing to process the user's message. Track compaction events and recent injections
+// so we can detect this pattern and re-inject the dropped message.
+const recentCompactionTs = new Map<string, number>(); // sessionId -> when compaction was detected
+const recentSessionInjections = new Map<string, { messageId: string; content: string; ts: number }>(); // conversationId -> last injection
+const postCompactionRecoveryTimers = new Map<string, ReturnType<typeof setTimeout>>(); // sessionId -> pending recovery
+const compactionRedeliveryBypass = new Set<string>(); // messageIds that should bypass injection dedup
+
 export function mapCodexAppServerThreadStatusToAgentStatus(status: AppServerThreadStatus | null | undefined): AgentStatus | null {
   if (!status?.type) return null;
   switch (status.type) {
@@ -717,16 +725,14 @@ function log(message: string, level: LogLevel = "info", metadata?: RemoteLog["me
   const line = `[${timestamp}] ${levelTag}${message}\n`;
   fs.appendFileSync(LOG_FILE, line);
 
-  if (level === "warn" || level === "error") {
-    remoteLogQueue.push({
-      level,
-      message: message.slice(0, 2000),
-      metadata,
-      timestamp: Date.now(),
-    });
-    if (remoteLogQueue.length > MAX_LOG_QUEUE_SIZE) {
-      remoteLogQueue.shift();
-    }
+  remoteLogQueue.push({
+    level,
+    message: message.slice(0, 2000),
+    metadata,
+    timestamp: Date.now(),
+  });
+  if (remoteLogQueue.length > MAX_LOG_QUEUE_SIZE) {
+    remoteLogQueue.shift();
   }
 }
 
@@ -1078,8 +1084,8 @@ async function executeRemoteCommand(
         // Flush logs before update
         await flushRemoteLogs();
         setTimeout(async () => {
-          const success = await performUpdate();
-          if (success) {
+          const result = await performUpdate();
+          if (result.success) {
             logLifecycle("update_complete", `Binary replaced from v${currentVersion}, restarting`);
             await flushRemoteLogs();
             log("Update successful, restarting...");
@@ -1095,9 +1101,33 @@ async function executeRemoteCommand(
             }
             setTimeout(() => process.exit(0), 500);
           } else {
-            logLifecycle("update_failed", `Update failed from v${currentVersion}`);
+            logLifecycle("update_failed", `Update failed from v${currentVersion} error=${result.error}`);
             await flushRemoteLogs();
           }
+        }, 1000);
+        return;
+      }
+      case "reinstall": {
+        const currentVersion = daemonVersion || "unknown";
+        log(`[REMOTE] Reinstall requested from v${currentVersion}`);
+        result = "reinstalling";
+        await fetch(`${siteUrl}/cli/command-result`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ api_token: config.auth_token, command_id: commandId, result }),
+        }).catch(() => {});
+        await flushRemoteLogs();
+        setTimeout(() => {
+          try {
+            const { execSync } = require("child_process");
+            execSync("curl -fsSL codecast.sh/install | sh", { timeout: 120000, stdio: "ignore" });
+            logLifecycle("reinstall_complete", `Reinstalled from v${currentVersion}`);
+          } catch (e) {
+            logLifecycle("reinstall_failed", `Failed from v${currentVersion}: ${e instanceof Error ? e.message : String(e)}`);
+          }
+          flushRemoteLogs().finally(() => {
+            setTimeout(() => process.exit(0), 500);
+          });
         }, 1000);
         return;
       }
@@ -1374,11 +1404,9 @@ async function executeRemoteCommand(
         }
         const tmuxTarget = await findTmuxPaneForTty(proc.tty);
         if (tmuxTarget && validateTmuxTarget(tmuxTarget)) {
-          await tmuxExec(["send-keys", "-t", tmuxTarget, "Escape"]);
-          await new Promise(resolve => setTimeout(resolve, 500));
-          await tmuxExec(["send-keys", "-t", tmuxTarget, "Enter"]);
+          await tmuxExec(["send-keys", "-t", tmuxTarget, "Escape", "Escape"]);
           result = "escape_sent";
-          log(`[REMOTE] Sent Escape+Enter to session ${sessionId.slice(0, 8)} via tmux ${tmuxTarget}`);
+          log(`[REMOTE] Sent double Escape to session ${sessionId.slice(0, 8)} via tmux ${tmuxTarget}`);
         } else {
           try {
             process.kill(proc.pid, "SIGINT");
@@ -1424,12 +1452,13 @@ async function executeRemoteCommand(
         const safeSteps = Math.min(Math.max(1, Math.floor(Number(stepsBack))), 50);
 
         const PROMPT_RE = /[❯›]/;
-        const PROMPT_EMPTY_RE = /[❯›]\s*(\n|$)/;
         const BUSY_RE = /⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏|Wandering|Vibing|Coasting|Working|thinking/;
+        const NAVIGATOR_RE = /Enter to continue/;
+        const RESTORE_RE = /Restore conversation/;
 
         const captureLast = async (): Promise<string> => {
           const { stdout } = await tmuxExec(["capture-pane", "-p", "-J", "-t", tmuxTarget, "-S", "-8"]);
-          return stdout.split("\n").slice(-10).join("\n");
+          return stdout.split("\n").slice(-15).join("\n");
         };
 
         const isAtPrompt = async (): Promise<boolean> => {
@@ -1437,20 +1466,26 @@ async function executeRemoteCommand(
           return PROMPT_RE.test(last) && !BUSY_RE.test(last);
         };
 
-        const hasEmptyPrompt = async (): Promise<boolean> => {
-          const last = await captureLast();
-          return PROMPT_EMPTY_RE.test(last);
+        const waitFor = async (test: (text: string) => boolean, label: string, maxWait = 10000): Promise<boolean> => {
+          const start = Date.now();
+          while (Date.now() - start < maxWait) {
+            const last = await captureLast();
+            if (test(last)) return true;
+            await new Promise(r => setTimeout(r, 300));
+          }
+          log(`[REWIND] Timed out waiting for: ${label}`);
+          return false;
         };
 
-        // Step 1: Get to idle prompt
+        // Step 1: Get to idle prompt (double Escape to interrupt if busy)
         if (!(await isAtPrompt())) {
-          log(`[REWIND] Session not at prompt, sending Escape`);
-          await tmuxExec(["send-keys", "-t", tmuxTarget, "Escape"]);
-          let gotPrompt = false;
-          for (let i = 0; i < 60; i++) {
-            await new Promise(r => setTimeout(r, 500));
-            if (await isAtPrompt()) { gotPrompt = true; break; }
-          }
+          log(`[REWIND] Session not at prompt, sending double Escape to interrupt`);
+          await tmuxExec(["send-keys", "-t", tmuxTarget, "Escape", "Escape"]);
+          const gotPrompt = await waitFor(
+            (text) => PROMPT_RE.test(text) && !BUSY_RE.test(text),
+            "prompt after interrupt",
+            30000,
+          );
           if (!gotPrompt) {
             error = "Timed out waiting for prompt after interrupt";
             break;
@@ -1458,30 +1493,53 @@ async function executeRemoteCommand(
           log(`[REWIND] Got prompt after interrupt`);
         }
 
-        // Step 2: Clear any existing text in the prompt
-        for (let attempt = 0; attempt < 3; attempt++) {
-          if (await hasEmptyPrompt()) break;
-          log(`[REWIND] Clearing existing prompt text (attempt ${attempt + 1})`);
-          await tmuxExec(["send-keys", "-t", tmuxTarget, "Escape"]);
-          await new Promise(r => setTimeout(r, 500));
-        }
-
-        // Step 3: Navigate history with Up arrows
-        log(`[REWIND] Sending ${safeSteps} Up arrows`);
-        const upKeys = Array.from({ length: safeSteps }, () => "Up");
-        await tmuxExec(["send-keys", "-t", tmuxTarget, ...upKeys]);
+        // Step 2: Clear any existing text (double Escape clears in CC)
+        log(`[REWIND] Clearing prompt with double Escape`);
+        await tmuxExec(["send-keys", "-t", tmuxTarget, "Escape", "Escape"]);
         await new Promise(r => setTimeout(r, 300));
 
-        // Step 4: Verify prompt has text (history was navigated)
-        if (await hasEmptyPrompt()) {
-          log(`[REWIND] Prompt still empty after Up arrows, no history at position ${safeSteps}`);
+        // Step 3: Navigate history with Up arrows
+        // First Up opens the visual navigator, subsequent Ups move back
+        log(`[REWIND] Sending ${safeSteps} Up arrows to open navigator`);
+        const upKeys = Array.from({ length: safeSteps }, () => "Up");
+        await tmuxExec(["send-keys", "-t", tmuxTarget, ...upKeys]);
+
+        // Step 4: Verify navigator opened
+        const navigatorOpened = await waitFor(
+          (text) => NAVIGATOR_RE.test(text),
+          "navigator to open",
+        );
+        if (!navigatorOpened) {
+          log(`[REWIND] Navigator did not open after ${safeSteps} Up arrows`);
           error = `No message found at history position ${safeSteps}`;
           break;
         }
 
-        // Step 5: Submit with single Enter (no confirmation needed)
-        log(`[REWIND] Submitting rewind`);
+        // Step 5: Select message in navigator (first Enter)
+        log(`[REWIND] Selecting message in navigator`);
         await tmuxExec(["send-keys", "-t", tmuxTarget, "Enter"]);
+
+        // Step 6: Confirm "Restore conversation" (second Enter)
+        const atRestore = await waitFor(
+          (text) => RESTORE_RE.test(text),
+          "restore confirmation",
+        );
+        if (atRestore) {
+          log(`[REWIND] Confirming restore`);
+          await tmuxExec(["send-keys", "-t", tmuxTarget, "Enter"]);
+        } else {
+          log(`[REWIND] No restore confirmation shown, sending Enter anyway`);
+          await tmuxExec(["send-keys", "-t", tmuxTarget, "Enter"]);
+        }
+
+        // Wait for forked session prompt with the rewound message pre-filled
+        // Don't submit — let the user review/edit the message in the web UI
+        await waitFor(
+          (text) => PROMPT_RE.test(text) && !BUSY_RE.test(text),
+          "prompt with rewound message",
+          15000,
+        );
+
         result = "rewind_sent";
         log(`[REWIND] Rewind ${stepsBack} steps sent to session ${sessionId.slice(0, 8)}`);
         break;
@@ -1658,6 +1716,17 @@ async function executeRemoteCommand(
           } catch {}
         }
 
+        // Clear all in-memory state that could block a subsequent resume.
+        // A kill is a clean slate — stale fatal reasons, circuit breakers,
+        // delivery failures, and repair cooldowns must not persist.
+        if (sessionId) {
+          resumeFatalReasons.delete(sessionId);
+          sessionDeliveryFailures.delete(sessionId);
+          repairAttempts.delete(sessionId);
+          conversationResumeFailures.delete(conversationId);
+          if (conversationId) repairAttempts.delete(conversationId);
+        }
+
         // Reset any injected-but-unacked messages back to pending so they
         // get re-delivered when the session is resumed
         if (syncServiceRef) {
@@ -1677,6 +1746,9 @@ async function executeRemoteCommand(
         }
         const projectPath = parsed.project_path;
         const forceReconstitute = parsed.force_reconstitute === true;
+        const resumeAgentType: "claude" | "codex" | "cursor" | "gemini" | undefined =
+          parsed.agent_type === "codex" || parsed.agent_type === "cursor" || parsed.agent_type === "gemini"
+            ? parsed.agent_type : undefined;
         // Skip if a resume is already in flight for this session
         if (resumeInFlight.has(sessionId)) {
           log(`[REMOTE] Resume already in flight for ${sessionId.slice(0, 8)}, skipping`);
@@ -1698,13 +1770,13 @@ async function executeRemoteCommand(
         let resumed = false;
         if (forceReconstitute) {
           log(`[REMOTE] Force-reconstituting session ${sessionId.slice(0, 8)} from DB${projectPath ? ` in ${projectPath}` : ""}`);
-          resumed = await repairAndResumeSession(sessionId, "", readTitleCache(), projectPath, conversationId);
+          resumed = await repairAndResumeSession(sessionId, "", readTitleCache(), projectPath, conversationId, resumeAgentType);
         } else {
           log(`[REMOTE] Force-resuming session ${sessionId.slice(0, 8)}${projectPath ? ` in ${projectPath}` : ""}`);
-          resumed = await autoResumeSession(sessionId, "", readTitleCache(), projectPath, conversationId);
+          resumed = await autoResumeSession(sessionId, "", readTitleCache(), projectPath, conversationId, resumeAgentType);
           if (!resumed) {
             log(`[REMOTE] Auto-resume failed for ${sessionId.slice(0, 8)}, attempting repair...`);
-            resumed = await repairAndResumeSession(sessionId, "", readTitleCache(), projectPath, conversationId);
+            resumed = await repairAndResumeSession(sessionId, "", readTitleCache(), projectPath, conversationId, resumeAgentType);
           }
         }
         if (resumed) {
@@ -1731,14 +1803,23 @@ async function executeRemoteCommand(
               const siteUrl = config.convex_url.replace(".cloud", ".site");
               const exportData = await fetchExport(siteUrl, config.auth_token!, conversationId);
               if (exportData.messages.length > 0) {
-                const TOKEN_BUDGET = 100_000;
-                const tailMessages = chooseClaudeTailMessagesForTokenBudget(exportData, TOKEN_BUDGET);
-                const { jsonl } = generateClaudeCodeJsonl(exportData, { tailMessages, sessionId });
-                const { sessionId: newSessionId, filePath: reconFilePath } = writeClaudeCodeSession(jsonl, sessionId, projectPath);
+                const reconAgent = resumeAgentType || "claude";
+                let reconJsonl: string;
+                let newSessionId: string;
+                let reconFilePath: string;
+                if (reconAgent === "codex") {
+                  ({ jsonl: reconJsonl, sessionId: newSessionId } = generateCodexJsonl(exportData, { sessionId }));
+                  reconFilePath = writeCodexSession(reconJsonl, newSessionId);
+                } else {
+                  const TOKEN_BUDGET = 100_000;
+                  const tailMessages = chooseClaudeTailMessagesForTokenBudget(exportData, TOKEN_BUDGET);
+                  ({ jsonl: reconJsonl, sessionId: newSessionId } = generateClaudeCodeJsonl(exportData, { tailMessages, sessionId }));
+                  ({ filePath: reconFilePath } = writeClaudeCodeSession(reconJsonl, newSessionId, projectPath));
+                }
                 setPosition(reconFilePath, fs.statSync(reconFilePath).size);
-                log(`[REMOTE] Reconstituted JSONL for ${sessionId.slice(0, 8)} (${exportData.messages.length} msgs, tail=${tailMessages})`);
+                log(`[REMOTE] Reconstituted ${reconAgent} JSONL for ${sessionId.slice(0, 8)} (${exportData.messages.length} msgs)`);
 
-                const reconResumed = await autoResumeSession(newSessionId, "", readTitleCache(), cwd, conversationId);
+                const reconResumed = await autoResumeSession(newSessionId, "", readTitleCache(), cwd, conversationId, resumeAgentType);
                 if (reconResumed) {
                   const cache = readConversationCache();
                   cache[newSessionId] = conversationId;
@@ -1759,11 +1840,12 @@ async function executeRemoteCommand(
             }
           }
 
-          const resumeFailureReason = resumeFatalReasons.get(sessionId) ?? null;
-          if (!reconstituted && !shouldStartBlankSessionAfterResumeFailure(resumeFailureReason)) {
-            error = `Failed to resume session ${sessionId.slice(0, 8)} — stale session id could not be rematerialized yet`;
-            log(`[REMOTE] Skipping blank-session fallback for ${sessionId.slice(0, 8)} (reason=${resumeFailureReason})`);
-            break;
+          // resume_session is only triggered by explicit user actions (kill & restart,
+          // repair). Always fall through to blank session — the user is asking us to restart,
+          // not silently give up. Clear any stale fatal reason so it doesn't block future
+          // auto-resume attempts either.
+          if (!reconstituted) {
+            resumeFatalReasons.delete(sessionId);
           }
 
           if (!reconstituted) {
@@ -1773,13 +1855,28 @@ async function executeRemoteCommand(
               result = JSON.stringify({ started_fresh: true, tmux_session: existingStarted.tmuxSession, deduplicated: true });
               break;
             }
-            log(`[REMOTE] Starting blank session in ${projectPath}`);
+            const blankAgentType = resumeAgentType || "claude";
+            log(`[REMOTE] Starting blank ${blankAgentType} session in ${projectPath}`);
             const shortId = Math.random().toString(36).slice(2, 8);
-            const tmuxSession = `cc-claude-${shortId}`;
-            let extraFlags = config.claude_args || "";
+            const tmuxSession = `cc-${blankAgentType}-${shortId}`;
+            let blankBinary: string;
+            let extraFlags: string;
+            if (blankAgentType === "codex") {
+              blankBinary = "codex";
+              extraFlags = config.codex_args || "";
+            } else if (blankAgentType === "cursor") {
+              blankBinary = "cursor-agent";
+              extraFlags = "";
+            } else if (blankAgentType === "gemini") {
+              blankBinary = "gemini";
+              extraFlags = "";
+            } else {
+              blankBinary = "claude";
+              extraFlags = config.claude_args || "";
+            }
             const blankArgs = extraFlags ? extraFlags.split(/\s+/).filter(Boolean) : [];
             const safeBlankArgs = sanitizeBinaryArgs(blankArgs);
-            const blankCmdText = `env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT ${["claude", ...safeBlankArgs].join(" ")}`;
+            const blankCmdText = `env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT ${[blankBinary, ...safeBlankArgs].join(" ")}`;
             try {
               tmuxExecSync(["new-session", "-d", "-s", tmuxSession, "-c", cwd], { timeout: 5000 });
               tmuxExecSync(["send-keys", "-t", tmuxSession, "-l", blankCmdText], { timeout: 5000 });
@@ -1788,7 +1885,7 @@ async function executeRemoteCommand(
                 tmuxSession,
                 projectPath: cwd,
                 startedAt: Date.now(),
-                agentType: "claude",
+                agentType: blankAgentType,
               });
               discoverAndLinkSession(conversationId, tmuxSession, cwd).catch(err => {
                 log(`Session discovery failed for ${conversationId.slice(0, 12)}: ${err}`);
@@ -4809,7 +4906,7 @@ async function injectViaTmuxInner(target: string, content: string): Promise<void
   // Check if agent has exited (defense-in-depth: catch race between liveness check and injection)
   try {
     const { stdout: preCheck } = await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", "-10"]);
-    if (/Resume this session with:|claude --resume|codex resume/i.test(preCheck)) {
+    if (/Resume this session with:/i.test(preCheck)) {
       throw new Error("SESSION_EXITED: agent has exited, refusing to inject into bare shell");
     }
 
@@ -5833,6 +5930,7 @@ async function discoverAndLinkSession(
     if (candidates.length === 0) continue;
     // Verify which candidate belongs to this tmux session's process
     let linkedSessionId: string | null = null;
+    let foundInOtherTmux = false;
     for (const sessionId of candidates) {
       try {
         const proc = await findSessionProcess(sessionId, "claude").catch(() => null);
@@ -5841,12 +5939,16 @@ async function discoverAndLinkSession(
           if (tmuxPane && tmuxPane.split(":")[0] === tmuxSession) {
             linkedSessionId = sessionId;
             break;
+          } else if (tmuxPane) {
+            foundInOtherTmux = true;
+            log(`[DISCOVER] Candidate ${sessionId.slice(0, 8)} is in tmux ${tmuxPane.split(":")[0]}, not ${tmuxSession} — skipping`);
           }
         }
       } catch {}
     }
-    // If process verification fails but there's exactly one candidate, use it
-    if (!linkedSessionId && candidates.length === 1) {
+    // Fall back to single candidate only if process wasn't found at all —
+    // if it was found in a different tmux session, it belongs to another conversation
+    if (!linkedSessionId && candidates.length === 1 && !foundInOtherTmux) {
       linkedSessionId = candidates[0];
     }
     if (linkedSessionId) {
@@ -6043,7 +6145,7 @@ function slugify(text: string, maxLen = 30): string {
     .replace(/-+$/, "");
 }
 
-async function autoResumeSession(sessionId: string, content: string, titleCache: TitleCache, cwdOverride?: string, conversationId?: string): Promise<boolean> {
+async function autoResumeSession(sessionId: string, content: string, titleCache: TitleCache, cwdOverride?: string, conversationId?: string, agentTypeHint?: "claude" | "codex" | "cursor" | "gemini"): Promise<boolean> {
   // Deduplicate concurrent resume attempts on the same session
   const existing = resumeInFlight.get(sessionId);
   if (existing) {
@@ -6079,7 +6181,7 @@ async function autoResumeSession(sessionId: string, content: string, titleCache:
       }
     }
   }
-  const promise = autoResumeSessionInner(sessionId, content, titleCache, cwdOverride, conversationId);
+  const promise = autoResumeSessionInner(sessionId, content, titleCache, cwdOverride, conversationId, agentTypeHint);
   resumeInFlight.set(sessionId, promise);
   resumeInFlightStarted.set(sessionId, Date.now());
   try {
@@ -6090,7 +6192,7 @@ async function autoResumeSession(sessionId: string, content: string, titleCache:
   }
 }
 
-async function autoResumeSessionInner(sessionId: string, content: string, titleCache: TitleCache, cwdOverride?: string, conversationId?: string): Promise<boolean> {
+async function autoResumeSessionInner(sessionId: string, content: string, titleCache: TitleCache, cwdOverride?: string, conversationId?: string, agentTypeHint?: "claude" | "codex" | "cursor" | "gemini"): Promise<boolean> {
   if (!hasTmux()) {
     logDelivery(`Cannot auto-resume ${sessionId.slice(0, 8)}: tmux not installed`);
     return false;
@@ -6111,21 +6213,36 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
         logDelivery(`Reconstitution skipped for ${sessionId.slice(0, 8)}: conversation has 0 messages`);
         return false;
       }
-      const estimatedTokens = estimateClaudeImportTokens(data);
-      const tailMessages = estimatedTokens > 120_000
-        ? chooseClaudeTailMessagesForTokenBudget(data, 100_000)
-        : undefined;
-      const { jsonl, sessionId: newId } = generateClaudeCodeJsonl(data, { tailMessages });
-      const result = writeClaudeCodeSession(jsonl, newId, data.conversation.project_path || undefined);
-      logDelivery(`Reconstituted ${sessionId.slice(0, 8)} as ${newId.slice(0, 8)} (${data.messages.length} msgs)`);
-      if (conversationId) {
-        remapConversationSession(sessionId, newId, conversationId);
-        if (syncServiceRef) {
-          syncServiceRef.updateSessionId(conversationId, newId).catch(() => {});
-        }
+      const reconAgentType = agentTypeHint || (data.conversation.agent_type === "codex" ? "codex" : undefined) || "claude";
+      let jsonl: string;
+      let reconId: string;
+      if (reconAgentType === "codex") {
+        ({ jsonl, sessionId: reconId } = generateCodexJsonl(data, { sessionId }));
+      } else {
+        const estimatedTokens = estimateClaudeImportTokens(data);
+        const tailMessages = estimatedTokens > 120_000
+          ? chooseClaudeTailMessagesForTokenBudget(data, 100_000)
+          : undefined;
+        ({ jsonl, sessionId: reconId } = generateClaudeCodeJsonl(data, { tailMessages, sessionId }));
       }
-      sessionId = newId;
-      sessionFile = findSessionFile(newId);
+      const result = reconAgentType === "codex"
+        ? { sessionId: reconId, filePath: writeCodexSession(jsonl, reconId) }
+        : writeClaudeCodeSession(jsonl, reconId, data.conversation.project_path || undefined);
+      logDelivery(`Reconstituted ${sessionId.slice(0, 8)} (${data.messages.length} msgs)`);
+      if (conversationId && reconId !== sessionId) {
+        remapConversationSession(sessionId, reconId, conversationId);
+        if (syncServiceRef) {
+          syncServiceRef.updateSessionId(conversationId, reconId).catch(() => {});
+        }
+      } else if (conversationId) {
+        // Ensure cache has the mapping even when sessionId is preserved
+        const cache = readConversationCache();
+        cache[sessionId] = conversationId;
+        saveConversationCache(cache);
+        if (conversationCacheRef) conversationCacheRef[sessionId] = conversationId;
+      }
+      sessionId = reconId;
+      sessionFile = findSessionFile(reconId);
       if (!sessionFile) {
         logDelivery(`Reconstituted file not found at expected path: ${result.filePath}`);
         return false;
@@ -6188,13 +6305,12 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
         fs.writeFileSync(newPath, rewritten);
         log(`Copied non-UUID session ${sessionId} to resumable UUID ${newUuid}`);
         resumeId = newUuid;
+        // Remap all caches so subsequent lookups use the new UUID
         if (conversationId) {
-          const cache = readConversationCache();
-          cache[newUuid] = conversationId;
-          saveConversationCache(cache);
-        }
-        if (syncServiceRef && conversationId) {
-          syncServiceRef.updateSessionId(conversationId, newUuid).catch(() => {});
+          remapConversationSession(sessionId, newUuid, conversationId);
+          if (syncServiceRef) {
+            syncServiceRef.updateSessionId(conversationId, newUuid).catch(() => {});
+          }
         }
       } catch (err) {
         log(`Failed to copy session for UUID resume: ${err instanceof Error ? err.message : String(err)}`);
@@ -6370,7 +6486,8 @@ async function repairAndResumeSession(
   content: string,
   titleCache: TitleCache,
   cwdOverride?: string,
-  conversationId?: string
+  conversationId?: string,
+  agentTypeHint?: "claude" | "codex" | "cursor" | "gemini"
 ): Promise<boolean> {
   const existing = repairInFlight.get(sessionId);
   if (existing) return existing;
@@ -6412,7 +6529,7 @@ async function repairAndResumeSession(
           return false;
         }
         const sessionFile = findSessionFile(sessionId);
-        const agentType = sessionFile?.agentType ?? "claude";
+        const agentType = agentTypeHint || sessionFile?.agentType || "claude";
         const isCodexSession = agentType === "codex";
         const failureReason = !isCodexSession ? resumeFatalReasons.get(sessionId) ?? null : null;
         const projectPath = cwdOverride || exportData.conversation.project_path || undefined;
@@ -6727,7 +6844,9 @@ async function materializeSession(
 
       const TOKEN_BUDGET = 100_000;
       const tailMessages = chooseClaudeTailMessagesForTokenBudget(exportData, TOKEN_BUDGET);
-      const { jsonl, sessionId } = generateClaudeCodeJsonl(exportData, { tailMessages });
+      // Use the conversation's actual session_id so the JSONL matches Convex
+      const convSessionId = exportData.conversation.session_id || undefined;
+      const { jsonl, sessionId } = generateClaudeCodeJsonl(exportData, { tailMessages, sessionId: convSessionId });
       const projectPath = exportData.conversation.project_path || undefined;
       const { filePath: matFilePath } = writeClaudeCodeSession(jsonl, sessionId, projectPath);
       setPosition(matFilePath, fs.statSync(matFilePath).size);
@@ -7311,7 +7430,7 @@ async function isTmuxAgentAlive(tmuxSession: string): Promise<boolean> {
       );
       const trimmed = paneContent.trim();
       if (!trimmed) return false;
-      if (/Resume this session with:|claude --resume|codex resume/i.test(trimmed)) return false;
+      if (/Resume this session with:/i.test(trimmed)) return false;
       if (/Segmentation fault|panic:|SIGABRT|core dumped|exited with/.test(trimmed)) return false;
       if (/-(?:ba)?sh:.*(?:No such file|command not found)/.test(trimmed)) return false;
       if (hasProcess) return true;
@@ -7913,8 +8032,8 @@ async function checkForForcedUpdate(syncService: SyncService): Promise<boolean> 
     if (compareVersions(currentVersion, minVersion) < 0) {
       logLifecycle("forced_update_start", `current=${currentVersion} min=${minVersion}`);
       await flushRemoteLogs();
-      const success = await performUpdate();
-      if (success) {
+      const result = await performUpdate();
+      if (result.success) {
         logLifecycle("forced_update_complete", `Binary replaced from v${currentVersion}, target>=${minVersion}`);
         await flushRemoteLogs();
         if (!isManagedByLaunchd()) {
@@ -7923,10 +8042,10 @@ async function checkForForcedUpdate(syncService: SyncService): Promise<boolean> 
         await new Promise(resolve => setTimeout(resolve, 500));
         process.exit(0);
       } else {
-        logLifecycle("forced_update_failed", `current=${currentVersion} target>=${minVersion}`);
+        logLifecycle("forced_update_failed", `current=${currentVersion} target>=${minVersion} error=${result.error}`);
         await flushRemoteLogs();
       }
-      return true;
+      return false;
     }
     return false;
   } catch (err) {
@@ -8430,7 +8549,10 @@ async function main(): Promise<void> {
     log("⚠️  Sync is PAUSED via environment variable (CODE_CHAT_SYNC_PAUSED or CODECAST_PAUSED)");
   }
 
-  saveDaemonState({ connected: false, runtimeVersion: getVersion() });
+  saveDaemonState({ connected: false, runtimeVersion: getVersion(), lastHeartbeatTick: Date.now() });
+
+  // Start heartbeat immediately so the daemon doesn't appear "blocked" during slow init
+  const eventLoopMonitorInterval = startEventLoopMonitor();
 
   const { config, convexUrl } = await waitForConfig();
   activeConfig = config;
@@ -8530,6 +8652,38 @@ async function main(): Promise<void> {
   const titleCache = readTitleCache();
   const pendingMessages: PendingMessages = {};
   const activeSessions = new Map<string, ActiveSession>();
+
+  // Warm restart: rebuild resumeSessionCache from surviving tmux sessions.
+  // After daemon restart, in-memory caches are lost but tmux sessions survive.
+  // Scanning them lets us deliver messages on first attempt instead of slow auto-resume.
+  if (hasTmux()) {
+    try {
+      const sessions = tmuxExecSync(["list-sessions", "-F", "#{session_name}"], { timeout: 5000 }).trim().split("\n").filter(Boolean);
+      const ccSessions = sessions.filter(s => s.startsWith("cc-") || s.startsWith("cx-") || s.startsWith("gm-"));
+      let recovered = 0;
+      for (const tmuxSession of ccSessions) {
+        try {
+          const sessionId = await getTmuxSessionOption(tmuxSession, "@codecast_session_id");
+          if (!sessionId) continue;
+          const alive = await isTmuxAgentAlive(tmuxSession);
+          if (!alive) continue;
+          // Found a live agent with session metadata — restore cache
+          resumeSessionCache.set(sessionId, tmuxSession);
+          const convId = conversationCache[sessionId];
+          if (convId && syncServiceRef) {
+            syncServiceRef.registerManagedSession(sessionId, process.pid, tmuxSession, convId).catch(() => {});
+            ensureManagedSessionHeartbeat(sessionId);
+          }
+          recovered++;
+        } catch {}
+      }
+      if (recovered > 0) {
+        log(`[WARM-RESTART] Recovered ${recovered} live session(s) from tmux: ${[...resumeSessionCache.entries()].map(([s, t]) => `${s.slice(0, 8)}→${t}`).join(", ")}`);
+      }
+    } catch (err) {
+      log(`[WARM-RESTART] tmux scan failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
 
   // Sync skills to user profile on startup (global + per-project)
   {
@@ -8686,13 +8840,18 @@ async function main(): Promise<void> {
       return;
     }
 
-    if (isPathExcluded(event.projectPath, config.excluded_paths)) {
-      log(`Skipping sync for excluded path: ${event.projectPath}`);
+    // event.projectPath is the encoded directory name — decode it to the real
+    // filesystem path so sync_mode:"selected" matching works correctly.
+    const decoded = decodeProjectDirName(event.projectPath);
+    const projectPath = decoded && fs.existsSync(decoded) ? decoded : event.projectPath;
+
+    if (isPathExcluded(projectPath, config.excluded_paths)) {
+      log(`Skipping sync for excluded path: ${projectPath}`);
       return;
     }
 
-    if (!isProjectAllowedToSync(event.projectPath, config)) {
-      log(`Skipping sync for non-selected project: ${event.projectPath}`);
+    if (!isProjectAllowedToSync(projectPath, config)) {
+      log(`Skipping sync for non-selected project: ${projectPath}`);
       return;
     }
 
@@ -8703,7 +8862,7 @@ async function main(): Promise<void> {
         await processSessionFile(
           filePath,
           event.sessionId,
-          event.projectPath,
+          projectPath,
           syncService,
           config.user_id!,
           config.team_id,
@@ -8764,6 +8923,46 @@ async function main(): Promise<void> {
           clearTimeout(existingTimer);
           idleTimers.delete(sessionId);
         }
+      }
+
+      // Post-compaction recovery: track compaction events and detect dropped messages.
+      // CC sometimes goes idle after compacting instead of continuing the user's turn.
+      if (data.status === "compacting") {
+        recentCompactionTs.set(sessionId, Date.now());
+      }
+      // Cancel pending recovery if session becomes active again
+      if (data.status !== "idle" && data.status !== "compacting") {
+        const recoveryTimer = postCompactionRecoveryTimers.get(sessionId);
+        if (recoveryTimer) {
+          clearTimeout(recoveryTimer);
+          postCompactionRecoveryTimers.delete(sessionId);
+          log(`Post-compaction recovery cancelled: session ${sessionId.slice(0, 8)} is now ${data.status}`);
+        }
+      }
+      // Detect compaction -> idle pattern: schedule delayed re-injection
+      if (data.status === "idle" && statusChanged) {
+        const compactedAt = recentCompactionTs.get(sessionId);
+        const injection = recentSessionInjections.get(convId);
+        if (compactedAt && (Date.now() - compactedAt) < 60_000 &&
+            injection && (Date.now() - injection.ts) < 120_000) {
+          log(`Post-compaction idle: session ${sessionId.slice(0, 8)} compacted ${Math.round((Date.now() - compactedAt) / 1000)}s ago, scheduling message recovery in 5s`);
+          const timerId = setTimeout(() => {
+            postCompactionRecoveryTimers.delete(sessionId);
+            const currentStatus = lastHookStatus.get(sessionId);
+            if (currentStatus?.status !== "idle") {
+              log(`Post-compaction recovery skipped: session ${sessionId.slice(0, 8)} is now ${currentStatus?.status}`);
+              return;
+            }
+            log(`Post-compaction recovery: re-queuing message ${injection.messageId.slice(0, 8)} for session ${sessionId.slice(0, 8)}`);
+            compactionRedeliveryBypass.add(injection.messageId);
+            syncService.retryMessage(injection.messageId).catch(err => {
+              log(`Post-compaction retry failed: ${err instanceof Error ? err.message : String(err)}`);
+            });
+          }, 5000);
+          postCompactionRecoveryTimers.set(sessionId, timerId);
+        }
+        recentCompactionTs.delete(sessionId);
+        recentSessionInjections.delete(convId);
       }
 
       if (statusChanged || modeChanged) {
@@ -8865,6 +9064,42 @@ async function main(): Promise<void> {
       fs.mkdirSync(AGENT_STATUS_DIR, { recursive: true });
       fs.writeFileSync(path.join(AGENT_STATUS_DIR, `${sessionId}.json`), JSON.stringify(data));
     } catch {}
+
+    // Piggyback message sync onto hook events — fs.watch can miss events on macOS,
+    // so use the reliable hook path to also trigger a transcript re-read.
+    const transcriptPath = data.transcript_path || findTranscriptForSession(sessionId);
+    if (transcriptPath) {
+      const existingSync = fileSyncs.get(transcriptPath);
+      if (existingSync) {
+        existingSync.invalidate();
+      } else {
+        // Session file exists but watcher never saw it — bootstrap the sync
+        const parts = transcriptPath.split(path.sep);
+        const projectDirName = parts[parts.length - 2];
+        const decoded = decodeProjectDirName(projectDirName);
+        const projectPath = decoded && fs.existsSync(decoded) ? decoded : projectDirName.replace(/-/g, path.sep).replace(/^-/, "");
+
+        if (isProjectAllowedToSync(projectPath, config) && !isPathExcluded(projectPath, config.excluded_paths)) {
+          const sync = new InvalidateSync(async () => {
+            await processSessionFile(
+              transcriptPath,
+              sessionId,
+              projectPath,
+              syncService,
+              config.user_id!,
+              config.team_id,
+              conversationCache,
+              retryQueue,
+              pendingMessages,
+              titleCache,
+              updateState
+            );
+          });
+          fileSyncs.set(transcriptPath, sync);
+          sync.invalidate();
+        }
+      }
+    }
   });
 
   function extractToolFromMessage(message: string): string {
@@ -9135,7 +9370,6 @@ async function main(): Promise<void> {
 
   const versionCheckInterval = startVersionChecker(syncService);
   const reconciliationInterval = startReconciliation(syncService, retryQueue);
-  const eventLoopMonitorInterval = startEventLoopMonitor();
 
   const cursorWatcher = new CursorWatcher();
   const cursorSyncs = new Map<string, InvalidateSync>();
@@ -9536,6 +9770,11 @@ async function main(): Promise<void> {
   }
 
   const messagesInFlight = new Set<string>();
+  // Track messages recently injected to tmux with timestamps, so retries don't re-inject.
+  // Uses a TTL: blocks re-delivery within 60s (the race window), but allows it after
+  // in case the agent dropped the paste or crashed silently after injection.
+  const injectedMessageTs = new Map<string, number>();
+  const INJECTION_DEDUP_TTL_MS = 60_000;
 
   const setupSubscription = () => {
     try {
@@ -9585,6 +9824,20 @@ async function main(): Promise<void> {
 
               syncService.updateSessionAgentStatus(msg.conversation_id, "connected").catch(() => {});
 
+              // If recently injected to tmux, skip re-delivery (prevents retry race causing duplicates).
+              // TTL ensures we allow re-delivery if the agent dropped/crashed after injection.
+              // Exception: compaction recovery bypass allows re-delivery of messages dropped during CC compaction.
+              const isCompactionRecovery = compactionRedeliveryBypass.delete(msg._id);
+              const lastInjectedAt = injectedMessageTs.get(msg._id);
+              if (lastInjectedAt && (Date.now() - lastInjectedAt) < INJECTION_DEDUP_TTL_MS && !isCompactionRecovery) {
+                logDelivery(`DEDUP: msg=${msg._id.slice(0, 8)} injected ${Math.round((Date.now() - lastInjectedAt) / 1000)}s ago, updating status only`);
+                try {
+                  await syncService.updateMessageStatus({ messageId: msg._id, status: "injected" });
+                } catch {}
+                messagesInFlight.delete(msg._id);
+                continue;
+              }
+
               try {
                 const delivered = await deliverMessage(
                   msg.conversation_id,
@@ -9595,7 +9848,25 @@ async function main(): Promise<void> {
                   titleCache
                 );
                 if (delivered) {
-                  logDelivery(`SUCCESS: msg=${msg._id.slice(0, 8)} injected`);
+                  logDelivery(`SUCCESS: msg=${msg._id.slice(0, 8)} injected${isCompactionRecovery ? " (compaction recovery)" : ""}`);
+                  injectedMessageTs.set(msg._id, Date.now());
+                  // Track for post-compaction recovery: if CC compacts and goes idle,
+                  // we can re-inject this message. Skip on recovery re-injections to
+                  // prevent infinite compaction->recovery loops.
+                  if (!isCompactionRecovery) {
+                    recentSessionInjections.set(msg.conversation_id, {
+                      messageId: msg._id,
+                      content: messageContent,
+                      ts: Date.now(),
+                    });
+                  }
+                  // GC: evict expired entries to prevent unbounded growth
+                  if (injectedMessageTs.size > 500) {
+                    const now = Date.now();
+                    for (const [id, ts] of injectedMessageTs) {
+                      if (now - ts > INJECTION_DEDUP_TTL_MS) injectedMessageTs.delete(id);
+                    }
+                  }
                 } else {
                   logDelivery(`FAILED: msg=${msg._id.slice(0, 8)} delivery returned false, scheduling retry ${(msg.retry_count ?? 0) + 1}`);
                   scheduleMessageRetry(msg._id, msg.retry_count ?? 0, msg.conversation_id, messageContent);
@@ -9694,10 +9965,17 @@ async function main(): Promise<void> {
 
               if (injected) {
                 log(`Injected permission '${key}' for session ${sessionId?.slice(0, 8)}`);
-                processedPermissionIds.add(permission._id);
               } else {
-                log(`Failed to inject permission response, will retry on next update`);
+                // Check if the permission is stale (resolved > 60s ago) — no point retrying
+                const resolvedAge = permission.resolved_at ? Date.now() - permission.resolved_at : Infinity;
+                if (resolvedAge > 60_000) {
+                  log(`Skipping stale permission response for session ${sessionId?.slice(0, 8)} (resolved ${Math.round(resolvedAge / 1000)}s ago)`);
+                } else {
+                  log(`Failed to inject permission response for session ${sessionId?.slice(0, 8)}, will retry on next update`);
+                }
               }
+              // Always mark as processed — if the session process is gone, retrying won't help
+              processedPermissionIds.add(permission._id);
             } catch (err) {
               const errMsg = err instanceof Error ? err.message : String(err);
               log(`Error handling permission response: ${errMsg}`);
@@ -9973,8 +10251,8 @@ export async function runWatchdog(): Promise<void> {
   if (minCliVersion && compareVersions(version, minCliVersion) < 0) {
     logLine(`Binary outdated: current=${version} min=${minCliVersion}, updating...`);
     await sendWatchdogLog("info", `[LIFECYCLE] watchdog_update_start: current=${version} min=${minCliVersion}`);
-    const success = await performUpdate();
-    if (success) {
+    const result = await performUpdate();
+    if (result.success) {
       logLine("Watchdog update successful");
       await sendWatchdogLog("info", `[LIFECYCLE] watchdog_update_complete: ${version} -> ${minCliVersion}`);
       clearCrashCount();
@@ -9986,8 +10264,8 @@ export async function runWatchdog(): Promise<void> {
         daemonAlive = false;
       }
     } else {
-      logLine("Watchdog update failed");
-      await sendWatchdogLog("warn", `[LIFECYCLE] watchdog_update_failed: current=${version} target>=${minCliVersion}`);
+      logLine(`Watchdog update failed: ${result.error}`);
+      await sendWatchdogLog("warn", `[LIFECYCLE] watchdog_update_failed: current=${version} target>=${minCliVersion} error=${result.error}`);
     }
   }
 
@@ -10018,7 +10296,7 @@ export async function runWatchdog(): Promise<void> {
     const updateCmd = commands.find(c => c.command === "force_update");
     if (updateCmd) {
       logLine("Force update pending, updating before restart...");
-      const success = await performUpdate();
+      const result = await performUpdate();
       // Report result
       await fetch(`${siteUrl}/cli/command-result`, {
         method: "POST",
@@ -10026,11 +10304,11 @@ export async function runWatchdog(): Promise<void> {
         body: JSON.stringify({
           api_token: config.auth_token,
           command_id: updateCmd.id,
-          result: success ? "Updated by watchdog" : undefined,
-          error: success ? undefined : "Watchdog update failed",
+          result: result.success ? "Updated by watchdog" : undefined,
+          error: result.success ? undefined : `Watchdog update failed: ${result.error}`,
         }),
       }).catch(() => {});
-      if (success) {
+      if (result.success) {
         logLine("Update successful");
         clearCrashCount();
       }

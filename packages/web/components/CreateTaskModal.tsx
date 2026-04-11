@@ -201,7 +201,6 @@ function LabelsChip({ value, onChange }: { value: string[]; onChange: (v: string
 
 export function CreateTaskModal({ onClose, teamMembers, currentUser }: { onClose: () => void; teamMembers?: any[] | null; currentUser?: any }) {
   const createTask = useInboxStore((s) => s.createTask);
-  const webCreate = useMutation(api.tasks.webCreate);
   const workspaceArgs = useWorkspaceArgs();
   const convex = useConvex();
   const generateUploadUrl = useMutation(api.images.generateUploadUrl);
@@ -248,6 +247,7 @@ export function CreateTaskModal({ onClose, teamMembers, currentUser }: { onClose
   const handleSubmit = useCallback(async () => {
     if (!title.trim()) return;
     const desc = descriptionRef.current.trim();
+    const wsArgs = workspaceArgs === "skip" ? {} : workspaceArgs;
     const opts: any = {
       title: title.trim(),
       description: desc || undefined,
@@ -256,16 +256,10 @@ export function CreateTaskModal({ onClose, teamMembers, currentUser }: { onClose
       status,
       assignee: assignee || undefined,
       labels: labels.length > 0 ? labels : undefined,
+      ...wsArgs,
     };
     createTask(opts);
-    try {
-      const wsArgs = workspaceArgs === "skip" ? {} : workspaceArgs;
-      await webCreate({ ...opts, ...wsArgs });
-      toast.success(`Created: ${title.trim()}`);
-    } catch (e: any) {
-      console.error("Task creation failed:", e);
-      toast.error(`Failed to create task: ${e?.message || "Unknown error"}`);
-    }
+    toast.success(`Created: ${title.trim()}`);
     if (createMore) {
       setTitle("");
       descriptionRef.current = "";
@@ -274,7 +268,7 @@ export function CreateTaskModal({ onClose, teamMembers, currentUser }: { onClose
     } else {
       onClose();
     }
-  }, [title, priority, status, assignee, labels, createMore, createTask, webCreate, onClose, workspaceArgs]);
+  }, [title, priority, status, assignee, labels, createMore, createTask, onClose, workspaceArgs]);
 
   return (
     <div

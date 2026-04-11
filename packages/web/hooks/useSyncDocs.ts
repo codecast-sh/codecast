@@ -1,31 +1,76 @@
-import { useCallback } from "react";
-import { useQuery } from "convex/react";
+import { useCallback, useEffect, useRef } from "react";
+import { useQuery, usePaginatedQuery } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, DocDetail } from "../store/inboxStore";
-import { useWorkspaceArgs } from "./useWorkspaceArgs";
 import { useConvexSync } from "./useConvexSync";
+import { Id } from "@codecast/convex/convex/_generated/dataModel";
 
 const api = _api as any;
 
-export function useSyncDocs(typeFilter?: string, searchQuery?: string, projectFilter?: string, scope?: string) {
-  const workspaceArgs = useWorkspaceArgs();
-  const result = useQuery(
-    searchQuery ? api.docs.webSearch : api.docs.webList,
-    workspaceArgs === "skip" ? "skip"
-      : searchQuery
-        ? { query: searchQuery, doc_type: typeFilter || undefined, scope: scope || undefined, ...workspaceArgs }
-        : { doc_type: typeFilter || undefined, scope: scope || undefined, ...workspaceArgs, ...(projectFilter ? { project_path: projectFilter } : {}) }
-  );
+function normalizeProjectPath(path: string): string {
+  const parts = path.split("/");
+  const srcIndex = parts.findIndex((p) => p === "src" || p === "projects" || p === "repos" || p === "code");
+  if (srcIndex >= 0 && srcIndex < parts.length - 1) {
+    return parts.slice(0, srcIndex + 2).join("/");
+  }
+  return path;
+}
+
+function dedupeProjectPaths(paths: string[]): string[] {
+  const byName = new Map<string, string>();
+  for (const path of paths) {
+    const root = normalizeProjectPath(path);
+    const name = root.split("/").filter(Boolean).pop() || path;
+    const existing = byName.get(name);
+    if (!existing || (path.includes("/src/") && !existing.includes("/src/"))) {
+      byName.set(name, path);
+    }
+  }
+  return Array.from(byName.values());
+}
+
+const PAGE_SIZE = 200;
+
+/**
+ * Fetches ALL docs via paginated queries — each page reads a bounded number of
+ * docs so the Convex query stays under the 64MB memory limit.
+ * Results accumulate client-side and are synced to the store as they arrive.
+ */
+export function useSyncDocs() {
+  const activeTeamId = useInboxStore(
+    (s) => s.clientState.ui?.active_team_id
+  ) as Id<"teams"> | undefined;
+  const initialized = useInboxStore((s) => s.clientStateInitialized);
   const syncTable = useInboxStore((s) => s.syncTable);
 
-  useConvexSync(result, useCallback((data: any) => {
-    if (searchQuery) {
-      syncTable("docs", data as any);
-    } else {
-      const { docs, projectPaths } = data as any;
-      syncTable("docs", docs as any, { extra: { docProjectPaths: projectPaths } });
+  const stableArgs = !initialized ? "skip" : activeTeamId
+    ? { team_id: activeTeamId, workspace: "team" as const }
+    : { workspace: "personal" as const };
+
+  const { results, status, loadMore } = usePaginatedQuery(
+    api.docs.webListPaged,
+    stableArgs === "skip" ? "skip" : stableArgs,
+    { initialNumItems: PAGE_SIZE }
+  );
+
+  // Auto-load all remaining pages
+  const loadMoreRef = useRef(loadMore);
+  loadMoreRef.current = loadMore;
+  useEffect(() => {
+    if (status === "CanLoadMore") {
+      loadMoreRef.current(PAGE_SIZE);
     }
-  }, [syncTable, searchQuery]));
+  }, [status, results?.length]);
+
+  // Sync accumulated results to store
+  useConvexSync(
+    status !== "LoadingFirstPage" ? results : undefined,
+    useCallback((docs: any) => {
+      const rawPaths: string[] = docs.map((d: any) => d.project_path).filter(Boolean);
+      const projectPaths = dedupeProjectPaths([...new Set(rawPaths)]);
+      syncTable("docs", docs, { extra: { docProjectPaths: projectPaths } });
+    }, [syncTable])
+  );
 }
 
 export function useSyncDocDetail(id?: string) {

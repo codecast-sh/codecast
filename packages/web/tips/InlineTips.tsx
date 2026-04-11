@@ -1,14 +1,17 @@
 import { X } from 'lucide-react';
-import { useInboxStore } from '../store/inboxStore';
+import { useTrackedStore } from '../store/inboxStore';
 import { getInlineTips } from './registry';
 import { formatShortcutParts, getShortcutsForAction } from '../shortcuts/registry';
 import { KeyCap } from '../components/KeyboardShortcutsHelp';
 import { track } from '../lib/analytics';
 
 export function InlineTips() {
-  const tips = useInboxStore(s => s.clientState.tips);
-  const initialized = useInboxStore(s => s.clientStateInitialized);
-  const updateTips = useInboxStore(s => s.updateClientTips);
+  const s = useTrackedStore([
+    s => s.clientState.tips,
+    s => s.clientStateInitialized,
+  ]);
+  const tips = s.clientState.tips;
+  const initialized = s.clientStateInitialized;
 
   if (!initialized || tips?.level === 'none') return null;
   if (tips?._inlineSuppressed) return null;
@@ -26,7 +29,7 @@ export function InlineTips() {
   if (visible.length === 0) return null;
 
   const dismiss = (tipId: string) => {
-    updateTips({
+    s.updateClientTips({
       seen: [...seen, tipId],
       dismissed: [...dismissed, tipId],
       _inlineSuppressed: true,

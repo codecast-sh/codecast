@@ -24,7 +24,7 @@ import { Button } from "./ui/button";
 import { DiffView } from "./DiffView";
 import { parsePatch, getFileStatus } from "../lib/patchParser";
 import { cn, copyToClipboard } from "../lib/utils";
-import { useInboxStore } from "../store/inboxStore";
+import { useTrackedStore } from "../store/inboxStore";
 
 export interface DiffFile {
   filename: string;
@@ -688,19 +688,20 @@ export function FileDiffLayout({
   const strippedFiles = useMemo(() => stripCommonPrefix(files), [files]);
 
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
-  const toggleShortcutsPanel = useInboxStore(s => s.toggleShortcutsPanel);
-  const layoutPref = useInboxStore(s => s.clientState.layouts?.file_diff ?? DEFAULT_FILE_DIFF_LAYOUT);
-  const updateLayout = useInboxStore(s => s.updateClientLayout);
-  const updateUI = useInboxStore(s => s.updateClientUI);
+  const s = useTrackedStore([
+    s => s.clientState.layouts?.file_diff,
+    s => s.clientState.ui?.file_diff_view_mode,
+  ]);
+  const layoutPref = s.clientState.layouts?.file_diff ?? DEFAULT_FILE_DIFF_LAYOUT;
+  const viewMode = s.clientState.ui?.file_diff_view_mode ?? "unified";
   const layout: Layout = { "file-tree": layoutPref.tree, "diff-content": layoutPref.content };
   const [currentFileIndex, setCurrentFileIndex] = useState(0);
   const [isMobile, setIsMobile] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const viewMode = useInboxStore(s => s.clientState.ui?.file_diff_view_mode ?? "unified");
   const selectedFileRef = useRef<HTMLButtonElement>(null);
 
   const toggleViewMode = () => {
-    updateUI({ file_diff_view_mode: viewMode === "split" ? "unified" : "split" });
+    s.updateClientUI({ file_diff_view_mode: viewMode === "split" ? "unified" : "split" });
   };
 
   useMountEffect(() => {
@@ -773,13 +774,13 @@ export function FileDiffLayout({
         break;
       case "?":
         e.preventDefault();
-        toggleShortcutsPanel();
+        s.toggleShortcutsPanel();
         break;
     }
   });
 
   const handleLayoutChange = (newLayout: Layout) => {
-    updateLayout("file_diff", { tree: newLayout["file-tree"] || 25, content: newLayout["diff-content"] || 75 });
+    s.updateClientLayout("file_diff", { tree: newLayout["file-tree"] || 25, content: newLayout["diff-content"] || 75 });
   };
 
   const handleSelectFile = (filename: string) => {
@@ -869,7 +870,7 @@ export function FileDiffLayout({
               variant="ghost"
               size="icon"
               className="h-8 w-8 opacity-50 hover:opacity-100"
-              onClick={toggleShortcutsPanel}
+              onClick={s.toggleShortcutsPanel}
               title="Keyboard shortcuts (?)"
             >
               <Keyboard className="h-4 w-4" />
@@ -911,7 +912,7 @@ export function FileDiffLayout({
           variant="ghost"
           size="icon"
           className="h-8 w-8 opacity-50 hover:opacity-100"
-          onClick={toggleShortcutsPanel}
+          onClick={s.toggleShortcutsPanel}
           title="Keyboard shortcuts (?)"
         >
           <Keyboard className="h-4 w-4" />
@@ -937,7 +938,7 @@ export function FileDiffLayout({
           variant="ghost"
           size="icon"
           className="h-8 w-8 opacity-50 hover:opacity-100"
-          onClick={toggleShortcutsPanel}
+          onClick={s.toggleShortcutsPanel}
           title="Keyboard shortcuts (?)"
         >
           <Keyboard className="h-4 w-4" />

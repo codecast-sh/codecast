@@ -1,9 +1,11 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
+import { execSync } from "child_process";
+import pkg from "../package.json";
 
-const VERSION = "1.1.11";
-const MEMORY_VERSION = "3";
+const VERSION = pkg.version;
+const MEMORY_VERSION = "4";
 const TASK_VERSION = "1";
 const WORK_VERSION = "5";
 const PLAN_VERSION = "2";
@@ -151,71 +153,54 @@ export function isDevMode(): boolean {
   return exe.includes("bun") || (!exe.includes("codecast") && !exe.includes("/cast"));
 }
 
-export async function performUpdate(): Promise<boolean> {
+export async function performUpdate(): Promise<{ success: boolean; error?: string }> {
   if (isDevMode()) {
-    console.error("Cannot self-update in dev mode (running via bun)");
-    console.error("Install the binary version: curl -fsSL codecast.sh/install | sh (provides 'cast' command)");
-    return false;
+    return { success: false, error: "dev_mode" };
   }
 
   const platformKey = getPlatformKey();
+  const currentExe = process.execPath;
+  const newExe = currentExe + ".new";
+  const backupExe = currentExe + ".backup";
 
   try {
+    // Fetch metadata (small JSON — fine via fetch)
     const response = await fetch(LATEST_URL);
     if (!response.ok) {
-      console.error("Failed to fetch update info");
-      return false;
+      return { success: false, error: `fetch_latest_${response.status}` };
     }
 
     const latest: LatestInfo = await response.json();
     const binary = latest.binaries[platformKey];
 
     if (!binary) {
-      console.error(`No binary available for platform: ${platformKey}`);
-      return false;
+      return { success: false, error: `no_binary_${platformKey}` };
     }
 
     console.log(`Downloading cast v${latest.version}...`);
 
-    const binaryResponse = await fetch(binary.url);
-    if (!binaryResponse.ok) {
-      console.error("Failed to download binary");
-      return false;
-    }
-
-    const binaryData = await binaryResponse.arrayBuffer();
+    // Download binary via curl (streams to disk, works under launchd)
+    try { fs.unlinkSync(newExe); } catch {}
+    execSync(`curl -fsSL "${binary.url}" -o "${newExe}"`, { timeout: 180000, stdio: "ignore" });
 
     // Verify checksum
-    const hash = await crypto.subtle.digest("SHA-256", binaryData);
+    const downloaded = fs.readFileSync(newExe);
+    const hash = await crypto.subtle.digest("SHA-256", downloaded.buffer);
     const hashHex = Array.from(new Uint8Array(hash))
       .map((b) => b.toString(16).padStart(2, "0"))
       .join("");
 
     if (hashHex !== binary.sha256) {
-      console.error("Checksum verification failed");
-      return false;
+      try { fs.unlinkSync(newExe); } catch {}
+      return { success: false, error: `checksum_mismatch_${platformKey}` };
     }
 
-    // Get current executable path
-    const currentExe = process.execPath;
-    const backupExe = currentExe + ".backup";
-    const newExe = currentExe + ".new";
-
-    // Write new binary
-    fs.writeFileSync(newExe, Buffer.from(binaryData));
+    // Replace binary
     fs.chmodSync(newExe, 0o755);
-
-    // Backup current and replace
-    if (fs.existsSync(backupExe)) {
-      fs.unlinkSync(backupExe);
-    }
+    if (fs.existsSync(backupExe)) fs.unlinkSync(backupExe);
     fs.renameSync(currentExe, backupExe);
     fs.renameSync(newExe, currentExe);
-
-    // Clean up backup
-    try {
-      fs.unlinkSync(backupExe);
-    } catch {}
+    try { fs.unlinkSync(backupExe); } catch {}
 
     // Update state
     const state = readUpdateState();
@@ -224,10 +209,12 @@ export async function performUpdate(): Promise<boolean> {
 
     console.log(`Updated to v${latest.version}`);
     ensureCastAlias();
-    return true;
+    return { success: true };
   } catch (err) {
-    console.error("Update failed:", err);
-    return false;
+    try { fs.unlinkSync(newExe); } catch {}
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("Update failed:", msg);
+    return { success: false, error: msg };
   }
 }
 

@@ -1,10 +1,7 @@
 import { useState } from "react";
-import { useMutation } from "convex/react";
-import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { RotateCw } from "lucide-react";
 import { cn } from "@/lib/utils";
-
-const api = _api as any;
+import { useInboxStore } from "../store/inboxStore";
 
 const RETRYABLE_STATUSES = new Set(["needs_context", "blocked", "failed"]);
 
@@ -16,26 +13,19 @@ interface RetryTaskButtonProps {
 
 export function RetryTaskButton({ task, className, onRetry }: RetryTaskButtonProps) {
   const [loading, setLoading] = useState(false);
-  const webUpdate = useMutation(api.tasks.webUpdate);
+  const updateTask = useInboxStore((s) => s.updateTask);
 
   if (!task.execution_status || !RETRYABLE_STATUSES.has(task.execution_status)) {
     return null;
   }
 
-  const handleRetry = async (e: React.MouseEvent) => {
+  const handleRetry = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
     setLoading(true);
-    try {
-      await webUpdate({
-        short_id: task.short_id,
-        status: "open",
-        execution_status: "",
-      });
-      onRetry?.();
-    } finally {
-      setLoading(false);
-    }
+    updateTask(task.short_id, { status: "open", execution_status: "" });
+    onRetry?.();
+    setLoading(false);
   };
 
   return (

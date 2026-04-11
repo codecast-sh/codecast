@@ -195,18 +195,18 @@ export const getMessageTimestamp = query({
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthUserId(ctx);
-    if (!authUserId) {
-      return null;
-    }
     const conversation = await ctx.db.get(args.conversation_id);
     if (!conversation) {
       return null;
     }
-    const isOwner = conversation.user_id.toString() === authUserId.toString();
-    if (!isOwner) {
-      if (!(await canTeamMemberAccess(ctx, authUserId, conversation))) {
-        return null;
-      }
+    const isOwner = authUserId && conversation.user_id.toString() === authUserId.toString();
+    const isShared = !!conversation.share_token;
+    let hasTeamAccess = false;
+    if (authUserId && !isOwner) {
+      hasTeamAccess = await canTeamMemberAccess(ctx, authUserId, conversation);
+    }
+    if (!isOwner && !hasTeamAccess && !isShared) {
+      return null;
     }
 
     const message = await ctx.db.get(args.message_id);
@@ -812,18 +812,18 @@ export const findMessageByContent = query({
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthUserId(ctx);
-    if (!authUserId) {
-      return null;
-    }
     const conversation = await ctx.db.get(args.conversation_id);
     if (!conversation) {
       return null;
     }
-    const isOwner = conversation.user_id.toString() === authUserId.toString();
-    if (!isOwner) {
-      if (!(await canTeamMemberAccess(ctx, authUserId, conversation))) {
-        return null;
-      }
+    const isOwner = authUserId && conversation.user_id.toString() === authUserId.toString();
+    const isShared = !!conversation.share_token;
+    let hasTeamAccess = false;
+    if (authUserId && !isOwner) {
+      hasTeamAccess = await canTeamMemberAccess(ctx, authUserId, conversation);
+    }
+    if (!isOwner && !hasTeamAccess && !isShared) {
+      return null;
     }
 
     const searchLower = args.search_term.toLowerCase();

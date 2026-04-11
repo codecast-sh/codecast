@@ -1,7 +1,8 @@
-import { StyleSheet, FlatList, RefreshControl, TouchableOpacity, TextInput, View as RNView, Text as RNText, Modal, Alert, ScrollView, KeyboardAvoidingView, Platform, ActivityIndicator, Image } from 'react-native';
+import { StyleSheet, FlatList, RefreshControl, TouchableOpacity, TextInput, View as RNView, Text as RNText, Modal, Alert, ScrollView, KeyboardAvoidingView, Platform, ActivityIndicator, Image, ActionSheetIOS } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useMutation } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
+import type { Id } from '@codecast/convex/convex/_generated/dataModel';
 import { useState, useCallback, useRef, useMemo, useEffect } from 'react';
 import { useRouter } from 'expo-router';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
@@ -12,6 +13,7 @@ import {
 } from '@/components/SessionItem';
 import { useInboxStore, type InboxSession, categorizeSessions } from '@codecast/web/store/inboxStore';
 import { useSyncInboxSessions } from '@/hooks/useSyncInboxSessions';
+import { SessionListSkeleton } from '@/components/SkeletonLoader';
 import { useQuery } from 'convex/react';
 
 function DismissedItem({ session, onPress }: { session: SessionData; onPress: () => void }) {
@@ -311,6 +313,8 @@ export default function InboxScreen() {
   const stashSession = useInboxStore((s) => s.stashSession);
   const unstashSession = useInboxStore((s) => s.unstashSession);
   const pinSession = useInboxStore((s) => s.pinSession);
+  const deferSession = useInboxStore((s) => s.deferSession);
+  const killSession = useMutation(api.conversations.killSession);
 
   const sessionsWithQueuedMessages = useInboxStore((s) => s.sessionsWithQueuedMessages);
   const { sorted: sortedAll, pinned, newSessions, needsInput, working } = useMemo(
@@ -342,6 +346,11 @@ export default function InboxScreen() {
     stashSession(conversationId);
   }, [stashSession]);
 
+  const handleDefer = useCallback((conversationId: string) => {
+    deferSession(conversationId);
+  }, [deferSession]);
+
+
   const handleUndismiss = useCallback((conversationId: string) => {
     unstashSession(conversationId);
   }, [unstashSession]);
@@ -349,6 +358,48 @@ export default function InboxScreen() {
   const handlePin = useCallback((conversationId: string) => {
     pinSession(conversationId);
   }, [pinSession]);
+
+  const handleSessionLongPress = useCallback((session: InboxSession) => {
+    const options = [
+      session.is_pinned ? 'Unpin' : 'Pin',
+      'Defer',
+      'Dismiss',
+      'Kill Agent',
+      'Cancel',
+    ];
+    const destructiveButtonIndex = 3;
+    const cancelButtonIndex = 4;
+
+    if (Platform.OS === 'ios') {
+      ActionSheetIOS.showActionSheetWithOptions(
+        { options, cancelButtonIndex, destructiveButtonIndex, title: cleanTitle(session.title) },
+        (index) => {
+          if (index === 0) handlePin(session._id);
+          else if (index === 1) deferSession(session._id);
+          else if (index === 2) handleDismiss(session._id);
+          else if (index === 3) {
+            Alert.alert('Kill Agent', 'Stop this agent session?', [
+              { text: 'Cancel', style: 'cancel' },
+              { text: 'Kill', style: 'destructive', onPress: () => killSession({ conversation_id: session._id as Id<"conversations"> }) },
+            ]);
+          }
+        },
+      );
+    } else {
+      Alert.alert(cleanTitle(session.title), undefined, [
+        { text: session.is_pinned ? 'Unpin' : 'Pin', onPress: () => handlePin(session._id) },
+        { text: 'Defer', onPress: () => deferSession(session._id) },
+        { text: 'Dismiss', onPress: () => handleDismiss(session._id) },
+        { text: 'Kill Agent', style: 'destructive', onPress: () => {
+          Alert.alert('Kill Agent', 'Stop this agent session?', [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Kill', style: 'destructive', onPress: () => killSession({ conversation_id: session._id as Id<"conversations"> }) },
+          ]);
+        }},
+        { text: 'Cancel', style: 'cancel' },
+      ]);
+    }
+  }, [handlePin, handleDismiss, deferSession, killSession]);
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
@@ -362,8 +413,9 @@ export default function InboxScreen() {
       onPress={() => router.push(`/session/${s._id}`)}
       onDismiss={() => handleDismiss(s._id)}
       onPin={() => handlePin(s._id)}
+      onLongPress={() => handleSessionLongPress(s)}
     />
-  ), [router, handleDismiss, handlePin]);
+  ), [router, handleDismiss, handlePin, handleSessionLongPress]);
 
   const renderSection = useCallback((label: string, items: InboxSession[], color?: string) => {
     if (items.length === 0) return null;
@@ -379,7 +431,10 @@ export default function InboxScreen() {
 
   const listData = useMemo(() => {
     const sections: React.ReactNode[] = [];
-    if (activeSessions.length === 0 && Object.keys(sessions).length > 0) {
+    if (Object.keys(sessions).length === 0) {
+      return [<SessionListSkeleton key="skeleton" />];
+    }
+    if (activeSessions.length === 0) {
       return [(
         <RNView key="empty" style={styles.emptyInbox}>
           <FontAwesome name="inbox" size={32} color={Theme.textMuted0} />
@@ -531,7 +586,7 @@ export default function InboxScreen() {
           onPress={() => setShowNewSession(true)}
           activeOpacity={0.8}
         >
-          <FontAwesome name="plus" size={16} color={Theme.textMuted} />
+          <FontAwesome name="plus" size={18} color="#fff" />
         </TouchableOpacity>
       </RNView>
     </SafeAreaView>
@@ -547,10 +602,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: Spacing.lg,
-    paddingVertical: Spacing.md,
+    paddingTop: Spacing.md,
+    paddingBottom: Spacing.xs,
     backgroundColor: Theme.bgAlt,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: Theme.borderLight,
     gap: 8,
   },
   headerTitle: {
@@ -648,8 +702,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.md,
     paddingTop: Spacing.xs,
     paddingBottom: Spacing.xs,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: Theme.borderLight,
   },
   searchInputRow: {
     flexDirection: 'row',
@@ -740,18 +792,16 @@ const styles = StyleSheet.create({
     elevation: 100,
   },
   fab: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: Theme.bgAlt,
-    borderWidth: 1,
-    borderColor: Theme.border,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: Theme.accent,
     alignItems: 'center',
     justifyContent: 'center',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 4,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.25,
+    shadowRadius: 6,
+    elevation: 6,
   },
 });

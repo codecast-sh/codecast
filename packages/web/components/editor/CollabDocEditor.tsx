@@ -32,6 +32,7 @@ import { DateMentionExtension } from "./DateMentionExtension";
 import { EntityIdExtension } from "./EntityIdExtension";
 import { BubbleToolbar } from "./BubbleToolbar";
 import { ImageUploadPlaceholder, uploadImageWithPlaceholder } from "./ImageUploadPlugin";
+import { createWikiLinkExtension } from "./WikiLinkExtension";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import type { SyncApi } from "@convex-dev/prosemirror-sync";
 
@@ -253,6 +254,11 @@ function buildExtensions(onMentionQuery: MentionQueryFn, placeholder: string) {
       transformCopiedText: true,
     }) as any,
     ImageUploadPlaceholder,
+    // Wiki links: [[ trigger opens doc-only suggestion
+    createWikiLinkExtension(async (query: string) => {
+      const results = await onMentionQuery(query);
+      return results.filter((item) => item.type === "doc");
+    }),
   ];
 }
 

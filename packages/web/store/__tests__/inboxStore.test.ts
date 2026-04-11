@@ -209,7 +209,7 @@ describe("categorizeSessions", () => {
     expect(needsInput.map((s) => s._id)).toContain("conv-needs-reply");
   });
 
-  it("excludes stopped sessions from Needs Input", () => {
+  it("puts stopped sessions in Needs Input (not invisible)", () => {
     const stopped: InboxSession = {
       ...baseSession,
       _id: "conv-stopped",
@@ -235,9 +235,9 @@ describe("categorizeSessions", () => {
       new Set(),
     );
 
-    expect(needsInput.map((s) => s._id)).not.toContain("conv-stopped");
+    // Stopped sessions need user attention — they must be visible
+    expect(needsInput.map((s) => s._id)).toContain("conv-stopped");
     expect(needsInput.map((s) => s._id)).toContain("conv-idle");
-    // stopped sessions shouldn't be in working either
     expect(working.map((s) => s._id)).not.toContain("conv-stopped");
   });
 });

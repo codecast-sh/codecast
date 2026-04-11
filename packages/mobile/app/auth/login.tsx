@@ -14,6 +14,8 @@ import {
 import { Text } from '@/components/Themed';
 import { useAuth } from '@/lib/auth';
 import { Link } from 'expo-router';
+import { Theme, Spacing, FontSize, BorderRadius } from '@/constants/Theme';
+import { Feather, Ionicons } from '@expo/vector-icons';
 
 export default function LoginScreen() {
   const [email, setEmail] = useState('');
@@ -79,41 +81,49 @@ export default function LoginScreen() {
         keyboardShouldPersistTaps="handled"
       >
         <View style={styles.header}>
-          <Image
-            source={require('@/assets/images/logo.png')}
-            style={styles.logo}
-            resizeMode="contain"
-          />
+          <View style={styles.logoContainer}>
+            <Image
+              source={require('@/assets/images/logo.png')}
+              style={styles.logo}
+              resizeMode="contain"
+            />
+          </View>
           <Text style={styles.title}>codecast</Text>
           <Text style={styles.subtitle}>Sign in to access your conversations</Text>
         </View>
 
-        <View style={styles.card}>
+        <View style={styles.buttonsContainer}>
           {isAppleAuthAvailable && (
             <TouchableOpacity
               style={[styles.appleButton, loading && styles.buttonDisabled]}
               onPress={handleAppleSignIn}
               disabled={loading}
+              activeOpacity={0.8}
             >
               {loading && !showEmailForm ? (
-                <ActivityIndicator color="#000" />
+                <ActivityIndicator color="#fff" />
               ) : (
-                <Text style={styles.appleButtonText}>Sign in with Apple</Text>
+                <View style={styles.buttonContent}>
+                  <Ionicons name="logo-apple" size={20} color="#fff" style={styles.buttonIcon} />
+                  <Text style={styles.appleButtonText}>Continue with Apple</Text>
+                </View>
               )}
             </TouchableOpacity>
           )}
 
           <TouchableOpacity
-            style={[styles.githubButton, loading && styles.buttonDisabled, isAppleAuthAvailable && { marginTop: 12 }]}
+            style={[styles.githubButton, loading && styles.buttonDisabled]}
             onPress={handleGitHubSignIn}
             disabled={loading}
+            activeOpacity={0.8}
           >
             {loading && !showEmailForm ? (
-              <ActivityIndicator color="#fff" />
+              <ActivityIndicator color={Theme.text} />
             ) : (
-              <>
-                <Text style={styles.githubButtonText}>Sign in with GitHub</Text>
-              </>
+              <View style={styles.buttonContent}>
+                <Feather name="github" size={18} color={Theme.text} style={styles.buttonIcon} />
+                <Text style={styles.githubButtonText}>Continue with GitHub</Text>
+              </View>
             )}
           </TouchableOpacity>
 
@@ -121,8 +131,12 @@ export default function LoginScreen() {
             <TouchableOpacity
               style={styles.emailToggle}
               onPress={() => setShowEmailForm(true)}
+              activeOpacity={0.7}
             >
-              <Text style={styles.emailToggleText}>Sign in with email</Text>
+              <View style={styles.buttonContent}>
+                <Feather name="mail" size={16} color={Theme.accentAmber} style={styles.buttonIcon} />
+                <Text style={styles.emailToggleText}>Sign in with email</Text>
+              </View>
             </TouchableOpacity>
           ) : (
             <>
@@ -137,7 +151,7 @@ export default function LoginScreen() {
                 <TextInput
                   style={styles.input}
                   placeholder="you@example.com"
-                  placeholderTextColor="#888"
+                  placeholderTextColor={Theme.inputPlaceholder}
                   value={email}
                   onChangeText={setEmail}
                   autoCapitalize="none"
@@ -152,7 +166,7 @@ export default function LoginScreen() {
                 <TextInput
                   style={styles.input}
                   placeholder="Enter your password"
-                  placeholderTextColor="#888"
+                  placeholderTextColor={Theme.inputPlaceholder}
                   value={password}
                   onChangeText={setPassword}
                   secureTextEntry
@@ -165,6 +179,7 @@ export default function LoginScreen() {
                 style={[styles.signInButton, loading && styles.buttonDisabled]}
                 onPress={handleEmailSignIn}
                 disabled={loading}
+                activeOpacity={0.8}
               >
                 {loading && showEmailForm ? (
                   <ActivityIndicator color="#fff" />
@@ -177,19 +192,19 @@ export default function LoginScreen() {
                 style={styles.backButton}
                 onPress={() => setShowEmailForm(false)}
               >
-                <Text style={styles.backButtonText}>Back to GitHub sign in</Text>
+                <Text style={styles.backButtonText}>Back</Text>
               </TouchableOpacity>
             </>
           )}
+        </View>
 
-          <View style={styles.footer}>
-            <Text style={styles.footerText}>Don't have an account? </Text>
-            <Link href="/auth/signup" asChild>
-              <TouchableOpacity>
-                <Text style={styles.footerLink}>Sign Up</Text>
-              </TouchableOpacity>
-            </Link>
-          </View>
+        <View style={styles.footer}>
+          <Text style={styles.footerText}>Don't have an account? </Text>
+          <Link href="/auth/signup" asChild>
+            <TouchableOpacity>
+              <Text style={styles.footerLink}>Sign Up</Text>
+            </TouchableOpacity>
+          </Link>
         </View>
       </ScrollView>
     </KeyboardAvoidingView>
@@ -199,144 +214,165 @@ export default function LoginScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f8f8f8',
+    backgroundColor: Theme.bg,
   },
   scrollContent: {
     flexGrow: 1,
     justifyContent: 'center',
-    padding: 24,
-  },
-  logo: {
-    width: 80,
-    height: 80,
-    marginBottom: 16,
+    padding: Spacing.xxl,
   },
   header: {
     alignItems: 'center',
-    marginBottom: 40,
+    marginBottom: Spacing.xxxl + 8,
+  },
+  logoContainer: {
+    width: 88,
+    height: 88,
+    borderRadius: BorderRadius.xl + 6,
+    backgroundColor: Theme.bgAlt,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: Spacing.lg,
+    shadowColor: Theme.text,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    elevation: 4,
+  },
+  logo: {
+    width: 56,
+    height: 56,
   },
   title: {
-    fontSize: 32,
-    fontWeight: '600',
-    color: '#1a1a1a',
-    marginBottom: 8,
+    fontSize: 30,
+    fontWeight: '700',
+    color: Theme.text,
+    letterSpacing: -0.5,
+    marginBottom: Spacing.xs,
   },
   subtitle: {
-    fontSize: 15,
-    color: '#666',
+    fontSize: FontSize.md,
+    color: Theme.textMuted,
+    letterSpacing: 0.1,
   },
-  card: {
-    backgroundColor: '#fff',
-    borderRadius: 16,
-    padding: 24,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 3,
+  buttonsContainer: {
+    gap: Spacing.md,
+  },
+  buttonContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  buttonIcon: {
+    marginRight: Spacing.sm + 2,
   },
   appleButton: {
-    backgroundColor: '#fff',
-    padding: 16,
-    borderRadius: 12,
+    backgroundColor: Theme.text,
+    paddingVertical: Spacing.lg,
+    borderRadius: BorderRadius.lg,
     alignItems: 'center',
   },
   appleButtonText: {
-    color: '#000',
-    fontSize: 16,
+    color: '#fff',
+    fontSize: FontSize.lg,
     fontWeight: '600',
   },
   githubButton: {
-    backgroundColor: '#24292e',
-    padding: 16,
-    borderRadius: 12,
+    backgroundColor: Theme.bgAlt,
+    paddingVertical: Spacing.lg,
+    borderRadius: BorderRadius.lg,
     alignItems: 'center',
-    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: Theme.borderLight,
   },
   githubButtonText: {
-    color: '#fff',
-    fontSize: 16,
+    color: Theme.text,
+    fontSize: FontSize.lg,
     fontWeight: '600',
   },
   buttonDisabled: {
     opacity: 0.5,
   },
   emailToggle: {
-    padding: 12,
+    paddingVertical: Spacing.md,
     alignItems: 'center',
   },
   emailToggleText: {
-    color: '#d97706',
-    fontSize: 15,
-    fontWeight: '500',
+    color: Theme.accentAmber,
+    fontSize: FontSize.md + 1,
+    fontWeight: '600',
   },
   divider: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginVertical: 20,
+    marginVertical: Spacing.sm,
   },
   dividerLine: {
     flex: 1,
     height: 1,
-    backgroundColor: '#e0e0e0',
+    backgroundColor: Theme.borderLight,
   },
   dividerText: {
-    marginHorizontal: 12,
-    color: '#888',
-    fontSize: 14,
+    marginHorizontal: Spacing.md,
+    color: Theme.textMuted0,
+    fontSize: FontSize.sm,
+    textTransform: 'uppercase',
+    letterSpacing: 1,
   },
   inputContainer: {
-    marginBottom: 16,
+    marginBottom: Spacing.sm,
   },
   label: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: '#444',
-    marginBottom: 8,
+    fontSize: FontSize.sm,
+    fontWeight: '600',
+    color: Theme.textMuted,
+    marginBottom: Spacing.xs + 2,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
   },
   input: {
-    backgroundColor: '#f5f5f5',
+    backgroundColor: Theme.inputBg,
     borderWidth: 1,
-    borderColor: '#e0e0e0',
-    borderRadius: 10,
-    padding: 14,
-    fontSize: 16,
-    color: '#1a1a1a',
+    borderColor: Theme.inputBorder,
+    borderRadius: BorderRadius.lg,
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.md + 2,
+    fontSize: FontSize.lg,
+    color: Theme.text,
   },
   signInButton: {
-    backgroundColor: '#d97706',
-    padding: 16,
-    borderRadius: 12,
+    backgroundColor: Theme.accentAmber,
+    paddingVertical: Spacing.lg,
+    borderRadius: BorderRadius.lg,
     alignItems: 'center',
-    marginTop: 8,
+    marginTop: Spacing.sm,
   },
   signInButtonText: {
     color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
+    fontSize: FontSize.lg,
+    fontWeight: '700',
   },
   backButton: {
-    padding: 12,
+    paddingVertical: Spacing.sm,
     alignItems: 'center',
-    marginTop: 8,
   },
   backButtonText: {
-    color: '#666',
-    fontSize: 14,
+    color: Theme.textMuted,
+    fontSize: FontSize.md,
   },
   footer: {
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
-    marginTop: 24,
+    marginTop: Spacing.xxxl,
   },
   footerText: {
-    color: '#666',
-    fontSize: 14,
+    color: Theme.textMuted,
+    fontSize: FontSize.md,
   },
   footerLink: {
-    color: '#d97706',
-    fontSize: 14,
-    fontWeight: '600',
+    color: Theme.accentAmber,
+    fontSize: FontSize.md,
+    fontWeight: '700',
   },
 });

@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
+import { isConversationTeamVisible } from "./privacy";
 
 export const sendPushNotification = internalAction({
   args: {
@@ -59,6 +60,10 @@ export const notifyTeamSessionStart = internalMutation({
       return;
     }
 
+    if (!(await isConversationTeamVisible(ctx, conversation))) {
+      return;
+    }
+
     const user = await ctx.db.get(args.user_id);
     if (!user) {
       return;
@@ -92,6 +97,10 @@ export const notifyTeamSessionStart = internalMutation({
     const now = Date.now();
 
     for (const member of teamMembers) {
+      // Skip if this member has muted the actor
+      if (member.muted_members?.includes(args.user_id)) {
+        continue;
+      }
       if (
         member.push_token &&
         member.notifications_enabled &&
@@ -178,6 +187,11 @@ export const create = mutation({
 
     const prefs = recipient.notification_preferences;
     if (args.type === "mention" && prefs && !prefs.mention) {
+      return null;
+    }
+
+    // Skip if recipient has muted this actor
+    if (args.actor_user_id && recipient.muted_members?.includes(args.actor_user_id)) {
       return null;
     }
 
@@ -386,9 +400,10 @@ const ENTITY_TYPE_VALIDATOR = v.union(
 export const isWatching = query({
   args: {
     entity_type: ENTITY_TYPE_VALIDATOR,
-    entity_id: v.string(),
+    entity_id: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    if (!args.entity_id) return false;
     const userId = await getAuthUserId(ctx);
     if (!userId) return false;
     const sub = await ctx.db

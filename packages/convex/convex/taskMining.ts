@@ -243,6 +243,7 @@ export const mineTasksFromInsights = internalMutation({
         created_from_conversation: insight.conversation_id,
         created_from_insight: insight._id,
         source: "insight" as const,
+        triage_status: "suggested" as const,
         confidence: insight.confidence,
         is_private: insight.is_private,
         team_visibility: insight.team_visibility,
@@ -516,7 +517,8 @@ export const mineDocsFromSessions = internalMutation({
         contentParts.push(`## Project\n\`${session.project_path}\``);
 
       const conv = await ctx.db.get(session.conversation_id);
-      const convTeamId = conv && (!conv.is_private || conv.auto_shared) ? conv.team_id : args.team_id;
+      const convTeamId = conv && (!conv.is_private || conv.auto_shared
+        || (conv.team_visibility && conv.team_visibility !== "private")) ? conv.team_id : args.team_id;
 
       await ctx.db.insert("docs", {
         user_id: args.user_id,
@@ -792,7 +794,7 @@ export const findMarkdownWrites = internalQuery({
         const q2 = q.eq("conversation_id", args.conversation_id);
         return args.after_creation ? q2.gt("_creationTime", args.after_creation) : q2;
       })
-      .take(100);
+      .take(20);
 
     let lastCreation = 0;
     for (const msg of msgs) {
@@ -822,7 +824,7 @@ export const findMarkdownWrites = internalQuery({
         }
       }
     }
-    return { writes: results, lastCreation, hasMore: msgs.length === 100 };
+    return { writes: results, lastCreation, hasMore: msgs.length === 20 };
   },
 });
 
@@ -844,8 +846,7 @@ export const insertExtractedDocs = internalMutation({
 
     const existing = await ctx.db
       .query("docs")
-      .withIndex("by_user_id", (q) => q.eq("user_id", args.user_id))
-      .filter((q) => q.eq(q.field("conversation_id"), args.conversation_id))
+      .withIndex("by_conversation_id", (q) => q.eq("conversation_id", args.conversation_id))
       .collect();
     const existingFiles = new Set(existing.map((d) => d.source_file).filter(Boolean));
 

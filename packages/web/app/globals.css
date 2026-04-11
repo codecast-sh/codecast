@@ -728,6 +728,14 @@ pre[class*="language-"] {
   cursor: col-resize !important;
 }
 
+/* Window manager: hide input area on unfocused windows */
+.session-window--blurred [data-chat-input] {
+  display: none;
+}
+.session-window--blurred .shrink-0.sticky.bottom-0 {
+  display: none;
+}
+
 /* Desktop: titlebar drag region for overlay titlebar */
 .electron-drag-region {
   -webkit-app-region: drag;

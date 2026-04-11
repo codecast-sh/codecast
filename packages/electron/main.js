@@ -5,6 +5,15 @@ const fs = require("fs");
 
 app.name = "Codecast";
 
+// Pin Chromium's download path to our userData dir so macOS TCC never
+// probes ~/Documents or ~/Downloads and triggers the permission dialog.
+const _ud = app.getPath("userData");
+for (const dir of ["downloads", "temp"]) {
+  const p = path.join(_ud, dir);
+  fs.mkdirSync(p, { recursive: true });
+  app.setPath(dir, p);
+}
+
 let notificationRefs = [];
 
 function showNativeNotification(title, body, onClick) {

@@ -1,6 +1,5 @@
 import { useState, useCallback, DragEvent } from "react";
-import { useMutation } from "convex/react";
-import { api as _api } from "@codecast/convex/convex/_generated/api";
+import { useInboxStore } from "../store/inboxStore";
 import { TaskStatusBadge, getExecStatusConfig } from "./TaskStatusBadge";
 import { toast } from "sonner";
 import {
@@ -13,8 +12,6 @@ import {
   Minus,
   AlertTriangle,
 } from "lucide-react";
-
-const api = _api as any;
 
 const BOARD_COLUMNS = [
   { status: "open", label: "Open", icon: Circle, color: "text-sol-blue", border: "border-sol-blue/30" },
@@ -32,7 +29,7 @@ const PRIORITY_CONFIG: Record<string, { icon: typeof Minus; color: string }> = {
 };
 
 export function PlanBoardView({ tasks, planShortId }: { tasks: any[]; planShortId: string }) {
-  const webUpdate = useMutation(api.tasks.webUpdate);
+  const updateTask = useInboxStore((s) => s.updateTask);
   const [dragging, setDragging] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState<string | null>(null);
 
@@ -47,7 +44,7 @@ export function PlanBoardView({ tasks, planShortId }: { tasks: any[]; planShortI
     setDragOver(null);
   }, []);
 
-  const onDrop = useCallback(async (e: DragEvent, targetStatus: string) => {
+  const onDrop = useCallback((e: DragEvent, targetStatus: string) => {
     e.preventDefault();
     setDragOver(null);
     const shortId = e.dataTransfer.getData("text/plain");
@@ -59,14 +56,10 @@ export function PlanBoardView({ tasks, planShortId }: { tasks: any[]; planShortI
       return;
     }
 
-    try {
-      await webUpdate({ short_id: shortId, status: targetStatus });
-      toast.success(`${shortId} → ${targetStatus.replace("_", " ")}`);
-    } catch {
-      toast.error("Failed to update task");
-    }
+    updateTask(shortId, { status: targetStatus });
+    toast.success(`${shortId} → ${targetStatus.replace("_", " ")}`);
     setDragging(null);
-  }, [tasks, webUpdate]);
+  }, [tasks, updateTask]);
 
   const onDragOver = useCallback((e: DragEvent, status: string) => {
     e.preventDefault();

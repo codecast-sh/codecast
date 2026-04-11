@@ -16,12 +16,14 @@ import {
   ArrowDown,
   ChevronDown,
   ExternalLink,
+  MessageSquare,
+  FolderOpen,
 } from "lucide-react";
 import { Popover, PopoverContent, PopoverAnchor } from "./ui/popover";
 
 const api = _api as any;
 
-const ENTITY_ID_RE = /^(ct|pl)-[a-z0-9]+$/i;
+const ENTITY_ID_RE = /^(?:(?:ct|pl)-[a-z0-9]+|jx[a-z0-9]{5,})$/i;
 
 const STATUS_ICON: Record<string, any> = {
   draft: CircleDotDashed,
@@ -205,6 +207,90 @@ function PlanHoverContent({ plan }: { plan: any }) {
   );
 }
 
+function abbrevModel(model?: string | null): string | null {
+  if (!model) return null;
+  if (model.includes("opus")) return "Opus";
+  if (model.includes("sonnet")) return "Sonnet";
+  if (model.includes("haiku")) return "Haiku";
+  return null;
+}
+
+function relativeTime(ts?: number | null): string | null {
+  if (!ts) return null;
+  const diff = Date.now() - ts;
+  const mins = Math.floor(diff / 60000);
+  const hours = Math.floor(mins / 60);
+  const days = Math.floor(hours / 24);
+  if (days > 0) return `${days}d ago`;
+  if (hours > 0) return `${hours}h ago`;
+  if (mins > 5) return `${mins}m ago`;
+  return "just now";
+}
+
+function SessionHoverContent({ session }: { session: any }) {
+  const isActive = session.status === "active";
+  const model = abbrevModel(session.model);
+  const projectName = session.project_path?.split("/").pop() ?? null;
+  const timeAgo = relativeTime(session.updated_at);
+
+  const metaParts = [
+    session.message_count != null ? `${session.message_count} msgs` : null,
+    model,
+    timeAgo,
+  ].filter(Boolean);
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-start gap-2">
+        <div className="relative flex-shrink-0 mt-0.5">
+          <MessageSquare className="w-3.5 h-3.5 text-sol-blue" />
+          {isActive && (
+            <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-sol-green border border-sol-bg" />
+          )}
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="text-xs font-medium text-sol-text leading-snug">
+            {session.title || session.short_id}
+          </div>
+          <div className="flex items-center gap-2 mt-1">
+            <span className={`text-[10px] font-medium ${isActive ? "text-sol-green" : "text-gray-400"}`}>
+              {isActive ? "Active" : session.status || "Stopped"}
+            </span>
+            {session.agent_type && (
+              <>
+                <span className="text-gray-600">·</span>
+                <span className="text-[10px] text-gray-400">{session.agent_type}</span>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {metaParts.length > 0 && (
+        <div className="flex items-center gap-2 pl-[22px] text-[10px] text-gray-500 font-mono">
+          {metaParts.map((p, i) => (
+            <span key={i}>{p}</span>
+          ))}
+        </div>
+      )}
+
+      {projectName && (
+        <div className="flex items-center gap-1.5 pl-[22px]">
+          <FolderOpen className="w-2.5 h-2.5 text-gray-500 flex-shrink-0" />
+          <span className="text-[10px] text-gray-400 font-mono truncate">{projectName}</span>
+        </div>
+      )}
+
+      <div className="flex items-center justify-between pt-1 border-t border-white/5">
+        <span className="text-[10px] text-gray-500 font-mono">{session.short_id}</span>
+        <span className="text-[10px] text-gray-500 inline-flex items-center gap-0.5">
+          Click to open <ArrowUpRight className="w-2.5 h-2.5" />
+        </span>
+      </div>
+    </div>
+  );
+}
+
 const MENTION_RE = /@\[([^\]]*?)(?:\s+(ct-\w+|pl-\w+|jx\w+|doc:\w+))?\](?:\s*\([^)]*\))?/g;
 
 function MentionPill({ name, entityId }: { name: string; entityId?: string }) {
@@ -262,7 +348,7 @@ export function EntityAwareLink({ href, children, ...props }: any) {
   if (isEntityId(text)) {
     return <EntityIdPill shortId={text} />;
   }
-  return <a href={href} {...props}>{children}</a>;
+  return <a href={href} target="_blank" rel="noopener noreferrer" {...props}>{children}</a>;
 }
 
 const CROSSHATCH_BG = [
@@ -389,6 +475,62 @@ function InlinePlanExpand({ plan }: { plan: any }) {
   );
 }
 
+function InlineSessionExpand({ session }: { session: any }) {
+  const isActive = session.status === "active";
+  const model = abbrevModel(session.model);
+  const projectName = session.project_path?.split("/").pop() ?? null;
+  const timeAgo = relativeTime(session.updated_at);
+
+  const metaParts = [
+    session.message_count != null ? `${session.message_count} msgs` : null,
+    model,
+    timeAgo,
+  ].filter(Boolean);
+
+  return (
+    <div
+      className="mt-1 rounded-lg border border-sol-border/20 overflow-hidden"
+      style={{ background: CROSSHATCH_BG }}
+    >
+      <div className="px-3 py-2.5 space-y-2">
+        <div className="flex items-center gap-2">
+          <div className="relative flex-shrink-0">
+            <MessageSquare className="w-3.5 h-3.5 text-sol-blue" />
+            {isActive && (
+              <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-sol-green border border-sol-bg" />
+            )}
+          </div>
+          <div className="text-xs font-medium text-sol-text leading-snug">
+            {session.title || session.short_id}
+          </div>
+        </div>
+        <div className="flex items-center gap-3">
+          <span className={`inline-flex items-center gap-1 text-[10px] font-medium ${isActive ? "text-sol-green" : "text-sol-text-dim"}`}>
+            {isActive ? "Active" : session.status || "Stopped"}
+          </span>
+          {metaParts.map((p, i) => (
+            <span key={i} className="text-[10px] text-sol-text-dim font-mono">{p}</span>
+          ))}
+        </div>
+        {projectName && (
+          <div className="flex items-center gap-1.5">
+            <FolderOpen className="w-2.5 h-2.5 text-sol-text-dim flex-shrink-0" />
+            <span className="text-[10px] text-sol-text-muted font-mono truncate">{projectName}</span>
+          </div>
+        )}
+        <Link
+          href={`/conversation/${session._id}`}
+          className="flex items-center gap-1 text-[10px] text-sol-cyan hover:text-sol-text transition-colors pt-1 border-t border-sol-border/10"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <ExternalLink className="w-2.5 h-2.5" />
+          Open session
+        </Link>
+      </div>
+    </div>
+  );
+}
+
 const TASK_STATUS_CONFIG: Record<string, { icon: any; label: string; color: string }> = {
   draft: { icon: CircleDotDashed, label: "Draft", color: "text-gray-400" },
   open: { icon: Circle, label: "Open", color: "text-sol-blue" },
@@ -400,9 +542,9 @@ const TASK_STATUS_CONFIG: Record<string, { icon: any; label: string; color: stri
 
 export function EntityIdPill({ shortId }: { shortId: string }) {
   const id = shortId.toLowerCase().trim();
-  const prefix = id.split("-")[0];
-  const isTask = prefix === "ct";
-  const isPlan = prefix === "pl";
+  const isTask = id.startsWith("ct-");
+  const isPlan = id.startsWith("pl-");
+  const isSession = id.startsWith("jx");
 
   const [hoverOpen, setHoverOpen] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -410,17 +552,29 @@ export function EntityIdPill({ shortId }: { shortId: string }) {
 
   const task = useQuery(api.tasks.webGet, isTask ? { short_id: id } : "skip");
   const plan = useQuery(api.plans.webGet, isPlan ? { short_id: id } : "skip");
+  const session = useQuery(
+    api.conversations.webGet,
+    isSession ? { short_id: id.slice(0, 7) } : "skip"
+  );
 
-  const entity = isTask ? task : plan;
+  const entity = isTask ? task : isPlan ? plan : session;
   const status = entity?.status;
 
-  const Icon = isPlan
-    ? Target
-    : STATUS_ICON[status || "open"] || Circle;
+  const Icon = isSession
+    ? MessageSquare
+    : isPlan
+      ? Target
+      : STATUS_ICON[status || "open"] || Circle;
 
-  const colors = isPlan
-    ? "bg-sol-cyan/10 text-sol-cyan border-sol-cyan/20 hover:bg-sol-cyan/20"
-    : "bg-sol-yellow/10 text-sol-yellow border-sol-yellow/20 hover:bg-sol-yellow/20";
+  const colors = isSession
+    ? "bg-sol-blue/10 text-sol-blue border-sol-blue/20 hover:bg-sol-blue/20"
+    : isPlan
+      ? "bg-sol-cyan/10 text-sol-cyan border-sol-cyan/20 hover:bg-sol-cyan/20"
+      : "bg-sol-yellow/10 text-sol-yellow border-sol-yellow/20 hover:bg-sol-yellow/20";
+
+  const pillLabel = isSession && entity?.title
+    ? entity.title.length > 30 ? entity.title.slice(0, 30) + "…" : entity.title
+    : id;
 
   const handleMouseEnter = useCallback(() => {
     if (expanded) return;
@@ -448,8 +602,13 @@ export function EntityIdPill({ shortId }: { shortId: string }) {
             onMouseLeave={handleMouseLeave}
             className={`inline-flex items-center gap-1 px-1.5 py-0 rounded text-[11px] font-mono leading-[1.4] ${colors} border transition-colors cursor-pointer align-baseline`}
           >
-            <Icon className="w-2.5 h-2.5 flex-shrink-0" />
-            <span>{id}</span>
+            <span className="relative flex-shrink-0">
+              <Icon className="w-2.5 h-2.5" />
+              {isSession && status === "active" && (
+                <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-sol-green" />
+              )}
+            </span>
+            <span>{pillLabel}</span>
             <ChevronDown className={`w-2 h-2 flex-shrink-0 transition-transform ${expanded ? "rotate-180" : ""}`} />
           </button>
         </PopoverAnchor>
@@ -464,14 +623,18 @@ export function EntityIdPill({ shortId }: { shortId: string }) {
           onOpenAutoFocus={(e) => e.preventDefault()}
         >
           {entity ? (
-            isTask ? <TaskHoverContent task={entity} /> : <PlanHoverContent plan={entity} />
+            isTask ? <TaskHoverContent task={entity} />
+            : isPlan ? <PlanHoverContent plan={entity} />
+            : <SessionHoverContent session={entity} />
           ) : (
             <div className="text-[11px] text-gray-500">{id}</div>
           )}
         </PopoverContent>
       </Popover>
       {expanded && entity && (
-        isTask ? <InlineTaskExpand task={entity} /> : <InlinePlanExpand plan={entity} />
+        isTask ? <InlineTaskExpand task={entity} />
+        : isPlan ? <InlinePlanExpand plan={entity} />
+        : <InlineSessionExpand session={entity} />
       )}
     </span>
   );
