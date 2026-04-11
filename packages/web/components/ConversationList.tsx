@@ -430,7 +430,7 @@ function ConvSubtitleSection({ conv, expanded }: { conv: Conversation; expanded?
 
   // Default: show subtitle
   if (conv.subtitle && conv.visibility_mode !== "minimal") {
-    return <p className={`text-xs sm:text-sm text-sol-text-secondary mb-1.5 sm:mb-2 ${expanded ? "" : "line-clamp-2"} whitespace-pre-line`}>{conv.subtitle}</p>;
+    return <p className={`text-xs sm:text-sm text-sol-text-secondary mb-1.5 sm:mb-2 ${expanded ? "line-clamp-4" : "line-clamp-2"} whitespace-pre-line break-words`}>{conv.subtitle}</p>;
   }
 
   // Full mode with no browser open: show bullets normally
@@ -520,7 +520,7 @@ function ConversationCard({ conv, filter, isFocused, onNavigate, hasTeam }: {
       onClick={isOthersRestrictedView ? (e) => e.preventDefault() : onNavigate ? (e) => { e.preventDefault(); onNavigate(conv._id); } : undefined}
       data-flip-key={conv._id}
     >
-      <div className={`relative border rounded-lg sm:rounded-xl transition-all duration-200 dark:shadow-none ${
+      <div className={`relative border rounded-lg sm:rounded-xl transition-all duration-200 dark:shadow-none overflow-hidden ${
         conv.is_subagent
           ? !conv.is_active
             ? "p-1.5 sm:p-2 bg-sol-bg/50 dark:bg-sol-bg/30 border-sol-border/15 opacity-35 hover:opacity-55 scale-[0.97] origin-left"
@@ -540,7 +540,7 @@ function ConversationCard({ conv, filter, isFocused, onNavigate, hasTeam }: {
             <div className="flex items-start justify-between gap-3 mb-1">
               <div className="flex items-center gap-2 min-w-0 flex-1">
                 <AgentIcon agentType={conv.agent_type || "claude_code"} className={`shrink-0 ${conv.is_subagent ? "w-3.5 h-3.5 opacity-50" : "w-4 h-4"}`} />
-                <span className={`transition-colors ${
+                <span className={`truncate min-w-0 transition-colors ${
                   conv.is_subagent
                     ? "font-normal text-xs sm:text-sm text-sol-text-dim/70"
                     : isOthersRestrictedView ? "font-medium text-sm sm:text-base text-sol-text-muted" : "font-medium text-sm sm:text-base text-sol-text"
@@ -586,13 +586,13 @@ function ConversationCard({ conv, filter, isFocused, onNavigate, hasTeam }: {
             </div>
 
             {conv.parent_conversation_id && (
-              <div className="flex items-center gap-1.5 mb-1.5 text-[11px] text-sol-text-dim">
-                <svg className="w-3 h-3 rotate-180" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <div className="flex items-center gap-1.5 mb-1.5 text-[11px] text-sol-text-dim min-w-0">
+                <svg className="w-3 h-3 rotate-180 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
                 </svg>
-                <span>sub of</span>
+                <span className="shrink-0">sub of</span>
                 <button
-                  className="text-sol-cyan/70 hover:text-sol-cyan truncate max-w-[200px] transition-colors text-left"
+                  className="text-sol-cyan/70 hover:text-sol-cyan truncate max-w-[150px] sm:max-w-[200px] transition-colors text-left"
                   onClick={(e) => {
                     e.preventDefault();
                     e.stopPropagation();
@@ -606,7 +606,7 @@ function ConversationCard({ conv, filter, isFocused, onNavigate, hasTeam }: {
 
             <ConvSubtitleSection conv={conv} expanded />
 
-            <div className="flex items-center gap-1.5 sm:gap-2 text-[11px] sm:text-xs flex-wrap text-sol-text-dim select-none">
+            <div className="flex items-center gap-1.5 sm:gap-2 text-[11px] sm:text-xs flex-wrap text-sol-text-dim select-none overflow-hidden">
               {(filter === "team" || !conv.is_own) && (
                 <span className="flex items-center gap-1.5 font-medium">
                   {conv.author_avatar ? (
@@ -626,7 +626,7 @@ function ConversationCard({ conv, filter, isFocused, onNavigate, hasTeam }: {
                   <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
                   </svg>
-                  <span className="truncate max-w-[100px]">{(conv.git_root || conv.project_path || "").split("/").pop()}</span>
+                  <span className="truncate max-w-[80px] sm:max-w-[100px]">{(conv.git_root || conv.project_path || "").split("/").pop()}</span>
                 </span>
               )}
               {filter === "team" && !conv.is_own && conv.is_private === false && (
@@ -1259,11 +1259,11 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onNavi
       }}
       onBlur={() => setFocusedIndex(-1)}>
       {/* Filter bar */}
-      <div className="flex gap-1.5 sm:gap-2 items-center pt-1 sm:pt-2 overflow-x-auto pb-1 scrollbar-auto sm:flex-wrap sm:overflow-x-visible sm:pb-0">
+      <div className="flex gap-1 sm:gap-1.5 items-center pt-1 sm:pt-2 overflow-x-auto pb-1 scrollbar-auto flex-wrap sm:pb-0" style={{ scrollbarWidth: 'none' }}>
         {filter === "my" && (
           <button
             onClick={() => openNewSession()}
-            className="px-2 sm:px-2.5 md:px-3 py-1 sm:py-1.5 text-xs sm:text-sm rounded-lg transition-colors whitespace-nowrap bg-sol-yellow/20 text-sol-yellow border border-sol-yellow/40 hover:bg-sol-yellow/30"
+            className="px-1.5 sm:px-2.5 py-0.5 sm:py-1 text-[11px] sm:text-xs rounded-md transition-colors whitespace-nowrap bg-sol-yellow/20 text-sol-yellow border border-sol-yellow/40 hover:bg-sol-yellow/30"
           >
             <span className="flex items-center gap-1">
               <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -1278,7 +1278,7 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onNavi
         {/* Time filters */}
         <button
           onClick={() => setTimeFilter("all")}
-          className={`px-2 sm:px-2.5 md:px-3 py-1 sm:py-1.5 text-xs sm:text-sm rounded-lg transition-colors whitespace-nowrap ${
+          className={`px-1.5 sm:px-2.5 py-0.5 sm:py-1 text-[11px] sm:text-xs rounded-md transition-colors whitespace-nowrap ${
             timeFilter === "all"
               ? "bg-amber-500/20 text-amber-400 border border-amber-500/40"
               : "bg-sol-bg-alt/60 text-sol-text-muted border border-sol-border/40 hover:border-sol-border bg-sol-bg-alt border-sol-border"
@@ -1288,7 +1288,7 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onNavi
         </button>
         <button
           onClick={() => setTimeFilter("long")}
-          className={`px-2 sm:px-2.5 md:px-3 py-1 sm:py-1.5 text-xs sm:text-sm rounded-lg transition-colors whitespace-nowrap ${
+          className={`px-1.5 sm:px-2.5 py-0.5 sm:py-1 text-[11px] sm:text-xs rounded-md transition-colors whitespace-nowrap ${
             timeFilter === "long"
               ? "bg-amber-500/20 text-amber-400 border border-amber-500/40"
               : "bg-sol-bg-alt/60 text-sol-text-muted border border-sol-border/40 hover:border-sol-border bg-sol-bg-alt border-sol-border"
@@ -1300,7 +1300,7 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onNavi
         </button>
         <button
           onClick={() => setTimeFilter("active")}
-          className={`px-2 sm:px-2.5 md:px-3 py-1 sm:py-1.5 text-xs sm:text-sm rounded-lg transition-colors whitespace-nowrap ${
+          className={`px-1.5 sm:px-2.5 py-0.5 sm:py-1 text-[11px] sm:text-xs rounded-md transition-colors whitespace-nowrap ${
             timeFilter === "active"
               ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/40"
               : "bg-sol-bg-alt/60 text-sol-text-muted border border-sol-border/40 hover:border-sol-border bg-sol-bg-alt border-sol-border"
@@ -1309,12 +1309,12 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onNavi
           Active{counts.active > 0 && ` (${counts.active})`}
         </button>
 
-        <div className="w-px bg-sol-border/30 mx-1" />
+        <div className="w-px h-4 bg-sol-border/30 mx-0.5" />
 
         {/* Subagent filters */}
         <button
           onClick={() => setSubagentFilter(subagentFilter === "main" ? "all" : "main")}
-          className={`px-2 sm:px-2.5 md:px-3 py-1 sm:py-1.5 text-xs sm:text-sm rounded-lg transition-colors whitespace-nowrap ${
+          className={`px-1.5 sm:px-2.5 py-0.5 sm:py-1 text-[11px] sm:text-xs rounded-md transition-colors whitespace-nowrap ${
             subagentFilter === "main"
               ? "bg-sol-blue/20 text-sol-blue border border-sol-blue/40"
               : "bg-sol-bg-alt/40 text-sol-text-muted border border-sol-border/30 hover:border-sol-border/50"
@@ -1324,7 +1324,7 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onNavi
         </button>
         <button
           onClick={() => setSubagentFilter(subagentFilter === "subagent" ? "all" : "subagent")}
-          className={`px-2 sm:px-2.5 md:px-3 py-1 sm:py-1.5 text-xs sm:text-sm rounded-lg transition-colors whitespace-nowrap ${
+          className={`px-1.5 sm:px-2.5 py-0.5 sm:py-1 text-[11px] sm:text-xs rounded-md transition-colors whitespace-nowrap ${
             subagentFilter === "subagent"
               ? "bg-sol-violet/20 text-sol-violet border border-sol-violet/40"
               : "bg-sol-bg-alt/40 text-sol-text-muted border border-sol-border/30 hover:border-sol-border/50"
@@ -1364,7 +1364,7 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onNavi
               // Minimal mode: just show activity line (e.g., "Worked in outreach for 4m")
               if (conv.visibility_mode === "minimal") {
                 const minimalContent = (
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-3 min-w-0">
                     {conv.author_avatar ? (
                       <img
                         src={conv.author_avatar}
@@ -1376,12 +1376,12 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onNavi
                         <span className="text-xs text-sol-text-muted">{conv.author_name?.charAt(0).toUpperCase()}</span>
                       </div>
                     )}
-                    <span className="font-medium text-sol-text text-sm">{conv.author_name}</span>
+                    <span className="font-medium text-sol-text text-sm shrink-0">{conv.author_name}</span>
                     {conv.is_active && (
-                      <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                      <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0" />
                     )}
-                    <span className="text-sol-text-muted text-sm flex-1">{conv.activity_summary}</span>
-                    <span className="text-sol-text-dim text-xs">{getRelativeTime(conv.updated_at)}</span>
+                    <span className="text-sol-text-muted text-sm flex-1 truncate min-w-0">{conv.activity_summary}</span>
+                    <span className="text-sol-text-dim text-xs shrink-0">{getRelativeTime(conv.updated_at)}</span>
                   </div>
                 );
 
