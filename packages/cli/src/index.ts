@@ -754,6 +754,18 @@ function clearTaskPulse(sessionId: string): void {
   } catch {}
 }
 
+function readTaskPulse(): { task?: string; plan?: string } | null {
+  const sessionId = detectCurrentSessionId();
+  if (!sessionId) return null;
+  try {
+    const file = path.join(os.homedir(), ".codecast", "task-pulse", `${sessionId}.json`);
+    if (!fs.existsSync(file)) return null;
+    return JSON.parse(fs.readFileSync(file, "utf-8"));
+  } catch {
+    return null;
+  }
+}
+
 const TASK_PULSE_HOOK = `#!/bin/bash
 # Periodic task/plan reminder — emits a short nudge every N user messages
 set -uo pipefail
@@ -9282,8 +9294,17 @@ work
 work
   .command("context")
   .description("Get full context for a task (for agents)")
-  .argument("<short_id>", "Task short ID")
-  .action(async (shortId: string) => {
+  .argument("[short_id]", "Task short ID (omit with --current)")
+  .option("--current", "Use the task bound to the current session")
+  .action(async (shortId: string | undefined, options: any) => {
+    if (options.current || !shortId) {
+      const pulse = readTaskPulse();
+      if (!pulse?.task) {
+        console.error("No task bound to current session. Use: cast task start <id>");
+        process.exit(1);
+      }
+      shortId = pulse.task;
+    }
     const result = await cliPost("/cli/work/context", { short_id: shortId });
     if (!result) {
       console.error("Task not found");
@@ -9781,6 +9802,80 @@ plan
         const ref = entry.path_or_url ? ` ${c.dim}→ ${entry.path_or_url}${c.reset}` : "";
         const author = entry.author ? `${entry.author} ` : "";
         console.log(`    ${icon} ${c.dim}${author}${ago} ago:${c.reset} ${entry.content}${extra}${ref}`);
+      }
+    }
+    console.log();
+  });
+
+plan
+  .command("context")
+  .description("Get full context for a plan (for agents)")
+  .argument("[plan_id]", "Plan short ID (omit with --current)")
+  .option("--current", "Use the plan bound to the current session")
+  .action(async (planId: string | undefined, options: any) => {
+    if (options.current || !planId) {
+      const pulse = readTaskPulse();
+      if (!pulse?.plan) {
+        console.error("No plan bound to current session. Use: cast plan bind <id>");
+        process.exit(1);
+      }
+      planId = pulse.plan;
+    }
+    const result = await cliPost("/cli/plans/get", { short_id: planId });
+    if (!result) {
+      console.error("Plan not found");
+      process.exit(1);
+    }
+    const p = result;
+    console.log(`\n# ${p.title}`);
+    console.log(`ID: ${p.short_id} | Status: ${p.status}`);
+    if (p.goal) console.log(`\nGoal: ${p.goal}`);
+    if (p.doc_content) console.log(`\n${p.doc_content}`);
+    if (p.acceptance_criteria?.length) {
+      console.log(`\n## Acceptance Criteria`);
+      for (const ac of p.acceptance_criteria) {
+        console.log(`- ${ac}`);
+      }
+    }
+    if (p.tasks?.length) {
+      const done = p.tasks.filter((t: any) => t.status === "done");
+      const inProgress = p.tasks.filter((t: any) => t.status === "in_progress");
+      const ready = p.tasks.filter((t: any) => t.status === "open" && !t.blocked_by?.length);
+      const blocked = p.tasks.filter((t: any) => t.status === "open" && t.blocked_by?.length);
+      console.log(`\n## Tasks (${done.length}/${p.tasks.length} done)`);
+      if (inProgress.length) {
+        console.log(`\nIn Progress:`);
+        for (const t of inProgress) console.log(`- ${t.short_id}: ${t.title}`);
+      }
+      if (ready.length) {
+        console.log(`\nReady:`);
+        for (const t of ready) console.log(`- ${t.short_id}: ${t.title}`);
+      }
+      if (blocked.length) {
+        console.log(`\nBlocked:`);
+        for (const t of blocked) console.log(`- ${t.short_id}: ${t.title} (by ${t.blocked_by?.join(", ")})`);
+      }
+      if (done.length) {
+        console.log(`\nDone:`);
+        for (const t of done) console.log(`- ${t.short_id}: ${t.title}`);
+      }
+    }
+    if (p.comments?.length) {
+      const decisions = p.comments.filter((e: any) => e.type === "decision");
+      const recent = p.comments.slice(-10);
+      if (decisions.length) {
+        console.log(`\n## Decisions`);
+        for (const d of decisions) {
+          const extra = d.rationale ? ` (${d.rationale})` : "";
+          console.log(`- ${d.content}${extra}`);
+        }
+      }
+      if (recent.length) {
+        console.log(`\n## Recent Activity`);
+        for (const e of recent) {
+          const ago = formatMs(Date.now() - e.timestamp);
+          console.log(`- [${ago} ago] ${e.content}`);
+        }
       }
     }
     console.log();
