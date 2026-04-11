@@ -592,6 +592,7 @@ interface InboxStoreState {
   setCurrentSession: (id: string) => void;
   clearSelection: () => void;
   setShowDismissed: (show: boolean) => void;
+  toggleShowDismissed: () => void;
   toggleCollapsedSection: (key: string) => void;
   setViewingDismissedId: (id: string | null) => void;
   getCurrentSession: () => InboxSession | null;
@@ -838,6 +839,7 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
       ui: "deep_merge",
       layouts: "deep_merge",
       dismissed: "deep_merge",
+      show_dismissed: "local_wins",
       drafts: "local_wins",
       tabs: "deep_merge",
       activeTabId: "deep_merge",
@@ -1454,9 +1456,13 @@ export const useInboxStore = create<InboxStoreState>(
     this.viewingDismissedId = null;
   }),
 
-  setShowDismissed: (show: boolean) => {
-    set({ showDismissed: show });
-  },
+  setShowDismissed: action(function (this: Draft, show: boolean) {
+    this.clientState.show_dismissed = show;
+  }),
+
+  toggleShowDismissed: action(function (this: Draft) {
+    this.clientState.show_dismissed = this.clientState.show_dismissed === false;
+  }),
 
   toggleCollapsedSection: (key: string) => {
     const current = get().collapsedSections;
@@ -1963,79 +1969,65 @@ export const useInboxStore = create<InboxStoreState>(
   tabs: [],
   activeTabId: null,
 
-  _applyTabs: sync(function (this: Draft, tabs: AppTab[], activeTabId: string | null) {
-    this.tabs = tabs;
-    this.activeTabId = activeTabId;
-  }),
-
-  openTab: (opts) => {
-    const { tabs, sidePanelSessionId, sidePanelOpen } = get();
+  openTab: action(function (this: Draft, opts: { title: string; path: string; sessionId?: string; makeActive?: boolean }) {
     const id = `tab_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
     const tab: AppTab = {
       id,
       title: opts.title,
       path: opts.path,
       sessionId: opts.sessionId,
-      sidePanelSessionId: sidePanelSessionId ?? undefined,
-      sidePanelOpen: sidePanelOpen || undefined,
+      sidePanelSessionId: this.sidePanelSessionId ?? undefined,
+      sidePanelOpen: this.sidePanelOpen || undefined,
       createdAt: Date.now(),
     };
-    const newTabs = [...tabs, tab];
-    const newActiveId = opts.makeActive !== false ? id : get().activeTabId;
-    (get() as any)._applyTabs(newTabs, newActiveId);
-    const dispatch = () => get()._dispatch("patch", [], { client_state: { _: { tabs: newTabs, activeTabId: newActiveId } } });
-    dispatch().catch(() => setTimeout(() => dispatch().catch(() => {}), 3000));
+    this.tabs = [...this.tabs, tab];
+    if (opts.makeActive !== false) this.activeTabId = id;
     return id;
-  },
+  }),
 
-  closeTab: (id) => {
-    const { tabs, activeTabId } = get();
-    const idx = tabs.findIndex((t: AppTab) => t.id === id);
+  closeTab: action(function (this: Draft, id: string) {
+    const idx = this.tabs.findIndex((t: AppTab) => t.id === id);
     if (idx === -1) return;
-    const newTabs = tabs.filter((t: AppTab) => t.id !== id);
-    let newActiveId = activeTabId;
-    if (activeTabId === id) {
+    const newTabs = this.tabs.filter((t: AppTab) => t.id !== id);
+    if (this.activeTabId === id) {
       const nextTab = newTabs[Math.min(idx, newTabs.length - 1)];
-      newActiveId = nextTab?.id ?? null;
+      this.activeTabId = nextTab?.id ?? null;
     }
-    (get() as any)._applyTabs(newTabs, newActiveId);
-    const dispatch = () => get()._dispatch("patch", [], { client_state: { _: { tabs: newTabs, activeTabId: newActiveId } } });
-    dispatch().catch(() => setTimeout(() => dispatch().catch(() => {}), 3000));
-  },
+    this.tabs = newTabs;
+  }),
 
-  switchTab: (id) => {
-    const { tabs, activeTabId } = get();
-    if (activeTabId === id) return;
-    if (activeTabId) get().saveCurrentTabState();
-    const target = tabs.find((t: AppTab) => t.id === id);
-    (get() as any)._applyTabs(tabs, id);
+  switchTab: action(function (this: Draft, id: string) {
+    if (this.activeTabId === id) return;
+    if (this.activeTabId) {
+      this.tabs = this.tabs.map((t: AppTab) => t.id === this.activeTabId ? {
+        ...t,
+        sidePanelSessionId: this.sidePanelSessionId ?? undefined,
+        sidePanelOpen: this.sidePanelOpen || undefined,
+        path: typeof window !== "undefined" ? window.location.pathname : t.path,
+      } : t);
+    }
+    const target = this.tabs.find((t: AppTab) => t.id === id);
+    this.activeTabId = id;
     if (target) {
-      set({
-        sidePanelSessionId: target.sidePanelSessionId ?? null,
-        sidePanelOpen: target.sidePanelOpen ?? false,
-      });
+      this.sidePanelSessionId = target.sidePanelSessionId ?? null;
+      this.sidePanelOpen = target.sidePanelOpen ?? false;
     }
-    get()._dispatch("patch", [], { client_state: { _: { activeTabId: id } } }).catch(() => {});
-  },
+  }),
 
-  updateTab: (id, patch) => {
-    const { tabs } = get();
-    const newTabs = tabs.map((t: AppTab) => t.id === id ? { ...t, ...patch } : t);
-    set({ tabs: newTabs });
-  },
+  updateTab: action(function (this: Draft, id: string, patch: Partial<AppTab>) {
+    this.tabs = this.tabs.map((t: AppTab) => t.id === id ? { ...t, ...patch } : t);
+  }),
 
-  saveCurrentTabState: (patch) => {
-    const { tabs, activeTabId, sidePanelSessionId, sidePanelOpen } = get();
-    if (!activeTabId) return;
-    const newTabs = tabs.map((t: AppTab) => t.id === activeTabId ? {
+  saveCurrentTabState: action(function (this: Draft, patch?: Partial<AppTab>) {
+    if (!this.activeTabId) return;
+    this.tabs = this.tabs.map((t: AppTab) => t.id === this.activeTabId ? {
       ...t,
-      sidePanelSessionId: sidePanelSessionId ?? undefined,
-      sidePanelOpen: sidePanelOpen || undefined,
+      sidePanelSessionId: this.sidePanelSessionId ?? undefined,
+      sidePanelOpen: this.sidePanelOpen || undefined,
       path: typeof window !== "undefined" ? window.location.pathname : t.path,
       ...patch,
     } : t);
-    set({ tabs: newTabs });
-  },
+  }),
 
   // =====================
   // CACHED QUERY DATA

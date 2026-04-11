@@ -37,7 +37,7 @@ import { isInboxSessionView } from "../lib/inboxRouting";
 import { useSessionSwitcher } from "../hooks/useSessionSwitcher";
 import { SessionSwitcher } from "./SessionSwitcher";
 import { TabBar } from "./TabBar";
-import { TabPanes } from "./TabPanes";
+import { TabContent } from "./TabContent";
 import { useTipActions } from "../tips";
 
 interface DashboardLayoutProps {
@@ -52,16 +52,15 @@ interface DashboardLayoutProps {
 const DEFAULT_LAYOUT = { sidebar: 25, main: 75 };
 const separatorClass = "relative z-10 w-px bg-black/10 cursor-col-resize before:absolute before:inset-y-0 before:-left-[2px] before:-right-[2px] before:content-[''] before:transition-colors before:duration-150 hover:before:bg-sol-cyan data-[resize-handle-active]:before:bg-sol-cyan";
 
-// When rendered inside TabPanes, nested DashboardLayouts become pass-through
-const DashboardLayoutNestingCtx = createContext(false);
+const DashboardNestCtx = createContext(false);
 
 export function DashboardLayout(props: DashboardLayoutProps) {
-  const isNested = useContext(DashboardLayoutNestingCtx);
+  const isNested = useContext(DashboardNestCtx);
   if (isNested) return <>{props.children}</>;
   return (
-    <DashboardLayoutNestingCtx.Provider value={true}>
+    <DashboardNestCtx.Provider value={true}>
       <DashboardLayoutInner {...props} />
-    </DashboardLayoutNestingCtx.Provider>
+    </DashboardNestCtx.Provider>
   );
 }
 
@@ -392,7 +391,7 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
   }
 
   const hasTabs = s.tabs.length > 0;
-  const content = hasTabs ? <TabPanes /> : children;
+  const content = hasTabs ? <TabContent /> : children;
 
   const pageContent = isFullWidthPage || hasTabs ? (
     <div className="h-full">{content}</div>

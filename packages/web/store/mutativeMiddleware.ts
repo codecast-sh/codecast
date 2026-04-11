@@ -47,6 +47,13 @@ const TABLE_MAP: Record<string, TableMapping> = {
   clientState: { table: "client_state", kind: "singleton" },
 };
 
+// Top-level store keys that dispatch as fields within a singleton table.
+// On patch, sends the full current value of the key (not granular sub-patches).
+const FIELD_TO_TABLE: Record<string, { table: string }> = {
+  tabs: { table: "client_state" },
+  activeTabId: { table: "client_state" },
+};
+
 const SINGLETON_KEY = "_";
 
 function setNested(obj: any, path: (string | number)[], value: any): any {
@@ -58,16 +65,27 @@ function setNested(obj: any, path: (string | number)[], value: any): any {
 }
 
 export function groupPatchesByTable(
-  patches: Patch[]
+  patches: Patch[],
+  state?: any,
 ): Record<string, Record<string, Record<string, any>>> {
   const result: Record<string, Record<string, Record<string, any>>> = {};
 
   for (const patch of patches) {
     if (patch.op !== "replace" && patch.op !== "add") continue;
     const path = patch.path as (string | number)[];
-    if (path.length < 2) continue;
+    if (path.length < 1) continue;
 
     const storeKey = String(path[0]);
+
+    const fieldMapping = FIELD_TO_TABLE[storeKey];
+    if (fieldMapping && state) {
+      result[fieldMapping.table] ??= {};
+      result[fieldMapping.table][SINGLETON_KEY] ??= {};
+      result[fieldMapping.table][SINGLETON_KEY][storeKey] = state[storeKey];
+      continue;
+    }
+
+    if (path.length < 2) continue;
     const mapping = TABLE_MAP[storeKey];
     if (!mapping) continue;
 
@@ -150,7 +168,7 @@ export function mutativeMiddleware(config: any): any {
 
         if ((isAct || isAsyncAct) && dispatchFn) {
           const grouped =
-            patches.length > 0 ? groupPatchesByTable(patches) : undefined;
+            patches.length > 0 ? groupPatchesByTable(patches, nextState) : undefined;
           const promise = dispatchFn(key, args, grouped, returnValue);
           if (isAsyncAct) return promise;
           promise.catch(() => {});
