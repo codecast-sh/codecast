@@ -7245,6 +7245,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const scrollCtxRef = useRef({ messageCount: 0, messagesLen: 0, timelineLen: 0, loadedStartIndex: 0 });
   const knownItemIdsRef = useRef<Set<string>>(new Set());
   const newItemIdsRef = useRef<Set<string>>(new Set());
+  const mountTimeRef = useRef(Date.now());
   const [shareSelectionMode, setShareSelectionMode] = useState(false);
   const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(new Set());
   const [isCreatingShareLink, setIsCreatingShareLink] = useState(false);
@@ -7954,7 +7955,12 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       return `pr-${(item.data as any)._id}`;
     }));
 
-    if (knownItemIdsRef.current.size > 0 && !isPaginatingRef.current) {
+    // Suppress animation during initial hydration — IDB delivers cached messages first,
+    // then Convex syncs the latest. Without this window, the Convex delta would
+    // trigger slide-in animations for messages that aren't actually new.
+    const isSettling = Date.now() - mountTimeRef.current < 1500;
+
+    if (knownItemIdsRef.current.size > 0 && !isPaginatingRef.current && !isSettling) {
       const fresh = new Set<string>();
       for (const id of currentIds) {
         if (!knownItemIdsRef.current.has(id)) {
