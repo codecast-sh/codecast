@@ -368,13 +368,9 @@ export function useConversationMessages(
   const conversation: Record<string, any> | null = useMemo(() => {
     if (!storeMeta && !hasPending) return null;
     if (!hasPending && targetMode && !targetAroundData && rawMessages.length === 0) return null;
-    // Don't return an empty conversation while messages are still loading —
-    // otherwise ConversationView shows the "new session" AgentSwitcher + input flash.
-    // The message_count check catches known-nonempty conversations; the !initialized
-    // check catches cases where message_count is undefined/0 but messages haven't loaded yet.
-    if (!hasPending && rawMessages.length === 0 && (
-      (storeMeta?.message_count ?? 0) > 0 || (!storePagination?.initialized && storeMeta?.message_count !== 0)
-    )) return null;
+    // Return the conversation immediately with whatever messages are available.
+    // The AgentSwitcher's own message_count === 0 guard prevents "new session" flash
+    // for sessions that have messages but haven't hydrated from IDB yet.
     return {
       ...(storeMeta || { _id: conversationId, status: "active", message_count: 0 }),
       messages: rawMessages,
@@ -382,7 +378,7 @@ export function useConversationMessages(
       compaction_count: compactionCount,
       child_conversation_map: childConversationMap,
     };
-  }, [storeMeta, rawMessages, loadedStartIndex, compactionCount, childConversationMap, targetMode, targetAroundData, hasPending, conversationId, storePagination?.initialized]);
+  }, [storeMeta, rawMessages, loadedStartIndex, compactionCount, childConversationMap, targetMode, targetAroundData, hasPending, conversationId]);
 
   // =============================================
   // Target search (auto-load older to find target)
