@@ -1395,6 +1395,19 @@ export const webGetTaskDetail = query({
       .withIndex("by_task_id", (q) => q.eq("task_id", task._id))
       .collect();
 
+    const now = Date.now();
+    const fiveMinutesAgo = now - 5 * 60 * 1000;
+    const HEARTBEAT_ALIVE_MS = 90 * 1000;
+    const managedSessions = await ctx.db
+      .query("managed_sessions")
+      .withIndex("by_user_id", (q: any) => q.eq("user_id", task.user_id))
+      .collect();
+    const liveConvIds = new Set(
+      managedSessions
+        .filter((s: any) => now - s.last_heartbeat < HEARTBEAT_ALIVE_MS && s.conversation_id)
+        .map((s: any) => s.conversation_id!.toString())
+    );
+
     const linkedConversations: any[] = [];
     const seenConvIds = new Set<string>();
     if (task.conversation_ids) {
@@ -1402,6 +1415,7 @@ export const webGetTaskDetail = query({
         const conv = await ctx.db.get(convId);
         if (conv) {
           seenConvIds.add(conv._id.toString());
+          const isActive = conv.status === "active" && (conv.updated_at > fiveMinutesAgo || liveConvIds.has(conv._id.toString()));
           const entry: any = {
             _id: conv._id,
             session_id: conv.session_id,
@@ -1409,14 +1423,14 @@ export const webGetTaskDetail = query({
             headline: (conv as any).headline,
             project_path: conv.project_path,
             message_count: conv.message_count || 0,
-            is_active: (conv as any).is_active,
+            is_active: isActive,
             started_at: (conv as any).started_at || conv._creationTime,
             updated_at: conv.updated_at,
             agent_type: conv.agent_type,
             outcome_type: (conv as any).outcome_type,
             git_branch: (conv as any).git_branch,
           };
-          if ((conv as any).is_active) {
+          if (isActive) {
             const recentMsgs = await ctx.db
               .query("messages")
               .withIndex("by_conversation_timestamp", (q: any) => q.eq("conversation_id", conv._id))
@@ -1442,6 +1456,7 @@ export const webGetTaskDetail = query({
     for (const conv of allConvs) {
       if (seenConvIds.has(conv._id.toString())) continue;
       seenConvIds.add(conv._id.toString());
+      const isActive = conv.status === "active" && (conv.updated_at > fiveMinutesAgo || liveConvIds.has(conv._id.toString()));
       const entry: any = {
         _id: conv._id,
         session_id: conv.session_id,
@@ -1449,14 +1464,14 @@ export const webGetTaskDetail = query({
         headline: (conv as any).headline,
         project_path: conv.project_path,
         message_count: conv.message_count || 0,
-        is_active: (conv as any).is_active,
+        is_active: isActive,
         started_at: (conv as any).started_at || conv._creationTime,
         updated_at: conv.updated_at,
         agent_type: conv.agent_type,
         outcome_type: (conv as any).outcome_type,
         git_branch: (conv as any).git_branch,
       };
-      if ((conv as any).is_active) {
+      if (isActive) {
         const recentMsgs = await ctx.db
           .query("messages")
           .withIndex("by_conversation_timestamp", (q: any) => q.eq("conversation_id", conv._id))
