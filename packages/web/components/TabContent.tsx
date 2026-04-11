@@ -37,6 +37,7 @@ const Search = lazy(() => import("@/app/search/page"));
 const Windows = lazy(() => import("@/app/windows/page"));
 const ConfigPage = lazy(() => import("@/app/config/page"));
 const Notifications = lazy(() => import("@/app/notifications/page"));
+const AdminDaemonLogs = lazy(() => import("@/app/admin/daemon-logs/page"));
 
 type RouteEntry = {
   pattern: RegExp;
@@ -69,6 +70,7 @@ const ROUTES: RouteEntry[] = [
   { pattern: /^\/windows$/, paramNames: [], component: Windows },
   { pattern: /^\/config$/, paramNames: [], component: ConfigPage },
   { pattern: /^\/notifications$/, paramNames: [], component: Notifications },
+  { pattern: /^\/admin\/daemon-logs$/, paramNames: [], component: AdminDaemonLogs },
 ];
 
 function matchRoute(path: string): { component: React.LazyExoticComponent<any>; params: Record<string, string> } | null {
