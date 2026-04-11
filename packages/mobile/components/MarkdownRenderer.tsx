@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useCallback } from 'react';
 import {
   StyleSheet,
   ScrollView,
@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
+import { useRouter } from 'expo-router';
 import { Theme } from '@/constants/Theme';
 
 const SYNTAX_PATTERNS: Array<{ regex: RegExp; color: string }> = [
@@ -65,7 +66,7 @@ const MENTION_COLORS: Record<string, string> = {
   doc: Theme.cyan,
 };
 
-export function renderInlineMarkdown(text: string, baseStyle: any, keyPrefix = '', isUser = false): React.ReactNode[] {
+export function renderInlineMarkdown(text: string, baseStyle: any, keyPrefix = '', isUser = false, onEntityPress?: (id: string) => void): React.ReactNode[] {
   const result: React.ReactNode[] = [];
   const pattern = /(`[^`]+`|\*\*(.+?)\*\*|\*(.+?)\*|~~(.+?)~~|\[([^\]]+)\]\(([^)]+)\)|(https?:\/\/[^\s<>\])"',]+)|@\[([^\]]+)\]|@(\w+)|((?:ct|pl|doc)-[a-z0-9]{4,}))/g;
   let lastIndex = 0;
@@ -132,8 +133,13 @@ export function renderInlineMarkdown(text: string, baseStyle: any, keyPrefix = '
       const id = match[10];
       const prefix = id.split('-')[0];
       const color = MENTION_COLORS[prefix] || Theme.cyan;
+      const route = prefix === 'ct' ? `/task/${id}` : prefix === 'pl' ? `/plan/${id}` : prefix === 'doc' ? `/doc/${id}` : null;
       result.push(
-        <RNText key={`${keyPrefix}e${key++}`} style={[mdStyles.entityPill, { backgroundColor: color + '20', color }]}>{id}</RNText>
+        <RNText
+          key={`${keyPrefix}e${key++}`}
+          style={[mdStyles.entityPill, { backgroundColor: color + '20', color }]}
+          onPress={route && onEntityPress ? () => onEntityPress(id) : undefined}
+        >{id}</RNText>
       );
     }
 
@@ -244,7 +250,7 @@ export function CodeBlockWithCopy({ content, language }: { content: string; lang
   );
 }
 
-export function MarkdownTextBlock({ text, baseStyle, blockKey, isUser = false }: { text: string; baseStyle: any; blockKey: string; isUser?: boolean }) {
+export function MarkdownTextBlock({ text, baseStyle, blockKey, isUser = false, onEntityPress }: { text: string; baseStyle: any; blockKey: string; isUser?: boolean; onEntityPress?: (id: string) => void }) {
   const lines = text.split('\n');
   const elements: React.ReactNode[] = [];
   let i = 0;
@@ -262,7 +268,7 @@ export function MarkdownTextBlock({ text, baseStyle, blockKey, isUser = false }:
       const fontSize = level === 1 ? 18 : level === 2 ? 16 : 15;
       elements.push(
         <RNText key={`${blockKey}h${elKey++}`} style={[baseStyle, { fontSize, fontWeight: '700', marginTop: 8, marginBottom: 4 }]}>
-          {renderInlineMarkdown(headerMatch[2], baseStyle, `${blockKey}h${elKey}`, isUser)}
+          {renderInlineMarkdown(headerMatch[2], baseStyle, `${blockKey}h${elKey}`, isUser, onEntityPress)}
         </RNText>
       );
       i++;
@@ -295,7 +301,7 @@ export function MarkdownTextBlock({ text, baseStyle, blockKey, isUser = false }:
                 {item.checked !== undefined ? (item.checked ? '\u2611' : '\u2610') : item.ordered ? `${item.num}.` : '\u2022'}
               </RNText>
               <RNText style={[baseStyle, { flex: 1 }, item.checked === true && { textDecorationLine: 'line-through', color: Theme.textMuted0 }]}>
-                {renderInlineMarkdown(item.text, baseStyle, `${blockKey}li${j}`, isUser)}
+                {renderInlineMarkdown(item.text, baseStyle, `${blockKey}li${j}`, isUser, onEntityPress)}
               </RNText>
             </RNView>
           ))}
@@ -321,7 +327,7 @@ export function MarkdownTextBlock({ text, baseStyle, blockKey, isUser = false }:
       elements.push(
         <RNView key={`${blockKey}q${elKey++}`} style={isUser ? mdStyles.blockquoteUser : mdStyles.blockquote}>
           <RNText style={[baseStyle, mdStyles.blockquoteText]}>
-            {renderInlineMarkdown(quoteLines.join('\n'), baseStyle, `${blockKey}q${elKey}`, isUser)}
+            {renderInlineMarkdown(quoteLines.join('\n'), baseStyle, `${blockKey}q${elKey}`, isUser, onEntityPress)}
           </RNText>
         </RNView>
       );
@@ -356,7 +362,7 @@ export function MarkdownTextBlock({ text, baseStyle, blockKey, isUser = false }:
                 {row.map((cell, ci) => (
                   <RNView key={ci} style={mdStyles.tableCell}>
                     <RNText style={[baseStyle, mdStyles.tableCellText]}>
-                      {renderInlineMarkdown(cell, baseStyle, `${blockKey}tbl${ri}${ci}`, isUser)}
+                      {renderInlineMarkdown(cell, baseStyle, `${blockKey}tbl${ri}${ci}`, isUser, onEntityPress)}
                     </RNText>
                   </RNView>
                 ))}
@@ -378,7 +384,7 @@ export function MarkdownTextBlock({ text, baseStyle, blockKey, isUser = false }:
     if (paraLines.length > 0) {
       elements.push(
         <RNText key={`${blockKey}p${elKey++}`} style={[baseStyle, { marginBottom: 6 }]} selectable>
-          {renderInlineMarkdown(paraLines.join('\n'), baseStyle, `${blockKey}p${elKey}`, isUser)}
+          {renderInlineMarkdown(paraLines.join('\n'), baseStyle, `${blockKey}p${elKey}`, isUser, onEntityPress)}
         </RNText>
       );
     }
@@ -388,6 +394,13 @@ export function MarkdownTextBlock({ text, baseStyle, blockKey, isUser = false }:
 }
 
 export function MarkdownContent({ text, baseStyle, isUser = false }: { text: string; baseStyle: any; isUser?: boolean }) {
+  const router = useRouter();
+  const handleEntityPress = useCallback((id: string) => {
+    const prefix = id.split('-')[0];
+    if (prefix === 'ct') router.push(`/task/${id}`);
+    else if (prefix === 'pl') router.push(`/plan/${id}`);
+    else if (prefix === 'doc') router.push(`/doc/${id}`);
+  }, [router]);
   const codeBlockRegex = /```(\w+)?\n([\s\S]*?)```/g;
   const blocks: Array<{ type: 'text' | 'code'; content: string; language?: string }> = [];
   let lastIndex = 0;
@@ -418,7 +431,7 @@ export function MarkdownContent({ text, baseStyle, isUser = false }: { text: str
           );
         }
 
-        return <MarkdownTextBlock key={idx} text={block.content} baseStyle={baseStyle} blockKey={`b${idx}`} isUser={isUser} />;
+        return <MarkdownTextBlock key={idx} text={block.content} baseStyle={baseStyle} blockKey={`b${idx}`} isUser={isUser} onEntityPress={handleEntityPress} />;
       })}
     </RNView>
   );

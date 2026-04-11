@@ -2,8 +2,8 @@
 import { useCallback, useMemo, useRef, useEffect } from "react";
 import { useRouter, useSearchParams, useParams, usePathname } from "next/navigation";
 import Link from "next/link";
-import { useInboxStore, DocItem, DocViewPrefs } from "../../store/inboxStore";
-import { useSyncDocs } from "../../hooks/useSyncDocs";
+import { useInboxStore, DocItem, DocViewPrefs, ProjectItem } from "../../store/inboxStore";
+
 import { useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { GenericListView, ListGroup, ItemRowState } from "../../components/GenericListView";
@@ -12,6 +12,7 @@ import {
   FileText,
   Pin,
   FolderOpen,
+  FolderKanban,
   Tag,
   User,
   Bot,
@@ -146,9 +147,13 @@ export function DocListContent() {
   const router = useRouter();
   const createDoc = useMutation(api.docs.webCreate);
   const docs = useInboxStore((s) => s.docs);
+  const projects = useInboxStore((s) => s.projects);
   const docProjectPaths = useInboxStore((s) => s.docProjectPaths);
-
-  useSyncDocs(docType || undefined, undefined, projectFilter || undefined);
+  const saveView = useInboxStore((s) => s.saveView);
+  const docView = useInboxStore((s) => s.clientState.ui?.doc_view);
+  const handleSaveView = useCallback((name: string) => {
+    saveView({ name, page: "docs", prefs: { ...docView, doc_type: docType } as DocViewPrefs });
+  }, [saveView, docView, docType]);
 
   const docsList = useMemo(() => Object.values(docs), [docs]);
 
@@ -158,22 +163,34 @@ export function DocListContent() {
     return [...set].sort();
   }, [docsList]);
 
+  // Source filtering applied before other filters.
+  // Default ("") shows ALL docs. "human" narrows to human-created only.
+  const sourceFilteredDocs = useMemo(() => {
+    if (sourceFilter === "human") return docsList.filter((d) => d.source === "human");
+    if (sourceFilter === "bot") return docsList.filter((d) => d.source !== "human");
+    return docsList; // Default: show everything
+  }, [docsList, sourceFilter]);
+
+  const hiddenAgentCount = useMemo(() => {
+    if (sourceFilter !== "human") return 0;
+    return docsList.filter((d) => d.source !== "human").length;
+  }, [docsList, sourceFilter]);
+
   const filteredDocs = useMemo(() => {
-    let list = docsList;
-    if (sourceFilter === "human") list = list.filter((d) => d.source === "human");
-    else if (sourceFilter === "bot") list = list.filter((d) => d.source !== "human");
+    let list = sourceFilteredDocs;
+    if (docType) list = list.filter((d) => d.doc_type === docType);
     if (labelFilter) list = list.filter((d) => d.labels?.includes(labelFilter));
     if (projectFilter) list = list.filter((d) => d.source_file?.startsWith(projectFilter));
     return list;
-  }, [docsList, sourceFilter, labelFilter, projectFilter]);
+  }, [sourceFilteredDocs, docType, labelFilter, projectFilter]);
 
   const typeCounts = useMemo(() => {
     const counts: Record<string, number> = {};
-    for (const d of docsList) {
+    for (const d of sourceFilteredDocs) {
       counts[d.doc_type] = (counts[d.doc_type] || 0) + 1;
     }
     return counts;
-  }, [docsList]);
+  }, [sourceFilteredDocs]);
 
   const typeGroups = useMemo(() => {
     if (sortBy !== "type") return null;
@@ -190,32 +207,34 @@ export function DocListContent() {
 
   const projectGroups = useMemo(() => {
     if (sortBy !== "project") return null;
-    const byProject: Record<string, DocItem[]> = {};
+    const byProject: Record<string, { project: ProjectItem | undefined; docs: DocItem[] }> = {};
     const ungrouped: DocItem[] = [];
     for (const d of filteredDocs) {
-      const proj = d.source_file?.split("/").slice(0, -1).join("/") || "";
-      if (proj) {
-        if (!byProject[proj]) byProject[proj] = [];
-        byProject[proj].push(d);
+      const pid = (d as any).project_id;
+      if (pid) {
+        if (!byProject[pid]) byProject[pid] = { project: projects[pid], docs: [] };
+        byProject[pid].docs.push(d);
       } else {
         ungrouped.push(d);
       }
     }
-    const ordered = Object.entries(byProject)
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([path, docs]) => ({ path, docs: docs.sort((a, b) => b.updated_at - a.updated_at) }));
+    const ordered = Object.values(byProject)
+      .sort((a, b) => (a.project?.title || "").localeCompare(b.project?.title || ""));
     if (ungrouped.length > 0) {
-      ordered.push({ path: "", docs: ungrouped.sort((a, b) => b.updated_at - a.updated_at) });
+      ordered.push({ project: undefined, docs: ungrouped.sort((a, b) => b.updated_at - a.updated_at) });
+    }
+    for (const g of ordered) {
+      g.docs.sort((a, b) => b.updated_at - a.updated_at);
     }
     return ordered;
-  }, [filteredDocs, sortBy]);
+  }, [filteredDocs, sortBy, projects]);
 
   const flatDocs = useMemo(() => {
     if (sortBy === "type" && typeGroups) {
       return typeGroups.flatMap((g) => g.docs);
     }
     if (sortBy === "project" && projectGroups) {
-      return projectGroups.flatMap((g) => g.docs);
+      return projectGroups.flatMap((g: any) => g.docs);
     }
     const sorted = [...filteredDocs];
     if (sortBy === "created") sorted.sort((a, b) => b.created_at - a.created_at);
@@ -236,10 +255,15 @@ export function DocListContent() {
       });
     }
     if (sortBy === "project" && projectGroups) {
-      return projectGroups.map((g) => ({
-        key: g.path || "__ungrouped",
-        label: g.path ? g.path.split("/").pop()! : "No project",
-        icon: <FolderOpen className="w-3.5 h-3.5 text-sol-text-dim" />,
+      return projectGroups.map((g: any) => ({
+        key: g.project?._id || "__no_project",
+        label: g.project?.title || "No project",
+        icon: <FolderKanban className={`w-3.5 h-3.5 ${g.project ? "text-sol-cyan" : "text-sol-text-dim"}`} />,
+        extra: g.project ? (
+          <Link href={`/projects/${g.project._id}`} onClick={(e: any) => e.stopPropagation()} className="text-[10px] text-sol-cyan hover:underline flex-shrink-0">
+            View project
+          </Link>
+        ) : undefined,
         items: g.docs,
       }));
     }
@@ -273,6 +297,15 @@ export function DocListContent() {
         { value: "project", label: "Group by project" },
       ]}
       onSortChange={(sort) => setParam({ sort })}
+      listFooter={hiddenAgentCount > 0 ? (
+        <div className="px-6 py-2.5 border-t border-sol-border/15 flex items-center gap-2 text-xs text-sol-text-dim">
+          <Bot className="w-3.5 h-3.5 opacity-40" />
+          <span>{hiddenAgentCount} agent {hiddenAgentCount === 1 ? "item" : "items"} not shown</span>
+          <button onClick={() => setParam({ source: "all" })} className="text-sol-cyan hover:underline ml-0.5">
+            Show all
+          </button>
+        </div>
+      ) : undefined}
       headerExtra={
         <div className="flex items-center rounded-md border border-sol-border/40 overflow-hidden">
           <button
@@ -299,7 +332,7 @@ export function DocListContent() {
         </div>
       }
       filters={{
-        hasActive: !!(projectFilter || labelFilter),
+        hasActive: !!(projectFilter || labelFilter || sourceFilter || docType),
         defs: [
           {
             key: "project", label: "Project", icon: <FolderOpen className="w-3 h-3" />, value: projectFilter,
@@ -315,7 +348,8 @@ export function DocListContent() {
             onChange: (v: string) => setParam({ label: v }),
           },
         ],
-        onClear: () => setParam({ project: "", label: "" }),
+        onClear: () => setParam({ project: "", label: "", source: "", type: "" }),
+        onSaveView: handleSaveView,
       }}
       groups={listGroups}
       flatItems={flatDocs}

@@ -18,7 +18,6 @@ export const create = mutation({
     if (!auth) throw new Error("Unauthorized");
 
     const db = await createDataContext(ctx, { userId: auth.userId, project_path: args.project_path });
-    const now = Date.now();
 
     const id = await db.insert("projects", {
       title: args.title,
@@ -127,6 +126,25 @@ export const update = mutation({
 
 // --- Web-facing queries ---
 
+async function enrichProject(ctx: any, p: any) {
+  const [tasks, plans, docs] = await Promise.all([
+    ctx.db.query("tasks").withIndex("by_project_id", (q: any) => q.eq("project_id", p._id)).collect(),
+    ctx.db.query("plans").withIndex("by_project_id", (q: any) => q.eq("project_id", p._id)).collect(),
+    ctx.db.query("docs").withIndex("by_project_id", (q: any) => q.eq("project_id", p._id)).collect(),
+  ]);
+  return {
+    ...p,
+    task_counts: {
+      total: tasks.length,
+      done: tasks.filter((t: any) => t.status === "done").length,
+      in_progress: tasks.filter((t: any) => t.status === "in_progress").length,
+    },
+    plan_count: plans.length,
+    doc_count: docs.length,
+    active_plan_count: plans.filter((pl: any) => pl.status === "active").length,
+  };
+}
+
 export const webList = query({
   args: {
     status: v.optional(v.string()),
@@ -156,7 +174,6 @@ export const webList = query({
         projects = projects.filter(p => p.status === args.status);
       }
     } else {
-      // Backwards compat: no workspace arg
       if (args.status) {
         projects = await ctx.db
           .query("projects")
@@ -172,19 +189,97 @@ export const webList = query({
       }
     }
 
-    const enriched = await Promise.all(
-      projects.map(async (p) => {
-        const tasks = await ctx.db
-          .query("tasks")
-          .withIndex("by_project_id", (q) => q.eq("project_id", p._id))
-          .collect();
-        const total = tasks.length;
-        const done = tasks.filter((t) => t.status === "done").length;
-        const in_progress = tasks.filter((t) => t.status === "in_progress").length;
-        return { ...p, task_counts: { total, done, in_progress } };
-      })
-    );
+    return Promise.all(projects.map((p) => enrichProject(ctx, p)));
+  },
+});
 
-    return enriched;
+export const webGet = query({
+  args: {
+    id: v.id("projects"),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return null;
+
+    const project = await ctx.db.get(args.id);
+    if (!project) return null;
+    // Allow if owner or same team
+    if (project.user_id !== userId && !project.team_id) return null;
+
+    return enrichProject(ctx, project);
+  },
+});
+
+export const webCreate = mutation({
+  args: {
+    title: v.string(),
+    description: v.optional(v.string()),
+    status: v.optional(v.string()),
+    color: v.optional(v.string()),
+    icon: v.optional(v.string()),
+    target_date: v.optional(v.number()),
+    labels: v.optional(v.array(v.string())),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Unauthorized");
+
+    const now = Date.now();
+    const short_id = `pj-${now.toString(36)}`;
+
+    // Inherit active team from user's client state
+    const clientState = await ctx.db
+      .query("client_state")
+      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+      .first();
+    const team_id = clientState?.ui?.active_team_id;
+
+    const doc: any = {
+      user_id: userId,
+      short_id,
+      title: args.title,
+      description: args.description,
+      status: (args.status as any) || "active",
+      color: args.color,
+      icon: args.icon,
+      target_date: args.target_date,
+      labels: args.labels,
+      created_at: now,
+      updated_at: now,
+    };
+    if (team_id) doc.team_id = team_id;
+
+    const id = await ctx.db.insert("projects", doc);
+
+    return { id, short_id };
+  },
+});
+
+export const webUpdate = mutation({
+  args: {
+    id: v.id("projects"),
+    title: v.optional(v.string()),
+    description: v.optional(v.string()),
+    status: v.optional(v.string()),
+    color: v.optional(v.string()),
+    icon: v.optional(v.string()),
+    target_date: v.optional(v.number()),
+    labels: v.optional(v.array(v.string())),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Unauthorized");
+
+    const project = await ctx.db.get(args.id);
+    if (!project || project.user_id !== userId) throw new Error("Project not found");
+
+    const { id, ...fields } = args;
+    const updates: any = { updated_at: Date.now() };
+    for (const [k, val] of Object.entries(fields)) {
+      if (val !== undefined) updates[k] = val;
+    }
+
+    await ctx.db.patch(args.id, updates);
+    return { success: true };
   },
 });

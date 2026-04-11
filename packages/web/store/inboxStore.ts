@@ -1,7 +1,8 @@
 import { create } from "zustand";
-import { mutativeMiddleware, action, sync } from "./mutativeMiddleware";
+import { useSyncExternalStore, useRef } from "react";
+import { mutativeMiddleware, action, asyncAction, sync } from "./mutativeMiddleware";
 import { applySyncTable, type PendingEntry } from "./syncProtocol";
-import { soundDismiss } from "../lib/sounds";
+import { soundDismiss, soundKill } from "../lib/sounds";
 import { loadCache, writePatchesToIDB, setHydrating, loadConversationMessages, writeConversationMessages } from "./idbCache";
 
 export type { PendingEntry } from "./syncProtocol";
@@ -50,6 +51,24 @@ export type PlanItem = {
   progress?: { total: number; done: number; in_progress: number; open: number };
   task_count?: number;
   session_count?: number;
+  created_at: number;
+  updated_at: number;
+};
+
+export type ProjectItem = {
+  _id: string;
+  short_id?: string;
+  title: string;
+  description?: string;
+  status: string;
+  color?: string;
+  icon?: string;
+  target_date?: number;
+  labels?: string[];
+  task_counts: { total: number; done: number; in_progress: number };
+  plan_count: number;
+  doc_count: number;
+  active_plan_count: number;
   created_at: number;
   updated_at: number;
 };
@@ -171,6 +190,7 @@ export type TaskItem = {
   labels?: string[];
   blocked_by?: string[];
   blocks?: string[];
+  user_id?: string;
   assignee?: string;
   assignee_info?: { name: string; image?: string } | null;
   confidence?: number;
@@ -181,6 +201,7 @@ export type TaskItem = {
   plan?: PlanRef;
   activeSession?: { session_id: string; title?: string; agent_status?: string; agent_type?: string } | null;
   source_agent_type?: string | null;
+  origin_session?: { conversation_id: string; session_id: string; title?: string } | null;
   session_count?: number;
   steps?: TaskStep[];
   acceptance_criteria?: string[];
@@ -219,6 +240,9 @@ export type DocItem = {
   plan_id?: string;
   plan_short_id?: string;
   plan_status?: string;
+  parent_id?: string | null;
+  sort_order?: number;
+  linked_doc_ids?: string[];
   created_at: number;
   updated_at: number;
 };
@@ -250,6 +274,19 @@ export type DocViewPrefs = {
   scope?: string;
 };
 
+export type PlanViewPrefs = {
+  source?: string;
+};
+
+export type SavedView = {
+  id: string;
+  name: string;
+  page: "tasks" | "docs" | "plans";
+  prefs: TaskViewPrefs | DocViewPrefs | PlanViewPrefs;
+  team_id?: string;
+  created_at: number;
+};
+
 export type ClientUI = {
   theme?: "light" | "dark";
   sidebar_collapsed?: boolean;
@@ -263,6 +300,10 @@ export type ClientUI = {
   sounds_enabled?: boolean;
   task_view?: TaskViewPrefs;
   doc_view?: DocViewPrefs;
+  plan_view?: PlanViewPrefs;
+  saved_views?: SavedView[];
+  show_subagents?: boolean;
+  show_old_sessions?: boolean;
 };
 
 export type ClientLayouts = {
@@ -278,6 +319,7 @@ export type ClientDismissed = {
   setup_prompt?: number;
   cli_offline?: number;
   tmux_missing?: number;
+  team_sharing_prompt?: number;
 };
 
 export type ClientTips = {
@@ -286,6 +328,16 @@ export type ClientTips = {
   completed?: string[];
   level?: 'all' | 'subtle' | 'none';
   _inlineSuppressed?: boolean;
+};
+
+export type AppTab = {
+  id: string;
+  title: string;
+  path: string;
+  sessionId?: string;
+  sidePanelSessionId?: string;
+  sidePanelOpen?: boolean;
+  createdAt: number;
 };
 
 export type ClientState = {
@@ -298,6 +350,8 @@ export type ClientState = {
   dismissed?: ClientDismissed;
   tips?: ClientTips;
   drafts?: Record<string, Record<string, any> | null>;
+  tabs?: AppTab[];
+  activeTabId?: string;
 
   // deprecated: backward compat
   sidebar_collapsed?: boolean;
@@ -349,8 +403,10 @@ export function isSessionWaitingForInput(
   session: Pick<InboxSession, "_id" | "is_idle" | "agent_status" | "message_count" | "is_pinned">,
   sessionsWithQueuedMessages?: Set<string>,
 ): boolean {
-  // Dead sessions (stopped/crashed) aren't waiting for input — they're gone
-  if (session.agent_status && DEAD_AGENT_STATUSES.has(session.agent_status)) return false;
+  // Dead sessions (stopped/crashed) still need user attention if they have messages
+  if (session.agent_status && DEAD_AGENT_STATUSES.has(session.agent_status)) {
+    return session.message_count > 0 && !session.is_pinned;
+  }
   return isSessionEffectivelyIdle(session) &&
     session.message_count > 0 &&
     !session.is_pinned &&
@@ -412,15 +468,15 @@ export function categorizeSessions(
   }
 
   const subsWithParent = new Set(Array.from(subsByParent.values()).flat().map((s) => s._id));
+  const forksWithParent = new Set(Array.from(forksByParent.values()).flat().map((s) => s._id));
 
-  const isTop = (s: InboxSession) => !subsWithParent.has(s._id);
+  const isTop = (s: InboxSession) => !subsWithParent.has(s._id) && !forksWithParent.has(s._id);
 
   const pinned = sorted.filter((s) => s.is_pinned && isTop(s));
   const newSessions = sorted.filter((s) => s.message_count === 0 && !s.is_pinned && isTop(s))
     .sort((a, b) => (a.is_connected ? 1 : 0) - (b.is_connected ? 1 : 0));
   const needsInput = sorted.filter((s) => isSessionWaitingForInput(s, sessionsWithQueuedMessages) && isTop(s));
-  const isSessionDead = (s: InboxSession) => s.agent_status != null && DEAD_AGENT_STATUSES.has(s.agent_status);
-  const working = sorted.filter((s) => (!isSessionWaitingForInput(s, sessionsWithQueuedMessages) && !isSessionDead(s) && s.message_count > 0 && !s.is_pinned) && isTop(s));
+  const working = sorted.filter((s) => (!isSessionWaitingForInput(s, sessionsWithQueuedMessages) && s.message_count > 0 && !s.is_pinned) && isTop(s));
 
   return { sorted, pinned, newSessions, needsInput, working, subsByParent, forksByParent };
 }
@@ -455,12 +511,11 @@ interface InboxStoreState {
   pendingNavigateId: string | null;
   renamingSessionId: string | null;
   pendingScrollToMessageId: string | null;
+  pendingHighlightQuery: string | null;
   showMySessions: boolean;
   setShowMySessions: (show: boolean) => void;
-  showAllSessions: boolean;
-  toggleShowAllSessions: () => void;
   hiddenSessionCount: number;
-  mruStack: string[];
+  _lastViewedAt: Record<string, number>;
 
   messages: Record<string, Message[]>;
   pendingMessages: Record<string, Message[]>;
@@ -510,7 +565,7 @@ interface InboxStoreState {
   _dispatch: (action: string, args: any, patches?: any) => Promise<any>;
 
   // -- Wrapped actions (middleware creates aliases from do_* -> *) --
-  stashSession: (id: string) => void;
+  stashSession: (id: string, opts?: { kill?: boolean }) => void;
   unstashSession: (id: string) => void;
   deferSession: (id: string) => void;
   pinSession: (id: string) => void;
@@ -587,6 +642,19 @@ interface InboxStoreState {
   updateClientDismissed: (key: keyof ClientDismissed, value: any) => void;
   updateClientTips: (partial: Partial<ClientTips>) => void;
 
+  // -- Saved views --
+  saveView: (view: Omit<SavedView, "id" | "created_at" | "team_id">) => void;
+  deleteView: (id: string) => void;
+
+  // -- Tabs --
+  tabs: AppTab[];
+  activeTabId: string | null;
+  openTab: (opts: { path: string; title: string; sessionId?: string; makeActive?: boolean }) => string;
+  closeTab: (id: string) => void;
+  switchTab: (id: string) => void;
+  updateTab: (id: string, patch: Partial<AppTab>) => void;
+  saveCurrentTabState: (patch?: Partial<AppTab>) => void;
+
   // -- Recent projects cache --
   recentProjects: Array<{ path: string; count: number; lastActive: number }>;
   setRecentProjects: (projects: Array<{ path: string; count: number; lastActive: number }>) => void;
@@ -600,10 +668,11 @@ interface InboxStoreState {
   sidebarNavExpanded: Record<string, boolean>;
   toggleSidebarNav: (section: string) => void;
 
-  // -- Task / Doc / Plan state --
+  // -- Task / Doc / Plan / Project state --
   tasks: Record<string, TaskItem>;
   docs: Record<string, DocItem>;
   plans: Record<string, PlanItem>;
+  projects: Record<string, ProjectItem>;
   docProjectPaths: string[];
   docDetails: Record<string, DocDetail>;
   taskFilter: { status: string };
@@ -633,8 +702,8 @@ interface InboxStoreState {
 
   // -- Task / Doc mutations (action + side effect) --
   updateTaskStatus: (shortId: string, status: string) => Promise<any>;
-  updateTask: (shortId: string, fields: { status?: string; priority?: string; title?: string; description?: string; labels?: string[]; triage_status?: string }) => Promise<any>;
-  createTask: (opts: { title: string; description?: string; task_type?: string; priority?: string; status?: string; project_id?: string; labels?: string[] }) => Promise<any>;
+  updateTask: (shortId: string, fields: { status?: string; priority?: string; title?: string; description?: string; labels?: string[]; triage_status?: string; assignee?: string; execution_status?: string; project_id?: string; project_path?: string }) => Promise<any>;
+  createTask: (opts: { title: string; description?: string; task_type?: string; priority?: string; status?: string; project_id?: string; labels?: string[]; assignee?: string; plan_id?: string; team_id?: string; workspace?: string; project_path?: string }) => Promise<any>;
   addTaskComment: (shortId: string, text: string, commentType?: string) => Promise<any>;
   updateDoc: (id: string, fields: { content?: string; title?: string; doc_type?: string; labels?: string[] }) => void;
   pinDoc: (id: string, pinned: boolean) => Promise<any>;
@@ -670,28 +739,26 @@ function stripImageRef(s: string): string {
 
 // Max conversations to keep messages in the Zustand store (in-memory).
 // Others are evicted but remain in IDB for instant reload.
-const MAX_IN_MEMORY_CONVERSATIONS = 5;
+const MAX_IN_MEMORY_CONVERSATIONS = 50;
 
 function evictInactiveMessages(draft: any, activeConvId: string) {
   const loaded = Object.keys(draft.messages);
   if (loaded.length <= MAX_IN_MEMORY_CONVERSATIONS) return;
 
   const currentConvId = draft.currentConversation?.conversationId;
-  // Never evict the conversation we're currently viewing or the one just loaded
-  const keep = new Set([activeConvId, currentConvId].filter(Boolean));
+  // Never evict conversations actively visible in the UI
+  const keep = new Set([activeConvId, currentConvId, draft.currentSessionId, draft.sidePanelSessionId, draft.viewingDismissedId].filter(Boolean));
 
-  // Evict oldest first (by last message timestamp)
+  // Never evict active inbox sessions — clicking them must be instant
+  for (const id of Object.keys(draft.sessions || {})) keep.add(id);
+
+  // Evict least-recently-viewed first
   // Never evict conversations with pending messages — the user just sent something
   // and evicting would make it vanish from the UI
+  const viewedAt = draft._lastViewedAt || {};
   const candidates = loaded
     .filter((id: string) => !keep.has(id) && !(draft.pendingMessages[id]?.length > 0))
-    .sort((a: string, b: string) => {
-      const aMsgs = draft.messages[a];
-      const bMsgs = draft.messages[b];
-      const aTs = Array.isArray(aMsgs) && aMsgs.length > 0 ? aMsgs[aMsgs.length - 1].timestamp : 0;
-      const bTs = Array.isArray(bMsgs) && bMsgs.length > 0 ? bMsgs[bMsgs.length - 1].timestamp : 0;
-      return aTs - bTs;
-    });
+    .sort((a: string, b: string) => (viewedAt[a] ?? 0) - (viewedAt[b] ?? 0));
 
   const toEvict = candidates.slice(0, loaded.length - MAX_IN_MEMORY_CONVERSATIONS);
   for (const id of toEvict) {
@@ -768,10 +835,12 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
   clientState: {
     kind: "singleton",
     merge: {
-      ui: "local_wins",
+      ui: "deep_merge",
       layouts: "deep_merge",
       dismissed: "deep_merge",
       drafts: "local_wins",
+      tabs: "deep_merge",
+      activeTabId: "deep_merge",
       tips: {
         seen: "set_union",
         dismissed: "set_union",
@@ -787,6 +856,13 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
       }
       if (!incoming.layouts && incoming.layout) {
         result.layouts = { ...(result.layouts || {}), dashboard: incoming.layout };
+      }
+      // Hydrate tabs from server on first sync
+      if (incoming.tabs && Array.isArray(incoming.tabs) && draft.tabs.length === 0) {
+        draft.tabs = incoming.tabs;
+      }
+      if (incoming.activeTabId && !draft.activeTabId) {
+        draft.activeTabId = incoming.activeTabId;
       }
       if (!initialized) {
         if (incoming.drafts) {
@@ -868,12 +944,11 @@ export const useInboxStore = create<InboxStoreState>(
   pendingNavigateId: null,
   renamingSessionId: null,
   pendingScrollToMessageId: null,
+  pendingHighlightQuery: null,
   showMySessions: false,
   setShowMySessions: (show: boolean) => set({ showMySessions: show }),
-  showAllSessions: true,
-  toggleShowAllSessions: () => set({ showAllSessions: !get().showAllSessions }),
   hiddenSessionCount: 0,
-  mruStack: [],
+  _lastViewedAt: {},
 
   messages: {},
   pendingMessages: {},
@@ -956,8 +1031,8 @@ export const useInboxStore = create<InboxStoreState>(
   // ACTIONS (wrapped by middleware: mutative draft + server dispatch)
   // =====================
 
-  stashSession: action(function (this: Draft, id: string) {
-    soundDismiss();
+  stashSession: action(function (this: Draft, id: string, opts?: { kill?: boolean }) {
+    (opts?.kill ? soundKill : soundDismiss)();
     const now = Date.now();
     const sessionValues = Object.values(this.sessions) as InboxSession[];
     const childIds = sessionValues
@@ -1102,7 +1177,7 @@ export const useInboxStore = create<InboxStoreState>(
 
   sendEscape: action(function (_convId: string) {}),
 
-  createSession: action(function (this: Draft, opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string }) {
+  createSession: asyncAction(function (this: Draft, opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string }) {
     const sessionId = opts.session_id || (Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2));
     if (!opts.session_id) opts.session_id = sessionId;
     const now = Date.now();
@@ -1122,20 +1197,69 @@ export const useInboxStore = create<InboxStoreState>(
     } as InboxSession;
   }),
 
-  updateClientUI: action(function (this: Draft, partial: Partial<ClientUI>) {
+  _applyClientUI: sync(function (this: Draft, partial: Partial<ClientUI>) {
     if (!this.clientState.ui) this.clientState.ui = {} as ClientUI;
     Object.assign(this.clientState.ui, partial);
   }),
 
-  updateClientLayout: action(function (this: Draft, key: string, value: any) {
+  updateClientUI: (partial: Partial<ClientUI>) => {
+    (get() as any)._applyClientUI(partial);
+    if (Object.keys(partial).length > 0) {
+      const dispatch = () => get()._dispatch("patch", [], { client_state: { _: { ui: partial } } });
+      dispatch().catch(() => setTimeout(() => dispatch().catch(() => {}), 3000));
+    }
+  },
+
+  _applySavedViews: sync(function (this: Draft, views: SavedView[]) {
+    if (!this.clientState.ui) this.clientState.ui = {} as ClientUI;
+    this.clientState.ui.saved_views = views;
+  }),
+
+  saveView: (view: Omit<SavedView, "id" | "created_at" | "team_id">) => {
+    const state = get();
+    const current = state.clientState.ui?.saved_views ?? [];
+    const newView: SavedView = {
+      ...view,
+      id: `sv_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      team_id: state.clientState.ui?.active_team_id,
+      created_at: Date.now(),
+    };
+    const newViews = [...current, newView];
+    (state as any)._applySavedViews(newViews);
+    const dispatch = () => get()._dispatch("patch", [], { client_state: { _: { ui: { saved_views: newViews } } } });
+    dispatch().catch(() => setTimeout(() => dispatch().catch(() => {}), 3000));
+  },
+
+  deleteView: (id: string) => {
+    const state = get();
+    const current = state.clientState.ui?.saved_views ?? [];
+    const newViews = current.filter((v: SavedView) => v.id !== id);
+    (state as any)._applySavedViews(newViews);
+    const dispatch = () => get()._dispatch("patch", [], { client_state: { _: { ui: { saved_views: newViews } } } });
+    dispatch().catch(() => setTimeout(() => dispatch().catch(() => {}), 3000));
+  },
+
+  _applyClientLayout: sync(function (this: Draft, key: string, value: any) {
     if (!this.clientState.layouts) this.clientState.layouts = {};
     (this.clientState.layouts as any)[key] = value;
   }),
 
-  updateClientDismissed: action(function (this: Draft, key: string, value: any) {
+  updateClientLayout: (key: string, value: any) => {
+    (get() as any)._applyClientLayout(key, value);
+    const dispatch = () => get()._dispatch("patch", [], { client_state: { _: { layouts: { [key]: value } } } });
+    dispatch().catch(() => setTimeout(() => dispatch().catch(() => {}), 3000));
+  },
+
+  _applyClientDismissed: sync(function (this: Draft, key: string, value: any) {
     if (!this.clientState.dismissed) this.clientState.dismissed = {};
     (this.clientState.dismissed as any)[key] = value;
   }),
+
+  updateClientDismissed: (key: string, value: any) => {
+    (get() as any)._applyClientDismissed(key, value);
+    const dispatch = () => get()._dispatch("patch", [], { client_state: { _: { dismissed: { [key]: value } } } });
+    dispatch().catch(() => setTimeout(() => dispatch().catch(() => {}), 3000));
+  },
 
   _applyClientTips: sync(function (this: Draft, partial: Partial<ClientTips>) {
     if (!this.clientState.tips) this.clientState.tips = {} as ClientTips;
@@ -1232,11 +1356,33 @@ export const useInboxStore = create<InboxStoreState>(
   }),
 
   syncRecord: sync(function (this: Draft, field: string, id: string, record: any) {
-    const existing = (this as any)[field]?.[id];
-    (this as any)[field] = {
-      ...(this as any)[field],
-      [id]: { ...existing, ...record },
-    };
+    const collection = (this as any)[field];
+    const existing = collection?.[id];
+
+    // Bail out if every incoming property already matches — avoids creating
+    // a new state reference, which would cascade through useTrackedStore →
+    // storeMeta → conversation prop → ConversationView re-render → Radix
+    // tooltip ref loop under React 19's ref cleanup semantics.
+    if (existing && record) {
+      const keys = Object.keys(record);
+      if (keys.length > 0 && keys.every(k => Object.is(existing[k], record[k]))) {
+        return;
+      }
+    }
+
+    // Mutate draft in-place instead of replacing the collection object.
+    // This ensures mutative only marks the changed subtree as dirty.
+    if (!collection) {
+      (this as any)[field] = { [id]: record };
+    } else if (!existing) {
+      collection[id] = record;
+    } else {
+      for (const key of Object.keys(record)) {
+        if (!Object.is(existing[key], record[key])) {
+          existing[key] = record[key];
+        }
+      }
+    }
   }),
 
   addPending: sync(function (this: Draft, key: string, entry: PendingEntry) {
@@ -1378,9 +1524,7 @@ export const useInboxStore = create<InboxStoreState>(
   }),
 
   touchMru: (id: string) => {
-    const { mruStack } = get();
-    const filtered = mruStack.filter((s: string) => s !== id);
-    set({ mruStack: [id, ...filtered] });
+    set({ _lastViewedAt: { ...get()._lastViewedAt, [id]: Date.now() } });
   },
 
   markKilling: action(function (this: Draft, id: string) {
@@ -1656,6 +1800,7 @@ export const useInboxStore = create<InboxStoreState>(
   tasks: {},
   docs: {},
   plans: {},
+  projects: {},
   docDetails: {},
   taskFilter: { status: "" },
   docFilter: { type: "", query: "", project: "", scope: "" },
@@ -1812,6 +1957,87 @@ export const useInboxStore = create<InboxStoreState>(
   },
 
   // =====================
+  // TABS
+  // =====================
+
+  tabs: [],
+  activeTabId: null,
+
+  _applyTabs: sync(function (this: Draft, tabs: AppTab[], activeTabId: string | null) {
+    this.tabs = tabs;
+    this.activeTabId = activeTabId;
+  }),
+
+  openTab: (opts) => {
+    const { tabs, sidePanelSessionId, sidePanelOpen } = get();
+    const id = `tab_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const tab: AppTab = {
+      id,
+      title: opts.title,
+      path: opts.path,
+      sessionId: opts.sessionId,
+      sidePanelSessionId: sidePanelSessionId ?? undefined,
+      sidePanelOpen: sidePanelOpen || undefined,
+      createdAt: Date.now(),
+    };
+    const newTabs = [...tabs, tab];
+    const newActiveId = opts.makeActive !== false ? id : get().activeTabId;
+    (get() as any)._applyTabs(newTabs, newActiveId);
+    const dispatch = () => get()._dispatch("patch", [], { client_state: { _: { tabs: newTabs, activeTabId: newActiveId } } });
+    dispatch().catch(() => setTimeout(() => dispatch().catch(() => {}), 3000));
+    return id;
+  },
+
+  closeTab: (id) => {
+    const { tabs, activeTabId } = get();
+    const idx = tabs.findIndex((t: AppTab) => t.id === id);
+    if (idx === -1) return;
+    const newTabs = tabs.filter((t: AppTab) => t.id !== id);
+    let newActiveId = activeTabId;
+    if (activeTabId === id) {
+      const nextTab = newTabs[Math.min(idx, newTabs.length - 1)];
+      newActiveId = nextTab?.id ?? null;
+    }
+    (get() as any)._applyTabs(newTabs, newActiveId);
+    const dispatch = () => get()._dispatch("patch", [], { client_state: { _: { tabs: newTabs, activeTabId: newActiveId } } });
+    dispatch().catch(() => setTimeout(() => dispatch().catch(() => {}), 3000));
+  },
+
+  switchTab: (id) => {
+    const { tabs, activeTabId } = get();
+    if (activeTabId === id) return;
+    if (activeTabId) get().saveCurrentTabState();
+    const target = tabs.find((t: AppTab) => t.id === id);
+    (get() as any)._applyTabs(tabs, id);
+    if (target) {
+      set({
+        sidePanelSessionId: target.sidePanelSessionId ?? null,
+        sidePanelOpen: target.sidePanelOpen ?? false,
+      });
+    }
+    get()._dispatch("patch", [], { client_state: { _: { activeTabId: id } } }).catch(() => {});
+  },
+
+  updateTab: (id, patch) => {
+    const { tabs } = get();
+    const newTabs = tabs.map((t: AppTab) => t.id === id ? { ...t, ...patch } : t);
+    set({ tabs: newTabs });
+  },
+
+  saveCurrentTabState: (patch) => {
+    const { tabs, activeTabId, sidePanelSessionId, sidePanelOpen } = get();
+    if (!activeTabId) return;
+    const newTabs = tabs.map((t: AppTab) => t.id === activeTabId ? {
+      ...t,
+      sidePanelSessionId: sidePanelSessionId ?? undefined,
+      sidePanelOpen: sidePanelOpen || undefined,
+      path: typeof window !== "undefined" ? window.location.pathname : t.path,
+      ...patch,
+    } : t);
+    set({ tabs: newTabs });
+  },
+
+  // =====================
   // CACHED QUERY DATA
   // =====================
 
@@ -1847,6 +2073,51 @@ export const store = new Proxy({} as StoreProxy, {
   },
 });
 
+// =====================
+// TRACKED STORE HOOK
+// =====================
+// Declare what to watch, access the full state.
+// Re-renders only when a dep's return value changes (Object.is).
+//
+//   const s = useTrackedStore([s => s.messages[id], s => s.sessions[id]]);
+//   s.conversations[id]  // full state access
+//   s.getSession(id)     // getters work too
+//
+export function useTrackedStore(deps: Array<(s: InboxStoreState) => any>): InboxStoreState {
+  const prevRef = useRef<{ deps: any[]; state: InboxStoreState } | null>(null);
+  return useSyncExternalStore(useInboxStore.subscribe, () => {
+    const state = useInboxStore.getState();
+    const next = deps.map(d => d(state));
+    const prev = prevRef.current;
+    if (prev && next.length === prev.deps.length &&
+        next.every((v, i) => Object.is(v, prev.deps[i]))) {
+      return prev.state;
+    }
+    prevRef.current = { deps: next, state };
+    return state;
+  });
+}
+
+// -- Per-conversation IDB hydration (idempotent, no hooks) --
+// Tracks in-flight hydrations (not "ever hydrated") so evicted conversations
+// can be re-hydrated from IDB when the user switches back to them.
+const _idbHydratingSet = new Set<string>();
+export function ensureHydrated(convId: string) {
+  const store = useInboxStore.getState();
+  // Already in memory — nothing to hydrate
+  if (store.messages[convId]?.length > 0) return;
+  // In-flight hydration — don't double-load
+  if (_idbHydratingSet.has(convId)) return;
+  _idbHydratingSet.add(convId);
+  loadConversationMessages(convId).then((cached) => {
+    _idbHydratingSet.delete(convId);
+    if (!cached || cached.messages.length === 0) return;
+    const current = useInboxStore.getState().messages[convId];
+    if (current?.length > 0) return;
+    useInboxStore.getState().setMessages(convId, cached.messages, cached.pagination);
+  });
+}
+
 // -- IndexedDB cache: wire patch-driven writes + hydrate on load --
 
 if (typeof window !== "undefined") {
@@ -1865,6 +2136,7 @@ if (typeof window !== "undefined") {
         if (val == null) continue;
         const cur = (state as any)[key];
         if (key === "clientState" && state.clientStateInitialized) {
+          // Merge tips (set_union)
           const cachedTips = val?.tips;
           if (cachedTips) {
             const cur = state.clientState.tips ?? {} as any;
@@ -1875,6 +2147,16 @@ if (typeof window !== "undefined") {
               if (union.length > ((cur as any)[k]?.length ?? 0)) { merged[k] = union; changed = true; }
             }
             if (changed) state.updateClientTips(merged);
+          }
+          // Merge ui fields that may only exist in IDB (saved_views, etc.)
+          const cachedUI = val?.ui;
+          if (cachedUI) {
+            const curUI = state.clientState.ui ?? {};
+            const uiPatch: Record<string, any> = {};
+            for (const [uk, uv] of Object.entries(cachedUI)) {
+              if (uv != null && (curUI as any)[uk] == null) uiPatch[uk] = uv;
+            }
+            if (Object.keys(uiPatch).length > 0) state.updateClientUI(uiPatch);
           }
           continue;
         }
@@ -1888,7 +2170,10 @@ if (typeof window !== "undefined") {
           if (Object.keys(cur || {}).length === 0) updates[key] = val;
         }
       }
-      if (Object.keys(updates).length > 0) useInboxStore.setState(updates);
+      if (Object.keys(updates).length > 0) {
+        if (updates.clientState) updates.clientStateInitialized = true;
+        useInboxStore.setState(updates);
+      }
     };
 
     // Strip stale large fields from cached conversations (git_diff, git_diff_staged, available_skills)
@@ -1903,13 +2188,19 @@ if (typeof window !== "undefined") {
     delete cached.messages;
     delete cached.pagination;
 
-    // Critical path: sidebar + current conversation render immediately
+    // Critical path: sidebar + current conversation + tabs render immediately
     apply(["sessions", "dismissedSessions", "clientState",
-           "conversations", "teams", "teamMembers", "teamUnreadCount", "drafts"]);
+           "conversations", "teams", "teamMembers", "teamUnreadCount", "drafts",
+           "tabs", "activeTabId"]);
+
+    // Preload messages for all active inbox sessions so clicks are instant
+    for (const id of Object.keys(cached.sessions || {})) {
+      ensureHydrated(id);
+    }
 
     // Deferred: list views + secondary data render next frame
     requestAnimationFrame(() => {
-      apply(["tasks", "docs", "plans", "favorites", "bookmarks",
+      apply(["tasks", "docs", "plans", "projects", "favorites", "bookmarks",
              "recentProjects", "collapsedSections", "sidebarNavExpanded"]);
     });
   });

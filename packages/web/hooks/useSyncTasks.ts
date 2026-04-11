@@ -1,22 +1,31 @@
-import { useState, useCallback } from "react";
+import { useCallback } from "react";
 import { useQuery } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../store/inboxStore";
-import { useWorkspaceArgs } from "./useWorkspaceArgs";
 import { useConvexSync } from "./useConvexSync";
+import { Id } from "@codecast/convex/convex/_generated/dataModel";
 
 const api = _api as any;
 
-export function useSyncTasks(statusFilter?: string, triageStatus?: string) {
-  const [numItems, setNumItems] = useState(300);
-  const workspaceArgs = useWorkspaceArgs();
+/**
+ * Fetches ALL tasks for the current workspace (team or personal) into the store.
+ * No pagination, no limits — every task is loaded and kept in the store.
+ * All filtering happens client-side.
+ */
+export function useSyncTasks() {
+  const activeTeamId = useInboxStore(
+    (s) => s.clientState.ui?.active_team_id
+  ) as Id<"teams"> | undefined;
+  const initialized = useInboxStore((s) => s.clientStateInitialized);
   const syncTable = useInboxStore((s) => s.syncTable);
+
+  const stableArgs = !initialized ? "skip" : activeTeamId
+    ? { team_id: activeTeamId, workspace: "team" as const }
+    : { workspace: "personal" as const };
+
   const result = useQuery(api.tasks.webList,
-    workspaceArgs === "skip" ? "skip" : {
-      status: statusFilter || undefined,
-      ...workspaceArgs,
-      limit: numItems,
-      ...(triageStatus ? { triage_status: triageStatus } : {}),
+    stableArgs === "skip" ? "skip" : {
+      ...stableArgs,
       include_derived: true,
     }
   );
@@ -25,12 +34,7 @@ export function useSyncTasks(statusFilter?: string, triageStatus?: string) {
     syncTable("tasks", data.items ?? data);
   }, [syncTable]));
 
-  const hasMore = result?.hasMore ?? false;
-  const loadMore = useCallback(() => {
-    setNumItems(n => n + 300);
-  }, []);
-
-  return { hasMore, loadMore };
+  return { hasMore: false, loadMore: () => {} };
 }
 
 export function useSyncTaskDetail(id?: string) {

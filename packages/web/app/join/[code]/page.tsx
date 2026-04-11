@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useQuery, useMutation } from "convex/react";
 import { useConvexAuth } from "convex/react";
@@ -36,11 +36,11 @@ export default function JoinTeamPage() {
     setError("");
 
     try {
-      await joinTeam({
+      const teamId = await joinTeam({
         invite_code: code,
         user_id: currentUser._id,
       });
-      router.push("/inbox");
+      router.push(`/settings/sync?teamSetup=1&teamId=${teamId}`);
     } catch (err) {
       if (err instanceof Error) {
         setError(err.message);

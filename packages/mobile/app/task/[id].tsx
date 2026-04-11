@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useRef, useEffect } from "react";
 import {
   StyleSheet,
   ScrollView,
@@ -38,9 +38,32 @@ export default function TaskDetailScreen() {
     return Object.values(tasks).find((t) => t.short_id === id);
   }, [tasks, id]);
 
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState("");
+  const titleInputRef = useRef<TextInput>(null);
   const [commentText, setCommentText] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const webAddComment = useMutation(api.tasks.webAddComment);
+
+  useEffect(() => {
+    if (editingTitle) {
+      setTimeout(() => titleInputRef.current?.focus(), 50);
+    }
+  }, [editingTitle]);
+
+  const startEditTitle = useCallback(() => {
+    if (!task) return;
+    setTitleDraft(task.title);
+    setEditingTitle(true);
+  }, [task]);
+
+  const commitTitle = useCallback(() => {
+    const trimmed = titleDraft.trim();
+    if (task && trimmed && trimmed !== task.title) {
+      updateTask(task.short_id, { title: trimmed });
+    }
+    setEditingTitle(false);
+  }, [task, titleDraft, updateTask]);
 
   const status = task ? (STATUS_CONFIG[task.status as TaskStatus] ?? STATUS_CONFIG.open) : STATUS_CONFIG.open;
   const priority = task ? (PRIORITY_CONFIG[task.priority as TaskPriority] ?? PRIORITY_CONFIG.medium) : PRIORITY_CONFIG.medium;
@@ -129,7 +152,22 @@ export default function TaskDetailScreen() {
         }}
       />
       <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-        <RNText style={styles.title}>{task.title}</RNText>
+        {editingTitle ? (
+          <TextInput
+            ref={titleInputRef}
+            style={styles.titleInput}
+            value={titleDraft}
+            onChangeText={setTitleDraft}
+            onBlur={commitTitle}
+            onSubmitEditing={commitTitle}
+            multiline
+          />
+        ) : (
+          <TouchableOpacity onPress={startEditTitle} activeOpacity={0.7}>
+            <RNText style={styles.title}>{task.title}</RNText>
+            <RNText style={styles.editHint}>Tap to edit</RNText>
+          </TouchableOpacity>
+        )}
 
         <RNView style={styles.badgeRow}>
           <TouchableOpacity style={[styles.badge, { borderColor: status.color + "40" }]} onPress={handleStatusPress}>
@@ -314,7 +352,25 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: Theme.text,
     lineHeight: 26,
+    marginBottom: 2,
+  },
+  editHint: {
+    fontSize: 11,
+    color: Theme.textMuted0,
     marginBottom: Spacing.md,
+  },
+  titleInput: {
+    fontSize: 20,
+    fontWeight: "700",
+    color: Theme.text,
+    lineHeight: 26,
+    marginBottom: Spacing.md,
+    backgroundColor: Theme.bgAlt,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: Theme.accent + "60",
+    paddingHorizontal: 10,
+    paddingVertical: 8,
   },
   badgeRow: {
     flexDirection: "row",

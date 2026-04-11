@@ -1,9 +1,10 @@
 "use client";
-import { ReactNode, useState, useCallback, useMemo } from "react";
+import { ReactNode, useState, useCallback, useMemo, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { FilterDropdown } from "./FilterDropdown";
 import { useInboxStore } from "../store/inboxStore";
+import { toast } from "sonner";
 import { KeyCap } from "./KeyboardShortcutsHelp";
 import {
   Plus,
@@ -12,6 +13,7 @@ import {
   Command,
   Check,
   Search,
+  Bookmark,
 } from "lucide-react";
 
 export interface ListTab {
@@ -70,6 +72,7 @@ export interface GenericListViewProps<T> {
     hasActive: boolean;
     defs: ListFilterDef[];
     onClear: () => void;
+    onSaveView?: (name: string) => void;
   };
 
   groups: ListGroup<T>[] | null;
@@ -84,6 +87,7 @@ export interface GenericListViewProps<T> {
   onCreate: () => void;
 
   hasMore?: boolean;
+  isLoadingMore?: boolean;
   onLoadMore?: () => void;
 
   paletteTargetType?: 'task' | 'doc';
@@ -96,6 +100,7 @@ export interface GenericListViewProps<T> {
 
   getSearchText?: (item: T) => string;
   headerExtra?: ReactNode;
+  listFooter?: ReactNode;
   customContent?: (helpers: { openPaletteForItems: (items: T[], mode?: string) => void }) => ReactNode;
   extraShortcuts?: { key: string; label: string }[];
   extraKeyHandler?: (e: KeyboardEvent, stop: () => void) => boolean;
@@ -122,6 +127,7 @@ export function GenericListView<T>({
   emptyMessage,
   onCreate,
   hasMore,
+  isLoadingMore,
   onLoadMore,
   paletteTargetType,
   paletteShortcuts,
@@ -130,6 +136,7 @@ export function GenericListView<T>({
   onItemEdit,
   getSearchText,
   headerExtra,
+  listFooter,
   customContent,
   extraShortcuts,
   extraKeyHandler,
@@ -150,6 +157,10 @@ export function GenericListView<T>({
   const shortcutsPanelOpen = useInboxStore(s => s.shortcutsPanelOpen);
   const [searchQuery, setSearchQuery] = useState("");
   const [showSearch, setShowSearch] = useState(false);
+  const [savingView, setSavingView] = useState(false);
+  const [saveViewName, setSaveViewName] = useState("");
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const loadMoreRef = useRef<HTMLDivElement | null>(null);
 
   const displayGroups = useMemo((): ListGroup<T>[] | null => {
     if (!groups) return null;
@@ -317,6 +328,23 @@ export function GenericListView<T>({
     onCreate, openPalette, toggleSelect, router, extraKeyHandler, onItemEdit, renderPreview, getSearchText]);
 
   const previewItem = previewId ? flatItems.find((item) => getItemId(item) === previewId) || null : null;
+
+  useEffect(() => {
+    if (!hasMore || !onLoadMore || isLoadingMore) return;
+    const root = scrollRef.current;
+    const target = loadMoreRef.current;
+    if (!root || !target) return;
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry?.isIntersecting) onLoadMore();
+      },
+      { root, rootMargin: "240px 0px", threshold: 0 }
+    );
+
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [hasMore, onLoadMore, isLoadingMore, visibleItems.length]);
 
   const renderItemRow = (item: T, globalIdx: number) => {
     const id = getItemId(item);
@@ -497,13 +525,59 @@ export function GenericListView<T>({
               <X className="w-3 h-3" /> Clear
             </button>
           )}
+          {filters.onSaveView && !savingView && (
+            <button
+              onClick={() => { setSavingView(true); setSaveViewName(""); }}
+              className="text-[10px] text-sol-text-dim hover:text-sol-cyan ml-1 flex items-center gap-1 transition-colors"
+              title="Save current view as a shortcut"
+            >
+              <Bookmark className="w-3 h-3" /> Save View
+            </button>
+          )}
+          {filters.onSaveView && savingView && (
+            <form
+              className="flex items-center gap-1.5 ml-1"
+              onSubmit={(e) => {
+                e.preventDefault();
+                const name = saveViewName.trim();
+                if (name) {
+                  filters.onSaveView!(name);
+                  setSavingView(false);
+                  toast.success(`View "${name}" saved`);
+                }
+              }}
+            >
+              <input
+                autoFocus
+                value={saveViewName}
+                onChange={(e) => setSaveViewName(e.target.value)}
+                placeholder="View name..."
+                className="text-[11px] px-2 py-0.5 rounded bg-sol-bg border border-sol-border/60 text-sol-text outline-none focus:border-sol-cyan w-32"
+                onKeyDown={(e) => { if (e.key === "Escape") setSavingView(false); }}
+              />
+              <button
+                type="submit"
+                disabled={!saveViewName.trim()}
+                className="text-[10px] text-sol-cyan hover:text-sol-cyan/80 disabled:opacity-30 disabled:cursor-default flex items-center gap-0.5"
+              >
+                <Check className="w-3 h-3" /> Save
+              </button>
+              <button
+                type="button"
+                onClick={() => setSavingView(false)}
+                className="text-[10px] text-sol-text-dim hover:text-sol-text"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </form>
+          )}
         </div>
       )}
 
       {/* Content area */}
       {customContent ? customContent({ openPaletteForItems }) : (
         <div className="flex-1 flex overflow-hidden">
-          <div className="flex-1 overflow-y-auto">
+          <div ref={scrollRef} className="flex-1 overflow-y-auto">
             {visibleItems.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-48 text-sol-text-dim">
                 {emptyIcon}
@@ -527,10 +601,12 @@ export function GenericListView<T>({
               </div>
             )}
 
+            {listFooter}
+
             {hasMore && onLoadMore && (
-              <div className="px-6 py-3 border-t border-sol-border/20">
+              <div ref={loadMoreRef} className="px-6 py-3 border-t border-sol-border/20">
                 <button onClick={onLoadMore} className="text-xs text-sol-text-dim hover:text-sol-text transition-colors">
-                  Load more
+                  {isLoadingMore ? "Loading..." : "Load more"}
                 </button>
               </div>
             )}

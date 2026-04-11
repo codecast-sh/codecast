@@ -1,10 +1,10 @@
 /**
  * HMR-stable capture-phase keydown listener.
  *
- * Registered once at module-evaluation time via a window global, so it
- * always fires *before* any useEffect-based addEventListener calls.
- * The handler ref survives Vite HMR re-evaluations — only the
- * ShortcutProvider swaps the callback, the listener itself never moves.
+ * The listener is registered eagerly at module-evaluation time via an IIFE,
+ * so it always fires *before* any useEffect-based addEventListener calls.
+ * The handler ref is stored on `window` and survives Vite HMR
+ * re-evaluations — only the ShortcutProvider swaps the callback.
  */
 
 type KeyHandler = (e: KeyboardEvent) => void;
@@ -13,7 +13,8 @@ interface HandlerRef { current: KeyHandler | null }
 
 const REF_KEY = '__cc_shortcut_handler';
 
-function getRef(): HandlerRef {
+// Eagerly register at module-evaluation time (runs before any React effects).
+const handlerRef: HandlerRef = (() => {
   if (typeof window === 'undefined') return { current: null };
   let ref = (window as any)[REF_KEY] as HandlerRef | undefined;
   if (!ref) {
@@ -22,8 +23,8 @@ function getRef(): HandlerRef {
     window.addEventListener('keydown', (e) => ref!.current?.(e), true);
   }
   return ref;
-}
+})();
 
 export function setShortcutHandler(handler: KeyHandler | null): void {
-  getRef().current = handler;
+  handlerRef.current = handler;
 }

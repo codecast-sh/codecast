@@ -18,6 +18,8 @@ export default defineConfig({
       "@": path.resolve(__dirname, "."),
       "next/navigation": path.resolve(__dirname, "src/compat/next-navigation.ts"),
       "next/link": path.resolve(__dirname, "src/compat/next-link.tsx"),
+      // React 19 compat: stable useComposedRefs to prevent infinite re-render loop
+      "@radix-ui/react-compose-refs": path.resolve(__dirname, "src/compat/radix-compose-refs.ts"),
     },
     dedupe: ["convex", "react", "react-dom"],
   },

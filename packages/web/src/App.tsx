@@ -47,6 +47,8 @@ const Plans = lazy(() => import("@/app/plans/page"));
 const PlanDetail = lazy(() => import("@/app/plans/[id]/page"));
 const Tasks = lazy(() => import("@/app/tasks/page"));
 const TaskDetail = lazy(() => import("@/app/tasks/[id]/page"));
+const Projects = lazy(() => import("@/app/projects/page"));
+const ProjectDetail = lazy(() => import("@/app/projects/[id]/page"));
 const Workflows = lazy(() => import("@/app/workflows/page"));
 
 const Team = lazy(() => import("@/app/team/page"));
@@ -59,6 +61,7 @@ const Cli = lazy(() => import("@/app/cli/page"));
 const AdminDaemonLogs = lazy(() => import("@/app/admin/daemon-logs/page"));
 const ConfigPage = lazy(() => import("@/app/config/page"));
 const Sessions = lazy(() => import("@/app/sessions/page"));
+const Windows = lazy(() => import("@/app/windows/page"));
 
 const Palette = lazy(() => import("@/app/palette/page"));
 
@@ -72,6 +75,7 @@ const SettingsAccountsLinkGithub = lazy(() => import("@/app/settings/accounts/li
 const SettingsTeam = lazy(() => import("@/app/settings/team/page"));
 const SettingsTeamCreate = lazy(() => import("@/app/settings/team/create/page"));
 const SettingsTeamJoin = lazy(() => import("@/app/settings/team/join/page"));
+const SettingsNotifications = lazy(() => import("@/app/settings/notifications/page"));
 const SettingsIntegrationsGithub = lazy(() => import("@/app/settings/integrations/github-app/page"));
 const SettingsDesktop = lazy(() => import("@/app/settings/desktop/page"));
 
@@ -135,6 +139,8 @@ export function App() {
             <Route path="plans/:id" element={<E name="PlanDetail"><PlanDetail /></E>} />
             <Route path="tasks" element={<E name="Tasks"><Tasks /></E>} />
             <Route path="tasks/:id" element={<E name="TaskDetail"><TaskDetail /></E>} />
+            <Route path="projects" element={<E name="Projects"><Projects /></E>} />
+            <Route path="projects/:id" element={<E name="ProjectDetail"><ProjectDetail /></E>} />
             <Route path="workflows" element={<E name="Workflows"><Workflows /></E>} />
 
             {/* Team */}
@@ -147,6 +153,7 @@ export function App() {
             <Route path="roadmap" element={<E name="Roadmap"><Roadmap /></E>} />
             <Route path="cli" element={<E name="Cli"><Cli /></E>} />
             <Route path="sessions" element={<E name="Sessions"><Sessions /></E>} />
+            <Route path="windows" element={<E name="Windows"><Windows /></E>} />
             <Route path="admin/daemon-logs" element={<E name="AdminDaemonLogs"><AdminDaemonLogs /></E>} />
             <Route path="config" element={<E name="ConfigPage"><ConfigPage /></E>} />
 
@@ -167,6 +174,7 @@ export function App() {
               <Route path="team" element={<E name="SettingsTeam"><SettingsTeam /></E>} />
               <Route path="team/create" element={<E name="SettingsTeamCreate"><SettingsTeamCreate /></E>} />
               <Route path="team/join" element={<E name="SettingsTeamJoin"><SettingsTeamJoin /></E>} />
+              <Route path="notifications" element={<E name="SettingsNotifications"><SettingsNotifications /></E>} />
               <Route path="integrations/github-app" element={<E name="SettingsIntegrations"><SettingsIntegrationsGithub /></E>} />
               <Route path="desktop" element={<E name="SettingsDesktop"><SettingsDesktop /></E>} />
             </Route>

@@ -5,6 +5,10 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
 }
 
+export function shareOrigin(): string {
+  return "https://codecast.sh";
+}
+
 export async function copyToClipboard(text: string): Promise<void> {
   // Sync execCommand first - must run before dropdown/popup closes and shifts focus
   const textArea = document.createElement("textarea");

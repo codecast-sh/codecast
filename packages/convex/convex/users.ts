@@ -1,4 +1,5 @@
 import { mutation, query, internalMutation } from "./_generated/server";
+import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
@@ -207,10 +208,20 @@ export const sendDaemonCommand = mutation({
       v.literal("status"),
       v.literal("restart"),
       v.literal("force_update"),
+      v.literal("reinstall"),
       v.literal("version"),
       v.literal("start_session"),
       v.literal("escape"),
-      v.literal("resume_session")
+      v.literal("resume_session"),
+      v.literal("kill_session"),
+      v.literal("send_keys"),
+      v.literal("rewind"),
+      v.literal("config_list"),
+      v.literal("config_read"),
+      v.literal("config_write"),
+      v.literal("config_create"),
+      v.literal("config_delete"),
+      v.literal("run_workflow")
     ),
     args_json: v.optional(v.string()),
   },
@@ -233,6 +244,112 @@ export const sendDaemonCommand = mutation({
     });
 
     return { command_id: commandId };
+  },
+});
+
+export const sendDaemonCommandToAll = mutation({
+  args: {
+    command: v.union(
+      v.literal("restart"),
+      v.literal("force_update"),
+      v.literal("reinstall")
+    ),
+    max_version: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthUserId(ctx);
+    if (!authUserId) throw new Error("Not authenticated");
+    const currentUser = await ctx.db.get(authUserId);
+    if (!currentUser || currentUser.role !== "admin") throw new Error("Not authorized");
+
+    const allUsers = await ctx.db.query("users").collect();
+    const now = Date.now();
+    const recentlyActive = allUsers.filter(
+      (u) => u.last_heartbeat && now - u.last_heartbeat < 24 * 60 * 60 * 1000
+    );
+
+    let targeted = recentlyActive;
+    if (args.max_version) {
+      targeted = recentlyActive.filter((u) => {
+        if (!u.cli_version) return true;
+        const parts = u.cli_version.split(".").map(Number);
+        const maxParts = args.max_version!.split(".").map(Number);
+        for (let i = 0; i < Math.max(parts.length, maxParts.length); i++) {
+          if ((parts[i] || 0) < (maxParts[i] || 0)) return true;
+          if ((parts[i] || 0) > (maxParts[i] || 0)) return false;
+        }
+        return false;
+      });
+    }
+
+    let sent = 0;
+    for (const user of targeted) {
+      await ctx.db.insert("daemon_commands", {
+        user_id: user._id,
+        command: args.command,
+        created_at: now,
+      });
+      sent++;
+    }
+
+    return { sent, total: recentlyActive.length };
+  },
+});
+
+// Admin-only internal mutation for CLI use with admin key
+export const internalSendCommand = internalMutation({
+  args: {
+    email: v.string(),
+    command: v.string(),
+    args_json: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const users = await ctx.db.query("users").collect();
+    const user = users.find(u => u.email === args.email);
+    if (!user) throw new Error(`User not found: ${args.email}`);
+
+    const commandId = await ctx.db.insert("daemon_commands", {
+      user_id: user._id,
+      command: args.command as any,
+      args: args.args_json,
+      created_at: Date.now(),
+    });
+    return { command_id: commandId, user_id: user._id };
+  },
+});
+
+export const internalExpireCommands = internalMutation({
+  args: { email: v.string() },
+  handler: async (ctx, args) => {
+    const users = await ctx.db.query("users").collect();
+    const user = users.find(u => u.email === args.email);
+    if (!user) throw new Error(`User not found: ${args.email}`);
+    const pending = await ctx.db.query("daemon_commands")
+      .withIndex("by_user_pending", q => q.eq("user_id", user._id).eq("executed_at", undefined))
+      .collect();
+    for (const cmd of pending) {
+      await ctx.db.patch(cmd._id, { executed_at: Date.now(), error: "expired_manual" });
+    }
+    return { expired: pending.length, commands: pending.map(c => c.command) };
+  },
+});
+
+export const internalGetCommand = internalMutation({
+  args: { command_id: v.id("daemon_commands") },
+  handler: async (ctx, args) => {
+    const cmd = await ctx.db.get(args.command_id);
+    return cmd ? { command: cmd.command, result: cmd.result, error: cmd.error, executed_at: cmd.executed_at } : null;
+  },
+});
+
+export const internalListUsers = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const users = await ctx.db.query("users").collect();
+    return users
+      .filter(u => u.last_heartbeat)
+      .map(u => ({ email: u.email, _id: u._id, cli_version: u.cli_version, last_heartbeat: u.last_heartbeat }))
+      .sort((a, b) => (b.last_heartbeat ?? 0) - (a.last_heartbeat ?? 0));
   },
 });
 
@@ -383,7 +500,11 @@ export const updateNotificationPreferences = mutation({
       permission_request: v.boolean(),
       session_idle: v.optional(v.boolean()),
       session_error: v.optional(v.boolean()),
+      task_activity: v.optional(v.boolean()),
+      doc_activity: v.optional(v.boolean()),
+      plan_activity: v.optional(v.boolean()),
     })),
+    muted_members: v.optional(v.array(v.id("users"))),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -396,6 +517,9 @@ export const updateNotificationPreferences = mutation({
     }
     if (args.notification_preferences !== undefined) {
       updateData.notification_preferences = args.notification_preferences;
+    }
+    if (args.muted_members !== undefined) {
+      updateData.muted_members = args.muted_members;
     }
     await ctx.db.patch(userId, updateData);
   },
@@ -1170,27 +1294,175 @@ export const getDirectoryTeamMappings = query({
   },
 });
 
-async function retroactivelyShareConversations(
+const DIRECTORY_MATCH_BATCH_SIZE = 32;
+
+function matchesPathPrefix(projectPath: string | null | undefined, pathPrefix: string) {
+  return !!projectPath && (
+    projectPath === pathPrefix ||
+    projectPath.startsWith(pathPrefix + "/")
+  );
+}
+
+function getConversationProjectPath(conv: { git_root?: string | null; project_path?: string | null }) {
+  return conv.git_root || conv.project_path || null;
+}
+
+function getPathPrefixUpperBound(pathPrefix: string) {
+  return `${pathPrefix}\uffff`;
+}
+
+function getRepoNameFromPath(path: string | null | undefined) {
+  if (!path) return null;
+  const parts = path.split("/").filter(Boolean);
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const part = parts[i];
+    if (!part.startsWith(".")) {
+      return part.toLowerCase();
+    }
+  }
+  return null;
+}
+
+function getRepoKeyFromRemote(remote: string | null | undefined) {
+  if (!remote) return null;
+  const normalized = remote.trim().replace(/\/+$/, "");
+  const githubMatch = normalized.match(/github\.com[:/](.+?)(?:\.git)?$/i);
+  if (githubMatch?.[1]) {
+    return githubMatch[1].toLowerCase();
+  }
+  const genericMatch = normalized.match(/[:/]([^/:]+\/[^/]+?)(?:\.git)?$/);
+  return genericMatch?.[1]?.toLowerCase() || null;
+}
+
+async function getMatchingConversationsPage(
+  ctx: any,
+  userId: any,
+  pathPrefix: string,
+  source: "git_root" | "project_path",
+  cursor?: string,
+  numItems = DIRECTORY_MATCH_BATCH_SIZE,
+) {
+  const field = source === "git_root" ? "git_root" : "project_path";
+  const index = source === "git_root" ? "by_user_git_root" : "by_user_project_path";
+  const page = await ctx.db
+    .query("conversations")
+    .withIndex(index, (q: any) =>
+      q
+        .eq("user_id", userId)
+        .gte(field, pathPrefix)
+        .lt(field, getPathPrefixUpperBound(pathPrefix))
+    )
+    .paginate({
+      cursor: (cursor || null) as any,
+      numItems,
+    });
+
+  const matches = page.page.filter((conv: any) => {
+    if (source === "project_path" && conv.git_root) {
+      return false;
+    }
+    return matchesPathPrefix(getConversationProjectPath(conv), pathPrefix);
+  });
+
+  return { page: matches, isDone: page.isDone, continueCursor: page.continueCursor };
+}
+
+async function findNextConversationForPath(
+  ctx: any,
+  userId: any,
+  pathPrefix: string,
+) {
+  for (const source of ["git_root", "project_path"] as const) {
+    let cursor: string | undefined;
+    while (true) {
+      const page = await getMatchingConversationsPage(ctx, userId, pathPrefix, source, cursor, 16);
+      if (page.page.length > 0) {
+        return page.page[0];
+      }
+      if (page.isDone) {
+        break;
+      }
+      cursor = page.continueCursor;
+    }
+  }
+  return null;
+}
+
+async function queueRetroactiveShareConversations(
   ctx: any,
   userId: any,
   pathPrefix: string,
   teamId: any,
 ) {
-  const privateConvs = await ctx.db
-    .query("conversations")
-    .withIndex("by_user_private", (q: any) => q.eq("user_id", userId).eq("is_private", true))
-    .take(500);
-
-  let updated = 0;
-  for (const conv of privateConvs) {
-    const projectPath = conv.git_root || conv.project_path;
-    if (projectPath && (projectPath === pathPrefix || projectPath.startsWith(pathPrefix + "/"))) {
-      await ctx.db.patch(conv._id, { is_private: false, team_id: teamId });
-      updated++;
-    }
-  }
-  return updated;
+  await ctx.scheduler.runAfter(0, internal.users.backfillDirectoryTeamMappingConversations, {
+    user_id: userId,
+    path_prefix: pathPrefix,
+    team_id: teamId,
+    source: "git_root",
+  });
 }
+
+export const backfillDirectoryTeamMappingConversations = internalMutation({
+  args: {
+    user_id: v.id("users"),
+    path_prefix: v.string(),
+    team_id: v.id("teams"),
+    source: v.optional(v.union(v.literal("git_root"), v.literal("project_path"))),
+    cursor: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const source = args.source || "git_root";
+    const page = await getMatchingConversationsPage(
+      ctx,
+      args.user_id,
+      args.path_prefix,
+      source,
+      args.cursor,
+    );
+
+    let updated = 0;
+    for (const conv of page.page) {
+      const patch: Record<string, unknown> = {};
+      if (conv.is_private !== false) {
+        patch.is_private = false;
+      }
+      if (conv.team_id?.toString() !== args.team_id.toString()) {
+        patch.team_id = args.team_id;
+      }
+      if (!conv.auto_shared) {
+        patch.auto_shared = true;
+      }
+      if (Object.keys(patch).length > 0) {
+        await ctx.db.patch(conv._id, patch);
+        updated++;
+      }
+    }
+
+    if (!page.isDone) {
+      await ctx.scheduler.runAfter(0, internal.users.backfillDirectoryTeamMappingConversations, {
+        user_id: args.user_id,
+        path_prefix: args.path_prefix,
+        team_id: args.team_id,
+        source,
+        cursor: page.continueCursor,
+      });
+    } else if (source === "git_root") {
+      await ctx.scheduler.runAfter(0, internal.users.backfillDirectoryTeamMappingConversations, {
+        user_id: args.user_id,
+        path_prefix: args.path_prefix,
+        team_id: args.team_id,
+        source: "project_path",
+      });
+    }
+
+    return {
+      updated,
+      source,
+      isDone: page.isDone && source === "project_path",
+      continueCursor: page.isDone ? undefined : page.continueCursor,
+    };
+  },
+});
 
 export const backfillAutoShareConversations = internalMutation({
   args: {
@@ -1207,14 +1479,12 @@ export const backfillAutoShareConversations = internalMutation({
       mappings = await ctx.db.query("directory_team_mappings").take(50);
     }
     const autoShareMappings = mappings.filter(m => m.auto_share);
-    let totalUpdated = 0;
     for (const mapping of autoShareMappings) {
-      const count = await retroactivelyShareConversations(
+      await queueRetroactiveShareConversations(
         ctx, mapping.user_id, mapping.path_prefix, mapping.team_id
       );
-      totalUpdated += count;
     }
-    return { totalUpdated, mappingsProcessed: autoShareMappings.length };
+    return { totalUpdated: 0, mappingsProcessed: autoShareMappings.length };
   },
 });
 
@@ -1268,12 +1538,17 @@ export const updateDirectoryTeamMapping = mutation({
       });
     }
 
-    let retroactiveCount = 0;
     if (autoShare) {
-      retroactiveCount = await retroactivelyShareConversations(ctx, userId, args.path_prefix, args.team_id);
+      await queueRetroactiveShareConversations(ctx, userId, args.path_prefix, args.team_id);
     }
 
-    return { success: true, updated: !!existingMapping, created: !existingMapping, retroactivelyShared: retroactiveCount };
+    return {
+      success: true,
+      updated: !!existingMapping,
+      created: !existingMapping,
+      retroactivelyShared: 0,
+      retroactiveQueued: autoShare,
+    };
   },
 });
 
@@ -1317,21 +1592,12 @@ async function deleteConversationsForPathInternal(
   userId: any,
   pathPrefix: string,
 ) {
-  const convos = await ctx.db
-    .query("conversations")
-    .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
-    .take(500);
+  const conv = await findNextConversationForPath(ctx, userId, pathPrefix);
 
-  const matching = convos.filter((conv: any) => {
-    const projectPath = conv.git_root || conv.project_path;
-    return projectPath && (projectPath === pathPrefix || projectPath.startsWith(pathPrefix + "/"));
-  });
-
-  if (matching.length === 0) {
+  if (!conv) {
     return { conversationsDeleted: 0, messagesDeleted: 0, hasMore: false };
   }
 
-  const conv = matching[0];
   const MSG_BATCH = 100;
   const msgs = await ctx.db
     .query("messages")
@@ -1347,7 +1613,36 @@ async function deleteConversationsForPathInternal(
   }
 
   await ctx.db.delete(conv._id);
-  return { conversationsDeleted: 1, messagesDeleted: msgs.length, hasMore: matching.length > 1 };
+  const nextConv = await findNextConversationForPath(ctx, userId, pathPrefix);
+  return { conversationsDeleted: 1, messagesDeleted: msgs.length, hasMore: !!nextConv };
+}
+
+async function countConversationsForPathInternal(
+  ctx: any,
+  userId: any,
+  pathPrefix: string,
+) {
+  const seen = new Set<string>();
+  let count = 0;
+
+  for (const source of ["git_root", "project_path"] as const) {
+    let cursor: string | undefined;
+    while (true) {
+      const page = await getMatchingConversationsPage(ctx, userId, pathPrefix, source, cursor, 32);
+      for (const conv of page.page) {
+        const id = conv._id.toString();
+        if (seen.has(id)) continue;
+        seen.add(id);
+        count++;
+      }
+      if (page.isDone) {
+        break;
+      }
+      cursor = page.continueCursor;
+    }
+  }
+
+  return count;
 }
 
 export const countConversationsForPath = query({
@@ -1357,20 +1652,7 @@ export const countConversationsForPath = query({
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return { count: 0 };
-
-    const convos = await ctx.db
-      .query("conversations")
-      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
-      .take(500);
-
-    let count = 0;
-    for (const conv of convos) {
-      const projectPath = conv.git_root || conv.project_path;
-      if (projectPath && (projectPath === args.path_prefix || projectPath.startsWith(args.path_prefix + "/"))) {
-        count++;
-      }
-    }
-    return { count };
+    return { count: await countConversationsForPathInternal(ctx, userId, args.path_prefix) };
   },
 });
 
@@ -1454,6 +1736,205 @@ export const getRecentProjectsWithGitInfo = query({
       });
 
     return projects;
+  },
+});
+
+export const getSuggestedTeamProjects = query({
+  args: {
+    team_id: v.optional(v.id("teams")),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      return null;
+    }
+
+    const user = await ctx.db.get(userId);
+    if (!user) {
+      return null;
+    }
+
+    const teamId = args.team_id || user.active_team_id || user.team_id;
+    if (!teamId) {
+      return null;
+    }
+
+    const membership = await ctx.db
+      .query("team_memberships")
+      .withIndex("by_user_team", (q) => q.eq("user_id", userId).eq("team_id", teamId))
+      .unique();
+    if (!membership) {
+      return null;
+    }
+
+    const team = await ctx.db.get(teamId);
+    const memberships = await ctx.db
+      .query("team_memberships")
+      .withIndex("by_team_id", (q) => q.eq("team_id", teamId))
+      .collect();
+
+    const currentUserMappings = await ctx.db
+      .query("directory_team_mappings")
+      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+      .collect();
+    const mappingByPath = new Map(currentUserMappings.map((mapping) => [mapping.path_prefix, mapping]));
+
+    const conversations = await ctx.db
+      .query("conversations")
+      .withIndex("by_user_updated", (q) => q.eq("user_id", userId))
+      .order("desc")
+      .take(200);
+
+    const projectMap = new Map<string, {
+      path: string;
+      git_remote_url?: string;
+      session_count: number;
+      last_active: number;
+      repo_key: string | null;
+      repo_name: string | null;
+    }>();
+
+    for (const conv of conversations) {
+      const path = getConversationProjectPath(conv);
+      if (!path) continue;
+
+      const existing = projectMap.get(path);
+      if (existing) {
+        existing.session_count++;
+        existing.last_active = Math.max(existing.last_active, conv.updated_at);
+        if (!existing.git_remote_url && conv.git_remote_url) {
+          existing.git_remote_url = conv.git_remote_url;
+          existing.repo_key = getRepoKeyFromRemote(conv.git_remote_url);
+        }
+        continue;
+      }
+
+      projectMap.set(path, {
+        path,
+        git_remote_url: conv.git_remote_url,
+        session_count: 1,
+        last_active: conv.updated_at,
+        repo_key: getRepoKeyFromRemote(conv.git_remote_url),
+        repo_name: getRepoNameFromPath(path),
+      });
+    }
+
+    const repoKeySignals = new Map<string, { members: Set<string> }>();
+    const repoNameSignals = new Map<string, { members: Set<string> }>();
+    const registerSignal = (
+      store: Map<string, { members: Set<string> }>,
+      key: string | null,
+      memberId: string,
+    ) => {
+      if (!key) return;
+      const existing = store.get(key) || { members: new Set<string>() };
+      existing.members.add(memberId);
+      store.set(key, existing);
+    };
+
+    for (const member of memberships) {
+      if (member.user_id.toString() === userId.toString()) {
+        continue;
+      }
+
+      const sharedConversations = await ctx.db
+        .query("conversations")
+        .withIndex("by_team_user_updated", (q) => q.eq("team_id", teamId).eq("user_id", member.user_id))
+        .order("desc")
+        .take(40);
+
+      for (const conv of sharedConversations) {
+        if (conv.is_private) continue;
+        const path = getConversationProjectPath(conv);
+        if (!path) continue;
+        const memberKey = member.user_id.toString();
+        registerSignal(repoKeySignals, getRepoKeyFromRemote(conv.git_remote_url), memberKey);
+        registerSignal(repoNameSignals, getRepoNameFromPath(path), memberKey);
+      }
+    }
+
+    const mappingsForTeam = await ctx.db
+      .query("directory_team_mappings")
+      .withIndex("by_team_id", (q) => q.eq("team_id", teamId))
+      .collect();
+    for (const mapping of mappingsForTeam) {
+      if (mapping.user_id.toString() === userId.toString()) {
+        continue;
+      }
+      registerSignal(repoNameSignals, getRepoNameFromPath(mapping.path_prefix), mapping.user_id.toString());
+    }
+
+    const suggestions = Array.from(projectMap.values())
+      .map((project) => {
+        const currentMapping = mappingByPath.get(project.path);
+        if (currentMapping?.team_id?.toString() === teamId.toString()) {
+          return null;
+        }
+
+        const repoKeySignal = project.repo_key ? repoKeySignals.get(project.repo_key) : null;
+        const repoNameSignal = project.repo_name ? repoNameSignals.get(project.repo_name) : null;
+        const signal = repoKeySignal || repoNameSignal;
+        if (!signal) {
+          return null;
+        }
+
+        const matched_member_count = signal.members.size;
+        const match_type = repoKeySignal ? "github" : "repo_name";
+        const match_reason = repoKeySignal
+          ? `${matched_member_count} teammate${matched_member_count === 1 ? "" : "s"} already share ${project.repo_key}`
+          : `${matched_member_count} teammate${matched_member_count === 1 ? "" : "s"} already share ${project.repo_name}`;
+
+        return {
+          path: project.path,
+          git_remote_url: project.git_remote_url || null,
+          session_count: project.session_count,
+          last_active: project.last_active,
+          matched_member_count,
+          match_type,
+          match_reason,
+          current_team_id: currentMapping?.team_id || null,
+        };
+      })
+      .filter((project): project is NonNullable<typeof project> => project !== null)
+      .sort((a, b) => {
+        if (b.matched_member_count !== a.matched_member_count) {
+          return b.matched_member_count - a.matched_member_count;
+        }
+        if (a.match_type !== b.match_type) {
+          return a.match_type === "github" ? -1 : 1;
+        }
+        return b.last_active - a.last_active;
+      })
+      .slice(0, 8);
+
+    // Collect team repos the user doesn't have locally
+    const userRepoKeys = new Set<string>();
+    for (const project of projectMap.values()) {
+      if (project.repo_key) userRepoKeys.add(project.repo_key);
+    }
+
+    const teamOnlyRepos: { repo_key: string; repo_name: string; member_count: number }[] = [];
+    for (const [key, signal] of repoKeySignals) {
+      if (!userRepoKeys.has(key)) {
+        const name = key.split("/").pop() || key;
+        teamOnlyRepos.push({
+          repo_key: key,
+          repo_name: name,
+          member_count: signal.members.size,
+        });
+      }
+    }
+    teamOnlyRepos.sort((a, b) => b.member_count - a.member_count);
+
+    return {
+      team_id: teamId,
+      team_name: team?.name || "Team",
+      team_icon: team?.icon || null,
+      team_icon_color: team?.icon_color || null,
+      current_visibility: membership.visibility || "summary",
+      suggestions,
+      team_only_repos: teamOnlyRepos.slice(0, 6),
+    };
   },
 });
 
@@ -1984,12 +2465,16 @@ export const updateDirectoryMappingForCLI = mutation({
       });
     }
 
-    let retroactiveCount = 0;
     if (autoShare) {
-      retroactiveCount = await retroactivelyShareConversations(ctx, result.userId, args.path_prefix, teamId);
+      await queueRetroactiveShareConversations(ctx, result.userId, args.path_prefix, teamId);
     }
 
-    return { success: true, action: existingMapping ? "updated" : "created", retroactivelyShared: retroactiveCount };
+    return {
+      success: true,
+      action: existingMapping ? "updated" : "created",
+      retroactivelyShared: 0,
+      retroactiveQueued: autoShare,
+    };
   },
 });
 
@@ -2003,19 +2488,7 @@ export const countConversationsForPathCLI = query({
     if (!result) {
       return { error: "Unauthorized" };
     }
-    const convos = await ctx.db
-      .query("conversations")
-      .withIndex("by_user_id", (q) => q.eq("user_id", result.userId))
-      .take(500);
-
-    let count = 0;
-    for (const conv of convos) {
-      const projectPath = conv.git_root || conv.project_path;
-      if (projectPath && (projectPath === args.path_prefix || projectPath.startsWith(args.path_prefix + "/"))) {
-        count++;
-      }
-    }
-    return { count };
+    return { count: await countConversationsForPathInternal(ctx, result.userId, args.path_prefix) };
   },
 });
 
@@ -2245,4 +2718,3 @@ export const getCommandResult = query({
     };
   },
 });
-

@@ -29,6 +29,7 @@ export type SessionData = {
   is_own?: boolean;
   icon?: string;
   icon_color?: string;
+  is_favorite?: boolean;
 };
 
 export function formatRelativeTime(timestamp: number): string {
@@ -73,6 +74,14 @@ export function agentLabel(agentType: string): string {
     case "gemini": return "Gemini";
     default: return "";
   }
+}
+
+const projectColors = [Theme.blue, Theme.cyan, Theme.violet, Theme.magenta, Theme.green, Theme.orange];
+
+export function projectColor(name: string): string {
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) hash = ((hash << 5) - hash + name.charCodeAt(i)) | 0;
+  return projectColors[Math.abs(hash) % projectColors.length];
 }
 
 export function agentColor(agentType: string): string {
@@ -182,7 +191,7 @@ function StatusDot({ session }: { session: SessionData }) {
   return <RNView style={[styles.statusDot, { backgroundColor: color }]} />;
 }
 
-export function SessionItem({ session, onPress, onPin }: { session: SessionData; onPress: () => void; onPin?: () => void }) {
+export function SessionItem({ session, onPress, onPin, onLongPress }: { session: SessionData; onPress: () => void; onPin?: () => void; onLongPress?: () => void }) {
   const project = projectName(session);
   const agent = agentLabel(session.agent_type ?? "");
   const durationMs = session.updated_at - (session.started_at ?? session.updated_at);
@@ -191,13 +200,16 @@ export function SessionItem({ session, onPress, onPin }: { session: SessionData;
   const showAuthor = session.author_name && session.is_own === false;
 
   return (
-    <TouchableOpacity onPress={onPress} style={styles.conversationContent} activeOpacity={0.6}>
+    <TouchableOpacity onPress={onPress} onLongPress={onLongPress} delayLongPress={400} style={styles.conversationContent} activeOpacity={0.6}>
       <RNView style={styles.conversationHeader}>
         <RNView style={styles.titleRow}>
           <RNView style={styles.iconWithStatus}>
             <SessionIcon icon={session.icon} iconColor={session.icon_color} id={session._id} size={14} />
             <StatusDot session={session} />
           </RNView>
+          {session.is_favorite && (
+            <Feather name="star" size={11} color={Theme.accent} style={{ marginRight: 3 }} />
+          )}
           {session.is_pinned && (
             <FontAwesome name="thumb-tack" size={10} color={Theme.magenta} style={{ marginRight: 4 }} />
           )}
@@ -207,7 +219,7 @@ export function SessionItem({ session, onPress, onPin }: { session: SessionData;
         </RNView>
         <RNView style={styles.rightMeta}>
           {sLabel && <RNText style={[styles.statusBadge, { color: sColor }]}>{sLabel}</RNText>}
-          <RNText style={styles.messageCount}>{session.message_count}</RNText>
+          <RNText style={styles.timeText}>{formatRelativeTime(session.updated_at)}</RNText>
         </RNView>
       </RNView>
 
@@ -225,53 +237,42 @@ export function SessionItem({ session, onPress, onPin }: { session: SessionData;
       )}
 
       <RNView style={styles.conversationMeta}>
+        {project && (
+          <RNText style={[styles.projectBadge, { color: projectColor(project), backgroundColor: projectColor(project) + '28' }]} numberOfLines={1}>{project}</RNText>
+        )}
         {showAuthor && (
-          <>
-            <RNText style={styles.authorText}>{session.author_name}</RNText>
-            <RNText style={styles.metaSeparator}>·</RNText>
-          </>
+          <RNText style={styles.authorText}>{session.author_name}</RNText>
         )}
         {agent ? (
-          <>
-            <RNText style={[styles.agentBadge, { color: agentColor(session.agent_type ?? "") }]}>{agent}</RNText>
-            <RNText style={styles.metaSeparator}>·</RNText>
-          </>
+          <RNText style={[styles.agentBadge, { color: agentColor(session.agent_type ?? "") }]}>{agent}</RNText>
         ) : null}
-        <RNText style={styles.metaText}>{formatRelativeTime(session.updated_at)}</RNText>
-        {durationMs > 60000 && (
-          <>
-            <RNText style={styles.metaSeparator}>·</RNText>
-            <RNText style={styles.metaText}>{formatDuration(durationMs)}</RNText>
-          </>
-        )}
-        {project && (
-          <>
-            <RNText style={styles.metaSeparator}>·</RNText>
-            <RNText style={styles.projectText} numberOfLines={1}>{project}</RNText>
-          </>
-        )}
       </RNView>
     </TouchableOpacity>
   );
 }
 
-export function SwipeableSessionItem({ session, onPress, onDismiss, onPin }: {
+export function SwipeableSessionItem({ session, onPress, onDismiss, onPin, onLongPress }: {
   session: SessionData;
   onPress: () => void;
   onDismiss: () => void;
   onPin?: () => void;
+  onLongPress?: () => void;
 }) {
   const translateX = useRef(new RNAnimated.Value(0)).current;
   const panStartX = useRef(0);
   const dismissed = useRef(false);
 
+  const didSwipe = useRef(false);
+
   const handleTouchStart = useCallback((e: any) => {
     panStartX.current = e.nativeEvent.pageX;
     dismissed.current = false;
+    didSwipe.current = false;
   }, []);
 
   const handleTouchMove = useCallback((e: any) => {
     const dx = e.nativeEvent.pageX - panStartX.current;
+    if (Math.abs(dx) > 5) didSwipe.current = true;
     if (dx < 0) translateX.setValue(dx);
     if (dx > 0) translateX.setValue(dx);
   }, [translateX]);
@@ -302,23 +303,32 @@ export function SwipeableSessionItem({ session, onPress, onDismiss, onPin }: {
     }
   }, [translateX, onDismiss, onPin]);
 
+  const swipeBehindOpacity = translateX.interpolate({
+    inputRange: [-400, -1, 0, 1, 400],
+    outputRange: [1, 1, 0, 0, 0],
+  });
+  const swipeBehindPinOpacity = translateX.interpolate({
+    inputRange: [-400, -1, 0, 1, 400],
+    outputRange: [0, 0, 0, 1, 1],
+  });
+
   return (
     <RNView style={styles.swipeContainer}>
-      <RNView style={styles.swipeBehind}>
+      <RNAnimated.View style={[styles.swipeBehind, { opacity: swipeBehindOpacity }]}>
         <FontAwesome name="archive" size={16} color="#fff" />
         <RNText style={styles.swipeBehindText}>Dismiss</RNText>
-      </RNView>
-      <RNView style={styles.swipeBehindPin}>
+      </RNAnimated.View>
+      <RNAnimated.View style={[styles.swipeBehindPin, { opacity: swipeBehindPinOpacity }]}>
         <FontAwesome name="thumb-tack" size={16} color="#fff" />
         <RNText style={styles.swipeBehindText}>{session.is_pinned ? "Unpin" : "Pin"}</RNText>
-      </RNView>
+      </RNAnimated.View>
       <RNAnimated.View
         style={[styles.conversationItem, { transform: [{ translateX }] }]}
         onTouchStart={handleTouchStart}
         onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}
       >
-        <SessionItem session={session} onPress={onPress} onPin={onPin} />
+        <SessionItem session={session} onPress={() => { if (!didSwipe.current) onPress(); }} onPin={onPin} onLongPress={onLongPress} />
       </RNAnimated.View>
     </RNView>
   );
@@ -409,6 +419,22 @@ export const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.3,
   },
+  projectBadge: {
+    fontSize: 11,
+    fontWeight: '600',
+    maxWidth: 130,
+    letterSpacing: 0.2,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 6,
+    overflow: 'hidden',
+    marginRight: 2,
+  },
+  timeText: {
+    fontSize: 11,
+    color: Theme.textMuted0,
+    fontWeight: '400',
+  },
   messageCount: {
     fontSize: 11,
     color: Theme.textMuted0,
@@ -438,6 +464,8 @@ export const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     marginLeft: 31,
+    marginTop: 2,
+    gap: 6,
   },
   authorText: {
     fontSize: 12,

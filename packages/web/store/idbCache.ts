@@ -7,6 +7,7 @@ class CacheDB extends Dexie {
   tasks!: Dexie.Table<any, string>;
   docs!: Dexie.Table<any, string>;
   plans!: Dexie.Table<any, string>;
+  projects!: Dexie.Table<any, string>;
   meta!: Dexie.Table<{ key: string; value: any }, string>;
   conversationMessages!: Dexie.Table<{ convId: string; messages: any[]; latestTimestamp: number; pagination: any }, string>;
 
@@ -29,6 +30,16 @@ class CacheDB extends Dexie {
       meta: "key",
       conversationMessages: "convId",
     });
+    this.version(3).stores({
+      sessions: "_id",
+      dismissedSessions: "_id",
+      tasks: "_id",
+      docs: "_id",
+      plans: "_id",
+      projects: "_id",
+      meta: "key",
+      conversationMessages: "convId",
+    });
   }
 }
 
@@ -40,6 +51,7 @@ const COLLECTION_TABLES: Record<string, Dexie.Table<any, string>> = {
   tasks: db.tasks,
   docs: db.docs,
   plans: db.plans,
+  projects: db.projects,
 };
 
 const META_KEYS = new Set([
@@ -55,6 +67,8 @@ const META_KEYS = new Set([
   "teamUnreadCount",
   "favorites",
   "bookmarks",
+  "tabs",
+  "activeTabId",
 ]);
 
 let _hydrating = false;

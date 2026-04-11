@@ -31,19 +31,12 @@ export function useSessionSwitcher() {
   const peekTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const getMruSessions = useCallback((): InboxSession[] => {
-    const { sessions, mruStack, sortedSessions, activeProjectFilter } = useInboxStore.getState();
+    const { _lastViewedAt, sortedSessions, activeProjectFilter } = useInboxStore.getState();
     const matchesFilter = (s: InboxSession) =>
       !activeProjectFilter || getProjectName(s.git_root, s.project_path) === activeProjectFilter;
-    const ordered: InboxSession[] = [];
-    const seen = new Set<string>();
-    for (const id of mruStack) {
-      const s = sessions[id];
-      if (s && matchesFilter(s)) { ordered.push(s); seen.add(id); }
-    }
-    for (const s of sortedSessions()) {
-      if (!seen.has(s._id) && matchesFilter(s)) ordered.push(s);
-    }
-    return ordered;
+    const all = sortedSessions().filter(matchesFilter);
+    all.sort((a, b) => (_lastViewedAt[b._id] ?? 0) - (_lastViewedAt[a._id] ?? 0));
+    return all;
   }, []);
 
   const commit = useCallback((sessions: InboxSession[], idx: number) => {

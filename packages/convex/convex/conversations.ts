@@ -1359,8 +1359,9 @@ export const getConversationToolStats = query({
     }
 
     let latestTodos: any[] | null = null;
-    let taskTotal = 0;
-    let taskCompleted = 0;
+    // Collect creates and updates separately since we iterate newest-first
+    const taskCreates: { subject: string }[] = [];
+    const taskStatusMap = new Map<string, string>(); // taskId -> latest status (first seen = newest)
 
     for await (const msg of ctx.db
       .query("messages")
@@ -1376,24 +1377,48 @@ export const getConversationToolStats = query({
             if (input.todos) latestTodos = input.todos;
           } catch {}
         }
-        if (tc.name === "TaskCreate") taskTotal++;
+        if (tc.name === "TaskCreate") {
+          try {
+            const inp = JSON.parse(tc.input);
+            taskCreates.push({ subject: inp.subject || inp.title || inp.description || "" });
+          } catch {}
+        }
         if (tc.name === "TaskUpdate") {
           try {
             const inp = JSON.parse(tc.input);
-            if (inp.status === "completed") taskCompleted++;
+            if (inp.taskId && inp.status && !taskStatusMap.has(inp.taskId)) {
+              taskStatusMap.set(inp.taskId, inp.status);
+            }
           } catch {}
         }
       }
     }
 
-    // Merge todos and tasks into unified stats
-    const todoTotal = latestTodos?.length ?? 0;
-    const todoCompleted = latestTodos?.filter((t: any) => t.status === "completed").length ?? 0;
-    const total = todoTotal + taskTotal;
-    const completed = todoCompleted + taskCompleted;
+    // Reverse creates to get chronological order (IDs are assigned 1, 2, 3, ...)
+    taskCreates.reverse();
+    const normalizeStatus = (s: string) => s === "completed" ? "done" : s === "in_progress" ? "in_progress" : "open";
+    const taskItems = taskCreates
+      .map((tc, i) => {
+        const id = String(i + 1);
+        const rawStatus = taskStatusMap.get(id) ?? "pending";
+        return { id, content: tc.subject, status: normalizeStatus(rawStatus) };
+      })
+      .filter(t => taskStatusMap.get(t.id) !== "deleted");
+
+    // Normalize todo items and merge with task items
+    const todoItems = (latestTodos ?? []).map((t: any, i: number) => ({
+      id: t.id || `todo-${i}`,
+      content: t.content || t.task || t.title || "",
+      status: normalizeStatus(t.status ?? "pending"),
+    }));
+    const items = [...todoItems, ...taskItems];
+    const total = items.length;
+    const done = items.filter(i => i.status === "done").length;
+    const in_progress = items.filter(i => i.status === "in_progress").length;
+    const open = total - done - in_progress;
 
     return {
-      taskStats: total > 0 ? { total, completed } : null,
+      taskStats: total > 0 ? { total, done, in_progress, open, items } : null,
     };
   },
 });
@@ -2867,6 +2892,47 @@ export const getConversationBySessionId = query({
   },
 });
 
+// Single resolver for /conversation/[id] links.
+// Accepts any string: Convex document _id, session_id, or UUID.
+// Returns the access level and resolved Convex _id so the frontend
+// doesn't need to guess which ID format was used.
+export const resolveConversation = query({
+  args: { id: v.string() },
+  handler: async (ctx, args) => {
+    let conversation = null;
+
+    // Try as Convex document ID
+    const convId = ctx.db.normalizeId("conversations", args.id);
+    if (convId) {
+      conversation = await ctx.db.get(convId);
+    }
+
+    // Try as session_id
+    if (!conversation) {
+      conversation = await ctx.db
+        .query("conversations")
+        .withIndex("by_session_id", (q) => q.eq("session_id", args.id))
+        .first();
+    }
+
+    if (!conversation) {
+      return { access_level: "not_found" as const, conversation_id: null };
+    }
+
+    const authUserId = await getAuthUserId(ctx);
+    const accessLevel = await checkConversationAccess(ctx, authUserId, conversation);
+
+    if (accessLevel === "denied") {
+      return { access_level: "denied" as const, conversation_id: null };
+    }
+
+    return {
+      access_level: accessLevel,
+      conversation_id: conversation._id.toString(),
+    };
+  },
+});
+
 export const getSessionLinks = mutation({
   args: {
     session_id: v.string(),
@@ -2918,6 +2984,7 @@ export const searchForCLI = query({
     user_only: v.optional(v.boolean()),
     team_id: v.optional(v.id("teams")),
     member_name: v.optional(v.string()),
+    mine_only: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
@@ -2978,7 +3045,9 @@ export const searchForCLI = query({
     }
 
     let filterUserId: string | null = null;
-    if (args.member_name) {
+    if (args.mine_only) {
+      filterUserId = authUserId.toString();
+    } else if (args.member_name) {
       const memberNameLower = args.member_name.toLowerCase();
       const matchingMember = teamUsers.find(u => {
         const name = u.name?.toLowerCase() || "";
@@ -3081,26 +3150,15 @@ export const searchForCLI = query({
         const cliFilter = cliFeedFilters.get(conv.team_id.toString());
         if (!cliFilter || !cliFilter.isVisible(conv)) continue;
         if (!teamUserIds.has(conv.user_id.toString())) continue;
+      } else if (resolvedTeamId) {
+        // Own sessions: filter by team when team is resolved from directory
+        const convTeamId = (conv.team_id ?? conv.active_team_id)?.toString();
+        if (!convTeamId || !effectiveTeamIdSet.has(convTeamId)) continue;
       }
 
-      // Filter by specific member if requested
+      // Filter by specific member (or self via --mine)
       if (filterUserId && conv.user_id.toString() !== filterUserId) {
         continue;
-      }
-
-      // Match sessions at or under the search path (not parent directories)
-      // Skip path filter for other team members since absolute paths differ per user
-      if (projectPath && !filterUserId) {
-        const convPath = conv.project_path || "";
-        const convGitRoot = conv.git_root || "";
-        // Match: exact path, or session is in a subdirectory of search path
-        const isPathMatch = convPath === projectPath ||
-          convPath.startsWith(projectPath + "/") ||
-          convGitRoot === projectPath ||
-          convGitRoot.startsWith(projectPath + "/");
-        if (!isPathMatch) {
-          continue;
-        }
       }
 
       if (startTime && conv.updated_at < startTime) continue;
@@ -3340,6 +3398,7 @@ export const readConversationMessages = query({
       conversation: {
         id: conv._id,
         title,
+        agent_type: conv.agent_type || "claude_code",
         project_path: conv.project_path || null,
         message_count: nonEmptyCount,
         updated_at: new Date(conv.updated_at).toISOString(),
@@ -4464,6 +4523,7 @@ export const feedForCLI = query({
     project_path: v.optional(v.string()),
     team_id: v.optional(v.id("teams")),
     member_name: v.optional(v.string()),
+    mine_only: v.optional(v.boolean()),
     live_only: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
@@ -4525,7 +4585,9 @@ export const feedForCLI = query({
     const effectiveTeamIdSet = new Set(effectiveTeamIds.map(id => id.toString()));
 
     let filterUserId: string | null = null;
-    if (args.member_name) {
+    if (args.mine_only) {
+      filterUserId = authUserId.toString();
+    } else if (args.member_name) {
       const memberNameLower = args.member_name.toLowerCase();
       const matchingMember = teamUsers.find(u => {
         const name = u.name?.toLowerCase() || "";
@@ -4589,21 +4651,13 @@ export const feedForCLI = query({
       );
       const validConvs = matchedConvs.filter((c): c is NonNullable<typeof c> => c !== null);
 
-      // Filter own conversations by project path if specified
+      // Filter own conversations by team when team is resolved
       queryMatchedOwnConversations = validConvs.filter(c => {
         if (c.user_id.toString() !== authUserId.toString()) return false;
-
-        // Apply project path filter for own conversations
-        if (projectPath) {
-          const convPath = c.project_path || "";
-          const convGitRoot = c.git_root || "";
-          const isPathMatch = convPath === projectPath ||
-            (convPath && convPath.startsWith(projectPath + "/")) ||
-            convGitRoot === projectPath ||
-            (convGitRoot && convGitRoot.startsWith(projectPath + "/"));
-          if (!isPathMatch) return false;
+        if (resolvedTeamId) {
+          const convTeamId = ((c as any).team_id ?? (c as any).active_team_id)?.toString();
+          if (!convTeamId || !effectiveTeamIdSet.has(convTeamId)) return false;
         }
-
         return true;
       });
 
@@ -4617,7 +4671,7 @@ export const feedForCLI = query({
 
     const fetchLimit = query
       ? Math.min(offset + limit + 20, 100)
-      : projectPath ? 200 : Math.min(offset + limit + 50, 200);
+      : Math.min(offset + limit + 50, 200);
     let ownConversations = await ctx.db
       .query("conversations")
       .withIndex("by_user_updated", (q) => q.eq("user_id", authUserId))
@@ -4633,7 +4687,7 @@ export const feedForCLI = query({
 
     // Include non-private team conversations whose team_id matches effective teams
     let teamConversations: typeof ownConversations = [];
-    if (effectiveTeamIds.length > 0) {
+    if (effectiveTeamIds.length > 0 && !args.mine_only) {
       const visibleTeamMembers = teamUsers.filter(u =>
         u._id.toString() !== authUserId.toString() &&
         (u.activity_visibility || "detailed") !== "hidden"
@@ -4669,39 +4723,10 @@ export const feedForCLI = query({
       .filter((c): c is typeof ownConversations[number] => {
         if (filterUserId && c.user_id.toString() !== filterUserId) return false;
 
-        // Path filter: when in a specific project, filter to same git repository
-        if (projectPath && !filterUserId) {
-          const convPath = c.project_path || "";
-          const convGitRoot = c.git_root || "";
-
-          if (isOwnConversation(c)) {
-            // Own conversations: match full path or git root
-            const isPathMatch = convPath === projectPath ||
-              (convPath && convPath.startsWith(projectPath + "/")) ||
-              convGitRoot === projectPath ||
-              (convGitRoot && convGitRoot.startsWith(projectPath + "/"));
-            if (!isPathMatch) return false;
-          } else {
-            // Team conversations: filter to same git repo (different home dirs, but same repo name)
-            // Extract repo name from paths like ~/src/codecast or /Users/jason/code/union-mobile/outreach
-            const getRepoName = (path: string) => {
-              const parts = path.split("/");
-              // Find the last meaningful directory (not ~ or empty)
-              for (let i = parts.length - 1; i >= 0; i--) {
-                if (parts[i] && parts[i] !== "~" && !parts[i].startsWith(".")) {
-                  return parts[i];
-                }
-              }
-              return "";
-            };
-
-            const projectRepo = getRepoName(projectPath);
-            const convRepo = getRepoName(convGitRoot || convPath);
-
-            if (!projectRepo || !convRepo || projectRepo !== convRepo) {
-              return false;
-            }
-          }
+        // Team filter: when team is resolved from directory, filter own sessions by team
+        if (resolvedTeamId && isOwnConversation(c)) {
+          const convTeamId = ((c as any).team_id ?? (c as any).active_team_id)?.toString();
+          if (!convTeamId || !effectiveTeamIdSet.has(convTeamId)) return false;
         }
         if (startTime && c.updated_at < startTime) return false;
         if (endTime && c.updated_at > endTime) return false;
@@ -5488,12 +5513,20 @@ export const listIdleSessions = query({
         .map((s) => s.conversation_id!.toString())
     );
 
-    const AGENT_STATUS_FRESH_MS = 5 * 60 * 1000;
     const agentStatusMap = new Map<string, "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "stopped" | "starting" | "resuming">();
     for (const s of managedSessions) {
-      if (s.conversation_id && s.agent_status && s.agent_status_updated_at &&
-          (now - s.agent_status_updated_at) < AGENT_STATUS_FRESH_MS) {
+      if (!s.conversation_id || !s.agent_status) continue;
+      const heartbeatAlive = now - s.last_heartbeat < HEARTBEAT_ALIVE_MS;
+      if (s.agent_status === "stopped" || s.agent_status === "idle") {
         agentStatusMap.set(s.conversation_id.toString(), s.agent_status);
+      } else if (heartbeatAlive) {
+        // Heartbeat alive → daemon is running. Trust last known status even if
+        // agent_status_updated_at is stale (status only updates on transitions,
+        // so a long "working" phase naturally has an old timestamp).
+        agentStatusMap.set(s.conversation_id.toString(), s.agent_status);
+      } else {
+        // Heartbeat dead → daemon crashed or exited, infer stopped
+        agentStatusMap.set(s.conversation_id.toString(), "stopped");
       }
     }
 
@@ -5559,8 +5592,12 @@ export const listIdleSessions = query({
         if (!args.show_all) continue;
       }
 
-      const daemonAlive = liveConvIds.has(conv._id.toString()) ||
-        (userDaemonAlive && (now - conv.updated_at) < 10 * 60 * 1000);
+      const agentStatus = agentStatusMap.get(conv._id.toString());
+      // Don't let userDaemonAlive resurrect sessions we know are stopped
+      const daemonAlive = agentStatus === "stopped"
+        ? false
+        : liveConvIds.has(conv._id.toString()) ||
+          (userDaemonAlive && (now - conv.updated_at) < 10 * 60 * 1000);
 
       const isInterruptMsg = !!lastUserMessage && (
         lastUserMessage.startsWith("[Request interrupted") || lastUserMessage.startsWith("[Request cancelled")
@@ -5573,7 +5610,6 @@ export const listIdleSessions = query({
         (hasPending && !recentlyUpdated)
       );
 
-      const agentStatus = agentStatusMap.get(conv._id.toString());
       let isIdle = agentStatus
         ? agentStatus !== "working" && agentStatus !== "compacting" && agentStatus !== "thinking" && agentStatus !== "connected"
         : daemonAlive

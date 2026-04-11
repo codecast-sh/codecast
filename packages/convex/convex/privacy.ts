@@ -47,23 +47,24 @@ function isVisibilityShareable(visibility: string): boolean {
 }
 
 // ── Access control (single conversation) ──
-// These check whether a specific conversation CAN be seen by a team member.
-// They do NOT apply path-based feed filtering -- use TeamFeedFilter for that.
+// is_private is the source of truth (set at creation from directory_team_mappings auto_share).
+// team_visibility is the per-conversation override. Membership visibility is user-level opt-out.
 
 export async function isConversationTeamVisible(
   ctx: DbCtx,
   conversation: ConversationForAccess
 ): Promise<boolean> {
   if (!conversation.team_id) return false;
-  if (conversation.is_private === false) return true;
-  if (conversation.team_visibility && conversation.team_visibility !== "private")
-    return true;
   const ownerVisibility = await getOwnerTeamVisibility(
     ctx,
     conversation.user_id,
     conversation.team_id
   );
-  return isVisibilityShareable(ownerVisibility);
+  if (!isVisibilityShareable(ownerVisibility)) return false;
+  if (conversation.is_private === false) return true;
+  if (conversation.team_visibility && conversation.team_visibility !== "private")
+    return true;
+  return false;
 }
 
 function isConversationTeamVisibleSync(
@@ -71,10 +72,11 @@ function isConversationTeamVisibleSync(
   ownerMembershipVisibility: string
 ): boolean {
   if (!conversation.team_id) return false;
+  if (!isVisibilityShareable(ownerMembershipVisibility)) return false;
   if (conversation.is_private === false) return true;
   if (conversation.team_visibility && conversation.team_visibility !== "private")
     return true;
-  return isVisibilityShareable(ownerMembershipVisibility);
+  return false;
 }
 
 export async function canTeamMemberAccess(
@@ -101,53 +103,38 @@ export async function checkConversationAccess(
 }
 
 // ── Team feed filter ──
-// Pre-loads all data needed for team feed filtering, returns a predicate.
+// Pre-loads membership data for team feed filtering, returns a predicate.
 // Use this everywhere team conversations are listed or counted.
 //
-// Encapsulates:
-//   1. Membership visibility (privacy/sharing check)
-//   2. Directory path mapping (only show conversations from mapped projects)
+// Visibility is determined by is_private (set at creation from auto_share).
+// Membership visibility is a user-level opt-out (hidden users are invisible).
 //
 // Usage:
 //   const filter = await createTeamFeedFilter(ctx, teamId);
 //   const visible = conversations.filter(c => filter.isVisible(c));
 //   const vis = filter.getVisibility(userId);  // for resolveVisibilityMode
 
-type TeamMapping = { user_id: { toString(): string }; path_prefix: string };
-
 type ConversationForFeed = {
   user_id: { toString(): string };
   team_id?: any;
   is_private: boolean;
   team_visibility?: string;
-  git_root?: string;
-  project_path?: string;
 };
 
 export type TeamFeedFilter = {
   isVisible: (conversation: ConversationForFeed) => boolean;
   getVisibility: (userId: string) => string;
   memberships: Array<{ user_id: Id<"users">; visibility?: string }>;
-  mappings: TeamMapping[];
 };
 
 export async function createTeamFeedFilter(
   ctx: DbCtx,
   teamId: Id<"teams">
 ): Promise<TeamFeedFilter> {
-  const [memberships, mappings] = await Promise.all([
-    ctx.db
-      .query("team_memberships")
-      .withIndex("by_team_id", (q: any) => q.eq("team_id", teamId))
-      .collect(),
-    ctx.db
-      .query("directory_team_mappings")
-      .withIndex("by_team_id", (q: any) => q.eq("team_id", teamId))
-      .collect(),
-  ]);
-
-  const memberUserIds = memberships.map((m: any) => m.user_id) as Array<Id<"users">>;
-  const userHasMappings = await buildUserHasMappings(ctx, memberUserIds);
+  const memberships = await ctx.db
+    .query("team_memberships")
+    .withIndex("by_team_id", (q: any) => q.eq("team_id", teamId))
+    .collect();
 
   const visibilityMap = new Map<string, string>(
     memberships.map((m: any) => [m.user_id.toString(), m.visibility || "summary"])
@@ -155,28 +142,15 @@ export async function createTeamFeedFilter(
 
   const isVisible = (conversation: ConversationForFeed): boolean => {
     if (!conversation.team_id) return false;
-
     const ownerVis = visibilityMap.get(conversation.user_id.toString()) || "summary";
-    if (!isConversationTeamVisibleSync(conversation as any, ownerVis)) return false;
-
-    const ownerHas = !!userHasMappings.get(conversation.user_id.toString());
-    if (!ownerHas) return true;
-
-    const path = conversation.git_root || conversation.project_path;
-    if (!path) return false;
-
-    const userId = conversation.user_id.toString();
-    return mappings.some(
-      (m: any) => m.user_id.toString() === userId &&
-           (path === m.path_prefix || path.startsWith(m.path_prefix + "/"))
-    );
+    return isConversationTeamVisibleSync(conversation as any, ownerVis);
   };
 
   const getVisibility = (userId: string): string => {
     return visibilityMap.get(userId) || "summary";
   };
 
-  return { isVisible, getVisibility, memberships, mappings };
+  return { isVisible, getVisibility, memberships };
 }
 
 // ── Team resolution for session creation ──
@@ -220,26 +194,6 @@ export function resolveTeamForPath(
   }
 
   return { teamId: resolvedTeamId, isPrivate, autoShared };
-}
-
-// ── Build userHasMappings ──
-
-async function buildUserHasMappings(
-  ctx: DbCtx,
-  userIds: Array<Id<"users">>
-): Promise<Map<string, boolean>> {
-  const result = new Map<string, boolean>();
-  const checks = await Promise.all(
-    userIds.map(uid =>
-      ctx.db.query("directory_team_mappings")
-        .withIndex("by_user_id", (q: any) => q.eq("user_id", uid))
-        .first()
-    )
-  );
-  userIds.forEach((uid: Id<"users">, i: number) => {
-    if (checks[i]) result.set(uid.toString(), true);
-  });
-  return result;
 }
 
 // ── Visibility modes ──

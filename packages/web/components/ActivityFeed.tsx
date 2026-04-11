@@ -1,6 +1,6 @@
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import React, { useMemo, useState, useCallback } from "react";
+import React, { useMemo, useState, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { LoadingSkeleton } from "./LoadingSkeleton";
 import { EmptyState } from "./EmptyState";
@@ -146,14 +146,14 @@ function formatDuration(startMs: number, endMs: number): string {
   return remMins > 0 ? `${hours}h ${remMins}m` : `${hours}h`;
 }
 
-const JUNK_PROJECTS = new Set(["unknown", "src", "home", "tmp", "var", "users", "opt", "usr", "app", "root"]);
+const JUNK_WORKSPACES = new Set(["unknown", "src", "home", "tmp", "var", "users", "opt", "usr", "app", "root"]);
 
-function extractProject(projectPath: string | undefined): string | undefined {
+function extractWorkspace(projectPath: string | undefined): string | undefined {
   if (!projectPath) return undefined;
   const parts = projectPath.split("/").filter(Boolean);
   if (parts.length < 3) return undefined;
   const name = parts[parts.length - 1];
-  if (!name || JUNK_PROJECTS.has(name.toLowerCase())) return undefined;
+  if (!name || JUNK_WORKSPACES.has(name.toLowerCase())) return undefined;
   if (name.length < 2 || name.length > 40) return undefined;
   if (!/[-_a-zA-Z]/.test(name[0])) return undefined;
   return name;
@@ -218,7 +218,7 @@ function useProjectColors(items: any[]) {
     const map: Record<string, string> = {};
     let idx = 0;
     for (const item of items) {
-      const proj = extractProject(item.project_path);
+      const proj = extractWorkspace(item.project_path);
       if (proj && !map[proj]) {
         map[proj] = PROJECT_PALETTE[idx % PROJECT_PALETTE.length];
         idx++;
@@ -426,7 +426,7 @@ export function SessionCardInner({ item, compact, showActor, onNavigate, project
   const [deepDive, setDeepDive] = useState(false);
   const actorName = item.actor?.name || "Unknown";
   const actorId = item.actor?._id;
-  const project = extractProject(item.project_path);
+  const project = extractWorkspace(item.project_path);
   const outcome = OUTCOME_STYLES[item.outcome_type] || OUTCOME_STYLES.unknown;
   const isActive = item.status === "active";
   const isTrivial = (item.message_count || 0) < 3;
@@ -458,8 +458,11 @@ export function SessionCardInner({ item, compact, showActor, onNavigate, project
 
   return (
     <div
-      onClick={() => hasDetail && setExpanded(!expanded)}
-      className={`group relative border border-sol-border/30 bg-white dark:bg-sol-bg-alt rounded-xl shadow-sm overflow-hidden ${compact ? "pl-4 pr-2.5 py-2" : "pl-5 pr-3 py-2.5"} ${isTrivial ? "opacity-50" : ""} ${hasDetail ? "cursor-pointer" : ""} hover:border-sol-yellow/30 hover:shadow-md transition-all`}
+      onClick={() => {
+        if (onNavigate) handleNav();
+        else if (hasDetail) setExpanded(!expanded);
+      }}
+      className={`group relative border border-sol-border/30 bg-white dark:bg-sol-bg-alt rounded-xl shadow-sm overflow-hidden ${compact ? "pl-4 pr-2.5 py-2" : "pl-5 pr-3 py-2.5"} ${isTrivial ? "opacity-50" : ""} ${onNavigate || hasDetail ? "cursor-pointer" : ""} hover:border-sol-yellow/30 hover:shadow-md transition-all`}
     >
       <div className={`absolute left-0 top-0 bottom-0 w-[3px] rounded-l-xl ${outcome.accent}`} />
       {/* Row 1: actor + title + project + time */}
@@ -684,7 +687,7 @@ function DaySection({ day, items, compact, showActor, onNavigate, projectColors,
     const projSet = new Set<string>();
     const actorSet = new Set<string>();
     for (const i of items) {
-      const p = extractProject(i.project_path);
+      const p = extractWorkspace(i.project_path);
       if (p) projSet.add(p);
       if (i.actor?._id) actorSet.add(i.actor._id.toString());
     }
@@ -766,7 +769,7 @@ function DaySection({ day, items, compact, showActor, onNavigate, projectColors,
                 compact={compact}
                 showActor={showActor}
                 onNavigate={onNavigate}
-                projectColor={projectColors[extractProject(item.project_path) || ""]}
+                projectColor={projectColors[extractWorkspace(item.project_path) || ""]}
               />
             ))}
           </div>
@@ -832,6 +835,9 @@ export function ActivityFeed({ mode, teamId, compact, directoryFilter, onNavigat
   const [projectFilter, setProjectFilter] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<"feed" | "raw">("raw");
   const [digestScope, setDigestScope] = useState<DigestScope>("day");
+  const FEED_PAGE_SIZE = 15;
+  const [maxFeedItems, setMaxFeedItems] = useState(FEED_PAGE_SIZE);
+  const feedSentinelRef = useRef<HTMLDivElement>(null);
 
   const tz = useMemo(() => Intl.DateTimeFormat().resolvedOptions().timeZone, []);
 
@@ -884,7 +890,7 @@ export function ActivityFeed({ mode, teamId, compact, directoryFilter, onNavigat
         return parts.includes(filterName!);
       });
     }
-    if (projectFilter) items = items.filter((item: any) => extractProject(item.project_path) === projectFilter);
+    if (projectFilter) items = items.filter((item: any) => extractWorkspace(item.project_path) === projectFilter);
     return items;
   }, [digest?.feed, actorFilter, directoryFilter, projectFilter]);
 
@@ -912,6 +918,43 @@ export function ActivityFeed({ mode, teamId, compact, directoryFilter, onNavigat
     }
     return map;
   }, [filteredFeed, tz]);
+
+  // Paginate feed items across day sections
+  const { visibleDays, hasMoreFeed } = useMemo(() => {
+    const result: Array<{ day: any; items: any[] }> = [];
+    let count = 0;
+    for (const day of filteredDaySummaries) {
+      if (count >= maxFeedItems) break;
+      const dayItems = feedByDay.get(day.date) || [];
+      const remaining = maxFeedItems - count;
+      const visible = dayItems.slice(0, remaining);
+      count += visible.length;
+      if (visible.length > 0) result.push({ day, items: visible });
+    }
+    return { visibleDays: result, hasMoreFeed: count < filteredFeed.length };
+  }, [filteredDaySummaries, feedByDay, maxFeedItems, filteredFeed.length]);
+
+  // IntersectionObserver to load more feed items on scroll
+  useWatchEffect(() => {
+    if (!hasMoreFeed) return;
+    const el = feedSentinelRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          setMaxFeedItems(c => c + FEED_PAGE_SIZE);
+        }
+      },
+      { rootMargin: "400px" }
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [hasMoreFeed]);
+
+  // Reset feed pagination when filters change
+  useWatchEffect(() => {
+    setMaxFeedItems(FEED_PAGE_SIZE);
+  }, [actorFilter, projectFilter, directoryFilter]);
 
   if (digest === undefined) return <LoadingSkeleton />;
 
@@ -967,11 +1010,11 @@ export function ActivityFeed({ mode, teamId, compact, directoryFilter, onNavigat
         <EmptyState title="No sessions" description={actorFilter ? "No sessions for this person in this window." : "No sessions found."} />
       ) : (
         <div className={compact ? "space-y-1" : "space-y-2"}>
-          {filteredDaySummaries.map((day: any) => (
+          {visibleDays.map(({ day, items }) => (
             <DaySection
               key={day.date}
               day={day}
-              items={feedByDay.get(day.date) || []}
+              items={items}
               compact={compact}
               showActor={mode === "team"}
               onNavigate={onNavigate}
@@ -980,6 +1023,13 @@ export function ActivityFeed({ mode, teamId, compact, directoryFilter, onNavigat
               onProjectFilter={setProjectFilter}
             />
           ))}
+          {hasMoreFeed && (
+            <div ref={feedSentinelRef} className="flex justify-center py-3">
+              <span className="text-[10px] text-sol-text-dim/30 tabular-nums">
+                {visibleDays.reduce((s, d) => s + d.items.length, 0)} of {filteredFeed.length} sessions
+              </span>
+            </div>
+          )}
         </div>
       )}
     </div>

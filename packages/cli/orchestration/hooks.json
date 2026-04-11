@@ -1,0 +1,27 @@
+{
+  "hooks": {
+    "SubagentStop": [
+      {
+        "matcher": "implementer|reviewer|critic",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.codecast/orchestration/scripts/agent-complete.sh",
+            "timeout": 10000
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.codecast/orchestration/scripts/reground.sh",
+            "timeout": 10000
+          }
+        ]
+      }
+    ]
+  }
+}
