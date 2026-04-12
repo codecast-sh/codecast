@@ -240,4 +240,59 @@ describe("categorizeSessions", () => {
     expect(needsInput.map((s) => s._id)).toContain("conv-idle");
     expect(working.map((s) => s._id)).not.toContain("conv-stopped");
   });
+
+  it("puts idle sessions with pending messages in Working (not Needs Input)", () => {
+    const idleWithPending: InboxSession = {
+      ...baseSession,
+      _id: "conv-pending",
+      session_id: "session-pending",
+      message_count: 5,
+      agent_status: "idle",
+      is_idle: true,
+      has_pending: true,
+    };
+    const idleNoPending: InboxSession = {
+      ...baseSession,
+      _id: "conv-no-pending",
+      session_id: "session-no-pending",
+      message_count: 3,
+      agent_status: "idle",
+      is_idle: true,
+      has_pending: false,
+    };
+
+    const { needsInput, working } = categorizeSessions(
+      {
+        [idleWithPending._id]: idleWithPending,
+        [idleNoPending._id]: idleNoPending,
+      },
+      new Set(),
+    );
+
+    // Pending messages mean work is about to start — don't flag as needs input
+    expect(working.map((s) => s._id)).toContain("conv-pending");
+    expect(needsInput.map((s) => s._id)).not.toContain("conv-pending");
+    // Genuinely idle session without pending work stays in needs input
+    expect(needsInput.map((s) => s._id)).toContain("conv-no-pending");
+  });
+
+  it("puts sessions with queued messages in Working (not Needs Input)", () => {
+    const idleSession: InboxSession = {
+      ...baseSession,
+      _id: "conv-queued",
+      session_id: "session-queued",
+      message_count: 5,
+      agent_status: "idle",
+      is_idle: true,
+      has_pending: false,
+    };
+
+    const { needsInput, working } = categorizeSessions(
+      { [idleSession._id]: idleSession },
+      new Set(["conv-queued"]),
+    );
+
+    expect(working.map((s) => s._id)).toContain("conv-queued");
+    expect(needsInput.map((s) => s._id)).not.toContain("conv-queued");
+  });
 });
