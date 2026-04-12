@@ -1969,13 +1969,14 @@ cast task start/done/comment <id>           # Task lifecycle
 cast task create "Title" -t task -p high    # Create task
 cast task create "Title" --plan <plan_id>   # Create task bound to plan
 cast task update <id> --plan <plan_id>      # Bind existing task to plan
-cast task context <id>                      # Full context (re-read after compaction)
+cast task context <id>                      # Full context for a task
+cast task context --current                 # Context for session's current task
 cast plan create "Title" -g "goal" -b "body"  # Create plan with inline body
 cast plan create "Title" --body-file plan.md  # Create plan from file
 cast plan bind/unbind <plan_id>             # Bind/unbind session to plan
-cast plan decompose <plan_id>              # Generate tasks from goal
-cast plan orchestrate <plan_id>            # Spawn agents for ready tasks
 cast plan show/status <plan_id>            # Plan details
+cast plan context <plan_id>                # Full context for a plan (for agents)
+cast plan context --current                # Context for session's current plan
 cast plan comment <plan_id> "note"         # Add comment (progress by default)
 cast plan comment <plan_id> "x" -d -r "y" # Decision with rationale
 cast plan done/drop <plan_id>             # Close or abandon a plan
