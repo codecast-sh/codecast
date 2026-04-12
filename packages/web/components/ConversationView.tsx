@@ -3569,13 +3569,14 @@ interface ParsedContextBlock {
 function parseContextBlocks(text: string): { contexts: ParsedContextBlock[]; remaining: string } {
   const contexts: ParsedContextBlock[] = [];
   const remaining = text.replace(
-    /<context\s+type="([^"]+)"\s+title="([^"]+)">\s*([\s\S]*?)\s*<\/context>\s*/g,
-    (_, type, title, inner) => {
+    /<context\s+type="([^"]+)"\s+title="([^"]+)"(?:\s+id="([^"]+)")?\s*>\s*([\s\S]*?)\s*<\/context>\s*/g,
+    (_, type, title, tagId, inner) => {
       const ctx: ParsedContextBlock = { type, title };
+      if (tagId) ctx.id = tagId;
       const idMatch = inner.match(/ID:\s*(\S+)/);
       const statusMatch = inner.match(/Status:\s*(\S+)/);
       const priorityMatch = inner.match(/Priority:\s*(\S+)/);
-      if (idMatch) ctx.id = idMatch[1];
+      if (!ctx.id && idMatch) ctx.id = idMatch[1];
       if (statusMatch) ctx.status = statusMatch[1];
       if (priorityMatch) ctx.priority = priorityMatch[1];
       contexts.push(ctx);
@@ -3592,16 +3593,27 @@ const CONTEXT_TYPE_CONFIG: Record<string, { icon: typeof ListChecks; colorClass:
 };
 
 function ContextBlockPill({ ctx }: { ctx: ParsedContextBlock }) {
+  const router = useRouter();
   const config = CONTEXT_TYPE_CONFIG[ctx.type] || CONTEXT_TYPE_CONFIG.task;
   const Icon = config.icon;
 
+  const handleClick = ctx.id ? (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const route = ctx.type === "doc" ? `/docs/${ctx.id}` : ctx.type === "plan" ? `/plans/${ctx.id}` : `/tasks/${ctx.id}`;
+    router.push(route);
+  } : undefined;
+
   return (
-    <div className={`inline-flex items-center gap-1.5 px-2 py-1 rounded border text-xs ${config.colorClass}`}>
+    <button
+      onClick={handleClick}
+      disabled={!handleClick}
+      className={`inline-flex items-center gap-1.5 px-2 py-1 rounded border text-xs ${config.colorClass} ${handleClick ? "cursor-pointer" : ""}`}
+    >
       <Icon className="w-3 h-3 flex-shrink-0" />
       <span className="font-medium capitalize">{ctx.type}</span>
       <span className="text-sol-text-muted truncate max-w-[250px]">{ctx.title}</span>
       {ctx.id && <EntityIdPill shortId={ctx.id} />}
-    </div>
+    </button>
   );
 }
 

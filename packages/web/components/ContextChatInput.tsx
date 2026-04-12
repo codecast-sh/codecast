@@ -50,8 +50,14 @@ export function ContextChatInput({
     if (!text) return;
 
     const body = getContextBody();
-    const contextBlock = body
-      ? `<context type="${contextType}" title="${contextTitle}">\n${body}\n</context>\n\n`
+    const idAttr = linkedObjectId ? ` id="${linkedObjectId}"` : "";
+    let contextBody = body || "";
+    // Prepend editing instructions for docs so the model knows how to modify them
+    if (contextType === "doc" && linkedObjectId && body) {
+      contextBody = `[Document ID: ${linkedObjectId}]\nTo edit this document use: cast doc edit ${linkedObjectId} --old "text to find" --new "replacement text"\nTo update title: cast doc edit ${linkedObjectId} --title "New Title"\nDo not use file Read/Write/Edit tools — this document lives in the database, not the filesystem.\n\n${body}`;
+    }
+    const contextBlock = contextBody
+      ? `<context type="${contextType}" title="${contextTitle}"${idAttr}>\n${contextBody}\n</context>\n\n`
       : `[Viewing ${contextType}: ${contextTitle}]\n\n`;
     const fullMessage = contextBlock + text;
 
@@ -63,6 +69,13 @@ export function ContextChatInput({
     soundNewSession();
     const sid = nanoid(10);
     const now = Date.now();
+
+    // Resolve linked object for optimistic rendering (task badge in header/sidebar)
+    let activeTask: { _id: string; short_id: string; title: string; status: string } | undefined;
+    if (contextType === "task" && linkedObjectId) {
+      const t = store.tasks[linkedObjectId] as any;
+      if (t) activeTask = { _id: t._id, short_id: t.short_id, title: t.title, status: t.status };
+    }
 
     store.syncRecord("conversations", sid, {
       _id: sid,
@@ -78,6 +91,7 @@ export function ContextChatInput({
       status: "active",
       title: "New session",
       messages: [],
+      ...(activeTask && { active_task_id: linkedObjectId, active_task: activeTask }),
     });
 
     store.syncRecord("sessions", sid, {
@@ -93,6 +107,7 @@ export function ContextChatInput({
       is_idle: true,
       has_pending: false,
       last_user_message: null,
+      ...(activeTask && { active_task: activeTask }),
     });
 
     const clientId = store.addOptimisticMessage(sid, fullMessage);
