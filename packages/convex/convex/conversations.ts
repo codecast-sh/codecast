@@ -5610,8 +5610,13 @@ export const listIdleSessions = query({
         (hasPending && !recentlyUpdated)
       );
 
+      const agentStatusIdle = agentStatus
+        ? agentStatus !== "working" && agentStatus !== "compacting" && agentStatus !== "thinking" && agentStatus !== "connected" && agentStatus !== "starting" && agentStatus !== "resuming"
+        : false;
+      // Even when agent reports idle, pending messages or a trailing user message
+      // mean work is about to start — don't flag the session as idle yet.
       let isIdle = agentStatus
-        ? agentStatus !== "working" && agentStatus !== "compacting" && agentStatus !== "thinking" && agentStatus !== "connected"
+        ? agentStatusIdle && !hasPending && !lastRoleIsUser
         : daemonAlive
           ? (!hasPending && !lastRoleIsUser && !recentlyUpdated)
           : !recentlyUpdated;
@@ -5700,10 +5705,14 @@ export const listIdleSessions = query({
         const childDaemon = liveConvIds.has(child._id.toString());
         const childAgentStatus = agentStatusMap.get(child._id.toString());
         const childRecentlyUpdated = (now - child.updated_at) < 45 * 1000;
+        const childHasPending = !!child.has_pending_messages;
+        const childAgentIdle = childAgentStatus
+          ? childAgentStatus !== "working" && childAgentStatus !== "compacting" && childAgentStatus !== "thinking" && childAgentStatus !== "connected" && childAgentStatus !== "starting" && childAgentStatus !== "resuming"
+          : false;
         const childIsIdle = childAgentStatus
-          ? childAgentStatus !== "working" && childAgentStatus !== "compacting" && childAgentStatus !== "thinking" && childAgentStatus !== "connected"
+          ? childAgentIdle && !childHasPending
           : childDaemon
-            ? !childRecentlyUpdated
+            ? !childHasPending && !childRecentlyUpdated
             : !childRecentlyUpdated;
         results.push({
           _id: child._id,
