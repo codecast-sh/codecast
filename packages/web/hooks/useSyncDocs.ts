@@ -31,25 +31,21 @@ function dedupeProjectPaths(paths: string[]): string[] {
 
 const PAGE_SIZE = 200;
 
-/**
- * Fetches ALL docs via paginated queries — each page reads a bounded number of
- * docs so the Convex query stays under the 64MB memory limit.
- * Results accumulate client-side and are synced to the store as they arrive.
- */
-export function useSyncDocs() {
-  const activeTeamId = useInboxStore(
-    (s) => s.clientState.ui?.active_team_id
-  ) as Id<"teams"> | undefined;
-  const initialized = useInboxStore((s) => s.clientStateInitialized);
-  const syncTable = useInboxStore((s) => s.syncTable);
+type WorkspaceArgs =
+  | { team_id: Id<"teams">; workspace: "team" }
+  | { workspace: "personal" }
+  | "skip";
 
-  const stableArgs = !initialized ? "skip" : activeTeamId
-    ? { team_id: activeTeamId, workspace: "team" as const }
-    : { workspace: "personal" as const };
+/**
+ * Shared paginated docs sync — used by both web and mobile.
+ * Each page stays under Convex's 64 MB query limit.
+ */
+export function useSyncDocsPaginated(wsArgs: WorkspaceArgs) {
+  const syncTable = useInboxStore((s) => s.syncTable);
 
   const { results, status, loadMore } = usePaginatedQuery(
     api.docs.webListPaged,
-    stableArgs === "skip" ? "skip" : stableArgs,
+    wsArgs === "skip" ? "skip" : wsArgs,
     { initialNumItems: PAGE_SIZE }
   );
 
@@ -71,6 +67,24 @@ export function useSyncDocs() {
       syncTable("docs", docs, { extra: { docProjectPaths: projectPaths } });
     }, [syncTable])
   );
+
+  return { ready: status !== "LoadingFirstPage" };
+}
+
+/**
+ * Web-specific wrapper — reads workspace args from the store.
+ */
+export function useSyncDocs() {
+  const activeTeamId = useInboxStore(
+    (s) => s.clientState.ui?.active_team_id
+  ) as Id<"teams"> | undefined;
+  const initialized = useInboxStore((s) => s.clientStateInitialized);
+
+  const wsArgs: WorkspaceArgs = !initialized ? "skip" : activeTeamId
+    ? { team_id: activeTeamId, workspace: "team" as const }
+    : { workspace: "personal" as const };
+
+  return useSyncDocsPaginated(wsArgs);
 }
 
 export function useSyncDocDetail(id?: string) {
