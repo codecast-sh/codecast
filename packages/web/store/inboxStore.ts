@@ -400,17 +400,18 @@ export function isSessionEffectivelyIdle(
 }
 
 export function isSessionWaitingForInput(
-  session: Pick<InboxSession, "_id" | "is_idle" | "agent_status" | "message_count" | "is_pinned">,
+  session: Pick<InboxSession, "_id" | "is_idle" | "agent_status" | "message_count" | "is_pinned" | "has_pending">,
   sessionsWithQueuedMessages?: Set<string>,
 ): boolean {
+  // Pending messages mean work is queued — session is not waiting for user input
+  if (session.has_pending || sessionsWithQueuedMessages?.has(session._id)) return false;
   // Dead sessions (stopped/crashed) still need user attention if they have messages
   if (session.agent_status && DEAD_AGENT_STATUSES.has(session.agent_status)) {
     return session.message_count > 0 && !session.is_pinned;
   }
   return isSessionEffectivelyIdle(session) &&
     session.message_count > 0 &&
-    !session.is_pinned &&
-    !sessionsWithQueuedMessages?.has(session._id);
+    !session.is_pinned;
 }
 
 export function getSessionRenderKey(
@@ -824,6 +825,17 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
       for (const s of incoming as any[]) {
         if (!draft.conversations[s._id]) draft.conversations[s._id] = { _id: s._id };
       }
+      // Authoritative dismiss filter: conversations.inbox_dismissed_at is the
+      // source of truth.  The 15-second pending exclude is only a fast-path;
+      // once it expires the server may still send the session (race between
+      // dispatch and query re-evaluation).  Move dismissed sessions to
+      // dismissedSessions so unstash can recover them.
+      for (const id of Object.keys(table)) {
+        if ((draft.conversations[id] as any)?.inbox_dismissed_at) {
+          draft.dismissedSessions[id] = table[id];
+          delete table[id];
+        }
+      }
       if (!draft.currentSessionId && !draft.showMySessions &&
           Object.keys(table).length > 0 && draft.clientStateInitialized) {
         const persisted = draft.clientState.current_conversation_id;
@@ -1052,6 +1064,7 @@ export const useInboxStore = create<InboxStoreState>(
     }
     for (const sid of allIds) {
       const wasPinned = this.sessions[sid]?.is_pinned;
+      if (this.sessions[sid]) this.dismissedSessions[sid] = this.sessions[sid];
       delete this.sessions[sid];
       this.pending[`sessions:${sid}`] = { type: "exclude", expiresAt: now + 15_000 };
       if (this.conversations[sid]) {
@@ -1071,6 +1084,7 @@ export const useInboxStore = create<InboxStoreState>(
     const now = Date.now();
     const agentLabels: Record<string, string> = { claude_code: "Claude", codex: "Codex", cursor: "Cursor", gemini: "Gemini" };
 
+    if (this.sessions[currentId]) this.dismissedSessions[currentId] = this.sessions[currentId];
     delete this.sessions[currentId];
     this.pending[`sessions:${currentId}`] = { type: "exclude", expiresAt: now + 15_000 };
     if (this.conversations[currentId]) {
@@ -1482,6 +1496,7 @@ export const useInboxStore = create<InboxStoreState>(
   injectSession: action(function (this: Draft, session: InboxSession) {
     const excludeKey = `sessions:${session._id}`;
     if (this.pending[excludeKey]) delete this.pending[excludeKey];
+    delete this.dismissedSessions[session._id];
     this.sessions[session._id] = session;
     this.currentSessionId = session._id;
     this.viewingDismissedId = null;
@@ -1512,11 +1527,13 @@ export const useInboxStore = create<InboxStoreState>(
 
   navigateToSession: action(function (this: Draft, id: string) {
     const excludeKey = `sessions:${id}`;
-    if (this.pending[excludeKey]) {
-      delete this.pending[excludeKey];
-      if (this.conversations[id]) {
-        (this.conversations[id] as any).inbox_dismissed_at = null;
-      }
+    delete this.pending[excludeKey];
+    if (this.conversations[id]) {
+      (this.conversations[id] as any).inbox_dismissed_at = null;
+    }
+    if (this.dismissedSessions[id]) {
+      this.sessions[id] = this.dismissedSessions[id];
+      delete this.dismissedSessions[id];
     }
     if (this.sessions[id]) {
       this.currentSessionId = id;
