@@ -823,8 +823,8 @@ export function SessionListPanel({
   }, [killSessionMutation]);
 
   const handleSelect = useCallback((session: InboxSession) => {
-    if (isFork(session) && onForkSelect && session.forked_from && session.parent_message_uuid) {
-      onForkSelect(session._id, session.forked_from, session.parent_message_uuid);
+    if (isFork(session) && onForkSelect && session.forked_from) {
+      onForkSelect(session._id, session.forked_from, session.parent_message_uuid || "");
       return;
     }
     if (onSessionSelect) {
