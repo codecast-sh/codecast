@@ -1,19 +1,34 @@
 export type PendingEntry = {
-  type: "exclude" | "field";
+  type: "exclude" | "include" | "field";
   value?: any;
+  ts?: number;
 };
+
+/**
+ * Local-first sync: pending entries represent local mutations waiting for
+ * server acknowledgment.  They never expire by time — they clear only when
+ * the server confirms the change.
+ *
+ *   exclude — record was deleted locally; block server from re-adding it.
+ *             Clears when the server stops sending the record.
+ *   include — record was added locally; keep it even if server doesn't
+ *             send it yet.  Clears when the server starts sending it.
+ *   field   — field was changed locally; override server value.
+ *             Clears when the server value matches the local value.
+ */
 
 export function applySyncTable<T extends { _id: string }>(
   tableName: string,
   incoming: T[],
   pending: Record<string, PendingEntry>,
+  prev?: Record<string, T>,
 ): { table: Record<string, T>; pending: Record<string, PendingEntry> } {
   const newPending = { ...pending };
   const table: Record<string, T> = {};
   const incomingIds = new Set(incoming.map(r => r._id));
   const prefix = `${tableName}:`;
 
-  // Clean up confirmed exclude entries — server no longer sends the record
+  // Confirmed excludes — server no longer sends the record
   for (const [key, entry] of Object.entries(newPending)) {
     if (!key.startsWith(prefix)) continue;
     if (entry.type === "exclude") {
@@ -24,6 +39,7 @@ export function applySyncTable<T extends { _id: string }>(
     }
   }
 
+  // Build table from incoming, respecting excludes and field overrides
   for (const record of incoming) {
     const excludeKey = `${tableName}:${record._id}`;
     if (newPending[excludeKey]?.type === "exclude") continue;
@@ -41,6 +57,17 @@ export function applySyncTable<T extends { _id: string }>(
       }
     }
     table[record._id] = merged;
+  }
+
+  // Include entries — locally-added records the server hasn't acknowledged
+  for (const [key, entry] of Object.entries(newPending)) {
+    if (!key.startsWith(prefix) || entry.type !== "include") continue;
+    const id = key.slice(prefix.length);
+    if (incomingIds.has(id)) {
+      delete newPending[key];
+    } else if (prev?.[id] && !table[id]) {
+      table[id] = prev[id];
+    }
   }
 
   return { table, pending: newPending };
