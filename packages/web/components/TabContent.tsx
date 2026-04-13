@@ -144,6 +144,33 @@ export function TabContent() {
     activeTabId = tabs[0].id;
   }
 
+  // On full-page navigation (address bar, external link), the active tab's
+  // stored path may differ from the browser URL. Override it at render time so
+  // TabPanes immediately render the correct content (no effect-timing race).
+  // The store is updated in the effect below.
+  const navUrl = useRef<string | null>(window.location.pathname + window.location.search);
+  let renderTabs = tabs;
+  if (navUrl.current && activeTabId) {
+    const active = tabs.find((t: AppTab) => t.id === activeTabId);
+    if (active && active.path.split("?")[0] !== navUrl.current.split("?")[0]) {
+      const url = navUrl.current;
+      renderTabs = tabs.map((t: AppTab) =>
+        t.id === activeTabId ? { ...t, path: url } : t
+      );
+    }
+  }
+  useEffect(() => {
+    if (!navUrl.current) return;
+    const url = navUrl.current;
+    navUrl.current = null;
+    const store = useInboxStore.getState();
+    if (!store.activeTabId) return;
+    const active = store.tabs.find((t: AppTab) => t.id === store.activeTabId);
+    if (active && active.path.split("?")[0] !== url.split("?")[0]) {
+      store.updateTab(store.activeTabId, { path: url });
+    }
+  }, []);
+
   // Sync stale activeTabId to store after render
   useEffect(() => {
     const { activeTabId: storeId, tabs } = useInboxStore.getState();
@@ -168,7 +195,7 @@ export function TabContent() {
 
   return (
     <div className="h-full">
-      {tabs.map((tab: AppTab) => {
+      {renderTabs.map((tab: AppTab) => {
         if (!mountedRef.current.has(tab.id)) return null;
         return (
           <TabPane
