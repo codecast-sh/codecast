@@ -74,7 +74,7 @@ const ROUTES: RouteEntry[] = [
 ];
 
 function matchRoute(path: string): { component: React.LazyExoticComponent<any>; params: Record<string, string> } | null {
-  const pathOnly = path.split("?")[0];
+  const pathOnly = path.split("?")[0].split("#")[0];
   for (const route of ROUTES) {
     const match = pathOnly.match(route.pattern);
     if (match) {
@@ -91,9 +91,10 @@ function matchRoute(path: string): { component: React.LazyExoticComponent<any>; 
 function TabPane({ tab, isActive }: { tab: AppTab; isActive: boolean }) {
   const matched = useMemo(() => matchRoute(tab.path), [tab.path]);
   const ctxValue = useMemo(() => {
-    const [pathOnly, queryString] = tab.path.split("?");
+    const [pathAndHash, queryString] = tab.path.split("?");
+    const pathname = pathAndHash.split("#")[0];
     return {
-      pathname: pathOnly,
+      pathname,
       params: matched?.params ?? {},
       searchParams: new URLSearchParams(queryString ?? ""),
     };

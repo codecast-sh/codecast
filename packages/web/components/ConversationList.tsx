@@ -778,6 +778,7 @@ export function NewSessionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
   const router = useRouter();
   const context = useInboxStore((s) => s.newSession.context);
   const initializedRef = useRef(false);
+  const handleSubmitRef = useRef<() => void>(() => {});
 
   useConvexSync(freshProjects, setRecentProjects);
 
@@ -815,16 +816,17 @@ export function NewSessionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
 
   useWatchEffect(() => {
     if (!isOpen) return;
-    function handleEsc(e: KeyboardEvent) {
+    function handleKeyDown(e: KeyboardEvent) {
       if (e.key === "Escape") onClose();
+      if (e.key === "Enter" && !e.defaultPrevented) handleSubmitRef.current();
     }
     function handleClickOutside(e: MouseEvent) {
       if (modalRef.current && !modalRef.current.contains(e.target as Node)) onClose();
     }
-    document.addEventListener("keydown", handleEsc);
+    document.addEventListener("keydown", handleKeyDown);
     document.addEventListener("mousedown", handleClickOutside);
     return () => {
-      document.removeEventListener("keydown", handleEsc);
+      document.removeEventListener("keydown", handleKeyDown);
       document.removeEventListener("mousedown", handleClickOutside);
     };
   }, [isOpen, onClose]);
@@ -832,6 +834,7 @@ export function NewSessionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
   if (!isOpen) return null;
 
   const handleSubmit = async () => {
+    if (isSubmitting) return;
     setIsSubmitting(true);
     soundNewSession();
     try {
@@ -863,6 +866,7 @@ export function NewSessionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
       setIsSubmitting(false);
     }
   };
+  handleSubmitRef.current = handleSubmit;
 
 
   return (
@@ -990,7 +994,7 @@ export function NewSessionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
                   setShowDropdown(false);
                   return;
                 }
-                if (e.key === "Enter") handleSubmit();
+                if (e.key === "Enter") { e.preventDefault(); handleSubmit(); }
               }}
             />
             {showDropdown && filteredProjects.length > 0 && (

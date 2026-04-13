@@ -393,9 +393,16 @@ const ACTIVE_AGENT_STATUSES: Set<string> = new Set(["working", "compacting", "th
 const DEAD_AGENT_STATUSES: Set<string> = new Set(["stopped"]);
 
 export function isSessionEffectivelyIdle(
-  session: Pick<InboxSession, "is_idle" | "agent_status">,
+  session: Pick<InboxSession, "is_idle" | "agent_status" | "last_user_message">,
 ): boolean {
-  if (session.agent_status) return !ACTIVE_AGENT_STATUSES.has(session.agent_status);
+  if (session.agent_status) {
+    // Interrupted sessions are idle — the agent_status may lag behind the actual state
+    if (ACTIVE_AGENT_STATUSES.has(session.agent_status) &&
+        isInterruptControlMessage(session.last_user_message)) {
+      return true;
+    }
+    return !ACTIVE_AGENT_STATUSES.has(session.agent_status);
+  }
   return session.is_idle;
 }
 
@@ -537,11 +544,6 @@ interface InboxStoreState {
   openNewSession: (ctx?: SessionContext) => void;
   closeNewSession: () => void;
 
-  // -- Compose palette --
-  composePalette: { isOpen: boolean; initialMessage: string };
-  openComposePalette: (initialMessage?: string) => void;
-  closeComposePalette: () => void;
-
   // -- Unified command palette --
   palette: { open: boolean; targets: any[]; targetType: 'task' | 'doc' | 'plan' | 'session' | null; initialMode: string; initialQuery?: string };
   openPalette: (opts?: { targets?: any[]; targetType?: 'task' | 'doc' | 'plan' | 'session'; mode?: string; initialQuery?: string }) => void;
@@ -562,8 +564,10 @@ interface InboxStoreState {
   setPendingForkActivation: (id: string | null) => void;
 
   // -- Dispatch (provided by middleware) --
-  _setDispatch: (fn: (action: string, args: any, patches?: any) => Promise<any>) => void;
-  _dispatch: (action: string, args: any, patches?: any) => Promise<any>;
+  _setDispatch: (fn: (action: string, args: any, patches?: any, result?: any) => Promise<any>) => void;
+  _setDispatchError: (fn: (action: string, error: unknown) => void) => void;
+  _dispatch: (action: string, args: any, patches?: any, result?: any) => Promise<any>;
+  dispatchErrors: number;
 
   // -- Wrapped actions (middleware creates aliases from do_* -> *) --
   stashSession: (id: string, opts?: { kill?: boolean }) => void;
@@ -832,19 +836,7 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
       }
     },
   },
-  dismissedSessions: {
-    transform(draft, table, _incoming, _initialized, prev) {
-      // Preserve locally-dismissed sessions that server hasn't acknowledged yet.
-      // These have a sessions:X exclude pending (set automatically by the
-      // middleware when the action deleted them from sessions).
-      if (!prev) return;
-      for (const [id, session] of Object.entries(prev)) {
-        if (!table[id] && draft.pending[`sessions:${id}`]?.type === "exclude") {
-          table[id] = session as any;
-        }
-      }
-    },
-  },
+  dismissedSessions: {},
   clientState: {
     kind: "singleton",
     merge: {
@@ -951,6 +943,7 @@ export const useInboxStore = create<InboxStoreState>(
   sessions: {},
   dismissedSessions: {},
   pending: {},
+  dispatchErrors: 0,
   currentSessionId: null,
   showDismissed: false,
   collapsedSections: {},
@@ -984,16 +977,6 @@ export const useInboxStore = create<InboxStoreState>(
 
   closeNewSession: () => {
     set({ newSession: { isOpen: false, context: {} } });
-  },
-
-  composePalette: { isOpen: false, initialMessage: "" },
-
-  openComposePalette: (initialMessage?: string) => {
-    set({ composePalette: { isOpen: true, initialMessage: initialMessage || "" } });
-  },
-
-  closeComposePalette: () => {
-    set({ composePalette: { isOpen: false, initialMessage: "" } });
   },
 
   palette: { open: false, targets: [], targetType: null, initialMode: 'root' },
@@ -1323,14 +1306,14 @@ export const useInboxStore = create<InboxStoreState>(
     }
 
     // collection
-    const { table, pending } = applySyncTable(field, incoming, this.pending);
+    const prevCollection = (this as any)[field] || {};
+    const { table, pending } = applySyncTable(field, incoming, this.pending, prevCollection);
 
     if (config.altKey) {
-      const prev = (this as any)[field] || {};
       const incomingByAlt = new Map(
         (incoming as any[]).map((r: any) => [r[config.altKey!], r])
       );
-      for (const [oldId, old] of Object.entries(prev)) {
+      for (const [oldId, old] of Object.entries(prevCollection)) {
         if (isConvexId(oldId)) continue;
         const match = incomingByAlt.get((old as any)[config.altKey!] || oldId);
         if (match) {
@@ -1343,24 +1326,21 @@ export const useInboxStore = create<InboxStoreState>(
 
     if (config.keepSelected) {
       const selectedId = (this as any)[config.keepSelected];
-      const prev = (this as any)[field] || {};
-      if (selectedId && !table[selectedId] && prev[selectedId]) {
-        table[selectedId] = prev[selectedId];
+      if (selectedId && !table[selectedId] && prevCollection[selectedId]) {
+        table[selectedId] = prevCollection[selectedId];
       }
     }
 
     if (!config.altKey && !config.extra && !config.transform) {
-      const prev = (this as any)[field];
-      if (prev) {
+      if (prevCollection) {
         const newKeys = Object.keys(table);
-        if (newKeys.length === Object.keys(prev).length &&
-            newKeys.every(k => prev[k]?.updated_at === (table[k] as any)?.updated_at)) {
+        if (newKeys.length === Object.keys(prevCollection).length &&
+            newKeys.every(k => prevCollection[k]?.updated_at === (table[k] as any)?.updated_at)) {
           return;
         }
       }
     }
 
-    const prevCollection = (this as any)[field];
     (this as any)[field] = table;
     this.pending = pending as any;
     if (config.transform) config.transform(this, table, incoming, false, prevCollection);

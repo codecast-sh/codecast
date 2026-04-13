@@ -17,7 +17,7 @@ export function usePathname(): string {
   const tabPath = useInboxStore((s) => {
     if (s.tabs.length > 0 && s.activeTabId) {
       const tab = s.tabs.find((t) => t.id === s.activeTabId);
-      return tab?.path?.split("?")[0] ?? null;
+      return tab?.path?.split("?")[0].split("#")[0] ?? null;
     }
     return null;
   });
