@@ -1313,6 +1313,7 @@ async function executeRemoteCommand(
             const initialManagedSessionId = getInitialManagedSessionId(agentType, expectedSessionId, codexThreadId);
             registerAppServerConversation(conversationId, codexThreadId, { cwd, approvalPolicy: codexApprovalPolicy });
             if (initialManagedSessionId && syncServiceRef) {
+              syncServiceRef.markSessionActive(conversationId).catch(() => {});
               syncServiceRef.registerManagedSession(initialManagedSessionId, process.pid, undefined, conversationId).catch(() => {});
               syncServiceRef.updateSessionAgentStatus(conversationId, "connected").catch(() => {});
               ensureManagedSessionHeartbeat(initialManagedSessionId);
@@ -5874,6 +5875,7 @@ async function handleDeadSession(sessionId: string, tmuxSession: string): Promis
 
 function registerManagedStartedSession(conversationId: string, sessionId: string, tmuxSession: string): void {
   if (!syncServiceRef) return;
+  syncServiceRef.markSessionActive(conversationId).catch(() => {});
   syncServiceRef.registerManagedSession(sessionId, process.pid, tmuxSession, conversationId).catch(() => {});
   ensureManagedSessionHeartbeat(sessionId);
 }
