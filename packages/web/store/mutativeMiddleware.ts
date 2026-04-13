@@ -56,11 +56,59 @@ const FIELD_TO_TABLE: Record<string, { table: string }> = {
 
 const SINGLETON_KEY = "_";
 
+// Store keys that receive server sync data. The middleware auto-generates
+// pending entries when action() modifies these collections, preventing
+// server sync from overwriting local-first state.
+const PROTECTED_COLLECTIONS = new Set([
+  "sessions", "dismissedSessions", "conversations", "tasks",
+]);
+
 function setNested(obj: any, path: (string | number)[], value: any): any {
   if (path.length === 0) return value;
   const result = typeof obj === "object" && obj !== null ? { ...obj } : {};
   const [head, ...tail] = path;
   result[head] = setNested(result[head], tail, value);
+  return result;
+}
+
+/**
+ * Scan mutative patches from an action() and auto-generate pending entries
+ * for synced collections. Returns null if no pending changes needed.
+ */
+function generateAutoPending(
+  patches: Patch[],
+  currentPending: Record<string, any>,
+): Record<string, any> | null {
+  let result: Record<string, any> | null = null;
+
+  for (const patch of patches) {
+    const path = patch.path as (string | number)[];
+    if (path.length < 2) continue;
+
+    const storeKey = String(path[0]);
+    if (storeKey === "pending" || !PROTECTED_COLLECTIONS.has(storeKey)) continue;
+
+    const recordId = String(path[1]);
+
+    if (patch.op === "remove" && path.length === 2) {
+      // Record deleted from collection → exclude from server sync
+      if (!result) result = { ...currentPending };
+      result[`${storeKey}:${recordId}`] = { type: "exclude" };
+    } else if (patch.op === "add" && path.length === 2) {
+      // Record added to collection → clear any existing exclude
+      if (!result) result = { ...currentPending };
+      delete result[`${storeKey}:${recordId}`];
+    } else if ((patch.op === "replace" || patch.op === "add") && path.length >= 3) {
+      // Field modified on a collection record → protect field value
+      const field = String(path[2]);
+      if (!result) result = { ...currentPending };
+      result[`${storeKey}:${recordId}:${field}`] = {
+        type: "field",
+        value: patch.value,
+      };
+    }
+  }
+
   return result;
 }
 
@@ -157,18 +205,32 @@ export function mutativeMiddleware(config: any): any {
           },
           { enablePatches: { pathAsArray: true } }
         );
-        set(nextState, true);
 
-        if (idbWriteFn && patches.length > 0) {
+        // Auto-generate pending entries for synced collections so local-first
+        // writes are protected from server sync overwrites.
+        let finalState = nextState;
+        let finalPatches: Patch[] = patches;
+        if (isAct || isAsyncAct) {
+          const newPending = generateAutoPending(patches, nextState.pending ?? {});
+          if (newPending) {
+            finalState = { ...nextState, pending: newPending };
+            // Synthetic patch so IDB persists the updated pending
+            finalPatches = [...patches, { op: "replace" as const, path: ["pending"] as (string | number)[], value: newPending }];
+          }
+        }
+
+        set(finalState, true);
+
+        if (idbWriteFn && finalPatches.length > 0) {
           const fn = idbWriteFn;
-          const p = patches;
-          const s = nextState;
+          const p = finalPatches;
+          const s = finalState;
           (typeof requestIdleCallback === "function" ? requestIdleCallback : setTimeout)(() => fn(p, s));
         }
 
         if ((isAct || isAsyncAct) && dispatchFn) {
           const grouped =
-            patches.length > 0 ? groupPatchesByTable(patches, nextState) : undefined;
+            patches.length > 0 ? groupPatchesByTable(patches, finalState) : undefined;
           const promise = dispatchFn(key, args, grouped, returnValue);
           if (isAsyncAct) return promise;
           promise.catch(() => {});

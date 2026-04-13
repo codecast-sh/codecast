@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { useSyncExternalStore, useRef } from "react";
 import { mutativeMiddleware, action, asyncAction, sync } from "./mutativeMiddleware";
-import { applySyncTable, type PendingEntry } from "./syncProtocol";
+import { applySyncTable, applySyncRecord, type PendingEntry } from "./syncProtocol";
 import { soundDismiss, soundKill } from "../lib/sounds";
 import { loadCache, writePatchesToIDB, setHydrating, loadConversationMessages, writeConversationMessages } from "./idbCache";
 
@@ -581,8 +581,6 @@ interface InboxStoreState {
   // -- Generic sync --
   syncTable: (field: string, incoming: any, opts?: SyncOpts) => void;
   syncRecord: (field: string, id: string, record: any) => void;
-  addPending: (key: string, entry: PendingEntry) => void;
-  clearPending: (key: string) => void;
   sortedSessions: () => InboxSession[];
   visualOrder: () => InboxSession[];
 
@@ -783,7 +781,7 @@ export type SyncOpts = {
   merge?: Record<string, MergeSpec>;
   altKey?: string;
   keepSelected?: string;
-  transform?: (draft: any, result: any, incoming: any, initialized: boolean) => void;
+  transform?: (draft: any, result: any, incoming: any, initialized: boolean, prev?: any) => void;
   extra?: Record<string, any>;
 };
 
@@ -825,23 +823,25 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
       for (const s of incoming as any[]) {
         if (!draft.conversations[s._id]) draft.conversations[s._id] = { _id: s._id };
       }
-      // Authoritative dismiss filter: conversations.inbox_dismissed_at is the
-      // source of truth.  The 15-second pending exclude is only a fast-path;
-      // once it expires the server may still send the session (race between
-      // dispatch and query re-evaluation).  Move dismissed sessions to
-      // dismissedSessions so unstash can recover them.
-      for (const id of Object.keys(table)) {
-        if ((draft.conversations[id] as any)?.inbox_dismissed_at) {
-          draft.dismissedSessions[id] = table[id];
-          delete table[id];
-        }
-      }
       if (!draft.currentSessionId && !draft.showMySessions &&
           Object.keys(table).length > 0 && draft.clientStateInitialized) {
         const persisted = draft.clientState.current_conversation_id;
         const sorted = sortSessions(table as Record<string, InboxSession>);
         draft.currentSessionId = (persisted && table[persisted])
           ? persisted : (sorted[0]?._id ?? null);
+      }
+    },
+  },
+  dismissedSessions: {
+    transform(draft, table, _incoming, _initialized, prev) {
+      // Preserve locally-dismissed sessions that server hasn't acknowledged yet.
+      // These have a sessions:X exclude pending (set automatically by the
+      // middleware when the action deleted them from sessions).
+      if (!prev) return;
+      for (const [id, session] of Object.entries(prev)) {
+        if (!table[id] && draft.pending[`sessions:${id}`]?.type === "exclude") {
+          table[id] = session as any;
+        }
       }
     },
   },
@@ -1066,7 +1066,6 @@ export const useInboxStore = create<InboxStoreState>(
       const wasPinned = this.sessions[sid]?.is_pinned;
       if (this.sessions[sid]) this.dismissedSessions[sid] = this.sessions[sid];
       delete this.sessions[sid];
-      this.pending[`sessions:${sid}`] = { type: "exclude", expiresAt: now + 15_000 };
       if (this.conversations[sid]) {
         (this.conversations[sid] as any).inbox_dismissed_at = now;
         if (wasPinned) (this.conversations[sid] as any).inbox_pinned_at = null;
@@ -1086,7 +1085,6 @@ export const useInboxStore = create<InboxStoreState>(
 
     if (this.sessions[currentId]) this.dismissedSessions[currentId] = this.sessions[currentId];
     delete this.sessions[currentId];
-    this.pending[`sessions:${currentId}`] = { type: "exclude", expiresAt: now + 15_000 };
     if (this.conversations[currentId]) {
       (this.conversations[currentId] as any).inbox_dismissed_at = now;
     }
@@ -1132,7 +1130,6 @@ export const useInboxStore = create<InboxStoreState>(
     const allIds = [id, ...childIds];
     for (const sid of allIds) {
       if (this.conversations[sid]) (this.conversations[sid] as any).inbox_dismissed_at = null;
-      delete this.pending[`sessions:${sid}`];
       if (this.dismissedSessions[sid]) {
         this.sessions[sid] = this.dismissedSessions[sid];
         delete this.dismissedSessions[sid];
@@ -1146,7 +1143,6 @@ export const useInboxStore = create<InboxStoreState>(
   deferSession: action(function (this: Draft, id: string) {
     if (this.sessions[id]) this.sessions[id].is_deferred = true;
     if (this.conversations[id]) (this.conversations[id] as any).inbox_deferred_at = Date.now();
-    this.pending[`sessions:${id}:is_deferred`] = { type: "field", value: true, expiresAt: Date.now() + 15_000 };
   }),
 
   pinSession: action(function (this: Draft, id: string) {
@@ -1154,7 +1150,6 @@ export const useInboxStore = create<InboxStoreState>(
     const pinnedAt = newPinned ? Date.now() : null;
     if (this.sessions[id]) this.sessions[id].is_pinned = newPinned;
     if (this.conversations[id]) (this.conversations[id] as any).inbox_pinned_at = pinnedAt;
-    this.pending[`sessions:${id}:is_pinned`] = { type: "field", value: newPinned, expiresAt: Date.now() + 15_000 };
   }),
 
   renameSession: action(function (this: Draft, id: string, title: string) {
@@ -1365,13 +1360,23 @@ export const useInboxStore = create<InboxStoreState>(
       }
     }
 
+    const prevCollection = (this as any)[field];
     (this as any)[field] = table;
     this.pending = pending as any;
-    if (config.transform) config.transform(this, table, incoming, false);
+    if (config.transform) config.transform(this, table, incoming, false, prevCollection);
     if (config.extra) Object.assign(this, config.extra);
   }),
 
   syncRecord: sync(function (this: Draft, field: string, id: string, record: any) {
+    // Apply pending protection: local-first field values win over server
+    const { record: protectedRecord, pending: newPending } =
+      applySyncRecord(field, id, record, this.pending);
+    this.pending = newPending as any;
+
+    // Exclude pending — entire record blocked from sync
+    const excludeKey = `${field}:${id}`;
+    if (this.pending[excludeKey]?.type === "exclude") return;
+
     const collection = (this as any)[field];
     const existing = collection?.[id];
 
@@ -1379,9 +1384,9 @@ export const useInboxStore = create<InboxStoreState>(
     // a new state reference, which would cascade through useTrackedStore →
     // storeMeta → conversation prop → ConversationView re-render → Radix
     // tooltip ref loop under React 19's ref cleanup semantics.
-    if (existing && record) {
-      const keys = Object.keys(record);
-      if (keys.length > 0 && keys.every(k => Object.is(existing[k], record[k]))) {
+    if (existing && protectedRecord) {
+      const keys = Object.keys(protectedRecord);
+      if (keys.length > 0 && keys.every(k => Object.is(existing[k], protectedRecord[k]))) {
         return;
       }
     }
@@ -1389,25 +1394,18 @@ export const useInboxStore = create<InboxStoreState>(
     // Mutate draft in-place instead of replacing the collection object.
     // This ensures mutative only marks the changed subtree as dirty.
     if (!collection) {
-      (this as any)[field] = { [id]: record };
+      (this as any)[field] = { [id]: protectedRecord };
     } else if (!existing) {
-      collection[id] = record;
+      collection[id] = protectedRecord;
     } else {
-      for (const key of Object.keys(record)) {
-        if (!Object.is(existing[key], record[key])) {
-          existing[key] = record[key];
+      for (const key of Object.keys(protectedRecord)) {
+        if (!Object.is(existing[key], protectedRecord[key])) {
+          existing[key] = protectedRecord[key];
         }
       }
     }
   }),
 
-  addPending: sync(function (this: Draft, key: string, entry: PendingEntry) {
-    this.pending[key] = entry;
-  }),
-
-  clearPending: sync(function (this: Draft, key: string) {
-    delete this.pending[key];
-  }),
 
   sortedSessions: () => {
     return sortSessions(get().sessions).filter((s: InboxSession) => !s.is_subagent && !s.parent_conversation_id);
@@ -1494,8 +1492,6 @@ export const useInboxStore = create<InboxStoreState>(
   },
 
   injectSession: action(function (this: Draft, session: InboxSession) {
-    const excludeKey = `sessions:${session._id}`;
-    if (this.pending[excludeKey]) delete this.pending[excludeKey];
     delete this.dismissedSessions[session._id];
     this.sessions[session._id] = session;
     this.currentSessionId = session._id;
@@ -1526,8 +1522,6 @@ export const useInboxStore = create<InboxStoreState>(
   }),
 
   navigateToSession: action(function (this: Draft, id: string) {
-    const excludeKey = `sessions:${id}`;
-    delete this.pending[excludeKey];
     if (this.conversations[id]) {
       (this.conversations[id] as any).inbox_dismissed_at = null;
     }
@@ -1560,7 +1554,6 @@ export const useInboxStore = create<InboxStoreState>(
       newSessionId = next?._id ?? null;
     }
     delete this.sessions[id];
-    this.pending[`sessions:${id}`] = { type: "exclude", expiresAt: Date.now() + 10_000 };
     this.currentSessionId = newSessionId;
     this.clientState.current_conversation_id = newSessionId ?? undefined;
   }),
@@ -1857,9 +1850,6 @@ export const useInboxStore = create<InboxStoreState>(
       if (status === "done" || status === "dropped") {
         (task as any).closed_at = Date.now();
       }
-      this.pending[`tasks:${task._id}:status`] = {
-        type: "field", field: "status", value: status, expiresAt: Date.now() + 15_000,
-      };
     }
   }),
 
@@ -2199,8 +2189,18 @@ if (typeof window !== "undefined") {
 
     // Critical path: sidebar + current conversation + tabs render immediately
     apply(["sessions", "dismissedSessions", "clientState",
-           "conversations", "teams", "teamMembers", "teamUnreadCount", "drafts",
+           "conversations", "pending", "teams", "teamMembers", "teamUnreadCount", "drafts",
            "tabs", "activeTabId"]);
+
+    // Restore selected session from persisted clientState before React effects
+    // can auto-select the first session (QueuePageClient's fallback effect).
+    const st = useInboxStore.getState();
+    if (!st.currentSessionId) {
+      const persistedId = st.clientState?.current_conversation_id;
+      if (persistedId && st.sessions[persistedId]) {
+        useInboxStore.setState({ currentSessionId: persistedId });
+      }
+    }
 
     // Preload messages for all active inbox sessions so clicks are instant
     for (const id of Object.keys(cached.sessions || {})) {
