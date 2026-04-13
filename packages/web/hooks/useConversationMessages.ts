@@ -63,11 +63,13 @@ export function useConversationMessages(
   const [targetMode, setTargetMode] = useState(hasTarget);
   const [trackedConvId, setTrackedConvId] = useState(conversationId);
   const [jumpTimestamp, setJumpTimestamp] = useState<number | null>(null);
+  const [jumpMode, setJumpMode] = useState<"start" | "center" | null>(null);
 
   if (trackedConvId !== conversationId) {
     setTrackedConvId(conversationId);
     setTargetMode(!!(targetMessageId || cleanedHighlightQuery));
     setJumpTimestamp(null);
+    setJumpMode(null);
   }
 
   // Derive targetMode from hasTarget (deleted the useEffect, using render-time sync)
@@ -183,8 +185,8 @@ export function useConversationMessages(
       ? {
           conversation_id: convId,
           center_timestamp: jumpTimestamp ?? effectiveTargetTimestamp!,
-          limit_before: jumpTimestamp !== null ? 0 : 50,
-          limit_after: jumpTimestamp !== null ? 100 : 50,
+          limit_before: jumpMode === "start" ? 0 : 50,
+          limit_after: jumpMode === "start" ? 100 : 50,
         }
       : "skip"
   );
@@ -322,6 +324,7 @@ export function useConversationMessages(
     targetInitializedRef.current = false;
     setTargetAroundData(null);
     setJumpTimestamp(0);
+    setJumpMode("start");
     setTargetMode(true);
     setTargetHasMoreAbove(false);
     setTargetHasMoreBelow(true);
@@ -336,6 +339,21 @@ export function useConversationMessages(
     targetInitializedRef.current = false;
     setTargetAroundData(null);
     setJumpTimestamp(null);
+    setJumpMode(null);
+    setTargetLoadOlderTs(undefined);
+    setTargetLoadNewerTs(undefined);
+    setTargetIsLoadingOlder(false);
+    setTargetIsLoadingNewer(false);
+  }, []);
+
+  const jumpToTimestamp = useCallback((ts: number) => {
+    targetInitializedRef.current = false;
+    setTargetAroundData(null);
+    setJumpTimestamp(ts);
+    setJumpMode("center");
+    setTargetMode(true);
+    setTargetHasMoreAbove(true);
+    setTargetHasMoreBelow(true);
     setTargetLoadOlderTs(undefined);
     setTargetLoadNewerTs(undefined);
     setTargetIsLoadingOlder(false);
@@ -448,6 +466,7 @@ export function useConversationMessages(
     loadNewer,
     jumpToStart,
     jumpToEnd,
+    jumpToTimestamp,
     isSearchingForTarget,
     targetMessageFound,
   };
