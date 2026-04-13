@@ -3508,7 +3508,15 @@ async function processSessionFile(
         clearTimeout(existingTimer);
         idleTimers.delete(sessionId);
       }
-      lastIdleNotifiedSize.delete(sessionId);
+      if (wasInterrupted) {
+        // Interruption message arrived without an assistant message in this batch
+        // (assistant messages were already synced earlier). Transition to idle immediately.
+        log(`Interrupted session detected (no assistant msg in batch): ${sessionId.slice(0, 8)}, setting idle`);
+        lastIdleNotifiedSize.set(sessionId, stats.size);
+        sendAgentStatus(syncService, conversationId, sessionId, "idle");
+      } else {
+        lastIdleNotifiedSize.delete(sessionId);
+      }
     }
 
     updateStateCallback();
@@ -4373,6 +4381,17 @@ function detectSessionAgentType(sessionId: string): "claude" | "codex" | "cursor
 
 function tryRegisterSessionProcess(sessionId: string, agentType: "claude" | "codex" | "cursor" | "gemini"): void {
   try {
+    // Heartbeat intervals are in-memory and lost on daemon restart, while registry
+    // files persist on disk. Always ensure heartbeat is running for known sessions,
+    // even when skipping the expensive process discovery below.
+    if (syncServiceRef && !resumeHeartbeatIntervals.has(sessionId)) {
+      const cache = readConversationCache();
+      const conversationId = cache[sessionId];
+      if (conversationId) {
+        ensureManagedSessionHeartbeat(sessionId);
+      }
+    }
+
     const registryDir = path.join(CONFIG_DIR, "session-registry");
     const registryFile = path.join(registryDir, `${sessionId}.json`);
 
@@ -5156,7 +5175,25 @@ end run`;
   return { script, args: `'${escapedContent}' '${normalizedTty}'` };
 }
 
-async function injectViaTerminal(tty: string, content: string, termProgram?: string): Promise<void> {
+// ── Terminal label helper ───────────────────────────────────────────────────
+function getTerminalLabel(termProgram?: string): string {
+  switch (termProgram) {
+    case "Apple_Terminal": return "Terminal.app";
+    case "iTerm.app": return "iTerm2";
+    case "ghostty": return "Ghostty";
+    case "kitty": return "Kitty";
+    case "WezTerm": return "WezTerm";
+    case "Alacritty": return "Alacritty";
+    default: return termProgram || "iTerm2";
+  }
+}
+
+// Terminals where we know there's no direct injection API — tmux required
+const TMUX_ONLY_TERMINALS = new Set(["ghostty", "Alacritty"]);
+
+// ── AppleScript injection (iTerm2 + Terminal.app) ──────────────────────────
+// Extracted from original injectViaTerminal — logic is identical
+async function injectViaAppleScript(tty: string, content: string, termProgram?: string): Promise<void> {
   const normalizedTty = normalizeTty(tty);
   const poll = parsePollMessage(content);
 
@@ -5174,6 +5211,154 @@ async function injectViaTerminal(tty: string, content: string, termProgram?: str
   } finally {
     try { fs.unlinkSync(tmpFile); } catch {}
   }
+}
+
+// ── Kitty injection via remote control (`kitty @`) ─────────────────────────
+// Requires allow_remote_control in kitty.conf
+
+function mapKeyForKitty(key: string): string {
+  const map: Record<string, string> = {
+    Return: "enter", Enter: "enter", Escape: "escape",
+    Up: "up", Down: "down", Left: "left", Right: "right",
+    Tab: "tab", Space: "space", Backspace: "backspace", Delete: "delete",
+  };
+  return map[key] || key.toLowerCase();
+}
+
+async function findKittyWindowId(normalizedTty: string): Promise<number | null> {
+  const { stdout } = await execAsync("kitty @ ls");
+  const osWindows = JSON.parse(stdout);
+  for (const osWindow of osWindows) {
+    for (const tab of osWindow.tabs) {
+      for (const window of tab.windows) {
+        try {
+          const { stdout: ttyOut } = await execAsync(`ps -o tty= -p ${window.pid}`);
+          const windowTty = normalizeTty(ttyOut.trim());
+          if (windowTty === normalizedTty) return window.id;
+        } catch {}
+      }
+    }
+  }
+  return null;
+}
+
+async function injectViaKitty(tty: string, content: string): Promise<void> {
+  const normalizedTty = normalizeTty(tty);
+  const windowId = await findKittyWindowId(normalizedTty);
+  if (windowId === null) {
+    throw new Error(`Kitty window not found for TTY ${normalizedTty}`);
+  }
+  const match = `--match id:${windowId}`;
+
+  const poll = parsePollMessage(content);
+  if (poll) {
+    const steps: Array<{ key: string; text?: string }> = poll.steps || (poll.keys || []).map((k: string) => ({ key: k }));
+    for (const step of steps) {
+      if (step.text) {
+        await execAsync(`kitty @ send-key ${match} escape`);
+        await new Promise(r => setTimeout(r, 500));
+        const escaped = step.text.replace(/'/g, "'\\''");
+        await execAsync(`kitty @ send-text ${match} '${escaped}'`);
+        await new Promise(r => setTimeout(r, 150));
+        await execAsync(`kitty @ send-key ${match} enter`);
+      } else {
+        await execAsync(`kitty @ send-key ${match} ${mapKeyForKitty(step.key)}`);
+      }
+      await new Promise(r => setTimeout(r, 500));
+    }
+    if (poll.text) {
+      await new Promise(r => setTimeout(r, 300));
+      const escaped = poll.text.replace(/'/g, "'\\''");
+      await execAsync(`kitty @ send-text ${match} '${escaped}'`);
+      await new Promise(r => setTimeout(r, 150));
+      await execAsync(`kitty @ send-key ${match} enter`);
+    }
+    log(`Injected poll response via Kitty for TTY ${normalizedTty}`);
+    return;
+  }
+
+  const escaped = content.replace(/'/g, "'\\''");
+  await execAsync(`kitty @ send-text ${match} '${escaped}'`);
+  log(`Injected message via Kitty for TTY ${normalizedTty}`);
+}
+
+// ── WezTerm injection via CLI (`wezterm cli`) ──────────────────────────────
+
+const WEZTERM_KEY_SEQUENCES: Record<string, string> = {
+  Return: "\r", Enter: "\r", Escape: "\x1b",
+  Up: "\x1b[A", Down: "\x1b[B", Left: "\x1b[D", Right: "\x1b[C",
+  Tab: "\t", Backspace: "\x7f", Delete: "\x1b[3~", Space: " ",
+};
+
+async function findWezTermPaneId(normalizedTty: string): Promise<number | null> {
+  const { stdout } = await execAsync("wezterm cli list --format json");
+  const panes = JSON.parse(stdout);
+  for (const pane of panes) {
+    if (pane.tty_name && normalizeTty(pane.tty_name) === normalizedTty) {
+      return pane.pane_id;
+    }
+  }
+  return null;
+}
+
+async function weztermSendText(paneId: number, text: string): Promise<void> {
+  const escaped = text.replace(/'/g, "'\\''");
+  await execAsync(`printf '%s' '${escaped}' | wezterm cli send-text --pane-id ${paneId} --no-paste`);
+}
+
+async function injectViaWezTerm(tty: string, content: string): Promise<void> {
+  const normalizedTty = normalizeTty(tty);
+  const paneId = await findWezTermPaneId(normalizedTty);
+  if (paneId === null) {
+    throw new Error(`WezTerm pane not found for TTY ${normalizedTty}`);
+  }
+
+  const poll = parsePollMessage(content);
+  if (poll) {
+    const steps: Array<{ key: string; text?: string }> = poll.steps || (poll.keys || []).map((k: string) => ({ key: k }));
+    for (const step of steps) {
+      if (step.text) {
+        await weztermSendText(paneId, "\x1b"); // Escape
+        await new Promise(r => setTimeout(r, 500));
+        await weztermSendText(paneId, step.text);
+        await new Promise(r => setTimeout(r, 150));
+        await weztermSendText(paneId, "\r"); // Enter
+      } else {
+        const seq = WEZTERM_KEY_SEQUENCES[step.key];
+        await weztermSendText(paneId, seq || step.key);
+      }
+      await new Promise(r => setTimeout(r, 500));
+    }
+    if (poll.text) {
+      await new Promise(r => setTimeout(r, 300));
+      await weztermSendText(paneId, poll.text);
+      await new Promise(r => setTimeout(r, 150));
+      await weztermSendText(paneId, "\r");
+    }
+    log(`Injected poll response via WezTerm for TTY ${normalizedTty}`);
+    return;
+  }
+
+  await weztermSendText(paneId, content);
+  log(`Injected message via WezTerm for TTY ${normalizedTty}`);
+}
+
+// ── Terminal injection router ──────────────────────────────────────────────
+// Routes to the appropriate strategy based on TERM_PROGRAM.
+// AppleScript path (iTerm2/Terminal.app) is the default fallback for
+// unknown terminals — preserves existing behavior exactly.
+async function injectViaTerminal(tty: string, content: string, termProgram?: string): Promise<void> {
+  if (termProgram === "kitty") {
+    return injectViaKitty(tty, content);
+  }
+  if (termProgram === "WezTerm") {
+    return injectViaWezTerm(tty, content);
+  }
+  if (termProgram && TMUX_ONLY_TERMINALS.has(termProgram)) {
+    throw new Error(`${getTerminalLabel(termProgram)} does not support direct injection — use tmux for this terminal`);
+  }
+  // Apple_Terminal, iTerm.app, unknown → existing AppleScript path
+  return injectViaAppleScript(tty, content, termProgram);
 }
 
 
@@ -7191,8 +7376,8 @@ async function deliverMessage(
       }
 
       if (!agentDetectedDead) {
-        // Try AppleScript injection (iTerm2 or Terminal.app)
-        const termLabel = proc.termProgram === "Apple_Terminal" ? "Terminal.app" : "iTerm2";
+        // Try direct terminal injection (AppleScript for iTerm2/Terminal.app, CLI for Kitty/WezTerm)
+        const termLabel = getTerminalLabel(proc.termProgram);
         logDelivery(`Trying ${termLabel} injection for tty=${proc.tty}`);
         try {
           await injectViaTerminal(proc.tty, content, proc.termProgram);
