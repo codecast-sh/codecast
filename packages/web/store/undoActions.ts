@@ -1,8 +1,22 @@
 import { useInboxStore, type InboxSession, type ConversationMeta } from "./inboxStore";
 import { pushUndo, showUndoToast } from "./undoStack";
 
-/** Session IDs that should play the enter animation on next render. */
-export const enteringSessionIds = new Set<string>();
+/** Mark a session card to play the enter animation after it appears in the DOM. */
+export function animateSessionEnter(id: string) {
+  // Use setTimeout with escalating delays to wait for React to commit the render
+  const delays = [0, 20, 50, 100, 200];
+  const tryApply = (attempt: number) => {
+    const card = document.querySelector(`[data-session-id="${id}"]`);
+    const target = card?.parentElement ?? card;
+    if (target) {
+      target.classList.add('session-entering');
+      target.addEventListener('animationend', () => target.classList.remove('session-entering'), { once: true });
+    } else if (attempt < delays.length - 1) {
+      setTimeout(() => tryApply(attempt + 1), delays[attempt + 1]);
+    }
+  };
+  setTimeout(() => tryApply(0), delays[0]);
+}
 
 /** Animate a session card sliding out, then call undoableStashSession. */
 export function animatedStashSession(id: string, opts?: { verb?: string }) {
@@ -67,7 +81,6 @@ export function undoableStashSession(id: string, options?: { verb?: string }) {
   pushUndo({
     label: `${verb} ${label}`,
     undo: () => {
-      enteringSessionIds.add(id);
       const store = useInboxStore.getState();
       const restoredSessions = { ...store.sessions };
       const restoredConvos = { ...store.conversations };
@@ -89,6 +102,7 @@ export function undoableStashSession(id: string, options?: { verb?: string }) {
         currentSessionId: snap.currentSessionId,
         clientState: snap.clientState,
       });
+      animateSessionEnter(id);
       store._dispatch("patch", [], {
         conversations: Object.fromEntries(
           snap.allIds.map((sid) => [sid, { inbox_dismissed_at: null }])

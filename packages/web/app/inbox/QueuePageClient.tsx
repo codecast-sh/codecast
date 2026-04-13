@@ -23,7 +23,7 @@ import { TaskStatusBadge } from "../../components/TaskStatusBadge";
 import { PlanContextPanel } from "../../components/PlanContextPanel";
 import { WorkflowContextPanel } from "../../components/WorkflowContextPanel";
 import { toast } from "sonner";
-import { animatedStashSession, enteringSessionIds } from "../../store/undoActions";
+import { animatedStashSession } from "../../store/undoActions";
 import { cleanUserMessage, formatIdleDuration, getProjectName, SessionListPanel } from "../../components/GlobalSessionPanel";
 
 const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, onSendAndAdvance, onSendAndDismiss, lastUserMessage, sessionError, onBack, targetMessageId, highlightQuery, onClearHighlight }: { sessionId: string; isIdle: boolean; onSendAndAdvance: () => void; onSendAndDismiss?: () => void; lastUserMessage?: string | null; sessionError?: string; onBack?: () => void; targetMessageId?: string; highlightQuery?: string; onClearHighlight?: () => void }) {

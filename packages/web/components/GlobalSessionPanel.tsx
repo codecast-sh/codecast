@@ -15,7 +15,7 @@ import { PlanContextPanel } from "./PlanContextPanel";
 import { WorkflowContextPanel } from "./WorkflowContextPanel";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { animatedStashSession, enteringSessionIds } from "../store/undoActions";
+import { animatedStashSession } from "../store/undoActions";
 import { soundKill } from "../lib/sounds";
 import { formatShortcutLabel } from "../shortcuts";
 import { X, ChevronsLeft, ChevronsRight } from "lucide-react";
@@ -917,7 +917,7 @@ export function SessionListPanel({
             const visibleSubs = subs.length <= 2 ? subs : subsExpanded ? subs : subs.slice(0, 2);
             const hiddenCount = subs.length - visibleSubs.length;
             return (
-              <div key={session._id} className={`border-b border-sol-border/30${enteringSessionIds.has(session._id) ? ' session-entering' : ''}`} onAnimationEnd={() => enteringSessionIds.delete(session._id)}>
+              <div key={session._id} className="border-b border-sol-border/30">
                 <SessionCard
                   session={session}
                   isActive={
