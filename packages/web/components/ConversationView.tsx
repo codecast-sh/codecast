@@ -85,7 +85,7 @@ import { useMentionQuery } from "../hooks/useMentionQuery";
 const sacredInputs = new Map<string, { text: string; images?: any[] }>();
 const EMPTY_PENDING: any[] = [];
 const EMPTY_MATCH_IDS: string[] = [];
-const EMPTY_MATCH_INSTANCES: { messageId: string; localIndex: number }[] = [];
+const EMPTY_MATCH_INSTANCES: { messageId: string; localIndex: number; timestamp: number }[] = [];
 
 /** Ensure a value is a string before rendering as a React child.
  *  Guards against intermittent race conditions where content fields
@@ -305,6 +305,7 @@ type ConversationViewProps = {
   onLoadNewer?: () => void;
   onJumpToStart?: () => void;
   onJumpToEnd?: () => void;
+  onJumpToTimestamp?: (ts: number) => void;
   highlightQuery?: string;
   onClearHighlight?: () => void;
   embedded?: boolean;
@@ -7187,7 +7188,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
 const CC_MODE_ORDER = ["default", "plan", "acceptEdits", "bypassPermissions", "dontAsk"];
 
 export const ConversationView = forwardRef<ConversationViewHandle, ConversationViewProps>(
-  function ConversationView({ conversation, commits = [], pullRequests = [], backHref, backLabel = "Back", headerExtra, headerLeft, headerEnd, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, onLoadOlder, onLoadNewer, onJumpToStart, onJumpToEnd, highlightQuery: propHighlightQuery, onClearHighlight: propClearHighlight, embedded, showMessageInput = true, targetMessageId, isOwner = true, onSendAndAdvance, onSendAndDismiss, autoFocusInput, fallbackStickyContent, onBack, subHeaderContent, hideHeader }, ref) {
+  function ConversationView({ conversation, commits = [], pullRequests = [], backHref, backLabel = "Back", headerExtra, headerLeft, headerEnd, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, onLoadOlder, onLoadNewer, onJumpToStart, onJumpToEnd, onJumpToTimestamp, highlightQuery: propHighlightQuery, onClearHighlight: propClearHighlight, embedded, showMessageInput = true, targetMessageId, isOwner = true, onSendAndAdvance, onSendAndDismiss, autoFocusInput, fallbackStickyContent, onBack, subHeaderContent, hideHeader }, ref) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [userScrolled, _setUserScrolled] = useState(false);
   const userScrolledRef = useRef(false);
@@ -7217,7 +7218,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const [commentMessageId, setCommentMessageId] = useState<Id<"messages"> | null>(null);
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const [allMatchingMessageIds, setAllMatchingMessageIds] = useState<string[]>([]);
-  const [matchInstances, setMatchInstances] = useState<{ messageId: string; localIndex: number }[]>([]);
+  const [matchInstances, setMatchInstances] = useState<{ messageId: string; localIndex: number; timestamp: number }[]>([]);
   const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
   const [isLocalSearchOpen, setIsLocalSearchOpen] = useState(false);
   const [localSearchQuery, setLocalSearchQuery] = useState("");
@@ -8001,9 +8002,20 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   // Track if we've already scrolled for this highlight query
   const hasScrolledToHighlight = useRef(false);
 
-  // Find all match instances (individual occurrences, not just messages)
+  // Fetch ALL matches across the whole conversation (not just loaded messages).
+  // Without this, a match in a message outside the current pagination window is invisible.
+  const cleanedHighlight = highlightQuery?.trim();
+  const globalMatches = useQuery(
+    api.messages.findAllMessagesByContent,
+    convexConvId && cleanedHighlight
+      ? { conversation_id: convexConvId, search_term: cleanedHighlight }
+      : "skip"
+  );
+
+  // Build match instances from the global list so the counter and next/prev
+  // work across unloaded messages too.
   useWatchEffect(() => {
-    if (!highlightQuery || messages.length === 0) {
+    if (!highlightQuery) {
       setHighlightedMessageId(null);
       setAllMatchingMessageIds(EMPTY_MATCH_IDS);
       setMatchInstances(EMPTY_MATCH_INSTANCES);
@@ -8011,60 +8023,76 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       hasScrolledToHighlight.current = false;
       return;
     }
-    const terms = parseSearchTerms(highlightQuery);
-    if (terms.length === 0) return;
+    if (!globalMatches) return;
 
-    const pattern = terms.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
-    const regex = new RegExp(pattern, 'gi');
     const matchingIds: string[] = [];
-    const instances: { messageId: string; localIndex: number }[] = [];
-    for (const msg of messages) {
-      const content = msg.content || "";
-      regex.lastIndex = 0;
-      let localIndex = 0;
-      while (regex.exec(content) !== null) {
-        instances.push({ messageId: msg._id, localIndex });
-        localIndex++;
+    const instances: { messageId: string; localIndex: number; timestamp: number }[] = [];
+    for (const m of globalMatches) {
+      matchingIds.push(m.message_id);
+      for (let i = 0; i < m.match_count; i++) {
+        instances.push({ messageId: m.message_id, localIndex: i, timestamp: m.timestamp });
       }
-      if (localIndex > 0) matchingIds.push(msg._id);
     }
 
     setAllMatchingMessageIds(matchingIds);
     setMatchInstances(instances);
     if (instances.length > 0) {
       setHighlightedMessageId(instances[0].messageId);
-      setCurrentMatchIndex(0);
+      setCurrentMatchIndex(prev => (prev < instances.length ? prev : 0));
     } else {
       setHighlightedMessageId(null);
+      setCurrentMatchIndex(0);
     }
-  }, [highlightQuery, messages]);
+  }, [highlightQuery, globalMatches]);
+
+  // Ref of loaded message IDs for fast membership checks during navigation.
+  const loadedIdsRef = useRef<Set<string>>(new Set());
+  loadedIdsRef.current = useMemo(() => new Set(messages.map((m: Message) => m._id)), [messages]);
+
+  const navigateToMatch = useCallback((index: number) => {
+    if (matchInstances.length === 0) return;
+    const target = matchInstances[index];
+    setCurrentMatchIndex(index);
+    setHighlightedMessageId(target.messageId);
+    hasScrolledToHighlight.current = false;
+    setNavTrigger(t => t + 1);
+    if (!loadedIdsRef.current.has(target.messageId) && onJumpToTimestamp) {
+      onJumpToTimestamp(target.timestamp);
+    }
+  }, [matchInstances, onJumpToTimestamp]);
 
   const goToNextMatch = useCallback(() => {
     if (matchInstances.length === 0) return;
-    const nextIndex = (currentMatchIndex + 1) % matchInstances.length;
-    setCurrentMatchIndex(nextIndex);
-    setHighlightedMessageId(matchInstances[nextIndex].messageId);
-    hasScrolledToHighlight.current = false;
-    setNavTrigger(t => t + 1);
-  }, [matchInstances, currentMatchIndex]);
+    navigateToMatch((currentMatchIndex + 1) % matchInstances.length);
+  }, [matchInstances, currentMatchIndex, navigateToMatch]);
 
   const goToPrevMatch = useCallback(() => {
     if (matchInstances.length === 0) return;
-    const prevIndex = currentMatchIndex === 0 ? matchInstances.length - 1 : currentMatchIndex - 1;
-    setCurrentMatchIndex(prevIndex);
-    setHighlightedMessageId(matchInstances[prevIndex].messageId);
-    hasScrolledToHighlight.current = false;
-    setNavTrigger(t => t + 1);
-  }, [matchInstances, currentMatchIndex]);
+    navigateToMatch(currentMatchIndex === 0 ? matchInstances.length - 1 : currentMatchIndex - 1);
+  }, [matchInstances, currentMatchIndex, navigateToMatch]);
 
   // Activate the specific mark in the DOM after navigation
+  // Track pending scroll target; survives until the target message renders so that
+  // navigating to an unloaded match still scrolls once the jump loads the messages.
+  const pendingScrollRef = useRef<{ messageId: string; localIndex: number } | null>(null);
+
   useWatchEffect(() => {
     void navTrigger;
     if (matchInstances.length === 0 || !containerRef.current) return;
     const instance = matchInstances[currentMatchIndex];
     if (!instance) return;
+    pendingScrollRef.current = { messageId: instance.messageId, localIndex: instance.localIndex };
+  }, [currentMatchIndex, matchInstances, navTrigger]);
+
+  // Activate the pending mark whenever the DOM for the target message is ready.
+  // Runs on navigation AND when `messages` changes (post-jump rehydration).
+  useWatchEffect(() => {
+    const pending = pendingScrollRef.current;
+    if (!pending || !containerRef.current) return;
+    if (!loadedIdsRef.current.has(pending.messageId)) return;
     const activate = () => {
-      if (!containerRef.current) return;
+      if (!containerRef.current || !pendingScrollRef.current) return;
+      const p = pendingScrollRef.current;
       containerRef.current.querySelectorAll('mark[data-search-active]').forEach(m => {
         m.removeAttribute('data-search-active');
         (m as HTMLElement).style.cssText = '';
@@ -8072,17 +8100,21 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       const msgEl = containerRef.current.querySelector('.message-highlight');
       if (!msgEl) return;
       const marks = Array.from(msgEl.querySelectorAll('mark[data-search-highlight]'));
-      const target = marks[instance.localIndex];
+      const target = marks[p.localIndex] ?? marks[0];
       if (target) {
         target.setAttribute('data-search-active', 'true');
         (target as HTMLElement).style.backgroundColor = 'rgb(245 158 11)';
         (target as HTMLElement).style.borderRadius = '2px';
         (target as HTMLElement).style.boxShadow = '0 0 0 1px rgb(245 158 11)';
         target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        pendingScrollRef.current = null;
       }
     };
-    setTimeout(activate, 200);
-  }, [currentMatchIndex, matchInstances, navTrigger]);
+    const t1 = setTimeout(activate, 50);
+    const t2 = setTimeout(activate, 250);
+    const t3 = setTimeout(activate, 600);
+    return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); };
+  }, [navTrigger, messages, highlightedMessageId]);
 
   // Highlight all text occurrences of search query in the DOM
   useWatchEffect(() => {

@@ -33,6 +33,7 @@ interface ConversationDiffLayoutProps {
   onLoadNewer?: () => void;
   onJumpToStart?: () => void;
   onJumpToEnd?: () => void;
+  onJumpToTimestamp?: (ts: number) => void;
   highlightQuery?: string;
   onClearHighlight?: () => void;
   targetMessageId?: string;
@@ -63,6 +64,7 @@ export function ConversationDiffLayout({
   onLoadNewer,
   onJumpToStart,
   onJumpToEnd,
+  onJumpToTimestamp,
   highlightQuery,
   targetMessageId,
   onClearHighlight,
@@ -171,6 +173,7 @@ export function ConversationDiffLayout({
     onLoadNewer,
     onJumpToStart,
     onJumpToEnd,
+    onJumpToTimestamp,
     highlightQuery,
     onClearHighlight,
     embedded,
