@@ -16,7 +16,7 @@ import { TeamAvatarBar } from "./TeamAvatarBar";
 import { TeamSwitcher } from "./TeamSwitcher";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { soundNewSession } from "../lib/sounds";
-import { enteringSessionIds } from "../store/undoActions";
+import { animateSessionEnter } from "../store/undoActions";
 import { Plus, PanelLeft, PanelRight } from "lucide-react";
 import { nanoid } from "nanoid";
 import { SetupPromptBanner } from "./SetupPromptBanner";
@@ -291,7 +291,7 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
     const sessionId = nanoid(10);
     const now = Date.now();
 
-    enteringSessionIds.add(sessionId);
+    animateSessionEnter(sessionId);
     store.syncRecord("conversations", sessionId, {
       _id: sessionId, _creationTime: now, user_id: "", agent_type: agentType,
       session_id: sessionId, project_path: path, git_root: gitRoot || path,
