@@ -10,7 +10,6 @@ import { useInboxStore, InboxSession, TaskItem, DocItem } from "../store/inboxSt
 import { isElectron } from "../lib/desktop";
 import { isInboxRoute } from "../lib/inboxRouting";
 import { useCurrentUser } from "../hooks/useCurrentUser";
-import { AgentTypeIcon } from "./AgentTypeIcon";
 import { getLabelColor, DEFAULT_LABELS } from "../lib/labelColors";
 import { toast } from "sonner";
 import { undoableArchiveDoc, undoableStashSession, undoableDeferSession } from "../store/undoActions";
@@ -521,50 +520,6 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
       .map(([path]) => path);
   }, [recentConversations]);
 
-  const [composeMode, setComposeMode] = useState(false);
-  const [composeMsg, setComposeMsg] = useState("");
-  const [composeAgent, setComposeAgent] = useState("claude_code");
-  const [composeProject, setComposeProject] = useState<string | null>(null);
-  const composeRef = useRef<HTMLTextAreaElement>(null);
-
-  const COMPOSE_AGENTS = [
-    { type: "claude_code", label: "Claude" },
-    { type: "codex", label: "Codex" },
-    { type: "cursor", label: "Cursor" },
-    { type: "gemini", label: "Gemini" },
-  ];
-
-  const enterComposeMode = useCallback((initialMsg: string) => {
-    setComposeMode(true);
-    setComposeMsg(initialMsg);
-    setComposeAgent("claude_code");
-    setComposeProject(projects[0] || null);
-    setTimeout(() => composeRef.current?.focus(), 50);
-  }, [projects]);
-
-  const exitComposeMode = useCallback(() => {
-    setComposeMode(false);
-    setComposeMsg("");
-  }, []);
-
-  const handleComposeSubmit = useCallback((navigate = false) => {
-    const msg = composeMsg.trim();
-    if (!msg) return;
-    if (standalone && isElectron()) {
-      window.__CODECAST_ELECTRON__?.paletteStartSession?.({
-        message: msg,
-        agentType: composeAgent,
-        projectPath: composeProject || projects[0] || undefined,
-        navigate,
-      });
-    } else {
-      closePalette();
-      useInboxStore.getState().openComposePalette(msg);
-    }
-    setComposeMode(false);
-    setComposeMsg("");
-  }, [composeMsg, composeAgent, composeProject, projects, standalone, closePalette]);
-
   // Global Cmd+K toggle — context-aware
   const storeOpenPalette = useInboxStore((s) => s.openPalette);
   useShortcutAction('palette.toggle', useCallback(() => {
@@ -650,8 +605,6 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
         e.preventDefault();
         if (actionMode) {
           setActionMode(null);
-        } else if (composeMode) {
-          exitComposeMode();
         } else if (isElectron()) {
           window.__CODECAST_ELECTRON__?.paletteHide?.();
         }
@@ -659,15 +612,13 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
     };
     document.addEventListener("keydown", handleKeyDown, true);
     return () => document.removeEventListener("keydown", handleKeyDown, true);
-  }, [standalone, composeMode, actionMode, exitComposeMode]);
+  }, [standalone, actionMode]);
 
   useWatchEffect(() => {
     if (!standalone || !isElectron()) return;
     const unsub = window.__CODECAST_ELECTRON__?.onPaletteShow?.(() => {
       setQuery("");
       setActionMode(null);
-      setComposeMode(false);
-      setComposeMsg("");
       setTimeout(() => {
         const input = document.querySelector<HTMLInputElement>("[cmdk-input]");
         input?.focus();
@@ -675,16 +626,6 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
     });
     return unsub;
   }, [standalone]);
-
-  useWatchEffect(() => {
-    if (!standalone || !isElectron()) return;
-    const unsub = window.__CODECAST_ELECTRON__?.onComposeShow?.(() => {
-      setQuery("");
-      enterComposeMode("");
-      setTimeout(() => composeRef.current?.focus(), 300);
-    });
-    return unsub;
-  }, [standalone, enterComposeMode]);
 
   const navigate = useCallback(
     (path: string) => {
@@ -884,94 +825,6 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
 
   const groupClass = "px-1.5 [&_[cmdk-group-heading]]:px-2.5 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-widest [&_[cmdk-group-heading]]:text-sol-text-dim/70";
   const itemClass = "flex items-center gap-3 px-2.5 py-2 mx-1 rounded-lg text-sm text-sol-text-muted cursor-pointer transition-colors data-[selected=true]:bg-sol-cyan/10 data-[selected=true]:text-sol-text";
-
-  // Handle compose mode for standalone palette
-  if (standalone && composeMode) {
-    return (
-      <div className="w-[580px] rounded-xl border border-sol-border/80 bg-sol-bg shadow-2xl shadow-black/40 overflow-hidden flex flex-col animate-in fade-in-0 zoom-in-95 slide-in-from-top-2 duration-150">
-        <div className="flex items-center gap-3 px-4 py-3 border-b border-sol-border/60">
-          <button
-            onClick={exitComposeMode}
-            className="text-sol-text-dim hover:text-sol-text transition-colors"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 19l-7-7 7-7" /></svg>
-          </button>
-          <span className="text-[13px] font-medium text-sol-text-muted tracking-wide">New Session</span>
-          <div className="flex-1" />
-          <kbd className="px-1.5 py-0.5 text-[10px] font-medium text-sol-text-dim bg-sol-bg-alt rounded border border-sol-border/80 tracking-wide">ESC</kbd>
-        </div>
-
-        {projects.length > 0 && (
-          <div className="px-4 py-2.5 border-b border-sol-border/40 flex flex-wrap gap-1.5">
-            {projects.map((dir) => (
-              <button
-                key={dir}
-                onClick={() => setComposeProject(dir)}
-                className={`px-2.5 py-1 text-[11px] rounded-lg border transition-colors ${
-                  composeProject === dir
-                    ? "bg-sol-cyan/15 text-sol-cyan border-sol-cyan/40"
-                    : "bg-sol-bg-alt text-sol-text-dim border-sol-border/60 hover:text-sol-text-muted hover:border-sol-border"
-                }`}
-              >
-                {getShortPath(dir)}
-              </button>
-            ))}
-          </div>
-        )}
-
-        <div className="px-4 py-2.5 border-b border-sol-border/40 flex items-center gap-1.5">
-          {COMPOSE_AGENTS.map((a) => (
-            <button
-              key={a.type}
-              onClick={() => setComposeAgent(a.type)}
-              className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] rounded-md border transition-colors ${
-                composeAgent === a.type
-                  ? "bg-sol-yellow/15 text-sol-yellow border-sol-yellow/40"
-                  : "bg-transparent text-sol-text-dim border-transparent hover:text-sol-text-muted"
-              }`}
-            >
-              <AgentTypeIcon agentType={a.type} className="w-3 h-3" />
-              {a.label}
-            </button>
-          ))}
-        </div>
-
-        <div className="flex-1 px-4 py-3 min-h-[120px]">
-          <textarea
-            ref={composeRef}
-            autoFocus
-            value={composeMsg}
-            onChange={(e) => setComposeMsg(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                handleComposeSubmit(e.metaKey || e.ctrlKey);
-              }
-            }}
-            placeholder="Send a message..."
-            className="w-full h-full min-h-[100px] bg-transparent text-sm text-sol-text placeholder:text-sol-text-dim/60 outline-none resize-none"
-          />
-        </div>
-
-        <div className="px-3 py-2 border-t border-sol-border/60 flex items-center justify-between text-[10px] text-sol-text-dim bg-sol-bg-alt/40">
-          <span className="flex items-center gap-2">
-            <span className="flex items-center gap-1">
-              <kbd className="px-1.5 py-0.5 bg-sol-bg rounded border border-sol-border/80 text-sol-text-secondary">&#9166;</kbd>
-              send
-            </span>
-            <span className="flex items-center gap-1">
-              <kbd className="px-1.5 py-0.5 bg-sol-bg rounded border border-sol-border/80 text-sol-text-secondary">&#8984;&#9166;</kbd>
-              send &amp; open
-            </span>
-          </span>
-          <span className="flex items-center gap-1">
-            <kbd className="px-1.5 py-0.5 bg-sol-bg rounded border border-sol-border/80 text-sol-text-secondary">ESC</kbd>
-            back
-          </span>
-        </div>
-      </div>
-    );
-  }
 
   // Action submenu mode
   if (actionMode && hasTargets) {
@@ -1185,13 +1038,13 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
         {query.trim() && (
           <CommandPrimitive.Group className={groupClass}>
             <CommandPrimitive.Item
-              value={`__compose__ ${query}`}
+              value="__compose__"
               onSelect={() => {
                 if (standalone && isElectron()) {
-                  enterComposeMode(query.trim());
+                  window.__CODECAST_ELECTRON__?.paletteNewSession?.();
                 } else {
                   closePalette();
-                  useInboxStore.getState().openComposePalette(query.trim());
+                  window.dispatchEvent(new CustomEvent('codecast-new-session'));
                 }
               }}
               className={itemClass}

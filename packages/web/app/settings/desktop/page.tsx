@@ -6,14 +6,14 @@ import { isElectron } from "../../../lib/desktop";
 const SHORTCUT_LABELS: Record<string, string> = {
   toggleWindow: "Toggle Main Window",
   togglePalette: "Quick Command Palette",
-  toggleCompose: "Quick Compose Session",
+  newSession: "New Session",
   toggleEnv: "Switch Local / Prod",
 };
 
 const SHORTCUT_DESCRIPTIONS: Record<string, string> = {
   toggleWindow: "Show or hide the main Codecast window",
   togglePalette: "Open the floating command palette from anywhere",
-  toggleCompose: "Open compose palette to start a session with a message",
+  newSession: "Show the main window and create a new session",
   toggleEnv: "Switch between local dev and production",
 };
 

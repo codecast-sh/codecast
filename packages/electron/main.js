@@ -32,7 +32,7 @@ const BASE_URL = process.env.CODECAST_URL || PROD_URL;
 const DEFAULT_SHORTCUTS = {
   toggleWindow: "CommandOrControl+Alt+Space",
   togglePalette: "Control+Alt+Space",
-  toggleCompose: "CommandOrControl+Alt+N",
+  newSession: "Control+Shift+N",
   toggleEnv: "CommandOrControl+Alt+L",
 };
 
@@ -56,7 +56,13 @@ function loadFullSettings() {
 
 function loadSettings() {
   const s = loadFullSettings();
-  return { ...DEFAULT_SHORTCUTS, ...s.shortcuts };
+  const merged = { ...DEFAULT_SHORTCUTS, ...s.shortcuts };
+  // Migrate renamed key
+  if (merged.toggleCompose && !s.shortcuts?.newSession) {
+    merged.newSession = merged.toggleCompose;
+  }
+  delete merged.toggleCompose;
+  return merged;
 }
 
 function saveSettings(shortcuts) {
@@ -304,7 +310,7 @@ function createTray() {
     { label: "Inbox", click: () => navigateMain("/inbox") },
     { label: "Tasks", click: () => navigateMain("/tasks") },
     { type: "separator" },
-    { label: "New Session", click: () => { mainWindow?.show(); mainWindow?.focus(); mainWindow?.webContents.executeJavaScript("window.__CODECAST_COMPOSE_SHOW && window.__CODECAST_COMPOSE_SHOW('')"); } },
+    { label: "New Session", click: () => { mainWindow?.show(); mainWindow?.focus(); mainWindow?.webContents.executeJavaScript("window.__CODECAST_NEW_SESSION && window.__CODECAST_NEW_SESSION()"); } },
     { label: "Command Palette", click: () => togglePalette() },
     { type: "separator" },
     { label: "Quit Codecast", click: () => app.quit() },
@@ -344,7 +350,7 @@ function buildAppMenu() {
             mainWindow.show();
             mainWindow.focus();
             mainWindow.webContents.executeJavaScript(
-              "window.__CODECAST_COMPOSE_SHOW ? window.__CODECAST_COMPOSE_SHOW('') : window.dispatchEvent(new CustomEvent('codecast-navigate', { detail: '/inbox' }))"
+              "window.__CODECAST_NEW_SESSION && window.__CODECAST_NEW_SESSION()"
             );
           },
         },
@@ -454,30 +460,14 @@ ipcMain.on("palette-hide", () => {
   hidePalette();
 });
 
-ipcMain.on("palette-compose", (_e, initialMessage) => {
+ipcMain.on("palette-new-session", () => {
   hidePalette();
   if (mainWindow) {
     mainWindow.show();
     mainWindow.focus();
     mainWindow.webContents.executeJavaScript(
-      `window.__CODECAST_COMPOSE_SHOW && window.__CODECAST_COMPOSE_SHOW(${JSON.stringify(initialMessage || "")})`
+      "window.__CODECAST_NEW_SESSION && window.__CODECAST_NEW_SESSION()"
     );
-  }
-});
-
-ipcMain.on("palette-start-session", (_e, data) => {
-  hidePalette();
-  if (mainWindow) {
-    if (data?.navigate) {
-      mainWindow.show();
-      mainWindow.focus();
-    }
-    mainWindow.webContents.executeJavaScript(
-      `window.__CODECAST_START_SESSION && window.__CODECAST_START_SESSION(${JSON.stringify(data)})`
-    );
-    if (!data?.navigate && process.platform === "darwin") {
-      app.hide();
-    }
   }
 });
 
@@ -513,18 +503,14 @@ function registerShortcuts() {
     });
   }
 
-  if (shortcuts.toggleCompose) {
-    globalShortcut.register(shortcuts.toggleCompose, () => {
-      if (!paletteWindow) {
-        createPaletteWindow();
-        paletteWindow.once("ready-to-show", () => {
-          showPalette();
-          paletteWindow.webContents.send("compose-show");
-        });
-        return;
-      }
-      showPalette();
-      paletteWindow.webContents.send("compose-show");
+  if (shortcuts.newSession) {
+    globalShortcut.register(shortcuts.newSession, () => {
+      if (!mainWindow) return;
+      mainWindow.show();
+      mainWindow.focus();
+      mainWindow.webContents.executeJavaScript(
+        "window.__CODECAST_NEW_SESSION && window.__CODECAST_NEW_SESSION()"
+      );
     });
   }
 
@@ -545,7 +531,7 @@ app.whenReady().then(() => {
   createPaletteWindow();
   if (app.dock) {
     app.dock.setMenu(Menu.buildFromTemplate([
-      { label: "New Session", click: () => { mainWindow?.show(); mainWindow?.focus(); mainWindow?.webContents.executeJavaScript("window.__CODECAST_COMPOSE_SHOW && window.__CODECAST_COMPOSE_SHOW('')"); } },
+      { label: "New Session", click: () => { mainWindow?.show(); mainWindow?.focus(); mainWindow?.webContents.executeJavaScript("window.__CODECAST_NEW_SESSION && window.__CODECAST_NEW_SESSION()"); } },
       { label: "Dashboard", click: () => navigateMain("/dashboard") },
       { label: "Inbox", click: () => navigateMain("/inbox") },
     ]));
