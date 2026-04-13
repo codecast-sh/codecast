@@ -59,6 +59,7 @@ const META_KEYS = new Set([
   // "messages" and "pagination" are now per-conversation in the conversationMessages table
   "conversations",
   "drafts",
+  "pending",
   "recentProjects",
   "collapsedSections",
   "sidebarNavExpanded",
