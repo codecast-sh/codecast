@@ -638,6 +638,33 @@ pre[class*="language-"] {
   animation: slideInRight 0.2s ease-out;
 }
 
+@keyframes sessionEnter {
+  from {
+    opacity: 0;
+    transform: translateX(24px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes sessionDismiss {
+  to {
+    opacity: 0;
+    transform: translateX(60px);
+  }
+}
+
+.session-entering {
+  animation: sessionEnter 250ms ease-out;
+}
+
+.session-dismissing {
+  animation: sessionDismiss 200ms ease-out forwards;
+  pointer-events: none;
+}
+
 @keyframes slideInLeft {
   from {
     transform: translateX(-100%);

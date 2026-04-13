@@ -23,7 +23,7 @@ import { TaskStatusBadge } from "../../components/TaskStatusBadge";
 import { PlanContextPanel } from "../../components/PlanContextPanel";
 import { WorkflowContextPanel } from "../../components/WorkflowContextPanel";
 import { toast } from "sonner";
-import { undoableStashSession } from "../../store/undoActions";
+import { animatedStashSession, enteringSessionIds } from "../../store/undoActions";
 import { cleanUserMessage, formatIdleDuration, getProjectName, SessionListPanel } from "../../components/GlobalSessionPanel";
 
 const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, onSendAndAdvance, onSendAndDismiss, lastUserMessage, sessionError, onBack, targetMessageId, highlightQuery, onClearHighlight }: { sessionId: string; isIdle: boolean; onSendAndAdvance: () => void; onSendAndDismiss?: () => void; lastUserMessage?: string | null; sessionError?: string; onBack?: () => void; targetMessageId?: string; highlightQuery?: string; onClearHighlight?: () => void }) {
@@ -270,6 +270,7 @@ function SessionCard({
   if (isSubagent) {
     return (
       <div
+        data-session-id={session._id}
         onDragEnter={handleFileDragEnter}
         onDragOver={handleFileDragOver}
         onDragLeave={handleFileDragLeave}
@@ -372,6 +373,7 @@ function SessionCard({
 
   return (
     <div
+      data-session-id={session._id}
       onDragEnter={handleFileDragEnter}
       onDragOver={handleFileDragOver}
       onDragLeave={handleFileDragLeave}
@@ -709,7 +711,7 @@ export function QueuePageClient({ initialSessionId }: { initialSessionId?: strin
   }, [pendingNavigateId, pendingScrollToMessageId, sessions, setCurrentSession]);
 
   const handleDismiss = useCallback((id: string) => {
-    undoableStashSession(id);
+    animatedStashSession(id);
   }, []);
 
   const prevSessionRef = useRef(currentSessionId);
@@ -721,7 +723,7 @@ export function QueuePageClient({ initialSessionId }: { initialSessionId?: strin
   }, [advanceToNext]);
 
   const handleSendAndDismiss = useCallback(() => {
-    if (currentSessionId) undoableStashSession(currentSessionId);
+    if (currentSessionId) animatedStashSession(currentSessionId);
   }, [currentSessionId]);
 
   const handleSessionSelect = useCallback((id: string) => {

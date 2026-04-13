@@ -1,6 +1,28 @@
 import { useInboxStore, type InboxSession, type ConversationMeta } from "./inboxStore";
 import { pushUndo, showUndoToast } from "./undoStack";
 
+/** Session IDs that should play the enter animation on next render. */
+export const enteringSessionIds = new Set<string>();
+
+/** Animate a session card sliding out, then call undoableStashSession. */
+export function animatedStashSession(id: string, opts?: { verb?: string }) {
+  const card = document.querySelector(`[data-session-id="${id}"]`);
+  const wrapper = card?.parentElement;
+  if (wrapper) {
+    wrapper.classList.add('session-dismissing');
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      undoableStashSession(id, opts);
+    };
+    wrapper.addEventListener('animationend', finish, { once: true });
+    setTimeout(finish, 250);
+  } else {
+    undoableStashSession(id, opts);
+  }
+}
+
 type StoreState = ReturnType<typeof useInboxStore.getState>;
 
 function snapshotSession(state: StoreState, id: string) {
@@ -45,6 +67,7 @@ export function undoableStashSession(id: string, options?: { verb?: string }) {
   pushUndo({
     label: `${verb} ${label}`,
     undo: () => {
+      enteringSessionIds.add(id);
       const store = useInboxStore.getState();
       const restoredSessions = { ...store.sessions };
       const restoredConvos = { ...store.conversations };
@@ -78,7 +101,6 @@ export function undoableStashSession(id: string, options?: { verb?: string }) {
     },
   });
 
-  showUndoToast(`${verb} ${label}`);
 }
 
 export function undoableDeferSession(id: string) {

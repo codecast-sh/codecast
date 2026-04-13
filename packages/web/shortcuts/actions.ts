@@ -8,7 +8,7 @@ import { useInboxStore, isConvexId, isSessionWaitingForInput, getProjectName } f
 import { isInboxSessionView } from "../lib/inboxRouting";
 import { useShortcutAction } from "./ShortcutProvider";
 import { performUndo, performRedo } from "../store/undoStack";
-import { undoableStashSession, undoableDeferSession, undoablePinSession } from "../store/undoActions";
+import { animatedStashSession, undoableDeferSession, undoablePinSession } from "../store/undoActions";
 import { checkMilestone } from "../tips/useTips";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 
@@ -88,15 +88,14 @@ export function useGlobalShortcutActions() {
     const currentId = isOnInboxPage ? store.currentSessionId : store.sidePanelSessionId;
     if (!currentId) return;
     checkMilestone('m-first-stash');
-    const ordered = store.visualOrder();
-    undoableStashSession(currentId);
     if (!isOnInboxPage) {
-      const sessions = useInboxStore.getState().sessions;
+      const ordered = store.visualOrder();
       const idx = ordered.findIndex(s => s._id === currentId);
-      const next = ordered.slice(idx + 1).find(s => sessions[s._id])
-        ?? ordered.find(s => sessions[s._id]);
+      const next = ordered.slice(idx + 1).find(s => s._id !== currentId)
+        ?? ordered.find(s => s._id !== currentId);
       if (next) store.selectPanelSession(next._id);
     }
+    animatedStashSession(currentId);
   }, [isOnInboxPage]));
 
   useShortcutAction('session.kill', useCallback(() => {
@@ -107,15 +106,14 @@ export function useGlobalShortcutActions() {
     if (convexId && isConvexId(convexId)) {
       killSessionMutation({ conversation_id: convexId as Id<"conversations">, mark_completed: true }).catch(() => {});
     }
-    const ordered = store.visualOrder();
-    const idx = ordered.findIndex(s => s._id === currentId);
-    undoableStashSession(currentId, { verb: "Killed" });
     if (!isOnInboxPage) {
-      const sessions = useInboxStore.getState().sessions;
-      const next = ordered.slice(idx + 1).find(s => sessions[s._id])
-        ?? ordered.find(s => sessions[s._id]);
+      const ordered = store.visualOrder();
+      const idx = ordered.findIndex(s => s._id === currentId);
+      const next = ordered.slice(idx + 1).find(s => s._id !== currentId)
+        ?? ordered.find(s => s._id !== currentId);
       if (next) store.selectPanelSession(next._id);
     }
+    animatedStashSession(currentId, { verb: "Killed" });
   }, [isOnInboxPage, killSessionMutation]));
 
   useShortcutAction('session.deferAdvance', useCallback(() => {
