@@ -71,6 +71,7 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
     loadNewer,
     jumpToStart,
     jumpToEnd,
+    jumpToTimestamp,
   } = useConversationMessages(sessionId, targetMessageId);
 
   const resumeSession = useMutation(api.users.resumeSession);
@@ -236,6 +237,7 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
           onLoadNewer={loadNewer}
           onJumpToStart={jumpToStart}
           onJumpToEnd={jumpToEnd}
+          onJumpToTimestamp={jumpToTimestamp}
           isOwner={true}
           onSendAndAdvance={onSendAndAdvance}
           onSendAndDismiss={onSendAndDismiss}
@@ -880,18 +882,44 @@ export function SessionListPanel({
     return count;
   }, [globalSubByParent]);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const scrolledToRef = useRef<string | null>(null);
 
   // -- Dismiss & enter animations --
   const handleAnimatedDismiss = useCallback((id: string) => {
     animatedStashSession(id);
   }, []);
 
-  // Auto-scroll to the active session when it changes
+  // Auto-scroll to active session, retrying when sessions load and revealing hidden sections
   useWatchEffect(() => {
-    if (!activeSessionId || !scrollContainerRef.current) return;
+    if (!activeSessionId || !scrollContainerRef.current) {
+      scrolledToRef.current = null;
+      return;
+    }
+    if (scrolledToRef.current === activeSessionId) return;
+
     const el = scrollContainerRef.current.querySelector(`[data-session-id="${activeSessionId}"]`);
-    if (el) el.scrollIntoView({ block: "nearest" });
-  }, [activeSessionId]);
+    if (el) {
+      el.scrollIntoView({ block: "nearest" });
+      scrolledToRef.current = activeSessionId;
+      return;
+    }
+
+    // Card not rendered — try to reveal it by uncollapsing its section
+    const inList = (items: InboxSession[]) => items.some(i => i._id === activeSessionId);
+    const sections: [InboxSession[], string][] = [
+      [filteredPinned, "pinned"], [filteredNew, "new"],
+      [filteredNeedsInput, "needs_input"], [filteredWorking, "working"],
+    ];
+    for (const [items, key] of sections) {
+      if (inList(items) && s.collapsedSections[key]) {
+        s.toggleCollapsedSection(key);
+        return;
+      }
+    }
+    if (inList(filteredDismissed) && s.clientState.show_dismissed === false) {
+      s.toggleShowDismissed();
+    }
+  }, [activeSessionId, sortedSessions, s.collapsedSections, s.clientState.show_dismissed]);
 
   const renderSection = (label: string, items: InboxSession[], color: string, sectionVariant?: "working") => {
     if (items.length === 0) return null;

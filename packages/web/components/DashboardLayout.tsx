@@ -26,7 +26,6 @@ import { TmuxMissingBanner } from "./TmuxMissingBanner";
 import { FindBar } from "./FindBar";
 import { KeyboardShortcutsPanel } from "./KeyboardShortcutsHelp";
 import { NewSessionModal } from "./ConversationList";
-import { CreatePalette } from "./CreatePalette";
 import { useInboxStore, useTrackedStore, isSessionEffectivelyIdle } from "../store/inboxStore";
 import { useShortcutAction, useShortcutContext, useGlobalShortcutActions, formatShortcutLabel } from "../shortcuts";
 import { usePrefetch } from "../hooks/usePrefetch";
@@ -186,8 +185,8 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
     store.setPendingForkActivation(forkId);
     store.setActiveForkHighlight(forkId);
     if (isOnConversationPage) {
-      // Navigate so both owner and non-owner views update
-      router.push(`/conversation/${parentId}`);
+      store.navigateToSession(parentId);
+      router.push('/inbox');
     } else {
       store.setCurrentSession(parentId);
       if (store.showMySessions) store.setShowMySessions(false);
@@ -206,10 +205,11 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
     ? (conversationPageId ?? s.currentSessionId)
     : s.sidePanelSessionId;
 
-  // Conversation pages use URL navigation so both owner (QueuePageClient) and
-  // non-owner (ViewerView) views update correctly on sidebar clicks.
+  // Conversation pages (ViewerView for non-owner access) redirect to inbox on
+  // session select — single codepath for viewing your own sessions.
   const handleConversationSessionSelect = useCallback((id: string) => {
-    router.push(`/conversation/${id}`);
+    useInboxStore.getState().navigateToSession(id);
+    router.push('/inbox');
   }, [router]);
 
   const sessionListOnSelect = isOnInboxPage
@@ -339,6 +339,18 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
       router.push(`/conversation/${conversationId}?focus=1`);
     }
   }, [resolveNewSessionContext, router, isOnInboxPage, isOnConversationPage, createQuickSession, s.openNewSession]);
+
+  // Bridge for Electron global shortcut / menu "New Session" — opens the
+  // same NewSessionModal used by the in-app flow.
+  useMountEffect(() => {
+    const open = () => useInboxStore.getState().openNewSession();
+    (window as any).__CODECAST_NEW_SESSION = open;
+    window.addEventListener('codecast-new-session', open);
+    return () => {
+      delete (window as any).__CODECAST_NEW_SESSION;
+      window.removeEventListener('codecast-new-session', open);
+    };
+  });
 
   useGlobalShortcutActions();
   useShortcutContext('desktop', isDesktopApp);
@@ -652,9 +664,6 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
         <FindBar />
       </ErrorBoundary>
       <NewSessionModal isOpen={s.newSession.isOpen} onClose={s.closeNewSession} />
-      <ErrorBoundary name="CreatePalette" level="inline">
-        <CreatePalette />
-      </ErrorBoundary>
       {switcherState.open && (
         <SessionSwitcher
           sessions={switcherState.mruSessions}

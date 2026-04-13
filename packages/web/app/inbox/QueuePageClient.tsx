@@ -37,6 +37,7 @@ const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, o
     loadNewer,
     jumpToStart,
     jumpToEnd,
+    jumpToTimestamp,
   } = useConversationMessages(sessionId, targetMessageId);
 
   const resumeSession = useMutation(api.users.resumeSession);
@@ -167,6 +168,7 @@ const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, o
           onLoadNewer={loadNewer}
           onJumpToStart={jumpToStart}
           onJumpToEnd={jumpToEnd}
+          onJumpToTimestamp={jumpToTimestamp}
           isOwner={isOwnSession}
           onSendAndAdvance={isOwnSession ? onSendAndAdvance : undefined}
           onSendAndDismiss={isOwnSession ? onSendAndDismiss : undefined}
@@ -577,7 +579,7 @@ function InboxShortcuts() {
   return null;
 }
 
-export function QueuePageClient({ initialSessionId }: { initialSessionId?: string } = {}) {
+export function QueuePageClient() {
   const searchParams = useSearchParams();
   const router = useRouter();
 
@@ -609,7 +611,7 @@ export function QueuePageClient({ initialSessionId }: { initialSessionId?: strin
 
   const isPopstateRef = useRef(false);
   const lastAppliedParamId = useRef<string | null>(null);
-  const paramProcessedRef = useRef(!searchParams.get("s") && !initialSessionId);
+  const paramProcessedRef = useRef(!searchParams.get("s"));
 
   const injectSession = useInboxStore((s) => s.injectSession);
 
@@ -626,8 +628,8 @@ export function QueuePageClient({ initialSessionId }: { initialSessionId?: strin
     shouldQueryDirect ? { conversation_id: pendingInjectId as Id<"conversations">, limit: 1 } : "skip"
   );
 
-  // Select session from URL param or initialSessionId -- only when the param actually changes
-  const paramSessionId = searchParams.get("s") || initialSessionId || null;
+  // Select session from URL param -- only when the param actually changes
+  const paramSessionId = searchParams.get("s") || null;
   useWatchEffect(() => {
     if (!paramSessionId || paramSessionId === lastAppliedParamId.current) return;
     if (Object.keys(sessions).length === 0 && !clientStateInitialized) return;
