@@ -48,8 +48,8 @@ const TABLE_CONFIG: Record<string, TableConfig> = {
 };
 
 export const dispatch = mutation({
-  args: { action: v.string(), args: v.any(), patches: v.optional(v.any()) },
-  handler: async (ctx, { action, args: actionArgs, patches }) => {
+  args: { action: v.string(), args: v.any(), patches: v.optional(v.any()), result: v.optional(v.any()) },
+  handler: async (ctx, { action, args: actionArgs, patches, result }) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
 
@@ -59,13 +59,13 @@ export const dispatch = mutation({
 
     const sideEffect = SIDE_EFFECTS[action];
     if (sideEffect) {
-      return sideEffect(ctx, userId, actionArgs);
+      return sideEffect(ctx, userId, actionArgs, result);
     }
   },
 });
 
 type HandlerCtx = { db: any; storage?: any; runMutation?: any };
-type HandlerFn = (ctx: HandlerCtx, userId: Id<"users">, args: any) => Promise<any>;
+type HandlerFn = (ctx: HandlerCtx, userId: Id<"users">, args: any, result?: any) => Promise<any>;
 
 function deepMergeField(existing: any, incoming: any): any {
   if (
@@ -195,6 +195,41 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       created_at: now,
     });
 
+    return conversationId;
+  },
+
+  switchAgent: async (ctx, userId, [currentId, targetAgentType]: [string, string], result?: string) => {
+    if (!result) return;
+    const oldConv = await ctx.db.get(currentId as Id<"conversations">);
+    if (!oldConv || oldConv.user_id !== userId) return;
+
+    const now = Date.now();
+    const agentType = (targetAgentType || "claude_code") as "claude_code" | "codex" | "cursor" | "gemini";
+    const conversationPath = oldConv.git_root || oldConv.project_path;
+
+    const mappings = await ctx.db
+      .query("directory_team_mappings")
+      .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+      .collect();
+    const { teamId: resolvedTeamId, isPrivate, autoShared } = resolveTeamForPath(
+      mappings, conversationPath, undefined
+    );
+
+    const conversationId = await ctx.db.insert("conversations", {
+      user_id: userId,
+      team_id: resolvedTeamId,
+      agent_type: agentType,
+      session_id: result,
+      project_path: oldConv.project_path,
+      git_root: oldConv.git_root,
+      started_at: now,
+      updated_at: now,
+      message_count: 0,
+      is_private: isPrivate,
+      auto_shared: autoShared || undefined,
+      status: "active" as const,
+    });
+    await ctx.db.patch(conversationId, { short_id: conversationId.toString().slice(0, 7) });
     return conversationId;
   },
 

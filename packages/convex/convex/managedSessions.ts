@@ -387,6 +387,14 @@ export const updateAgentStatus = mutation({
       patch.agent_status_updated_at = args.client_ts || Date.now();
     }
 
+    // Active status updates prove the daemon is alive — refresh heartbeat too.
+    // This prevents stale-heartbeat inference from overriding a valid status update
+    // (e.g. after daemon restart before the heartbeat interval kicks in).
+    const ACTIVE_STATUSES = new Set(["working", "compacting", "thinking", "connected", "starting", "resuming"]);
+    if (ACTIVE_STATUSES.has(args.agent_status)) {
+      patch.last_heartbeat = Date.now();
+    }
+
     if (Object.keys(patch).length > 0) {
       await ctx.db.patch(session._id, patch);
     }

@@ -97,25 +97,24 @@ export const notifyTeamSessionStart = internalMutation({
     const now = Date.now();
 
     for (const member of teamMembers) {
-      // Skip if this member has muted the actor
       if (member.muted_members?.includes(args.user_id)) {
         continue;
       }
-      if (
-        member.push_token &&
-        member.notifications_enabled &&
-        member.notification_preferences?.team_session_start
-      ) {
-        await ctx.db.insert("notifications", {
-          recipient_user_id: member._id,
-          type: "team_session_start",
-          actor_user_id: args.user_id,
-          conversation_id: args.conversation_id,
-          message: body,
-          read: false,
-          created_at: now,
-        });
+      if (member.notification_preferences?.team_session_start === false) {
+        continue;
+      }
 
+      await ctx.db.insert("notifications", {
+        recipient_user_id: member._id,
+        type: "team_session_start",
+        actor_user_id: args.user_id,
+        conversation_id: args.conversation_id,
+        message: body,
+        read: false,
+        created_at: now,
+      });
+
+      if (member.push_token && member.notifications_enabled) {
         const recentNotifs = await ctx.db
           .query("notifications")
           .withIndex("by_recipient_created", (q: any) =>

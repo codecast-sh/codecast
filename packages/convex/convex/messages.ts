@@ -853,6 +853,72 @@ export const findMessageByContent = query({
   },
 });
 
+function parseSearchTermsServer(query: string): string[] {
+  const terms: string[] = [];
+  const regex = /"([^"]+)"|(\S+)/g;
+  let match;
+  while ((match = regex.exec(query)) !== null) {
+    const term = match[1] || match[2];
+    if (term) terms.push(term.toLowerCase());
+  }
+  return terms;
+}
+
+function countMatches(content: string, terms: string[]): number {
+  if (terms.length === 0) return 0;
+  const lower = content.toLowerCase();
+  let count = 0;
+  for (const term of terms) {
+    if (!term) continue;
+    let pos = 0;
+    while ((pos = lower.indexOf(term, pos)) !== -1) {
+      count++;
+      pos += term.length;
+    }
+  }
+  return count;
+}
+
+export const findAllMessagesByContent = query({
+  args: {
+    conversation_id: v.id("conversations"),
+    search_term: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthUserId(ctx);
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation) return [];
+    const isOwner = authUserId && conversation.user_id.toString() === authUserId.toString();
+    const isShared = !!conversation.share_token;
+    let hasTeamAccess = false;
+    if (authUserId && !isOwner) {
+      hasTeamAccess = await canTeamMemberAccess(ctx, authUserId, conversation);
+    }
+    if (!isOwner && !hasTeamAccess && !isShared) return [];
+
+    const terms = parseSearchTermsServer(args.search_term);
+    if (terms.length === 0) return [];
+
+    const messages = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_timestamp", (q) =>
+        q.eq("conversation_id", args.conversation_id)
+      )
+      .order("asc")
+      .collect();
+
+    const matches: { message_id: string; timestamp: number; match_count: number }[] = [];
+    for (const msg of messages) {
+      if (!msg.content) continue;
+      const count = countMatches(msg.content, terms);
+      if (count > 0) {
+        matches.push({ message_id: msg._id, timestamp: msg.timestamp, match_count: count });
+      }
+    }
+    return matches;
+  },
+});
+
 export const findMessageByContentPublic = query({
   args: {
     conversation_id: v.id("conversations"),
