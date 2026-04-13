@@ -15,7 +15,7 @@ import { PlanContextPanel } from "./PlanContextPanel";
 import { WorkflowContextPanel } from "./WorkflowContextPanel";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { undoableStashSession } from "../store/undoActions";
+import { animatedStashSession, enteringSessionIds } from "../store/undoActions";
 import { soundKill } from "../lib/sounds";
 import { formatShortcutLabel } from "../shortcuts";
 import { X, ChevronsLeft, ChevronsRight } from "lucide-react";
@@ -820,7 +820,6 @@ export function SessionListPanel({
     const newDismissed = { ...useInboxStore.getState().dismissedSessions };
     delete newDismissed[id];
     useInboxStore.setState({ dismissedSessions: newDismissed });
-    toast.success(`Killed session`);
   }, [killSessionMutation]);
 
   const handleSelect = useCallback((session: InboxSession) => {
@@ -882,6 +881,11 @@ export function SessionListPanel({
   }, [globalSubByParent]);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
+  // -- Dismiss & enter animations --
+  const handleAnimatedDismiss = useCallback((id: string) => {
+    animatedStashSession(id);
+  }, []);
+
   // Auto-scroll to the active session when it changes
   useWatchEffect(() => {
     if (!activeSessionId || !scrollContainerRef.current) return;
@@ -913,7 +917,7 @@ export function SessionListPanel({
             const visibleSubs = subs.length <= 2 ? subs : subsExpanded ? subs : subs.slice(0, 2);
             const hiddenCount = subs.length - visibleSubs.length;
             return (
-              <div key={session._id} className="border-b border-sol-border/30">
+              <div key={session._id} className={`border-b border-sol-border/30${enteringSessionIds.has(session._id) ? ' session-entering' : ''}`} onAnimationEnd={() => enteringSessionIds.delete(session._id)}>
                 <SessionCard
                   session={session}
                   isActive={
@@ -922,7 +926,7 @@ export function SessionListPanel({
                   }
                   globalIndex={0}
                   onSelect={() => handleSelect(session)}
-                  onDismiss={s.stashSession}
+                  onDismiss={handleAnimatedDismiss}
                   onDefer={s.deferSession}
                   onPin={s.pinSession}
                   variant={sectionVariant || "default"}
@@ -941,7 +945,7 @@ export function SessionListPanel({
                     }
                     globalIndex={0}
                     onSelect={() => handleSelect(sub)}
-                    onDismiss={s.stashSession}
+                    onDismiss={handleAnimatedDismiss}
                     variant={sectionVariant || "default"}
                   />
                 ))}
@@ -972,7 +976,7 @@ export function SessionListPanel({
                     }
                     globalIndex={0}
                     onSelect={() => handleSelect(fork)}
-                    onDismiss={s.stashSession}
+                    onDismiss={handleAnimatedDismiss}
                     variant={sectionVariant || "default"}
                   />
                 ))}
@@ -1219,7 +1223,7 @@ export const ConversationColumn = memo(function ConversationColumn() {
   }, [s.selectPanelSession]);
 
   const handleSendAndDismiss = useCallback(() => {
-    if (s.sidePanelSessionId) undoableStashSession(s.sidePanelSessionId);
+    if (s.sidePanelSessionId) animatedStashSession(s.sidePanelSessionId);
   }, [s.sidePanelSessionId]);
 
   if (!session || !s.sidePanelSessionId) return null;
