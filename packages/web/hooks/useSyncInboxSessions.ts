@@ -41,6 +41,7 @@ export function useSyncInboxSessions() {
 
   const syncTable = useInboxStore((s) => s.syncTable);
   const _setDispatch = useInboxStore((s) => s._setDispatch);
+  const _setDispatchError = useInboxStore((s) => s._setDispatchError);
 
   const prevActiveIdsRef = useRef<Set<string> | null>(null);
   const prevIdleMapRef = useRef<Map<string, boolean> | null>(null);
@@ -49,7 +50,11 @@ export function useSyncInboxSessions() {
   dispatchRef.current = dispatchMutation;
 
   useMountEffect(() => {
-    _setDispatch((action, args, patches) => dispatchRef.current({ action, args, patches }));
+    _setDispatch((action, args, patches, result) => dispatchRef.current({ action, args, patches, result }));
+    _setDispatchError((action, error) => {
+      console.error(`[sync] dispatch failed after retries: ${action}`, error);
+      useInboxStore.setState(s => ({ dispatchErrors: s.dispatchErrors + 1 }));
+    });
   });
 
   // Background-sync messages for inbox sessions so clicks are instant.

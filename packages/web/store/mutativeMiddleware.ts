@@ -80,6 +80,7 @@ function generateAutoPending(
   currentPending: Record<string, any>,
 ): Record<string, any> | null {
   let result: Record<string, any> | null = null;
+  const now = Date.now();
 
   for (const patch of patches) {
     const path = patch.path as (string | number)[];
@@ -93,11 +94,11 @@ function generateAutoPending(
     if (patch.op === "remove" && path.length === 2) {
       // Record deleted from collection → exclude from server sync
       if (!result) result = { ...currentPending };
-      result[`${storeKey}:${recordId}`] = { type: "exclude" };
+      result[`${storeKey}:${recordId}`] = { type: "exclude", ts: now };
     } else if (patch.op === "add" && path.length === 2) {
-      // Record added to collection → clear any existing exclude
+      // Record added to collection → include (keep until server acknowledges)
       if (!result) result = { ...currentPending };
-      delete result[`${storeKey}:${recordId}`];
+      result[`${storeKey}:${recordId}`] = { type: "include", ts: now };
     } else if ((patch.op === "replace" || patch.op === "add") && path.length >= 3) {
       // Field modified on a collection record → protect field value
       const field = String(path[2]);
@@ -105,6 +106,7 @@ function generateAutoPending(
       result[`${storeKey}:${recordId}:${field}`] = {
         type: "field",
         value: patch.value,
+        ts: now,
       };
     }
   }
@@ -176,10 +178,34 @@ export function groupPatchesByTable(
   return result;
 }
 
+const RETRY_DELAYS = [1000, 2000, 4000];
+
+async function dispatchWithRetry(
+  fn: DispatchFn,
+  action: string,
+  args: any,
+  grouped: any,
+  result: any,
+  onError?: (action: string, error: unknown) => void,
+): Promise<any> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fn(action, args, grouped, result);
+    } catch (e) {
+      if (attempt >= RETRY_DELAYS.length) {
+        onError?.(action, e);
+        throw e;
+      }
+      await new Promise(r => setTimeout(r, RETRY_DELAYS[attempt]));
+    }
+  }
+}
+
 export function mutativeMiddleware(config: any): any {
   return (set: any, get: any, api: any) => {
     let dispatchFn: DispatchFn | null = null;
     let idbWriteFn: IDBWriteFn | null = null;
+    let dispatchErrorFn: ((action: string, error: unknown) => void) | undefined;
 
     const rawStore = config(set, get, api);
 
@@ -231,7 +257,9 @@ export function mutativeMiddleware(config: any): any {
         if ((isAct || isAsyncAct) && dispatchFn) {
           const grouped =
             patches.length > 0 ? groupPatchesByTable(patches, finalState) : undefined;
-          const promise = dispatchFn(key, args, grouped, returnValue);
+          const promise = dispatchWithRetry(
+            dispatchFn, key, args, grouped, returnValue, dispatchErrorFn,
+          );
           if (isAsyncAct) return promise;
           promise.catch(() => {});
         }
@@ -248,10 +276,14 @@ export function mutativeMiddleware(config: any): any {
       idbWriteFn = fn;
     };
 
+    wrapped._setDispatchError = (fn: (action: string, error: unknown) => void) => {
+      dispatchErrorFn = fn;
+    };
+
     wrapped._dispatch = (action: string, args: any, patches?: any, result?: any) => {
       if (!dispatchFn) return Promise.reject(new Error("Dispatch not wired"));
       const safeArgs = Array.isArray(args) ? args.map((a: any) => a === undefined ? null : a) : args;
-      return dispatchFn(action, safeArgs, patches, result);
+      return dispatchWithRetry(dispatchFn, action, safeArgs, patches, result, dispatchErrorFn);
     };
 
     return wrapped;
