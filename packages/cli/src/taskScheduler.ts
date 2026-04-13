@@ -100,29 +100,48 @@ export class TaskScheduler {
     const promptFile = `/tmp/codecast-task-${shortId}.txt`;
     fs.writeFileSync(promptFile, prompt);
 
-    let args: string[] = [];
+    // Build agent command args (will be passed to the script, which quotes them via "$(cat promptFile)")
+    let extraAgentArgs: string[] = [];
+    let agentBin: string;
     if (agentType === "codex") {
-      args.push("codex", `"$(cat ${promptFile})"`);
+      agentBin = "codex";
       const extraArgs = this.config.codex_args;
       if (extraArgs) {
-        args.push(...extraArgs.split(/\s+/).filter(Boolean));
+        extraAgentArgs.push(...extraArgs.split(/\s+/).filter(Boolean));
       }
-      if (!args.some(a => a.includes("--full-auto") || a.includes("--ask-for-approval") || a.includes("--dangerously-bypass"))) {
-        args.push("--dangerously-bypass-approvals-and-sandbox");
+      if (!extraAgentArgs.some(a => a.includes("--full-auto") || a.includes("--ask-for-approval") || a.includes("--dangerously-bypass"))) {
+        extraAgentArgs.push("--dangerously-bypass-approvals-and-sandbox");
       }
     } else {
-      args.push("claude", "-p", `"$(cat ${promptFile})"`, "--dangerously-skip-permissions");
+      agentBin = "claude";
+      extraAgentArgs.push("--dangerously-skip-permissions");
       const extraArgs = this.config.claude_args;
       if (extraArgs) {
         const skip = new Set(["--chrome", "--dangerously-skip-permissions"]);
         const extra = extraArgs.split(/\s+/).filter(Boolean);
         for (const arg of extra) {
-          if (!skip.has(arg) && !args.includes(arg)) args.push(arg);
+          if (!skip.has(arg) && !extraAgentArgs.includes(arg)) extraAgentArgs.push(arg);
         }
       }
     }
 
-    const shellCmd = `unset CLAUDECODE; ${args.join(" ")}; rm -f ${promptFile}`;
+    // Write a shell script so the target shell (inside tmux) handles all quoting/expansion,
+    // rather than relying on the outer exec shell to expand $(cat ...). This avoids issues
+    // when the prompt contains characters that would be misinterpreted by the shell
+    // (quotes, newlines, etc.) after being expanded by the outer shell.
+    const scriptFile = `/tmp/codecast-task-${shortId}.sh`;
+    const agentInvocation = agentType === "codex"
+      ? `${agentBin} "$(cat ${promptFile})" ${extraAgentArgs.map(a => `'${a.replace(/'/g, "'\\''")}'`).join(" ")}`
+      : `${agentBin} -p "$(cat ${promptFile})" ${extraAgentArgs.map(a => `'${a.replace(/'/g, "'\\''")}'`).join(" ")}`;
+    const scriptBody = [
+      "#!/bin/bash",
+      "unset CLAUDECODE",
+      "unset ANTHROPIC_API_KEY",
+      agentInvocation,
+      `rm -f ${promptFile} ${scriptFile}`,
+      "",
+    ].join("\n");
+    fs.writeFileSync(scriptFile, scriptBody, { mode: 0o755 });
 
     if (!hasTmux()) {
       this.log(`tmux not installed, cannot run task "${task.title}"`, "error");
@@ -133,7 +152,7 @@ export class TaskScheduler {
     try {
       try { await execAsync(`tmux kill-session -t '${tmuxSession}' 2>/dev/null`); } catch {}
       await execAsync(`tmux new-session -d -s '${tmuxSession}' -c '${cwd}'`);
-      await execAsync(`tmux send-keys -t '${tmuxSession}' ${JSON.stringify(shellCmd)} Enter`);
+      await execAsync(`tmux send-keys -t '${tmuxSession}' ${JSON.stringify(`bash ${scriptFile}`)} Enter`);
       this.log(`Spawned tmux session ${tmuxSession} for task "${task.title}"`);
     } catch (err) {
       const stderr = (err as any)?.stderr ? ` stderr: ${(err as any).stderr}` : "";
