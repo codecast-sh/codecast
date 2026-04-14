@@ -1,16 +1,17 @@
 import Link from "next/link";
 import { LogoIcon } from "./Logo";
 import { useRouter } from "next/navigation";
-import { useLayoutEffect, useRef, useState, useMemo, useImperativeHandle, forwardRef, useCallback, memo } from "react";
+import { useLayoutEffect, useRef, useState, useMemo, useImperativeHandle, forwardRef, useCallback, memo, createContext, useContext, ComponentProps } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useEventListener } from "../hooks/useEventListener";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useShortcutContext, useShortcutAction, formatShortcutLabel } from "../shortcuts";
 import { useConvexSync } from "../hooks/useConvexSync";
 import { createPortal } from "react-dom";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdownBase from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import remarkGfm from "remark-gfm";
+import { rehypeSearchHighlight } from "../lib/rehypeSearchHighlight";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { isCommandMessage, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractSkillsFromMessages, extractFilePaths, isSystemMessage } from "../lib/conversationProcessor";
 import { getBuiltinCommands } from "../lib/builtinCommands";
@@ -119,6 +120,30 @@ function parseSearchTerms(query: string): string[] {
     if (term) terms.push(term.toLowerCase());
   }
   return terms;
+}
+
+const HighlightContext = createContext<string | undefined>(undefined);
+
+type ReactMarkdownProps = ComponentProps<typeof ReactMarkdownBase>;
+
+/**
+ * ReactMarkdown wrapper that appends `rehypeSearchHighlight` to the plugin list
+ * whenever a `highlightQuery` is active in the HighlightContext. Because the plugin
+ * transforms the HAST before React renders, highlights are part of the VDOM and
+ * survive re-renders — avoiding the MutationObserver/TreeWalker race we used before.
+ */
+function ReactMarkdown(props: ReactMarkdownProps) {
+  const query = useContext(HighlightContext);
+  const userPlugins = props.rehypePlugins;
+  const plugins = useMemo(() => {
+    const base = userPlugins ? [...userPlugins] : [];
+    if (!query) return base;
+    const terms = parseSearchTerms(query);
+    if (terms.length === 0) return base;
+    base.push([rehypeSearchHighlight, { terms }]);
+    return base;
+  }, [query, userPlugins]);
+  return <ReactMarkdownBase {...props} rehypePlugins={plugins} />;
 }
 
 type ToolCall = {
@@ -8056,10 +8081,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     setHighlightedMessageId(target.messageId);
     hasScrolledToHighlight.current = false;
     setNavTrigger(t => t + 1);
-    if (!loadedIdsRef.current.has(target.messageId) && onJumpToTimestamp) {
-      onJumpToTimestamp(target.timestamp);
-    }
-  }, [matchInstances, onJumpToTimestamp]);
+  }, [matchInstances]);
 
   const goToNextMatch = useCallback(() => {
     if (matchInstances.length === 0) return;
@@ -8082,14 +8104,23 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     const instance = matchInstances[currentMatchIndex];
     if (!instance) return;
     pendingScrollRef.current = { messageId: instance.messageId, localIndex: instance.localIndex };
-  }, [currentMatchIndex, matchInstances, navTrigger]);
+    const isLoaded = loadedIdsRef.current.has(instance.messageId);
+    // If the target message is outside the current pagination window, trigger
+    // a server jump so the activation effect can scroll to it once it loads.
+    if (!isLoaded && onJumpToTimestamp) {
+      onJumpToTimestamp(instance.timestamp);
+    }
+  }, [currentMatchIndex, matchInstances, navTrigger, onJumpToTimestamp]);
 
   // Activate the pending mark whenever the DOM for the target message is ready.
-  // Runs on navigation AND when `messages` changes (post-jump rehydration).
+  // Messages are virtualized: the wrapper may render before its text/marks do.
+  // Scroll the wrapper in first (triggers virtualizer to render content), then
+  // retry finding marks. Runs on navigation AND when `messages` changes (post-jump).
   useWatchEffect(() => {
     const pending = pendingScrollRef.current;
     if (!pending || !containerRef.current) return;
     if (!loadedIdsRef.current.has(pending.messageId)) return;
+    let scrolledWrapper = false;
     const activate = () => {
       if (!containerRef.current || !pendingScrollRef.current) return;
       const p = pendingScrollRef.current;
@@ -8097,9 +8128,18 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         m.removeAttribute('data-search-active');
         (m as HTMLElement).style.cssText = '';
       });
-      const msgEl = containerRef.current.querySelector('.message-highlight');
+      const msgEl = containerRef.current.querySelector(`#msg-${CSS.escape(p.messageId)}`);
       if (!msgEl) return;
       const marks = Array.from(msgEl.querySelectorAll('mark[data-search-highlight]'));
+      if (marks.length === 0) {
+        // Virtualizer hasn't rendered the message content yet — scroll the wrapper
+        // so it mounts; a later retry (50/200/500/1000ms) will find the marks.
+        if (!scrolledWrapper) {
+          msgEl.scrollIntoView({ block: 'center', behavior: 'auto' });
+          scrolledWrapper = true;
+        }
+        return;
+      }
       const target = marks[p.localIndex] ?? marks[0];
       if (target) {
         target.setAttribute('data-search-active', 'true');
@@ -8111,105 +8151,11 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       }
     };
     const t1 = setTimeout(activate, 50);
-    const t2 = setTimeout(activate, 250);
-    const t3 = setTimeout(activate, 600);
-    return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); };
+    const t2 = setTimeout(activate, 200);
+    const t3 = setTimeout(activate, 500);
+    const t4 = setTimeout(activate, 1000);
+    return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); clearTimeout(t4); };
   }, [navTrigger, messages, highlightedMessageId]);
-
-  // Highlight all text occurrences of search query in the DOM
-  useWatchEffect(() => {
-    if (!highlightQuery || !containerRef.current) return;
-
-    const terms = parseSearchTerms(highlightQuery);
-    if (terms.length === 0) return;
-
-    const pattern = terms.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
-    const regex = new RegExp(`(${pattern})`, 'gi');
-
-    const applyHighlights = () => {
-      if (!containerRef.current) return;
-
-      // Find text nodes that haven't been processed yet
-      const walker = document.createTreeWalker(
-        containerRef.current,
-        NodeFilter.SHOW_TEXT,
-        null
-      );
-
-      const textNodes: Text[] = [];
-      let node;
-      while ((node = walker.nextNode())) {
-        // Skip if parent is already a highlight mark or script/style
-        const parent = node.parentNode as HTMLElement;
-        if (!parent) continue;
-        if (parent.hasAttribute?.('data-search-highlight')) continue;
-        if (parent.nodeName === 'SCRIPT' || parent.nodeName === 'STYLE' || parent.nodeName === 'MARK') continue;
-        textNodes.push(node as Text);
-      }
-
-      textNodes.forEach(textNode => {
-        const text = textNode.textContent || '';
-        if (!regex.test(text)) return;
-        regex.lastIndex = 0;
-
-        const parent = textNode.parentNode;
-        if (!parent) return;
-
-        const fragment = document.createDocumentFragment();
-        let lastIndex = 0;
-        let match;
-
-        while ((match = regex.exec(text)) !== null) {
-          if (match.index > lastIndex) {
-            fragment.appendChild(document.createTextNode(text.slice(lastIndex, match.index)));
-          }
-          const mark = document.createElement('mark');
-          mark.setAttribute('data-search-highlight', 'true');
-          mark.className = 'bg-amber-300/50 text-amber-900 dark:bg-amber-700/40 dark:text-amber-100 rounded px-0.5 font-medium';
-          mark.textContent = match[0];
-          fragment.appendChild(mark);
-          lastIndex = regex.lastIndex;
-        }
-
-        if (lastIndex < text.length) {
-          fragment.appendChild(document.createTextNode(text.slice(lastIndex)));
-        }
-
-        if (fragment.childNodes.length > 0) {
-          parent.replaceChild(fragment, textNode);
-        }
-      });
-    };
-
-    // Apply highlights initially and on DOM changes (for virtualized content)
-    const observer = new MutationObserver(() => {
-      requestAnimationFrame(applyHighlights);
-    });
-
-    // Initial highlight after a brief delay to let virtualizer render
-    const timeoutId = setTimeout(applyHighlights, 100);
-
-    observer.observe(containerRef.current, {
-      childList: true,
-      subtree: true
-    });
-
-    return () => {
-      clearTimeout(timeoutId);
-      observer.disconnect();
-      // Cleanup highlights
-      if (containerRef.current) {
-        const marks = containerRef.current.querySelectorAll('mark[data-search-highlight]');
-        marks.forEach(mark => {
-          const parent = mark.parentNode;
-          if (parent) {
-            parent.replaceChild(document.createTextNode(mark.textContent || ''), mark);
-            parent.normalize();
-          }
-        });
-      }
-    };
-  }, [highlightQuery]);
 
   const handleCopyAll = async () => {
     if (!convexConvId) {
@@ -8932,7 +8878,22 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       if (itemIndex >= 0) {
         hasScrolledToHighlight.current = true;
         setUserScrolled(true);
-        setTimeout(() => virtualizer.scrollToIndex(itemIndex, { align: "center", behavior: "smooth" }), 150);
+        // react-virtual's scrollToIndex assigns scrollTop but relies on the
+        // scroll event to recompute its visible range. Programmatic scrollTop
+        // writes don't always emit that event reliably (same-value writes,
+        // batching), so we nudge the range ourselves. Retries handle the case
+        // where item-size estimates for unmeasured items above shift the
+        // target offset — once those items render and measure, the next
+        // scrollToIndex corrects onto the real position.
+        const align = { align: "center" as const, behavior: "auto" as const };
+        const retry = () => {
+          virtualizer.scrollToIndex(itemIndex, align);
+          containerRef.current?.dispatchEvent(new Event('scroll', { bubbles: true }));
+        };
+        setTimeout(retry, 150);
+        setTimeout(retry, 300);
+        setTimeout(retry, 500);
+        setTimeout(retry, 900);
       }
     }
   }, [highlightedMessageId, timeline, virtualizer]);
@@ -9425,6 +9386,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   };
 
   return (
+    <HighlightContext.Provider value={highlightQuery}>
     <ImageGalleryProvider>
     <main className="relative flex flex-col bg-sol-bg h-full" onDragEnter={handleDragEnter} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
       {isDragging && (
@@ -10372,5 +10334,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       )}
     </main>
     </ImageGalleryProvider>
+    </HighlightContext.Provider>
   );
 });
