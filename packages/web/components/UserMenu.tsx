@@ -190,7 +190,7 @@ export function UserMenu() {
             Keyboard shortcuts
           </button>
           <button
-            onClick={() => { setOpen(false); window.location.href = "/settings"; }}
+            onClick={() => { setOpen(false); router.push("/settings"); }}
             className={menuBtnClass}
           >
             Settings
