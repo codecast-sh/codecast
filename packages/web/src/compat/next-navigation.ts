@@ -28,12 +28,16 @@ export function usePathname(): string {
   return routerPath;
 }
 
+function isNonTabRoute(path: string): boolean {
+  return path.startsWith("/settings");
+}
+
 export function useRouter() {
   const navigate = useNavigate();
   return {
     push: (path: string) => {
       const { tabs, activeTabId } = useInboxStore.getState();
-      if (tabs.length > 0 && activeTabId) {
+      if (tabs.length > 0 && activeTabId && !isNonTabRoute(path)) {
         useInboxStore.getState().updateTab(activeTabId, { path, title: pathLabel(path) });
         window.history.replaceState(null, "", path);
       } else {
@@ -42,7 +46,7 @@ export function useRouter() {
     },
     replace: (path: string) => {
       const { tabs, activeTabId } = useInboxStore.getState();
-      if (tabs.length > 0 && activeTabId) {
+      if (tabs.length > 0 && activeTabId && !isNonTabRoute(path)) {
         useInboxStore.getState().updateTab(activeTabId, { path, title: pathLabel(path) });
         window.history.replaceState(null, "", path);
       } else {
