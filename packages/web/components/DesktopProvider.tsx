@@ -15,6 +15,7 @@ import {
   requestNotificationPermission,
   hasBrowserNotificationPermission,
 } from "../lib/desktop";
+import { cleanNotificationBody } from "../lib/notificationText";
 import { useInboxStore } from "../store/inboxStore";
 
 export function DesktopProvider() {
@@ -63,7 +64,8 @@ export function DesktopProvider() {
       if (!seenIdsRef.current.has(n._id) && !n.read && n.created_at >= mountedAtRef.current) {
         const actor = n.actor?.name || n.actor?.github_username;
         const title = actor ? `${actor}` : "Codecast";
-        notifyNative(title, n.message, { conversationId: n.conversation_id });
+        const body = cleanNotificationBody(n.message) || n.message;
+        notifyNative(title, body, { conversationId: n.conversation_id });
       }
     }
     seenIdsRef.current = new Set(notifications.map((n) => n._id));
