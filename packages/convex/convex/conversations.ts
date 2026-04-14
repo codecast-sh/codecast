@@ -8,6 +8,7 @@ import { verifyApiToken } from "./apiTokens";
 import { internal } from "./_generated/api";
 import { resetConversationPendingMessages } from "./pendingMessages";
 import { hasRecentPendingDaemonCommand } from "./daemonCommandUtils";
+import { shouldShowInIdle, shouldShowInDismissed } from "./inboxFilters";
 import {
   isTeamMember,
   canTeamMemberAccess,
@@ -5530,8 +5531,6 @@ export const listIdleSessions = query({
       }
     }
 
-    const NOISE_TITLE_PREFIXES = ["[Using:", "[Request", "[SUGGESTION MODE:"];
-
     const userDaemonAlive = managedSessions.some(
       (s) => now - s.last_heartbeat < 6 * 60 * 1000
     );
@@ -5551,12 +5550,7 @@ export const listIdleSessions = query({
     let hiddenCount = 0;
     const results = [];
     for (const conv of conversations) {
-      if (conv.is_subagent || conv.is_workflow_sub || (conv.parent_conversation_id && !conv.parent_message_uuid)) continue;
-      if (conv.status === "completed" && conv.message_count === 0) continue;
-
-      const title = conv.title?.trim() || "";
-      if (title.toLowerCase() === "warmup") continue;
-      if (NOISE_TITLE_PREFIXES.some((p) => title.startsWith(p))) continue;
+      if (!shouldShowInIdle(conv)) continue;
 
       let hasPending = !!conv.has_pending_messages;
       let lastMsgRole = conv.last_message_role;
@@ -5584,8 +5578,6 @@ export const listIdleSessions = query({
       }
 
       const pinned = !!conv.inbox_pinned_at;
-      const dismissed = conv.inbox_dismissed_at && conv.inbox_dismissed_at >= conv.updated_at;
-      if (dismissed && !pinned) continue;
 
       if (clusterCutoff > 0 && conv.updated_at < clusterCutoff && !hasPending && !pinned) {
         hiddenCount++;
@@ -5841,7 +5833,7 @@ export const dismissFromInbox = mutation({
     const conv = await ctx.db.get(args.conversation_id);
     if (!conv || conv.user_id !== userId) throw new Error("Not found");
     await ctx.db.patch(args.conversation_id, {
-      inbox_dismissed_at: Math.max(Date.now(), conv.updated_at + 1),
+      inbox_dismissed_at: Date.now(),
     });
   },
 });
@@ -6176,17 +6168,10 @@ export const listDismissedSessions = query({
       .order("desc")
       .take(200);
 
-    const NOISE_TITLE_PREFIXES = ["[Using:", "[Request", "[SUGGESTION MODE:"];
     const results = [];
 
     for (const conv of conversations) {
-      if (conv.is_subagent || conv.is_workflow_sub || (conv.parent_conversation_id && !conv.parent_message_uuid)) continue;
-      if (!conv.inbox_dismissed_at || conv.inbox_dismissed_at < conv.updated_at) continue;
-      if (conv.inbox_killed_at) continue;
-
-      const title = conv.title?.trim() || "";
-      if (title.toLowerCase() === "warmup") continue;
-      if (NOISE_TITLE_PREFIXES.some((p) => title.startsWith(p))) continue;
+      if (!shouldShowInDismissed(conv)) continue;
 
       const isDismissedCompleted = conv.status === "completed";
 
