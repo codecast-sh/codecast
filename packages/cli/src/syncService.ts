@@ -716,6 +716,26 @@ export class SyncService {
     }
   }
 
+  async sendMessageToSession(conversationId: string, content: string): Promise<string | null> {
+    if (!this.apiToken) return null;
+    try {
+      const result = await this.client.mutation(
+        "pendingMessages:sendMessageToSession" as any,
+        {
+          conversation_id: conversationId,
+          content,
+          api_token: this.apiToken,
+        },
+      );
+      return result as string;
+    } catch (error) {
+      if (isAuthError(error)) {
+        throw new AuthExpiredError();
+      }
+      throw error;
+    }
+  }
+
   async setSessionError(conversationId: string, error?: string): Promise<void> {
     if (!this.apiToken) return;
     try {

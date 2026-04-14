@@ -89,6 +89,31 @@ export class TaskScheduler {
 
     this.log(`Claimed task "${task.title}" (${task._id})`);
 
+    // --context current path: inject the prompt into the originating conversation
+    // instead of spawning a fresh agent. The daemon's pending_messages subscription
+    // + autoResumeSession handle both live (tmux-inject) and stopped (resurrect
+    // then inject) sessions uniformly.
+    if (task.originating_conversation_id) {
+      try {
+        await this.syncService.sendMessageToSession(task.originating_conversation_id, task.prompt);
+        this.log(`Injected prompt into conversation ${task.originating_conversation_id.toString().slice(-8)} for task "${task.title}"`);
+        // Omit summary — the injected prompt and the agent's reply are the
+        // real record; a stub summary would leak into target_conversation_id
+        // threads as a useless assistant message.
+        await this.syncService.completeTaskRun(
+          task._id,
+          this.daemonId,
+          undefined,
+          task.originating_conversation_id,
+        );
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.log(`Failed to inject into conversation for task "${task.title}": ${msg}`, "error");
+        await this.syncService.failTaskRun(task._id, this.daemonId, `Injection failed: ${msg}`);
+      }
+      return;
+    }
+
     const prompt = this.buildPrompt(task);
     const agentType = task.agent_type || "claude";
     const projectPath = task.project_path || process.env.HOME || "/tmp";
