@@ -398,10 +398,6 @@ export const addMessage = mutation({
       updated_at: msgTimestamp,
       last_message_role: args.role,
     };
-    // Preserve dismiss: if conversation was dismissed, keep inbox_dismissed_at ahead of updated_at
-    if (conversation.inbox_dismissed_at && conversation.inbox_dismissed_at >= conversation.updated_at) {
-      convPatch.inbox_dismissed_at = msgTimestamp + 1;
-    }
     if (args.role === "user" && contentToStore?.trim()) {
       convPatch.last_message_preview = redactSecrets(contentToStore).replace(/\[Image[:\s][^\]]*\]/gi, "").trim().slice(0, 200);
       convPatch.last_user_message_at = msgTimestamp;
@@ -693,10 +689,6 @@ export const addMessages = mutation({
         updated_at: maxTimestamp,
         last_message_role: lastMsg.role,
       };
-      // Preserve dismiss: if conversation was dismissed, keep inbox_dismissed_at ahead of updated_at
-      if (conversation.inbox_dismissed_at && conversation.inbox_dismissed_at >= conversation.updated_at) {
-        convPatch.inbox_dismissed_at = maxTimestamp + 1;
-      }
       const userMsgs = args.messages.filter((m) => m.role === "user");
       if (userMsgs.length > 0) {
         const lastUserMsg = userMsgs[userMsgs.length - 1];

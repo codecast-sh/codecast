@@ -188,6 +188,13 @@ export default defineSchema({
     auto_shared: v.optional(v.boolean()),
     skip_title_generation: v.optional(v.boolean()),
     idle_summary: v.optional(v.string()),
+    // Absolute flag: a truthy value means dismissed until a user action clears
+    // it. Never compare against `updated_at` — dozens of mutations bump that
+    // field and a relative check re-opens the session. Set by:
+    // dismissFromInbox, linkSessions*, linkPlanHandoff (auto-dismiss parent),
+    // killSession-adjacent paths. Cleared only by: dispatch.sendMessage,
+    // pendingMessages.create, inboxStore.unstashSession, adminUnlinkSession.
+    // The list predicates live in inboxFilters.ts.
     inbox_dismissed_at: v.optional(v.number()),
     inbox_killed_at: v.optional(v.number()),
     inbox_deferred_at: v.optional(v.number()),

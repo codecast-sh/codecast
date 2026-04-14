@@ -32,9 +32,9 @@ const TABLE_CONFIG: Record<string, TableConfig> = {
       "started_at", "message_count", "short_id", "share_token",
       "is_private", "team_visibility", "auto_shared", "status", "agent_type",
     ]),
-    beforePatch: (doc, safe) => {
+    beforePatch: (_doc, safe) => {
       if (safe.inbox_dismissed_at && typeof safe.inbox_dismissed_at === "number") {
-        safe.inbox_dismissed_at = Math.max(Date.now(), doc.updated_at + 1);
+        safe.inbox_dismissed_at = Date.now();
       }
       return safe;
     },

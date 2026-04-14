@@ -188,7 +188,7 @@ export const heartbeat = mutation({
     let dismissed = false;
     if (session.conversation_id) {
       const conv = await ctx.db.get(session.conversation_id);
-      if (conv && conv.inbox_dismissed_at && conv.inbox_dismissed_at >= (conv.updated_at || 0) && !conv.is_subagent) {
+      if (conv && conv.inbox_dismissed_at && !conv.is_subagent) {
         dismissed = true;
       }
     }
