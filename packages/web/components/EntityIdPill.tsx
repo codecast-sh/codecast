@@ -20,6 +20,7 @@ import {
   FolderOpen,
 } from "lucide-react";
 import { Popover, PopoverContent, PopoverAnchor } from "./ui/popover";
+import { stripMarkdown } from "../lib/notificationText";
 
 const api = _api as any;
 
@@ -70,18 +71,6 @@ const PRIORITY_CONFIG: Record<string, { icon: any; color: string; label: string 
 
 export function isEntityId(text: string): boolean {
   return ENTITY_ID_RE.test(text.trim());
-}
-
-function stripMarkdown(text: string): string {
-  return text
-    .replace(/^#{1,6}\s+/gm, "")
-    .replace(/\*\*([^*]+)\*\*/g, "$1")
-    .replace(/\*([^*]+)\*/g, "$1")
-    .replace(/`([^`]+)`/g, "$1")
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
-    .replace(/^[-*]\s+/gm, "")
-    .replace(/\n+/g, " ")
-    .trim();
 }
 
 function TaskHoverContent({ task }: { task: any }) {
