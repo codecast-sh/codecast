@@ -19,6 +19,8 @@ import {
   resolveVisibilityMode,
 } from "./privacy";
 
+const NOISE_TITLE_PREFIXES = ["[Using:", "[Request", "[SUGGESTION MODE:"];
+
 async function getAuthenticatedUserId(
   ctx: { db: any },
   apiToken?: string
@@ -118,7 +120,6 @@ async function findChildConversations(
     }
   }
 
-  const NOISE_TITLE_PREFIXES = ["[Using:", "[Request", "[SUGGESTION MODE:"];
   const children = allChildren
     .filter((conv: any) => !NOISE_TITLE_PREFIXES.some((p) => (conv.title || "").startsWith(p)))
     .map((conv: any) => ({
