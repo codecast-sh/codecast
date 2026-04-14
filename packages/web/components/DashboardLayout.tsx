@@ -3,6 +3,7 @@ import { useMountEffect } from "../hooks/useMountEffect";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useEventListener } from "../hooks/useEventListener";
 import { usePathname, useRouter } from "next/navigation";
+import { useLocation } from "react-router";
 import { useMutation, useConvexAuth } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Panel, Group, Separator } from "react-resizable-panels";
@@ -404,7 +405,9 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
     );
   }
 
-  const hasTabs = s.tabs.length > 0;
+  const routerLocation = useLocation();
+  const isNonTabRoute = routerLocation.pathname.startsWith("/settings");
+  const hasTabs = s.tabs.length > 0 && !isNonTabRoute;
   const content = hasTabs ? <TabContent /> : children;
 
   const pageContent = isFullWidthPage || hasTabs ? (
