@@ -215,6 +215,7 @@ export type TaskItem = {
   team_id?: string;
   workflow_run_id?: string;
   workflow_node_id?: string;
+  project_path?: string;
 };
 
 export type TaskDetail = TaskItem & {

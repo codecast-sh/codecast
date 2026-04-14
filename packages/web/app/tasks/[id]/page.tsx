@@ -1038,6 +1038,7 @@ function TaskDetailContent() {
           contextTitle={data.title}
           getContextBody={getTaskContextBody}
           linkedObjectId={data._id}
+          projectPath={data.project_path}
         />
         </div>
         </div>

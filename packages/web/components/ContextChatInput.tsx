@@ -20,6 +20,7 @@ interface ContextChatInputProps {
   getContextBody: () => string;
   placeholder?: string;
   linkedObjectId?: string;
+  projectPath?: string;
 }
 
 export function ContextChatInput({
@@ -28,6 +29,7 @@ export function ContextChatInput({
   getContextBody,
   placeholder,
   linkedObjectId,
+  projectPath: projectPathProp,
 }: ContextChatInputProps) {
   const [message, setMessage] = useState("");
   const [isFocused, setIsFocused] = useState(false);
@@ -63,7 +65,7 @@ export function ContextChatInput({
 
     const store = useInboxStore.getState();
     const { projectPath, gitRoot } = store.currentConversation;
-    const path = projectPath || gitRoot;
+    const path = projectPathProp || projectPath || gitRoot;
     const convexAgentType = AGENT_TYPES.find(a => a.key === agentKey)?.convex || "claude_code";
 
     soundNewSession();
