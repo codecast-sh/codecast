@@ -31,7 +31,7 @@ export function SettingsLayout() {
   return (
     <AuthGuard>
       <DashboardLayout>
-        <div className="max-w-4xl mx-auto">
+        <div className="max-w-4xl mx-auto px-2 sm:px-4 pt-4 sm:pt-6 pb-8">
           <div className="flex items-center justify-between mb-6">
             <h1 className="text-2xl font-semibold text-sol-text">Settings</h1>
             <Button
