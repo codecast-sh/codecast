@@ -32,22 +32,27 @@ function isNonTabRoute(path: string): boolean {
   return path.startsWith("/settings");
 }
 
+function shouldUseTabRouting(targetPath: string): boolean {
+  if (isNonTabRoute(targetPath)) return false;
+  if (isNonTabRoute(window.location.pathname)) return false;
+  const { tabs, activeTabId } = useInboxStore.getState();
+  return tabs.length > 0 && !!activeTabId;
+}
+
 export function useRouter() {
   const navigate = useNavigate();
   return {
     push: (path: string) => {
-      const { tabs, activeTabId } = useInboxStore.getState();
-      if (tabs.length > 0 && activeTabId && !isNonTabRoute(path)) {
-        useInboxStore.getState().updateTab(activeTabId, { path, title: pathLabel(path) });
+      if (shouldUseTabRouting(path)) {
+        useInboxStore.getState().updateTab(useInboxStore.getState().activeTabId!, { path, title: pathLabel(path) });
         window.history.replaceState(null, "", path);
       } else {
         navigate(path);
       }
     },
     replace: (path: string) => {
-      const { tabs, activeTabId } = useInboxStore.getState();
-      if (tabs.length > 0 && activeTabId && !isNonTabRoute(path)) {
-        useInboxStore.getState().updateTab(activeTabId, { path, title: pathLabel(path) });
+      if (shouldUseTabRouting(path)) {
+        useInboxStore.getState().updateTab(useInboxStore.getState().activeTabId!, { path, title: pathLabel(path) });
         window.history.replaceState(null, "", path);
       } else {
         navigate(path, { replace: true });
