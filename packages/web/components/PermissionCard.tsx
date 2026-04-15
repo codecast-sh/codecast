@@ -70,7 +70,13 @@ function PermissionRow({
   );
 }
 
-export function PermissionStack({ permissions }: { permissions: Permission[] }) {
+export function PermissionStack({
+  permissions,
+  onAllowAll,
+}: {
+  permissions: Permission[];
+  onAllowAll?: () => void;
+}) {
   const updatePermissionStatus = useMutation(api.permissions.updatePermissionStatus);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState(false);
@@ -107,6 +113,16 @@ export function PermissionStack({ permissions }: { permissions: Permission[] }) 
       )
     );
   }, [pending, updatePermissionStatus]);
+
+  const handleAllowAll = useCallback(async () => {
+    if (!onAllowAll) return;
+    await Promise.all(
+      pending.map((p) =>
+        updatePermissionStatus({ permission_id: p._id, status: "approved" }).catch(() => {})
+      )
+    );
+    onAllowAll();
+  }, [pending, updatePermissionStatus, onAllowAll]);
 
   useEventListener("keydown", useCallback((e: KeyboardEvent) => {
     const tag = (e.target as HTMLElement)?.tagName;
@@ -171,6 +187,15 @@ export function PermissionStack({ permissions }: { permissions: Permission[] }) 
             >
               {inflight.has(p._id) ? "..." : "Approve"}
             </button>
+            {onAllowAll && (
+              <button
+                onClick={handleAllowAll}
+                title="Approve this and bypass all future permission prompts in this session"
+                className="px-2.5 py-0.5 text-[11px] font-medium rounded border border-orange-500/40 text-orange-500 hover:bg-orange-500 hover:text-sol-bg transition-colors"
+              >
+                Allow all
+              </button>
+            )}
             <button
               onClick={() => handleDeny(p._id)}
               disabled={inflight.has(p._id)}
@@ -215,6 +240,15 @@ export function PermissionStack({ permissions }: { permissions: Permission[] }) 
           >
             Approve all
           </button>
+          {onAllowAll && (
+            <button
+              onClick={handleAllowAll}
+              title="Approve all and bypass future permission prompts in this session"
+              className="px-2 py-0.5 text-[10px] font-medium rounded border border-orange-500/40 text-orange-500 hover:bg-orange-500 hover:text-sol-bg transition-colors"
+            >
+              Allow all tool calls
+            </button>
+          )}
           <button
             onClick={handleDenyAll}
             className="px-2 py-0.5 text-[10px] font-medium rounded border border-sol-border/40 text-sol-text-dim hover:bg-sol-red hover:text-sol-bg transition-colors"

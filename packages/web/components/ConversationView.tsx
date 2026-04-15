@@ -7416,6 +7416,21 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     clearTimeout(optimisticTimerRef.current);
     optimisticTimerRef.current = setTimeout(() => setOptimisticMode(null), 8000);
   }, [conversation, effectiveIsOwner, sendKeys, optimisticMode, managedSession?.permission_mode, effectiveConversationId]);
+
+  const handleEnableBypass = useCallback(() => {
+    if (!conversation || !effectiveIsOwner || conversation.status !== "active") return;
+    const currentMode = optimisticMode || managedSession?.permission_mode || "default";
+    const currentIdx = CC_MODE_ORDER.indexOf(currentMode);
+    const targetIdx = CC_MODE_ORDER.indexOf("bypassPermissions");
+    if (currentIdx === -1 || targetIdx === -1 || currentIdx === targetIdx) return;
+    const steps = (targetIdx - currentIdx + CC_MODE_ORDER.length) % CC_MODE_ORDER.length;
+    if (steps === 0) return;
+    const keys = Array(steps).fill("BTab").join(" ");
+    sendKeys({ conversation_id: (effectiveConversationId || conversation._id) as Id<"conversations">, keys });
+    setOptimisticMode("bypassPermissions");
+    clearTimeout(optimisticTimerRef.current);
+    optimisticTimerRef.current = setTimeout(() => setOptimisticMode(null), 8000);
+  }, [conversation, effectiveIsOwner, sendKeys, optimisticMode, managedSession?.permission_mode, effectiveConversationId]);
   useWatchEffect(() => {
     if (optimisticMode && managedSession?.permission_mode === optimisticMode) {
       setOptimisticMode(null);
@@ -10318,7 +10333,17 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       {pendingPermissions && pendingPermissions.length > 0 && (
         <div className={`border-t border-sol-border/40 shrink-0 ${embedded ? "-mx-[9999px] px-[9999px]" : ""}`}>
           <div className="max-w-7xl mx-auto px-2 sm:px-3 md:px-4 py-1.5">
-            <PermissionStack permissions={pendingPermissions as any} />
+            <PermissionStack
+              permissions={pendingPermissions as any}
+              onAllowAll={
+                (conversation?.agent_type ?? "claude_code") === "claude_code" &&
+                effectiveIsOwner &&
+                conversation?.status === "active" &&
+                effectiveMode !== "bypassPermissions"
+                  ? handleEnableBypass
+                  : undefined
+              }
+            />
           </div>
         </div>
       )}
