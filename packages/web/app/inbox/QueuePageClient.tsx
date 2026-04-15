@@ -4,7 +4,7 @@ import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useEventListener } from "../../hooks/useEventListener";
 import { useShortcutContext } from "../../shortcuts";
 import { useQuery, useMutation } from "convex/react";
-import { useSearchParams, useRouter } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { DashboardLayout } from "../../components/DashboardLayout";
@@ -14,17 +14,14 @@ import { ConversationDiffLayout } from "../../components/ConversationDiffLayout"
 import { ConversationData } from "../../components/ConversationView";
 import { shareOrigin } from "../../lib/utils";
 import { useConversationMessages } from "../../hooks/useConversationMessages";
-import { useInboxStore, InboxSession, getSessionRenderKey, isConvexId, sortSessions, isInterruptControlMessage, ensureHydrated } from "../../store/inboxStore";
-import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "../../components/ui/tooltip";
-import { cleanTitle } from "../../lib/conversationProcessor";
+import { useInboxStore, getSessionRenderKey, isConvexId, sortSessions, isInterruptControlMessage, ensureHydrated } from "../../store/inboxStore";
 import { SharePopover } from "../../components/SharePopover";
 import { ActivityFeed } from "../../components/ActivityFeed";
-import { TaskStatusBadge } from "../../components/TaskStatusBadge";
 import { PlanContextPanel } from "../../components/PlanContextPanel";
 import { WorkflowContextPanel } from "../../components/WorkflowContextPanel";
 import { toast } from "sonner";
 import { animatedStashSession } from "../../store/undoActions";
-import { cleanUserMessage, formatIdleDuration, getProjectName, SessionListPanel } from "../../components/GlobalSessionPanel";
+import { cleanUserMessage } from "../../components/GlobalSessionPanel";
 
 const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, onSendAndAdvance, onSendAndDismiss, lastUserMessage, sessionError, onBack, targetMessageId, highlightQuery, onClearHighlight }: { sessionId: string; isIdle: boolean; onSendAndAdvance: () => void; onSendAndDismiss?: () => void; lastUserMessage?: string | null; sessionError?: string; onBack?: () => void; targetMessageId?: string; highlightQuery?: string; onClearHighlight?: () => void }) {
   const {
@@ -189,390 +186,7 @@ const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, o
   );
 });
 
-function SessionCard({
-  session,
-  isActive,
-  globalIndex,
-  onSelect,
-  onDismiss,
-  onDefer,
-  onPin,
-  onRestore,
-  onNavigateToSession,
-  variant = "default",
-}: {
-  session: InboxSession;
-  isActive: boolean;
-  globalIndex: number;
-  onSelect: (index: number) => void;
-  onDismiss?: (id: string) => void;
-  onDefer?: (id: string) => void;
-  onPin?: (id: string) => void;
-  onRestore?: (id: string) => void;
-  onNavigateToSession?: (id: string) => void;
-  variant?: "default" | "working" | "dismissed";
-}) {
-  const project = getProjectName(session.git_root, session.project_path);
-  const isWorking = variant === "working";
-  const isDismissed = variant === "dismissed";
-  const isSubagent = !!session.is_subagent || !!session.worktree_name;
-  const displayTitle = cleanTitle(session.title || "New Session");
-  const isSlashCommand = displayTitle.startsWith("/");
-  const cleanedUserMsg = cleanUserMessage(session.last_user_message);
-
-  const [isDragOver, setIsDragOver] = useState(false);
-  const dragCounter = useRef(0);
-  const generateUploadUrl = useMutation(api.images.generateUploadUrl);
-  const sendMessage = useMutation(api.pendingMessages.sendMessageToSession);
-
-  const handleFileDragEnter = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    dragCounter.current++;
-    if (e.dataTransfer.types.includes("Files")) setIsDragOver(true);
-  }, []);
-
-  const handleFileDragOver = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-  }, []);
-
-  const handleFileDragLeave = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    dragCounter.current--;
-    if (dragCounter.current === 0) setIsDragOver(false);
-  }, []);
-
-  const handleFileDrop = useCallback(async (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    dragCounter.current = 0;
-    setIsDragOver(false);
-    const files = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith("image/"));
-    if (files.length === 0) {
-      if (e.dataTransfer.files.length > 0) toast.error("Only image files are supported");
-      return;
-    }
-    try {
-      const storageIds: Id<"_storage">[] = [];
-      for (const file of files) {
-        const uploadUrl = await generateUploadUrl({});
-        const result = await fetch(uploadUrl, { method: "POST", headers: { "Content-Type": file.type }, body: file });
-        const { storageId } = await result.json();
-        storageIds.push(storageId);
-      }
-      await sendMessage({ conversation_id: session._id as Id<"conversations">, content: "[image]", image_storage_ids: storageIds });
-      toast.success(`Attached ${files.length} image${files.length > 1 ? "s" : ""} to "${displayTitle}"`);
-    } catch {
-      toast.error("Failed to attach files");
-    }
-  }, [session._id, displayTitle, generateUploadUrl, sendMessage]);
-
-  if (isSubagent) {
-    return (
-      <div
-        data-session-id={session._id}
-        onDragEnter={handleFileDragEnter}
-        onDragOver={handleFileDragOver}
-        onDragLeave={handleFileDragLeave}
-        onDrop={handleFileDrop}
-        className={`relative group transition-colors overflow-hidden ${isDragOver ? "ring-1 ring-inset ring-violet-400/40 bg-violet-500/10" : ""} ${
-          isActive
-            ? "bg-violet-500/[0.08] border-l-2 border-l-violet-400/60"
-            : isWorking
-              ? "hover:bg-violet-500/[0.06] border-l border-l-violet-400/25"
-              : isDismissed
-                ? "opacity-40 hover:opacity-60 hover:bg-violet-500/[0.04]"
-                : "hover:bg-violet-500/[0.06] border-l border-l-violet-500/15"
-        }`}
-      >
-        <div
-          role="button"
-          tabIndex={0}
-          onClick={() => onSelect(globalIndex)}
-          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(globalIndex); } }}
-          className="w-full text-left cursor-pointer px-2 py-1"
-        >
-          <div className="flex items-center gap-1.5">
-            <svg className="w-3 h-3 text-violet-400/60 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M6 4v12h12" />
-              <path strokeLinecap="round" strokeLinejoin="round" d="M14 12l4 4-4 4" />
-            </svg>
-            <span className={`truncate text-xs leading-tight flex-1 ${
-              isActive ? "text-violet-300 font-medium" : "text-gray-400 font-normal"
-            }`}>
-              {isSlashCommand ? <span className="font-mono text-violet-400/80">{displayTitle}</span> : displayTitle}
-            </span>
-            <div className="flex items-center gap-1 flex-shrink-0">
-              {session.session_error && (
-                <span className="w-1.5 h-1.5 rounded-full bg-sol-red" title={session.session_error} />
-              )}
-              {session.is_unresponsive && !session.session_error && (
-                <span className="w-1.5 h-1.5 rounded-full bg-sol-orange" title="Session unresponsive" />
-              )}
-              {session.has_pending && !session.is_unresponsive && (
-                <span className="w-1.5 h-1.5 rounded-full bg-sol-yellow animate-pulse" title="Message pending" />
-              )}
-              {isWorking && (
-                <span className="relative flex h-1.5 w-1.5" title="Working">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-violet-400 opacity-75" />
-                  <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-violet-400" />
-                </span>
-              )}
-              {!isWorking && !isDismissed && session.is_idle && !session.is_connected && !session.session_error && !session.is_unresponsive && !session.has_pending && session.message_count > 0 && (
-                <span className="w-1.5 h-1.5 rounded-full bg-gray-500/40 ring-1 ring-gray-500/20" title="Session idle" />
-              )}
-              {session.message_count > 0 && (
-                <span className="text-[9px] text-gray-500 tabular-nums">{session.message_count}</span>
-              )}
-              <span className="text-[9px] text-gray-500 tabular-nums">
-                {formatIdleDuration(session.updated_at)}
-              </span>
-            </div>
-          </div>
-          {cleanedUserMsg && (
-            <div className="text-[10px] text-gray-500 mt-0.5 truncate leading-snug pl-[18px]">
-              <span className="text-gray-600 mr-0.5">&gt;</span>
-              {cleanedUserMsg}
-            </div>
-          )}
-          {session.active_task && (
-            <div className="flex items-center gap-1 mt-0.5 pl-[18px]">
-              <span className="inline-flex items-center px-1 py-0 rounded text-[9px] font-medium bg-violet-900/20 text-violet-400/70 border border-violet-600/20 max-w-[160px] truncate" title={session.active_task.title}>
-                {session.active_task.title}
-              </span>
-            </div>
-          )}
-        </div>
-        {(onDismiss || onDefer || onPin) && (
-          <div className={`absolute top-0 bottom-0 right-0 flex items-center py-1 opacity-0 group-hover:opacity-100 transition-opacity pl-8 pr-2 bg-gradient-to-r from-transparent to-sol-bg-alt`}>
-            {onDismiss && (
-              <button
-                onClick={(e) => { e.stopPropagation(); onDismiss(session._id); }}
-                className="p-0.5 rounded text-gray-500 hover:text-sol-red transition-colors"
-              >
-                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            )}
-          </div>
-        )}
-        {onRestore && (
-          <button
-            onClick={(e) => { e.stopPropagation(); onRestore(session._id); }}
-            className="absolute top-1 right-1.5 p-0.5 rounded text-gray-500 hover:text-violet-400 opacity-0 group-hover:opacity-100 transition-opacity"
-          >
-            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17L7 7M7 7h6M7 7v6" />
-            </svg>
-          </button>
-        )}
-      </div>
-    );
-  }
-
-  return (
-    <div
-      data-session-id={session._id}
-      onDragEnter={handleFileDragEnter}
-      onDragOver={handleFileDragOver}
-      onDragLeave={handleFileDragLeave}
-      onDrop={handleFileDrop}
-      className={`relative group border-b border-sol-border/30 transition-colors overflow-hidden ${isDragOver ? "ring-1 ring-inset ring-sol-cyan bg-sol-cyan/10" : ""} ${
-        isActive
-          ? "bg-sol-cyan/15 border-l-[3px] border-l-sol-cyan shadow-[inset_0_0_16px_rgba(42,161,152,0.12)]"
-          : isWorking
-            ? "bg-sol-green/[0.04] border-l-2 border-l-sol-green/40 hover:bg-sol-green/[0.08]"
-            : isDismissed
-              ? "opacity-60 hover:opacity-80 hover:bg-sol-bg-alt/80"
-              : "hover:bg-sol-bg-alt/80"
-      }`}
-    >
-      <div
-        role="button"
-        tabIndex={0}
-        onClick={() => onSelect(globalIndex)}
-        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(globalIndex); } }}
-        className="w-full text-left cursor-pointer px-2.5 sm:px-3 py-1.5 sm:py-2"
-      >
-        <div className={`truncate leading-tight ${
-          isActive ? "text-sm text-sol-text font-semibold" : isWorking ? "text-sm text-sol-text font-medium" : isDismissed ? "text-sm text-sol-text-muted" : "text-sm text-sol-text"
-        }`}>
-          {isSlashCommand ? <span className="font-mono text-sol-cyan">{displayTitle}</span> : displayTitle}
-        </div>
-        {(session.idle_summary || session.subtitle) && !session.implementation_session && (
-          <div className="text-[11px] text-sol-text-muted mt-0.5 line-clamp-2 leading-snug whitespace-pre-line">
-            {session.idle_summary || session.subtitle}
-          </div>
-        )}
-        {cleanedUserMsg && (
-          <div className="text-[11px] text-sky-700 dark:text-sky-300 mt-0.5 truncate leading-snug font-semibold">
-            <span className="text-sky-600/60 dark:text-sky-400/50 mr-0.5">&gt;</span>
-            {cleanedUserMsg}
-          </div>
-        )}
-        {session.message_count === 0 && !session.last_user_message && (
-          session.is_connected ? (
-            <div className="flex items-center gap-1.5 mt-0.5 text-[11px] text-sol-green/70">
-              <span className="w-1.5 h-1.5 rounded-full bg-sol-green/70" />
-              <span>Ready</span>
-            </div>
-          ) : (Date.now() - (session.started_at || session.updated_at)) < 2 * 60 * 1000 ? (
-            <div className="flex items-center gap-1.5 mt-0.5 text-[11px] text-sol-cyan/60">
-              <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" />
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-              </svg>
-              <span>Starting...</span>
-            </div>
-          ) : (
-            <div className="text-[11px] text-sol-text-dim/60 mt-0.5">
-              Waiting for connection
-            </div>
-          )
-        )}
-        <div className="flex items-center gap-1.5 mt-1">
-          {project !== "unknown" && (
-            <span className={`text-[10px] truncate ${
-              isWorking ? "font-medium text-sol-green/70" : "font-medium text-sol-cyan/70"
-            }`}>{project}</span>
-          )}
-          {session.worktree_name && (
-            <span className="text-[9px] text-sol-cyan font-mono truncate max-w-[80px]" title={session.worktree_branch || session.worktree_name}>
-              {session.worktree_name}
-            </span>
-          )}
-          {session.message_count > 0 && (
-            <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">
-              {session.message_count} msg{session.message_count !== 1 ? "s" : ""}
-            </span>
-          )}
-          <div className="flex items-center gap-1.5 flex-shrink-0 ml-auto">
-            {session.active_plan && (
-              <span className="inline-flex items-center gap-0.5 px-1 py-0 rounded text-[9px] font-medium bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20 max-w-[120px] truncate" title={session.active_plan.title}>
-                {session.active_plan.title}
-              </span>
-            )}
-            {session.active_task && (
-              <span className="inline-flex items-center gap-0.5 px-1 py-0 rounded text-[9px] font-medium bg-sol-violet/10 text-sol-violet border border-sol-violet/20 max-w-[140px] truncate" title={session.active_task.title}>
-                {session.active_task.title}
-              </span>
-            )}
-            {session.session_error && (
-              <span className="w-1.5 h-1.5 rounded-full bg-sol-red" title={session.session_error} />
-            )}
-            {session.is_unresponsive && !session.session_error && (
-              <span className="w-1.5 h-1.5 rounded-full bg-sol-orange" title="Session unresponsive" />
-            )}
-            {session.has_pending && !session.is_unresponsive && (
-              <span className="w-1.5 h-1.5 rounded-full bg-sol-yellow animate-pulse" title="Message pending" />
-            )}
-            {!isWorking && !isDismissed && session.is_idle && !session.is_connected && !session.session_error && !session.is_unresponsive && !session.has_pending && session.message_count > 0 && (
-              <span className="w-1.5 h-1.5 rounded-full bg-sol-text-dim/40 ring-1 ring-sol-text-dim/20" title="Session idle" />
-            )}
-            {isWorking && (
-              <span className="relative flex h-2 w-2" title="Working">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-sol-green opacity-75" />
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-sol-green" />
-              </span>
-            )}
-            <span className="text-[10px] text-sol-text-dim tabular-nums">
-              {formatIdleDuration(session.updated_at)}
-            </span>
-          </div>
-        </div>
-        {session.implementation_session && (
-          <div
-            className="mt-1 flex items-center gap-1 text-[11px] text-sol-cyan hover:text-sol-cyan/80 cursor-pointer"
-            onClick={(e) => {
-              e.stopPropagation();
-              if (onNavigateToSession) onNavigateToSession(session.implementation_session!._id);
-            }}
-          >
-            <svg className="w-3 h-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
-            </svg>
-            <span className="truncate underline underline-offset-2">
-              {cleanTitle(session.implementation_session.title || "New Session")}
-            </span>
-          </div>
-        )}
-      </div>
-      {onPin && session.is_pinned && (
-        <div className="absolute top-0 right-0 py-1 pr-2 pointer-events-none z-[1]" style={{ paddingLeft: 24, background: isActive ? 'linear-gradient(to right, transparent, color-mix(in srgb, var(--sol-cyan) 15%, var(--sol-bg-alt)) 60%)' : 'linear-gradient(to right, transparent, var(--sol-bg-alt) 60%)' }}>
-          <button
-            onClick={(e) => { e.stopPropagation(); onPin(session._id); }}
-            className="p-1 rounded text-sol-magenta transition-colors pointer-events-auto"
-          >
-            <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 17v5" />
-              <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76z" />
-            </svg>
-          </button>
-        </div>
-      )}
-      {(onDismiss || onDefer || onPin) && (
-        <div className={`absolute top-0 bottom-0 right-0 flex flex-col items-center justify-between py-1 opacity-0 group-hover:opacity-100 transition-opacity pl-16 pr-2 ${isActive ? '' : 'bg-gradient-to-r from-transparent via-sol-bg-alt/60 to-sol-bg-alt'}`} style={isActive ? { background: 'linear-gradient(to right, transparent, color-mix(in srgb, color-mix(in srgb, var(--sol-cyan) 15%, var(--sol-bg-alt)) 60%, transparent), color-mix(in srgb, var(--sol-cyan) 15%, var(--sol-bg-alt)))' } : undefined}>
-          {onDismiss && (
-            <button
-              onClick={(e) => { e.stopPropagation(); onDismiss(session._id); }}
-              className="flex items-center gap-1 px-1.5 py-0.5 rounded text-xs text-sol-text-dim hover:text-sol-red transition-colors"
-            >
-              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 6l12 12M18 6L6 18" />
-              </svg>
-              Dismiss
-            </button>
-          )}
-          {onDefer && (
-            <button
-              onClick={(e) => { e.stopPropagation(); onDefer(session._id); }}
-              className="flex items-center gap-1 px-1.5 py-0.5 rounded text-xs text-sol-text-dim hover:text-sol-yellow transition-colors"
-            >
-              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v14m0 0l-6-6m6 6l6-6M5 21h14" />
-              </svg>
-              Defer
-            </button>
-          )}
-          {onPin && (
-            <button
-              onClick={(e) => { e.stopPropagation(); onPin(session._id); }}
-              className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-xs transition-colors ${session.is_pinned ? 'text-sol-magenta' : 'text-sol-text-dim hover:text-sol-magenta'}`}
-            >
-              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill={session.is_pinned ? "currentColor" : "none"} stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-                <path d="M12 17v5" />
-                <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76z" />
-              </svg>
-              {session.is_pinned ? "Unpin" : "Pin"}
-            </button>
-          )}
-        </div>
-      )}
-      {onRestore && (
-        <TooltipProvider delayDuration={300}>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                onClick={(e) => { e.stopPropagation(); onRestore(session._id); }}
-                className="absolute top-1.5 right-1.5 p-1 rounded-md text-sol-text-dim hover:text-sol-cyan opacity-0 group-hover:opacity-100 transition-opacity bg-sol-bg/95 backdrop-blur-sm shadow-sm border border-sol-border/30"
-              >
-                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17L7 7M7 7h6M7 7v6" />
-                </svg>
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="left">Restore</TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
-      )}
-    </div>
-  );
-}
-
-// InboxSessionPanel and NeedsAttentionSection moved to GlobalSessionPanel.tsx as shared SessionListPanel
+// SessionCard moved to GlobalSessionPanel.tsx as part of the shared SessionListPanel
 
 function InboxShortcuts() {
   useShortcutContext('inbox');
@@ -581,7 +195,6 @@ function InboxShortcuts() {
 
 export function QueuePageClient() {
   const searchParams = useSearchParams();
-  const router = useRouter();
 
   // Auto-open session panel when entering inbox (DashboardLayout renders it)
   useMountEffect(() => {
@@ -712,13 +325,8 @@ export function QueuePageClient() {
     }
   }, [pendingNavigateId, pendingScrollToMessageId, sessions, setCurrentSession]);
 
-  const handleDismiss = useCallback((id: string) => {
-    animatedStashSession(id);
-  }, []);
-
   const prevSessionRef = useRef(currentSessionId);
   prevSessionRef.current = currentSessionId;
-
 
   const handleSendAndAdvance = useCallback(() => {
     advanceToNext();
@@ -727,26 +335,6 @@ export function QueuePageClient() {
   const handleSendAndDismiss = useCallback(() => {
     if (currentSessionId) animatedStashSession(currentSessionId);
   }, [currentSessionId]);
-
-  const handleSessionSelect = useCallback((id: string) => {
-    if (sessions[id]) {
-      setCurrentSession(id);
-      if (showMySessions) setShowMySessions(false);
-    } else if (dismissedSessions[id]) {
-      setViewingDismissedId(id);
-      if (showMySessions) setShowMySessions(false);
-    } else {
-      useInboxStore.setState({ pendingNavigateId: id, showMySessions: false });
-    }
-  }, [sessions, dismissedSessions, setCurrentSession, setViewingDismissedId, showMySessions, setShowMySessions]);
-
-  const handleForkSelect = useCallback((forkId: string, parentId: string, _parentMessageUuid: string) => {
-    // Queue fork branch activation, then open the parent conversation
-    useInboxStore.getState().setPendingForkActivation(forkId);
-    useInboxStore.getState().setActiveForkHighlight(forkId);
-    setCurrentSession(parentId);
-    if (showMySessions) setShowMySessions(false);
-  }, [setCurrentSession, showMySessions, setShowMySessions]);
 
   const viewingDismissedSession = viewingDismissedId
     ? dismissedSessions[viewingDismissedId] ?? null
@@ -842,13 +430,8 @@ export function QueuePageClient() {
     setShowMySessions(true);
   }, [setShowMySessions]);
 
-  const [mobileSessionsOpen, setMobileSessionsOpen] = useState(false);
-  const [isMobileInbox, setIsMobileInbox] = useState(false);
   const viewingDismissedRenderKey = getSessionRenderKey(viewingDismissedSession);
   const currentSessionRenderKey = getSessionRenderKey(currentSession);
-
-  useMountEffect(() => { setIsMobileInbox(window.innerWidth < 768); });
-  useEventListener("resize", () => setIsMobileInbox(window.innerWidth < 768));
 
   const inboxContent = (
     <>
@@ -920,31 +503,8 @@ export function QueuePageClient() {
     <DashboardLayout>
       <InboxShortcuts />
       <div className="flex flex-col h-full">
-      {isMobileInbox ? (
-        <div className="flex-1 min-h-0 relative">
-          <div className="h-full">{inboxContent}</div>
-          <button
-            onClick={() => setMobileSessionsOpen(!mobileSessionsOpen)}
-            className="absolute top-2 right-2 z-30 flex items-center gap-1.5 px-3 py-2 rounded-lg bg-sol-bg-alt/95 border border-sol-border/60 text-sol-text-dim text-xs backdrop-blur-sm shadow-md hover:text-sol-text hover:border-sol-border transition-colors"
-          >
-            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h7" />
-            </svg>
-            {sortedSessions.length}
-          </button>
-          {mobileSessionsOpen && (
-            <>
-              <div className="fixed inset-0 z-40 bg-black/50" onClick={() => setMobileSessionsOpen(false)} />
-              <div className="fixed inset-y-0 right-0 z-50 w-[80vw] max-w-xs shadow-xl animate-slide-in-right">
-                <SessionListPanel onSessionSelect={handleSessionSelect} onForkSelect={handleForkSelect} activeSessionId={viewingDismissedId ?? currentSessionId} />
-              </div>
-            </>
-          )}
-        </div>
-      ) : (
-        <div className="flex-1 min-h-0">{inboxContent}</div>
-      )}
-      {showShortcuts && !isMobileInbox && (
+      <div className="flex-1 min-h-0">{inboxContent}</div>
+      {showShortcuts && (
         <div className="flex-shrink-0 px-3 py-1 border-t border-sol-border/30 bg-sol-bg-alt/30 flex items-center gap-3 text-[10px] text-sol-text-dim">
           <span className="flex items-center gap-1">
             <span className="flex items-center gap-[2px]"><KeyCap size="xs">{"\u2303"}</KeyCap><KeyCap size="xs">J</KeyCap><span className="text-sol-text-dim/40">/</span><KeyCap size="xs">K</KeyCap></span> nav
