@@ -8295,32 +8295,36 @@ schedule
     let originating_conversation_id: string | undefined;
     let target_conversation_id: string | undefined;
 
-    const needsSession = options.context === "current" || options.thread;
-    if (needsSession) {
-      const sessionId = findCurrentSessionFromProcess(getRealCwd());
-      if (sessionId) {
-        if (options.context === "current") {
-          console.log(fmt.muted(`Capturing context from session ${sessionId.slice(0, 8)}...`));
-        }
-        try {
-          const resp = await fetch(`${siteUrl}/cli/sessions`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ api_token: config.auth_token, session_id: sessionId }),
-          });
-          const data = await resp.json();
-          if (data?.conversation_id) {
-            originating_conversation_id = data.conversation_id;
-            if (options.thread) {
-              target_conversation_id = data.conversation_id;
-            }
+    // Always try to capture the originating session so scheduled tasks inject
+    // back into the live conversation instead of spawning fresh agents.
+    const sessionId = findCurrentSessionFromProcess(getRealCwd());
+    if (sessionId) {
+      const debug = !!process.env.DEBUG;
+      try {
+        if (debug) console.error(`[DEBUG] Resolving conversation for session ${sessionId}`);
+        const resp = await fetch(`${siteUrl}/cli/sessions`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ api_token: config.auth_token, session_ids: [sessionId] }),
+        });
+        const data = await resp.json();
+        if (debug) console.error(`[DEBUG] Session lookup response: ${JSON.stringify(data).slice(0, 200)}`);
+        const results = data?.conversations ?? (Array.isArray(data) ? data : [data]);
+        const conv = results[0];
+        if (conv?.conversation_id) {
+          originating_conversation_id = conv.conversation_id;
+          if (debug) console.error(`[DEBUG] Captured originating_conversation_id: ${originating_conversation_id}`);
+          if (options.thread) {
+            target_conversation_id = conv.conversation_id;
           }
-        } catch {}
+        }
+      } catch (err) {
+        if (debug) console.error(`[DEBUG] Session lookup failed:`, err);
       }
-      if (options.thread && !target_conversation_id) {
-        console.error("Could not resolve current conversation for --thread");
-        process.exit(1);
-      }
+    }
+    if (options.thread && !target_conversation_id) {
+      console.error("Could not resolve current conversation for --thread");
+      process.exit(1);
     }
 
     try {

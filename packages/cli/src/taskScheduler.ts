@@ -95,7 +95,9 @@ export class TaskScheduler {
     // then inject) sessions uniformly.
     if (task.originating_conversation_id) {
       try {
-        await this.syncService.sendMessageToSession(task.originating_conversation_id, task.prompt);
+        const safeTitle = (task.title || "").replace(/"/g, "&quot;");
+        const wrappedPrompt = `<scheduled-task title="${safeTitle}" task-id="${task._id}">${task.prompt}</scheduled-task>`;
+        await this.syncService.sendMessageToSession(task.originating_conversation_id, wrappedPrompt);
         this.log(`Injected prompt into conversation ${task.originating_conversation_id.toString().slice(-8)} for task "${task.title}"`);
         // Omit summary — the injected prompt and the agent's reply are the
         // real record; a stub summary would leak into target_conversation_id
