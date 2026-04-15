@@ -79,7 +79,7 @@ import { parseFileChangeSummary, parseUnifiedDiffSections } from "../lib/unified
 import { setupDesktopDrag, desktopHeaderClass } from "../lib/desktop";
 import { MessageNavButton } from "./MessageBrowserPopover";
 import type { MentionItem } from "./editor/MentionList";
-import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight } from "lucide-react";
+import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, Clock } from "lucide-react";
 import { ComposeEditor, type ComposeEditorHandle } from "./editor/ComposeEditor";
 import { useMentionQuery } from "../hooks/useMentionQuery";
 
@@ -911,7 +911,8 @@ type UserMessageKind =
   | { kind: 'empty' }
   | { kind: 'teammate_events' }
   | { kind: 'continuation' }
-  | { kind: 'poll_response' };
+  | { kind: 'poll_response' }
+  | { kind: 'scheduled_task' };
 
 const STICKY_NOISE_PREFIXES = ["[Request interrupted", "<task-notification>", "Your task is to create a detailed summary", "Full transcript available at:"];
 
@@ -930,6 +931,7 @@ function classifyUserMessage(
     return hasUserImages ? { kind: 'normal' } : { kind: 'empty' };
   }
   const t = content.trim();
+  if (t.startsWith('<scheduled-task')) return { kind: 'scheduled_task' };
   if (t.startsWith('{') && t.includes('__cc_poll')) {
     try { if (JSON.parse(t).__cc_poll) return { kind: 'poll_response' }; } catch {}
   }
@@ -3544,6 +3546,26 @@ function TaskNotificationLine({ content, timestamp, agentNameToChildMap }: { con
       )}
       <span className="text-sol-text-dim font-mono text-[10px] ml-auto shrink-0">{parsed.taskId}</span>
       <span className="text-sol-text-dim shrink-0 whitespace-nowrap" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
+    </div>
+  );
+}
+
+function ScheduledTaskBlock({ content, timestamp }: { content: string; timestamp: number }) {
+  const match = content.match(/<scheduled-task\s+title="([^"]*)"(?:\s+task-id="([^"]*)")?[^>]*>([\s\S]*?)<\/scheduled-task>/);
+  const title = match?.[1]?.replace(/&quot;/g, '"') || "Scheduled Task";
+  const taskId = match?.[2]?.slice(-8);
+  const prompt = match?.[3]?.trim() || content;
+
+  return (
+    <div className="mb-2 mx-1 rounded border-l-2 border-sol-violet/60 bg-sol-violet/5">
+      <div className="flex items-center gap-2 px-3 pt-2 pb-1">
+        <Clock className="w-3.5 h-3.5 text-sol-violet/70" />
+        <span className="text-[11px] font-medium tracking-wide uppercase text-sol-violet/70">Scheduled</span>
+        <span className="text-xs text-sol-text-muted truncate">{title}</span>
+        {taskId && <span className="text-[10px] font-mono text-sol-text-dim ml-auto shrink-0">{taskId}</span>}
+        <span className="text-[10px] text-sol-text-dim shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
+      </div>
+      <div className="px-3 pb-2 text-sm text-sol-text">{prompt}</div>
     </div>
   );
 }
@@ -8277,6 +8299,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         case 'continuation': return 30;
         case 'skill_expansion': return 44;
         case 'task_notification': return 40;
+        case 'scheduled_task': return 56;
         case 'teammate_events': return 40;
         case 'task_prompt': return 0;
         case 'compaction_prompt': return 0;
@@ -9209,6 +9232,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         case 'task_notification':
           if (collapsed) return null;
           return <TaskNotificationLine key={msg._id} content={msg.content!} timestamp={msg.timestamp} agentNameToChildMap={agentNameToChildMap} />;
+        case 'scheduled_task':
+          if (collapsed) return null;
+          return <ScheduledTaskBlock key={msg._id} content={msg.content!} timestamp={msg.timestamp} />;
         case 'task_prompt':
           return null;
         case 'compaction_summary':
