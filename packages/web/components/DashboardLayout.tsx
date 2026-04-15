@@ -149,6 +149,7 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
 
   const showCollapsedRail = !s.sidePanelOpen && !isMobile;
   const showSessionList = s.sidePanelOpen && !isMobile;
+  const showMobileSessionList = s.sidePanelOpen && isMobile;
   const showConversationColumn = !!s.sidePanelSessionId && !isOnInboxPage && !isOnConversationPage && !isMobile;
 
   // Clean up stale panel state after navigating to a full conversation page.
@@ -585,7 +586,7 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
             </ErrorBoundary>
             <button
               onClick={(e) => { s.toggleSidePanel(); tipActions.whisper('sidebar.toggleRight', e); }}
-              className="hidden md:flex items-center p-1.5 rounded-md text-sol-text-dim/60 hover:text-sol-text-muted transition-colors"
+              className="flex items-center p-1.5 rounded-md text-sol-text-dim/60 hover:text-sol-text-muted transition-colors"
               title={`Toggle sessions panel (${formatShortcutLabel('sidebar.toggleRight')})`}
             >
               <PanelRight className="w-[18px] h-[18px]" />
@@ -655,6 +656,22 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
                 onDirectoryFilterChange={onDirectoryFilterChange}
                 isMobileOpen={isMobileSidebarOpen}
                 onMobileClose={() => setIsMobileSidebarOpen(false)}
+              />
+            </ErrorBoundary>
+          </div>
+        </>
+      )}
+      {/* Mobile session list overlay — single render point for SessionListPanel on small screens */}
+      {showMobileSessionList && (
+        <>
+          <div className="fixed inset-0 z-40 bg-black/50" onClick={s.toggleSidePanel} />
+          <div className="fixed inset-y-0 right-0 z-50 w-[80vw] max-w-xs shadow-xl animate-slide-in-right">
+            <ErrorBoundary name="SessionList" level="panel">
+              <SessionListPanel
+                onSessionSelect={sessionListOnSelect}
+                onForkSelect={isOnInboxPage ? handleInboxForkSelect : handleConversationForkSelect}
+                activeSessionId={sessionListActiveId}
+                onCollapse={s.toggleSidePanel}
               />
             </ErrorBoundary>
           </div>
