@@ -385,22 +385,15 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
     if (!trimmed) return;
     if (trimmed === currentPath && !forceIsolated) return;
     setLocalPath(trimmed);
-    try {
-      const id = storeSession?._id || conversation._id;
-      const store = useInboxStore.getState();
-      store.updateSessionProject(id, trimmed);
-      store.syncRecord("conversations", id, { project_path: trimmed, git_root: trimmed });
-
-      if (isConvexId(id)) {
-        reconfigureSession({
-          conversation_id: id as Id<"conversations">,
-          project_path: trimmed,
-          git_root: trimmed,
-          isolated: (forceIsolated ?? isolated) || undefined,
-        }).catch(() => {});
-      }
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to switch project");
+    const id = storeSession?._id || conversation._id;
+    useInboxStore.getState().updateSessionProject(id, trimmed);
+    if (isConvexId(id)) {
+      reconfigureSession({
+        conversation_id: id as Id<"conversations">,
+        project_path: trimmed,
+        git_root: trimmed,
+        isolated: (forceIsolated ?? isolated) || undefined,
+      }).catch((err) => toast.error(err instanceof Error ? err.message : "Failed to switch project"));
     }
   }, [storeSession, conversation._id, reconfigureSession, currentPath, isolated]);
 

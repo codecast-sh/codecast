@@ -1483,10 +1483,16 @@ export const useInboxStore = create<InboxStoreState>(
     }
   }),
 
-  updateSessionProject: sync(function (this: Draft, id: string, projectPath: string) {
-    if (!this.sessions[id]) return;
-    this.sessions[id].project_path = projectPath;
-    this.sessions[id].git_root = projectPath;
+  updateSessionProject: action(function (this: Draft, id: string, projectPath: string) {
+    if (this.sessions[id]) {
+      this.sessions[id].project_path = projectPath;
+      this.sessions[id].git_root = projectPath;
+    }
+    if (!this.conversations[id]) {
+      this.conversations[id] = { _id: id } as any;
+    }
+    this.conversations[id].project_path = projectPath;
+    this.conversations[id].git_root = projectPath;
   }),
 
   patchSession: sync(function (this: Draft, id: string, fields: Partial<InboxSession>) {
