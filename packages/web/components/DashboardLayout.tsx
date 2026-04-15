@@ -265,24 +265,29 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
 
   const resolveNewSessionContext = useCallback(() => {
     const store = useInboxStore.getState();
+    // Ctrl+N always clones the selected session's project path — the session the
+    // user sees highlighted (sessionListActiveId). No other source is consulted
+    // while a session is selected, so directoryFilter and stale currentConversation
+    // state can never override what the user has in focus.
+    const selected = sessionListActiveId
+      ? (store.sessions[sessionListActiveId]
+          ?? store.dismissedSessions[sessionListActiveId]
+          ?? store.conversations[sessionListActiveId])
+      : null;
+    if (selected?.project_path) {
+      return {
+        path: selected.project_path,
+        gitRoot: selected.git_root || selected.project_path,
+        agentType: selected.agent_type,
+      };
+    }
+    // No session selected — only now fall back to dashboard directory filter, then git root.
     const ctx = store.currentConversation;
     if (directoryFilter) {
       return { path: directoryFilter, gitRoot: ctx.gitRoot || directoryFilter, agentType: ctx.agentType };
     }
-    // Clone parameters from the currently viewed session
-    if (ctx.projectPath) {
-      return { path: ctx.projectPath, gitRoot: ctx.gitRoot || ctx.projectPath, agentType: ctx.agentType };
-    }
-    // Fallback: look up the inbox-selected session directly
-    const liveId = (store.sidePanelOpen && store.sidePanelSessionId) || store.currentSessionId;
-    const liveSess = liveId
-      ? (store.sessions[liveId] ?? store.dismissedSessions[liveId] ?? store.conversations[liveId])
-      : null;
-    if (liveSess?.project_path) {
-      return { path: liveSess.project_path, gitRoot: liveSess.git_root || liveSess.project_path, agentType: liveSess.agent_type };
-    }
     return { path: ctx.gitRoot, gitRoot: ctx.gitRoot, agentType: ctx.agentType };
-  }, [directoryFilter]);
+  }, [directoryFilter, sessionListActiveId]);
 
   const handleQuickCreate = useCallback(() => {
     const store = useInboxStore.getState();
