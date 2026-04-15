@@ -437,7 +437,7 @@ export function QueuePageClient() {
     <>
       {showMySessions ? (
         <div className="h-full overflow-y-auto" data-main-scroll>
-          <div className="max-w-4xl mx-auto px-4 sm:px-6 py-4">
+          <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 pb-8">
             <ErrorBoundary name="ActivityFeed" level="inline">
               <ActivityFeed mode="personal" compact onNavigate={handleNavigateToConversation} />
             </ErrorBoundary>
@@ -489,7 +489,7 @@ export function QueuePageClient() {
         <div className="h-full" />
       ) : (
         <div className="h-full overflow-y-auto" data-main-scroll>
-          <div className="max-w-4xl mx-auto px-4 sm:px-6 py-4">
+          <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 pb-8">
             <ErrorBoundary name="ActivityFeed" level="inline">
               <ActivityFeed mode="personal" compact onNavigate={handleNavigateToConversation} />
             </ErrorBoundary>
