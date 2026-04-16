@@ -10351,7 +10351,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         </div>
       )}
 
-      {commentMessageId && conversation && (
+      {commentMessageId && !commentMessageId.startsWith("optimistic_") && conversation && (
         <CommentPanel
           conversationId={conversation._id as Id<"conversations">}
           messageId={commentMessageId}
