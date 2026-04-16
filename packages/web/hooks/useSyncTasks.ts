@@ -3,29 +3,20 @@ import { useQuery } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../store/inboxStore";
 import { useConvexSync } from "./useConvexSync";
-import { Id } from "@codecast/convex/convex/_generated/dataModel";
+import { useWorkspaceArgs, type WorkspaceArgs } from "./useWorkspaceArgs";
 
 const api = _api as any;
 
 /**
- * Fetches ALL tasks for the current workspace (team or personal) into the store.
- * No pagination, no limits — every task is loaded and kept in the store.
- * All filtering happens client-side.
+ * Core task sync — fetches ALL tasks for the given workspace into the store.
+ * Shared between web and mobile. Filtering happens client-side.
  */
-export function useSyncTasks() {
-  const activeTeamId = useInboxStore(
-    (s) => s.clientState.ui?.active_team_id
-  ) as Id<"teams"> | undefined;
-  const initialized = useInboxStore((s) => s.clientStateInitialized);
+export function useSyncTasksWithArgs(wsArgs: WorkspaceArgs) {
   const syncTable = useInboxStore((s) => s.syncTable);
 
-  const stableArgs = !initialized ? "skip" : activeTeamId
-    ? { team_id: activeTeamId, workspace: "team" as const }
-    : { workspace: "personal" as const };
-
   const result = useQuery(api.tasks.webList,
-    stableArgs === "skip" ? "skip" : {
-      ...stableArgs,
+    wsArgs === "skip" ? "skip" : {
+      ...wsArgs,
       include_derived: true,
     }
   );
@@ -34,7 +25,14 @@ export function useSyncTasks() {
     syncTable("tasks", data.items ?? data);
   }, [syncTable]));
 
-  return { hasMore: false, loadMore: () => {} };
+  return { hasMore: false, loadMore: () => {}, ready: result !== undefined };
+}
+
+/**
+ * Web wrapper — pulls workspace args from clientState.
+ */
+export function useSyncTasks() {
+  return useSyncTasksWithArgs(useWorkspaceArgs());
 }
 
 export function useSyncTaskDetail(id?: string) {

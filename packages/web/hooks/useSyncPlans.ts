@@ -2,17 +2,16 @@ import { useCallback } from "react";
 import { useQuery } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../store/inboxStore";
-import { useWorkspaceArgs } from "./useWorkspaceArgs";
+import { useWorkspaceArgs, type WorkspaceArgs } from "./useWorkspaceArgs";
 import { useConvexSync } from "./useConvexSync";
 
 const api = _api as any;
 
-export function useSyncPlans(statusFilter?: string) {
-  const workspaceArgs = useWorkspaceArgs();
+export function useSyncPlansWithArgs(wsArgs: WorkspaceArgs, statusFilter?: string) {
   const plans = useQuery(api.plans.webList,
-    workspaceArgs === "skip" ? "skip" : {
+    wsArgs === "skip" ? "skip" : {
       status: statusFilter || undefined,
-      ...workspaceArgs,
+      ...wsArgs,
     }
   );
   const syncTable = useInboxStore((s) => s.syncTable);
@@ -20,4 +19,10 @@ export function useSyncPlans(statusFilter?: string) {
   useConvexSync(plans, useCallback((data: any) => {
     syncTable("plans", data as any);
   }, [syncTable]));
+
+  return { ready: plans !== undefined };
+}
+
+export function useSyncPlans(statusFilter?: string) {
+  return useSyncPlansWithArgs(useWorkspaceArgs(), statusFilter);
 }
