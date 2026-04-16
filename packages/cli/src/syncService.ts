@@ -634,11 +634,15 @@ export class SyncService {
     } catch {}
   }
 
-  async heartbeatManagedSession(sessionId: string): Promise<{ found: boolean; dismissed?: boolean } | undefined> {
+  async heartbeatManagedSession(
+    sessionId: string,
+    agentStatus?: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "stopped" | "starting" | "resuming",
+  ): Promise<{ found: boolean; dismissed?: boolean } | undefined> {
     try {
       return await this.client.mutation("managedSessions:heartbeat" as any, {
         session_id: sessionId,
         api_token: this.apiToken,
+        ...(agentStatus ? { agent_status: agentStatus, client_ts: Date.now() } : {}),
       });
     } catch {}
   }
@@ -735,6 +739,7 @@ export class SyncService {
       throw error;
     }
   }
+
 
   async setSessionError(conversationId: string, error?: string): Promise<void> {
     if (!this.apiToken) return;
