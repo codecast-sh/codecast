@@ -412,6 +412,8 @@ const dismissedIdleSince = new Map<string, number>();
 const DISMISSED_IDLE_KILL_MS = 60 * 60 * 1000;
 const zombieFirstDead = new Map<string, number>();
 const ZOMBIE_GRACE_PERIOD_MS = 60 * 60 * 1000; // 1 hour
+const lastHeartbeatLogged = new Map<string, { status: string; ts: number; since: number }>();
+const HEARTBEAT_LOG_THROTTLE_MS = 5 * 60 * 1000;
 
 type AgentStatus = "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "stopped" | "resuming";
 type PermissionMode = "default" | "plan" | "acceptEdits" | "bypassPermissions" | "dontAsk";
@@ -559,6 +561,23 @@ function sendAgentStatus(
   if (status === "stopped") {
     workingPhaseStart.delete(sessionId);
   }
+}
+
+// Log the status carried on a heartbeat. Throttled per-session to once every
+// 5 minutes for same-status heartbeats; always logs on status change. The
+// "stuck=<seconds>" field is the dwell time in the current status — if we see
+// "status=working stuck=61234" in logs, that's the "session stuck in working"
+// bug. If we see status transitions in the log but the server still shows
+// stale status, the fault is in the transport, not the daemon's state tracking.
+function logHeartbeatStatus(sessionId: string, status: AgentStatus | undefined): void {
+  if (!status) return;
+  const now = Date.now();
+  const prev = lastHeartbeatLogged.get(sessionId);
+  const since = prev && prev.status === status ? prev.since : now;
+  if (prev && prev.status === status && now - prev.ts < HEARTBEAT_LOG_THROTTLE_MS) return;
+  lastHeartbeatLogged.set(sessionId, { status, ts: now, since });
+  const stuckSec = Math.round((now - since) / 1000);
+  log(`[HEARTBEAT] session=${sessionId.slice(0, 8)} status=${status} stuck=${stuckSec}s`);
 }
 
 // --- HTTP Hook Server ---
@@ -4420,7 +4439,9 @@ function tryRegisterSessionProcess(sessionId: string, agentType: "claude" | "cod
           if (!resumeHeartbeatIntervals.has(sessionId)) {
             const interval = setInterval(async () => {
               try {
-                const result = await syncServiceRef!.heartbeatManagedSession(sessionId);
+                const status = lastSentAgentStatus.get(sessionId);
+                logHeartbeatStatus(sessionId, status);
+                const result = await syncServiceRef!.heartbeatManagedSession(sessionId, status);
                 await processHeartbeatResponse(sessionId, result);
               } catch {}
             }, 30000);
@@ -5858,7 +5879,7 @@ type StartedSessionInfo = {
   worktreePath?: string;
 };
 
-const STARTED_SESSION_TTL_MS = 5 * 60 * 1000;
+const STARTED_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 
 class PersistedStartedSessions extends Map<string, StartedSessionInfo> {
   constructor() {
@@ -5977,7 +5998,9 @@ function ensureManagedSessionHeartbeat(sessionId: string): void {
   heartbeatHealthCheckCounter.set(sessionId, 0);
   const interval = setInterval(async () => {
     try {
-      const result = await syncServiceRef!.heartbeatManagedSession(sessionId);
+      const status = lastSentAgentStatus.get(sessionId);
+      logHeartbeatStatus(sessionId, status);
+      const result = await syncServiceRef!.heartbeatManagedSession(sessionId, status);
       await processHeartbeatResponse(sessionId, result);
     } catch {}
 
@@ -6527,7 +6550,9 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
         syncServiceRef.updateSessionAgentStatus(conversationId, "connected").catch(() => {});
         const interval = setInterval(async () => {
           try {
-            const result = await syncServiceRef!.heartbeatManagedSession(sessionId);
+            const status = lastSentAgentStatus.get(sessionId);
+            logHeartbeatStatus(sessionId, status);
+            const result = await syncServiceRef!.heartbeatManagedSession(sessionId, status);
             await processHeartbeatResponse(sessionId, result);
           } catch {}
         }, 30000);
@@ -6978,6 +7003,9 @@ async function startFreshSessionForDelivery(
 
   try {
     tmuxExecSync(["new-session", "-d", "-s", tmuxSession, "-c", projectPath], { timeout: 5000 });
+    await setTmuxSessionOption(tmuxSession, "@codecast_conversation_id", conversationId).catch(() => {});
+    await setTmuxSessionOption(tmuxSession, "@codecast_agent_type", "claude").catch(() => {});
+    await setTmuxSessionOption(tmuxSession, "@codecast_project_path", projectPath).catch(() => {});
     tmuxExecSync(["send-keys", "-t", tmuxSession, "-l", blankCmdText], { timeout: 5000 });
     tmuxExecSync(["send-keys", "-t", tmuxSession, "Enter"], { timeout: 5000 });
     const entry: StartedSessionInfo = {
@@ -6987,6 +7015,10 @@ async function startFreshSessionForDelivery(
       agentType: "claude",
     };
     startedSessionTmux.set(conversationId, entry);
+    if (syncServiceRef) {
+      syncServiceRef.registerManagedSession(tmuxSession, process.pid, tmuxSession, conversationId as any).catch(() => {});
+      ensureManagedSessionHeartbeat(tmuxSession);
+    }
     discoverAndLinkSession(conversationId, tmuxSession, projectPath).catch(err => {
       log(`Session discovery failed for ${conversationId.slice(0, 12)}: ${err}`);
     });
@@ -7210,8 +7242,13 @@ async function deliverMessage(
         // after the prompt is visible. Wait to avoid silent paste drops.
         await new Promise(resolve => setTimeout(resolve, 1500));
         const startedTmuxTarget = entry.tmuxSession + ":0.0";
-        await injectViaTmux(startedTmuxTarget, content);
+        // Mark "injected" BEFORE tmux send-keys. The send triggers Claude to write the user
+        // message to JSONL within ms, and the JSONL watcher calls ackInjectedMessages to flip
+        // "injected" → "delivered". If we flipped after the send, the ack could race ahead and
+        // find no "injected" row, leaving the status stuck until the 120s retry cron resets it
+        // and re-delivers the same message (duplicate reply).
         await syncService.updateMessageStatus({ messageId, status: "injected" });
+        await injectViaTmux(startedTmuxTarget, content);
         syncService.updateSessionAgentStatus(conversationId, "connected").catch(() => {});
         log(`Injected message to started session tmux ${entry.tmuxSession} for conversation ${conversationId.slice(0, 12)}`);
         const isPollResponse = !!parsePollMessage(content);
@@ -7318,8 +7355,8 @@ async function deliverMessage(
         if (hbInterval) { clearInterval(hbInterval); resumeHeartbeatIntervals.delete(sessionId); }
         try { await tmuxExec(["kill-session", "-t", cachedTmux]); } catch {}
       } else {
-        await injectViaTmux(cachedTmux, content);
         await syncService.updateMessageStatus({ messageId, status: "injected" });
+        await injectViaTmux(cachedTmux, content);
         syncService.setSessionError(conversationId).catch(() => {});
         const isPollResponse = !!parsePollMessage(content);
         if (content.trimStart().startsWith("/") || isPollResponse) {
@@ -7354,6 +7391,7 @@ async function deliverMessage(
       let agentDetectedDead = false;
       if (tmuxTarget) {
         try {
+          await syncService.updateMessageStatus({ messageId, status: "injected" });
           await injectViaTmux(tmuxTarget, content);
           const tmuxSessionName = tmuxTarget.split(":")[0];
           const agentAlive = await isTmuxAgentAlive(tmuxSessionName);
@@ -7362,7 +7400,6 @@ async function deliverMessage(
             sessionProcessCache.delete(sessionId);
             agentDetectedDead = true;
           } else {
-            await syncService.updateMessageStatus({ messageId, status: "injected" });
             logDelivery(`Injected via tmux ${tmuxTarget}`);
             const isPollResponse = !!parsePollMessage(content);
             if (content.trimStart().startsWith("/") || isPollResponse) {
@@ -7380,8 +7417,8 @@ async function deliverMessage(
         const termLabel = getTerminalLabel(proc.termProgram);
         logDelivery(`Trying ${termLabel} injection for tty=${proc.tty}`);
         try {
-          await injectViaTerminal(proc.tty, content, proc.termProgram);
           await syncService.updateMessageStatus({ messageId, status: "injected" });
+          await injectViaTerminal(proc.tty, content, proc.termProgram);
           logDelivery(`Injected via ${termLabel} tty=${proc.tty}`);
           return true;
         } catch (err) {
@@ -7407,11 +7444,14 @@ async function deliverMessage(
   if (!tmuxAvailable) {
     logDelivery(`CANNOT auto-resume: tmux is not installed. Install with: brew install tmux`);
   }
+  // Mark "injected" BEFORE starting the resume. autoResumeSession spins up tmux + Claude and
+  // injects the content; Claude writes the user message to JSONL, and the JSONL watcher acks.
+  // If we marked after, the ack could race ahead and leave the status stuck.
+  await syncService.updateMessageStatus({ messageId, status: "injected" });
   const resumed = await autoResumeSession(sessionId, content, titleCache, undefined, conversationId);
   if (resumed) {
     resetSessionDeliveryFailures(sessionId);
     materializedSessions.delete(sessionId);
-    await syncService.updateMessageStatus({ messageId, status: "injected" });
     logDelivery(`Injected via auto-resume for session=${sessionId.slice(0, 8)}`);
     const isPollResponse = !!parsePollMessage(content);
     if (content.trimStart().startsWith("/") || isPollResponse) {
@@ -7428,11 +7468,12 @@ async function deliverMessage(
 
   // Auto-resume failed - try repair (regenerate JSONL from Convex)
   logDelivery(`Auto-resume failed for ${sessionId.slice(0, 8)}, attempting repair...`);
+  // Row is already marked "injected" from the auto-resume attempt above; repair+resume is a
+  // second delivery path for the same message, so no re-mark needed.
   const repaired = await repairAndResumeSession(sessionId, content, titleCache, undefined, conversationId);
   if (repaired) {
     resetSessionDeliveryFailures(sessionId);
     materializedSessions.delete(sessionId);
-    await syncService.updateMessageStatus({ messageId, status: "injected" });
     logDelivery(`Injected via repair+resume for session=${sessionId.slice(0, 8)}`);
     const isPollResponse = !!parsePollMessage(content);
     if (content.trimStart().startsWith("/") || isPollResponse) {
@@ -8840,32 +8881,64 @@ async function main(): Promise<void> {
   const pendingMessages: PendingMessages = {};
   const activeSessions = new Map<string, ActiveSession>();
 
-  // Warm restart: rebuild resumeSessionCache from surviving tmux sessions.
+  // Warm restart: rebuild in-memory caches from surviving tmux sessions.
   // After daemon restart, in-memory caches are lost but tmux sessions survive.
-  // Scanning them lets us deliver messages on first attempt instead of slow auto-resume.
+  // We handle three shapes:
+  //   1. Resume tmuxes tagged with @codecast_session_id → restore resumeSessionCache.
+  //   2. Fresh tmuxes tagged with @codecast_conversation_id → restore startedSessionTmux.
+  //   3. Untagged legacy tmuxes → register anyway so user sees them in the sessions UI.
+  // Every recovered tmux is registered with managed_sessions so the UI lists it.
   if (hasTmux()) {
     try {
       const sessions = tmuxExecSync(["list-sessions", "-F", "#{session_name}"], { timeout: 5000 }).trim().split("\n").filter(Boolean);
-      const ccSessions = sessions.filter(s => s.startsWith("cc-") || s.startsWith("cx-") || s.startsWith("gm-"));
+      const ccSessions = sessions.filter(s => s.startsWith("cc-") || s.startsWith("cx-") || s.startsWith("gm-") || s.startsWith("ct-"));
       let recovered = 0;
       for (const tmuxSession of ccSessions) {
         try {
-          const sessionId = await getTmuxSessionOption(tmuxSession, "@codecast_session_id");
-          if (!sessionId) continue;
           const alive = await isTmuxAgentAlive(tmuxSession);
           if (!alive) continue;
-          // Found a live agent with session metadata — restore cache
-          resumeSessionCache.set(sessionId, tmuxSession);
-          const convId = conversationCache[sessionId];
-          if (convId && syncServiceRef) {
-            syncServiceRef.registerManagedSession(sessionId, process.pid, tmuxSession, convId).catch(() => {});
-            ensureManagedSessionHeartbeat(sessionId);
+
+          const sessionId = await getTmuxSessionOption(tmuxSession, "@codecast_session_id");
+          const tmuxConvId = await getTmuxSessionOption(tmuxSession, "@codecast_conversation_id");
+          const tmuxAgentType = await getTmuxSessionOption(tmuxSession, "@codecast_agent_type");
+          const tmuxProjectPath = await getTmuxSessionOption(tmuxSession, "@codecast_project_path");
+
+          if (sessionId) {
+            resumeSessionCache.set(sessionId, tmuxSession);
+            const convId = tmuxConvId || conversationCache[sessionId];
+            if (syncServiceRef) {
+              syncServiceRef.registerManagedSession(sessionId, process.pid, tmuxSession, (convId || undefined) as any).catch(() => {});
+              ensureManagedSessionHeartbeat(sessionId);
+            }
+            recovered++;
+            continue;
           }
-          recovered++;
+
+          if (tmuxConvId) {
+            const agentType = (tmuxAgentType as StartedSessionInfo["agentType"] | null) || "claude";
+            startedSessionTmux.set(tmuxConvId, {
+              tmuxSession,
+              projectPath: tmuxProjectPath || process.env.HOME || "/tmp",
+              startedAt: Date.now(),
+              agentType,
+            });
+            if (syncServiceRef) {
+              syncServiceRef.registerManagedSession(tmuxSession, process.pid, tmuxSession, tmuxConvId as any).catch(() => {});
+              ensureManagedSessionHeartbeat(tmuxSession);
+            }
+            recovered++;
+            continue;
+          }
+
+          if (syncServiceRef) {
+            syncServiceRef.registerManagedSession(tmuxSession, process.pid, tmuxSession).catch(() => {});
+            ensureManagedSessionHeartbeat(tmuxSession);
+            recovered++;
+          }
         } catch {}
       }
       if (recovered > 0) {
-        log(`[WARM-RESTART] Recovered ${recovered} live session(s) from tmux: ${[...resumeSessionCache.entries()].map(([s, t]) => `${s.slice(0, 8)}→${t}`).join(", ")}`);
+        log(`[WARM-RESTART] Recovered ${recovered} live session(s) from tmux`);
       }
     } catch (err) {
       log(`[WARM-RESTART] tmux scan failed: ${err instanceof Error ? err.message : String(err)}`);
