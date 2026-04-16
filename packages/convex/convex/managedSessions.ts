@@ -159,6 +159,8 @@ export const heartbeat = mutation({
   args: {
     session_id: v.string(),
     api_token: v.optional(v.string()),
+    agent_status: v.optional(v.union(v.literal("working"), v.literal("idle"), v.literal("permission_blocked"), v.literal("compacting"), v.literal("thinking"), v.literal("connected"), v.literal("stopped"), v.literal("starting"), v.literal("resuming"))),
+    client_ts: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
@@ -180,10 +182,19 @@ export const heartbeat = mutation({
     }
 
     const now = Date.now();
+    const patch: Record<string, any> = { last_heartbeat: now };
 
-    await ctx.db.patch(session._id, {
-      last_heartbeat: now,
-    });
+    // Heartbeat carries the daemon's current agent_status so the server's view
+    // self-heals if a transition mutation was dropped in flight.
+    if (args.agent_status) {
+      const tsStale = args.client_ts && session.agent_status_updated_at && args.client_ts < session.agent_status_updated_at;
+      if (!tsStale) {
+        patch.agent_status = args.agent_status;
+        patch.agent_status_updated_at = args.client_ts || now;
+      }
+    }
+
+    await ctx.db.patch(session._id, patch);
 
     let dismissed = false;
     if (session.conversation_id) {
