@@ -3555,8 +3555,7 @@ function ScheduledTaskBlock({ content, timestamp }: { content: string; timestamp
         <Clock className="w-3.5 h-3.5 text-sol-violet/70" />
         <span className="text-[11px] font-medium tracking-wide uppercase text-sol-violet/70">Scheduled</span>
         <span className="text-xs text-sol-text-muted truncate">{title}</span>
-        {taskId && <span className="text-[10px] font-mono text-sol-text-dim ml-auto shrink-0">{taskId}</span>}
-        <span className="text-[10px] text-sol-text-dim shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
+        <span className="text-[10px] text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
       </div>
       <div className="px-3 pb-2 text-sm text-sol-text">{prompt}</div>
     </div>
@@ -4775,6 +4774,10 @@ function SystemBlock({ content, subtype, timestamp, messageUuid, messageId, conv
         <div className="flex-1 h-px bg-gradient-to-r from-transparent via-amber-500/40 to-transparent" />
       </div>
     );
+  }
+
+  if (subtype === "scheduled_task_prompt" && content) {
+    return <ScheduledTaskBlock content={content} timestamp={timestamp || Date.now()} />;
   }
 
   if (subtype === "compaction_summary" && content) {
