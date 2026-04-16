@@ -1,7 +1,7 @@
 import { useInboxStore } from "../store/inboxStore";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 
-type WorkspaceArgs =
+export type WorkspaceArgs =
   | { team_id: Id<"teams">; workspace: "team"; project_path?: string }
   | { workspace: "personal"; project_path?: string }
   | "skip";
