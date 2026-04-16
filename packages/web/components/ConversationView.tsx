@@ -6763,6 +6763,19 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
                       >
                         {isExistingMessageDead || messageStatus?.status === "undeliverable" || messageStatus?.status === "failed" ? "Restart & retry" : "Force resume"}
                       </button>
+                      {existingPending?.content ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const text = existingPending.content ?? "";
+                            if (!text) { toast.error("No message to copy"); return; }
+                            setTimeout(() => { copyToClipboard(text).then(() => toast.success("Message copied")).catch(() => toast.error("Failed to copy")); });
+                          }}
+                          className="px-1.5 py-0.5 rounded bg-sol-base01/30 hover:bg-sol-base01/50 border border-sol-base01/40 text-sol-base1 transition-colors text-[10px]"
+                        >
+                          Copy last message
+                        </button>
+                      ) : null}
                     </span>
                   )
                 ) : agentStatus === "thinking" ? (
