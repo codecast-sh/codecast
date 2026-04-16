@@ -2,6 +2,10 @@ import { useInboxStore } from "../store/inboxStore";
 
 let ctx: AudioContext | null = null;
 
+function isSupported(): boolean {
+  return typeof AudioContext !== "undefined";
+}
+
 function isEnabled(): boolean {
   return useInboxStore.getState().clientState?.ui?.sounds_enabled !== false;
 }
@@ -16,6 +20,7 @@ function play(
   notes: Array<{ freq: number; start: number; dur: number; gain?: number; type?: OscillatorType }>,
   masterGain = 0.12,
 ) {
+  if (!isSupported()) return;
   try {
     const ac = getCtx();
     const master = ac.createGain();
@@ -55,7 +60,7 @@ export function soundIdle() {
 }
 
 export function soundDismiss() {
-  if (!isEnabled()) return;
+  if (!isEnabled() || !isSupported()) return;
   try {
     const ac = getCtx();
     const master = ac.createGain();
@@ -89,7 +94,7 @@ export function soundDismiss() {
 }
 
 export function soundKill() {
-  if (!isEnabled()) return;
+  if (!isEnabled() || !isSupported()) return;
   try {
     const ac = getCtx();
     const master = ac.createGain();
@@ -123,7 +128,7 @@ export function soundKill() {
 }
 
 export function soundSend() {
-  if (!isEnabled()) return;
+  if (!isEnabled() || !isSupported()) return;
   try {
     const ac = getCtx();
     const master = ac.createGain();
