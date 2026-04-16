@@ -97,11 +97,18 @@ export class TaskScheduler {
       try {
         const safeTitle = (task.title || "").replace(/"/g, "&quot;");
         const wrappedPrompt = `<scheduled-task title="${safeTitle}" task-id="${task._id}">${task.prompt}</scheduled-task>`;
+        // Insert a system message so the UI can render it distinctly,
+        // independent of JSONL sync (tmux-injected messages don't always
+        // become separate user-message rows in the DB).
+        await this.syncService.addMessage({
+          conversationId: task.originating_conversation_id,
+          role: "system",
+          content: wrappedPrompt,
+          subtype: "scheduled_task_prompt",
+          timestamp: Date.now(),
+        }).catch(() => {});
         await this.syncService.sendMessageToSession(task.originating_conversation_id, wrappedPrompt);
         this.log(`Injected prompt into conversation ${task.originating_conversation_id.toString().slice(-8)} for task "${task.title}"`);
-        // Omit summary — the injected prompt and the agent's reply are the
-        // real record; a stub summary would leak into target_conversation_id
-        // threads as a useless assistant message.
         await this.syncService.completeTaskRun(
           task._id,
           this.daemonId,
