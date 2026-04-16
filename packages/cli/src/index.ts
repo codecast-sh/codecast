@@ -8299,28 +8299,22 @@ schedule
     // back into the live conversation instead of spawning fresh agents.
     const sessionId = findCurrentSessionFromProcess(getRealCwd());
     if (sessionId) {
-      const debug = !!process.env.DEBUG;
       try {
-        if (debug) console.error(`[DEBUG] Resolving conversation for session ${sessionId}`);
         const resp = await fetch(`${siteUrl}/cli/sessions`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ api_token: config.auth_token, session_ids: [sessionId] }),
         });
         const data = await resp.json();
-        if (debug) console.error(`[DEBUG] Session lookup response: ${JSON.stringify(data).slice(0, 200)}`);
         const results = data?.conversations ?? (Array.isArray(data) ? data : [data]);
         const conv = results[0];
         if (conv?.conversation_id) {
           originating_conversation_id = conv.conversation_id;
-          if (debug) console.error(`[DEBUG] Captured originating_conversation_id: ${originating_conversation_id}`);
           if (options.thread) {
             target_conversation_id = conv.conversation_id;
           }
         }
-      } catch (err) {
-        if (debug) console.error(`[DEBUG] Session lookup failed:`, err);
-      }
+      } catch {}
     }
     if (options.thread && !target_conversation_id) {
       console.error("Could not resolve current conversation for --thread");
