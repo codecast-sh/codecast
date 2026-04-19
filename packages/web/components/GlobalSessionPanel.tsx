@@ -868,7 +868,10 @@ export function SessionListPanel({
   const filteredNew = useMemo(() => filterByProject(newSessions), [filterByProject, newSessions]);
   const filteredNeedsInput = useMemo(() => filterByProject(needsInput), [filterByProject, needsInput]);
   const filteredWorking = useMemo(() => filterByProject(working), [filterByProject, working]);
-  const filteredDismissed = useMemo(() => filterByProject(dismissedList), [filterByProject, dismissedList]);
+  const filteredDismissed = useMemo(() => {
+    const filtered = filterByProject(dismissedList);
+    return filtered.sort((a, b) => (b.dismissed_at || b.updated_at || 0) - (a.dismissed_at || a.updated_at || 0));
+  }, [filterByProject, dismissedList]);
   const filteredCount = filteredPinned.length + filteredNew.length + filteredNeedsInput.length + filteredWorking.length;
 
   const [expandedSubSessions, setExpandedSubSessions] = useState<Record<string, boolean>>({});
