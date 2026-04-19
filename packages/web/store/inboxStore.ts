@@ -110,6 +110,7 @@ export type InboxSession = {
   parent_message_uuid?: string | null;
   icon?: string;
   icon_color?: string;
+  dismissed_at?: number;
 };
 
 export type Message = {
@@ -1079,6 +1080,57 @@ export const useInboxStore = create<InboxStoreState>(
     this.currentSessionId = newSessionId;
     this.clientState.current_conversation_id = newSessionId ?? undefined;
   }),
+
+  switchAgent: action(function (this: Draft, currentId: string, targetAgentType: string) {
+    const session = this.sessions[currentId];
+    if (!session) return null;
+
+    const sessionId = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+    const now = Date.now();
+    const agentLabels: Record<string, string> = { claude_code: "Claude", codex: "Codex", cursor: "Cursor", gemini: "Gemini" };
+
+    if (this.sessions[currentId]) {
+      this.sessions[currentId].inbox_dismissed_at = now;
+      if (this.sessions[currentId].is_pinned) this.sessions[currentId].is_pinned = false;
+    }
+    if (this.conversations[currentId]) {
+      (this.conversations[currentId] as any).inbox_dismissed_at = now;
+    }
+
+    this.sessions[sessionId] = {
+      _id: sessionId,
+      session_id: sessionId,
+      title: session.title ? `${agentLabels[targetAgentType] || targetAgentType}: ${session.title}` : "New session",
+      updated_at: now,
+      started_at: now,
+      project_path: session.project_path,
+      git_root: session.git_root,
+      agent_type: targetAgentType,
+      message_count: 0,
+      is_idle: true,
+      has_pending: false,
+      last_user_message: null,
+    } as InboxSession;
+
+    this.currentSessionId = sessionId;
+    this.viewingDismissedId = null;
+    this.clientState.current_conversation_id = sessionId;
+
+    const draft = this.drafts[currentId]
+      ?? (this.clientState.drafts?.[currentId] && typeof this.clientState.drafts[currentId] === "object"
+        ? this.clientState.drafts[currentId] as Record<string, any>
+        : undefined);
+    if (draft) {
+      this.drafts[sessionId] = draft;
+      delete this.drafts[currentId];
+      if (!this.clientState.drafts) this.clientState.drafts = {};
+      this.clientState.drafts[sessionId] = draft;
+      this.clientState.drafts[currentId] = null;
+    }
+
+    return sessionId;
+  }),
+
 
   unstashSession: action(function (this: Draft, id: string) {
     const childIds = Object.values(this.sessions as Record<string, InboxSession>)

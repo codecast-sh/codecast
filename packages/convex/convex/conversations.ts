@@ -6216,6 +6216,76 @@ export const updateSessionId = mutation({
   },
 });
 
+export const listDismissedSessions = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+
+    const now = Date.now();
+    const WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+    const cutoff = now - WINDOW_MS;
+
+    const conversations = await ctx.db
+      .query("conversations")
+      .withIndex("by_user_dismissed", (q) =>
+        q.eq("user_id", userId).gte("inbox_dismissed_at", cutoff)
+      )
+      .order("desc")
+      .take(200);
+
+    const results = [];
+
+    for (const conv of conversations) {
+      if (!shouldShowInDismissed(conv)) continue;
+
+      const isDismissedCompleted = conv.status === "completed";
+
+      let implementationSession: { _id: string; title?: string } | undefined;
+      if (isDismissedCompleted) {
+        const children = await ctx.db
+          .query("conversations")
+          .withIndex("by_parent_conversation_id", (q) =>
+            q.eq("parent_conversation_id", conv._id)
+          )
+          .take(5);
+        const implChild = children.find(
+          (c) => c.parent_message_uuid === "plan-handoff" && !c.is_subagent
+        );
+        if (implChild) {
+          implementationSession = { _id: implChild._id.toString(), title: implChild.title };
+        }
+      }
+
+      results.push({
+        _id: conv._id,
+        session_id: conv.session_id,
+        title: conv.title,
+        subtitle: conv.subtitle,
+        updated_at: conv.updated_at,
+        project_path: conv.project_path,
+        git_root: conv.git_root,
+        git_branch: conv.git_branch,
+        agent_type: conv.agent_type,
+        message_count: conv.message_count,
+        idle_summary: conv.idle_summary,
+        is_idle: true,
+        has_pending: false,
+        implementation_session: implementationSession,
+        worktree_name: conv.worktree_name,
+        worktree_branch: conv.worktree_branch,
+        icon: conv.icon,
+        icon_color: conv.icon_color,
+        dismissed_at: conv.inbox_dismissed_at,
+      });
+    }
+
+    results.sort((a, b) => (b.dismissed_at || b.updated_at) - (a.dismissed_at || a.updated_at));
+    return results;
+  },
+});
+
+
 export const backfillLastUserMessageAt = internalMutation({
   args: { user_id: v.optional(v.id("users")) },
   handler: async (ctx, args) => {
