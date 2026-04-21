@@ -53,7 +53,14 @@ interface DashboardLayoutProps {
 const DEFAULT_LAYOUT = { sidebar: 25, main: 75 };
 const separatorClass = "relative z-10 w-px bg-black/10 cursor-col-resize before:absolute before:inset-y-0 before:-left-[2px] before:-right-[2px] before:content-[''] before:transition-colors before:duration-150 hover:before:bg-sol-cyan data-[resize-handle-active]:before:bg-sol-cyan";
 
-const DashboardNestCtx = createContext(false);
+// Stash on globalThis so the context identity survives Vite HMR reloads —
+// without this, a hot-updated inner DashboardLayout reads a fresh context
+// (default false) instead of the still-mounted outer's Provider (true),
+// causing the full layout to render twice.
+const _g = globalThis as Record<string, unknown>;
+const DashboardNestCtx: React.Context<boolean> =
+  (_g.__DashboardNestCtx as React.Context<boolean>) ??
+  (_g.__DashboardNestCtx = createContext(false));
 
 export function DashboardLayout(props: DashboardLayoutProps) {
   const isNested = useContext(DashboardNestCtx);
@@ -233,6 +240,7 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
     prevWasInboxRef.current = isOnInboxPage;
     if (wasInbox && !isOnInboxPage) {
       const store = useInboxStore.getState();
+      if (store.sidePanelUserClosed) return;
       const current = store.currentSessionId;
       if (current) {
         store.openSidePanel(current);
@@ -246,19 +254,21 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
     const prev = prevPathnameRef.current;
     prevPathnameRef.current = pathname;
     if (!prev || prev === pathname) return;
+    const store = useInboxStore.getState();
+    if (store.sidePanelUserClosed) return;
     const wasConvPage = prev.includes("/conversation/");
     const isNowConvPage = pathname?.includes("/conversation/");
     if (wasConvPage && !isNowConvPage) {
       const sessionId = prev.split("/conversation/")[1]?.split("?")[0];
       if (sessionId) {
-        useInboxStore.getState().openSidePanel(sessionId);
+        store.openSidePanel(sessionId);
       }
     }
     // Arriving at a conversation page (from notification, link, etc.) — open side panel
     if (isNowConvPage && !isOnInboxPage) {
       const sessionId = pathname?.split("/conversation/")[1]?.split("?")[0];
       if (sessionId) {
-        useInboxStore.getState().openSidePanel(sessionId);
+        store.openSidePanel(sessionId);
       }
     }
   }, [pathname, isOnInboxPage]);
