@@ -72,14 +72,18 @@ export function useSyncInboxSessions() {
       if (serverCount === 0 || (storedCount > 0 && storedCount >= serverCount)) continue;
       const lastTimestamp = storedCount > 0 ? storedMsgs[storedCount - 1].timestamp : 0;
       bgFetchingRef.current.add(id);
-      convex.query(api.conversations.getNewMessages, {
-        conversation_id: id as Id<"conversations">,
-        after_timestamp: lastTimestamp,
-      }).then((result) => {
-        bgFetchingRef.current.delete(id);
+      const fetchPage = async (after: number): Promise<void> => {
+        const result = await convex.query(api.conversations.getNewMessages, {
+          conversation_id: id as Id<"conversations">,
+          after_timestamp: after,
+        });
         if (!result?.messages?.length) return;
         useInboxStore.getState().mergeMessages(id, result.messages, "append", { initialized: true });
-      }).catch(() => {
+        if (result.has_more && result.last_timestamp != null) {
+          await fetchPage(result.last_timestamp);
+        }
+      };
+      fetchPage(lastTimestamp).finally(() => {
         bgFetchingRef.current.delete(id);
       });
     }
