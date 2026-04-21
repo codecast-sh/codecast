@@ -16,6 +16,7 @@ import type * as cleanup from "../cleanup.js";
 import type * as client_state from "../client_state.js";
 import type * as comments from "../comments.js";
 import type * as commits from "../commits.js";
+import type * as conversationSessionLookup from "../conversationSessionLookup.js";
 import type * as conversations from "../conversations.js";
 import type * as counters from "../counters.js";
 import type * as crons from "../crons.js";
@@ -81,6 +82,7 @@ declare const fullApi: ApiFromModules<{
   client_state: typeof client_state;
   comments: typeof comments;
   commits: typeof commits;
+  conversationSessionLookup: typeof conversationSessionLookup;
   conversations: typeof conversations;
   counters: typeof counters;
   crons: typeof crons;

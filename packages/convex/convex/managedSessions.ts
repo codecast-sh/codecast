@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
+import { findConversationBySessionReference } from "./conversationSessionLookup";
 
 async function getAuthenticatedUserId(
   ctx: { db: any },
@@ -119,6 +120,13 @@ export const updateSessionConversation = mutation({
     await ctx.db.patch(session._id, {
       conversation_id: args.conversation_id,
     });
+
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (conversation && conversation.user_id.toString() === authUserId.toString() && conversation.session_id !== session.session_id) {
+      await ctx.db.patch(args.conversation_id, {
+        session_id: session.session_id,
+      });
+    }
   },
 });
 
@@ -150,6 +158,15 @@ export const updateManagedSessionId = mutation({
     await ctx.db.patch(session._id, {
       session_id: args.new_session_id,
     });
+
+    if (session.conversation_id) {
+      const conversation = await ctx.db.get(session.conversation_id);
+      if (conversation && conversation.user_id.toString() === authUserId.toString() && conversation.session_id !== args.new_session_id) {
+        await ctx.db.patch(session.conversation_id, {
+          session_id: args.new_session_id,
+        });
+      }
+    }
 
     return { found: true, updated: true };
   },
@@ -635,10 +652,11 @@ export const getConversationBySessionId = query({
       throw new Error("Authentication required");
     }
 
-    const conversation = await ctx.db
-      .query("conversations")
-      .withIndex("by_session_id", (q: any) => q.eq("session_id", args.claude_session_id))
-      .first();
+    const conversation = await findConversationBySessionReference(
+      ctx as any,
+      args.claude_session_id,
+      authUserId
+    );
 
     if (!conversation) {
       return null;

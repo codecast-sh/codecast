@@ -1,5 +1,6 @@
 import { mutation, query, internalMutation, internalQuery } from "./_generated/server";
 import { v } from "convex/values";
+import { findConversationBySessionReference } from "./conversationSessionLookup";
 import { paginationOptsValidator } from "convex/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id } from "./_generated/dataModel";
@@ -5427,10 +5428,7 @@ export const getConversationsBySessionIds = query({
     }> = [];
 
     for (const sessionId of args.session_ids.slice(0, 100)) {
-      const conv = await ctx.db
-        .query("conversations")
-        .withIndex("by_session_id", (q) => q.eq("session_id", sessionId))
-        .first();
+      const conv = await findConversationBySessionReference(ctx as any, sessionId, authUserId);
       if (!conv) continue;
 
       let preview: string | null = null;
