@@ -4047,10 +4047,11 @@ export const forkFromMessage = mutation({
       messagesToCopy = allMessages.slice(0, forkIndex + 1);
     }
 
+    const isAgentSwitch = !!args.target_agent_type && !args.message_uuid;
     const agentType = args.target_agent_type || original.agent_type;
     const agentLabels: Record<string, string> = { claude_code: "Claude", codex: "Codex", cursor: "Cursor", gemini: "Gemini" };
-    const isAgentSwitch = args.target_agent_type && args.target_agent_type !== original.agent_type;
-    const titlePrefix = isAgentSwitch ? `${agentLabels[args.target_agent_type!] || args.target_agent_type}: ` : "Fork: ";
+    const isCrossAgentSwitch = !!args.target_agent_type && args.target_agent_type !== original.agent_type;
+    const titlePrefix = isCrossAgentSwitch ? `${agentLabels[args.target_agent_type!] || args.target_agent_type}: ` : "Fork: ";
 
     const now = Date.now();
     const forkSessionId = args.session_id || `forked-${original.session_id}-${crypto.randomUUID()}`;
@@ -4064,14 +4065,28 @@ export const forkFromMessage = mutation({
       subtitle: original.subtitle,
       project_hash: original.project_hash,
       project_path: original.project_path,
-      model: original.model,
+      model: isAgentSwitch ? undefined : original.model,
       started_at: now,
       updated_at: now,
       message_count: messagesToCopy.length,
-      is_private: true,
+      is_private: isAgentSwitch ? original.is_private : true,
+      auto_shared: isAgentSwitch ? original.auto_shared : undefined,
       status: "active",
-      forked_from: original._id,
-      parent_message_uuid: args.message_uuid,
+      forked_from: isAgentSwitch ? undefined : original._id,
+      parent_message_uuid: isAgentSwitch ? "agent-switch" : args.message_uuid,
+      parent_conversation_id: isAgentSwitch ? original._id : undefined,
+      git_commit_hash: original.git_commit_hash,
+      git_branch: original.git_branch,
+      git_remote_url: original.git_remote_url,
+      git_status: original.git_status,
+      git_diff: original.git_diff,
+      git_diff_staged: original.git_diff_staged,
+      git_root: original.git_root,
+      cli_flags: original.cli_flags,
+      worktree_name: original.worktree_name,
+      worktree_branch: original.worktree_branch,
+      worktree_path: original.worktree_path,
+      worktree_status: original.worktree_status,
     });
 
     await ctx.db.patch(newConversationId, {
@@ -4095,10 +4110,12 @@ export const forkFromMessage = mutation({
       });
     }
 
-    const currentForkCount = original.fork_count ?? 0;
-    await ctx.db.patch(original._id, {
-      fork_count: currentForkCount + 1,
-    });
+    if (!isAgentSwitch) {
+      const currentForkCount = original.fork_count ?? 0;
+      await ctx.db.patch(original._id, {
+        fork_count: currentForkCount + 1,
+      });
+    }
 
     // Auto-materialize the fork session via daemon
     const daemonAgentType = agentType === "codex" ? "codex" : agentType === "gemini" ? "gemini" : "claude";

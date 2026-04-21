@@ -70,6 +70,12 @@ describe("isOrphanOrSubagent", () => {
       parent_message_uuid: "m1",
     }))).toBe(false);
   });
+  test("agent-switch child is NOT orphan", () => {
+    expect(isOrphanOrSubagent(conv({
+      parent_conversation_id: "p1" as any,
+      parent_message_uuid: "agent-switch",
+    }))).toBe(false);
+  });
   test("is_subagent false is not orphan", () => {
     expect(isOrphanOrSubagent(conv({ is_subagent: false }))).toBe(false);
   });

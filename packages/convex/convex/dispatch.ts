@@ -198,41 +198,6 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     return conversationId;
   },
 
-  switchAgent: async (ctx, userId, [currentId, targetAgentType]: [string, string], result?: string) => {
-    if (!result) return;
-    const oldConv = await ctx.db.get(currentId as Id<"conversations">);
-    if (!oldConv || oldConv.user_id !== userId) return;
-
-    const now = Date.now();
-    const agentType = (targetAgentType || "claude_code") as "claude_code" | "codex" | "cursor" | "gemini";
-    const conversationPath = oldConv.git_root || oldConv.project_path;
-
-    const mappings = await ctx.db
-      .query("directory_team_mappings")
-      .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
-      .collect();
-    const { teamId: resolvedTeamId, isPrivate, autoShared } = resolveTeamForPath(
-      mappings, conversationPath, undefined
-    );
-
-    const conversationId = await ctx.db.insert("conversations", {
-      user_id: userId,
-      team_id: resolvedTeamId,
-      agent_type: agentType,
-      session_id: result,
-      project_path: oldConv.project_path,
-      git_root: oldConv.git_root,
-      started_at: now,
-      updated_at: now,
-      message_count: 0,
-      is_private: isPrivate,
-      auto_shared: autoShared || undefined,
-      status: "active" as const,
-    });
-    await ctx.db.patch(conversationId, { short_id: conversationId.toString().slice(0, 7) });
-    return conversationId;
-  },
-
   sendMessage: async (ctx, userId, [convId, content, imageIds, clientId]: [string, string, string[] | undefined, string | undefined]) => {
     const conversation = await ctx.db.get(convId as Id<"conversations">);
     if (!conversation || conversation.user_id.toString() !== userId.toString()) throw new Error("Unauthorized");
