@@ -3268,18 +3268,21 @@ export default function SessionDetailScreen() {
   }, [allMessages, showToast]);
 
   const handleCopyResume = useCallback(async () => {
-    if (!conversation?.session_id) return;
+    if (!conversation) return;
     const agentType = conversation.agent_type;
     let cmd: string;
     if (agentType === 'codex') {
+      if (!conversation.session_id) return;
       cmd = `codex resume ${conversation.session_id}`;
     } else {
-      cmd = `cast resume ${conversation.session_id}`;
+      const resumeId = conversation.short_id || conversation.session_id;
+      if (!resumeId) return;
+      cmd = `cast resume ${resumeId}`;
     }
     Clipboard.setString(cmd);
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     showToast('Resume command copied');
-  }, [conversation?.session_id, conversation?.agent_type, showToast]);
+  }, [conversation?.short_id, conversation?.session_id, conversation?.agent_type, showToast]);
 
   const toggleFavoriteConversation = useMutation(api.conversations.toggleFavorite);
   const generateShareLink = useMutation(api.conversations.generateShareLink);

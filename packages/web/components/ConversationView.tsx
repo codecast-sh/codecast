@@ -8227,16 +8227,19 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   };
 
   const buildResumeCommand = useCallback((targetAgent: "claude" | "codex"): string | null => {
-    const sessionId = managedSession?.session_id || conversation?.session_id;
-    if (!sessionId || !conversation) return null;
+    if (!conversation) return null;
     const projectDir = conversation.project_path || conversation.git_root;
     const cdPrefix = projectDir ? `cd ${projectDir} && ` : "";
     const sourceAgent = conversation.agent_type === "codex" ? "codex" : "claude";
     if (targetAgent === sourceAgent && targetAgent === "codex") {
-      return `${cdPrefix}codex resume ${sessionId}`;
+      const codexId = managedSession?.session_id || conversation.session_id;
+      if (!codexId) return null;
+      return `${cdPrefix}codex resume ${codexId}`;
     }
-    return `${cdPrefix}cast resume ${sessionId}${targetAgent !== sourceAgent ? ` --as ${targetAgent}` : ""}`;
-  }, [managedSession?.session_id, conversation?.session_id, conversation?.agent_type, conversation?.project_path, conversation?.git_root]);
+    const resumeId = conversation.short_id || managedSession?.session_id || conversation.session_id;
+    if (!resumeId) return null;
+    return `${cdPrefix}cast resume ${resumeId}${targetAgent !== sourceAgent ? ` --as ${targetAgent}` : ""}`;
+  }, [conversation?.short_id, managedSession?.session_id, conversation?.session_id, conversation?.agent_type, conversation?.project_path, conversation?.git_root]);
 
   const handleCopyResumeCommand = useCallback(async (targetAgent: "claude" | "codex") => {
     try {
