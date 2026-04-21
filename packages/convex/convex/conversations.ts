@@ -102,10 +102,12 @@ async function findChildConversations(
 }> {
   const map: Record<string, string> = {};
 
+  const CHILDREN_LIMIT = 2000;
   const allChildren = await ctx.db
     .query("conversations")
     .withIndex("by_parent_conversation_id", (q: any) => q.eq("parent_conversation_id", conversationId))
-    .collect();
+    .order("desc")
+    .take(CHILDREN_LIMIT);
 
   const subagentChildren = allChildren.filter((c: any) => c.is_subagent || !c.parent_message_uuid);
   const firstMessagePreviews = new Map<string, string>();
@@ -1107,13 +1109,16 @@ export const getNewMessages = query({
       }
     }
 
+    const PAGE_LIMIT = 2000;
     const messages = await ctx.db
       .query("messages")
       .withIndex("by_conversation_timestamp", (q) =>
         q.eq("conversation_id", args.conversation_id).gt("timestamp", args.after_timestamp)
       )
       .order("asc")
-      .collect();
+      .take(PAGE_LIMIT + 1);
+    const hasMore = messages.length > PAGE_LIMIT;
+    if (hasMore) messages.length = PAGE_LIMIT;
 
     const { children: childConversations, map: childConversationMap, agentNameMap } =
       await findChildConversations(ctx, args.conversation_id, messages);
@@ -1124,6 +1129,7 @@ export const getNewMessages = query({
       child_conversation_map: childConversationMap,
       agent_name_map: agentNameMap,
       last_timestamp: messages.length > 0 ? messages[messages.length - 1].timestamp : null,
+      has_more: hasMore,
       updated_at: conversation.updated_at,
       title: conversation.title,
     };
