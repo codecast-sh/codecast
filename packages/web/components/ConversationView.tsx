@@ -7242,6 +7242,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const [showThinking, setShowThinking] = useState(false);
   const [expandedSequences, setExpandedSequences] = useState<Set<string>>(new Set());
   const [diffExpanded, setDiffExpanded] = useState(false);
+  const router = useRouter();
   const convex = useConvex();
   const convexConvId = conversation?._id && isConvexId(conversation._id) ? conversation._id as Id<"conversations"> : undefined;
   const gitDiffData = useQuery(
@@ -7332,6 +7333,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const repairSession = useMutation(api.conversations.repairSession);
 
   const addOptimisticMsg = useInboxStore((s) => s.addOptimisticMessage);
+  const moveDraft = useInboxStore((s) => s.moveDraft);
+  const navigateToSession = useInboxStore((s) => s.navigateToSession);
   const activeBranches = useInboxStore((s) => s.activeBranches);
   const optimisticForkChildren = useInboxStore((s) => s.optimisticForkChildren);
   const firstActiveForkId = useMemo(() => {
@@ -9882,12 +9885,13 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                                 <DropdownMenuItem
                                   key={t}
                                   onClick={() => {
-                                    const sessionId = useInboxStore.getState().switchAgent(conversation._id.toString(), t);
-                                    if (!sessionId) return;
                                     forkFromMessage({
                                       conversation_id: conversation._id.toString(),
                                       target_agent_type: t,
-                                      session_id: sessionId,
+                                    }).then((result) => {
+                                      moveDraft(conversation._id.toString(), result.conversation_id);
+                                      navigateToSession(result.conversation_id);
+                                      router.push(convLink(result.conversation_id));
                                     }).catch((err) => {
                                       toast.error(err instanceof Error ? err.message : "Failed to switch agent");
                                     });

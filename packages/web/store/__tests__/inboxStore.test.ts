@@ -114,7 +114,7 @@ describe("draft migration", () => {
     });
   });
 
-  it("preserves drafts when switching agents through the inbox store", () => {
+  it("preserves drafts when moving them to a new conversation id", () => {
     useInboxStore.setState({
       sessions: {
         conv1: baseSession,
@@ -142,16 +142,17 @@ describe("draft migration", () => {
       pending: {},
     });
 
-    const newSessionId = useInboxStore.getState().switchAgent("conv1", "codex");
+    useInboxStore.getState().moveDraft("conv1", "conv2");
 
-    expect(newSessionId).toBeTruthy();
     const state = useInboxStore.getState();
     expect(state.drafts.conv1).toBeUndefined();
     expect(state.clientState.drafts?.conv1).toBeNull();
-    expect(newSessionId ? state.drafts[newSessionId] : undefined).toEqual({
+    expect(state.drafts.conv2).toEqual({
       draft_message: "draft survives switch",
     });
-    expect(newSessionId ? state.sessions[newSessionId]?.agent_type : undefined).toBe("codex");
+    expect(state.clientState.drafts?.conv2).toEqual({
+      draft_message: "draft survives switch",
+    });
   });
 });
 
