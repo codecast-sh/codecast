@@ -198,8 +198,9 @@ export function QueuePageClient() {
 
   // Auto-open session panel when entering inbox (DashboardLayout renders it)
   useMountEffect(() => {
-    if (!useInboxStore.getState().sidePanelOpen) {
-      useInboxStore.setState({ sidePanelOpen: true });
+    const store = useInboxStore.getState();
+    if (!store.sidePanelOpen && !store.sidePanelUserClosed) {
+      store.toggleSidePanel();
     }
   });
 

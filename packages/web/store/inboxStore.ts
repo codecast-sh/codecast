@@ -338,6 +338,7 @@ export type AppTab = {
   sessionId?: string;
   sidePanelSessionId?: string;
   sidePanelOpen?: boolean;
+  sidePanelUserClosed?: boolean;
   createdAt: number;
 };
 
@@ -698,6 +699,7 @@ interface InboxStoreState {
   // -- Side panel --
   sidePanelSessionId: string | null;
   sidePanelOpen: boolean;
+  sidePanelUserClosed: boolean;
   openSidePanel: (sessionId: string) => void;
   closeSidePanel: () => void;
   clearSidePanelSession: () => void;
@@ -1017,12 +1019,15 @@ export const useInboxStore = create<InboxStoreState>(
   setActiveForkHighlight: (id: string | null) => set({ activeForkHighlight: id }),
   setPendingForkActivation: (id: string | null) => set({ pendingForkActivation: id }),
   recentProjects: [],
-  setRecentProjects: (projects: Array<{ path: string; count: number; lastActive: number }>) => set({ recentProjects: projects }),
+  setRecentProjects: action(function (this: Draft, projects: Array<{ path: string; count: number; lastActive: number }>) {
+    this.recentProjects = projects;
+  }),
   activeProjectPath: null,
   activeProjectFilter: null,
-  setActiveProjectFilter: (name: string | null, path?: string | null) => {
-    set({ activeProjectFilter: name, activeProjectPath: path ?? null });
-  },
+  setActiveProjectFilter: action(function (this: Draft, name: string | null, path?: string | null) {
+    this.activeProjectFilter = name;
+    this.activeProjectPath = path ?? null;
+  }),
 
   // =====================
   // ACTIONS (wrapped by middleware: mutative draft + server dispatch)
@@ -1408,14 +1413,13 @@ export const useInboxStore = create<InboxStoreState>(
     this.clientState.show_dismissed = this.clientState.show_dismissed === false;
   }),
 
-  toggleCollapsedSection: (key: string) => {
-    const current = get().collapsedSections;
-    set({ collapsedSections: { ...current, [key]: !current[key] } });
-  },
+  toggleCollapsedSection: action(function (this: Draft, key: string) {
+    this.collapsedSections = { ...this.collapsedSections, [key]: !this.collapsedSections[key] };
+  }),
 
-  setViewingDismissedId: (id: string | null) => {
-    set({ viewingDismissedId: id });
-  },
+  setViewingDismissedId: action(function (this: Draft, id: string | null) {
+    this.viewingDismissedId = id;
+  }),
 
   getCurrentSession: () => {
     const { sessions, currentSessionId } = get();
@@ -1587,39 +1591,33 @@ export const useInboxStore = create<InboxStoreState>(
     }
   }),
 
-  setPagination: (convId: string, update: Partial<PaginationState>) => {
-    const state = get();
-    set({
-      pagination: {
-        ...state.pagination,
-        [convId]: { ...(state.pagination[convId] || DEFAULT_PAGINATION), ...update },
-      },
-    });
-  },
+  setPagination: action(function (this: Draft, convId: string, update: Partial<PaginationState>) {
+    this.pagination = {
+      ...this.pagination,
+      [convId]: { ...(this.pagination[convId] || DEFAULT_PAGINATION), ...update },
+    };
+  }),
 
-  initPagination: (convId: string) => {
-    const existing = get().pagination[convId];
-    if (existing) return;
-    set({
-      pagination: { ...get().pagination, [convId]: { ...DEFAULT_PAGINATION } },
-    });
-  },
+  initPagination: action(function (this: Draft, convId: string) {
+    if (this.pagination[convId]) return;
+    this.pagination = { ...this.pagination, [convId]: { ...DEFAULT_PAGINATION } };
+  }),
 
   // =====================
   // METADATA
   // =====================
 
-  setCurrentConversation: (ctx: CurrentConversationContext) => {
-    set({ currentConversation: ctx });
-  },
+  setCurrentConversation: action(function (this: Draft, ctx: CurrentConversationContext) {
+    this.currentConversation = ctx;
+  }),
 
-  setIsolatedWorktreeMode: (val: boolean) => {
-    set({ isolatedWorktreeMode: val });
-  },
+  setIsolatedWorktreeMode: action(function (this: Draft, val: boolean) {
+    this.isolatedWorktreeMode = val;
+  }),
 
-  clearCurrentConversation: () => {
-    set({ currentConversation: {} });
-  },
+  clearCurrentConversation: action(function (this: Draft) {
+    this.currentConversation = {};
+  }),
 
   // =====================
   // DRAFTS
@@ -1878,34 +1876,37 @@ export const useInboxStore = create<InboxStoreState>(
 
   sidePanelSessionId: null,
   sidePanelOpen: false,
+  sidePanelUserClosed: false,
 
-  openSidePanel: (sessionId: string) => {
-    set({ sidePanelSessionId: sessionId, sidePanelOpen: true });
-  },
+  openSidePanel: action(function (this: Draft, sessionId: string) {
+    this.sidePanelSessionId = sessionId;
+    this.sidePanelOpen = true;
+    this.sidePanelUserClosed = false;
+  }),
 
-  closeSidePanel: () => {
-    set({ sidePanelSessionId: null, sidePanelOpen: false });
-  },
+  closeSidePanel: action(function (this: Draft) {
+    this.sidePanelSessionId = null;
+    this.sidePanelOpen = false;
+  }),
 
-  clearSidePanelSession: () => {
-    set({ sidePanelSessionId: null });
-  },
+  clearSidePanelSession: action(function (this: Draft) {
+    this.sidePanelSessionId = null;
+  }),
 
-  toggleSidePanel: () => {
-    const { sidePanelOpen, sidePanelSessionId, currentSessionId } = get();
-    if (sidePanelOpen) {
-      set({ sidePanelOpen: false });
+  toggleSidePanel: action(function (this: Draft) {
+    if (this.sidePanelOpen) {
+      this.sidePanelOpen = false;
+      this.sidePanelUserClosed = true;
     } else {
-      set({
-        sidePanelOpen: true,
-        sidePanelSessionId: sidePanelSessionId || currentSessionId,
-      });
+      this.sidePanelOpen = true;
+      this.sidePanelUserClosed = false;
+      this.sidePanelSessionId = this.sidePanelSessionId ?? this.currentSessionId ?? null;
     }
-  },
+  }),
 
-  selectPanelSession: (sessionId: string | null) => {
-    set({ sidePanelSessionId: sessionId });
-  },
+  selectPanelSession: action(function (this: Draft, sessionId: string | null) {
+    this.sidePanelSessionId = sessionId;
+  }),
 
   // =====================
   // TABS
@@ -1923,6 +1924,7 @@ export const useInboxStore = create<InboxStoreState>(
       sessionId: opts.sessionId,
       sidePanelSessionId: this.sidePanelSessionId ?? undefined,
       sidePanelOpen: this.sidePanelOpen || undefined,
+      sidePanelUserClosed: this.sidePanelUserClosed || undefined,
       createdAt: Date.now(),
     };
     this.tabs = [...this.tabs, tab];
@@ -1948,6 +1950,7 @@ export const useInboxStore = create<InboxStoreState>(
         ...t,
         sidePanelSessionId: this.sidePanelSessionId ?? undefined,
         sidePanelOpen: this.sidePanelOpen || undefined,
+        sidePanelUserClosed: this.sidePanelUserClosed || undefined,
         path: typeof window !== "undefined" ? window.location.pathname : t.path,
       } : t);
     }
@@ -1956,6 +1959,7 @@ export const useInboxStore = create<InboxStoreState>(
     if (target) {
       this.sidePanelSessionId = target.sidePanelSessionId ?? null;
       this.sidePanelOpen = target.sidePanelOpen ?? false;
+      this.sidePanelUserClosed = target.sidePanelUserClosed ?? false;
     }
   }),
 
@@ -1969,6 +1973,7 @@ export const useInboxStore = create<InboxStoreState>(
       ...t,
       sidePanelSessionId: this.sidePanelSessionId ?? undefined,
       sidePanelOpen: this.sidePanelOpen || undefined,
+      sidePanelUserClosed: this.sidePanelUserClosed || undefined,
       path: typeof window !== "undefined" ? window.location.pathname : t.path,
       ...patch,
     } : t);
