@@ -9,6 +9,11 @@ export function shareOrigin(): string {
   return "https://codecast.sh";
 }
 
+export function canonicalUrl(): string {
+  if (typeof window === "undefined") return shareOrigin();
+  return `${shareOrigin()}${window.location.pathname}${window.location.search}${window.location.hash}`;
+}
+
 export async function copyToClipboard(text: string): Promise<void> {
   // Sync execCommand first - must run before dropdown/popup closes and shifts focus
   const textArea = document.createElement("textarea");

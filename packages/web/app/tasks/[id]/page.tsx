@@ -1,6 +1,6 @@
 "use client";
 import { useState, useCallback, useRef } from "react";
-import { copyToClipboard } from "../../../lib/utils";
+import { copyToClipboard, canonicalUrl } from "../../../lib/utils";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { useParams, useRouter } from "next/navigation";
 import { useMutation, useQuery } from "convex/react";
@@ -589,7 +589,7 @@ function TaskDetailContent() {
             </Link>
             <div className="flex items-center gap-1">
               <button
-                onClick={() => { copyToClipboard(typeof window !== "undefined" ? window.location.href : `/tasks/${id}`).then(() => toast.success("Link copied")).catch(() => toast.error("Failed to copy")); }}
+                onClick={() => { copyToClipboard(canonicalUrl()).then(() => toast.success("Link copied")).catch(() => toast.error("Failed to copy")); }}
                 className="p-1 rounded-md text-sol-text-dim hover:text-sol-cyan hover:bg-sol-bg-alt transition-colors"
                 title="Copy link"
               >
