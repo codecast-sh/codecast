@@ -7,7 +7,7 @@ import { ErrorBoundary } from "./ErrorBoundary";
 import { ContextChatInput } from "./ContextChatInput";
 import { ArrowLeft, Edit3, Eye, MoreHorizontal, Copy, Check, X, Link2 } from "lucide-react";
 import Link from "next/link";
-import { copyToClipboard } from "../lib/utils";
+import { copyToClipboard, canonicalUrl } from "../lib/utils";
 import { toast } from "sonner";
 
 interface DocumentDetailLayoutProps {
@@ -58,7 +58,7 @@ export function DocumentDetailLayout({
   );
 
   const handleCopyLink = () => {
-    copyToClipboard(window.location.href)
+    copyToClipboard(canonicalUrl())
       .then(() => {
         setLinkCopied(true);
         setTimeout(() => setLinkCopied(false), 2000);
