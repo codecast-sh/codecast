@@ -41,6 +41,8 @@ export function useSyncInboxSessions() {
   const syncTable = useInboxStore((s) => s.syncTable);
   const _setDispatch = useInboxStore((s) => s._setDispatch);
   const _setDispatchError = useInboxStore((s) => s._setDispatchError);
+  const pruneDrafts = useMutation(api.client_state.pruneDeadDrafts);
+  const prunedRef = useRef(false);
 
   const prevActiveIdsRef = useRef<Set<string> | null>(null);
   const prevIdleMapRef = useRef<Map<string, boolean> | null>(null);
@@ -117,7 +119,18 @@ export function useSyncInboxSessions() {
 
   useConvexSync(clientState, useCallback((data: any) => {
     useInboxStore.getState().syncTable("clientState", data);
-  }, []));
+    // One-time self-heal: if the server's client_state has accumulated more
+    // drafts than Convex can patch (>~1000), prune dead entries. Otherwise
+    // every subsequent dispatch that touches client_state would fail with
+    // "Object has too many fields".
+    if (!prunedRef.current && data?.drafts && typeof data.drafts === "object") {
+      const draftCount = Object.keys(data.drafts).length;
+      if (draftCount > 800) {
+        prunedRef.current = true;
+        pruneDrafts({}).catch((e) => console.error("[sync] prune drafts failed", e));
+      }
+    }
+  }, [pruneDrafts]));
 
   // When the current session becomes dismissed elsewhere, hop to its
   // implementation_session if one exists so the user isn't stranded.
