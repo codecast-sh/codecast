@@ -43,6 +43,7 @@ cd ../..
 echo "   Building web (clean)..."
 cd packages/web
 rm -rf .next
+set -o pipefail
 if ! bun run build 2>&1 | tee /tmp/web-build.log; then
   echo ""
   echo "   ✗ Web build failed! Fix errors before deploying."
@@ -80,7 +81,10 @@ PREV_CLI_HASH=""
 [[ -f "$LAST_CLI_MARKER" ]] && PREV_CLI_HASH=$(cat "$LAST_CLI_MARKER")
 
 CLI_NEEDS_DEPLOY=false
-if [[ -n "$REMOTE_VERSION" && "$CURRENT_VERSION" != "$REMOTE_VERSION" ]]; then
+if $FORCE_CLI; then
+  echo "   --force passed - deploying CLI unconditionally..."
+  CLI_NEEDS_DEPLOY=true
+elif [[ -n "$REMOTE_VERSION" && "$CURRENT_VERSION" != "$REMOTE_VERSION" ]]; then
   echo "   Version mismatch ($CURRENT_VERSION local vs $REMOTE_VERSION remote) - deploying..."
   CLI_NEEDS_DEPLOY=true
 elif [[ "$LAST_CLI_HASH" != "$PREV_CLI_HASH" ]]; then
