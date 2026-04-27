@@ -140,7 +140,7 @@ export function useConversationMessages(
   const storeMessages = s.messages[conversationId] ?? EMPTY_MESSAGES;
   const storePending = s.pendingMessages[conversationId] ?? EMPTY_PENDING;
   const _convMeta = s.conversations[conversationId];
-  const _sessMeta = s.sessions[conversationId] ?? s.dismissedSessions[conversationId];
+  const _sessMeta = s.sessions[conversationId];
   // Merge session data as defaults so the minimal conversations seed ({ _id }) doesn't
   // shadow real session fields like message_count before getConversationWithMeta resolves.
   // Must be memoized: the spread creates a new object every render, which breaks

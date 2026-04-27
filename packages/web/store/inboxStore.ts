@@ -3,7 +3,7 @@ import { useSyncExternalStore, useRef } from "react";
 import { mutativeMiddleware, action, asyncAction, sync } from "./mutativeMiddleware";
 import { applySyncTable, applySyncRecord, type PendingEntry } from "./syncProtocol";
 import { soundDismiss, soundKill } from "../lib/sounds";
-import { loadCache, writePatchesToIDB, setHydrating, loadConversationMessages, writeConversationMessages } from "./idbCache";
+import { loadCache, writePatchesToIDB, setHydrating, loadConversationMessages, writeConversationMessages, enqueueDispatch, removeDispatch, loadOutbox } from "./idbCache";
 
 export type { PendingEntry } from "./syncProtocol";
 
@@ -93,6 +93,7 @@ export type InboxSession = {
   agent_status?: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "stopped" | "starting" | "resuming";
   is_deferred?: boolean;
   is_pinned?: boolean;
+  inbox_dismissed_at?: number | null;
   last_user_message?: string | null;
   session_error?: string;
   implementation_session?: { _id: string; title?: string };
@@ -365,8 +366,12 @@ type Draft = InboxStoreState;
 
 // -- Helpers --
 
+export function isSessionDismissed(s: Pick<InboxSession, "inbox_dismissed_at">): boolean {
+  return !!s.inbox_dismissed_at;
+}
+
 export function sortSessions(sessions: Record<string, InboxSession>): InboxSession[] {
-  const list = Object.values(sessions);
+  const list = Object.values(sessions).filter((s) => !isSessionDismissed(s));
   list.sort((a, b) => {
     const aWaitingForInput = isSessionWaitingForInput(a);
     const bWaitingForInput = isSessionWaitingForInput(b);
@@ -444,6 +449,7 @@ export interface CategorizedSessions {
   newSessions: InboxSession[];
   needsInput: InboxSession[];
   working: InboxSession[];
+  dismissed: InboxSession[];
   subsByParent: Map<string, InboxSession[]>;
   forksByParent: Map<string, InboxSession[]>;
 }
@@ -453,6 +459,9 @@ export function categorizeSessions(
   sessionsWithQueuedMessages: Set<string>,
 ): CategorizedSessions {
   const sorted = sortSessions(sessions);
+  const dismissed = Object.values(sessions)
+    .filter(isSessionDismissed)
+    .sort((a, b) => (b.inbox_dismissed_at || 0) - (a.inbox_dismissed_at || 0));
   const allIds = new Set(sorted.map((s) => s._id));
 
   const subsByParent = new Map<string, InboxSession[]>();
@@ -488,7 +497,7 @@ export function categorizeSessions(
   const needsInput = sorted.filter((s) => isSessionWaitingForInput(s, sessionsWithQueuedMessages) && isTop(s));
   const working = sorted.filter((s) => (!isSessionWaitingForInput(s, sessionsWithQueuedMessages) && s.message_count > 0 && !s.is_pinned) && isTop(s));
 
-  return { sorted, pinned, newSessions, needsInput, working, subsByParent, forksByParent };
+  return { sorted, pinned, newSessions, needsInput, working, dismissed, subsByParent, forksByParent };
 }
 
 export function visualOrderSessions(
@@ -512,7 +521,6 @@ export function visualOrderSessions(
 
 interface InboxStoreState {
   sessions: Record<string, InboxSession>;
-  dismissedSessions: Record<string, InboxSession>;
   pending: Record<string, PendingEntry>;
   currentSessionId: string | null;
   showDismissed: boolean;
@@ -534,6 +542,7 @@ interface InboxStoreState {
 
   clientState: ClientState;
   clientStateInitialized: boolean;
+  sessionsServerSynced: boolean;
 
   drafts: Record<string, Record<string, any>>;
 
@@ -826,6 +835,7 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
     altKey: "session_id",
     keepSelected: "currentSessionId",
     transform(draft, table, incoming) {
+      draft.sessionsServerSynced = true;
       for (const s of incoming as any[]) {
         if (!draft.conversations[s._id]) draft.conversations[s._id] = { _id: s._id };
       }
@@ -838,7 +848,6 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
       }
     },
   },
-  dismissedSessions: {},
   clientState: {
     kind: "singleton",
     merge: {
@@ -943,7 +952,6 @@ export const useInboxStore = create<InboxStoreState>(
   mutativeMiddleware((set: any, get: any) => ({
   // -- Initial state --
   sessions: {},
-  dismissedSessions: {},
   pending: {},
   dispatchErrors: 0,
   currentSessionId: null,
@@ -965,6 +973,7 @@ export const useInboxStore = create<InboxStoreState>(
   conversations: {},
   clientState: {},
   clientStateInitialized: false,
+  sessionsServerSynced: false,
 
   drafts: {},
 
@@ -1051,9 +1060,12 @@ export const useInboxStore = create<InboxStoreState>(
       newSessionId = next?._id ?? null;
     }
     for (const sid of allIds) {
-      const wasPinned = this.sessions[sid]?.is_pinned;
-      if (this.sessions[sid]) this.dismissedSessions[sid] = this.sessions[sid];
-      delete this.sessions[sid];
+      const sess = this.sessions[sid];
+      const wasPinned = sess?.is_pinned;
+      if (sess) {
+        sess.inbox_dismissed_at = now;
+        if (wasPinned) sess.is_pinned = false;
+      }
       if (this.conversations[sid]) {
         (this.conversations[sid] as any).inbox_dismissed_at = now;
         if (wasPinned) (this.conversations[sid] as any).inbox_pinned_at = null;
@@ -1064,16 +1076,13 @@ export const useInboxStore = create<InboxStoreState>(
   }),
 
   unstashSession: action(function (this: Draft, id: string) {
-    const childIds = Object.values(this.dismissedSessions as Record<string, InboxSession>)
-      .filter((s) => s.parent_conversation_id === id)
+    const childIds = Object.values(this.sessions as Record<string, InboxSession>)
+      .filter((s) => isSessionDismissed(s) && s.parent_conversation_id === id)
       .map((s) => s._id);
     const allIds = [id, ...childIds];
     for (const sid of allIds) {
+      if (this.sessions[sid]) this.sessions[sid].inbox_dismissed_at = null;
       if (this.conversations[sid]) (this.conversations[sid] as any).inbox_dismissed_at = null;
-      if (this.dismissedSessions[sid]) {
-        this.sessions[sid] = this.dismissedSessions[sid];
-        delete this.dismissedSessions[sid];
-      }
     }
     this.currentSessionId = id;
     this.viewingDismissedId = null;
@@ -1428,8 +1437,7 @@ export const useInboxStore = create<InboxStoreState>(
   },
 
   injectSession: action(function (this: Draft, session: InboxSession) {
-    delete this.dismissedSessions[session._id];
-    this.sessions[session._id] = session;
+    this.sessions[session._id] = { ...session, inbox_dismissed_at: null };
     this.currentSessionId = session._id;
     this.viewingDismissedId = null;
     this.clientState.current_conversation_id = session._id;
@@ -1467,9 +1475,8 @@ export const useInboxStore = create<InboxStoreState>(
     if (this.conversations[id]) {
       (this.conversations[id] as any).inbox_dismissed_at = null;
     }
-    if (this.dismissedSessions[id]) {
-      this.sessions[id] = this.dismissedSessions[id];
-      delete this.dismissedSessions[id];
+    if (this.sessions[id]) {
+      this.sessions[id].inbox_dismissed_at = null;
     }
     if (this.sessions[id]) {
       this.currentSessionId = id;
@@ -1994,8 +2001,7 @@ export const useInboxStore = create<InboxStoreState>(
   // =====================
 
   getSession: (id: string) => {
-    const { sessions, dismissedSessions } = get();
-    return sessions[id] || dismissedSessions[id];
+    return get().sessions[id];
   },
 
 })) as any);
@@ -2064,6 +2070,7 @@ export function ensureHydrated(convId: string) {
 
 if (typeof window !== "undefined") {
   (useInboxStore.getState() as any)._setIDBWrite(writePatchesToIDB);
+  (useInboxStore.getState() as any)._setOutbox(enqueueDispatch, removeDispatch, loadOutbox);
 
   setHydrating(true);
   loadCache().then((cached) => {
@@ -2110,6 +2117,8 @@ if (typeof window !== "undefined") {
           if (cur?.length === 0) updates[key] = val;
         } else if (typeof val === "object") {
           if (Object.keys(cur || {}).length === 0) updates[key] = val;
+        } else {
+          updates[key] = val;
         }
       }
       if (Object.keys(updates).length > 0) {
@@ -2131,9 +2140,10 @@ if (typeof window !== "undefined") {
     delete cached.pagination;
 
     // Critical path: sidebar + current conversation + tabs render immediately
-    apply(["sessions", "dismissedSessions", "clientState",
+    apply(["sessions", "clientState",
            "conversations", "pending", "teams", "teamMembers", "teamUnreadCount", "drafts",
-           "tabs", "activeTabId"]);
+           "tabs", "activeTabId",
+           "sidePanelOpen", "sidePanelSessionId", "sidePanelUserClosed"]);
 
     // Restore selected session from persisted clientState before React effects
     // can auto-select the first session (QueuePageClient's fallback effect).

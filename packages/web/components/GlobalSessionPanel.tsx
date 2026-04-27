@@ -806,22 +806,21 @@ export function SessionListPanel({
     s => s.clientState.show_dismissed,
     s => s.hiddenSessionCount,
     s => s.sessions,
-    s => s.dismissedSessions,
     s => s.sessionsWithQueuedMessages,
     s => s.activeForkHighlight,
     s => s.activeProjectFilter,
     s => s.collapsedSections,
+    s => s.sessionsServerSynced,
   ]);
-  const dismissedList = useMemo(() => Object.values(s.dismissedSessions), [s.dismissedSessions]);
   const killSessionMutation = useMutation(api.conversations.killSession);
   const handleKillDismissed = useCallback((id: string) => {
     soundKill();
     if (isConvexId(id)) {
       killSessionMutation({ conversation_id: id as Id<"conversations">, mark_completed: true }).catch(() => {});
     }
-    const newDismissed = { ...useInboxStore.getState().dismissedSessions };
-    delete newDismissed[id];
-    useInboxStore.setState({ dismissedSessions: newDismissed });
+    const newSessions = { ...useInboxStore.getState().sessions };
+    delete newSessions[id];
+    useInboxStore.setState({ sessions: newSessions });
   }, [killSessionMutation]);
 
   const handleSelect = useCallback((session: InboxSession) => {
@@ -834,7 +833,7 @@ export function SessionListPanel({
     }
   }, [onSessionSelect, onForkSelect]);
 
-  const { sorted: sortedSessions, pinned, newSessions, needsInput, working, subsByParent: globalSubByParent, forksByParent: globalForksByParent } = useMemo(
+  const { sorted: sortedSessions, pinned, newSessions, needsInput, working, dismissed: dismissedList, subsByParent: globalSubByParent, forksByParent: globalForksByParent } = useMemo(
     () => categorizeSessions(s.sessions, s.sessionsWithQueuedMessages),
     [s.sessions, s.sessionsWithQueuedMessages],
   );
@@ -1057,6 +1056,13 @@ export function SessionListPanel({
         </div>
       </div>
       <div ref={scrollContainerRef} className="flex-1 overflow-y-auto scrollbar-auto">
+        {!s.sessionsServerSynced ? (
+          <div className="px-3 py-4 flex flex-col gap-2">
+            {[...Array(4)].map((_, i) => (
+              <div key={i} className="h-12 rounded bg-sol-border/20 animate-pulse" />
+            ))}
+          </div>
+        ) : <>
         {!s.activeProjectFilter && <NeedsAttentionSection />}
         {renderSection("Pinned", filteredPinned, "text-sol-magenta")}
         {renderSection("New", filteredNew, "text-sol-blue")}
@@ -1127,6 +1133,7 @@ export function SessionListPanel({
             );
           })()}
         </div>
+        </>}
       </div>
       {onCollapse && (
         <div className="flex-shrink-0 border-t border-sol-border/30 flex justify-center py-1">
@@ -1222,11 +1229,10 @@ export const ConversationColumn = memo(function ConversationColumn() {
   const s = useTrackedStore([
     s => s.sidePanelSessionId,
     s => s.sessions,
-    s => s.dismissedSessions,
   ]);
   const router = useRouter();
 
-  const session = s.sidePanelSessionId ? (s.sessions[s.sidePanelSessionId] ?? s.dismissedSessions[s.sidePanelSessionId] ?? null) : null;
+  const session = s.sidePanelSessionId ? (s.sessions[s.sidePanelSessionId] ?? null) : null;
   const sessionRenderKey = getSessionRenderKey(session);
 
   useWatchEffect(() => {

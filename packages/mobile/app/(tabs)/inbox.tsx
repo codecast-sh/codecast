@@ -309,7 +309,6 @@ export default function InboxScreen() {
   useSyncInboxSessions();
 
   const sessions = useInboxStore((s) => s.sessions);
-  const dismissedSessionsMap = useInboxStore((s) => s.dismissedSessions);
   const stashSession = useInboxStore((s) => s.stashSession);
   const unstashSession = useInboxStore((s) => s.unstashSession);
   const pinSession = useInboxStore((s) => s.pinSession);
@@ -317,12 +316,11 @@ export default function InboxScreen() {
   const killSession = useMutation(api.conversations.killSession);
 
   const sessionsWithQueuedMessages = useInboxStore((s) => s.sessionsWithQueuedMessages);
-  const { sorted: sortedAll, pinned, newSessions, needsInput, working } = useMemo(
+  const { sorted: sortedAll, pinned, newSessions, needsInput, working, dismissed: dismissedSessions } = useMemo(
     () => categorizeSessions(sessions, sessionsWithQueuedMessages),
     [sessions, sessionsWithQueuedMessages],
   );
   const activeSessions = useMemo(() => sortedAll.filter((s) => !s.is_deferred), [sortedAll]);
-  const dismissedSessions = useMemo(() => Object.values(dismissedSessionsMap), [dismissedSessionsMap]);
 
   const searchResults = useQuery(
     api.conversations.searchConversations,

@@ -24,8 +24,7 @@ function deepMerge(target: any, source: any): any {
 export function useSyncInboxSessions() {
   const convex = useConvex();
   const showAll = useInboxStore((s) => s.clientState.ui?.show_old_sessions ?? true);
-  const activeSessions = useQuery(api.conversations.listIdleSessions, { show_all: showAll });
-  const dismissedQuery = useQuery(api.conversations.listDismissedSessions, {});
+  const inboxSessions = useQuery(api.conversations.listInboxSessions, { show_all: showAll });
   const clientState = useQuery(api.client_state.get, {});
   const bgFetchingRef = useRef(new Set<string>());
   const dispatchMutation = useMutation(api.dispatch.dispatch).withOptimisticUpdate(
@@ -89,13 +88,14 @@ export function useSyncInboxSessions() {
     }
   }, [convex]);
 
-  useConvexSync(activeSessions, useCallback((data: any) => {
+  useConvexSync(inboxSessions, useCallback((data: any) => {
     const sessions = data.sessions ?? data;
     const queued = useInboxStore.getState().sessionsWithQueuedMessages;
     const prev = prevIdleMapRef.current;
     if (prev) {
       for (const s of sessions) {
         if (isSub(s as InboxSession)) continue;
+        if (s.inbox_dismissed_at) continue;
         const id = s._id.toString();
         if (isSessionWaitingForInput(s as InboxSession, queued) && prev.has(id) && !prev.get(id)) {
           soundIdle();
@@ -103,7 +103,11 @@ export function useSyncInboxSessions() {
         }
       }
     }
-    prevIdleMapRef.current = new Map(sessions.map((s: any) => [s._id.toString(), isSessionWaitingForInput(s as InboxSession, queued)]));
+    prevIdleMapRef.current = new Map(
+      sessions
+        .filter((s: any) => !s.inbox_dismissed_at)
+        .map((s: any) => [s._id.toString(), isSessionWaitingForInput(s as InboxSession, queued)])
+    );
     syncTable("sessions", sessions as unknown as InboxSession[]);
     if (typeof data.hidden_count === "number") {
       useInboxStore.setState({ hiddenSessionCount: data.hidden_count });
@@ -111,34 +115,33 @@ export function useSyncInboxSessions() {
     bgSyncMessages(sessions);
   }, [syncTable, bgSyncMessages]));
 
-  useConvexSync(dismissedQuery, useCallback((data: any) => {
-    syncTable("dismissedSessions", data as unknown as InboxSession[]);
-  }, [syncTable]));
-
   useConvexSync(clientState, useCallback((data: any) => {
     useInboxStore.getState().syncTable("clientState", data);
   }, []));
 
+  // When the current session becomes dismissed elsewhere, hop to its
+  // implementation_session if one exists so the user isn't stranded.
   // eslint-disable-next-line no-restricted-syntax -- navigation side effect on session list change
   useEffect(() => {
-    if (!activeSessions || !dismissedQuery) return;
-    const sessionsList = (activeSessions as any).sessions ?? activeSessions;
-    const activeIds = new Set<string>(sessionsList.map((s: any) => s._id.toString()));
+    if (!inboxSessions) return;
+    const sessionsList = (inboxSessions as any).sessions ?? inboxSessions;
+    const activeIds = new Set<string>(
+      sessionsList.filter((s: any) => !s.inbox_dismissed_at).map((s: any) => s._id.toString())
+    );
     const prev = prevActiveIdsRef.current;
     if (prev) {
       const currentSessionId = useInboxStore.getState().currentSessionId;
       const sessions = useInboxStore.getState().sessions;
       const currentSession = currentSessionId ? sessions[currentSessionId] : null;
       if (currentSession && prev.has(currentSession._id) && !activeIds.has(currentSession._id)) {
-        const dismissedSessions = useInboxStore.getState().dismissedSessions;
-        const dismissed = Object.values(dismissedSessions).find((s) => s._id === currentSession._id);
-        if (dismissed?.implementation_session) {
-          useInboxStore.getState().navigateToSession(dismissed.implementation_session._id);
+        const synced = (sessionsList as any[]).find((s) => s._id.toString() === currentSession._id);
+        if (synced?.implementation_session) {
+          useInboxStore.getState().navigateToSession(synced.implementation_session._id);
         }
       }
     }
     prevActiveIdsRef.current = activeIds;
-  }, [activeSessions, dismissedQuery]);
+  }, [inboxSessions]);
 
-  return { activeSessions };
+  return { activeSessions: inboxSessions };
 }

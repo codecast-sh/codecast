@@ -17,9 +17,8 @@ export const SessionWindow = memo(function SessionWindow({ win, isFocused }: Ses
 
   const s = useTrackedStore([
     s => s.sessions[win.sessionId],
-    s => s.dismissedSessions[win.sessionId],
   ]);
-  const session = s.sessions[win.sessionId] ?? s.dismissedSessions[win.sessionId];
+  const session = s.sessions[win.sessionId];
   const isIdle = session ? isSessionEffectivelyIdle(session) : true;
   const renderKey = getSessionRenderKey(session);
   const title = cleanTitle(session?.title || "New Session");

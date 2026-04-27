@@ -1,15 +1,24 @@
 import Dexie from "dexie";
 import type { Patch } from "mutative";
 
+export type OutboxEntry = {
+  id: string;
+  action: string;
+  args: any;
+  patches: any;
+  result: any;
+  ts: number;
+};
+
 class CacheDB extends Dexie {
   sessions!: Dexie.Table<any, string>;
-  dismissedSessions!: Dexie.Table<any, string>;
   tasks!: Dexie.Table<any, string>;
   docs!: Dexie.Table<any, string>;
   plans!: Dexie.Table<any, string>;
   projects!: Dexie.Table<any, string>;
   meta!: Dexie.Table<{ key: string; value: any }, string>;
   conversationMessages!: Dexie.Table<{ convId: string; messages: any[]; latestTimestamp: number; pagination: any }, string>;
+  dispatchOutbox!: Dexie.Table<OutboxEntry, string>;
 
   constructor() {
     super("codecast-store");
@@ -40,6 +49,29 @@ class CacheDB extends Dexie {
       meta: "key",
       conversationMessages: "convId",
     });
+    this.version(4).stores({
+      sessions: "_id",
+      dismissedSessions: "_id",
+      tasks: "_id",
+      docs: "_id",
+      plans: "_id",
+      projects: "_id",
+      meta: "key",
+      conversationMessages: "convId",
+      dispatchOutbox: "id, ts",
+    });
+    // v5: dismissedSessions table dropped — dismissal is now a field on sessions.
+    this.version(5).stores({
+      sessions: "_id",
+      dismissedSessions: null,
+      tasks: "_id",
+      docs: "_id",
+      plans: "_id",
+      projects: "_id",
+      meta: "key",
+      conversationMessages: "convId",
+      dispatchOutbox: "id, ts",
+    });
   }
 }
 
@@ -47,7 +79,6 @@ const db = new CacheDB();
 
 const COLLECTION_TABLES: Record<string, Dexie.Table<any, string>> = {
   sessions: db.sessions,
-  dismissedSessions: db.dismissedSessions,
   tasks: db.tasks,
   docs: db.docs,
   plans: db.plans,
@@ -70,6 +101,9 @@ const META_KEYS = new Set([
   "bookmarks",
   "tabs",
   "activeTabId",
+  "sidePanelOpen",
+  "sidePanelSessionId",
+  "sidePanelUserClosed",
 ]);
 
 let _hydrating = false;
@@ -86,33 +120,12 @@ export function writePatchesToIDB(patches: Patch[], state: any) {
   for (const key of affectedKeys) {
     const table = COLLECTION_TABLES[key];
     if (table) {
-      const fullReplace = patches.some(
-        (p) => String((p.path as any[])[0]) === key && p.path.length === 1,
-      );
-      if (fullReplace) {
-        const data = state[key];
-        if (data && typeof data === "object") {
-          table
-            .clear()
-            .then(() => table.bulkPut(Object.values(data)))
-            .catch(() => {});
-        }
-      } else {
-        const puts: any[] = [];
-        const deletes: string[] = [];
-        for (const patch of patches) {
-          const path = patch.path as (string | number)[];
-          if (String(path[0]) !== key || path.length < 2) continue;
-          const docId = String(path[1]);
-          if (patch.op === "remove" && path.length === 2) {
-            deletes.push(docId);
-          } else {
-            const doc = state[key]?.[docId];
-            if (doc) puts.push(doc);
-          }
-        }
-        if (puts.length > 0) table.bulkPut(puts).catch(() => {});
-        if (deletes.length > 0) table.bulkDelete(deletes).catch(() => {});
+      const data = state[key];
+      if (data && typeof data === "object") {
+        table
+          .clear()
+          .then(() => table.bulkPut(Object.values(data)))
+          .catch(() => {});
       }
     } else if (META_KEYS.has(key)) {
       db.meta.put({ key, value: state[key] }).catch(() => {});
@@ -169,5 +182,23 @@ export function writeConversationMessages(convId: string, messages: any[], pagin
     ? Math.max(...messages.map((m: any) => m.timestamp || 0))
     : 0;
   db.conversationMessages.put({ convId, messages, pagination, latestTimestamp }).catch(() => {});
+}
+
+// -- Dispatch outbox: persist server-bound mutations until acknowledged --
+
+export function enqueueDispatch(entry: OutboxEntry) {
+  db.dispatchOutbox.put(entry).catch(() => {});
+}
+
+export function removeDispatch(id: string) {
+  db.dispatchOutbox.delete(id).catch(() => {});
+}
+
+export async function loadOutbox(): Promise<OutboxEntry[]> {
+  try {
+    return await db.dispatchOutbox.orderBy("ts").toArray();
+  } catch {
+    return [];
+  }
 }
 
