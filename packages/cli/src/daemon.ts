@@ -506,13 +506,13 @@ function syncSkillsForConversation(conversationId: string, projectPath: string |
   skillsSyncedConversations.add(conversationId);
   const allSkills = readAvailableSkills(projectPath);
   if (allSkills.length === 0) return;
-  syncService.setAvailableSkills(conversationId, JSON.stringify(allSkills)).catch(() => {});
+  syncService.setAvailableSkills(conversationId, JSON.stringify(allSkills)).catch(logConvexFailure);
   if (projectPath) {
     const globalSkills = readAvailableSkills();
     const globalNames = new Set(globalSkills.map(s => s.name));
     const projectOnly = allSkills.filter(s => !globalNames.has(s.name));
     if (projectOnly.length > 0) {
-      syncService.setAvailableSkills(undefined, JSON.stringify(projectOnly), projectPath).catch(() => {});
+      syncService.setAvailableSkills(undefined, JSON.stringify(projectOnly), projectPath).catch(logConvexFailure);
     }
   }
 }
@@ -779,6 +779,15 @@ function logDelivery(message: string, metadata?: RemoteLog["metadata"]): void {
   if (remoteLogQueue.length > MAX_LOG_QUEUE_SIZE) {
     remoteLogQueue.shift();
   }
+}
+
+// Standard catch handler for fire-and-forget Convex calls. Previously these used
+// `.catch(() => {})` and silently swallowed errors, which hid Convex outages,
+// auth-token expiry, and stuck mutations. Logs at info level to keep noise reasonable
+// while still leaving a breadcrumb when the sync layer fails.
+function logConvexFailure(err: unknown): void {
+  const msg = err instanceof Error ? err.message : String(err);
+  log(`[convex-bg] mutation failed: ${msg}`);
 }
 
 function logLifecycle(event: string, details?: string): void {
@@ -1332,9 +1341,9 @@ async function executeRemoteCommand(
             const initialManagedSessionId = getInitialManagedSessionId(agentType, expectedSessionId, codexThreadId);
             registerAppServerConversation(conversationId, codexThreadId, { cwd, approvalPolicy: codexApprovalPolicy });
             if (initialManagedSessionId && syncServiceRef) {
-              syncServiceRef.markSessionActive(conversationId).catch(() => {});
-              syncServiceRef.registerManagedSession(initialManagedSessionId, process.pid, undefined, conversationId).catch(() => {});
-              syncServiceRef.updateSessionAgentStatus(conversationId, "connected").catch(() => {});
+              syncServiceRef.markSessionActive(conversationId).catch(logConvexFailure);
+              syncServiceRef.registerManagedSession(initialManagedSessionId, process.pid, undefined, conversationId).catch(logConvexFailure);
+              syncServiceRef.updateSessionAgentStatus(conversationId, "connected").catch(logConvexFailure);
               ensureManagedSessionHeartbeat(initialManagedSessionId);
             }
             log(`[codex-app-server] registered conv=${conversationId.slice(0, 12)} -> thread=${codexThreadId.slice(0, 8)}`);
@@ -1650,7 +1659,7 @@ async function executeRemoteCommand(
           forgetPersistedAppServerConversation(conversationId);
           stopManagedSessionHeartbeat(killThreadId);
           if (syncServiceRef) {
-            syncServiceRef.markSessionCompleted(conversationId).catch(() => {});
+            syncServiceRef.markSessionCompleted(conversationId).catch(logConvexFailure);
             sendAgentStatus(syncServiceRef, conversationId, killThreadId, "stopped");
           }
           result = "killed_app_server";
@@ -1750,7 +1759,7 @@ async function executeRemoteCommand(
         // Reset any injected-but-unacked messages back to pending so they
         // get re-delivered when the session is resumed
         if (syncServiceRef) {
-          syncServiceRef.resetInjectedMessages(conversationId).catch(() => {});
+          syncServiceRef.resetInjectedMessages(conversationId).catch(logConvexFailure);
         }
 
         if (!result) result = sessionId ? "no_process" : "no_session";
@@ -1805,8 +1814,8 @@ async function executeRemoteCommand(
             cache[sessionId] = conversationId;
             saveConversationCache(cache);
             if (syncServiceRef) {
-              syncServiceRef.markSessionActive(conversationId).catch(() => {});
-              syncServiceRef.updateSessionAgentStatus(conversationId, "connected").catch(() => {});
+              syncServiceRef.markSessionActive(conversationId).catch(logConvexFailure);
+              syncServiceRef.updateSessionAgentStatus(conversationId, "connected").catch(logConvexFailure);
             }
           }
           restartingSessionIds.delete(sessionId);
@@ -1845,8 +1854,8 @@ async function executeRemoteCommand(
                   cache[newSessionId] = conversationId;
                   saveConversationCache(cache);
                   if (syncServiceRef) {
-                    syncServiceRef.markSessionActive(conversationId).catch(() => {});
-                    syncServiceRef.updateSessionAgentStatus(conversationId, "connected").catch(() => {});
+                    syncServiceRef.markSessionActive(conversationId).catch(logConvexFailure);
+                    syncServiceRef.updateSessionAgentStatus(conversationId, "connected").catch(logConvexFailure);
                   }
                   restartingSessionIds.delete(sessionId);
                   if (conversationId) conversationResumeFailures.delete(conversationId);
@@ -2643,7 +2652,7 @@ async function syncMessagesBatch(
     // If we just synced a user message from the JSONL, ack any injected pending messages
     // This confirms the session received the injected text
     if (messages.some(m => m.role === "user")) {
-      syncService.ackInjectedMessages(conversationId).catch(() => {});
+      syncService.ackInjectedMessages(conversationId).catch(logConvexFailure);
     }
     return { authExpired: false, conversationNotFound: false };
   } catch (err) {
@@ -3042,7 +3051,7 @@ async function processSessionFile(
           const tmuxEntry = startedSessionTmux.get(matchedStartedConversation);
           conversationCache[sessionId] = conversationId;
           saveConversationCache(conversationCache);
-          syncService.updateSessionId(conversationId, sessionId).catch(() => {});
+          syncService.updateSessionId(conversationId, sessionId).catch(logConvexFailure);
           if (tmuxEntry) {
           registerManagedStartedSession(conversationId, sessionId, tmuxEntry.tmuxSession);
           if (tmuxEntry.sessionId && tmuxEntry.sessionId !== sessionId) {
@@ -3128,13 +3137,13 @@ async function processSessionFile(
           if (!proc) return;
           findTmuxPaneForTty(proc.tty).then((tmuxPane) => {
             const tmuxSessionName = tmuxPane?.split(":")[0];
-            syncService.registerManagedSession(sessionId, proc.pid, tmuxSessionName, conversationId).catch(() => {});
+            syncService.registerManagedSession(sessionId, proc.pid, tmuxSessionName, conversationId).catch(logConvexFailure);
             if (tmuxSessionName) log(`Registered managed session for ${sessionId.slice(0, 8)} (tmux: ${tmuxSessionName})`);
           }).catch(() => {
-            syncService.registerManagedSession(sessionId, process.pid, undefined, conversationId).catch(() => {});
+            syncService.registerManagedSession(sessionId, process.pid, undefined, conversationId).catch(logConvexFailure);
           });
         }).catch(() => {
-          syncService.registerManagedSession(sessionId, process.pid, undefined, conversationId).catch(() => {});
+          syncService.registerManagedSession(sessionId, process.pid, undefined, conversationId).catch(logConvexFailure);
         });
 
         // Resolve any pending subagents waiting for this session as their parent
@@ -4032,7 +4041,7 @@ async function processCodexSession(
           const tmuxEntry = startedSessionTmux.get(matchedStartedConversation);
           conversationCache[sessionId] = conversationId;
           saveConversationCache(conversationCache);
-          syncService.updateSessionId(conversationId, sessionId).catch(() => {});
+          syncService.updateSessionId(conversationId, sessionId).catch(logConvexFailure);
           if (tmuxEntry) {
             registerManagedStartedSession(conversationId, sessionId, tmuxEntry.tmuxSession);
             if (tmuxEntry.sessionId && tmuxEntry.sessionId !== sessionId) {
@@ -4895,11 +4904,30 @@ export function tmuxPromptStillHasInput(paneContent: string, input: string): boo
 }
 
 const tmuxTargetLocks = new Map<string, Promise<void>>();
+// Cap how long a new caller will wait on an existing lock holder. Combined with the
+// Promise.race timeout in deliverMessage, this keeps a single hung inject from wedging
+// every subsequent inject for the same tmux session. Set well above typical inject
+// (~5s) but below the deliverMessage ceiling (180s).
+const TMUX_LOCK_WAIT_MS = 60_000;
 
 async function withTmuxLock<T>(target: string, fn: () => Promise<T>): Promise<T> {
   const baseTarget = target.split(":")[0];
+  const start = Date.now();
   while (tmuxTargetLocks.has(baseTarget)) {
-    await tmuxTargetLocks.get(baseTarget);
+    const elapsed = Date.now() - start;
+    if (elapsed >= TMUX_LOCK_WAIT_MS) {
+      log(`tmux lock for ${baseTarget} held >${Math.round(elapsed / 1000)}s, forcing release and proceeding`);
+      tmuxTargetLocks.delete(baseTarget);
+      break;
+    }
+    const existing = tmuxTargetLocks.get(baseTarget);
+    if (!existing) break;
+    // Race the held lock against a short slice so the elapsed check runs even if
+    // the holder never resolves.
+    await Promise.race([
+      existing,
+      new Promise<void>(r => setTimeout(r, Math.min(1000, TMUX_LOCK_WAIT_MS - elapsed))),
+    ]);
   }
   let resolve: () => void;
   const lock = new Promise<void>(r => { resolve = r; });
@@ -4907,7 +4935,11 @@ async function withTmuxLock<T>(target: string, fn: () => Promise<T>): Promise<T>
   try {
     return await fn();
   } finally {
-    tmuxTargetLocks.delete(baseTarget);
+    // Only delete if we still own the slot — a forced release may have replaced us
+    // with a successor whose entry must not be removed by our finally.
+    if (tmuxTargetLocks.get(baseTarget) === lock) {
+      tmuxTargetLocks.delete(baseTarget);
+    }
     resolve!();
   }
 }
@@ -5504,7 +5536,7 @@ async function killSessionBySessionId(sessionId: string, reason: string): Promis
   postDeliveryDeadStrikes.delete(sessionId);
 
   if (conversationId && syncServiceRef) {
-    syncServiceRef.markSessionCompleted(conversationId).catch(() => {});
+    syncServiceRef.markSessionCompleted(conversationId).catch(logConvexFailure);
     sendAgentStatus(syncServiceRef, conversationId, sessionId, "stopped");
   }
 
@@ -6063,28 +6095,28 @@ async function handleDeadSession(sessionId: string, tmuxSession: string): Promis
   const conversationId = cache[sessionId];
 
   if (conversationId && syncServiceRef) {
-    await syncServiceRef.setSessionError(conversationId, "Session crashed — reconstituting from database").catch(() => {});
+    await syncServiceRef.setSessionError(conversationId, "Session crashed — reconstituting from database").catch(logConvexFailure);
   }
 
   const repaired = await repairAndResumeSession(sessionId, "", readTitleCache(), undefined, conversationId);
   if (repaired) {
     log(`[HEARTBEAT-HEALTH] Reconstituted session ${sessionId.slice(0, 8)}`);
     if (conversationId && syncServiceRef) {
-      await syncServiceRef.setSessionError(conversationId).catch(() => {});
-      await syncServiceRef.updateSessionAgentStatus(conversationId, "connected").catch(() => {});
+      await syncServiceRef.setSessionError(conversationId).catch(logConvexFailure);
+      await syncServiceRef.updateSessionAgentStatus(conversationId, "connected").catch(logConvexFailure);
     }
   } else {
     log(`[HEARTBEAT-HEALTH] Reconstitution failed for ${sessionId.slice(0, 8)}`);
     if (conversationId && syncServiceRef) {
-      await syncServiceRef.setSessionError(conversationId, "Session crashed and could not be reconstituted").catch(() => {});
+      await syncServiceRef.setSessionError(conversationId, "Session crashed and could not be reconstituted").catch(logConvexFailure);
     }
   }
 }
 
 function registerManagedStartedSession(conversationId: string, sessionId: string, tmuxSession: string): void {
   if (!syncServiceRef) return;
-  syncServiceRef.markSessionActive(conversationId).catch(() => {});
-  syncServiceRef.registerManagedSession(sessionId, process.pid, tmuxSession, conversationId).catch(() => {});
+  syncServiceRef.markSessionActive(conversationId).catch(logConvexFailure);
+  syncServiceRef.registerManagedSession(sessionId, process.pid, tmuxSession, conversationId).catch(logConvexFailure);
   ensureManagedSessionHeartbeat(sessionId);
 }
 
@@ -6176,7 +6208,7 @@ async function discoverAndLinkSession(
       }
       saveConversationCache(cache);
       if (syncServiceRef) {
-        syncServiceRef.updateSessionId(conversationId, linkedSessionId).catch(() => {});
+        syncServiceRef.updateSessionId(conversationId, linkedSessionId).catch(logConvexFailure);
         registerManagedStartedSession(conversationId, linkedSessionId, tmuxSession);
         if (startedEntry?.sessionId && startedEntry.sessionId !== linkedSessionId) {
           stopManagedSessionHeartbeat(startedEntry.sessionId);
@@ -6442,7 +6474,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
       if (conversationId && reconId !== sessionId) {
         remapConversationSession(sessionId, reconId, conversationId);
         if (syncServiceRef) {
-          syncServiceRef.updateSessionId(conversationId, reconId).catch(() => {});
+          syncServiceRef.updateSessionId(conversationId, reconId).catch(logConvexFailure);
         }
       } else if (conversationId) {
         // Ensure cache has the mapping even when sessionId is preserved
@@ -6519,7 +6551,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
         if (conversationId) {
           remapConversationSession(sessionId, newUuid, conversationId);
           if (syncServiceRef) {
-            syncServiceRef.updateSessionId(conversationId, newUuid).catch(() => {});
+            syncServiceRef.updateSessionId(conversationId, newUuid).catch(logConvexFailure);
           }
         }
       } catch (err) {
@@ -6546,8 +6578,8 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
       }
       // Ensure heartbeat + sync registration exist (may be missing after daemon restart)
       if (syncServiceRef && conversationId && !resumeHeartbeatIntervals.has(sessionId)) {
-        syncServiceRef.registerManagedSession(sessionId, process.pid, aliveTarget, conversationId).catch(() => {});
-        syncServiceRef.updateSessionAgentStatus(conversationId, "connected").catch(() => {});
+        syncServiceRef.registerManagedSession(sessionId, process.pid, aliveTarget, conversationId).catch(logConvexFailure);
+        syncServiceRef.updateSessionAgentStatus(conversationId, "connected").catch(logConvexFailure);
         const interval = setInterval(async () => {
           try {
             const status = lastSentAgentStatus.get(sessionId);
@@ -6578,8 +6610,8 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
     // Register managed session early with "resuming" status — will transition to "connected" once prompt is visible
     resumeSessionCache.set(sessionId, tmuxSession);
     if (syncServiceRef && conversationId) {
-      syncServiceRef.registerManagedSession(sessionId, process.pid, tmuxSession, conversationId).catch(() => {});
-      syncServiceRef.updateSessionAgentStatus(conversationId, "resuming").catch(() => {});
+      syncServiceRef.registerManagedSession(sessionId, process.pid, tmuxSession, conversationId).catch(logConvexFailure);
+      syncServiceRef.updateSessionAgentStatus(conversationId, "resuming").catch(logConvexFailure);
       stopManagedSessionHeartbeat(sessionId);
       ensureManagedSessionHeartbeat(sessionId);
 
@@ -6649,7 +6681,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
 
     // Transition to "connected" now that the agent prompt is visible (or timed out with live process)
     if (syncServiceRef && conversationId) {
-      syncServiceRef.updateSessionAgentStatus(conversationId, "connected").catch(() => {});
+      syncServiceRef.updateSessionAgentStatus(conversationId, "connected").catch(logConvexFailure);
     }
 
     // Dismiss startup warnings (model mismatch, rate limit) before injection
@@ -6773,7 +6805,7 @@ async function repairAndResumeSession(
             saveTitleCache(titleCache);
           }
           if (syncServiceRef) {
-            syncServiceRef.updateSessionId(convId, targetSessionId).catch(() => {});
+            syncServiceRef.updateSessionId(convId, targetSessionId).catch(logConvexFailure);
           }
           log(`Materialized fresh Claude session ${targetSessionId.slice(0, 8)} from stale ${sessionId.slice(0, 8)} (${exportData.messages.length} messages, tail=${tailMessages})`);
 
@@ -7016,7 +7048,7 @@ async function startFreshSessionForDelivery(
     };
     startedSessionTmux.set(conversationId, entry);
     if (syncServiceRef) {
-      syncServiceRef.registerManagedSession(tmuxSession, process.pid, tmuxSession, conversationId as any).catch(() => {});
+      syncServiceRef.registerManagedSession(tmuxSession, process.pid, tmuxSession, conversationId as any).catch(logConvexFailure);
       ensureManagedSessionHeartbeat(tmuxSession);
     }
     discoverAndLinkSession(conversationId, tmuxSession, projectPath).catch(err => {
@@ -7079,7 +7111,7 @@ async function materializeSession(
       }
 
       if (syncService) {
-        syncService.updateSessionId(conversationId, sessionId).catch(() => {});
+        syncService.updateSessionId(conversationId, sessionId).catch(logConvexFailure);
       }
 
       logDelivery(`Materialized session=${sessionId.slice(0, 8)} conv=${conversationId.slice(0, 12)} (${exportData.messages.length} msgs, tail=${tailMessages})`);
@@ -7192,7 +7224,7 @@ async function deliverMessage(
     const cacheKeys = Object.keys(conversationCache);
     const reverseKeys = Object.keys(reverseCache);
     logDelivery(`No session in cache for conv=${conversationId.slice(0, 12)}, cache has ${cacheKeys.length} sessions/${reverseKeys.length} convs, startedTmux has ${startedSessionTmux.size} entries`);
-    syncService.updateSessionAgentStatus(conversationId, "starting").catch(() => {});
+    syncService.updateSessionAgentStatus(conversationId, "starting").catch(logConvexFailure);
     // Try delivering via a recently started tmux session (from start_session command)
     const tryStartedTmux = async (entry: StartedSessionInfo): Promise<boolean> => {
       try {
@@ -7249,7 +7281,7 @@ async function deliverMessage(
         // and re-delivers the same message (duplicate reply).
         await syncService.updateMessageStatus({ messageId, status: "injected" });
         await injectViaTmux(startedTmuxTarget, content);
-        syncService.updateSessionAgentStatus(conversationId, "connected").catch(() => {});
+        syncService.updateSessionAgentStatus(conversationId, "connected").catch(logConvexFailure);
         log(`Injected message to started session tmux ${entry.tmuxSession} for conversation ${conversationId.slice(0, 12)}`);
         const isPollResponse = !!parsePollMessage(content);
         if (content.trimStart().startsWith("/") || isPollResponse) {
@@ -7305,7 +7337,7 @@ async function deliverMessage(
           log(`Cannot deliver: no local session, materialization failed, and fresh start failed for ${conversationId}`);
           return false;
         }
-        syncService.updateSessionAgentStatus(conversationId, "resuming").catch(() => {});
+        syncService.updateSessionAgentStatus(conversationId, "resuming").catch(logConvexFailure);
       }
     } else {
       log(`No session_id in local cache for conversation ${conversationId}, attempting to materialize from server...`);
@@ -7317,7 +7349,7 @@ async function deliverMessage(
         logDelivery(`Cannot deliver: no local session, materialization failed, and fresh start failed for conv=${conversationId.slice(0, 12)}`);
         return false;
       }
-      syncService.updateSessionAgentStatus(conversationId, "resuming").catch(() => {});
+      syncService.updateSessionAgentStatus(conversationId, "resuming").catch(logConvexFailure);
     }
   }
 
@@ -7357,7 +7389,7 @@ async function deliverMessage(
       } else {
         await syncService.updateMessageStatus({ messageId, status: "injected" });
         await injectViaTmux(cachedTmux, content);
-        syncService.setSessionError(conversationId).catch(() => {});
+        syncService.setSessionError(conversationId).catch(logConvexFailure);
         const isPollResponse = !!parsePollMessage(content);
         if (content.trimStart().startsWith("/") || isPollResponse) {
           checkForInteractivePrompt(cachedTmux, sessionId, conversationId, syncService, isPollResponse ? 4000 : 2000).catch(() => {});
@@ -8513,7 +8545,7 @@ function startWatchdog(
             const convId = deps.conversationCache[sessionId];
             if (!convId) { try { fs.unlinkSync(filePath); } catch {} continue; }
             log(`Watchdog: stale ${data.status} session ${sessionId.slice(0, 8)} (${Math.round(ageMs / 60000)}min), marking completed`);
-            deps.syncService.markSessionCompleted(convId).catch(() => {});
+            deps.syncService.markSessionCompleted(convId).catch(logConvexFailure);
             sendAgentStatus(deps.syncService, convId, sessionId, "stopped");
             try { fs.unlinkSync(filePath); } catch {}
           } catch {}
@@ -8907,7 +8939,7 @@ async function main(): Promise<void> {
             resumeSessionCache.set(sessionId, tmuxSession);
             const convId = tmuxConvId || conversationCache[sessionId];
             if (syncServiceRef) {
-              syncServiceRef.registerManagedSession(sessionId, process.pid, tmuxSession, (convId || undefined) as any).catch(() => {});
+              syncServiceRef.registerManagedSession(sessionId, process.pid, tmuxSession, (convId || undefined) as any).catch(logConvexFailure);
               ensureManagedSessionHeartbeat(sessionId);
             }
             recovered++;
@@ -8923,7 +8955,7 @@ async function main(): Promise<void> {
               agentType,
             });
             if (syncServiceRef) {
-              syncServiceRef.registerManagedSession(tmuxSession, process.pid, tmuxSession, tmuxConvId as any).catch(() => {});
+              syncServiceRef.registerManagedSession(tmuxSession, process.pid, tmuxSession, tmuxConvId as any).catch(logConvexFailure);
               ensureManagedSessionHeartbeat(tmuxSession);
             }
             recovered++;
@@ -8931,7 +8963,7 @@ async function main(): Promise<void> {
           }
 
           if (syncServiceRef) {
-            syncServiceRef.registerManagedSession(tmuxSession, process.pid, tmuxSession).catch(() => {});
+            syncServiceRef.registerManagedSession(tmuxSession, process.pid, tmuxSession).catch(logConvexFailure);
             ensureManagedSessionHeartbeat(tmuxSession);
             recovered++;
           }
@@ -8988,7 +9020,7 @@ async function main(): Promise<void> {
         const projectOnly = allSkills.filter(s => !globalNames.has(s.name));
         if (projectOnly.length > 0) {
           log(`Startup: syncing ${projectOnly.length} project skills for ${path.basename(projectPath)}`);
-          syncService.setAvailableSkills(undefined as any, JSON.stringify(projectOnly), projectPath).catch(() => {});
+          syncService.setAvailableSkills(undefined as any, JSON.stringify(projectOnly), projectPath).catch(logConvexFailure);
         }
       }
     } catch {}
@@ -9237,7 +9269,7 @@ async function main(): Promise<void> {
           if (filePath) try { fs.unlinkSync(filePath); } catch {}
         } else {
           log(`Session ended for ${sessionId.slice(0, 8)}, marking completed`);
-          syncService.markSessionCompleted(convId).catch(() => {});
+          syncService.markSessionCompleted(convId).catch(logConvexFailure);
           if (filePath) try { fs.unlinkSync(filePath); } catch {}
         }
       }
@@ -10011,7 +10043,7 @@ async function main(): Promise<void> {
     if (messageRetryTimers.has(messageId)) return;
     if (retryCount >= 10) {
       logDelivery(`msg=${messageId.slice(0, 8)} exceeded max retries (10), marking undeliverable`);
-      syncService.updateMessageStatus({ messageId, status: "undeliverable" as any }).catch(() => {});
+      syncService.updateMessageStatus({ messageId, status: "undeliverable" as any }).catch(logConvexFailure);
       return;
     }
     const delays = [1000, 5000, 15000, 30000, 60000];
@@ -10035,6 +10067,10 @@ async function main(): Promise<void> {
   // in case the agent dropped the paste or crashed silently after injection.
   const injectedMessageTs = new Map<string, number>();
   const INJECTION_DEDUP_TTL_MS = 60_000;
+  // Hard ceiling on a single deliverMessage attempt. Worst legitimate path is auto-resume
+  // of a large JSONL (~90s poll + tmux startup); 180s leaves margin without leaving the
+  // in-flight slot wedged forever if a tmux/Convex call hangs.
+  const DELIVERY_TIMEOUT_MS = 180_000;
 
   const setupSubscription = () => {
     try {
@@ -10082,7 +10118,7 @@ async function main(): Promise<void> {
                 }
               }
 
-              syncService.updateSessionAgentStatus(msg.conversation_id, "connected").catch(() => {});
+              syncService.updateSessionAgentStatus(msg.conversation_id, "connected").catch(logConvexFailure);
 
               // If recently injected to tmux, skip re-delivery (prevents retry race causing duplicates).
               // TTL ensures we allow re-delivery if the agent dropped/crashed after injection.
@@ -10098,15 +10134,24 @@ async function main(): Promise<void> {
                 continue;
               }
 
+              let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
               try {
-                const delivered = await deliverMessage(
-                  msg.conversation_id,
-                  messageContent,
-                  conversationCache,
-                  syncService,
-                  msg._id,
-                  titleCache
-                );
+                const delivered = await Promise.race([
+                  deliverMessage(
+                    msg.conversation_id,
+                    messageContent,
+                    conversationCache,
+                    syncService,
+                    msg._id,
+                    titleCache
+                  ),
+                  new Promise<never>((_, reject) => {
+                    timeoutHandle = setTimeout(
+                      () => reject(new Error(`deliverMessage timed out after ${DELIVERY_TIMEOUT_MS / 1000}s`)),
+                      DELIVERY_TIMEOUT_MS,
+                    );
+                  }),
+                ]);
                 if (delivered) {
                   logDelivery(`SUCCESS: msg=${msg._id.slice(0, 8)} injected${isCompactionRecovery ? " (compaction recovery)" : ""}`);
                   injectedMessageTs.set(msg._id, Date.now());
@@ -10136,6 +10181,7 @@ async function main(): Promise<void> {
                 logDelivery(`ERROR: msg=${msg._id.slice(0, 8)} exception: ${errMsg}`);
                 scheduleMessageRetry(msg._id, msg.retry_count ?? 0, msg.conversation_id, msg.content);
               } finally {
+                if (timeoutHandle) clearTimeout(timeoutHandle);
                 messagesInFlight.delete(msg._id);
               }
             }
