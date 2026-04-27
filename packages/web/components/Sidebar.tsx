@@ -280,9 +280,10 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
   const openCreateModal = useInboxStore((s) => s.openCreateModal);
   const inboxSessions = useInboxStore((s) => s.sessions);
   const sessionsWithQueuedMessages = useInboxStore((s) => s.sessionsWithQueuedMessages);
+  const sessionsServerSynced = useInboxStore((s) => s.sessionsServerSynced);
   const needsInputCount = useMemo(
-    () => categorizeSessions(inboxSessions, sessionsWithQueuedMessages).needsInput.length,
-    [inboxSessions, sessionsWithQueuedMessages],
+    () => sessionsServerSynced ? categorizeSessions(inboxSessions, sessionsWithQueuedMessages).needsInput.length : 0,
+    [inboxSessions, sessionsWithQueuedMessages, sessionsServerSynced],
   );
   const openNewSession = useInboxStore((s) => s.openNewSession);
   const hasUsedDesktop = useInboxStore((s) => s.clientState.dismissed?.has_used_desktop ?? false);
@@ -647,17 +648,27 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
             <div className="space-y-0.5">
               {favorites.slice(0, 5).map((fav: any) => (
                 <div key={fav._id} className="flex items-center group">
-                  <Link
+                  <a
                     href={`/conversation/${fav._id}`}
-                    onClick={onMobileClose}
-                    className="flex items-center gap-2 px-4 py-1.5 text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60 transition-colors flex-1 min-w-0"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      const store = useInboxStore.getState();
+                      store.navigateToSession(fav._id);
+                      const activeTab = store.tabs.find((t: any) => t.id === store.activeTabId);
+                      if (activeTab) {
+                        store.updateTab(activeTab.id, { path: "/inbox" });
+                      }
+                      if (!store.tabs.length) router.push("/inbox");
+                      onMobileClose?.();
+                    }}
+                    className="flex items-center gap-2 px-4 py-1.5 text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60 transition-colors flex-1 min-w-0 cursor-pointer"
                   >
                     <svg className="w-3 h-3 text-amber-400 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24">
                       <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
                     </svg>
                     <span className="truncate text-sm flex-1">{cleanTitle(fav.title || "New Session")}</span>
                     {fav.message_count > 0 && <span className={`text-[10px] tabular-nums ${msgCountColor(fav.message_count)}`}>{fav.message_count}</span>}
-                  </Link>
+                  </a>
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
@@ -690,11 +701,14 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
                   key={bookmark._id}
                   className="flex items-center gap-2 px-4 py-1.5 text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60 transition-colors group cursor-pointer"
                   onClick={() => {
-                    useInboxStore.setState({
-                      pendingNavigateId: bookmark.conversation_id,
-                      pendingScrollToMessageId: bookmark.message_id,
-                    });
-                    router.push("/inbox");
+                    const store = useInboxStore.getState();
+                    store.navigateToSession(bookmark.conversation_id);
+                    useInboxStore.setState({ pendingScrollToMessageId: bookmark.message_id });
+                    const activeTab = store.tabs.find((t: any) => t.id === store.activeTabId);
+                    if (activeTab) {
+                      store.updateTab(activeTab.id, { path: "/inbox" });
+                    }
+                    if (!store.tabs.length) router.push("/inbox");
                     onMobileClose?.();
                   }}
                 >
