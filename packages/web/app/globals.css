@@ -641,27 +641,37 @@ pre[class*="language-"] {
 @keyframes sessionEnter {
   from {
     opacity: 0;
-    transform: translateX(24px);
+    max-height: 0;
+    transform: translateY(-6px);
   }
   to {
     opacity: 1;
-    transform: translateX(0);
+    max-height: 80px;
+    transform: translateY(0);
   }
 }
 
 @keyframes sessionDismiss {
+  from {
+    opacity: 1;
+    max-height: 80px;
+  }
   to {
     opacity: 0;
-    transform: translateX(60px);
+    max-height: 0;
+    transform: translateY(-6px);
+    border-color: transparent;
   }
 }
 
 .session-entering {
   animation: sessionEnter 250ms ease-out;
+  overflow: hidden;
 }
 
 .session-dismissing {
   animation: sessionDismiss 200ms ease-out forwards;
+  overflow: hidden;
   pointer-events: none;
 }
 
