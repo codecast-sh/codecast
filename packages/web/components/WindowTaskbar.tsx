@@ -189,9 +189,8 @@ const MinimizedPill = memo(function MinimizedPill({ windowId, sessionId }: { win
   const { restoreWindow, bringToFront, closeWindow } = useWindowManager();
   const s = useTrackedStore([
     s => s.sessions[sessionId],
-    s => s.dismissedSessions[sessionId],
   ]);
-  const session = s.sessions[sessionId] ?? s.dismissedSessions[sessionId];
+  const session = s.sessions[sessionId];
   const isIdle = session ? isSessionEffectivelyIdle(session) : true;
   const title = cleanTitle(session?.title || "New Session");
 

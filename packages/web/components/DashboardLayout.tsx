@@ -170,11 +170,13 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
 
   const handleInboxSessionSelect = useCallback((id: string) => {
     const store = useInboxStore.getState();
-    if (store.sessions[id]) {
-      store.setCurrentSession(id);
-      if (store.showMySessions) store.setShowMySessions(false);
-    } else if (store.dismissedSessions[id]) {
-      store.setViewingDismissedId(id);
+    const sess = store.sessions[id];
+    if (sess) {
+      if (sess.inbox_dismissed_at) {
+        store.setViewingDismissedId(id);
+      } else {
+        store.setCurrentSession(id);
+      }
       if (store.showMySessions) store.setShowMySessions(false);
     } else {
       useInboxStore.setState({ pendingNavigateId: id, showMySessions: false });
@@ -281,7 +283,6 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
     // state can never override what the user has in focus.
     const selected = sessionListActiveId
       ? (store.sessions[sessionListActiveId]
-          ?? store.dismissedSessions[sessionListActiveId]
           ?? store.conversations[sessionListActiveId])
       : null;
     if (selected?.project_path) {

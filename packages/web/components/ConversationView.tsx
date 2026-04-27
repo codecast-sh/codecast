@@ -7908,7 +7908,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   }, [conversation?.messages]);
 
   const storeSessions = useInboxStore((s) => s.sessions);
-  const storeDismissed = useInboxStore((s) => s.dismissedSessions);
   const storeTasks = useInboxStore((s) => s.tasks);
   const storePlans = useInboxStore((s) => s.plans);
   const storeDocs = useInboxStore((s) => s.docs);
@@ -7928,15 +7927,14 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     const plans: MentionItem[] = Object.values(storePlans)
       .sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0)).slice(0, PER_TYPE)
       .map(p => ({ id: p._id, type: "plan", label: p.title, sublabel: p.short_id, shortId: p.short_id, status: p.status, goal: p.goal, updatedAt: p.updated_at }));
-    const allSessions = { ...storeSessions, ...storeDismissed };
-    const sessions: MentionItem[] = Object.values(allSessions)
+    const sessions: MentionItem[] = Object.values(storeSessions)
       .filter(s => !s.is_subagent)
       .sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0)).slice(0, PER_TYPE)
       .map(s => ({ id: s._id, type: "session", label: s.title || "Untitled Session", sublabel: s.idle_summary?.slice(0, 80) || s.session_id, shortId: s.session_id, messageCount: s.message_count, projectPath: s.project_path, agentType: s.agent_type, updatedAt: s.updated_at, idleSummary: s.idle_summary }));
     const all = [...persons, ...tasks, ...docs, ...plans, ...sessions];
     all.sort(byRecency);
     return all;
-  }, [storeMembers, storeTasks, storeDocs, storePlans, storeSessions, storeDismissed]);
+  }, [storeMembers, storeTasks, storeDocs, storePlans, storeSessions]);
   mentionItemsRef.current = mentionItems;
   const handleMentionQuery = useCallback((_q: string) => {}, []);
 

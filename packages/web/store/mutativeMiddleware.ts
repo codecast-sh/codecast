@@ -2,6 +2,10 @@ import { create as mutativeCreate, type Patch } from "mutative";
 
 type DispatchFn = (action: string, args: any, patches?: any, result?: any) => Promise<any>;
 type IDBWriteFn = (patches: Patch[], state: any) => void;
+type OutboxEntry = { id: string; action: string; args: any; patches: any; result: any; ts: number };
+type OutboxEnqueueFn = (entry: OutboxEntry) => void;
+type OutboxRemoveFn = (id: string) => void;
+type OutboxLoadFn = () => Promise<OutboxEntry[]>;
 
 const ACTION_FLAG = Symbol("action");
 const ASYNC_ACTION_FLAG = Symbol("asyncAction");
@@ -60,7 +64,7 @@ const SINGLETON_KEY = "_";
 // pending entries when action() modifies these collections, preventing
 // server sync from overwriting local-first state.
 const PROTECTED_COLLECTIONS = new Set([
-  "sessions", "dismissedSessions", "conversations", "tasks",
+  "sessions", "conversations", "tasks",
 ]);
 
 function setNested(obj: any, path: (string | number)[], value: any): any {
@@ -206,6 +210,27 @@ export function mutativeMiddleware(config: any): any {
     let dispatchFn: DispatchFn | null = null;
     let idbWriteFn: IDBWriteFn | null = null;
     let dispatchErrorFn: ((action: string, error: unknown) => void) | undefined;
+    let outboxEnqueueFn: OutboxEnqueueFn | null = null;
+    let outboxRemoveFn: OutboxRemoveFn | null = null;
+    let outboxLoadFn: OutboxLoadFn | null = null;
+
+    function newOutboxId(): string {
+      if (typeof crypto !== "undefined" && (crypto as any).randomUUID) return (crypto as any).randomUUID();
+      return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    }
+
+    async function drainOutbox() {
+      if (!dispatchFn || !outboxLoadFn) return;
+      const entries = await outboxLoadFn();
+      for (const entry of entries) {
+        try {
+          await dispatchWithRetry(dispatchFn, entry.action, entry.args, entry.patches, entry.result, dispatchErrorFn);
+          outboxRemoveFn?.(entry.id);
+        } catch {
+          // Leave in outbox for the next reload to retry.
+        }
+      }
+    }
 
     const rawStore = config(set, get, api);
 
@@ -248,20 +273,39 @@ export function mutativeMiddleware(config: any): any {
         set(finalState, true);
 
         if (idbWriteFn && finalPatches.length > 0) {
-          const fn = idbWriteFn;
-          const p = finalPatches;
-          const s = finalState;
-          (typeof requestIdleCallback === "function" ? requestIdleCallback : setTimeout)(() => fn(p, s));
+          // Synchronous: Dexie's bulkPut/clear/put don't block the main thread,
+          // and deferring via requestIdleCallback can lose writes if the user
+          // reloads before idle (e.g. dismiss → reload race).
+          idbWriteFn(finalPatches, finalState);
         }
 
-        if ((isAct || isAsyncAct) && dispatchFn) {
+        if (isAct || isAsyncAct) {
           const grouped =
             patches.length > 0 ? groupPatchesByTable(patches, finalState) : undefined;
-          const promise = dispatchWithRetry(
-            dispatchFn, key, args, grouped, returnValue, dispatchErrorFn,
-          );
-          if (isAsyncAct) return promise;
-          promise.catch(() => {});
+          const outboxId = newOutboxId();
+          // Persist the outbound dispatch *before* firing so it survives a
+          // reload mid-flight. Removed only on server acknowledgment; failed
+          // dispatches stay queued and re-fire on next hydrate via drainOutbox.
+          // Enqueued even when dispatchFn isn't wired yet — drainOutbox picks
+          // them up the moment _setDispatch runs.
+          outboxEnqueueFn?.({
+            id: outboxId,
+            action: key,
+            args,
+            patches: grouped,
+            result: returnValue,
+            ts: Date.now(),
+          });
+          if (dispatchFn) {
+            const promise = dispatchWithRetry(
+              dispatchFn, key, args, grouped, returnValue, dispatchErrorFn,
+            ).then((r) => {
+              outboxRemoveFn?.(outboxId);
+              return r;
+            });
+            if (isAsyncAct) return promise;
+            promise.catch(() => {});
+          }
         }
 
         return returnValue;
@@ -270,10 +314,18 @@ export function mutativeMiddleware(config: any): any {
 
     wrapped._setDispatch = (fn: DispatchFn) => {
       dispatchFn = fn;
+      // Drain any persisted outbox entries from a prior session.
+      drainOutbox();
     };
 
     wrapped._setIDBWrite = (fn: IDBWriteFn) => {
       idbWriteFn = fn;
+    };
+
+    wrapped._setOutbox = (enqueue: OutboxEnqueueFn, remove: OutboxRemoveFn, load: OutboxLoadFn) => {
+      outboxEnqueueFn = enqueue;
+      outboxRemoveFn = remove;
+      outboxLoadFn = load;
     };
 
     wrapped._setDispatchError = (fn: (action: string, error: unknown) => void) => {

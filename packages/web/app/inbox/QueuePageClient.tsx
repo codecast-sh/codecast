@@ -207,7 +207,6 @@ export function QueuePageClient() {
 
   const sessions = useInboxStore((s) => s.sessions);
   const clientStateInitialized = useInboxStore((s) => s.clientStateInitialized);
-  const dismissedSessions = useInboxStore((s) => s.dismissedSessions);
   const currentSessionId = useInboxStore((s) => s.currentSessionId);
   const advanceToNext = useInboxStore((s) => s.advanceToNext);
   const setCurrentSession = useInboxStore((s) => s.setCurrentSession);
@@ -338,7 +337,7 @@ export function QueuePageClient() {
   }, [currentSessionId]);
 
   const viewingDismissedSession = viewingDismissedId
-    ? dismissedSessions[viewingDismissedId] ?? null
+    ? sessions[viewingDismissedId] ?? null
     : null;
 
   const setCurrentConversation = useInboxStore((s) => s.setCurrentConversation);
