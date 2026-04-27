@@ -25,7 +25,8 @@ export function applySyncTable<T extends { _id: string }>(
 ): { table: Record<string, T>; pending: Record<string, PendingEntry> } {
   const newPending = { ...pending };
   const table: Record<string, T> = {};
-  const incomingIds = new Set(incoming.map(r => r._id));
+  const incomingMap = new Map(incoming.map(r => [r._id, r]));
+  const incomingIds = new Set(incomingMap.keys());
   const prefix = `${tableName}:`;
 
   // Confirmed excludes — server no longer sends the record
@@ -39,11 +40,10 @@ export function applySyncTable<T extends { _id: string }>(
     }
   }
 
-  // Build table from incoming, respecting excludes and field overrides
-  for (const record of incoming) {
-    const excludeKey = `${tableName}:${record._id}`;
-    if (newPending[excludeKey]?.type === "exclude") continue;
-
+  // Local-first ordering: walk prev keys first so existing records keep
+  // their position; server sync only updates fields, not order. Records
+  // dropped by server (not in incoming) are removed.
+  const applyFieldOverrides = (record: T): T => {
     let merged = record;
     const fieldPrefix = `${tableName}:${record._id}:`;
     for (const [key, entry] of Object.entries(newPending)) {
@@ -56,7 +56,26 @@ export function applySyncTable<T extends { _id: string }>(
         (merged as any)[field] = entry.value;
       }
     }
-    table[record._id] = merged;
+    return merged;
+  };
+
+  if (prev) {
+    for (const id of Object.keys(prev)) {
+      const excludeKey = `${tableName}:${id}`;
+      if (newPending[excludeKey]?.type === "exclude") continue;
+      const incomingRecord = incomingMap.get(id);
+      if (incomingRecord) {
+        table[id] = applyFieldOverrides(incomingRecord);
+      }
+    }
+  }
+
+  // Append records new in incoming (not previously seen) at the end
+  for (const record of incoming) {
+    const excludeKey = `${tableName}:${record._id}`;
+    if (newPending[excludeKey]?.type === "exclude") continue;
+    if (table[record._id]) continue;
+    table[record._id] = applyFieldOverrides(record);
   }
 
   // Include entries — locally-added records the server hasn't acknowledged
