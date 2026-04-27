@@ -191,6 +191,22 @@ export function groupPatchesByTable(
 
 const RETRY_DELAYS = [1000, 2000, 4000];
 
+// Convex rejects `undefined` anywhere in the payload. Action functions are
+// free to leave optional args/return values as `undefined`, so normalize at
+// the dispatch boundary instead of forcing every call site to do it.
+function sanitizeForConvex(value: any): any {
+  if (value === undefined) return null;
+  if (Array.isArray(value)) return value.map(sanitizeForConvex);
+  if (value && typeof value === "object") {
+    const out: Record<string, any> = {};
+    for (const [k, v] of Object.entries(value)) {
+      if (v !== undefined) out[k] = sanitizeForConvex(v);
+    }
+    return out;
+  }
+  return value;
+}
+
 async function dispatchWithRetry(
   fn: DispatchFn,
   action: string,
@@ -199,9 +215,12 @@ async function dispatchWithRetry(
   result: any,
   onError?: (action: string, error: unknown) => void,
 ): Promise<any> {
+  const safeArgs = sanitizeForConvex(args);
+  const safeGrouped = grouped !== undefined ? sanitizeForConvex(grouped) : undefined;
+  const safeResult = result === undefined ? null : sanitizeForConvex(result);
   for (let attempt = 0; ; attempt++) {
     try {
-      return await fn(action, args, grouped, result);
+      return await fn(action, safeArgs, safeGrouped, safeResult);
     } catch (e) {
       if (attempt >= RETRY_DELAYS.length) {
         onError?.(action, e);
@@ -346,8 +365,7 @@ export function mutativeMiddleware(config: any): any {
 
     wrapped._dispatch = (action: string, args: any, patches?: any, result?: any) => {
       if (!dispatchFn) return Promise.reject(new Error("Dispatch not wired"));
-      const safeArgs = Array.isArray(args) ? args.map((a: any) => a === undefined ? null : a) : args;
-      return dispatchWithRetry(dispatchFn, action, safeArgs, patches, result, dispatchErrorFn);
+      return dispatchWithRetry(dispatchFn, action, args, patches, result, dispatchErrorFn);
     };
 
     return wrapped;
