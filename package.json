@@ -21,7 +21,7 @@
     "typescript": "^5.7.2"
   },
   "dependencies": {
-    "@codecast/web": "./packages/web",
+    "@codecast/web": "workspace:*",
     "@tanstack/react-virtual": "^3.13.18",
     "convex": "^1.31.6",
     "nanoid": "^5.1.7"
