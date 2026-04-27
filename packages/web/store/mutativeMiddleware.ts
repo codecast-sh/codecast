@@ -60,6 +60,10 @@ const FIELD_TO_TABLE: Record<string, { table: string }> = {
 
 const SINGLETON_KEY = "_";
 
+// Convex document ids are 32-char base32. Stub/local ids (e.g. fresh sessions
+// before server assignment) are shorter and would crash applyPatches server-side.
+const CONVEX_ID_RE = /^[a-z0-9]{32}$/;
+
 // Store keys that receive server sync data. The middleware auto-generates
 // pending entries when action() modifies these collections, preventing
 // server sync from overwriting local-first state.
@@ -149,6 +153,9 @@ export function groupPatchesByTable(
     if (kind === "collection") {
       if (path.length < 3) continue;
       const docId = String(path[1]);
+      // Skip stub ids — server can't act on them. Once the session is rekeyed
+      // to its real Convex id, subsequent patches will dispatch normally.
+      if (!CONVEX_ID_RE.test(docId)) continue;
       const field = String(path[2]);
       const nested = path.slice(3);
 
@@ -222,13 +229,18 @@ export function mutativeMiddleware(config: any): any {
     async function drainOutbox() {
       if (!dispatchFn || !outboxLoadFn) return;
       const entries = await outboxLoadFn();
+      // The outbox exists to survive a reload that lands in the middle of an
+      // in-flight dispatch. Each entry gets exactly one boot-time attempt
+      // (with the standard retry ladder), then is removed regardless of
+      // outcome — keeping permanently-broken dispatches around forever would
+      // just slow every subsequent page load.
       for (const entry of entries) {
         try {
           await dispatchWithRetry(dispatchFn, entry.action, entry.args, entry.patches, entry.result, dispatchErrorFn);
-          outboxRemoveFn?.(entry.id);
         } catch {
-          // Leave in outbox for the next reload to retry.
+          // Reported via dispatchErrorFn; the entry is dropped below.
         }
+        outboxRemoveFn?.(entry.id);
       }
     }
 
