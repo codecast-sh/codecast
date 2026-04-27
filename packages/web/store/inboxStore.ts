@@ -461,6 +461,12 @@ export function categorizeSessions(
   sessionsWithQueuedMessages: Set<string>,
 ): CategorizedSessions {
   const sorted = sortSessions(sessions);
+  // Temporary diagnostic: logs the needs_input order on every render so we can
+  // see what flips between IDB-hydrated and server-synced renders.
+  if (typeof window !== "undefined" && (window as any).__DEBUG_SORT__) {
+    const ni = sorted.filter(s => isSessionWaitingForInput(s, sessionsWithQueuedMessages) && !s.parent_conversation_id);
+    console.log("[needs_input]", ni.map(s => `${s._id.slice(-6)}=${s.is_idle ? "idle" : (s.agent_status || "?")}`).join(" | "));
+  }
   const dismissed = Object.values(sessions)
     .filter(isSessionDismissed)
     .sort((a, b) => (b.inbox_dismissed_at || 0) - (a.inbox_dismissed_at || 0));
