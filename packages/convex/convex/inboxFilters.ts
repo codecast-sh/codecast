@@ -21,19 +21,13 @@ export function isOrphanOrSubagent(conv: ConversationDoc): boolean {
 // `inbox_dismissed_at` is an absolute flag: a truthy value means dismissed until
 // a user action clears it. Never compare it against `updated_at`. See
 // schema.ts for the list of mutations allowed to clear it.
-export function shouldShowInIdle(conv: ConversationDoc): boolean {
+//
+// Dismissed conversations are still part of the inbox — clients categorize them
+// into a separate bucket via the `inbox_dismissed_at` field on each result.
+export function shouldShowInInbox(conv: ConversationDoc): boolean {
   if (isOrphanOrSubagent(conv)) return false;
   if (conv.status === "completed" && conv.message_count === 0) return false;
   if (isNoiseTitle(conv.title)) return false;
   if (conv.inbox_killed_at) return false;
-  if (conv.inbox_dismissed_at && !conv.inbox_pinned_at) return false;
-  return true;
-}
-
-export function shouldShowInDismissed(conv: ConversationDoc): boolean {
-  if (isOrphanOrSubagent(conv)) return false;
-  if (!conv.inbox_dismissed_at) return false;
-  if (conv.inbox_killed_at) return false;
-  if (isNoiseTitle(conv.title)) return false;
   return true;
 }

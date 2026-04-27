@@ -9,7 +9,7 @@ import { verifyApiToken } from "./apiTokens";
 import { internal } from "./_generated/api";
 import { resetConversationPendingMessages } from "./pendingMessages";
 import { hasRecentPendingDaemonCommand } from "./daemonCommandUtils";
-import { shouldShowInIdle, shouldShowInDismissed } from "./inboxFilters";
+import { shouldShowInInbox } from "./inboxFilters";
 import {
   isTeamMember,
   canTeamMemberAccess,
@@ -5487,24 +5487,25 @@ export const getConversationsBySessionIds = query({
   },
 });
 
-export const listIdleSessions = query({
+export const listInboxSessions = query({
   args: {
     show_all: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
-    if (!userId) return [];
+    if (!userId) return { sessions: [], hidden_count: 0 };
 
     const now = Date.now();
     const HEARTBEAT_ALIVE_MS = 90 * 1000;
-    const WINDOW_MS = 48 * 60 * 60 * 1000;
-    const CLUSTER_WINDOW_MS = 60 * 60 * 1000;
-    const cutoff = now - WINDOW_MS;
+    const ACTIVE_WINDOW_MS = 48 * 60 * 60 * 1000;
+    const DISMISSED_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+    const activeCutoff = now - ACTIVE_WINDOW_MS;
+    const dismissedCutoff = now - DISMISSED_WINDOW_MS;
 
     const recentConversations = await ctx.db
       .query("conversations")
       .withIndex("by_user_updated", (q) =>
-        q.eq("user_id", userId).gte("updated_at", cutoff)
+        q.eq("user_id", userId).gte("updated_at", activeCutoff)
       )
       .order("desc")
       .filter((q) => q.or(
@@ -5513,17 +5514,26 @@ export const listIdleSessions = query({
       ))
       .take(100);
 
-    const recentIds = new Set(recentConversations.map((c) => c._id.toString()));
     const pinnedConversations = await ctx.db
       .query("conversations")
       .withIndex("by_user_pinned", (q) =>
         q.eq("user_id", userId).gt("inbox_pinned_at", 0)
       )
       .take(20);
-    const conversations = [
-      ...recentConversations,
-      ...pinnedConversations.filter((c) => !recentIds.has(c._id.toString())),
-    ];
+
+    const dismissedConversations = await ctx.db
+      .query("conversations")
+      .withIndex("by_user_dismissed", (q) =>
+        q.eq("user_id", userId).gte("inbox_dismissed_at", dismissedCutoff)
+      )
+      .order("desc")
+      .take(200);
+
+    const byId = new Map<string, typeof recentConversations[number]>();
+    for (const c of recentConversations) byId.set(c._id.toString(), c);
+    for (const c of pinnedConversations) byId.set(c._id.toString(), c);
+    for (const c of dismissedConversations) byId.set(c._id.toString(), c);
+    const conversations = Array.from(byId.values());
 
     const managedSessions = await ctx.db
       .query("managed_sessions")
@@ -5557,9 +5567,12 @@ export const listIdleSessions = query({
       (s) => now - s.last_heartbeat < 6 * 60 * 1000
     );
 
+    // Cluster cutoff hides stale active sessions when there's a clean time gap.
+    // Dismissed sessions have their own 30d window, so exclude them from the gap analysis.
     let clusterCutoff = 0;
-    if (conversations.length > 0) {
-      const sorted = [...conversations].sort((a, b) => b.updated_at - a.updated_at);
+    const activeConvs = conversations.filter((c) => !c.inbox_dismissed_at);
+    if (activeConvs.length > 0) {
+      const sorted = [...activeConvs].sort((a, b) => b.updated_at - a.updated_at);
       for (let i = 1; i < sorted.length; i++) {
         const gap = sorted[i - 1].updated_at - sorted[i].updated_at;
         if (gap > 2 * 60 * 60 * 1000) {
@@ -5572,7 +5585,7 @@ export const listIdleSessions = query({
     let hiddenCount = 0;
     const results = [];
     for (const conv of conversations) {
-      if (!shouldShowInIdle(conv)) continue;
+      if (!shouldShowInInbox(conv)) continue;
 
       let hasPending = !!conv.has_pending_messages;
       let lastMsgRole = conv.last_message_role;
@@ -5600,8 +5613,9 @@ export const listIdleSessions = query({
       }
 
       const pinned = !!conv.inbox_pinned_at;
+      const dismissed = !!conv.inbox_dismissed_at;
 
-      if (clusterCutoff > 0 && conv.updated_at < clusterCutoff && !hasPending && !pinned) {
+      if (!dismissed && clusterCutoff > 0 && conv.updated_at < clusterCutoff && !hasPending && !pinned) {
         hiddenCount++;
         if (!args.show_all) continue;
       }
@@ -5700,6 +5714,7 @@ export const listIdleSessions = query({
         has_pending: hasPending,
         is_deferred: !!deferred,
         is_pinned: pinned,
+        inbox_dismissed_at: conv.inbox_dismissed_at ?? null,
         agent_status: agentStatus,
         last_user_message: lastUserMessage,
         session_error: conv.session_error,
@@ -5714,6 +5729,11 @@ export const listIdleSessions = query({
         icon: conv.icon,
         icon_color: conv.icon_color,
       });
+
+      // Don't surface subagents under a dismissed parent — they used to be
+      // invisible (parent was excluded from the idle query entirely) and
+      // exposing them now would make active buckets pick them up as orphans.
+      if (dismissed) continue;
 
       for (const child of subagentChildren) {
         const childDaemon = liveConvIds.has(child._id.toString());
@@ -5747,6 +5767,7 @@ export const listIdleSessions = query({
           has_pending: !!child.has_pending_messages,
           is_deferred: false,
           is_pinned: false,
+          inbox_dismissed_at: child.inbox_dismissed_at ?? null,
           agent_status: childAgentStatus,
           last_user_message: null,
           session_error: child.session_error,
@@ -6171,75 +6192,6 @@ export const updateSessionId = mutation({
     return { updated: true };
   },
 });
-
-export const listDismissedSessions = query({
-  args: {},
-  handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) return [];
-
-    const now = Date.now();
-    const WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
-    const cutoff = now - WINDOW_MS;
-
-    const conversations = await ctx.db
-      .query("conversations")
-      .withIndex("by_user_dismissed", (q) =>
-        q.eq("user_id", userId).gte("inbox_dismissed_at", cutoff)
-      )
-      .order("desc")
-      .take(200);
-
-    const results = [];
-
-    for (const conv of conversations) {
-      if (!shouldShowInDismissed(conv)) continue;
-
-      const isDismissedCompleted = conv.status === "completed";
-
-      let implementationSession: { _id: string; title?: string } | undefined;
-      if (isDismissedCompleted) {
-        const children = await ctx.db
-          .query("conversations")
-          .withIndex("by_parent_conversation_id", (q) =>
-            q.eq("parent_conversation_id", conv._id)
-          )
-          .take(5);
-        const implChild = children.find(
-          (c) => c.parent_message_uuid === "plan-handoff" && !c.is_subagent
-        );
-        if (implChild) {
-          implementationSession = { _id: implChild._id.toString(), title: implChild.title };
-        }
-      }
-
-      results.push({
-        _id: conv._id,
-        session_id: conv.session_id,
-        title: conv.title,
-        subtitle: conv.subtitle,
-        updated_at: conv.updated_at,
-        project_path: conv.project_path,
-        git_root: conv.git_root,
-        git_branch: conv.git_branch,
-        agent_type: conv.agent_type,
-        message_count: conv.message_count,
-        idle_summary: conv.idle_summary,
-        is_idle: true,
-        has_pending: false,
-        implementation_session: implementationSession,
-        worktree_name: conv.worktree_name,
-        worktree_branch: conv.worktree_branch,
-        icon: conv.icon,
-        icon_color: conv.icon_color,
-      });
-    }
-
-    results.sort((a, b) => b.updated_at - a.updated_at);
-    return results;
-  },
-});
-
 
 export const backfillLastUserMessageAt = internalMutation({
   args: { user_id: v.optional(v.id("users")) },
