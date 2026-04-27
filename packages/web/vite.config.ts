@@ -20,6 +20,9 @@ export default defineConfig({
       "next/link": path.resolve(__dirname, "src/compat/next-link.tsx"),
       // React 19 compat: stable useComposedRefs to prevent infinite re-render loop
       "@radix-ui/react-compose-refs": path.resolve(__dirname, "src/compat/radix-compose-refs.ts"),
+      // @tiptap/pm v3 dropped the ./collab subpath; @convex-dev/prosemirror-sync still imports it.
+      // The v2 subpath was just a re-export of prosemirror-collab, which remains installed.
+      "@tiptap/pm/collab": "prosemirror-collab",
     },
     dedupe: ["convex", "react", "react-dom"],
   },
