@@ -280,10 +280,9 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
   const openCreateModal = useInboxStore((s) => s.openCreateModal);
   const inboxSessions = useInboxStore((s) => s.sessions);
   const sessionsWithQueuedMessages = useInboxStore((s) => s.sessionsWithQueuedMessages);
-  const sessionsServerSynced = useInboxStore((s) => s.sessionsServerSynced);
   const needsInputCount = useMemo(
-    () => sessionsServerSynced ? categorizeSessions(inboxSessions, sessionsWithQueuedMessages).needsInput.length : 0,
-    [inboxSessions, sessionsWithQueuedMessages, sessionsServerSynced],
+    () => categorizeSessions(inboxSessions, sessionsWithQueuedMessages).needsInput.length,
+    [inboxSessions, sessionsWithQueuedMessages],
   );
   const openNewSession = useInboxStore((s) => s.openNewSession);
   const hasUsedDesktop = useInboxStore((s) => s.clientState.dismissed?.has_used_desktop ?? false);

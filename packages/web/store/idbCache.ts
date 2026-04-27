@@ -138,17 +138,22 @@ export async function loadCache(): Promise<Record<string, any> | null> {
     const result: Record<string, any> = {};
     let hasData = false;
 
-    for (const [key, table] of Object.entries(COLLECTION_TABLES)) {
-      const rows = await table.toArray();
+    const collectionEntries = Object.entries(COLLECTION_TABLES);
+    const [collectionResults, metaRows] = await Promise.all([
+      Promise.all(collectionEntries.map(([, table]) => table.toArray())),
+      db.meta.toArray(),
+    ]);
+
+    collectionEntries.forEach(([key], i) => {
+      const rows = collectionResults[i];
       if (rows.length > 0) {
         const map: Record<string, any> = {};
         for (const row of rows) map[row._id] = row;
         result[key] = map;
         hasData = true;
       }
-    }
+    });
 
-    const metaRows = await db.meta.toArray();
     for (const row of metaRows) {
       result[row.key] = row.value;
       hasData = true;

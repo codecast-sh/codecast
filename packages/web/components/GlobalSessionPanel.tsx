@@ -810,7 +810,6 @@ export function SessionListPanel({
     s => s.activeForkHighlight,
     s => s.activeProjectFilter,
     s => s.collapsedSections,
-    s => s.sessionsServerSynced,
   ]);
   const killSessionMutation = useMutation(api.conversations.killSession);
   const handleKillDismissed = useCallback((id: string) => {
@@ -1056,13 +1055,6 @@ export function SessionListPanel({
         </div>
       </div>
       <div ref={scrollContainerRef} className="flex-1 overflow-y-auto scrollbar-auto">
-        {!s.sessionsServerSynced ? (
-          <div className="px-3 py-4 flex flex-col gap-2">
-            {[...Array(4)].map((_, i) => (
-              <div key={i} className="h-12 rounded bg-sol-border/20 animate-pulse" />
-            ))}
-          </div>
-        ) : <>
         {!s.activeProjectFilter && <NeedsAttentionSection />}
         {renderSection("Pinned", filteredPinned, "text-sol-magenta")}
         {renderSection("New", filteredNew, "text-sol-blue")}
@@ -1133,7 +1125,6 @@ export function SessionListPanel({
             );
           })()}
         </div>
-        </>}
       </div>
       {onCollapse && (
         <div className="flex-shrink-0 border-t border-sol-border/30 flex justify-center py-1">

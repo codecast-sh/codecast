@@ -385,6 +385,8 @@ export function sortSessions(sessions: Record<string, InboxSession>): InboxSessi
     const aIdle = isSessionEffectivelyIdle(a);
     const bIdle = isSessionEffectivelyIdle(b);
     if (aIdle !== bIdle) return aIdle ? -1 : 1;
+    if (a._id < b._id) return -1;
+    if (a._id > b._id) return 1;
     return 0;
   });
   return list;
@@ -542,7 +544,6 @@ interface InboxStoreState {
 
   clientState: ClientState;
   clientStateInitialized: boolean;
-  sessionsServerSynced: boolean;
 
   drafts: Record<string, Record<string, any>>;
 
@@ -835,7 +836,6 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
     altKey: "session_id",
     keepSelected: "currentSessionId",
     transform(draft, table, incoming) {
-      draft.sessionsServerSynced = true;
       for (const s of incoming as any[]) {
         if (!draft.conversations[s._id]) draft.conversations[s._id] = { _id: s._id };
       }
@@ -851,9 +851,9 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
   clientState: {
     kind: "singleton",
     merge: {
-      ui: "deep_merge",
-      layouts: "deep_merge",
-      dismissed: "deep_merge",
+      ui: "local_wins",
+      layouts: "local_wins",
+      dismissed: "local_wins",
       show_dismissed: "local_wins",
       drafts: "local_wins",
       tabs: "deep_merge",
@@ -973,7 +973,6 @@ export const useInboxStore = create<InboxStoreState>(
   conversations: {},
   clientState: {},
   clientStateInitialized: false,
-  sessionsServerSynced: false,
 
   drafts: {},
 
@@ -2068,14 +2067,22 @@ export function ensureHydrated(convId: string) {
 
 // -- IndexedDB cache: wire patch-driven writes + hydrate on load --
 
+// Exported promise that resolves once IDB hydration is complete. main.tsx
+// awaits this before mounting React so the first render sees real data
+// instead of empty defaults.
+export let idbReady: Promise<void> = Promise.resolve();
+
 if (typeof window !== "undefined") {
   (useInboxStore.getState() as any)._setIDBWrite(writePatchesToIDB);
   (useInboxStore.getState() as any)._setOutbox(enqueueDispatch, removeDispatch, loadOutbox);
 
   setHydrating(true);
-  loadCache().then((cached) => {
+  idbReady = loadCache().then((cached) => {
     setHydrating(false);
-    if (!cached) return;
+    if (!cached) {
+      useInboxStore.setState({ clientStateInitialized: true });
+      return;
+    }
 
     const apply = (pick: string[]) => {
       const state = useInboxStore.getState();
@@ -2144,6 +2151,12 @@ if (typeof window !== "undefined") {
            "conversations", "pending", "teams", "teamMembers", "teamUnreadCount", "drafts",
            "tabs", "activeTabId",
            "sidePanelOpen", "sidePanelSessionId", "sidePanelUserClosed"]);
+
+    // Always mark initialized after IDB hydration completes — even if cached
+    // clientState was missing — so app gates don't hang on fresh users.
+    if (!useInboxStore.getState().clientStateInitialized) {
+      useInboxStore.setState({ clientStateInitialized: true });
+    }
 
     // Restore selected session from persisted clientState before React effects
     // can auto-select the first session (QueuePageClient's fallback effect).
