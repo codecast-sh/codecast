@@ -196,7 +196,23 @@ export const completeTaskRun = mutation({
     const task = await ctx.db.get(args.task_id);
     if (!task || task.user_id !== auth.userId) return false;
     if (args.daemon_id && task.lease_holder !== args.daemon_id) return false;
-    if (task.status !== "running" && task.status !== "scheduled") return false;
+
+    // Inject path: the daemon auto-completes the task on injection (without a
+    // summary) so the lease doesn't expire and re-fire. The agent in the
+    // originating conversation calls this later with --summary; allow it
+    // through so the summary still posts to target_conversation.
+    const isLateSummary =
+      task.status === "completed" &&
+      !task.last_run_summary &&
+      !!args.summary;
+
+    if (
+      task.status !== "running" &&
+      task.status !== "scheduled" &&
+      !isLateSummary
+    ) {
+      return false;
+    }
 
     const now = Date.now();
     const updates: Record<string, any> = {
@@ -205,19 +221,23 @@ export const completeTaskRun = mutation({
       last_run_conversation_id: args.conversation_id
         ? args.conversation_id as Id<"conversations">
         : undefined,
-      run_count: task.run_count + 1,
       lease_holder: undefined,
       lease_expires_at: undefined,
     };
 
-    if (task.schedule_type === "recurring" && task.interval_ms) {
-      updates.status = "scheduled";
-      updates.run_at = now + task.interval_ms;
-    } else if (task.schedule_type === "event") {
-      updates.status = "scheduled";
-      updates.run_at = undefined;
+    if (isLateSummary) {
+      // Already counted on initial completion; don't double-count or re-arm.
     } else {
-      updates.status = "completed";
+      updates.run_count = task.run_count + 1;
+      if (task.schedule_type === "recurring" && task.interval_ms) {
+        updates.status = "scheduled";
+        updates.run_at = now + task.interval_ms;
+      } else if (task.schedule_type === "event") {
+        updates.status = "scheduled";
+        updates.run_at = undefined;
+      } else {
+        updates.status = "completed";
+      }
     }
 
     await ctx.db.patch(args.task_id, updates);
