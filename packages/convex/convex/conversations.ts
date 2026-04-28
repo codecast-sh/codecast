@@ -1146,7 +1146,7 @@ export const getNewMessages = query({
     const { children: childConversations, map: childConversationMap, agentNameEntries } =
       await findChildConversations(ctx, args.conversation_id, messages);
 
-    return {
+    return sanitizeConvexObjectKeys({
       messages,
       child_conversations: childConversations,
       child_conversation_map: childConversationMap,
@@ -1155,7 +1155,7 @@ export const getNewMessages = query({
       has_more: hasMore,
       updated_at: conversation.updated_at,
       title: conversation.title,
-    };
+    });
   },
 });
 
@@ -1182,7 +1182,7 @@ export const copyAllMessages = query({
       .order("asc")
       .collect();
 
-    return allMessages
+    return sanitizeConvexObjectKeys(allMessages
       .filter(isNonEmptyMessage)
       .map((m) => ({
         role: m.role,
@@ -1192,7 +1192,7 @@ export const copyAllMessages = query({
         tool_calls: m.tool_calls,
         tool_results: m.tool_results,
         subtype: m.subtype || undefined,
-      }));
+      })));
   },
 });
 
@@ -1218,13 +1218,14 @@ export const listMessages = query({
       return { page: [], isDone: true, continueCursor: "" };
     }
 
-    return await ctx.db
+    const result = await ctx.db
       .query("messages")
       .withIndex("by_conversation_timestamp", (q) =>
         q.eq("conversation_id", args.conversation_id)
       )
       .order("desc")
       .paginate(args.paginationOpts);
+    return { ...result, page: sanitizeConvexObjectKeys(result.page) };
   },
 });
 
