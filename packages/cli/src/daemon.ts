@@ -7694,13 +7694,11 @@ async function isTmuxAgentAlive(tmuxSession: string): Promise<boolean> {
       if (/Segmentation fault|panic:|SIGABRT|core dumped|exited with/.test(trimmed)) return false;
       if (/-(?:ba)?sh:.*(?:No such file|command not found)/.test(trimmed)) return false;
       if (hasProcess) return true;
-      // Only trust shell prompt as death signal if the pane looks like a bare shell --
-      // agents running bash commands can leave a $ prompt visible in the last 10 lines
-      // while still actively working above
-      const lines = trimmed.split("\n").filter(l => l.trim());
-      const looksLikeBareShell = lines.length <= 3 && /[$%#]\s*$/.test(trimmed);
-      if (looksLikeBareShell) return false;
-      return true;
+      // No agent process in the process tree — the agent has exited or crashed.
+      // Don't optimistically return true just because the pane has content; that
+      // content is likely a crash stack trace or leftover output from the dead
+      // process. Return false so the caller falls through to auto-resume.
+      return false;
     } catch {}
     return hasProcess;
   } catch {
