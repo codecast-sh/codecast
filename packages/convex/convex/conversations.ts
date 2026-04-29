@@ -6238,7 +6238,7 @@ export const listDismissedSessions = query({
     const results = [];
 
     for (const conv of conversations) {
-      if (!shouldShowInDismissed(conv)) continue;
+      if (!shouldShowInInbox(conv)) continue;
 
       const isDismissedCompleted = conv.status === "completed";
 
