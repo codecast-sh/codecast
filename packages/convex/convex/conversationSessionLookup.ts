@@ -16,7 +16,7 @@ export const findConversationBySessionReference = async (
 ): Promise<LookupRecord | null> => {
   const directConversation = await ctx.db
     .query("conversations")
-    .withIndex("by_session_id", (query) => query.eq("session_id", sessionId))
+    .withIndex("by_session_id", (query: any) => query.eq("session_id", sessionId))
     .first();
 
   if (hasMatchingUser(directConversation, authUserId)) {
@@ -25,7 +25,7 @@ export const findConversationBySessionReference = async (
 
   const managedSession = await ctx.db
     .query("managed_sessions")
-    .withIndex("by_session_id", (query) => query.eq("session_id", sessionId))
+    .withIndex("by_session_id", (query: any) => query.eq("session_id", sessionId))
     .first();
 
   if (!hasMatchingUser(managedSession, authUserId) || !managedSession?.conversation_id) {
