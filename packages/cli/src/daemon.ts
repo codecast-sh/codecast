@@ -3298,12 +3298,29 @@ async function processSessionFile(
             const taskMap = planModeTaskMap.get(sessionId);
             const shortId = taskMap?.get(String(block.input.taskId));
             if (shortId) {
-              const status = block.input.status === "completed" ? "done" : block.input.status === "in_progress" ? "in_progress" : block.input.status;
-              try {
-                await syncService.updateTaskStatus(shortId, status, sessionId);
-                log(`Updated task ${shortId} -> ${status} in session ${sessionId.slice(0, 8)}`);
-              } catch (err) {
-                log(`Failed to sync TaskUpdate: ${err instanceof Error ? err.message : String(err)}`);
+              const rawStatus = String(block.input.status);
+              const statusMap: Record<string, string> = {
+                pending: "open",
+                open: "open",
+                backlog: "backlog",
+                in_progress: "in_progress",
+                in_review: "in_review",
+                completed: "done",
+                done: "done",
+                deleted: "dropped",
+                cancelled: "dropped",
+                dropped: "dropped",
+              };
+              const status = statusMap[rawStatus];
+              if (!status) {
+                log(`Skipping TaskUpdate sync for ${shortId}: unknown status "${rawStatus}"`);
+              } else {
+                try {
+                  await syncService.updateTaskStatus(shortId, status, sessionId);
+                  log(`Updated task ${shortId} -> ${status} in session ${sessionId.slice(0, 8)}`);
+                } catch (err) {
+                  log(`Failed to sync TaskUpdate: ${err instanceof Error ? err.message : String(err)}`);
+                }
               }
             }
           }
