@@ -2450,7 +2450,7 @@ export const searchConversations = query({
     const searchResults = await ctx.db
       .query("messages")
       .withSearchIndex("search_content", (q) => q.search("content", searchQuery))
-      .take(200);
+      .take(1024);
 
     // Group messages by conversation (keep messages matching ANY term for context)
     const conversationMessages = new Map<string, typeof searchResults>();
@@ -2479,6 +2479,7 @@ export const searchConversations = query({
     const results: Array<{
       conversationId: string;
       title: string;
+      matchCount: number;
       matches: Array<{
         messageId: string;
         content: string;
@@ -2487,6 +2488,7 @@ export const searchConversations = query({
       }>;
       updatedAt: number;
       authorName: string;
+      authorAvatar: string | null;
       isOwn: boolean;
       messageCount: number;
       proximityScore: number;
@@ -2535,6 +2537,7 @@ export const searchConversations = query({
       results.push({
         conversationId: conv._id,
         title,
+        matchCount: messages.length,
         matches: messages.slice(0, 5).map((m) => {
           const content = m.content || "";
           const lowerContent = content.toLowerCase();
@@ -2559,6 +2562,7 @@ export const searchConversations = query({
         }),
         updatedAt: conv.updated_at,
         authorName: conversationUser?.name || "Unknown",
+        authorAvatar: (conversationUser as any)?.image || (conversationUser as any)?.github_avatar_url || null,
         isOwn,
         messageCount: conv.message_count || 0,
         proximityScore,
@@ -2569,7 +2573,12 @@ export const searchConversations = query({
     const sorted = results.sort((a, b) => {
       return b.updatedAt - a.updatedAt;
     });
-    return { results: sorted.slice(0, limit), totalMatches: searchResults.length };
+    const totalMatches = results.reduce((sum, r) => sum + r.matchCount, 0);
+    return {
+      results: sorted.slice(0, limit),
+      totalMatches,
+      totalSessions: sorted.length,
+    };
   },
 });
 
@@ -5750,6 +5759,8 @@ export const listInboxSessions = query({
         workflow_run_id: conv.workflow_run_id || null,
         is_workflow_primary: conv.is_workflow_primary || false,
         workflow_run_status,
+        forked_from: conv.forked_from?.toString() || null,
+        parent_message_uuid: conv.parent_message_uuid || null,
         icon: conv.icon,
         icon_color: conv.icon_color,
       });
