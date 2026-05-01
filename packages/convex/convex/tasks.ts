@@ -7,6 +7,15 @@ import { createDataContext, scopeByProject } from "./data";
 import { nextShortId } from "./counters";
 import { internal } from "./_generated/api";
 
+const VALID_TASK_STATUSES = ["backlog", "open", "in_progress", "in_review", "done", "dropped"] as const;
+type TaskStatus = typeof VALID_TASK_STATUSES[number];
+
+function assertValidTaskStatus(status: string | undefined): asserts status is TaskStatus | undefined {
+  if (status !== undefined && !VALID_TASK_STATUSES.includes(status as TaskStatus)) {
+    throw new Error(`Invalid task status '${status}'. Valid: ${VALID_TASK_STATUSES.join(", ")}`);
+  }
+}
+
 export async function resolveAssigneeToUserId(
   ctx: any,
   assignee: string,
@@ -153,6 +162,7 @@ export const create = mutation({
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
     if (!auth) throw new Error("Unauthorized");
+    assertValidTaskStatus(args.status);
 
     // Resolve conversation first so we can propagate team_id to the task
     let conversation_ids: Id<"conversations">[] | undefined;
@@ -555,6 +565,7 @@ export const update = mutation({
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
     if (!auth) throw new Error("Unauthorized");
+    assertValidTaskStatus(args.status);
 
     const task = await ctx.db
       .query("tasks")
@@ -1125,6 +1136,7 @@ export const webUpdate = mutation({
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Unauthorized");
+    assertValidTaskStatus(args.status);
 
     const task = await ctx.db
       .query("tasks")
@@ -1731,6 +1743,7 @@ export const batchUpdateStatus = mutation({
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
     if (!auth) throw new Error("Unauthorized");
+    assertValidTaskStatus(args.status);
 
     const now = Date.now();
     const results: { short_id: string; success: boolean }[] = [];
