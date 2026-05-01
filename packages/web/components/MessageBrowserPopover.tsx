@@ -35,7 +35,7 @@ function formatTimeAgo(ts: number): string {
   return new Date(ts).toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
-type PM = { _id: string; display: string; isCmd: boolean; timestamp: number; commentCount: number };
+type PM = { _id: string; display: string; isCmd: boolean; role: "user" | "assistant"; timestamp: number; commentCount: number };
 
 type CommentEntry = {
   _id: string;
@@ -66,6 +66,10 @@ function HoverPreview({ message, rect, onMouseEnter, onMouseLeave, onDropdownEnt
       >
         <div className="flex items-center gap-2 p-3 pb-1 flex-shrink-0">
           <span className="text-[10px] text-sol-text-dim tabular-nums">#{message.originalIndex + 1}</span>
+          <span className="text-sol-text-dim/30">·</span>
+          <span className={`text-[10px] ${message.role === "assistant" ? "text-sol-orange/70" : "text-sol-text-dim"}`}>
+            {message.role === "assistant" ? "claude" : "you"}
+          </span>
           <span className="text-sol-text-dim/30">·</span>
           <span className="text-sol-text-dim text-[10px]">{formatTimeAgo(message.timestamp)}</span>
           {message.commentCount > 0 && (
@@ -303,12 +307,17 @@ function NavDropdown({
                   }`}
                 >
                   <div className="flex items-start gap-2">
-                    <span className="text-[10px] text-sol-text-dim/40 tabular-nums w-4 text-right flex-shrink-0 pt-[2px]">
+                    <span className={`text-[10px] tabular-nums w-4 text-right flex-shrink-0 pt-[2px] ${
+                      m.role === "assistant" ? "text-sol-orange/50" : "text-sol-text-dim/40"
+                    }`}>
                       {m.originalIndex + 1}
                     </span>
                     <div className="flex-1 min-w-0">
                       <div className={`text-[12px] leading-snug line-clamp-2 ${
-                        isCurrent ? "text-sol-text font-medium" : m.isCmd ? "text-sol-text-muted font-mono" : "text-sol-text-muted"
+                        isCurrent ? "text-sol-text font-medium"
+                          : m.role === "assistant" ? "text-sol-text-dim italic"
+                          : m.isCmd ? "text-sol-text-muted font-mono"
+                          : "text-sol-text-muted"
                       }`}>
                         {m.display}
                       </div>
@@ -443,14 +452,14 @@ export function MessageNavButton({
 
   const processed: PM[] = messages
     ? messages
-        .map((m: { _id: string; content: string; timestamp: number }) => ({
+        .map((m: { _id: string; role?: string; content: string; timestamp: number }) => ({
           _id: m._id,
+          role: (m.role === "assistant" ? "assistant" : "user") as "user" | "assistant",
           ...processUserMessage(m.content),
           timestamp: m.timestamp,
           commentCount: commentsByMessage.get(m._id) || 0,
         }))
         .filter((m: PM) => m.display.length > 0 && !isSystemMessage(m.display))
-        .reverse()
     : [];
 
   const total = processed.length;
@@ -529,6 +538,7 @@ export function MessageNavButton({
           const isActive = mappedIndex === activeIndex;
           const msg = processed[mappedIndex];
           const hasComment = msg && msg.commentCount > 0;
+          const isAssistant = msg?.role === "assistant";
           return (
             <span
               key={i}
@@ -537,6 +547,8 @@ export function MessageNavButton({
                   ? "bg-sol-text w-4 h-[2.5px]"
                   : hasComment
                   ? "bg-sol-cyan w-3.5 h-[2px] opacity-70"
+                  : isAssistant
+                  ? "bg-sol-orange w-2.5 h-px opacity-30"
                   : "bg-current w-3 h-px opacity-35"
               }`}
             />
