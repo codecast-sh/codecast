@@ -393,9 +393,10 @@ export const addMessage = mutation({
       timestamp: msgTimestamp,
     });
     const newMessageCount = conversation.message_count + 1;
+    const now = Date.now();
     const convPatch: Record<string, unknown> = {
       message_count: newMessageCount,
-      updated_at: msgTimestamp,
+      updated_at: now,
       last_message_role: args.role,
     };
     if (args.role === "user" && contentToStore?.trim()) {
@@ -547,14 +548,10 @@ export const addMessages = mutation({
 
     const ids: Id<"messages">[] = [];
     let insertedCount = 0;
-    let maxTimestamp = conversation.updated_at;
     let lastUserContentStored: string | undefined;
 
     for (const msg of args.messages) {
       const msgTimestamp = msg.timestamp || Date.now();
-      if (msgTimestamp > maxTimestamp) {
-        maxTimestamp = msgTimestamp;
-      }
 
       const safeContent = msg.content ? redactSecrets(msg.content) : msg.content;
       const safeThinking = msg.thinking ? redactSecrets(msg.thinking) : msg.thinking;
@@ -686,7 +683,7 @@ export const addMessages = mutation({
       const lastMsg = args.messages[args.messages.length - 1];
       const convPatch: Record<string, unknown> = {
         message_count: newMessageCount,
-        updated_at: maxTimestamp,
+        updated_at: Date.now(),
         last_message_role: lastMsg.role,
       };
       const userMsgs = args.messages.filter((m) => m.role === "user");
