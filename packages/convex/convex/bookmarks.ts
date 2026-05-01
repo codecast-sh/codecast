@@ -268,6 +268,8 @@ export const listBookmarks = query({
           message_id: bookmark.message_id,
           created_at: bookmark.created_at,
           conversation_title: conversation.title || "New Session",
+          conversation_updated_at: conversation.updated_at,
+          conversation_message_count: conversation.message_count || 0,
           message_preview: message.content?.slice(0, 100) || "",
           message_role: message.role,
           message_timestamp: message.timestamp,
