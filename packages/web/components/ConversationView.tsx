@@ -8664,9 +8664,14 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         virtualizer.scrollToIndex(itemIndex, { align: "center", behavior: "smooth" });
         setHighlightedMessageId(messageId);
         setTimeout(() => setHighlightedMessageId(null), 2000);
+      } else if (conversation?._id) {
+        useInboxStore.setState({
+          pendingNavigateId: conversation._id,
+          pendingScrollToMessageId: messageId,
+        });
       }
     }
-  }), [timeline, virtualizer]);
+  }), [timeline, virtualizer, conversation?._id]);
 
   useMountEffect(() => {
     const scrollContainer = containerRef.current;
@@ -10010,6 +10015,11 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   virtualizer.scrollToIndex(itemIndex, { align: "center", behavior: "smooth" });
                   setHighlightedMessageId(messageId);
                   setTimeout(() => setHighlightedMessageId(null), 2000);
+                } else if (conversation?._id) {
+                  useInboxStore.setState({
+                    pendingNavigateId: conversation._id,
+                    pendingScrollToMessageId: messageId,
+                  });
                 }
               }}
             />
