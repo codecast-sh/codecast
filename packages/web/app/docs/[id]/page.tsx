@@ -146,6 +146,12 @@ function DocDetailContent() {
       (d) => d._id !== id && d.linked_doc_ids?.includes(id)
     );
   }, [allDocs, id]);
+  // Child docs (pages nested under this doc)
+  const childDocs = useMemo(() => {
+    return Object.values(allDocs)
+      .filter((d) => d.parent_id === id)
+      .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
+  }, [allDocs, id]);
   const updateDoc = useInboxStore((s) => s.updateDoc);
   const pinDoc = useInboxStore((s) => s.pinDoc);
   const promoteToPlan = useMutation(api.docs.webPromoteToPlan);
@@ -212,12 +218,6 @@ function DocDetailContent() {
   const doc = data;
   const conversation = data.conversation;
   const relatedTasks = data.related_tasks || [];
-  // Child docs (pages nested under this doc)
-  const childDocs = useMemo(() => {
-    return Object.values(allDocs)
-      .filter((d) => d.parent_id === id)
-      .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
-  }, [allDocs, id]);
 
   const hasRelatedContent =
     (doc as any).active_plan ||
