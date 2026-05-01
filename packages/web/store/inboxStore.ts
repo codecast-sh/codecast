@@ -374,14 +374,18 @@ export function isSessionDismissed(s: Pick<InboxSession, "inbox_dismissed_at">):
 export function sortSessions(sessions: Record<string, InboxSession>): InboxSession[] {
   const list = Object.values(sessions).filter((s) => !isSessionDismissed(s));
   list.sort((a, b) => {
+    const aPinned = !!a.is_pinned;
+    const bPinned = !!b.is_pinned;
+    if (aPinned !== bPinned) return aPinned ? -1 : 1;
+    const aDeferred = !!a.is_deferred;
+    const bDeferred = !!b.is_deferred;
+    if (aDeferred !== bDeferred) return aDeferred ? 1 : -1;
+    if (!isConvexId(a._id) !== !isConvexId(b._id)) return !isConvexId(a._id) ? -1 : 1;
+    const aNew = (a.message_count ?? 0) === 0;
+    const bNew = (b.message_count ?? 0) === 0;
+    if (aNew !== bNew) return aNew ? -1 : 1;
     const aWaitingForInput = isSessionWaitingForInput(a);
     const bWaitingForInput = isSessionWaitingForInput(b);
-    if (a.is_pinned !== b.is_pinned) return a.is_pinned ? -1 : 1;
-    if (a.is_deferred !== b.is_deferred) return a.is_deferred ? 1 : -1;
-    if (!isConvexId(a._id) !== !isConvexId(b._id)) return !isConvexId(a._id) ? -1 : 1;
-    const aNew = a.message_count === 0;
-    const bNew = b.message_count === 0;
-    if (aNew !== bNew) return aNew ? -1 : 1;
     if (aWaitingForInput !== bWaitingForInput) return aWaitingForInput ? -1 : 1;
     const aIdle = isSessionEffectivelyIdle(a);
     const bIdle = isSessionEffectivelyIdle(b);
@@ -462,12 +466,6 @@ export function categorizeSessions(
   sessionsWithQueuedMessages: Set<string>,
 ): CategorizedSessions {
   const sorted = sortSessions(sessions);
-  // Temporary diagnostic: logs the needs_input order on every render so we can
-  // see what flips between IDB-hydrated and server-synced renders.
-  if (typeof window !== "undefined" && (window as any).__DEBUG_SORT__) {
-    const ni = sorted.filter(s => isSessionWaitingForInput(s, sessionsWithQueuedMessages) && !s.parent_conversation_id);
-    console.log("[needs_input]", ni.map(s => `${s._id.slice(-6)}=${s.is_idle ? "idle" : (s.agent_status || "?")}`).join(" | "));
-  }
   const dismissed = Object.values(sessions)
     .filter(isSessionDismissed)
     .sort((a, b) => (b.inbox_dismissed_at || 0) - (a.inbox_dismissed_at || 0));
@@ -913,6 +911,18 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
   bookmarks: { kind: "list" },
 };
 
+// Rename pending protection entries from oldId → newId so field
+// overrides survive the stub-to-Convex ID transition.
+function rekeyPending(pending: Record<string, any>, oldId: string, newId: string): void {
+  for (const key of Object.keys(pending)) {
+    const newKey = key.replace(`:${oldId}`, `:${newId}`);
+    if (newKey !== key) {
+      pending[newKey] = pending[key];
+      delete pending[key];
+    }
+  }
+}
+
 function rekeyId(draft: any, oldId: string, newId: string) {
   if (oldId === newId) return;
   if (draft.sessions[oldId]) {
@@ -1341,6 +1351,16 @@ export const useInboxStore = create<InboxStoreState>(
         const match = incomingByAlt.get((old as any)[config.altKey!] || oldId);
         if (match) {
           rekeyId(this, oldId, match._id);
+          rekeyPending(pending, oldId, match._id);
+          // Reapply field overrides that applySyncTable missed (it ran
+          // before the pending entries were rekeyed to the new ID).
+          const fp = `${field}:${match._id}:`;
+          for (const [key, entry] of Object.entries(pending)) {
+            if (entry.type !== "field" || !key.startsWith(fp)) continue;
+            if (table[match._id]) {
+              (table[match._id] as any)[key.slice(fp.length)] = entry.value;
+            }
+          }
         } else if (!table[oldId]) {
           table[oldId] = old as any;
         }
@@ -1732,9 +1752,27 @@ export const useInboxStore = create<InboxStoreState>(
   // SESSION ID RESOLUTION
   // =====================
 
-  resolveSessionId: sync(function (this: Draft, sessionId: string, convexId: string) {
+  _rekeySession: sync(function (this: Draft, sessionId: string, convexId: string) {
+    rekeyPending(this.pending, sessionId, convexId);
     rekeyId(this, sessionId, convexId);
   }),
+
+  resolveSessionId: (sessionId: string, convexId: string) => {
+    (get() as any)._rekeySession(sessionId, convexId);
+    // Flush pending field changes to server. Fields modified while the
+    // session had a stub ID weren't dispatched (groupPatchesByTable
+    // skips non-Convex IDs), so send them now.
+    const state = get();
+    const prefix = `conversations:${convexId}:`;
+    const fields: Record<string, any> = {};
+    for (const [key, entry] of Object.entries(state.pending || {})) {
+      if ((entry as any).type !== "field" || !key.startsWith(prefix)) continue;
+      fields[key.slice(prefix.length)] = (entry as any).value;
+    }
+    if (Object.keys(fields).length > 0) {
+      (state as any)._dispatch("patch", [], { conversations: { [convexId]: fields } }).catch(() => {});
+    }
+  },
 
   getConvexId: (id: string) => {
     if (isConvexId(id)) return id;
@@ -2028,6 +2066,13 @@ export const useInboxStore = create<InboxStoreState>(
   }),
 
   updateTab: action(function (this: Draft, id: string, patch: Partial<AppTab>) {
+    const current = this.tabs.find((t: AppTab) => t.id === id);
+    if (!current) return;
+    let changed = false;
+    for (const k in patch) {
+      if ((current as any)[k] !== (patch as any)[k]) { changed = true; break; }
+    }
+    if (!changed) return;
     this.tabs = this.tabs.map((t: AppTab) => t.id === id ? { ...t, ...patch } : t);
   }),
 
