@@ -183,23 +183,18 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
     }
   }, []);
 
-  const handleInboxForkSelect = useCallback((forkId: string, parentId: string, _parentMessageUuid: string) => {
+  const handleInboxForkSelect = useCallback((forkId: string, _parentId: string, _parentMessageUuid: string) => {
     const store = useInboxStore.getState();
-    store.setPendingForkActivation(forkId);
-    store.setActiveForkHighlight(forkId);
-    store.setCurrentSession(parentId);
+    store.navigateToSession(forkId);
     if (store.showMySessions) store.setShowMySessions(false);
   }, []);
 
-  const handleConversationForkSelect = useCallback((forkId: string, parentId: string, _parentMessageUuid: string) => {
+  const handleConversationForkSelect = useCallback((forkId: string, _parentId: string, _parentMessageUuid: string) => {
     const store = useInboxStore.getState();
-    store.setPendingForkActivation(forkId);
-    store.setActiveForkHighlight(forkId);
+    store.navigateToSession(forkId);
     if (isOnConversationPage) {
-      store.navigateToSession(parentId);
       router.push('/inbox');
     } else {
-      store.setCurrentSession(parentId);
       if (store.showMySessions) store.setShowMySessions(false);
     }
   }, [router, isOnConversationPage]);

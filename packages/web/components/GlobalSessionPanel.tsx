@@ -3,6 +3,7 @@ import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
+import { useRouter } from "next/navigation";
 import { ConversationDiffLayout } from "./ConversationDiffLayout";
 import { ConversationData } from "./ConversationView";
 import { useConversationMessages } from "../hooks/useConversationMessages";
@@ -13,7 +14,6 @@ import { SharePopover } from "./SharePopover";
 import { shareOrigin } from "../lib/utils";
 import { PlanContextPanel } from "./PlanContextPanel";
 import { WorkflowContextPanel } from "./WorkflowContextPanel";
-import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { animatedStashSession } from "../store/undoActions";
 import { soundKill } from "../lib/sounds";
@@ -225,7 +225,7 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
             </button>
           ) : undefined}
           headerLeft={onExpandToMain ? (
-            <button onClick={onExpandToMain} className="p-0.5 rounded text-sol-text-dim hover:text-sol-cyan transition-colors flex-shrink-0" title="Go to inbox">
+            <button onClick={onExpandToMain} className="p-0.5 rounded text-sol-text-dim hover:text-sol-cyan transition-colors flex-shrink-0" title="Collapse sessions">
               <ChevronsLeft className="w-4 h-4" />
             </button>
           ) : undefined}
@@ -256,6 +256,30 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
   );
 });
 
+// -- Fork tree color --
+
+const FORK_HUES = [30, 60, 120, 180, 200, 220, 260, 45, 90, 160, 240, 280];
+
+function getForkColor(id: string): string {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = ((h << 5) - h + id.charCodeAt(i)) | 0;
+  const hue = FORK_HUES[((h % FORK_HUES.length) + FORK_HUES.length) % FORK_HUES.length];
+  return `hsl(${hue}, 65%, 55%)`;
+}
+
+function ForkCorner({ colorKey }: { colorKey: string }) {
+  const color = getForkColor(colorKey);
+  return (
+    <div
+      className="absolute top-0 left-0 w-0 h-0"
+      style={{
+        borderTop: `10px solid ${color}`,
+        borderRight: "10px solid transparent",
+      }}
+    />
+  );
+}
+
 // -- SessionCard (shared) --
 
 export function SessionCard({
@@ -271,6 +295,7 @@ export function SessionCard({
   onKill,
   onNavigateToSession,
   variant = "default",
+  forkColorKey,
 }: {
   session: InboxSession;
   isActive: boolean;
@@ -284,6 +309,7 @@ export function SessionCard({
   onKill?: (id: string) => void;
   onNavigateToSession?: (id: string) => void;
   variant?: "default" | "working" | "dismissed";
+  forkColorKey?: string;
 }) {
   const tipActions = useTipActions();
   const project = getProjectName(session.git_root, session.project_path);
@@ -364,6 +390,7 @@ export function SessionCard({
                   : "hover:bg-violet-500/[0.06] border-l border-l-violet-500/15"
         }`}
       >
+        {forkColorKey && <ForkCorner colorKey={forkColorKey} />}
         <div
           role="button"
           tabIndex={0}
@@ -477,6 +504,7 @@ export function SessionCard({
               : "hover:bg-sol-bg-alt/80"
       }`}
     >
+      {forkColorKey && <ForkCorner colorKey={forkColorKey} />}
       <div
         role="button"
         tabIndex={0}
@@ -959,6 +987,7 @@ export function SessionListPanel({
                   onDefer={s.deferSession}
                   onPin={s.pinSession}
                   variant={sectionVariant || "default"}
+                  forkColorKey={globalForksByParent.has(session._id) ? session._id : (session.forked_from ?? undefined)}
                 />
                 {showSubagents && visibleSubs.map((sub) => (
                   <SessionCard
@@ -994,21 +1023,6 @@ export function SessionListPanel({
                     collapse
                   </button>
                 )}
-                {(globalForksByParent.get(session._id) || []).map((fork) => (
-                  <SessionCard
-                    key={fork._id}
-                    session={fork}
-                    isActive={fork._id === s.activeForkHighlight}
-                    isParentActive={
-                      session._id === s.activeForkHighlight ||
-                      (session._id === activeSessionId && !s.activeForkHighlight)
-                    }
-                    globalIndex={0}
-                    onSelect={() => handleSelect(fork)}
-                    onDismiss={handleAnimatedDismiss}
-                    variant={sectionVariant || "default"}
-                  />
-                ))}
               </div>
             );
           })}
@@ -1108,6 +1122,7 @@ export function SessionListPanel({
                     onRestore={(id) => s.unstashSession(id)}
                     onKill={handleKillDismissed}
                     variant="dismissed"
+                    forkColorKey={globalForksByParent.has(session._id) ? session._id : (session.forked_from ?? undefined)}
                   />
                   {showSubagents && subMap.get(session._id)?.map((sub) => (
                     <SessionCard
@@ -1238,13 +1253,10 @@ export const ConversationColumn = memo(function ConversationColumn() {
   }, [s.selectPanelSession]);
 
   const handleExpand = useCallback(() => {
-    const sessionId = s.sidePanelSessionId;
-    if (!sessionId) return;
-    // Navigate first — don't clear sidePanelSessionId yet.
-    // DashboardLayout hides ConversationColumn via !isOnConversationPage,
-    // then cleans up panel state once the route lands.
-    router.push(`/conversation/${sessionId}`);
-  }, [s.sidePanelSessionId, router]);
+    if (!s.sidePanelSessionId) return;
+    s.navigateToSession(s.sidePanelSessionId);
+    router.push('/inbox');
+  }, [s.sidePanelSessionId, s.navigateToSession, router]);
 
   const handleClose = useCallback(() => {
     s.selectPanelSession(null);
