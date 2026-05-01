@@ -908,7 +908,7 @@ type UserMessageKind =
   | { kind: 'poll_response' }
   | { kind: 'scheduled_task' };
 
-const STICKY_NOISE_PREFIXES = ["[Request interrupted", "<task-notification>", "Your task is to create a detailed summary", "Full transcript available at:"];
+const STICKY_NOISE_PREFIXES = ["[Request interrupted", "<task-notification>", "Your task is to create a detailed summary", "Full transcript available at:", "[Codecast import]"];
 
 function classifyUserMessage(
   msg: Message,
