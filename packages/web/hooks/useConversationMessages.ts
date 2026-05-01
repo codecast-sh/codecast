@@ -47,7 +47,8 @@ export function useConversationMessages(
   });
   const effectiveTargetMessageId = targetMessageId ?? hashTarget;
   if (typeof window !== "undefined" && (window as any).__deeplinkDbg__) {
-    console.log('[deeplink:hook] cid=' + conversationId + ' tgt=' + targetMessageId + ' hash=' + hashTarget + ' eff=' + effectiveTargetMessageId);
+    (window as any).__dbgRows__ = (window as any).__dbgRows__ || [];
+    (window as any).__dbgRows__.push({ where: 'hook', cid: conversationId, targetMessageId, hashTarget, effectiveTargetMessageId });
   }
 
   // --- Target resolution ---
@@ -58,7 +59,8 @@ export function useConversationMessages(
       : "skip"
   );
   if (typeof window !== "undefined" && (window as any).__deeplinkDbg__ && effectiveTargetMessageId) {
-    console.log('[deeplink:hook] tsResult=' + JSON.stringify(targetMessageTimestamp));
+    (window as any).__dbgRows__ = (window as any).__dbgRows__ || [];
+    (window as any).__dbgRows__.push({ where: 'tsResult', eff: effectiveTargetMessageId, ts: targetMessageTimestamp, cid: conversationId });
   }
 
   const cleanedHighlightQuery = highlightQuery?.replace(/^"|"$/g, "").trim();
