@@ -6701,7 +6701,7 @@ export const getUserMessages = query({
         q.eq("conversation_id", args.conversation_id).eq("role", "user")
       )
       .order("desc")
-      .take(500);
+      .collect();
     // Strip contextual tags that wrap user content so noise-prefix checks
     // and content truncation operate on the actual user text, not metadata.
     const stripContextTags = (s: string) =>
@@ -6710,7 +6710,6 @@ export const getUserMessages = query({
        .replace(/<task-reminder>[\s\S]*?<\/task-reminder>/g, "")
        .trim();
     const NOISE_PREFIXES = [
-      "<command-name>", "<command-message>",
       "<local-command-stdout>", "<local-command-stderr>", "<local-command-caveat>",
       "[Request interrupted", "[Request cancelled",
       "This session is being continued",
