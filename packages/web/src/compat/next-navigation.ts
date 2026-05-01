@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import {
   useNavigate,
   useLocation,
@@ -41,41 +42,43 @@ function shouldUseTabRouting(targetPath: string): boolean {
 
 export function useRouter() {
   const navigate = useNavigate();
-  return {
-    push: (path: string) => {
-      if (shouldUseTabRouting(path)) {
-        useInboxStore.getState().updateTab(useInboxStore.getState().activeTabId!, { path, title: pathLabel(path) });
-        window.history.replaceState(null, "", path);
-      } else {
-        navigate(path);
-      }
-    },
-    replace: (path: string) => {
-      if (shouldUseTabRouting(path)) {
-        useInboxStore.getState().updateTab(useInboxStore.getState().activeTabId!, { path, title: pathLabel(path) });
-        window.history.replaceState(null, "", path);
-      } else {
-        navigate(path, { replace: true });
-      }
-    },
-    back: () => navigate(-1),
-    forward: () => navigate(1),
-    refresh: () => window.location.reload(),
-    prefetch: (_path: string) => {},
-  };
+  return useMemo(
+    () => ({
+      push: (path: string) => {
+        if (shouldUseTabRouting(path)) {
+          useInboxStore.getState().updateTab(useInboxStore.getState().activeTabId!, { path, title: pathLabel(path) });
+          window.history.replaceState(null, "", path);
+        } else {
+          navigate(path);
+        }
+      },
+      replace: (path: string) => {
+        if (shouldUseTabRouting(path)) {
+          useInboxStore.getState().updateTab(useInboxStore.getState().activeTabId!, { path, title: pathLabel(path) });
+          window.history.replaceState(null, "", path);
+        } else {
+          navigate(path, { replace: true });
+        }
+      },
+      back: () => navigate(-1),
+      forward: () => navigate(1),
+      refresh: () => window.location.reload(),
+      prefetch: (_path: string) => {},
+    }),
+    [navigate],
+  );
 }
 
 export function useSearchParams(): URLSearchParams {
   const tabCtx = useTabContext();
-  if (tabCtx) return tabCtx.searchParams;
-  const [searchParams] = useRRSearchParams();
-  return searchParams;
+  const [rrSearchParams] = useRRSearchParams();
+  return tabCtx ? tabCtx.searchParams : rrSearchParams;
 }
 
 export function useParams<T extends Record<string, string> = Record<string, string>>(): T {
   const tabCtx = useTabContext();
-  if (tabCtx) return tabCtx.params as T;
-  return useRRParams() as T;
+  const rrParams = useRRParams();
+  return (tabCtx ? tabCtx.params : rrParams) as T;
 }
 
 export function redirect(path: string): never {
