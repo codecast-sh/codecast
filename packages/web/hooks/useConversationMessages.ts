@@ -46,10 +46,6 @@ export function useConversationMessages(
     return hash.slice(5);
   });
   const effectiveTargetMessageId = targetMessageId ?? hashTarget;
-  if (typeof window !== "undefined" && (window as any).__deeplinkDbg__) {
-    (window as any).__dbgRows__ = (window as any).__dbgRows__ || [];
-    (window as any).__dbgRows__.push({ where: 'hook', cid: conversationId, targetMessageId, hashTarget, effectiveTargetMessageId });
-  }
 
   // --- Target resolution ---
   const targetMessageTimestamp = useQuery(
@@ -58,10 +54,6 @@ export function useConversationMessages(
       ? { conversation_id: convId, message_id: effectiveTargetMessageId as Id<"messages"> }
       : "skip"
   );
-  if (typeof window !== "undefined" && (window as any).__deeplinkDbg__ && effectiveTargetMessageId) {
-    (window as any).__dbgRows__ = (window as any).__dbgRows__ || [];
-    (window as any).__dbgRows__.push({ where: 'tsResult', eff: effectiveTargetMessageId, ts: targetMessageTimestamp, cid: conversationId });
-  }
 
   const cleanedHighlightQuery = highlightQuery?.replace(/^"|"$/g, "").trim();
   const highlightMessageResult = useQuery(
