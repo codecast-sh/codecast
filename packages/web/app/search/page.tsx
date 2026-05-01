@@ -63,6 +63,8 @@ function formatTimestamp(ts: number) {
   return date.toLocaleDateString([], { month: "short", day: "numeric" }) + ` ${timeStr}`;
 }
 
+const PAGE_SIZE = 20;
+
 export default function SearchPage() {
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -70,7 +72,12 @@ export default function SearchPage() {
   const initialUserOnly = searchParams.get("userOnly") === "true";
   const [query, setQuery] = useState(initialQuery);
   const [userOnly, setUserOnly] = useState(initialUserOnly);
+  const [limit, setLimit] = useState(PAGE_SIZE);
   const debouncedQuery = useDebounce(query, 300);
+
+  useWatchEffect(() => {
+    setLimit(PAGE_SIZE);
+  }, [debouncedQuery]);
 
   useWatchEffect(() => {
     const params = new URLSearchParams();
@@ -82,12 +89,14 @@ export default function SearchPage() {
 
   const searchResults = useQuery(
     api.conversations.searchConversations,
-    debouncedQuery.length >= 2 ? { query: debouncedQuery, limit: 100, userOnly } : "skip"
+    debouncedQuery.length >= 2 ? { query: debouncedQuery, limit, userOnly } : "skip"
   );
 
   const searchData = searchResults && "results" in searchResults ? searchResults : null;
   const totalMatches = searchData?.totalMatches || 0;
+  const totalSessions = (searchData as any)?.totalSessions || 0;
   const sessionCount = searchData?.results?.length || 0;
+  const hasMore = sessionCount < totalSessions;
 
   return (
     <AuthGuard>
@@ -140,7 +149,7 @@ export default function SearchPage() {
                 <span>Searching...</span>
               ) : (
                 <span>
-                  {totalMatches} match{totalMatches !== 1 ? "es" : ""} in {sessionCount} conversation{sessionCount !== 1 ? "s" : ""}
+                  {totalMatches} match{totalMatches !== 1 ? "es" : ""} in {totalSessions} conversation{totalSessions !== 1 ? "s" : ""}
                 </span>
               )}
             </div>
@@ -200,6 +209,15 @@ export default function SearchPage() {
                 </div>
               ))}
             </div>
+          )}
+
+          {hasMore && (
+            <button
+              onClick={() => setLimit((l) => l + PAGE_SIZE)}
+              className="w-full py-3 text-sm text-sol-text-secondary hover:text-sol-text bg-sol-bg-alt border border-sol-border rounded-lg hover:bg-sol-base02/30 transition-colors"
+            >
+              Show more ({totalSessions - sessionCount} remaining)
+            </button>
           )}
 
           {searchData?.results && searchData.results.length === 0 && debouncedQuery.length >= 2 && (
