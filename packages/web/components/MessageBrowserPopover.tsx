@@ -459,7 +459,7 @@ export function MessageNavButton({
           timestamp: m.timestamp,
           commentCount: commentsByMessage.get(m._id) || 0,
         }))
-        .filter((m: PM) => m.display.length > 0 && !isSystemMessage(m.display))
+        .filter((m: PM) => m.display.length > 0 && !isSystemMessage(m.display) && m.role === "user")
     : [];
 
   const total = processed.length;
