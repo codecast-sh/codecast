@@ -494,9 +494,8 @@ export function categorizeSessions(
   }
 
   const subsWithParent = new Set(Array.from(subsByParent.values()).flat().map((s) => s._id));
-  const forksWithParent = new Set(Array.from(forksByParent.values()).flat().map((s) => s._id));
 
-  const isTop = (s: InboxSession) => !subsWithParent.has(s._id) && !forksWithParent.has(s._id);
+  const isTop = (s: InboxSession) => !subsWithParent.has(s._id);
 
   const pinned = sorted.filter((s) => s.is_pinned && isTop(s));
   const newSessions = sorted.filter((s) => s.message_count === 0 && !s.is_pinned && isTop(s))
@@ -1460,19 +1459,19 @@ export const useInboxStore = create<InboxStoreState>(
   navigateUp: () => {
     const ordered = get().visualOrder();
     if (ordered.length === 0) return;
-    const currentId = get().currentSessionId;
+    const currentId = get().activeForkHighlight || get().currentSessionId;
     const idx = ordered.findIndex((s: InboxSession) => s._id === currentId);
     const newIdx = (idx - 1 + ordered.length) % ordered.length;
-    get().setCurrentSession(ordered[newIdx]._id);
+    get().navigateToSession(ordered[newIdx]._id);
   },
 
   navigateDown: () => {
     const ordered = get().visualOrder();
     if (ordered.length === 0) return;
-    const currentId = get().currentSessionId;
+    const currentId = get().activeForkHighlight || get().currentSessionId;
     const idx = ordered.findIndex((s: InboxSession) => s._id === currentId);
     const newIdx = (idx + 1) % ordered.length;
-    get().setCurrentSession(ordered[newIdx]._id);
+    get().navigateToSession(ordered[newIdx]._id);
   },
 
   setCurrentSession: action(function (this: Draft, id: string) {
@@ -1549,6 +1548,13 @@ export const useInboxStore = create<InboxStoreState>(
   }),
 
   navigateToSession: action(function (this: Draft, id: string) {
+    const session = this.sessions[id];
+    if (session?.forked_from && this.sessions[session.forked_from]) {
+      this.pendingForkActivation = id;
+      this.activeForkHighlight = id;
+      id = session.forked_from;
+    }
+
     if (this.conversations[id]) {
       (this.conversations[id] as any).inbox_dismissed_at = null;
     }

@@ -35,6 +35,7 @@ const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, o
     jumpToStart,
     jumpToEnd,
     jumpToTimestamp,
+    effectiveTargetMessageId,
   } = useConversationMessages(sessionId, targetMessageId);
 
   const resumeSession = useMutation(api.users.resumeSession);
@@ -172,7 +173,7 @@ const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, o
           autoFocusInput
           backHref="/inbox"
           onBack={onBack}
-          targetMessageId={targetMessageId}
+          targetMessageId={effectiveTargetMessageId}
           highlightQuery={highlightQuery}
           onClearHighlight={onClearHighlight}
           fallbackStickyContent={isOwnSession ? cleanUserMessage(lastUserMessage) : undefined}
@@ -270,7 +271,13 @@ export function QueuePageClient() {
   useWatchEffect(() => {
     if (!pendingInjectId) return;
     if (sessions[pendingInjectId]) {
-      setCurrentSession(pendingInjectId);
+      const injectSession_ = sessions[pendingInjectId];
+      if (injectSession_.forked_from && sessions[injectSession_.forked_from]) {
+        useInboxStore.setState({ pendingForkActivation: pendingInjectId, activeForkHighlight: pendingInjectId });
+        setCurrentSession(injectSession_.forked_from);
+      } else {
+        setCurrentSession(pendingInjectId);
+      }
       setPendingInjectId(null);
       paramProcessedRef.current = true;
       return;
@@ -299,6 +306,8 @@ export function QueuePageClient() {
       message_count: directConv.message_count || 0,
       is_idle: true,
       has_pending: false,
+      forked_from: directConv.forked_from || null,
+      parent_message_uuid: directConv.parent_message_uuid || null,
     });
     setPendingInjectId(null);
     paramProcessedRef.current = true;
@@ -318,12 +327,35 @@ export function QueuePageClient() {
       setScrollTarget({ sessionId: pendingNavigateId, messageId: scrollTarget });
     }
     if (sessions[pendingNavigateId]) {
-      setPendingInjectId(null);
-      setCurrentSession(pendingNavigateId);
+      const navSession = sessions[pendingNavigateId];
+      if (navSession.forked_from && sessions[navSession.forked_from]) {
+        useInboxStore.setState({ pendingForkActivation: pendingNavigateId, activeForkHighlight: pendingNavigateId });
+        setPendingInjectId(null);
+        setCurrentSession(navSession.forked_from);
+      } else {
+        setPendingInjectId(null);
+        setCurrentSession(pendingNavigateId);
+      }
     } else {
       setPendingInjectId(pendingNavigateId);
     }
   }, [pendingNavigateId, pendingScrollToMessageId, sessions, setCurrentSession]);
+
+  // Consume pendingScrollToMessageId / pendingHighlightQuery on cache-hit navigation:
+  // navigateToSession sets currentSessionId directly when sessions[id] is in store,
+  // bypassing pendingNavigateId, so the watcher above never fires for deep-links to
+  // already-cached sessions (Sidebar bookmarks, CommandPalette, MessageBrowserPopover).
+  useWatchEffect(() => {
+    if (!currentSessionId) return;
+    if (!pendingScrollToMessageId && !pendingHighlightQuery) return;
+    const scrollTarget = pendingScrollToMessageId;
+    const highlight = pendingHighlightQuery;
+    useInboxStore.setState({ pendingScrollToMessageId: null, pendingHighlightQuery: null });
+    if (highlight) setActiveHighlight(highlight);
+    if (scrollTarget) {
+      setScrollTarget({ sessionId: currentSessionId, messageId: scrollTarget });
+    }
+  }, [currentSessionId, pendingScrollToMessageId, pendingHighlightQuery]);
 
   const prevSessionRef = useRef(currentSessionId);
   prevSessionRef.current = currentSessionId;

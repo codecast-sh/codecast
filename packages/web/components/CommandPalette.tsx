@@ -640,19 +640,27 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
   );
 
   const navigateToSession = useCallback(
-    (conv: { _id: string; session_id?: string; title?: string; updated_at: number; project_path?: string; git_root?: string; agent_type?: string; message_count?: number; is_idle?: boolean }) => {
-      const conversationPath = `/conversation/${conv._id}`;
+    (
+      conv: { _id: string; session_id?: string; title?: string; updated_at?: number; project_path?: string; git_root?: string; agent_type?: string; message_count?: number; is_idle?: boolean },
+      opts?: { messageId?: string; highlight?: string }
+    ) => {
+      const hash = opts?.messageId ? `#msg-${opts.messageId}` : "";
+      const conversationPath = `/conversation/${conv._id}${hash}`;
       if (standalone && isElectron()) {
         window.__CODECAST_ELECTRON__?.paletteNavigate?.(conversationPath);
         return;
       }
       const store = useInboxStore.getState();
+      const pending: Record<string, any> = {};
+      if (opts?.messageId) pending.pendingScrollToMessageId = opts.messageId;
+      if (opts?.highlight) pending.pendingHighlightQuery = opts.highlight;
+      if (Object.keys(pending).length > 0) useInboxStore.setState(pending);
       if (!store.sessions[conv._id]) {
         store.injectSession({
           _id: conv._id,
           session_id: conv.session_id || conv._id,
           title: conv.title,
-          updated_at: conv.updated_at,
+          updated_at: conv.updated_at ?? Date.now(),
           project_path: conv.project_path,
           git_root: conv.git_root,
           agent_type: conv.agent_type || "claude_code",
@@ -946,7 +954,15 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
               <CommandPrimitive.Item
                 key={`bm-${bm._id}`}
                 value={`bookmark ${bm.message_preview || bm.conversation_title || ""}|||${bm._id}`}
-                onSelect={() => navigate(`/conversation/${bm.conversation_id}#msg-${bm.message_id}`)}
+                onSelect={() => navigateToSession(
+                  {
+                    _id: bm.conversation_id,
+                    title: bm.conversation_title,
+                    updated_at: bm.conversation_updated_at,
+                    message_count: bm.conversation_message_count,
+                  },
+                  { messageId: bm.message_id }
+                )}
                 className={itemClass}
               >
                 <span className="text-sol-cyan flex-shrink-0">
@@ -1078,21 +1094,35 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
               <CommandPrimitive.Item
                 key={`search-${result.conversationId}`}
                 value={`__search__ ${result.title} ${result.matches?.[0]?.content?.slice(0, 100) || ""}|||${result.conversationId}`}
-                onSelect={() => {
-                  const firstMatch = result.matches?.[0];
-                  if (firstMatch) {
-                    navigate(`/conversation/${result.conversationId}#msg-${firstMatch.messageId}`);
-                  } else {
-                    navigate(`/conversation/${result.conversationId}`);
-                  }
-                }}
+                onSelect={() => navigateToSession(
+                  {
+                    _id: result.conversationId,
+                    title: result.title,
+                    updated_at: result.updatedAt,
+                    message_count: result.messageCount,
+                  },
+                  { messageId: result.matches?.[0]?.messageId }
+                )}
                 className={itemClass}
               >
-                <span className="text-sol-text-dim flex-shrink-0">
-                  <NavIcon type="session" />
-                </span>
+                {!result.isOwn && result.authorAvatar ? (
+                  <img src={result.authorAvatar} alt={result.authorName} className="w-4 h-4 rounded-full flex-shrink-0" />
+                ) : !result.isOwn && result.authorName ? (
+                  <div className="w-4 h-4 rounded-full flex-shrink-0 bg-sol-bg-highlight border border-sol-border/50 flex items-center justify-center text-[8px] font-medium text-sol-text-muted">
+                    {result.authorName.split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase()}
+                  </div>
+                ) : (
+                  <span className="text-sol-text-dim flex-shrink-0">
+                    <NavIcon type="session" />
+                  </span>
+                )}
                 <div className="flex-1 min-w-0">
-                  <div className="truncate text-sm">{cleanTitle(result.title || "Untitled")}</div>
+                  <div className="truncate text-sm flex items-center gap-1.5">
+                    <span className="truncate">{cleanTitle(result.title || "Untitled")}</span>
+                    {!result.isOwn && (
+                      <span className="text-[10px] text-sol-text-dim flex-shrink-0">· {result.authorName}</span>
+                    )}
+                  </div>
                   {result.matches?.[0]?.content && (
                     <div className="truncate text-[11px] text-sol-text-dim mt-0.5">
                       {result.matches[0].content.slice(0, 80)}

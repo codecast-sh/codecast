@@ -34,11 +34,24 @@ export function useConversationMessages(
   const canQuery = isConvexId(conversationId);
   const convId = conversationId as Id<"conversations">;
 
+  // Deep-link fallback: when the URL is /conversation/{conversationId}#msg-X and no
+  // explicit targetMessageId was supplied, derive it from the hash. This makes deep
+  // links work whatever path got us here (full-page load, palette nav, bookmark).
+  const [hashTarget] = useState<string | undefined>(() => {
+    if (typeof window === "undefined") return undefined;
+    const hash = window.location.hash;
+    if (!hash.startsWith("#msg-")) return undefined;
+    const m = window.location.pathname.match(/^\/conversation\/([^/]+)$/);
+    if (!m || m[1] !== conversationId) return undefined;
+    return hash.slice(5);
+  });
+  const effectiveTargetMessageId = targetMessageId ?? hashTarget;
+
   // --- Target resolution ---
   const targetMessageTimestamp = useQuery(
     api.messages.getMessageTimestamp,
-    canQuery && targetMessageId
-      ? { conversation_id: convId, message_id: targetMessageId as Id<"messages"> }
+    canQuery && effectiveTargetMessageId
+      ? { conversation_id: convId, message_id: effectiveTargetMessageId as Id<"messages"> }
       : "skip"
   );
 
@@ -52,9 +65,9 @@ export function useConversationMessages(
 
   const effectiveTargetTimestamp = targetMessageTimestamp?.timestamp ?? highlightMessageResult?.timestamp;
   const highlightNotFound = !!(cleanedHighlightQuery && highlightMessageResult === null);
-  const targetNotFound = !!(targetMessageId && targetMessageTimestamp === null);
+  const targetNotFound = !!(effectiveTargetMessageId && targetMessageTimestamp === null);
   const hasTarget = !!(
-    (targetMessageId && !targetNotFound) ||
+    (effectiveTargetMessageId && !targetNotFound) ||
     (cleanedHighlightQuery && !highlightNotFound)
   );
   const targetTimestampReady = hasTarget && effectiveTargetTimestamp !== undefined;
@@ -67,7 +80,7 @@ export function useConversationMessages(
 
   if (trackedConvId !== conversationId) {
     setTrackedConvId(conversationId);
-    setTargetMode(!!(targetMessageId || cleanedHighlightQuery));
+    setTargetMode(!!(effectiveTargetMessageId || cleanedHighlightQuery));
     setJumpTimestamp(null);
     setJumpMode(null);
   }
@@ -419,8 +432,8 @@ export function useConversationMessages(
 
   // eslint-disable-next-line no-restricted-syntax -- reactive search triggers progressive older-message loading
   useEffect(() => {
-    if (!targetMessageId || rawMessages.length === 0 || !targetMessageTimestamp) return;
-    const found = rawMessages.some((m) => m._id === targetMessageId);
+    if (!effectiveTargetMessageId || rawMessages.length === 0 || !targetMessageTimestamp) return;
+    const found = rawMessages.some((m) => m._id === effectiveTargetMessageId);
     if (found) {
       setIsSearchingForTarget(false);
       searchAttempts.current = 0;
@@ -437,7 +450,7 @@ export function useConversationMessages(
     } else {
       setIsSearchingForTarget(false);
     }
-  }, [targetMessageId, rawMessages, targetMode, targetHasMoreAbove, targetIsLoadingOlder, targetMessageTimestamp]);
+  }, [effectiveTargetMessageId, rawMessages, targetMode, targetHasMoreAbove, targetIsLoadingOlder, targetMessageTimestamp]);
 
   const highlightSearchAttempts = useRef(0);
   // eslint-disable-next-line no-restricted-syntax -- reactive highlight search triggers progressive older-message loading
@@ -465,8 +478,8 @@ export function useConversationMessages(
   // =============================================
   // Target found
   // =============================================
-  const targetMessageFound = targetMessageId
-    ? rawMessages.some((m) => m._id === targetMessageId)
+  const targetMessageFound = effectiveTargetMessageId
+    ? rawMessages.some((m) => m._id === effectiveTargetMessageId)
     : true;
 
   return {
@@ -482,5 +495,6 @@ export function useConversationMessages(
     jumpToTimestamp,
     isSearchingForTarget,
     targetMessageFound,
+    effectiveTargetMessageId,
   };
 }
