@@ -369,10 +369,7 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
   useConvexSync(freshProjects, setRecentProjects);
 
   const currentConvContext = useInboxStore((s) => s.currentConversation);
-  const derivedPath = storeSession?.project_path || storeSession?.git_root || conversation.git_root || conversation.project_path || currentConvContext?.projectPath || currentConvContext?.gitRoot;
-  // Local override immune to server sync — prevents snap-back on click
-  const [localPath, setLocalPath] = useState<string | null>(null);
-  const currentPath = localPath ?? derivedPath;
+  const currentPath = storeSession?.project_path || storeSession?.git_root || conversation.git_root || conversation.project_path || currentConvContext?.projectPath || currentConvContext?.gitRoot;
   const currentName = currentPath?.split("/").filter(Boolean).pop() || "unknown";
 
   const otherProjects = useMemo(() => {
@@ -385,7 +382,6 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
     const trimmed = projectPath.trim();
     if (!trimmed) return;
     if (trimmed === currentPath && !forceIsolated) return;
-    setLocalPath(trimmed);
     const id = storeSession?._id || conversation._id;
     useInboxStore.getState().updateSessionProject(id, trimmed);
     if (isConvexId(id)) {
