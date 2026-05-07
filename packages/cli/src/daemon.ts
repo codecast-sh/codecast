@@ -26,7 +26,7 @@ import { GeminiWatcher, type GeminiSessionEvent } from "./geminiWatcher.js";
 import { parseSessionFile, parseCodexSessionFile, parseGeminiSessionFile, parseCursorTranscriptFile, extractSlug, extractParentUuid, extractSummaryTitle, extractCwd, extractCodexCwd, extractGeminiProjectHash, detectCliFlags, type ParsedMessage } from "./parser.js";
 import { extractMessagesFromCursorDb } from "./cursorProcessor.js";
 import { getPosition, setPosition } from "./positionTracker.js";
-import { encryptToken, decryptToken, isEncryptedToken } from "./tokenEncryption.js";
+import { encryptToken, decryptToken, isEncryptedToken, TokenDecryptError } from "./tokenEncryption.js";
 import { markSynced, getSyncRecord, findUnsyncedFiles, type SyncRecord } from "./syncLedger.js";
 import { SyncService, AuthExpiredError } from "./syncService.js";
 import { redactSecrets, maskToken } from "./redact.js";
@@ -2158,19 +2158,61 @@ function ensureConfigDir(): void {
   }
 }
 
-function readConfig(): Config | null {
+type ConfigDiagnosis =
+  | { ok: true; config: Config; convexUrl: string }
+  | { ok: false; reason: string };
+
+function diagnoseConfig(): ConfigDiagnosis {
   if (!fs.existsSync(CONFIG_FILE)) {
-    return null;
+    return { ok: false, reason: "Waiting for configuration... (run 'cast auth' to set up)" };
   }
+  let raw: string;
   try {
-    const config = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf-8")) as Config;
-    if (config.auth_token && isEncryptedToken(config.auth_token)) {
-      config.auth_token = decryptToken(config.auth_token);
-    }
-    return config;
-  } catch {
-    return null;
+    raw = fs.readFileSync(CONFIG_FILE, "utf-8");
+  } catch (err) {
+    return {
+      ok: false,
+      reason: `[ERROR] Cannot read ${CONFIG_FILE}: ${err instanceof Error ? err.message : String(err)}`,
+    };
   }
+  let config: Config;
+  try {
+    config = JSON.parse(raw) as Config;
+  } catch (err) {
+    return {
+      ok: false,
+      reason: `[ERROR] ${CONFIG_FILE} is not valid JSON: ${err instanceof Error ? err.message : String(err)} — run 'cast auth' to recreate`,
+    };
+  }
+  if (config.auth_token && isEncryptedToken(config.auth_token)) {
+    try {
+      config.auth_token = decryptToken(config.auth_token);
+    } catch (err) {
+      if (err instanceof TokenDecryptError) {
+        return {
+          ok: false,
+          reason: `[ERROR] Auth token cannot be decrypted on this machine (${err.message}) — run 'cast auth' to re-encrypt`,
+        };
+      }
+      throw err;
+    }
+  }
+  if (!config.user_id) {
+    return { ok: false, reason: `[ERROR] ${CONFIG_FILE} is missing user_id — run 'cast auth' to fix` };
+  }
+  const convexUrl = config.convex_url || process.env.CONVEX_URL;
+  if (!convexUrl) {
+    return {
+      ok: false,
+      reason: `[ERROR] ${CONFIG_FILE} is missing convex_url and CONVEX_URL is not set — run 'cast auth' to fix`,
+    };
+  }
+  return { ok: true, config, convexUrl };
+}
+
+function readConfig(): Config | null {
+  const diag = diagnoseConfig();
+  return diag.ok ? diag.config : null;
 }
 
 const ANSI_ESCAPE_RE = /\x1b\[[0-9;]*m/g;
@@ -3505,21 +3547,22 @@ async function processSessionFile(
           idleTimers.delete(sessionId);
           lastIdleNotifiedSize.set(sessionId, stats.size);
           sendAgentStatus(syncService, conversationId, sessionId, "idle");
+        } else if (lastHookStatus.has(sessionId)) {
+          // Single-writer rule: when the status hook is active for a session,
+          // its handler is the only emitter of agent_status. The transcript
+          // watcher used to second-guess it via a 30s recency cliff plus a
+          // size-debounced fallback, which produced working/idle flap whenever
+          // the model paused mid-turn between tool calls.
+          idleTimers.delete(sessionId);
         } else {
-          const hookEntry = lastHookStatus.get(sessionId);
-          const hookIsRecent = hookEntry && (Date.now() / 1000 - hookEntry.ts) < 30;
-
+          // No hook history — fall back to transcript heuristics. This path is
+          // for sessions where the codecast status hook isn't installed.
           const hasPendingToolCalls = (lastAssistantMessage.toolCalls?.length ?? 0) > 0 &&
             !messages.some(m => m.role === "assistant" && (m.toolResults?.length ?? 0) > 0 &&
               m.timestamp >= lastAssistantMessage.timestamp);
 
-          const hookSaysActive = hookIsRecent && hookEntry &&
-            (hookEntry.status === "working" || hookEntry.status === "thinking" || hookEntry.status === "compacting");
-
-          if (hasPendingToolCalls || hookSaysActive) {
-            if (!hookIsRecent) {
-              sendAgentStatus(syncService, conversationId, sessionId, "working");
-            }
+          if (hasPendingToolCalls) {
+            sendAgentStatus(syncService, conversationId, sessionId, "working");
             idleTimers.delete(sessionId);
           } else if (lastAssistantMessage.stopReason === "end_turn") {
             idleTimers.delete(sessionId);
@@ -3530,9 +3573,7 @@ async function processSessionFile(
               sendAgentStatus(syncService, conversationId, sessionId, "idle", undefined, undefined, preview);
             }
           } else {
-            if (!hookIsRecent) {
-              sendAgentStatus(syncService, conversationId, sessionId, "working");
-            }
+            sendAgentStatus(syncService, conversationId, sessionId, "working");
             const capturedSize = stats.size;
             const capturedConvId = conversationId;
 
@@ -4993,9 +5034,11 @@ async function injectViaTmuxInner(target: string, content: string): Promise<void
   }
   const sanitized = content.replace(/\r?\n/g, " ");
 
-  // Check if agent has exited (defense-in-depth: catch race between liveness check and injection)
+  const INTERRUPTED_PATTERN = /Interrupted\b[^\n]*What should Claude do instead\?/i;
+  const ACTIVITY_PATTERN = /⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏|esc to interrupt/;
+
   try {
-    const { stdout: preCheck } = await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", "-10"]);
+    const { stdout: preCheck } = await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", "-15"]);
     if (/Resume this session with:/i.test(preCheck)) {
       throw new Error("SESSION_EXITED: agent has exited, refusing to inject into bare shell");
     }
@@ -5010,8 +5053,48 @@ async function injectViaTmuxInner(target: string, content: string): Promise<void
       await tmuxExec(["send-keys", "-t", target, "Escape"]);
       await new Promise(resolve => setTimeout(resolve, 500));
     }
+
+    // The "Interrupted · What should Claude do instead?" dialog swallows pasted input instead of
+    // producing an assistant turn. Dismiss with Escape and verify it cleared; if it persists, defer
+    // (caller's "injected" row gets reset to "pending" after 120s by retryStuckMessages).
+    if (INTERRUPTED_PATTERN.test(preCheck)) {
+      log(`Clearing 'Interrupted' state before inject to ${target}`);
+      await tmuxExec(["send-keys", "-t", target, "Escape"]);
+      await new Promise(resolve => setTimeout(resolve, 700));
+      const { stdout: postEsc } = await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", "-15"]);
+      if (INTERRUPTED_PATTERN.test(postEsc)) {
+        throw new Error("AGENT_INTERRUPTED: failed to clear interrupted state, deferring");
+      }
+    }
   } catch (err) {
-    if (err instanceof Error && err.message.startsWith("SESSION_EXITED")) throw err;
+    if (err instanceof Error && (err.message.startsWith("SESSION_EXITED") || err.message.startsWith("AGENT_INTERRUPTED"))) throw err;
+  }
+
+  // Don't paste while the agent is mid-tool. Spinner / "esc to interrupt" near the prompt means
+  // the input line isn't taking submissions cleanly; pasting now produces ghost messages that
+  // show injected/delivered without an assistant reply. Wait for quiet, then proceed; if still
+  // busy past the cap, throw and let retryStuckMessages redrive once the agent settles.
+  const BUSY_WAIT_MS = 90_000;
+  const BUSY_POLL_MS = 1500;
+  const busyDeadline = Date.now() + BUSY_WAIT_MS;
+  let busyLogged = false;
+  let agentIdle = true;
+  while (Date.now() < busyDeadline) {
+    let tail = "";
+    try {
+      const { stdout } = await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", "-10"]);
+      tail = stdout.split("\n").slice(-10).join("\n");
+    } catch { break; }
+    if (!ACTIVITY_PATTERN.test(tail)) { agentIdle = true; break; }
+    if (!busyLogged) {
+      log(`Agent busy in ${target}, waiting up to ${Math.round(BUSY_WAIT_MS / 1000)}s for idle before inject`);
+      busyLogged = true;
+      agentIdle = false;
+    }
+    await new Promise(resolve => setTimeout(resolve, BUSY_POLL_MS));
+  }
+  if (!agentIdle) {
+    throw new Error("AGENT_BUSY: agent did not become idle within wait window, deferring");
   }
 
   const contentLines = content.split(/\r?\n/).length;
@@ -7667,16 +7750,23 @@ async function backfillPlanModeFromJSONL(syncService: SyncService): Promise<void
 
 async function waitForConfig(): Promise<{ config: Config; convexUrl: string }> {
   const checkInterval = 30000;
+  let lastReason: string | null = null;
+  let unchangedRepeats = 0;
+  const HEARTBEAT_EVERY = 20; // re-log the same reason every ~10min so it can't slip past log rotation
 
   while (true) {
-    const config = readConfig();
-    if (config?.user_id) {
-      const convexUrl = config.convex_url || process.env.CONVEX_URL;
-      if (convexUrl) {
-        return { config, convexUrl };
-      }
+    const diag = diagnoseConfig();
+    if (diag.ok) {
+      return { config: diag.config, convexUrl: diag.convexUrl };
     }
-    log("Waiting for configuration... (run 'cast auth' to set up)");
+    if (diag.reason !== lastReason) {
+      log(diag.reason);
+      lastReason = diag.reason;
+      unchangedRepeats = 0;
+    } else if (++unchangedRepeats >= HEARTBEAT_EVERY) {
+      log(diag.reason);
+      unchangedRepeats = 0;
+    }
     await new Promise(resolve => setTimeout(resolve, checkInterval));
   }
 }
