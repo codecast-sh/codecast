@@ -1,27 +1,31 @@
 import { useRef, useState } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
-import mermaid from "mermaid";
+import type { Mermaid } from "mermaid";
 
-let initialized = false;
+let mermaidPromise: Promise<Mermaid> | null = null;
 
-function ensureInit() {
-  if (initialized) return;
-  initialized = true;
-  mermaid.initialize({
-    startOnLoad: false,
-    theme: "dark",
-    themeVariables: {
-      darkMode: true,
-      background: "#0f1117",
-      primaryColor: "#1e2535",
-      primaryTextColor: "#c9d1d9",
-      primaryBorderColor: "#30363d",
-      lineColor: "#8b949e",
-      secondaryColor: "#161b22",
-      tertiaryColor: "#21262d",
-    },
-    fontFamily: "inherit",
+function loadMermaid(): Promise<Mermaid> {
+  if (mermaidPromise) return mermaidPromise;
+  mermaidPromise = import("mermaid").then((mod) => {
+    const m = mod.default;
+    m.initialize({
+      startOnLoad: false,
+      theme: "dark",
+      themeVariables: {
+        darkMode: true,
+        background: "#0f1117",
+        primaryColor: "#1e2535",
+        primaryTextColor: "#c9d1d9",
+        primaryBorderColor: "#30363d",
+        lineColor: "#8b949e",
+        secondaryColor: "#161b22",
+        tertiaryColor: "#21262d",
+      },
+      fontFamily: "inherit",
+    });
+    return m;
   });
+  return mermaidPromise;
 }
 
 let idCounter = 0;
@@ -32,22 +36,24 @@ export function MermaidDiagram({ code }: { code: string }) {
   const id = useRef(`mermaid-${++idCounter}`);
 
   useWatchEffect(() => {
-    ensureInit();
     let cancelled = false;
     setError(null);
 
-    mermaid.render(id.current, code).then(({ svg }) => {
-      if (cancelled || !ref.current) return;
-      ref.current.innerHTML = svg;
-      const svgEl = ref.current.querySelector("svg");
-      if (svgEl) {
-        svgEl.style.maxWidth = "100%";
-        svgEl.style.height = "auto";
-      }
-    }).catch((err) => {
-      if (cancelled) return;
-      setError(err?.message ?? "Failed to render diagram");
-    });
+    loadMermaid()
+      .then((m) => m.render(id.current, code))
+      .then(({ svg }) => {
+        if (cancelled || !ref.current) return;
+        ref.current.innerHTML = svg;
+        const svgEl = ref.current.querySelector("svg");
+        if (svgEl) {
+          svgEl.style.maxWidth = "100%";
+          svgEl.style.height = "auto";
+        }
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setError(err?.message ?? "Failed to render diagram");
+      });
 
     return () => { cancelled = true; };
   }, [code]);
