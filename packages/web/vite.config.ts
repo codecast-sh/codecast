@@ -39,17 +39,32 @@ export default defineConfig({
     target: "es2022",
     rollupOptions: {
       output: {
-        manualChunks: {
-          vendor: ["react", "react-dom"],
-          convex: ["convex", "@convex-dev/auth/react"],
-          ui: [
-            "@radix-ui/react-dialog",
-            "@radix-ui/react-dropdown-menu",
-            "@radix-ui/react-popover",
-            "@radix-ui/react-tabs",
-            "@radix-ui/react-scroll-area",
-          ],
-          markdown: ["react-markdown", "rehype-highlight", "remark-gfm", "prismjs"],
+        manualChunks(id) {
+          if (!id.includes("node_modules")) return;
+
+          // Heavy diagram/math libs — only loaded when MermaidDiagram is rendered.
+          if (id.includes("/node_modules/mermaid/")) return "mermaid";
+          if (id.includes("/node_modules/katex/")) return "katex";
+          if (id.includes("/node_modules/cytoscape")) return "cytoscape";
+          if (id.includes("/node_modules/dagre") || id.includes("/node_modules/d3-")) return "diagram-deps";
+
+          if (
+            id.includes("/node_modules/react/") ||
+            id.includes("/node_modules/react-dom/") ||
+            id.includes("/node_modules/scheduler/")
+          ) {
+            return "vendor";
+          }
+          if (id.includes("/node_modules/convex/") || id.includes("/node_modules/@convex-dev/auth/")) return "convex";
+          if (id.includes("/node_modules/@radix-ui/")) return "ui";
+          if (
+            id.includes("/node_modules/react-markdown/") ||
+            id.includes("/node_modules/rehype-highlight/") ||
+            id.includes("/node_modules/remark-gfm/") ||
+            id.includes("/node_modules/prismjs/")
+          ) {
+            return "markdown";
+          }
         },
       },
     },
