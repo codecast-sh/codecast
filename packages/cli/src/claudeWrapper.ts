@@ -4,7 +4,7 @@ import * as path from "path";
 import * as os from "os";
 import { ConvexHttpClient } from "convex/browser";
 import { hasTmux } from "./tmux.js";
-import { decryptToken, isEncryptedToken } from "./tokenEncryption.js";
+import { decryptToken, isEncryptedToken, TokenDecryptError } from "./tokenEncryption.js";
 
 const CONFIG_DIR = process.env.HOME + "/.codecast";
 const CONFIG_FILE = path.join(CONFIG_DIR, "config.json");
@@ -22,7 +22,15 @@ function readConfig(): Config | null {
     if (fs.existsSync(CONFIG_FILE)) {
       const config = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf-8")) as Config;
       if (config.auth_token && isEncryptedToken(config.auth_token)) {
-        config.auth_token = decryptToken(config.auth_token);
+        try {
+          config.auth_token = decryptToken(config.auth_token);
+        } catch (err) {
+          if (err instanceof TokenDecryptError) {
+            log(`auth token unreadable on this machine — run 'cast auth' to re-encrypt`);
+            return null;
+          }
+          throw err;
+        }
       }
       return config;
     }

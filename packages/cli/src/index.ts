@@ -13,7 +13,7 @@ import { ensureTmux, hasTmux, tryInstallTmux } from "./tmux.js";
 import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, ensureCastAlias } from "./update.js";
 import { glob } from "glob";
 import { getPosition, setPosition } from "./positionTracker.js";
-import { encryptToken, decryptToken, isEncryptedToken } from "./tokenEncryption.js";
+import { encryptToken, decryptToken, isEncryptedToken, TokenDecryptError } from "./tokenEncryption.js";
 import { getAllSyncRecords, findUnsyncedFiles } from "./syncLedger.js";
 import { getLastReconciliation, performReconciliation, repairDiscrepancies } from "./reconciliation.js";
 import { parseSessionFile, extractSlug } from "./parser.js";
@@ -521,7 +521,12 @@ function discoverProjects(): DiscoveredProject[] {
     let projectPath: string | null = null;
     for (const file of sessionFiles) {
       const filePath = path.join(dirPath, file);
-      const stats = fs.statSync(filePath);
+      let stats;
+      try {
+        stats = fs.statSync(filePath);
+      } catch {
+        continue;
+      }
       if (stats.mtime > lastModified) {
         lastModified = stats.mtime;
       }
@@ -552,6 +557,8 @@ function ensureConfigDir(): void {
   }
 }
 
+let warnedAboutDecryptFailure = false;
+
 function readConfig(): Config | null {
   if (!fs.existsSync(CONFIG_FILE)) {
     return null;
@@ -560,7 +567,18 @@ function readConfig(): Config | null {
   const config = JSON.parse(content) as Config;
   if (config.auth_token) {
     if (isEncryptedToken(config.auth_token)) {
-      config.auth_token = decryptToken(config.auth_token);
+      try {
+        config.auth_token = decryptToken(config.auth_token);
+      } catch (err) {
+        if (err instanceof TokenDecryptError) {
+          if (!warnedAboutDecryptFailure) {
+            warnedAboutDecryptFailure = true;
+            process.stderr.write(`\n[cast] ${err.message}\n\n`);
+          }
+          return null;
+        }
+        throw err;
+      }
     } else {
       writeConfig(config);
     }

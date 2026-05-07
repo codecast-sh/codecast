@@ -1,5 +1,5 @@
 import { describe, it, expect } from "bun:test";
-import { encryptToken, decryptToken, isEncryptedToken } from "./tokenEncryption.js";
+import { encryptToken, decryptToken, isEncryptedToken, TokenDecryptError } from "./tokenEncryption.js";
 
 describe("tokenEncryption", () => {
   const testToken = "cxt_abc123def456_test_token_value";
@@ -46,9 +46,13 @@ describe("tokenEncryption", () => {
     expect(decryptToken(encrypted)).toBe(unicodeToken);
   });
 
-  it("throws on tampered ciphertext", () => {
+  it("throws TokenDecryptError on tampered ciphertext", () => {
     const encrypted = encryptToken(testToken);
     const tampered = encrypted.slice(0, -2) + "AA";
-    expect(() => decryptToken(tampered)).toThrow();
+    expect(() => decryptToken(tampered)).toThrow(TokenDecryptError);
+  });
+
+  it("throws TokenDecryptError on truncated payload", () => {
+    expect(() => decryptToken("enc:AAAA")).toThrow(TokenDecryptError);
   });
 });
