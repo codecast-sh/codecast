@@ -219,6 +219,11 @@ export async function runClaudeWrapper(args: string[]): Promise<void> {
                 }
                 log(`Injected poll response via tmux to session ${tmuxSessionName}`);
               } else {
+                // Clear any stale input before injecting to prevent submitting draft text
+                execSync(`tmux send-keys -t '${tmuxSessionName}' Escape`, { stdio: "ignore" });
+                await sleep(100);
+                execSync(`tmux send-keys -t '${tmuxSessionName}' C-u`, { stdio: "ignore" });
+                await sleep(100);
                 const escapedContent = msg.content.replace(/'/g, "'\\''");
                 execSync(`tmux send-keys -t '${tmuxSessionName}' '${escapedContent}'`, { stdio: "ignore" });
                 await sleep(150);
@@ -366,6 +371,11 @@ export async function runClaudeWrapper(args: string[]): Promise<void> {
           }
           log(`Injected poll response via tmux to pane ${tmuxPane}`);
         } else {
+          // Clear any stale input before injecting to prevent submitting draft text
+          execSync(`tmux send-keys -t ${tmuxPane} Escape`, { stdio: "ignore" });
+          await sleep(100);
+          execSync(`tmux send-keys -t ${tmuxPane} C-u`, { stdio: "ignore" });
+          await sleep(100);
           const escapedContent = content.replace(/'/g, "'\\''");
           execSync(`tmux send-keys -t ${tmuxPane} '${escapedContent}'`, { stdio: "ignore" });
           await sleep(150);

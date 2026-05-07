@@ -5047,10 +5047,19 @@ async function injectViaTmuxInner(target: string, content: string): Promise<void
     const promptVisible = /[❯›]/.test(preCheck.split("\n").slice(-5).join("\n"));
     if (hasBlockingWarning && !promptVisible) {
       log(`Clearing blocking dialog before inject to ${target}`);
+      // Clear any text in the input buffer first to avoid submitting draft/stale text.
+      // Escape dismisses autocomplete/selection, Ctrl+U clears the input line.
+      await tmuxExec(["send-keys", "-t", target, "Escape"]);
+      await new Promise(resolve => setTimeout(resolve, 200));
+      await tmuxExec(["send-keys", "-t", target, "C-u"]);
+      await new Promise(resolve => setTimeout(resolve, 200));
       await tmuxExec(["send-keys", "-t", target, "Enter"]);
       await new Promise(resolve => setTimeout(resolve, 1000));
     } else if (hasBlockingWarning && promptVisible) {
+      // Prompt is visible with a warning in scrollback — just clear the input, don't press Enter
       await tmuxExec(["send-keys", "-t", target, "Escape"]);
+      await new Promise(resolve => setTimeout(resolve, 200));
+      await tmuxExec(["send-keys", "-t", target, "C-u"]);
       await new Promise(resolve => setTimeout(resolve, 500));
     }
 
@@ -5114,6 +5123,13 @@ async function injectViaTmuxInner(target: string, content: string): Promise<void
       try { fs.unlinkSync(tmpFile); } catch {}
     }
   };
+
+  // Clear any stale input before pasting to prevent draft text from being
+  // prepended to the injected message or submitted by the trailing Enter.
+  await tmuxExec(["send-keys", "-t", target, "Escape"]);
+  await new Promise(resolve => setTimeout(resolve, 100));
+  await tmuxExec(["send-keys", "-t", target, "C-u"]);
+  await new Promise(resolve => setTimeout(resolve, 100));
 
   // Capture pane before paste for before/after comparison
   let prePaste = "";
