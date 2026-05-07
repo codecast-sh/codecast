@@ -6,7 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useLocation } from "react-router";
 import { useMutation, useConvexAuth } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { Panel, Group, Separator } from "react-resizable-panels";
+import { Panel, Group, Separator, usePanelRef } from "react-resizable-panels";
 import { UserMenu } from "./UserMenu";
 import { Sidebar } from "./Sidebar";
 import { GlobalSearch } from "./GlobalSearch";
@@ -77,6 +77,7 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
   const isGuest = !isAuthenticated && !isAuthLoading;
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const s = useTrackedStore([
+    s => s.clientStateInitialized,
     s => s.clientState.ui?.zen_mode,
     s => s.clientState.ui?.sidebar_collapsed,
     s => s.clientState.layouts?.dashboard,
@@ -182,22 +183,6 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
       useInboxStore.setState({ pendingNavigateId: id, showMySessions: false });
     }
   }, []);
-
-  const handleInboxForkSelect = useCallback((forkId: string, _parentId: string, _parentMessageUuid: string) => {
-    const store = useInboxStore.getState();
-    store.navigateToSession(forkId);
-    if (store.showMySessions) store.setShowMySessions(false);
-  }, []);
-
-  const handleConversationForkSelect = useCallback((forkId: string, _parentId: string, _parentMessageUuid: string) => {
-    const store = useInboxStore.getState();
-    store.navigateToSession(forkId);
-    if (isOnConversationPage) {
-      router.push('/inbox');
-    } else {
-      if (store.showMySessions) store.setShowMySessions(false);
-    }
-  }, [router, isOnConversationPage]);
 
   // On conversation pages, derive active ID from the URL so non-owner viewers
   // (ViewerView) get correct sidebar highlighting — they don't set currentSessionId.
@@ -395,9 +380,39 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
     requestAnimationFrame(recalcHeight);
   }, [recalcHeight]));
 
+  // Persist user-driven resizes only. Imperative collapse fires onLayoutChange too —
+  // ignore those so a collapsed sidebar doesn't stick as a 0-size layout for next mount.
   const handleLayoutChange = (newLayout: { [key: string]: number }) => {
+    if ((newLayout.sidebar ?? 0) < 5) return;
     s.updateClientLayout("dashboard", { sidebar: newLayout.sidebar || 25, main: newLayout.main || 75 });
   };
+
+  // Stable layout shell: panels stay mounted across zen/sidebar/sidePanel toggles to
+  // avoid remounting ConversationView and its Convex subscriptions (which flash a
+  // "Loading conversation..." state). Visibility is driven imperatively.
+  const sidebarPanelRef = usePanelRef();
+  const sessionListPanelRef = usePanelRef();
+  const sidebarHidden = !!hideSidebar || isZenMode || sidebarCollapsed || isMobile;
+
+  useWatchEffect(() => {
+    const ref = sidebarPanelRef.current;
+    if (!ref) return;
+    if (sidebarHidden) {
+      if (!ref.isCollapsed()) ref.collapse();
+    } else {
+      if (ref.isCollapsed()) ref.expand();
+    }
+  }, [sidebarHidden]);
+
+  useWatchEffect(() => {
+    const ref = sessionListPanelRef.current;
+    if (!ref) return;
+    if (showSessionList) {
+      if (ref.isCollapsed()) ref.expand();
+    } else {
+      if (!ref.isCollapsed()) ref.collapse();
+    }
+  }, [showSessionList]);
 
   // Must be above the isGuest early return — React requires stable hook count across renders
   const conversationPanel = useMemo(() => (
@@ -438,26 +453,42 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
     </Group>
   ) : pageContent;
 
-  const rightArea = showSessionList ? (
-    <Group orientation="horizontal" className="h-full" defaultLayout={{ "right-content": 70, "session-list": 30 }}>
-      <Panel id="right-content" minSize={400}><div className="h-full">{mainContent}</div></Panel>
-      <Separator className={separatorClass} />
-      <Panel id="session-list" minSize={200} maxSize="50%" defaultSize="30%">
-        <ErrorBoundary name="SessionList" level="panel">
-          <div className="w-full h-full border-l border-sol-border/30">
-            <SessionListPanel
-              onSessionSelect={sessionListOnSelect}
-              onForkSelect={isOnInboxPage ? handleInboxForkSelect : handleConversationForkSelect}
-              activeSessionId={sessionListActiveId}
-              onCollapse={s.toggleSidePanel}
-            />
-          </div>
-        </ErrorBoundary>
-      </Panel>
-    </Group>
-  ) : (
+  // Group is always rendered; the session-list Panel collapses to 0 when not in use.
+  // The collapsed rail renders alongside (outside the Group) when the panel is hidden.
+  const rightArea = (
     <div className="h-full flex">
-      <div className="flex-1 min-w-0 h-full">{mainContent}</div>
+      <div className="flex-1 min-w-0 h-full">
+        <Group orientation="horizontal" className="h-full" defaultLayout={{ "right-content": showSessionList ? 70 : 100, "session-list": showSessionList ? 30 : 0 }}>
+          <Panel id="right-content" minSize={400}><div className="h-full">{mainContent}</div></Panel>
+          <Separator className={`${separatorClass} ${showSessionList ? "" : "invisible"}`} />
+          <Panel
+            id="session-list"
+            panelRef={sessionListPanelRef}
+            minSize={200}
+            maxSize="50%"
+            defaultSize={showSessionList ? 30 : 0}
+            collapsible
+            collapsedSize={0}
+            onResize={(size) => {
+              if (size.asPercentage === 0 && showSessionList) {
+                s.toggleSidePanel();
+              }
+            }}
+          >
+            {!isMobile && (
+              <ErrorBoundary name="SessionList" level="panel">
+                <div className="w-full h-full border-l border-sol-border/30">
+                  <SessionListPanel
+                    onSessionSelect={sessionListOnSelect}
+                    activeSessionId={sessionListActiveId}
+                    onCollapse={s.toggleSidePanel}
+                  />
+                </div>
+              </ErrorBoundary>
+            )}
+          </Panel>
+        </Group>
+      </div>
       {showCollapsedRail && <ErrorBoundary name="SessionRail" level="inline"><CollapsedSessionRail /></ErrorBoundary>}
     </div>
   );
@@ -617,19 +648,33 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
         <TabBar />
       </ErrorBoundary>
 
-      {/* Content area with sidebar and main */}
+      {/* Content area with sidebar and main. Group is always mounted; sidebar Panel
+          collapses imperatively so toggling zen/sidebar/mobile doesn't remount {rightArea}. */}
       <div className="flex-1 min-h-0 flex">
         <div className="flex-1 min-w-0">
-          {hideSidebar || isZenMode || sidebarCollapsed || isMobile ? (
-            <div className="h-full">{rightArea}</div>
-          ) : (
-            <Group
-              orientation="horizontal"
-              className="h-full"
-              defaultLayout={layout}
-              onLayoutChange={handleLayoutChange}
+          <Group
+            orientation="horizontal"
+            className="h-full"
+            defaultLayout={sidebarHidden ? { sidebar: 0, main: 100 } : layout}
+            onLayoutChange={handleLayoutChange}
+          >
+            <Panel
+              id="sidebar"
+              panelRef={sidebarPanelRef}
+              minSize={180}
+              maxSize="50%"
+              collapsible
+              collapsedSize={0}
+              defaultSize={sidebarHidden ? 0 : layout.sidebar}
+              onResize={(size) => {
+                // If the user drags below minSize, the panel collapses on its own.
+                // Mirror that into store state so the effect doesn't re-expand it.
+                if (size.asPercentage === 0 && !sidebarHidden) {
+                  s.updateClientUI({ sidebar_collapsed: true });
+                }
+              }}
             >
-              <Panel id="sidebar" minSize={180} maxSize="50%" collapsible collapsedSize={0}>
+              {!isMobile && (
                 <div className="h-full bg-sol-bg-alt overflow-auto">
                   <ErrorBoundary name="Sidebar" level="panel">
                     <Sidebar
@@ -642,11 +687,11 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
                     />
                   </ErrorBoundary>
                 </div>
-              </Panel>
-              <Separator className={separatorClass} />
-              <Panel id="main" minSize={400}>{rightArea}</Panel>
-            </Group>
-          )}
+              )}
+            </Panel>
+            <Separator className={`${separatorClass} ${sidebarHidden ? "invisible" : ""}`} />
+            <Panel id="main" minSize={400}>{rightArea}</Panel>
+          </Group>
         </div>
         <KeyboardShortcutsPanel />
       </div>
@@ -680,7 +725,6 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
             <ErrorBoundary name="SessionList" level="panel">
               <SessionListPanel
                 onSessionSelect={sessionListOnSelect}
-                onForkSelect={isOnInboxPage ? handleInboxForkSelect : handleConversationForkSelect}
                 activeSessionId={sessionListActiveId}
                 onCollapse={s.toggleSidePanel}
               />

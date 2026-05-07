@@ -211,6 +211,7 @@ export function QueuePageClient() {
   const currentSessionId = useInboxStore((s) => s.currentSessionId);
   const advanceToNext = useInboxStore((s) => s.advanceToNext);
   const setCurrentSession = useInboxStore((s) => s.setCurrentSession);
+  const navigateToSession = useInboxStore((s) => s.navigateToSession);
   const viewingDismissedId = useInboxStore((s) => s.viewingDismissedId);
   const setViewingDismissedId = useInboxStore((s) => s.setViewingDismissedId);
   const touchMru = useInboxStore((s) => s.touchMru);
@@ -218,6 +219,8 @@ export function QueuePageClient() {
   const setShowMySessions = useInboxStore((s) => s.setShowMySessions);
   const sortedSessions = useMemo(() => sortSessions(sessions), [sessions]);
 
+  // inbox_shortcuts_hidden is mirrored to localStorage (see CRITICAL_UI_KEYS in
+  // inboxStore.ts), so it's seeded synchronously and correct on first paint.
   const shortcutsHidden = useInboxStore(s => s.clientState.ui?.inbox_shortcuts_hidden ?? false);
   const showShortcuts = !shortcutsHidden;
 
@@ -271,13 +274,7 @@ export function QueuePageClient() {
   useWatchEffect(() => {
     if (!pendingInjectId) return;
     if (sessions[pendingInjectId]) {
-      const injectSession_ = sessions[pendingInjectId];
-      if (injectSession_.forked_from && sessions[injectSession_.forked_from]) {
-        useInboxStore.setState({ pendingForkActivation: pendingInjectId, activeForkHighlight: pendingInjectId });
-        setCurrentSession(injectSession_.forked_from);
-      } else {
-        setCurrentSession(pendingInjectId);
-      }
+      setCurrentSession(pendingInjectId);
       setPendingInjectId(null);
       paramProcessedRef.current = true;
       return;
@@ -327,15 +324,8 @@ export function QueuePageClient() {
       setScrollTarget({ sessionId: pendingNavigateId, messageId: scrollTarget });
     }
     if (sessions[pendingNavigateId]) {
-      const navSession = sessions[pendingNavigateId];
-      if (navSession.forked_from && sessions[navSession.forked_from]) {
-        useInboxStore.setState({ pendingForkActivation: pendingNavigateId, activeForkHighlight: pendingNavigateId });
-        setPendingInjectId(null);
-        setCurrentSession(navSession.forked_from);
-      } else {
-        setPendingInjectId(null);
-        setCurrentSession(pendingNavigateId);
-      }
+      setPendingInjectId(null);
+      setCurrentSession(pendingNavigateId);
     } else {
       setPendingInjectId(pendingNavigateId);
     }
@@ -450,13 +440,9 @@ export function QueuePageClient() {
   }, []);
 
   const handleNavigateToConversation = useCallback((conversationId: string) => {
-    if (sessions[conversationId]) {
-      setCurrentSession(conversationId);
-    } else {
-      useInboxStore.setState({ pendingNavigateId: conversationId });
-    }
+    navigateToSession(conversationId);
     if (showMySessions) setShowMySessions(false);
-  }, [sessions, setCurrentSession, showMySessions, setShowMySessions]);
+  }, [navigateToSession, showMySessions, setShowMySessions]);
 
   const handleBack = useCallback(() => {
     setShowMySessions(true);

@@ -19,6 +19,45 @@ export function isConvexId(id: string): boolean {
   return CONVEX_ID_RE.test(id);
 }
 
+// Critical UI prefs mirrored to localStorage so they're available
+// synchronously at module load — avoids a layout flash between first paint
+// and IDB hydration. The IDB-backed clientState remains the source of truth
+// across tabs; localStorage is just a sync-readable cache for first-paint
+// values that affect layout. Keep this set TINY — every key here adds
+// localStorage churn on every change.
+const CRITICAL_UI_KEYS = ["sidebar_collapsed", "zen_mode", "inbox_shortcuts_hidden"] as const;
+const CRITICAL_PREFS_LS_KEY = "codecast-critical-ui";
+
+function readCriticalUiPrefs(): Record<string, any> {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = localStorage.getItem(CRITICAL_PREFS_LS_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    const out: Record<string, any> = {};
+    for (const k of CRITICAL_UI_KEYS) {
+      if (parsed[k] !== undefined) out[k] = parsed[k];
+    }
+    return out;
+  } catch { return {}; }
+}
+
+function writeCriticalUiPrefs(partial: Record<string, any>) {
+  if (typeof window === "undefined") return;
+  let toWrite: Record<string, any> | null = null;
+  for (const k of CRITICAL_UI_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(partial, k)) {
+      if (!toWrite) toWrite = {};
+      toWrite[k] = partial[k];
+    }
+  }
+  if (!toWrite) return;
+  try {
+    const existing = JSON.parse(localStorage.getItem(CRITICAL_PREFS_LS_KEY) || "{}");
+    localStorage.setItem(CRITICAL_PREFS_LS_KEY, JSON.stringify({ ...existing, ...toWrite }));
+  } catch {}
+}
+
 export function getProjectName(gitRoot?: string, projectPath?: string): string {
   const path = gitRoot || projectPath;
   if (!path) return "unknown";
@@ -987,7 +1026,10 @@ export const useInboxStore = create<InboxStoreState>(
   pendingMessages: {},
   pagination: {},
   conversations: {},
-  clientState: {},
+  // Seed UI from localStorage so layout-affecting prefs (sidebar collapsed,
+  // zen mode, inbox shortcut bar) are correct on first paint. IDB hydration
+  // fills in everything else and is the source of truth across tabs.
+  clientState: { ui: readCriticalUiPrefs() as ClientUI },
   clientStateInitialized: false,
 
   drafts: {},
@@ -1230,6 +1272,7 @@ export const useInboxStore = create<InboxStoreState>(
 
   updateClientUI: (partial: Partial<ClientUI>) => {
     (get() as any)._applyClientUI(partial);
+    writeCriticalUiPrefs(partial as Record<string, any>);
     if (Object.keys(partial).length > 0) {
       const dispatch = () => get()._dispatch("patch", [], { client_state: { _: { ui: partial } } });
       dispatch().catch(() => setTimeout(() => dispatch().catch(() => {}), 3000));
@@ -1548,23 +1591,16 @@ export const useInboxStore = create<InboxStoreState>(
   }),
 
   navigateToSession: action(function (this: Draft, id: string) {
-    const session = this.sessions[id];
-    if (session?.forked_from && this.sessions[session.forked_from]) {
-      this.pendingForkActivation = id;
-      this.activeForkHighlight = id;
-      id = session.forked_from;
-    }
-
     if (this.conversations[id]) {
       (this.conversations[id] as any).inbox_dismissed_at = null;
     }
     if (this.sessions[id]) {
       this.sessions[id].inbox_dismissed_at = null;
-    }
-    if (this.sessions[id]) {
       this.currentSessionId = id;
       this.viewingDismissedId = null;
       this.activeBranches = {};
+      this.activeForkHighlight = null;
+      this.pendingForkActivation = null;
       this.clientState.current_conversation_id = id;
     } else {
       this.pendingNavigateId = id;
@@ -2225,7 +2261,27 @@ if (typeof window !== "undefined") {
           }
           continue;
         }
-        if (key === "collapsedSections" || key === "sidebarNavExpanded") {
+        if (key === "clientState") {
+          // Cold-start path. clientState may have a small localStorage seed
+          // (sidebar_collapsed, zen_mode, etc.) — preserve those and fill in
+          // everything else from IDB. Deep-merge nested objects (ui, dismissed,
+          // layouts, tips) so a single seeded ui key doesn't shadow the rest.
+          const merged: Record<string, any> = { ...val };
+          for (const subKey of Object.keys(cur || {})) {
+            const curSub = (cur as any)[subKey];
+            const cachedSub = (val as any)[subKey];
+            if (
+              curSub && typeof curSub === "object" && !Array.isArray(curSub) &&
+              cachedSub && typeof cachedSub === "object" && !Array.isArray(cachedSub)
+            ) {
+              // Local seed wins per-key; cached fills in the rest.
+              merged[subKey] = { ...cachedSub, ...curSub };
+            } else if (curSub != null) {
+              merged[subKey] = curSub;
+            }
+          }
+          updates[key] = merged;
+        } else if (key === "collapsedSections" || key === "sidebarNavExpanded") {
           updates[key] = { ...val, ...cur };
         } else if (key === "teamUnreadCount") {
           if (state.teamUnreadCount == null) updates[key] = val;
