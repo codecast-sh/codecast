@@ -72,9 +72,13 @@ function deepMergeField(existing: any, incoming: any): any {
     incoming && typeof incoming === "object" && !Array.isArray(incoming) &&
     existing && typeof existing === "object" && !Array.isArray(existing)
   ) {
-    const result = { ...existing };
+    const result: Record<string, any> = {};
+    for (const [k, v] of Object.entries(existing)) {
+      if (v !== null && v !== undefined) result[k] = v;
+    }
     for (const [k, v] of Object.entries(incoming)) {
-      result[k] = v;
+      if (v === null || v === undefined) delete result[k];
+      else result[k] = v;
     }
     return result;
   }
