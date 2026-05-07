@@ -1,5 +1,6 @@
-import { lazy, Suspense, ReactNode } from "react";
+import { lazy, Suspense, ReactNode, useEffect } from "react";
 import { Routes, Route } from "react-router";
+import NProgress from "nprogress";
 import { Providers } from "./providers";
 import { MarketingLayout } from "./layouts/MarketingLayout";
 import { PaletteLayout } from "./layouts/PaletteLayout";
@@ -83,11 +84,19 @@ function E({ name, children }: { name: string; children: ReactNode }) {
   return <ErrorBoundary name={name} level="panel">{children}</ErrorBoundary>;
 }
 
+function RouteFallback() {
+  useEffect(() => {
+    NProgress.start();
+    return () => { NProgress.done(); };
+  }, []);
+  return null;
+}
+
 export function App() {
   return (
     <Providers>
       <ErrorBoundary name="App" level="panel">
-        <Suspense>
+        <Suspense fallback={<RouteFallback />}>
           <Routes>
             {/* Marketing - light mode layout */}
             <Route element={<MarketingLayout />}>
