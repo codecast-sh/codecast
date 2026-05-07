@@ -820,12 +820,10 @@ function NeedsAttentionSection() {
 
 export function SessionListPanel({
   onSessionSelect,
-  onForkSelect,
   activeSessionId,
   onCollapse,
 }: {
   onSessionSelect?: (id: string) => void;
-  onForkSelect?: (forkId: string, parentId: string, parentMessageUuid: string) => void;
   activeSessionId?: string | null;
   onCollapse?: () => void;
 }) {
@@ -851,14 +849,10 @@ export function SessionListPanel({
   }, [killSessionMutation]);
 
   const handleSelect = useCallback((session: InboxSession) => {
-    if (isFork(session) && onForkSelect && session.forked_from) {
-      onForkSelect(session._id, session.forked_from, session.parent_message_uuid || "");
-      return;
-    }
     if (onSessionSelect) {
       onSessionSelect(session._id);
     }
-  }, [onSessionSelect, onForkSelect]);
+  }, [onSessionSelect]);
 
   const { sorted: sortedSessions, pinned, newSessions, needsInput, working, dismissed: dismissedList, subsByParent: globalSubByParent, forksByParent: globalForksByParent } = useMemo(
     () => categorizeSessions(s.sessions, s.sessionsWithQueuedMessages),
@@ -1161,7 +1155,7 @@ export function SessionListPanel({
 
 // -- CollapsedSessionRail --
 
-export function CollapsedSessionRail({ onSessionSelect }: { onSessionSelect?: (id: string) => void } = {}) {
+export function CollapsedSessionRail() {
   const s = useTrackedStore([
     s => s.sessions,
     s => s.sessionsWithQueuedMessages,
