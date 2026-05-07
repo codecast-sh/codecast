@@ -1,32 +1,26 @@
-import { useState } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useRouter } from "next/navigation";
 import { X, Users, ArrowRight } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
-import { useMountEffect } from "../hooks/useMountEffect";
 
 const DISMISS_DURATION_MS = 24 * 60 * 60 * 1000;
 
 export function TeamSharingBanner() {
+  const initialized = useInboxStore((s) => s.clientStateInitialized);
   const dismissedTs = useInboxStore(
     (s) => s.clientState.dismissed?.team_sharing_prompt ?? 0,
   );
   const updateDismissed = useInboxStore((s) => s.updateClientDismissed);
-  const [mounted, setMounted] = useState(false);
   const router = useRouter();
 
   const user = useQuery(api.users.getCurrentUser);
   const mappings = useQuery(api.users.getDirectoryTeamMappings);
 
-  useMountEffect(() => {
-    setMounted(true);
-  });
-
   const isDismissed =
     dismissedTs > 0 && Date.now() - dismissedTs < DISMISS_DURATION_MS;
 
-  if (!mounted || isDismissed) return null;
+  if (!initialized || isDismissed) return null;
   if (user === undefined || mappings === undefined) return null;
 
   // Only show if user belongs to a team

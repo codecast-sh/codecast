@@ -4,23 +4,20 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { X, Terminal } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
 import { copyToClipboard } from "../lib/utils";
-import { useMountEffect } from "../hooks/useMountEffect";
 
 const DISMISS_DURATION_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
 export function TmuxMissingBanner() {
+  const initialized = useInboxStore(s => s.clientStateInitialized);
   const dismissedTs = useInboxStore(s => s.clientState.dismissed?.tmux_missing ?? 0);
   const updateDismissed = useInboxStore(s => s.updateClientDismissed);
-  const [mounted, setMounted] = useState(false);
   const [copied, setCopied] = useState(false);
 
   const user = useQuery(api.users.getCurrentUser);
 
-  useMountEffect(() => { setMounted(true); });
-
   const isDismissed = dismissedTs > 0 && Date.now() - dismissedTs < DISMISS_DURATION_MS;
 
-  if (!mounted || isDismissed) return null;
+  if (!initialized || isDismissed) return null;
   if (user === undefined) return null;
   if (user?.has_tmux !== false) return null;
 
