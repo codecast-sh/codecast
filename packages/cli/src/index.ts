@@ -411,6 +411,11 @@ interface Config {
   stable_mode?: "solo" | "team";
   stable_global?: boolean;
   team_share_mode?: "full" | "summary";
+  agent_permission_modes?: {
+    claude?: "default" | "bypass";
+    codex?: "default" | "full_auto" | "bypass";
+    gemini?: "default" | "bypass";
+  };
   agent_default_params?: {
     claude?: Record<string, string>;
     codex?: Record<string, string>;
@@ -5240,6 +5245,21 @@ function launchCodex(sessionId: string, extraArgs?: string, showArgsHint?: boole
   if (extraArgs) {
     const parsedArgs = extraArgs.split(/\s+/).filter((a) => a.length > 0);
     args.push(...parsedArgs);
+  }
+
+  // Apply permission mode from config if not already specified
+  const allArgs = args.join(" ");
+  if (!allArgs.includes("--full-auto") && !allArgs.includes("--dangerously-bypass") && !allArgs.includes("--ask-for-approval")) {
+    const cfg = readConfig();
+    const mode = cfg?.agent_permission_modes?.codex;
+    if (mode === "bypass") {
+      args.push("--dangerously-bypass-approvals-and-sandbox");
+    } else if (mode === "full_auto") {
+      args.push("--full-auto");
+    }
+  }
+
+  if (extraArgs) {
     console.log(`Using: codex ${args.join(" ")}`);
   } else if (showArgsHint) {
     console.log(`\nTip: Set default codex args with: cast config codex_args -- "--dangerously-bypass-approvals-and-sandbox"`);
@@ -5325,6 +5345,20 @@ function launchClaude(sessionId: string, extraArgs?: string, showArgsHint?: bool
   if (extraArgs) {
     const parsedArgs = extraArgs.split(/\s+/).filter((a) => a.length > 0);
     args.push(...parsedArgs);
+  }
+
+  // Apply permission mode from config if not already specified
+  const allArgs = args.join(" ");
+  if (!allArgs.includes("--dangerously-skip-permissions") && !allArgs.includes("--permission-mode") && !allArgs.includes("--allow-dangerously-skip-permissions")) {
+    const cfg = readConfig();
+    if (cfg?.agent_permission_modes?.claude === "bypass") {
+      args.push("--permission-mode", "bypassPermissions");
+    } else {
+      args.push("--allow-dangerously-skip-permissions");
+    }
+  }
+
+  if (extraArgs) {
     console.log(`Using: claude ${args.join(" ")}`);
   } else if (showArgsHint) {
     console.log(`\nTip: Set default claude args with: cast config claude_args -- "--dangerously-skip-permissions"`);
