@@ -262,19 +262,19 @@ export function QueuePageClient() {
       useInboxStore.setState({ pendingScrollToMessageId: null });
     }
     if (sessions[paramSessionId]) {
-      setCurrentSession(paramSessionId);
+      navigateToSession(paramSessionId);
       setPendingInjectId(null);
       paramProcessedRef.current = true;
     } else {
       setPendingInjectId(paramSessionId);
     }
-  }, [paramSessionId, sessions, setCurrentSession, clientStateInitialized]);
+  }, [paramSessionId, sessions, navigateToSession, clientStateInitialized]);
 
   // Once we have the conversation data, inject it into the queue
   useWatchEffect(() => {
     if (!pendingInjectId) return;
     if (sessions[pendingInjectId]) {
-      setCurrentSession(pendingInjectId);
+      navigateToSession(pendingInjectId);
       setPendingInjectId(null);
       paramProcessedRef.current = true;
       return;
@@ -308,7 +308,7 @@ export function QueuePageClient() {
     });
     setPendingInjectId(null);
     paramProcessedRef.current = true;
-  }, [pendingInjectId, directConv, sessions, setCurrentSession, injectSession]);
+  }, [pendingInjectId, directConv, sessions, navigateToSession, injectSession]);
 
   // Handle store-based navigation (from CommandPalette, bookmarks, etc.)
   const pendingNavigateId = useInboxStore((s) => s.pendingNavigateId);
@@ -325,11 +325,11 @@ export function QueuePageClient() {
     }
     if (sessions[pendingNavigateId]) {
       setPendingInjectId(null);
-      setCurrentSession(pendingNavigateId);
+      navigateToSession(pendingNavigateId);
     } else {
       setPendingInjectId(pendingNavigateId);
     }
-  }, [pendingNavigateId, pendingScrollToMessageId, sessions, setCurrentSession]);
+  }, [pendingNavigateId, pendingScrollToMessageId, sessions, navigateToSession]);
 
   // Consume pendingScrollToMessageId / pendingHighlightQuery on cache-hit navigation:
   // navigateToSession sets currentSessionId directly when sessions[id] is in store,
@@ -413,7 +413,7 @@ export function QueuePageClient() {
     if (!id) return;
     if (sessions[id]) {
       isPopstateRef.current = true;
-      setCurrentSession(id);
+      navigateToSession(id);
       if (showMySessions) setShowMySessions(false);
     }
   });

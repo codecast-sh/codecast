@@ -1591,16 +1591,44 @@ export const useInboxStore = create<InboxStoreState>(
   }),
 
   navigateToSession: action(function (this: Draft, id: string) {
+    const session = this.sessions[id];
+    if (session?.forked_from) {
+      const parentId = session.forked_from;
+      if (this.conversations[parentId]) {
+        (this.conversations[parentId] as any).inbox_dismissed_at = null;
+      }
+      this.pendingForkActivation = id;
+      this.activeForkHighlight = id;
+      if (this.sessions[parentId]) {
+        this.sessions[parentId].inbox_dismissed_at = null;
+        this.currentSessionId = parentId;
+        this.viewingDismissedId = null;
+        this.activeBranches = {};
+        this.clientState.current_conversation_id = parentId;
+      } else {
+        this.pendingNavigateId = parentId;
+        this.viewingDismissedId = null;
+      }
+      return;
+    }
+
     if (this.conversations[id]) {
       (this.conversations[id] as any).inbox_dismissed_at = null;
     }
-    if (this.sessions[id]) {
-      this.sessions[id].inbox_dismissed_at = null;
+    if (session) {
+      session.inbox_dismissed_at = null;
       this.currentSessionId = id;
       this.viewingDismissedId = null;
       this.activeBranches = {};
-      this.activeForkHighlight = null;
-      this.pendingForkActivation = null;
+      // Preserve pending fork activation when navigating to the fork's parent
+      const pendingFork = this.pendingForkActivation;
+      const isPendingParent = pendingFork && this.sessions[pendingFork]?.forked_from === id;
+      if (isPendingParent) {
+        // Keep pendingForkActivation and activeForkHighlight for ConversationView to consume
+      } else {
+        this.activeForkHighlight = null;
+        this.pendingForkActivation = null;
+      }
       this.clientState.current_conversation_id = id;
     } else {
       this.pendingNavigateId = id;
