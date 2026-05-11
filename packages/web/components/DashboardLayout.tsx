@@ -172,6 +172,11 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
   const handleInboxSessionSelect = useCallback((id: string) => {
     const store = useInboxStore.getState();
     const sess = store.sessions[id];
+    if (sess?.forked_from) {
+      store.navigateToSession(id);
+      if (store.showMySessions) store.setShowMySessions(false);
+      return;
+    }
     if (sess) {
       if (sess.inbox_dismissed_at) {
         store.setViewingDismissedId(id);
