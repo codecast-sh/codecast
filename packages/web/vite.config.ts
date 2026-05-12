@@ -42,11 +42,13 @@ export default defineConfig({
         manualChunks(id) {
           if (!id.includes("node_modules")) return;
 
-          // Heavy diagram/math libs — only loaded when MermaidDiagram is rendered.
-          if (id.includes("/node_modules/mermaid/")) return "mermaid";
-          if (id.includes("/node_modules/katex/")) return "katex";
-          if (id.includes("/node_modules/cytoscape")) return "cytoscape";
-          if (id.includes("/node_modules/dagre") || id.includes("/node_modules/d3-")) return "diagram-deps";
+          // NOTE: do NOT manual-chunk mermaid / cytoscape / dagre / d3 / katex.
+          // They're only reached via dynamic `import("mermaid")` inside MermaidDiagram.
+          // Putting them in a named manualChunk pulls them into the entry's static
+          // import graph (Rollup quirk), which eagerly evaluates mermaid's module body
+          // on every page and crashes with `this.clear is not a function` due to a
+          // dep version mismatch in mermaid's bundled lodash. Letting Rollup
+          // auto-chunk them keeps them load-on-demand.
 
           if (
             id.includes("/node_modules/react/") ||
