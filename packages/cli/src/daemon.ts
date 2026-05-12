@@ -2641,6 +2641,10 @@ async function flushPendingMessagesBatch(
     });
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
+    if (isStaleConversationError(errMsg)) {
+      log(`Batch pending flush hit stale conversation ${conversationId}; dropping batch so the caller can re-resolve: ${errMsg}`);
+      return;
+    }
     log(`Batch pending flush failed, queueing individually: ${errMsg}`);
     for (const msg of pendingMsgs) {
       retryQueue.add("addMessage", {
@@ -2660,6 +2664,16 @@ async function flushPendingMessagesBatch(
 }
 
 type RawMessage = { uuid?: string; role: string; content: string; timestamp: number; thinking?: string; toolCalls?: any; toolResults?: any; images?: any; subtype?: string };
+
+// A cached conversation_id can become invalid against the current api_token in two ways:
+// the conversation was deleted (Convex returns "Conversation not found") or the auth token
+// now belongs to a different user (Convex returns "Unauthorized: can only add messages to
+// your own conversations"). Both mean: drop the cache, let createConversation re-resolve
+// by (session_id, current user_id). Retrying without re-resolving spins forever.
+function isStaleConversationError(errMsg: string): boolean {
+  return errMsg.includes("Conversation not found") ||
+    errMsg.includes("Unauthorized: can only add messages to your own conversations");
+}
 
 function mapRole(role: string): "human" | "assistant" | "system" {
   return role === "user" ? "human" : role === "system" ? "system" : "assistant";
@@ -2705,7 +2719,7 @@ async function syncMessagesBatch(
     }
 
     const errMsg = err instanceof Error ? err.message : String(err);
-    if (errMsg.includes("Conversation not found")) {
+    if (isStaleConversationError(errMsg)) {
       return { authExpired: false, conversationNotFound: true };
     }
 
@@ -2721,6 +2735,9 @@ async function syncMessagesBatch(
       return { authExpired: false, conversationNotFound: false };
     } catch (retryErr) {
       const retryErrMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+      if (isStaleConversationError(retryErrMsg)) {
+        return { authExpired: false, conversationNotFound: true };
+      }
       log(`Batch retry also failed, queueing as batch: ${retryErrMsg}`);
       retryQueue.add("addMessages", {
         conversationId,
@@ -2878,6 +2895,10 @@ async function processSessionFile(
     if (!newContent) {
       // No complete lines yet — don't advance position
       return;
+    }
+    const LARGE_BATCH_BYTES = 64 * 1024;
+    if (bytesConsumed >= LARGE_BATCH_BYTES) {
+      log(`Processing ${bytesConsumed} bytes for session ${sessionId.slice(0, 8)} (from position ${lastPosition})`);
     }
     let messages = parseSessionFile(newContent);
 
@@ -3611,6 +3632,9 @@ async function processSessionFile(
       log(`Warning: Permission denied reading ${filePath}. Will retry when permissions are restored.`);
       return;
     }
+    const errMsg = err instanceof Error ? err.message : String(err);
+    const stack = err instanceof Error && err.stack ? `\n${err.stack}` : "";
+    log(`processSessionFile failed for ${sessionId.slice(0, 8)} at position=${lastPosition}: ${errMsg}${stack}`);
     throw err;
   }
 }
@@ -4961,6 +4985,69 @@ export function tmuxPromptStillHasInput(paneContent: string, input: string): boo
   return normalizePromptText(fromPrompt).includes(normalizedInput);
 }
 
+// The Claude Code TUI renders its live UI (input box, or modal that replaces it) at the
+// very bottom of the pane, bracketed by box-drawing separator runs. Everything above
+// those separators is transcript — immutable history rendered as text — and must not
+// influence inject decisions. Extracting the live region first means scrollback can
+// never produce a false positive (the original bug: stale "Interrupted · What should
+// Claude do instead?" transcript matched forever).
+export function extractTmuxLiveRegion(paneContent: string): string {
+  const lines = paneContent.replace(/\s+$/, "").split("\n");
+  const TAIL = 25;
+  const tail = lines.slice(-TAIL);
+  const isSep = (line: string) => /[─━]{20,}/.test(line);
+  const sepIdx: number[] = [];
+  for (let i = 0; i < tail.length; i++) {
+    if (isSep(tail[i])) sepIdx.push(i);
+  }
+  if (sepIdx.length >= 2) {
+    // Input box: take content between the last two separators (the box body).
+    const top = sepIdx[sepIdx.length - 2];
+    const bot = sepIdx[sepIdx.length - 1];
+    return tail.slice(top + 1, bot).join("\n");
+  }
+  if (sepIdx.length === 1) {
+    // Modal or busy indicator: one separator, content lives below it.
+    return tail.slice(sepIdx[0] + 1).join("\n");
+  }
+  // No separators visible — could be spinner-only or unusual UI. Use a tight tail
+  // (5 lines) so transcript text from older turns can't reach the classifier.
+  return tail.slice(-5).join("\n");
+}
+
+export type TmuxLiveState =
+  | "idle"          // empty input prompt — safe to paste
+  | "busy"          // spinner / "esc to interrupt" — wait
+  | "interrupted"   // "What should Claude do instead?" dialog — Escape to clear
+  | "rewind"        // Rewind/Restore modal — Escape to cancel (NEVER Enter, that rewinds)
+  | "warning"       // dismissable banner — Enter to ack
+  | "exited"        // bare shell, agent has exited — abort
+  | "unknown";      // anything we don't recognize — defer, do not guess
+
+// Classifies the live region only. Ordering matters: more-specific dialogs are
+// matched before more-general ones (e.g. Rewind contains "Interrupted" in its option
+// list, so check Rewind first). Idle is a positive whitelist — never inferred from
+// absence of other patterns.
+export function classifyTmuxLiveState(region: string): TmuxLiveState {
+  if (/Resume this session with:/i.test(region)) return "exited";
+  if (/-(?:ba)?sh:.*(?:No such file|command not found)/.test(region)) return "exited";
+  if (/⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏|esc to interrupt/i.test(region)) return "busy";
+  // Rewind / cancel-able modal: distinguished from warnings by an Esc option.
+  // Warnings have only "Press enter to continue" (no Esc). The "❯ (current)" marker
+  // is also unique to the Rewind option list.
+  if (/Esc to cancel|❯\s*\(current\)/i.test(region)) return "rewind";
+  if (/What should Claude do instead\?/i.test(region)) return "interrupted";
+  if (/Press enter to continue|Update available|weekly limit|recorded with model|⚠/i.test(region)) return "warning";
+  // Ready: the live region contains an input-prompt glyph and none of the modal
+  // patterns above matched. Draft text typed into the input by the user counts as
+  // ready — the paste path's mandatory Escape+C-u clears it before pasting. The
+  // safety net is the modal pattern set above being checked first; if Claude Code
+  // ever ships a modal that uses `❯` with no other marker, the post-paste
+  // verification (input-still-has-our-text → reschedule) will catch it.
+  if (region.includes("❯") || region.includes("›")) return "idle";
+  return "unknown";
+}
+
 const tmuxTargetLocks = new Map<string, Promise<void>>();
 // Cap how long a new caller will wait on an existing lock holder. Combined with the
 // Promise.race timeout in deliverMessage, this keeps a single hung inject from wedging
@@ -5002,6 +5089,81 @@ async function withTmuxLock<T>(target: string, fn: () => Promise<T>): Promise<T>
   }
 }
 
+// Drives the live UI to "idle" through repeated classify→act→re-classify steps.
+// Throws a structured error (SESSION_EXITED, AGENT_BUSY, AGENT_UNKNOWN_STATE, …)
+// so retryStuckMessages can decide whether to redrive. Per-state actions are
+// hardcoded to safe choices (Escape for both interrupted and rewind — Enter would
+// rewind the conversation), and the stall guard fails fast if our action doesn't
+// change the live state, instead of hammering the same key forever.
+async function ensureTmuxReady(target: string): Promise<void> {
+  const BUSY_WAIT_MS = 90_000;
+  const STUCK_BUDGET_MS = 8_000;
+  const startedAt = Date.now();
+  let busyLogged = false;
+  let lastCorrectiveState: TmuxLiveState | null = null;
+  let sameStateAttempts = 0;
+
+  while (true) {
+    let region: string;
+    try {
+      const { stdout } = await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", "-25"]);
+      region = extractTmuxLiveRegion(stdout);
+    } catch (err) {
+      throw new Error(`AGENT_CAPTURE_FAILED: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    const state = classifyTmuxLiveState(region);
+
+    if (state === "idle") return;
+    if (state === "exited") {
+      throw new Error("SESSION_EXITED: agent has exited, refusing to inject into bare shell");
+    }
+
+    if (state === "busy") {
+      if (Date.now() - startedAt >= BUSY_WAIT_MS) {
+        throw new Error("AGENT_BUSY: agent did not become idle within wait window, deferring");
+      }
+      if (!busyLogged) {
+        log(`Agent busy in ${target}, waiting up to ${Math.round(BUSY_WAIT_MS / 1000)}s for idle before inject`);
+        busyLogged = true;
+      }
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      continue;
+    }
+
+    // Corrective states: cap total time and bail if our key didn't move the state.
+    if (Date.now() - startedAt >= STUCK_BUDGET_MS) {
+      throw new Error(`AGENT_NOT_READY: live state '${state}' did not settle within ${STUCK_BUDGET_MS}ms`);
+    }
+    if (state === lastCorrectiveState) {
+      if (++sameStateAttempts >= 3) {
+        throw new Error(`AGENT_STUCK_${state.toUpperCase()}: corrective input did not change live state`);
+      }
+    } else {
+      sameStateAttempts = 0;
+      lastCorrectiveState = state;
+    }
+
+    if (state === "unknown") {
+      log(`Unrecognized live UI in ${target}, deferring: ${region.replace(/\s+/g, " ").slice(0, 240)}`);
+      throw new Error("AGENT_UNKNOWN_STATE: deferring");
+    }
+
+    if (state === "interrupted") {
+      log(`Clearing Interrupted dialog in ${target}`);
+      await tmuxExec(["send-keys", "-t", target, "Escape"]);
+      await new Promise(resolve => setTimeout(resolve, 500));
+    } else if (state === "rewind") {
+      log(`Cancelling Rewind dialog in ${target} (Escape, never Enter)`);
+      await tmuxExec(["send-keys", "-t", target, "Escape"]);
+      await new Promise(resolve => setTimeout(resolve, 500));
+    } else if (state === "warning") {
+      log(`Dismissing warning banner in ${target}`);
+      await tmuxExec(["send-keys", "-t", target, "Enter"]);
+      await new Promise(resolve => setTimeout(resolve, 800));
+    }
+  }
+}
+
 async function injectViaTmux(target: string, content: string): Promise<void> {
   return withTmuxLock(target, () => injectViaTmuxInner(target, content));
 }
@@ -5034,77 +5196,11 @@ async function injectViaTmuxInner(target: string, content: string): Promise<void
   }
   const sanitized = content.replace(/\r?\n/g, " ");
 
-  const INTERRUPTED_PATTERN = /Interrupted\b[^\n]*What should Claude do instead\?/i;
-  const ACTIVITY_PATTERN = /⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏|esc to interrupt/;
-
-  try {
-    const { stdout: preCheck } = await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", "-15"]);
-    if (/Resume this session with:/i.test(preCheck)) {
-      throw new Error("SESSION_EXITED: agent has exited, refusing to inject into bare shell");
-    }
-
-    const hasBlockingWarning = /Press enter to continue|Update available|⚠|recorded with model|weekly limit/i.test(preCheck);
-    const promptVisible = /[❯›]/.test(preCheck.split("\n").slice(-5).join("\n"));
-    if (hasBlockingWarning && !promptVisible) {
-      log(`Clearing blocking dialog before inject to ${target}`);
-      // Clear any text in the input buffer first to avoid submitting draft/stale text.
-      // Escape dismisses autocomplete/selection, Ctrl+U clears the input line.
-      await tmuxExec(["send-keys", "-t", target, "Escape"]);
-      await new Promise(resolve => setTimeout(resolve, 200));
-      await tmuxExec(["send-keys", "-t", target, "C-u"]);
-      await new Promise(resolve => setTimeout(resolve, 200));
-      await tmuxExec(["send-keys", "-t", target, "Enter"]);
-      await new Promise(resolve => setTimeout(resolve, 1000));
-    } else if (hasBlockingWarning && promptVisible) {
-      // Prompt is visible with a warning in scrollback — just clear the input, don't press Enter
-      await tmuxExec(["send-keys", "-t", target, "Escape"]);
-      await new Promise(resolve => setTimeout(resolve, 200));
-      await tmuxExec(["send-keys", "-t", target, "C-u"]);
-      await new Promise(resolve => setTimeout(resolve, 500));
-    }
-
-    // The "Interrupted · What should Claude do instead?" dialog swallows pasted input instead of
-    // producing an assistant turn. Dismiss with Escape and verify it cleared; if it persists, defer
-    // (caller's "injected" row gets reset to "pending" after 120s by retryStuckMessages).
-    if (INTERRUPTED_PATTERN.test(preCheck)) {
-      log(`Clearing 'Interrupted' state before inject to ${target}`);
-      await tmuxExec(["send-keys", "-t", target, "Escape"]);
-      await new Promise(resolve => setTimeout(resolve, 700));
-      const { stdout: postEsc } = await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", "-15"]);
-      if (INTERRUPTED_PATTERN.test(postEsc)) {
-        throw new Error("AGENT_INTERRUPTED: failed to clear interrupted state, deferring");
-      }
-    }
-  } catch (err) {
-    if (err instanceof Error && (err.message.startsWith("SESSION_EXITED") || err.message.startsWith("AGENT_INTERRUPTED"))) throw err;
-  }
-
-  // Don't paste while the agent is mid-tool. Spinner / "esc to interrupt" near the prompt means
-  // the input line isn't taking submissions cleanly; pasting now produces ghost messages that
-  // show injected/delivered without an assistant reply. Wait for quiet, then proceed; if still
-  // busy past the cap, throw and let retryStuckMessages redrive once the agent settles.
-  const BUSY_WAIT_MS = 90_000;
-  const BUSY_POLL_MS = 1500;
-  const busyDeadline = Date.now() + BUSY_WAIT_MS;
-  let busyLogged = false;
-  let agentIdle = true;
-  while (Date.now() < busyDeadline) {
-    let tail = "";
-    try {
-      const { stdout } = await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", "-10"]);
-      tail = stdout.split("\n").slice(-10).join("\n");
-    } catch { break; }
-    if (!ACTIVITY_PATTERN.test(tail)) { agentIdle = true; break; }
-    if (!busyLogged) {
-      log(`Agent busy in ${target}, waiting up to ${Math.round(BUSY_WAIT_MS / 1000)}s for idle before inject`);
-      busyLogged = true;
-      agentIdle = false;
-    }
-    await new Promise(resolve => setTimeout(resolve, BUSY_POLL_MS));
-  }
-  if (!agentIdle) {
-    throw new Error("AGENT_BUSY: agent did not become idle within wait window, deferring");
-  }
+  // Closed-loop pre-flight: classify the live UI region only (transcript ignored),
+  // dispatch the correct clearing key per state, re-classify, stop when idle. Never
+  // sends a key without first proving which modal it'll act against — that's the
+  // invariant that prevents Escape-at-idle from spuriously opening the Rewind dialog.
+  await ensureTmuxReady(target);
 
   const contentLines = content.split(/\r?\n/).length;
   const captureLines = Math.max(30, contentLines + Math.ceil(sanitized.length / 60) + 10);
@@ -8696,7 +8792,12 @@ function startWatchdog(
       const next = async (): Promise<void> => {
         while (i < items.length) {
           const idx = i++;
-          await fn(items[idx]);
+          try {
+            await fn(items[idx]);
+          } catch (err) {
+            const errMsg = err instanceof Error ? err.message : String(err);
+            log(`Watchdog worker failed for item ${JSON.stringify(items[idx])}: ${errMsg}`);
+          }
         }
       };
       await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, () => next()));
@@ -8833,6 +8934,10 @@ function startWatchdog(
     }, WATCHDOG_CONCURRENCY);
 
     log(`Watchdog: Sync completed for ${totalStale} files`);
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      const stack = err instanceof Error && err.stack ? `\n${err.stack}` : "";
+      log(`Watchdog cycle aborted: ${errMsg}${stack}`);
     } finally { watchdogRunning = false; }
   }, WATCHDOG_INTERVAL_MS);
 }

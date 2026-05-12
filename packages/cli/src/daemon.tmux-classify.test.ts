@@ -1,0 +1,227 @@
+import { describe, expect, test } from "bun:test";
+import { classifyTmuxLiveState, extractTmuxLiveRegion } from "./daemon.js";
+
+// Real pane captures from cc-resume-f61304a3 (the session that surfaced this bug)
+// and synthesized variants are used as test fixtures so the classifier is grounded
+// in actual Claude Code TUI output rather than what we *think* it looks like.
+
+const IDLE_PANE = `  Today (5/11): 1,564
+
+  ────────────────────────────────────────
+  Column 1: — routing_status='routed' (orphans)
+  Today (5/11): 1,503
+
+❯ Sample 100 of these 1500, look at the counter party agent runs and lets
+  identify root cause for this - are they all old, check the rate of this issue
+   in the last month
+
+⏺ Bash(./xrun sql "
+      -- Sample 100 uncovered routed needs, joined to their markets via
+      need_set…)
+  ⎿  Interrupted · What should Claude do instead?
+
+❯ [Codecast import] This Claude session was truncated to avoid overly-long
+  context (which can break Claude Code /compact).
+  Original: 2216 messages. Included: last 1038 messages + first user message.
+
+────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle)               ● high · /effort
+`;
+
+const REWIND_PANE = `❯ [Codecast import] This Claude session was truncated to avoid overly-long
+  context (which can break Claude Code /compact).
+  Original: 2217 messages. Included: last 1038 messages + first user message.
+
+────────────────────────────────────────────────────────────────────────────────
+  Rewind
+
+  Restore the code and/or conversation to the point before…
+
+   ↑ 16 more above
+
+    [Request interrupted by user]
+    ⚠ No code restore
+
+    [Codecast import] This Claude session was truncated to avoid overly-l…
+    ⚠ No code restore
+
+  ❯ (current)
+
+
+
+  Enter to continue · Esc to cancel
+`;
+
+// What the LIVE interrupted dialog looks like: text appears in the input area
+// (between the input-box separators), not as a transcript ⎿ tool-output line.
+const INTERRUPTED_LIVE_PANE = `  ⎿  Some past tool output line that survives in transcript
+
+────────────────────────────────────────────────────────────────────────────────
+  Interrupted · What should Claude do instead?
+────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle)
+`;
+
+// CRITICAL fixture: the original bug. "Interrupted · What should Claude do
+// instead?" appears in scrollback as a tool-result transcript line, but the
+// live input box is empty. The old INTERRUPTED_PATTERN matched this and looped
+// forever. The new classifier must return "idle".
+const INTERRUPTED_IN_SCROLLBACK_ONLY = `❯ continue on this
+
+⏺ Bash(./xrun sql "select * from foo")
+  ⎿  Interrupted · What should Claude do instead?
+
+⏺ Got it, here's a summary of where things stand.
+
+────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle)
+`;
+
+const BUSY_SPINNER_PANE = `❯ run the tests
+
+⏺ Bash(bun test)
+  ⎿  ⠹ Running…  (esc to interrupt)
+`;
+
+describe("extractTmuxLiveRegion", () => {
+  test("returns content between the last two separators for an idle input box", () => {
+    const region = extractTmuxLiveRegion(IDLE_PANE);
+    expect(region).toContain("❯");
+    expect(region).not.toContain("Interrupted");
+    expect(region).not.toContain("Codecast import");
+    expect(region).not.toContain("Sample 100");
+  });
+
+  test("returns content below the single separator when a modal replaces the input", () => {
+    const region = extractTmuxLiveRegion(REWIND_PANE);
+    expect(region).toContain("Rewind");
+    expect(region).toContain("Enter to continue");
+    // The Rewind dialog *legitimately* quotes prior user message previews
+    // (including the "[Codecast import]" banner) in its option list — that's not
+    // scrollback bleed, it's modal content. The classifier still returns "rewind"
+    // because we check the Esc-to-cancel signature before anything else.
+    expect(region).not.toContain("Original: 2217 messages");
+  });
+
+  test("strips scrollback that contains the 'Interrupted' transcript line", () => {
+    const region = extractTmuxLiveRegion(INTERRUPTED_IN_SCROLLBACK_ONLY);
+    expect(region).not.toContain("Interrupted");
+    expect(region.trim()).toContain("❯");
+  });
+
+  test("falls back to a tight tail when no separators are visible (busy state)", () => {
+    const region = extractTmuxLiveRegion(BUSY_SPINNER_PANE);
+    expect(region).toContain("esc to interrupt");
+  });
+});
+
+describe("classifyTmuxLiveState", () => {
+  test("idle: empty prompt between separators", () => {
+    const region = extractTmuxLiveRegion(IDLE_PANE);
+    expect(classifyTmuxLiveState(region)).toBe("idle");
+  });
+
+  test("idle even when 'Interrupted' is in scrollback only (the original bug)", () => {
+    const region = extractTmuxLiveRegion(INTERRUPTED_IN_SCROLLBACK_ONLY);
+    expect(classifyTmuxLiveState(region)).toBe("idle");
+  });
+
+  test("rewind: Restore dialog with 'Enter to continue · Esc to cancel'", () => {
+    const region = extractTmuxLiveRegion(REWIND_PANE);
+    expect(classifyTmuxLiveState(region)).toBe("rewind");
+  });
+
+  test("interrupted: live 'What should Claude do instead?' inside input region", () => {
+    const region = extractTmuxLiveRegion(INTERRUPTED_LIVE_PANE);
+    expect(classifyTmuxLiveState(region)).toBe("interrupted");
+  });
+
+  test("busy: spinner glyph or 'esc to interrupt'", () => {
+    const region = extractTmuxLiveRegion(BUSY_SPINNER_PANE);
+    expect(classifyTmuxLiveState(region)).toBe("busy");
+  });
+
+  test("warning: 'Press enter to continue' banner", () => {
+    // Warning may appear with the prompt also visible — classifier checks region
+    // and returns 'idle' if the separator-bracketed body is empty. To exercise the
+    // warning path, run the classifier directly on the warning text region.
+    expect(classifyTmuxLiveState("  Update available: 1.1.36 → 1.1.40\n  Press enter to continue")).toBe("warning");
+  });
+
+  test("exited: 'Resume this session with:' surfaced in the live region", () => {
+    expect(classifyTmuxLiveState("Resume this session with: claude --resume abc123")).toBe("exited");
+  });
+
+  test("rewind beats interrupted when both keywords would match (Rewind dialog mentions interrupted requests in its option list)", () => {
+    const region = `  Rewind
+  Restore conversation
+   ↑ 16 more above
+    [Request interrupted by user]
+    What should Claude do instead?
+  ❯ (current)
+  Enter to continue · Esc to cancel`;
+    expect(classifyTmuxLiveState(region)).toBe("rewind");
+  });
+
+  test("unknown: no recognizable pattern → defer rather than guess", () => {
+    expect(classifyTmuxLiveState("  some weird state we have never seen before")).toBe("unknown");
+  });
+
+  test("idle tolerates cursor placeholder glyphs after ❯", () => {
+    expect(classifyTmuxLiveState("❯ ▋")).toBe("idle");
+    expect(classifyTmuxLiveState("❯ \n  ▎")).toBe("idle");
+    expect(classifyTmuxLiveState("›  ")).toBe("idle");
+  });
+
+  test("draft text in the input still classifies as idle (paste path clears it)", () => {
+    // Real example pulled from cc-resume-c712d5e0 — user had typed a follow-up
+    // but not pressed Enter. The classifier must let this through; refusing would
+    // strand any session where the user typed something then walked away.
+    expect(classifyTmuxLiveState("❯ retry the frontend deploy")).toBe("idle");
+    expect(classifyTmuxLiveState("❯ commit this")).toBe("idle");
+    expect(classifyTmuxLiveState("❯ yes do it")).toBe("idle");
+  });
+
+  test("modal patterns still beat ❯-with-draft-text — modal check runs first", () => {
+    // If a modal happens to render with ❯ AND a modal marker, the modal wins.
+    expect(classifyTmuxLiveState("Interrupted prompt\n❯ \nWhat should Claude do instead?")).toBe("interrupted");
+    expect(classifyTmuxLiveState("❯ (current)\nEsc to cancel")).toBe("rewind");
+  });
+
+  test("no prompt glyph + no modal marker → unknown (defer rather than guess)", () => {
+    expect(classifyTmuxLiveState("  some weird state we have never seen")).toBe("unknown");
+    expect(classifyTmuxLiveState("Files touched:\n  foo.ts\n  bar.ts")).toBe("unknown");
+  });
+});
+
+describe("end-to-end: the bug case", () => {
+  test("the exact pane that bricked cc-resume-f61304a3 now classifies as idle", () => {
+    // From `tmux capture-pane -p -J -t cc-resume-f61304a3:0.0 -S -15` taken
+    // while the daemon was in the AGENT_INTERRUPTED loop.
+    const buggedPane = `❯ Sample 100 of these 1500, look at the counter party agent runs and lets
+  identify root cause for this - are they all old, check the rate of this issue
+   in the last month
+
+⏺ Bash(./xrun sql "
+      -- Sample 100 uncovered routed needs, joined to their markets via
+      need_set…)
+  ⎿  Interrupted · What should Claude do instead?
+
+❯ [Codecast import] This Claude session was truncated to avoid overly-long
+  context (which can break Claude Code /compact).
+  Original: 2216 messages. Included: last 1038 messages + first user message.
+
+────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle)               ● high · /effort
+`;
+    const region = extractTmuxLiveRegion(buggedPane);
+    const state = classifyTmuxLiveState(region);
+    expect(state).toBe("idle");
+  });
+});
