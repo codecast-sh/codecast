@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "vite build && node scripts/precompress.mjs",
     "start": "bun run server/index.ts",
     "preview": "vite preview",
     "lint": "eslint .",
