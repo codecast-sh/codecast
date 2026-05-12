@@ -149,7 +149,7 @@ start_web() {
     # Clear Vite cache on every restart to prevent stale module errors
     rm -rf "$ROOT_DIR/packages/web/node_modules/.vite"
     cd "$ROOT_DIR/packages/web"
-    "$ROOT_DIR/node_modules/.bin/vite" --port $PORT --host 0.0.0.0 &
+    "$ROOT_DIR/packages/web/node_modules/.bin/vite" --port $PORT --host 0.0.0.0 &
     cd "$ROOT_DIR"
 
     local attempts=0
