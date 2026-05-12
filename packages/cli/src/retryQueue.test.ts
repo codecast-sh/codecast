@@ -269,6 +269,39 @@ describe("RetryQueue", () => {
     expect(pending[1].type).toBe("createConversation");
   });
 
+  it("should drop stale-conversation errors on first failure (no retries)", async () => {
+    // Regression: previously, "Unauthorized: can only add messages to your own
+    // conversations" was treated as transient — the queue retried forever, flooding
+    // prod Convex with rejected mutations. The cached conversationId is permanently
+    // bad for the current api_token; only re-resolution recovers, never retries.
+    let attempts = 0;
+    queue.setExecutor(async () => {
+      attempts++;
+      throw new Error("Unauthorized: can only add messages to your own conversations");
+    });
+
+    queue.add("addMessages", { conversationId: "stale-conv-id" });
+    await new Promise((r) => setTimeout(r, 100));
+
+    expect(attempts).toBe(1);
+    expect(queue.getQueueSize()).toBe(0);
+    expect(logs.some(l => l.startsWith("DROPPED addMessages: stale conversation"))).toBe(true);
+  });
+
+  it("should drop Conversation-not-found errors on first failure", async () => {
+    let attempts = 0;
+    queue.setExecutor(async () => {
+      attempts++;
+      throw new Error("Conversation not found");
+    });
+
+    queue.add("addMessage", { conversationId: "gone-conv-id" });
+    await new Promise((r) => setTimeout(r, 100));
+
+    expect(attempts).toBe(1);
+    expect(queue.getQueueSize()).toBe(0);
+  });
+
   it("should handle rate limit delays", async () => {
     let attempts = 0;
     queue.setExecutor(async () => {
