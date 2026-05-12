@@ -1265,6 +1265,57 @@ function getAgentLabel(agentType?: string): string | null {
 
 const DAEMON_BLOCKED_THRESHOLD_MS = 5 * 60 * 1000;
 
+const STUCK_SYNC_THRESHOLD_MS = 5 * 60 * 1000;
+const STUCK_SYNC_MIN_BYTES = 4096;
+
+type StuckSync = {
+  filePath: string;
+  sessionId: string;
+  unsyncedBytes: number;
+  fileSize: number;
+  lastSyncedAt: number;
+  conversationId?: string;
+};
+
+function getStuckSyncs(): StuckSync[] {
+  const ledger = getAllSyncRecords();
+  const now = Date.now();
+  const out: StuckSync[] = [];
+
+  for (const [filePath, record] of Object.entries(ledger)) {
+    let stats: fs.Stats;
+    try {
+      stats = fs.statSync(filePath);
+    } catch {
+      continue;
+    }
+    const unsynced = stats.size - record.lastSyncedPosition;
+    if (unsynced < STUCK_SYNC_MIN_BYTES) continue;
+    if (stats.mtimeMs <= record.lastSyncedAt) continue;
+    if (now - record.lastSyncedAt < STUCK_SYNC_THRESHOLD_MS) continue;
+
+    const base = path.basename(filePath, ".jsonl");
+    const m = base.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/);
+    out.push({
+      filePath,
+      sessionId: m ? m[0] : base,
+      unsyncedBytes: unsynced,
+      fileSize: stats.size,
+      lastSyncedAt: record.lastSyncedAt,
+      conversationId: record.conversationId,
+    });
+  }
+
+  out.sort((a, b) => b.unsyncedBytes - a.unsyncedBytes);
+  return out;
+}
+
+function formatBytesShort(n: number): string {
+  if (n < 1024) return `${n}B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)}KB`;
+  return `${(n / 1024 / 1024).toFixed(1)}MB`;
+}
+
 function checkDaemonHealth(): { blocked: boolean; restarted: boolean } {
   const pid = getDaemonPid();
   if (!pid) return { blocked: false, restarted: false };
@@ -1352,6 +1403,23 @@ function showStatus(): void {
   row("Convex", convexConnected ? fmt.success(icons.check + " connected") : fmt.muted(icons.cross + " disconnected"));
 
   console.log("");
+
+  const stuck = getStuckSyncs();
+  if (stuck.length > 0) {
+    const label = `${stuck.length} session${stuck.length === 1 ? "" : "s"}`;
+    row("Stuck syncs", fmt.warning(label) + " " + fmt.muted("(file changed but no sync logged in 5+ min)"));
+    for (const s of stuck.slice(0, 5)) {
+      const short = s.sessionId.slice(0, 8);
+      const sizes = `${formatBytesShort(s.unsyncedBytes)} unsynced of ${formatBytesShort(s.fileSize)}`;
+      const age = formatRelativeTime(s.lastSyncedAt);
+      console.log(`      ${fmt.muted(icons.bullet)} ${fmt.id(short)}  ${fmt.number(sizes)}  ${fmt.muted("last sync")} ${fmt.value(age)}`);
+    }
+    if (stuck.length > 5) {
+      console.log(`      ${fmt.muted(`... and ${stuck.length - 5} more`)}`);
+    }
+    console.log(`  ${fmt.muted("Recover:")} ${fmt.cmd("cast restart")}`);
+    console.log("");
+  }
 
   const syncMode = config?.sync_mode || "all";
   const syncProjects = config?.sync_projects || [];
@@ -2996,6 +3064,39 @@ program
     }
 
     console.log(`\nRepaired ${repaired} project paths`);
+  });
+
+program
+  .command("repair-stuck-syncs")
+  .description("Clear cached conversation IDs for stuck session files so they re-resolve")
+  .option("--dry-run", "Show which entries would be cleared without modifying the ledger")
+  .action(async (options) => {
+    // A ledger row's conversationId becomes invalid against the current api_token in
+    // two scenarios: the conversation was deleted, or the auth token now belongs to a
+    // different user (account switch, token rotation). The daemon used to retry these
+    // forever; the fix in syncMessagesBatch makes it self-heal, but if a daemon
+    // pre-fix is wedged, this command unsticks it by dropping the cached ID so the
+    // next pass calls createConversation (which looks up by session_id + current
+    // user_id and returns the right one).
+    const stuck = getStuckSyncs().filter(s => s.conversationId);
+    if (stuck.length === 0) {
+      console.log("No stuck session files with cached conversation IDs found.");
+      return;
+    }
+    console.log(`Found ${stuck.length} stuck session file${stuck.length === 1 ? "" : "s"}:\n`);
+    for (const s of stuck) {
+      const ageMin = Math.round((Date.now() - s.lastSyncedAt) / 60000);
+      console.log(`  ${s.sessionId.slice(0, 8)}  conv=${s.conversationId}  ${formatBytesShort(s.unsyncedBytes)} unsynced  last sync ${ageMin}m ago`);
+    }
+    if (options.dryRun) {
+      console.log("\nDry run — no changes made. Re-run without --dry-run to clear.");
+      return;
+    }
+    const { updateSyncRecord } = await import("./syncLedger.js");
+    for (const s of stuck) {
+      updateSyncRecord(s.filePath, { conversationId: undefined });
+    }
+    console.log(`\nCleared cached conversation IDs for ${stuck.length} file${stuck.length === 1 ? "" : "s"}. Restart the daemon (cast restart) so it re-resolves on the next sync pass.`);
   });
 
 program
