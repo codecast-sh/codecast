@@ -148,8 +148,18 @@ start_web() {
     kill_web
     # Clear Vite cache on every restart to prevent stale module errors
     rm -rf "$ROOT_DIR/packages/web/node_modules/.vite"
+    # Resolve vite from wherever bun hoisted it (workspace or root node_modules)
+    local VITE_BIN=""
+    if [ -x "$ROOT_DIR/packages/web/node_modules/.bin/vite" ]; then
+        VITE_BIN="$ROOT_DIR/packages/web/node_modules/.bin/vite"
+    elif [ -x "$ROOT_DIR/node_modules/.bin/vite" ]; then
+        VITE_BIN="$ROOT_DIR/node_modules/.bin/vite"
+    else
+        log_warn "vite binary not found; run 'bun install'"
+        return
+    fi
     cd "$ROOT_DIR/packages/web"
-    "$ROOT_DIR/packages/web/node_modules/.bin/vite" --port $PORT --host 0.0.0.0 &
+    "$VITE_BIN" --port $PORT --host 0.0.0.0 &
     cd "$ROOT_DIR"
 
     local attempts=0
