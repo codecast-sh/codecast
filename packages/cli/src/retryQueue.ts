@@ -2,7 +2,7 @@ import fs from "fs";
 
 export interface RetryOperation {
   id: string;
-  type: "createConversation" | "addMessage";
+  type: "createConversation" | "addMessage" | "addMessages";
   params: Record<string, unknown>;
   attempts: number;
   nextRetryAt: number;
@@ -13,7 +13,7 @@ export interface RetryOperation {
 
 export interface DroppedOperation {
   id: string;
-  type: "createConversation" | "addMessage";
+  type: "createConversation" | "addMessage" | "addMessages";
   params: Record<string, unknown>;
   attempts: number;
   createdAt: number;
@@ -244,8 +244,27 @@ export class RetryQueue {
     return networkPatterns.some(p => lower.includes(p));
   }
 
+  // Errors that mean the cached conversation_id is permanently invalid against the
+  // current api_token. Retrying with the same params will fail forever — the only
+  // recovery is for the caller to re-resolve the conversation (which happens on the
+  // next processSessionFile pass once the local conversation cache is dropped).
+  private isStaleConversationError(error: string): boolean {
+    return error.includes("Conversation not found") ||
+      error.includes("Unauthorized: can only add messages to your own conversations");
+  }
+
   private handleFailure(op: RetryOperation, error: string): void {
     op.lastError = error;
+
+    if (this.isStaleConversationError(error)) {
+      this.log(
+        `DROPPED ${op.type}: stale conversation ${op.params.conversationId || 'unknown'} (${error}). Will re-resolve on next sync.`,
+        "warn"
+      );
+      this.recordDroppedOperation(op);
+      this.queue.delete(op.id);
+      return;
+    }
 
     const isNetwork = this.isNetworkError(error);
 
