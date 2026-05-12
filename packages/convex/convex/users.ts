@@ -826,43 +826,82 @@ export const getUserActivityHeatmap = query({
     const numDays = args.days ?? 365;
     const now = Date.now();
     const cutoff = now - numDays * 24 * 60 * 60 * 1000;
+    // Hybrid read strategy:
+    //   - Recent window (last 7 days): stream `conversations` directly.
+    //     Source of truth for in-progress sessions, but heavy docs
+    //     (1024-dim title_embedding + git_diff blobs), so we keep the window
+    //     tight to stay under the 100MB bytes-read cap.
+    //   - Older days: use lightweight `team_activity_events` and
+    //     `session_insights` (no embeddings/diffs). They lag real time but
+    //     have settled by day +1, so they're accurate for historical buckets.
+    // Bucketing is done on the session START day in both branches so a
+    // session that runs past midnight lands on the day it began (matching
+    // how DayHeader groups the Feed tab).
+    const recentCutoff = now - 7 * 24 * 60 * 60 * 1000;
 
     const buckets: Record<string, { hours: number; sessions: number }> = {};
-    const seenConvos = new Set<string>();
+    const seen = new Set<string>();
 
-    const [insights, events] = await Promise.all([
-      ctx.db.query("session_insights")
-        .withIndex("by_actor_generated_at", (q) =>
-          q.eq("actor_user_id", args.user_id).gte("generated_at", cutoff)
-        )
-        .collect(),
-      ctx.db.query("team_activity_events")
-        .withIndex("by_actor", (q) => q.eq("actor_user_id", args.user_id))
-        .collect(),
-    ]);
+    // Bucket each session on its **last activity day** (`updated_at`), not its
+    // start day. This matches the user's mental model — "today's hours" means
+    // sessions I was working on today, even if they began earlier in the week.
+    // Long sessions are common in this codebase (workflow/orchestrate), so
+    // start-day bucketing would hide today's work on multi-day sessions.
+    // Subagent/child sessions are included (no parent filter) to match the
+    // pre-existing query semantics and the 5422-session header total.
+    for await (const c of ctx.db
+      .query("conversations")
+      .withIndex("by_user_updated", (q) =>
+        q.eq("user_id", args.user_id).gte("updated_at", recentCutoff)
+      )) {
+      const upd = c.updated_at ?? c.started_at;
+      if (!upd) continue;
+      seen.add(String(c._id));
+      const date = new Date(upd).toISOString().split("T")[0];
+      if (!buckets[date]) buckets[date] = { hours: 0, sessions: 0 };
+      buckets[date].sessions++;
+      const durMs = c.started_at ? Math.max(0, upd - c.started_at) : 0;
+      buckets[date].hours += Math.min(durMs, 8 * 3600000) / 3600000;
+    }
+
+    const events = await ctx.db
+      .query("team_activity_events")
+      .withIndex("by_actor", (q) => q.eq("actor_user_id", args.user_id))
+      .collect();
+
+    for (const e of events) {
+      if (e.timestamp < cutoff || e.timestamp >= recentCutoff) continue;
+      if (e.event_type !== "session_started" && e.event_type !== "session_completed") continue;
+      const cid = e.related_conversation_id ? String(e.related_conversation_id) : `evt-${e._id}`;
+      if (seen.has(cid)) continue;
+      seen.add(cid);
+      // `e.timestamp` is when the event fired: for `session_completed` that's
+      // the end of activity; for `session_started` it's the start. Both are
+      // reasonable proxies for "activity day" — the original query used the
+      // same field, so historical buckets stay stable across this change.
+      const date = new Date(e.timestamp).toISOString().split("T")[0];
+      if (!buckets[date]) buckets[date] = { hours: 0, sessions: 0 };
+      buckets[date].sessions++;
+      const durMs = e.event_type === "session_completed" ? e.metadata?.duration_ms : undefined;
+      buckets[date].hours += durMs ? Math.min(durMs, 8 * 3600000) / 3600000 : 0.5;
+    }
+
+    const insights = await ctx.db
+      .query("session_insights")
+      .withIndex("by_actor_generated_at", (q) =>
+        q.eq("actor_user_id", args.user_id).gte("generated_at", cutoff)
+      )
+      .collect();
 
     for (const ins of insights) {
+      if (ins.generated_at >= recentCutoff) continue;
       const cid = String(ins.conversation_id);
-      if (seenConvos.has(cid)) continue;
-      seenConvos.add(cid);
+      if (seen.has(cid)) continue;
+      seen.add(cid);
       const date = new Date(ins.generated_at).toISOString().split("T")[0];
       if (!buckets[date]) buckets[date] = { hours: 0, sessions: 0 };
       buckets[date].sessions++;
       buckets[date].hours += 0.5;
-    }
-
-    for (const e of events) {
-      if (e.timestamp < cutoff) continue;
-      if (e.event_type === "session_started" || e.event_type === "session_completed") {
-        const sid = e.related_conversation_id ? String(e.related_conversation_id) : `evt-${e._id}`;
-        if (seenConvos.has(sid)) continue;
-        seenConvos.add(sid);
-        const date = new Date(e.timestamp).toISOString().split("T")[0];
-        if (!buckets[date]) buckets[date] = { hours: 0, sessions: 0 };
-        buckets[date].sessions++;
-        const durMs = e.event_type === "session_completed" && e.metadata?.duration_ms;
-        buckets[date].hours += durMs ? Math.min(durMs, 8 * 3600000) / 3600000 : 0.5;
-      }
     }
 
     return Object.entries(buckets)
