@@ -184,9 +184,15 @@ export const create = mutation({
       }
     }
 
+    // Mirror conversation creation: when no directory mapping resolves, fall
+    // back to the user's active team so tasks created from a shared session
+    // inherit that team automatically (instead of becoming orphans).
+    const creator = await ctx.db.get(auth.userId);
+    const activeTeamId = (creator?.active_team_id || (creator as any)?.team_id) as Id<"teams"> | undefined;
     const db = await createDataContext(ctx, {
       userId: auth.userId,
       project_path: args.project_path,
+      active_team_id: activeTeamId,
       ...(convTeamId ? { workspace: "team" as const, team_id: convTeamId } : {}),
     });
     const now = Date.now();
@@ -931,19 +937,32 @@ export const webList = query({
           if (String(t.team_id) === teamStr) pushUnique(t);
         }
       } else if (args.workspace === "personal") {
-        // PERSONAL VIEW: all user's tasks that don't belong to any team.
+        // PERSONAL VIEW: tasks with no team_id that are mine — either as
+        // creator OR assignee. Without the assignee union, a task assigned
+        // to me by someone else (e.g. an ops bot) with no team_id is
+        // invisible in every view.
         const userTasks = await ctx.db.query("tasks")
           .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
           .collect();
         for (const t of userTasks) {
           if (!t.team_id) pushUnique(t);
         }
+        const assignedTasks = await ctx.db.query("tasks")
+          .withIndex("by_assignee_status", (q: any) => q.eq("assignee", String(userId)))
+          .collect();
+        for (const t of assignedTasks) {
+          if (!t.team_id) pushUnique(t);
+        }
       } else {
-        // UNSCOPED: all user's tasks
+        // UNSCOPED: all user's tasks (creator or assignee).
         const userTasks = await ctx.db.query("tasks")
           .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
           .collect();
         for (const t of userTasks) pushUnique(t);
+        const assignedTasks = await ctx.db.query("tasks")
+          .withIndex("by_assignee_status", (q: any) => q.eq("assignee", String(userId)))
+          .collect();
+        for (const t of assignedTasks) pushUnique(t);
       }
       tasks = allTasks;
     }
@@ -1342,7 +1361,11 @@ export const webCreate = mutation({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Unauthorized");
 
-    const db = await createDataContext(ctx, { userId, workspace: args.workspace, team_id: args.team_id, project_path: args.project_path });
+    // Same fallback as tasks:create — without this, web-created tasks with no
+    // directory mapping become orphans (no team_id, invisible in team view).
+    const creator = await ctx.db.get(userId);
+    const activeTeamId = (creator?.active_team_id || (creator as any)?.team_id) as Id<"teams"> | undefined;
+    const db = await createDataContext(ctx, { userId, workspace: args.workspace, team_id: args.team_id, active_team_id: activeTeamId, project_path: args.project_path });
     const short_id = await nextShortId(ctx.db, "ct");
 
     let project_id: Id<"projects"> | undefined;
@@ -1652,6 +1675,27 @@ export const backfillTeamScope = mutation({
 
 // Internal version for admin CLI: npx convex run tasks:backfillTaskTeamIds
 // Paginated — pass cursor from previous result to continue.
+// One-shot: assign team_id to a specific set of orphan tasks by short_id.
+// Pulls the team from the creator's active_team_id, mirroring the fix to
+// the create paths so existing orphans get the same treatment.
+export const backfillOrphanTasksByShortIds = internalMutation({
+  args: { short_ids: v.array(v.string()) },
+  handler: async (ctx, args) => {
+    const results: Array<{ short_id: string; status: string; team_id?: string }> = [];
+    for (const sid of args.short_ids) {
+      const t = await ctx.db.query("tasks").withIndex("by_short_id", (q: any) => q.eq("short_id", sid)).first();
+      if (!t) { results.push({ short_id: sid, status: "not_found" }); continue; }
+      if (t.team_id) { results.push({ short_id: sid, status: "already_set", team_id: String(t.team_id) }); continue; }
+      const creator = await ctx.db.get(t.user_id) as any;
+      const tid = creator?.active_team_id || creator?.team_id;
+      if (!tid) { results.push({ short_id: sid, status: "no_team_on_creator" }); continue; }
+      await ctx.db.patch(t._id, { team_id: tid });
+      results.push({ short_id: sid, status: "patched", team_id: String(tid) });
+    }
+    return results;
+  },
+});
+
 export const backfillTaskTeamIds = internalMutation({
   args: { cursor: v.optional(v.string()) },
   handler: async (ctx, args) => {

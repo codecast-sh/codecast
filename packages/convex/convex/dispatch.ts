@@ -430,7 +430,12 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
         .query("directory_team_mappings")
         .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
         .collect();
-      teamId = resolveTeamForPath(mappings, opts.project_path, undefined).teamId;
+      // Fall back to user's active team if no directory mapping matches —
+      // mirrors session creation so tasks land on the same team as the
+      // session that spawned them.
+      const user = await ctx.db.get(userId);
+      const fallbackTeam = (user?.active_team_id || (user as any)?.team_id) as Id<"teams"> | undefined;
+      teamId = resolveTeamForPath(mappings, opts.project_path, fallbackTeam).teamId;
     }
 
     const shortId = await nextShortId(ctx.db, "ct");
