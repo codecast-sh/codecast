@@ -234,9 +234,36 @@ function SessionMention({ attrs }: { attrs: Record<string, any> }) {
   );
 }
 
+const RELATIVE_DATE_LABELS = new Set([
+  "today", "yesterday", "tomorrow",
+  "this week", "last week", "next week",
+  "this month", "last month", "next month",
+]);
+
+function recomputeRelativeLabel(dateValue: string): string | null {
+  const parts = dateValue.split("-");
+  if (parts.length !== 3) return null;
+  const target = new Date(+parts[0], +parts[1] - 1, +parts[2]);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  target.setHours(0, 0, 0, 0);
+  const diffDays = Math.round((target.getTime() - today.getTime()) / 86400000);
+  if (diffDays === 0) return "Today";
+  if (diffDays === -1) return "Yesterday";
+  if (diffDays === 1) return "Tomorrow";
+  return null;
+}
+
 function DateMention({ attrs }: { attrs: Record<string, any> }) {
   const dateValue = attrs.dateValue || attrs.id;
-  const label = attrs.label || dateValue;
+  const storedLabel: string = attrs.label || dateValue;
+
+  // If the stored label is a relative term (e.g. "Today" from when the doc
+  // was written), recompute it against the current date so old docs don't
+  // claim to be from "today" forever.
+  const isRelative = RELATIVE_DATE_LABELS.has(String(storedLabel).toLowerCase());
+  const recomputed = isRelative && dateValue ? recomputeRelativeLabel(dateValue) : null;
+  const label = isRelative ? (recomputed ?? dateValue) : storedLabel;
 
   let resolvedDisplay = "";
   if (dateValue) {
