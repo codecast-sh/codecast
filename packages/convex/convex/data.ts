@@ -62,26 +62,29 @@ export async function scopedFetch(
   const { userId, teamId, workspace } = opts;
   const fetchLimit = opts.limit;
   const strip = opts.stripFields;
+  // Hard cap prevents unbounded iteration when callers omit a limit
+  const hardCap = fetchLimit || 2000;
 
   let userRecords: any[] = [];
   let teamRecords: any[] = [];
 
   // When stripFields is set, iterate with `for await` so only one full record
   // is in the V8 heap at a time — heavy fields are dropped before accumulating.
+  const stripSet = strip ? new Set(strip) : null;
   const runQuery = async (q: any): Promise<any[]> => {
-    if (strip) {
+    if (stripSet) {
       const results: any[] = [];
       for await (const r of q) {
         const light: any = {};
         for (const k of Object.keys(r)) {
-          if (!strip.includes(k)) light[k] = r[k];
+          if (!stripSet.has(k)) light[k] = r[k];
         }
         results.push(light);
-        if (fetchLimit && results.length >= fetchLimit) break;
+        if (results.length >= hardCap) break;
       }
       return results;
     }
-    return fetchLimit ? q.take(fetchLimit) : q.collect();
+    return q.take(hardCap);
   };
 
   if (workspace === "personal") {
