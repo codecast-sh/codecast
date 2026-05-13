@@ -71,6 +71,7 @@ const MENTION_COLOR_MAP: Record<string, string> = {
 
 function createMentionSuggestion(queryFn: MentionQueryFn) {
   return {
+    allowSpaces: true,
     items: async ({ query }: { query: string }) => queryFn(query),
     render: () => {
       let component: ReactRenderer<any> | null = null;

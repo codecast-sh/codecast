@@ -43,6 +43,7 @@ export const MENTION_COLOR_MAP: Record<string, string> = {
 
 export function createMentionSuggestion(queryFn: MentionQueryFn) {
   return {
+    allowSpaces: true,
     items: async ({ query }: { query: string }) => {
       return queryFn(query);
     },
