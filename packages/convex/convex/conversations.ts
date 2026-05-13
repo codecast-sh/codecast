@@ -995,6 +995,61 @@ export const getAllMessages = query({
   },
 });
 
+// Returns this user's distinct git_root values for the given remote URL,
+// most-recently-updated first. The CLI/daemon uses this to remap a foreign
+// project_path (created on another machine, or forked from another user) to
+// a local checkout of the same repo. Pure metadata — no message bodies.
+export const findUserLocalCheckouts = query({
+  args: {
+    git_remote_url: v.string(),
+    api_token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) return [];
+    if (!args.git_remote_url) return [];
+    const convs = await ctx.db
+      .query("conversations")
+      .withIndex("by_user_git_remote_url", (q) =>
+        q.eq("user_id", userId).eq("git_remote_url", args.git_remote_url)
+      )
+      .collect();
+    const seen = new Set<string>();
+    const out: { git_root: string; project_path: string | null; updated_at: number }[] = [];
+    convs.sort((a, b) => b.updated_at - a.updated_at);
+    for (const c of convs) {
+      const root = c.git_root;
+      if (!root || seen.has(root)) continue;
+      seen.add(root);
+      out.push({ git_root: root, project_path: c.project_path ?? null, updated_at: c.updated_at });
+    }
+    return out;
+  },
+});
+
+// Lightweight metadata fetch used by the daemon to resolve project paths
+// without pulling the full conversation + messages. Auth-checked.
+export const getProjectInfo = query({
+  args: {
+    conversation_id: v.id("conversations"),
+    api_token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) return null;
+    const conv = await ctx.db.get(args.conversation_id);
+    if (!conv) return null;
+    if (conv.user_id.toString() !== userId.toString()) {
+      if (!(await canTeamMemberAccess(ctx, userId, conv))) return null;
+    }
+    return {
+      project_path: conv.project_path ?? null,
+      git_root: conv.git_root ?? null,
+      git_remote_url: conv.git_remote_url ?? null,
+    };
+  },
+});
+
 export const getMessagesAroundTimestamp = query({
   args: {
     conversation_id: v.id("conversations"),
@@ -3503,6 +3558,8 @@ export const exportConversationMessages = query({
         session_id: conv.session_id,
         agent_type: conv.agent_type,
         project_path: conv.project_path || null,
+        git_root: conv.git_root || null,
+        git_remote_url: conv.git_remote_url || null,
         model: conv.model || null,
         message_count: nonEmptyMessages.length,
         started_at: new Date(conv.started_at).toISOString(),
@@ -3586,6 +3643,8 @@ export const exportConversationMessagesPage = query({
         session_id: conv.session_id,
         agent_type: conv.agent_type,
         project_path: conv.project_path || null,
+        git_root: conv.git_root || null,
+        git_remote_url: conv.git_remote_url || null,
         model: conv.model || null,
         message_count: conv.message_count || 0,
         started_at: new Date(conv.started_at).toISOString(),
