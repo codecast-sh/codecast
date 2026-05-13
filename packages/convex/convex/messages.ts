@@ -280,6 +280,9 @@ export const addMessage = mutation({
       throw new Error("Authentication failed: invalid token or session");
     }
     if (conversation.user_id.toString() !== authUserId.toString()) {
+      console.warn(
+        `[addMessage] cross-user write blocked: auth=${authUserId} conv=${args.conversation_id} owner=${conversation.user_id} session=${conversation.session_id ?? "?"}`,
+      );
       throw new Error("Unauthorized: can only add messages to your own conversations");
     }
 
@@ -541,6 +544,9 @@ export const addMessages = mutation({
       throw new Error("Authentication failed: invalid token or session");
     }
     if (conversation.user_id.toString() !== authUserId.toString()) {
+      console.warn(
+        `[addMessages] cross-user write blocked: auth=${authUserId} conv=${args.conversation_id} owner=${conversation.user_id} session=${conversation.session_id ?? "?"} batch=${args.messages.length}`,
+      );
       throw new Error("Unauthorized: can only add messages to your own conversations");
     }
 

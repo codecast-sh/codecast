@@ -48,24 +48,34 @@ import {
   writeClaudeCodeSession,
   writeCodexSession,
   chooseClaudeTailMessagesForTokenBudget,
-  estimateClaudeImportTokens,
 } from "./jsonlGenerator.js";
+import {
+  CLAUDE_UUID_RE,
+  chooseClaudeAutoTrim,
+  combineClaudeResumeFlags,
+  extractJsonlPermissionMode,
+  rewriteSubagentJsonlToUuid,
+} from "./resumeCommand.js";
 import { resolveLocalProjectPath } from "./projectPathResolver.js";
 
-const _execAsync = promisify(exec);
 const ENRICHED_PATH = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
 const EXEC_TIMEOUT_MS = 10_000;
-const execAsync = async (cmd: string, opts?: any): Promise<{ stdout: string; stderr: string }> => {
-  const result = await _execAsync(cmd, {
-    encoding: "utf8",
-    timeout: EXEC_TIMEOUT_MS,
-    ...opts,
-    env: { ...process.env, PATH: ENRICHED_PATH, ...(opts?.env || {}) },
+// Hold references to spawned children so they can't be GC'd before exit/reaping
+const _activeChildren = new Set<ReturnType<typeof exec>>();
+const execAsync = (cmd: string, opts?: any): Promise<{ stdout: string; stderr: string }> => {
+  return new Promise((resolve, reject) => {
+    const child = exec(cmd, {
+      encoding: "utf8",
+      timeout: EXEC_TIMEOUT_MS,
+      ...opts,
+      env: { ...process.env, PATH: ENRICHED_PATH, ...(opts?.env || {}) },
+    }, (err, stdout, stderr) => {
+      _activeChildren.delete(child);
+      if (err) return reject(err);
+      resolve({ stdout: String(stdout), stderr: String(stderr) });
+    });
+    _activeChildren.add(child);
   });
-  return {
-    stdout: String(result.stdout),
-    stderr: String(result.stderr),
-  };
 };
 
 const _execFileAsync = promisify(execFile);
@@ -435,6 +445,65 @@ const recentCompactionTs = new Map<string, number>(); // sessionId -> when compa
 const recentSessionInjections = new Map<string, { messageId: string; content: string; ts: number }>(); // conversationId -> last injection
 const postCompactionRecoveryTimers = new Map<string, ReturnType<typeof setTimeout>>(); // sessionId -> pending recovery
 const compactionRedeliveryBypass = new Set<string>(); // messageIds that should bypass injection dedup
+
+// Message delivery dedup/in-flight tracking. Module-scoped so kill_session can clear entries
+// for a conversation when its tmux pane is killed mid-delivery — otherwise the daemon's
+// 60s dedup window would skip re-delivery of the message Convex just reset back to pending.
+// Each entry stores the conversation_id so kill_session can find matching ids without
+// maintaining a reverse index.
+const messagesInFlight = new Map<string, { ts: number; conversationId: string }>();
+const injectedMessageTs = new Map<string, { ts: number; conversationId: string }>();
+const IN_FLIGHT_HARD_TTL_MS = 240_000; // > DELIVERY_TIMEOUT_MS (180s)
+const INJECTION_DEDUP_TTL_MS = 60_000;
+
+function clearMessageDeliveryStateForConversation(conversationId: string): { inFlight: number; dedup: number } {
+  let inFlight = 0;
+  let dedup = 0;
+  for (const [id, entry] of messagesInFlight) {
+    if (entry.conversationId === conversationId) {
+      messagesInFlight.delete(id);
+      inFlight++;
+    }
+  }
+  for (const [id, entry] of injectedMessageTs) {
+    if (entry.conversationId === conversationId) {
+      injectedMessageTs.delete(id);
+      dedup++;
+    }
+  }
+  return { inFlight, dedup };
+}
+
+// Single source of truth for "this session/conversation just lost its tmux pane".
+// Every kill path (user-triggered kill_session, auto-kill on dismissed-idle, crash
+// reconstitution) must call this — otherwise the next pending message Convex re-fires
+// hits the 60s injection-dedup branch ("injected Ns ago, updating status only") and
+// never reaches the freshly-resumed tmux. Mirrored Convex state (injected→pending) is
+// reset here too so the message becomes eligible for redelivery from the subscription.
+async function clearConversationDeliveryAndResumeState(
+  conversationId: string | undefined,
+  sessionId: string | undefined,
+  context: string,
+): Promise<void> {
+  if (sessionId) {
+    resumeFatalReasons.delete(sessionId);
+    sessionDeliveryFailures.delete(sessionId);
+    repairAttempts.delete(sessionId);
+  }
+  if (!conversationId) return;
+  conversationResumeFailures.delete(conversationId);
+  repairAttempts.delete(conversationId);
+
+  if (syncServiceRef) {
+    syncServiceRef.resetInjectedMessages(conversationId).catch(logConvexFailure);
+  }
+
+  const cleared = clearMessageDeliveryStateForConversation(conversationId);
+  if (cleared.inFlight || cleared.dedup) {
+    log(`[${context}] Cleared delivery state for conversation ${conversationId.slice(0, 12)}: ${cleared.inFlight} in-flight, ${cleared.dedup} dedup`);
+  }
+  recentSessionInjections.delete(conversationId);
+}
 
 export function mapCodexAppServerThreadStatusToAgentStatus(status: AppServerThreadStatus | null | undefined): AgentStatus | null {
   if (!status?.type) return null;
@@ -1787,22 +1856,10 @@ async function executeRemoteCommand(
           } catch {}
         }
 
-        // Clear all in-memory state that could block a subsequent resume.
-        // A kill is a clean slate — stale fatal reasons, circuit breakers,
-        // delivery failures, and repair cooldowns must not persist.
-        if (sessionId) {
-          resumeFatalReasons.delete(sessionId);
-          sessionDeliveryFailures.delete(sessionId);
-          repairAttempts.delete(sessionId);
-          conversationResumeFailures.delete(conversationId);
-          if (conversationId) repairAttempts.delete(conversationId);
-        }
-
-        // Reset any injected-but-unacked messages back to pending so they
-        // get re-delivered when the session is resumed
-        if (syncServiceRef) {
-          syncServiceRef.resetInjectedMessages(conversationId).catch(logConvexFailure);
-        }
+        // A kill is a clean slate. Wipe per-session/per-conversation caches that
+        // would otherwise block a subsequent resume or silently suppress the next
+        // injected message.
+        await clearConversationDeliveryAndResumeState(conversationId, sessionId, "REMOTE");
 
         if (!result) result = sessionId ? "no_process" : "no_session";
         break;
@@ -1814,6 +1871,27 @@ async function executeRemoteCommand(
         if (!sessionId) {
           error = "Missing session_id";
           break;
+        }
+        // Fresh-session guard. If the conversation just had a session spawned
+        // (startedSessionTmux still tracks it) and there's no linked Claude
+        // session_id yet, an auto-resume from the UI's stuck-banner heuristic
+        // will try `claude --resume <nanoid>` which can't succeed — the nanoid
+        // is the optimistic id from the inline new-session flow, not a real
+        // Claude UUID. We were churning through kill → repair → reconstitute
+        // → start-fresh for every such call, racing the tryStartedTmux path
+        // that was already about to deliver the user's first message.
+        if (conversationId) {
+          const startedEntry = startedSessionTmux.get(conversationId);
+          if (startedEntry) {
+            const cache = readConversationCache();
+            const reverseCache = buildReverseConversationCache(cache);
+            const linkedSessionId = reverseCache[conversationId];
+            if (!linkedSessionId) {
+              log(`[REMOTE] Skipping resume for ${sessionId.slice(0, 8)} — conversation ${conversationId.slice(0, 12)} has a freshly started tmux (${startedEntry.tmuxSession}) that hasn't been linked yet; tryStartedTmux will handle delivery.`);
+              result = JSON.stringify({ skipped: true, reason: "fresh_session_unlinked" });
+              break;
+            }
+          }
         }
         const projectPath = parsed.project_path;
         const forceReconstitute = parsed.force_reconstitute === true;
@@ -4589,7 +4667,19 @@ function tryRegisterSessionProcess(sessionId: string, agentType: "claude" | "cod
   } catch {}
 }
 
+const findSessionProcessInflight = new Map<string, Promise<ClaudeSessionInfo | null>>();
+
 async function findSessionProcess(sessionId: string, agentType: "claude" | "codex" | "cursor" | "gemini" = "claude"): Promise<ClaudeSessionInfo | null> {
+  const key = `${sessionId}:${agentType}`;
+  const inflight = findSessionProcessInflight.get(key);
+  if (inflight) return inflight;
+
+  const promise = findSessionProcessImpl(sessionId, agentType);
+  findSessionProcessInflight.set(key, promise);
+  return promise.finally(() => findSessionProcessInflight.delete(key));
+}
+
+async function findSessionProcessImpl(sessionId: string, agentType: "claude" | "codex" | "cursor" | "gemini" = "claude"): Promise<ClaudeSessionInfo | null> {
   // Check process cache first
   const cached = await getCachedSessionProcess(sessionId);
   if (cached) {
@@ -5749,16 +5839,19 @@ const HEALTH_CHECK_DEAD_STRIKES_TO_KILL = 3;
 const postDeliveryDeadStrikes = new Map<string, number>();
 const POST_DELIVERY_DEAD_STRIKES_TO_KILL = 2;
 
-// Working-stuck watchdog: a live Claude CLI can wedge inside a tool call so the
+// Working-stuck watchdog: a live agent CLI can wedge inside a tool call so the
 // process is alive (passes isTmuxAgentAlive) yet does nothing — no JSONL writes,
-// no status transitions, ~0% CPU. Queued messages then pile up at "injected"
-// because ensureTmuxReady refuses to paste into a busy pane. Detect via JSONL
-// mtime + CPU and reuse handleDeadSession's repair path.
+// no status transitions, ~0% CPU. We *detect* this and log it, but we do NOT
+// auto-reconstitute: the heuristic (silent JSONL + low CPU) overlaps with
+// legitimate long thinking and slow model calls, so killing on it was producing
+// false positives that wiped live tmux sessions out from under users. The UI
+// already exposes a "Kill & restart" action that drives the same repair path
+// (api.conversations.restartSession → kill_session + resume_session daemon
+// commands); operators trigger it when the log says a session looks wedged.
 const workingStuckJsonlMtime = new Map<string, number>();
 const workingStuckStrikes = new Map<string, number>();
-const WORKING_STUCK_THRESHOLD_MS = 10 * 60 * 1000;
+const WORKING_STUCK_THRESHOLD_MS = 45 * 60 * 1000;
 const WORKING_STUCK_CPU_CEILING = 1.0;
-const WORKING_STUCK_STRIKES_TO_KILL = 2;
 
 async function killSessionBySessionId(sessionId: string, reason: string): Promise<void> {
   const cache = readConversationCache();
@@ -5807,6 +5900,12 @@ async function killSessionBySessionId(sessionId: string, reason: string): Promis
     syncServiceRef.markSessionCompleted(conversationId).catch(logConvexFailure);
     sendAgentStatus(syncServiceRef, conversationId, sessionId, "stopped");
   }
+
+  // Same lifecycle contract as the user-triggered kill_session: any tmux teardown
+  // must invalidate the daemon's dedup state, otherwise the next pending message
+  // for this conversation will be skipped as "already injected" into a tmux that no
+  // longer exists.
+  await clearConversationDeliveryAndResumeState(conversationId, sessionId, "AUTO-KILL");
 
   log(`[AUTO-KILL] Session ${sessionId.slice(0, 8)} killed: ${reason}`);
 }
@@ -6355,7 +6454,7 @@ async function heartbeatHealthCheck(sessionId: string): Promise<void> {
   await checkWorkingStuck(sessionId, tmux);
 }
 
-async function checkWorkingStuck(sessionId: string, tmux: string): Promise<void> {
+async function checkWorkingStuck(sessionId: string, _tmux: string): Promise<void> {
   const status = lastSentAgentStatus.get(sessionId);
   if (status !== "working" && status !== "thinking") {
     workingStuckJsonlMtime.delete(sessionId);
@@ -6391,25 +6490,20 @@ async function checkWorkingStuck(sessionId: string, tmux: string): Promise<void>
   }
 
   // Long-running compute (typecheck, build) can be silent on stdout but burns
-  // CPU; treat that as alive so we don't kill productive work.
+  // CPU; treat that as alive.
   const resources = latestSessionResources.get(sessionId);
   if (resources && resources.cpu > WORKING_STUCK_CPU_CEILING) {
     return;
   }
 
+  // Detection only — no auto-kill. Surface the suspicion in the daemon log so
+  // operators can decide; recovery is driven from the UI's "Kill & restart"
+  // action, which goes through api.conversations.restartSession.
   const strikes = (workingStuckStrikes.get(sessionId) || 0) + 1;
   workingStuckStrikes.set(sessionId, strikes);
   const dwellSec = Math.round(dwell / 1000);
   const cpuLabel = resources ? `${resources.cpu.toFixed(1)}%` : "unknown";
-  if (strikes < WORKING_STUCK_STRIKES_TO_KILL) {
-    log(`[HEARTBEAT-HEALTH] Session ${sessionId.slice(0, 8)} appears wedged in ${status} (dwell=${dwellSec}s cpu=${cpuLabel} jsonl frozen) — strike ${strikes}/${WORKING_STUCK_STRIKES_TO_KILL}`);
-    return;
-  }
-
-  log(`[HEARTBEAT-HEALTH] Session ${sessionId.slice(0, 8)} wedged in ${status} for ${dwellSec}s with cpu=${cpuLabel} and no JSONL progress, reconstituting`);
-  workingStuckJsonlMtime.delete(sessionId);
-  workingStuckStrikes.delete(sessionId);
-  await handleDeadSession(sessionId, tmux);
+  log(`[HEARTBEAT-HEALTH] Session ${sessionId.slice(0, 8)} appears wedged in ${status} (dwell=${dwellSec}s cpu=${cpuLabel} jsonl frozen, strike ${strikes}). Not auto-killing; user can Kill & restart from the UI.`);
 }
 
 async function handleDeadSession(sessionId: string, tmuxSession: string): Promise<void> {
@@ -6422,6 +6516,12 @@ async function handleDeadSession(sessionId: string, tmuxSession: string): Promis
 
   const cache = readConversationCache();
   const conversationId = cache[sessionId];
+
+  // Crash recovery shares the kill_session lifecycle contract: the tmux pane has
+  // been torn down, any "injected" messages on Convex were lost with it, and the
+  // daemon's local dedup state now references a dead pane. Reset both so the
+  // reconstituted session can replay pending work.
+  await clearConversationDeliveryAndResumeState(conversationId, sessionId, "HEARTBEAT-HEALTH");
 
   if (conversationId && syncServiceRef) {
     await syncServiceRef.setSessionError(conversationId, "Session crashed — reconstituting from database").catch(logConvexFailure);
@@ -6692,11 +6792,9 @@ async function collectResourceSnapshot(): Promise<void> {
   }
 }
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 function resolveSessionId(filePath: string): string {
   const name = path.basename(filePath, ".jsonl");
-  if (UUID_RE.test(name)) return name;
+  if (CLAUDE_UUID_RE.test(name)) return name;
   const parts = filePath.split(path.sep);
   if (parts.includes("subagents")) return name;
   try {
@@ -6790,10 +6888,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
       if (reconAgentType === "codex") {
         ({ jsonl, sessionId: reconId } = generateCodexJsonl(data, { sessionId }));
       } else {
-        const estimatedTokens = estimateClaudeImportTokens(data);
-        const tailMessages = estimatedTokens > 120_000
-          ? chooseClaudeTailMessagesForTokenBudget(data, 100_000)
-          : undefined;
+        const tailMessages = chooseClaudeAutoTrim(data);
         ({ jsonl, sessionId: reconId } = generateClaudeCodeJsonl(data, { tailMessages, sessionId }));
       }
       const result = reconAgentType === "codex"
@@ -6849,43 +6944,28 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
     resumeCmd = `gemini --resume latest`;
   } else {
     cwd = validOverride || resolveLocalRepo(extractCwd(jsonlContent) || "") || process.env.HOME || "/tmp";
-    let extraFlags = config?.claude_args || "";
-    try {
-      const firstUserLine = jsonlContent.split("\n").find(l => l.includes('"type":"user"'));
-      if (firstUserLine) {
-        const parsed = JSON.parse(firstUserLine);
-        if (parsed.permissionMode === "bypassPermissions" && !extraFlags.includes("--dangerously-skip-permissions")) {
-          extraFlags = extraFlags ? extraFlags + " --dangerously-skip-permissions" : "--dangerously-skip-permissions";
-        }
-      }
-    } catch {}
-    const permFlags = getPermissionFlags("claude", config);
-    if (permFlags && !extraFlags.includes("--dangerously-skip-permissions") && !extraFlags.includes("--permission-mode") && !extraFlags.includes("--allow-dangerously-skip-permissions")) {
-      extraFlags = extraFlags ? extraFlags + " " + permFlags : permFlags;
-    }
+    const jsonlBypass = extractJsonlPermissionMode(jsonlContent) === "bypassPermissions";
+    const extraFlags = combineClaudeResumeFlags(
+      config?.claude_args,
+      getPermissionFlags("claude", config),
+      jsonlBypass,
+    );
     let resumeId = sessionId;
-    if (!UUID_RE.test(sessionId)) {
-      const newUuid = crypto.randomUUID();
-      const newPath = path.join(path.dirname(jsonlPath), `${newUuid}.jsonl`);
-      try {
-        const rawContent = fs.readFileSync(jsonlPath, "utf-8");
-        const rewritten = rawContent.replace(
-          new RegExp(`"sessionId"\\s*:\\s*"${sessionId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`, "g"),
-          `"sessionId":"${newUuid}"`
-        );
-        fs.writeFileSync(newPath, rewritten);
-        log(`Copied non-UUID session ${sessionId} to resumable UUID ${newUuid}`);
-        resumeId = newUuid;
+    try {
+      const rewrite = rewriteSubagentJsonlToUuid(sessionId, jsonlPath);
+      if (rewrite.rewrote) {
+        log(`Copied non-UUID session ${sessionId} to resumable UUID ${rewrite.resumeId}`);
+        resumeId = rewrite.resumeId;
         // Remap all caches so subsequent lookups use the new UUID
         if (conversationId) {
-          remapConversationSession(sessionId, newUuid, conversationId);
+          remapConversationSession(sessionId, rewrite.resumeId, conversationId);
           if (syncServiceRef) {
-            syncServiceRef.updateSessionId(conversationId, newUuid).catch(logConvexFailure);
+            syncServiceRef.updateSessionId(conversationId, rewrite.resumeId).catch(logConvexFailure);
           }
         }
-      } catch (err) {
-        log(`Failed to copy session for UUID resume: ${err instanceof Error ? err.message : String(err)}`);
       }
+    } catch (err) {
+      log(`Failed to copy session for UUID resume: ${err instanceof Error ? err.message : String(err)}`);
     }
     resumeCmd = `claude --resume ${resumeId}${extraFlags ? " " + extraFlags : ""}`;
   }
@@ -10476,17 +10556,9 @@ async function main(): Promise<void> {
     }, delay);
   }
 
-  // Tracks messages currently being processed. Maps id → entry timestamp so a
-  // single botched deliverMessage (e.g. AppleScript hang past the 180s timeout,
-  // or a hung subscription handler) can't permanently wedge an id in the set
-  // and stop every future retry of the same message.
-  const messagesInFlight = new Map<string, number>();
-  const IN_FLIGHT_HARD_TTL_MS = 240_000; // > DELIVERY_TIMEOUT_MS (180s)
-  // Track messages recently injected to tmux with timestamps, so retries don't re-inject.
-  // Uses a TTL: blocks re-delivery within 60s (the race window), but allows it after
-  // in case the agent dropped the paste or crashed silently after injection.
-  const injectedMessageTs = new Map<string, number>();
-  const INJECTION_DEDUP_TTL_MS = 60_000;
+  // messagesInFlight / injectedMessageTs are module-scoped so kill_session can wipe a
+  // conversation's entries — otherwise a forced restart leaves the local dedup convinced
+  // the message just landed even though the tmux it landed in was just killed.
   // Hard ceiling on a single deliverMessage attempt. Worst legitimate path is auto-resume
   // of a large JSONL (~90s poll + tmux startup); 180s leaves margin without leaving the
   // in-flight slot wedged forever if a tmux/Convex call hangs.
@@ -10508,9 +10580,9 @@ async function main(): Promise<void> {
               logDelivery(`Subscription: ${messages.length} pending message(s) received`);
             }
             for (const msg of messages) {
-              const inFlightSince = messagesInFlight.get(msg._id);
-              if (inFlightSince !== undefined) {
-                const age = Date.now() - inFlightSince;
+              const inFlight = messagesInFlight.get(msg._id);
+              if (inFlight !== undefined) {
+                const age = Date.now() - inFlight.ts;
                 if (age < IN_FLIGHT_HARD_TTL_MS) {
                   logDelivery(`Skipping msg=${msg._id.slice(0, 8)} - already in flight (age=${Math.round(age / 1000)}s)`);
                   continue;
@@ -10518,7 +10590,7 @@ async function main(): Promise<void> {
                 logDelivery(`Reclaiming msg=${msg._id.slice(0, 8)} - in-flight ${Math.round(age / 1000)}s exceeds ${IN_FLIGHT_HARD_TTL_MS / 1000}s TTL, retrying`);
                 messagesInFlight.delete(msg._id);
               }
-              messagesInFlight.set(msg._id, Date.now());
+              messagesInFlight.set(msg._id, { ts: Date.now(), conversationId: msg.conversation_id });
 
               const imageIds = msg.image_storage_ids ?? (msg.image_storage_id ? [msg.image_storage_id] : []);
               logDelivery(`Processing: msg=${msg._id.slice(0, 8)} conv=${msg.conversation_id.slice(0, 12)} content="${msg.content.slice(0, 80)}" images=${imageIds.length} retry=${msg.retry_count ?? 0}`);
@@ -10550,9 +10622,9 @@ async function main(): Promise<void> {
               // TTL ensures we allow re-delivery if the agent dropped/crashed after injection.
               // Exception: compaction recovery bypass allows re-delivery of messages dropped during CC compaction.
               const isCompactionRecovery = compactionRedeliveryBypass.delete(msg._id);
-              const lastInjectedAt = injectedMessageTs.get(msg._id);
-              if (lastInjectedAt && (Date.now() - lastInjectedAt) < INJECTION_DEDUP_TTL_MS && !isCompactionRecovery) {
-                logDelivery(`DEDUP: msg=${msg._id.slice(0, 8)} injected ${Math.round((Date.now() - lastInjectedAt) / 1000)}s ago, updating status only`);
+              const lastInjected = injectedMessageTs.get(msg._id);
+              if (lastInjected && (Date.now() - lastInjected.ts) < INJECTION_DEDUP_TTL_MS && !isCompactionRecovery) {
+                logDelivery(`DEDUP: msg=${msg._id.slice(0, 8)} injected ${Math.round((Date.now() - lastInjected.ts) / 1000)}s ago, updating status only`);
                 try {
                   await syncService.updateMessageStatus({ messageId: msg._id, status: "injected" });
                 } catch {}
@@ -10580,7 +10652,7 @@ async function main(): Promise<void> {
                 ]);
                 if (delivered) {
                   logDelivery(`SUCCESS: msg=${msg._id.slice(0, 8)} injected${isCompactionRecovery ? " (compaction recovery)" : ""}`);
-                  injectedMessageTs.set(msg._id, Date.now());
+                  injectedMessageTs.set(msg._id, { ts: Date.now(), conversationId: msg.conversation_id });
                   // Track for post-compaction recovery: if CC compacts and goes idle,
                   // we can re-inject this message. Skip on recovery re-injections to
                   // prevent infinite compaction->recovery loops.
@@ -10594,8 +10666,8 @@ async function main(): Promise<void> {
                   // GC: evict expired entries to prevent unbounded growth
                   if (injectedMessageTs.size > 500) {
                     const now = Date.now();
-                    for (const [id, ts] of injectedMessageTs) {
-                      if (now - ts > INJECTION_DEDUP_TTL_MS) injectedMessageTs.delete(id);
+                    for (const [id, entry] of injectedMessageTs) {
+                      if (now - entry.ts > INJECTION_DEDUP_TTL_MS) injectedMessageTs.delete(id);
                     }
                   }
                 } else {
