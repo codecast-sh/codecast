@@ -647,12 +647,8 @@ interface InboxStoreState {
   closeCreateModal: () => void;
 
   // -- Fork navigation --
-  activeBranches: Record<string, string>;
+  // Forks are first-class conversations; we navigate to them by URL. No overlay state.
   optimisticForkChildren: ForkChild[];
-  activeForkHighlight: string | null;
-  pendingForkActivation: string | null;
-  setActiveForkHighlight: (id: string | null) => void;
-  setPendingForkActivation: (id: string | null) => void;
 
   // -- Dispatch (provided by middleware) --
   _setDispatch: (fn: (action: string, args: any, patches?: any, result?: any) => Promise<any>) => void;
@@ -724,12 +720,9 @@ interface InboxStoreState {
   getConvexId: (id: string) => string | undefined;
 
   // -- Fork navigation --
-  switchBranch: (messageUuid: string, convId: string) => void;
-  clearBranch: (messageUuid: string) => void;
   addOptimisticFork: (fork: ForkChild) => void;
   pruneOptimisticForks: (serverIds: Set<string>) => void;
   resolveForkSessionId: (sessionId: string, convexId: string) => void;
-  resetForkNav: () => void;
 
   // -- Client prefs (mutative actions -> auto-dispatch) --
   updateClientUI: (partial: Partial<ClientUI>) => void;
@@ -1124,12 +1117,7 @@ export const useInboxStore = create<InboxStoreState>(
   openCreateModal: (type: 'task' | 'plan' | 'doc') => set({ createModal: type }),
   closeCreateModal: () => set({ createModal: null }),
 
-  activeBranches: {},
   optimisticForkChildren: [],
-  activeForkHighlight: null,
-  pendingForkActivation: null,
-  setActiveForkHighlight: (id: string | null) => set({ activeForkHighlight: id }),
-  setPendingForkActivation: (id: string | null) => set({ pendingForkActivation: id }),
   recentProjects: [],
   setRecentProjects: action(function (this: Draft, projects: Array<{ path: string; count: number; lastActive: number }>) {
     this.recentProjects = projects;
@@ -1562,7 +1550,7 @@ export const useInboxStore = create<InboxStoreState>(
   navigateUp: () => {
     const ordered = get().visualOrder();
     if (ordered.length === 0) return;
-    const currentId = get().activeForkHighlight || get().currentSessionId;
+    const currentId = get().currentSessionId;
     const idx = ordered.findIndex((s: InboxSession) => s._id === currentId);
     const newIdx = (idx - 1 + ordered.length) % ordered.length;
     get().navigateToSession(ordered[newIdx]._id);
@@ -1571,7 +1559,7 @@ export const useInboxStore = create<InboxStoreState>(
   navigateDown: () => {
     const ordered = get().visualOrder();
     if (ordered.length === 0) return;
-    const currentId = get().activeForkHighlight || get().currentSessionId;
+    const currentId = get().currentSessionId;
     const idx = ordered.findIndex((s: InboxSession) => s._id === currentId);
     const newIdx = (idx + 1) % ordered.length;
     get().navigateToSession(ordered[newIdx]._id);
@@ -1580,12 +1568,6 @@ export const useInboxStore = create<InboxStoreState>(
   setCurrentSession: action(function (this: Draft, id: string) {
     this.currentSessionId = id;
     this.viewingDismissedId = null;
-    this.activeBranches = {};
-    // Preserve pendingForkActivation — it's consumed by ConversationView after parent loads.
-    // Only clear activeForkHighlight if there's no pending fork.
-    if (!this.pendingForkActivation) {
-      this.activeForkHighlight = null;
-    }
     this.clientState.current_conversation_id = id;
   }),
 
@@ -1651,44 +1633,17 @@ export const useInboxStore = create<InboxStoreState>(
   }),
 
   navigateToSession: action(function (this: Draft, id: string) {
-    const session = this.sessions[id];
-    if (session?.forked_from) {
-      const parentId = session.forked_from;
-      if (this.conversations[parentId]) {
-        (this.conversations[parentId] as any).inbox_dismissed_at = null;
-      }
-      this.pendingForkActivation = id;
-      this.activeForkHighlight = id;
-      if (this.sessions[parentId]) {
-        this.sessions[parentId].inbox_dismissed_at = null;
-        this.currentSessionId = parentId;
-        this.viewingDismissedId = null;
-        this.activeBranches = {};
-        this.clientState.current_conversation_id = parentId;
-      } else {
-        this.pendingNavigateId = parentId;
-        this.viewingDismissedId = null;
-      }
-      return;
-    }
-
+    // Plain navigation. Forks are first-class conversations — clicking one
+    // (in the sidebar, BranchSelector, or a deep link) just sets it as the
+    // current conversation. No overlay-on-parent state to keep in sync.
     if (this.conversations[id]) {
       (this.conversations[id] as any).inbox_dismissed_at = null;
     }
+    const session = this.sessions[id];
     if (session) {
       session.inbox_dismissed_at = null;
       this.currentSessionId = id;
       this.viewingDismissedId = null;
-      this.activeBranches = {};
-      // Preserve pending fork activation when navigating to the fork's parent
-      const pendingFork = this.pendingForkActivation;
-      const isPendingParent = pendingFork && this.sessions[pendingFork]?.forked_from === id;
-      if (isPendingParent) {
-        // Keep pendingForkActivation and activeForkHighlight for ConversationView to consume
-      } else {
-        this.activeForkHighlight = null;
-        this.pendingForkActivation = null;
-      }
       this.clientState.current_conversation_id = id;
     } else {
       this.pendingNavigateId = id;
@@ -1914,20 +1869,9 @@ export const useInboxStore = create<InboxStoreState>(
   // =====================
   // FORK NAVIGATION
   // =====================
-
-  switchBranch: (messageUuid: string, convId: string) => {
-    set((s: InboxStoreState) => ({
-      activeBranches: { ...s.activeBranches, [messageUuid]: convId },
-    }));
-  },
-
-  clearBranch: (messageUuid: string) => {
-    set((s: InboxStoreState) => {
-      const next = { ...s.activeBranches };
-      delete next[messageUuid];
-      return { activeBranches: next };
-    });
-  },
+  // Forks are first-class conversations. The only state we track is the
+  // optimistic fork-children list (so the UI can show a freshly created
+  // fork before the server confirms its convex id).
 
   addOptimisticFork: (fork: ForkChild) => {
     set((s: InboxStoreState) => ({
@@ -1945,10 +1889,6 @@ export const useInboxStore = create<InboxStoreState>(
   resolveForkSessionId: (sessionId: string, convexId: string) => {
     if (sessionId === convexId) return;
     const state = get();
-    const newActiveBranches = { ...state.activeBranches };
-    for (const [uuid, cid] of Object.entries(newActiveBranches)) {
-      if (cid === sessionId) newActiveBranches[uuid] = convexId;
-    }
     const newOptimistic = state.optimisticForkChildren.map((f: ForkChild) =>
       f._id === sessionId ? { ...f, _id: convexId } : f
     );
@@ -1958,17 +1898,8 @@ export const useInboxStore = create<InboxStoreState>(
       delete newMessages[sessionId];
     }
     set({
-      activeBranches: newActiveBranches,
       optimisticForkChildren: newOptimistic,
       messages: newMessages,
-    });
-  },
-
-  resetForkNav: () => {
-    set({
-      activeBranches: {},
-      optimisticForkChildren: [],
-      activeForkHighlight: null,
     });
   },
 
