@@ -2023,7 +2023,7 @@ You operate within a structured work tracking system. A human monitors your prog
 
 **Create a plan** when the user describes work with multiple distinct parts — a feature with frontend and backend changes, a refactor that touches several subsystems, a bug that needs investigation then fixing. Run \`cast plan create "Title" -g "goal"\` and add tasks with \`cast task create "Title" --plan <plan_id>\`. Don't create plans for single-task work.
 
-**Check existing work first.** Your context includes an overview of active tasks and plans. Before creating new ones, check if your work already has a task (\`cast task ready\`) or fits under an existing plan. Claim existing tasks with \`cast task start <id>\` rather than creating duplicates.
+**Check existing work first.** Your context includes an overview of active tasks and plans. Before creating new ones, check if your work already has a task or fits under an existing plan. When the user names a topic, search by it directly — \`cast task ls -q "<topic>"\` and \`cast plan ls -q "<topic>"\` filter by title/description so you don't have to scan a wall of IDs. Use \`cast task ready\` (optionally \`-q\`) for unclaimed work. Claim existing tasks with \`cast task start <id>\` rather than creating duplicates.
 
 ### Working on tasks
 
@@ -2056,6 +2056,9 @@ When your context gets compacted, re-read your task or plan context (\`cast task
 
 \`\`\`bash
 cast task ready                             # Find available work
+cast task ready -q "<topic>"                # Filter ready tasks by title/description
+cast task ls -q "<topic>"                   # Search all active tasks by title/description
+cast plan ls -q "<topic>"                   # Search active plans by title/goal
 cast task start/done/comment <id>           # Task lifecycle
 cast task create "Title" -t task -p high    # Create task
 cast task create "Title" --plan <plan_id>   # Create task bound to plan
@@ -9234,6 +9237,7 @@ work
   .option("-a, --all", "Include done/dropped tasks")
   .option("-d, --derived", "Include derived/mined tasks (hidden by default)")
   .option("-n, --limit <n>", "Max results", "50")
+  .option("-q, --query <text>", "Filter by title/description (case-insensitive)")
   .option("-v, --verbose", "Show descriptions")
   .action(async (options: any) => {
     const body: Record<string, any> = { limit: parseInt(options.limit) };
@@ -9242,6 +9246,7 @@ work
     if (options.status) body.status = options.status;
     if (options.ready) body.ready = true;
     if (options.derived || options.all) body.include_derived = true;
+    if (options.query) body.query = options.query;
     body.project_path = getRealCwd();
 
     const tasks = await cliPost("/cli/work/list", body);
@@ -9499,10 +9504,12 @@ work
   .description("Show tasks ready to work on (open, no blockers)")
   .option("-p, --project <id>", "Filter by project")
   .option("--plan <plan_id>", "Filter by plan")
+  .option("-q, --query <text>", "Filter by title/description (case-insensitive)")
   .action(async (options: any) => {
     const body: Record<string, any> = { ready: true };
     if (options.project) body.project_id = options.project;
     if (options.plan) body.plan_id = options.plan;
+    if (options.query) body.query = options.query;
     body.project_path = getRealCwd();
     const tasks = await cliPost("/cli/work/list", body);
     if (!Array.isArray(tasks) || tasks.length === 0) {
@@ -9886,6 +9893,7 @@ plan
   .option("--done", "Show done plans")
   .option("--all", "Show all statuses")
   .option("--project <id>", "Filter by project")
+  .option("-q, --query <text>", "Filter by title/goal/description (case-insensitive)")
   .action(async (options: any) => {
     const body: Record<string, any> = {};
     if (options.all) body.include_all = true;
@@ -9893,6 +9901,7 @@ plan
     else if (options.done) body.status = "done";
     else if (options.active) body.status = "active";
     if (options.project) body.project_id = options.project;
+    if (options.query) body.query = options.query;
     body.project_path = getRealCwd();
 
     const plans = await cliPost("/cli/plans/list", body);

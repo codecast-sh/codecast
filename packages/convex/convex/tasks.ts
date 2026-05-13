@@ -441,6 +441,7 @@ export const list = query({
     include_derived: v.optional(v.boolean()),
     include_done: v.optional(v.boolean()),
     project_path: v.optional(v.string()),
+    query: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token, false);
@@ -486,9 +487,17 @@ export const list = query({
       tasks = tasks.filter((t: any) => t.execution_status === args.execution_status);
     }
 
+    if (args.query) {
+      const q = args.query.toLowerCase();
+      tasks = tasks.filter((t: any) =>
+        (t.title || "").toLowerCase().includes(q) ||
+        (t.description || "").toLowerCase().includes(q) ||
+        (t.short_id || "").toLowerCase().includes(q),
+      );
+    }
+
     // Ready = open + no blockers
     if (args.ready) {
-      const allShortIds = new Set(tasks.map((t: any) => t.short_id));
       tasks = tasks.filter((t: any) => {
         if (t.status !== "open") return false;
         if (!t.blocked_by || t.blocked_by.length === 0) return true;

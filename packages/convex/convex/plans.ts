@@ -905,6 +905,7 @@ export const list = query({
     team: v.optional(v.boolean()),
     include_all: v.optional(v.boolean()),
     limit: v.optional(v.number()),
+    query: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token, false);
@@ -942,6 +943,16 @@ export const list = query({
 
     if (!args.status && !args.include_all) {
       plans = plans.filter((p: any) => p.status !== "done" && p.status !== "abandoned");
+    }
+
+    if (args.query) {
+      const q = args.query.toLowerCase();
+      plans = plans.filter((p: any) =>
+        (p.title || "").toLowerCase().includes(q) ||
+        (p.goal || "").toLowerCase().includes(q) ||
+        (p.description || "").toLowerCase().includes(q) ||
+        (p.short_id || "").toLowerCase().includes(q),
+      );
     }
 
     plans.sort((a: any, b: any) => (b.updated_at || 0) - (a.updated_at || 0));
