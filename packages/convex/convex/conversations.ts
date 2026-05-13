@@ -1217,6 +1217,7 @@ export const getNewMessages = query({
 export const copyAllMessages = query({
   args: {
     conversation_id: v.id("conversations"),
+    paginationOpts: v.optional(paginationOptsValidator),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthUserId(ctx);
@@ -1231,23 +1232,36 @@ export const copyAllMessages = query({
     }
     if (!isOwner && !hasTeamAccess && !isShared) return null;
 
+    const mapMsg = (m: any) => ({
+      role: m.role,
+      content: m.content || "",
+      thinking: m.thinking || undefined,
+      timestamp: m.timestamp,
+      tool_calls: m.tool_calls,
+      tool_results: m.tool_results,
+      subtype: m.subtype || undefined,
+    });
+
+    if (args.paginationOpts) {
+      const result = await ctx.db
+        .query("messages")
+        .withIndex("by_conversation_timestamp", (q) =>
+          q.eq("conversation_id", args.conversation_id)
+        )
+        .order("asc")
+        .paginate(args.paginationOpts);
+      const page = sanitizeConvexObjectKeys(result.page.filter(isNonEmptyMessage).map(mapMsg));
+      return { page, isDone: result.isDone, continueCursor: result.continueCursor };
+    }
+
     const allMessages = await ctx.db
       .query("messages")
-      .withIndex("by_conversation_id", (q) => q.eq("conversation_id", args.conversation_id))
+      .withIndex("by_conversation_timestamp", (q) =>
+        q.eq("conversation_id", args.conversation_id)
+      )
       .order("asc")
       .collect();
-
-    return sanitizeConvexObjectKeys(allMessages
-      .filter(isNonEmptyMessage)
-      .map((m) => ({
-        role: m.role,
-        content: m.content || "",
-        thinking: m.thinking || undefined,
-        timestamp: m.timestamp,
-        tool_calls: m.tool_calls,
-        tool_results: m.tool_results,
-        subtype: m.subtype || undefined,
-      })));
+    return sanitizeConvexObjectKeys(allMessages.filter(isNonEmptyMessage).map(mapMsg));
   },
 });
 
@@ -4004,6 +4018,152 @@ export const listPublicConversations = query({
   },
 });
 
+// === Chained fork copy ===
+//
+// A single Convex mutation can write at most ~8192 documents / 16 MB. Large
+// conversations would blow past that, so the fork mutations split message
+// copying across multiple transactions linked by `scheduler.runAfter(0, ...)`.
+//
+// The fork target conversation carries the cursor + total + cutoff (see
+// schema.ts). The kickoff mutation copies the first batch synchronously
+// (so small forks finish in one round-trip), then if more remains schedules
+// `_continueFork`, which advances the cursor batch by batch until done.
+//
+// Batches are bounded by both document count and a byte budget so a stream
+// of large tool_results can't blow the 16 MB transaction limit.
+const FORK_BATCH_DOCS = 500;
+const FORK_BATCH_MAX_BYTES = 8 * 1024 * 1024;
+
+function estimateMsgBytes(m: {
+  content?: string;
+  thinking?: string;
+  tool_calls?: unknown;
+  tool_results?: unknown;
+  images?: unknown;
+}): number {
+  return (
+    (m.content?.length ?? 0) +
+    (m.thinking?.length ?? 0) +
+    (m.tool_calls ? JSON.stringify(m.tool_calls).length : 0) +
+    (m.tool_results ? JSON.stringify(m.tool_results).length : 0) +
+    (m.images ? JSON.stringify(m.images).length : 0) +
+    256
+  );
+}
+
+// Emits the daemon_commands row that materializes a fork session, once
+// (and only once) per fork. Reads the deferred args off the fork row.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function emitForkDaemonCommand(ctx: any, fork: any): Promise<void> {
+  if (!fork.fork_daemon_args) return;
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(fork.fork_daemon_args);
+  } catch {
+    return;
+  }
+  await ctx.db.insert("daemon_commands", {
+    user_id: fork.user_id,
+    command: "resume_session",
+    args: JSON.stringify(parsed),
+    created_at: Date.now(),
+  });
+  // Clear it so a retried _continueFork can never double-spawn.
+  await ctx.db.patch(fork._id, { fork_daemon_args: undefined });
+}
+
+// Copies one batch of messages from the source conversation into the fork.
+// Advances the fork's cursor + message_count atomically with the inserts.
+// Returns { done: true } when no more batches are needed; otherwise schedules
+// _continueFork to run as soon as the current transaction commits.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function advanceForkCopy(ctx: any, forkId: Id<"conversations">): Promise<{ done: boolean }> {
+  const fork = await ctx.db.get(forkId);
+  if (!fork || fork.fork_status !== "copying") {
+    return { done: true };
+  }
+  const sourceId: Id<"conversations"> | undefined = fork.forked_from ?? fork.parent_conversation_id;
+  if (!sourceId) {
+    await ctx.db.patch(forkId, { fork_status: "failed" });
+    return { done: true };
+  }
+
+  const cursor: number = fork.fork_copy_cursor ?? 0;
+  const cutoff: number | undefined = fork.fork_cutoff_timestamp;
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let qBuilder: any = ctx.db
+    .query("messages")
+    .withIndex("by_conversation_timestamp", (qq: any) => qq.eq("conversation_id", sourceId));
+  qBuilder = qBuilder.filter((qq: any) =>
+    cutoff !== undefined
+      ? qq.and(qq.gt(qq.field("timestamp"), cursor), qq.lte(qq.field("timestamp"), cutoff))
+      : qq.gt(qq.field("timestamp"), cursor)
+  );
+  const batch = await qBuilder.order("asc").take(FORK_BATCH_DOCS);
+
+  if (batch.length === 0) {
+    await ctx.db.patch(forkId, {
+      fork_status: "complete",
+      message_count: fork.fork_copied ?? 0,
+    });
+    await emitForkDaemonCommand(ctx, fork);
+    return { done: true };
+  }
+
+  let copied = 0;
+  let bytes = 0;
+  let lastTs = cursor;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  for (const msg of batch as any[]) {
+    const sz = estimateMsgBytes(msg);
+    if (copied > 0 && bytes + sz > FORK_BATCH_MAX_BYTES) break;
+    await ctx.db.insert("messages", {
+      conversation_id: forkId,
+      message_uuid: msg.message_uuid,
+      role: msg.role,
+      content: msg.content,
+      thinking: msg.thinking,
+      tool_calls: msg.tool_calls,
+      tool_results: msg.tool_results,
+      images: msg.images,
+      subtype: msg.subtype,
+      timestamp: msg.timestamp,
+      tokens_used: msg.tokens_used,
+      usage: msg.usage,
+    });
+    copied++;
+    bytes += sz;
+    lastTs = msg.timestamp;
+  }
+
+  const newCopied = (fork.fork_copied ?? 0) + copied;
+  await ctx.db.patch(forkId, {
+    fork_copy_cursor: lastTs,
+    fork_copied: newCopied,
+    message_count: newCopied,
+  });
+
+  // If we trimmed early (byte budget) or filled the doc cap, more rows may exist.
+  // Otherwise the batch underfilled the index, meaning we're done.
+  const moreExpected = copied < batch.length || batch.length === FORK_BATCH_DOCS;
+  if (moreExpected) {
+    await ctx.scheduler.runAfter(0, internal.conversations._continueFork, { forkId });
+    return { done: false };
+  }
+
+  await ctx.db.patch(forkId, { fork_status: "complete" });
+  await emitForkDaemonCommand(ctx, { ...fork, _id: forkId, fork_copied: newCopied });
+  return { done: true };
+}
+
+export const _continueFork = internalMutation({
+  args: { forkId: v.id("conversations") },
+  handler: async (ctx, args) => {
+    await advanceForkCopy(ctx, args.forkId);
+  },
+});
+
 export const forkConversation = mutation({
   args: {
     share_token: v.string(),
@@ -4025,11 +4185,9 @@ export const forkConversation = mutation({
 
     const original = originalConversations[0];
 
-    const messages = await ctx.db
-      .query("messages")
-      .withIndex("by_conversation_id", (q) => q.eq("conversation_id", original._id))
-      .collect();
-
+    // Trust the denormalized message_count for display; the actual copy is
+    // driven by advanceForkCopy walking the source by timestamp cursor and
+    // does not need an exact precomputed total.
     const now = Date.now();
     const newConversationId = await ctx.db.insert("conversations", {
       user_id: authUserId,
@@ -4044,37 +4202,33 @@ export const forkConversation = mutation({
       model: original.model,
       started_at: now,
       updated_at: now,
-      message_count: messages.length,
+      message_count: 0,
       is_private: true,
       status: "completed",
       forked_from: original._id,
+      fork_status: "copying",
+      fork_copy_total: original.message_count ?? 0,
+      fork_copied: 0,
+      fork_copy_cursor: 0,
+      // Snapshot the source at fork time — new messages added to the source
+      // after this point are NOT pulled into the fork. Without this, batches
+      // run across separate transactions could accidentally track the
+      // source's ongoing activity.
+      fork_cutoff_timestamp: now,
     });
-    // Set short_id for O(1) lookup
     await ctx.db.patch(newConversationId, {
       short_id: newConversationId.toString().slice(0, 7),
     });
-
-    for (const msg of messages) {
-      await ctx.db.insert("messages", {
-        conversation_id: newConversationId,
-        message_uuid: msg.message_uuid,
-        role: msg.role,
-        content: msg.content,
-        thinking: msg.thinking,
-        tool_calls: msg.tool_calls,
-        tool_results: msg.tool_results,
-        images: msg.images,
-        subtype: msg.subtype,
-        timestamp: msg.timestamp,
-        tokens_used: msg.tokens_used,
-        usage: msg.usage,
-      });
-    }
 
     const currentForkCount = original.fork_count ?? 0;
     await ctx.db.patch(original._id, {
       fork_count: currentForkCount + 1,
     });
+
+    // Copy the first batch synchronously so small forks finish in one RTT.
+    // If more remains, advanceForkCopy schedules _continueFork to chain
+    // subsequent batches as separate transactions.
+    await advanceForkCopy(ctx, newConversationId);
 
     return newConversationId;
   },
@@ -4122,31 +4276,48 @@ export const forkFromMessage = mutation({
       }
     }
 
-    const allMessages = await ctx.db
-      .query("messages")
-      .withIndex("by_conversation_timestamp", (q) =>
-        q.eq("conversation_id", original!._id)
-      )
-      .order("asc")
-      .collect();
+    // Resolve cutoff (for partial forks) without scanning the source. The
+    // denormalized message_count on the conversation gives us an upper-bound
+    // estimate for display; we don't need an exact total to drive the copy
+    // chain (advanceForkCopy walks until the source runs dry). Avoiding a
+    // full-source scan here is what keeps the kickoff mutation under
+    // Convex's per-transaction read limit for huge conversations.
+    const now = Date.now();
 
-    let messagesToCopy = allMessages;
+    // The fork is a snapshot at this moment in time. Partial forks cap at the
+    // fork-point message's timestamp; full / agent-switch forks cap at "now"
+    // so messages added to the source after fork-time aren't pulled in by
+    // subsequent batches.
+    let cutoffTimestamp: number;
+    let isPartial = false;
     if (args.message_uuid) {
-      const forkIndex = allMessages.findIndex((m) => m.message_uuid === args.message_uuid);
-      if (forkIndex === -1) {
+      const forkPointMsg = await ctx.db
+        .query("messages")
+        .withIndex("by_message_uuid", (q) => q.eq("message_uuid", args.message_uuid!))
+        .first();
+      if (!forkPointMsg || forkPointMsg.conversation_id !== original._id) {
         throw new Error("Fork point message not found");
       }
-      messagesToCopy = allMessages.slice(0, forkIndex + 1);
+      cutoffTimestamp = forkPointMsg.timestamp;
+      isPartial = true;
+    } else {
+      cutoffTimestamp = now;
     }
+    // Partial forks: exact total is unknown without a scan, so leave it
+    // undefined; the UI shows progress without a denominator in that case.
+    // Full forks: trust the denormalized message_count for display.
+    const totalToCopy = isPartial ? undefined : (original.message_count ?? 0);
 
     const isAgentSwitch = !!args.target_agent_type && !args.message_uuid;
     const agentType = args.target_agent_type || original.agent_type;
     const agentLabels: Record<string, string> = { claude_code: "Claude", codex: "Codex", cursor: "Cursor", gemini: "Gemini" };
     const isCrossAgentSwitch = !!args.target_agent_type && args.target_agent_type !== original.agent_type;
     const titlePrefix = isCrossAgentSwitch ? `${agentLabels[args.target_agent_type!] || args.target_agent_type}: ` : "Fork: ";
-
-    const now = Date.now();
     const forkSessionId = args.session_id || `forked-${original.session_id}-${crypto.randomUUID()}`;
+    // The daemon_command is deferred so it can't race a half-copied fork. It
+    // gets inserted by advanceForkCopy when fork_status flips to "complete".
+    const daemonAgentType = agentType === "codex" ? "codex" : agentType === "gemini" ? "gemini" : "claude";
+
     const newConversationId = await ctx.db.insert("conversations", {
       user_id: userId,
       team_id: original.team_id,
@@ -4160,7 +4331,7 @@ export const forkFromMessage = mutation({
       model: isAgentSwitch ? undefined : original.model,
       started_at: now,
       updated_at: now,
-      message_count: messagesToCopy.length,
+      message_count: 0,
       is_private: isAgentSwitch ? original.is_private : true,
       auto_shared: isAgentSwitch ? original.auto_shared : undefined,
       status: "active",
@@ -4179,28 +4350,22 @@ export const forkFromMessage = mutation({
       worktree_branch: original.worktree_branch,
       worktree_path: original.worktree_path,
       worktree_status: original.worktree_status,
+      fork_status: "copying",
+      fork_copy_total: totalToCopy,
+      fork_copied: 0,
+      fork_copy_cursor: 0,
+      fork_cutoff_timestamp: cutoffTimestamp,
     });
 
     await ctx.db.patch(newConversationId, {
       short_id: newConversationId.toString().slice(0, 7),
-    });
-
-    for (const msg of messagesToCopy) {
-      await ctx.db.insert("messages", {
+      fork_daemon_args: JSON.stringify({
+        session_id: forkSessionId,
+        agent_type: daemonAgentType,
         conversation_id: newConversationId,
-        message_uuid: msg.message_uuid,
-        role: msg.role,
-        content: msg.content,
-        thinking: msg.thinking,
-        tool_calls: msg.tool_calls,
-        tool_results: msg.tool_results,
-        images: msg.images,
-        subtype: msg.subtype,
-        timestamp: msg.timestamp,
-        tokens_used: msg.tokens_used,
-        usage: msg.usage,
-      });
-    }
+        project_path: original.project_path || original.git_root,
+      }),
+    });
 
     if (!isAgentSwitch) {
       const currentForkCount = original.fork_count ?? 0;
@@ -4209,19 +4374,9 @@ export const forkFromMessage = mutation({
       });
     }
 
-    // Auto-materialize the fork session via daemon
-    const daemonAgentType = agentType === "codex" ? "codex" : agentType === "gemini" ? "gemini" : "claude";
-    await ctx.db.insert("daemon_commands", {
-      user_id: userId,
-      command: "resume_session",
-      args: JSON.stringify({
-        session_id: forkSessionId,
-        agent_type: daemonAgentType,
-        conversation_id: newConversationId,
-        project_path: original.project_path || original.git_root,
-      }),
-      created_at: Date.now(),
-    });
+    // Copy first batch synchronously so small forks finish in one round-trip;
+    // larger ones chain via _continueFork.
+    await advanceForkCopy(ctx, newConversationId);
 
     return {
       conversation_id: newConversationId,
@@ -5589,22 +5744,18 @@ export const listInboxSessions = query({
 
     const now = Date.now();
     const HEARTBEAT_ALIVE_MS = 90 * 1000;
-    const ACTIVE_WINDOW_MS = 48 * 60 * 60 * 1000;
     const DISMISSED_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
-    const activeCutoff = now - ACTIVE_WINDOW_MS;
     const dismissedCutoff = now - DISMISSED_WINDOW_MS;
 
     const recentConversations = await ctx.db
       .query("conversations")
-      .withIndex("by_user_updated", (q) =>
-        q.eq("user_id", userId).gte("updated_at", activeCutoff)
-      )
+      .withIndex("by_user_updated", (q) => q.eq("user_id", userId))
       .order("desc")
       .filter((q) => q.or(
         q.eq(q.field("status"), "active"),
         q.eq(q.field("status"), "completed")
       ))
-      .take(100);
+      .take(200);
 
     const pinnedConversations = await ctx.db
       .query("conversations")
@@ -5667,7 +5818,7 @@ export const listInboxSessions = query({
       const sorted = [...activeConvs].sort((a, b) => b.updated_at - a.updated_at);
       for (let i = 1; i < sorted.length; i++) {
         const gap = sorted[i - 1].updated_at - sorted[i].updated_at;
-        if (gap > 2 * 60 * 60 * 1000) {
+        if (gap > 12 * 60 * 60 * 1000) {
           clusterCutoff = sorted[i].updated_at;
           break;
         }
@@ -5822,6 +5973,8 @@ export const listInboxSessions = query({
         parent_message_uuid: conv.parent_message_uuid || null,
         icon: conv.icon,
         icon_color: conv.icon_color,
+        team_id: conv.team_id ?? null,
+        is_private: conv.is_private ?? false,
       });
 
       // Don't surface subagents under a dismissed parent — they used to be
@@ -5874,6 +6027,8 @@ export const listInboxSessions = query({
           workflow_run_status: null,
           icon: child.icon,
           icon_color: child.icon_color,
+          team_id: child.team_id ?? null,
+          is_private: child.is_private ?? false,
         });
       }
     }

@@ -183,6 +183,27 @@ export default defineSchema({
     git_root: v.optional(v.string()),
     fork_count: v.optional(v.number()),
     forked_from: v.optional(v.id("conversations")),
+    // Fork-copy progress (set on the fork target, not the source). The fork
+    // mutation chain reads/writes these to copy >8192-message conversations
+    // across multiple transactions without hitting Convex's per-mutation write
+    // limit. Absence means "not a fork in progress".
+    //   - fork_status: "copying" while batches are being copied; "complete"
+    //     once finalized; "failed" if a watchdog marks it.
+    //   - fork_copy_total: messages we expect to copy.
+    //   - fork_copied: messages copied so far (kept in sync with message_count).
+    //   - fork_copy_cursor: timestamp of the last message copied; the next
+    //     batch reads messages where timestamp > this cursor.
+    //   - fork_cutoff_timestamp: upper bound for partial forks (forked at a
+    //     specific message). Absent = full copy.
+    //   - fork_daemon_args: JSON args for the daemon_commands row to insert
+    //     once copy completes; kept here so the daemon can't race a half-copied
+    //     fork.
+    fork_status: v.optional(v.union(v.literal("copying"), v.literal("complete"), v.literal("failed"))),
+    fork_copy_total: v.optional(v.number()),
+    fork_copied: v.optional(v.number()),
+    fork_copy_cursor: v.optional(v.number()),
+    fork_cutoff_timestamp: v.optional(v.number()),
+    fork_daemon_args: v.optional(v.string()),
     is_favorite: v.optional(v.boolean()),
     short_id: v.optional(v.string()),
     auto_shared: v.optional(v.boolean()),
