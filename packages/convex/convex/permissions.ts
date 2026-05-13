@@ -23,6 +23,11 @@ async function getAuthenticatedUserId(
   return null;
 }
 
+// Window during which an identical pending prompt is treated as a duplicate.
+// Two detection paths (transcript-scan + PreToolUse hook) can fire for the same
+// tool call within milliseconds of each other; this collapses them into one row.
+const DUPLICATE_WINDOW_MS = 10_000;
+
 export const createPermissionRequest = mutation({
   args: {
     conversation_id: v.id("conversations"),
@@ -45,16 +50,63 @@ export const createPermissionRequest = mutation({
       throw new Error("Unauthorized: can only create permissions for your own conversations");
     }
 
+    const now = Date.now();
+    const existing = await ctx.db
+      .query("pending_permissions")
+      .withIndex("by_conversation_status", (q: any) =>
+        q.eq("conversation_id", args.conversation_id).eq("status", "pending")
+      )
+      .collect();
+
+    const duplicate = existing.find(
+      (p) =>
+        p.session_id === args.session_id &&
+        p.tool_name === args.tool_name &&
+        p.arguments_preview === args.arguments_preview &&
+        now - p.created_at < DUPLICATE_WINDOW_MS
+    );
+    if (duplicate) {
+      return duplicate._id;
+    }
+
     const permissionId = await ctx.db.insert("pending_permissions", {
       conversation_id: args.conversation_id,
       session_id: args.session_id,
       tool_name: args.tool_name,
       arguments_preview: args.arguments_preview,
       status: "pending",
-      created_at: Date.now(),
+      created_at: now,
     });
 
     return permissionId;
+  },
+});
+
+export const cancelPermissionRequest = mutation({
+  args: {
+    permission_id: v.id("pending_permissions"),
+    api_token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!authUserId) {
+      throw new Error("Authentication failed: invalid token or session");
+    }
+
+    const permission = await ctx.db.get(args.permission_id);
+    if (!permission) return false;
+    if (permission.status !== "pending") return false;
+
+    const conversation = await ctx.db.get(permission.conversation_id);
+    if (!conversation || conversation.user_id.toString() !== authUserId.toString()) {
+      return false;
+    }
+
+    await ctx.db.patch(args.permission_id, {
+      status: "cancelled",
+      resolved_at: Date.now(),
+    });
+    return true;
   },
 });
 
@@ -100,6 +152,50 @@ export const updatePermissionStatus = mutation({
   },
 });
 
+export const cancelPendingPermissions = mutation({
+  args: {
+    session_id: v.string(),
+    // Only cancel records created at or before this timestamp. Guards against
+    // a race where the daemon triggers cancellation on transition out of
+    // permission_blocked, but Claude Code emits a fresh permission_prompt for
+    // the next tool while the cancel is in flight. Without this guard, the
+    // cancel mutation could land after the new record is inserted and
+    // erroneously cancel it.
+    created_before: v.optional(v.number()),
+    api_token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!authUserId) {
+      throw new Error("Authentication failed: invalid token or session");
+    }
+
+    const cutoff = args.created_before ?? Date.now();
+    const pending = await ctx.db
+      .query("pending_permissions")
+      .withIndex("by_session", (q) => q.eq("session_id", args.session_id))
+      .filter((q) =>
+        q.and(
+          q.eq(q.field("status"), "pending"),
+          q.lte(q.field("created_at"), cutoff)
+        )
+      )
+      .collect();
+
+    let cancelled = 0;
+    for (const p of pending) {
+      const conv = await ctx.db.get(p.conversation_id);
+      if (!conv || conv.user_id.toString() !== authUserId.toString()) continue;
+      await ctx.db.patch(p._id, {
+        status: "cancelled",
+        resolved_at: Date.now(),
+      });
+      cancelled++;
+    }
+    return cancelled;
+  },
+});
+
 export const getPendingPermissions = query({
   args: {
     conversation_id: v.id("conversations"),
@@ -119,6 +215,14 @@ export const getPendingPermissions = query({
       return [];
     }
 
+    // Safety net: hide pending rows older than 2 hours. The daemon's local
+    // handler cancels rows on its own timeout (~1h), but if the daemon was
+    // killed mid-prompt or the cancel mutation failed, the row would otherwise
+    // haunt the UI forever. The local timeout is the source of truth; this is
+    // just defense in depth.
+    const STALE_PENDING_MS = 2 * 60 * 60 * 1000;
+    const cutoff = Date.now() - STALE_PENDING_MS;
+
     const permissions = await ctx.db
       .query("pending_permissions")
       .withIndex("by_conversation_status", (q) =>
@@ -126,7 +230,9 @@ export const getPendingPermissions = query({
       )
       .collect();
 
-    return permissions.sort((a, b) => a.created_at - b.created_at);
+    return permissions
+      .filter((p) => p.created_at > cutoff)
+      .sort((a, b) => a.created_at - b.created_at);
   },
 });
 

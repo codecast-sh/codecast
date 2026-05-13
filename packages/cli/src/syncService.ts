@@ -835,9 +835,46 @@ export class SyncService {
     }
   }
 
+  async cancelPermissionRequest(permissionId: string): Promise<boolean> {
+    try {
+      const ok = await this.client.mutation(
+        "permissions:cancelPermissionRequest" as any,
+        {
+          permission_id: permissionId,
+          api_token: this.apiToken,
+        }
+      );
+      return Boolean(ok);
+    } catch (error) {
+      if (isAuthError(error)) {
+        throw new AuthExpiredError();
+      }
+      throw error;
+    }
+  }
+
+  async cancelPendingPermissions(sessionId: string, createdBefore?: number): Promise<number> {
+    try {
+      const cancelled = await this.client.mutation(
+        "permissions:cancelPendingPermissions" as any,
+        {
+          session_id: sessionId,
+          ...(createdBefore !== undefined && { created_before: createdBefore }),
+          api_token: this.apiToken,
+        }
+      );
+      return Number(cancelled) || 0;
+    } catch (error) {
+      if (isAuthError(error)) {
+        throw new AuthExpiredError();
+      }
+      throw error;
+    }
+  }
+
   async getPermissionDecision(sessionId: string, permissionId?: string): Promise<{
     _id: string;
-    status: "approved" | "denied";
+    status: "approved" | "denied" | "cancelled";
     resolved_at?: number;
     tool_name: string;
   } | null> {
