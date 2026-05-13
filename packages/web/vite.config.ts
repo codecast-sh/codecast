@@ -33,6 +33,38 @@ export default defineConfig({
     port: 3000,
     host: true,
     allowedHosts: ["local.codecast.sh", "local.1.codecast.sh", "local.2.codecast.sh"],
+    // Transform the heaviest modules on boot so the first nav doesn't race HMR.
+    // Sized by line count; ConversationView alone is 10k LOC.
+    warmup: {
+      clientFiles: [
+        "./components/ConversationView.tsx",
+        "./components/ConversationList.tsx",
+        "./components/GlobalSessionPanel.tsx",
+        "./components/CommandPalette.tsx",
+        "./components/ActivityFeed.tsx",
+        "./components/PlanDetailPanel.tsx",
+        "./components/FileDiffLayout.tsx",
+        "./components/Sidebar.tsx",
+        "./store/inboxStore.ts",
+      ],
+    },
+  },
+  // Pre-bundle heavy CJS/ESM-interop deps so the optimizer doesn't have to
+  // discover and re-bundle them mid-session (which invalidates module URLs
+  // and causes ERR_CONTENT_LENGTH_MISMATCH on in-flight requests).
+  optimizeDeps: {
+    include: [
+      "react",
+      "react-dom",
+      "react-dom/client",
+      "react-router",
+      "convex/react",
+      "@convex-dev/auth/react",
+      "react-markdown",
+      "@dnd-kit/core",
+      "@dnd-kit/sortable",
+      "dexie",
+    ],
   },
   build: {
     sourcemap: true,
