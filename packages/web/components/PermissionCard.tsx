@@ -8,7 +8,7 @@ type Permission = {
   _id: Id<"pending_permissions">;
   tool_name: string;
   arguments_preview?: string;
-  status: "pending" | "approved" | "denied";
+  status: "pending" | "approved" | "denied" | "cancelled";
   created_at: number;
   responded_at?: number;
 };

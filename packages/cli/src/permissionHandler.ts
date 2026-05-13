@@ -6,7 +6,11 @@ export interface PermissionDecision {
 }
 
 const POLL_INTERVAL_MS = 1000;
-const TIMEOUT_MS = 5 * 60 * 1000;
+// Long timeout: the global permission subscription (daemon.ts setupPermissionSubscription)
+// is the authoritative injection path. This local poller exists only so call sites that
+// await a decision can react. If the user takes longer than this, the row is cancelled
+// so it stops cluttering the UI as a zombie pending — the subscription will then ignore it.
+const TIMEOUT_MS = 60 * 60 * 1000;
 
 export async function handlePermissionRequest(
   syncService: SyncService,
@@ -30,6 +34,10 @@ export async function handlePermissionRequest(
       const decision = await syncService.getPermissionDecision(sessionId, permissionId);
 
       if (decision) {
+        if (decision.status === "cancelled") {
+          log(`Permission auto-cancelled (agent moved on) for tool: ${prompt.tool_name}`);
+          return null;
+        }
         const approved = decision.status === "approved";
         log(`Permission ${approved ? "approved" : "denied"} for tool: ${prompt.tool_name}`);
         return { approved };
@@ -38,7 +46,12 @@ export async function handlePermissionRequest(
       await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
     }
 
-    log(`Permission request timed out for tool: ${prompt.tool_name}`);
+    log(`Permission request timed out for tool: ${prompt.tool_name}, cancelling row`);
+    try {
+      await syncService.cancelPermissionRequest(permissionId);
+    } catch (cancelErr) {
+      log(`Failed to cancel timed-out permission ${permissionId}: ${cancelErr instanceof Error ? cancelErr.message : String(cancelErr)}`);
+    }
     return null;
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);

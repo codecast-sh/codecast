@@ -218,7 +218,10 @@ function getPermissionFlags(agentType: "claude" | "codex" | "cursor" | "gemini",
 
   if (agentType === "claude") {
     if (modes?.claude === "bypass") return "--permission-mode bypassPermissions";
-    return "--allow-dangerously-skip-permissions";
+    if (modes?.claude === "default") return "--allow-dangerously-skip-permissions";
+    // No explicit config: match codex behavior and default to bypass so sessions launched
+    // from the web (or any non-CLI surface) inherit the user's expected dev defaults.
+    return "--permission-mode bypassPermissions";
   } else if (agentType === "codex") {
     const existing = config?.codex_args || "";
     if (existing.includes("--full-auto") || existing.includes("--ask-for-approval") || existing.includes("--dangerously-bypass")) return null;
@@ -724,6 +727,11 @@ function extractPendingToolUseFromTranscript(transcriptPath: string): { tool_nam
 
 const permissionRecordPending = new Set<string>();
 const permissionJustResolved = new Set<string>();
+// One-shot cleanup tracking: when a session is first observed in
+// bypassPermissions mode (post-daemon-restart or post-upgrade), sweep any
+// stale pending_permissions records left over from before the phantom-suppression
+// fix shipped. After the first sweep per session we leave it alone.
+const bypassPermissionsCleaned = new Set<string>();
 
 const syncStats = {
   messagesSynced: 0,
@@ -3505,8 +3513,9 @@ async function processSessionFile(
     const lastAssistantMessage = messages.filter(m => m.role === "assistant").pop();
     if (lastAssistantMessage && conversationId) {
       const permissionPrompt = detectPermissionPrompt(lastAssistantMessage.content);
-      if (permissionPrompt) {
+      if (permissionPrompt && !permissionRecordPending.has(sessionId)) {
         log(`Permission prompt detected for tool: ${permissionPrompt.tool_name}`);
+        permissionRecordPending.add(sessionId);
         permissionJustResolved.add(sessionId);
         sendAgentStatus(syncService, conversationId, sessionId, "permission_blocked");
 
@@ -3555,8 +3564,10 @@ async function processSessionFile(
           } else {
             log("Permission request timed out or failed");
           }
+          permissionRecordPending.delete(sessionId);
         }).catch((err) => {
           log(`Permission handling error: ${err instanceof Error ? err.message : String(err)}`);
+          permissionRecordPending.delete(sessionId);
         });
       }
 
@@ -9431,8 +9442,35 @@ async function main(): Promise<void> {
       const prev = lastHookStatus.get(sessionId);
       if (prev && prev.ts >= data.ts) return;
 
+      // In bypassPermissions mode, Claude Code still emits permission_prompt
+      // Notification events for tools it auto-approves. Those notifications do
+      // not pause the agent — no real block exists. Treating them as
+      // permission_blocked spawns a phantom Approve/Deny dialog in the web UI
+      // that has no way to resolve, because the agent has already moved on.
+      // The Notification event doesn't carry permission_mode, so fall back to
+      // the last mode we observed for this session.
+      const inheritedMode = data.permission_mode || prev?.permission_mode;
+      if (data.status === "permission_blocked" && inheritedMode === "bypassPermissions") {
+        log(`Suppressing phantom permission_blocked in bypassPermissions mode for session ${sessionId.slice(0, 8)}`);
+        data = { ...data, status: "working" };
+      }
+
+      // One-shot sweep for sessions in bypass mode. Catches stale records
+      // from before the phantom-suppression fix shipped.
+      if (inheritedMode === "bypassPermissions" && !bypassPermissionsCleaned.has(sessionId)) {
+        bypassPermissionsCleaned.add(sessionId);
+        syncService.cancelPendingPermissions(sessionId, Date.now())
+          .then((n) => { if (n > 0) log(`Swept ${n} pre-existing pending permission(s) for bypass-mode session ${sessionId.slice(0, 8)}`); })
+          .catch((err) => log(`Bypass-mode permission sweep failed: ${err instanceof Error ? err.message : String(err)}`));
+      }
+
       const statusChanged = !prev || prev.status !== data.status;
       const modeChanged = data.permission_mode && (!prev || prev.permission_mode !== data.permission_mode);
+      // Notification events don't carry permission_mode; preserve the last
+      // observed mode so subsequent bypass-mode suppression stays correct.
+      if (!data.permission_mode && prev?.permission_mode) {
+        data = { ...data, permission_mode: prev.permission_mode };
+      }
       lastHookStatus.set(sessionId, data);
 
       if (data.status === "compacting" || data.status === "thinking" || data.status === "stopped") {
@@ -9560,6 +9598,16 @@ async function main(): Promise<void> {
 
       if (data.status !== "permission_blocked" && prev?.status === "permission_blocked") {
         permissionRecordPending.delete(sessionId);
+        // The agent moved past the permission point without the web UI's
+        // approval — bypass auto-approved, the user answered in the TUI, or
+        // Claude Code emitted a stale permission_prompt for a tool that never
+        // actually blocked. Either way, records created up to this transition
+        // are stale; pass a cutoff so a freshly created record for the *next*
+        // tool can't be racily cancelled by an in-flight mutation.
+        const cutoff = Date.now();
+        syncService.cancelPendingPermissions(sessionId, cutoff)
+          .then((n) => { if (n > 0) log(`Cancelled ${n} stale permission record(s) for session ${sessionId.slice(0, 8)}`); })
+          .catch((err) => log(`Failed to cancel pending permissions: ${err instanceof Error ? err.message : String(err)}`));
       }
     } catch {}
   }
@@ -9580,7 +9628,11 @@ async function main(): Promise<void> {
     handleStatusData(sessionId, data);
     try {
       fs.mkdirSync(AGENT_STATUS_DIR, { recursive: true });
-      fs.writeFileSync(path.join(AGENT_STATUS_DIR, `${sessionId}.json`), JSON.stringify(data));
+      // Persist the normalized record (with inherited permission_mode) so a
+      // daemon restart can correctly classify cached permission_blocked events
+      // from sessions running in bypassPermissions mode.
+      const persistData = lastHookStatus.get(sessionId) || data;
+      fs.writeFileSync(path.join(AGENT_STATUS_DIR, `${sessionId}.json`), JSON.stringify(persistData));
     } catch {}
 
     // Piggyback message sync onto hook events — fs.watch can miss events on macOS,
@@ -9649,7 +9701,9 @@ async function main(): Promise<void> {
         const stat = fs.statSync(fp);
         if (stat.mtimeMs < cutoff) {
           fs.unlinkSync(fp);
-          lastHookStatus.delete(path.basename(file, ".json"));
+          const sid = path.basename(file, ".json");
+          lastHookStatus.delete(sid);
+          bypassPermissionsCleaned.delete(sid);
         }
       }
     } catch {}
@@ -10469,6 +10523,15 @@ async function main(): Promise<void> {
             }
 
             log(`New permission response: ${permission._id} status=${permission.status} tool=${permission.tool_name}`);
+
+            // "cancelled" means the daemon itself marked the record resolved
+            // because the agent moved past the permission point. Injecting
+            // Enter/Escape would land in a TUI that no longer has a prompt
+            // open and corrupt the next user input.
+            if (permission.status === "cancelled") {
+              processedPermissionIds.add(permission._id);
+              continue;
+            }
 
             try {
               const approved = permission.status === "approved";
