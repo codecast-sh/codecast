@@ -50,6 +50,7 @@ import {
   chooseClaudeTailMessagesForTokenBudget,
   estimateClaudeImportTokens,
 } from "./jsonlGenerator.js";
+import { resolveLocalProjectPath } from "./projectPathResolver.js";
 
 const _execAsync = promisify(exec);
 const ENRICHED_PATH = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
@@ -419,7 +420,7 @@ const lastHeartbeatLogged = new Map<string, { status: string; ts: number; since:
 const HEARTBEAT_LOG_THROTTLE_MS = 5 * 60 * 1000;
 
 type AgentStatus = "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "stopped" | "resuming";
-type PermissionMode = "default" | "plan" | "acceptEdits" | "bypassPermissions" | "dontAsk";
+type PermissionMode = "default" | "plan" | "acceptEdits" | "bypassPermissions" | "dontAsk" | "auto";
 type HookStatusData = { status: AgentStatus; ts: number; permission_mode?: PermissionMode; message?: string; transcript_path?: string };
 type AppServerThreadStatus = { type?: string; activeFlags?: string[] };
 const lastHookStatus = new Map<string, HookStatusData>();
@@ -1235,7 +1236,40 @@ async function executeRemoteCommand(
         const shortId = Math.random().toString(36).slice(2, 8);
         const tmuxSession = `cc-${agentType}-${shortId}`;
 
-        let cwd = validatePath(rawPath) || validatePath(process.env.HOME || "/tmp") || "/tmp";
+        // Resolve a usable local cwd. If `rawPath` doesn't exist on this
+        // machine (conversation came from another host or was forked from
+        // someone else's session), look up a local checkout for the same
+        // git_remote_url. Refuse to start the session if no local checkout
+        // exists — silently falling back to $HOME hides the problem and
+        // makes the user's messages land in a totally wrong agent context.
+        let cwd: string;
+        const validatedRaw = validatePath(rawPath);
+        if (validatedRaw) {
+          cwd = validatedRaw;
+        } else if (conversationId && syncServiceRef) {
+          const projectInfo = await syncServiceRef.getProjectInfo(conversationId).catch(() => null);
+          const resolved = await resolveLocalProjectPath({
+            projectPath: projectInfo?.project_path ?? rawPath,
+            gitRoot: projectInfo?.git_root ?? null,
+            gitRemoteUrl: projectInfo?.git_remote_url ?? null,
+            findCandidates: (url) => syncServiceRef!.findLocalCheckouts(url).catch(() => []),
+          });
+          if (!resolved) {
+            const remote = projectInfo?.git_remote_url ?? "<unknown remote>";
+            error = `No local checkout for ${remote} (recorded path ${rawPath} doesn't exist here). Clone it first.`;
+            log(`[REMOTE] start_session refused: ${error}`);
+            syncServiceRef.setSessionError(conversationId, error).catch(() => {});
+            break;
+          }
+          cwd = resolved.path;
+          if (resolved.remapped) {
+            log(`[REMOTE] start_session remapped path: ${resolved.reason}`);
+          }
+        } else {
+          error = `Project path ${rawPath} doesn't exist`;
+          log(`[REMOTE] start_session refused: ${error}`);
+          break;
+        }
         let worktreeResult: WorktreeResult | null = null;
 
         if (isolated && cwd) {

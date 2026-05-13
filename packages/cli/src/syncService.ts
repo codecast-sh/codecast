@@ -659,6 +659,39 @@ export class SyncService {
     } catch {}
   }
 
+  async findLocalCheckouts(gitRemoteUrl: string): Promise<string[]> {
+    if (!gitRemoteUrl) return [];
+    try {
+      const result = await this.client.query("conversations:findUserLocalCheckouts" as any, {
+        git_remote_url: gitRemoteUrl,
+        api_token: this.apiToken,
+      });
+      if (!Array.isArray(result)) return [];
+      return result.map((r: any) => r?.git_root).filter((g: any): g is string => typeof g === "string" && g.length > 0);
+    } catch (error) {
+      if (isAuthError(error)) throw new AuthExpiredError();
+      return [];
+    }
+  }
+
+  async getProjectInfo(conversationId: string): Promise<{ project_path: string | null; git_root: string | null; git_remote_url: string | null } | null> {
+    try {
+      const result = await this.client.query("conversations:getProjectInfo" as any, {
+        conversation_id: conversationId,
+        api_token: this.apiToken,
+      });
+      if (!result) return null;
+      return {
+        project_path: result.project_path ?? null,
+        git_root: result.git_root ?? null,
+        git_remote_url: result.git_remote_url ?? null,
+      };
+    } catch (error) {
+      if (isAuthError(error)) throw new AuthExpiredError();
+      return null;
+    }
+  }
+
   async ackInjectedMessages(conversationId: string): Promise<void> {
     try {
       await this.client.mutation("pendingMessages:ackInjectedMessages" as any, {

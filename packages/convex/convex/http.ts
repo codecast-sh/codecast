@@ -600,6 +600,56 @@ http.route({
 });
 
 http.route({
+  path: "/cli/local-checkouts",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const corsHeaders = {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type",
+    };
+    try {
+      const body = await request.json();
+      const { api_token, git_remote_url } = body;
+      if (!api_token || !git_remote_url) {
+        return new Response(JSON.stringify({ error: "Missing api_token or git_remote_url" }), {
+          status: 400,
+          headers: { "Content-Type": "application/json", ...corsHeaders },
+        });
+      }
+      const checkouts = await ctx.runQuery(api.conversations.findUserLocalCheckouts, {
+        git_remote_url,
+        api_token,
+      });
+      return new Response(JSON.stringify({ checkouts }), {
+        status: 200,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      });
+    } catch (error) {
+      return new Response(JSON.stringify({ error: "Internal error", details: error instanceof Error ? error.message : String(error) }), {
+        status: 500,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      });
+    }
+  }),
+});
+
+http.route({
+  path: "/cli/local-checkouts",
+  method: "OPTIONS",
+  handler: httpAction(async () => {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+      },
+    });
+  }),
+});
+
+http.route({
   path: "/cli/feed",
   method: "POST",
   handler: httpAction(async (ctx, request) => {

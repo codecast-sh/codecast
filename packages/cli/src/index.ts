@@ -18,6 +18,7 @@ import { getAllSyncRecords, findUnsyncedFiles } from "./syncLedger.js";
 import { getLastReconciliation, performReconciliation, repairDiscrepancies } from "./reconciliation.js";
 import { parseSessionFile, extractSlug } from "./parser.js";
 import { SyncService } from "./syncService.js";
+import { resolveLocalProjectPath } from "./projectPathResolver.js";
 import * as readline from "readline";
 import {
   fetchExport,
@@ -5400,6 +5401,23 @@ function launchCodex(sessionId: string, extraArgs?: string, showArgsHint?: boole
   });
 }
 
+async function fetchLocalCheckouts(siteUrl: string, apiToken: string, gitRemoteUrl: string): Promise<string[]> {
+  if (!gitRemoteUrl) return [];
+  try {
+    const resp = await fetch(`${siteUrl}/cli/local-checkouts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_token: apiToken, git_remote_url: gitRemoteUrl }),
+    });
+    if (!resp.ok) return [];
+    const body = await resp.json().catch(() => null) as { checkouts?: { git_root?: string }[] } | null;
+    if (!body?.checkouts) return [];
+    return body.checkouts.map(c => c.git_root).filter((g): g is string => typeof g === "string" && g.length > 0);
+  } catch {
+    return [];
+  }
+}
+
 function openInNewTab(cmd: string, cwd?: string | null): void {
   const dir = cwd && fs.existsSync(cwd) ? cwd : process.cwd();
   const escapedCmd = cmd.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
@@ -7632,13 +7650,37 @@ program
         const data = await fetchExport(siteUrl, config.auth_token!, result.conversation_id);
         console.log(`  ${data.messages.length} messages exported`);
 
+        // Same path-resolution codepath as the daemon's start_session: if the
+        // forked conversation's recorded project_path doesn't exist locally,
+        // remap it to a local checkout of the same git remote. Refuse if no
+        // local checkout — opening claude in $HOME silently is a worse UX
+        // than a clear "clone the repo first" message.
+        const launchCwd = await resolveLocalProjectPath({
+          projectPath: data.conversation.project_path,
+          gitRoot: data.conversation.git_root,
+          gitRemoteUrl: data.conversation.git_remote_url,
+          findCandidates: (url) => fetchLocalCheckouts(siteUrl, config.auth_token!, url),
+        });
+        if (!launchCwd) {
+          const remote = data.conversation.git_remote_url ?? "<unknown remote>";
+          console.error(
+            `\nCannot open forked session: no local checkout for ${remote}.\n` +
+            `  Recorded project_path: ${data.conversation.project_path ?? "<none>"}\n` +
+            `  Clone the repo locally, then re-run with --resume.`
+          );
+          process.exit(1);
+        }
+        if (launchCwd.remapped) {
+          console.log(`  Remapped project path → ${launchCwd.path}`);
+        }
+
         if (targetAgent === "codex") {
           const { jsonl, sessionId } = generateCodexJsonl(data);
           writeCodexSession(jsonl, sessionId, "cc-import");
           const resolvedArgs = options.claudeArgs ?? config.codex_args ?? "";
           const cmd = `codex resume ${sessionId}${resolvedArgs ? " " + resolvedArgs : ""}`;
           console.log(`\nResume command:\n  ${cmd}`);
-          openInNewTab(cmd, data.conversation.project_path);
+          openInNewTab(cmd, launchCwd.path);
         } else {
           const CLAUDE_CONTEXT_LIMIT_TOKENS = 200_000;
           const AUTO_TRIM_THRESHOLD_TOKENS = 120_000;
@@ -7667,11 +7709,11 @@ program
           }
 
           const { jsonl, sessionId } = generateClaudeCodeJsonl(data, { tailMessages });
-          writeClaudeCodeSession(jsonl, sessionId, data.conversation.project_path || undefined);
+          writeClaudeCodeSession(jsonl, sessionId, launchCwd.path);
           const resolvedArgs = options.claudeArgs ?? config.claude_args ?? "";
           const launchCmd = `claude --resume ${sessionId}${resolvedArgs ? " " + resolvedArgs : ""}`;
           console.log(`\nResume command:\n  cast resume ${sessionId}`);
-          openInNewTab(launchCmd, data.conversation.project_path);
+          openInNewTab(launchCmd, launchCwd.path);
         }
       }
     } catch (error) {
