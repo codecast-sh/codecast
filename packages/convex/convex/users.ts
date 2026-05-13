@@ -4,6 +4,7 @@ import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { hasRecentPendingDaemonCommand } from "./daemonCommandUtils";
+import { resolveTeamForPath } from "./privacy";
 
 export const getCurrentUser = query({
   args: {},
@@ -1439,16 +1440,19 @@ async function findNextConversationForPath(
   return null;
 }
 
-async function queueRetroactiveShareConversations(
+// Queue a full re-resolution of every conversation whose path matches
+// `pathPrefix`. Used after any mapping mutation (add/update/remove) — the
+// backfill reads the *current* mappings and recomputes team_id/is_private/
+// auto_shared per conversation, so it correctly handles longer-prefix
+// precedence and falls back to teamless when no mapping matches anymore.
+async function queueRetroactiveResolveConversations(
   ctx: any,
   userId: any,
   pathPrefix: string,
-  teamId: any,
 ) {
   await ctx.scheduler.runAfter(0, internal.users.backfillDirectoryTeamMappingConversations, {
     user_id: userId,
     path_prefix: pathPrefix,
-    team_id: teamId,
     source: "git_root",
   });
 }
@@ -1457,12 +1461,17 @@ export const backfillDirectoryTeamMappingConversations = internalMutation({
   args: {
     user_id: v.id("users"),
     path_prefix: v.string(),
-    team_id: v.id("teams"),
+    // Legacy arg — ignored. The backfill re-resolves from current mappings.
+    team_id: v.optional(v.id("teams")),
     source: v.optional(v.union(v.literal("git_root"), v.literal("project_path"))),
     cursor: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const source = args.source || "git_root";
+    const mappings = await ctx.db
+      .query("directory_team_mappings")
+      .withIndex("by_user_id", (q) => q.eq("user_id", args.user_id))
+      .collect();
     const page = await getMatchingConversationsPage(
       ctx,
       args.user_id,
@@ -1473,16 +1482,17 @@ export const backfillDirectoryTeamMappingConversations = internalMutation({
 
     let updated = 0;
     for (const conv of page.page) {
+      const convPath = conv.git_root || conv.project_path;
+      if (!convPath) continue;
+      const { teamId, isPrivate, autoShared } = resolveTeamForPath(mappings, convPath, undefined);
+
       const patch: Record<string, unknown> = {};
-      if (conv.is_private !== false) {
-        patch.is_private = false;
-      }
-      if (conv.team_id?.toString() !== args.team_id.toString()) {
-        patch.team_id = args.team_id;
-      }
-      if (!conv.auto_shared) {
-        patch.auto_shared = true;
-      }
+      const newTeam = teamId ? teamId.toString() : null;
+      const oldTeam = conv.team_id ? conv.team_id.toString() : null;
+      if (newTeam !== oldTeam) patch.team_id = teamId ?? undefined;
+      if ((conv.is_private ?? true) !== isPrivate) patch.is_private = isPrivate;
+      if ((conv.auto_shared ?? false) !== autoShared) patch.auto_shared = autoShared;
+
       if (Object.keys(patch).length > 0) {
         await ctx.db.patch(conv._id, patch);
         updated++;
@@ -1493,7 +1503,6 @@ export const backfillDirectoryTeamMappingConversations = internalMutation({
       await ctx.scheduler.runAfter(0, internal.users.backfillDirectoryTeamMappingConversations, {
         user_id: args.user_id,
         path_prefix: args.path_prefix,
-        team_id: args.team_id,
         source,
         cursor: page.continueCursor,
       });
@@ -1501,7 +1510,6 @@ export const backfillDirectoryTeamMappingConversations = internalMutation({
       await ctx.scheduler.runAfter(0, internal.users.backfillDirectoryTeamMappingConversations, {
         user_id: args.user_id,
         path_prefix: args.path_prefix,
-        team_id: args.team_id,
         source: "project_path",
       });
     }
@@ -1529,13 +1537,15 @@ export const backfillAutoShareConversations = internalMutation({
     } else {
       mappings = await ctx.db.query("directory_team_mappings").take(50);
     }
-    const autoShareMappings = mappings.filter(m => m.auto_share);
-    for (const mapping of autoShareMappings) {
-      await queueRetroactiveShareConversations(
-        ctx, mapping.user_id, mapping.path_prefix, mapping.team_id
+    // Re-resolve conversations under every mapping — not just auto_share ones.
+    // The shared backfill reads current mappings and applies the right
+    // is_private/auto_shared values per conversation.
+    for (const mapping of mappings) {
+      await queueRetroactiveResolveConversations(
+        ctx, mapping.user_id, mapping.path_prefix
       );
     }
-    return { totalUpdated: 0, mappingsProcessed: autoShareMappings.length };
+    return { totalUpdated: 0, mappingsProcessed: mappings.length };
   },
 });
 
@@ -1560,6 +1570,7 @@ export const updateDirectoryTeamMapping = mutation({
     if (!args.team_id) {
       if (existingMapping) {
         await ctx.db.delete(existingMapping._id);
+        await queueRetroactiveResolveConversations(ctx, userId, args.path_prefix);
       }
       return { success: true, deleted: true };
     }
@@ -1589,16 +1600,17 @@ export const updateDirectoryTeamMapping = mutation({
       });
     }
 
-    if (autoShare) {
-      await queueRetroactiveShareConversations(ctx, userId, args.path_prefix, args.team_id);
-    }
+    // Re-resolve every matching conversation against current mappings,
+    // regardless of auto_share — the backfill applies the new mapping's
+    // is_private/auto_shared values per conversation.
+    await queueRetroactiveResolveConversations(ctx, userId, args.path_prefix);
 
     return {
       success: true,
       updated: !!existingMapping,
       created: !existingMapping,
       retroactivelyShared: 0,
-      retroactiveQueued: autoShare,
+      retroactiveQueued: true,
     };
   },
 });
@@ -1632,6 +1644,10 @@ export const removeDirectoryTeamMapping = mutation({
       conversationsDeleted = result.conversationsDeleted;
       messagesDeleted = result.messagesDeleted;
       hasMore = result.hasMore;
+    } else if (mapping) {
+      // Mapping was removed but conversations kept — re-resolve them so they
+      // either pick up a parent mapping or fall back to personal (no team).
+      await queueRetroactiveResolveConversations(ctx, userId, args.path_prefix);
     }
 
     return { success: true, conversationsDeleted, messagesDeleted, hasMore };
@@ -2486,6 +2502,7 @@ export const updateDirectoryMappingForCLI = mutation({
     if (!args.team_id) {
       if (existingMapping) {
         await ctx.db.delete(existingMapping._id);
+        await queueRetroactiveResolveConversations(ctx, result.userId, args.path_prefix);
       }
       return { success: true, action: "removed" };
     }
@@ -2516,15 +2533,15 @@ export const updateDirectoryMappingForCLI = mutation({
       });
     }
 
-    if (autoShare) {
-      await queueRetroactiveShareConversations(ctx, result.userId, args.path_prefix, teamId);
-    }
+    // Re-resolve every matching conversation against current mappings,
+    // regardless of auto_share — see updateDirectoryTeamMapping for rationale.
+    await queueRetroactiveResolveConversations(ctx, result.userId, args.path_prefix);
 
     return {
       success: true,
       action: existingMapping ? "updated" : "created",
       retroactivelyShared: 0,
-      retroactiveQueued: autoShare,
+      retroactiveQueued: true,
     };
   },
 });
