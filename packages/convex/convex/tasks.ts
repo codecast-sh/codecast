@@ -1052,11 +1052,12 @@ export const webList = query({
     const liveSessions = managedSessions.filter(
       (s) => now - s.last_heartbeat < HEARTBEAT_ALIVE_MS && s.conversation_id
     );
-    const activeTaskMap = new Map<string, { session_id: string; title?: string; agent_status?: string; agent_type?: string }>();
+    const activeTaskMap = new Map<string, { _id: string; session_id: string; title?: string; agent_status?: string; agent_type?: string }>();
     for (const s of liveSessions) {
       const conv = await ctx.db.get(s.conversation_id!);
       if (conv && conv.active_task_id) {
         activeTaskMap.set(conv.active_task_id.toString(), {
+          _id: conv._id.toString(),
           session_id: conv.session_id,
           title: conv.title || undefined,
           agent_status: s.agent_status || undefined,
