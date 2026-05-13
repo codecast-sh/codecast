@@ -65,19 +65,26 @@ export function ContextChatInput({
 
     const store = useInboxStore.getState();
     const { projectPath, gitRoot } = store.currentConversation;
-    const path = projectPathProp || projectPath || gitRoot;
     const convexAgentType = AGENT_TYPES.find(a => a.key === agentKey)?.convex || "claude_code";
 
     soundNewSession();
     const sid = nanoid(10);
     const now = Date.now();
 
-    // Resolve linked object for optimistic rendering (task badge in header/sidebar)
+    // Resolve linked object for optimistic rendering (task badge in header/sidebar).
+    // Task's own project_path is preferred over the viewer's currentConversation, which may belong
+    // to an unrelated repo (~/src etc). The server will further resolve via team directory mappings
+    // if neither is set, so the daemon command always gets the right cwd.
     let activeTask: { _id: string; short_id: string; title: string; status: string } | undefined;
+    let taskDerivedPath: string | undefined;
     if (contextType === "task" && linkedObjectId) {
       const t = store.tasks[linkedObjectId] as any;
-      if (t) activeTask = { _id: t._id, short_id: t.short_id, title: t.title, status: t.status };
+      if (t) {
+        activeTask = { _id: t._id, short_id: t.short_id, title: t.title, status: t.status };
+        if (t.project_path) taskDerivedPath = t.project_path;
+      }
     }
+    const path = projectPathProp || taskDerivedPath || projectPath || gitRoot;
 
     store.syncRecord("conversations", sid, {
       _id: sid,
@@ -127,12 +134,14 @@ export function ContextChatInput({
       project_path: path,
       git_root: gitRoot || path,
       session_id: sid,
+      ...(linkedObjectId ? { linked_object: { type: contextType, id: linkedObjectId } } : {}),
     }]);
 
     if (convexId) {
       store.resolveSessionId(sid, convexId);
       store._dispatch("sendMessage", [convexId, fullMessage, null, clientId]);
-      if (linkedObjectId) {
+      // createSession handles task linkage atomically; only docs/plans still need a separate link.
+      if (linkedObjectId && contextType !== "task") {
         store._dispatch("linkConversation", [contextType, linkedObjectId, convexId]);
       }
     }

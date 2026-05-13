@@ -156,22 +156,50 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     });
   },
 
-  createSession: async (ctx, userId, [opts]: [{ agent_type?: string; project_path?: string; git_root?: string; session_id?: string }]) => {
+  createSession: async (ctx, userId, [opts]: [{ agent_type?: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string } }]) => {
     await checkRateLimit(ctx as any, userId, "createConversation");
     const now = Date.now();
     const sessionId = opts.session_id || crypto.randomUUID();
     const agentType = (opts.agent_type || "claude_code") as "claude_code" | "codex" | "cursor" | "gemini";
 
-    const conversationPath = opts.git_root || opts.project_path;
     const mappings = await ctx.db
       .query("directory_team_mappings")
       .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
       .collect();
 
+    // Resolve project_path from linked task (or its team mapping) before falling back to client-supplied path.
+    let resolvedProjectPath = opts.project_path;
+    let resolvedGitRoot = opts.git_root;
+    let linkedTask: any = null;
+    if (opts.linked_object?.type === "task" && opts.linked_object.id) {
+      try {
+        linkedTask = await ctx.db.get(opts.linked_object.id as Id<"tasks">);
+      } catch { linkedTask = null; }
+      if (linkedTask) {
+        const hasAccess = linkedTask.user_id.toString() === userId.toString()
+          || (linkedTask.team_id && !!(await ctx.db
+              .query("team_memberships")
+              .withIndex("by_user_team", (q: any) => q.eq("user_id", userId).eq("team_id", linkedTask.team_id))
+              .first()));
+        if (!hasAccess) {
+          linkedTask = null;
+        } else if (!resolvedProjectPath) {
+          if (linkedTask.project_path) {
+            resolvedProjectPath = linkedTask.project_path;
+          } else if (linkedTask.team_id) {
+            const teamMapping = mappings.find((m: any) => m.team_id.toString() === linkedTask.team_id.toString());
+            if (teamMapping) resolvedProjectPath = teamMapping.path_prefix;
+          }
+          if (!resolvedGitRoot) resolvedGitRoot = resolvedProjectPath;
+        }
+      }
+    }
+
+    const conversationPath = resolvedGitRoot || resolvedProjectPath;
     const { teamId: resolvedTeamId, isPrivate, autoShared } = resolveTeamForPath(
       mappings,
       conversationPath,
-      undefined
+      linkedTask?.team_id
     );
 
     const conversationId = await ctx.db.insert("conversations", {
@@ -179,23 +207,33 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       team_id: resolvedTeamId,
       agent_type: agentType,
       session_id: sessionId,
-      project_path: opts.project_path,
-      git_root: opts.git_root,
+      project_path: resolvedProjectPath,
+      git_root: resolvedGitRoot,
       started_at: now,
       updated_at: now,
       message_count: 0,
       is_private: isPrivate,
       auto_shared: autoShared || undefined,
       status: "active" as const,
+      ...(linkedTask ? { active_task_id: linkedTask._id } : {}),
     });
 
     await ctx.db.patch(conversationId, { short_id: conversationId.toString().slice(0, 7) });
+
+    if (linkedTask) {
+      const existing = linkedTask.conversation_ids || [];
+      if (!existing.some((id: any) => id.toString() === conversationId.toString())) {
+        await ctx.db.patch(linkedTask._id, {
+          conversation_ids: [...existing, conversationId],
+        });
+      }
+    }
 
     const daemonType = agentType === "codex" ? "codex" : agentType === "gemini" ? "gemini" : "claude";
     await ctx.db.insert("daemon_commands", {
       user_id: userId,
       command: "start_session" as const,
-      args: JSON.stringify({ agent_type: daemonType, project_path: opts.project_path || opts.git_root, conversation_id: conversationId }),
+      args: JSON.stringify({ agent_type: daemonType, project_path: resolvedProjectPath || resolvedGitRoot, conversation_id: conversationId }),
       created_at: now,
     });
 
@@ -280,7 +318,15 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       }
     } else if (objectType === "task") {
       const task = await ctx.db.get(objectId as Id<"tasks">);
-      if (!task || task.user_id.toString() !== userId.toString()) return;
+      if (!task) return;
+      if (task.user_id.toString() !== userId.toString()) {
+        if (!task.team_id) return;
+        const membership = await ctx.db
+          .query("team_memberships")
+          .withIndex("by_user_team", (q: any) => q.eq("user_id", userId).eq("team_id", task.team_id))
+          .first();
+        if (!membership) return;
+      }
       const existing = task.conversation_ids || [];
       if (!existing.some((id: any) => id.toString() === conversationId)) {
         await ctx.db.patch(objectId as Id<"tasks">, {
