@@ -107,7 +107,9 @@ export async function scopedFetch(
     if (!seen.has(String(r._id))) all.push(r);
   }
 
-  // Batch-resolve linked conversations
+  // Batch-resolve linked conversations — keep only the fields used by
+  // resolveEffectiveTeam and common callers to avoid holding large blobs
+  // (title_embedding, git_diff, git_diff_staged) that blow the 64MB limit.
   const convIds = new Set<string>();
   for (const r of all) {
     const cid = getLinkedConvId(r);
@@ -116,15 +118,27 @@ export async function scopedFetch(
   const convMap = new Map<string, any>();
   for (const cid of convIds) {
     const conv = await ctx.db.get(cid as any);
-    if (conv) convMap.set(cid, conv);
+    if (conv) convMap.set(cid, {
+      team_id: conv.team_id,
+      is_private: conv.is_private,
+      auto_shared: conv.auto_shared,
+      team_visibility: conv.team_visibility,
+      git_root: conv.git_root,
+      started_at: conv.started_at,
+      project_path: conv.project_path,
+    });
   }
 
-  // Filter by effective team
+  // Filter by effective team. In team view, also include the user's own
+  // untagged records (no conv-derived team and no team_id) — orphans created
+  // before any team was active follow the user into their active workspace
+  // rather than vanishing.
   let records: any[];
   if ((workspace === "team" || !workspace) && teamId) {
     records = all.filter(r => {
       const eff = resolveEffectiveTeam(r, convMap);
-      return eff && String(eff) === String(teamId);
+      if (eff) return String(eff) === String(teamId);
+      return String(r.user_id) === String(userId);
     });
   } else if (workspace === "personal") {
     records = all.filter(r => !resolveEffectiveTeam(r, convMap));

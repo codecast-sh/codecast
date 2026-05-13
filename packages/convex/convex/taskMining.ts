@@ -1100,7 +1100,13 @@ export const webGetRoadmap = query({
     const convMap = new Map<string, any>();
     for (const cid of insightConvIds) {
       const conv = await ctx.db.get(cid);
-      if (conv) convMap.set(cid, conv);
+      if (conv) convMap.set(cid, {
+        title: conv.title,
+        subtitle: conv.subtitle,
+        project_path: conv.project_path,
+        git_branch: conv.git_branch,
+        message_count: conv.message_count,
+      });
     }
 
     for (const insight of recentInsights) {
@@ -1175,7 +1181,13 @@ export const webGetRoadmap = query({
     for (const cid of taskDocConvIds) {
       if (!convMap.has(cid)) {
         const conv = await ctx.db.get(cid as Id<"conversations">);
-        if (conv) convMap.set(cid, conv);
+        if (conv) convMap.set(cid, {
+          title: conv.title,
+          subtitle: conv.subtitle,
+          project_path: conv.project_path,
+          git_branch: conv.git_branch,
+          message_count: conv.message_count,
+        });
       }
     }
 
