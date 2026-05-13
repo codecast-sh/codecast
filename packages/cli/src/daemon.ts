@@ -5715,6 +5715,17 @@ const HEALTH_CHECK_DEAD_STRIKES_TO_KILL = 3;
 const postDeliveryDeadStrikes = new Map<string, number>();
 const POST_DELIVERY_DEAD_STRIKES_TO_KILL = 2;
 
+// Working-stuck watchdog: a live Claude CLI can wedge inside a tool call so the
+// process is alive (passes isTmuxAgentAlive) yet does nothing — no JSONL writes,
+// no status transitions, ~0% CPU. Queued messages then pile up at "injected"
+// because ensureTmuxReady refuses to paste into a busy pane. Detect via JSONL
+// mtime + CPU and reuse handleDeadSession's repair path.
+const workingStuckJsonlMtime = new Map<string, number>();
+const workingStuckStrikes = new Map<string, number>();
+const WORKING_STUCK_THRESHOLD_MS = 10 * 60 * 1000;
+const WORKING_STUCK_CPU_CEILING = 1.0;
+const WORKING_STUCK_STRIKES_TO_KILL = 2;
+
 async function killSessionBySessionId(sessionId: string, reason: string): Promise<void> {
   const cache = readConversationCache();
   const conversationId = cache[sessionId];
@@ -6246,6 +6257,8 @@ function stopManagedSessionHeartbeat(sessionId: string | undefined): void {
     resumeHeartbeatIntervals.delete(sessionId);
   }
   heartbeatHealthCheckCounter.delete(sessionId);
+  workingStuckJsonlMtime.delete(sessionId);
+  workingStuckStrikes.delete(sessionId);
 }
 
 function ensureManagedSessionHeartbeat(sessionId: string): void {
@@ -6301,9 +6314,68 @@ async function heartbeatHealthCheck(sessionId: string): Promise<void> {
     } else {
       log(`[HEARTBEAT-HEALTH] Agent appears dead in ${tmux} for ${sessionId.slice(0, 8)} (strike ${strikes}/${HEALTH_CHECK_DEAD_STRIKES_TO_KILL})`);
     }
-  } else {
-    healthCheckDeadStrikes.delete(sessionId);
+    return;
   }
+  healthCheckDeadStrikes.delete(sessionId);
+
+  await checkWorkingStuck(sessionId, tmux);
+}
+
+async function checkWorkingStuck(sessionId: string, tmux: string): Promise<void> {
+  const status = lastSentAgentStatus.get(sessionId);
+  if (status !== "working" && status !== "thinking") {
+    workingStuckJsonlMtime.delete(sessionId);
+    workingStuckStrikes.delete(sessionId);
+    return;
+  }
+  // since-tracking lives in lastHeartbeatLogged; it resets on every status change.
+  const heart = lastHeartbeatLogged.get(sessionId);
+  if (!heart || heart.status !== status) return;
+  const dwell = Date.now() - heart.since;
+  if (dwell < WORKING_STUCK_THRESHOLD_MS) {
+    workingStuckJsonlMtime.delete(sessionId);
+    workingStuckStrikes.delete(sessionId);
+    return;
+  }
+
+  const jsonlPath = findSessionJsonlPath(sessionId);
+  let currentMtime = 0;
+  if (jsonlPath) {
+    try { currentMtime = fs.statSync(jsonlPath).mtimeMs; } catch {}
+  }
+
+  const recorded = workingStuckJsonlMtime.get(sessionId);
+  if (recorded === undefined) {
+    workingStuckJsonlMtime.set(sessionId, currentMtime);
+    return;
+  }
+  // Agent still writing tool output → genuinely working, reset.
+  if (currentMtime > recorded) {
+    workingStuckJsonlMtime.set(sessionId, currentMtime);
+    workingStuckStrikes.delete(sessionId);
+    return;
+  }
+
+  // Long-running compute (typecheck, build) can be silent on stdout but burns
+  // CPU; treat that as alive so we don't kill productive work.
+  const resources = latestSessionResources.get(sessionId);
+  if (resources && resources.cpu > WORKING_STUCK_CPU_CEILING) {
+    return;
+  }
+
+  const strikes = (workingStuckStrikes.get(sessionId) || 0) + 1;
+  workingStuckStrikes.set(sessionId, strikes);
+  const dwellSec = Math.round(dwell / 1000);
+  const cpuLabel = resources ? `${resources.cpu.toFixed(1)}%` : "unknown";
+  if (strikes < WORKING_STUCK_STRIKES_TO_KILL) {
+    log(`[HEARTBEAT-HEALTH] Session ${sessionId.slice(0, 8)} appears wedged in ${status} (dwell=${dwellSec}s cpu=${cpuLabel} jsonl frozen) — strike ${strikes}/${WORKING_STUCK_STRIKES_TO_KILL}`);
+    return;
+  }
+
+  log(`[HEARTBEAT-HEALTH] Session ${sessionId.slice(0, 8)} wedged in ${status} for ${dwellSec}s with cpu=${cpuLabel} and no JSONL progress, reconstituting`);
+  workingStuckJsonlMtime.delete(sessionId);
+  workingStuckStrikes.delete(sessionId);
+  await handleDeadSession(sessionId, tmux);
 }
 
 async function handleDeadSession(sessionId: string, tmuxSession: string): Promise<void> {
@@ -7598,13 +7670,37 @@ async function deliverMessage(
 
   // Check if we have a cached tmux target from a previous auto-resume
   const cachedTmux = resumeSessionCache.get(sessionId);
+  let cachedTmuxStillValid = false;
   if (cachedTmux) {
     logDelivery(`Found cached tmux=${cachedTmux} for session=${sessionId.slice(0, 12)}`);
+    let hasSessionOk = false;
     try {
       await tmuxExec(["has-session", "-t", cachedTmux]);
-      if (!(await isTmuxAgentAlive(cachedTmux))) {
+      hasSessionOk = true;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // Only drop the cache for a definitive "no such session" — transient
+      // tmuxExec failures (timeout, EAGAIN) must not nuke a live mapping and
+      // force fallback to AppleScript injection. The pane is almost certainly
+      // still alive; another retry will resolve it.
+      if (/can't find session|no such session|session not found/i.test(msg)) {
+        logDelivery(`Cached tmux ${cachedTmux} gone (${msg.slice(0, 80)}), clearing cache`);
+        resumeSessionCache.delete(sessionId);
+        stopCodexPermissionPoller(sessionId);
+        const hbInterval = resumeHeartbeatIntervals.get(sessionId);
+        if (hbInterval) { clearInterval(hbInterval); resumeHeartbeatIntervals.delete(sessionId); }
+      } else {
+        logDelivery(`Cached tmux ${cachedTmux} has-session transient error (${msg.slice(0, 80)}), keeping cache and falling through to process match`);
+      }
+    }
+    if (hasSessionOk) {
+      cachedTmuxStillValid = true;
+      let agentAlive = true;
+      try { agentAlive = await isTmuxAgentAlive(cachedTmux); } catch {}
+      if (!agentAlive) {
         logDelivery(`Cached tmux ${cachedTmux} has no live agent, clearing cache`);
         resumeSessionCache.delete(sessionId);
+        cachedTmuxStillValid = false;
         stopCodexPermissionPoller(sessionId);
         const hbInterval = resumeHeartbeatIntervals.get(sessionId);
         if (hbInterval) { clearInterval(hbInterval); resumeHeartbeatIntervals.delete(sessionId); }
@@ -7619,11 +7715,6 @@ async function deliverMessage(
         }
         return true;
       }
-    } catch {
-      resumeSessionCache.delete(sessionId);
-      stopCodexPermissionPoller(sessionId);
-      const hbInterval = resumeHeartbeatIntervals.get(sessionId);
-      if (hbInterval) { clearInterval(hbInterval); resumeHeartbeatIntervals.delete(sessionId); }
     }
   }
 
@@ -7640,8 +7731,18 @@ async function deliverMessage(
       logDelivery(`Process ${proc.pid} is no longer an agent process, clearing cache`);
       sessionProcessCache.delete(sessionId);
     } else {
-      // Try tmux first (most reliable)
-      const tmuxTarget = await findTmuxPaneForTty(proc.tty);
+      // Try tmux first (most reliable). If the tty doesn't map to a pane,
+      // fall back to the cached tmux session — Claude often runs inside a
+      // tmux pane whose pty mapping isn't visible via `list-panes -a` (e.g.
+      // nested tmux, or a freshly-spawned pane whose tty hasn't propagated
+      // yet). The AppleScript path types into the foreground iTerm2 session,
+      // not the tmux pane, so it silently drops the message — much worse
+      // than reusing a known-good cached target.
+      let tmuxTarget = await findTmuxPaneForTty(proc.tty);
+      if (!tmuxTarget && cachedTmuxStillValid && cachedTmux) {
+        logDelivery(`tmux pane not found for tty=${proc.tty}, falling back to cached tmux=${cachedTmux}`);
+        tmuxTarget = cachedTmux;
+      }
       logDelivery(`tmux pane for tty=${proc.tty}: ${tmuxTarget ?? "not found"}`);
       let agentDetectedDead = false;
       if (tmuxTarget) {
@@ -10341,7 +10442,12 @@ async function main(): Promise<void> {
     }, delay);
   }
 
-  const messagesInFlight = new Set<string>();
+  // Tracks messages currently being processed. Maps id → entry timestamp so a
+  // single botched deliverMessage (e.g. AppleScript hang past the 180s timeout,
+  // or a hung subscription handler) can't permanently wedge an id in the set
+  // and stop every future retry of the same message.
+  const messagesInFlight = new Map<string, number>();
+  const IN_FLIGHT_HARD_TTL_MS = 240_000; // > DELIVERY_TIMEOUT_MS (180s)
   // Track messages recently injected to tmux with timestamps, so retries don't re-inject.
   // Uses a TTL: blocks re-delivery within 60s (the race window), but allows it after
   // in case the agent dropped the paste or crashed silently after injection.
@@ -10368,11 +10474,17 @@ async function main(): Promise<void> {
               logDelivery(`Subscription: ${messages.length} pending message(s) received`);
             }
             for (const msg of messages) {
-              if (messagesInFlight.has(msg._id)) {
-                logDelivery(`Skipping msg=${msg._id.slice(0, 8)} - already in flight`);
-                continue;
+              const inFlightSince = messagesInFlight.get(msg._id);
+              if (inFlightSince !== undefined) {
+                const age = Date.now() - inFlightSince;
+                if (age < IN_FLIGHT_HARD_TTL_MS) {
+                  logDelivery(`Skipping msg=${msg._id.slice(0, 8)} - already in flight (age=${Math.round(age / 1000)}s)`);
+                  continue;
+                }
+                logDelivery(`Reclaiming msg=${msg._id.slice(0, 8)} - in-flight ${Math.round(age / 1000)}s exceeds ${IN_FLIGHT_HARD_TTL_MS / 1000}s TTL, retrying`);
+                messagesInFlight.delete(msg._id);
               }
-              messagesInFlight.add(msg._id);
+              messagesInFlight.set(msg._id, Date.now());
 
               const imageIds = msg.image_storage_ids ?? (msg.image_storage_id ? [msg.image_storage_id] : []);
               logDelivery(`Processing: msg=${msg._id.slice(0, 8)} conv=${msg.conversation_id.slice(0, 12)} content="${msg.content.slice(0, 80)}" images=${imageIds.length} retry=${msg.retry_count ?? 0}`);
