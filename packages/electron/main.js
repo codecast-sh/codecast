@@ -151,7 +151,44 @@ function createWindow() {
     backgroundColor: "#002b36",
   });
 
-  mainWindow.loadURL(currentBaseUrl);
+  // Retry/watchdog for cold-start hangs: if the initial nav fails or the
+  // page stalls before reaching the app shell, reload automatically instead
+  // of leaving the user on a frozen splash that only cmd-r recovers.
+  let stallTimer = null;
+  let loadAttempts = 0;
+  const MAX_LOAD_ATTEMPTS = 5;
+  const STALL_MS = 10_000;
+
+  function armStallTimer() {
+    clearTimeout(stallTimer);
+    stallTimer = setTimeout(() => {
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      if (loadAttempts >= MAX_LOAD_ATTEMPTS) return;
+      loadAttempts++;
+      mainWindow.webContents.reloadIgnoringCache();
+      armStallTimer();
+    }, STALL_MS);
+  }
+
+  function startLoad() {
+    loadAttempts++;
+    armStallTimer();
+    mainWindow.loadURL(currentBaseUrl);
+  }
+
+  mainWindow.webContents.on("did-fail-load", (_e, errorCode, _desc, _url, isMainFrame) => {
+    if (!isMainFrame) return;
+    // -3 is ABORTED (intentional nav cancel) — don't retry on that.
+    if (errorCode === -3) return;
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (loadAttempts >= MAX_LOAD_ATTEMPTS) return;
+    setTimeout(() => {
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      startLoad();
+    }, 500);
+  });
+
+  startLoad();
 
   mainWindow.once("ready-to-show", () => {
     mainWindow.show();
@@ -162,11 +199,15 @@ function createWindow() {
   });
 
   mainWindow.webContents.on("did-finish-load", () => {
+    clearTimeout(stallTimer);
+    stallTimer = null;
+    loadAttempts = 0;
     mainWindow.webContents.setZoomFactor(getAutoZoomFactor());
     mainWindow.webContents.executeJavaScript(
       "document.documentElement.classList.add('electron-desktop')"
     );
   });
+
 
   // Open external links in browser
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
@@ -178,6 +219,7 @@ function createWindow() {
   });
 
   mainWindow.on("closed", () => {
+    clearTimeout(stallTimer);
     mainWindow = null;
   });
 }
