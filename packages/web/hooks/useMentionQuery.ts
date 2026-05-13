@@ -1,30 +1,146 @@
-import { useCallback, useRef } from "react";
-import { useQuery } from "convex/react";
-import { api as _api } from "@codecast/convex/convex/_generated/api";
+import { useCallback } from "react";
 import type { MentionItem } from "../components/editor/MentionList";
 import { useInboxStore } from "../store/inboxStore";
 
-const api = _api as any;
+const RECENT_LIMIT_PER_TYPE = 6;
+const SEARCH_LIMIT_PER_TYPE = 12;
 
-export function useMentionQuery(projectPath?: string | null) {
-  const storeSession = useInboxStore((s) => {
-    const id = s.currentSessionId;
-    return id ? s.sessions[id] : null;
-  });
-  const resolvedPath = projectPath || storeSession?.project_path || storeSession?.git_root || null;
-  const mentionResults = useQuery(api.docs.mentionSearch, { query: "", limit: 50, ...(resolvedPath ? { projectPath: resolvedPath } : {}) });
-  const ref = useRef<MentionItem[]>([]);
-  if (mentionResults) ref.current = mentionResults;
+function abbrevDocType(t?: string): string {
+  return t || "note";
+}
 
-  return useCallback(async (q: string): Promise<MentionItem[]> => {
-    const results = ref.current;
-    if (!results.length) return [];
-    const lower = q.toLowerCase();
-    if (!lower) return results;
-    return results.filter(
-      (r) =>
-        r.label.toLowerCase().includes(lower) ||
-        (r.sublabel && r.sublabel.toLowerCase().includes(lower))
-    );
-  }, []);
+function score(label: string, q: string): number {
+  const l = label.toLowerCase();
+  if (l === q) return 0;
+  if (l.startsWith(q)) return 1;
+  const idx = l.indexOf(q);
+  return idx === -1 ? Infinity : 2 + idx;
+}
+
+export function useMentionQuery(_projectPath?: string | null) {
+  const getStore = useInboxStore.getState;
+
+  return useCallback(async (rawQ: string): Promise<MentionItem[]> => {
+    const q = rawQ.trim().toLowerCase();
+    const s = getStore();
+
+    const taskItems: Array<{ item: MentionItem; rank: number; updated: number }> = [];
+    for (const t of Object.values(s.tasks)) {
+      const r = q ? score(t.title || "", q) : 0;
+      if (q && r === Infinity) {
+        if (!t.short_id?.toLowerCase().includes(q)) continue;
+      }
+      taskItems.push({
+        item: {
+          id: t._id,
+          type: "task",
+          label: t.title,
+          sublabel: t.short_id,
+          shortId: t.short_id,
+          status: t.status,
+          priority: t.priority,
+        },
+        rank: r === Infinity ? 99 : r,
+        updated: t.updated_at || 0,
+      });
+    }
+
+    const docItems: Array<{ item: MentionItem; rank: number; updated: number }> = [];
+    for (const d of Object.values(s.docs)) {
+      const r = q ? score(d.title || "", q) : 0;
+      if (q && r === Infinity) continue;
+      docItems.push({
+        item: {
+          id: d._id,
+          type: "doc",
+          label: d.title,
+          sublabel: abbrevDocType(d.doc_type),
+          docType: d.doc_type,
+        },
+        rank: r === Infinity ? 99 : r,
+        updated: d.updated_at || 0,
+      });
+    }
+
+    const planItems: Array<{ item: MentionItem; rank: number; updated: number }> = [];
+    for (const p of Object.values(s.plans)) {
+      const labelHit = q ? score(p.title || "", q) : 0;
+      const goalHit = q && p.goal ? score(p.goal, q) : Infinity;
+      const r = Math.min(labelHit, goalHit);
+      if (q && r === Infinity) {
+        if (!p.short_id?.toLowerCase().includes(q)) continue;
+      }
+      planItems.push({
+        item: {
+          id: p._id,
+          type: "plan",
+          label: p.title,
+          sublabel: p.short_id,
+          shortId: p.short_id,
+          status: p.status,
+          goal: p.goal,
+        },
+        rank: r === Infinity ? 99 : r,
+        updated: p.updated_at || 0,
+      });
+    }
+
+    const sessionItems: Array<{ item: MentionItem; rank: number; updated: number }> = [];
+    for (const sess of Object.values(s.sessions)) {
+      const titleHit = q ? score(sess.title || "", q) : 0;
+      const summaryHit = q && sess.idle_summary ? score(sess.idle_summary, q) : Infinity;
+      const r = Math.min(titleHit, summaryHit);
+      if (q && r === Infinity) continue;
+      sessionItems.push({
+        item: {
+          id: sess._id,
+          type: "session",
+          label: sess.title || "Untitled Session",
+          sublabel: sess.idle_summary?.slice(0, 80) || undefined,
+          messageCount: sess.message_count,
+          projectPath: sess.project_path,
+          status: sess.agent_status,
+          agentType: sess.agent_type,
+          updatedAt: sess.updated_at,
+          idleSummary: sess.idle_summary,
+        },
+        rank: r === Infinity ? 99 : r,
+        updated: sess.updated_at || 0,
+      });
+    }
+
+    const personItems: Array<{ item: MentionItem; rank: number; updated: number }> = [];
+    for (const m of s.teamMembers || []) {
+      const name = (m.name || "").toLowerCase();
+      const username = (m.github_username || "").toLowerCase();
+      if (q && !name.includes(q) && !username.includes(q)) continue;
+      personItems.push({
+        item: {
+          id: String(m._id),
+          type: "person",
+          label: m.name || m.github_username || "Unknown",
+          sublabel: m.github_username ? `@${m.github_username}` : m.email,
+          image: m.image || m.github_avatar_url,
+          shortId: m.github_username ? `@${m.github_username}` : undefined,
+        },
+        rank: 0,
+        updated: 0,
+      });
+    }
+
+    const limit = q ? SEARCH_LIMIT_PER_TYPE : RECENT_LIMIT_PER_TYPE;
+    const sortAndTake = (arr: typeof taskItems) =>
+      arr
+        .sort((a, b) => a.rank - b.rank || b.updated - a.updated)
+        .slice(0, limit)
+        .map((x) => x.item);
+
+    return [
+      ...sortAndTake(personItems),
+      ...sortAndTake(sessionItems),
+      ...sortAndTake(taskItems),
+      ...sortAndTake(docItems),
+      ...sortAndTake(planItems),
+    ];
+  }, [getStore]);
 }
