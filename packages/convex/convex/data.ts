@@ -28,7 +28,7 @@ export type DataContext = Awaited<ReturnType<typeof createDataContext>>;
 type ScopedFetchOpts = {
   userId: Id<"users">;
   teamId?: Id<"teams">;
-  workspace?: "personal" | "team";
+  workspace?: "personal" | "team" | "all";
   limit?: number;
   stripFields?: string[];
 };
@@ -91,6 +91,20 @@ export async function scopedFetch(
     userRecords = await runQuery(
       ctx.db.query(table).withIndex("by_user_id", (q: any) => q.eq("user_id", userId)).order("desc")
     );
+  } else if (workspace === "all") {
+    userRecords = await runQuery(
+      ctx.db.query(table).withIndex("by_user_id", (q: any) => q.eq("user_id", userId)).order("desc")
+    );
+    const memberships = await ctx.db
+      .query("team_memberships")
+      .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+      .collect();
+    for (const m of memberships) {
+      const teamRecs = await runQuery(
+        ctx.db.query(table).withIndex("by_team_id", (q: any) => q.eq("team_id", m.team_id)).order("desc")
+      );
+      teamRecords.push(...teamRecs);
+    }
   } else {
     userRecords = await runQuery(
       ctx.db.query(table).withIndex("by_user_id", (q: any) => q.eq("user_id", userId)).order("desc")
@@ -137,7 +151,11 @@ export async function scopedFetch(
   // before any team was active follow the user into their active workspace
   // rather than vanishing.
   let records: any[];
-  if ((workspace === "team" || !workspace) && teamId) {
+  if (workspace === "all") {
+    // No team filter — caller wants every record the user can see across
+    // their memberships plus their own untagged items.
+    records = all;
+  } else if ((workspace === "team" || !workspace) && teamId) {
     records = all.filter(r => {
       const eff = resolveEffectiveTeam(r, convMap);
       if (eff) return String(eff) === String(teamId);

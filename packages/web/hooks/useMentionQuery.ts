@@ -2,11 +2,19 @@ import { useCallback } from "react";
 import type { MentionItem } from "../components/editor/MentionList";
 import { useInboxStore } from "../store/inboxStore";
 
+export type MentionScope =
+  | { kind: "team"; teamId: string }
+  | { kind: "personal"; userId: string }
+  | { kind: "any" };
+
 const RECENT_LIMIT_PER_TYPE = 6;
 const SEARCH_LIMIT_PER_TYPE = 12;
 
-function abbrevDocType(t?: string): string {
-  return t || "note";
+function inScope(item: { team_id?: string | null; user_id?: string | null }, scope: MentionScope): boolean {
+  if (scope.kind === "any") return true;
+  const itemTeam = item.team_id ? String(item.team_id) : null;
+  if (scope.kind === "team") return itemTeam === scope.teamId;
+  return !itemTeam && (item.user_id ? String(item.user_id) === scope.userId : true);
 }
 
 function score(label: string, q: string): number {
@@ -17,15 +25,22 @@ function score(label: string, q: string): number {
   return idx === -1 ? Infinity : 2 + idx;
 }
 
-export function useMentionQuery(_projectPath?: string | null) {
+export function useMentionQuery(scope: MentionScope = { kind: "any" }) {
   const getStore = useInboxStore.getState;
+  const scopeKey = scope.kind === "team"
+    ? `team:${scope.teamId}`
+    : scope.kind === "personal"
+      ? `personal:${scope.userId}`
+      : "any";
 
   return useCallback(async (rawQ: string): Promise<MentionItem[]> => {
     const q = rawQ.trim().toLowerCase();
     const s = getStore();
+    const idx = s.mentionIndex || { tasks: {}, docs: {}, plans: {} };
 
     const taskItems: Array<{ item: MentionItem; rank: number; updated: number }> = [];
-    for (const t of Object.values(s.tasks)) {
+    for (const t of Object.values(idx.tasks)) {
+      if (!inScope(t, scope)) continue;
       const r = q ? score(t.title || "", q) : 0;
       if (q && r === Infinity) {
         if (!t.short_id?.toLowerCase().includes(q)) continue;
@@ -46,7 +61,8 @@ export function useMentionQuery(_projectPath?: string | null) {
     }
 
     const docItems: Array<{ item: MentionItem; rank: number; updated: number }> = [];
-    for (const d of Object.values(s.docs)) {
+    for (const d of Object.values(idx.docs)) {
+      if (!inScope(d, scope)) continue;
       const r = q ? score(d.title || "", q) : 0;
       if (q && r === Infinity) continue;
       docItems.push({
@@ -54,7 +70,7 @@ export function useMentionQuery(_projectPath?: string | null) {
           id: d._id,
           type: "doc",
           label: d.title,
-          sublabel: abbrevDocType(d.doc_type),
+          sublabel: d.doc_type || "note",
           docType: d.doc_type,
         },
         rank: r === Infinity ? 99 : r,
@@ -63,7 +79,8 @@ export function useMentionQuery(_projectPath?: string | null) {
     }
 
     const planItems: Array<{ item: MentionItem; rank: number; updated: number }> = [];
-    for (const p of Object.values(s.plans)) {
+    for (const p of Object.values(idx.plans)) {
+      if (!inScope(p, scope)) continue;
       const labelHit = q ? score(p.title || "", q) : 0;
       const goalHit = q && p.goal ? score(p.goal, q) : Infinity;
       const r = Math.min(labelHit, goalHit);
@@ -87,6 +104,14 @@ export function useMentionQuery(_projectPath?: string | null) {
 
     const sessionItems: Array<{ item: MentionItem; rank: number; updated: number }> = [];
     for (const sess of Object.values(s.sessions)) {
+      const sessTeam = sess.team_id ? String(sess.team_id) : null;
+      const inScopeForSession =
+        scope.kind === "any"
+          ? true
+          : scope.kind === "team"
+            ? sessTeam === scope.teamId
+            : !sessTeam;
+      if (!inScopeForSession) continue;
       const titleHit = q ? score(sess.title || "", q) : 0;
       const summaryHit = q && sess.idle_summary ? score(sess.idle_summary, q) : Infinity;
       const r = Math.min(titleHit, summaryHit);
@@ -142,5 +167,5 @@ export function useMentionQuery(_projectPath?: string | null) {
       ...sortAndTake(docItems),
       ...sortAndTake(planItems),
     ];
-  }, [getStore]);
+  }, [getStore, scopeKey]);
 }

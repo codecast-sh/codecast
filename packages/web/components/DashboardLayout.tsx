@@ -33,9 +33,9 @@ import { usePrefetch } from "../hooks/usePrefetch";
 import { desktopHeaderClass, setupDesktopDrag, isElectron } from "../lib/desktop";
 import { CollapsedSessionRail, SessionListPanel, ConversationColumn } from "./GlobalSessionPanel";
 import { useSyncInboxSessions } from "../hooks/useSyncInboxSessions";
-import { useSyncDocs } from "../hooks/useSyncDocs";
-import { useSyncPlans } from "../hooks/useSyncPlans";
-import { useSyncTasks } from "../hooks/useSyncTasks";
+import { useSyncDocs, useSyncMentionDocs } from "../hooks/useSyncDocs";
+import { useSyncMentionPlans } from "../hooks/useSyncPlans";
+import { useSyncMentionTasks } from "../hooks/useSyncTasks";
 import { isInboxSessionView } from "../lib/inboxRouting";
 import { useSessionSwitcher } from "../hooks/useSessionSwitcher";
 import { SessionSwitcher } from "./SessionSwitcher";
@@ -112,8 +112,9 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
   const prevPathnameRef = useRef(pathname);
   usePrefetch();
   useSyncDocs();
-  useSyncPlans();
-  useSyncTasks();
+  useSyncMentionTasks();
+  useSyncMentionDocs();
+  useSyncMentionPlans();
   useSyncInboxSessions();
   const tipActions = useTipActions();
 

@@ -4,7 +4,7 @@ import { Id } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
 import { verifyApiToken } from "./apiTokens";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { createDataContext, scopedFetch } from "./data";
+import { createDataContext, scopedFetch, resolveEffectiveTeam } from "./data";
 import { resolveTeamForPath } from "./privacy";
 
 function generatePlanShortId(): string {
@@ -86,7 +86,7 @@ async function buildWebDocList(
     project_path?: string;
     scope?: string;
     team_id?: Id<"teams">;
-    workspace?: "personal" | "team";
+    workspace?: "personal" | "team" | "all";
   },
   requestedCount?: number
 ) {
@@ -670,7 +670,7 @@ export const webList = query({
     scope: v.optional(v.string()),
     limit: v.optional(v.number()),
     team_id: v.optional(v.id("teams")),
-    workspace: v.optional(v.union(v.literal("personal"), v.literal("team"))),
+    workspace: v.optional(v.union(v.literal("personal"), v.literal("team"), v.literal("all"))),
   },
   handler: async (ctx, args) => {
     const fetchCount = args.limit || undefined;
@@ -679,13 +679,115 @@ export const webList = query({
   },
 });
 
-function encodeOffsetCursor(offset: number): string {
-  return String(offset);
+// Cursor format: JSON-encoded { phase, inner } where phase is "primary" or
+// "orphans" and inner is the Convex paginate cursor for that phase. Two-phase
+// pagination lets team view stream team-tagged records first, then the
+// viewer's untagged orphans, without merging both streams in one handler.
+// Long-term: heavy fields (content/embedding/entries) should move to a
+// sibling doc_contents table so list queries never pay their memory cost.
+type WebDocsCursor = { phase: "primary" | "orphans"; inner: string | null };
+
+function parseCursor(cursor: string | null): WebDocsCursor {
+  if (!cursor) return { phase: "primary", inner: null };
+  try {
+    const parsed = JSON.parse(cursor);
+    if (parsed?.phase === "primary" || parsed?.phase === "orphans") {
+      return { phase: parsed.phase, inner: typeof parsed.inner === "string" ? parsed.inner : null };
+    }
+  } catch {}
+  return { phase: "primary", inner: null };
 }
 
-function decodeOffsetCursor(cursor: string | null): number {
-  const parsed = Number.parseInt(cursor || "0", 10);
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+function encodeCursor(c: WebDocsCursor): string {
+  return JSON.stringify(c);
+}
+
+function stripDoc(d: any): any {
+  const { content, embedding, entries, ...rest } = d;
+  return rest;
+}
+
+async function buildConvMapForPage(ctx: any, records: any[]): Promise<Map<string, any>> {
+  const convIds = new Set<string>();
+  for (const r of records) {
+    const cid = r.conversation_id || r.created_from_conversation || r.related_conversation_ids?.[0] || r.conversation_ids?.[0];
+    if (cid) convIds.add(String(cid));
+  }
+  const convMap = new Map<string, any>();
+  for (const cid of convIds) {
+    const conv = await ctx.db.get(cid as any);
+    if (conv) convMap.set(cid, {
+      team_id: conv.team_id,
+      is_private: conv.is_private,
+      auto_shared: conv.auto_shared,
+      team_visibility: conv.team_visibility,
+      git_root: conv.git_root,
+      started_at: conv.started_at,
+      project_path: conv.project_path,
+    });
+  }
+  return convMap;
+}
+
+async function enrichPage(
+  ctx: any,
+  records: any[],
+  convMap: Map<string, any>,
+  args: { doc_type?: string; project_id?: string; project_path?: string; scope?: string },
+): Promise<any[]> {
+  let docs = records;
+
+  if (args.scope === "projects" || args.project_path) {
+    if (args.project_path) {
+      const filterName = repoName(args.project_path);
+      docs = docs.filter((d) => d.project_path && docRepoName(d, convMap) === filterName);
+    }
+  }
+
+  docs = docs.filter((d) => !d.archived_at && !isNoiseDocForWeb(d) && d.source !== "plan_mode");
+
+  const enriched = docs.map((d) => {
+    const cid = d.conversation_id || (d.related_conversation_ids?.[0]);
+    const conv = cid ? convMap.get(String(cid)) : undefined;
+    if (conv?.started_at) return { ...d, originated_at: conv.started_at };
+    return d;
+  });
+  enriched.sort((a: any, b: any) => (b.originated_at || b.created_at) - (a.originated_at || a.created_at));
+
+  const userIds = new Set<string>();
+  for (const d of enriched) if (d.user_id) userIds.add(String(d.user_id));
+  const userMap = new Map<string, any>();
+  for (const uid of userIds) {
+    const u = await ctx.db.get(uid as Id<"users">);
+    if (u) userMap.set(uid, { name: u.name, image: u.image || (u as any).github_avatar_url, github_username: (u as any).github_username });
+  }
+
+  const planIds = new Set<string>();
+  const docIdsNeedingPlan: string[] = [];
+  for (const d of enriched) {
+    if (d.plan_id) planIds.add(String(d.plan_id));
+    else if (d.doc_type === "plan") docIdsNeedingPlan.push(d._id as string);
+  }
+  const planMap = new Map<string, { short_id: string; status: string }>();
+  for (const pid of planIds) {
+    const p = await ctx.db.get(pid as Id<"plans">);
+    if (p) planMap.set(pid, { short_id: (p as any).short_id, status: (p as any).status });
+  }
+  const docToPlanMap = new Map<string, { short_id: string; status: string }>();
+  for (const docId of docIdsNeedingPlan) {
+    const p = await ctx.db.query("plans").withIndex("by_doc_id", (q: any) => q.eq("doc_id", docId)).first();
+    if (p) docToPlanMap.set(docId, { short_id: p.short_id, status: p.status as string });
+  }
+
+  return enriched.map(extractPlanTitleForWeb).map((d: any) => {
+    const author = d.user_id ? userMap.get(String(d.user_id)) : undefined;
+    const plan = d.plan_id ? planMap.get(String(d.plan_id)) : (docToPlanMap.get(d._id as string) || undefined);
+    return {
+      ...d,
+      ...(author ? { author_name: author.name, author_image: author.image, author_username: author.github_username } : {}),
+      ...(plan ? { plan_short_id: plan.short_id, plan_status: plan.status } : {}),
+    };
+  });
 }
 
 export const webListPaginated = query({
@@ -699,17 +801,90 @@ export const webListPaginated = query({
     paginationOpts: paginationOptsValidator,
   },
   handler: async (ctx, args) => {
-    const offset = decodeOffsetCursor(args.paginationOpts.cursor);
-    const limit = Math.max(args.paginationOpts.numItems, 1);
-    const end = offset + limit;
-    const { docs } = await buildWebDocList(ctx, args, end + 1);
-    const page = docs.slice(offset, end);
-    const hasMore = docs.length > end;
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return { page: [], isDone: true, continueCursor: "" };
+
+    const user = await ctx.db.get(userId);
+    const resolvedTeamId = args.workspace === "team" && args.team_id
+      ? args.team_id
+      : !args.workspace ? user?.active_team_id : undefined;
+    const effectiveWorkspace = args.scope === "projects"
+      ? "personal" as const
+      : args.workspace;
+    const isTeamView = !!resolvedTeamId && (effectiveWorkspace === "team" || !effectiveWorkspace);
+
+    // Defensive clamp: Convex returns full documents from storage before our
+    // strip step runs, so a single page that includes a doc with multi-MB
+    // content/entries can blow the 64MB query memory cap. 100 items × typical
+    // doc size leaves headroom for the convMap/user/plan lookups below.
+    const paginationOpts = {
+      ...args.paginationOpts,
+      numItems: Math.min(args.paginationOpts.numItems, 100),
+    };
+    const cursor = parseCursor(paginationOpts.cursor);
+
+    // Phase: primary stream.
+    //   Team view: paginate by_team_id, keep records whose effective team matches.
+    //   Personal view: paginate by_user_id, keep records with no effective team.
+    if (cursor.phase === "primary") {
+      const primaryQuery = isTeamView
+        ? ctx.db.query("docs").withIndex("by_team_id", (q: any) => q.eq("team_id", resolvedTeamId)).order("desc")
+        : ctx.db.query("docs").withIndex("by_user_id", (q: any) => q.eq("user_id", userId)).order("desc");
+
+      const result = await primaryQuery.paginate({ ...paginationOpts, cursor: cursor.inner });
+      const stripped = result.page.map(stripDoc);
+      const convMap = await buildConvMapForPage(ctx, stripped);
+
+      const filtered = stripped.filter((r) => {
+        const eff = resolveEffectiveTeam(r, convMap);
+        if (isTeamView) {
+          if (eff) return String(eff) === String(resolvedTeamId);
+          return String(r.user_id) === String(userId);
+        }
+        return !eff;
+      });
+
+      const page = await enrichPage(ctx, filtered, convMap, args);
+
+      // Primary stream still has more → stay in primary phase.
+      if (!result.isDone) {
+        return {
+          page,
+          isDone: false,
+          continueCursor: encodeCursor({ phase: "primary", inner: result.continueCursor }),
+        };
+      }
+      // Primary done. Team view has a second phase for orphans; personal does not.
+      if (isTeamView) {
+        return {
+          page,
+          isDone: false,
+          continueCursor: encodeCursor({ phase: "orphans", inner: null }),
+        };
+      }
+      return { page, isDone: true, continueCursor: "" };
+    }
+
+    // Phase: orphan stream (team view only).
+    //   Paginate user's records, keep ones with no effective team. Records we
+    //   already returned in the primary phase have team_id == resolvedTeamId,
+    //   so the no-effective-team filter naturally excludes them.
+    const orphanQuery = ctx.db
+      .query("docs")
+      .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+      .order("desc");
+    const result = await orphanQuery.paginate({ ...paginationOpts, cursor: cursor.inner });
+    const stripped = result.page.map(stripDoc);
+    const convMap = await buildConvMapForPage(ctx, stripped);
+    const orphans = stripped.filter((r) => !resolveEffectiveTeam(r, convMap));
+    const page = await enrichPage(ctx, orphans, convMap, args);
 
     return {
       page,
-      isDone: !hasMore,
-      continueCursor: hasMore ? encodeOffsetCursor(end) : "",
+      isDone: result.isDone,
+      continueCursor: result.isDone
+        ? ""
+        : encodeCursor({ phase: "orphans", inner: result.continueCursor }),
     };
   },
 });
@@ -1018,6 +1193,83 @@ export const webPatch = mutation({
   },
 });
 
+export const webMentionList = query({
+  args: {
+    team_id: v.optional(v.id("teams")),
+    workspace: v.optional(v.union(v.literal("personal"), v.literal("team"), v.literal("all"))),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return { items: [] };
+
+    // Bound the response below Convex's 8192-array limit. See tasks.webMentionList
+    // for the rationale — same shape, same fallback to mentionSearch for stale items.
+    const MAX_TOTAL = 4000;
+    const MAX_PER_TEAM = 1500;
+    const seen = new Set<string>();
+    const docs: any[] = [];
+    const pushUnique = (d: any) => {
+      if (docs.length >= MAX_TOTAL) return;
+      const id = String(d._id);
+      if (!seen.has(id)) { seen.add(id); docs.push(d); }
+    };
+
+    if (args.workspace === "all") {
+      const memberships = await ctx.db
+        .query("team_memberships")
+        .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+        .collect();
+      for (const m of memberships) {
+        const teamDocs = await ctx.db
+          .query("docs")
+          .withIndex("by_team_id", (q: any) => q.eq("team_id", m.team_id))
+          .order("desc")
+          .take(MAX_PER_TEAM);
+        for (const d of teamDocs) pushUnique(d);
+        if (docs.length >= MAX_TOTAL) break;
+      }
+      if (docs.length < MAX_TOTAL) {
+        const userDocs = await ctx.db
+          .query("docs")
+          .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+          .order("desc")
+          .take(MAX_PER_TEAM);
+        for (const d of userDocs) pushUnique(d);
+      }
+    } else if (args.workspace === "team" && args.team_id) {
+      const teamDocs = await ctx.db
+        .query("docs")
+        .withIndex("by_team_id", (q: any) => q.eq("team_id", args.team_id))
+        .order("desc")
+        .take(MAX_TOTAL);
+      for (const d of teamDocs) pushUnique(d);
+    } else {
+      const userDocs = await ctx.db
+        .query("docs")
+        .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+        .order("desc")
+        .take(MAX_TOTAL);
+      for (const d of userDocs) {
+        if (args.workspace === "personal" && d.team_id) continue;
+        pushUnique(d);
+      }
+    }
+
+    return {
+      items: docs
+        .filter((d: any) => !d.archived_at && d.source !== "plan_mode")
+        .map((d: any) => ({
+          _id: String(d._id),
+          title: d.title,
+          doc_type: d.doc_type,
+          updated_at: d.updated_at,
+          team_id: d.team_id ?? null,
+          user_id: d.user_id ?? null,
+        })),
+    };
+  },
+});
+
 export const mentionSearch = query({
   args: {
     query: v.string(),
@@ -1088,13 +1340,22 @@ export const mentionSearch = query({
 
     if (types.includes("task")) {
       let tasks;
-      if (teamId) {
+      if (teamId && q) {
+        // Team workspace with query: use full-text search on title, then filter
+        // by team_id. Without this, the by_team_id-only path is capped at the
+        // most-recent N tasks and older matches are invisible.
+        const teamStr = String(teamId);
+        const searchHits = await ctx.db
+          .query("tasks")
+          .withSearchIndex("search_tasks", (s: any) => s.search("title", args.query))
+          .take(perType * 20);
+        tasks = searchHits.filter((t: any) => String(t.team_id || "") === teamStr);
+      } else if (teamId) {
         tasks = await ctx.db
           .query("tasks")
           .withIndex("by_team_id", (t: any) => t.eq("team_id", teamId))
           .order("desc")
           .take(perType * 10);
-        if (q) tasks = tasks.filter((t: any) => t.title?.toLowerCase().includes(q));
       } else if (q) {
         tasks = await ctx.db
           .query("tasks")
