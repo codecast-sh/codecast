@@ -4,7 +4,7 @@ import { Id } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
 import { verifyApiToken } from "./apiTokens";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { createDataContext, scopedFetch, resolveEffectiveTeam } from "./data";
+import { createDataContext, scopedFetch } from "./data";
 import { resolveTeamForPath } from "./privacy";
 
 function generatePlanShortId(): string {
@@ -679,92 +679,6 @@ export const webList = query({
   },
 });
 
-// Paginated query using Convex's native .paginate() — each page reads a bounded
-// number of docs so the query stays well under the 64MB V8 memory limit.
-// Heavy fields (content, embedding, entries) are stripped per-page.
-export const webListPaged = query({
-  args: {
-    team_id: v.optional(v.id("teams")),
-    workspace: v.optional(v.union(v.literal("personal"), v.literal("team"))),
-    paginationOpts: paginationOptsValidator,
-  },
-  handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) return { page: [], isDone: true, continueCursor: "" };
-
-    const user = await ctx.db.get(userId);
-    const teamId = args.workspace === "team" && args.team_id
-      ? args.team_id
-      : user?.active_team_id;
-
-    // Pick the right index based on workspace
-    const indexQuery = (args.workspace === "team" && teamId)
-      ? ctx.db.query("docs").withIndex("by_team_id", (q: any) => q.eq("team_id", teamId)).order("desc")
-      : ctx.db.query("docs").withIndex("by_user_id", (q: any) => q.eq("user_id", userId)).order("desc");
-
-    const result = await indexQuery.paginate(args.paginationOpts);
-
-    // Per-page: resolve conversations for team filtering + enrichment
-    const convIds = new Set<string>();
-    for (const d of result.page) {
-      const cid = d.conversation_id || (d.related_conversation_ids as any)?.[0];
-      if (cid) convIds.add(String(cid));
-    }
-    const convMap = new Map<string, any>();
-    for (const cid of convIds) {
-      const conv = await ctx.db.get(cid as Id<"conversations">);
-      if (conv) convMap.set(cid, conv);
-    }
-
-    // Per-page: resolve unique authors
-    const userIds = new Set<string>();
-    const planIds = new Set<string>();
-    const filtered: any[] = [];
-    for (const d of result.page) {
-      if (d.archived_at || d.source === "plan_mode" || isNoiseDocForWeb(d)) continue;
-      // Workspace filter for personal: exclude team-visible docs
-      if (args.workspace === "personal") {
-        const eff = resolveEffectiveTeam(d, convMap);
-        if (eff) continue;
-      }
-      if (d.user_id) userIds.add(String(d.user_id));
-      if (d.plan_id) planIds.add(String(d.plan_id));
-      filtered.push(d);
-    }
-
-    const userMap = new Map<string, { name?: string; image?: string; github_username?: string }>();
-    for (const uid of userIds) {
-      const u = await ctx.db.get(uid as Id<"users">);
-      if (u) userMap.set(uid, { name: u.name, image: u.image || (u as any).github_avatar_url, github_username: (u as any).github_username });
-    }
-    const planMap = new Map<string, { short_id: string; status: string }>();
-    for (const pid of planIds) {
-      const p = await ctx.db.get(pid as Id<"plans">);
-      if (p) planMap.set(pid, { short_id: (p as any).short_id, status: (p as any).status });
-    }
-
-    const page = filtered.map((d: any) => {
-      const cid = d.conversation_id || (d.related_conversation_ids as any)?.[0];
-      const conv = cid ? convMap.get(String(cid)) : undefined;
-      const author = d.user_id ? userMap.get(String(d.user_id)) : undefined;
-      const plan = d.plan_id ? planMap.get(String(d.plan_id)) : undefined;
-      const { content: _c, embedding: _e, entries: _en, ...rest } = d;
-      return {
-        ...rest,
-        ...(conv?.started_at ? { originated_at: conv.started_at } : {}),
-        ...(author ? { author_name: author.name, author_image: author.image, author_username: author.github_username } : {}),
-        ...(plan ? { plan_short_id: plan.short_id, plan_status: plan.status } : {}),
-      };
-    });
-
-    return {
-      page,
-      isDone: result.isDone,
-      continueCursor: result.continueCursor,
-    };
-  },
-});
-
 function encodeOffsetCursor(offset: number): string {
   return String(offset);
 }
@@ -887,7 +801,12 @@ export const webSearch = query({
     const convMap = new Map<string, any>();
     for (const cid of convIds) {
       const conv = await ctx.db.get(cid as Id<"conversations">);
-      if (conv) convMap.set(cid, conv);
+      if (conv) convMap.set(cid, {
+        team_id: conv.team_id,
+        is_private: conv.is_private,
+        auto_shared: conv.auto_shared,
+        team_visibility: conv.team_visibility,
+      });
     }
 
     const resolveTeam = (d: any) => {

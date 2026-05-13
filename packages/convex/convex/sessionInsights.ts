@@ -1548,7 +1548,12 @@ export const getDayInsightsForNarrative = internalQuery({
       dayInsights.map((i) => ctx.db.get(i.conversation_id))
     );
     const convMap = new Map(
-      conversations.filter((c): c is NonNullable<typeof c> => c !== null).map((c) => [c._id.toString(), c])
+      conversations.filter((c): c is NonNullable<typeof c> => c !== null).map((c) => [c._id.toString(), {
+        title: c.title,
+        project_path: c.project_path,
+        started_at: c.started_at,
+        updated_at: c.updated_at,
+      }])
     );
 
     const actorIds = [...new Set(dayInsights.map((i) => i.actor_user_id.toString()))];
@@ -1609,7 +1614,12 @@ export const getTeamDayInsights = internalQuery({
       dayInsights.map((i) => ctx.db.get(i.conversation_id))
     );
     const convMap = new Map(
-      conversations.filter((c): c is NonNullable<typeof c> => c !== null).map((c) => [c._id.toString(), c])
+      conversations.filter((c): c is NonNullable<typeof c> => c !== null).map((c) => [c._id.toString(), {
+        title: c.title,
+        project_path: c.project_path,
+        started_at: c.started_at,
+        updated_at: c.updated_at,
+      }])
     );
 
     const actorIds = [...new Set(dayInsights.map((i) => i.actor_user_id.toString()))];

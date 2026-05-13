@@ -44,7 +44,7 @@ export function useSyncDocsPaginated(wsArgs: WorkspaceArgs) {
   const syncTable = useInboxStore((s) => s.syncTable);
 
   const { results, status, loadMore } = usePaginatedQuery(
-    api.docs.webListPaged,
+    api.docs.webListPaginated,
     wsArgs === "skip" ? "skip" : wsArgs,
     { initialNumItems: PAGE_SIZE }
   );
