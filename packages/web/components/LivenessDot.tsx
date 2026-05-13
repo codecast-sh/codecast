@@ -93,13 +93,15 @@ export function planLivenessState(
 }
 
 interface ActiveSessionBadgeProps {
-  session: { session_id: string; title?: string; agent_status?: string; agent_type?: string };
+  // _id is the Convex conversation _id and is what the side panel keys off of.
+  // session_id (the chat session string) is kept for back-compat with older callers.
+  session: { _id?: string; session_id: string; title?: string; agent_status?: string; agent_type?: string };
   compact?: boolean;
   className?: string;
 }
 
 export function ActiveSessionBadge({ session, compact, className }: ActiveSessionBadgeProps) {
-  const { session_id, agent_status, agent_type, title } = session;
+  const { _id, session_id, agent_status, agent_type, title } = session;
   const isBlocked = agent_status === "permission_blocked";
   const isIdle = agent_status === "idle" || agent_status === "stopped";
   const state: LivenessState = isBlocked ? "blocked" : isIdle ? "idle" : "active";
@@ -118,26 +120,23 @@ export function ActiveSessionBadge({ session, compact, className }: ActiveSessio
     </>
   );
 
-  if (compact) {
-    return (
-      <span className={cn("inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px]", badgeClass, className)}>
-        {content}
-      </span>
-    );
-  }
-
   const handleClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     e.preventDefault();
     const store = useInboxStore.getState();
-    store.setCurrentSession(session_id);
-    store.selectPanelSession(session_id);
+    const targetId = _id || session_id;
+    store.openSidePanel(targetId);
   };
 
   return (
     <button
       onClick={handleClick}
-      className={cn("inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] cursor-pointer transition-colors flex-shrink-0", badgeClass, className)}
+      className={cn(
+        "inline-flex items-center gap-1 cursor-pointer transition-colors flex-shrink-0",
+        compact ? "px-1.5 py-0.5 rounded-full text-[9px]" : "px-1.5 py-0.5 rounded-full text-[10px]",
+        badgeClass,
+        className,
+      )}
       title={title || "Active session"}
     >
       {content}
