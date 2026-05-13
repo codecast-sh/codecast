@@ -29,7 +29,7 @@ function dedupeProjectPaths(paths: string[]): string[] {
   return Array.from(byName.values());
 }
 
-const PAGE_SIZE = 200;
+const PAGE_SIZE = 100;
 
 type WorkspaceArgs =
   | { team_id: Id<"teams">; workspace: "team" }
@@ -85,6 +85,18 @@ export function useSyncDocs() {
     : { workspace: "personal" as const };
 
   return useSyncDocsPaginated(wsArgs);
+}
+
+/**
+ * Cross-team mention index for docs — see useSyncMentionTasks for context.
+ */
+export function useSyncMentionDocs() {
+  const syncMentionIndex = useInboxStore((s) => s.syncMentionIndex);
+  const result = useQuery(api.docs.webMentionList, { workspace: "all" } as any);
+
+  useConvexSync(result, useCallback((data: any) => {
+    syncMentionIndex("docs", data?.items ?? []);
+  }, [syncMentionIndex]));
 }
 
 export function useSyncDocDetail(id?: string) {

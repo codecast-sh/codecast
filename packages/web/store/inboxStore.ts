@@ -80,6 +80,40 @@ export type TaskRef = {
   status: string;
 };
 
+// Lightweight shapes returned by `*.webMentionList` server queries. Only the
+// fields the mention picker actually renders, kept thin so we can hold a
+// cross-team index in memory comfortably.
+export type MentionTaskItem = {
+  _id: string;
+  title: string;
+  short_id: string;
+  status: string;
+  priority: string;
+  updated_at: number;
+  team_id?: string | null;
+  user_id?: string | null;
+};
+
+export type MentionDocItem = {
+  _id: string;
+  title: string;
+  doc_type: string;
+  updated_at: number;
+  team_id?: string | null;
+  user_id?: string | null;
+};
+
+export type MentionPlanItem = {
+  _id: string;
+  title: string;
+  short_id: string;
+  status: string;
+  goal?: string;
+  updated_at: number;
+  team_id?: string | null;
+  user_id?: string | null;
+};
+
 export type PlanItem = {
   _id: string;
   short_id: string;
@@ -150,6 +184,8 @@ export type InboxSession = {
   icon?: string;
   icon_color?: string;
   dismissed_at?: number;
+  team_id?: string | null;
+  is_private?: boolean;
 };
 
 export type Message = {
@@ -639,6 +675,7 @@ interface InboxStoreState {
   // -- Generic sync --
   syncTable: (field: string, incoming: any, opts?: SyncOpts) => void;
   syncRecord: (field: string, id: string, record: any) => void;
+  syncMentionIndex: (kind: "tasks" | "docs" | "plans", items: any[]) => void;
   sortedSessions: () => InboxSession[];
   visualOrder: () => InboxSession[];
 
@@ -733,6 +770,15 @@ interface InboxStoreState {
   projects: Record<string, ProjectItem>;
   docProjectPaths: string[];
   docDetails: Record<string, DocDetail>;
+  // Cross-team mention index — lightweight per-record snapshots loaded once
+  // at the app shell so @-search works for every team the user belongs to,
+  // without colliding with the active-team `tasks`/`docs`/`plans` collections
+  // that page views depend on.
+  mentionIndex: {
+    tasks: Record<string, MentionTaskItem>;
+    docs: Record<string, MentionDocItem>;
+    plans: Record<string, MentionPlanItem>;
+  };
   taskFilter: { status: string };
   docFilter: { type: string; query: string; project: string; scope: string };
   planFilter: { status: string };
@@ -1354,6 +1400,20 @@ export const useInboxStore = create<InboxStoreState>(
   // GENERIC SYNC
   // =====================
 
+  // Cross-team mention index — rebuild the slice from the latest server
+  // snapshot. Replaces wholesale by design: each `webMentionList` query
+  // returns the full set of records the user can see, so swapping the map
+  // is both correct and the cheapest way to handle deletions.
+  syncMentionIndex: sync(function (this: Draft, kind: "tasks" | "docs" | "plans", items: any[]) {
+    if (!items) return;
+    const next: Record<string, any> = {};
+    for (const it of items) {
+      if (it && it._id) next[String(it._id)] = it;
+    }
+    if (!this.mentionIndex) this.mentionIndex = { tasks: {}, docs: {}, plans: {} } as any;
+    (this.mentionIndex as any)[kind] = next;
+  }),
+
   syncTable: sync(function (this: Draft, field: string, incoming: any, opts?: SyncOpts) {
     if (!incoming && incoming !== 0) return;
     const config = SYNC_REGISTRY[field] ? { ...SYNC_REGISTRY[field], ...opts } : (opts || {});
@@ -1922,6 +1982,7 @@ export const useInboxStore = create<InboxStoreState>(
   })),
 
   tasks: {},
+  mentionIndex: { tasks: {}, docs: {}, plans: {} },
   docs: {},
   plans: {},
   projects: {},

@@ -1354,7 +1354,7 @@ export const webList = query({
     include_all: v.optional(v.boolean()),
     limit: v.optional(v.number()),
     team_id: v.optional(v.id("teams")),
-    workspace: v.optional(v.union(v.literal("personal"), v.literal("team"))),
+    workspace: v.optional(v.union(v.literal("personal"), v.literal("team"), v.literal("all"))),
     project_path: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -1414,6 +1414,83 @@ async function enrichPlansWithLiveness(ctx: any, userId: any, plans: any[]) {
     return { ...p, active_agents: activeAgents };
   });
 }
+
+export const webMentionList = query({
+  args: {
+    team_id: v.optional(v.id("teams")),
+    workspace: v.optional(v.union(v.literal("personal"), v.literal("team"), v.literal("all"))),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return { items: [] };
+
+    // Bound the response below Convex's 8192-array limit. See tasks.webMentionList
+    // for the rationale — same shape, same fallback to mentionSearch for stale items.
+    const MAX_TOTAL = 4000;
+    const MAX_PER_TEAM = 1500;
+    const seen = new Set<string>();
+    const plans: any[] = [];
+    const pushUnique = (p: any) => {
+      if (plans.length >= MAX_TOTAL) return;
+      const id = String(p._id);
+      if (!seen.has(id)) { seen.add(id); plans.push(p); }
+    };
+
+    if (args.workspace === "all") {
+      const memberships = await ctx.db
+        .query("team_memberships")
+        .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+        .collect();
+      for (const m of memberships) {
+        const teamPlans = await ctx.db
+          .query("plans")
+          .withIndex("by_team_id", (q: any) => q.eq("team_id", m.team_id))
+          .order("desc")
+          .take(MAX_PER_TEAM);
+        for (const p of teamPlans) pushUnique(p);
+        if (plans.length >= MAX_TOTAL) break;
+      }
+      if (plans.length < MAX_TOTAL) {
+        const userPlans = await ctx.db
+          .query("plans")
+          .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+          .order("desc")
+          .take(MAX_PER_TEAM);
+        for (const p of userPlans) pushUnique(p);
+      }
+    } else if (args.workspace === "team" && args.team_id) {
+      const teamPlans = await ctx.db
+        .query("plans")
+        .withIndex("by_team_id", (q: any) => q.eq("team_id", args.team_id))
+        .order("desc")
+        .take(MAX_TOTAL);
+      for (const p of teamPlans) pushUnique(p);
+    } else {
+      const userPlans = await ctx.db
+        .query("plans")
+        .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+        .order("desc")
+        .take(MAX_TOTAL);
+      for (const p of userPlans) {
+        if (args.workspace === "personal" && p.team_id) continue;
+        pushUnique(p);
+      }
+    }
+
+    return {
+      items: plans.map((p: any) => ({
+        _id: String(p._id),
+        title: p.title,
+        short_id: p.short_id,
+        status: p.status,
+        goal: p.goal,
+        updated_at: p.updated_at,
+        team_id: p.team_id ?? null,
+        user_id: p.user_id ?? null,
+      })),
+    };
+  },
+});
 
 export const webTeamList = query({
   args: {

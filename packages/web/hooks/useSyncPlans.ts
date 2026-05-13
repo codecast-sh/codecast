@@ -26,3 +26,15 @@ export function useSyncPlansWithArgs(wsArgs: WorkspaceArgs, statusFilter?: strin
 export function useSyncPlans(statusFilter?: string) {
   return useSyncPlansWithArgs(useWorkspaceArgs(), statusFilter);
 }
+
+/**
+ * Cross-team mention index for plans — see useSyncMentionTasks for context.
+ */
+export function useSyncMentionPlans() {
+  const syncMentionIndex = useInboxStore((s) => s.syncMentionIndex);
+  const result = useQuery(api.plans.webMentionList, { workspace: "all" } as any);
+
+  useConvexSync(result, useCallback((data: any) => {
+    syncMentionIndex("plans", data?.items ?? []);
+  }, [syncMentionIndex]));
+}

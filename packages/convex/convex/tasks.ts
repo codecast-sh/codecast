@@ -902,7 +902,7 @@ export const webList = query({
     include_derived: v.optional(v.boolean()),
     triage_status: v.optional(v.string()),
     team_id: v.optional(v.id("teams")),
-    workspace: v.optional(v.union(v.literal("personal"), v.literal("team"))),
+    workspace: v.optional(v.union(v.literal("personal"), v.literal("team"), v.literal("all"))),
     project_path: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -945,6 +945,28 @@ export const webList = query({
         for (const t of assignedTasks) {
           if (String(t.team_id) === teamStr) pushUnique(t);
         }
+      } else if (args.workspace === "all") {
+        // GLOBAL VIEW: every team the user belongs to + personal tasks
+        // (creator or assignee with no team). Used by the client to keep
+        // the inbox store warm for cross-team mention search.
+        const memberships = await ctx.db
+          .query("team_memberships")
+          .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+          .collect();
+        for (const m of memberships) {
+          const teamTasks = await ctx.db.query("tasks")
+            .withIndex("by_team_id", (q: any) => q.eq("team_id", m.team_id))
+            .collect();
+          for (const t of teamTasks) pushUnique(t);
+        }
+        const userTasks = await ctx.db.query("tasks")
+          .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+          .collect();
+        for (const t of userTasks) pushUnique(t);
+        const assignedTasks = await ctx.db.query("tasks")
+          .withIndex("by_assignee_status", (q: any) => q.eq("assignee", String(userId)))
+          .collect();
+        for (const t of assignedTasks) pushUnique(t);
       } else if (args.workspace === "personal") {
         // PERSONAL VIEW: tasks with no team_id that are mine — either as
         // creator OR assignee. Without the assignee union, a task assigned
@@ -1043,28 +1065,12 @@ export const webList = query({
       } catch {}
     }
 
-    const now = Date.now();
-    const HEARTBEAT_ALIVE_MS = 90 * 1000;
-    const managedSessions = await ctx.db
-      .query("managed_sessions")
-      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
-      .collect();
-    const liveSessions = managedSessions.filter(
-      (s) => now - s.last_heartbeat < HEARTBEAT_ALIVE_MS && s.conversation_id
-    );
-    const activeTaskMap = new Map<string, { _id: string; session_id: string; title?: string; agent_status?: string; agent_type?: string }>();
-    for (const s of liveSessions) {
-      const conv = await ctx.db.get(s.conversation_id!);
-      if (conv && conv.active_task_id) {
-        activeTaskMap.set(conv.active_task_id.toString(), {
-          _id: conv._id.toString(),
-          session_id: conv.session_id,
-          title: conv.title || undefined,
-          agent_status: s.agent_status || undefined,
-          agent_type: conv.agent_type || undefined,
-        });
-      }
-    }
+    // NOTE: activeSession enrichment was previously inlined here, but it caused
+    // webList to subscribe to managed_sessions and conversations — both of
+    // which churn on every daemon heartbeat (~30s per active session). The
+    // result: a 13MB response re-shipped every few seconds, regardless of
+    // whether any task actually changed. Live-session overlay now lives in
+    // `webActiveSessions` (small, cheap to invalidate). Web client merges.
 
     const sourceConvIds = new Set<string>();
     for (const t of result) {
@@ -1085,7 +1091,6 @@ export const webList = query({
       creator: userMap.get(t.user_id.toString()) || null,
       assignee_info: t.assignee ? userMap.get(t.assignee.toString()) || null : null,
       plan: t.plan_id ? planMap.get(t.plan_id.toString()) || null : null,
-      activeSession: activeTaskMap.get(t._id.toString()) || null,
       source_agent_type: t.created_from_conversation ? sourceConvMap.get(t.created_from_conversation.toString())?.agent_type || null : null,
       origin_session: t.created_from_conversation ? (() => {
         const sc = sourceConvMap.get(t.created_from_conversation.toString());
@@ -1094,6 +1099,125 @@ export const webList = query({
       session_count: (t.conversation_ids || []).length,
     }));
     return { items, hasMore: false };
+  },
+});
+
+// Companion to webList: the live-session overlay for the task list. Tiny
+// payload, but invalidates on every daemon heartbeat — keep it separate from
+// webList so the 13MB task payload doesn't re-ship on every heartbeat.
+//
+// Returns: { [taskId]: { _id, session_id, title?, agent_status?, agent_type? } }
+export const webActiveSessions = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return {};
+
+    const now = Date.now();
+    const HEARTBEAT_ALIVE_MS = 90 * 1000;
+    const managedSessions = await ctx.db
+      .query("managed_sessions")
+      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+      .collect();
+
+    const map: Record<string, { _id: string; session_id: string; title?: string; agent_status?: string; agent_type?: string }> = {};
+    for (const s of managedSessions) {
+      if (now - s.last_heartbeat >= HEARTBEAT_ALIVE_MS) continue;
+      if (!s.conversation_id) continue;
+      const conv = await ctx.db.get(s.conversation_id);
+      if (!conv || !conv.active_task_id) continue;
+      map[conv.active_task_id.toString()] = {
+        _id: conv._id.toString(),
+        session_id: conv.session_id,
+        title: conv.title || undefined,
+        agent_status: s.agent_status || undefined,
+        agent_type: conv.agent_type || undefined,
+      };
+    }
+    return map;
+  },
+});
+
+// Compact projection of tasks for mention/@-search store sync. Returns only
+// the fields needed to render and filter in the dropdown — orders of magnitude
+// smaller than `webList`, which enriches with creator/plan/active-session data.
+export const webMentionList = query({
+  args: {
+    team_id: v.optional(v.id("teams")),
+    workspace: v.optional(v.union(v.literal("personal"), v.literal("team"), v.literal("all"))),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+
+    // Convex caps query return arrays at 8192. Cap aggressively below that —
+    // the mention dropdown only renders ~6–12 results, so older tasks aren't
+    // useful to ship over the wire. Falls back to `mentionSearch` for the
+    // long tail. Per-team cap keeps any single high-volume team from
+    // crowding out smaller teams the user also belongs to.
+    const MAX_TOTAL = 4000;
+    const MAX_PER_TEAM = 1500;
+    const seen = new Set<string>();
+    const tasks: any[] = [];
+    const pushUnique = (t: any) => {
+      if (tasks.length >= MAX_TOTAL) return;
+      const id = String(t._id);
+      if (!seen.has(id)) { seen.add(id); tasks.push(t); }
+    };
+
+    if (args.workspace === "all") {
+      const memberships = await ctx.db
+        .query("team_memberships")
+        .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+        .collect();
+      for (const m of memberships) {
+        const teamTasks = await ctx.db
+          .query("tasks")
+          .withIndex("by_team_id", (q: any) => q.eq("team_id", m.team_id))
+          .order("desc")
+          .take(MAX_PER_TEAM);
+        for (const t of teamTasks) pushUnique(t);
+        if (tasks.length >= MAX_TOTAL) break;
+      }
+      if (tasks.length < MAX_TOTAL) {
+        const userTasks = await ctx.db
+          .query("tasks")
+          .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+          .order("desc")
+          .take(MAX_PER_TEAM);
+        for (const t of userTasks) pushUnique(t);
+      }
+    } else if (args.workspace === "team" && args.team_id) {
+      const teamTasks = await ctx.db
+        .query("tasks")
+        .withIndex("by_team_id", (q: any) => q.eq("team_id", args.team_id))
+        .order("desc")
+        .take(MAX_TOTAL);
+      for (const t of teamTasks) pushUnique(t);
+    } else {
+      const userTasks = await ctx.db
+        .query("tasks")
+        .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+        .order("desc")
+        .take(MAX_TOTAL);
+      for (const t of userTasks) {
+        if (args.workspace === "personal" && t.team_id) continue;
+        pushUnique(t);
+      }
+    }
+
+    return {
+      items: tasks.map((t: any) => ({
+        _id: String(t._id),
+        title: t.title,
+        short_id: t.short_id,
+        status: t.status,
+        priority: t.priority,
+        updated_at: t.updated_at,
+        team_id: t.team_id ?? null,
+        user_id: t.user_id ?? null,
+      })),
+    };
   },
 });
 
