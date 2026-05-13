@@ -140,6 +140,33 @@ export function useConversationMessages(
     useInboxStore.getState().syncRecord("conversations", conversationId, meta);
   }, [conversationId]));
 
+  // Diagnostic: surface stuck-load states so we can identify the root cause.
+  // Fires when storeMeta says the conversation has messages but we still have
+  // nothing locally after 5s. Logs the upstream state in one structured warn.
+  // eslint-disable-next-line no-restricted-syntax
+  useEffect(() => {
+    if (!canQuery) return;
+    const t = setTimeout(() => {
+      const state = useInboxStore.getState();
+      const meta = state.conversations[conversationId] ?? state.sessions[conversationId];
+      const msgs = state.messages[conversationId];
+      if (!meta || (meta.message_count ?? 0) === 0) return;
+      if (msgs && msgs.length > 0) return;
+      // eslint-disable-next-line no-console
+      console.warn("[useConversationMessages] stuck without messages after 5s", {
+        conversationId,
+        message_count: meta.message_count,
+        useNormalMode,
+        targetMode,
+        paginationStatus,
+        descResultsLength: descResults?.length,
+        hasTarget,
+        targetTimestampReady,
+      });
+    }, 5000);
+    return () => clearTimeout(t);
+  }, [conversationId, canQuery, useNormalMode, targetMode, paginationStatus, descResults, hasTarget, targetTimestampReady]);
+
   // =============================================
   // READ FROM STORE (primary source of truth - never waits on Convex)
   // =============================================

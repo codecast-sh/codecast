@@ -50,46 +50,26 @@ export type TimelineItem =
   | { type: 'commit'; data: Commit; timestamp: number }
   | { type: 'pull_request'; data: PullRequest; timestamp: number };
 
+// Cache keyed by the messages array reference. Lets re-visits to a previously-built
+// timeline (e.g. switching back to a conversation whose messages haven't mutated)
+// skip the O(n log n) sort + O(n) dedupe entirely.
+const timelineCache = new WeakMap<object, {
+  commits: Commit[];
+  pullRequests: PullRequest[];
+  result: TimelineItem[];
+}>();
+
 export function buildCompositeTimeline(
   messages: Message[],
   commits: Commit[],
   pullRequests: PullRequest[],
-  activeBranches: Record<string, string>,
-  loadedForkMessages: Record<string, Message[]>,
 ): TimelineItem[] {
-  let effectiveMessages = messages;
-
-  const activeForkUuids = Object.keys(activeBranches);
-  if (activeForkUuids.length > 0) {
-    const sortedForkPoints = activeForkUuids
-      .map((uuid) => {
-        const idx = messages.findIndex((m) => m.message_uuid === uuid);
-        return { uuid, idx };
-      })
-      .filter((fp) => fp.idx !== -1)
-      .sort((a, b) => a.idx - b.idx);
-
-    if (sortedForkPoints.length > 0) {
-      const firstForkPoint = sortedForkPoints[0];
-      const forkConvId = activeBranches[firstForkPoint.uuid];
-      const forkMsgs = loadedForkMessages[forkConvId];
-
-      if (forkMsgs !== undefined) {
-        const mainPrefix = messages.slice(0, firstForkPoint.idx + 1);
-        const forkPointInFork = forkMsgs.findIndex(
-          (m) => m.message_uuid === firstForkPoint.uuid
-        );
-        const divergentForkMsgs =
-          forkPointInFork !== -1
-            ? forkMsgs.slice(forkPointInFork + 1)
-            : forkMsgs;
-        effectiveMessages = [...mainPrefix, ...divergentForkMsgs];
-      }
-    }
+  const cached = timelineCache.get(messages);
+  if (cached && cached.commits === commits && cached.pullRequests === pullRequests) {
+    return cached.result;
   }
-
   const items: TimelineItem[] = [
-    ...effectiveMessages.map((msg) => ({
+    ...messages.map((msg) => ({
       type: 'message' as const,
       data: msg,
       timestamp: msg.timestamp,
@@ -111,7 +91,7 @@ export function buildCompositeTimeline(
   const seenUuids = new Set<string>();
   const seenIds = new Set<string>();
   const seenUserContent = new Map<string, number>();
-  return items.filter((item) => {
+  const result = items.filter((item) => {
     if (item.type !== 'message') return true;
     const msg = item.data as Message;
     if (msg._id) {
@@ -141,4 +121,6 @@ export function buildCompositeTimeline(
     if (msg.role === 'user' && (!msg.content || !msg.content.trim()) && !(msg.images && msg.images.length > 0)) return false;
     return true;
   });
+  timelineCache.set(messages, { commits, pullRequests, result });
+  return result;
 }

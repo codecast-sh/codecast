@@ -833,7 +833,6 @@ export function SessionListPanel({
     s => s.hiddenSessionCount,
     s => s.sessions,
     s => s.sessionsWithQueuedMessages,
-    s => s.activeForkHighlight,
     s => s.activeProjectFilter,
     s => s.collapsedSections,
   ]);
@@ -971,10 +970,7 @@ export function SessionListPanel({
               <div key={session._id} className="border-b border-sol-border/30">
                 <SessionCard
                   session={session}
-                  isActive={
-                    session._id === s.activeForkHighlight ||
-                    (session._id === activeSessionId && !s.activeForkHighlight)
-                  }
+                  isActive={session._id === activeSessionId}
                   globalIndex={0}
                   onSelect={() => handleSelect(session)}
                   onDismiss={handleAnimatedDismiss}
@@ -987,14 +983,8 @@ export function SessionListPanel({
                   <SessionCard
                     key={sub._id}
                     session={sub}
-                    isActive={
-                      sub._id === s.activeForkHighlight ||
-                      (sub._id === activeSessionId && !s.activeForkHighlight)
-                    }
-                    isParentActive={
-                      session._id === s.activeForkHighlight ||
-                      (session._id === activeSessionId && !s.activeForkHighlight)
-                    }
+                    isActive={sub._id === activeSessionId}
+                    isParentActive={session._id === activeSessionId}
                     globalIndex={0}
                     onSelect={() => handleSelect(sub)}
                     onDismiss={handleAnimatedDismiss}

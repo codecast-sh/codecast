@@ -757,6 +757,7 @@ export function NewSessionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
   const [mode, setMode] = useState<"session" | "workflow">("session");
   const [agentType, setAgentType] = useState<"claude" | "codex" | "cursor" | "gemini">("claude");
   const [projectPath, setProjectPath] = useState("");
+  const [firstMessage, setFirstMessage] = useState("");
   const [isolated, setIsolated] = useState(false);
   const [worktreeName, setWorktreeName] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -765,6 +766,7 @@ export function NewSessionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
   const [selectedWorkflowId, setSelectedWorkflowId] = useState("");
   const [goalOverride, setGoalOverride] = useState("");
   const createQuickSession = useMutation(api.conversations.createQuickSession);
+  const sendMessage = useMutation(api.pendingMessages.sendMessageToSession);
   const createWorkflowRun = useMutation((api as any).workflow_runs.create);
   const workflows = useQuery((api as any).workflows.webList);
   const freshProjects = useQuery(api.users.getRecentProjectPaths, { limit: 15 });
@@ -818,7 +820,14 @@ export function NewSessionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
     if (!isOpen) return;
     function handleKeyDown(e: KeyboardEvent) {
       if (e.key === "Escape") onClose();
-      if (e.key === "Enter" && !e.defaultPrevented) handleSubmitRef.current();
+      if (e.key === "Enter" && !e.defaultPrevented) {
+        // Skip plain Enter when the user is typing in the first-message textarea —
+        // its own onKeyDown handles Cmd/Ctrl+Enter and leaves plain Enter alone
+        // so users can write multi-line prompts.
+        const target = e.target as HTMLElement | null;
+        if (target?.tagName === "TEXTAREA" && !e.metaKey && !e.ctrlKey) return;
+        handleSubmitRef.current();
+      }
     }
     function handleClickOutside(e: MouseEvent) {
       if (modalRef.current && !modalRef.current.contains(e.target as Node)) onClose();
@@ -849,6 +858,7 @@ export function NewSessionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
         onClose();
       } else {
         const convexAgentType = agentType === "claude" ? "claude_code" as const : agentType === "codex" ? "codex" as const : agentType === "cursor" ? "cursor" as const : "gemini" as const;
+        const trimmedFirstMessage = firstMessage.trim();
         const conversationId = await createQuickSession({
           agent_type: convexAgentType,
           project_path: projectPath || undefined,
@@ -856,9 +866,25 @@ export function NewSessionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
           isolated: isolated || undefined,
           worktree_name: (isolated && worktreeName) ? worktreeName : undefined,
         });
+        // Send the first message in the same step so the daemon's startedSessionTmux
+        // fallback delivers it via the tmux pane while discovery is still in flight.
+        // The 2-step flow (create then type) leaves orphaned 0-message sessions when
+        // the user gives up before discovery resolves.
+        if (trimmedFirstMessage) {
+          try {
+            await sendMessage({
+              conversation_id: conversationId as Id<"conversations">,
+              content: trimmedFirstMessage,
+              client_id: `first-${conversationId}-${Date.now()}`,
+            });
+          } catch (err) {
+            toast.error(err instanceof Error ? err.message : "Failed to send initial message");
+          }
+        }
         router.push(`/conversation/${conversationId}?focus=1`);
         onClose();
         setProjectPath("");
+        setFirstMessage("");
       }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to create session");
@@ -947,6 +973,25 @@ export function NewSessionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
               </button>
             ))}
           </div>
+          )}
+
+          {mode === "session" && (
+            <div>
+              <label className="block text-xs font-medium text-sol-text-muted mb-1">First message <span className="text-sol-text-dim">(optional)</span></label>
+              <textarea
+                autoFocus
+                value={firstMessage}
+                onChange={(e) => setFirstMessage(e.target.value)}
+                onKeyDown={(e) => {
+                  // Cmd/Ctrl+Enter submits — preventDefault so browsers don't
+                  // insert a newline before the modal's global handler runs.
+                  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) e.preventDefault();
+                }}
+                placeholder="What should this session do? (⌘+Enter to send)"
+                rows={3}
+                className="w-full px-3 py-2 text-sm bg-sol-bg-alt border border-sol-border/50 rounded-lg text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:border-sol-yellow/50 resize-none font-mono"
+              />
+            </div>
           )}
 
           {/* Project path */}

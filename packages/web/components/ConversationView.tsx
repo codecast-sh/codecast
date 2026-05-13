@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { LogoIcon } from "./Logo";
 import { useRouter } from "next/navigation";
-import { useLayoutEffect, useRef, useState, useMemo, useImperativeHandle, forwardRef, useCallback, memo, createContext, useContext, ComponentProps } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, useMemo, useImperativeHandle, forwardRef, useCallback, memo, createContext, useContext, ComponentProps } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useEventListener } from "../hooks/useEventListener";
 import { useWatchEffect } from "../hooks/useWatchEffect";
@@ -71,7 +71,6 @@ import { soundSend } from "../lib/sounds";
 import { useForkNavigationStore } from "../store/forkNavigationStore";
 import { buildCompositeTimeline } from "../lib/compositeTimeline";
 import { useMessageSelection } from "../hooks/useMessageSelection";
-import { useForkMessages } from "../hooks/useForkMessages";
 import { BranchSelector } from "./BranchSelector";
 import { ForkTreePanel } from "./ForkTreePanel";
 import { getApplyPatchInput, parseApplyPatchSections } from "../lib/applyPatchParser";
@@ -85,6 +84,7 @@ import { useMentionQuery } from "../hooks/useMentionQuery";
 
 const sacredInputs = new Map<string, { text: string; images?: any[] }>();
 const EMPTY_PENDING: any[] = [];
+const EMPTY_MESSAGES: any[] = [];
 const EMPTY_MATCH_IDS: string[] = [];
 const EMPTY_MATCH_INSTANCES: { messageId: string; localIndex: number; timestamp: number }[] = [];
 
@@ -237,6 +237,9 @@ export type ConversationData = {
   status?: "active" | "completed";
   fork_count?: number;
   forked_from?: string;
+  fork_status?: "copying" | "complete" | "failed";
+  fork_copied?: number;
+  fork_copy_total?: number;
   forked_from_details?: {
     conversation_id: string;
     share_token?: string;
@@ -351,6 +354,89 @@ type ConversationViewProps = {
 
 export interface ConversationViewHandle {
   scrollToMessage: (messageId: string) => void;
+}
+
+function ForkCopyingState({ copied, total }: { copied: number; total?: number }) {
+  const pct = total && total > 0 ? Math.min(100, Math.round((copied / total) * 100)) : null;
+  return (
+    <div className="flex flex-col items-center gap-3 max-w-md text-center px-6">
+      <div className="flex items-center gap-2 text-sm font-medium text-sol-text">
+        <svg className="w-4 h-4 animate-spin text-sol-cyan" fill="none" viewBox="0 0 24 24">
+          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+        </svg>
+        Copying messages from parent…
+      </div>
+      <div className="text-xs text-sol-text-dim tabular-nums">
+        {total
+          ? `${copied.toLocaleString()} / ${total.toLocaleString()} messages${pct !== null ? ` · ${pct}%` : ""}`
+          : `${copied.toLocaleString()} messages copied so far`}
+      </div>
+      {total && total > 0 && (
+        <div className="w-full max-w-xs h-1.5 rounded-full bg-sol-bg-alt overflow-hidden">
+          <div
+            className="h-full bg-sol-cyan transition-all duration-500"
+            style={{ width: `${pct ?? 0}%` }}
+          />
+        </div>
+      )}
+      <div className="text-[11px] text-sol-text-dim/60">
+        Large forks copy in batches. Messages will appear automatically as they arrive.
+      </div>
+    </div>
+  );
+}
+
+function MessagesUnavailableState({
+  messageCount,
+  forkStatus,
+  forkCopied,
+  forkTotal,
+}: {
+  messageCount: number;
+  forkStatus?: "copying" | "complete" | "failed";
+  forkCopied?: number;
+  forkTotal?: number;
+}) {
+  const isCopying = forkStatus === "copying";
+  const [stalled, setStalled] = useState(false);
+  useEffect(() => {
+    if (isCopying) return;
+    const t = setTimeout(() => setStalled(true), 8000);
+    return () => clearTimeout(t);
+  }, [isCopying]);
+
+  if (isCopying) {
+    return <ForkCopyingState copied={forkCopied ?? 0} total={forkTotal} />;
+  }
+
+  if (!stalled) {
+    return (
+      <div className="flex items-center gap-2 text-sol-text-dim text-xs">
+        <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+        </svg>
+        <span>Loading messages…</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col items-center gap-2 max-w-md text-center px-6">
+      <div className="text-sm font-medium text-sol-text">Messages couldn't be loaded</div>
+      <div className="text-xs text-sol-text-dim">
+        This session reports {messageCount.toLocaleString()} message{messageCount === 1 ? "" : "s"}, but none were returned.
+        The fork may have failed mid-copy, or you may not have access.
+      </div>
+      <button
+        onClick={() => window.location.reload()}
+        className="mt-2 px-3 py-1.5 text-xs rounded-md border border-sol-border text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt transition-colors"
+      >
+        Reload
+      </button>
+    </div>
+  );
 }
 
 function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
@@ -3717,6 +3803,24 @@ function SkillCard({ name, description, path }: { name?: string; description?: s
   );
 }
 
+const SUMMARY_LABELS = /\b(Goal|Status|Next|Blocked|Plan|Result|Outcome|Context|Progress):/g;
+
+function FormattedSummary({ text }: { text: string }) {
+  const parts = text.split(SUMMARY_LABELS);
+  if (parts.length <= 1) return <>{text}</>;
+  return (
+    <>
+      {parts.map((part, i) =>
+        i % 2 === 1 ? (
+          <span key={i} className="font-semibold text-sol-text-primary">{i > 1 ? '\n' : ''}{part}: </span>
+        ) : (
+          <span key={i}>{part}</span>
+        )
+      )}
+    </>
+  );
+}
+
 type TeammateMessagePart = { type: 'text'; content: string } | { type: 'teammate'; teammateId: string; color?: string; summary?: string; content: string; };
 
 function parseTeammateMessages(text: string): TeammateMessagePart[] {
@@ -3799,14 +3903,19 @@ function TeammateMessageCard({ teammateId, color, summary, content }: { teammate
     const idleSummary = parsed.summary;
     if (idleSummary) {
       return (
-        <div className="flex items-center gap-2 py-1 px-2 text-xs text-sol-text-dim rounded bg-sol-bg-alt/30">
-          <span className={`px-1.5 py-0.5 rounded border text-[10px] font-mono ${agentColorMap[color || "blue"] || agentColorMap.blue}`}>
-            {teammateId}
-          </span>
-          <svg className="w-2.5 h-2.5 text-sol-text-dim/40 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-          </svg>
-          <span className="italic truncate">{idleSummary}</span>
+        <div className="py-1.5 px-2.5 text-xs rounded bg-sol-bg-alt/30 border border-sol-border/10">
+          <div className="flex items-center gap-2 mb-1">
+            <span className={`px-1.5 py-0.5 rounded border text-[10px] font-mono ${agentColorMap[color || "blue"] || agentColorMap.blue}`}>
+              {teammateId}
+            </span>
+            <svg className="w-2.5 h-2.5 text-sol-text-dim/40 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <span className="text-[10px] uppercase tracking-wider text-sol-text-dim/60 font-medium">idle</span>
+          </div>
+          <div className="text-sol-text-dim leading-relaxed whitespace-pre-line">
+            <FormattedSummary text={idleSummary} />
+          </div>
         </div>
       );
     }
@@ -3869,20 +3978,25 @@ function TeammateMessageCard({ teammateId, color, summary, content }: { teammate
 
   const borderColor = agentBorderMap[color || "blue"] || agentBorderMap.blue;
   const badgeColor = agentColorMap[color || "blue"] || agentColorMap.blue;
-  const isLong = content.length > 200;
+  const isSummary = /summary|idle|away/i.test(summary || '');
+  const isLong = !isSummary && content.length > 200;
 
   return (
-    <div className={`my-1.5 border-l-2 ${borderColor} pl-3 py-1`}>
-      <div className="flex items-center gap-2 mb-1">
+    <div className={`my-1.5 border-l-2 ${borderColor} pl-3 py-1.5`}>
+      <div className="flex items-center gap-2 mb-1.5">
         <span className={`px-1.5 py-0.5 rounded border text-[10px] font-mono ${badgeColor}`}>
           {teammateId}
         </span>
-        {summary && <span className="text-xs text-sol-text-muted">{summary}</span>}
+        {summary && (
+          <span className="text-[10px] uppercase tracking-wider font-medium text-sol-text-dim/60">
+            {summary}
+          </span>
+        )}
       </div>
       <div
-        className={`text-sm text-sol-text-secondary whitespace-pre-wrap break-words ${isLong && !expanded ? "line-clamp-4" : ""}`}
+        className={`text-sm text-sol-text-secondary break-words leading-relaxed ${isSummary ? "whitespace-pre-line" : "whitespace-pre-wrap"} ${isLong && !expanded ? "line-clamp-4" : ""}`}
       >
-        {content}
+        {isSummary ? <FormattedSummary text={content} /> : content}
       </div>
       {isLong && (
         <button
@@ -3896,7 +4010,7 @@ function TeammateMessageCard({ teammateId, color, summary, content }: { teammate
   );
 }
 
-function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, userName, avatarUrl, onOpenComments, isHighlighted, shareSelectionMode, isSelectedForShare, onToggleShareSelection, onStartShareSelection, onForkFromMessage, forkChildren, messageUuid, images, onBranchSwitch, activeBranchId, loadingBranchId, isPending, isQueued, mainMessageCount }: { content: string; timestamp: number; messageId: string; conversationId?: Id<"conversations">; collapsed?: boolean; userName?: string; avatarUrl?: string | null; onOpenComments?: () => void; isHighlighted?: boolean; shareSelectionMode?: boolean; isSelectedForShare?: boolean; onToggleShareSelection?: () => void; onStartShareSelection?: (messageId: string) => void; onForkFromMessage?: (messageUuid: string) => void; forkChildren?: Array<{ _id: string; title: string; short_id?: string; started_at?: number; username?: string; message_count?: number; agent_type?: string }>; messageUuid?: string; images?: ImageData[]; onBranchSwitch?: (convId: string | null) => void; activeBranchId?: string | null; loadingBranchId?: string | null; isPending?: boolean; isQueued?: boolean; mainMessageCount?: number }) {
+function UserPromptImpl({ content, timestamp, messageId, conversationId, collapsed, userName, avatarUrl, onOpenComments, isHighlighted, shareSelectionMode, isSelectedForShare, onToggleShareSelection, onStartShareSelection, onForkFromMessage, forkChildren, messageUuid, images, onBranchSwitch, activeBranchId, loadingBranchId, isPending, isQueued, mainMessageCount }: { content: string; timestamp: number; messageId: string; conversationId?: Id<"conversations">; collapsed?: boolean; userName?: string; avatarUrl?: string | null; onOpenComments?: (messageId: string) => void; isHighlighted?: boolean; shareSelectionMode?: boolean; isSelectedForShare?: boolean; onToggleShareSelection?: (messageId: string) => void; onStartShareSelection?: (messageId: string) => void; onForkFromMessage?: (messageUuid: string) => void; forkChildren?: Array<{ _id: string; title: string; short_id?: string; started_at?: number; username?: string; message_count?: number; agent_type?: string }>; messageUuid?: string; images?: ImageData[]; onBranchSwitch?: (messageUuid: string, convId: string | null) => void; activeBranchId?: string | null; loadingBranchId?: string | null; isPending?: boolean; isQueued?: boolean; mainMessageCount?: number }) {
   const [isExpanded, setIsExpanded] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
   const [isTruncated, setIsTruncated] = useState(false);
@@ -3972,7 +4086,7 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
   };
 
   return (
-    <div id={`msg-${messageId}`} className={`group relative scroll-mt-20 bg-sol-blue/10 -mx-4 px-4 py-4 rounded-lg border border-sol-blue/30 ${effectivelyCollapsed ? "mb-2" : "mb-6"} transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg message-highlight" : ""} ${shareSelectionMode ? "cursor-pointer" : ""} ${isSelectedForShare ? "bg-sol-cyan/10 border-2 border-sol-cyan ring-2 ring-sol-cyan/30" : ""} ${isPending ? "opacity-80 pending-stripes" : isQueued ? "opacity-90 queued-pulse" : ""}`} style={{ '--image-fade-bg': 'color-mix(in srgb, var(--sol-blue) 10%, var(--sol-bg))' } as React.CSSProperties} onClick={shareSelectionMode ? onToggleShareSelection : undefined}>
+    <div id={`msg-${messageId}`} className={`group relative scroll-mt-20 bg-sol-blue/10 -mx-4 px-4 py-4 rounded-lg border border-sol-blue/30 ${effectivelyCollapsed ? "mb-2" : "mb-6"} transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg message-highlight" : ""} ${shareSelectionMode ? "cursor-pointer" : ""} ${isSelectedForShare ? "bg-sol-cyan/10 border-2 border-sol-cyan ring-2 ring-sol-cyan/30" : ""} ${isPending ? "opacity-80 pending-stripes" : isQueued ? "opacity-90 queued-pulse" : ""}`} style={{ '--image-fade-bg': 'color-mix(in srgb, var(--sol-blue) 10%, var(--sol-bg))' } as React.CSSProperties} onClick={shareSelectionMode ? (() => onToggleShareSelection?.(messageId)) : undefined}>
       <div className={`absolute -top-2 right-0 transition-opacity flex gap-0.5 z-10 bg-sol-bg rounded shadow-md px-0.5 ${shareSelectionMode ? "opacity-0 pointer-events-none" : "opacity-0 group-hover:opacity-100"}`}>
         {onStartShareSelection && (
           <button
@@ -4007,7 +4121,7 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
           </svg>
         </button>
         <button
-          onClick={onOpenComments}
+          onClick={() => onOpenComments?.(messageId)}
           className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary flex items-center gap-1"
           title="Comments"
           aria-label="Comments"
@@ -4168,11 +4282,11 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
         </div>
       )}
 
-      {forkChildren && forkChildren.length > 0 && onBranchSwitch && (
+      {forkChildren && forkChildren.length > 0 && onBranchSwitch && messageUuid && (
         <BranchSelector
           forkChildren={forkChildren}
           activeBranchId={activeBranchId ?? null}
-          onSwitchBranch={(convId) => onBranchSwitch(convId)}
+          onSwitchBranch={(convId) => onBranchSwitch(messageUuid, convId)}
           loadingBranchId={loadingBranchId}
           mainMessageCount={mainMessageCount}
         />
@@ -4227,6 +4341,7 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
     </div>
   );
 }
+const UserPrompt = memo(UserPromptImpl);
 
 function linkifyMentions(text: string, map: Record<string, string>): string {
   if (!text || Object.keys(map).length === 0) return text;
@@ -4241,7 +4356,7 @@ function linkifyMentions(text: string, map: Record<string, string>): string {
   }).join('');
 }
 
-function AssistantBlock({
+function AssistantBlockImpl({
   content,
   timestamp,
   thinking,
@@ -4297,7 +4412,7 @@ function AssistantBlock({
   childConversations?: Array<{ _id: string; title: string; is_subagent?: boolean; first_message_preview?: string }>;
   agentNameToChildMap?: Record<string, string>;
   showHeader?: boolean;
-  onOpenComments?: () => void;
+  onOpenComments?: (messageId: string) => void;
   toolCallChangeSelectionMap?: Record<string, ToolCallChangeSelection>;
   isHighlighted?: boolean;
   onToggleCollapsed?: () => void;
@@ -4306,14 +4421,14 @@ function AssistantBlock({
   runMessageIds?: string[];
   shareSelectionMode?: boolean;
   isSelectedForShare?: boolean;
-  onToggleShareSelection?: () => void;
+  onToggleShareSelection?: (messageId: string) => void;
   onStartShareSelection?: (messageId: string) => void;
   agentType?: string;
   taskSubjectMap?: Record<string, string>;
   taskRecordMap?: TaskRecordMaps;
   onForkFromMessage?: (messageUuid: string) => void;
   forkChildren?: Array<{ _id: string; title: string; short_id?: string; started_at?: number; username?: string; message_count?: number; agent_type?: string }>;
-  onBranchSwitch?: (convId: string | null) => void;
+  onBranchSwitch?: (messageUuid: string, convId: string | null) => void;
   activeBranchId?: string | null;
   loadingBranchId?: string | null;
   mainMessageCount?: number;
@@ -4436,7 +4551,7 @@ function AssistantBlock({
   }
 
   return (
-    <div id={`msg-${messageId}`} className={`group relative scroll-mt-20 ${collapsed ? "mb-1" : onlyToolCalls ? "mb-1" : "mb-6"} transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg p-2 -m-2 message-highlight" : ""} ${shareSelectionMode ? "cursor-pointer" : ""} ${isSelectedForShare ? "bg-sol-cyan/10 rounded-lg p-2 -m-2 border-2 border-sol-cyan ring-2 ring-sol-cyan/30" : ""}`} onClick={shareSelectionMode ? onToggleShareSelection : undefined} title={!shouldShowHeader ? formatRelativeTime(timestamp) : undefined}>
+    <div id={`msg-${messageId}`} className={`group relative scroll-mt-20 ${collapsed ? "mb-1" : onlyToolCalls ? "mb-1" : "mb-6"} transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg p-2 -m-2 message-highlight" : ""} ${shareSelectionMode ? "cursor-pointer" : ""} ${isSelectedForShare ? "bg-sol-cyan/10 rounded-lg p-2 -m-2 border-2 border-sol-cyan ring-2 ring-sol-cyan/30" : ""}`} onClick={shareSelectionMode ? (() => onToggleShareSelection?.(messageId)) : undefined} title={!shouldShowHeader ? formatRelativeTime(timestamp) : undefined}>
       {(hasContent || hasToolCalls) && (
         <div className={`absolute ${hasPlanWrite && onlyToolCalls ? "-top-6" : onlyToolCalls ? "top-1" : "-top-2"} right-0 transition-opacity flex gap-0.5 z-10 bg-sol-bg rounded shadow-md px-0.5 ${shareSelectionMode ? "opacity-0 pointer-events-none" : "opacity-0 group-hover:opacity-100"}`}>
           {onStartShareSelection && (
@@ -4472,7 +4587,7 @@ function AssistantBlock({
             </svg>
           </button>
           <button
-            onClick={onOpenComments}
+            onClick={() => onOpenComments?.(messageId)}
             className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary flex items-center gap-1"
             title="Comments"
             aria-label="Comments"
@@ -4576,7 +4691,7 @@ function AssistantBlock({
               messageId={messageId}
               conversationId={conversationId}
               onStartShareSelection={onStartShareSelection}
-              onOpenComments={onOpenComments}
+              onOpenComments={onOpenComments ? () => onOpenComments(messageId) : undefined}
               collapsed={collapsed}
               timestamp={timestamp}
               images={images}
@@ -4738,11 +4853,11 @@ function AssistantBlock({
         )}
       </div>
 
-      {forkChildren && forkChildren.length > 0 && onBranchSwitch && (
+      {forkChildren && forkChildren.length > 0 && onBranchSwitch && messageUuid && (
         <BranchSelector
           forkChildren={forkChildren}
           activeBranchId={activeBranchId ?? null}
-          onSwitchBranch={(convId) => onBranchSwitch(convId)}
+          onSwitchBranch={(convId) => onBranchSwitch(messageUuid, convId)}
           loadingBranchId={loadingBranchId}
           mainMessageCount={mainMessageCount}
         />
@@ -4750,6 +4865,7 @@ function AssistantBlock({
     </div>
   );
 }
+const AssistantBlock = memo(AssistantBlockImpl);
 
 function ToolResultMessage({ toolResults, toolName }: { toolResults: ToolResult[]; toolName?: string }) {
   // Don't render separate result messages - results are shown inline with tool calls
@@ -4757,7 +4873,7 @@ function ToolResultMessage({ toolResults, toolName }: { toolResults: ToolResult[
   return null;
 }
 
-function SystemBlock({ content, subtype, timestamp, messageUuid, messageId, conversationId, onOpenComments, onStartShareSelection }: { content: string; subtype?: string; timestamp?: number; messageUuid?: string; messageId?: string; conversationId?: Id<"conversations">; onOpenComments?: () => void; onStartShareSelection?: (messageId: string) => void }) {
+function SystemBlockImpl({ content, subtype, timestamp, messageUuid, messageId, conversationId, onOpenComments, onStartShareSelection }: { content: string; subtype?: string; timestamp?: number; messageUuid?: string; messageId?: string; conversationId?: Id<"conversations">; onOpenComments?: (messageId: string) => void; onStartShareSelection?: (messageId: string) => void }) {
   if (subtype === "compact_boundary") {
     return (
       <div className="my-6 flex items-center gap-3">
@@ -4946,8 +5062,9 @@ function WorkflowEventBlock({ content, workflowRun, onGateChoice, gateResponding
 
   return null;
 }
+const SystemBlock = memo(SystemBlockImpl);
 
-function CompactionSummaryBlock({ content }: { content: string }) {
+const CompactionSummaryBlock = memo(function CompactionSummaryBlock({ content }: { content: string }) {
   const [isExpanded, setIsExpanded] = useState(false);
 
   return (
@@ -4975,11 +5092,11 @@ function CompactionSummaryBlock({ content }: { content: string }) {
       )}
     </div>
   );
-}
+});
 
 const PLAN_MAX_HEIGHT = 1800;
 
-function PlanBlock({ content, timestamp, collapsed, messageId, conversationId, onOpenComments, onStartShareSelection }: { content: string; timestamp: number; collapsed?: boolean; messageId?: string; conversationId?: Id<"conversations">; onOpenComments?: () => void; onStartShareSelection?: (messageId: string) => void }) {
+function PlanBlockImpl({ content, timestamp, collapsed, messageId, conversationId, onOpenComments, onStartShareSelection }: { content: string; timestamp: number; collapsed?: boolean; messageId?: string; conversationId?: Id<"conversations">; onOpenComments?: (messageId: string) => void; onStartShareSelection?: (messageId: string) => void }) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -5075,8 +5192,8 @@ function PlanBlock({ content, timestamp, collapsed, messageId, conversationId, o
               </svg>
             </button>
           )}
-          {onOpenComments && (
-            <button onClick={onOpenComments} className="p-1 rounded hover:bg-sol-bg-highlight text-sol-text-dim hover:text-sol-text-muted transition-colors flex items-center gap-0.5" title="Comments">
+          {onOpenComments && messageId && (
+            <button onClick={() => onOpenComments(messageId)} className="p-1 rounded hover:bg-sol-bg-highlight text-sol-text-dim hover:text-sol-text-muted transition-colors flex items-center gap-0.5" title="Comments">
               <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
               </svg>
@@ -5179,6 +5296,7 @@ function PlanBlock({ content, timestamp, collapsed, messageId, conversationId, o
     </div>
   );
 }
+const PlanBlock = memo(PlanBlockImpl);
 
 function GitBranchBadge({
   gitBranch,
@@ -5358,14 +5476,14 @@ function CyclingShortcutHint() {
 
 type NavUserMessage = { _id: string; message_uuid?: string; content: string; timestamp: number };
 
-function MessageNavigator({ userMessages, onRewind, onFork, onClose, forkPointMap, onBranchSwitch, activeBranches }: {
+function MessageNavigator({ userMessages, onRewind, onFork, onClose, forkPointMap, onBranchSwitch, activeConversationId }: {
   userMessages: NavUserMessage[];
   onRewind: (msg: NavUserMessage, indexFromEnd: number) => void;
   onFork: (msg: NavUserMessage) => void;
   onClose: (selectedMsg?: { content: string }) => void;
   forkPointMap?: Record<string, ForkChild[]>;
   onBranchSwitch?: (messageUuid: string, convId: string | null) => void;
-  activeBranches?: Record<string, string>;
+  activeConversationId?: string;
 }) {
   const [selectedIdx, setSelectedIdx] = useState(userMessages.length - 1);
   const [branchIdx, setBranchIdx] = useState<number>(-1);
@@ -5377,14 +5495,10 @@ function MessageNavigator({ userMessages, onRewind, onFork, onClose, forkPointMa
   const hasBranches = forks.length > 0;
 
   useWatchEffect(() => {
-    if (!hasBranches) { setBranchIdx(-1); return; }
-    const uuid = selectedMsg?.message_uuid;
-    if (!uuid || !activeBranches) { setBranchIdx(-1); return; }
-    const activeId = activeBranches[uuid];
-    if (!activeId) { setBranchIdx(-1); return; }
-    const idx = forks.findIndex(f => f._id === activeId);
+    if (!hasBranches || !activeConversationId) { setBranchIdx(-1); return; }
+    const idx = forks.findIndex(f => f._id === activeConversationId);
     setBranchIdx(idx >= 0 ? idx : -1);
-  }, [selectedIdx, hasBranches, selectedMsg?.message_uuid, activeBranches, forks]);
+  }, [selectedIdx, hasBranches, activeConversationId, forks]);
 
   useMountEffect(() => {
     return () => { if (escTimerRef.current) clearTimeout(escTimerRef.current); };
@@ -5685,7 +5799,19 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
   const [composeMode, setComposeMode] = useState(false);
   const [composeHasContent, setComposeHasContent] = useState(false);
   const composeRef = useRef<ComposeEditorHandle>(null);
-  const composeMentionQuery = useMentionQuery();
+  const { user: mentionUser } = useCurrentUser();
+  const composeSession = useInboxStore((s) => s.sessions[conversationId]);
+  const memberTeams = useInboxStore((s) => s.teams);
+  const mentionScope = useMemo(() => {
+    const teamId = composeSession?.team_id ? String(composeSession.team_id) : null;
+    const isMember = teamId
+      ? (memberTeams || []).some((t: any) => String(t._id) === teamId)
+      : false;
+    if (teamId && isMember) return { kind: "team" as const, teamId };
+    const uid = mentionUser?._id ? String(mentionUser._id) : "";
+    return uid ? { kind: "personal" as const, userId: uid } : { kind: "any" as const };
+  }, [composeSession?.team_id, memberTeams, mentionUser?._id]);
+  const composeMentionQuery = useMentionQuery(mentionScope);
   const [shortcutTooltip, setShortcutTooltip] = useState<{ x: number; y: number } | null>(null);
   const [pendingMessageId, setPendingMessageId] = useState<Id<"pending_messages"> | null>(null);
   const [sentAt, setSentAt] = useState<number | null>(null);
@@ -5744,22 +5870,30 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
       const currentMentionItems = mentionItemsRef?.current;
 
       if (currentMentionItems?.length) {
-        const entityMatches = currentMentionItems
-          .filter(m => {
-            if (!acQuery) return true;
-            return m.label.toLowerCase().includes(acQuery) ||
+        // Cap per type so a flood of sessions doesn't push tasks/docs out.
+        const perTypeCap = acQuery ? 5 : 6;
+        const perType: Record<string, number> = {};
+        const entityMatches: AcItem[] = [];
+        for (const m of currentMentionItems) {
+          if (acQuery) {
+            const hit =
+              m.label.toLowerCase().includes(acQuery) ||
               (m.shortId && m.shortId.toLowerCase().includes(acQuery)) ||
               (m.sublabel && m.sublabel.toLowerCase().includes(acQuery));
-          })
-          .slice(0, 15)
-          .map(m => ({
+            if (!hit) continue;
+          }
+          const c = perType[m.type] || 0;
+          if (c >= perTypeCap) continue;
+          perType[m.type] = c + 1;
+          entityMatches.push({
             label: m.label,
             description: m.sublabel,
             type: m.type,
             id: m.id,
             shortId: m.shortId,
             image: m.image,
-          }));
+          });
+        }
         items.push(...entityMatches);
       }
 
@@ -6374,9 +6508,9 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
       if (onPopulateInput) onPopulateInput.current = null;
       await onForkFromMessage(selectedMessageUuid);
       setTimeout(() => { if (onPopulateInput) onPopulateInput.current = savedPopulateFn; }, 200);
-      const branches = useInboxStore.getState().activeBranches;
-      const forkId = Object.values(branches)[0];
-      if (!forkId) {
+      // After fork: navigateToSession has been called, so currentSessionId is the new fork.
+      const forkId = useInboxStore.getState().currentSessionId;
+      if (!forkId || forkId === conversationId) {
         addOptimistic(conversationId, content);
         toast.error("Fork not ready — message saved locally");
         return;
@@ -7345,26 +7479,11 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const addOptimisticMsg = useInboxStore((s) => s.addOptimisticMessage);
   const moveDraft = useInboxStore((s) => s.moveDraft);
   const navigateToSession = useInboxStore((s) => s.navigateToSession);
-  const activeBranches = useInboxStore((s) => s.activeBranches);
   const optimisticForkChildren = useInboxStore((s) => s.optimisticForkChildren);
-  const firstActiveForkId = useMemo(() => {
-    const entries = Object.entries(activeBranches);
-    if (entries.length === 0) return null;
-    const [, convId] = entries[0];
-    const allForks = [...(conversation?.fork_children || []), ...optimisticForkChildren];
-    if (!allForks.some(f => f._id === convId)) return null;
-    return convId;
-  }, [activeBranches, conversation?.fork_children, optimisticForkChildren]);
-  const effectiveConversationId = firstActiveForkId || conversation?._id;
 
   const { user: currentUser } = useCurrentUser();
-  const isForkOwner = useMemo(() => {
-    if (!firstActiveForkId || !currentUser?._id) return false;
-    const allForks = [...(conversation?.fork_children || []), ...optimisticForkChildren];
-    const fork = allForks.find((f: any) => f._id === firstActiveForkId) as any;
-    return fork?.user_id?.toString() === currentUser._id.toString();
-  }, [firstActiveForkId, currentUser?._id, conversation?.fork_children, optimisticForkChildren]);
-  const effectiveIsOwner = isOwner || isForkOwner;
+  const effectiveIsOwner = isOwner;
+  const effectiveConversationId = conversation?._id;
 
   const handleSendInlineMessage = useCallback(async (content: string) => {
     if (!conversation || !effectiveConversationId) return;
@@ -7379,9 +7498,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   }, [conversation, effectiveConversationId, sendInlineMessage, addOptimisticMsg, setUserScrolled]);
   const managedSession = useQuery(
     api.managedSessions.isSessionManaged,
-    conversation && effectiveConversationId && isConvexId(effectiveConversationId) && (
-      (isOwner && conversation.status === "active") || !!firstActiveForkId
-    )
+    conversation && effectiveConversationId && isConvexId(effectiveConversationId) && isOwner && conversation.status === "active"
       ? { conversation_id: effectiveConversationId as Id<"conversations"> }
       : "skip"
   );
@@ -7470,7 +7587,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     return () => window.removeEventListener("keydown", handler);
   }, [conversation, effectiveIsOwner, handleCycleMode]);
 
-  const messages = conversation?.messages || [];
+  const messagesFromConv = conversation?.messages;
+  const messages = useMemo<Message[]>(() => messagesFromConv || EMPTY_MESSAGES, [messagesFromConv]);
 
   const agentNameToChildMap = useMemo(() => {
     const entries = conversation?.agent_name_entries;
@@ -7512,6 +7630,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const handleStartShareSelection = useCallback((messageId: string) => {
     setShareSelectionMode(true);
     setSelectedMessageIds(new Set([messageId]));
+  }, []);
+
+  const handleOpenComments = useCallback((messageId: string) => {
+    setCommentMessageId(messageId as Id<"messages">);
   }, []);
 
   const handleToggleMessageSelection = useCallback((messageId: string) => {
@@ -7591,39 +7713,18 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const pendingPermissions = pendingPermissionsRaw?.filter((p: any) => !PERMISSION_SKIP_TOOLS.has(p.tool_name));
   const hasAskUserQuestion = pendingPermissionsRaw?.some((p: any) => p.tool_name === "AskUserQuestion") ?? false;
 
-  // Fork navigation state (data in inbox store, UI state in forkNavigationStore)
-  const inboxMessages = useInboxStore((s) => s.messages);
-  const forkSwitchBranch = useInboxStore((s) => s.switchBranch);
-  const forkClearBranch = useInboxStore((s) => s.clearBranch);
+  // Fork UI state (panels). Forks themselves are first-class conversations
+  // (we navigate to them); no overlay state to keep in sync.
   const forkSetMessages = useInboxStore((s) => s.setMessages);
   const resolveForkSessionId = useInboxStore((s) => s.resolveForkSessionId);
   const forkTreePanelOpen = useForkNavigationStore((s) => s.treePanelOpen);
   const toggleTreePanel = useForkNavigationStore((s) => s.toggleTreePanel);
   const forkSetSelectedIndex = useForkNavigationStore((s) => s.setSelectedIndex);
-  const resetForkNav = useInboxStore((s) => s.resetForkNav);
-
-  const prevConvIdRef = useRef<string | null>(null);
-  useWatchEffect(() => {
-    const id = conversation?._id ?? null;
-    if (id && id !== prevConvIdRef.current) {
-      if (prevConvIdRef.current !== null) {
-        resetForkNav();
-        const url = new URL(window.location.href);
-        if (url.searchParams.has('branch')) {
-          url.searchParams.delete('branch');
-          window.history.replaceState({}, '', url.toString());
-        }
-      }
-      prevConvIdRef.current = id;
-    }
-  }, [conversation?._id, resetForkNav]);
 
   const timelineRef = useRef<any[]>([]);
 
   const doFork = useCallback(async (messageUuid: string): Promise<{ forkSessionId: string; conversationId: string } | null> => {
     if (!conversation?._id) return null;
-    const sourceConvId = effectiveConversationId || conversation._id;
-    const isNestedFork = sourceConvId.toString() !== conversation._id.toString();
     // Must be a valid UUID so the daemon can resume without ID remapping
     const forkSessionId = (typeof crypto !== 'undefined' && crypto.randomUUID)
       ? crypto.randomUUID()
@@ -7631,49 +7732,33 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           const r = Math.random() * 16 | 0;
           return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
         });
-    if (!isNestedFork) {
-      // Single-level fork: use branch overlay on the root conversation
-      addOptimisticFork({
-        _id: forkSessionId,
-        user_id: currentUser?._id?.toString(),
-        title: conversation.title ? `Fork: ${conversation.title}` : "Fork",
-        started_at: Date.now(),
-        username: conversation.user?.name || conversation.user?.email?.split("@")[0],
-        parent_message_uuid: messageUuid,
-        message_count: 0,
-        agent_type: conversation.agent_type,
-      });
-      forkSetMessages(forkSessionId, []);
-      forkSwitchBranch(messageUuid, forkSessionId);
-      const url = new URL(window.location.href);
-      url.searchParams.set('branch', forkSessionId);
-      window.history.replaceState({}, '', url.toString());
-      toast.success("Forked -- switched to branch");
-    }
+    addOptimisticFork({
+      _id: forkSessionId,
+      user_id: currentUser?._id?.toString(),
+      title: conversation.title ? `Fork: ${conversation.title}` : "Fork",
+      started_at: Date.now(),
+      username: conversation.user?.name || conversation.user?.email?.split("@")[0],
+      parent_message_uuid: messageUuid,
+      message_count: 0,
+      agent_type: conversation.agent_type,
+    });
+    forkSetMessages(forkSessionId, []);
     try {
       const result = await forkFromMessage({
-        conversation_id: sourceConvId.toString(),
+        conversation_id: conversation._id.toString(),
         message_uuid: messageUuid,
         session_id: forkSessionId,
       });
-      if (isNestedFork) {
-        // Nested fork: branch overlay only supports one level, navigate directly
-        window.location.href = `/conversation/${result.conversation_id}`;
-        return null;
-      }
       resolveForkSessionId(forkSessionId, result.conversation_id);
-      const resolvedUrl = new URL(window.location.href);
-      resolvedUrl.searchParams.set('branch', result.conversation_id);
-      window.history.replaceState({}, '', resolvedUrl.toString());
+      // Navigate to the new fork's own conversation. URL reflects identity.
+      navigateToSession(result.conversation_id);
+      toast.success("Forked");
       return { forkSessionId, conversationId: result.conversation_id };
     } catch (err) {
-      if (!isNestedFork) {
-        forkClearBranch(messageUuid);
-      }
       toast.error(err instanceof Error ? err.message : "Failed to fork");
       return null;
     }
-  }, [conversation?._id, conversation?.title, conversation?.user, conversation?.agent_type, effectiveConversationId, forkFromMessage, forkSwitchBranch, forkClearBranch, forkSetMessages, addOptimisticFork, resolveForkSessionId]);
+  }, [conversation?._id, conversation?.title, conversation?.user, conversation?.agent_type, forkFromMessage, forkSetMessages, addOptimisticFork, resolveForkSessionId, navigateToSession, currentUser?._id]);
 
   const handleForkFromMessage = useCallback(async (messageUuid: string) => {
     const tl = timelineRef.current;
@@ -7713,41 +7798,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     }
   }, [conversation, doFork, addOptimisticMsg, sendInlineMessage]);
 
-  // Preload branch from URL param
-  const urlBranchPreloaded = useRef(false);
-  useWatchEffect(() => {
-    if (urlBranchPreloaded.current || !conversation?.fork_children) return;
-    const url = new URL(window.location.href);
-    const branchId = url.searchParams.get('branch');
-    if (!branchId) return;
-    const fork = conversation.fork_children.find(f => f._id === branchId);
-    if (fork?.parent_message_uuid) {
-      forkSwitchBranch(fork.parent_message_uuid, branchId);
-      urlBranchPreloaded.current = true;
-    }
-  }, [conversation?.fork_children, forkSwitchBranch]);
-
-  // Activate fork branch when navigated from sidebar (pendingForkActivation)
-  const pendingForkActivation = useInboxStore((s) => s.pendingForkActivation);
-  const setPendingForkActivation = useInboxStore((s) => s.setPendingForkActivation);
-  const setActiveForkHighlight = useInboxStore((s) => s.setActiveForkHighlight);
-  const pendingForkConsumed = useRef<string | null>(null);
-  useWatchEffect(() => {
-    if (!pendingForkActivation || !conversation?.fork_children) return;
-    if (pendingForkConsumed.current === pendingForkActivation) return;
-    const fork = conversation.fork_children.find(f => f._id === pendingForkActivation);
-    if (fork?.parent_message_uuid) {
-      forkSwitchBranch(fork.parent_message_uuid, pendingForkActivation);
-      setActiveForkHighlight(pendingForkActivation);
-      pendingForkConsumed.current = pendingForkActivation;
-      setPendingForkActivation(null);
-    }
-  }, [pendingForkActivation, conversation?.fork_children, forkSwitchBranch, setPendingForkActivation, setActiveForkHighlight]);
-
-  const { isLoading: isForkLoading } = useForkMessages(firstActiveForkId);
+  const isForkLoading = false;
   const [loadingBranchId, setLoadingBranchId] = useState<string | null>(null);
 
-  // Merge messages, commits, and PRs into a single timeline (with fork branch support)
+  // Merge messages, commits, and PRs into a single timeline.
   type TimelineItem =
     | { type: 'message'; data: Message; timestamp: number }
     | { type: 'commit'; data: Commit; timestamp: number }
@@ -7763,8 +7817,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       messages,
       commits,
       pullRequests,
-      activeBranches,
-      inboxMessages,
     ) as TimelineItem[];
     if (pendingMsgs.length === 0) return base;
     // Guaranteed render: append any pending messages not already in the timeline.
@@ -7782,7 +7834,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     );
     if (toAdd.length === 0) return base;
     return [...base, ...toAdd.map((m: any) => ({ type: 'message' as const, data: m, timestamp: m.timestamp }))];
-  }, [messages, commits, pullRequests, activeBranches, inboxMessages, pendingMsgs]);
+  }, [messages, commits, pullRequests, pendingMsgs]);
   timelineRef.current = timeline;
   scrollCtxRef.current = { messageCount: conversation?.message_count || messages.length, messagesLen: messages.length, timelineLen: timeline.length, loadedStartIndex: conversation?.loaded_start_index ?? 0 };
 
@@ -7896,6 +7948,28 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     return map;
   }, [timeline, conversation?.agent_type]);
 
+  // Set of assistant message _ids that are the FIRST text-bearing assistant message in
+  // their turn (since the last user message). Used by estimateSize and renderItem to
+  // avoid an O(n) backward scan per row (which compounds to O(n²) during measurement).
+  const assistantFirstTextInTurnSet = useMemo(() => {
+    const set = new Set<string>();
+    let sawAssistantTextInTurn = false;
+    for (let i = 0; i < timeline.length; i++) {
+      const item = timeline[i];
+      if (item.type !== 'message') continue;
+      const m = item.data as Message;
+      if (m.role === 'user') { sawAssistantTextInTurn = false; continue; }
+      if (m.role !== 'assistant') continue;
+      const hasText = !!(m.content && m.content.trim().length > 0);
+      if (!hasText) continue;
+      if (!sawAssistantTextInTurn) {
+        set.add(m._id);
+        sawAssistantTextInTurn = true;
+      }
+    }
+    return set;
+  }, [timeline]);
+
   const sessionSkills = useMemo(() => {
     let extracted: Array<{ name: string; description: string }> = [];
     // Resolve skills from user-level data + project path (avoids storing per-conversation)
@@ -7929,33 +8003,51 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   }, [conversation?.messages]);
 
   const storeSessions = useInboxStore((s) => s.sessions);
-  const storeTasks = useInboxStore((s) => s.tasks);
-  const storePlans = useInboxStore((s) => s.plans);
-  const storeDocs = useInboxStore((s) => s.docs);
+  // Cross-team mention index — populated by useSyncMentionTasks/Docs/Plans in
+  // DashboardLayout. We sync across teams once globally, then filter here to
+  // the *conversation's* team so the dropdown stays scoped to the team this
+  // conversation belongs to (or to personal items if it's not in a team).
+  const mentionTasks = useInboxStore((s) => s.mentionIndex?.tasks);
+  const mentionPlans = useInboxStore((s) => s.mentionIndex?.plans);
+  const mentionDocs = useInboxStore((s) => s.mentionIndex?.docs);
   const storeMembers = useInboxStore((s) => s.teamMembers);
   const mentionItemsRef = useRef<MentionItem[]>([]);
+  // Pull team_id from the stored session (InboxSession carries it; ConversationData
+  // doesn't surface it in its type). Used to scope @-mention results to the
+  // conversation's team, falling back to personal-only when there's no team.
+  const convSession = useInboxStore((s) => effectiveConversationId ? s.sessions[effectiveConversationId] : null);
+  const convTeamId = convSession?.team_id ? String(convSession.team_id) : null;
   const mentionItems = useMemo(() => {
-    const PER_TYPE = 30;
     const byRecency = (a: { updatedAt?: number }, b: { updatedAt?: number }) => (b.updatedAt || 0) - (a.updatedAt || 0);
+    // Conversation's team scope wins: when the conversation is team-tagged
+    // we only show records in that team; when it's personal we only show
+    // records with no team. This matches conversation visibility rules.
+    const inScope = (rec: any): boolean => {
+      const recTeam = rec.team_id ? String(rec.team_id) : null;
+      if (convTeamId) return recTeam === convTeamId;
+      return !recTeam;
+    };
     const persons: MentionItem[] = storeMembers.map((m: any) => ({ id: String(m._id || m.id), type: "person", label: m.name || m.github_username || "Unknown", sublabel: m.github_username ? `@${m.github_username}` : m.email, image: m.image || m.github_avatar_url }));
-    const tasks: MentionItem[] = Object.values(storeTasks)
-      .sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0)).slice(0, PER_TYPE)
-      .map(t => ({ id: t._id, type: "task", label: t.title, sublabel: t.short_id, shortId: t.short_id, status: t.status, priority: t.priority, updatedAt: t.updated_at }));
-    const docs: MentionItem[] = Object.values(storeDocs)
-      .filter(d => d.doc_type !== "plan")
-      .sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0)).slice(0, PER_TYPE)
-      .map(d => ({ id: d._id, type: "doc", label: d.title, sublabel: d.doc_type, docType: d.doc_type, updatedAt: d.updated_at }));
-    const plans: MentionItem[] = Object.values(storePlans)
-      .sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0)).slice(0, PER_TYPE)
-      .map(p => ({ id: p._id, type: "plan", label: p.title, sublabel: p.short_id, shortId: p.short_id, status: p.status, goal: p.goal, updatedAt: p.updated_at }));
+    const tasks: MentionItem[] = Object.values(mentionTasks ?? {})
+      .filter(inScope)
+      .sort((a: any, b: any) => (b.updated_at || 0) - (a.updated_at || 0))
+      .map((t: any) => ({ id: t._id, type: "task", label: t.title, sublabel: t.short_id, shortId: t.short_id, status: t.status, priority: t.priority, updatedAt: t.updated_at }));
+    const docs: MentionItem[] = Object.values(mentionDocs ?? {})
+      .filter((d: any) => d.doc_type !== "plan" && inScope(d))
+      .sort((a: any, b: any) => (b.updated_at || 0) - (a.updated_at || 0))
+      .map((d: any) => ({ id: d._id, type: "doc", label: d.title, sublabel: d.doc_type, docType: d.doc_type, updatedAt: d.updated_at }));
+    const plans: MentionItem[] = Object.values(mentionPlans ?? {})
+      .filter(inScope)
+      .sort((a: any, b: any) => (b.updated_at || 0) - (a.updated_at || 0))
+      .map((p: any) => ({ id: p._id, type: "plan", label: p.title, sublabel: p.short_id, shortId: p.short_id, status: p.status, goal: p.goal, updatedAt: p.updated_at }));
     const sessions: MentionItem[] = Object.values(storeSessions)
-      .filter(s => !s.is_subagent)
-      .sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0)).slice(0, PER_TYPE)
+      .filter(s => !s.is_subagent && inScope(s))
+      .sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0))
       .map(s => ({ id: s._id, type: "session", label: s.title || "Untitled Session", sublabel: s.idle_summary?.slice(0, 80) || s.session_id, shortId: s.session_id, messageCount: s.message_count, projectPath: s.project_path, agentType: s.agent_type, updatedAt: s.updated_at, idleSummary: s.idle_summary }));
     const all = [...persons, ...tasks, ...docs, ...plans, ...sessions];
     all.sort(byRecency);
     return all;
-  }, [storeMembers, storeTasks, storeDocs, storePlans, storeSessions]);
+  }, [storeMembers, mentionTasks, mentionDocs, mentionPlans, storeSessions, convTeamId]);
   mentionItemsRef.current = mentionItems;
   const handleMentionQuery = useCallback((_q: string) => {}, []);
 
@@ -8212,21 +8304,27 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); clearTimeout(t4); };
   }, [navTrigger, messages, highlightedMessageId]);
 
-  const handleCopyAll = async () => {
+  const handleCopyAll = () => {
     if (!convexConvId) {
       toast.error("No messages to copy");
       return;
     }
 
-    try {
-      toast.info("Loading all messages...");
-      const allMessages = await convex.query(api.conversations.copyAllMessages, { conversation_id: convexConvId });
-      if (!allMessages || allMessages.length === 0) {
-        toast.error("No messages to copy");
-        return;
+    const loadFormatted = async (): Promise<string> => {
+      const allMessages: any[] = [];
+      let cursor: string | null = null;
+      // Safety cap: stop after ~100k messages so a corrupt cursor can't infinite-loop.
+      for (let i = 0; i < 500; i++) {
+        const result: any = await convex.query(api.conversations.copyAllMessages, {
+          conversation_id: convexConvId,
+          paginationOpts: { numItems: 200, cursor },
+        });
+        if (!result) break;
+        if (result.page?.length) allMessages.push(...result.page);
+        if (result.isDone) break;
+        cursor = result.continueCursor;
       }
-
-      const formatted = allMessages
+      return allMessages
         .filter((msg: any) => msg.role !== "system" && msg.subtype !== "compact_boundary")
         .map((msg: any) => {
           const ts = new Date(msg.timestamp).toLocaleString();
@@ -8237,12 +8335,45 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         })
         .filter(Boolean)
         .join("\n");
+    };
 
-      await copyToClipboard(formatted);
-      toast.success("Conversation copied to clipboard");
-    } catch (err) {
-      toast.error("Failed to copy to clipboard");
+    toast.info("Loading all messages...");
+
+    // Pagination requires multiple awaits, which lose transient user activation
+    // and cause both execCommand("copy") and navigator.clipboard.writeText to
+    // fail. ClipboardItem with a Promise is the one clipboard API that keeps
+    // the write bound to the original gesture across async work.
+    if (typeof ClipboardItem !== "undefined" && navigator.clipboard?.write) {
+      const item = new ClipboardItem({
+        "text/plain": loadFormatted().then((text) => {
+          if (!text) throw new Error("empty");
+          return new Blob([text], { type: "text/plain" });
+        }),
+      });
+      navigator.clipboard
+        .write([item])
+        .then(() => toast.success("Conversation copied to clipboard"))
+        .catch((err: unknown) => {
+          if (err instanceof Error && err.message === "empty") {
+            toast.error("No messages to copy");
+          } else {
+            toast.error("Failed to copy to clipboard");
+          }
+        });
+      return;
     }
+
+    loadFormatted()
+      .then((text) => {
+        if (!text) {
+          toast.error("No messages to copy");
+          return;
+        }
+        return copyToClipboard(text).then(() =>
+          toast.success("Conversation copied to clipboard"),
+        );
+      })
+      .catch(() => toast.error("Failed to copy to clipboard"));
   };
 
   const buildResumeCommand = useCallback((targetAgent: "claude" | "codex"): string | null => {
@@ -8311,17 +8442,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         if (kind && kind.kind !== 'normal' && kind.kind !== 'plan' && kind.kind !== 'skill_expansion') return 0;
       }
       if (msg.role === "assistant") {
-        const hasTextContent = msg.content && msg.content.trim().length > 0;
-        if (!hasTextContent) return 0;
-        for (let i = index - 1; i >= 0; i--) {
-          const checkItem = timeline[i];
-          if (checkItem.type !== 'message') continue;
-          const checkMsg = checkItem.data as Message;
-          if (checkMsg.role === "user") break;
-          if (checkMsg.role === "assistant" && checkMsg.content && checkMsg.content.trim().length > 0) {
-            return 0;
-          }
-        }
+        // Only the first text-bearing assistant message in a turn renders (size 80).
+        // All others collapse to 0. Membership check is O(1) thanks to the precomputed set.
+        if (!assistantFirstTextInTurnSet.has(msg._id)) return 0;
       }
       return 80;
     }
@@ -8355,7 +8478,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       return 200;
     }
     return 40;
-  }, [timeline, collapsed, userMsgKindMap]);
+  }, [timeline, collapsed, userMsgKindMap, assistantFirstTextInTurnSet]);
 
   const virtualizer = useVirtualizer({
     count: timeline.length,
@@ -8411,59 +8534,26 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     enabled: isOwner,
   });
 
-  // Fork navigation: handle branch switching
-  const handleBranchSwitch = useCallback((messageUuid: string, convId: string | null) => {
+  // BranchSelector / tree panel: switching branches is navigation.
+  // null = navigate to the conversation's parent (back to "main"); otherwise navigate to that fork.
+  const handleBranchSwitch = useCallback((_messageUuid: string, convId: string | null) => {
     if (convId === null) {
-      forkClearBranch(messageUuid);
-      setLoadingBranchId(null);
-      setActiveForkHighlight(null);
-    } else {
-      forkSwitchBranch(messageUuid, convId);
-      if (!inboxMessages[convId]) {
-        setLoadingBranchId(convId);
-      }
-      setActiveForkHighlight(convId);
+      const parentId = conversation?.forked_from;
+      if (parentId) navigateToSession(parentId.toString());
+      return;
     }
-    if (typeof window !== 'undefined') {
-      const url = new URL(window.location.href);
-      if (convId) {
-        url.searchParams.set('branch', convId);
-      } else {
-        url.searchParams.delete('branch');
-      }
-      window.history.replaceState({}, '', url.toString());
-    }
-  }, [forkSwitchBranch, forkClearBranch, inboxMessages, setActiveForkHighlight]);
+    navigateToSession(convId);
+  }, [conversation?.forked_from, navigateToSession]);
 
-  // Clear loading state when fork messages arrive
-  useWatchEffect(() => {
-    if (loadingBranchId && inboxMessages[loadingBranchId]) {
-      setLoadingBranchId(null);
-    }
-  }, [loadingBranchId, inboxMessages]);
-
-  // Fork tree panel: handle switching to a different conversation
   const handleTreeSwitchConversation = useCallback((convId: string) => {
-    if (convId === conversation?._id?.toString()) {
-      Object.keys(activeBranches).forEach(uuid => forkClearBranch(uuid));
-      return;
-    }
-    const forkChild = conversation?.fork_children?.find(f => f._id === convId);
-    if (forkChild && forkChild.parent_message_uuid) {
-      Object.keys(activeBranches).forEach(uuid => forkClearBranch(uuid));
-      forkSwitchBranch(forkChild.parent_message_uuid, convId);
-      if (!inboxMessages[convId]) {
-        setLoadingBranchId(convId);
-      }
-      return;
-    }
-    window.location.href = `/conversation/${convId}`;
-  }, [conversation?._id, conversation?.fork_children, activeBranches, forkClearBranch, forkSwitchBranch, inboxMessages]);
+    if (convId === conversation?._id?.toString()) return;
+    navigateToSession(convId);
+  }, [conversation?._id, navigateToSession]);
 
-  // Active branch IDs for tree panel highlighting
+  // Tree panel highlight: just the currently-viewed conversation.
   const activeBranchIdSet = useMemo(
-    () => new Set(Object.values(activeBranches)),
-    [activeBranches]
+    () => conversation?._id ? new Set([conversation._id.toString()]) : new Set<string>(),
+    [conversation?._id]
   );
 
   useShortcutContext('conversation');
@@ -8905,7 +8995,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   }, [timeline, virtualizer]);
 
   const scrollToHash = useCallback(() => {
-    if (!timeline.length || targetMessageId || !window.location.hash) return;
+    if (!timeline.length || !window.location.hash) return;
+    if (targetMessageId && !hasScrolledToTarget.current) return;
     const targetId = window.location.hash.slice(1);
     const itemIndex = timeline.findIndex(item => {
       if (item.type === 'message') {
@@ -8917,8 +9008,14 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     });
     if (itemIndex >= 0) {
       setUserScrolled(true);
+      const item = timeline[itemIndex];
+      const msgId = item.type === 'message' ? item.data._id : null;
       setTimeout(() => {
         virtualizer.scrollToIndex(itemIndex, { align: "center", behavior: "smooth" });
+        if (msgId) {
+          setHighlightedMessageId(msgId);
+          setTimeout(() => setHighlightedMessageId(null), 3000);
+        }
         history.replaceState(null, "", window.location.pathname + window.location.search);
       }, 100);
     }
@@ -9057,10 +9154,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     const id = setInterval(() => setNow(Date.now()), 10_000);
     return () => clearInterval(id);
   });
-  const isSessionConnected = !!conversation && (conversation.status === "active" || !!firstActiveForkId) && (now - lastActivityAt) < 5 * 60 * 1000;
+  const isSessionConnected = !!conversation && conversation.status === "active" && (now - lastActivityAt) < 5 * 60 * 1000;
   const isWorking = isSessionConnected && (now - lastActivityAt) < 45 * 1000 && lastMessageRole === "assistant";
   const isConversationLive = isWorking;
-  const isSessionDisconnected = !!conversation && (conversation.status === "active" || !!firstActiveForkId) && managedSession !== undefined && managedSession.managed === false && !isSessionConnected;
+  const isSessionDisconnected = !!conversation && conversation.status === "active" && managedSession !== undefined && managedSession.managed === false && !isSessionConnected;
   const sessionAge = now - (conversation?.started_at ?? 0);
   const isNewEmptySession = !!conversation && conversation.status === "active" && (conversation.message_count ?? 0) === 0;
   const isSessionStarting = isNewEmptySession && !managedSession?.managed && sessionAge < 30_000;
@@ -9075,11 +9172,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     };
   }, [truncatedTitle, conversation]);
 
-  const forkMessages = firstActiveForkId ? inboxMessages[firstActiveForkId] : undefined;
-
   const toolCallMap = useMemo(() => {
     const map: Record<string, string> = {};
-    const sources = [conversation?.messages, forkMessages].filter(Boolean) as Message[][];
+    const sources = [conversation?.messages].filter(Boolean) as Message[][];
     for (const msgs of sources) {
       for (const msg of msgs) {
         if (msg.tool_calls) {
@@ -9090,11 +9185,11 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       }
     }
     return map;
-  }, [conversation?.messages, forkMessages]);
+  }, [conversation?.messages]);
 
   const globalToolResultMap = useMemo(() => {
     const map: Record<string, ToolResult> = {};
-    const sources = [conversation?.messages, forkMessages].filter(Boolean) as Message[][];
+    const sources = [conversation?.messages].filter(Boolean) as Message[][];
     for (const msgs of sources) {
       for (const msg of msgs) {
         if (msg.tool_results) {
@@ -9105,11 +9200,11 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       }
     }
     return map;
-  }, [conversation?.messages, forkMessages]);
+  }, [conversation?.messages]);
 
   const globalImageMap = useMemo(() => {
     const map: Record<string, ImageData> = {};
-    const sources = [conversation?.messages, forkMessages].filter(Boolean) as Message[][];
+    const sources = [conversation?.messages].filter(Boolean) as Message[][];
     for (const msgs of sources) {
       for (const msg of msgs) {
         if (msg.images) {
@@ -9122,7 +9217,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       }
     }
     return map;
-  }, [conversation?.messages, forkMessages]);
+  }, [conversation?.messages]);
 
   const taskSubjectMap = useMemo(() => {
     const createInputs: Record<string, string> = {};
@@ -9237,7 +9332,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     const msg = item.data as Message;
     if (msg.role === "system") {
       if (collapsed) return null;
-      return <SystemBlock key={msg._id} content={msg.content || ""} subtype={msg.subtype} timestamp={msg.timestamp} messageUuid={msg.message_uuid} messageId={msg._id} conversationId={conversation?._id} onOpenComments={() => setCommentMessageId(msg._id as Id<"messages">)} onStartShareSelection={handleStartShareSelection} />;
+      return <SystemBlock key={msg._id} content={msg.content || ""} subtype={msg.subtype} timestamp={msg.timestamp} messageUuid={msg.message_uuid} messageId={msg._id} conversationId={conversation?._id} onOpenComments={handleOpenComments} onStartShareSelection={handleStartShareSelection} />;
     }
 
     if (msg.role === "user") {
@@ -9260,7 +9355,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           const cmdRest = cleanContent(msg.content!);
           const cmdDisplay = cmdN ? (cmdRest ? `/${cmdN} ${cmdRest}` : `/${cmdN}`) : (cmdRest || msg.content!);
           const cmdUserName = conversation?.user?.name || conversation?.user?.email?.split("@")[0];
-          return <UserPrompt key={msg._id} content={cmdDisplay} images={msg.images} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={collapsed} userName={cmdUserName} avatarUrl={conversation?.user?.avatar_url} onOpenComments={() => setCommentMessageId(msg._id as Id<"messages">)} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={() => handleToggleMessageSelection(msg._id)} onStartShareSelection={handleStartShareSelection} onForkFromMessage={handleForkFromMessage} forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined} onBranchSwitch={msg.message_uuid ? (convId) => handleBranchSwitch(msg.message_uuid!, convId) : undefined} activeBranchId={msg.message_uuid ? activeBranches[msg.message_uuid] : undefined} loadingBranchId={loadingBranchId} isPending={!!msg._isOptimistic} isQueued={!!msg._isQueued} mainMessageCount={msg.message_uuid ? conversation?.main_message_counts_by_fork?.[msg.message_uuid] : undefined} />;
+          return <UserPrompt key={msg._id} content={cmdDisplay} images={msg.images} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={collapsed} userName={cmdUserName} avatarUrl={conversation?.user?.avatar_url} onOpenComments={handleOpenComments} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={handleToggleMessageSelection} onStartShareSelection={handleStartShareSelection} onForkFromMessage={handleForkFromMessage} forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined} onBranchSwitch={handleBranchSwitch} activeBranchId={null} loadingBranchId={loadingBranchId} isPending={!!msg._isOptimistic} isQueued={!!msg._isQueued} mainMessageCount={msg.message_uuid ? conversation?.main_message_counts_by_fork?.[msg.message_uuid] : undefined} />;
         }
         case 'interrupt':
           if (collapsed) return null;
@@ -9281,13 +9376,13 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         case 'compaction_summary':
           return <CompactionSummaryBlock key={msg._id} content={msg.content!} />;
         case 'plan':
-          return <PlanBlock key={msg._id} content={kind.planContent} timestamp={msg.timestamp} collapsed={collapsed} messageId={msg._id} conversationId={conversation?._id} onOpenComments={() => setCommentMessageId(msg._id as Id<"messages">)} onStartShareSelection={handleStartShareSelection} />;
+          return <PlanBlock key={msg._id} content={kind.planContent} timestamp={msg.timestamp} collapsed={collapsed} messageId={msg._id} conversationId={conversation?._id} onOpenComments={handleOpenComments} onStartShareSelection={handleStartShareSelection} />;
         case 'teammate_events':
           return <TeammateEventsBlock key={msg._id} content={msg.content || ""} timestamp={msg.timestamp} />;
         case 'normal': {
           if (!msg.content?.trim() && !msg.images?.some(img => !img.tool_use_id)) return null;
           const userName = conversation?.user?.name || conversation?.user?.email?.split("@")[0];
-          return <UserPrompt key={msg._id} content={msg.content || ""} images={msg.images} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={collapsed} userName={userName} avatarUrl={conversation?.user?.avatar_url} onOpenComments={() => setCommentMessageId(msg._id as Id<"messages">)} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={() => handleToggleMessageSelection(msg._id)} onStartShareSelection={handleStartShareSelection} onForkFromMessage={handleForkFromMessage} forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined} onBranchSwitch={msg.message_uuid ? (convId) => handleBranchSwitch(msg.message_uuid!, convId) : undefined} activeBranchId={msg.message_uuid ? activeBranches[msg.message_uuid] : undefined} loadingBranchId={loadingBranchId} isPending={!!msg._isOptimistic} isQueued={!!msg._isQueued} mainMessageCount={msg.message_uuid ? conversation?.main_message_counts_by_fork?.[msg.message_uuid] : undefined} />;
+          return <UserPrompt key={msg._id} content={msg.content || ""} images={msg.images} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={collapsed} userName={userName} avatarUrl={conversation?.user?.avatar_url} onOpenComments={handleOpenComments} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={handleToggleMessageSelection} onStartShareSelection={handleStartShareSelection} onForkFromMessage={handleForkFromMessage} forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined} onBranchSwitch={handleBranchSwitch} activeBranchId={null} loadingBranchId={loadingBranchId} isPending={!!msg._isOptimistic} isQueued={!!msg._isQueued} mainMessageCount={msg.message_uuid ? conversation?.main_message_counts_by_fork?.[msg.message_uuid] : undefined} />;
         }
       }
     }
@@ -9411,7 +9506,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           childConversations={conversation?.child_conversations}
           agentNameToChildMap={agentNameToChildMap}
           showHeader={effectiveCollapsed ? true : (isFirstInSequence || (collapsed && msg._id === sequenceStartId))}
-          onOpenComments={() => setCommentMessageId(msg._id as Id<"messages">)}
+          onOpenComments={handleOpenComments}
           toolCallChangeSelectionMap={toolCallChangeSelectionMap}
           isHighlighted={highlightedMessageId === msg._id}
           isSequenceExpanded={isSequenceExpanded}
@@ -9430,15 +9525,15 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           showCollapseButton={collapsed && isSequenceExpanded && isFirstInSequence}
           shareSelectionMode={shareSelectionMode}
           isSelectedForShare={selectedMessageIds.has(msg._id)}
-          onToggleShareSelection={() => handleToggleMessageSelection(msg._id)}
+          onToggleShareSelection={handleToggleMessageSelection}
           onStartShareSelection={handleStartShareSelection}
           agentType={conversation?.agent_type}
           taskSubjectMap={taskSubjectMap}
           taskRecordMap={taskRecordMap}
           onForkFromMessage={handleForkFromMessage}
           forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined}
-          onBranchSwitch={msg.message_uuid ? (convId) => handleBranchSwitch(msg.message_uuid!, convId) : undefined}
-          activeBranchId={msg.message_uuid ? activeBranches[msg.message_uuid] : undefined}
+          onBranchSwitch={handleBranchSwitch}
+          activeBranchId={null}
           loadingBranchId={loadingBranchId}
           mainMessageCount={msg.message_uuid ? conversation?.main_message_counts_by_fork?.[msg.message_uuid] : undefined}
           model={conversation?.model}
@@ -9746,7 +9841,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                       </svg>
                     </button>
                   </TooltipTrigger>
-                  <TooltipContent side="bottom">Copy link{firstActiveForkId ? " (includes branch)" : ""}</TooltipContent>
+                  <TooltipContent side="bottom">Copy link</TooltipContent>
                 </Tooltip>
 
                 {managedSession?.tmux_session && (
@@ -10095,9 +10190,18 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         {(!conversation || timeline.length === 0) ? (
           <div className={`flex-1 flex flex-col items-center gap-3 ${hideHeader ? "justify-start pt-6" : "justify-start pt-16"}`}>
             {conversation && (
-              <ErrorBoundary name="ProjectSwitcher" level="inline">
-                <ProjectSwitcher conversation={conversation} />
-              </ErrorBoundary>
+              (conversation.fork_status === "copying" || (conversation.message_count ?? 0) > 0) ? (
+                <MessagesUnavailableState
+                  messageCount={conversation.message_count ?? 0}
+                  forkStatus={conversation.fork_status}
+                  forkCopied={conversation.fork_copied}
+                  forkTotal={conversation.fork_copy_total}
+                />
+              ) : (
+                <ErrorBoundary name="ProjectSwitcher" level="inline">
+                  <ProjectSwitcher conversation={conversation} />
+                </ErrorBoundary>
+              )
             )}
           </div>
         ) : (
@@ -10113,6 +10217,22 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                 </svg>
                 Spawned from parent session
               </Link>
+            </div>
+          )}
+          {conversation?.fork_status === "copying" && (
+            <div className="max-w-7xl mx-auto px-2 sm:px-3 md:px-4 pt-2 pb-1">
+              <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-md bg-sol-cyan/10 border border-sol-cyan/30 text-sol-cyan text-[11px]">
+                <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                </svg>
+                <span className="tabular-nums">
+                  Copying messages from parent
+                  {conversation.fork_copy_total
+                    ? ` · ${(conversation.fork_copied ?? 0).toLocaleString()} / ${conversation.fork_copy_total.toLocaleString()}`
+                    : ` · ${(conversation.fork_copied ?? 0).toLocaleString()} copied`}
+                </span>
+              </div>
             </div>
           )}
           <div
@@ -10294,7 +10414,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   </div>
                 )
               )}
-              <MessageInput key={conversation.session_id || conversation._id} conversationId={firstActiveForkId || conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} onSendAndDismiss={onSendAndDismiss} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} isSessionStarting={isSessionStarting} isSessionReady={isSessionReady} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={isSessionDisconnected || conversation.status !== "active" ? undefined : managedSession?.agent_status as any} deliveryStatus={managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} hasAskUserQuestion={hasAskUserQuestion} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={handleForkFromMessage} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onGateSend={workflowRun?.status === "paused" ? handleGateRespond : undefined} skills={sessionSkills} filePaths={sessionFilePaths} mentionItemsRef={mentionItemsRef} onMentionQuery={handleMentionQuery} />
+              <MessageInput key={conversation.session_id || conversation._id} conversationId={conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} onSendAndDismiss={onSendAndDismiss} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} isSessionStarting={isSessionStarting} isSessionReady={isSessionReady} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={isSessionDisconnected || conversation.status !== "active" ? undefined : managedSession?.agent_status as any} deliveryStatus={managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} hasAskUserQuestion={hasAskUserQuestion} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={handleForkFromMessage} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onGateSend={workflowRun?.status === "paused" ? handleGateRespond : undefined} skills={sessionSkills} filePaths={sessionFilePaths} mentionItemsRef={mentionItemsRef} onMentionQuery={handleMentionQuery} />
             </>
           )}
           {navigatorOpen && navigatorUserMessages && navigatorUserMessages.length > 0 && (
@@ -10305,7 +10425,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
               onClose={handleNavigatorClose}
               forkPointMap={forkPointMap}
               onBranchSwitch={handleBranchSwitch}
-              activeBranches={activeBranches}
+              activeConversationId={conversation._id}
             />
           )}
         </div>
