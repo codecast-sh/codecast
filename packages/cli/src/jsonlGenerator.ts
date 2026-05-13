@@ -27,6 +27,8 @@ export interface ExportedConversation {
   session_id: string;
   agent_type: string;
   project_path: string | null;
+  git_root?: string | null;
+  git_remote_url?: string | null;
   model: string | null;
   message_count: number;
   started_at: string;
