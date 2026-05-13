@@ -23,8 +23,11 @@ RAPID_WINDOW=60
 WEB_FAIL_COUNT=0
 WEB_FAIL_THRESHOLD=3
 HTTP_FAIL_COUNT=0
-HTTP_FAIL_THRESHOLD=4
-HTTP_CHECK_INTERVAL=30
+# Loosened from 4 -> 8 and interval extended 30s -> 60s.
+# Vite can stall briefly during heavy HMR (e.g. saving ConversationView.tsx);
+# we don't want the watchdog to yank the dev server mid-edit.
+HTTP_FAIL_THRESHOLD=8
+HTTP_CHECK_INTERVAL=60
 LAST_HTTP_CHECK=0
 WEB_STARTED_AT=0
 
@@ -146,8 +149,6 @@ start_web() {
     $SHUTTING_DOWN && return
 
     kill_web
-    # Clear Vite cache on every restart to prevent stale module errors
-    rm -rf "$ROOT_DIR/packages/web/node_modules/.vite"
     # Resolve vite from wherever bun hoisted it (workspace or root node_modules)
     local VITE_BIN=""
     if [ -x "$ROOT_DIR/packages/web/node_modules/.bin/vite" ]; then
@@ -183,7 +184,7 @@ port_is_listening() {
 
 http_is_healthy() {
     local status
-    status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "http://localhost:$PORT/" 2>/dev/null)
+    status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 20 "http://localhost:$PORT/" 2>/dev/null)
     [ "$status" = "200" ]
 }
 
@@ -198,11 +199,9 @@ pkill -f "vite.*--port $PORT" 2>/dev/null || true
 kill_port $PORT
 sleep 1
 
-# Clear Vite's dependency pre-bundle cache to prevent stale module errors
-if [ -d "$ROOT_DIR/packages/web/node_modules/.vite" ]; then
-    log "Clearing Vite cache..."
-    rm -rf "$ROOT_DIR/packages/web/node_modules/.vite"
-fi
+# Vite manages its own .vite cache invalidation via lockfile hash + config hash.
+# Wiping it forced a 10-20s re-prebundle on every restart and caused mid-restart
+# HMR failures. If you ever need a clean slate, delete it manually.
 
 if ! grep -q "$HOSTNAME" /etc/hosts 2>/dev/null; then
     log_warn "$HOSTNAME not in /etc/hosts - run: sudo ./setup-hosts.sh"
