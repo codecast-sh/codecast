@@ -374,6 +374,18 @@ export const resumeSession = mutation({
       throw new Error("No session ID on this conversation");
     }
 
+    // Skip resume for fresh 0-message sessions. The inline new-session flow
+    // (DashboardLayout.handleQuickCreate, ContextChatInput.handleSubmit)
+    // stamps a 10-char nanoid as session_id before any Claude process exists,
+    // so a `claude --resume <nanoid>` would fail every time. The UI's
+    // stuck-banner auto-resume kept firing this for brand-new sessions,
+    // triggering kill → repair → reconstitute → start-fresh churn on the
+    // daemon. tryStartedTmux on the daemon side already delivers the first
+    // message via the pane, so a no-op here is safe.
+    if ((conversation.message_count ?? 0) === 0) {
+      return { skipped: true, reason: "fresh_session_no_messages" } as const;
+    }
+
     const agentType = conversation.agent_type === "codex" ? "codex" : conversation.agent_type === "gemini" ? "gemini" : "claude";
     const pendingCommands = await ctx.db
       .query("daemon_commands")

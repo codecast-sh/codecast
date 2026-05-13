@@ -46,22 +46,42 @@ export const registerManagedSession = mutation({
     const now = Date.now();
 
     if (existing) {
-      await ctx.db.patch(existing._id, {
-        pid: args.pid,
-        last_heartbeat: now,
-        ...(args.tmux_session !== undefined ? { tmux_session: args.tmux_session } : {}),
-        ...(args.conversation_id !== undefined ? { conversation_id: args.conversation_id } : {}),
-      });
-      return existing._id;
+      // Reclaim ownership if the existing row belongs to a different user.
+      // session_ids are UUIDv4 (effectively unique), but the same session can
+      // resurface under a different local user (e.g. after a logout/login),
+      // and the daemon making this call has the legitimate live process.
+      // Without this, the next heartbeat throws Unauthorized in a loop.
+      if (existing.user_id.toString() !== authUserId.toString()) {
+        console.warn(
+          `[registerManagedSession] reclaiming session ${args.session_id} from ${existing.user_id} -> ${authUserId}`,
+        );
+        await ctx.db.delete(existing._id);
+      } else {
+        await ctx.db.patch(existing._id, {
+          pid: args.pid,
+          last_heartbeat: now,
+          ...(args.tmux_session !== undefined ? { tmux_session: args.tmux_session } : {}),
+          ...(args.conversation_id !== undefined ? { conversation_id: args.conversation_id } : {}),
+        });
+        return existing._id;
+      }
     }
 
-    // Remove stale sessions for same conversation
+    // Remove stale sessions for same conversation, but carry forward a known
+    // tmux_session if this re-registration didn't supply one. Daemon paths
+    // sometimes re-register without a pane handle (e.g. after a transient
+    // findTmuxPaneForTty failure); we must not silently erase the live attach
+    // target the UI shows.
+    let inheritedTmuxSession: string | undefined;
     if (args.conversation_id) {
       const old = await ctx.db
         .query("managed_sessions")
         .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", args.conversation_id))
         .collect();
       for (const o of old) {
+        if (args.tmux_session === undefined && o.tmux_session && !inheritedTmuxSession) {
+          inheritedTmuxSession = o.tmux_session;
+        }
         await ctx.db.delete(o._id);
       }
     }
@@ -70,7 +90,7 @@ export const registerManagedSession = mutation({
       session_id: args.session_id,
       user_id: authUserId,
       pid: args.pid,
-      tmux_session: args.tmux_session,
+      tmux_session: args.tmux_session ?? inheritedTmuxSession,
       conversation_id: args.conversation_id,
       started_at: now,
       last_heartbeat: now,
@@ -195,7 +215,14 @@ export const heartbeat = mutation({
     }
 
     if (session.user_id.toString() !== authUserId.toString()) {
-      throw new Error("Unauthorized");
+      // Don't throw — daemon's heartbeat loop swallows the error anyway,
+      // but throwing pollutes Convex logs every 30s. Returning found:false
+      // tells the daemon to re-register, which will reclaim ownership via
+      // the updated registerManagedSession path above.
+      console.warn(
+        `[heartbeat] cross-user heartbeat ignored: auth=${authUserId} session=${args.session_id} owner=${session.user_id} conv=${session.conversation_id ?? "?"}`,
+      );
+      return { found: false };
     }
 
     const now = Date.now();

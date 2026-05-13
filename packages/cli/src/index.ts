@@ -29,6 +29,14 @@ import {
   estimateClaudeImportTokens,
   chooseClaudeTailMessagesForTokenBudget,
 } from "./jsonlGenerator.js";
+import {
+  CLAUDE_UUID_RE,
+  CLAUDE_AUTO_TRIM_THRESHOLD_TOKENS,
+  CLAUDE_AUTO_TRIM_TARGET_TOKENS,
+  CLAUDE_CONTEXT_LIMIT_TOKENS,
+  combineClaudeResumeFlags,
+  rewriteSubagentJsonlToUuid,
+} from "./resumeCommand.js";
 import Anthropic from "@anthropic-ai/sdk";
 import { detectRuntime, parseAgentMarkers as _parseAgentMarkers, type AgentRuntime, type AgentHandle } from "./agents/index.js";
 import { buildImplementerPrompt as _buildImplementerPrompt, buildReviewerPrompt, buildCriticPrompt, resolveTaskModel, resolveTaskModelFull, resolveFidelity, buildRetroPrompt, type FidelityLevel, type TypedRetro } from "./agents/index.js";
@@ -5289,16 +5297,45 @@ function claudeSessionPath(sessionId: string, projectPath?: string | null): stri
   return path.join(projectDir, `${sessionId}.jsonl`);
 }
 
+// Pre-register a fresh sessionId -> conversationId mapping in the daemon's
+// cache *before* the daemon discovers the JSONL. Without this, the daemon
+// treats the reconstituted JSONL as a brand-new session and creates a
+// duplicate conversation, orphaning the live agent from the user's original
+// conversation in the web UI. The daemon re-reads this file when it picks up
+// a new session (daemon.ts:readConversationCache), so a write here wins the
+// race against the JSONL watcher discovering the file.
+function linkSessionToConversation(sessionId: string, conversationId: string): void {
+  try {
+    const cacheDir = path.join(os.homedir(), ".codecast");
+    const cacheFile = path.join(cacheDir, "conversations.json");
+    let cache: Record<string, string> = {};
+    if (fs.existsSync(cacheFile)) {
+      try { cache = JSON.parse(fs.readFileSync(cacheFile, "utf-8")) as Record<string, string>; }
+      catch { cache = {}; }
+    }
+    if (cache[sessionId] === conversationId) return;
+    cache[sessionId] = conversationId;
+    if (!fs.existsSync(cacheDir)) fs.mkdirSync(cacheDir, { recursive: true });
+    fs.writeFileSync(cacheFile, JSON.stringify(cache, null, 2));
+  } catch {
+    // Non-fatal: the daemon falls back to creating a new conversation, which
+    // is the pre-fix behavior. The user still gets a working session.
+  }
+}
+
 async function ensureLocalSession(
   sessionId: string,
   projectPath: string | null | undefined,
   reconCtx?: ReconstitutionContext,
 ): Promise<string> {
-  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  if (!UUID_RE.test(sessionId)) return sessionId;
+  if (!CLAUDE_UUID_RE.test(sessionId)) return sessionId;
 
   const filePath = claudeSessionPath(sessionId, projectPath);
-  if (fs.existsSync(filePath)) return sessionId;
+  if (fs.existsSync(filePath)) {
+    // The original JSONL still exists. The daemon already has a mapping for
+    // this sessionId; nothing to reconstitute or re-link.
+    return sessionId;
+  }
 
   if (!reconCtx) {
     console.log(`Local session file not found: ${filePath}`);
@@ -5310,22 +5347,21 @@ async function ensureLocalSession(
   const data = await fetchExport(siteUrl, reconCtx.config.auth_token!, reconCtx.conversationId);
   console.log(`  ${data.messages.length} messages exported`);
 
-  const CLAUDE_CONTEXT_LIMIT_TOKENS = 200_000;
-  const AUTO_TRIM_THRESHOLD_TOKENS = 120_000;
-  const AUTO_TRIM_TARGET_TOKENS = 100_000;
-
   const estimatedTokens = estimateClaudeImportTokens(data);
   let tailMessages: number | undefined;
 
-  if (estimatedTokens > AUTO_TRIM_THRESHOLD_TOKENS) {
-    tailMessages = chooseClaudeTailMessagesForTokenBudget(data, AUTO_TRIM_TARGET_TOKENS);
+  if (estimatedTokens > CLAUDE_AUTO_TRIM_THRESHOLD_TOKENS) {
+    tailMessages = chooseClaudeTailMessagesForTokenBudget(data, CLAUDE_AUTO_TRIM_TARGET_TOKENS);
     console.log(
       `  ~${estimatedTokens.toLocaleString()} tokens estimated (limit ~${CLAUDE_CONTEXT_LIMIT_TOKENS.toLocaleString()}).\n` +
-      `  Auto-trimming to last ${tailMessages} messages (~${AUTO_TRIM_TARGET_TOKENS.toLocaleString()} tokens).`
+      `  Auto-trimming to last ${tailMessages} messages (~${CLAUDE_AUTO_TRIM_TARGET_TOKENS.toLocaleString()} tokens).`
     );
   }
 
   const { jsonl, sessionId: newSessionId } = generateClaudeCodeJsonl(data, { tailMessages });
+  // Write the daemon cache mapping BEFORE writeClaudeCodeSession so it's on
+  // disk when the daemon's JSONL watcher fires.
+  linkSessionToConversation(newSessionId, reconCtx.conversationId);
   const result = writeClaudeCodeSession(jsonl, newSessionId, projectPath || undefined);
   console.log(`  Reconstituted as: ${newSessionId} (${result.filePath})`);
   return newSessionId;
@@ -5440,22 +5476,14 @@ function openInNewTab(cmd: string, cwd?: string | null): void {
 
 function launchClaude(sessionId: string, extraArgs?: string, showArgsHint?: boolean, projectPath?: string | null): void {
   let resumeId = sessionId;
-  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  if (!UUID_RE.test(sessionId)) {
-    const newUuid = crypto.randomUUID();
+  if (!CLAUDE_UUID_RE.test(sessionId)) {
     const projectSlug = (projectPath || process.cwd()).replace(/\//g, "-");
     const projectDir = path.join(os.homedir(), ".claude", "projects", projectSlug);
     const oldPath = path.join(projectDir, `${sessionId}.jsonl`);
-    const newPath = path.join(projectDir, `${newUuid}.jsonl`);
-    if (fs.existsSync(oldPath)) {
-      const raw = fs.readFileSync(oldPath, "utf-8");
-      const rewritten = raw.replace(
-        new RegExp(`"sessionId"\\s*:\\s*"${sessionId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`, "g"),
-        `"sessionId":"${newUuid}"`
-      );
-      fs.writeFileSync(newPath, rewritten);
-      console.log(`Converted subagent session ${sessionId} -> ${newUuid}`);
-      resumeId = newUuid;
+    const rewrite = rewriteSubagentJsonlToUuid(sessionId, oldPath);
+    if (rewrite.rewrote) {
+      console.log(`Converted subagent session ${sessionId} -> ${rewrite.resumeId}`);
+      resumeId = rewrite.resumeId;
     } else {
       console.error(`Session file not found: ${oldPath}`);
       console.error(`Non-UUID session IDs (subagent sessions) require a local JSONL file to resume.`);
@@ -5464,20 +5492,13 @@ function launchClaude(sessionId: string, extraArgs?: string, showArgsHint?: bool
   }
   const args = ["--resume", resumeId];
 
-  if (extraArgs) {
-    const parsedArgs = extraArgs.split(/\s+/).filter((a) => a.length > 0);
-    args.push(...parsedArgs);
-  }
-
-  // Apply permission mode from config if not already specified
-  const allArgs = args.join(" ");
-  if (!allArgs.includes("--dangerously-skip-permissions") && !allArgs.includes("--permission-mode") && !allArgs.includes("--allow-dangerously-skip-permissions")) {
-    const cfg = readConfig();
-    if (cfg?.agent_permission_modes?.claude === "bypass") {
-      args.push("--permission-mode", "bypassPermissions");
-    } else {
-      args.push("--allow-dangerously-skip-permissions");
-    }
+  const cfg = readConfig();
+  const cliDefaultPermFlag = cfg?.agent_permission_modes?.claude === "bypass"
+    ? "--permission-mode bypassPermissions"
+    : "--allow-dangerously-skip-permissions";
+  const combined = combineClaudeResumeFlags(extraArgs, cliDefaultPermFlag);
+  if (combined) {
+    args.push(...combined.split(/\s+/).filter((a) => a.length > 0));
   }
 
   if (extraArgs) {
