@@ -23,6 +23,16 @@ import {
 
 const NOISE_TITLE_PREFIXES = ["[Using:", "[Request", "[SUGGESTION MODE:"];
 
+// Hard cap on per-field diff size stored on conversation rows. Daemon already
+// truncates at 100KB before send, but the server defends against any future
+// client that bypasses that. Oversized diffs blow the Convex isolate's 96 MiB
+// memory limit when collateral queries (heartbeat, webListPaginated, webList)
+// do `ctx.db.get(conversationId)` and pull the whole row.
+const MAX_GIT_DIFF_SIZE = 100_000;
+function truncateGitDiff(s: string | undefined): string | undefined {
+  return s && s.length > MAX_GIT_DIFF_SIZE ? s.slice(0, MAX_GIT_DIFF_SIZE) : s;
+}
+
 async function getAuthenticatedUserId(
   ctx: { db: any },
   apiToken?: string
@@ -505,8 +515,8 @@ export const createConversation = mutation({
       git_branch: args.git_branch,
       git_remote_url: args.git_remote_url,
       git_status: args.git_status,
-      git_diff: args.git_diff,
-      git_diff_staged: args.git_diff_staged,
+      git_diff: truncateGitDiff(args.git_diff),
+      git_diff_staged: truncateGitDiff(args.git_diff_staged),
       git_root: args.git_root,
       cli_flags: args.cli_flags,
       worktree_name: args.worktree_name,
@@ -6889,5 +6899,47 @@ export const getUserMessages = query({
       content: (stripContextTags(m.content!) || m.content!).slice(0, 500),
       timestamp: m.timestamp,
     }));
+  },
+});
+
+// One-time migration: truncate any conversation whose git_diff or
+// git_diff_staged exceeds MAX_GIT_DIFF_SIZE. Run via:
+//   npx convex run conversations:truncateOversizedDiffs '{"cursor":null}'
+// then re-run with the returned `nextCursor` until `done: true`.
+//
+// Idempotent: skips rows already within the cap. Paginates by 200 to stay
+// well under the per-mutation memory ceiling — we deliberately do NOT use
+// the same isolate-bursting `collect()` patterns this migration is meant
+// to fix.
+export const truncateOversizedDiffs = internalMutation({
+  args: {
+    cursor: v.union(v.string(), v.null()),
+  },
+  handler: async (ctx, args) => {
+    const page = await ctx.db
+      .query("conversations")
+      .paginate({ cursor: args.cursor, numItems: 200 });
+
+    let truncated = 0;
+    for (const conv of page.page) {
+      const patch: Record<string, string> = {};
+      if (conv.git_diff && conv.git_diff.length > MAX_GIT_DIFF_SIZE) {
+        patch.git_diff = conv.git_diff.slice(0, MAX_GIT_DIFF_SIZE);
+      }
+      if (conv.git_diff_staged && conv.git_diff_staged.length > MAX_GIT_DIFF_SIZE) {
+        patch.git_diff_staged = conv.git_diff_staged.slice(0, MAX_GIT_DIFF_SIZE);
+      }
+      if (Object.keys(patch).length > 0) {
+        await ctx.db.patch(conv._id, patch);
+        truncated++;
+      }
+    }
+
+    return {
+      truncated,
+      scanned: page.page.length,
+      done: page.isDone,
+      nextCursor: page.isDone ? null : page.continueCursor,
+    };
   },
 });

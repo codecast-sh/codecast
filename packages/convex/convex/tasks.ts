@@ -920,23 +920,27 @@ export const webList = query({
     const isDelta = since !== undefined;
 
     // Range-scan helper: when in delta mode, use the *_updated indexes so we
-    // only materialize rows whose updated_at > since. Otherwise fall back to
-    // the legacy unbounded collect.
+    // only materialize rows whose updated_at > since. Initial (non-delta) load
+    // is capped to the most-recently-updated MAX_INITIAL — the unbounded
+    // collect blew the Convex isolate's 96 MiB memory limit on heavy users
+    // (TooMuchMemoryCarryOver, 2026-05-13). Older rows are still reachable via
+    // delta polling after the cursor advances.
+    const MAX_INITIAL = 2000;
     const collectByUser = async (uid: any) => isDelta
       ? await ctx.db.query("tasks").withIndex("by_user_updated", (q: any) =>
           q.eq("user_id", uid).gt("updated_at", since!)).collect()
-      : await ctx.db.query("tasks").withIndex("by_user_id", (q: any) =>
-          q.eq("user_id", uid)).collect();
+      : await ctx.db.query("tasks").withIndex("by_user_updated", (q: any) =>
+          q.eq("user_id", uid)).order("desc").take(MAX_INITIAL);
     const collectByTeam = async (tid: any) => isDelta
       ? await ctx.db.query("tasks").withIndex("by_team_updated", (q: any) =>
           q.eq("team_id", tid).gt("updated_at", since!)).collect()
-      : await ctx.db.query("tasks").withIndex("by_team_id", (q: any) =>
-          q.eq("team_id", tid)).collect();
+      : await ctx.db.query("tasks").withIndex("by_team_updated", (q: any) =>
+          q.eq("team_id", tid)).order("desc").take(MAX_INITIAL);
     const collectByAssignee = async (assignee: string) => isDelta
       ? await ctx.db.query("tasks").withIndex("by_assignee_updated", (q: any) =>
           q.eq("assignee", assignee).gt("updated_at", since!)).collect()
-      : await ctx.db.query("tasks").withIndex("by_assignee_status", (q: any) =>
-          q.eq("assignee", assignee)).collect();
+      : await ctx.db.query("tasks").withIndex("by_assignee_updated", (q: any) =>
+          q.eq("assignee", assignee)).order("desc").take(MAX_INITIAL);
 
     let tasks: any[];
     if (args.project_id) {
