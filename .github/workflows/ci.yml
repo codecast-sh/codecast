@@ -21,3 +21,48 @@ jobs:
 
       - name: Build
         run: bun run build
+
+  test-cli:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.13
+
+      - name: Install tmux (e2e tests need a real tmux server)
+        run: sudo apt-get update && sudo apt-get install -y tmux
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Unit tests (cli package)
+        working-directory: packages/cli
+        # Exclude the e2e suite — it has its own step with --rerun-each for
+        # resilience against tmux-resource flake under CI runner load.
+        run: bun test src/ --bail=5
+
+      - name: E2E messaging pipeline (real tmux + fake-claude shim)
+        working-directory: packages/cli
+        # Up to 3 full-suite attempts to absorb tmux-resource flake from
+        # running 10 fresh sessions back-to-back on a contended runner.
+        # Real regressions fail all 3 attempts; transient flake is filtered.
+        # If you see this retry step gating frequently, treat that as a
+        # signal to harden the test isolation, not as the desired norm.
+        run: |
+          set -e
+          for attempt in 1 2 3; do
+            echo "::group::E2E attempt $attempt"
+            if bun test src/messaging.e2e.test.ts --timeout=60000; then
+              echo "::endgroup::"
+              echo "E2E passed on attempt $attempt"
+              exit 0
+            fi
+            echo "::endgroup::"
+            echo "::warning::E2E attempt $attempt failed; retrying"
+            tmux kill-server 2>/dev/null || true
+            sleep 2
+          done
+          echo "::error::E2E failed all 3 attempts — likely a real regression"
+          exit 1
