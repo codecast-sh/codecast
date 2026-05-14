@@ -27,6 +27,18 @@ export declare interface SessionWatcher {
   ): boolean;
 }
 
+// Marker substrings produced by the test harness (`messagingHarness.ts` →
+// `codecast-test-cwd-`, `fakeClaudeShim.ts` → `codecast-fake-claude-`).
+// These tmpdirs end up under ~/.claude/projects/<encoded-cwd>/ when tests
+// run, and without filtering the daemon would upload them to the user's
+// production Convex inbox. Tests that need a real session-watcher event
+// loop should pick a neutral project dir name.
+const TEST_PROJECT_MARKERS = ["codecast-test-cwd-", "codecast-fake-claude-"];
+
+export function isTestProjectDir(projectDirName: string): boolean {
+  return TEST_PROJECT_MARKERS.some(m => projectDirName.includes(m));
+}
+
 export class SessionWatcher extends EventEmitter {
   private watcher: RecursiveWatcher | null = null;
   private projectsPath: string;
@@ -120,6 +132,7 @@ export class SessionWatcher extends EventEmitter {
     if (parts.length < 2) return;
 
     const projectDirName = parts[0];
+    if (isTestProjectDir(projectDirName)) return;
     const fileName = parts[parts.length - 1];
     const sessionId = fileName.replace(".jsonl", "");
 
