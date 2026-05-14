@@ -7821,13 +7821,14 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       resolveForkSessionId(forkSessionId, result.conversation_id);
       // Navigate to the new fork's own conversation. URL reflects identity.
       navigateToSession(result.conversation_id);
+      router.push(`/conversation/${result.conversation_id}`);
       toast.success("Forked");
       return { forkSessionId, conversationId: result.conversation_id };
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to fork");
       return null;
     }
-  }, [conversation?._id, conversation?.title, conversation?.user, conversation?.agent_type, forkFromMessage, forkSetMessages, addOptimisticFork, resolveForkSessionId, navigateToSession, currentUser?._id]);
+  }, [conversation?._id, conversation?.title, conversation?.user, conversation?.agent_type, forkFromMessage, forkSetMessages, addOptimisticFork, resolveForkSessionId, navigateToSession, router, currentUser?._id]);
 
   const handleForkFromMessage = useCallback(async (messageUuid: string) => {
     const tl = timelineRef.current;
@@ -8603,21 +8604,30 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     enabled: isOwner,
   });
 
-  // BranchSelector / tree panel: switching branches is navigation.
+  // BranchSelector / tree panel: switching branches is navigation. We route through
+  // next/navigation so the URL changes via the app's router (in tab mode this updates
+  // the tab's path so the TabPane remounts the target conversation). navigateToSession
+  // still primes the store so the message panel switches without a flash.
   // null = navigate to the conversation's parent (back to "main"); otherwise navigate to that fork.
   const handleBranchSwitch = useCallback((_messageUuid: string, convId: string | null) => {
+    let targetId: string | undefined;
     if (convId === null) {
       const parentId = conversation?.forked_from;
-      if (parentId) navigateToSession(parentId.toString());
-      return;
+      if (parentId) targetId = parentId.toString();
+    } else {
+      targetId = convId;
     }
-    navigateToSession(convId);
-  }, [conversation?.forked_from, navigateToSession]);
+    if (!targetId) return;
+    if (targetId === conversation?._id?.toString()) return;
+    navigateToSession(targetId);
+    router.push(`/conversation/${targetId}`);
+  }, [conversation?.forked_from, conversation?._id, navigateToSession, router]);
 
   const handleTreeSwitchConversation = useCallback((convId: string) => {
     if (convId === conversation?._id?.toString()) return;
     navigateToSession(convId);
-  }, [conversation?._id, navigateToSession]);
+    router.push(`/conversation/${convId}`);
+  }, [conversation?._id, navigateToSession, router]);
 
   // Tree panel highlight: just the currently-viewed conversation.
   const activeBranchIdSet = useMemo(
