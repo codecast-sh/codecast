@@ -27,7 +27,7 @@ import { TmuxMissingBanner } from "./TmuxMissingBanner";
 import { FindBar } from "./FindBar";
 import { KeyboardShortcutsPanel } from "./KeyboardShortcutsHelp";
 import { NewSessionModal } from "./ConversationList";
-import { useInboxStore, useTrackedStore, isSessionEffectivelyIdle } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, categorizeSessions } from "../store/inboxStore";
 import { useShortcutAction, useShortcutContext, useGlobalShortcutActions, formatShortcutLabel } from "../shortcuts";
 import { usePrefetch } from "../hooks/usePrefetch";
 import { desktopHeaderClass, setupDesktopDrag, isElectron } from "../lib/desktop";
@@ -91,6 +91,7 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
     s => s.viewingDismissedId,
     s => s.newSession.isOpen,
     s => s.tabs.length,
+    s => s.sessionsWithQueuedMessages,
   ]);
   const isZenMode = s.clientState.ui?.zen_mode ?? false;
   const sidebarCollapsed = s.clientState.ui?.sidebar_collapsed ?? false;
@@ -154,23 +155,20 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
   const isOnWindowsPage = pathname === "/windows";
   const isFullWidthPage = isOnConversationPage || isOnCommitPage || isOnPRPage || isOnInboxPage || isOnTasksPage || isOnWorkflowsPage || isOnPlansPage || isOnDocsPage || isOnProjectsPage || isOnWindowsPage;
 
-  const activeAgentCount = useMemo(() => {
-    return Object.values(s.sessions).filter(
-      (sess) => !isSessionEffectivelyIdle(sess) && sess.message_count > 0
-    ).length;
-  }, [s.sessions]);
+  const categorized = useMemo(() => categorizeSessions(s.sessions, s.sessionsWithQueuedMessages), [s.sessions, s.sessionsWithQueuedMessages]);
+  const activeAgentCount = categorized.working.length;
 
   const showCollapsedRail = !s.sidePanelOpen && !isMobile;
   const showSessionList = s.sidePanelOpen && !isMobile;
   const showMobileSessionList = s.sidePanelOpen && isMobile;
   const showConversationColumn = !!s.sidePanelSessionId && !isOnInboxPage && !isOnConversationPage && !isMobile;
 
-  // Clean up stale panel state after navigating to a full conversation page.
-  // The panel is already hidden by !isOnConversationPage — this just prevents
-  // it from reappearing when navigating away later.
+  // Clear stale conversation-column session on full conversation pages so the
+  // column doesn't reappear when navigating away. Only clear the session ID;
+  // leave sidePanelOpen untouched so the session list sidebar stays visible.
   useWatchEffect(() => {
     if (isOnConversationPage && s.sidePanelSessionId) {
-      s.closeSidePanel();
+      s.clearSidePanelSession();
     }
   }, [isOnConversationPage, s.sidePanelSessionId]);
 
@@ -584,11 +582,8 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
               <button
                 onClick={() => {
                   if (!s.sidePanelOpen) s.toggleSidePanel();
-                  // Select first working session so the list scrolls to it
                   const store = useInboxStore.getState();
-                  const firstWorking = Object.values(store.sessions).find(
-                    (s) => !isSessionEffectivelyIdle(s) && s.message_count > 0
-                  );
+                  const firstWorking = categorized.working[0];
                   if (firstWorking) {
                     if (isOnInboxPage) {
                       store.setCurrentSession(firstWorking._id);
