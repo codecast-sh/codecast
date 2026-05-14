@@ -145,30 +145,9 @@ type ReactMarkdownProps = ComponentProps<typeof ReactMarkdownBase>;
  * whenever a `highlightQuery` is active in the HighlightContext. Because the plugin
  * transforms the HAST before React renders, highlights are part of the VDOM and
  * survive re-renders — avoiding the MutationObserver/TreeWalker race we used before.
- *
- * Lazy first-render: the unified/remark/rehype pipeline (markdown → mdast → hast →
- * VDOM) is the dominant per-row cost on conversation switch. We render a cheap
- * whitespace-preserving span on first mount, then swap to the full pipeline on the
- * next idle callback (or 200ms timeout, whichever fires first). Children must be a
- * string for the fallback to render — true for every call site in this file.
  */
 function ReactMarkdown(props: ReactMarkdownProps) {
   const query = useContext(HighlightContext);
-  const [hydrated, setHydrated] = useState(false);
-  useEffect(() => {
-    const ric = (typeof window !== 'undefined' && (window as any).requestIdleCallback) as
-      | ((cb: () => void, opts?: { timeout: number }) => number)
-      | undefined;
-    const cic = (typeof window !== 'undefined' && (window as any).cancelIdleCallback) as
-      | ((id: number) => void)
-      | undefined;
-    if (ric) {
-      const id = ric(() => setHydrated(true), { timeout: 200 });
-      return () => cic && cic(id);
-    }
-    const id = setTimeout(() => setHydrated(true), 0);
-    return () => clearTimeout(id);
-  }, []);
   const userPlugins = props.rehypePlugins;
   const plugins = useMemo(() => {
     const base = userPlugins ? [...userPlugins] : [];
@@ -178,10 +157,6 @@ function ReactMarkdown(props: ReactMarkdownProps) {
     base.push([rehypeSearchHighlight, { terms }]);
     return base;
   }, [query, userPlugins]);
-  if (!hydrated) {
-    const text = typeof props.children === 'string' ? props.children : '';
-    return <span className="whitespace-pre-wrap">{text}</span>;
-  }
   return <ReactMarkdownBase {...props} rehypePlugins={plugins} />;
 }
 
@@ -3994,7 +3969,28 @@ function TeammateMessageCard({ teammateId, color, summary, content }: { teammate
   const borderColor = agentBorderMap[color || "blue"] || agentBorderMap.blue;
   const badgeColor = agentColorMap[color || "blue"] || agentColorMap.blue;
   const isSummary = /summary|idle|away/i.test(summary || '');
-  const isLong = !isSummary && content.length > 200;
+
+  if (isSummary) {
+    return (
+      <div className={`my-1.5 rounded-lg bg-sol-bg-alt/40 border ${borderColor} px-4 py-3`}>
+        <div className="flex items-center gap-2 mb-2">
+          <span className={`px-1.5 py-0.5 rounded border text-[10px] font-mono ${badgeColor}`}>
+            {teammateId}
+          </span>
+          {summary && (
+            <span className="text-[10px] uppercase tracking-wider font-medium text-sol-text-dim/60">
+              {summary}
+            </span>
+          )}
+        </div>
+        <div className="text-[13px] text-sol-text-secondary break-words leading-relaxed whitespace-pre-line">
+          <FormattedSummary text={content} />
+        </div>
+      </div>
+    );
+  }
+
+  const isLong = content.length > 200;
 
   return (
     <div className={`my-1.5 border-l-2 ${borderColor} pl-3 py-1.5`}>
@@ -4009,9 +4005,9 @@ function TeammateMessageCard({ teammateId, color, summary, content }: { teammate
         )}
       </div>
       <div
-        className={`text-sm text-sol-text-secondary break-words leading-relaxed ${isSummary ? "whitespace-pre-line" : "whitespace-pre-wrap"} ${isLong && !expanded ? "line-clamp-4" : ""}`}
+        className={`text-sm text-sol-text-secondary break-words leading-relaxed whitespace-pre-wrap ${isLong && !expanded ? "line-clamp-4" : ""}`}
       >
-        {isSummary ? <FormattedSummary text={content} /> : content}
+        {content}
       </div>
       {isLong && (
         <button
@@ -4411,7 +4407,6 @@ function AssistantBlockImpl({
   onSendInlineMessage,
   isConversationActive,
   globalImageMap,
-  deferMarkdown,
 }: {
   content?: string;
   timestamp: number;
@@ -4452,7 +4447,6 @@ function AssistantBlockImpl({
   onSendInlineMessage?: (content: string) => void;
   isConversationActive?: boolean;
   globalImageMap?: Record<string, ImageData>;
-  deferMarkdown?: boolean;
 }) {
   const COLLAPSED_LINES = 2;
   const CONTENT_MAX_HEIGHT = 800;
@@ -4461,26 +4455,6 @@ function AssistantBlockImpl({
   const [isOverflowing, setIsOverflowing] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
-
-  // Markdown deferral for off-screen overscan rows. Visible rows get markdown
-  // immediately (markdownReady starts true when !deferMarkdown). Off-screen rows
-  // render a fast plain-text fallback until an idle callback upgrades them, or
-  // until they scroll into view (parent re-renders with deferMarkdown=false).
-  const [markdownReady, setMarkdownReady] = useState(!deferMarkdown);
-  useEffect(() => {
-    if (markdownReady || !deferMarkdown) {
-      if (!deferMarkdown && !markdownReady) setMarkdownReady(true);
-      return;
-    }
-    const w: any = window;
-    const id = w.requestIdleCallback
-      ? w.requestIdleCallback(() => setMarkdownReady(true), { timeout: 300 })
-      : setTimeout(() => setMarkdownReady(true), 80);
-    return () => {
-      if (w.cancelIdleCallback && w.requestIdleCallback) w.cancelIdleCallback(id);
-      else clearTimeout(id);
-    };
-  }, [deferMarkdown, markdownReady]);
 
   const safeContent = content ? safeString(content) : content;
   const strippedContent = safeContent ? stripSystemTags(safeContent) : safeContent;
@@ -4773,7 +4747,7 @@ function AssistantBlockImpl({
                         >{part.content}</ReactMarkdown>
                       ))}
                     </div>
-                  ) : markdownReady ? (
+                  ) : (
                     <ReactMarkdown
                       remarkPlugins={entityRemarkPlugins}
                       rehypePlugins={[rehypeHighlight]}
@@ -4786,11 +4760,6 @@ function AssistantBlockImpl({
                     >
                       {displayContent}
                     </ReactMarkdown>
-                  ) : (
-                    // Off-screen overscan: render plain text instantly; idle upgrade swaps in markdown.
-                    <div className="whitespace-pre-wrap break-words text-sol-text">
-                      {displayContent}
-                    </div>
                   )}
                   {!contentExpanded && isOverflowing && (
                     <div className="absolute bottom-0 left-0 right-0 h-8 pointer-events-none bg-gradient-to-b from-transparent to-[var(--sol-bg)]" />
@@ -8505,7 +8474,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         case 'skill_expansion': return 44;
         case 'task_notification': return 40;
         case 'scheduled_task': return 56;
-        case 'teammate_events': return 40;
+        case 'teammate_events': return 80;
         case 'task_prompt': return 0;
         case 'compaction_prompt': return 0;
         case 'compaction_summary': return 60;
@@ -9337,7 +9306,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     return null;
   };
 
-  const renderItem = (item: TimelineItem, index: number, deferMarkdown: boolean = false) => {
+  const renderItem = (item: TimelineItem, index: number) => {
     if (!item || index < 0 || index >= timeline.length) return null;
     if (item.type === 'commit') {
       const commit = item.data;
@@ -9592,7 +9561,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           loadingBranchId={loadingBranchId}
           mainMessageCount={msg.message_uuid ? conversation?.main_message_counts_by_fork?.[msg.message_uuid] : undefined}
           model={conversation?.model}
-          deferMarkdown={deferMarkdown}
           onSendInlineMessage={handleSendInlineMessage}
           isConversationActive={conversation?.status === "active"}
           globalImageMap={globalImageMap}
@@ -10323,20 +10291,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                 </div>
               </div>
             )}
-            {(() => {
-              // Read scroll state once per render so overscan rows can be flagged for
-              // deferred markdown rendering. If the ref isn't ready yet (initial mount),
-              // treat everything as visible — defer only kicks in on subsequent renders
-              // (e.g. switches) when scrollTop/clientHeight are real numbers.
-              const _sc = containerRef.current;
-              const _visTop = _sc ? _sc.scrollTop : 0;
-              const _visBottom = _sc ? _visTop + _sc.clientHeight : Number.POSITIVE_INFINITY;
-              return virtualizer.getVirtualItems().map((virtualItem) => {
+            {virtualizer.getVirtualItems().map((virtualItem) => {
               const item = timeline[virtualItem.index];
-              const _itemEnd = virtualItem.start + virtualItem.size;
-              const _isVisible = !_sc || (virtualItem.start < _visBottom && _itemEnd > _visTop);
-              const deferMarkdown = !!_sc && !_isVisible;
-              const content = renderItem(item, virtualItem.index, deferMarkdown);
+              const content = renderItem(item, virtualItem.index);
               const isSearchDimmed = highlightQuery && allMatchingMessageIds.length > 0 && item.type === 'message' && !allMatchingMessageIds.includes((item.data as Message)._id);
               const itemId = item.type === 'message' ? (item.data as Message)._id : item.type === 'commit' ? `commit-${(item.data as any).sha || (item.data as any)._id}` : `pr-${(item.data as any)._id}`;
               const isNew = newItemIdsRef.current.has(itemId);
@@ -10370,8 +10327,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   )}
                 </div>
               );
-            });
-            })()}
+            })}
             {/* Loading indicator at bottom */}
             {isLoadingNewer && (
               <div className="sticky bottom-0 z-10 flex justify-center py-2 pointer-events-none">
