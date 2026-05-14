@@ -1698,11 +1698,26 @@ export const useInboxStore = create<InboxStoreState>(
         );
       });
     }
-    // Server data only — pending messages are merged at read time
-    this.messages[convId] = msgs;
+    // Server data only — pending messages are merged at read time.
+    //
+    // Preserve any local messages with timestamps strictly newer than the
+    // incoming batch's newest. The paginated `listMessages` subscription is
+    // DESC-ordered and its first page covers the newest N items, but its
+    // reactivity can briefly stall while a recovery fetch (see
+    // useConversationMessages) has already merged in even-newer items.
+    // Without this guard, the next paginated tick clobbers them and the
+    // user sees the conversation snap backward.
+    const existing = this.messages[convId] || [];
+    const incomingNewestTs = msgs.length > 0 ? msgs[msgs.length - 1].timestamp : -Infinity;
+    const incomingIds = new Set(msgs.map((m: Message) => m._id));
+    const newerLocal = existing.filter(
+      (m: Message) => m.timestamp > incomingNewestTs && !incomingIds.has(m._id)
+    );
+    const merged = newerLocal.length > 0 ? [...msgs, ...newerLocal] : msgs;
+    this.messages[convId] = merged;
     const pag = { ...(this.pagination[convId] || DEFAULT_PAGINATION), ...meta };
     this.pagination[convId] = pag;
-    writeConversationMessages(convId, msgs, pag);
+    writeConversationMessages(convId, merged, pag);
     evictInactiveMessages(this, convId);
   }),
 
