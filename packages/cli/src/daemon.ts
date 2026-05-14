@@ -5367,10 +5367,14 @@ async function injectViaTmuxInner(target: string, content: string): Promise<void
   // Paste once
   await doPaste();
 
-  // Brief confirmation: did the pane change? (5 checks, 200ms apart = 1s max)
+  // Brief confirmation: did the pane change? (4 checks, 100ms apart = 400ms max).
+  // Tightened from 5×200ms (1s) — observation: pane redraw after a tmux paste
+  // is sub-100ms in practice; the long budget was defensive and rarely useful.
+  // The post-submit verify loop below is the real safety net for "did the
+  // payload actually reach the agent" — this is just an early signal.
   let pasteConfirmed = false;
-  for (let attempt = 0; attempt < 5; attempt++) {
-    await new Promise(resolve => setTimeout(resolve, 200));
+  for (let attempt = 0; attempt < 4; attempt++) {
+    await new Promise(resolve => setTimeout(resolve, 100));
     try {
       const { stdout: postPaste } = await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${captureLines}`]);
       if (postPaste !== prePaste) {
@@ -5381,7 +5385,7 @@ async function injectViaTmuxInner(target: string, content: string): Promise<void
   }
 
   if (!pasteConfirmed) {
-    log(`Paste may not have landed in ${target} (pane unchanged after 1s), proceeding anyway`);
+    log(`Paste may not have landed in ${target} (pane unchanged after 400ms), proceeding anyway`);
   }
 
   // Send Enter to submit
