@@ -97,16 +97,37 @@ describe("messaging e2e — fresh session", () => {
     const target = `${h.tmuxSession}:0.0`;
     const content = "hello from test scenario 1";
     const injectStart = Date.now();
-    await injectViaTmux(target, content);
+    try {
+      await injectViaTmux(target, content);
+    } catch (err) {
+      const dbg = [
+        `[s1 inject threw] ${err instanceof Error ? err.message : String(err)}`,
+        `pane: ${JSON.stringify(h.capturePane())}`,
+        `jsonl exists: ${fs.existsSync(h.jsonlPath)}`,
+      ];
+      fs.writeFileSync("/tmp/codecast-s1-debug.log", dbg.join("\n\n"));
+      throw err;
+    }
     const injectElapsed = Date.now() - injectStart;
     logPerf("S1", "inject_fresh", injectElapsed);
     expect(injectElapsed).toBeLessThan(BUDGET_INJECT_FRESH_MS);
 
     // Step 3: shim writes the user message to JSONL.
-    await waitFor(() => {
-      const msgs = readJsonlMessages(h.jsonlPath);
-      return msgs.some(m => m.type === "user" && m.text === content);
-    }, { timeoutMs: BUDGET_JSONL_SYNC_MS, label: "user msg in JSONL" });
+    try {
+      await waitFor(() => {
+        const msgs = readJsonlMessages(h.jsonlPath);
+        return msgs.some(m => m.type === "user" && m.text === content);
+      }, { timeoutMs: BUDGET_JSONL_SYNC_MS, label: "user msg in JSONL" });
+    } catch (err) {
+      const raw = fs.existsSync(h.jsonlPath) ? fs.readFileSync(h.jsonlPath, "utf-8") : "(no jsonl)";
+      const dbg = [
+        `[s1 jsonl wait] ${err instanceof Error ? err.message : String(err)}`,
+        `pane: ${JSON.stringify(h.capturePane())}`,
+        `jsonl: ${raw}`,
+      ];
+      fs.writeFileSync("/tmp/codecast-s1-debug.log", dbg.join("\n\n"));
+      throw err;
+    }
 
     // Step 4: shim emits an assistant reply (proves bidirectional flow).
     await waitFor(() => {
