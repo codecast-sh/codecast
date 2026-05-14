@@ -297,3 +297,86 @@ describe("categorizeSessions", () => {
     expect(needsInput.map((s) => s._id)).not.toContain("conv-queued");
   });
 });
+
+describe("mergeMessages — sync-recovery safety net", () => {
+  // mergeMessages is the operation the watermark recovery loop in
+  // useConversationMessages relies on to back-fill messages when
+  // usePaginatedQuery's reactivity stalls. These tests pin the
+  // guarantees that recovery depends on: idempotent append, gap fill,
+  // no duplicates on overlap, no loss when the delta lands in chunks.
+
+  function msg(id: string, ts: number, role: "user" | "assistant" = "assistant") {
+    return { _id: id, role, content: id, timestamp: ts } as any;
+  }
+
+  beforeEach(() => {
+    useInboxStore.setState({
+      messages: {},
+      pendingMessages: {},
+      pagination: {},
+    });
+  });
+
+  it("appends a delta when the server has more messages than the local store", () => {
+    const store = useInboxStore.getState();
+    store.setMessages("c1", [msg("m1", 1), msg("m2", 2), msg("m3", 3)]);
+    store.mergeMessages("c1", [msg("m4", 4), msg("m5", 5)], "append", { initialized: true });
+
+    const out = useInboxStore.getState().messages.c1;
+    expect(out.map((m: any) => m._id)).toEqual(["m1", "m2", "m3", "m4", "m5"]);
+  });
+
+  it("dedupes messages already in the local store (overlap at the boundary)", () => {
+    const store = useInboxStore.getState();
+    store.setMessages("c1", [msg("m1", 1), msg("m2", 2), msg("m3", 3)]);
+    // Server returns m3 (the last local) and the new ones — the watermark
+    // fetch uses `>= last_timestamp` semantics in some paths, so overlap
+    // happens. The store must not double the boundary message.
+    store.mergeMessages("c1", [msg("m3", 3), msg("m4", 4), msg("m5", 5)], "append", { initialized: true });
+
+    const out = useInboxStore.getState().messages.c1;
+    expect(out.map((m: any) => m._id)).toEqual(["m1", "m2", "m3", "m4", "m5"]);
+  });
+
+  it("converges on the server set after a stall + recovery sequence", () => {
+    const store = useInboxStore.getState();
+    // Initial load: paginated query returns 3 messages.
+    store.setMessages("c1", [msg("m1", 1), msg("m2", 2), msg("m3", 3)]);
+
+    // Pagination stalls. Agent writes 50 more messages on the server.
+    // Recovery loop fires repeatedly with the current watermark, fetching
+    // in chunks until it catches up.
+    const allNew: any[] = [];
+    for (let i = 4; i <= 53; i++) allNew.push(msg(`m${i}`, i));
+
+    // First recovery page (20 messages).
+    store.mergeMessages("c1", allNew.slice(0, 20), "append", { initialized: true });
+    expect(useInboxStore.getState().messages.c1.length).toBe(23);
+
+    // Second recovery page (next 20). Real recovery sends `after_timestamp`
+    // of the last local, but the store must be safe even if pages overlap.
+    store.mergeMessages("c1", allNew.slice(15, 35), "append", { initialized: true });
+    expect(useInboxStore.getState().messages.c1.length).toBe(38);
+
+    // Final recovery page.
+    store.mergeMessages("c1", allNew.slice(30), "append", { initialized: true });
+    const final = useInboxStore.getState().messages.c1;
+    expect(final.length).toBe(53);
+    // Strictly sorted by timestamp — recovery must not corrupt order.
+    for (let i = 1; i < final.length; i++) {
+      expect(final[i].timestamp).toBeGreaterThanOrEqual(final[i - 1].timestamp);
+    }
+    // No duplicate ids.
+    expect(new Set(final.map((m: any) => m._id)).size).toBe(53);
+  });
+
+  it("preserves local messages when a recovery fetch returns nothing new", () => {
+    const store = useInboxStore.getState();
+    store.setMessages("c1", [msg("m1", 1), msg("m2", 2), msg("m3", 3)]);
+    // No-op delta: server returned the same items we already had.
+    store.mergeMessages("c1", [msg("m1", 1), msg("m2", 2), msg("m3", 3)], "append", { initialized: true });
+
+    const out = useInboxStore.getState().messages.c1;
+    expect(out.map((m: any) => m._id)).toEqual(["m1", "m2", "m3"]);
+  });
+});
