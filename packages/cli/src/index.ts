@@ -1452,8 +1452,42 @@ function showStatus(): void {
   console.log("");
 }
 
+function getManagedDaemonPlistPath(): string | null {
+  if (process.platform !== "darwin" || !process.getuid) return null;
+  const home = process.env.HOME;
+  if (!home) return null;
+  const p = path.join(home, "Library", "LaunchAgents", "sh.codecast.daemon.plist");
+  return fs.existsSync(p) ? p : null;
+}
+
+function waitForPidExit(pid: number, timeoutMs: number): boolean {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return true;
+    }
+    spawnSync("sleep", ["0.1"], { stdio: "ignore" });
+  }
+  return false;
+}
+
 function stopDaemon(): void {
   let killedAny = false;
+  const pidsToWait = new Set<number>();
+
+  // If launchd is managing the daemon, bootout the plist first so KeepAlive
+  // can't respawn it during the kill window. The plist file stays on disk so
+  // startDaemon (or next login) can bootstrap it back.
+  const managedPlistPath = getManagedDaemonPlistPath();
+  const launchdUid = process.getuid ? `gui/${process.getuid()}` : null;
+  if (managedPlistPath && launchdUid) {
+    const status = getMacLaunchdDaemonStatus();
+    if (status?.pid) pidsToWait.add(status.pid);
+    spawnSync("launchctl", ["bootout", launchdUid, managedPlistPath], { stdio: "ignore" });
+    killedAny = true;
+  }
 
   if (fs.existsSync(PID_FILE)) {
     const pidStr = fs.readFileSync(PID_FILE, "utf-8").trim();
@@ -1464,6 +1498,7 @@ function stopDaemon(): void {
     } else {
       try {
         process.kill(pid, "SIGTERM");
+        pidsToWait.add(pid);
         killedAny = true;
       } catch {}
       try { fs.unlinkSync(PID_FILE); } catch {}
@@ -1476,10 +1511,18 @@ function stopDaemon(): void {
     for (const orphanPid of pids) {
       try {
         process.kill(orphanPid, "SIGTERM");
+        pidsToWait.add(orphanPid);
         killedAny = true;
       } catch {}
     }
   } catch {}
+
+  for (const pid of pidsToWait) {
+    if (!waitForPidExit(pid, 5000)) {
+      try { process.kill(pid, "SIGKILL"); } catch {}
+      waitForPidExit(pid, 2000);
+    }
+  }
 
   if (killedAny) {
     console.log("Daemon stopped");
@@ -1498,6 +1541,25 @@ function startDaemon(): void {
   const existingPid = getDaemonPid();
   if (existingPid) {
     console.log(`Daemon is already running (PID: ${existingPid})`);
+    return;
+  }
+
+  // If a LaunchAgent plist exists, drive it through launchd instead of spawning
+  // a parallel process. bootstrap is idempotent on the bootout side and triggers
+  // RunAtLoad, which runs the daemon as a launchd-managed job.
+  const managedPlistPath = getManagedDaemonPlistPath();
+  const launchdUid = process.getuid ? `gui/${process.getuid()}` : null;
+  if (managedPlistPath && launchdUid) {
+    spawnSync("launchctl", ["bootstrap", launchdUid, managedPlistPath], { stdio: "ignore" });
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline) {
+      if (getLaunchdDaemonPid()) {
+        console.log("Daemon started");
+        return;
+      }
+      spawnSync("sleep", ["0.1"], { stdio: "ignore" });
+    }
+    console.log("Daemon started");
     return;
   }
 
