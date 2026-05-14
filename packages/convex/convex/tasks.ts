@@ -442,6 +442,7 @@ export const list = query({
     include_done: v.optional(v.boolean()),
     project_path: v.optional(v.string()),
     query: v.optional(v.string()),
+    assignee: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token, false);
@@ -457,6 +458,11 @@ export const list = query({
       project_path: args.project_path,
       ...(args.team && teamIdForScope ? { workspace: "team" as const, team_id: teamIdForScope } : {}),
     });
+
+    let resolvedAssignee: string | undefined;
+    if (args.assignee) {
+      resolvedAssignee = await resolveAssigneeStr(ctx, args.assignee, auth.userId);
+    }
 
     let tasks: any[];
     if (args.project_id) {
@@ -481,6 +487,10 @@ export const list = query({
 
     if (!args.include_derived) {
       tasks = tasks.filter((t: any) => !t.triage_status || t.triage_status === "active");
+    }
+
+    if (resolvedAssignee) {
+      tasks = tasks.filter((t: any) => t.assignee === resolvedAssignee);
     }
 
     if (args.execution_status) {
@@ -510,7 +520,23 @@ export const list = query({
     }
 
     const limit = args.limit || 300;
-    return tasks.slice(0, limit);
+    const result = tasks.slice(0, limit);
+
+    const assigneeIds = [...new Set(result.map((t: any) => t.assignee).filter(Boolean))];
+    const assigneeNames: Record<string, string> = {};
+    for (const id of assigneeIds) {
+      if (id.startsWith("agent:")) {
+        assigneeNames[id] = id;
+      } else {
+        const user = await ctx.db.get(id as any) as any;
+        if (user?.name) assigneeNames[id] = user.name;
+        else if (user?.github_username) assigneeNames[id] = user.github_username;
+      }
+    }
+    return result.map((t: any) => ({
+      ...t,
+      assignee_name: t.assignee ? (assigneeNames[t.assignee] || t.assignee) : undefined,
+    }));
   },
 });
 

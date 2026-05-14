@@ -9079,7 +9079,8 @@ function formatWorkItem(t: any, verbose = false): string {
   const pri = t.priority !== "medium" ? ` ${pcolor}${t.priority}${c.reset}` : "";
   const labels = t.labels?.length ? ` ${c.dim}[${t.labels.join(", ")}]${c.reset}` : "";
   const blocked = t.blocked_by?.length ? ` ${c.red}blocked${c.reset}` : "";
-  let line = `  ${icon} ${c.cyan}${t.short_id}${c.reset} ${t.title}${pri}${labels}${blocked}`;
+  const assignee = t.assignee_name ? ` ${c.dim}@${t.assignee_name}${c.reset}` : "";
+  let line = `  ${icon} ${c.cyan}${t.short_id}${c.reset} ${t.title}${pri}${assignee}${labels}${blocked}`;
   if (verbose && t.description) {
     line += `\n    ${c.dim}${t.description.slice(0, 120)}${c.reset}`;
   }
@@ -9372,6 +9373,7 @@ work
   .option("-d, --derived", "Include derived/mined tasks (hidden by default)")
   .option("-n, --limit <n>", "Max results", "50")
   .option("-q, --query <text>", "Filter by title/description (case-insensitive)")
+  .option("--assignee <name>", "Filter by assignee (username, 'me', or user ID)")
   .option("-v, --verbose", "Show descriptions")
   .action(async (options: any) => {
     const body: Record<string, any> = { limit: parseInt(options.limit) };
@@ -9381,6 +9383,7 @@ work
     if (options.ready) body.ready = true;
     if (options.derived || options.all) body.include_derived = true;
     if (options.query) body.query = options.query;
+    if (options.assignee) body.assignee = options.assignee;
     body.project_path = getRealCwd();
 
     const tasks = await cliPost("/cli/work/list", body);
