@@ -5826,10 +5826,13 @@ export const listInboxSessions = query({
       const agentStatusIdle = agentStatus
         ? agentStatus !== "working" && agentStatus !== "compacting" && agentStatus !== "thinking" && agentStatus !== "connected" && agentStatus !== "starting" && agentStatus !== "resuming"
         : false;
-      // Even when agent reports idle, pending messages or a trailing user message
-      // mean work is about to start — don't flag the session as idle yet.
+      // Even when the agent reports idle, recent activity (assistant just
+      // finished streaming), pending messages, or a trailing user message all
+      // mean work is in flight — don't flag as idle yet. The recentlyUpdated
+      // grace mirrors the "working" pill in ConversationView so the inbox
+      // bucket and the per-conversation header agree.
       let isIdle = agentStatus
-        ? agentStatusIdle && !hasPending && !lastRoleIsUser
+        ? agentStatusIdle && !hasPending && !lastRoleIsUser && !recentlyUpdated
         : daemonAlive
           ? (!hasPending && !lastRoleIsUser && !recentlyUpdated)
           : !recentlyUpdated;

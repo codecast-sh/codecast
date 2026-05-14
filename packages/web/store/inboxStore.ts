@@ -482,16 +482,16 @@ const ACTIVE_AGENT_STATUSES: Set<string> = new Set(["working", "compacting", "th
 const DEAD_AGENT_STATUSES: Set<string> = new Set(["stopped"]);
 
 export function isSessionEffectivelyIdle(
-  session: Pick<InboxSession, "is_idle" | "agent_status" | "last_user_message">,
+  session: Pick<InboxSession, "is_idle" | "agent_status">,
 ): boolean {
-  if (session.agent_status) {
-    // Interrupted sessions are idle — the agent_status may lag behind the actual state
-    if (ACTIVE_AGENT_STATUSES.has(session.agent_status) &&
-        isInterruptControlMessage(session.last_user_message)) {
-      return true;
-    }
-    return !ACTIVE_AGENT_STATUSES.has(session.agent_status);
+  // Daemon-reported ACTIVE statuses are a definitive "working" signal —
+  // short-circuit to non-idle for fast UI response when status flips.
+  if (session.agent_status && ACTIVE_AGENT_STATUSES.has(session.agent_status)) {
+    return false;
   }
+  // Otherwise defer to the backend's composite is_idle, which already
+  // factors in agent_status, recent activity, last-message role, pending
+  // messages, and daemon liveness.
   return session.is_idle;
 }
 
@@ -1606,12 +1606,16 @@ export const useInboxStore = create<InboxStoreState>(
   },
 
   injectSession: action(function (this: Draft, session: InboxSession) {
-    this.sessions[session._id] = { ...session, inbox_dismissed_at: null };
-    this.currentSessionId = session._id;
-    this.viewingDismissedId = null;
-    this.clientState.current_conversation_id = session._id;
-    if (this.conversations[session._id]) {
-      (this.conversations[session._id] as any).inbox_dismissed_at = null;
+    // Dismiss is absolute — never altered by viewing. If the injected session
+    // arrived dismissed, surface it through viewingDismissedId so the user can
+    // read it without resurrecting it into the active inbox.
+    this.sessions[session._id] = { ...session };
+    if (isSessionDismissed(session)) {
+      this.viewingDismissedId = session._id;
+    } else {
+      this.currentSessionId = session._id;
+      this.viewingDismissedId = null;
+      this.clientState.current_conversation_id = session._id;
     }
   }),
 
@@ -1644,15 +1648,23 @@ export const useInboxStore = create<InboxStoreState>(
     // Plain navigation. Forks are first-class conversations — clicking one
     // (in the sidebar, BranchSelector, or a deep link) just sets it as the
     // current conversation. No overlay-on-parent state to keep in sync.
-    if (this.conversations[id]) {
-      (this.conversations[id] as any).inbox_dismissed_at = null;
-    }
+    //
+    // Dismiss is absolute: navigation NEVER clears `inbox_dismissed_at`.
+    // Deep-link / URL `?s=` / popstate / palette / desktop window-focus all
+    // funnel through here, and silently resurrecting a dismissed session was
+    // the long-running "dismiss doesn't stick" bug. A dismissed target is
+    // shown through `viewingDismissedId` (the same view-only path the inbox
+    // sidebar uses when you click a session under "Dismissed"); only an
+    // explicit `unstashSession` or sending a message clears dismiss.
     const session = this.sessions[id];
     if (session) {
-      session.inbox_dismissed_at = null;
-      this.currentSessionId = id;
-      this.viewingDismissedId = null;
-      this.clientState.current_conversation_id = id;
+      if (isSessionDismissed(session)) {
+        this.viewingDismissedId = id;
+      } else {
+        this.currentSessionId = id;
+        this.viewingDismissedId = null;
+        this.clientState.current_conversation_id = id;
+      }
     } else {
       this.pendingNavigateId = id;
       this.viewingDismissedId = null;

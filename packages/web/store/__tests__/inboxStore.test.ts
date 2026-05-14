@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "bun:test";
-import { categorizeSessions, getSessionRenderKey, useInboxStore, type InboxSession } from "../inboxStore";
+import { categorizeSessions, getSessionRenderKey, isSessionDismissed, useInboxStore, type InboxSession } from "../inboxStore";
 
 const baseSession: InboxSession = {
   _id: "conv1",
@@ -296,6 +296,75 @@ describe("categorizeSessions", () => {
     expect(working.map((s) => s._id)).toContain("conv-queued");
     expect(needsInput.map((s) => s._id)).not.toContain("conv-queued");
   });
+
+  it("keeps a working session out of Needs Input even when the previous turn was interrupted", () => {
+    // Regression: resume after interrupt leaves last_user_message as the
+    // interrupt control text while agent_status flips to "working". An old
+    // override classified this as idle; it must now stay in Working.
+    const resumedAfterInterrupt: InboxSession = {
+      ...baseSession,
+      _id: "conv-resumed",
+      session_id: "session-resumed",
+      message_count: 5,
+      agent_status: "working",
+      is_idle: false,
+      last_user_message: "[Request interrupted by user]",
+    };
+
+    const { needsInput, working } = categorizeSessions(
+      { [resumedAfterInterrupt._id]: resumedAfterInterrupt },
+      new Set(),
+    );
+
+    expect(working.map((s) => s._id)).toContain("conv-resumed");
+    expect(needsInput.map((s) => s._id)).not.toContain("conv-resumed");
+  });
+
+  it("trusts backend is_idle=false when agent_status is idle (recent assistant burst)", () => {
+    // Right after the assistant finishes streaming, the daemon flips
+    // agent_status from "working" to "idle" while the conversation was
+    // updated <45s ago. The backend's is_idle composes recency + role and
+    // returns false (still effectively working). The frontend must defer
+    // to that — not short-circuit on agent_status === "idle".
+    const justFinished: InboxSession = {
+      ...baseSession,
+      _id: "conv-just-finished",
+      session_id: "session-just-finished",
+      message_count: 7,
+      agent_status: "idle",
+      is_idle: false,
+      last_user_message: "Earlier user prompt",
+    };
+
+    const { needsInput, working } = categorizeSessions(
+      { [justFinished._id]: justFinished },
+      new Set(),
+    );
+
+    expect(working.map((s) => s._id)).toContain("conv-just-finished");
+    expect(needsInput.map((s) => s._id)).not.toContain("conv-just-finished");
+  });
+
+  it("classifies agent_status=working as Working even if backend is_idle is stale=true", () => {
+    // Convex propagation gap: agent_status update arrives before is_idle
+    // recomputes. ACTIVE statuses are a definitive working signal.
+    const workingButStaleIdle: InboxSession = {
+      ...baseSession,
+      _id: "conv-stale-idle",
+      session_id: "session-stale-idle",
+      message_count: 3,
+      agent_status: "working",
+      is_idle: true,
+    };
+
+    const { needsInput, working } = categorizeSessions(
+      { [workingButStaleIdle._id]: workingButStaleIdle },
+      new Set(),
+    );
+
+    expect(working.map((s) => s._id)).toContain("conv-stale-idle");
+    expect(needsInput.map((s) => s._id)).not.toContain("conv-stale-idle");
+  });
 });
 
 describe("mergeMessages — sync-recovery safety net", () => {
@@ -402,5 +471,130 @@ describe("mergeMessages — sync-recovery safety net", () => {
 
     const out = useInboxStore.getState().messages.c1;
     expect(out.map((m: any) => m._id)).toEqual(["m1", "m2", "m3"]);
+  });
+});
+
+describe("dismiss is absolute — navigation/injection must not resurrect", () => {
+  // Bug history: dismissed sessions kept reappearing in prod because
+  // navigateToSession and injectSession silently cleared `inbox_dismissed_at`
+  // on every navigation (URL deep-link, refresh with ?s= param, command
+  // palette jump, sidebar bookmark, /conversation/[id] redirect, desktop
+  // window-focus). Each of those dispatched a server patch that wiped
+  // dismiss everywhere. These tests pin the invariant: only an explicit
+  // user action (unstashSession, or sending a message) clears dismiss.
+
+  const dismissed: InboxSession = {
+    ...baseSession,
+    _id: "conv-dismissed",
+    session_id: "session-dismissed",
+    inbox_dismissed_at: 100,
+  };
+  const alive: InboxSession = {
+    ...baseSession,
+    _id: "conv-alive",
+    session_id: "session-alive",
+  };
+
+  beforeEach(() => {
+    useInboxStore.setState({
+      sessions: {
+        [dismissed._id]: { ...dismissed },
+        [alive._id]: { ...alive },
+      },
+      conversations: {
+        [dismissed._id]: { _id: dismissed._id, inbox_dismissed_at: 100 } as any,
+        [alive._id]: { _id: alive._id } as any,
+      },
+      currentSessionId: null,
+      viewingDismissedId: null,
+      clientState: {},
+      pending: {},
+    });
+  });
+
+  it("navigateToSession does NOT clear dismiss on a dismissed session", () => {
+    useInboxStore.getState().navigateToSession(dismissed._id);
+
+    const s = useInboxStore.getState();
+    expect(isSessionDismissed(s.sessions[dismissed._id])).toBe(true);
+    expect(s.sessions[dismissed._id].inbox_dismissed_at).toBe(100);
+    expect((s.conversations[dismissed._id] as any).inbox_dismissed_at).toBe(100);
+  });
+
+  it("navigateToSession routes a dismissed target through viewingDismissedId, not currentSessionId", () => {
+    useInboxStore.getState().navigateToSession(dismissed._id);
+
+    const s = useInboxStore.getState();
+    expect(s.viewingDismissedId).toBe(dismissed._id);
+    expect(s.currentSessionId).not.toBe(dismissed._id);
+  });
+
+  it("navigateToSession still works normally for a live session", () => {
+    useInboxStore.getState().navigateToSession(alive._id);
+
+    const s = useInboxStore.getState();
+    expect(s.currentSessionId).toBe(alive._id);
+    expect(s.viewingDismissedId).toBeNull();
+    expect(isSessionDismissed(s.sessions[alive._id])).toBe(false);
+  });
+
+  it("injectSession preserves an incoming dismissed session's flag", () => {
+    useInboxStore.setState({
+      sessions: {},
+      conversations: {},
+      currentSessionId: null,
+      viewingDismissedId: null,
+    });
+    useInboxStore.getState().injectSession({
+      ...baseSession,
+      _id: "conv-injected",
+      session_id: "sess-injected",
+      inbox_dismissed_at: 555,
+    } as InboxSession);
+
+    const s = useInboxStore.getState();
+    expect(s.sessions["conv-injected"].inbox_dismissed_at).toBe(555);
+    expect(isSessionDismissed(s.sessions["conv-injected"])).toBe(true);
+  });
+
+  it("injectSession of a live session doesn't accidentally mark it dismissed", () => {
+    useInboxStore.setState({
+      sessions: {},
+      conversations: {},
+      currentSessionId: null,
+      viewingDismissedId: null,
+    });
+    useInboxStore.getState().injectSession({
+      ...baseSession,
+      _id: "conv-fresh",
+      session_id: "sess-fresh",
+    } as InboxSession);
+
+    const s = useInboxStore.getState();
+    expect(isSessionDismissed(s.sessions["conv-fresh"])).toBe(false);
+  });
+
+  it("stash then navigate then unstash — dismiss survives the round trip", () => {
+    useInboxStore.setState({
+      sessions: {
+        [alive._id]: { ...alive },
+      },
+      conversations: {
+        [alive._id]: { _id: alive._id } as any,
+      },
+      currentSessionId: alive._id,
+      viewingDismissedId: null,
+      clientState: {},
+      pending: {},
+    });
+
+    useInboxStore.getState().stashSession(alive._id);
+    expect(isSessionDismissed(useInboxStore.getState().sessions[alive._id])).toBe(true);
+
+    useInboxStore.getState().navigateToSession(alive._id);
+    expect(isSessionDismissed(useInboxStore.getState().sessions[alive._id])).toBe(true);
+
+    useInboxStore.getState().unstashSession(alive._id);
+    expect(isSessionDismissed(useInboxStore.getState().sessions[alive._id])).toBe(false);
   });
 });

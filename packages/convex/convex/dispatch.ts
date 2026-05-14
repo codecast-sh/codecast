@@ -32,12 +32,12 @@ const TABLE_CONFIG: Record<string, TableConfig> = {
       "started_at", "message_count", "short_id", "share_token",
       "is_private", "team_visibility", "auto_shared", "status", "agent_type",
     ]),
-    beforePatch: (_doc, safe) => {
-      if (safe.inbox_dismissed_at && typeof safe.inbox_dismissed_at === "number") {
-        safe.inbox_dismissed_at = Date.now();
-      }
-      return safe;
-    },
+    // No beforePatch hook: dismiss is an absolute flag, so the server has no
+    // reason to rewrite the client's `inbox_dismissed_at`. A previous hook
+    // stamped `Date.now()` here (vestige of the `inbox_dismissed_at >=
+    // updated_at` era) and the resulting client/server value drift kept the
+    // local pending-field override alive forever — a cross-tab unstash could
+    // never converge.
   },
   client_state: {
     kind: "singleton",
