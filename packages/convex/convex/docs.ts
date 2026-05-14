@@ -815,11 +815,13 @@ export const webListPaginated = query({
 
     // Defensive clamp: Convex returns full documents from storage before our
     // strip step runs, so a single page that includes a doc with multi-MB
-    // content/entries can blow the 64MB query memory cap. 100 items × typical
-    // doc size leaves headroom for the convMap/user/plan lookups below.
+    // content/entries can blow the 64MB query memory cap. Originally 100 —
+    // lowered to 30 after observing TooMuchMemoryCarryOver on this UDF
+    // (2026-05-13). 30 items × ~200KB/doc leaves headroom for the
+    // convMap/user/plan lookups below.
     const paginationOpts = {
       ...args.paginationOpts,
-      numItems: Math.min(args.paginationOpts.numItems, 100),
+      numItems: Math.min(args.paginationOpts.numItems, 30),
     };
     const cursor = parseCursor(paginationOpts.cursor);
 
