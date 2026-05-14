@@ -51,6 +51,13 @@ const DEFAULT_MAX_DELAY = 30000;
 const DEFAULT_MAX_ATTEMPTS = 10;
 const DEFAULT_CONCURRENCY = 5;
 
+// Match the Convex addMessages sub-batch size in syncService. Queueing a
+// 5000-message blob as a single retry op meant every retry had to complete
+// 200 sub-batches in serial within one mutation budget — any single
+// sub-batch hitting the 60s timeout aborted the whole op, and the same
+// blob got re-queued forever, jamming the concurrency=5 slots.
+const RETRY_BATCH_CHUNK = 25;
+
 export class RetryQueue {
   private queue: Map<string, RetryOperation> = new Map();
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -82,14 +89,36 @@ export class RetryQueue {
       if (fs.existsSync(this.persistPath)) {
         const data = JSON.parse(fs.readFileSync(this.persistPath, "utf-8"));
         if (Array.isArray(data)) {
+          let splitFrom = 0;
           for (const op of data) {
-            if (op.id && op.type && op.params) {
-              op.nextRetryAt = Date.now() + 1000;
-              this.queue.set(op.id, op);
+            if (!op.id || !op.type || !op.params) continue;
+            // Heal oversized addMessages ops left from before the
+            // queue-time splitting fix — they would never fit a single
+            // mutation budget and jam the concurrency slots.
+            if (op.type === "addMessages") {
+              const msgs = op.params?.messages;
+              if (Array.isArray(msgs) && msgs.length > RETRY_BATCH_CHUNK) {
+                splitFrom++;
+                for (let i = 0; i < msgs.length; i += RETRY_BATCH_CHUNK) {
+                  const chunkId = `${op.type}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}-c${i}`;
+                  this.queue.set(chunkId, {
+                    id: chunkId,
+                    type: op.type,
+                    params: { ...op.params, messages: msgs.slice(i, i + RETRY_BATCH_CHUNK) },
+                    attempts: 0,
+                    nextRetryAt: Date.now() + 1000,
+                    createdAt: op.createdAt ?? Date.now(),
+                    lastError: op.lastError,
+                  });
+                }
+                continue;
+              }
             }
+            op.nextRetryAt = Date.now() + 1000;
+            this.queue.set(op.id, op);
           }
           if (this.queue.size > 0) {
-            this.log(`Restored ${this.queue.size} operations from disk`);
+            this.log(`Restored ${this.queue.size} operations from disk${splitFrom > 0 ? ` (split ${splitFrom} oversized addMessages ops)` : ''}`);
           }
         }
       }
@@ -119,6 +148,26 @@ export class RetryQueue {
   }
 
   add(
+    type: RetryOperation["type"],
+    params: Record<string, unknown>,
+    error?: string
+  ): string {
+    if (type === "addMessages") {
+      const msgs = (params as { messages?: unknown[] }).messages;
+      if (Array.isArray(msgs) && msgs.length > RETRY_BATCH_CHUNK) {
+        const ids: string[] = [];
+        for (let i = 0; i < msgs.length; i += RETRY_BATCH_CHUNK) {
+          const chunk = msgs.slice(i, i + RETRY_BATCH_CHUNK);
+          ids.push(this.addSingle(type, { ...params, messages: chunk }, error));
+        }
+        this.log(`Split oversized addMessages (${msgs.length} msgs) into ${ids.length} retry chunks`);
+        return ids[0] ?? "";
+      }
+    }
+    return this.addSingle(type, params, error);
+  }
+
+  private addSingle(
     type: RetryOperation["type"],
     params: Record<string, unknown>,
     error?: string

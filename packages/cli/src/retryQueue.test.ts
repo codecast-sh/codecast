@@ -302,6 +302,31 @@ describe("RetryQueue", () => {
     expect(queue.getQueueSize()).toBe(0);
   });
 
+  it("splits oversized addMessages batches into 25-message chunks", () => {
+    const msgs = Array.from({ length: 130 }, (_, i) => ({ uuid: `m${i}` }));
+    queue.add("addMessages", { conversationId: "conv", messages: msgs });
+
+    const pending = queue.getPendingOperations();
+    expect(pending.length).toBe(Math.ceil(130 / 25));
+    for (const op of pending) {
+      expect(op.type).toBe("addMessages");
+      const params = op.params as { messages: unknown[] };
+      expect(params.messages.length).toBeLessThanOrEqual(25);
+    }
+    const totalMsgs = pending.reduce((n, op) => n + (op.params as { messages: unknown[] }).messages.length, 0);
+    expect(totalMsgs).toBe(130);
+    expect(logs.some(l => l.includes("Split oversized addMessages (130 msgs) into 6 retry chunks"))).toBe(true);
+  });
+
+  it("does not split addMessages batches at or below the chunk size", () => {
+    const msgs = Array.from({ length: 25 }, (_, i) => ({ uuid: `m${i}` }));
+    queue.add("addMessages", { conversationId: "conv", messages: msgs });
+
+    const pending = queue.getPendingOperations();
+    expect(pending.length).toBe(1);
+    expect((pending[0].params as { messages: unknown[] }).messages.length).toBe(25);
+  });
+
   it("should handle rate limit delays", async () => {
     let attempts = 0;
     queue.setExecutor(async () => {
