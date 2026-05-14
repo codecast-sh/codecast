@@ -63,6 +63,41 @@ export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
       }
       throw new Error(`Invalid redirectTo: ${redirectTo}`);
     },
+    // Dedupe users by email across providers. Without this, signing in via
+    // a second provider (GitHub then Apple, password then OAuth, etc.)
+    // creates a new users row even when the email is the same — leaving
+    // orphan CLI sessions and conversations stamped under a duplicate id.
+    // We had exactly one such case in prod (jasoncbenn@gmail.com).
+    async createOrUpdateUser(ctx, { existingUserId, profile }) {
+      if (existingUserId) return existingUserId;
+      const email = profile.email?.toLowerCase().trim();
+      if (email) {
+        // ctx.db is typed as GenericMutationCtx<AnyDataModel> in this
+        // callback, so the custom `email` index isn't visible to TS — cast
+        // to access it. (Index is defined in schema.ts at users.)
+        const existing = await (ctx.db as any)
+          .query("users")
+          .withIndex("email", (q: any) => q.eq("email", email))
+          .first();
+        if (existing) {
+          // Patch in any newly-provided profile fields the existing row lacks
+          // (e.g. github_username learned from a later OAuth sign-in).
+          const patch: Record<string, unknown> = {};
+          for (const [k, v] of Object.entries(profile)) {
+            if (v == null) continue;
+            if ((existing as any)[k] == null) patch[k] = v;
+          }
+          if (Object.keys(patch).length > 0) {
+            await ctx.db.patch(existing._id, patch);
+          }
+          return existing._id;
+        }
+      }
+      return await ctx.db.insert("users", {
+        ...(profile as any),
+        created_at: Date.now(),
+      });
+    },
   },
   providers: [
     GitHub({
