@@ -82,9 +82,13 @@ const _execFileAsync = promisify(execFile);
 
 const SAFE_ENV = { ...process.env, PATH: ENRICHED_PATH };
 
-function tmuxExecSync(args: string[], opts?: { timeout?: number; env?: Record<string, string | undefined> }): string {
+// tmux clients can wedge in a busy loop when their server dies mid-protocol,
+// and a wedged client ignores SIGTERM — leaving 100%-CPU zombies that survive
+// Node's exec timeout. Default to SIGKILL so a timeout actually reaps the process.
+function tmuxExecSync(args: string[], opts?: { timeout?: number; killSignal?: string; env?: Record<string, string | undefined> }): string {
   return execFileSync("tmux", args, {
     timeout: opts?.timeout ?? EXEC_TIMEOUT_MS,
+    killSignal: (opts?.killSignal ?? "SIGKILL") as any,
     encoding: "utf-8",
     env: { ...SAFE_ENV, ...opts?.env },
   }).toString();
@@ -93,7 +97,7 @@ function tmuxExecSync(args: string[], opts?: { timeout?: number; env?: Record<st
 async function tmuxExec(args: string[], opts?: { timeout?: number; killSignal?: string; env?: Record<string, string | undefined> }): Promise<{ stdout: string; stderr: string }> {
   return _execFileAsync("tmux", args, {
     timeout: opts?.timeout ?? EXEC_TIMEOUT_MS,
-    killSignal: (opts?.killSignal ?? "SIGTERM") as any,
+    killSignal: (opts?.killSignal ?? "SIGKILL") as any,
     env: { ...SAFE_ENV, ...opts?.env },
   });
 }
@@ -2990,7 +2994,18 @@ async function processSessionFile(
   }
 
   if (stats.size <= lastPosition) {
-        return;
+    // Nothing new to read, but the watchdog uses sync-ledger.json (NOT
+    // positions.json) to decide which files are "stale". If we return without
+    // updating the ledger, findStaleSessionFiles will re-detect this file
+    // forever — burning ~15s of event-loop time every 5 min and head-of-line-
+    // blocking incoming Convex commands (start_session etc.). Bring the ledger
+    // up to the actual read position so the file stops re-appearing as stale.
+    const existing = getSyncRecord(filePath);
+    if (!existing || existing.lastSyncedPosition < lastPosition) {
+      const knownConvId = conversationCache[sessionId];
+      markSynced(filePath, lastPosition, 0, knownConvId);
+    }
+    return;
   }
 
   let fd;
