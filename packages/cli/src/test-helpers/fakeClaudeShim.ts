@@ -121,6 +121,18 @@ fi
 
 emit_meta
 
+# Disable bracketed paste in this terminal. tmux 3.x defaults bracketed paste
+# on, which wraps long pastes with ESC[200~ ... ESC[201~. plain bash read
+# treats those bytes as part of the line and never sees a clean LF terminator
+# for very long pastes — so the user message would never make it into JSONL
+# even though the bytes are sitting in the input buffer.
+printf '\\033[?2004l'
+
+# Strip bracketed-paste wrapper bytes if any slip through (defensive).
+strip_paste_markers() {
+  printf '%s' "$1" | LC_ALL=C sed -e 's/\\x1b\\[200~//g' -e 's/\\x1b\\[201~//g'
+}
+
 # Main loop: print prompt, read line, append to JSONL, echo a reply.
 trap 'exit 0' INT TERM
 while true; do
@@ -128,6 +140,7 @@ while true; do
   if ! IFS= read -r line; then
     exit 0
   fi
+  line=$(strip_paste_markers "$line")
   if [ -z "$line" ]; then continue; fi
   emit_user_message "$line"
   # Echo back so daemon JSONL watcher has something to sync.

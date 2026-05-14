@@ -58,12 +58,17 @@ export function spawnHarness(opts: HarnessOptions = {}): Harness {
 
   // Spawn tmux session in the target cwd, executing the shim.
   // Use bash -c (NOT -lc) to skip login-shell init files — saves 1–3s startup.
-  spawnSync("tmux", [
+  // Pass the shim path explicitly so a missing PATH hop (sometimes seen under
+  // bun:test's spawnSync env handling) doesn't silently produce an empty pane.
+  const r = spawnSync("tmux", [
     "new-session", "-d", "-s", tmuxSession,
     "-x", "200", "-y", "50",
     "-c", cwd,
-    "bash", "-c", `PATH='${shimDir}:'$PATH FAKE_CLAUDE_SESSION_ID='${sessionId}' exec claude`
-  ], { env, stdio: "ignore" });
+    "bash", "-c", `FAKE_CLAUDE_SESSION_ID='${sessionId}' exec '${shimPath}'`
+  ], { env, encoding: "utf-8" });
+  if (r.status !== 0) {
+    throw new Error(`tmux new-session failed (status ${r.status}): ${r.stderr ?? ""} ${r.stdout ?? ""}`);
+  }
   ACTIVE_SESSIONS.add(tmuxSession);
 
   const projectDirName = cwd.replace(/\//g, "-");
