@@ -165,23 +165,39 @@ export function useConversationMessages(
       const local = state.messages[conversationId] ?? [];
       const serverCount = (meta as any)?.message_count ?? 0;
       if (serverCount === 0 || local.length >= serverCount) return;
-      // Avoid colliding with the initial paginated-query load.
-      if (local.length === 0 && paginationStatusRef.current === "LoadingFirstPage") return;
+      // Don't pile on while the initial paginated query is still inflight on
+      // the very first tick — let it land if it's going to. After it settles
+      // (Exhausted/CanLoadMore), recovery is the authoritative path even if
+      // status briefly flips back to LoadingFirstPage during reactivity blips.
 
       recoveryInFlightRef.current = true;
       const after = local.length > 0 ? local[local.length - 1].timestamp : 0;
       try {
         let cursor = after;
+        let fetched = 0;
         // Bound the inner pagination loop so a buggy server can't pin us here.
-        for (let i = 0; i < 20; i++) {
+        for (let i = 0; i < 40; i++) {
           const result: any = await convex.query(api.conversations.getNewMessages, {
             conversation_id: convId,
             after_timestamp: cursor,
           });
-          if (!result?.messages?.length) break;
+          // getNewMessages returns null for unauth/no-access — treat as a
+          // transient failure and surface in logs so it doesn't silently
+          // strand the UI in the loading state.
+          if (result === null) {
+            // eslint-disable-next-line no-console
+            console.warn("[useConversationMessages] recovery got null (auth not ready?)", { conversationId });
+            break;
+          }
+          if (!result.messages?.length) break;
           useInboxStore.getState().mergeMessages(conversationId, result.messages, "append", { initialized: true });
+          fetched += result.messages.length;
           if (!result.has_more || result.last_timestamp == null) break;
           cursor = result.last_timestamp;
+        }
+        if (fetched > 0) {
+          // eslint-disable-next-line no-console
+          console.log("[useConversationMessages] recovery fetched", { conversationId, fetched, serverCount });
         }
       } catch (err) {
         // eslint-disable-next-line no-console
@@ -192,11 +208,10 @@ export function useConversationMessages(
     };
 
     // Run once immediately so a freshly-opened stuck conversation catches up
-    // without waiting a full interval, then poll. Cadence is intentionally
-    // fast — getNewMessages with a recent watermark returns near-empty pages
-    // when caught up, so the cost is dominated by latency, not work.
+    // without waiting a full interval, then poll. 1s cadence — getNewMessages
+    // with a current watermark is near-empty, so cost is latency-bound.
     tick();
-    const id = setInterval(tick, 2_000);
+    const id = setInterval(tick, 1_000);
     return () => clearInterval(id);
   }, [conversationId, canQuery, targetMode, convex, convId]);
 

@@ -427,7 +427,6 @@ function ForkCopyingState({ copied, total }: { copied: number; total?: number })
 }
 
 function MessagesUnavailableState({
-  messageCount,
   forkStatus,
   forkCopied,
   forkTotal,
@@ -437,43 +436,20 @@ function MessagesUnavailableState({
   forkCopied?: number;
   forkTotal?: number;
 }) {
-  const isCopying = forkStatus === "copying";
-  const [stalled, setStalled] = useState(false);
-  useEffect(() => {
-    if (isCopying) return;
-    const t = setTimeout(() => setStalled(true), 8000);
-    return () => clearTimeout(t);
-  }, [isCopying]);
-
-  if (isCopying) {
+  if (forkStatus === "copying") {
     return <ForkCopyingState copied={forkCopied ?? 0} total={forkTotal} />;
   }
 
-  if (!stalled) {
-    return (
-      <div className="flex items-center gap-2 text-sol-text-dim text-xs">
-        <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
-          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-        </svg>
-        <span>Loading messages…</span>
-      </div>
-    );
-  }
-
+  // No "couldn't be loaded" panic — the recovery loop in useConversationMessages
+  // keeps trying every second. Just show the loader; if it never lands the user
+  // will see this indicator rather than a misleading error.
   return (
-    <div className="flex flex-col items-center gap-2 max-w-md text-center px-6">
-      <div className="text-sm font-medium text-sol-text">Messages couldn't be loaded</div>
-      <div className="text-xs text-sol-text-dim">
-        This session reports {messageCount.toLocaleString()} message{messageCount === 1 ? "" : "s"}, but none were returned.
-        The fork may have failed mid-copy, or you may not have access.
-      </div>
-      <button
-        onClick={() => window.location.reload()}
-        className="mt-2 px-3 py-1.5 text-xs rounded-md border border-sol-border text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt transition-colors"
-      >
-        Reload
-      </button>
+    <div className="flex items-center gap-2 text-sol-text-dim text-xs">
+      <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+      </svg>
+      <span>Loading messages…</span>
     </div>
   );
 }
