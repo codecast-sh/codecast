@@ -11,6 +11,20 @@ const MAX_IMAGES_PER_MESSAGE = 10;
 
 const MIN_REQUEST_INTERVAL_MS = 100;
 
+const ADD_MESSAGES_BATCH_TIMEOUT_MS = 60_000;
+
+async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 export class AuthExpiredError extends Error {
   constructor(message: string = "Authentication token expired") {
     super(message);
@@ -504,13 +518,17 @@ export class SyncService {
       const batch = preparedMessages.slice(i, i + BATCH_SIZE);
       await this.throttle();
       try {
-        const result = await this.client.mutation(
-          "messages:addMessages" as any,
-          {
-            conversation_id: params.conversationId,
-            messages: batch,
-            api_token: this.apiToken,
-          }
+        const result = await withTimeout(
+          this.client.mutation(
+            "messages:addMessages" as any,
+            {
+              conversation_id: params.conversationId,
+              messages: batch,
+              api_token: this.apiToken,
+            }
+          ),
+          ADD_MESSAGES_BATCH_TIMEOUT_MS,
+          `addMessages batch (${batch.length} msgs)`
         );
         const typed = result as { inserted: number; ids: string[] };
         totalInserted += typed.inserted;

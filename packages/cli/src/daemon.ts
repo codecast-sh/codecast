@@ -180,8 +180,7 @@ setInterval(() => {
   const elapsed = now - lastTickTime;
   if (elapsed > SLEEP_DETECTION_THRESHOLD_MS) {
     wakeGraceUntil = now + WAKE_GRACE_PERIOD_MS;
-    dismissedIdleSince.clear();
-    log(`Sleep detected (${Math.round(elapsed / 1000)}s gap), grace period until ${new Date(wakeGraceUntil).toISOString()}, dismissed-idle timers reset`);
+    log(`Sleep detected (${Math.round(elapsed / 1000)}s gap), grace period until ${new Date(wakeGraceUntil).toISOString()}`);
   }
   lastTickTime = now;
 }, 5_000);
@@ -422,10 +421,6 @@ const WORKING_STATUS_THROTTLE_MS = 10_000;
 const lastSentAgentStatus = new Map<string, AgentStatus>();
 const workingPhaseStart = new Map<string, number>();
 const MIN_WORKING_DURATION_FOR_NOTIF_MS = 10_000;
-const dismissedIdleSince = new Map<string, number>();
-const DISMISSED_IDLE_KILL_MS = 60 * 60 * 1000;
-const zombieFirstDead = new Map<string, number>();
-const ZOMBIE_GRACE_PERIOD_MS = 60 * 60 * 1000; // 1 hour
 const lastHeartbeatLogged = new Map<string, { status: string; ts: number; since: number }>();
 const HEARTBEAT_LOG_THROTTLE_MS = 5 * 60 * 1000;
 
@@ -5833,111 +5828,21 @@ function findSessionFile(sessionId: string): SessionFileInfo | null {
 const resumeSessionCache = new Map<string, string>();
 const resumeHeartbeatIntervals = new Map<string, NodeJS.Timeout>();
 const heartbeatHealthCheckCounter = new Map<string, number>();
-const healthCheckDeadStrikes = new Map<string, number>();
 const HEALTH_CHECK_EVERY_N_HEARTBEATS = 3;
-const HEALTH_CHECK_DEAD_STRIKES_TO_KILL = 3;
-const postDeliveryDeadStrikes = new Map<string, number>();
-const POST_DELIVERY_DEAD_STRIKES_TO_KILL = 2;
 
-// Working-stuck watchdog: a live agent CLI can wedge inside a tool call so the
-// process is alive (passes isTmuxAgentAlive) yet does nothing — no JSONL writes,
-// no status transitions, ~0% CPU. We *detect* this and log it, but we do NOT
-// auto-reconstitute: the heuristic (silent JSONL + low CPU) overlaps with
-// legitimate long thinking and slow model calls, so killing on it was producing
-// false positives that wiped live tmux sessions out from under users. The UI
-// already exposes a "Kill & restart" action that drives the same repair path
-// (api.conversations.restartSession → kill_session + resume_session daemon
-// commands); operators trigger it when the log says a session looks wedged.
-const workingStuckJsonlMtime = new Map<string, number>();
-const workingStuckStrikes = new Map<string, number>();
-const WORKING_STUCK_THRESHOLD_MS = 45 * 60 * 1000;
-const WORKING_STUCK_CPU_CEILING = 1.0;
+// Tmux-kill policy: the daemon only tears down a managed tmux session in
+// response to an *unambiguous* death signal — the session is no longer listed
+// by tmux at all (a `tmux has-session` failure). Passive indicators ("no agent
+// process visible in the pane's process tree", "JSONL hasn't been written for
+// N minutes", "CPU is near zero") are never enough to justify auto-killing
+// a worker. Operators drive repair via the UI's Kill & restart action when
+// they see a session looks wedged.
 
-async function killSessionBySessionId(sessionId: string, reason: string): Promise<void> {
-  const cache = readConversationCache();
-  const conversationId = cache[sessionId];
-  let killed = false;
-
-  const cachedTmux = resumeSessionCache.get(sessionId);
-  if (cachedTmux && validateTmuxTarget(cachedTmux)) {
-    try { await tmuxExec(["kill-session", "-t", cachedTmux]); killed = true; } catch {}
-    resumeSessionCache.delete(sessionId);
-  }
-
-  if (!killed) {
-    try {
-      const proc = await findSessionProcess(sessionId, detectSessionAgentType(sessionId));
-      if (proc) {
-        const tmuxTarget = await findTmuxPaneForTty(proc.tty);
-        if (tmuxTarget && validateTmuxTarget(tmuxTarget)) {
-          try { await tmuxExec(["kill-session", "-t", tmuxTarget.split(":")[0]]); killed = true; } catch {}
-        }
-        if (!killed) {
-          try { process.kill(proc.pid, "SIGKILL"); killed = true; } catch {}
-        }
-      }
-    } catch {}
-  }
-
-  if (conversationId) {
-    const started = startedSessionTmux.get(conversationId);
-    if (started && validateTmuxTarget(started.tmuxSession) && !killed) {
-      try { await tmuxExec(["kill-session", "-t", started.tmuxSession]); } catch {}
-    }
-    deleteStartedSession(conversationId);
-  }
-
-  const hbInterval = resumeHeartbeatIntervals.get(sessionId);
-  if (hbInterval) { clearInterval(hbInterval); resumeHeartbeatIntervals.delete(sessionId); }
-  stopCodexPermissionPoller(sessionId);
-  sessionProcessCache.delete(sessionId);
-  resumeInFlight.delete(sessionId);
-  resumeInFlightStarted.delete(sessionId);
-  dismissedIdleSince.delete(sessionId);
-  postDeliveryDeadStrikes.delete(sessionId);
-
-  if (conversationId && syncServiceRef) {
-    syncServiceRef.markSessionCompleted(conversationId).catch(logConvexFailure);
-    sendAgentStatus(syncServiceRef, conversationId, sessionId, "stopped");
-  }
-
-  // Same lifecycle contract as the user-triggered kill_session: any tmux teardown
-  // must invalidate the daemon's dedup state, otherwise the next pending message
-  // for this conversation will be skipped as "already injected" into a tmux that no
-  // longer exists.
-  await clearConversationDeliveryAndResumeState(conversationId, sessionId, "AUTO-KILL");
-
-  log(`[AUTO-KILL] Session ${sessionId.slice(0, 8)} killed: ${reason}`);
-}
-
-async function processHeartbeatResponse(sessionId: string, result?: { found: boolean; dismissed?: boolean }): Promise<void> {
-  if (!result?.found) return;
-
-  const status = lastSentAgentStatus.get(sessionId);
-  const isIdle = status === "idle" || status === "permission_blocked";
-
-  if (result.dismissed && isIdle) {
-    if (!dismissedIdleSince.has(sessionId)) {
-      dismissedIdleSince.set(sessionId, Date.now());
-      log(`[DISMISSED-IDLE] Session ${sessionId.slice(0, 8)} is dismissed+idle, starting 1h timer`);
-    }
-    const idleSince = dismissedIdleSince.get(sessionId)!;
-    if (Date.now() - idleSince >= DISMISSED_IDLE_KILL_MS) {
-      const tmux = resumeSessionCache.get(sessionId);
-      const alive = tmux ? await isTmuxAgentAlive(tmux) : false;
-      if (alive) {
-        log(`[DISMISSED-IDLE] Session ${sessionId.slice(0, 8)} timer expired but agent still alive, resetting`);
-        dismissedIdleSince.delete(sessionId);
-      } else {
-        killSessionBySessionId(sessionId, "dismissed and idle for 1+ hour").catch(() => {});
-      }
-    }
-  } else {
-    if (dismissedIdleSince.has(sessionId)) {
-      log(`[DISMISSED-IDLE] Session ${sessionId.slice(0, 8)} no longer dismissed+idle, timer cleared`);
-    }
-    dismissedIdleSince.delete(sessionId);
-  }
+async function processHeartbeatResponse(_sessionId: string, _result?: { found: boolean; dismissed?: boolean }): Promise<void> {
+  // The previous "dismissed + idle for 1h → kill" auto-reap has been removed.
+  // Dismissal is a UI state, not a worker-lifecycle signal: a user can dismiss
+  // a card and still expect the agent to be running when they return. Workers
+  // now live until the user explicitly kills them.
 }
 
 // Codex tmux pane monitoring for permission prompts
@@ -6390,8 +6295,6 @@ function stopManagedSessionHeartbeat(sessionId: string | undefined): void {
     resumeHeartbeatIntervals.delete(sessionId);
   }
   heartbeatHealthCheckCounter.delete(sessionId);
-  workingStuckJsonlMtime.delete(sessionId);
-  workingStuckStrikes.delete(sessionId);
 }
 
 function ensureManagedSessionHeartbeat(sessionId: string): void {
@@ -6428,82 +6331,16 @@ async function heartbeatHealthCheck(sessionId: string): Promise<void> {
   const restartTs = restartingSessionIds.get(sessionId);
   if (restartTs && Date.now() - restartTs < RESTART_GUARD_TTL_MS) return;
 
+  // The only auto-action allowed: if the tmux server no longer lists this
+  // session, reconstitute the worker. The kill inside handleDeadSession is a
+  // no-op in that case (nothing to kill), and the reconstitution restores the
+  // agent the user wants alive.
   try {
     await tmuxExec(["has-session", "-t", tmux], { timeout: 3000, killSignal: "SIGKILL" });
   } catch {
     log(`[HEARTBEAT-HEALTH] tmux session ${tmux} gone for ${sessionId.slice(0, 8)}, triggering reconstitution`);
     await handleDeadSession(sessionId, tmux);
-    return;
   }
-
-  const alive = await isTmuxAgentAlive(tmux);
-  if (!alive) {
-    const strikes = (healthCheckDeadStrikes.get(sessionId) || 0) + 1;
-    healthCheckDeadStrikes.set(sessionId, strikes);
-    if (strikes >= HEALTH_CHECK_DEAD_STRIKES_TO_KILL) {
-      log(`[HEARTBEAT-HEALTH] Agent dead in ${tmux} for ${sessionId.slice(0, 8)} (${strikes} strikes), triggering reconstitution`);
-      healthCheckDeadStrikes.delete(sessionId);
-      await handleDeadSession(sessionId, tmux);
-    } else {
-      log(`[HEARTBEAT-HEALTH] Agent appears dead in ${tmux} for ${sessionId.slice(0, 8)} (strike ${strikes}/${HEALTH_CHECK_DEAD_STRIKES_TO_KILL})`);
-    }
-    return;
-  }
-  healthCheckDeadStrikes.delete(sessionId);
-
-  await checkWorkingStuck(sessionId, tmux);
-}
-
-async function checkWorkingStuck(sessionId: string, _tmux: string): Promise<void> {
-  const status = lastSentAgentStatus.get(sessionId);
-  if (status !== "working" && status !== "thinking") {
-    workingStuckJsonlMtime.delete(sessionId);
-    workingStuckStrikes.delete(sessionId);
-    return;
-  }
-  // since-tracking lives in lastHeartbeatLogged; it resets on every status change.
-  const heart = lastHeartbeatLogged.get(sessionId);
-  if (!heart || heart.status !== status) return;
-  const dwell = Date.now() - heart.since;
-  if (dwell < WORKING_STUCK_THRESHOLD_MS) {
-    workingStuckJsonlMtime.delete(sessionId);
-    workingStuckStrikes.delete(sessionId);
-    return;
-  }
-
-  const jsonlPath = findSessionJsonlPath(sessionId);
-  let currentMtime = 0;
-  if (jsonlPath) {
-    try { currentMtime = fs.statSync(jsonlPath).mtimeMs; } catch {}
-  }
-
-  const recorded = workingStuckJsonlMtime.get(sessionId);
-  if (recorded === undefined) {
-    workingStuckJsonlMtime.set(sessionId, currentMtime);
-    return;
-  }
-  // Agent still writing tool output → genuinely working, reset.
-  if (currentMtime > recorded) {
-    workingStuckJsonlMtime.set(sessionId, currentMtime);
-    workingStuckStrikes.delete(sessionId);
-    return;
-  }
-
-  // Long-running compute (typecheck, build) can be silent on stdout but burns
-  // CPU; treat that as alive.
-  const resources = latestSessionResources.get(sessionId);
-  if (resources && resources.cpu > WORKING_STUCK_CPU_CEILING) {
-    return;
-  }
-
-  // Detection only — no auto-kill. Surface the suspicion in the daemon log so
-  // operators can decide; recovery is driven from the UI's "Kill & restart"
-  // action, which goes through api.conversations.restartSession.
-  const strikes = (workingStuckStrikes.get(sessionId) || 0) + 1;
-  workingStuckStrikes.set(sessionId, strikes);
-  const dwellSec = Math.round(dwell / 1000);
-  const cpuLabel = resources ? `${resources.cpu.toFixed(1)}%` : "unknown";
-  log(`[HEARTBEAT-HEALTH] Session ${sessionId.slice(0, 8)} appears wedged in ${status} (dwell=${dwellSec}s cpu=${cpuLabel} jsonl frozen, strike ${strikes}). Not auto-killing; user can Kill & restart from the UI.`);
 }
 
 async function handleDeadSession(sessionId: string, tmuxSession: string): Promise<void> {
@@ -6512,7 +6349,6 @@ async function handleDeadSession(sessionId: string, tmuxSession: string): Promis
   stopCodexPermissionPoller(sessionId);
   stopManagedSessionHeartbeat(sessionId);
   heartbeatHealthCheckCounter.delete(sessionId);
-  healthCheckDeadStrikes.delete(sessionId);
 
   const cache = readConversationCache();
   const conversationId = cache[sessionId];
@@ -7364,45 +7200,18 @@ async function postDeliveryHealthCheck(
     return;
   }
 
-  // Session exists - check if agent process is still alive (use strike system to avoid false-negative kills)
+  // Detection-only past this point. The tmux-session-missing branch above
+  // already covers the unambiguous death case (and reconstitutes the worker
+  // since there is nothing to kill). If the tmux is still listed we trust it
+  // — a missing agent process or empty pane is not enough signal to tear
+  // down a session out from under the user. They drive repair from the UI's
+  // Kill & restart action when something looks wrong.
   const alive = await isTmuxAgentAlive(tmuxSession);
-  if (!alive) {
-    const strikes = (postDeliveryDeadStrikes.get(sessionId) || 0) + 1;
-    postDeliveryDeadStrikes.set(sessionId, strikes);
-    if (strikes < POST_DELIVERY_DEAD_STRIKES_TO_KILL) {
-      log(`Health check: agent appears dead in ${tmuxSession} for ${sessionId.slice(0, 8)} (strike ${strikes}/${POST_DELIVERY_DEAD_STRIKES_TO_KILL}), rechecking in 5s`);
-      await new Promise(resolve => setTimeout(resolve, 5000));
-      const aliveRetry = await isTmuxAgentAlive(tmuxSession);
-      if (aliveRetry) {
-        postDeliveryDeadStrikes.delete(sessionId);
-        log(`Health check: session ${sessionId.slice(0, 8)} recovered on recheck`);
-        try { await syncService.setSessionError(conversationId); } catch {}
-        return;
-      }
-    }
-    postDeliveryDeadStrikes.delete(sessionId);
-    log(`Health check: agent confirmed dead in ${tmuxSession} for ${sessionId.slice(0, 8)} (${strikes} strikes)`);
-    try { await tmuxExec(["kill-session", "-t", tmuxSession]); } catch {}
-    resumeSessionCache.delete(sessionId);
-    stopCodexPermissionPoller(sessionId);
-    const hbInterval = resumeHeartbeatIntervals.get(sessionId);
-    if (hbInterval) { clearInterval(hbInterval); resumeHeartbeatIntervals.delete(sessionId); }
-
-    const repaired = await repairAndResumeSession(sessionId, content, titleCache, undefined, conversationId);
-    if (repaired) {
-      log(`Health check: repaired crashed session ${sessionId.slice(0, 8)}`);
-      try { await syncService.setSessionError(conversationId); } catch {}
-    } else {
-      log(`Health check: repair failed for crashed session ${sessionId.slice(0, 8)}, retrying message delivery`);
-      try {
-        await syncService.retryMessage(messageId);
-        await syncService.setSessionError(conversationId, "Session crashed — retrying message delivery");
-      } catch {}
-    }
-  } else {
-    postDeliveryDeadStrikes.delete(sessionId);
+  if (alive) {
     log(`Health check: session ${sessionId.slice(0, 8)} is healthy`);
     try { await syncService.setSessionError(conversationId); } catch {}
+  } else {
+    log(`Health check: session ${sessionId.slice(0, 8)} agent looks idle/missing in ${tmuxSession}; not auto-killing (use Kill & restart in UI if wedged)`);
   }
 }
 
@@ -7812,13 +7621,17 @@ async function deliverMessage(
       let agentAlive = true;
       try { agentAlive = await isTmuxAgentAlive(cachedTmux); } catch {}
       if (!agentAlive) {
-        logDelivery(`Cached tmux ${cachedTmux} has no live agent, clearing cache`);
+        // Drop cache so the next delivery falls through to process-match /
+        // fresh-spawn, but do NOT tear down the tmux on the weak
+        // isTmuxAgentAlive signal. A repair-and-resume will reclaim the name
+        // with its own kill+new-session sequence if it actually needs to
+        // overwrite this pane.
+        logDelivery(`Cached tmux ${cachedTmux} has no live agent, clearing cache (leaving tmux in place)`);
         resumeSessionCache.delete(sessionId);
         cachedTmuxStillValid = false;
         stopCodexPermissionPoller(sessionId);
         const hbInterval = resumeHeartbeatIntervals.get(sessionId);
         if (hbInterval) { clearInterval(hbInterval); resumeHeartbeatIntervals.delete(sessionId); }
-        try { await tmuxExec(["kill-session", "-t", cachedTmux]); } catch {}
       } else {
         await syncService.updateMessageStatus({ messageId, status: "injected" });
         await injectViaTmux(cachedTmux, content);
@@ -8923,56 +8736,28 @@ function startWatchdog(
     // Validate process cache
     validateProcessCache();
 
-    // Prune started session entries if tmux session is dead or agent has crashed
+    // Prune the daemon's internal tracking of started sessions older than
+    // STARTED_SESSION_TTL_MS. Two cases:
+    //   - tmux has-session fails → the session is genuinely gone, just untrack.
+    //   - tmux still exists → stop tracking it but leave the pane alone. The
+    //     user may still be using it; "agent process not visible" is the weak
+    //     signal we no longer trust as grounds for tearing down a pane.
     for (const [convId, entry] of startedSessionTmux.entries()) {
       if (now - entry.startedAt > STARTED_SESSION_TTL_MS) {
         try {
           await tmuxExec(["has-session", "-t", entry.tmuxSession], { timeout: 3000, killSignal: "SIGKILL" });
-          if (!(await isTmuxAgentAlive(entry.tmuxSession))) {
-            log(`Pruning started session ${entry.tmuxSession}: agent dead (zombie shell)`);
-            try { await tmuxExec(["kill-session", "-t", entry.tmuxSession]); } catch {}
-            deleteStartedSession(convId);
-          }
+          log(`Untracking started session ${entry.tmuxSession} after ${Math.round((now - entry.startedAt) / 3600000)}h (leaving tmux in place)`);
+          deleteStartedSession(convId);
         } catch {
           deleteStartedSession(convId);
         }
       }
     }
 
-    // Reap zombie cc-resume-* and cc-claude-* tmux sessions where agent has crashed
-    // Require 3 consecutive "dead" checks before killing (strike system)
-    const activeStartedTmux = new Set([...startedSessionTmux.values()].map(e => e.tmuxSession));
-    const activeResumeTmux = new Set(resumeSessionCache.values());
-    try {
-      const { stdout: tmuxList } = await tmuxExec(["list-sessions", "-F", "#{session_name}"], { timeout: 3000, killSignal: "SIGKILL" });
-      const seenThisCycle = new Set<string>();
-      for (const tmuxName of tmuxList.trim().split("\n")) {
-        if (!tmuxName || (!/^cc-resume-/.test(tmuxName) && !/^cc-claude-/.test(tmuxName))) continue;
-        seenThisCycle.add(tmuxName);
-        if (activeStartedTmux.has(tmuxName)) continue;
-        if (activeResumeTmux.has(tmuxName)) continue;
-        if (!(await isTmuxAgentAlive(tmuxName))) {
-          const now = Date.now();
-          if (!zombieFirstDead.has(tmuxName)) {
-            zombieFirstDead.set(tmuxName, now);
-            log(`Zombie candidate ${tmuxName}: grace period started (1h)`);
-          } else {
-            const deadSince = zombieFirstDead.get(tmuxName)!;
-            const deadMs = now - deadSince;
-            if (deadMs >= ZOMBIE_GRACE_PERIOD_MS) {
-              log(`Reaping zombie tmux session ${tmuxName} (dead for ${Math.round(deadMs / 60000)}min)`);
-              try { await tmuxExec(["kill-session", "-t", tmuxName]); } catch {}
-              zombieFirstDead.delete(tmuxName);
-            }
-          }
-        } else {
-          zombieFirstDead.delete(tmuxName);
-        }
-      }
-      for (const name of zombieFirstDead.keys()) {
-        if (!seenThisCycle.has(name)) zombieFirstDead.delete(name);
-      }
-    } catch {}
+    // Zombie reaping of untracked cc-resume-*/cc-claude-* tmux sessions has been
+    // removed. It used the same weak isTmuxAgentAlive signal that we no longer
+    // act on. Orphan accumulation is a manual cleanup — `tmux kill-session` from
+    // a shell, or the UI's Kill & restart on a specific conversation.
 
     // Mark stale agent-status files as completed (session ended without SessionEnd hook)
     try {
