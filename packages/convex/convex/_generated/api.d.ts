@@ -29,6 +29,7 @@ import type * as docSync from "../docSync.js";
 import type * as docs from "../docs.js";
 import type * as embeddings from "../embeddings.js";
 import type * as fileTouches from "../fileTouches.js";
+import type * as forkCopy from "../forkCopy.js";
 import type * as githubApi from "../githubApi.js";
 import type * as githubApp from "../githubApp.js";
 import type * as githubWebhooks from "../githubWebhooks.js";
@@ -95,6 +96,7 @@ declare const fullApi: ApiFromModules<{
   docs: typeof docs;
   embeddings: typeof embeddings;
   fileTouches: typeof fileTouches;
+  forkCopy: typeof forkCopy;
   githubApi: typeof githubApi;
   githubApp: typeof githubApp;
   githubWebhooks: typeof githubWebhooks;
