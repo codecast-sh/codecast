@@ -3162,6 +3162,14 @@ program
       });
 
       try {
+        let conversationCache: Record<string, string> = {};
+        try {
+          const cacheFile = path.join(os.homedir(), ".codecast", "conversations.json");
+          if (fs.existsSync(cacheFile)) {
+            conversationCache = JSON.parse(fs.readFileSync(cacheFile, "utf-8")) as Record<string, string>;
+          }
+        } catch { /* fall through with empty cache */ }
+
         const result = await performReconciliation(
           syncService,
           (msg, level) => {
@@ -3173,6 +3181,7 @@ program
               console.log(`  ${fmt.muted(msg)}`);
             }
           },
+          conversationCache,
           100
         );
 

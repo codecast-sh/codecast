@@ -993,7 +993,10 @@ export class SyncService {
     }
   }
 
-  async getMessageCountsForReconciliation(sessionIds: string[]): Promise<Array<{
+  async getMessageCountsForReconciliation(
+    sessionIds: string[],
+    conversationIdHints: Array<{ session_id: string; conversation_id: string }> = []
+  ): Promise<Array<{
     session_id: string;
     conversation_id: string;
     message_count: number;
@@ -1007,6 +1010,7 @@ export class SyncService {
         "conversations:getMessageCountsForReconciliation" as any,
         {
           session_ids: sessionIds,
+          conversation_id_hints: conversationIdHints.length > 0 ? conversationIdHints : undefined,
           api_token: this.apiToken,
         }
       );
