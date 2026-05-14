@@ -8,6 +8,7 @@ import { checkRateLimit } from "./rateLimit";
 import { verifyApiToken } from "./apiTokens";
 import { internal } from "./_generated/api";
 import { resetConversationPendingMessages } from "./pendingMessages";
+import { advanceForkCopy, type ForkCopyCtx } from "./forkCopy";
 import { hasRecentPendingDaemonCommand } from "./daemonCommandUtils";
 import { shouldShowInInbox } from "./inboxFilters";
 import {
@@ -4029,138 +4030,46 @@ export const listPublicConversations = query({
 // (so small forks finish in one round-trip), then if more remains schedules
 // `_continueFork`, which advances the cursor batch by batch until done.
 //
-// Batches are bounded by both document count and a byte budget so a stream
-// of large tool_results can't blow the 16 MB transaction limit.
-const FORK_BATCH_DOCS = 500;
-const FORK_BATCH_MAX_BYTES = 8 * 1024 * 1024;
+// The per-batch logic lives in forkCopy.ts so it can be unit-tested without
+// dragging in Convex's module graph.
 
-function estimateMsgBytes(m: {
-  content?: string;
-  thinking?: string;
-  tool_calls?: unknown;
-  tool_results?: unknown;
-  images?: unknown;
-}): number {
-  return (
-    (m.content?.length ?? 0) +
-    (m.thinking?.length ?? 0) +
-    (m.tool_calls ? JSON.stringify(m.tool_calls).length : 0) +
-    (m.tool_results ? JSON.stringify(m.tool_results).length : 0) +
-    (m.images ? JSON.stringify(m.images).length : 0) +
-    256
-  );
-}
-
-// Emits the daemon_commands row that materializes a fork session, once
-// (and only once) per fork. Reads the deferred args off the fork row.
+// Wraps the Convex MutationCtx in the minimal interface advanceForkCopy needs.
+// Keeping this adapter local means forkCopy.ts has no Convex imports and can
+// run in plain `bun:test`.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function emitForkDaemonCommand(ctx: any, fork: any): Promise<void> {
-  if (!fork.fork_daemon_args) return;
-  let parsed: Record<string, unknown>;
-  try {
-    parsed = JSON.parse(fork.fork_daemon_args);
-  } catch {
-    return;
-  }
-  await ctx.db.insert("daemon_commands", {
-    user_id: fork.user_id,
-    command: "resume_session",
-    args: JSON.stringify(parsed),
-    created_at: Date.now(),
-  });
-  // Clear it so a retried _continueFork can never double-spawn.
-  await ctx.db.patch(fork._id, { fork_daemon_args: undefined });
-}
-
-// Copies one batch of messages from the source conversation into the fork.
-// Advances the fork's cursor + message_count atomically with the inserts.
-// Returns { done: true } when no more batches are needed; otherwise schedules
-// _continueFork to run as soon as the current transaction commits.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function advanceForkCopy(ctx: any, forkId: Id<"conversations">): Promise<{ done: boolean }> {
-  const fork = await ctx.db.get(forkId);
-  if (!fork || fork.fork_status !== "copying") {
-    return { done: true };
-  }
-  const sourceId: Id<"conversations"> | undefined = fork.forked_from ?? fork.parent_conversation_id;
-  if (!sourceId) {
-    await ctx.db.patch(forkId, { fork_status: "failed" });
-    return { done: true };
-  }
-
-  const cursor: number = fork.fork_copy_cursor ?? 0;
-  const cutoff: number | undefined = fork.fork_cutoff_timestamp;
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let qBuilder: any = ctx.db
-    .query("messages")
-    .withIndex("by_conversation_timestamp", (qq: any) => qq.eq("conversation_id", sourceId));
-  qBuilder = qBuilder.filter((qq: any) =>
-    cutoff !== undefined
-      ? qq.and(qq.gt(qq.field("timestamp"), cursor), qq.lte(qq.field("timestamp"), cutoff))
-      : qq.gt(qq.field("timestamp"), cursor)
-  );
-  const batch = await qBuilder.order("asc").take(FORK_BATCH_DOCS);
-
-  if (batch.length === 0) {
-    await ctx.db.patch(forkId, {
-      fork_status: "complete",
-      message_count: fork.fork_copied ?? 0,
-    });
-    await emitForkDaemonCommand(ctx, fork);
-    return { done: true };
-  }
-
-  let copied = 0;
-  let bytes = 0;
-  let lastTs = cursor;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  for (const msg of batch as any[]) {
-    const sz = estimateMsgBytes(msg);
-    if (copied > 0 && bytes + sz > FORK_BATCH_MAX_BYTES) break;
-    await ctx.db.insert("messages", {
-      conversation_id: forkId,
-      message_uuid: msg.message_uuid,
-      role: msg.role,
-      content: msg.content,
-      thinking: msg.thinking,
-      tool_calls: msg.tool_calls,
-      tool_results: msg.tool_results,
-      images: msg.images,
-      subtype: msg.subtype,
-      timestamp: msg.timestamp,
-      tokens_used: msg.tokens_used,
-      usage: msg.usage,
-    });
-    copied++;
-    bytes += sz;
-    lastTs = msg.timestamp;
-  }
-
-  const newCopied = (fork.fork_copied ?? 0) + copied;
-  await ctx.db.patch(forkId, {
-    fork_copy_cursor: lastTs,
-    fork_copied: newCopied,
-    message_count: newCopied,
-  });
-
-  // If we trimmed early (byte budget) or filled the doc cap, more rows may exist.
-  // Otherwise the batch underfilled the index, meaning we're done.
-  const moreExpected = copied < batch.length || batch.length === FORK_BATCH_DOCS;
-  if (moreExpected) {
-    await ctx.scheduler.runAfter(0, internal.conversations._continueFork, { forkId });
-    return { done: false };
-  }
-
-  await ctx.db.patch(forkId, { fork_status: "complete" });
-  await emitForkDaemonCommand(ctx, { ...fork, _id: forkId, fork_copied: newCopied });
-  return { done: true };
+function makeForkCtx(ctx: any): ForkCopyCtx {
+  return {
+    db: {
+      get: (id) => ctx.db.get(id),
+      queryMessages: async ({ conversationId, cursorGt, cutoffLte, limit }) => {
+        const builder = ctx.db
+          .query("messages")
+          .withIndex("by_conversation_timestamp", (qq: any) =>
+            qq.eq("conversation_id", conversationId as Id<"conversations">)
+          )
+          .filter((qq: any) =>
+            cutoffLte !== undefined
+              ? qq.and(qq.gt(qq.field("timestamp"), cursorGt), qq.lte(qq.field("timestamp"), cutoffLte))
+              : qq.gt(qq.field("timestamp"), cursorGt)
+          );
+        return builder.order("asc").take(limit);
+      },
+      insertMessage: (row) => ctx.db.insert("messages", row),
+      insertDaemonCommand: (row) => ctx.db.insert("daemon_commands", row),
+      patchConv: (id, patch) => ctx.db.patch(id as Id<"conversations">, patch),
+    },
+    scheduleContinue: async (forkId) => {
+      await ctx.scheduler.runAfter(0, internal.conversations._continueFork, {
+        forkId: forkId as Id<"conversations">,
+      });
+    },
+  };
 }
 
 export const _continueFork = internalMutation({
   args: { forkId: v.id("conversations") },
   handler: async (ctx, args) => {
-    await advanceForkCopy(ctx, args.forkId);
+    await advanceForkCopy(makeForkCtx(ctx), args.forkId);
   },
 });
 
@@ -4228,7 +4137,7 @@ export const forkConversation = mutation({
     // Copy the first batch synchronously so small forks finish in one RTT.
     // If more remains, advanceForkCopy schedules _continueFork to chain
     // subsequent batches as separate transactions.
-    await advanceForkCopy(ctx, newConversationId);
+    await advanceForkCopy(makeForkCtx(ctx), newConversationId);
 
     return newConversationId;
   },
@@ -4376,7 +4285,7 @@ export const forkFromMessage = mutation({
 
     // Copy first batch synchronously so small forks finish in one round-trip;
     // larger ones chain via _continueFork.
-    await advanceForkCopy(ctx, newConversationId);
+    await advanceForkCopy(makeForkCtx(ctx), newConversationId);
 
     return {
       conversation_id: newConversationId,
