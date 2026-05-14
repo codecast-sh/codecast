@@ -5123,6 +5123,21 @@ export const deleteByProjectHash = mutation({
 export const getMessageCountsForReconciliation = query({
   args: {
     session_ids: v.array(v.string()),
+    // Daemon-side hints: { session_id (local JSONL UUID) → conversation_id it's
+    // already bound to }. Necessary because `conversations.session_id` only
+    // stores the FIRST UUID a conversation was bound to; resumed sessions get
+    // new JSONL UUIDs that never appear on any conversation row, so the
+    // by_session_id index returns nothing and the daemon's reconciliation
+    // would falsely flag them as `missing_backend` and reset their sync
+    // position — the storm fix.
+    conversation_id_hints: v.optional(
+      v.array(
+        v.object({
+          session_id: v.string(),
+          conversation_id: v.id("conversations"),
+        })
+      )
+    ),
     api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -5138,11 +5153,19 @@ export const getMessageCountsForReconciliation = query({
       updated_at: number;
     }> = [];
 
+    const hintMap = new Map<string, Id<"conversations">>();
+    for (const hint of args.conversation_id_hints ?? []) {
+      hintMap.set(hint.session_id, hint.conversation_id);
+    }
+
     for (const sessionId of args.session_ids.slice(0, 100)) {
-      const conv = await ctx.db
-        .query("conversations")
-        .withIndex("by_session_id", (q) => q.eq("session_id", sessionId))
-        .first();
+      const hintedConvId = hintMap.get(sessionId);
+      const conv = hintedConvId
+        ? await ctx.db.get(hintedConvId)
+        : await ctx.db
+            .query("conversations")
+            .withIndex("by_session_id", (q) => q.eq("session_id", sessionId))
+            .first();
 
       if (conv && conv.user_id.toString() === authUserId.toString()) {
         results.push({

@@ -3,6 +3,7 @@ import * as path from "path";
 import { parseSessionFile } from "./parser.js";
 import { SyncService } from "./syncService.js";
 import { setPosition } from "./positionTracker.js";
+import { updateSyncRecord } from "./syncLedger.js";
 
 const CONFIG_DIR = process.env.HOME + "/.codecast";
 const RECONCILIATION_FILE = path.join(CONFIG_DIR, "last-reconciliation.json");
@@ -65,6 +66,7 @@ function extractSessionIdFromPath(filePath: string): string {
 export async function performReconciliation(
   syncService: SyncService,
   log: (message: string, level?: "info" | "warn" | "error") => void,
+  conversationCache: Record<string, string> = {},
   maxFiles: number = 50
 ): Promise<ReconciliationResult> {
   const result: ReconciliationResult = {
@@ -122,7 +124,21 @@ export async function performReconciliation(
   // Extract session IDs
   const sessionIds = filesToCheck.map(f => extractSessionIdFromPath(f.path));
 
-  log(`Reconciliation: Checking ${sessionIds.length} sessions against backend`);
+  // Build daemon-side hints: for any local JSONL UUID the daemon already
+  // mapped to a conversation (typically because the file was resumed and the
+  // conversation's primary session_id is some older UUID), tell the backend
+  // which conversation to look at instead of relying on the by_session_id
+  // index. Without this, every resumed session is falsely flagged as
+  // `missing_backend` and triggers a position reset → watchdog storm.
+  const conversationIdHints = sessionIds
+    .filter(sid => Boolean(conversationCache[sid]))
+    .map(sid => ({ session_id: sid, conversation_id: conversationCache[sid] }));
+  const hintedSessions = new Set(conversationIdHints.map(h => h.session_id));
+
+  log(
+    `Reconciliation: Checking ${sessionIds.length} sessions against backend ` +
+    `(${conversationIdHints.length} via local conv mapping)`
+  );
 
   // Query backend for message counts
   let backendCounts: Array<{
@@ -133,7 +149,10 @@ export async function performReconciliation(
   }> = [];
 
   try {
-    backendCounts = await syncService.getMessageCountsForReconciliation(sessionIds);
+    backendCounts = await syncService.getMessageCountsForReconciliation(
+      sessionIds,
+      conversationIdHints
+    );
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
     result.errors.push(`Failed to query backend: ${errMsg}`);
@@ -162,6 +181,11 @@ export async function performReconciliation(
         status: "missing_backend",
       });
       log(`Reconciliation: Session ${sessionId.slice(0, 8)}... missing from backend (${localCount} local messages)`, "warn");
+    } else if (hintedSessions.has(sessionId)) {
+      // Resolved via local conv mapping → backend `message_count` is the
+      // conversation total across all linked JSONLs, NOT this file's count.
+      // Comparing the two is meaningless; trust that the daemon has been
+      // syncing this file (it knows the convId) and skip the mismatch flag.
     } else if (localCount !== backendData.message_count) {
       result.discrepancies.push({
         sessionId,
@@ -215,9 +239,11 @@ export async function repairDiscrepancies(
       if (fileSize > MAX_RESYNC_BYTES) {
         const newPosition = Math.max(0, fileSize - MAX_RESYNC_BYTES);
         setPosition(d.filePath, newPosition);
+        updateSyncRecord(d.filePath, { lastSyncedPosition: newPosition });
         log(`Reset sync position for ${d.sessionId.slice(0, 8)}... to ${newPosition} (tail ${MAX_RESYNC_BYTES} bytes of ${fileSize} byte file)`);
       } else {
         setPosition(d.filePath, 0);
+        updateSyncRecord(d.filePath, { lastSyncedPosition: 0 });
         log(`Reset sync position for ${d.sessionId.slice(0, 8)}... to trigger full re-sync`);
       }
       repaired++;

@@ -8828,7 +8828,11 @@ function logHealthReport(retryQueue: RetryQueue): void {
   }
 }
 
-function startReconciliation(syncService: SyncService, retryQueue: RetryQueue): NodeJS.Timeout {
+function startReconciliation(
+  syncService: SyncService,
+  retryQueue: RetryQueue,
+  conversationCache: ConversationCache
+): NodeJS.Timeout {
   log("Reconciliation scheduler started (runs every hour)");
 
   // Run initial reconciliation after 5 minutes (let daemon stabilize first)
@@ -8839,7 +8843,8 @@ function startReconciliation(syncService: SyncService, retryQueue: RetryQueue): 
 
       const result = await performReconciliation(
         syncService,
-        (msg, level) => log(msg, level || "info")
+        (msg, level) => log(msg, level || "info"),
+        conversationCache
       );
 
       if (result.discrepancies.length > 0) {
@@ -8865,7 +8870,8 @@ function startReconciliation(syncService: SyncService, retryQueue: RetryQueue): 
 
       const result = await performReconciliation(
         syncService,
-        (msg, level) => log(msg, level || "info")
+        (msg, level) => log(msg, level || "info"),
+        conversationCache
       );
 
       if (result.discrepancies.length > 0) {
@@ -10156,7 +10162,7 @@ async function main(): Promise<void> {
   });
 
   const versionCheckInterval = startVersionChecker(syncService);
-  const reconciliationInterval = startReconciliation(syncService, retryQueue);
+  const reconciliationInterval = startReconciliation(syncService, retryQueue, conversationCache);
 
   const cursorWatcher = new CursorWatcher();
   const cursorSyncs = new Map<string, InvalidateSync>();
