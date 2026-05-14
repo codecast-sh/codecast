@@ -370,6 +370,30 @@ describe("mergeMessages — sync-recovery safety net", () => {
     expect(new Set(final.map((m: any) => m._id)).size).toBe(53);
   });
 
+  it("setMessages preserves local messages newer than the paginated batch", () => {
+    // Real-world race: usePaginatedQuery's first page is stalled at items
+    // 1-100 (timestamps 1-100). Recovery loop fetches items 101-105 via
+    // getNewMessages and merges them. PaginatedQuery later re-fires with
+    // the SAME stale 100-item snapshot — setMessages must not clobber the
+    // recovery-added newer items.
+    const store = useInboxStore.getState();
+    const paginated: any[] = [];
+    for (let i = 1; i <= 100; i++) paginated.push(msg(`m${i}`, i));
+    store.setMessages("c1", paginated);
+
+    // Recovery merges newer messages.
+    store.mergeMessages("c1", [msg("m101", 101), msg("m102", 102)], "append", { initialized: true });
+    expect(useInboxStore.getState().messages.c1.length).toBe(102);
+
+    // PaginatedQuery re-fires with the same stale 100-item snapshot.
+    store.setMessages("c1", paginated);
+
+    // Recovery-added items must survive.
+    const out = useInboxStore.getState().messages.c1;
+    expect(out.length).toBe(102);
+    expect(out[out.length - 1]._id).toBe("m102");
+  });
+
   it("preserves local messages when a recovery fetch returns nothing new", () => {
     const store = useInboxStore.getState();
     store.setMessages("c1", [msg("m1", 1), msg("m2", 2), msg("m3", 3)]);
