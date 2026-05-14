@@ -510,7 +510,7 @@ export class SyncService {
       });
     }
 
-    const BATCH_SIZE = 25;
+    const BATCH_SIZE = 10;
     let totalInserted = 0;
     const allIds: string[] = [];
 
