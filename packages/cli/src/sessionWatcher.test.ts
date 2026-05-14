@@ -2,7 +2,7 @@ import { describe, test, expect, afterEach } from "bun:test";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { SessionWatcher, type SessionEvent } from "./sessionWatcher.js";
+import { SessionWatcher, isTestProjectDir, type SessionEvent } from "./sessionWatcher.js";
 
 function tmpDir(prefix: string): string {
   return path.join(
@@ -214,6 +214,39 @@ describe("SessionWatcher", () => {
     for (const sid of sessionIds) {
       expect(events.some(e => e.sessionId === sid)).toBe(true);
     }
+  });
+
+  test("skips JSONL files in test-harness project dirs", async () => {
+    const root = tmpDir("sw-test-skip");
+    const realProj = path.join(root, "real-project");
+    const harnessProj = path.join(root, "-private-tmp-codecast-test-cwd-ABC123");
+    const shimProj = path.join(root, "-private-tmp-codecast-fake-claude-XYZ");
+    fs.mkdirSync(realProj, { recursive: true });
+    fs.mkdirSync(harnessProj, { recursive: true });
+    fs.mkdirSync(shimProj, { recursive: true });
+
+    const events: SessionEvent[] = [];
+    const watcher = new SessionWatcher(root);
+    cleanups.push(() => { watcher.stop(); fs.rmSync(root, { recursive: true, force: true }); });
+
+    watcher.on("session", (e) => events.push(e));
+    watcher.start();
+    await new Promise(r => setTimeout(r, 200));
+
+    fs.writeFileSync(path.join(realProj, "real-session.jsonl"), "{}");
+    fs.writeFileSync(path.join(harnessProj, "harness-session.jsonl"), "{}");
+    fs.writeFileSync(path.join(shimProj, "shim-session.jsonl"), "{}");
+
+    await new Promise(r => setTimeout(r, 500));
+
+    expect(events.map(e => e.sessionId).sort()).toEqual(["real-session"]);
+  });
+
+  test("isTestProjectDir matches harness markers", () => {
+    expect(isTestProjectDir("-private-tmp-codecast-test-cwd-D1V9e5")).toBe(true);
+    expect(isTestProjectDir("-tmp-codecast-fake-claude-AbC")).toBe(true);
+    expect(isTestProjectDir("-Users-ashot-src-codecast")).toBe(false);
+    expect(isTestProjectDir("real-project-abc123")).toBe(false);
   });
 
   test("does not start twice", () => {
