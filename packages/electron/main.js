@@ -600,7 +600,13 @@ app.whenReady().then(() => {
   });
   autoUpdater.on("update-downloaded", (info) => {
     mainWindow?.webContents.send("update-status", { status: "ready", version: info.version });
-    setTimeout(() => autoUpdater.quitAndInstall(), 3000);
+    // Notify the user instead of force-quitting. The update will also apply
+    // on next app quit thanks to autoInstallOnAppQuit, so dismissing is safe.
+    showNativeNotification(
+      `Codecast ${info.version} is ready`,
+      "Click to restart and install the update.",
+      () => autoUpdater.quitAndInstall(),
+    );
   });
   autoUpdater.on("error", (err) => {
     console.error("Auto-update error:", err.message);
