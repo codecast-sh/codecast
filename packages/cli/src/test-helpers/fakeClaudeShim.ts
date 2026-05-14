@@ -44,7 +44,10 @@ export function buildShimScript(opts: ShimOptions = {}): string {
 
   return `#!/usr/bin/env bash
 # fake-claude shim — see fakeClaudeShim.ts for contract
-set -u
+# Deliberately NOT using \`set -u\` or \`set -e\`: under back-to-back tmux paste
+# bursts, transient subshell failures (e.g. uuidgen briefly unreachable, write
+# to a draining pane) shouldn't crash the whole shim. Real claude survives
+# these too; the goal is to mirror its resilience, not its strictness.
 SESSION_ID="\${FAKE_CLAUDE_SESSION_ID:-${sessionId}}"
 STARTUP_MS="\${FAKE_CLAUDE_STARTUP_MS:-${startupMs}}"
 TRUST_PROMPT="\${FAKE_CLAUDE_TRUST_PROMPT:-${trustPrompt}}"
