@@ -881,6 +881,11 @@ export type SyncOpts = {
   keepSelected?: string;
   transform?: (draft: any, result: any, incoming: any, initialized: boolean, prev?: any) => void;
   extra?: Record<string, any>;
+  // When true, `incoming` is treated as a partial set of changed records:
+  // missing rows in `prev` are preserved instead of being dropped. Used for
+  // delta-cursor queries (e.g. tasks.webList with `since`). Soft-deletes
+  // arrive as updated rows; hard deletes are NOT supported in delta mode.
+  isDelta?: boolean;
 };
 
 function applyMerge(local: any, server: any, spec: MergeSpec, initialized: boolean): any {
@@ -1430,7 +1435,10 @@ export const useInboxStore = create<InboxStoreState>(
 
     // collection
     const prevCollection = (this as any)[field] || {};
-    const { table, pending } = applySyncTable(field, incoming, this.pending, prevCollection);
+    const { table, pending } = applySyncTable(
+      field, incoming, this.pending, prevCollection,
+      config.isDelta ? { isDelta: true } : undefined,
+    );
 
     if (config.altKey) {
       const incomingByAlt = new Map(

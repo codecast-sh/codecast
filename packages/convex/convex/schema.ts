@@ -1234,14 +1234,17 @@ export default defineSchema({
   })
     .index("by_user_id", ["user_id"])
     .index("by_user_status", ["user_id", "status"])
+    .index("by_user_updated", ["user_id", "updated_at"])
     .index("by_project_id", ["project_id"])
     .index("by_project_status", ["project_id", "status"])
     .index("by_parent_id", ["parent_id"])
     .index("by_short_id", ["short_id"])
     .index("by_team_id", ["team_id"])
     .index("by_team_status", ["team_id", "status"])
+    .index("by_team_updated", ["team_id", "updated_at"])
     .index("by_workflow_run", ["workflow_run_id"])
     .index("by_assignee_status", ["assignee", "status"])
+    .index("by_assignee_updated", ["assignee", "updated_at"])
     .searchIndex("search_tasks", {
       searchField: "title",
       filterFields: ["user_id", "project_id", "status"],

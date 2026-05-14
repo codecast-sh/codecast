@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../store/inboxStore";
@@ -7,9 +7,20 @@ import { useWorkspaceArgs, type WorkspaceArgs } from "./useWorkspaceArgs";
 
 const api = _api as any;
 
+// How long the delta window can grow before we bump the cursor. Reactive
+// ticks within this window don't resubscribe (cheap), but the result set is
+// bounded by ~CURSOR_REFRESH_MS of accumulated changes. 30s strikes a
+// balance between resub churn and reactive payload size.
+const CURSOR_REFRESH_MS = 30_000;
+
 /**
- * Core task sync — fetches ALL tasks for the given workspace into the store.
+ * Core task sync — pulls tasks for the workspace into the store.
  * Shared between web and mobile. Filtering happens client-side.
+ *
+ * Uses a delta cursor: the first subscription fetches a full snapshot, then
+ * subsequent reactive runs receive only tasks whose `updated_at` exceeds the
+ * cursor. The cursor is bumped periodically (CURSOR_REFRESH_MS) so the
+ * reactive window stays small without resubscribing on every change.
  *
  * The live "activeSession" overlay is fetched as a separate small query so
  * that daemon heartbeats (which churn managed_sessions every ~30s) don't
@@ -18,29 +29,55 @@ const api = _api as any;
 export function useSyncTasksWithArgs(wsArgs: WorkspaceArgs) {
   const syncTable = useInboxStore((s) => s.syncTable);
 
+  // Reset the cursor whenever workspace args change — switching teams or
+  // toggling workspace=all needs a fresh full snapshot.
+  const wsKey = wsArgs === "skip" ? "skip" : JSON.stringify(wsArgs);
+  const [cursor, setCursor] = useState<number | undefined>(undefined);
+  const lastSeenCursor = useRef<number | undefined>(undefined);
+  const lastWsKey = useRef<string>(wsKey);
+  if (lastWsKey.current !== wsKey) {
+    lastWsKey.current = wsKey;
+    if (cursor !== undefined) setCursor(undefined);
+    lastSeenCursor.current = undefined;
+  }
+
   const tasksResult = useQuery(api.tasks.webList,
     wsArgs === "skip" ? "skip" : {
       ...wsArgs,
       include_derived: true,
+      ...(cursor !== undefined ? { since: cursor } : {}),
     }
   );
   const activeMap = useQuery(api.tasks.webActiveSessions,
     wsArgs === "skip" ? "skip" : {}
   );
 
+  // Server returns { items, cursor, isDelta }; we surface items+activeSession
+  // overlay and the delta flag to the sync layer.
   const merged = useMemo(() => {
     if (tasksResult === undefined) return undefined;
-    const items = tasksResult.items ?? tasksResult;
-    if (!activeMap) return items;
-    return items.map((t: any) => ({
-      ...t,
-      activeSession: activeMap[String(t._id)] ?? null,
-    }));
+    const items: any[] = tasksResult.items ?? tasksResult;
+    const overlayed = activeMap
+      ? items.map((t: any) => ({ ...t, activeSession: activeMap[String(t._id)] ?? null }))
+      : items;
+    return { items: overlayed, isDelta: !!tasksResult.isDelta, cursor: tasksResult.cursor };
   }, [tasksResult, activeMap]);
 
   useConvexSync(merged, useCallback((data: any) => {
-    syncTable("tasks", data);
+    syncTable("tasks", data.items, { isDelta: data.isDelta });
+    if (typeof data.cursor === "number") lastSeenCursor.current = data.cursor;
   }, [syncTable]));
+
+  // Periodically promote the latest seen cursor. Each promotion triggers a
+  // resubscription with the new `since`, which discards already-shipped rows
+  // and keeps the reactive payload trimmed.
+  useEffect(() => {
+    const id = setInterval(() => {
+      const next = lastSeenCursor.current;
+      if (next !== undefined && next !== cursor) setCursor(next);
+    }, CURSOR_REFRESH_MS);
+    return () => clearInterval(id);
+  }, [cursor]);
 
   return { hasMore: false, loadMore: () => {}, ready: tasksResult !== undefined };
 }
