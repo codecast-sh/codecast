@@ -60,14 +60,47 @@ export function spawnHarness(opts: HarnessOptions = {}): Harness {
   // Use bash -c (NOT -lc) to skip login-shell init files — saves 1–3s startup.
   // Pass the shim path explicitly so a missing PATH hop (sometimes seen under
   // bun:test's spawnSync env handling) doesn't silently produce an empty pane.
-  const r = spawnSync("tmux", [
+  const sessionAlive = (): boolean => {
+    try {
+      execSync(`tmux has-session -t ${tmuxSession} 2>/dev/null`, { stdio: "ignore" });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const spawnOnce = (): { status: number | null; stderr?: string; stdout?: string } => spawnSync("tmux", [
     "new-session", "-d", "-s", tmuxSession,
     "-x", "200", "-y", "50",
     "-c", cwd,
     "bash", "-c", `FAKE_CLAUDE_SESSION_ID='${sessionId}' exec '${shimPath}'`
   ], { env, encoding: "utf-8" });
-  if (r.status !== 0) {
-    throw new Error(`tmux new-session failed (status ${r.status}): ${r.stderr ?? ""} ${r.stdout ?? ""}`);
+  // Up to 3 spawn attempts. Under heavy load we observe the inner bash dying
+  // before reaching the shim (tmux PTY setup race). Verify "alive after 250ms"
+  // before declaring success — sleep first so a session that died right after
+  // exec is detected and respawned.
+  let lastErr = "";
+  let spawned = false;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const r = spawnOnce();
+    if (r.status !== 0) {
+      lastErr = `tmux new-session failed (status ${r.status}): ${r.stderr ?? ""} ${r.stdout ?? ""}`;
+      // Try to clear any partial session that might be lingering before retry.
+      try { execSync(`tmux kill-session -t ${tmuxSession} 2>/dev/null`, { stdio: "ignore" }); } catch {}
+      continue;
+    }
+    // Brief sync wait — uses the deadline-loop approach so the harness
+    // doesn't return prematurely. 1s total max per attempt.
+    const deadline = Date.now() + 1000;
+    while (Date.now() < deadline) {
+      if (sessionAlive()) { spawned = true; break; }
+      execSync("sleep 0.05");
+    }
+    if (spawned) break;
+    lastErr = "tmux session died within 1s of spawn";
+    try { execSync(`tmux kill-session -t ${tmuxSession} 2>/dev/null`, { stdio: "ignore" }); } catch {}
+  }
+  if (!spawned) {
+    throw new Error(`harness spawn failed after 3 attempts: ${lastErr}`);
   }
   ACTIVE_SESSIONS.add(tmuxSession);
 
