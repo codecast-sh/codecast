@@ -5352,10 +5352,12 @@ async function injectViaTmuxInner(target: string, content: string): Promise<void
 
   // Clear any stale input before pasting to prevent draft text from being
   // prepended to the injected message or submitted by the trailing Enter.
+  // 50ms each is enough for tmux send-keys to flush; 100ms was inherited from
+  // pre-paste-buffer days when we used `-l` and needed extra settle.
   await tmuxExec(["send-keys", "-t", target, "Escape"]);
-  await new Promise(resolve => setTimeout(resolve, 100));
+  await new Promise(resolve => setTimeout(resolve, 50));
   await tmuxExec(["send-keys", "-t", target, "C-u"]);
-  await new Promise(resolve => setTimeout(resolve, 100));
+  await new Promise(resolve => setTimeout(resolve, 50));
 
   // Capture pane before paste for before/after comparison
   let prePaste = "";
@@ -5388,15 +5390,22 @@ async function injectViaTmuxInner(target: string, content: string): Promise<void
     log(`Paste may not have landed in ${target} (pane unchanged after 400ms), proceeding anyway`);
   }
 
-  // Send Enter to submit
-  const enterDelay = Math.max(200, Math.min(1000, Math.ceil(sanitized.length / 100) * 50));
+  // Send Enter to submit. The adaptive delay scales with content length so
+  // tmux paste-buffer has time to flush before Enter — but the 200ms floor
+  // was overly generous: tmux paste + Enter are queued in the same pty
+  // stream so order is preserved even for short pastes.
+  const enterDelay = Math.max(100, Math.min(1000, Math.ceil(sanitized.length / 100) * 50));
   await new Promise(resolve => setTimeout(resolve, enterDelay));
   await tmuxExec(["send-keys", "-t", target, "Enter"]);
 
-  // Post-submit: verify the agent started processing
+  // Post-submit: verify the agent started processing.
+  // Tightened from 5×600ms (3s) to 3×400ms (1.2s). The verify loop is
+  // observational — early termination just means "we couldn't confirm
+  // activity in 1.2s", which is fine: the real signal of delivery is
+  // the JSONL ack from the daemon's file watcher (separate path).
   let rePasted = false;
-  for (let retry = 0; retry < 5; retry++) {
-    await new Promise(resolve => setTimeout(resolve, 600));
+  for (let retry = 0; retry < 3; retry++) {
+    await new Promise(resolve => setTimeout(resolve, 400));
     try {
       const { stdout: postCheck } = await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${captureLines}`]);
       const lastLines = postCheck.split("\n").slice(-15).join("\n");
@@ -7492,9 +7501,14 @@ async function deliverMessage(
         if (!ready) {
           log(`Started session ${entry.tmuxSession} startup timed out after ${Date.now() - startTime}ms, proceeding anyway`);
         }
-        // Extra settle time: Claude Code's input handler may not be ready immediately
-        // after the prompt is visible. Wait to avoid silent paste drops.
-        await new Promise(resolve => setTimeout(resolve, 1500));
+        // Extra settle time: Claude Code's input handler may not be ready
+        // immediately after the prompt is visible. Original budget was 1.5s
+        // (speculative — no documented incident at lower values); the e2e
+        // suite covers this exact race (Scenario 1: inject right after
+        // first prompt). 500ms keeps a safety margin while shaving a full
+        // second off cold-start delivery. If injects start failing
+        // intermittently for fresh sessions, raise this back up first.
+        await new Promise(resolve => setTimeout(resolve, 500));
         const startedTmuxTarget = entry.tmuxSession + ":0.0";
         // Mark "injected" BEFORE tmux send-keys. The send triggers Claude to write the user
         // message to JSONL within ms, and the JSONL watcher calls ackInjectedMessages to flip
