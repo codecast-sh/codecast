@@ -1,5 +1,5 @@
 import { useCallback, useState, useRef, useMemo, useEffect } from "react";
-import { useQuery, usePaginatedQuery } from "convex/react";
+import { useQuery, usePaginatedQuery, useConvex } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useInboxStore, useTrackedStore, isConvexId, ensureHydrated } from "../store/inboxStore";
@@ -140,32 +140,65 @@ export function useConversationMessages(
     useInboxStore.getState().syncRecord("conversations", conversationId, meta);
   }, [conversationId]));
 
-  // Diagnostic: surface stuck-load states so we can identify the root cause.
-  // Fires when storeMeta says the conversation has messages but we still have
-  // nothing locally after 5s. Logs the upstream state in one structured warn.
-  // eslint-disable-next-line no-restricted-syntax
+  // Safety net: server-vs-local watermark recovery.
+  //
+  // usePaginatedQuery above is the primary sync path, but its reactivity can
+  // stall: after loadMore() bounds the first page, during conversation_id
+  // transitions, under transient ws blips, or when the query is briefly
+  // skipped. Without a fallback, the local store can sit frozen while the
+  // server keeps inserting messages — the user sees a stuck conversation.
+  //
+  // This loop watches storeMeta.message_count (server truth, kept fresh by
+  // the getConversationWithMeta subscription) against the local store. When
+  // they diverge, fetch the delta via getNewMessages and merge — same path
+  // useSyncInboxSessions.bgSyncMessages uses, just driven per-conversation.
+  const convex = useConvex();
+  const recoveryInFlightRef = useRef(false);
+  // eslint-disable-next-line no-restricted-syntax -- polled recovery; effect manages its own interval
   useEffect(() => {
-    if (!canQuery) return;
-    const t = setTimeout(() => {
+    if (!canQuery || targetMode) return; // recovery only applies to live normal-mode view
+
+    const tick = async () => {
+      if (recoveryInFlightRef.current) return;
       const state = useInboxStore.getState();
       const meta = state.conversations[conversationId] ?? state.sessions[conversationId];
-      const msgs = state.messages[conversationId];
-      if (!meta || (meta.message_count ?? 0) === 0) return;
-      if (msgs && msgs.length > 0) return;
-      // eslint-disable-next-line no-console
-      console.warn("[useConversationMessages] stuck without messages after 5s", {
-        conversationId,
-        message_count: meta.message_count,
-        useNormalMode,
-        targetMode,
-        paginationStatus,
-        descResultsLength: descResults?.length,
-        hasTarget,
-        targetTimestampReady,
-      });
-    }, 5000);
-    return () => clearTimeout(t);
-  }, [conversationId, canQuery, useNormalMode, targetMode, paginationStatus, descResults, hasTarget, targetTimestampReady]);
+      const local = state.messages[conversationId] ?? [];
+      const serverCount = (meta as any)?.message_count ?? 0;
+      if (serverCount === 0 || local.length >= serverCount) return;
+      // Avoid colliding with the initial paginated-query load.
+      if (local.length === 0 && paginationStatusRef.current === "LoadingFirstPage") return;
+
+      recoveryInFlightRef.current = true;
+      const after = local.length > 0 ? local[local.length - 1].timestamp : 0;
+      try {
+        let cursor = after;
+        // Bound the inner pagination loop so a buggy server can't pin us here.
+        for (let i = 0; i < 20; i++) {
+          const result: any = await convex.query(api.conversations.getNewMessages, {
+            conversation_id: convId,
+            after_timestamp: cursor,
+          });
+          if (!result?.messages?.length) break;
+          useInboxStore.getState().mergeMessages(conversationId, result.messages, "append", { initialized: true });
+          if (!result.has_more || result.last_timestamp == null) break;
+          cursor = result.last_timestamp;
+        }
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn("[useConversationMessages] recovery fetch failed", { conversationId, err });
+      } finally {
+        recoveryInFlightRef.current = false;
+      }
+    };
+
+    // Run once immediately so a freshly-opened stuck conversation catches up
+    // without waiting a full interval, then poll. Cadence is intentionally
+    // fast — getNewMessages with a recent watermark returns near-empty pages
+    // when caught up, so the cost is dominated by latency, not work.
+    tick();
+    const id = setInterval(tick, 2_000);
+    return () => clearInterval(id);
+  }, [conversationId, canQuery, targetMode, convex, convId]);
 
   // =============================================
   // READ FROM STORE (primary source of truth - never waits on Convex)
