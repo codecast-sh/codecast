@@ -22,27 +22,31 @@ export function applySyncTable<T extends { _id: string }>(
   incoming: T[],
   pending: Record<string, PendingEntry>,
   prev?: Record<string, T>,
+  opts?: { isDelta?: boolean },
 ): { table: Record<string, T>; pending: Record<string, PendingEntry> } {
   const newPending = { ...pending };
   const table: Record<string, T> = {};
   const incomingMap = new Map(incoming.map(r => [r._id, r]));
   const incomingIds = new Set(incomingMap.keys());
   const prefix = `${tableName}:`;
+  const isDelta = !!opts?.isDelta;
 
-  // Confirmed excludes — server no longer sends the record
-  for (const [key, entry] of Object.entries(newPending)) {
-    if (!key.startsWith(prefix)) continue;
-    if (entry.type === "exclude") {
-      const id = key.slice(prefix.length);
-      if (!incomingIds.has(id)) {
-        delete newPending[key];
+  // Confirmed excludes — server no longer sends the record.
+  // In delta mode the incoming set is partial by definition, so an absent
+  // record means "unchanged", not "deleted". Skip the exclude-clearing
+  // pass; soft-deletes (status="dropped") still arrive as updated rows.
+  if (!isDelta) {
+    for (const [key, entry] of Object.entries(newPending)) {
+      if (!key.startsWith(prefix)) continue;
+      if (entry.type === "exclude") {
+        const id = key.slice(prefix.length);
+        if (!incomingIds.has(id)) {
+          delete newPending[key];
+        }
       }
     }
   }
 
-  // Local-first ordering: walk prev keys first so existing records keep
-  // their position; server sync only updates fields, not order. Records
-  // dropped by server (not in incoming) are removed.
   const applyFieldOverrides = (record: T): T => {
     let merged = record;
     const fieldPrefix = `${tableName}:${record._id}:`;
@@ -59,6 +63,11 @@ export function applySyncTable<T extends { _id: string }>(
     return merged;
   };
 
+  // Snapshot mode: walk prev first to preserve ordering, then copy any
+  // incoming-only records at the tail. Records absent from incoming are
+  // dropped (server is authoritative).
+  //
+  // Delta mode: keep ALL prev rows; overlay incoming. Absence != deletion.
   if (prev) {
     for (const id of Object.keys(prev)) {
       const excludeKey = `${tableName}:${id}`;
@@ -66,6 +75,8 @@ export function applySyncTable<T extends { _id: string }>(
       const incomingRecord = incomingMap.get(id);
       if (incomingRecord) {
         table[id] = applyFieldOverrides(incomingRecord);
+      } else if (isDelta) {
+        table[id] = prev[id];
       }
     }
   }
@@ -78,11 +89,13 @@ export function applySyncTable<T extends { _id: string }>(
     table[record._id] = applyFieldOverrides(record);
   }
 
-  // Include entries — locally-added records the server hasn't acknowledged
+  // Include entries — locally-added records the server hasn't acknowledged.
+  // Same delta caveat: don't clear an include just because this partial
+  // batch didn't carry the record.
   for (const [key, entry] of Object.entries(newPending)) {
     if (!key.startsWith(prefix) || entry.type !== "include") continue;
     const id = key.slice(prefix.length);
-    if (incomingIds.has(id)) {
+    if (!isDelta && incomingIds.has(id)) {
       delete newPending[key];
     } else if (prev?.[id] && !table[id]) {
       table[id] = prev[id];

@@ -904,17 +904,50 @@ export const webList = query({
     team_id: v.optional(v.id("teams")),
     workspace: v.optional(v.union(v.literal("personal"), v.literal("team"), v.literal("all"))),
     project_path: v.optional(v.string()),
+    // Delta cursor: when provided, only return tasks with updated_at > since.
+    // First subscription omits it (full snapshot); subsequent subscriptions
+    // pass the high-water-mark from the prior response. The web client merges
+    // results additively — rows missing from a delta are NOT removed locally,
+    // since tasks are soft-deleted via status="dropped" (which bumps
+    // updated_at, so the dropped row flows through naturally).
+    since: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
-    if (!userId) return [];
+    if (!userId) return { items: [], hasMore: false, cursor: args.since ?? 0, isDelta: !!args.since };
+
+    const since = args.since;
+    const isDelta = since !== undefined;
+
+    // Range-scan helper: when in delta mode, use the *_updated indexes so we
+    // only materialize rows whose updated_at > since. Otherwise fall back to
+    // the legacy unbounded collect.
+    const collectByUser = async (uid: any) => isDelta
+      ? await ctx.db.query("tasks").withIndex("by_user_updated", (q: any) =>
+          q.eq("user_id", uid).gt("updated_at", since!)).collect()
+      : await ctx.db.query("tasks").withIndex("by_user_id", (q: any) =>
+          q.eq("user_id", uid)).collect();
+    const collectByTeam = async (tid: any) => isDelta
+      ? await ctx.db.query("tasks").withIndex("by_team_updated", (q: any) =>
+          q.eq("team_id", tid).gt("updated_at", since!)).collect()
+      : await ctx.db.query("tasks").withIndex("by_team_id", (q: any) =>
+          q.eq("team_id", tid)).collect();
+    const collectByAssignee = async (assignee: string) => isDelta
+      ? await ctx.db.query("tasks").withIndex("by_assignee_updated", (q: any) =>
+          q.eq("assignee", assignee).gt("updated_at", since!)).collect()
+      : await ctx.db.query("tasks").withIndex("by_assignee_status", (q: any) =>
+          q.eq("assignee", assignee)).collect();
 
     let tasks: any[];
     if (args.project_id) {
-      tasks = await ctx.db
+      // project_id path has no _updated index yet; fall back to collect+filter
+      // (these queries are rarely the memory hot spot — they're scoped to
+      // one project at a time).
+      const rows = await ctx.db
         .query("tasks")
         .withIndex("by_project_id", (q) => q.eq("project_id", args.project_id as any))
         .collect();
+      tasks = isDelta ? rows.filter((t: any) => t.updated_at > since!) : rows;
       if (args.status) {
         tasks = tasks.filter((t) => t.status === args.status);
       } else {
@@ -931,16 +964,12 @@ export const webList = query({
       if (args.workspace === "team" && args.team_id) {
         // TEAM VIEW: fetch ALL tasks for this team — no per-status limits.
         // Client does all filtering (status, source, assignee, priority).
-        const teamTasks = await ctx.db.query("tasks")
-          .withIndex("by_team_id", (q: any) => q.eq("team_id", args.team_id))
-          .collect();
+        const teamTasks = await collectByTeam(args.team_id);
         for (const t of teamTasks) pushUnique(t);
 
         // Also include tasks assigned to current user in this team
         // (covers edge case where assignee is set but team_id isn't)
-        const assignedTasks = await ctx.db.query("tasks")
-          .withIndex("by_assignee_status", (q: any) => q.eq("assignee", String(userId)))
-          .collect();
+        const assignedTasks = await collectByAssignee(String(userId));
         const teamStr = String(args.team_id);
         for (const t of assignedTasks) {
           if (String(t.team_id) === teamStr) pushUnique(t);
@@ -954,45 +983,31 @@ export const webList = query({
           .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
           .collect();
         for (const m of memberships) {
-          const teamTasks = await ctx.db.query("tasks")
-            .withIndex("by_team_id", (q: any) => q.eq("team_id", m.team_id))
-            .collect();
+          const teamTasks = await collectByTeam(m.team_id);
           for (const t of teamTasks) pushUnique(t);
         }
-        const userTasks = await ctx.db.query("tasks")
-          .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
-          .collect();
+        const userTasks = await collectByUser(userId);
         for (const t of userTasks) pushUnique(t);
-        const assignedTasks = await ctx.db.query("tasks")
-          .withIndex("by_assignee_status", (q: any) => q.eq("assignee", String(userId)))
-          .collect();
+        const assignedTasks = await collectByAssignee(String(userId));
         for (const t of assignedTasks) pushUnique(t);
       } else if (args.workspace === "personal") {
         // PERSONAL VIEW: tasks with no team_id that are mine — either as
         // creator OR assignee. Without the assignee union, a task assigned
         // to me by someone else (e.g. an ops bot) with no team_id is
         // invisible in every view.
-        const userTasks = await ctx.db.query("tasks")
-          .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
-          .collect();
+        const userTasks = await collectByUser(userId);
         for (const t of userTasks) {
           if (!t.team_id) pushUnique(t);
         }
-        const assignedTasks = await ctx.db.query("tasks")
-          .withIndex("by_assignee_status", (q: any) => q.eq("assignee", String(userId)))
-          .collect();
+        const assignedTasks = await collectByAssignee(String(userId));
         for (const t of assignedTasks) {
           if (!t.team_id) pushUnique(t);
         }
       } else {
         // UNSCOPED: all user's tasks (creator or assignee).
-        const userTasks = await ctx.db.query("tasks")
-          .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
-          .collect();
+        const userTasks = await collectByUser(userId);
         for (const t of userTasks) pushUnique(t);
-        const assignedTasks = await ctx.db.query("tasks")
-          .withIndex("by_assignee_status", (q: any) => q.eq("assignee", String(userId)))
-          .collect();
+        const assignedTasks = await collectByAssignee(String(userId));
         for (const t of assignedTasks) pushUnique(t);
       }
       tasks = allTasks;
@@ -1086,19 +1101,36 @@ export const webList = query({
       } catch {}
     }
 
-    const items = result.map(t => ({
-      ...t,
-      creator: userMap.get(t.user_id.toString()) || null,
-      assignee_info: t.assignee ? userMap.get(t.assignee.toString()) || null : null,
-      plan: t.plan_id ? planMap.get(t.plan_id.toString()) || null : null,
-      source_agent_type: t.created_from_conversation ? sourceConvMap.get(t.created_from_conversation.toString())?.agent_type || null : null,
-      origin_session: t.created_from_conversation ? (() => {
+    // Compute the delta cursor from the *unfiltered* row set so the next
+    // subscription doesn't keep re-fetching rows the local filters dropped.
+    // For full-snapshot mode (no `since`) cursor still reflects the newest
+    // row seen, so the next page can switch to delta cleanly.
+    let cursor = since ?? 0;
+    for (const t of tasks) {
+      if (typeof t.updated_at === "number" && t.updated_at > cursor) cursor = t.updated_at;
+    }
+
+    // In-place enrichment instead of `{...t, ...}` — the spread doubled peak
+    // heap (both `result` and the enriched array alive simultaneously) and
+    // was a top contributor to TooMuchMemoryCarryOver on this UDF.
+    for (const t of result as any[]) {
+      t.creator = userMap.get(t.user_id.toString()) || null;
+      t.assignee_info = t.assignee ? userMap.get(t.assignee.toString()) || null : null;
+      t.plan = t.plan_id ? planMap.get(t.plan_id.toString()) || null : null;
+      t.source_agent_type = t.created_from_conversation
+        ? sourceConvMap.get(t.created_from_conversation.toString())?.agent_type || null
+        : null;
+      if (t.created_from_conversation) {
         const sc = sourceConvMap.get(t.created_from_conversation.toString());
-        return sc?.session_id ? { conversation_id: t.created_from_conversation.toString(), session_id: sc.session_id, title: sc.title } : null;
-      })() : null,
-      session_count: (t.conversation_ids || []).length,
-    }));
-    return { items, hasMore: false };
+        t.origin_session = sc?.session_id
+          ? { conversation_id: t.created_from_conversation.toString(), session_id: sc.session_id, title: sc.title }
+          : null;
+      } else {
+        t.origin_session = null;
+      }
+      t.session_count = (t.conversation_ids || []).length;
+    }
+    return { items: result, hasMore: false, cursor, isDelta };
   },
 });
 
