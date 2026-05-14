@@ -33,26 +33,21 @@ export default defineConfig({
     port: 3000,
     host: true,
     allowedHosts: ["local.codecast.sh", "local.1.codecast.sh", "local.2.codecast.sh"],
-    // Transform the heaviest modules on boot so the first nav doesn't race HMR.
-    // Sized by line count; ConversationView alone is 10k LOC.
-    warmup: {
-      clientFiles: [
-        "./components/ConversationView.tsx",
-        "./components/ConversationList.tsx",
-        "./components/GlobalSessionPanel.tsx",
-        "./components/CommandPalette.tsx",
-        "./components/ActivityFeed.tsx",
-        "./components/PlanDetailPanel.tsx",
-        "./components/FileDiffLayout.tsx",
-        "./components/Sidebar.tsx",
-        "./store/inboxStore.ts",
-      ],
-    },
+    // NOTE: server.warmup is deliberately omitted. Warming up a 10k-LOC
+    // module (ConversationView.tsx) on boot kicks the optimizer into a
+    // dep-discovery cycle that races real page requests, producing
+    // ERR_CONTENT_LENGTH_MISMATCH on the in-flight transform response and
+    // leaving the boot shell stuck at "...". Vite's natural request-driven
+    // pipeline plus holdUntilCrawlEnd below is more reliable than warmup
+    // for a graph this large.
   },
-  // Pre-bundle heavy CJS/ESM-interop deps so the optimizer doesn't have to
-  // discover and re-bundle them mid-session (which invalidates module URLs
-  // and causes ERR_CONTENT_LENGTH_MISMATCH on in-flight requests).
+  // Pre-bundle every heavy CJS/ESM-interop dep that the SPA's entry graph
+  // reaches transitively. The goal isn't speed; it's stability: the optimizer
+  // does discovery once at boot, never re-bundles mid-session, and module URLs
+  // stay stable so the dev server can't serve a Content-Length that drifts
+  // from the body bytes.
   optimizeDeps: {
+    holdUntilCrawlEnd: true,
     include: [
       "react",
       "react-dom",
@@ -61,8 +56,28 @@ export default defineConfig({
       "convex/react",
       "@convex-dev/auth/react",
       "react-markdown",
+      "rehype-highlight",
+      "remark-gfm",
+      "@tanstack/react-virtual",
+      "lucide-react",
+      "sonner",
+      "cmdk",
+      "nanoid",
+      "nprogress",
+      "react-resizable-panels",
+      "react-rnd",
       "@dnd-kit/core",
       "@dnd-kit/sortable",
+      "@radix-ui/react-dialog",
+      "@radix-ui/react-dropdown-menu",
+      "@radix-ui/react-popover",
+      "@radix-ui/react-tooltip",
+      "@radix-ui/react-tabs",
+      "@radix-ui/react-scroll-area",
+      "@radix-ui/react-slot",
+      "@radix-ui/react-label",
+      "@radix-ui/react-accordion",
+      "@radix-ui/react-avatar",
       "dexie",
     ],
   },
