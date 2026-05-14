@@ -5230,7 +5230,7 @@ async function withTmuxLock<T>(target: string, fn: () => Promise<T>): Promise<T>
 // hardcoded to safe choices (Escape for both interrupted and rewind — Enter would
 // rewind the conversation), and the stall guard fails fast if our action doesn't
 // change the live state, instead of hammering the same key forever.
-async function ensureTmuxReady(target: string): Promise<void> {
+export async function ensureTmuxReady(target: string): Promise<void> {
   const BUSY_WAIT_MS = 90_000;
   const STUCK_BUDGET_MS = 8_000;
   const startedAt = Date.now();
@@ -5299,7 +5299,7 @@ async function ensureTmuxReady(target: string): Promise<void> {
   }
 }
 
-async function injectViaTmux(target: string, content: string): Promise<void> {
+export async function injectViaTmux(target: string, content: string): Promise<void> {
   return withTmuxLock(target, () => injectViaTmuxInner(target, content));
 }
 
