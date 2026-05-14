@@ -145,6 +145,10 @@ function createWindow() {
       nodeIntegration: false,
       zoomFactor: zoom,
       additionalArguments: [`--zoom-factor=${zoom}`],
+      // Keep the Convex live-query WebSocket alive when the window is
+      // hidden or unfocused. Default-on throttling can pause subscription
+      // delivery in the renderer, leaving the inbox stale until refocus.
+      backgroundThrottling: false,
     },
     icon: path.join(__dirname, "assets", "icon.png"),
     show: false,
