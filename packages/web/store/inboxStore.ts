@@ -1250,7 +1250,10 @@ export const useInboxStore = create<InboxStoreState>(
 
   renameSession: action(function (this: Draft, id: string, title: string) {
     if (this.sessions[id]) this.sessions[id].title = title;
-    if (this.conversations[id]) this.conversations[id].title = title;
+    if (this.conversations[id]) {
+      this.conversations[id].title = title;
+      this.conversations[id].title_is_custom = true;
+    }
   }),
 
   switchProject: action(function (this: Draft, convId: string, path: string) {

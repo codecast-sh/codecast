@@ -9,10 +9,11 @@ export const setTitleAndSubtitle = internalMutation({
     subtitle: v.string(),
   },
   handler: async (ctx, args) => {
-    await ctx.db.patch(args.conversation_id, {
-      title: args.title,
-      subtitle: args.subtitle,
-    });
+    const conv = await ctx.db.get(args.conversation_id);
+    if (!conv) return;
+    const patch: { title?: string; subtitle?: string } = { subtitle: args.subtitle };
+    if (!conv.title_is_custom) patch.title = args.title;
+    await ctx.db.patch(args.conversation_id, patch);
   },
 });
 
