@@ -3709,9 +3709,11 @@ export const updateTitle = mutation({
       throw new Error("Unauthorized: can only update your own conversations");
     }
 
-    await ctx.db.patch(args.conversation_id, {
-      title: args.title,
-    });
+    if (!conversation.title_is_custom) {
+      await ctx.db.patch(args.conversation_id, {
+        title: args.title,
+      });
+    }
 
     if (args.api_token) {
       await ctx.db.patch(conversation.user_id, {

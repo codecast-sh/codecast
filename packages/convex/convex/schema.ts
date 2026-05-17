@@ -208,6 +208,7 @@ export default defineSchema({
     short_id: v.optional(v.string()),
     auto_shared: v.optional(v.boolean()),
     skip_title_generation: v.optional(v.boolean()),
+    title_is_custom: v.optional(v.boolean()),
     idle_summary: v.optional(v.string()),
     // Absolute flag: a truthy value means dismissed until a user action clears
     // it. Never compare against `updated_at` — dozens of mutations bump that
