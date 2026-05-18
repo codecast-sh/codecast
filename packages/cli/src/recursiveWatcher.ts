@@ -121,8 +121,12 @@ export class RecursiveWatcher extends EventEmitter {
     this.debounceTimers.clear();
   }
 
-  restart(): void {
+  async restart(): Promise<void> {
     this.stop();
+    // Yield before re-opening: bun's native File Watcher thread holds an
+    // os_unfair_lock during fs.watch teardown, and a back-to-back close→open
+    // on the same path can deadlock the main thread against that worker.
+    await new Promise((resolve) => setTimeout(resolve, 250));
     this.start();
   }
 

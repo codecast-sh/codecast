@@ -209,7 +209,7 @@ describe("RecursiveWatcher", () => {
     watcher.start();
     await new Promise(r => setTimeout(r, 200));
 
-    watcher.restart();
+    await watcher.restart();
     expect(watcher.isWatching).toBe(true);
     await new Promise(r => setTimeout(r, 200));
 

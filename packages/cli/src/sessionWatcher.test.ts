@@ -175,7 +175,7 @@ describe("SessionWatcher", () => {
     watcher.start();
     await new Promise(r => setTimeout(r, 200));
 
-    watcher.restart();
+    await watcher.restart();
     await new Promise(r => setTimeout(r, 200));
 
     const eventPromise = waitForSessionEvent(

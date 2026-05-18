@@ -118,8 +118,14 @@ export class SessionWatcher extends EventEmitter {
     }
   }
 
-  restart(): void {
+  async restart(): Promise<void> {
     this.stop();
+    // Yield before re-opening: bun's native File Watcher thread holds an
+    // os_unfair_lock during fs.watch teardown, and a back-to-back close→open
+    // on the same path can deadlock the main thread against that worker.
+    // (Observed: daemon froze for 27h on wake-from-sleep with both threads
+    // wedged on __ulock_wait2.)
+    await new Promise((resolve) => setTimeout(resolve, 250));
     this.start();
   }
 
