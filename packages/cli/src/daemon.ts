@@ -5007,15 +5007,15 @@ function parseInteractivePrompt(text: string): InteractivePrompt | null {
       firstOptionIdx = i;
       if (/^\s*[❯>]\s*\d/.test(lines[i])) hasCursorIndicator = true;
       const label = m[2].replace(/\s*[✓✗✔☑]\s*/g, "").trim();
-      if (label.length > 80) continue;
+      if (label.length > 200) continue;
       const description = m[3]?.trim() || undefined;
       if (label) options.unshift({ label, description });
       gapCount = 0;
     } else if (options.length > 0) {
       const trimmed = lines[i].trim();
-      if (!trimmed || /^\s{10,}/.test(lines[i])) {
+      if (!trimmed || /^\s{4,}/.test(lines[i])) {
         gapCount++;
-        if (gapCount > 3) break;
+        if (gapCount > 8) break;
       } else {
         break;
       }
@@ -5024,7 +5024,7 @@ function parseInteractivePrompt(text: string): InteractivePrompt | null {
 
   if (options.length >= 2 && firstOptionIdx >= 0) {
     const tail = lines.slice(firstOptionIdx).join("\n");
-    const hasFooter = /enter to confirm|esc(ape)? to (exit|cancel)|↑.*↓|←.*→|arrow keys/i.test(tail);
+    const hasFooter = /enter to (confirm|select)|esc(ape)? to (exit|cancel)|↑.*↓|←.*→|arrow keys/i.test(tail);
     if (hasCursorIndicator || hasFooter) {
       const headerLines = lines.slice(Math.max(0, firstOptionIdx - 5), firstOptionIdx)
         .map(l => l.trim())
