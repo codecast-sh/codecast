@@ -1153,13 +1153,10 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onNavi
   const { containerRef: flipContainerRef, beforeReorder } = useFlipAnimation();
   const getConvKey = useCallback((c: Conversation) => c._id, []);
 
-  const user = useQuery(api.users.getCurrentUser);
+  const user = useInboxStore((s) => s.currentUser);
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id) as Id<"teams"> | undefined;
   const effectiveTeamId = activeTeamId || user?.team_id;
-  const teamMembers = useQuery(
-    api.teams.getTeamMembers,
-    effectiveTeamId ? { team_id: effectiveTeamId } : "skip"
-  );
+  const teamMembers = useInboxStore((s) => s.teamMembers.length > 0 ? s.teamMembers : null);
   const hasTeammates = teamMembers && teamMembers.length > 1;
   const hasTeam = !!effectiveTeamId;
 

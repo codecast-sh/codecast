@@ -1,8 +1,7 @@
-import { useQuery } from "convex/react";
-import { api } from "@codecast/convex/convex/_generated/api";
+import { useInboxStore } from "../store/inboxStore";
 
 export function useCurrentUser() {
-  const user = useQuery(api.users.getCurrentUser);
+  const user = useInboxStore((s) => s.currentUser);
 
   return {
     user,

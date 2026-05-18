@@ -1,9 +1,8 @@
 import { useState } from "react";
-import { useQuery } from "convex/react";
-import { api } from "@codecast/convex/convex/_generated/api";
 import { X, Terminal } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
 import { copyToClipboard } from "../lib/utils";
+import { useCurrentUser } from "../hooks/useCurrentUser";
 
 const DISMISS_DURATION_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
@@ -13,7 +12,7 @@ export function TmuxMissingBanner() {
   const updateDismissed = useInboxStore(s => s.updateClientDismissed);
   const [copied, setCopied] = useState(false);
 
-  const user = useQuery(api.users.getCurrentUser);
+  const { user } = useCurrentUser();
 
   const isDismissed = dismissedTs > 0 && Date.now() - dismissedTs < DISMISS_DURATION_MS;
 

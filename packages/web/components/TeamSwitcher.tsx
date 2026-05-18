@@ -1,7 +1,8 @@
-import { useQuery, useMutation } from "convex/react";
+import { useMutation } from "convex/react";
 import { useRouter } from "next/navigation";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../store/inboxStore";
+import { useCurrentUser } from "../hooks/useCurrentUser";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -19,8 +20,8 @@ const InviteModal = lazy(() => import("./InviteModal").then(m => ({ default: m.I
 
 export function TeamSwitcher() {
   const router = useRouter();
-  const user = useQuery(api.users.getCurrentUser);
-  const teams = useQuery(api.teams.getUserTeams);
+  const { user } = useCurrentUser();
+  const teams = useInboxStore((s) => s.teams);
   const saveActiveTeam = useMutation(api.teams.setActiveTeam);
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id) as Id<"teams"> | undefined;
   const updateClientUI = useInboxStore((s) => s.updateClientUI);

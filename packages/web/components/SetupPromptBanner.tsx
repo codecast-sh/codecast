@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import Link from "next/link";
+import { useCurrentUser } from "../hooks/useCurrentUser";
 import { X, Terminal, ArrowRight } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
 import { useMountEffect } from "../hooks/useMountEffect";
@@ -13,7 +14,7 @@ export function SetupPromptBanner() {
   const updateDismissed = useInboxStore(s => s.updateClientDismissed);
   const [mounted, setMounted] = useState(false);
 
-  const user = useQuery(api.users.getCurrentUser);
+  const { user } = useCurrentUser();
   const conversationsResult = useQuery(
     api.conversations.listConversations,
     user?._id ? { filter: "my", limit: 1 } : "skip"

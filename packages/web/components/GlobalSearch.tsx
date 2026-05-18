@@ -6,6 +6,7 @@ import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useRouter } from "next/navigation";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
+import { useInboxStore } from "../store/inboxStore";
 
 function parseSearchTerms(query: string): string[] {
   const terms: string[] = [];
@@ -83,7 +84,7 @@ export function GlobalSearch() {
   const inputRef = useRef<HTMLInputElement>(null);
   const router = useRouter();
 
-  const userTeams = useQuery(api.teams.getUserTeams);
+  const userTeams = useInboxStore((s) => s.teams);
 
   useWatchEffect(() => {
     const timer = setTimeout(() => {

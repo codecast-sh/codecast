@@ -1,6 +1,7 @@
 import { useState } from "react";
-import { useMutation, useQuery } from "convex/react";
+import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
+import { useCurrentUser } from "../hooks/useCurrentUser";
 import {
   Dialog,
   DialogContent,
@@ -20,7 +21,7 @@ interface SettingsModalProps {
 
 export function SettingsModal({ trigger }: SettingsModalProps) {
   const [open, setOpen] = useState(false);
-  const user = useQuery(api.users.getCurrentUser);
+  const { user } = useCurrentUser();
   const updateProfile = useMutation(api.users.updateProfile);
 
   const [name, setName] = useState("");
