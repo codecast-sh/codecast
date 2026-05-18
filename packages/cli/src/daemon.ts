@@ -9646,6 +9646,15 @@ async function main(): Promise<void> {
         } else {
           log(`Skipped permission record for ${toolName || "unknown"} (SKIP_TOOLS) session ${sessionId.slice(0, 8)}`);
           permissionRecordPending.delete(sessionId);
+          if (toolName === "AskUserQuestion") {
+            findSessionProcess(sessionId, detectSessionAgentType(sessionId)).then(async (proc) => {
+              if (!proc) return;
+              const tmuxTarget = await findTmuxPaneForTty(proc.tty) || (resumeSessionCache.get(sessionId) ?? null);
+              if (tmuxTarget) {
+                checkForInteractivePrompt(tmuxTarget, sessionId, convId, syncService, 3000).catch(() => {});
+              }
+            }).catch(() => {});
+          }
         }
       }
 
