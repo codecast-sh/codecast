@@ -282,7 +282,7 @@ function ForkCorner({ colorKey }: { colorKey: string }) {
 
 // -- SessionCard (shared) --
 
-export function SessionCard({
+export const SessionCard = memo(function SessionCard({
   session,
   isActive,
   isParentActive,
@@ -742,7 +742,7 @@ export function SessionCard({
       )}
     </div>
   );
-}
+});
 
 // -- SessionListPanel (shared) --
 

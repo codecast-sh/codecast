@@ -14,7 +14,7 @@ import { ConversationDiffLayout } from "../../components/ConversationDiffLayout"
 import { ConversationData } from "../../components/ConversationView";
 import { shareOrigin } from "../../lib/utils";
 import { useConversationMessages } from "../../hooks/useConversationMessages";
-import { useInboxStore, getSessionRenderKey, isConvexId, sortSessions, isInterruptControlMessage, ensureHydrated } from "../../store/inboxStore";
+import { useInboxStore, isConvexId, sortSessions, isInterruptControlMessage, ensureHydrated } from "../../store/inboxStore";
 import { SharePopover } from "../../components/SharePopover";
 import { ActivityFeed } from "../../components/ActivityFeed";
 import { PlanContextPanel } from "../../components/PlanContextPanel";
@@ -45,6 +45,12 @@ const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, o
   const generateShareLink = useMutation(api.conversations.generateShareLink);
   const [resumeState, setResumeState] = useState<"idle" | "resuming" | "sent" | "failed">("idle");
   const forceRestartAttemptedRef = useRef(false);
+  const [_trackedSessionId, _setTrackedSessionId] = useState(sessionId);
+  if (_trackedSessionId !== sessionId) {
+    _setTrackedSessionId(sessionId);
+    setResumeState("idle");
+    forceRestartAttemptedRef.current = false;
+  }
 
   const lastMsg = conversation?.messages?.[conversation.messages.length - 1];
   const lastRoleIsUser = lastMsg?.role === "user";
@@ -448,9 +454,6 @@ export function QueuePageClient() {
     setShowMySessions(true);
   }, [setShowMySessions]);
 
-  const viewingDismissedRenderKey = getSessionRenderKey(viewingDismissedSession);
-  const currentSessionRenderKey = getSessionRenderKey(currentSession);
-
   const inboxContent = (
     <>
       {showMySessions ? (
@@ -462,9 +465,8 @@ export function QueuePageClient() {
           </div>
         </div>
       ) : viewingDismissedSession ? (
-        <ErrorBoundary name="Conversation" level="inline" key={`eb-${viewingDismissedRenderKey}`}>
+        <ErrorBoundary name="Conversation" level="inline">
           <InboxConversation
-            key={viewingDismissedRenderKey || viewingDismissedSession._id}
             sessionId={viewingDismissedSession._id}
             isIdle={viewingDismissedSession.is_idle}
             onSendAndAdvance={() => setViewingDismissedId(null)}
@@ -474,13 +476,8 @@ export function QueuePageClient() {
           />
         </ErrorBoundary>
       ) : currentSession ? (
-        <ErrorBoundary name="Conversation" level="inline" key={`eb-${currentSessionRenderKey}`}>
+        <ErrorBoundary name="Conversation" level="inline">
           <InboxConversation
-            key={
-              scrollTarget?.sessionId === currentSession._id
-                ? `${currentSessionRenderKey}-${scrollTarget.messageId}`
-                : (currentSessionRenderKey || currentSession._id)
-            }
             sessionId={currentSession._id}
             isIdle={currentSession.is_idle}
             onSendAndAdvance={handleSendAndAdvance}
