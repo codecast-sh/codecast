@@ -387,7 +387,8 @@ function TaskSessionCards({ sessions }: { sessions: any[] }) {
 }
 
 export function OrchestrationHeader({ tasks, sessions }: { tasks: any[]; sessions: any[] }) {
-  const activeAgents = tasks.filter((t: any) => t.activeSession);
+  const taskActiveSessions = useInboxStore((s) => s.taskActiveSessions);
+  const activeAgents = tasks.filter((t: any) => taskActiveSessions[t._id]);
   const doneTasks = tasks.filter((t: any) => t.status === "done");
   const blockedTasks = tasks.filter((t: any) => t.execution_status === "blocked" || t.execution_status === "needs_context");
   const concernTasks = tasks.filter((t: any) => t.execution_status === "done_with_concerns");
@@ -485,7 +486,7 @@ export function OrchestrationHeader({ tasks, sessions }: { tasks: any[]; session
             {activeAgents.map((t: any) => (
               <Link
                 key={t._id}
-                href={`/conversation/${t.activeSession.session_id}`}
+                href={`/conversation/${taskActiveSessions[t._id]?.session_id}`}
                 className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-emerald-500/10 hover:bg-emerald-500/20 transition-colors group/agent"
               >
                 <LivenessDot state="active" size="xs" />
@@ -561,6 +562,7 @@ export function PlanTaskSection({ planShortId, tasks, sessions }: { planShortId:
   const [showFilterBar, setShowFilterBar] = useState(false);
   const updateTask = useInboxStore((s) => s.updateTask);
   const createTask = useInboxStore((s) => s.createTask);
+  const taskActiveSessions = useInboxStore((s) => s.taskActiveSessions);
 
   const cycleStatus = useCallback((shortId: string, currentStatus: string) => {
     const idx = TASK_STATUS_CYCLE.indexOf(currentStatus);
@@ -734,13 +736,13 @@ export function PlanTaskSection({ planShortId, tasks, sessions }: { planShortId:
                     className="text-sm text-sol-text truncate"
                   />
                 </div>
-                {task.activeSession && (
-                  <ActiveSessionBadge session={task.activeSession} />
+                {taskActiveSessions[task._id] && (
+                  <ActiveSessionBadge session={taskActiveSessions[task._id]} />
                 )}
                 {hasExec && (
                   <TaskStatusBadge status={task.execution_status} type="execution" className="flex-shrink-0" />
                 )}
-                {taskSessions.length > 0 && !task.activeSession && (
+                {taskSessions.length > 0 && !taskActiveSessions[task._id] && (
                   <span className="text-[10px] text-gray-400 dark:text-gray-500 flex-shrink-0 font-mono">
                     {taskSessions.length} sess
                   </span>
@@ -842,6 +844,7 @@ export function PlanTaskSection({ planShortId, tasks, sessions }: { planShortId:
 }
 
 export function OrchestrationTab({ tasks, sessions }: { tasks: any[]; sessions: any[] }) {
+  const taskActiveSessions = useInboxStore((s) => s.taskActiveSessions);
   const activeSessions = sessions.filter((s: any) => s.is_active);
   const recentSessions = [...sessions].sort((a: any, b: any) => (b.updated_at || 0) - (a.updated_at || 0));
 
@@ -927,8 +930,8 @@ export function OrchestrationTab({ tasks, sessions }: { tasks: any[]; sessions: 
                         {hasExec && (
                           <TaskStatusBadge status={task.execution_status} type="execution" />
                         )}
-                        {task.activeSession && (
-                          <ActiveSessionBadge session={task.activeSession} />
+                        {taskActiveSessions[task._id] && (
+                          <ActiveSessionBadge session={taskActiveSessions[task._id]} />
                         )}
                         {task.actual_minutes && (
                           <span className="text-[10px] text-gray-400 dark:text-gray-500 font-mono">

@@ -85,6 +85,7 @@ function CreatorAvatar({ creator }: { creator?: { name: string; image?: string; 
 }
 
 export function TaskRow({ task, state, triageMode, onTriage }: { task: TaskItem; state: ItemRowState; triageMode?: boolean; onTriage?: (task: TaskItem, action: "active" | "dismissed") => void }) {
+  const activeSession = useInboxStore((s) => s.taskActiveSessions[task._id]) ?? null;
   const status = STATUS_CONFIG[task.status as TaskStatus] || STATUS_CONFIG.open;
   const priority = PRIORITY_CONFIG[task.priority as TaskPriority] || PRIORITY_CONFIG.medium;
   const StatusIcon = status.icon;
@@ -113,7 +114,7 @@ export function TaskRow({ task, state, triageMode, onTriage }: { task: TaskItem;
         className="flex-shrink-0 hover:scale-125 transition-transform"
         title="Change status (s)"
       >
-        {(task as any).activeSession && taskLivenessState(task.status, (task as any).activeSession) === "active" ? (
+        {activeSession && taskLivenessState(task.status, activeSession) === "active" ? (
           <LivenessDot state="active" size="sm" />
         ) : (
           <StatusIcon className={`w-4 h-4 ${status.color}`} />
@@ -146,8 +147,8 @@ export function TaskRow({ task, state, triageMode, onTriage }: { task: TaskItem;
           <span className="flex-shrink-0 cq-hide-compact" title={`${task.source} created`}><Bot className="w-3.5 h-3.5 text-sol-text-dim/60" /></span>
         )
       )}
-      {(task as any).activeSession ? (
-        <ActiveSessionBadge session={(task as any).activeSession} className="cq-hide-compact" />
+      {activeSession ? (
+        <ActiveSessionBadge session={activeSession} className="cq-hide-compact" />
       ) : task.session_count && task.session_count > 0 ? (
         <span className="text-[10px] text-sol-text-dim flex-shrink-0 font-mono cq-hide-compact" title={`${task.session_count} session${task.session_count > 1 ? "s" : ""}`}>
           <Link2 className="w-3 h-3 inline mr-0.5" />{task.session_count}
@@ -439,6 +440,7 @@ function KanbanCard({
   onDragStart?: (e: React.DragEvent) => void;
   onDragEnd?: () => void;
 }) {
+  const activeSession = useInboxStore((s) => s.taskActiveSessions[task._id]) ?? null;
   const priority = PRIORITY_CONFIG[task.priority as TaskPriority] || PRIORITY_CONFIG.none;
   const PriorityIcon = priority.icon;
   const assignee = task.assignee_info;
@@ -457,8 +459,8 @@ function KanbanCard({
       <div className="flex items-start justify-between gap-2 mb-2">
         <span className="text-[10px] font-mono text-sol-text-dim leading-none mt-0.5">{task.short_id}</span>
         <div className="flex items-center gap-1.5 flex-shrink-0">
-          {(task as any).activeSession && (
-            <ActiveSessionBadge session={(task as any).activeSession} compact />
+          {activeSession && (
+            <ActiveSessionBadge session={activeSession} compact />
           )}
           {assignee ? (() => {
             const av = assignee.image ? (

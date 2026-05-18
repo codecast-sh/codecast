@@ -52,21 +52,23 @@ export function useSyncTasksWithArgs(wsArgs: WorkspaceArgs) {
     wsArgs === "skip" ? "skip" : {}
   );
 
-  // Server returns { items, cursor, isDelta }; we surface items+activeSession
-  // overlay and the delta flag to the sync layer.
-  const merged = useMemo(() => {
+  // Sync tasks WITHOUT the activeSession overlay so daemon heartbeats
+  // (which churn activeMap every ~30s) don't re-sync the entire task table.
+  const taskData = useMemo(() => {
     if (tasksResult === undefined) return undefined;
     const items: any[] = tasksResult.items ?? tasksResult;
-    const overlayed = activeMap
-      ? items.map((t: any) => ({ ...t, activeSession: activeMap[String(t._id)] ?? null }))
-      : items;
-    return { items: overlayed, isDelta: !!tasksResult.isDelta, cursor: tasksResult.cursor };
-  }, [tasksResult, activeMap]);
+    return { items, isDelta: !!tasksResult.isDelta, cursor: tasksResult.cursor };
+  }, [tasksResult]);
 
-  useConvexSync(merged, useCallback((data: any) => {
+  useConvexSync(taskData, useCallback((data: any) => {
     syncTable("tasks", data.items, { isDelta: data.isDelta });
     if (typeof data.cursor === "number") lastSeenCursor.current = data.cursor;
   }, [syncTable]));
+
+  // Active sessions stored separately — lightweight update, no task resync.
+  useConvexSync(activeMap, useCallback((data: any) => {
+    if (data) useInboxStore.setState({ taskActiveSessions: data });
+  }, []));
 
   // Periodically promote the latest seen cursor. Each promotion triggers a
   // resubscription with the new `since`, which discards already-shipped rows
