@@ -760,6 +760,7 @@ interface InboxStoreState {
 
   // -- Task / Doc / Plan / Project state --
   tasks: Record<string, TaskItem>;
+  taskActiveSessions: Record<string, any>;
   docs: Record<string, DocItem>;
   plans: Record<string, PlanItem>;
   projects: Record<string, ProjectItem>;
@@ -1955,6 +1956,7 @@ export const useInboxStore = create<InboxStoreState>(
   })),
 
   tasks: {},
+  taskActiveSessions: {} as Record<string, any>,
   mentionIndex: { tasks: {}, docs: {}, plans: {} },
   docs: {},
   plans: {},
