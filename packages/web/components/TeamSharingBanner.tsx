@@ -3,6 +3,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { useRouter } from "next/navigation";
 import { X, Users, ArrowRight } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
+import { useCurrentUser } from "../hooks/useCurrentUser";
 
 const DISMISS_DURATION_MS = 24 * 60 * 60 * 1000;
 
@@ -14,7 +15,7 @@ export function TeamSharingBanner() {
   const updateDismissed = useInboxStore((s) => s.updateClientDismissed);
   const router = useRouter();
 
-  const user = useQuery(api.users.getCurrentUser);
+  const { user } = useCurrentUser();
   const mappings = useQuery(api.users.getDirectoryTeamMappings);
 
   const isDismissed =

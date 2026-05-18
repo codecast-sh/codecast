@@ -476,19 +476,15 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
 
   const updateTask = useInboxStore((s) => s.updateTask);
   const pinDoc = useInboxStore((s) => s.pinDoc);
-  const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id);
   const { user: currentUser } = useCurrentUser();
-  const effectiveTeamId = (activeTeamId || (currentUser as any)?.team_id) as string | undefined;
-  const teamMembersQuery = useQuery(api.teams.getTeamMembers, effectiveTeamId ? { team_id: effectiveTeamId as any } : "skip");
-  const cachedMembers = useInboxStore((s) => s.teamMembers);
-  const teamMembers = teamMembersQuery ?? (cachedMembers.length > 0 ? cachedMembers : undefined);
+  const teamMembers = useInboxStore((s) => s.teamMembers.length > 0 ? s.teamMembers : undefined);
 
   const open = standalone || paletteOpen;
 
   const killSessionMutation = useMutation(api.conversations.killSession);
 
-  const favorites = useQuery(api.conversations.listFavorites, open ? {} : "skip");
-  const bookmarks = useQuery(api.bookmarks.listBookmarks, open ? {} : "skip");
+  const favorites = useInboxStore((s) => s.favorites);
+  const bookmarks = useInboxStore((s) => s.bookmarks);
   const recentConversations = useQuery(api.conversations.listRecentSessions, open ? {} : "skip") ?? [];
 
   // Debounced search for async conversation results

@@ -2,11 +2,10 @@ import { useState, useRef, useCallback } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useEventListener } from "../hooks/useEventListener";
 import { useAuthActions } from "@convex-dev/auth/react";
-import { useQuery } from "convex/react";
-import { api } from "@codecast/convex/convex/_generated/api";
 import { useRouter } from "next/navigation";
 import { useInboxStore } from "../store/inboxStore";
 import { copyToClipboard } from "../lib/utils";
+import { useCurrentUser } from "../hooks/useCurrentUser";
 
 function UrlBarModal({ onClose }: { onClose: () => void }) {
   const router = useRouter();
@@ -96,7 +95,7 @@ export function UserMenu() {
   const menuRef = useRef<HTMLDivElement>(null);
   const { signOut } = useAuthActions();
   const router = useRouter();
-  const user = useQuery(api.users.getCurrentUser);
+  const { user } = useCurrentUser();
   const toggleShortcutsPanel = useInboxStore(s => s.toggleShortcutsPanel);
 
   useEventListener("mousedown", useCallback((e: MouseEvent) => {

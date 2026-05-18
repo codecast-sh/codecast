@@ -1,10 +1,9 @@
 import { useState } from "react";
-import { useQuery } from "convex/react";
-import { api } from "@codecast/convex/convex/_generated/api";
 import { X, Terminal } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
 import { copyToClipboard } from "../lib/utils";
 import { useMountEffect } from "../hooks/useMountEffect";
+import { useCurrentUser } from "../hooks/useCurrentUser";
 
 const ONE_MIN_MS = 60 * 1000;
 const ONE_HOUR_MS = 60 * ONE_MIN_MS;
@@ -59,7 +58,7 @@ export function CliOfflineBanner() {
   const [mounted, setMounted] = useState(false);
   const [copied, setCopied] = useState(false);
 
-  const user = useQuery(api.users.getCurrentUser);
+  const { user } = useCurrentUser();
 
   useMountEffect(() => { setMounted(true); });
 

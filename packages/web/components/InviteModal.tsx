@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
+import { useCurrentUser } from "../hooks/useCurrentUser";
 import {
   Dialog,
   DialogContent,
@@ -25,7 +26,7 @@ export function InviteModal({ trigger, open: controlledOpen, onOpenChange }: Inv
   const [internalOpen, setInternalOpen] = useState(false);
   const open = controlledOpen ?? internalOpen;
   const setOpen = onOpenChange ?? setInternalOpen;
-  const user = useQuery(api.users.getCurrentUser);
+  const { user } = useCurrentUser();
   const team = useQuery(
     api.teams.getTeam,
     user?.team_id ? { team_id: user.team_id } : "skip"

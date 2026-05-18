@@ -26,6 +26,7 @@ export function useSyncInboxSessions() {
   const showAll = useInboxStore((s) => s.clientState.ui?.show_old_sessions ?? true);
   const inboxSessions = useQuery(api.conversations.listInboxSessions, { show_all: showAll });
   const clientState = useQuery(api.client_state.get, {});
+  const currentUser = useQuery(api.users.getCurrentUser);
   const bgFetchingRef = useRef(new Set<string>());
   const dispatchMutation = useMutation(api.dispatch.dispatch).withOptimisticUpdate(
     (localStore, { patches }) => {
@@ -131,6 +132,10 @@ export function useSyncInboxSessions() {
       }
     }
   }, [pruneDrafts]));
+
+  useConvexSync(currentUser, useCallback((data: any) => {
+    useInboxStore.getState().syncTable("currentUser", data);
+  }, []));
 
   // When the current session becomes dismissed elsewhere, hop to its
   // implementation_session if one exists so the user isn't stranded.

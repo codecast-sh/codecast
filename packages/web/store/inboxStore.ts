@@ -810,6 +810,7 @@ interface InboxStoreState {
   archiveDoc: (id: string) => Promise<any>;
 
   // -- Cached query data (local-first) --
+  currentUser: any | null;
   teams: any[];
   teamMembers: any[];
   teamUnreadCount: number | null;
@@ -988,6 +989,7 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
       }
     },
   },
+  currentUser: { kind: "singleton" },
   teams: { kind: "list" },
   teamMembers: { kind: "list" },
   teamUnreadCount: { kind: "scalar" },
@@ -2194,6 +2196,7 @@ export const useInboxStore = create<InboxStoreState>(
   // CACHED QUERY DATA
   // =====================
 
+  currentUser: null,
   teams: [],
   teamMembers: [],
   teamUnreadCount: null,
