@@ -7477,6 +7477,63 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const [headerHeight, setHeaderHeight] = useState(32);
   const messageInputRef = useRef<HTMLDivElement>(null);
   const [messageInputHeight, setMessageInputHeight] = useState(0);
+  const [initialScrollDone, setInitialScrollDone] = useState(false);
+
+  // Conversation transition: reset per-session state when staying mounted
+  // across session switches (no key-based remount).
+  const [_trackedConvId, _setTrackedConvId] = useState(conversation?._id);
+  if (_trackedConvId !== conversation?._id) {
+    _setTrackedConvId(conversation?._id);
+    _setUserScrolled(false);
+    userScrolledRef.current = false;
+    setIsNearTop(true);
+    setCollapsed(false);
+    setShowThinking(false);
+    setExpandedSequences(new Set());
+    setDiffExpanded(false);
+    setHighlightedMessageId(null);
+    setAllMatchingMessageIds([]);
+    setMatchInstances([]);
+    setCurrentMatchIndex(0);
+    setIsLocalSearchOpen(false);
+    setLocalSearchQuery("");
+    setDebouncedSearchQuery("");
+    setCommentMessageId(null);
+    setShareSelectionMode(false);
+    setSelectedMessageIds(new Set());
+    setIsImageLightboxActive(false);
+    setStickyMsgVisible(false);
+    setNavScrollProgress(1);
+    setInitialScrollDone(false);
+    isNearBottomRef.current = true;
+    lastScrollTopRef.current = 0;
+    prevTimelineLengthRef.current = 0;
+    scrollAnchorRef.current = null;
+    hasScrolledToTarget.current = false;
+    jumpDirectionRef.current = null;
+    isPaginatingRef.current = false;
+    paginationCooldownRef.current = false;
+    isVirtualizerCorrectingRef.current = false;
+    if (correctingTimerRef.current) clearTimeout(correctingTimerRef.current);
+    correctingTimerRef.current = null;
+    scrollCtxRef.current = { messageCount: 0, messagesLen: 0, timelineLen: 0, loadedStartIndex: 0 };
+    knownItemIdsRef.current = new Set();
+    newItemIdsRef.current = new Set();
+    mountTimeRef.current = Date.now();
+    prevStickyMsgIdRef.current = null;
+    prevStickyIdxRef.current = null;
+    stickyGapRef.current = null;
+    dismissedStickyIdsRef.current = new Set();
+  }
+
+  // Reset scroll target tracking when targetMessageId changes (same-session navigation)
+  const [_trackedTargetMsgId, _setTrackedTargetMsgId] = useState(targetMessageId);
+  if (_trackedTargetMsgId !== targetMessageId) {
+    _setTrackedTargetMsgId(targetMessageId);
+    if (targetMessageId) {
+      hasScrolledToTarget.current = false;
+    }
+  }
 
   const convLink = useCallback((id: string) => `/conversation/${id}`, []);
 
@@ -7510,13 +7567,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       toast.error("Failed to send message");
     }
   }, [conversation, effectiveConversationId, sendInlineMessage, addOptimisticMsg, setUserScrolled]);
-  const managedSession = useQuery(
-    api.managedSessions.isSessionManaged,
-    deferredQueriesEnabled && conversation && effectiveConversationId && isConvexId(effectiveConversationId) && isOwner && conversation.status === "active"
-      ? { conversation_id: effectiveConversationId as Id<"conversations"> }
-      : "skip"
-  );
-  const isSessionLive = managedSession?.managed === true;
+  const managedSession = useInboxStore((s) => effectiveConversationId ? s.sessions[effectiveConversationId] : null);
+  const isSessionLive = !!managedSession?.is_connected;
 
   const workflowRun = useQuery(
     api.workflow_runs.get,
@@ -8017,54 +8069,42 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     return extractFilePaths(conversation.messages);
   }, [conversation?.messages]);
 
-  const storeSessions = useInboxStore((s) => s.sessions);
-  // Cross-team mention index — populated by useSyncMentionTasks/Docs/Plans in
-  // DashboardLayout. We sync across teams once globally, then filter here to
-  // the *conversation's* team so the dropdown stays scoped to the team this
-  // conversation belongs to (or to personal items if it's not in a team).
-  const mentionTasks = useInboxStore((s) => s.mentionIndex?.tasks);
-  const mentionPlans = useInboxStore((s) => s.mentionIndex?.plans);
-  const mentionDocs = useInboxStore((s) => s.mentionIndex?.docs);
-  const storeMembers = useInboxStore((s) => s.teamMembers);
   const mentionItemsRef = useRef<MentionItem[]>([]);
-  // Pull team_id from the stored session (InboxSession carries it; ConversationData
-  // doesn't surface it in its type). Used to scope @-mention results to the
-  // conversation's team, falling back to personal-only when there's no team.
-  const convSession = useInboxStore((s) => effectiveConversationId ? s.sessions[effectiveConversationId] : null);
-  const convTeamId = convSession?.team_id ? String(convSession.team_id) : null;
-  const mentionItems = useMemo(() => {
+  const convTeamId = managedSession?.team_id ? String(managedSession.team_id) : null;
+  // Mention items are computed lazily (on dropdown open) to avoid subscribing
+  // ConversationView to s.sessions, mentionIndex, and teamMembers — those
+  // change on every heartbeat and would re-render this 10K-line component.
+  const buildMentionItems = useCallback(() => {
+    const state = useInboxStore.getState();
     const byRecency = (a: { updatedAt?: number }, b: { updatedAt?: number }) => (b.updatedAt || 0) - (a.updatedAt || 0);
-    // Conversation's team scope wins: when the conversation is team-tagged
-    // we only show records in that team; when it's personal we only show
-    // records with no team. This matches conversation visibility rules.
     const inScope = (rec: any): boolean => {
       const recTeam = rec.team_id ? String(rec.team_id) : null;
       if (convTeamId) return recTeam === convTeamId;
       return !recTeam;
     };
-    const persons: MentionItem[] = storeMembers.map((m: any) => ({ id: String(m._id || m.id), type: "person", label: m.name || m.github_username || "Unknown", sublabel: m.github_username ? `@${m.github_username}` : m.email, image: m.image || m.github_avatar_url }));
-    const tasks: MentionItem[] = Object.values(mentionTasks ?? {})
+    const persons: MentionItem[] = (state.teamMembers || []).map((m: any) => ({ id: String(m._id || m.id), type: "person", label: m.name || m.github_username || "Unknown", sublabel: m.github_username ? `@${m.github_username}` : m.email, image: m.image || m.github_avatar_url }));
+    const tasks: MentionItem[] = Object.values(state.mentionIndex?.tasks ?? {})
       .filter(inScope)
       .sort((a: any, b: any) => (b.updated_at || 0) - (a.updated_at || 0))
       .map((t: any) => ({ id: t._id, type: "task", label: t.title, sublabel: t.short_id, shortId: t.short_id, status: t.status, priority: t.priority, updatedAt: t.updated_at }));
-    const docs: MentionItem[] = Object.values(mentionDocs ?? {})
+    const docs: MentionItem[] = Object.values(state.mentionIndex?.docs ?? {})
       .filter((d: any) => d.doc_type !== "plan" && inScope(d))
       .sort((a: any, b: any) => (b.updated_at || 0) - (a.updated_at || 0))
       .map((d: any) => ({ id: d._id, type: "doc", label: d.title, sublabel: d.doc_type, docType: d.doc_type, updatedAt: d.updated_at }));
-    const plans: MentionItem[] = Object.values(mentionPlans ?? {})
+    const plans: MentionItem[] = Object.values(state.mentionIndex?.plans ?? {})
       .filter(inScope)
       .sort((a: any, b: any) => (b.updated_at || 0) - (a.updated_at || 0))
       .map((p: any) => ({ id: p._id, type: "plan", label: p.title, sublabel: p.short_id, shortId: p.short_id, status: p.status, goal: p.goal, updatedAt: p.updated_at }));
-    const sessions: MentionItem[] = Object.values(storeSessions)
+    const sessions: MentionItem[] = Object.values(state.sessions)
       .filter(s => !s.is_subagent && inScope(s))
       .sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0))
       .map(s => ({ id: s._id, type: "session", label: s.title || "Untitled Session", sublabel: s.idle_summary?.slice(0, 80) || s.session_id, shortId: s.session_id, messageCount: s.message_count, projectPath: s.project_path, agentType: s.agent_type, updatedAt: s.updated_at, idleSummary: s.idle_summary }));
     const all = [...persons, ...tasks, ...docs, ...plans, ...sessions];
     all.sort(byRecency);
-    return all;
-  }, [storeMembers, mentionTasks, mentionDocs, mentionPlans, storeSessions, convTeamId]);
-  mentionItemsRef.current = mentionItems;
-  const handleMentionQuery = useCallback((_q: string) => {}, []);
+    mentionItemsRef.current = all;
+  }, [convTeamId]);
+  useEffect(() => { buildMentionItems(); }, [buildMentionItems]);
+  const handleMentionQuery = useCallback((_q: string) => { buildMentionItems(); }, [buildMentionItems]);
 
   const isWaitingForResponse = useMemo(() => {
     if (!conversation || conversation.status !== "active" || timeline.length === 0 || hasMoreBelow) return false;
@@ -8896,8 +8936,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     });
   }, [timeline.length]);
 
-  const [initialScrollDone, setInitialScrollDone] = useState(false);
-
   // New messages auto-scroll (only after initial scroll is done)
   useWatchEffect(() => {
     const hasNewMessages = timeline.length > prevTimelineLengthRef.current;
@@ -9181,11 +9219,11 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const isSessionConnected = !!conversation && conversation.status === "active" && (now - lastActivityAt) < 5 * 60 * 1000;
   const isWorking = isSessionConnected && (now - lastActivityAt) < 45 * 1000 && lastMessageRole === "assistant";
   const isConversationLive = isWorking;
-  const isSessionDisconnected = !!conversation && conversation.status === "active" && managedSession !== undefined && managedSession.managed === false && !isSessionConnected;
+  const isSessionDisconnected = !!conversation && conversation.status === "active" && !!managedSession && !managedSession.is_connected && !isSessionConnected;
   const sessionAge = now - (conversation?.started_at ?? 0);
   const isNewEmptySession = !!conversation && conversation.status === "active" && (conversation.message_count ?? 0) === 0;
-  const isSessionStarting = isNewEmptySession && !managedSession?.managed && sessionAge < 30_000;
-  const isSessionReady = isNewEmptySession && !isSessionStarting && (managedSession?.managed === true || sessionAge >= 30_000) && sessionAge < 120_000;
+  const isSessionStarting = isNewEmptySession && !managedSession?.is_connected && sessionAge < 30_000;
+  const isSessionReady = isNewEmptySession && !isSessionStarting && (managedSession?.is_connected || sessionAge >= 30_000) && sessionAge < 120_000;
 
   useWatchEffect(() => {
     if (conversation) {
