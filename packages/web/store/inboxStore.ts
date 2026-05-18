@@ -164,6 +164,8 @@ export type InboxSession = {
   is_connected?: boolean;
   has_pending: boolean;
   agent_status?: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "stopped" | "starting" | "resuming";
+  tmux_session?: string | null;
+  permission_mode?: string | null;
   is_deferred?: boolean;
   is_pinned?: boolean;
   inbox_dismissed_at?: number | null;
