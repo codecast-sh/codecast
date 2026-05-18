@@ -5734,19 +5734,21 @@ export const listInboxSessions = query({
     );
 
     const agentStatusMap = new Map<string, "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "stopped" | "starting" | "resuming">();
+    const tmuxSessionMap = new Map<string, string>();
+    const permissionModeMap = new Map<string, string>();
     for (const s of managedSessions) {
-      if (!s.conversation_id || !s.agent_status) continue;
+      if (!s.conversation_id) continue;
+      const cid = s.conversation_id.toString();
+      if (s.tmux_session) tmuxSessionMap.set(cid, s.tmux_session);
+      if (s.permission_mode) permissionModeMap.set(cid, s.permission_mode);
+      if (!s.agent_status) continue;
       const heartbeatAlive = now - s.last_heartbeat < HEARTBEAT_ALIVE_MS;
       if (s.agent_status === "stopped" || s.agent_status === "idle") {
-        agentStatusMap.set(s.conversation_id.toString(), s.agent_status);
+        agentStatusMap.set(cid, s.agent_status);
       } else if (heartbeatAlive) {
-        // Heartbeat alive → daemon is running. Trust last known status even if
-        // agent_status_updated_at is stale (status only updates on transitions,
-        // so a long "working" phase naturally has an old timestamp).
-        agentStatusMap.set(s.conversation_id.toString(), s.agent_status);
+        agentStatusMap.set(cid, s.agent_status);
       } else {
-        // Heartbeat dead → daemon crashed or exited, infer stopped
-        agentStatusMap.set(s.conversation_id.toString(), "stopped");
+        agentStatusMap.set(cid, "stopped");
       }
     }
 
@@ -5906,6 +5908,8 @@ export const listInboxSessions = query({
         is_pinned: pinned,
         inbox_dismissed_at: conv.inbox_dismissed_at ?? null,
         agent_status: agentStatus,
+        tmux_session: tmuxSessionMap.get(conv._id.toString()) ?? null,
+        permission_mode: permissionModeMap.get(conv._id.toString()) ?? null,
         last_user_message: lastUserMessage,
         session_error: conv.session_error,
         implementation_session: implementationSession,
@@ -5963,6 +5967,8 @@ export const listInboxSessions = query({
           is_pinned: false,
           inbox_dismissed_at: child.inbox_dismissed_at ?? null,
           agent_status: childAgentStatus,
+          tmux_session: tmuxSessionMap.get(child._id.toString()) ?? null,
+          permission_mode: permissionModeMap.get(child._id.toString()) ?? null,
           last_user_message: null,
           session_error: child.session_error,
           is_subagent: true,
