@@ -8648,7 +8648,12 @@ function startEventLoopMonitor(): NodeJS.Timeout {
 
     if (elapsed > EVENT_LOOP_LAG_THRESHOLD_MS) {
       logLifecycle("wake_detected", `System was suspended for ${Math.round(elapsed / 1000)}s, recovering`);
-      lastWatcherEventTime = 0;
+      // Re-arm to `now`, not 0. Setting to 0 would make the next watchdog tick
+      // see ~56 years of idle time and force a watcher.restart() on every wake,
+      // which can deadlock bun's native File Watcher thread (lock inversion in
+      // fs.watch close→open under load). The watcher's FSEvents handle survives
+      // sleep/wake on macOS; if it doesn't, the genuine 60-min idle path catches it.
+      lastWatcherEventTime = now;
     }
   }, EVENT_LOOP_CHECK_INTERVAL_MS);
 }
@@ -8825,8 +8830,17 @@ function startWatchdog(
     const watcherIdleMinutes = Math.floor((now - lastWatcherEventTime) / 60000);
     if (watcherIdleMinutes >= 60) {
       log(`Watcher idle for ${watcherIdleMinutes}min, restarting`);
+      // Guard with a timeout. The synchronous form of this call previously
+      // deadlocked the event loop indefinitely against bun's File Watcher
+      // thread on an os_unfair_lock (see recursiveWatcher.restart()).
+      // Promise.race lets the watchdog tick recover even if the deadlock recurs.
       try {
-        deps.watcher.restart();
+        await Promise.race([
+          deps.watcher.restart(),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error("watcher restart timeout after 10s")), 10_000),
+          ),
+        ]);
         lastWatcherEventTime = now;
         log(`Watcher restarted successfully`);
       } catch (err) {
