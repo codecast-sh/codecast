@@ -150,9 +150,10 @@ export default function ConversationPage() {
   // Local-first: resolve from inbox store instantly when available.
   // Falls back to server resolver for shared links / external navigation.
   const localSession = useInboxStore(s => s.sessions[id]);
-  const resolved = useQuery(api.conversations.resolveConversation, { id });
+  const resolved = useQuery(api.conversations.resolveConversation, id ? { id } : "skip");
   const effective = resolved ?? (localSession ? { access_level: "owner" as const, conversation_id: localSession._id } : undefined);
 
+  if (!id) return <NotFoundView />;
   if (effective === undefined) return <ConversationLoadingSkeleton />;
   if (effective.access_level === "denied") return <DeniedView />;
   if (effective.access_level === "not_found" || !effective.conversation_id) return <NotFoundView />;
