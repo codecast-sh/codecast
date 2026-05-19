@@ -11,6 +11,7 @@ import { resetConversationPendingMessages } from "./pendingMessages";
 import { advanceForkCopy, type ForkCopyCtx } from "./forkCopy";
 import { hasRecentPendingDaemonCommand } from "./daemonCommandUtils";
 import { shouldShowInInbox } from "./inboxFilters";
+import { filterAndMergeUserMessages } from "./userMessagesFilter";
 import {
   isTeamMember,
   canTeamMemberAccess,
@@ -6872,44 +6873,7 @@ export const getUserMessages = query({
           q.eq("conversation_id", args.conversation_id).eq("role", "assistant"))
         .order("desc").collect(),
     ]);
-    const stripContextTags = (s: string) =>
-      s.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "")
-       .replace(/<task-notification>[\s\S]*?<\/task-notification>/g, "")
-       .replace(/<task-reminder>[\s\S]*?<\/task-reminder>/g, "")
-       .trim();
-    const USER_NOISE_PREFIXES = [
-      "<local-command-stdout>", "<local-command-stderr>", "<local-command-caveat>",
-      "[Request interrupted", "[Request cancelled",
-      "This session is being continued",
-      "Your task is to create a detailed summary",
-      "Please continue the conversation",
-      "Read the output file to retrieve the result:",
-      "Caveat:",
-    ];
-    const filtered = [...userMsgs, ...assistantMsgs]
-      .filter((m) => {
-        if (m.subtype === "compact_boundary") return false;
-        if (!m.content || !m.content.trim()) return false;
-        const t = stripContextTags(m.content);
-        if (!t) return false;
-        if (m.role === "user") {
-          if (USER_NOISE_PREFIXES.some((p) => t.startsWith(p))) return false;
-          if (t.includes("Your task is to create a detailed summary of the conversation so far")) return false;
-          if (m.tool_results && m.tool_results.length > 0 && t.length < 5) return false;
-        }
-        if (m.role === "assistant") {
-          if (m.tool_calls && m.tool_calls.length > 0 && t.length < 30) return false;
-        }
-        return true;
-      })
-      .sort((a, b) => a.timestamp - b.timestamp);
-    return filtered.map((m) => ({
-      _id: m._id,
-      message_uuid: m.message_uuid,
-      role: m.role as "user" | "assistant",
-      content: (stripContextTags(m.content!) || m.content!).slice(0, 500),
-      timestamp: m.timestamp,
-    }));
+    return filterAndMergeUserMessages(userMsgs, assistantMsgs);
   },
 });
 
