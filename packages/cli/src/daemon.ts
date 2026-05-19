@@ -5367,11 +5367,24 @@ async function injectViaTmuxInner(target: string, content: string): Promise<void
 
   // Clear any stale input before pasting to prevent draft text from being
   // prepended to the injected message or submitted by the trailing Enter.
-  // 50ms each is enough for tmux send-keys to flush; 100ms was inherited from
-  // pre-paste-buffer days when we used `-l` and needed extra settle.
+  //
+  // Why C-u alone is not enough: in Claude Code 2.1.x's TUI input box, a single
+  // C-u does not reliably empty the buffer when stale text is present (e.g. a
+  // prompt recalled via Up arrow, or a partial draft). When that happens, the
+  // paste-buffer content gets appended to whatever was left over and the
+  // trailing Enter submits the concatenated string as a single user message —
+  // the "old prompt + new follow-up" duplication seen on 2026-05-19.
+  // Cycling C-a (move to start of line) + C-k (kill to end) reliably drains
+  // the box, and three cycles handles multi-line drafts too. See
+  // daemon.inject-clear.test.ts for the reproduction.
   await tmuxExec(["send-keys", "-t", target, "Escape"]);
   await new Promise(resolve => setTimeout(resolve, 50));
-  await tmuxExec(["send-keys", "-t", target, "C-u"]);
+  for (let i = 0; i < 3; i++) {
+    await tmuxExec(["send-keys", "-t", target, "C-a"]);
+    await new Promise(resolve => setTimeout(resolve, 20));
+    await tmuxExec(["send-keys", "-t", target, "C-k"]);
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
   await new Promise(resolve => setTimeout(resolve, 50));
 
   // Capture pane before paste for before/after comparison
