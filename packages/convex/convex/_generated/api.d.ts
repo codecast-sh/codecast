@@ -65,6 +65,7 @@ import type * as tasks from "../tasks.js";
 import type * as teamActivity from "../teamActivity.js";
 import type * as teams from "../teams.js";
 import type * as titleGeneration from "../titleGeneration.js";
+import type * as userMessagesFilter from "../userMessagesFilter.js";
 import type * as users from "../users.js";
 import type * as workflow_runs from "../workflow_runs.js";
 import type * as workflows from "../workflows.js";
@@ -133,6 +134,7 @@ declare const fullApi: ApiFromModules<{
   teamActivity: typeof teamActivity;
   teams: typeof teams;
   titleGeneration: typeof titleGeneration;
+  userMessagesFilter: typeof userMessagesFilter;
   users: typeof users;
   workflow_runs: typeof workflow_runs;
   workflows: typeof workflows;
