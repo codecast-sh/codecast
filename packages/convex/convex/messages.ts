@@ -687,9 +687,15 @@ export const addMessages = mutation({
     if (insertedCount > 0) {
       const newMessageCount = conversation.message_count + insertedCount;
       const lastMsg = args.messages[args.messages.length - 1];
+      // Use the actual max message timestamp instead of Date.now(): for live
+      // sync these match, but for historical backfill (sync_mode=all dredging
+      // up months-old JSONLs) Date.now() would falsely mark every old session
+      // as just-active and pollute the inbox's "needs input" / "working"
+      // buckets. Math.max guards against clock skew or out-of-order batches.
+      const maxMsgTs = args.messages.reduce((max, m) => Math.max(max, m.timestamp || 0), 0);
       const convPatch: Record<string, unknown> = {
         message_count: newMessageCount,
-        updated_at: Date.now(),
+        updated_at: Math.max(conversation.updated_at, maxMsgTs || Date.now()),
         last_message_role: lastMsg.role,
       };
       const userMsgs = args.messages.filter((m) => m.role === "user");

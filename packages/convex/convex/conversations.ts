@@ -6115,6 +6115,80 @@ export const patchConversation = mutation({
   },
 });
 
+// Repairs conversations whose updated_at was wrongly bumped to Date.now() by
+// addMessages during a sync_mode=all historical backfill (months-old JSONLs
+// re-uploaded with current timestamps, polluting the inbox active panel).
+//
+// For each conversation owned by the caller, looks up the actual latest
+// message timestamp. If updated_at is more than 1 hour ahead of that real
+// timestamp, rewinds it to the real timestamp. Additionally, if the real
+// last message is older than 7 days and the session isn't already dismissed,
+// sets inbox_dismissed_at=now so historical sessions stop appearing in the
+// active panel.
+//
+// Paginated by user — caller passes cursor until isDone=true.
+export const healHistoricalUpdatedAt = mutation({
+  args: {
+    cursor: v.optional(v.string()),
+    limit: v.optional(v.number()),
+    dismiss_older_than_days: v.optional(v.number()),
+    api_token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!authUserId) throw new Error("Authentication required");
+
+    const batchSize = args.limit ?? 100;
+    const dismissCutoffMs = (args.dismiss_older_than_days ?? 7) * 24 * 60 * 60 * 1000;
+    const now = Date.now();
+
+    const result = await ctx.db
+      .query("conversations")
+      .withIndex("by_user_id", (q) => q.eq("user_id", authUserId))
+      .paginate({ cursor: args.cursor ?? null, numItems: batchSize });
+
+    let rewound = 0;
+    let dismissed = 0;
+    for (const conv of result.page) {
+      const lastMsg = await ctx.db
+        .query("messages")
+        .withIndex("by_conversation_timestamp", (q) =>
+          q.eq("conversation_id", conv._id)
+        )
+        .order("desc")
+        .first();
+
+      const realLastTs = lastMsg?.timestamp ?? conv.started_at;
+      const patch: Record<string, unknown> = {};
+
+      if (conv.updated_at > realLastTs + 60 * 60 * 1000) {
+        patch.updated_at = realLastTs;
+        rewound++;
+      }
+
+      if (
+        !conv.inbox_dismissed_at &&
+        now - realLastTs > dismissCutoffMs
+      ) {
+        patch.inbox_dismissed_at = now;
+        dismissed++;
+      }
+
+      if (Object.keys(patch).length > 0) {
+        await ctx.db.patch(conv._id, patch);
+      }
+    }
+
+    return {
+      rewound,
+      dismissed,
+      scanned: result.page.length,
+      cursor: result.continueCursor,
+      isDone: result.isDone,
+    };
+  },
+});
+
 export const reconfigureSession = mutation({
   args: {
     conversation_id: v.id("conversations"),

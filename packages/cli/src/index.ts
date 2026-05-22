@@ -3174,6 +3174,77 @@ program
   });
 
 program
+  .command("heal-historical")
+  .description("Rewind updated_at on sessions whose timestamps were wrongly bumped by historical backfill; dismiss sessions older than N days")
+  .option("--dismiss-older-than-days <days>", "Threshold (days) above which the actual-last-message age also auto-dismisses the session", "7")
+  .option("--limit <n>", "Batch size per Convex call", "100")
+  .action(async (options) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: cast auth");
+      process.exit(1);
+    }
+
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+    const limit = parseInt(options.limit, 10);
+    const dismissOlderThanDays = parseFloat(options.dismissOlderThanDays);
+
+    let cursor: string | undefined;
+    let totalScanned = 0;
+    let totalRewound = 0;
+    let totalDismissed = 0;
+    let batches = 0;
+
+    console.log(`Healing historical sessions (dismiss threshold: ${dismissOlderThanDays}d)\n`);
+
+    for (;;) {
+      const response = await fetch(`${siteUrl}/api/mutation`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          path: "conversations:healHistoricalUpdatedAt",
+          args: {
+            api_token: config.auth_token,
+            cursor,
+            limit,
+            dismiss_older_than_days: dismissOlderThanDays,
+          },
+        }),
+      });
+
+      if (!response.ok) {
+        const text = await response.text();
+        console.error(`Mutation failed: ${response.status} ${text}`);
+        process.exit(1);
+      }
+
+      const body = await response.json() as {
+        status: string;
+        value?: { rewound: number; dismissed: number; scanned: number; cursor: string; isDone: boolean };
+        errorMessage?: string;
+      };
+
+      if (body.status !== "success" || !body.value) {
+        console.error(`Mutation error: ${body.errorMessage || JSON.stringify(body)}`);
+        process.exit(1);
+      }
+
+      batches++;
+      totalScanned += body.value.scanned;
+      totalRewound += body.value.rewound;
+      totalDismissed += body.value.dismissed;
+      console.log(`  batch ${batches}: scanned=${body.value.scanned} rewound=${body.value.rewound} dismissed=${body.value.dismissed}`);
+
+      if (body.value.isDone) break;
+      cursor = body.value.cursor;
+    }
+
+    console.log(`\nDone. Scanned ${totalScanned} conversations across ${batches} batch(es).`);
+    console.log(`  Rewound updated_at: ${totalRewound}`);
+    console.log(`  Dismissed (>${dismissOlderThanDays}d old):    ${totalDismissed}`);
+  });
+
+program
   .command("health")
   .description("Show detailed sync health information including dropped operations and pending files")
   .option("--clear-dropped", "Clear the dropped operations log")
