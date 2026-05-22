@@ -77,6 +77,12 @@ export default defineSchema({
       description: v.optional(v.string()),
     }))),
     available_skills: v.optional(v.string()),
+    // Tolerated for cross-fork data carried over from Ashot's deployment.
+    // No code in this fork reads or writes these fields; they are declared
+    // here only so `convex deploy` doesn't reject existing user docs that
+    // already have them.
+    local_project_roots: v.optional(v.array(v.string())),
+    local_project_roots_updated_at: v.optional(v.number()),
   })
     .index("email", ["email"])
     .index("by_github_username", ["github_username"])
