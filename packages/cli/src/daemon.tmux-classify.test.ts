@@ -1,5 +1,21 @@
 import { describe, expect, test } from "bun:test";
-import { classifyTmuxLiveState, extractTmuxLiveRegion } from "./daemon.js";
+import { classifyTmuxLiveState, extractTmuxLiveRegion, isPhantomBypassPermissionBlock } from "./daemon.js";
+
+describe("isPhantomBypassPermissionBlock", () => {
+  test("suppresses auto-approved tool permission_blocked in bypass mode", () => {
+    expect(isPhantomBypassPermissionBlock("permission_blocked", "bypassPermissions", "Bash: rm -rf")).toBe(true);
+    expect(isPhantomBypassPermissionBlock("permission_blocked", "bypassPermissions", undefined)).toBe(true);
+  });
+
+  test("lets a genuine AskUserQuestion block through even in bypass mode", () => {
+    expect(isPhantomBypassPermissionBlock("permission_blocked", "bypassPermissions", "AskUserQuestion")).toBe(false);
+  });
+
+  test("never suppresses outside bypass mode or for non-blocked statuses", () => {
+    expect(isPhantomBypassPermissionBlock("permission_blocked", "default", "Bash")).toBe(false);
+    expect(isPhantomBypassPermissionBlock("working", "bypassPermissions", undefined)).toBe(false);
+  });
+});
 
 // Real pane captures from cc-resume-f61304a3 (the session that surfaced this bug)
 // and synthesized variants are used as test fixtures so the classifier is grounded
