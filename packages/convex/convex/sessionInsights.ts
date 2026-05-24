@@ -637,6 +637,16 @@ ${sampledMessages}`;
         },
       })) as Id<"session_insights">;
 
+      // Keep the inbox's short summary fresh by reusing the insight headline.
+      // Runs every turn (5-min throttled), so any active session has a one-liner --
+      // unlike the idle-notification path, which fires at most once per idle transition.
+      if (headline) {
+        await ctx.runMutation(internal.idleSummary.setIdleSummary, {
+          conversation_id: context.conversation._id,
+          idle_summary: headline,
+        });
+      }
+
       // Auto-mine tasks and docs from this conversation after insight is saved
       if (context.conversation.actor_user_id) {
         await ctx.scheduler.runAfter(0, internal.taskMining.mineConversationAfterInsight, {
