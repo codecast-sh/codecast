@@ -100,7 +100,7 @@ export function useConversationMessages(
   const { results: descResults, status: paginationStatus, loadMore } = usePaginatedQuery(
     api.conversations.listMessages,
     useNormalMode ? { conversation_id: convId } : "skip",
-    { initialNumItems: 100 }
+    { initialNumItems: 40 }
   );
 
   // Ref avoids re-creating the sync callback when paginationStatus changes,
@@ -138,6 +138,20 @@ export function useConversationMessages(
 
   useConvexSync(remoteMeta, useCallback((meta: any) => {
     useInboxStore.getState().syncRecord("conversations", conversationId, meta);
+  }, [conversationId]));
+
+  // =============================================
+  // USER MESSAGES: full (non-paginated) navigable list → store cache
+  // =============================================
+  // One subscription, shared by every ConversationView consumer (sticky
+  // header, message browser, rewind navigator). Caching the complete list
+  // means those features never depend on which message window is paginated in.
+  const userMessages = useQuery(
+    api.conversations.getUserMessages,
+    canQuery ? { conversation_id: convId } : "skip"
+  );
+  useConvexSync(userMessages, useCallback((msgs: any) => {
+    useInboxStore.getState().setUserMessages(conversationId, msgs);
   }, [conversationId]));
 
   // Safety net: server-vs-local watermark recovery.
@@ -394,7 +408,7 @@ export function useConversationMessages(
   const hasMoreBelow = targetMode ? targetHasMoreBelow : false;
 
   const isLoadingOlder = targetMode
-    ? targetIsLoadingOlder
+    ? (targetIsLoadingOlder || (!!jumpMode && !targetInitializedRef.current))
     : paginationStatus === "LoadingMore";
 
   const isLoadingNewer = targetMode ? targetIsLoadingNewer : false;
