@@ -4,6 +4,7 @@ import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useEventListener } from "../hooks/useEventListener";
 import { usePathname, useRouter } from "next/navigation";
 import { useLocation } from "react-router";
+import { isNonTabRoute } from "../src/compat/tabRouting";
 import { useMutation, useConvexAuth } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Panel, Group, Separator, usePanelRef } from "react-resizable-panels";
@@ -304,14 +305,20 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
       started_at: now, updated_at: now, message_count: 0, status: "active",
       title: "New session", messages: [],
     });
-    store.createSession({
+    const createPromise = store.createSession({
       agent_type: agentType,
       project_path: path,
       git_root: gitRoot || path,
       session_id: sessionId,
     }).then((convexId: string) => {
       if (convexId) useInboxStore.getState().resolveSessionId(sessionId, convexId);
-    }).catch(() => {});
+      return convexId;
+    });
+    // Track the in-flight create so message send can await rekey instead of
+    // polling — server roundtrip on slow networks can exceed waitForConvexId's
+    // poll budget, producing a spurious "not yet created" toast.
+    store.trackSessionCreate(sessionId, createPromise);
+    createPromise.catch((e) => { console.error("[handleQuickCreate] createSession failed", e); });
 
     if (isOnInboxPage || isOnConversationPage) {
       store.setCurrentSession(sessionId);
@@ -441,8 +448,7 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
   }
 
   const routerLocation = useLocation();
-  const isNonTabRoute = routerLocation.pathname.startsWith("/settings");
-  const hasTabs = s.tabs.length > 0 && !isNonTabRoute;
+  const hasTabs = s.tabs.length > 0 && !isNonTabRoute(routerLocation.pathname);
   const content = hasTabs ? <TabContent /> : children;
 
   const pageContent = isFullWidthPage || hasTabs ? (

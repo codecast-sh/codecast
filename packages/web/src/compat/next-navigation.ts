@@ -5,8 +5,10 @@ import {
   useSearchParams as useRRSearchParams,
   useParams as useRRParams,
 } from "react-router";
-import { useTabContext } from "../../components/TabContent";
-import { useInboxStore } from "../../store/inboxStore";
+import { useTabContext } from "@/components/TabContent";
+import { useInboxStore } from "@/store/inboxStore";
+import { pathLabel } from "@/components/TabBar";
+import { shouldUseTabRouting } from "./tabRouting";
 
 /**
  * Returns the current pathname. When tabs are active, reads from the active
@@ -27,17 +29,6 @@ export function usePathname(): string {
   if (tabCtx) return tabCtx.pathname;
   if (tabPath) return tabPath;
   return routerPath;
-}
-
-function isNonTabRoute(path: string): boolean {
-  return path.startsWith("/settings");
-}
-
-function shouldUseTabRouting(targetPath: string): boolean {
-  if (isNonTabRoute(targetPath)) return false;
-  if (isNonTabRoute(window.location.pathname)) return false;
-  const { tabs, activeTabId } = useInboxStore.getState();
-  return tabs.length > 0 && !!activeTabId;
 }
 
 export function useRouter() {
@@ -88,17 +79,4 @@ export function redirect(path: string): never {
 
 export function notFound(): never {
   throw new Response("Not Found", { status: 404 });
-}
-
-function pathLabel(path: string): string {
-  if (path.startsWith("/conversation/")) return "Conversation";
-  if (path.startsWith("/tasks/")) return "Task";
-  if (path.startsWith("/docs/")) return "Doc";
-  if (path.startsWith("/plans/")) return "Plan";
-  const segments: Record<string, string> = {
-    "/tasks": "Tasks", "/docs": "Docs", "/plans": "Plans",
-    "/projects": "Projects", "/inbox": "Inbox", "/feed": "Feed",
-    "/settings": "Settings", "/dashboard": "Dashboard",
-  };
-  return segments[path] || path.split("/").pop() || "Tab";
 }
