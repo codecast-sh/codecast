@@ -590,7 +590,11 @@ export function categorizeSessions(
   const newSessions = sorted.filter((s) => s.message_count === 0 && !s.is_pinned && isTop(s))
     .sort((a, b) => (a.is_connected ? 1 : 0) - (b.is_connected ? 1 : 0));
   const needsInput = sorted.filter((s) => isSessionWaitingForInput(s, sessionsWithQueuedMessages) && isTop(s))
-    .sort((a, b) => (a.updated_at || 0) - (b.updated_at || 0));
+    .sort((a, b) => {
+      // Deferred sessions sink to the bottom of the group; otherwise earliest-updated first.
+      if (!!a.is_deferred !== !!b.is_deferred) return a.is_deferred ? 1 : -1;
+      return (a.updated_at || 0) - (b.updated_at || 0);
+    });
   const working = sorted.filter((s) => (!isSessionWaitingForInput(s, sessionsWithQueuedMessages) && s.message_count > 0 && !s.is_pinned) && isTop(s));
 
   return { sorted, pinned, newSessions, needsInput, working, dismissed, subsByParent, forksByParent };
