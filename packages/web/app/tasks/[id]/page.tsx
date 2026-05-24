@@ -664,21 +664,21 @@ function TaskDetailContent() {
           </div>
 
           {/* Properties grid */}
-          <div className="border-t border-b border-sol-border/30 mb-6 divide-y divide-sol-border/10">
+          <div className="mb-6 rounded-lg border border-sol-border/20 bg-sol-bg-alt/10 overflow-hidden">
             {/* Status */}
-            <div className="grid grid-cols-[7rem_1fr] items-center px-4 py-0.5 hover:bg-sol-bg-alt/30 transition-colors">
+            <div className="grid grid-cols-[7rem_1fr] items-center px-4 py-1.5 hover:bg-sol-bg-alt/30 transition-colors">
               <span className="text-xs text-sol-text-dim">Status</span>
               <Dropdown value={data.status} options={STATUS_OPTIONS} onChange={(v) => handleUpdate({ status: v })} shortcutHint="s to cycle" />
             </div>
 
             {/* Priority */}
-            <div className="grid grid-cols-[7rem_1fr] items-center px-4 py-0.5 hover:bg-sol-bg-alt/30 transition-colors">
+            <div className="grid grid-cols-[7rem_1fr] items-center px-4 py-1.5 hover:bg-sol-bg-alt/30 transition-colors">
               <span className="text-xs text-sol-text-dim">Priority</span>
               <Dropdown value={data.priority} options={PRIORITY_OPTIONS} onChange={(v) => handleUpdate({ priority: v })} shortcutHint="p to cycle" />
             </div>
 
             {/* Assignee */}
-            <div className="grid grid-cols-[7rem_1fr] items-center px-4 py-0.5 hover:bg-sol-bg-alt/30 transition-colors">
+            <div className="grid grid-cols-[7rem_1fr] items-center px-4 py-1.5 hover:bg-sol-bg-alt/30 transition-colors">
               <span className="text-xs text-sol-text-dim">Assignee</span>
               <button
                 onClick={() => openCmd("assign")}
@@ -720,7 +720,7 @@ function TaskDetailContent() {
 
             {/* Confidence — visual bar */}
             {data.confidence != null && (
-              <div className="grid grid-cols-[7rem_1fr] items-center px-4 py-0.5 hover:bg-sol-bg-alt/30 transition-colors">
+              <div className="grid grid-cols-[7rem_1fr] items-center px-4 py-1.5 hover:bg-sol-bg-alt/30 transition-colors">
                 <span className="text-xs text-sol-text-dim">Confidence</span>
                 <ConfidenceBar value={data.confidence} />
               </div>
@@ -798,6 +798,7 @@ function TaskDetailContent() {
               onImageUpload={handleImageUpload}
               editable={true}
               placeholder="Add a description..."
+              className="doc-editor-compact"
             />
           </div>
 
@@ -892,6 +893,15 @@ function TaskDetailContent() {
                           <UserBadge name={item.data.author} image={item.data.author_image} />
                           {item.data.comment_type !== "note" && (
                             <Badge variant="outline" className="text-[10px] px-1">{item.data.comment_type}</Badge>
+                          )}
+                          {item.data.session_info && (
+                            <Link
+                              href={`/conversation/${item.data.session_info.session_id}`}
+                              className="flex items-center gap-1 text-[10px] text-sol-text-dim hover:text-sol-cyan transition-colors truncate max-w-[200px]"
+                            >
+                              <Zap className="w-3 h-3 text-sol-violet flex-shrink-0" />
+                              <span className="truncate">{item.data.session_info.title || "session"}</span>
+                            </Link>
                           )}
                           <TimeAgo ts={item.data.created_at} className="text-[11px] text-gray-400" />
                         </div>
@@ -1041,18 +1051,6 @@ function TaskDetailContent() {
           projectPath={data.project_path}
         />
         </div>
-        </div>
-
-        {/* Keyboard shortcuts footer */}
-        <div className="flex-shrink-0 flex items-center gap-4 px-6 py-2 border-t border-sol-border/20 bg-sol-bg text-[10px] text-sol-text-dim">
-          <span><kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/40 font-mono">j</kbd><kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/40 font-mono ml-0.5">k</kbd> navigate</span>
-          <span><kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/40 font-mono">{"⌫"}</kbd> back</span>
-          <span><kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/40 font-mono">s</kbd> status</span>
-          <span><kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/40 font-mono">p</kbd> priority</span>
-          <span><kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/40 font-mono">l</kbd> labels</span>
-          <span><kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/40 font-mono">e</kbd> edit title</span>
-          <span><kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/40 font-mono">{"⌘K"}</kbd> cmd</span>
-          <span className="ml-auto"><kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/40 font-mono">?</kbd> help</span>
         </div>
 
         {/* Unified palette is global via DashboardLayout */}
