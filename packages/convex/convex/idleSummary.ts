@@ -82,7 +82,7 @@ ${messageText}`;
         },
         body: JSON.stringify({
           model: "claude-haiku-4-5-20251001",
-          max_tokens: 100,
+          max_tokens: 200,
           messages: [{ role: "user", content: prompt }],
         }),
       });
@@ -94,7 +94,7 @@ ${messageText}`;
 
       const data = await response.json();
       const raw = data.content?.[0]?.text?.trim();
-      const text = raw?.replace(/^```(?:\w+)?\s*/i, "").replace(/\s*```$/i, "").trim();
+      const text = raw?.replace(/^```(?:\w+)?\s*/i, "").replace(/\s*```$/i, "").replace(/\s*\.{3,}\s*$/, "").replace(/\s+to\s*$/, "").trim();
 
       if (text && text.length > 0 && text.length < 300) {
         await ctx.runMutation(internal.idleSummary.setIdleSummary, {

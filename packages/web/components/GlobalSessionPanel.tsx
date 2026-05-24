@@ -5,7 +5,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useRouter } from "next/navigation";
 import { ConversationDiffLayout } from "./ConversationDiffLayout";
-import { ConversationData } from "./ConversationView";
+import { ConversationData, FormattedSummary } from "./ConversationView";
 import { useConversationMessages } from "../hooks/useConversationMessages";
 import { useInboxStore, useTrackedStore, InboxSession, getSessionRenderKey, isConvexId, categorizeSessions, isInterruptControlMessage, getProjectName, isFork } from "../store/inboxStore";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "./ui/tooltip";
@@ -319,6 +319,12 @@ export const SessionCard = memo(function SessionCard({
   const displayTitle = cleanTitle(session.title || "New Session");
   const isSlashCommand = displayTitle.startsWith("/");
   const cleanedUserMsg = cleanUserMessage(session.last_user_message);
+  // idle_summary is the purpose-built one-liner. When it's absent the card falls
+  // back to subtitle, which is a 2-4 bullet block (since titleGeneration commit
+  // 2b1db97d) — too long for a card, so show only its first bullet.
+  const cardSummary = session.idle_summary
+    || session.subtitle?.split("\n").find(l => l.trim())?.replace(/^[-*]\s*/, "").trim()
+    || "";
 
 
   const [isDragOver, setIsDragOver] = useState(false);
@@ -517,9 +523,9 @@ export const SessionCard = memo(function SessionCard({
         }`}>
           <span className="truncate">{isSlashCommand ? <span className="font-mono text-sol-cyan">{displayTitle}</span> : displayTitle}</span>
         </div>
-        {(session.idle_summary || session.subtitle) && !session.implementation_session && (
+        {cardSummary && !session.implementation_session && (
           <div className="text-[11px] text-sol-text-muted mt-0.5 line-clamp-2 leading-snug whitespace-pre-line">
-            {session.idle_summary || session.subtitle}
+            <FormattedSummary text={cardSummary} />
           </div>
         )}
         {cleanedUserMsg && (
