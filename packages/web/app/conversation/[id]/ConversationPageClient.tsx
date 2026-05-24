@@ -1,4 +1,4 @@
-import { useQuery } from "convex/react";
+import { useConvexAuth, useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
@@ -136,6 +136,8 @@ function NotFoundView() {
 export default function ConversationPage() {
   const params = useParams();
   const searchParams = useSearchParams();
+  const router = useRouter();
+  const { isAuthenticated, isLoading: isAuthLoading } = useConvexAuth();
   const id = params.id as string;
   const highlightQuery = searchParams.get("highlight") || undefined;
   const [targetMessageId] = useState<string | undefined>(() => {
@@ -155,7 +157,14 @@ export default function ConversationPage() {
 
   if (!id) return <NotFoundView />;
   if (effective === undefined) return <ConversationLoadingSkeleton />;
-  if (effective.access_level === "denied") return <DeniedView />;
+  if (effective.access_level === "denied") {
+    if (!isAuthLoading && !isAuthenticated) {
+      const returnTo = `/conversation/${id}${window.location.hash}`;
+      router.replace(`/login?return_to=${encodeURIComponent(returnTo)}`);
+      return <ConversationLoadingSkeleton />;
+    }
+    return <DeniedView />;
+  }
   if (effective.access_level === "not_found" || !effective.conversation_id) return <NotFoundView />;
 
   // Every accessible session (owner, team, shared) renders through the inbox — single codepath.

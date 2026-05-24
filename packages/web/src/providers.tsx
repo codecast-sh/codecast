@@ -11,6 +11,7 @@ import { TipProvider } from "@/tips/TipProvider";
 import { useLocalStorageMigration } from "@/hooks/useLocalStorageMigration";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { identifyUser, resetUser } from "@/lib/analytics";
+import { durableAuthStorage } from "@/lib/durableAuthStorage";
 
 function PrefsMigration() {
   useLocalStorageMigration();
@@ -47,7 +48,7 @@ if (import.meta.hot) {
 
 export function Providers({ children }: { children: ReactNode }) {
   return (
-    <ConvexAuthProvider client={convex}>
+    <ConvexAuthProvider client={convex} storage={durableAuthStorage}>
       <ThemeProvider>
         <ShortcutProvider>
         <TipProvider>

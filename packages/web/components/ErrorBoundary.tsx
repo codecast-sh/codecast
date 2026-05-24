@@ -17,17 +17,32 @@ interface ErrorBoundaryState {
   showDetails: boolean;
 }
 
-const HMR_ERROR_PATTERNS = [
+// Narrowly-scoped: errors that mean "the JS the browser has is incompatible
+// with what the server is serving" — typically a stale tab whose chunk hashes
+// no longer exist after a deploy, or a Vite dev-server HMR boundary failure.
+// Generic TypeErrors ("is not a function", "Cannot read properties of undefined")
+// are NOT included: they are ordinary code bugs, and auto-reloading on them
+// hides the real failure and produces the "needs multiple reloads to load"
+// symptom (the throttle then suppresses subsequent reloads, leaving a blank app).
+const CHUNK_LOAD_ERROR_PATTERNS = [
   "Failed to fetch dynamically imported module",
-  "Failed to reload",
-  "does not provide an export named",
-  "is not a function",
-  "Cannot read properties of undefined",
+  "Importing a module script failed",
+  "error loading dynamically imported module",
+  "ChunkLoadError",
+  "Loading chunk",
+  "Loading CSS chunk",
 ];
 
-function isHmrRelatedError(msg: string): boolean {
-  return HMR_ERROR_PATTERNS.some((p) => msg.includes(p));
+function isChunkLoadError(msg: string): boolean {
+  return CHUNK_LOAD_ERROR_PATTERNS.some((p) => msg.includes(p));
 }
+
+// Hard cap on auto-reloads per tab session. Even if a chunk-load error
+// recurs (e.g. the deploy is mid-rollout), we never silently reload more
+// than once — instead we surface the error UI so the user can see what's
+// happening.
+const RELOAD_COUNT_KEY = "eb_reload_count";
+const MAX_AUTO_RELOADS = 1;
 
 const _recentErrors = new Set<string>();
 
@@ -60,12 +75,16 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
       });
     }
 
-    if (error.message && isHmrRelatedError(error.message)) {
-      const key = "eb_reload_" + window.location.pathname;
-      const last = sessionStorage.getItem(key);
-      if (!last || Date.now() - Number(last) > 10_000) {
-        sessionStorage.setItem(key, String(Date.now()));
-        window.location.reload();
+    if (error.message && isChunkLoadError(error.message)) {
+      try {
+        const count = Number(sessionStorage.getItem(RELOAD_COUNT_KEY) ?? "0");
+        if (count < MAX_AUTO_RELOADS) {
+          sessionStorage.setItem(RELOAD_COUNT_KEY, String(count + 1));
+          window.location.reload();
+        }
+      } catch {
+        // sessionStorage unavailable (private mode quota etc.) — fall through
+        // to showing the error UI rather than risking an unbounded loop.
       }
     }
   }

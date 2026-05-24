@@ -1,4 +1,5 @@
 import { lazy, Suspense, ReactNode, useEffect } from "react";
+import { BootFallback } from "@/components/BootFallback";
 import { Routes, Route } from "react-router";
 import NProgress from "nprogress";
 import { Providers } from "./providers";
@@ -94,6 +95,7 @@ function RouteFallback() {
 
 export function App() {
   return (
+    <Suspense fallback={<BootFallback />}>
     <Providers>
       <ErrorBoundary name="App" level="panel">
         <Suspense fallback={<RouteFallback />}>
@@ -191,5 +193,6 @@ export function App() {
         </Suspense>
       </ErrorBoundary>
     </Providers>
+    </Suspense>
   );
 }
