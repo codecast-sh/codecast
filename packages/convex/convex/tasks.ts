@@ -286,7 +286,6 @@ export const create = mutation({
           entity_id: id.toString(),
           message: `assigned you to ${short_id}: ${args.title}`,
           direct_recipient_id: assigneeId,
-          actor_is_agent: true,
         });
       }
     }
@@ -465,7 +464,17 @@ export const list = query({
     }
 
     let tasks: any[];
-    if (args.project_id) {
+    if (resolvedAssignee) {
+      // When filtering by assignee, query the assignee index directly so
+      // tasks assigned to the user but missing team_id aren't dropped by
+      // the workspace-scoped query.
+      tasks = await ctx.db
+        .query("tasks")
+        .withIndex("by_assignee_updated", (q: any) =>
+          q.eq("assignee", resolvedAssignee)
+        )
+        .collect();
+    } else if (args.project_id) {
       tasks = await ctx.db
         .query("tasks")
         .withIndex("by_project_id", (q) => q.eq("project_id", args.project_id as any))
@@ -487,10 +496,6 @@ export const list = query({
 
     if (!args.include_derived) {
       tasks = tasks.filter((t: any) => !t.triage_status || t.triage_status === "active");
-    }
-
-    if (resolvedAssignee) {
-      tasks = tasks.filter((t: any) => t.assignee === resolvedAssignee);
     }
 
     if (args.execution_status) {
@@ -674,6 +679,10 @@ export const update = mutation({
             await ctx.db.patch(conv._id, { active_plan_id: task.plan_id });
           }
         }
+        // Clear active_task_id when task is closed
+        if ((args.status === "done" || args.status === "dropped") && conv.active_task_id === task._id) {
+          await ctx.db.patch(conv._id, { active_task_id: undefined });
+        }
       }
     }
 
@@ -703,6 +712,7 @@ export const update = mutation({
         field,
         old_value: String(oldVal),
         new_value: String(newVal),
+        ...(linkedConvId ? { conversation_id: linkedConvId } : {}),
         created_at: now,
       });
     }
@@ -726,7 +736,6 @@ export const update = mutation({
           entity_id: task._id.toString(),
           message: `assigned you to ${task.short_id}: ${task.title}`,
           direct_recipient_id: assigneeId,
-          actor_is_agent: true,
         });
       }
     }
@@ -997,12 +1006,13 @@ export const webList = query({
         const teamTasks = await collectByTeam(args.team_id);
         for (const t of teamTasks) pushUnique(t);
 
-        // Also include tasks assigned to current user in this team
-        // (covers edge case where assignee is set but team_id isn't)
+        // Also rescue orphan tasks (no team_id) assigned to me — CLI-created
+        // tasks that never got a team would otherwise be invisible in every
+        // view. Do NOT pull in tasks belonging to *other* teams: a task whose
+        // team_id is set to another team must not leak into this team's list.
         const assignedTasks = await collectByAssignee(String(userId));
-        const teamStr = String(args.team_id);
         for (const t of assignedTasks) {
-          if (String(t.team_id) === teamStr) pushUnique(t);
+          if (!t.team_id || String(t.team_id) === String(args.team_id)) pushUnique(t);
         }
       } else if (args.workspace === "all") {
         // GLOBAL VIEW: every team the user belongs to + personal tasks
@@ -2094,7 +2104,6 @@ export const batchAssign = mutation({
             entity_id: task._id.toString(),
             message: `assigned you to ${task.short_id}: ${task.title}`,
             direct_recipient_id: assigneeId,
-            actor_is_agent: true,
           });
         }
       }
