@@ -47,6 +47,8 @@ export function useSyncInboxSessions() {
 
   const prevActiveIdsRef = useRef<Set<string> | null>(null);
   const prevIdleMapRef = useRef<Map<string, boolean> | null>(null);
+  const lastSyncRef = useRef(Date.now());
+  const recoveryInFlightRef = useRef(false);
 
   const dispatchRef = useRef(dispatchMutation);
   dispatchRef.current = dispatchMutation;
@@ -116,6 +118,7 @@ export function useSyncInboxSessions() {
       useInboxStore.setState({ hiddenSessionCount: data.hidden_count });
     }
     bgSyncMessages(sessions);
+    lastSyncRef.current = Date.now();
   }, [syncTable, bgSyncMessages]));
 
   useConvexSync(clientState, useCallback((data: any) => {
@@ -136,6 +139,40 @@ export function useSyncInboxSessions() {
   useConvexSync(currentUser, useCallback((data: any) => {
     useInboxStore.getState().syncTable("currentUser", data);
   }, []));
+
+  // Recovery heartbeat: the listInboxSessions subscription can silently stall
+  // after sleep/wake or WebSocket reconnection. Poll via one-shot query to
+  // catch divergence — same pattern as useConversationMessages' watermark loop.
+  // eslint-disable-next-line no-restricted-syntax -- polled recovery; effect manages its own interval
+  useEffect(() => {
+    const STALE_THRESHOLD = 15_000;
+    const POLL_INTERVAL = 10_000;
+
+    const tick = async () => {
+      if (recoveryInFlightRef.current) return;
+      if (Date.now() - lastSyncRef.current < STALE_THRESHOLD) return;
+
+      recoveryInFlightRef.current = true;
+      try {
+        const fresh: any = await convex.query(api.conversations.listInboxSessions, { show_all: showAll });
+        if (!fresh) return;
+        const sessions = fresh.sessions ?? fresh;
+        syncTable("sessions", sessions as unknown as InboxSession[]);
+        if (typeof fresh.hidden_count === "number") {
+          useInboxStore.setState({ hiddenSessionCount: fresh.hidden_count });
+        }
+        bgSyncMessages(sessions);
+        lastSyncRef.current = Date.now();
+      } catch (err) {
+        console.warn("[useSyncInboxSessions] recovery fetch failed", err);
+      } finally {
+        recoveryInFlightRef.current = false;
+      }
+    };
+
+    const id = setInterval(tick, POLL_INTERVAL);
+    return () => clearInterval(id);
+  }, [convex, showAll, syncTable, bgSyncMessages]);
 
   // When the current session becomes dismissed elsewhere, hop to its
   // implementation_session if one exists so the user isn't stranded.
