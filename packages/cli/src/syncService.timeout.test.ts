@@ -1,5 +1,5 @@
 import { describe, it, expect } from "bun:test";
-import { withTimeout, SyncService } from "./syncService.js";
+import { withTimeout, SyncService, chunkMessagesBySize } from "./syncService.js";
 
 describe("withTimeout", () => {
   it("resolves through when the inner promise wins the race", async () => {
@@ -80,5 +80,74 @@ describe("SyncService.addMessages timeout regression", () => {
 
     expect(result.inserted).toBe(1);
     expect(result.ids).toEqual(["m1"]);
+  });
+});
+
+describe("chunkMessagesBySize", () => {
+  it("keeps a batch within both the count and byte caps", () => {
+    const msgs = Array.from({ length: 25 }, (_, i) => ({ id: i, body: "x" }));
+    const batches = chunkMessagesBySize(msgs, 10, 1_000_000);
+    // Count cap dominates here (tiny messages) → 10/10/5.
+    expect(batches.map(b => b.length)).toEqual([10, 10, 5]);
+    expect(batches.flat().length).toBe(25);
+  });
+
+  it("closes a batch early when adding the next message would exceed the byte cap", () => {
+    // Four ~300KB messages, 1MB byte cap: 3 fit (~900KB), the 4th starts a new batch.
+    const big = "a".repeat(300_000);
+    const msgs = Array.from({ length: 4 }, (_, i) => ({ id: i, body: big }));
+    const batches = chunkMessagesBySize(msgs, 10, 1_000_000);
+    expect(batches.length).toBe(2);
+    expect(batches[0].length).toBe(3);
+    expect(batches[1].length).toBe(1);
+  });
+
+  it("emits a single oversized message in its own batch rather than dropping it", () => {
+    const huge = "a".repeat(2_000_000);
+    const msgs = [{ id: 0, body: "small" }, { id: 1, body: huge }, { id: 2, body: "small" }];
+    const batches = chunkMessagesBySize(msgs, 10, 1_000_000);
+    // small | huge-alone | small — the huge one is never merged or lost.
+    expect(batches.length).toBe(3);
+    expect(batches.map(b => b.length)).toEqual([1, 1, 1]);
+    expect(batches.flat().map(m => m.id)).toEqual([0, 1, 2]);
+  });
+});
+
+// content is truncated to MAX_CONTENT_SIZE (100KB) inside addMessages, so each
+// message tops out near this regardless of input length.
+const MAX_CONTENT_NEAR_CAP = 100_000;
+
+describe("SyncService.addMessages oversized-batch regression", () => {
+  it("splits an image-heavy run into multiple sub-cap mutations instead of one giant call", async () => {
+    const sync = new SyncService({ convexUrl: "http://localhost:0", userId: "u", authToken: "t" });
+
+    // Capture every mutation payload so we can assert none is multi-MB. Before
+    // the byte-aware split, 10 of these ~100KB-content messages would go out as
+    // a single ~1MB+ mutation; with image-sized messages it was multi-MB and
+    // timed out forever, freezing the file's sync position (session 2207e202).
+    const sentBatchSizes: number[] = [];
+    (sync as any).client = {
+      mutation: async (_name: string, args: { messages: unknown[] }) => {
+        sentBatchSizes.push(Buffer.byteLength(JSON.stringify(args.messages)));
+        return { inserted: args.messages.length, ids: args.messages.map((_, i) => `m${i}`) };
+      },
+    };
+
+    const body = "x".repeat(MAX_CONTENT_NEAR_CAP);
+    const messages = Array.from({ length: 12 }, () => ({
+      role: "human" as const,
+      content: body,
+      timestamp: Date.now(),
+    }));
+
+    const result = await sync.addMessages({ conversationId: "conv", messages });
+
+    expect(result.inserted).toBe(12);
+    // Must have split into more than one mutation...
+    expect(sentBatchSizes.length).toBeGreaterThan(1);
+    // ...and no single mutation may approach the multi-MB danger zone.
+    for (const bytes of sentBatchSizes) {
+      expect(bytes).toBeLessThanOrEqual(1_000_000);
+    }
   });
 });
