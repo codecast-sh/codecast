@@ -1,13 +1,13 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { checkRateLimit, MESSAGE_LIMIT } from "./rateLimit";
 import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { shouldGenerateTitle } from "./titleGeneration";
 import { canTeamMemberAccess } from "./privacy";
 import { redactSecrets } from "./redact";
+import { markPendingDelivered } from "./pendingMessages";
 
 function classifyDocContent(content: string): "plan" | "design" | "spec" | "investigation" | "handoff" | "note" {
   const first2k = content.slice(0, 2000).toLowerCase();
@@ -286,8 +286,6 @@ export const addMessage = mutation({
       throw new Error("Unauthorized: can only add messages to your own conversations");
     }
 
-    await checkRateLimit(ctx, conversation.user_id, "addMessage", MESSAGE_LIMIT);
-
     const msgTimestamp = args.timestamp || Date.now();
 
     const safeContent = args.content ? redactSecrets(args.content) : args.content;
@@ -379,6 +377,8 @@ export const addMessage = mutation({
             images = ids.map(id => ({ media_type: "image/png", storage_id: id }));
           }
         }
+        // Agent echoed the message → durable proof of delivery; promote to terminal "delivered".
+        await markPendingDelivered(ctx, matchingPending);
       }
     }
 
@@ -550,8 +550,6 @@ export const addMessages = mutation({
       throw new Error("Unauthorized: can only add messages to your own conversations");
     }
 
-    await checkRateLimit(ctx, conversation.user_id, "addMessage", MESSAGE_LIMIT, args.messages.length);
-
     const ids: Id<"messages">[] = [];
     let insertedCount = 0;
     let lastUserContentStored: string | undefined;
@@ -663,6 +661,11 @@ export const addMessages = mutation({
               images = ids.map(id => ({ media_type: "image/png", storage_id: id }));
             }
           }
+          // The agent echoed this user message to its JSONL — durable proof it was received.
+          // Promote the pending row to "delivered" here (atomic with the insert, content-matched)
+          // so the ack can't be missed by a fire-and-forget side-channel or a non-acking sync
+          // path. delivered is terminal, so the 120s stuck-message reset stops re-injecting it.
+          await markPendingDelivered(ctx, matchingPending);
         }
       }
 
