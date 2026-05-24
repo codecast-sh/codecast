@@ -1598,9 +1598,26 @@ export const webGetTaskDetail = query({
       if (u.image) nameToImage.set(u.name, u.image);
     }
     if (creator?.image) nameToImage.set(creator.name, creator.image);
-    const enrichedComments = comments.map(c => ({
-      ...c,
-      author_image: nameToImage.get(c.author) || null,
+    const commentConvCache = new Map<string, { session_id: string; title: string | null } | null>();
+    const enrichedComments = await Promise.all(comments.map(async c => {
+      let session_info: { session_id: string; title: string | null } | null = null;
+      if (c.conversation_id) {
+        const key = c.conversation_id.toString();
+        if (commentConvCache.has(key)) {
+          session_info = commentConvCache.get(key)!;
+        } else {
+          const conv = await ctx.db.get(c.conversation_id);
+          if (conv) {
+            session_info = { session_id: conv.session_id, title: conv.title || conv.subtitle || null };
+          }
+          commentConvCache.set(key, session_info);
+        }
+      }
+      return {
+        ...c,
+        author_image: nameToImage.get(c.author) || null,
+        session_info,
+      };
     }));
 
     let plan = null;
