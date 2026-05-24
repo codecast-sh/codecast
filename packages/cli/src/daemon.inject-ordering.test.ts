@@ -119,11 +119,12 @@ describe("deliverMessage: mark-injected-before-send invariant", () => {
     //
     // Match delivery inject call-sites only: those whose first arg refers to a real
     // tmux target or tty AND whose content arg is `content` (the pending message body).
+    // The cached-tmux and live-process-pane injects were unified behind resolveLiveTmuxTarget,
+    // so both now flow through a single `injectViaTmux(injectTarget, content)` call site.
     const callSites = [
       /await\s+injectViaTmux\(\s*startedTmuxTarget\s*,\s*content\s*\)/g,
-      /await\s+injectViaTmux\(\s*cachedTmux\s*,\s*content\s*\)/g,
-      /await\s+injectViaTmux\(\s*tmuxTarget\s*,\s*content\s*\)/g,
-      /await\s+injectViaTerminal\(\s*proc\.tty\s*,\s*content\s*,\s*proc\.termProgram\s*\)/g,
+      /await\s+injectViaTmux\(\s*injectTarget\s*,\s*content\s*\)/g,
+      /await\s+injectViaTerminal\(\s*live\.proc\.tty\s*,\s*content\s*,\s*live\.proc\.termProgram\s*\)/g,
       /await\s+autoResumeSession\(\s*sessionId\s*,\s*content\s*,/g,
       /await\s+repairAndResumeSession\(\s*sessionId\s*,\s*content\s*,/g,
     ];
@@ -146,7 +147,8 @@ describe("deliverMessage: mark-injected-before-send invariant", () => {
       }
     }
 
-    // We must actually find the 6 known sites -- otherwise the test is silently vacuous.
-    expect(totalSitesChecked).toBeGreaterThanOrEqual(6);
+    // We must actually find the 5 known sites -- otherwise the test is silently vacuous.
+    // (started-tmux, unified live-target tmux, terminal/AppleScript, auto-resume, repair+resume.)
+    expect(totalSitesChecked).toBeGreaterThanOrEqual(5);
   });
 });

@@ -127,14 +127,31 @@ describe("matchStartedConversation", () => {
       ["conv-1", { tmuxSession: "cc-codex-1", projectPath: "/repo", startedAt: 4900 }],
     ]);
 
+    // No tmuxSessionName → cwd fallback path, which must still consume an
+    // iterator (not just an array) without throwing.
     const match = matchStartedConversation(entries.entries(), {
-      tmuxSessionName: "cc-codex-missing",
       projectPath: "/repo",
       now: 5000,
       ttlMs: 300,
     });
 
     expect(match).toBe("conv-1");
+  });
+
+  test("does NOT cwd-hijack when the candidate lives in an unrelated tmux", () => {
+    // Regression: session ec7a32bf ran in tmux cc-claude-4atddd87bmnx (owned by
+    // another conversation). The only conversation waiting in this cwd was
+    // jx7cz32, so the old projectPath fallback stole the session for it.
+    const match = matchStartedConversation(
+      [["jx7cz32", { tmuxSession: "cc-claude-a3438587a2bs", projectPath: "/repo", startedAt: 4900 }]],
+      {
+        tmuxSessionName: "cc-claude-4atddd87bmnx",
+        projectPath: "/repo",
+        now: 5000,
+        ttlMs: 300,
+      }
+    );
+    expect(match).toBeNull();
   });
 });
 

@@ -87,6 +87,23 @@ const BUSY_SPINNER_PANE = `❯ run the tests
   ⎿  ⠹ Running…  (esc to interrupt)
 `;
 
+// The storm fixture (cc-resume-5caa8942): the agent is BUSY generating but
+// still renders its input box for type-ahead. The spinner sits above the box
+// and "esc to interrupt" sits in the footer below it — both OUTSIDE the
+// box-body region. Slicing to the box body alone returned just "❯" and the
+// classifier called it idle, so the daemon pasted a user turn into a mid-turn
+// agent; the queued text never submitted to JSONL, never acked, and redelivered
+// forever (each retry re-pasted → "not respondinghttps://…" pile-up).
+const BUSY_WITH_INPUT_BOX_PANE = `⏺ Reading the delivery path now…
+
+✻ Dilly-dallying… (1m 20s · ↓ 5.9k tokens · almost done thinking with high effort)
+
+────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle)               · esc to interrupt
+`;
+
 describe("extractTmuxLiveRegion", () => {
   test("returns content between the last two separators for an idle input box", () => {
     const region = extractTmuxLiveRegion(IDLE_PANE);
@@ -117,6 +134,18 @@ describe("extractTmuxLiveRegion", () => {
     const region = extractTmuxLiveRegion(BUSY_SPINNER_PANE);
     expect(region).toContain("esc to interrupt");
   });
+
+  test("keeps the footer below the input box so the busy marker survives", () => {
+    // Regression: an agent generating with its input box visible must not look
+    // idle. The "esc to interrupt" footer lives below the box, so the extracted
+    // region has to reach past the bottom separator.
+    const region = extractTmuxLiveRegion(BUSY_WITH_INPUT_BOX_PANE);
+    expect(region).toContain("❯");
+    expect(region).toContain("esc to interrupt");
+    // Still no scrollback bleed — the spinner line above the box stays out.
+    expect(region).not.toContain("Dilly-dallying");
+    expect(region).not.toContain("Reading the delivery path");
+  });
 });
 
 describe("classifyTmuxLiveState", () => {
@@ -142,6 +171,13 @@ describe("classifyTmuxLiveState", () => {
 
   test("busy: spinner glyph or 'esc to interrupt'", () => {
     const region = extractTmuxLiveRegion(BUSY_SPINNER_PANE);
+    expect(classifyTmuxLiveState(region)).toBe("busy");
+  });
+
+  test("busy even when the input box is visible (the storm bug)", () => {
+    // A generating agent renders ❯ for type-ahead; without the footer this used
+    // to classify "idle" and the daemon pasted into the busy agent.
+    const region = extractTmuxLiveRegion(BUSY_WITH_INPUT_BOX_PANE);
     expect(classifyTmuxLiveState(region)).toBe("busy");
   });
 
