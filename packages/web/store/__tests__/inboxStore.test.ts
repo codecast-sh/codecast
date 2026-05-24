@@ -366,6 +366,51 @@ describe("categorizeSessions", () => {
     expect(working.map((s) => s._id)).toContain("conv-stale-idle");
     expect(needsInput.map((s) => s._id)).not.toContain("conv-stale-idle");
   });
+
+  it("sinks deferred sessions to the bottom of Needs Input", () => {
+    // Defer (shift+backspace / "send to bottom") sets is_deferred. The needsInput
+    // group must honor that flag, otherwise deferring a needs-input session is a no-op.
+    const early: InboxSession = {
+      ...baseSession,
+      _id: "conv-early",
+      session_id: "session-early",
+      message_count: 3,
+      updated_at: 100,
+    };
+    const late: InboxSession = {
+      ...baseSession,
+      _id: "conv-late",
+      session_id: "session-late",
+      message_count: 3,
+      updated_at: 200,
+    };
+    // Deferred and OLDEST — a pure updated_at sort would float it to the top,
+    // so this only passes if is_deferred overrides the timestamp ordering.
+    const deferred: InboxSession = {
+      ...baseSession,
+      _id: "conv-deferred",
+      session_id: "session-deferred",
+      message_count: 3,
+      updated_at: 50,
+      is_deferred: true,
+    };
+
+    const { needsInput } = categorizeSessions(
+      {
+        [deferred._id]: deferred,
+        [early._id]: early,
+        [late._id]: late,
+      },
+      new Set(),
+    );
+
+    // All three still need input; deferred sinks below the rest despite newest updated_at.
+    expect(needsInput.map((s) => s._id)).toEqual([
+      "conv-early",
+      "conv-late",
+      "conv-deferred",
+    ]);
+  });
 });
 
 describe("mergeMessages — sync-recovery safety net", () => {
