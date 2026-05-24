@@ -183,8 +183,6 @@ export default defineSchema({
     git_branch: v.optional(v.string()),
     git_remote_url: v.optional(v.string()),
     git_status: v.optional(v.string()),
-    git_diff: v.optional(v.string()),
-    git_diff_staged: v.optional(v.string()),
     git_root: v.optional(v.string()),
     fork_count: v.optional(v.number()),
     forked_from: v.optional(v.id("conversations")),
@@ -288,6 +286,18 @@ export default defineSchema({
       searchField: "title",
       filterFields: ["user_id"],
     }),
+
+  // Large git-diff blobs split off the conversations hot doc. The conversations
+  // row is read+patched on every message sync (addMessages) and returned by list
+  // queries; keeping multi-MB diffs there inflated every read/write and worsened
+  // OCC contention. These are written once at session creation (and on fork) and
+  // read only on-demand by getConversationGitDiff.
+  conversation_git_diffs: defineTable({
+    conversation_id: v.id("conversations"),
+    git_diff: v.optional(v.string()),
+    git_diff_staged: v.optional(v.string()),
+    updated_at: v.number(),
+  }).index("by_conversation_id", ["conversation_id"]),
 
   public_conversations: defineTable({
     conversation_id: v.id("conversations"),
