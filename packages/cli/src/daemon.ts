@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import * as fs from "fs";
 import * as path from "path";
+import { randomUUID, createHash } from "node:crypto";
 import * as http from "http";
 import { Database } from "bun:sqlite";
 import { execSync, execFileSync, exec, execFile, spawn } from "child_process";
@@ -40,7 +41,7 @@ import { performReconciliation, repairDiscrepancies } from "./reconciliation.js"
 import { TaskScheduler } from "./taskScheduler.js";
 import { hasTmux } from "./tmux.js";
 import { formatFeedResults } from "./formatter.js";
-import { collectSessionResources, formatResourcesLog, type SessionResources } from "./resourceMonitor.js";
+import { collectSessionResources, formatResourcesLog, nextAwakeIdleMs, type SessionResources } from "./resourceMonitor.js";
 import {
   fetchExport,
   generateClaudeCodeJsonl,
@@ -146,6 +147,19 @@ function resolveLocalRepo(remotePath: string): string | null {
     }
   }
   return null;
+}
+
+// Claude indexes a session by the slug of the cwd it runs in:
+// ~/.claude/projects/<cwd-slug>/<sessionId>.jsonl. When we reconstitute a session
+// whose origin path lives on another machine (a fork, or any cross-host resume),
+// the JSONL must land under the *locally-resolved* repo path — the same cwd
+// `claude --resume` will actually use — or Claude reports "No conversation found
+// with session ID" and the resume crashes, poisoning the fatal-reason cache and
+// falling back to a blank session. Resolve the write dir the same way we resolve
+// the resume cwd so the two always agree.
+function localSessionDir(remotePath?: string): string | undefined {
+  if (!remotePath) return undefined;
+  return resolveLocalRepo(remotePath) ?? remotePath;
 }
 
 function validatePath(p: string): string | null {
@@ -454,6 +468,10 @@ const messagesInFlight = new Map<string, { ts: number; conversationId: string }>
 const injectedMessageTs = new Map<string, { ts: number; conversationId: string }>();
 const IN_FLIGHT_HARD_TTL_MS = 240_000; // > DELIVERY_TIMEOUT_MS (180s)
 const INJECTION_DEDUP_TTL_MS = 60_000;
+// Per-conversation delivery lock: prevents multiple messages targeting the same tmux pane
+// from being injected concurrently (which causes an interrupt storm where each injection
+// Escapes the previous, none complete, and the retry cron resets them all to pending).
+const conversationDeliveryActive = new Set<string>();
 
 function clearMessageDeliveryStateForConversation(conversationId: string): { inFlight: number; dedup: number } {
   let inFlight = 0;
@@ -470,6 +488,7 @@ function clearMessageDeliveryStateForConversation(conversationId: string): { inF
       dedup++;
     }
   }
+  conversationDeliveryActive.delete(conversationId);
   return { inFlight, dedup };
 }
 
@@ -1010,6 +1029,41 @@ async function pollDaemonCommands(): Promise<void> {
   }
 }
 
+// Enumerate first-level children of the conventional project parent dirs
+// ("src", "projects", "repos", "code"). Matches the same path shape produced
+// by `normalizeProjectPath` in users.ts so the convex side can do a Set lookup.
+// Bounded scan: only directories that actually exist on this host.
+function computeLocalProjectRoots(): string[] {
+  const home = process.env.HOME;
+  if (!home) return [];
+  const roots = new Set<string>();
+  const parents = ["src", "Projects", "projects", "repos", "code"];
+  for (const parent of parents) {
+    const parentPath = path.join(home, parent);
+    try {
+      const stat = fs.statSync(parentPath);
+      if (!stat.isDirectory()) continue;
+      for (const child of fs.readdirSync(parentPath)) {
+        if (child.startsWith(".")) continue;
+        const full = path.join(parentPath, child);
+        try {
+          if (fs.statSync(full).isDirectory()) roots.add(full);
+        } catch {}
+      }
+    } catch {}
+  }
+  // Also include any project_paths we've actually started a session in — covers
+  // non-conventional locations the user has used recently.
+  for (const info of startedSessionTmux.values()) {
+    if (info.projectPath) {
+      try {
+        if (fs.statSync(info.projectPath).isDirectory()) roots.add(info.projectPath);
+      } catch {}
+    }
+  }
+  return Array.from(roots).slice(0, 300);
+}
+
 async function sendHeartbeat(): Promise<void> {
   const config = readConfig();
   if (!config?.auth_token || !config?.convex_url) {
@@ -1028,6 +1082,7 @@ async function sendHeartbeat(): Promise<void> {
         pid: process.pid,
         autostart_enabled: isAutostartEnabled(),
         has_tmux: hasTmux(),
+        local_project_roots: computeLocalProjectRoots(),
       }),
     });
 
@@ -1302,7 +1357,20 @@ async function executeRemoteCommand(
         const worktreeName: string | undefined = parsed.worktree_name;
 
         const shortId = Math.random().toString(36).slice(2, 8);
-        const tmuxSession = `cc-${agentType}-${shortId}`;
+        // Deterministic name keyed by conversation_id so kill/restart is a single
+        // `tmux kill-session -t cc-<agent>-<convId>` with no lookup tables involved.
+        const convSuffix = conversationId ? conversationId.slice(-12) : shortId;
+        const tmuxSession = `cc-${agentType}-${convSuffix}`;
+
+        // Assign claude's session id up front. `claude --session-id <uuid>` writes
+        // its transcript to <uuid>.jsonl, so the daemon knows the JSONL path before
+        // the process starts — no filesystem/process discovery, no cwd-based
+        // matching, no hijack races. Reuse a caller-supplied id only if it's a real
+        // UUID (the conversation_id is not), otherwise mint one.
+        const assignedClaudeSessionId =
+          agentType === "claude"
+            ? (expectedSessionId && CLAUDE_UUID_RE.test(expectedSessionId) ? expectedSessionId : randomUUID())
+            : undefined;
 
         // Resolve a usable local cwd. If `rawPath` doesn't exist on this
         // machine (conversation came from another host or was forked from
@@ -1350,7 +1418,7 @@ async function executeRemoteCommand(
           })();
           if (gitRoot) {
             const wtName = worktreeName || `session-${shortId}`;
-            worktreeResult = createWorktree(gitRoot, wtName);
+            worktreeResult = await createWorktree(gitRoot, wtName);
             if (worktreeResult) {
               cwd = worktreeResult.worktreePath;
               log(`[WORKTREE] Created isolated worktree: ${worktreeResult.worktreeName} at ${cwd}`);
@@ -1403,6 +1471,9 @@ async function executeRemoteCommand(
           const permFlags = getPermissionFlags(agentType, config);
           if (permFlags && !extraArgs.includes("--dangerously-skip-permissions") && !extraArgs.includes("--permission-mode") && !extraArgs.includes("--allow-dangerously-skip-permissions")) {
             binaryArgs.push(...permFlags.split(/\s+/).filter(Boolean));
+          }
+          if (assignedClaudeSessionId && !extraArgs.includes("--session-id")) {
+            binaryArgs.push("--session-id", assignedClaudeSessionId);
           }
         }
 
@@ -1467,7 +1538,20 @@ async function executeRemoteCommand(
         }
 
         try {
+          // Kill-before-create makes start_session idempotent: clicking the folder
+          // switcher repeatedly just keeps respawning into the latest cwd.
+          if (conversationId) {
+            try { await tmuxExec(["kill-session", "-t", tmuxSession]); } catch {}
+            deleteStartedSession(conversationId);
+            await clearConversationDeliveryAndResumeState(conversationId, undefined, "RECONFIG");
+          }
           tmuxExecSync(["new-session", "-d", "-s", tmuxSession, "-c", cwd], { timeout: 5000 });
+          // Tag the tmux so warm-restart can rebuild startedSessionTmux from `tmux ls`.
+          if (conversationId) {
+            await setTmuxSessionOption(tmuxSession, "@codecast_conversation_id", conversationId).catch(() => {});
+          }
+          await setTmuxSessionOption(tmuxSession, "@codecast_agent_type", agentType).catch(() => {});
+          await setTmuxSessionOption(tmuxSession, "@codecast_project_path", cwd).catch(() => {});
           tmuxExecSync(["send-keys", "-t", tmuxSession, "-l", cmdText], { timeout: 5000 });
           tmuxExecSync(["send-keys", "-t", tmuxSession, "Enter"], { timeout: 5000 });
           const resultObj: Record<string, any> = { tmux_session: tmuxSession, agent_type: agentType, project_path: cwd };
@@ -1480,7 +1564,7 @@ async function executeRemoteCommand(
           result = JSON.stringify(resultObj);
           log(`[REMOTE] Started ${agentType} session in tmux: ${tmuxSession} (cwd: ${cwd})`);
           if (conversationId) {
-            const initialManagedSessionId = getInitialManagedSessionId(agentType, expectedSessionId);
+            const initialManagedSessionId = assignedClaudeSessionId ?? getInitialManagedSessionId(agentType, expectedSessionId);
             startedSessionTmux.set(conversationId, {
               tmuxSession,
               projectPath: cwd,
@@ -1496,6 +1580,14 @@ async function executeRemoteCommand(
               registerManagedStartedSession(conversationId, initialManagedSessionId, tmuxSession);
             }
             if (agentType === "claude") {
+              // `--session-id <uuid>` makes the JSONL deterministically named and
+              // ensures it lands in THIS conversation's tmux, so discovery
+              // tmux-exact-matches it (no cwd-fallback hijack) and the server's
+              // session_id already equals the uuid (no mismatch/overwrite). We do
+              // NOT pre-register conversationCache here: that would let
+              // deliverMessage resolve sessionId immediately and skip the
+              // readiness-gated started-tmux path, injecting the first message
+              // into a still-booting prompt. Let discovery/the watcher link it.
               discoverAndLinkSession(conversationId, tmuxSession, cwd).catch(err => {
                 log(`Session discovery failed for ${conversationId.slice(0, 12)}: ${err}`);
               });
@@ -1871,6 +1963,9 @@ async function executeRemoteCommand(
           error = "Missing session_id";
           break;
         }
+        // Forks tag their resume command (fork_daemon_args) so the resume can
+        // override a copied-in model the local CLI can't run. See claudeModelAlias.
+        if (parsed.fork && conversationId) forkResumeConversations.add(conversationId);
         // Fresh-session guard. If the conversation just had a session spawned
         // (startedSessionTmux still tracks it) and there's no linked Claude
         // session_id yet, an auto-resume from the UI's stuck-banner heuristic
@@ -1934,7 +2029,9 @@ async function executeRemoteCommand(
             saveConversationCache(cache);
             if (syncServiceRef) {
               syncServiceRef.markSessionActive(conversationId).catch(logConvexFailure);
-              syncServiceRef.updateSessionAgentStatus(conversationId, "connected").catch(logConvexFailure);
+              // Don't force "connected" here — autoResumeSession already publishes the
+              // accurate status (connected once the input prompt is visible, else resuming).
+              // Overriding it would re-report the false-live signal fix #1 removes.
             }
           }
           restartingSessionIds.delete(sessionId);
@@ -1962,7 +2059,7 @@ async function executeRemoteCommand(
                   const TOKEN_BUDGET = 100_000;
                   const tailMessages = chooseClaudeTailMessagesForTokenBudget(exportData, TOKEN_BUDGET);
                   ({ jsonl: reconJsonl, sessionId: newSessionId } = generateClaudeCodeJsonl(exportData, { tailMessages, sessionId }));
-                  ({ filePath: reconFilePath } = writeClaudeCodeSession(reconJsonl, newSessionId, projectPath));
+                  ({ filePath: reconFilePath } = writeClaudeCodeSession(reconJsonl, newSessionId, cwd));
                 }
                 setPosition(reconFilePath, fs.statSync(reconFilePath).size);
                 log(`[REMOTE] Reconstituted ${reconAgent} JSONL for ${sessionId.slice(0, 8)} (${exportData.messages.length} msgs)`);
@@ -2598,7 +2695,48 @@ interface WorktreeResult {
   portIndex: number;
 }
 
-function createWorktree(repoRoot: string, name: string): WorktreeResult | null {
+/**
+ * Create or attach to a worktree.
+ *
+ * Two paths:
+ *   1. NEW: if .codecast/workspace.toml exists, delegate to the workspace
+ *      module (full manifest-driven setup: copy, install, hooks, contract).
+ *      Project the resulting Workspace to the legacy WorktreeResult shape.
+ *   2. LEGACY: minimal git worktree + .wt-setup-files copy. Preserved
+ *      verbatim for repos that haven't opted in.
+ *
+ * On any failure of the new path, we fall through to the legacy path so the
+ * daemon never regresses below pre-integration capability.
+ */
+async function createWorktree(
+  repoRoot: string,
+  name: string,
+): Promise<WorktreeResult | null> {
+  const manifestPath = path.join(repoRoot, ".codecast/workspace.toml");
+  if (fs.existsSync(manifestPath)) {
+    try {
+      const ws = await import("./workspace/index.js");
+      const result = await ws.acquireWorkspace(repoRoot, name);
+      log(
+        `[WORKTREE] new-path: ${name} state=${result.workspace.state} detected=${result.workspace.manifest.detected ?? "none"}`,
+      );
+      if (result.workspace.state === "ready") {
+        return ws.toWorktreeResult(result.workspace);
+      }
+      // Broken contract — log details and fall through to legacy as safety net.
+      const failures = result.workspace.contract?.checks
+        .filter((c) => !c.ok)
+        .map((c) => `${c.name}${c.reason ? `: ${c.reason}` : ""}`)
+        .join("; ");
+      log(`[WORKTREE] new-path ${name} broken, falling back. failures: ${failures}`);
+    } catch (err) {
+      log(`[WORKTREE] new-path ${name} threw, falling back: ${(err as Error).message}`);
+    }
+  }
+  return createWorktreeLegacy(repoRoot, name);
+}
+
+function createWorktreeLegacy(repoRoot: string, name: string): WorktreeResult | null {
   const worktreeDir = path.join(repoRoot, CODECAST_WORKTREE_DIR);
   const worktreePath = path.join(worktreeDir, name);
   const branchName = `codecast/${name}`;
@@ -3221,7 +3359,10 @@ async function processSessionFile(
         }
         matchedStartedConversation = matchStartedConversation(startedClaudeEntries, {
           tmuxSessionName,
-          projectPath: actualProjectPath,
+          // Only allow the cwd fallback when the process wasn't found at all
+          // (still spawning). A located process that isn't in our tmux belongs
+          // to someone else — see matchStartedConversation.
+          projectPath: proc ? null : actualProjectPath,
         });
         if (matchedStartedConversation && tmuxSessionName) {
           log(`Matched session ${sessionId.slice(0, 8)} to conversation ${matchedStartedConversation.slice(0, 12)} via tmux ${tmuxSessionName}`);
@@ -3244,7 +3385,10 @@ async function processSessionFile(
           const tmuxEntry = startedSessionTmux.get(matchedStartedConversation);
           conversationCache[sessionId] = conversationId;
           saveConversationCache(conversationCache);
-          syncService.updateSessionId(conversationId, sessionId).catch(logConvexFailure);
+          // Reconcile project_path/git_root to the real session cwd: the stub
+          // was created (e.g. from the web) before this session existed, so its
+          // stored path is a guess that may not match where the session runs.
+          syncService.updateSessionId(conversationId, sessionId, actualProjectPath || undefined, gitInfo?.repoRoot || gitInfo?.root).catch(logConvexFailure);
           if (tmuxEntry) {
           registerManagedStartedSession(conversationId, sessionId, tmuxEntry.tmuxSession);
           if (tmuxEntry.sessionId && tmuxEntry.sessionId !== sessionId) {
@@ -3626,6 +3770,17 @@ async function processSessionFile(
     syncStats.messagesSynced += messages.length;
     syncStats.sessionsActive.add(sessionId);
     tryRegisterSessionProcess(sessionId, "claude");
+
+    const askTc = messages.flatMap(m => m.toolCalls || []).find((tc: any) => tc.name === "AskUserQuestion");
+    if (askTc && !pendingInteractivePrompts.has(sessionId)) {
+      const inp = askTc.input as any;
+      const options = inp?.questions?.[0]?.options || [];
+      pendingInteractivePrompts.set(sessionId, { timestamp: Date.now(), options });
+      log(`AskUserQuestion in JSONL for ${sessionId.slice(0, 8)}, set pending prompt guard`);
+      if (conversationId) {
+        sendAgentStatus(syncService, conversationId, sessionId, "permission_blocked");
+      }
+    }
 
     const lastMessage = messages[messages.length - 1];
     const wasInterrupted = lastMessage?.role === "user" &&
@@ -4241,7 +4396,9 @@ async function processCodexSession(
 
           matchedStartedConversation = matchStartedConversation(startedCodexEntries, {
             tmuxSessionName,
-            projectPath,
+            // Only allow the cwd fallback when the process wasn't found at all
+            // (see claude branch / matchStartedConversation).
+            projectPath: proc ? null : projectPath,
           });
 
           if (matchedStartedConversation && tmuxSessionName) {
@@ -4256,7 +4413,11 @@ async function processCodexSession(
           const tmuxEntry = startedSessionTmux.get(matchedStartedConversation);
           conversationCache[sessionId] = conversationId;
           saveConversationCache(conversationCache);
-          syncService.updateSessionId(conversationId, sessionId).catch(logConvexFailure);
+          // Reconcile project_path/git_root to the real session cwd (see Claude
+          // match branch): the stub's stored path was a guess made before the
+          // session existed and may not match where it actually runs.
+          const codexGitInfo = projectPath ? getGitInfo(projectPath) : undefined;
+          syncService.updateSessionId(conversationId, sessionId, projectPath || undefined, codexGitInfo?.repoRoot || codexGitInfo?.root).catch(logConvexFailure);
           if (tmuxEntry) {
             registerManagedStartedSession(conversationId, sessionId, tmuxEntry.tmuxSession);
             if (tmuxEntry.sessionId && tmuxEntry.sessionId !== sessionId) {
@@ -4991,7 +5152,7 @@ async function findTmuxPaneForTty(tty: string): Promise<string | null> {
 
 type InteractivePrompt = { question: string; options: Array<{ label: string; description?: string }>; isConfirmation?: boolean };
 
-function parseInteractivePrompt(text: string): InteractivePrompt | null {
+export function parseInteractivePrompt(text: string): InteractivePrompt | null {
   const lines = text.split("\n");
   const optionPattern = /^\s*[❯>)]*\s*(\d+)[.)]\s+(.+?)(?:\s{2,}(.+?))?$/;
   const options: Array<{ label: string; description?: string }> = [];
@@ -4999,6 +5160,10 @@ function parseInteractivePrompt(text: string): InteractivePrompt | null {
   let lastOptionIdx = -1;
   let gapCount = 0;
   let hasCursorIndicator = false;
+  // The AskUserQuestion menu renders each option's description on indented
+  // continuation lines BELOW the numbered label. We scan bottom-up, so those
+  // lines arrive before their option; buffer them and attach on the next match.
+  let pendingDesc: string[] = [];
 
   for (let i = lines.length - 1; i >= 0; i--) {
     const m = lines[i].match(optionPattern);
@@ -5007,13 +5172,20 @@ function parseInteractivePrompt(text: string): InteractivePrompt | null {
       firstOptionIdx = i;
       if (/^\s*[❯>]\s*\d/.test(lines[i])) hasCursorIndicator = true;
       const label = m[2].replace(/\s*[✓✗✔☑]\s*/g, "").trim();
-      if (label.length > 200) continue;
-      const description = m[3]?.trim() || undefined;
+      if (label.length > 200) { pendingDesc = []; continue; }
+      const descParts = [m[3]?.trim(), ...pendingDesc].filter((s): s is string => !!s);
+      const description = descParts.length ? descParts.join(" ") : undefined;
       if (label) options.unshift({ label, description });
+      pendingDesc = [];
       gapCount = 0;
     } else if (options.length > 0) {
       const trimmed = lines[i].trim();
-      if (!trimmed || /^\s{4,}/.test(lines[i])) {
+      const isIndented = /^\s{4,}/.test(lines[i]);
+      const isSeparator = /^[─━═\-_]{3,}$/.test(trimmed);
+      if (trimmed && isIndented && !isSeparator && trimmed.length <= 300) {
+        // Indented continuation line = description for the option just above it.
+        pendingDesc.unshift(trimmed);
+      } else if (!trimmed || isIndented || isSeparator) {
         gapCount++;
         if (gapCount > 8) break;
       } else {
@@ -5064,6 +5236,25 @@ function parsePollMessage(content: string): PollMessage | null {
   return null;
 }
 
+// The synthetic poll the daemon emits for a live interactive prompt must carry a
+// STABLE message id. checkForInteractivePrompt fires from several call sites
+// (post-inject, post-resume, heartbeat) that can race inside the capture-delay
+// window — all pass the pending guard before any of them sets it — and a
+// timestamped uuid made each emit a distinct server row, so the same prompt
+// rendered 4-5x in the UI. Keying the uuid on the prompt's *content* makes
+// addMessages idempotent: addMessages upserts by (conversation_id, message_uuid),
+// so identical prompts collapse to a single row no matter how many callers detect
+// them. Distinct prompts still get distinct ids and render separately.
+export function interactivePromptMessageUuid(sessionId: string, prompt: InteractivePrompt): string {
+  const canonical = JSON.stringify({
+    q: prompt.question,
+    o: prompt.options.map(o => [o.label, o.description ?? ""]),
+    c: !!prompt.isConfirmation,
+  });
+  const digest = createHash("sha256").update(canonical).digest("hex").slice(0, 16);
+  return `interactive-prompt-${sessionId}-${digest}`;
+}
+
 async function checkForInteractivePrompt(
   tmuxTarget: string,
   sessionId: string,
@@ -5088,15 +5279,18 @@ async function checkForInteractivePrompt(
     const now = Date.now();
     pendingInteractivePrompts.set(sessionId, { timestamp: now, options: prompt.options, isConfirmation: prompt.isConfirmation });
 
+    // Content-deterministic id: the same prompt detected by racing callers
+    // upserts to one server row instead of N duplicate poll cards.
+    const promptUuid = interactivePromptMessageUuid(sessionId, prompt);
     await syncService.addMessages({
       conversationId,
       messages: [{
-        messageUuid: `interactive-prompt-${sessionId}-${now}`,
+        messageUuid: promptUuid,
         role: "assistant" as const,
         content: "",
         timestamp: now,
         toolCalls: [{
-          id: `prompt-${now}`,
+          id: promptUuid,
           name: "AskUserQuestion",
           input: {
             questions: [{
@@ -5146,10 +5340,16 @@ export function extractTmuxLiveRegion(paneContent: string): string {
     if (isSep(tail[i])) sepIdx.push(i);
   }
   if (sepIdx.length >= 2) {
-    // Input box: take content between the last two separators (the box body).
+    // Input box: take the box body AND everything below the box (the footer).
+    // The footer is where Claude Code renders "esc to interrupt" while it is
+    // generating — and the input box (❯) stays visible the whole time for
+    // type-ahead. Slicing to `bot` (box body only) hid that marker, so a busy
+    // agent showing its input box was misclassified "idle" and we pasted into
+    // it; the queued text never submitted, never acked, and retried forever.
+    // Nothing but the live footer renders below the box, so this can't pull in
+    // scrollback (the reason the region is narrowed in the first place).
     const top = sepIdx[sepIdx.length - 2];
-    const bot = sepIdx[sepIdx.length - 1];
-    return tail.slice(top + 1, bot).join("\n");
+    return tail.slice(top + 1).join("\n");
   }
   if (sepIdx.length === 1) {
     // Modal or busy indicator: one separator, content lives below it.
@@ -6283,6 +6483,10 @@ const resumeInFlightStarted = new Map<string, number>();
 const RESUME_IN_FLIGHT_TIMEOUT_MS = 120_000;
 type ResumeFatalReason = "missing_conversation" | "session_not_found";
 const resumeFatalReasons = new Map<string, ResumeFatalReason>();
+// Conversations whose agent is being spawned as a fork. Fork history is copied
+// from the source and can reference a model the local CLI can't run, so these
+// resumes — and only these — get a model-alias override. See claudeModelAlias.
+const forkResumeConversations = new Set<string>();
 const conversationResumeFailures = new Map<string, { count: number; lastFailure: number }>();
 const CONVERSATION_RESUME_MAX_FAILURES = 3;
 const CONVERSATION_RESUME_COOLDOWN_MS = 5 * 60 * 1000; // 5 min cooldown after max failures
@@ -6328,6 +6532,20 @@ export function shouldStartBlankSessionAfterResumeFailure(reason: ResumeFatalRea
   return !shouldMaterializeFreshClaudeSession(reason);
 }
 
+// A reconstituted session's JSONL records the model it was made with — often a
+// pinned snapshot like claude-opus-4-6-20260205. Snapshots get retired when a
+// newer model ships, and `claude --resume` then dies with "the selected model
+// ... may not exist". Claude also accepts the short names opus/sonnet/haiku, which
+// always resolve to the current model of that line. Return the short name matching
+// the recorded model so a fork can resume on a live model instead of a dead
+// snapshot. Fork-only: a fork's copied history may carry a model the local CLI
+// can't run (e.g. forking another user's older session); normal resumes keep
+// whatever model the session already uses.
+export function claudeModelAlias(jsonlContent: string): string | null {
+  const m = jsonlContent.match(/"model"\s*:\s*"claude-(opus|sonnet|haiku)\b/);
+  return m ? m[1] : null;
+}
+
 function stopManagedSessionHeartbeat(sessionId: string | undefined): void {
   if (!sessionId) return;
   const interval = resumeHeartbeatIntervals.get(sessionId);
@@ -6349,11 +6567,8 @@ function ensureManagedSessionHeartbeat(sessionId: string): void {
       await processHeartbeatResponse(sessionId, result);
     } catch {}
 
-    // Report resource metrics if available
-    const resources = latestSessionResources.get(sessionId);
-    if (resources) {
-      syncServiceRef!.reportSessionMetrics(sessionId, resources.cpu, resources.memory, resources.pidCount).catch(() => {});
-    }
+    // Resource metrics (incl. agent_pid + awake-idle) are reported centrally by
+    // collectResourceSnapshot for every live session, so nothing to push here.
 
     const count = (heartbeatHealthCheckCounter.get(sessionId) || 0) + 1;
     heartbeatHealthCheckCounter.set(sessionId, count);
@@ -6381,6 +6596,30 @@ async function heartbeatHealthCheck(sessionId: string): Promise<void> {
   } catch {
     log(`[HEARTBEAT-HEALTH] tmux session ${tmux} gone for ${sessionId.slice(0, 8)}, triggering reconstitution`);
     await handleDeadSession(sessionId, tmux);
+    return;
+  }
+
+  if (syncServiceRef) {
+    const cache = readConversationCache();
+    const convId = cache[sessionId];
+    if (convId) {
+      const pending = pendingInteractivePrompts.get(sessionId);
+      if (pending && Date.now() - pending.timestamp > 90_000) {
+        try {
+          const { stdout: pane } = await tmuxExec(["capture-pane", "-p", "-J", "-t", tmux + ":0.0", "-S", "-50"]);
+          if (!parseInteractivePrompt(pane)) {
+            pendingInteractivePrompts.delete(sessionId);
+            log(`[HEARTBEAT-HEALTH] Cleared stale pending prompt for ${sessionId.slice(0, 8)}`);
+          } else {
+            pending.timestamp = Date.now();
+          }
+        } catch {
+          pendingInteractivePrompts.delete(sessionId);
+        }
+      } else if (!pending) {
+        checkForInteractivePrompt(tmux + ":0.0", sessionId, convId, syncServiceRef, 0).catch(() => {});
+      }
+    }
   }
 }
 
@@ -6487,9 +6726,13 @@ async function discoverAndLinkSession(
           if (tmuxPane && tmuxPane.split(":")[0] === tmuxSession) {
             linkedSessionId = sessionId;
             break;
-          } else if (tmuxPane) {
+          } else {
+            // Process located but not in our tmux — either a different tmux or
+            // no tmux at all (a bare terminal/iTerm session). A web-started
+            // session always runs inside its own tmux, so this candidate is
+            // not ours regardless. Block the single-candidate fallback below.
             foundInOtherTmux = true;
-            log(`[DISCOVER] Candidate ${sessionId.slice(0, 8)} is in tmux ${tmuxPane.split(":")[0]}, not ${tmuxSession} — skipping`);
+            log(`[DISCOVER] Candidate ${sessionId.slice(0, 8)} is in ${tmuxPane ? `tmux ${tmuxPane.split(":")[0]}` : "no tmux"}, not ${tmuxSession} — skipping`);
           }
         }
       } catch {}
@@ -6514,7 +6757,11 @@ async function discoverAndLinkSession(
       }
       saveConversationCache(cache);
       if (syncServiceRef) {
-        syncServiceRef.updateSessionId(conversationId, linkedSessionId).catch(logConvexFailure);
+        // Reconcile project_path/git_root to the real session cwd (see Claude
+        // match branch). `cwd` is authoritative here: the linked candidate's
+        // JSONL was found under the cwd-derived project dir.
+        const discoveryGitInfo = getGitInfo(cwd);
+        syncServiceRef.updateSessionId(conversationId, linkedSessionId, cwd, discoveryGitInfo?.repoRoot || discoveryGitInfo?.root).catch(logConvexFailure);
         registerManagedStartedSession(conversationId, linkedSessionId, tmuxSession);
         if (startedEntry?.sessionId && startedEntry.sessionId !== linkedSessionId) {
           stopManagedSessionHeartbeat(startedEntry.sessionId);
@@ -6642,8 +6889,22 @@ function validateProcessCache(): void {
 const latestSessionResources = new Map<string, SessionResources>();
 const RESOURCE_MONITOR_INTERVAL_MS = 30_000;
 
+// Sleep-aware idle accounting. We accumulate idle time per session only across
+// ticks where the machine was awake, so a closed-lid gap never makes a frozen
+// session look "idle for hours" the moment it wakes. A session's counter resets
+// to 0 whenever it shows activity (CPU above the floor or a working status).
+const sessionAwakeIdleMs = new Map<string, number>();
+let lastResourceTickAt = 0;
+// A gap larger than this between resource ticks means the daemon was suspended
+// (sleep) or stalled — either way that interval is not real awake-idle time.
+const RESOURCE_TICK_SLEEP_GAP_MS = RESOURCE_MONITOR_INTERVAL_MS * 2.5;
+
 export function getLatestSessionResources(): ReadonlyMap<string, SessionResources> {
   return latestSessionResources;
+}
+
+export function getSessionAwakeIdleMs(sessionId: string): number {
+  return sessionAwakeIdleMs.get(sessionId) ?? 0;
 }
 
 async function collectResourceSnapshot(): Promise<void> {
@@ -6661,6 +6922,40 @@ async function collectResourceSnapshot(): Promise<void> {
     for (const [sessionId, r] of resources) {
       latestSessionResources.set(sessionId, r);
     }
+
+    // Advance per-session awake-idle counters. Skip the very first tick, wake
+    // grace, and any oversized gap (sleep/stall) so suspended time is excluded.
+    const now = Date.now();
+    const elapsed = lastResourceTickAt > 0 ? now - lastResourceTickAt : 0;
+    const sleepSkip = lastResourceTickAt === 0 || isInWakeGrace() || elapsed > RESOURCE_TICK_SLEEP_GAP_MS;
+    lastResourceTickAt = now;
+
+    for (const [sessionId, r] of resources) {
+      sessionAwakeIdleMs.set(sessionId, nextAwakeIdleMs({
+        prevIdleMs: sessionAwakeIdleMs.get(sessionId) ?? 0,
+        cpu: r.cpu,
+        status: lastSentAgentStatus.get(sessionId),
+        elapsedMs: elapsed,
+        sleepSkip,
+      }));
+    }
+    // Drop counters for sessions whose process tree is gone (no longer collected).
+    for (const sessionId of sessionAwakeIdleMs.keys()) {
+      if (!resources.has(sessionId)) sessionAwakeIdleMs.delete(sessionId);
+    }
+
+    // Push metrics for every live session here (not only resume-managed ones),
+    // so the Sessions page sees fresh metrics — and thus liveness — for anything
+    // with a real process tree, including sessions reporting a "stopped" status.
+    if (syncServiceRef) {
+      for (const [sessionId, r] of resources) {
+        const agentPid = sessionProcessCache.get(sessionId)?.pid;
+        syncServiceRef.reportSessionMetrics(
+          sessionId, r.cpu, r.memory, r.pidCount, agentPid, sessionAwakeIdleMs.get(sessionId) ?? 0,
+        ).catch(() => {});
+      }
+    }
+
     if (resources.size > 0) {
       log(`[RESOURCES] ${formatResourcesLog(resources)}`);
     }
@@ -6689,6 +6984,146 @@ function slugify(text: string, maxLen = 30): string {
     .replace(/^-+|-+$/g, "")
     .slice(0, maxLen)
     .replace(/-+$/, "");
+}
+
+/**
+ * Ordered, de-duplicated list of tmux sessions to probe for a live agent before
+ * spawning a fresh resume session. Priority: the cached resume tmux, then the
+ * original started session (cc-<agent>-<convId> from start_session), then the
+ * resume-named session. Including the started session is what stops a force-resume
+ * of an already-live started session from spawning a parallel cc-resume- tmux and
+ * splitting message delivery across two panes.
+ */
+export function resumeReuseCandidates(
+  cachedTmux: string | undefined,
+  startedTmux: string | undefined,
+  resumeTmux: string,
+): string[] {
+  const out: string[] = [];
+  for (const t of [cachedTmux, startedTmux, resumeTmux]) {
+    if (t && !out.includes(t)) out.push(t);
+  }
+  return out;
+}
+
+// Build the `env` prefix for an auto-resume command. Always strips CLAUDECODE so the
+// resumed agent doesn't refuse to launch "inside another Claude Code session". For Claude,
+// also pushes the "Resume from summary?" thresholds out of reach: that prompt fires for
+// old/large sessions (default >70min AND >100k tokens) and blocks the TUI awaiting a choice,
+// but a daemon auto-resume has no human at the pane to answer it — so it would wedge forever
+// and trip the web stuck-banner into a kill+restart loop. There is no CLI flag for it, only
+// these env gates (read by Claude Code as process.env.CLAUDE_CODE_RESUME_THRESHOLD_*).
+export function buildResumeEnvPrefix(agentType: string): string {
+  const base = "env -u CLAUDECODE";
+  return agentType === "claude"
+    ? `${base} CLAUDE_CODE_RESUME_THRESHOLD_MINUTES=999999999 CLAUDE_CODE_RESUME_TOKEN_THRESHOLD=999999999999`
+    : base;
+}
+
+interface ResolvedLiveSession {
+  /** A live tmux target ready for injection (bare "cc-x" for cache/started/resume-name,
+   *  "cc-x:win.pane" for a process-discovered pane), or null if no live tmux was found. */
+  tmuxTarget: string | null;
+  /** Where the live target came from (logging), or null when no live tmux was found. */
+  source: "cache" | "started" | "resume-name" | "process" | null;
+  /** The live agent process when discovered by process scan — lets callers fall back to
+   *  direct-terminal (AppleScript/CLI) injection for agents not running inside tmux. */
+  proc: ClaudeSessionInfo | null;
+  /** True when a cached resume tmux existed and passed has-session. */
+  cachedStillValid: boolean;
+}
+
+/**
+ * Single source of truth for "is this session already running, and where do I inject?".
+ * Probes, in order: the cached resume tmux, the original started session
+ * (cc-<agent>-<convId>), an optional resume-named session, then a live OS process
+ * (→ its tmux pane, or the bare process for non-tmux terminal injection). Read-only
+ * apart from self-healing cache eviction (drops a cached entry whose tmux is gone or
+ * whose agent has died). Both deliverMessage and autoResumeSession route through this
+ * so the two delivery paths can never disagree about whether a session is already live.
+ */
+async function resolveLiveTmuxTarget(
+  conversationId: string | undefined,
+  sessionId: string,
+  agentType: "claude" | "codex" | "cursor" | "gemini",
+  resumeTmuxName?: string,
+): Promise<ResolvedLiveSession> {
+  const cachedTmux = resumeSessionCache.get(sessionId);
+  let cachedStillValid = false;
+
+  const dropCache = () => {
+    resumeSessionCache.delete(sessionId);
+    stopCodexPermissionPoller(sessionId);
+    const hbInterval = resumeHeartbeatIntervals.get(sessionId);
+    if (hbInterval) { clearInterval(hbInterval); resumeHeartbeatIntervals.delete(sessionId); }
+  };
+
+  // 1. Cached resume tmux — verified before use; self-heals on gone/dead.
+  if (cachedTmux) {
+    let hasSessionOk = false;
+    try {
+      await tmuxExec(["has-session", "-t", cachedTmux], { timeout: 3000, killSignal: "SIGKILL" });
+      hasSessionOk = true;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // Only a definitive "no such session" drops the cache — transient tmux errors
+      // (timeout, EAGAIN) must not nuke a live mapping; just fall through to other probes.
+      if (/can't find session|no such session|session not found/i.test(msg)) {
+        logDelivery(`Cached tmux ${cachedTmux} gone (${msg.slice(0, 80)}), clearing cache`);
+        dropCache();
+      } else {
+        logDelivery(`Cached tmux ${cachedTmux} has-session transient error (${msg.slice(0, 80)}), keeping cache and falling through`);
+      }
+    }
+    if (hasSessionOk) {
+      cachedStillValid = true;
+      let agentAlive = true;
+      try { agentAlive = await isTmuxAgentAlive(cachedTmux); } catch {}
+      if (agentAlive) {
+        return { tmuxTarget: cachedTmux, source: "cache", proc: null, cachedStillValid: true };
+      }
+      // Dead agent: drop the cache (leave the tmux in place) and keep probing.
+      logDelivery(`Cached tmux ${cachedTmux} has no live agent, clearing cache (leaving tmux in place)`);
+      dropCache();
+      cachedStillValid = false;
+    }
+  }
+
+  // 2/3. Started session, then optional resume-named session — both verified alive.
+  const startedTmux = conversationId ? startedSessionTmux.get(conversationId)?.tmuxSession : undefined;
+  for (const candidate of resumeReuseCandidates(undefined, startedTmux, resumeTmuxName ?? "")) {
+    try {
+      await tmuxExec(["has-session", "-t", candidate], { timeout: 3000, killSignal: "SIGKILL" });
+      if (await isTmuxAgentAlive(candidate)) {
+        return {
+          tmuxTarget: candidate,
+          source: candidate === startedTmux ? "started" : "resume-name",
+          proc: null,
+          cachedStillValid,
+        };
+      }
+    } catch {}
+  }
+
+  // 4. Live OS process → its tmux pane (or the bare process for AppleScript/CLI fallback).
+  // Materialized sessions have no running process and CWD+timing heuristics false-positive.
+  const isMaterialized = materializedSessions.has(sessionId);
+  const proc = isMaterialized ? null : await findSessionProcess(sessionId, agentType);
+  if (proc) {
+    if (!isAgentProcess(proc.pid)) {
+      // Leftover shell, not an agent — drop the stale process cache and give up on it.
+      sessionProcessCache.delete(sessionId);
+      return { tmuxTarget: null, source: null, proc: null, cachedStillValid };
+    }
+    let pane = await findTmuxPaneForTty(proc.tty);
+    // Claude often runs in a tmux pane whose pty mapping isn't visible (nested tmux, fresh
+    // pane): fall back to a still-valid cached target rather than the AppleScript path,
+    // which would type into the foreground terminal and silently drop the message.
+    if (!pane && cachedStillValid && cachedTmux) pane = cachedTmux;
+    return { tmuxTarget: pane, source: pane ? "process" : null, proc, cachedStillValid };
+  }
+
+  return { tmuxTarget: null, source: null, proc: null, cachedStillValid };
 }
 
 async function autoResumeSession(sessionId: string, content: string, titleCache: TitleCache, cwdOverride?: string, conversationId?: string, agentTypeHint?: "claude" | "codex" | "cursor" | "gemini"): Promise<boolean> {
@@ -6768,9 +7203,14 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
         const tailMessages = chooseClaudeAutoTrim(data);
         ({ jsonl, sessionId: reconId } = generateClaudeCodeJsonl(data, { tailMessages, sessionId }));
       }
+      // Write under the same cwd the resume will run in (see localSessionDir):
+      // a valid override wins, otherwise the locally-resolved repo path.
+      const reconDir = (cwdOverride && fs.existsSync(cwdOverride))
+        ? cwdOverride
+        : localSessionDir(data.conversation.project_path || undefined);
       const result = reconAgentType === "codex"
         ? { sessionId: reconId, filePath: writeCodexSession(jsonl, reconId) }
-        : writeClaudeCodeSession(jsonl, reconId, data.conversation.project_path || undefined);
+        : writeClaudeCodeSession(jsonl, reconId, reconDir);
       logDelivery(`Reconstituted ${sessionId.slice(0, 8)} (${data.messages.length} msgs)`);
       if (conversationId && reconId !== sessionId) {
         remapConversationSession(sessionId, reconId, conversationId);
@@ -6844,41 +7284,70 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
     } catch (err) {
       log(`Failed to copy session for UUID resume: ${err instanceof Error ? err.message : String(err)}`);
     }
-    resumeCmd = `claude --resume ${resumeId}${extraFlags ? " " + extraFlags : ""}`;
+    // Guarantee the session JSONL lives under the slug of the cwd we're about to
+    // resume in. findSessionFile() searches *every* project dir, so it can return
+    // a copy written under another machine's path (e.g. a fork whose origin was
+    // /Users/<other>/...). `claude --resume` only scans its own cwd's project dir,
+    // so relocate the file there or Claude reports "No conversation found with
+    // session ID" and crashes. This also self-heals stale wrong-dir JSONLs left by
+    // earlier runs.
+    try {
+      const resumeFile = findSessionFile(resumeId);
+      if (resumeFile) {
+        const cwdProjectDir = path.join(process.env.HOME || "", ".claude", "projects", cwd.replace(/\//g, "-"));
+        const desiredPath = path.join(cwdProjectDir, `${resumeId}.jsonl`);
+        if (path.resolve(resumeFile.path) !== path.resolve(desiredPath)) {
+          fs.mkdirSync(cwdProjectDir, { recursive: true });
+          fs.copyFileSync(resumeFile.path, desiredPath);
+          log(`Relocated session ${resumeId.slice(0, 8)} JSONL into resume cwd dir (${cwd})`);
+        }
+      }
+    } catch (err) {
+      log(`Failed to relocate session JSONL for ${resumeId.slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    // Only fork resumes get a model override: the copied history can reference a
+    // model the local CLI can't run (a retired snapshot, or another user's model).
+    // Normal resumes keep whatever model the session already uses.
+    const isForkResume = !!conversationId && forkResumeConversations.has(conversationId);
+    const hasModelFlag = /(^|\s)--model(\s|=)/.test(extraFlags);
+    const modelAlias = (isForkResume && !hasModelFlag) ? claudeModelAlias(jsonlContent) : null;
+    const modelFlag = modelAlias ? ` --model ${modelAlias}` : "";
+    resumeCmd = `claude --resume ${resumeId}${modelFlag}${extraFlags ? " " + extraFlags : ""}`;
   }
 
   const prefix = agentType === "codex" ? "cx" : agentType === "gemini" ? "gm" : "cc";
   const tmuxSession = slug ? `${prefix}-resume-${slug}-${shortId}` : `${prefix}-resume-${shortId}`;
 
-  // Check if this session already has a healthy agent running (avoid killing + recreating)
-  const cachedTmux = resumeSessionCache.get(sessionId);
-  const aliveTarget = cachedTmux || tmuxSession;
-  try {
-    await tmuxExec(["has-session", "-t", aliveTarget], { timeout: 3000, killSignal: "SIGKILL" });
-    const alive = await isTmuxAgentAlive(aliveTarget);
-    if (alive) {
-      logDelivery(`Session ${shortId} already alive in tmux=${aliveTarget}, reusing`);
-      resumeSessionCache.set(sessionId, aliveTarget);
-      if (content) {
-        await injectViaTmux(aliveTarget + ":0.0", content);
-      }
-      // Ensure heartbeat + sync registration exist (may be missing after daemon restart)
-      if (syncServiceRef && conversationId && !resumeHeartbeatIntervals.has(sessionId)) {
-        syncServiceRef.registerManagedSession(sessionId, process.pid, aliveTarget, conversationId).catch(logConvexFailure);
-        syncServiceRef.updateSessionAgentStatus(conversationId, "connected").catch(logConvexFailure);
-        const interval = setInterval(async () => {
-          try {
-            const status = lastSentAgentStatus.get(sessionId);
-            logHeartbeatStatus(sessionId, status);
-            const result = await syncServiceRef!.heartbeatManagedSession(sessionId, status);
-            await processHeartbeatResponse(sessionId, result);
-          } catch {}
-        }, 30000);
-        resumeHeartbeatIntervals.set(sessionId, interval);
-      }
-      return true;
+  // Check if this session already has a healthy agent running (avoid killing + recreating).
+  // resolveLiveTmuxTarget probes the cached resume tmux, the original started session
+  // (cc-<agent>-<convId>), this resume-named session, and any live process — reusing the
+  // first with a live agent. The started-session probe is what prevents a force-resume of
+  // an already-live started session from spawning a parallel cc-resume- tmux and splitting
+  // delivery across two panes.
+  const live = await resolveLiveTmuxTarget(conversationId, sessionId, agentType, tmuxSession);
+  if (live.tmuxTarget) {
+    const bareName = live.tmuxTarget.split(":")[0];
+    logDelivery(`Session ${shortId} already alive in tmux=${live.tmuxTarget} (${live.source}), reusing`);
+    resumeSessionCache.set(sessionId, bareName);
+    if (content) {
+      await injectViaTmux(live.tmuxTarget.includes(":") ? live.tmuxTarget : live.tmuxTarget + ":0.0", content);
     }
-  } catch {}
+    // Ensure heartbeat + sync registration exist (may be missing after daemon restart)
+    if (syncServiceRef && conversationId && !resumeHeartbeatIntervals.has(sessionId)) {
+      syncServiceRef.registerManagedSession(sessionId, process.pid, bareName, conversationId).catch(logConvexFailure);
+      syncServiceRef.updateSessionAgentStatus(conversationId, "connected").catch(logConvexFailure);
+      const interval = setInterval(async () => {
+        try {
+          const status = lastSentAgentStatus.get(sessionId);
+          logHeartbeatStatus(sessionId, status);
+          const result = await syncServiceRef!.heartbeatManagedSession(sessionId, status);
+          await processHeartbeatResponse(sessionId, result);
+        } catch {}
+      }, 30000);
+      resumeHeartbeatIntervals.set(sessionId, interval);
+    }
+    return true;
+  }
 
   try {
     try { await tmuxExec(["kill-session", "-t", tmuxSession]); } catch {}
@@ -6887,8 +7356,10 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
     await setTmuxSessionOption(tmuxSession, "@codecast_session_id", sessionId);
     await setTmuxSessionOption(tmuxSession, "@codecast_agent_type", agentType);
 
-    // Prefix with env -u CLAUDECODE to prevent "cannot launch inside another Claude Code session" error
-    await tmuxExec(["send-keys", "-t", tmuxSession, "-l", `env -u CLAUDECODE ${resumeCmd}`]);
+    // See buildResumeEnvPrefix: strips CLAUDECODE and (for Claude) suppresses the
+    // "Resume from summary?" prompt that would otherwise wedge an unattended auto-resume.
+    const resumeEnvPrefix = buildResumeEnvPrefix(agentType);
+    await tmuxExec(["send-keys", "-t", tmuxSession, "-l", `${resumeEnvPrefix} ${resumeCmd}`]);
     await tmuxExec(["send-keys", "-t", tmuxSession, "Enter"]);
 
     logDelivery(`Auto-resumed ${agentType} ${shortId} in tmux=${tmuxSession} cwd=${cwd} cmd=${resumeCmd}`);
@@ -6943,6 +7414,15 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
             return false;
           }
           if (promptPattern.test(paneContent) && await isTmuxAgentAlive(tmuxSession)) {
+            // A bare ❯/› also renders as the cursor of a blocking selection menu (e.g. Claude's
+            // "Resume from summary?" prompt). Matching that would publish a false "connected" while
+            // the agent is frozen awaiting a choice. Keep polling until the menu clears. Only guard
+            // against option menus (isConfirmation false) — "press enter to continue" warnings are
+            // cleared by the Escape pass below, so they must not block readiness here.
+            const blockingMenu = parseInteractivePrompt(paneContent);
+            if (blockingMenu && !blockingMenu.isConfirmation) {
+              continue;
+            }
             resumeFatalReasons.delete(sessionId);
             logDelivery(`Agent ${shortId} ready (prompt visible) after ${Date.now() - startTime}ms`);
             ready = true;
@@ -6965,8 +7445,11 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
       logDelivery(`Agent ${shortId} startup timed out after ${Date.now() - startTime}ms (max=${maxPollMs}ms, jsonl=${Math.round(jsonlSize / 1024)}KB) but agent process alive, proceeding`);
     }
 
-    // Transition to "connected" now that the agent prompt is visible (or timed out with live process)
-    if (syncServiceRef && conversationId) {
+    // Transition to "connected" only when we actually saw the input prompt. On a timeout-but-alive
+    // resume we don't know the agent is interactive yet, so leave it "resuming" — the next hook event
+    // (working/idle) will correct it. Reporting "connected" prematurely is exactly the false-live
+    // signal that lets the web watchdog escalate to a destructive kill+restart.
+    if (ready && syncServiceRef && conversationId) {
       syncServiceRef.updateSessionAgentStatus(conversationId, "connected").catch(logConvexFailure);
     }
 
@@ -7083,7 +7566,7 @@ async function repairAndResumeSession(
         }
 
         if (targetSessionId !== sessionId) {
-          const { filePath: repairFilePath } = writeClaudeCodeSession(jsonl, targetSessionId, projectPath);
+          const { filePath: repairFilePath } = writeClaudeCodeSession(jsonl, targetSessionId, localSessionDir(projectPath));
           setPosition(repairFilePath, fs.statSync(repairFilePath).size);
           remapConversationSession(sessionId, targetSessionId, convId);
           if (titleCache[sessionId] && !titleCache[targetSessionId]) {
@@ -7116,7 +7599,7 @@ async function repairAndResumeSession(
           writeCodexSession(jsonl, sessionId, "rollout");
           log(`Wrote new Codex session file for ${sessionId.slice(0, 8)}`);
         } else {
-          const { filePath: repairFilePath } = writeClaudeCodeSession(jsonl, sessionId, projectPath);
+          const { filePath: repairFilePath } = writeClaudeCodeSession(jsonl, sessionId, localSessionDir(projectPath));
           setPosition(repairFilePath, fs.statSync(repairFilePath).size);
           log(`Wrote new session file for ${sessionId.slice(0, 8)}`);
         }
@@ -7358,7 +7841,7 @@ async function materializeSession(
       const convSessionId = exportData.conversation.session_id || undefined;
       const { jsonl, sessionId } = generateClaudeCodeJsonl(exportData, { tailMessages, sessionId: convSessionId });
       const projectPath = exportData.conversation.project_path || undefined;
-      const { filePath: matFilePath } = writeClaudeCodeSession(jsonl, sessionId, projectPath);
+      const { filePath: matFilePath } = writeClaudeCodeSession(jsonl, sessionId, localSessionDir(projectPath));
       setPosition(matFilePath, fs.statSync(matFilePath).size);
 
       conversationCache[sessionId] = conversationId;
@@ -7637,127 +8120,58 @@ async function deliverMessage(
   logDelivery(`Delivering to session=${sessionId.slice(0, 12)} conv=${conversationId.slice(0, 12)} type=${detectedType}`);
 
 
-  // Check if we have a cached tmux target from a previous auto-resume
-  const cachedTmux = resumeSessionCache.get(sessionId);
-  let cachedTmuxStillValid = false;
-  if (cachedTmux) {
-    logDelivery(`Found cached tmux=${cachedTmux} for session=${sessionId.slice(0, 12)}`);
-    let hasSessionOk = false;
+  // Find an already-live session (cached tmux / started session / live process pane) via the
+  // shared resolver, so this path and autoResumeSession agree on "is it live and where".
+  const live = await resolveLiveTmuxTarget(conversationId, sessionId, detectedType);
+  let agentDetectedDead = false;
+  if (live.tmuxTarget) {
+    // Bare names (cache/started) target the session's active pane via ":0.0"; a
+    // process-discovered pane ("cc-x:win.pane") is already fully qualified.
+    const injectTarget = live.tmuxTarget.includes(":") ? live.tmuxTarget : live.tmuxTarget + ":0.0";
+    const tmuxSessionName = injectTarget.split(":")[0];
     try {
-      await tmuxExec(["has-session", "-t", cachedTmux]);
-      hasSessionOk = true;
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      // Only drop the cache for a definitive "no such session" — transient
-      // tmuxExec failures (timeout, EAGAIN) must not nuke a live mapping and
-      // force fallback to AppleScript injection. The pane is almost certainly
-      // still alive; another retry will resolve it.
-      if (/can't find session|no such session|session not found/i.test(msg)) {
-        logDelivery(`Cached tmux ${cachedTmux} gone (${msg.slice(0, 80)}), clearing cache`);
-        resumeSessionCache.delete(sessionId);
-        stopCodexPermissionPoller(sessionId);
-        const hbInterval = resumeHeartbeatIntervals.get(sessionId);
-        if (hbInterval) { clearInterval(hbInterval); resumeHeartbeatIntervals.delete(sessionId); }
+      // Mark "injected" BEFORE send-keys: the send triggers Claude to write the user message
+      // to JSONL within ms, and the JSONL watcher flips "injected" → "delivered". Flipping
+      // after the send lets the ack race ahead, find no "injected" row, and leave the status
+      // stuck until the retry cron re-delivers the same message (duplicate reply).
+      await syncService.updateMessageStatus({ messageId, status: "injected" });
+      await injectViaTmux(injectTarget, content);
+      // A process-discovered pane can go stale between scan and inject — verify the agent
+      // survived and fall through to auto-resume if it crashed (the original optimistic path).
+      if (live.source === "process" && !(await isTmuxAgentAlive(tmuxSessionName))) {
+        logDelivery(`Agent in ${injectTarget} is dead after injection, falling through to auto-resume`);
+        sessionProcessCache.delete(sessionId);
+        agentDetectedDead = true;
       } else {
-        logDelivery(`Cached tmux ${cachedTmux} has-session transient error (${msg.slice(0, 80)}), keeping cache and falling through to process match`);
-      }
-    }
-    if (hasSessionOk) {
-      cachedTmuxStillValid = true;
-      let agentAlive = true;
-      try { agentAlive = await isTmuxAgentAlive(cachedTmux); } catch {}
-      if (!agentAlive) {
-        // Drop cache so the next delivery falls through to process-match /
-        // fresh-spawn, but do NOT tear down the tmux on the weak
-        // isTmuxAgentAlive signal. A repair-and-resume will reclaim the name
-        // with its own kill+new-session sequence if it actually needs to
-        // overwrite this pane.
-        logDelivery(`Cached tmux ${cachedTmux} has no live agent, clearing cache (leaving tmux in place)`);
-        resumeSessionCache.delete(sessionId);
-        cachedTmuxStillValid = false;
-        stopCodexPermissionPoller(sessionId);
-        const hbInterval = resumeHeartbeatIntervals.get(sessionId);
-        if (hbInterval) { clearInterval(hbInterval); resumeHeartbeatIntervals.delete(sessionId); }
-      } else {
-        await syncService.updateMessageStatus({ messageId, status: "injected" });
-        await injectViaTmux(cachedTmux, content);
-        syncService.setSessionError(conversationId).catch(logConvexFailure);
+        if (live.source === "cache") syncService.setSessionError(conversationId).catch(logConvexFailure);
+        logDelivery(`Injected via tmux ${injectTarget} (source=${live.source})`);
         const isPollResponse = !!parsePollMessage(content);
         if (content.trimStart().startsWith("/") || isPollResponse) {
-          checkForInteractivePrompt(cachedTmux, sessionId, conversationId, syncService, isPollResponse ? 4000 : 2000).catch(() => {});
+          checkForInteractivePrompt(injectTarget, sessionId, conversationId, syncService, isPollResponse ? 4000 : 2000).catch(() => {});
         }
         return true;
       }
+    } catch (err) {
+      logDelivery(`tmux injection failed for ${injectTarget}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
-  // Skip process matching for materialized sessions - they have no running process
-  // and CWD+timing heuristics can false-positive match other sessions
-  const isMaterialized = materializedSessions.has(sessionId);
-  logDelivery(`Finding process: materialized=${isMaterialized} session=${sessionId.slice(0, 12)}`);
-  const proc = isMaterialized ? null : await findSessionProcess(sessionId, detectedType);
-
-  if (proc) {
-    logDelivery(`Found process pid=${proc.pid} tty=${proc.tty} for session=${sessionId.slice(0, 12)}`);
-    // Verify the process is still an agent (not a leftover shell)
-    if (!isAgentProcess(proc.pid)) {
-      logDelivery(`Process ${proc.pid} is no longer an agent process, clearing cache`);
-      sessionProcessCache.delete(sessionId);
-    } else {
-      // Try tmux first (most reliable). If the tty doesn't map to a pane,
-      // fall back to the cached tmux session — Claude often runs inside a
-      // tmux pane whose pty mapping isn't visible via `list-panes -a` (e.g.
-      // nested tmux, or a freshly-spawned pane whose tty hasn't propagated
-      // yet). The AppleScript path types into the foreground iTerm2 session,
-      // not the tmux pane, so it silently drops the message — much worse
-      // than reusing a known-good cached target.
-      let tmuxTarget = await findTmuxPaneForTty(proc.tty);
-      if (!tmuxTarget && cachedTmuxStillValid && cachedTmux) {
-        logDelivery(`tmux pane not found for tty=${proc.tty}, falling back to cached tmux=${cachedTmux}`);
-        tmuxTarget = cachedTmux;
-      }
-      logDelivery(`tmux pane for tty=${proc.tty}: ${tmuxTarget ?? "not found"}`);
-      let agentDetectedDead = false;
-      if (tmuxTarget) {
-        try {
-          await syncService.updateMessageStatus({ messageId, status: "injected" });
-          await injectViaTmux(tmuxTarget, content);
-          const tmuxSessionName = tmuxTarget.split(":")[0];
-          const agentAlive = await isTmuxAgentAlive(tmuxSessionName);
-          if (!agentAlive) {
-            logDelivery(`Agent in ${tmuxTarget} is dead after injection, falling through to auto-resume`);
-            sessionProcessCache.delete(sessionId);
-            agentDetectedDead = true;
-          } else {
-            logDelivery(`Injected via tmux ${tmuxTarget}`);
-            const isPollResponse = !!parsePollMessage(content);
-            if (content.trimStart().startsWith("/") || isPollResponse) {
-              checkForInteractivePrompt(tmuxTarget, sessionId, conversationId, syncService, isPollResponse ? 4000 : 2000).catch(() => {});
-            }
-            return true;
-          }
-        } catch (err) {
-          logDelivery(`tmux injection failed for ${tmuxTarget}: ${err instanceof Error ? err.message : String(err)}`);
-        }
-      }
-
-      if (!agentDetectedDead) {
-        // Try direct terminal injection (AppleScript for iTerm2/Terminal.app, CLI for Kitty/WezTerm)
-        const termLabel = getTerminalLabel(proc.termProgram);
-        logDelivery(`Trying ${termLabel} injection for tty=${proc.tty}`);
-        try {
-          await syncService.updateMessageStatus({ messageId, status: "injected" });
-          await injectViaTerminal(proc.tty, content, proc.termProgram);
-          logDelivery(`Injected via ${termLabel} tty=${proc.tty}`);
-          return true;
-        } catch (err) {
-          logDelivery(`${termLabel} injection failed for ${proc.tty}: ${err instanceof Error ? err.message : String(err)}`);
-        }
-      }
-
-      logDelivery(`All injection methods failed for live process pid=${proc.pid}, falling back to auto-resume`);
+  // Live agent process not inside tmux (or the tmux inject failed without a confirmed-dead
+  // agent): try direct terminal injection (AppleScript for iTerm2/Terminal.app, CLI for
+  // Kitty/WezTerm). Skipped when the agent was just detected dead — that goes to auto-resume.
+  if (live.proc && !agentDetectedDead) {
+    const termLabel = getTerminalLabel(live.proc.termProgram);
+    logDelivery(`Trying ${termLabel} injection for tty=${live.proc.tty}`);
+    try {
+      await syncService.updateMessageStatus({ messageId, status: "injected" });
+      await injectViaTerminal(live.proc.tty, content, live.proc.termProgram);
+      logDelivery(`Injected via ${termLabel} tty=${live.proc.tty}`);
+      return true;
+    } catch (err) {
+      logDelivery(`${termLabel} injection failed for ${live.proc.tty}: ${err instanceof Error ? err.message : String(err)}`);
     }
-  } else {
+    logDelivery(`All injection methods failed for live process pid=${live.proc.pid}, falling back to auto-resume`);
+  } else if (!live.tmuxTarget && !live.proc) {
     logDelivery(`No running process found for session=${sessionId.slice(0, 12)} type=${detectedType}`);
   }
 
@@ -9274,6 +9688,16 @@ async function main(): Promise<void> {
       }
       if (recovered > 0) {
         log(`[WARM-RESTART] Recovered ${recovered} live session(s) from tmux`);
+        // Scan recovered sessions for undetected interactive prompts
+        setTimeout(() => {
+          const cache = readConversationCache();
+          for (const [sid, tmux] of resumeSessionCache) {
+            const convId = cache[sid];
+            if (convId && !pendingInteractivePrompts.has(sid) && syncServiceRef) {
+              checkForInteractivePrompt(tmux + ":0.0", sid, convId, syncServiceRef, 0).catch(() => {});
+            }
+          }
+        }, 10_000);
       }
     } catch (err) {
       log(`[WARM-RESTART] tmux scan failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -9506,7 +9930,8 @@ async function main(): Promise<void> {
       if (!convId) return;
 
       const prev = lastHookStatus.get(sessionId);
-      if (prev && prev.ts >= data.ts) return;
+      if (prev && prev.ts > data.ts) return;
+      if (prev && prev.ts === data.ts && prev.status === data.status) return;
 
       // In bypassPermissions mode, Claude Code still emits permission_prompt
       // Notification events for tools it auto-approves. Those notifications do
@@ -10440,6 +10865,11 @@ async function main(): Promise<void> {
               logDelivery(`Subscription: ${messages.length} pending message(s) received`);
             }
             for (const msg of messages) {
+              if ((msg.retry_count ?? 0) >= 12) {
+                logDelivery(`msg=${msg._id.slice(0, 8)} retry_count=${msg.retry_count} exceeds cap, marking undeliverable`);
+                syncService.updateMessageStatus({ messageId: msg._id, status: "undeliverable" as any }).catch(logConvexFailure);
+                continue;
+              }
               const inFlight = messagesInFlight.get(msg._id);
               if (inFlight !== undefined) {
                 const age = Date.now() - inFlight.ts;
@@ -10451,6 +10881,16 @@ async function main(): Promise<void> {
                 messagesInFlight.delete(msg._id);
               }
               messagesInFlight.set(msg._id, { ts: Date.now(), conversationId: msg.conversation_id });
+
+              // Per-conversation serialization: only one message delivers to a given tmux
+              // pane at a time. The subscription fires reactively when the first completes,
+              // giving the next message its turn.
+              if (conversationDeliveryActive.has(msg.conversation_id)) {
+                logDelivery(`Skipping msg=${msg._id.slice(0, 8)} - delivery already active for conv=${msg.conversation_id.slice(0, 12)}`);
+                messagesInFlight.delete(msg._id);
+                continue;
+              }
+              conversationDeliveryActive.add(msg.conversation_id);
 
               const imageIds = msg.image_storage_ids ?? (msg.image_storage_id ? [msg.image_storage_id] : []);
               logDelivery(`Processing: msg=${msg._id.slice(0, 8)} conv=${msg.conversation_id.slice(0, 12)} content="${msg.content.slice(0, 80)}" images=${imageIds.length} retry=${msg.retry_count ?? 0}`);
@@ -10489,6 +10929,7 @@ async function main(): Promise<void> {
                   await syncService.updateMessageStatus({ messageId: msg._id, status: "injected" });
                 } catch {}
                 messagesInFlight.delete(msg._id);
+                conversationDeliveryActive.delete(msg.conversation_id);
                 continue;
               }
 
@@ -10541,6 +10982,7 @@ async function main(): Promise<void> {
               } finally {
                 if (timeoutHandle) clearTimeout(timeoutHandle);
                 messagesInFlight.delete(msg._id);
+                conversationDeliveryActive.delete(msg.conversation_id);
               }
             }
           } else {

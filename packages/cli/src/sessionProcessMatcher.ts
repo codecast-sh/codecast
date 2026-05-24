@@ -58,6 +58,10 @@ export function matchStartedConversation(
         return conversationId;
       }
     }
+    // The candidate's process lives in a tmux we did NOT start, so it belongs
+    // to another conversation/owner. A shared cwd must never override that —
+    // otherwise concurrent sessions in the same repo hijack each other.
+    return null;
   }
 
   if (!projectPath) return null;
