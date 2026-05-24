@@ -72,12 +72,18 @@ export const updateUserActivity = internalMutation({
   },
   handler: async (ctx, args) => {
     const patch: Record<string, unknown> = {};
+    const user = await ctx.db.get(args.userId);
+    if (!user) return;
     if (args.daemonSeen) {
-      patch.daemon_last_seen = Date.now();
+      // Throttle: this fires on every message sync across all of the user's
+      // sessions, contending on a single hot doc. Only refresh when stale.
+      const DAEMON_SEEN_THROTTLE_MS = 60 * 1000;
+      if (!user.daemon_last_seen || Date.now() - user.daemon_last_seen > DAEMON_SEEN_THROTTLE_MS) {
+        patch.daemon_last_seen = Date.now();
+      }
     }
     if (args.messageTimestamp) {
-      const user = await ctx.db.get(args.userId);
-      if (user && (!user.last_message_sent_at || args.messageTimestamp > user.last_message_sent_at)) {
+      if (!user.last_message_sent_at || args.messageTimestamp > user.last_message_sent_at) {
         if (user.last_message_sent_at) {
           patch.prev_message_sent_at = user.last_message_sent_at;
           const GAP_THRESHOLD_MS = 2 * 60 * 60 * 1000;
@@ -113,6 +119,7 @@ export const daemonHeartbeat = mutation({
     pid: v.number(),
     autostart_enabled: v.optional(v.boolean()),
     has_tmux: v.optional(v.boolean()),
+    local_project_roots: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token, false);
@@ -121,7 +128,7 @@ export const daemonHeartbeat = mutation({
     }
 
     const now = Date.now();
-    await ctx.db.patch(auth.userId, {
+    const patch: Record<string, any> = {
       daemon_last_seen: now,
       last_heartbeat: now,
       cli_version: args.version,
@@ -129,7 +136,12 @@ export const daemonHeartbeat = mutation({
       daemon_pid: args.pid,
       autostart_enabled: args.autostart_enabled,
       has_tmux: args.has_tmux,
-    });
+    };
+    if (args.local_project_roots !== undefined) {
+      patch.local_project_roots = args.local_project_roots;
+      patch.local_project_roots_updated_at = now;
+    }
+    await ctx.db.patch(auth.userId, patch);
 
     const allPendingCommands = await ctx.db
       .query("daemon_commands")
@@ -2024,6 +2036,19 @@ export const getRecentProjectPaths = query({
       .order("desc")
       .take(200);
 
+    // Hide paths the daemon can't see locally. If the daemon hasn't published
+    // a list (older CLI, or first heartbeat hasn't landed yet), don't filter —
+    // showing too much is better than showing nothing.
+    const user = await ctx.db.get(userId);
+    const localRoots = user?.local_project_roots;
+    const FRESH_MS = 10 * 60 * 1000;
+    const isLocalFilterActive =
+      Array.isArray(localRoots) &&
+      localRoots.length > 0 &&
+      user?.local_project_roots_updated_at !== undefined &&
+      Date.now() - user.local_project_roots_updated_at < FRESH_MS;
+    const localRootSet = isLocalFilterActive ? new Set(localRoots) : null;
+
     const normalizeProjectPath = (raw: string): string | null => {
       let p = raw;
       p = p.replace(/\/\.conductor\/[^/]+$/, '');
@@ -2043,6 +2068,7 @@ export const getRecentProjectPaths = query({
       if (!raw) continue;
       const path = normalizeProjectPath(raw);
       if (!path) continue;
+      if (localRootSet && !localRootSet.has(path)) continue;
       const existing = pathCounts.get(path);
       if (existing) {
         existing.count++;
