@@ -3058,6 +3058,13 @@ export default function SessionDetailScreen() {
     id ? { conversation_id: id as Id<"conversations">, limit: 50 } : "skip"
   ) as ConversationData | null | undefined;
 
+  // git_diff blobs live off the conversation doc now; fetch them lazily (only
+  // when the diff panel is open) via the dedicated side-table query.
+  const gitDiffData = useQuery(
+    api.conversations.getConversationGitDiff,
+    diffExpanded && id ? { conversation_id: id as Id<"conversations"> } : "skip"
+  );
+
   const pendingPermissions = useQuery(
     api.permissions.getPendingPermissions,
     id ? { conversation_id: id as Id<"conversations"> } : "skip"
@@ -3492,7 +3499,10 @@ export default function SessionDetailScreen() {
     options.push('Copy');
     if (conversation?.session_id) options.push('Copy Resume Command');
     options.push(collapsed ? 'Expand Messages' : 'Collapse Messages');
-    const hasDiff = conversation?.git_branch && (conversation?.git_diff?.trim() || conversation?.git_diff_staged?.trim());
+    // git_diff lives off the conversation doc now and is fetched lazily on
+    // expand; surface "View Diff" whenever there's a branch (panel stays empty
+    // if there turns out to be no diff).
+    const hasDiff = !!conversation?.git_branch;
     if (hasDiff) options.push(diffExpanded ? 'Hide Diff' : 'View Diff');
     const hasTree = treeResult && !('error' in treeResult) && treeResult.tree && treeResult.tree.children.length > 0;
     if (hasTree) options.push('Fork Tree');
@@ -4008,23 +4018,23 @@ export default function SessionDetailScreen() {
                 )}
               </RNView>
             )}
-            {diffExpanded && (conversation.git_diff?.trim() || conversation.git_diff_staged?.trim()) && (
+            {diffExpanded && (gitDiffData?.git_diff?.trim() || gitDiffData?.git_diff_staged?.trim()) && (
               <RNView style={[styles.gitDiffPanel, { marginTop: 6, marginBottom: 2 }]}>
-                {conversation.git_diff_staged && conversation.git_diff_staged.trim().length > 0 && (
+                {gitDiffData.git_diff_staged && gitDiffData.git_diff_staged.trim().length > 0 && (
                   <RNView style={{ marginBottom: 8 }}>
                     <RNText style={{ fontSize: 10, color: Theme.green, fontWeight: '600', marginBottom: 4, paddingHorizontal: 12 }}>Staged</RNText>
                     <RNView style={styles.gitDiffContent}>
-                      <GitDiffView diff={conversation.git_diff_staged} />
+                      <GitDiffView diff={gitDiffData.git_diff_staged} />
                     </RNView>
                   </RNView>
                 )}
-                {conversation.git_diff && conversation.git_diff.trim().length > 0 && (
+                {gitDiffData.git_diff && gitDiffData.git_diff.trim().length > 0 && (
                   <RNView>
-                    {conversation.git_diff_staged && conversation.git_diff_staged.trim().length > 0 && (
+                    {gitDiffData.git_diff_staged && gitDiffData.git_diff_staged.trim().length > 0 && (
                       <RNText style={{ fontSize: 10, color: Theme.orange, fontWeight: '600', marginBottom: 4, paddingHorizontal: 12 }}>Unstaged</RNText>
                     )}
                     <RNView style={styles.gitDiffContent}>
-                      <GitDiffView diff={conversation.git_diff} />
+                      <GitDiffView diff={gitDiffData.git_diff} />
                     </RNView>
                   </RNView>
                 )}
