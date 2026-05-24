@@ -5,6 +5,7 @@ import {
   getSubtreeResources,
   collectSessionResources,
   formatResourcesLog,
+  nextAwakeIdleMs,
   type ProcessInfo,
 } from "./resourceMonitor.js";
 
@@ -114,6 +115,41 @@ describe("resourceMonitor", () => {
       ]);
       const result = await collectSessionResources(sessionPids);
       expect(result.size).toBe(0);
+    });
+  });
+
+  describe("nextAwakeIdleMs", () => {
+    const TICK = 30_000;
+
+    it("accumulates idle time across awake ticks", () => {
+      let idle = 0;
+      idle = nextAwakeIdleMs({ prevIdleMs: idle, cpu: 0.1, status: "idle", elapsedMs: TICK, sleepSkip: false });
+      idle = nextAwakeIdleMs({ prevIdleMs: idle, cpu: 0.0, status: "connected", elapsedMs: TICK, sleepSkip: false });
+      expect(idle).toBe(2 * TICK);
+    });
+
+    it("resets to 0 when CPU is above the floor", () => {
+      const idle = nextAwakeIdleMs({ prevIdleMs: 5 * TICK, cpu: 25, status: "idle", elapsedMs: TICK, sleepSkip: false });
+      expect(idle).toBe(0);
+    });
+
+    it("resets to 0 on a working status even at near-zero CPU (blocked on a tool/network call)", () => {
+      const idle = nextAwakeIdleMs({ prevIdleMs: 5 * TICK, cpu: 0.0, status: "working", elapsedMs: TICK, sleepSkip: false });
+      expect(idle).toBe(0);
+    });
+
+    it("does NOT count a sleep gap as idle (laptop closed for 2h)", () => {
+      const before = 10 * 60 * 1000; // 10 min of genuine awake-idle already banked
+      const twoHourGap = 2 * 60 * 60 * 1000;
+      const after = nextAwakeIdleMs({ prevIdleMs: before, cpu: 0.0, status: "idle", elapsedMs: twoHourGap, sleepSkip: true });
+      // The frozen 2h is excluded — the counter is unchanged, so reopening the
+      // lid does not suddenly mark the session killable.
+      expect(after).toBe(before);
+    });
+
+    it("treats undefined status as not-working (idle accrues on low CPU)", () => {
+      const idle = nextAwakeIdleMs({ prevIdleMs: 0, cpu: 0.0, status: undefined, elapsedMs: TICK, sleepSkip: false });
+      expect(idle).toBe(TICK);
     });
   });
 

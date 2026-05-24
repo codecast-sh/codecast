@@ -77,10 +77,9 @@ export default defineSchema({
       description: v.optional(v.string()),
     }))),
     available_skills: v.optional(v.string()),
-    // Tolerated for cross-fork data carried over from Ashot's deployment.
-    // No code in this fork reads or writes these fields; they are declared
-    // here only so `convex deploy` doesn't reject existing user docs that
-    // already have them.
+    // Paths the running daemon can see on this user's machine. Published on
+    // every heartbeat. Used by the project switcher to hide "ghost" folders
+    // that exist on another device the user owns but not on this one.
     local_project_roots: v.optional(v.array(v.string())),
     local_project_roots_updated_at: v.optional(v.number()),
   })
@@ -533,6 +532,15 @@ export default defineSchema({
     current_cpu: v.optional(v.number()),
     current_memory: v.optional(v.number()),
     current_pid_count: v.optional(v.number()),
+    // Real PID of the agent's process tree root (distinct from the daemon's PID
+    // historically stored in `pid`). Set by the resource collector.
+    agent_pid: v.optional(v.number()),
+    // Accumulated time the session has been idle while the machine was AWAKE
+    // (sleep gaps excluded). Reset to 0 whenever the session shows activity.
+    awake_idle_ms: v.optional(v.number()),
+    // When the daemon last reported live metrics for this session. Freshness
+    // here is the liveness signal: a live process tree is what produces a report.
+    last_metrics_at: v.optional(v.number()),
   })
     .index("by_session_id", ["session_id"])
     .index("by_conversation_id", ["conversation_id"])

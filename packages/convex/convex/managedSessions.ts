@@ -487,6 +487,8 @@ export const reportMetrics = mutation({
     cpu: v.number(),
     memory: v.number(),
     pid_count: v.number(),
+    agent_pid: v.optional(v.number()),
+    awake_idle_ms: v.optional(v.number()),
     api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -503,13 +505,16 @@ export const reportMetrics = mutation({
     if (!session) return;
     if (session.user_id.toString() !== authUserId.toString()) return;
 
+    const now = Date.now();
     await ctx.db.patch(session._id, {
       current_cpu: args.cpu,
       current_memory: args.memory,
       current_pid_count: args.pid_count,
+      last_metrics_at: now,
+      ...(args.agent_pid !== undefined ? { agent_pid: args.agent_pid } : {}),
+      ...(args.awake_idle_ms !== undefined ? { awake_idle_ms: args.awake_idle_ms } : {}),
     });
 
-    const now = Date.now();
     await ctx.db.insert("session_metrics", {
       session_id: args.session_id,
       user_id: authUserId,
@@ -599,6 +604,9 @@ export const listActiveSessions = query({
         current_cpu: session.current_cpu,
         current_memory: session.current_memory,
         current_pid_count: session.current_pid_count,
+        agent_pid: session.agent_pid,
+        awake_idle_ms: session.awake_idle_ms,
+        last_metrics_at: session.last_metrics_at,
         conversation_title: conversationTitle,
         project_path: projectPath,
         agent_type: agentType,

@@ -5,30 +5,29 @@ import { AuthGuard } from "../../components/AuthGuard";
 import Link from "next/link";
 import type { FunctionReturnType } from "convex/server";
 
-type AgentStatus = "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "stopped" | "starting" | "resuming";
 type Session = FunctionReturnType<typeof api.managedSessions.listActiveSessions>[number];
+// Cleanup-oriented buckets, computed from liveness + sleep-aware idle — NOT from
+// the agent's self-reported status (which says nothing about whether the OS
+// process exists, and conflates "done" with "frozen").
+type Bucket = "active" | "idle" | "dead";
 type ClassifiedSession = Session & {
-  isStale: boolean;
-  isActive: boolean;
-  isIdle: boolean;
-  idleDuration: number;
+  isAlive: boolean;
+  bucket: Bucket;
+  awakeIdleMs: number;
   uptime: number;
-  effectiveStatus: string;
 };
 
-const STATUS_STYLES: Record<AgentStatus, { bg: string; text: string; dot: string }> = {
-  working:             { bg: "bg-sky-950/40",    text: "text-sky-400",     dot: "bg-sky-500 animate-pulse" },
-  thinking:            { bg: "bg-violet-950/40", text: "text-violet-400",  dot: "bg-violet-500 animate-pulse" },
-  compacting:          { bg: "bg-amber-950/40",  text: "text-amber-400",   dot: "bg-amber-500 animate-pulse" },
-  starting:            { bg: "bg-teal-950/40",   text: "text-teal-400",    dot: "bg-teal-500 animate-pulse" },
-  resuming:            { bg: "bg-teal-950/40",   text: "text-teal-400",    dot: "bg-teal-500 animate-pulse" },
-  connected:           { bg: "bg-emerald-950/40",text: "text-emerald-400", dot: "bg-emerald-500" },
-  idle:                { bg: "bg-zinc-800/40",   text: "text-zinc-400",    dot: "bg-zinc-500" },
-  permission_blocked:  { bg: "bg-red-950/40",    text: "text-red-400",     dot: "bg-red-500" },
-  stopped:             { bg: "bg-zinc-800/40",   text: "text-zinc-600",    dot: "bg-zinc-700" },
+const BUCKET_STYLES: Record<Bucket, { label: string; text: string; dot: string }> = {
+  active: { label: "active",       text: "text-sky-400",   dot: "bg-sky-500" },
+  idle:   { label: "idle · kill?", text: "text-amber-400", dot: "bg-amber-500" },
+  dead:   { label: "dead",         text: "text-zinc-600",  dot: "bg-zinc-700" },
 };
 
-const STALE_THRESHOLD = 60 * 1000;
+// A session is alive if the daemon reported metrics for it recently — only a
+// real process tree produces a report. The daemon collects every 30s.
+const ALIVE_TTL_MS = 90 * 1000;
+// Awake-idle time (sleep excluded) after which a live session is safe to kill.
+const KILLABLE_IDLE_MS = 2 * 60 * 60 * 1000;
 
 function formatDuration(ms: number): string {
   if (ms < 0) ms = 0;
@@ -236,8 +235,9 @@ function AggregateChart({ metrics }: { metrics: AggregatePoint[] }) {
 function SessionsView() {
   const sessions = useQuery(api.managedSessions.listActiveSessions);
   const killSession = useMutation(api.conversations.killSession);
-  const [killing, setKilling] = useState<Set<string>>(new Set());
-  const [filter, setFilter] = useState<"all" | "active" | "idle" | "stale">("all");
+  const pruneSession = useMutation(api.managedSessions.unregisterManagedSession);
+  const [busy, setBusy] = useState<Set<string>>(new Set());
+  const [filter, setFilter] = useState<"all" | Bucket>("all");
   const [now, setNow] = useState(Date.now());
   const [expandedSession, setExpandedSession] = useState<string | null>(null);
 
@@ -249,79 +249,73 @@ function SessionsView() {
   const classified = useMemo((): ClassifiedSession[] => {
     if (!sessions) return [];
     return sessions.map((s: Session) => {
-      const isStale = now - s.last_heartbeat > STALE_THRESHOLD;
-      const status = s.agent_status || "stopped";
-      const isActive = !isStale && ["working", "thinking", "compacting", "starting", "resuming"].includes(status);
-      const isIdle = !isStale && (status === "idle" || status === "connected" || status === "permission_blocked");
-      const idleSince = s.agent_status_updated_at || s.last_heartbeat;
-      const idleDuration = isIdle || isStale ? now - idleSince : 0;
-      const uptime = now - s.started_at;
-
-      return {
-        ...s,
-        isStale,
-        isActive,
-        isIdle,
-        idleDuration,
-        uptime,
-        effectiveStatus: isStale ? "stale" : status,
-      };
+      const isAlive = s.last_metrics_at != null && now - s.last_metrics_at < ALIVE_TTL_MS;
+      const awakeIdleMs = s.awake_idle_ms ?? 0;
+      const bucket: Bucket = !isAlive ? "dead" : awakeIdleMs >= KILLABLE_IDLE_MS ? "idle" : "active";
+      return { ...s, isAlive, bucket, awakeIdleMs, uptime: now - s.started_at };
     }).sort((a: ClassifiedSession, b: ClassifiedSession) => {
-      if (a.isActive !== b.isActive) return a.isActive ? -1 : 1;
-      if (a.isIdle !== b.isIdle) return a.isIdle ? -1 : 1;
-      return b.idleDuration - a.idleDuration;
+      // Lead with the actionable cleanup list — killable-idle, biggest first —
+      // then live/active, then dead rows.
+      const order: Record<Bucket, number> = { idle: 0, active: 1, dead: 2 };
+      if (order[a.bucket] !== order[b.bucket]) return order[a.bucket] - order[b.bucket];
+      return (b.current_memory ?? 0) - (a.current_memory ?? 0);
     });
   }, [sessions, now]);
 
-  const filtered = useMemo(() => {
-    if (filter === "all") return classified;
-    if (filter === "active") return classified.filter((s) => s.isActive);
-    if (filter === "idle") return classified.filter((s) => s.isIdle);
-    if (filter === "stale") return classified.filter((s) => s.isStale);
-    return classified;
-  }, [classified, filter]);
+  const filtered = useMemo(
+    () => (filter === "all" ? classified : classified.filter((s) => s.bucket === filter)),
+    [classified, filter]
+  );
 
   const counts = useMemo(() => {
-    const c = { active: 0, idle: 0, stale: 0, total: 0 };
-    for (const s of classified) {
-      c.total++;
-      if (s.isActive) c.active++;
-      else if (s.isIdle) c.idle++;
-      else if (s.isStale) c.stale++;
-    }
+    const c = { active: 0, idle: 0, dead: 0, total: 0 };
+    for (const s of classified) { c.total++; c[s.bucket]++; }
     return c;
   }, [classified]);
 
+  const markBusy = useCallback((sessionId: string) => {
+    setBusy((prev) => new Set(prev).add(sessionId));
+    setTimeout(() => setBusy((prev) => {
+      const next = new Set(prev); next.delete(sessionId); return next;
+    }), 2000);
+  }, []);
+
   const handleKill = useCallback(
-    async (conversationId: string) => {
-      setKilling((prev) => new Set(prev).add(conversationId));
+    async (s: ClassifiedSession) => {
+      if (!s.conversation_id) return;
+      markBusy(s.session_id);
       try {
-        await killSession({ conversation_id: conversationId as any });
+        await killSession({ conversation_id: s.conversation_id as any });
       } catch (e) {
         console.error("Failed to kill session:", e);
-      } finally {
-        setTimeout(() => {
-          setKilling((prev) => {
-            const next = new Set(prev);
-            next.delete(conversationId);
-            return next;
-          });
-        }, 2000);
       }
     },
-    [killSession]
+    [killSession, markBusy]
   );
 
-  const handleKillAll = useCallback(
-    async (sessions: typeof filtered) => {
-      const killable = sessions.filter((s) => s.conversation_id && (s.isIdle || s.isStale));
-      for (const s of killable) {
-        if (s.conversation_id) {
-          handleKill(s.conversation_id);
-        }
+  // Prune removes the stale DB row for a dead session. It does not touch any
+  // process (there isn't one) — if a live session is misjudged, its next metrics
+  // report simply re-registers it.
+  const handlePrune = useCallback(
+    async (s: ClassifiedSession) => {
+      markBusy(s.session_id);
+      try {
+        await pruneSession({ session_id: s.session_id });
+      } catch (e) {
+        console.error("Failed to prune session:", e);
       }
     },
-    [handleKill]
+    [pruneSession, markBusy]
+  );
+
+  const handleBulk = useCallback(
+    async (rows: ClassifiedSession[]) => {
+      for (const s of rows) {
+        if (s.bucket === "dead") handlePrune(s);
+        else if (s.conversation_id) handleKill(s);
+      }
+    },
+    [handleKill, handlePrune]
   );
 
   if (sessions === undefined) {
@@ -335,11 +329,16 @@ function SessionsView() {
   const filterButtons = [
     { value: "all" as const, label: "All", count: counts.total },
     { value: "active" as const, label: "Active", count: counts.active },
-    { value: "idle" as const, label: "Idle", count: counts.idle },
-    { value: "stale" as const, label: "Stale", count: counts.stale },
+    { value: "idle" as const, label: "Idle 2h+", count: counts.idle },
+    { value: "dead" as const, label: "Dead", count: counts.dead },
   ];
 
-  const killableCount = filtered.filter((s) => s.conversation_id && (s.isIdle || s.isStale)).length;
+  // Bulk action only when viewing a single actionable bucket.
+  const bulkRows = filter === "idle"
+    ? filtered.filter((s) => s.conversation_id)
+    : filter === "dead"
+      ? filtered
+      : [];
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100">
@@ -356,18 +355,18 @@ function SessionsView() {
             <div className="flex items-center gap-3 text-xs text-zinc-500 font-mono">
               <span><span className="text-sky-400">{counts.active}</span> active</span>
               <span className="text-zinc-700">|</span>
-              <span><span className="text-zinc-400">{counts.idle}</span> idle</span>
+              <span><span className={counts.idle > 0 ? "text-amber-400" : "text-zinc-600"}>{counts.idle}</span> idle 2h+</span>
               <span className="text-zinc-700">|</span>
-              <span><span className={counts.stale > 0 ? "text-amber-400" : "text-zinc-600"}>{counts.stale}</span> stale</span>
+              <span><span className="text-zinc-600">{counts.dead}</span> dead</span>
             </div>
           </div>
 
-          {killableCount > 0 && (filter === "idle" || filter === "stale") && (
+          {bulkRows.length > 0 && (
             <button
-              onClick={() => handleKillAll(filtered)}
+              onClick={() => handleBulk(bulkRows)}
               className="px-3 py-1.5 text-xs font-mono bg-red-950/40 text-red-400 border border-red-900/40 rounded-md hover:bg-red-950/60 hover:border-red-800/50 transition-colors"
             >
-              Kill {killableCount} {filter}
+              {filter === "dead" ? `Prune ${bulkRows.length} dead` : `Kill ${bulkRows.length} idle`}
             </button>
           )}
         </div>
@@ -404,17 +403,16 @@ function SessionsView() {
         ) : (
           <div className="space-y-1">
               {filtered.map((session) => {
-                const statusKey = session.effectiveStatus as AgentStatus;
-                const style = STATUS_STYLES[statusKey] || STATUS_STYLES.stopped;
-                const isKilling = session.conversation_id ? killing.has(session.conversation_id) : false;
+                const style = BUCKET_STYLES[session.bucket];
+                const isBusy = busy.has(session.session_id);
                 const isExpanded = expandedSession === session.session_id;
 
                 return (
                   <div
                     key={session._id}
                     className={`bg-zinc-900/60 rounded-lg border border-zinc-800/60 transition-colors ${
-                      session.isStale ? "opacity-50" : ""
-                    } ${isKilling ? "opacity-30" : "hover:bg-zinc-900/80"}`}
+                      session.bucket === "dead" ? "opacity-50" : ""
+                    } ${isBusy ? "opacity-30" : "hover:bg-zinc-900/80"}`}
                   >
                     <div
                       className="px-4 py-3 cursor-pointer"
@@ -442,39 +440,43 @@ function SessionsView() {
                           )}
                         </div>
 
-                        {/* Status + idle */}
+                        {/* Bucket + reported status + idle */}
                         <span className={`text-xs font-mono shrink-0 ${style.text}`}>
-                          {session.effectiveStatus}
+                          {style.label}
                         </span>
-                        {session.permission_mode && session.permission_mode !== "default" && (
-                          <span className="text-[10px] text-zinc-600 font-mono shrink-0">
-                            {session.permission_mode}
+                        {session.agent_status && (
+                          <span className="text-[10px] text-zinc-600 font-mono shrink-0" title="agent-reported status">
+                            {session.agent_status}
                           </span>
                         )}
-                        {!session.isActive && (
+                        {session.isAlive && session.awakeIdleMs > 60 * 1000 && (
                           <span className={`text-xs font-mono tabular-nums shrink-0 ${
-                            session.idleDuration > 30 * 60 * 1000
-                              ? "text-red-400"
-                              : session.idleDuration > 10 * 60 * 1000
-                                ? "text-amber-400"
-                                : "text-zinc-500"
-                          }`}>
-                            {formatDuration(session.idleDuration)}
+                            session.bucket === "idle" ? "text-amber-400" : "text-zinc-500"
+                          }`} title="idle while awake (sleep excluded)">
+                            idle {formatDuration(session.awakeIdleMs)}
                           </span>
                         )}
 
-                        {/* Kill button */}
-                        {session.conversation_id && !isKilling && (
+                        {/* Action: kill a live session, prune a dead row */}
+                        {!isBusy && session.bucket === "dead" ? (
                           <button
-                            onClick={() => handleKill(session.conversation_id!)}
+                            onClick={() => handlePrune(session)}
+                            className="px-2 py-1 text-[11px] font-mono text-zinc-600 hover:text-zinc-300 hover:bg-zinc-800/50 rounded transition-colors border border-transparent hover:border-zinc-700/60 shrink-0"
+                            title="Remove this stale row (no live process to kill)"
+                          >
+                            prune
+                          </button>
+                        ) : !isBusy && session.conversation_id ? (
+                          <button
+                            onClick={() => handleKill(session)}
                             className="px-2 py-1 text-[11px] font-mono text-zinc-600 hover:text-red-400 hover:bg-red-950/30 rounded transition-colors border border-transparent hover:border-red-900/40 shrink-0"
                             title="Kill this session"
                           >
                             kill
                           </button>
-                        )}
-                        {isKilling && (
-                          <span className="text-[11px] font-mono text-zinc-600 shrink-0">killing...</span>
+                        ) : null}
+                        {isBusy && (
+                          <span className="text-[11px] font-mono text-zinc-600 shrink-0">working…</span>
                         )}
                       </div>
 
