@@ -1,8 +1,25 @@
-import { execSync, spawnSync } from "child_process";
+import { execSync, execFileSync, spawnSync } from "child_process";
 
 const ENRICHED_PATH = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
 
 let _hasTmux: boolean | null = null;
+
+// A tmux client whose server dies mid-protocol wedges in a 100% CPU loop and
+// ignores SIGTERM, so a Node `execSync` without a timeout leaves a zombie that
+// outlives the parent process (and a default-SIGTERM timeout never reaps it).
+// Always go through this wrapper for shell-form tmux calls.
+const DEFAULT_TMUX_TIMEOUT_MS = 5000;
+export function tmuxExecSync(args: string[], opts?: { timeout?: number; encoding?: "utf-8"; stdio?: "ignore" | ["ignore", "pipe", "ignore"] }): string {
+  const stdio = opts?.stdio ?? (opts?.encoding ? ["ignore", "pipe", "ignore"] as const : "ignore");
+  const result = execFileSync("tmux", args, {
+    timeout: opts?.timeout ?? DEFAULT_TMUX_TIMEOUT_MS,
+    killSignal: "SIGKILL",
+    encoding: opts?.encoding,
+    stdio: stdio as any,
+    env: { ...process.env, PATH: ENRICHED_PATH },
+  });
+  return typeof result === "string" ? result : "";
+}
 
 export function hasTmux(): boolean {
   if (_hasTmux === null) {
