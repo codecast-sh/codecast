@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { Command } from "commander";
+import { registerWorkspaceCommand } from "./workspace/cli.js";
 import open from "open";
 import * as fs from "fs";
 import * as path from "path";
@@ -7,6 +8,7 @@ import * as os from "os";
 import { spawn, spawnSync, execSync } from "child_process";
 import { fileURLToPath } from "url";
 import { maskToken } from "./redact.js";
+import { CODECAST_STATUS_HOOK } from "./statusHook.js";
 import { AuthServer } from "./authServer.js";
 import { c, fmt, icons } from "./colors.js";
 import { ensureTmux, hasTmux, tryInstallTmux } from "./tmux.js";
@@ -340,6 +342,19 @@ function buildWatchdogShellScript(): string {
     return `#!/bin/sh
 LOGFILE="\${HOME}/.codecast/watchdog-shell.log"
 log() { printf '[%s] %s\\n' "\$(date '+%Y-%m-%d %H:%M:%S')" "\$1" >> "\$LOGFILE"; }
+
+# Rotate oversized logs. copytruncate (copy then truncate-in-place) keeps launchd's
+# open append fd valid so it resumes writing at offset 0 after we shrink the file.
+MAX_LOG_BYTES=52428800
+rotate_log() {
+  [ -f "\$1" ] || return 0
+  sz=\$(wc -c < "\$1" 2>/dev/null | tr -d '[:space:]')
+  [ "\${sz:-0}" -gt "\$MAX_LOG_BYTES" ] || return 0
+  cp "\$1" "\$1.1" 2>/dev/null && : > "\$1" && log "rotated \$1 (\$sz bytes)"
+}
+for f in launchd.err.log launchd.out.log daemon.log; do
+  rotate_log "\${HOME}/.codecast/\$f"
+done
 
 LAUNCHD_UID="gui/\$(id -u)"
 if launchctl print "\$LAUNCHD_UID/sh.codecast.daemon" 2>/dev/null | grep -q 'state = running'; then
@@ -856,91 +871,6 @@ TTY=$(ps -o tty= -p "$CLAUDE_PID" 2>/dev/null | tr -d ' ')
 REGISTRY_DIR="$HOME/.codecast/session-registry"
 mkdir -p "$REGISTRY_DIR"
 echo "{\\"pid\\":$CLAUDE_PID,\\"tty\\":\\"$TTY\\",\\"ts\\":$(date +%s),\\"term\\":\\"$\{TERM_PROGRAM:-unknown}\\"}" > "$REGISTRY_DIR/$SESSION_ID.json"
-exit 0
-`;
-
-const CODECAST_STATUS_HOOK = `#!/bin/bash
-# Reports Claude Code lifecycle events to codecast daemon via status files
-set -uo pipefail
-
-INPUT=$(cat)
-SESSION_ID=$(echo "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('session_id',''))" 2>/dev/null)
-[ -z "$SESSION_ID" ] && exit 0
-
-EVENT=$(echo "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('hook_event_name',''))" 2>/dev/null)
-NOTIF_TYPE=$(echo "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('notification_type',''))" 2>/dev/null)
-SOURCE=$(echo "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('source',''))" 2>/dev/null)
-PERM_MODE=$(echo "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('permission_mode',''))" 2>/dev/null)
-
-STATUS=""
-EXTRA=""
-case "$EVENT" in
-  UserPromptSubmit) STATUS="thinking" ;;
-  PreToolUse) STATUS="working" ;;
-  PreCompact) STATUS="compacting" ;;
-  Stop) STATUS="idle" ;;
-  Notification)
-    case "$NOTIF_TYPE" in
-      permission_prompt)
-        STATUS="permission_blocked"
-        EXTRA=$(echo "$INPUT" | python3 -c "
-import sys,json
-d=json.load(sys.stdin)
-parts=[]
-m=d.get('message','')
-t=d.get('transcript_path','')
-if m: parts.append(',\"message\":'+json.dumps(m))
-if t: parts.append(',\"transcript_path\":'+json.dumps(t))
-print(''.join(parts))
-" 2>/dev/null)
-        ;;
-      idle_prompt) STATUS="idle" ;;
-    esac
-    ;;
-  SessionStart)
-    [ "$SOURCE" = "compact" ] && STATUS="working"
-    ;;
-esac
-
-[ -z "$STATUS" ] && exit 0
-
-TS=$(date +%s)
-
-# Try HTTP push first (instant), fall back to file write (polled)
-HOOK_PORT_FILE="$HOME/.codecast/hook-port"
-if [ -f "$HOOK_PORT_FILE" ]; then
-  PORT=$(cat "$HOOK_PORT_FILE" 2>/dev/null)
-  if [ -n "$PORT" ]; then
-    URL="http://127.0.0.1:$PORT/hook/status?session_id=$SESSION_ID&status=$STATUS&ts=$TS"
-    [ -n "$PERM_MODE" ] && URL="$URL&permission_mode=$PERM_MODE"
-
-    if [ -n "$EXTRA" ]; then
-      MSG=$(echo "$EXTRA" | python3 -c "import sys,json; d=json.loads('{'+sys.stdin.read().lstrip(',')+'}'); print(d.get('message',''))" 2>/dev/null)
-      TP=$(echo "$EXTRA" | python3 -c "import sys,json; d=json.loads('{'+sys.stdin.read().lstrip(',')+'}'); print(d.get('transcript_path',''))" 2>/dev/null)
-      [ -n "$MSG" ] && URL="$URL&message=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "$MSG" 2>/dev/null)"
-      [ -n "$TP" ] && URL="$URL&transcript_path=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "$TP" 2>/dev/null)"
-    fi
-
-    curl -sG "$URL" --connect-timeout 1 --max-time 2 >/dev/null 2>&1 && exit 0
-  fi
-fi
-
-# Fallback: write status file (existing path, daemon polls via chokidar)
-STATUS_DIR="$HOME/.codecast/agent-status"
-mkdir -p "$STATUS_DIR"
-CC_STATUS="$STATUS" CC_PERM_MODE="$PERM_MODE" CC_EXTRA="$EXTRA" CC_TS="$TS" python3 -c "
-import json, os
-d = {'status': os.environ['CC_STATUS'], 'ts': int(os.environ['CC_TS'])}
-pm = os.environ.get('CC_PERM_MODE', '')
-if pm: d['permission_mode'] = pm
-ex = os.environ.get('CC_EXTRA', '')
-if ex:
-    try:
-        parsed = json.loads('{' + ex.lstrip(',') + '}')
-        d.update(parsed)
-    except: pass
-print(json.dumps(d))
-" > "$STATUS_DIR/$SESSION_ID.json"
 exit 0
 `;
 
@@ -2905,6 +2835,8 @@ program
   .action(() => {
     program.outputHelp();
   });
+
+registerWorkspaceCommand(program);
 
 program
   .command("auth")
@@ -9568,7 +9500,9 @@ work
     if (options.message) body.verification_evidence = options.message;
     await cliPost("/cli/work/update", body);
     if (options.message) {
-      await cliPost("/cli/work/comment", { short_id: shortId, text: options.message, comment_type: "note" });
+      const commentBody: Record<string, any> = { short_id: shortId, text: options.message, comment_type: "note" };
+      if (sessionId) commentBody.conversation_id = sessionId;
+      await cliPost("/cli/work/comment", commentBody);
     }
     console.log(`${c.green}ok${c.reset} Completed ${c.cyan}${shortId}${c.reset}`);
     if (sessionId) clearTaskPulse(sessionId);
@@ -9581,10 +9515,14 @@ work
   .option("-m, --message <text>", "Reason for dropping")
   .action(async (shortId: string, options: any) => {
     const sessionId = detectCurrentSessionId();
-    await cliPost("/cli/work/update", { short_id: shortId, status: "dropped" });
+    const body: Record<string, any> = { short_id: shortId, status: "dropped" };
+    if (sessionId) body.conversation_id = sessionId;
+    await cliPost("/cli/work/update", body);
     if (sessionId) clearTaskPulse(sessionId);
     if (options.message) {
-      await cliPost("/cli/work/comment", { short_id: shortId, text: options.message, comment_type: "note" });
+      const commentBody: Record<string, any> = { short_id: shortId, text: options.message, comment_type: "note" };
+      if (sessionId) commentBody.conversation_id = sessionId;
+      await cliPost("/cli/work/comment", commentBody);
     }
     console.log(`${c.green}ok${c.reset} Dropped ${c.cyan}${shortId}${c.reset}`);
   });
@@ -9603,7 +9541,9 @@ work
   .option("--project-path <path>", "Project directory path")
   .option("--plan <plan_id>", "Plan short ID to associate this task with")
   .action(async (shortId: string, options: any) => {
+    const sessionId = detectCurrentSessionId();
     const body: Record<string, any> = { short_id: shortId };
+    if (sessionId) body.conversation_id = sessionId;
     if (options.status) body.status = options.status;
     if (options.priority) body.priority = options.priority;
     if (options.title) body.title = options.title;
@@ -10075,6 +10015,7 @@ plan
         return;
       }
 
+      const planSessionId = detectCurrentSessionId();
       const shortIdMap = new Map<string, string>();
       for (const t of tmpl) {
         const blockedBy = t.blocked_by?.map((dep: string) => shortIdMap.get(dep)).filter(Boolean) as string[] | undefined;
@@ -10084,6 +10025,7 @@ plan
           blocked_by: blockedBy?.length ? blockedBy : undefined,
           project_path: getRealCwd(),
           source: "agent",
+          ...(planSessionId ? { conversation_id: planSessionId } : {}),
         });
         shortIdMap.set(t.title, taskResult.short_id);
         console.log(`  ${c.green}+${c.reset} ${c.cyan}${taskResult.short_id}${c.reset}: ${t.title}`);
@@ -10500,6 +10442,7 @@ plan
   .option("--max <n>", "Max parallel agents", "3")
   .option("--watch", "Monitor agents after spawning")
   .action(async (planId: string, options: any) => {
+    const orchSessionId = detectCurrentSessionId();
     const result = await cliPost("/cli/plans/get", { short_id: planId });
     if (!result) {
       console.error("Plan not found");
@@ -10560,7 +10503,7 @@ plan
         activeHandles.set(sessionName, handle);
         const modelTag = taskModel !== "opus" ? ` ${c.dim}[${taskModel}]${c.reset}` : "";
         console.log(`  ${c.green}spawned${c.reset} ${c.cyan}${task.short_id}${c.reset} ${task.title}${modelTag} ${c.dim}(${runtime.name})${c.reset}`);
-        try { await cliPost("/cli/work/update", { short_id: task.short_id, status: "in_progress" }); } catch {}
+        try { await cliPost("/cli/work/update", { short_id: task.short_id, status: "in_progress", ...(orchSessionId ? { conversation_id: orchSessionId } : {}) }); } catch {}
         await emitOrchEvent(planId, "agent_spawned", task.short_id, task.title, { model: taskModel, runtime: runtime.name });
       } catch (err: any) {
         console.error(`  ${c.red}error${c.reset} spawning ${task.short_id}: ${err.message}`);
@@ -10631,6 +10574,7 @@ plan
   .argument("<plan_id>", "Plan short ID")
   .option("--depth <level>", "Decomposition depth: shallow (5-10 tasks), medium (20-50), deep (100+)", "medium")
   .action(async (planId: string, options: any) => {
+    const decomposeSessionId = detectCurrentSessionId();
     const result = await cliPost("/cli/plans/get", { short_id: planId });
     if (!result) {
       console.error("Plan not found");
@@ -10789,6 +10733,7 @@ Output valid JSON array of task objects. Nothing else.`;
             plan_id: planId,
             project_path: getRealCwd(),
             source: "agent",
+            ...(decomposeSessionId ? { conversation_id: decomposeSessionId } : {}),
             ...(task.estimated_minutes && { estimated_minutes: task.estimated_minutes }),
             ...(task.acceptance_criteria?.length && { acceptance_criteria: task.acceptance_criteria }),
             ...(task.steps?.length && { steps: task.steps }),
@@ -10834,6 +10779,8 @@ plan
   .option("--verify", "Run typecheck verification before merging")
   .option("--no-reschedule", "Disable automatic self-continuation on exit")
   .action(async (planId: string, options: any) => {
+    const orchSessionId = detectCurrentSessionId();
+    const orchCtx = orchSessionId ? { conversation_id: orchSessionId } : {};
     const maxAgents = parseInt(options.max, 10) || 3;
     const maxWaves = options.maxWaves ? parseInt(options.maxWaves, 10) : undefined;
     const intervalMs = (parseInt(options.interval, 10) || 2) * 60_000;
@@ -10929,7 +10876,7 @@ plan
                   });
                   activeHandles.set(vSessionName, vHandle);
                   activeAgents.set(verifyTask.short_id, { task: verifyTask, spawnedAt: Date.now() });
-                  try { await cliPost("/cli/work/update", { short_id: verifyTask.short_id, status: "in_progress", retry_count: visitCount + 1 }); } catch {}
+                  try { await cliPost("/cli/work/update", { short_id: verifyTask.short_id, status: "in_progress", retry_count: visitCount + 1, ...orchCtx }); } catch {}
                   await emitOrchEvent(planId, "verification_spawned", verifyTask.short_id, `Visit ${visitCount + 1}/${maxVisits}`);
                 } catch {}
               } else {
@@ -10937,7 +10884,7 @@ plan
                 const retryTarget = verifyTask.retry_target || task.short_id;
                 if (retryTarget && retryTarget !== verifyTask.short_id) {
                   console.log(`  ${c.dim}retry-target${c.reset} resetting ${c.cyan}${retryTarget}${c.reset} for re-implementation`);
-                  try { await cliPost("/cli/work/update", { short_id: retryTarget, status: "open" }); } catch {}
+                  try { await cliPost("/cli/work/update", { short_id: retryTarget, status: "open", ...orchCtx }); } catch {}
                 }
               }
             }
@@ -10963,7 +10910,7 @@ plan
             if (verifyResult.status !== 0) {
               console.log(`  ${c.yellow}verify-fail${c.reset} ${c.cyan}${shortId}${c.reset} typecheck failed, skipping merge`);
               try {
-                await cliPost("/cli/work/comment", { short_id: shortId, text: "Typecheck failed after completion, merge skipped", comment_type: "blocker" });
+                await cliPost("/cli/work/comment", { short_id: shortId, text: "Typecheck failed after completion, merge skipped", comment_type: "blocker", ...orchCtx });
               } catch {}
               activeAgents.delete(shortId);
               continue;
@@ -10998,32 +10945,32 @@ plan
           if (markers.status === "blocked") {
             console.log(`  ${c.red}block${c.reset} ${c.cyan}${shortId}${c.reset} ${info.task.title}: ${markers.detail}`);
             try {
-              await cliPost("/cli/work/update", { short_id: shortId, execution_status: "blocked" });
-              await cliPost("/cli/work/comment", { short_id: shortId, text: `BLOCKED: ${markers.detail}`, comment_type: "blocker" });
+              await cliPost("/cli/work/update", { short_id: shortId, execution_status: "blocked", ...orchCtx });
+              await cliPost("/cli/work/comment", { short_id: shortId, text: `BLOCKED: ${markers.detail}`, comment_type: "blocker", ...orchCtx });
             } catch {}
           } else if (markers.status === "needs_context") {
             console.log(`  ${c.yellow}needs${c.reset} ${c.cyan}${shortId}${c.reset} ${info.task.title}: ${markers.detail}`);
             try {
-              await cliPost("/cli/work/update", { short_id: shortId, execution_status: "needs_context" });
-              await cliPost("/cli/work/comment", { short_id: shortId, text: `NEEDS_CONTEXT: ${markers.detail}`, comment_type: "blocker" });
+              await cliPost("/cli/work/update", { short_id: shortId, execution_status: "needs_context", ...orchCtx });
+              await cliPost("/cli/work/comment", { short_id: shortId, text: `NEEDS_CONTEXT: ${markers.detail}`, comment_type: "blocker", ...orchCtx });
             } catch {}
           } else if (markers.status === "done_with_concerns") {
             console.log(`  ${c.yellow}done*${c.reset} ${c.cyan}${shortId}${c.reset} ${info.task.title}: ${markers.detail}`);
             try {
-              await cliPost("/cli/work/update", { short_id: shortId, status: "done", execution_status: "done_with_concerns", execution_concerns: markers.detail });
+              await cliPost("/cli/work/update", { short_id: shortId, status: "done", execution_status: "done_with_concerns", execution_concerns: markers.detail, ...orchCtx });
             } catch {}
           } else if (retryCount < maxRetries) {
             console.log(`  ${c.yellow}retry${c.reset} ${c.cyan}${shortId}${c.reset} agent died, retrying (${retryCount + 1}/${maxRetries})`);
             try {
-              await cliPost("/cli/work/update", { short_id: shortId, status: "open", retry_count: retryCount + 1 });
-              await cliPost("/cli/work/comment", { short_id: shortId, text: `Agent session \`${sn}\` exited without completing. Auto-retrying (attempt ${retryCount + 1}/${maxRetries}).`, comment_type: "progress" });
+              await cliPost("/cli/work/update", { short_id: shortId, status: "open", retry_count: retryCount + 1, ...orchCtx });
+              await cliPost("/cli/work/comment", { short_id: shortId, text: `Agent session \`${sn}\` exited without completing. Auto-retrying (attempt ${retryCount + 1}/${maxRetries}).`, comment_type: "progress", ...orchCtx });
             } catch {}
           } else {
             console.log(`  ${c.red}failed${c.reset} ${c.cyan}${shortId}${c.reset} agent died, max retries exceeded`);
             totalFailed++;
             try {
-              await cliPost("/cli/work/update", { short_id: shortId, execution_status: "needs_context" });
-              await cliPost("/cli/work/comment", { short_id: shortId, text: `Agent session \`${sn}\` exited without completing after ${retryCount} retries. Needs human attention.`, comment_type: "blocker" });
+              await cliPost("/cli/work/update", { short_id: shortId, execution_status: "needs_context", ...orchCtx });
+              await cliPost("/cli/work/comment", { short_id: shortId, text: `Agent session \`${sn}\` exited without completing after ${retryCount} retries. Needs human attention.`, comment_type: "blocker", ...orchCtx });
             } catch {}
           }
           activeAgents.delete(shortId);
@@ -11035,16 +10982,16 @@ plan
           if (markers.status === "blocked") {
             console.log(`  ${c.red}block${c.reset} ${c.cyan}${shortId}${c.reset} ${info.task.title}: ${markers.detail}`);
             try {
-              await cliPost("/cli/work/update", { short_id: shortId, execution_status: "blocked" });
-              await cliPost("/cli/work/comment", { short_id: shortId, text: `BLOCKED: ${markers.detail}`, comment_type: "blocker" });
+              await cliPost("/cli/work/update", { short_id: shortId, execution_status: "blocked", ...orchCtx });
+              await cliPost("/cli/work/comment", { short_id: shortId, text: `BLOCKED: ${markers.detail}`, comment_type: "blocker", ...orchCtx });
             } catch {}
             killAgent();
             activeAgents.delete(shortId);
           } else if (markers.status === "needs_context") {
             console.log(`  ${c.yellow}needs${c.reset} ${c.cyan}${shortId}${c.reset} ${info.task.title}: ${markers.detail}`);
             try {
-              await cliPost("/cli/work/update", { short_id: shortId, execution_status: "needs_context" });
-              await cliPost("/cli/work/comment", { short_id: shortId, text: `NEEDS_CONTEXT: ${markers.detail}`, comment_type: "blocker" });
+              await cliPost("/cli/work/update", { short_id: shortId, execution_status: "needs_context", ...orchCtx });
+              await cliPost("/cli/work/comment", { short_id: shortId, text: `NEEDS_CONTEXT: ${markers.detail}`, comment_type: "blocker", ...orchCtx });
             } catch {}
             killAgent();
             activeAgents.delete(shortId);
@@ -11056,8 +11003,8 @@ plan
               killAgent();
               const retryCount = task?.retry_count || 0;
               try {
-                await cliPost("/cli/work/update", { short_id: shortId, status: "open", retry_count: retryCount + 1 });
-                await cliPost("/cli/work/comment", { short_id: shortId, text: `Agent timed out after ${Math.round(elapsed / 60_000)}m. Auto-retrying.`, comment_type: "progress" });
+                await cliPost("/cli/work/update", { short_id: shortId, status: "open", retry_count: retryCount + 1, ...orchCtx });
+                await cliPost("/cli/work/comment", { short_id: shortId, text: `Agent timed out after ${Math.round(elapsed / 60_000)}m. Auto-retrying.`, comment_type: "progress", ...orchCtx });
               } catch {}
               activeAgents.delete(shortId);
             }
@@ -11154,7 +11101,7 @@ plan
           totalSpawned++;
           const modelTag = taskModel !== "opus" ? ` [${taskModel}]` : "";
           console.log(`  ${c.green}spawn${c.reset} ${c.cyan}${task.short_id}${c.reset} ${task.title}${modelTag}`);
-          try { await cliPost("/cli/work/update", { short_id: task.short_id, status: "in_progress" }); } catch {}
+          try { await cliPost("/cli/work/update", { short_id: task.short_id, status: "in_progress", ...(orchSessionId ? { conversation_id: orchSessionId } : {}) }); } catch {}
           await emitOrchEvent(planId, "agent_spawned", task.short_id, task.title, { model: taskModel });
         } catch (err: any) {
           console.error(`  ${c.red}fail${c.reset}  ${task.short_id}: ${err.message}`);
@@ -11303,6 +11250,7 @@ plan
   .description("Reset stuck tasks (needs_context/blocked) back to open")
   .argument("<plan_id>", "Plan short ID")
   .action(async (planId: string) => {
+    const sessionId = detectCurrentSessionId();
     const plan = await cliPost("/cli/plans/get", { short_id: planId });
     if (!plan) { console.error("Plan not found"); process.exit(1); }
 
@@ -11324,6 +11272,7 @@ plan
           status: "open",
           execution_status: "",
           attempt_count: 0,
+          ...(sessionId ? { conversation_id: sessionId } : {}),
         });
         console.log(`  ${c.green}reset${c.reset} ${c.cyan}${t.short_id}${c.reset} ${t.title} ${c.dim}(was ${t.execution_status})${c.reset}`);
         resetCount++;
@@ -11503,6 +11452,7 @@ plan
   .argument("<plan_id>", "Plan short ID")
   .option("--reset", "Also reset task status to open")
   .action(async (planId: string, options: any) => {
+    const killSessionId = detectCurrentSessionId();
     const plan = await cliPost("/cli/plans/get", { short_id: planId });
     if (!plan) { console.error("Plan not found"); process.exit(1); }
 
@@ -11524,7 +11474,7 @@ plan
       }
       if (options.reset) {
         try {
-          await cliPost("/cli/work/update", { short_id: t.short_id, status: "open" });
+          await cliPost("/cli/work/update", { short_id: t.short_id, status: "open", ...(killSessionId ? { conversation_id: killSessionId } : {}) });
           console.log(`  ${c.green}reset${c.reset} ${c.cyan}${t.short_id}${c.reset} -> open`);
         } catch {}
       }
@@ -12170,6 +12120,7 @@ plan
     const planResult = await cliPost("/cli/plans/create", planBody);
     console.log(`${c.green}ok${c.reset} Created plan ${c.cyan}${planResult.short_id}${c.reset}: ${title}`);
 
+    const importSessionId = detectCurrentSessionId();
     const titleToShortId: Record<string, string> = {};
     for (const t of tasks) {
       const taskBody: Record<string, any> = {
@@ -12180,6 +12131,7 @@ plan
         plan_id: planResult.short_id,
         project_path: getRealCwd(),
         source: "agent",
+        ...(importSessionId ? { conversation_id: importSessionId } : {}),
       };
       if (t.blocked_by?.length) {
         const resolvedDeps = t.blocked_by.map(dep => titleToShortId[dep] || dep).filter(Boolean);
