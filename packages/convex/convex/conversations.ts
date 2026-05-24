@@ -1,4 +1,4 @@
-import { mutation, query, internalMutation, internalQuery } from "./_generated/server";
+import { mutation, query, internalMutation, internalQuery, type QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { findConversationBySessionReference } from "./conversationSessionLookup";
 import { paginationOptsValidator } from "convex/server";
@@ -32,6 +32,25 @@ const NOISE_TITLE_PREFIXES = ["[Using:", "[Request", "[SUGGESTION MODE:"];
 const MAX_GIT_DIFF_SIZE = 100_000;
 function truncateGitDiff(s: string | undefined): string | undefined {
   return s && s.length > MAX_GIT_DIFF_SIZE ? s.slice(0, MAX_GIT_DIFF_SIZE) : s;
+}
+
+async function mapForkDetails(ctx: { db: any }, forks: any[]) {
+  return Promise.all(
+    forks.map(async (fork: any) => {
+      const forkUser = await ctx.db.get(fork.user_id);
+      return {
+        _id: fork._id,
+        user_id: fork.user_id,
+        title: fork.title || "New Session",
+        short_id: fork.short_id,
+        started_at: fork.started_at,
+        username: forkUser?.name || forkUser?.email?.split("@")[0] || "Unknown",
+        parent_message_uuid: fork.parent_message_uuid,
+        agent_type: fork.agent_type,
+        message_count: fork.message_count,
+      };
+    })
+  );
 }
 
 async function getAuthenticatedUserId(
@@ -954,22 +973,16 @@ export const getAllMessages = query({
       .withIndex("by_forked_from", (q) => q.eq("forked_from", args.conversation_id))
       .collect();
 
-    const forkChildrenDetails = await Promise.all(
-      forkChildren.map(async (fork) => {
-        const forkUser = await ctx.db.get(fork.user_id);
-        return {
-          _id: fork._id,
-          user_id: fork.user_id,
-          title: fork.title || "New Session",
-          short_id: fork.short_id,
-          started_at: fork.started_at,
-          username: forkUser?.name || forkUser?.email?.split("@")[0] || "Unknown",
-          parent_message_uuid: fork.parent_message_uuid,
-          agent_type: fork.agent_type,
-          message_count: fork.message_count,
-        };
-      })
-    );
+    const forkChildrenDetails = await mapForkDetails(ctx, forkChildren);
+
+    let forkSiblings: typeof forkChildrenDetails = [];
+    if (conversation.forked_from) {
+      const siblings = await ctx.db
+        .query("conversations")
+        .withIndex("by_forked_from", (q: any) => q.eq("forked_from", conversation.forked_from))
+        .collect();
+      forkSiblings = await mapForkDetails(ctx, siblings);
+    }
 
     const mainMsgCountsByFork: Record<string, number> = {};
     const forkPointUuids = new Set(forkChildren.map(f => f.parent_message_uuid).filter(Boolean));
@@ -1001,6 +1014,7 @@ export const getAllMessages = query({
       forked_from_details: forkedFromDetails,
       compaction_count: compactionCount,
       fork_children: forkChildrenDetails,
+      fork_siblings: forkSiblings.length > 0 ? forkSiblings : undefined,
       parent_conversation_id: parentConversationId,
       main_message_counts_by_fork: mainMsgCountsByFork,
     });
@@ -1369,22 +1383,16 @@ export const getConversationWithMeta = query({
       .withIndex("by_forked_from", (q) => q.eq("forked_from", args.conversation_id))
       .collect();
 
-    const forkChildrenDetails = await Promise.all(
-      forkChildren.map(async (fork) => {
-        const forkUser = await ctx.db.get(fork.user_id);
-        return {
-          _id: fork._id,
-          user_id: fork.user_id,
-          title: fork.title || "New Session",
-          short_id: fork.short_id,
-          started_at: fork.started_at,
-          username: forkUser?.name || forkUser?.email?.split("@")[0] || "Unknown",
-          parent_message_uuid: fork.parent_message_uuid,
-          agent_type: fork.agent_type,
-          message_count: fork.message_count,
-        };
-      })
-    );
+    const forkChildrenDetails = await mapForkDetails(ctx, forkChildren);
+
+    let forkSiblings: typeof forkChildrenDetails = [];
+    if (conversation.forked_from) {
+      const siblings = await ctx.db
+        .query("conversations")
+        .withIndex("by_forked_from", (q: any) => q.eq("forked_from", conversation.forked_from))
+        .collect();
+      forkSiblings = await mapForkDetails(ctx, siblings);
+    }
 
     let effective_team_visibility = conversation.team_visibility;
     if (!effective_team_visibility && conversation.team_id && isOwner) {
@@ -1425,6 +1433,7 @@ export const getConversationWithMeta = query({
       forked_from: conversation.forked_from,
       forked_from_details: forkedFromDetails,
       fork_children: forkChildrenDetails,
+      fork_siblings: forkSiblings.length > 0 ? forkSiblings : undefined,
       parent_conversation_id: parentConversationId,
       active_plan,
       active_task,
@@ -2441,8 +2450,10 @@ export const listRecentSessions = query({
   handler: async (ctx) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return [];
+    const user = await ctx.db.get(userId);
     const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
-    const results = await ctx.db
+
+    const own = await ctx.db
       .query("conversations")
       .withIndex("by_user_updated", (q) =>
         q.eq("user_id", userId).gte("updated_at", thirtyDaysAgo)
@@ -2458,16 +2469,67 @@ export const listRecentSessions = query({
         )
       )
       .take(100);
-    return results.map((c) => ({
-      _id: c._id,
-      session_id: c.session_id,
-      title: c.title,
-      updated_at: c.updated_at,
-      project_path: c.project_path,
-      git_root: c.git_root,
-      agent_type: c.agent_type,
-      message_count: c.message_count,
-    }));
+
+    type ConvRow = typeof own[number];
+    const isSessionRow = (c: ConvRow) =>
+      c.is_subagent !== true && (c.status === "active" || c.status === "completed");
+
+    const byId = new Map<string, { conv: ConvRow; isOwn: boolean }>();
+    for (const c of own) byId.set(c._id.toString(), { conv: c, isOwn: true });
+
+    // Merge in team-visible sessions so teammates' work shows in the palette too.
+    const effectiveTeamId = user?.active_team_id;
+    const authorById = new Map<string, { name: string; avatar: string | null }>();
+    if (effectiveTeamId) {
+      const feedFilter = await createTeamFeedFilter(ctx, effectiveTeamId);
+      const visibleMembers = feedFilter.memberships.filter((m) => {
+        if (m.user_id.toString() === userId.toString()) return false;
+        return ((m as any).visibility || "summary") !== "hidden";
+      });
+      const perMember = await Promise.all(
+        visibleMembers.map(async (m) => {
+          const convs = await ctx.db
+            .query("conversations")
+            .withIndex("by_team_user_updated", (q) =>
+              q.eq("team_id", effectiveTeamId).eq("user_id", m.user_id).gte("updated_at", thirtyDaysAgo)
+            )
+            .order("desc")
+            .take(10);
+          return convs.filter((c) => isSessionRow(c) && feedFilter.isVisible(c));
+        })
+      );
+      const memberUsers = await Promise.all(visibleMembers.map((m) => ctx.db.get(m.user_id)));
+      for (const u of memberUsers) {
+        if (u) authorById.set(u._id.toString(), {
+          name: (u as any).name || (u as any).email?.split("@")[0] || "Unknown",
+          avatar: (u as any).image || (u as any).github_avatar_url || null,
+        });
+      }
+      for (const c of perMember.flat()) {
+        const id = c._id.toString();
+        if (!byId.has(id)) byId.set(id, { conv: c, isOwn: false });
+      }
+    }
+
+    return Array.from(byId.values())
+      .sort((a, b) => b.conv.updated_at - a.conv.updated_at)
+      .slice(0, 100)
+      .map(({ conv: c, isOwn }) => {
+        const author = isOwn ? null : authorById.get(c.user_id.toString());
+        return {
+          _id: c._id,
+          session_id: c.session_id,
+          title: c.title,
+          updated_at: c.updated_at,
+          project_path: c.project_path,
+          git_root: c.git_root,
+          agent_type: c.agent_type,
+          message_count: c.message_count,
+          isOwn,
+          authorName: author?.name ?? null,
+          authorAvatar: author?.avatar ?? null,
+        };
+      });
   },
 });
 
@@ -2527,11 +2589,14 @@ export const searchConversations = query({
     const terms = parseSearchTerms(searchTerm);
     const searchQuery = terms.all.join(" ");
 
-    // Use full-text search on messages
+    // Use full-text search on messages. The index returns by relevance, and
+    // message docs can be large (tool results, long turns), so this take is the
+    // recall/speed knob: a bigger pool catches more recency-ranked matches at the
+    // cost of pulling more bytes per query.
     const searchResults = await ctx.db
       .query("messages")
       .withSearchIndex("search_content", (q) => q.search("content", searchQuery))
-      .take(1024);
+      .take(512);
 
     // Group messages by conversation (keep messages matching ANY term for context)
     const conversationMessages = new Map<string, typeof searchResults>();
@@ -2557,6 +2622,23 @@ export const searchConversations = query({
       }
     }
 
+    // Titles aren't covered by the message index — search them directly so a
+    // session like "Poll render debug" surfaces even when no message body matches.
+    type ConvDoc = NonNullable<Awaited<ReturnType<typeof ctx.db.get<"conversations">>>>;
+    const titleConvs = new Map<string, ConvDoc>();
+    if (!userOnly) {
+      const titleHits = await ctx.db
+        .query("conversations")
+        .withSearchIndex("search_title", (q) => q.search("title", searchQuery))
+        .take(50);
+      for (const conv of titleHits) {
+        const convId = conv._id.toString();
+        if (conversationMatches.has(convId)) continue;
+        if (!contentMatchesAnyTerm(conv.title || "", terms)) continue;
+        titleConvs.set(convId, conv);
+      }
+    }
+
     const results: Array<{
       conversationId: string;
       title: string;
@@ -2573,40 +2655,78 @@ export const searchConversations = query({
       isOwn: boolean;
       messageCount: number;
       proximityScore: number;
+      titleMatch: boolean;
     }> = [];
 
-    for (const [convId, messages] of conversationMatches) {
-      const conv = await ctx.db.get(messages[0].conversation_id);
-      if (!conv) continue;
+    // Hydrate conversation docs for message matches in parallel (was a serial
+    // await-in-loop, the dominant source of latency on common queries).
+    const matchEntries = [...conversationMatches.values()];
+    const matchConvs = await Promise.all(
+      matchEntries.map((messages) => ctx.db.get(messages[0].conversation_id))
+    );
+    const candidates: Array<{ conv: ConvDoc; messages: typeof searchResults }> = [];
+    matchEntries.forEach((messages, i) => {
+      const conv = matchConvs[i];
+      if (conv) candidates.push({ conv, messages });
+    });
+    for (const conv of titleConvs.values()) {
+      candidates.push({ conv, messages: [] });
+    }
 
-      const isOwn = conv.user_id.toString() === userId.toString();
-      if (!isOwn) {
-        if (!conv.team_id || !effectiveTeamIdSet.has(conv.team_id.toString())) continue;
-        const filter = feedFilters.get(conv.team_id.toString());
-        if (!filter || !filter.isVisible(conv)) continue;
-        if (!teamUserIds.has(conv.user_id.toString())) continue;
-      }
+    // Author identities are already loaded above (current user + team members),
+    // and every visible candidate is authored by one of them — so resolve names
+    // from this map instead of a per-result ctx.db.get.
+    const userById = new Map<string, UserDoc>(teamUsers.map((u) => [u._id.toString(), u]));
+    userById.set(userId.toString(), user);
 
-      const conversationUser = await ctx.db.get(conv.user_id);
+    // Visibility filter is synchronous (no DB) — drop non-visible candidates first.
+    const visible = candidates.filter(({ conv }) => {
+      if (conv.user_id.toString() === userId.toString()) return true;
+      if (!conv.team_id || !effectiveTeamIdSet.has(conv.team_id.toString())) return false;
+      const filter = feedFilters.get(conv.team_id.toString());
+      if (!filter || !filter.isVisible(conv)) return false;
+      if (!teamUserIds.has(conv.user_id.toString())) return false;
+      return true;
+    });
 
-      // Get first user message for title fallback
-      let firstUserMessage = "";
-      const firstMessages = await ctx.db
-        .query("messages")
-        .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
-        .order("asc")
-        .take(10);
-      for (const msg of firstMessages) {
-        const hasToolResults = msg.tool_results && msg.tool_results.length > 0;
-        if (msg.role === "user" && !hasToolResults) {
-          const text = msg.content?.trim();
-          if (text) {
-            firstUserMessage = text.slice(0, 120);
-            if (text.length > 120) firstUserMessage += "...";
-            break;
+    // Recency order, then keep only the page we'll return. Totals reflect the full
+    // visible set, not just the slice.
+    visible.sort((a, b) => b.conv.updated_at - a.conv.updated_at);
+    const totalMatches = visible.reduce((sum, c) => sum + c.messages.length, 0);
+    const totalSessions = visible.length;
+    const top = visible.slice(0, limit);
+
+    // First-message fetch only feeds a title fallback, so it's only needed for the
+    // title-less conversations that actually made the displayed slice — fetch those
+    // in parallel rather than one-per-candidate.
+    const firstMsgByConv = new Map<string, string>();
+    await Promise.all(
+      top.map(async ({ conv }) => {
+        if (conv.title) return;
+        const firstMessages = await ctx.db
+          .query("messages")
+          .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
+          .order("asc")
+          .take(10);
+        for (const msg of firstMessages) {
+          const hasToolResults = msg.tool_results && msg.tool_results.length > 0;
+          if (msg.role === "user" && !hasToolResults) {
+            const text = msg.content?.trim();
+            if (text) {
+              let firstUserMessage = text.slice(0, 120);
+              if (text.length > 120) firstUserMessage += "...";
+              firstMsgByConv.set(conv._id.toString(), firstUserMessage);
+              break;
+            }
           }
         }
-      }
+      })
+    );
+
+    for (const { conv, messages } of top) {
+      const isOwn = conv.user_id.toString() === userId.toString();
+      const conversationUser = userById.get(conv.user_id.toString());
+      const firstUserMessage = firstMsgByConv.get(conv._id.toString()) || "";
 
       const title = conv.title
         || firstUserMessage
@@ -2647,18 +2767,14 @@ export const searchConversations = query({
         isOwn,
         messageCount: conv.message_count || 0,
         proximityScore,
+        titleMatch: messages.length === 0,
       });
     }
 
-    // Sort by recency first, use proximity as tiebreaker
-    const sorted = results.sort((a, b) => {
-      return b.updatedAt - a.updatedAt;
-    });
-    const totalMatches = results.reduce((sum, r) => sum + r.matchCount, 0);
     return {
-      results: sorted.slice(0, limit),
+      results,
       totalMatches,
-      totalSessions: sorted.length,
+      totalSessions,
     };
   },
 });
@@ -4282,6 +4398,7 @@ export const forkFromMessage = mutation({
     await ctx.db.patch(newConversationId, {
       short_id: newConversationId.toString().slice(0, 7),
       fork_daemon_args: JSON.stringify({
+        fork: true,
         session_id: forkSessionId,
         agent_type: daemonAgentType,
         conversation_id: newConversationId,
@@ -6227,14 +6344,9 @@ export const reconfigureSession = mutation({
 
     await ctx.db.patch(args.conversation_id, patch);
 
-    const now = Date.now();
-    await ctx.db.insert("daemon_commands", {
-      user_id: userId,
-      command: "kill_session",
-      args: JSON.stringify({ conversation_id: args.conversation_id }),
-      created_at: now,
-    });
-
+    // start_session is now idempotent on the daemon: it kills any tmux with the
+    // deterministic name `cc-<agent>-<convId-suffix>` and respawns it. One
+    // command, last-write-wins, no two-step kill+start race.
     const updated = { ...conv, ...patch };
     const agentType = updated.agent_type || "claude_code";
     const daemonAgentType = agentType === "codex" ? "codex" : agentType === "gemini" ? "gemini" : "claude";
@@ -6248,7 +6360,7 @@ export const reconfigureSession = mutation({
         session_id: updated.session_id,
         ...(args.isolated ? { isolated: true } : {}),
       }),
-      created_at: now + 1,
+      created_at: Date.now(),
     });
   },
 });
@@ -6454,6 +6566,13 @@ export const updateSessionId = mutation({
   args: {
     conversation_id: v.id("conversations"),
     session_id: v.string(),
+    // When the daemon links a real local session to a pre-created stub
+    // (e.g. a web-started conversation), the stub's project_path/git_root were
+    // a guess made before the session existed. Reconcile them to the actual
+    // session cwd in the same patch so the displayed project can never diverge
+    // from where the session is really running.
+    project_path: v.optional(v.string()),
+    git_root: v.optional(v.string()),
     api_token: v.string(),
   },
   handler: async (ctx, args) => {
@@ -6465,7 +6584,10 @@ export const updateSessionId = mutation({
       throw new Error("Not found");
     }
 
-    await ctx.db.patch(args.conversation_id, { session_id: args.session_id });
+    const patch: Record<string, string> = { session_id: args.session_id };
+    if (args.project_path) patch.project_path = args.project_path;
+    if (args.git_root) patch.git_root = args.git_root;
+    await ctx.db.patch(args.conversation_id, patch);
     return { updated: true };
   },
 });
