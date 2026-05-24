@@ -13,7 +13,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-import { execSync, spawnSync } from "node:child_process";
+import { execSync, execFileSync, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { writeShimScript, cleanupShimScript, type ShimOptions } from "./fakeClaudeShim.js";
 
@@ -163,11 +163,26 @@ export async function waitFor(
  * `cc-claude-test-*` pattern). Safe to call from beforeAll.
  */
 export function sweepStaleSessions(prefix = "cc-claude-test"): void {
+  // A wedged tmux client ignores SIGTERM and spins at 100% CPU forever (see
+  // tmuxExec in daemon.ts). Without a timeout + SIGKILL here, a single bad
+  // tmux interaction during `bun test` orphans a process that outlives the run.
+  const TMUX_TIMEOUT_MS = 5000;
   try {
-    const out = execSync("tmux list-sessions -F '#{session_name}' 2>/dev/null", { encoding: "utf-8" });
-    for (const name of out.split("\n").map(s => s.trim()).filter(Boolean)) {
+    const out = execFileSync("tmux", ["list-sessions", "-F", "#{session_name}"], {
+      timeout: TMUX_TIMEOUT_MS,
+      killSignal: "SIGKILL",
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    for (const name of out.split("\n").map((s: string) => s.trim()).filter(Boolean)) {
       if (name.startsWith(prefix)) {
-        try { execSync(`tmux kill-session -t ${name} 2>/dev/null`, { stdio: "ignore" }); } catch {}
+        try {
+          execFileSync("tmux", ["kill-session", "-t", name], {
+            timeout: TMUX_TIMEOUT_MS,
+            killSignal: "SIGKILL",
+            stdio: "ignore",
+          });
+        } catch {}
       }
     }
   } catch {}

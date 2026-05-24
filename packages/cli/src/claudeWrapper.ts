@@ -3,7 +3,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import { ConvexHttpClient } from "convex/browser";
-import { hasTmux } from "./tmux.js";
+import { hasTmux, tmuxExecSync } from "./tmux.js";
 import { decryptToken, isEncryptedToken, TokenDecryptError } from "./tokenEncryption.js";
 
 const CONFIG_DIR = process.env.HOME + "/.codecast";
@@ -128,7 +128,7 @@ export async function runClaudeWrapper(args: string[]): Promise<void> {
   let tmuxSessionName: string | undefined;
   if (process.env.TMUX) {
     try {
-      tmuxSessionName = execSync("tmux display-message -p '#{session_name}'", { timeout: 2000 }).toString().trim();
+      tmuxSessionName = tmuxExecSync(["display-message", "-p", "#{session_name}"], { timeout: 2000, encoding: "utf-8" }).trim();
     } catch {}
   }
 
@@ -163,9 +163,10 @@ export async function runClaudeWrapper(args: string[]): Promise<void> {
     ].map(a => `'${a.replace(/'/g, "'\\''")}'`).join(" ");
 
     try {
-      execSync(`tmux new-session -d -s '${tmuxSessionName}' -n claude -x 200 -y 50`, { stdio: "ignore" });
+      tmuxExecSync(["new-session", "-d", "-s", tmuxSessionName, "-n", "claude", "-x", "200", "-y", "50"]);
       const envVars = `CODECAST_MANAGED_SESSION='${sessionId}' CODECAST_SESSION_ID='${sessionId}'`;
-      execSync(`tmux send-keys -t '${tmuxSessionName}' "${envVars} ${claudePath} ${args.map(a => `'${a}'`).join(' ')}" Enter`, { stdio: "ignore" });
+      const launchLine = `${envVars} ${claudePath} ${args.map(a => `'${a.replace(/'/g, "'\\''")}'`).join(" ")}`;
+      tmuxExecSync(["send-keys", "-t", tmuxSessionName, launchLine, "Enter"]);
       log(`Created tmux session and started Claude`);
 
       // Attach to the tmux session
@@ -177,7 +178,7 @@ export async function runClaudeWrapper(args: string[]): Promise<void> {
         log(`Tmux attach exited with code ${code}`);
         // Clean up tmux session
         try {
-          execSync(`tmux kill-session -t '${tmuxSessionName}'`, { stdio: "ignore" });
+          tmuxExecSync(["kill-session", "-t", tmuxSessionName!]);
         } catch {}
         process.exit(code ?? 0);
       });
@@ -198,36 +199,33 @@ export async function runClaudeWrapper(args: string[]): Promise<void> {
                 const steps: Array<{ key: string; text?: string }> = poll.steps || (poll.keys || []).map(k => ({ key: k }));
                 for (const step of steps) {
                   if (step.text) {
-                    execSync(`tmux send-keys -t '${tmuxSessionName}' Escape`, { stdio: "ignore" });
+                    tmuxExecSync(["send-keys", "-t", tmuxSessionName!, "Escape"]);
                     await sleep(500);
-                    const escapedText = step.text.replace(/'/g, "'\\''");
-                    execSync(`tmux send-keys -t '${tmuxSessionName}' -l '${escapedText}'`, { stdio: "ignore" });
+                    tmuxExecSync(["send-keys", "-t", tmuxSessionName!, "-l", step.text]);
                     await sleep(150);
-                    execSync(`tmux send-keys -t '${tmuxSessionName}' Enter`, { stdio: "ignore" });
+                    tmuxExecSync(["send-keys", "-t", tmuxSessionName!, "Enter"]);
                     await sleep(500);
                   } else {
-                    execSync(`tmux send-keys -t '${tmuxSessionName}' '${step.key}'`, { stdio: "ignore" });
+                    tmuxExecSync(["send-keys", "-t", tmuxSessionName!, step.key]);
                     await sleep(500);
                   }
                 }
                 if (poll.text) {
                   await sleep(300);
-                  const escapedText = poll.text.replace(/'/g, "'\\''");
-                  execSync(`tmux send-keys -t '${tmuxSessionName}' -l '${escapedText}'`, { stdio: "ignore" });
+                  tmuxExecSync(["send-keys", "-t", tmuxSessionName!, "-l", poll.text]);
                   await sleep(150);
-                  execSync(`tmux send-keys -t '${tmuxSessionName}' Enter`, { stdio: "ignore" });
+                  tmuxExecSync(["send-keys", "-t", tmuxSessionName!, "Enter"]);
                 }
                 log(`Injected poll response via tmux to session ${tmuxSessionName}`);
               } else {
                 // Clear any stale input before injecting to prevent submitting draft text
-                execSync(`tmux send-keys -t '${tmuxSessionName}' Escape`, { stdio: "ignore" });
+                tmuxExecSync(["send-keys", "-t", tmuxSessionName!, "Escape"]);
                 await sleep(100);
-                execSync(`tmux send-keys -t '${tmuxSessionName}' C-u`, { stdio: "ignore" });
+                tmuxExecSync(["send-keys", "-t", tmuxSessionName!, "C-u"]);
                 await sleep(100);
-                const escapedContent = msg.content.replace(/'/g, "'\\''");
-                execSync(`tmux send-keys -t '${tmuxSessionName}' '${escapedContent}'`, { stdio: "ignore" });
+                tmuxExecSync(["send-keys", "-t", tmuxSessionName!, msg.content]);
                 await sleep(150);
-                execSync(`tmux send-keys -t '${tmuxSessionName}' Enter`, { stdio: "ignore" });
+                tmuxExecSync(["send-keys", "-t", tmuxSessionName!, "Enter"]);
                 log(`Injected via tmux send-keys to session ${tmuxSessionName}`);
               }
 
@@ -274,7 +272,7 @@ export async function runClaudeWrapper(args: string[]): Promise<void> {
               realSessionDiscovered = true;
               const newTmuxName = `codecast-${claudeSessionId.slice(0, 8)}`;
               try {
-                execSync(`tmux rename-session -t '${tmuxSessionName}' '${newTmuxName}' 2>/dev/null`, { stdio: "ignore" });
+                tmuxExecSync(["rename-session", "-t", tmuxSessionName!, newTmuxName]);
                 log(`Renamed tmux session ${tmuxSessionName} -> ${newTmuxName}`);
                 tmuxSessionName = newTmuxName;
               } catch (err) {
@@ -350,36 +348,33 @@ export async function runClaudeWrapper(args: string[]): Promise<void> {
           const steps: Array<{ key: string; text?: string }> = poll.steps || (poll.keys || []).map(k => ({ key: k }));
           for (const step of steps) {
             if (step.text) {
-              execSync(`tmux send-keys -t ${tmuxPane} Escape`, { stdio: "ignore" });
+              tmuxExecSync(["send-keys", "-t", tmuxPane, "Escape"]);
               await sleep(500);
-              const escapedText = step.text.replace(/'/g, "'\\''");
-              execSync(`tmux send-keys -t ${tmuxPane} -l '${escapedText}'`, { stdio: "ignore" });
+              tmuxExecSync(["send-keys", "-t", tmuxPane, "-l", step.text]);
               await sleep(150);
-              execSync(`tmux send-keys -t ${tmuxPane} Enter`, { stdio: "ignore" });
+              tmuxExecSync(["send-keys", "-t", tmuxPane, "Enter"]);
               await sleep(500);
             } else {
-              execSync(`tmux send-keys -t ${tmuxPane} '${step.key}'`, { stdio: "ignore" });
+              tmuxExecSync(["send-keys", "-t", tmuxPane, step.key]);
               await sleep(500);
             }
           }
           if (poll.text) {
             await sleep(300);
-            const escapedText = poll.text.replace(/'/g, "'\\''");
-            execSync(`tmux send-keys -t ${tmuxPane} -l '${escapedText}'`, { stdio: "ignore" });
+            tmuxExecSync(["send-keys", "-t", tmuxPane, "-l", poll.text]);
             await sleep(150);
-            execSync(`tmux send-keys -t ${tmuxPane} Enter`, { stdio: "ignore" });
+            tmuxExecSync(["send-keys", "-t", tmuxPane, "Enter"]);
           }
           log(`Injected poll response via tmux to pane ${tmuxPane}`);
         } else {
           // Clear any stale input before injecting to prevent submitting draft text
-          execSync(`tmux send-keys -t ${tmuxPane} Escape`, { stdio: "ignore" });
+          tmuxExecSync(["send-keys", "-t", tmuxPane, "Escape"]);
           await sleep(100);
-          execSync(`tmux send-keys -t ${tmuxPane} C-u`, { stdio: "ignore" });
+          tmuxExecSync(["send-keys", "-t", tmuxPane, "C-u"]);
           await sleep(100);
-          const escapedContent = content.replace(/'/g, "'\\''");
-          execSync(`tmux send-keys -t ${tmuxPane} '${escapedContent}'`, { stdio: "ignore" });
+          tmuxExecSync(["send-keys", "-t", tmuxPane, content]);
           await sleep(150);
-          execSync(`tmux send-keys -t ${tmuxPane} Enter`, { stdio: "ignore" });
+          tmuxExecSync(["send-keys", "-t", tmuxPane, "Enter"]);
           log(`Injected via tmux send-keys to pane ${tmuxPane}`);
         }
         return true;
