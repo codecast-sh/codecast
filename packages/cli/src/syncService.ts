@@ -4,7 +4,9 @@ import { hashPath } from "./hash.js";
 
 const MAX_CONTENT_SIZE = 100_000;
 const MAX_TOOL_RESULT_SIZE = 50_000;
-const MAX_TOTAL_MESSAGE_SIZE = 900_000;
+// Max serialized bytes of one addMessages batch (~0.9MB, well under the 5MB
+// that triggered isolate OOM/timeouts in the 2026-05-13 stuck-sync incident).
+const MAX_BATCH_BYTES = 900_000;
 const MAX_IMAGE_SIZE = 5_000_000;
 const MAX_INLINE_IMAGE_SIZE = 500_000;
 const MAX_IMAGES_PER_MESSAGE = 10;
@@ -12,6 +14,7 @@ const MAX_IMAGES_PER_MESSAGE = 10;
 const MIN_REQUEST_INTERVAL_MS = 100;
 
 const ADD_MESSAGES_BATCH_TIMEOUT_MS = 60_000;
+const ADD_MESSAGES_BATCH_SIZE = 10;
 
 export async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
@@ -35,6 +38,36 @@ export class AuthExpiredError extends Error {
 function truncate(str: string, maxLen: number): string {
   if (str.length <= maxLen) return str;
   return str.slice(0, maxLen) + `\n... [truncated ${str.length - maxLen} chars]`;
+}
+
+/**
+ * Split prepared messages into mutation-sized batches, bounded by BOTH message
+ * count and serialized byte size. The byte bound is what stops a handful of
+ * image-heavy messages (large inline base64) from forming a multi-MB mutation
+ * that can't commit within the timeout/isolate budget. A single message that
+ * alone exceeds the byte cap is emitted in its own batch — one message can't be
+ * split, and one ~MAX_INLINE_IMAGE_SIZE message commits fine on its own.
+ */
+export function chunkMessagesBySize<T>(
+  messages: T[],
+  maxCount: number = ADD_MESSAGES_BATCH_SIZE,
+  maxBytes: number = MAX_BATCH_BYTES,
+): T[][] {
+  const batches: T[][] = [];
+  let current: T[] = [];
+  let currentBytes = 0;
+  for (const msg of messages) {
+    const bytes = Buffer.byteLength(JSON.stringify(msg));
+    if (current.length > 0 && (current.length >= maxCount || currentBytes + bytes > maxBytes)) {
+      batches.push(current);
+      current = [];
+      currentBytes = 0;
+    }
+    current.push(msg);
+    currentBytes += bytes;
+  }
+  if (current.length > 0) batches.push(current);
+  return batches;
 }
 
 function isAuthError(error: any): boolean {
@@ -510,12 +543,19 @@ export class SyncService {
       });
     }
 
-    const BATCH_SIZE = 10;
+    // Batch by bytes, not just count. A single message can carry a large
+    // inline image (up to MAX_INLINE_IMAGE_SIZE when Convex storage upload
+    // fails), so a count-only cap of BATCH_SIZE lets an image-heavy batch grow
+    // to several MB — past what one mutation can commit within
+    // ADD_MESSAGES_BATCH_TIMEOUT_MS / the isolate budget. That batch then fails
+    // every retry identically, and because sync advances the file position only
+    // after a batch lands, the whole tail behind it stays stuck forever. An
+    // oversized single message still goes out alone (one message can't split).
+    const batches = chunkMessagesBySize(preparedMessages);
     let totalInserted = 0;
     const allIds: string[] = [];
 
-    for (let i = 0; i < preparedMessages.length; i += BATCH_SIZE) {
-      const batch = preparedMessages.slice(i, i + BATCH_SIZE);
+    for (const batch of batches) {
       await this.throttle();
       try {
         const result = await withTimeout(
@@ -630,11 +670,13 @@ export class SyncService {
     }
   }
 
-  async updateSessionId(conversationId: string, sessionId: string): Promise<void> {
+  async updateSessionId(conversationId: string, sessionId: string, projectPath?: string, gitRoot?: string): Promise<void> {
     try {
       await this.client.mutation("conversations:updateSessionId" as any, {
         conversation_id: conversationId,
         session_id: sessionId,
+        project_path: projectPath,
+        git_root: gitRoot,
         api_token: this.apiToken,
       });
     } catch {}
@@ -665,13 +707,15 @@ export class SyncService {
     } catch {}
   }
 
-  async reportSessionMetrics(sessionId: string, cpu: number, memory: number, pidCount: number): Promise<void> {
+  async reportSessionMetrics(sessionId: string, cpu: number, memory: number, pidCount: number, agentPid?: number, awakeIdleMs?: number): Promise<void> {
     try {
       await this.client.mutation("managedSessions:reportMetrics" as any, {
         session_id: sessionId,
         cpu,
         memory,
         pid_count: pidCount,
+        ...(agentPid !== undefined ? { agent_pid: agentPid } : {}),
+        ...(awakeIdleMs !== undefined ? { awake_idle_ms: awakeIdleMs } : {}),
         api_token: this.apiToken,
       });
     } catch {}
