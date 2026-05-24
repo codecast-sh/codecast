@@ -18,6 +18,32 @@ export interface SessionResources {
   collectedAt: number;
 }
 
+// Below this CPU% (and not in a working status) a tick counts as idle.
+export const IDLE_CPU_FLOOR_PCT = 2;
+const WORKING_STATUSES = new Set(["working", "thinking", "compacting", "starting", "resuming"]);
+
+/**
+ * Per-tick update of a session's awake-idle counter.
+ *
+ * Returns the new accumulated idle time. The counter measures idle time only
+ * while the machine is AWAKE: a `sleepSkip` tick (first tick, wake grace, or an
+ * oversized gap from suspend/stall) carries the previous value forward unchanged,
+ * so a closed-lid period never inflates idle time. Any sign of activity — CPU at
+ * or above the floor, or a working status — resets the counter to 0.
+ */
+export function nextAwakeIdleMs(params: {
+  prevIdleMs: number;
+  cpu: number;
+  status: string | undefined;
+  elapsedMs: number;
+  sleepSkip: boolean;
+}): number {
+  const active = params.cpu >= IDLE_CPU_FLOOR_PCT || (params.status !== undefined && WORKING_STATUSES.has(params.status));
+  if (active) return 0;
+  if (params.sleepSkip) return params.prevIdleMs;
+  return params.prevIdleMs + params.elapsedMs;
+}
+
 export async function captureProcessSnapshot(): Promise<Map<number, ProcessInfo>> {
   if (process.platform !== "darwin") return new Map();
 
