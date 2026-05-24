@@ -1,4 +1,4 @@
-import { mutation, query, internalMutation, internalQuery, type QueryCtx } from "./_generated/server";
+import { mutation, query, internalMutation, internalQuery, type QueryCtx, type MutationCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { findConversationBySessionReference } from "./conversationSessionLookup";
 import { paginationOptsValidator } from "convex/server";
@@ -32,6 +32,53 @@ const NOISE_TITLE_PREFIXES = ["[Using:", "[Request", "[SUGGESTION MODE:"];
 const MAX_GIT_DIFF_SIZE = 100_000;
 function truncateGitDiff(s: string | undefined): string | undefined {
   return s && s.length > MAX_GIT_DIFF_SIZE ? s.slice(0, MAX_GIT_DIFF_SIZE) : s;
+}
+
+// Upsert the git-diff side row for a conversation. The blobs live off the
+// conversations hot doc (see conversation_git_diffs in schema.ts); only
+// getConversationGitDiff reads them. Deletes the row when both are empty.
+async function setConvGitDiff(
+  ctx: MutationCtx,
+  conversationId: Id<"conversations">,
+  gitDiff: string | undefined,
+  gitDiffStaged: string | undefined,
+) {
+  const diff = truncateGitDiff(gitDiff);
+  const staged = truncateGitDiff(gitDiffStaged);
+  const existing = await ctx.db
+    .query("conversation_git_diffs")
+    .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conversationId))
+    .first();
+  if (!diff && !staged) {
+    if (existing) await ctx.db.delete(existing._id);
+    return;
+  }
+  if (existing) {
+    await ctx.db.patch(existing._id, { git_diff: diff, git_diff_staged: staged, updated_at: Date.now() });
+  } else {
+    await ctx.db.insert("conversation_git_diffs", {
+      conversation_id: conversationId,
+      git_diff: diff,
+      git_diff_staged: staged,
+      updated_at: Date.now(),
+    });
+  }
+}
+
+// Read the git-diff side row (conversation_git_diffs). Blobs no longer live on
+// the conversation doc.
+async function getConvGitDiff(
+  ctx: QueryCtx,
+  conversationId: Id<"conversations">,
+): Promise<{ git_diff: string | null; git_diff_staged: string | null }> {
+  const row = await ctx.db
+    .query("conversation_git_diffs")
+    .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conversationId))
+    .first();
+  return {
+    git_diff: row?.git_diff ?? null,
+    git_diff_staged: row?.git_diff_staged ?? null,
+  };
 }
 
 async function mapForkDetails(ctx: { db: any }, forks: any[]) {
@@ -535,8 +582,6 @@ export const createConversation = mutation({
       git_branch: args.git_branch,
       git_remote_url: args.git_remote_url,
       git_status: args.git_status,
-      git_diff: truncateGitDiff(args.git_diff),
-      git_diff_staged: truncateGitDiff(args.git_diff_staged),
       git_root: args.git_root,
       cli_flags: args.cli_flags,
       worktree_name: args.worktree_name,
@@ -549,6 +594,8 @@ export const createConversation = mutation({
     await ctx.db.patch(conversationId, {
       short_id: conversationId.toString().slice(0, 7),
     });
+    // git_diff blobs live off the hot doc in conversation_git_diffs.
+    await setConvGitDiff(ctx, conversationId, args.git_diff, args.git_diff_staged);
 
     // Auto-dismiss parent only for plan handoffs (clear context -> implementation session)
     if (parentConversationId && args.parent_message_uuid === "plan-handoff") {
@@ -1417,8 +1464,9 @@ export const getConversationWithMeta = query({
       if (task) active_task = { _id: task._id, short_id: task.short_id, title: task.title, status: task.status };
     }
 
-    // Strip large fields that are only needed on-demand (git_diff, git_diff_staged, available_skills)
-    const { git_diff, git_diff_staged, available_skills: _convSkills, ...conversationLight } = conversation;
+    // Strip the large on-demand field (available_skills). git_diff /
+    // git_diff_staged now live in conversation_git_diffs, not on the doc.
+    const { available_skills: _convSkills, ...conversationLight } = conversation;
 
     return sanitizeConvexObjectKeys({
       ...conversationLight,
@@ -1458,10 +1506,7 @@ export const getConversationGitDiff = query({
     }
     if (!isOwner && !hasTeamAccess && !isShared) return null;
 
-    return {
-      git_diff: conversation.git_diff ?? null,
-      git_diff_staged: conversation.git_diff_staged ?? null,
-    };
+    return await getConvGitDiff(ctx, args.conversation_id);
   },
 });
 
@@ -4380,8 +4425,6 @@ export const forkFromMessage = mutation({
       git_branch: original.git_branch,
       git_remote_url: original.git_remote_url,
       git_status: original.git_status,
-      git_diff: original.git_diff,
-      git_diff_staged: original.git_diff_staged,
       git_root: original.git_root,
       cli_flags: original.cli_flags,
       worktree_name: original.worktree_name,
@@ -4405,6 +4448,15 @@ export const forkFromMessage = mutation({
         project_path: original.project_path || original.git_root,
       }),
     });
+
+    // Carry the original's git_diff over to the fork's side row (off the hot doc).
+    const originalGitDiff = await getConvGitDiff(ctx, original._id);
+    await setConvGitDiff(
+      ctx,
+      newConversationId,
+      originalGitDiff.git_diff ?? undefined,
+      originalGitDiff.git_diff_staged ?? undefined,
+    );
 
     if (!isAgentSwitch) {
       const currentForkCount = original.fork_count ?? 0;
@@ -7073,44 +7125,3 @@ export const getUserMessages = query({
   },
 });
 
-// One-time migration: truncate any conversation whose git_diff or
-// git_diff_staged exceeds MAX_GIT_DIFF_SIZE. Run via:
-//   npx convex run conversations:truncateOversizedDiffs '{"cursor":null}'
-// then re-run with the returned `nextCursor` until `done: true`.
-//
-// Idempotent: skips rows already within the cap. Paginates by 200 to stay
-// well under the per-mutation memory ceiling — we deliberately do NOT use
-// the same isolate-bursting `collect()` patterns this migration is meant
-// to fix.
-export const truncateOversizedDiffs = internalMutation({
-  args: {
-    cursor: v.union(v.string(), v.null()),
-  },
-  handler: async (ctx, args) => {
-    const page = await ctx.db
-      .query("conversations")
-      .paginate({ cursor: args.cursor, numItems: 200 });
-
-    let truncated = 0;
-    for (const conv of page.page) {
-      const patch: Record<string, string> = {};
-      if (conv.git_diff && conv.git_diff.length > MAX_GIT_DIFF_SIZE) {
-        patch.git_diff = conv.git_diff.slice(0, MAX_GIT_DIFF_SIZE);
-      }
-      if (conv.git_diff_staged && conv.git_diff_staged.length > MAX_GIT_DIFF_SIZE) {
-        patch.git_diff_staged = conv.git_diff_staged.slice(0, MAX_GIT_DIFF_SIZE);
-      }
-      if (Object.keys(patch).length > 0) {
-        await ctx.db.patch(conv._id, patch);
-        truncated++;
-      }
-    }
-
-    return {
-      truncated,
-      scanned: page.page.length,
-      done: page.isDone,
-      nextCursor: page.isDone ? null : page.continueCursor,
-    };
-  },
-});
