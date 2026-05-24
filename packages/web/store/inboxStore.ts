@@ -208,6 +208,18 @@ export type Message = {
   client_id?: string;
 };
 
+// The complete, non-paginated set of navigable (user + assistant) messages for
+// a conversation, fetched once via getUserMessages and cached so the sticky
+// header and message browser have the full list regardless of which window of
+// messages is currently paginated in.
+export type UserMessage = {
+  _id: string;
+  message_uuid?: string;
+  role: "user";
+  content: string;
+  timestamp: number;
+};
+
 export type PaginationState = {
   lastTimestamp: number | null;
   oldestTimestamp: number | null;
@@ -577,7 +589,8 @@ export function categorizeSessions(
   const pinned = sorted.filter((s) => s.is_pinned && isTop(s));
   const newSessions = sorted.filter((s) => s.message_count === 0 && !s.is_pinned && isTop(s))
     .sort((a, b) => (a.is_connected ? 1 : 0) - (b.is_connected ? 1 : 0));
-  const needsInput = sorted.filter((s) => isSessionWaitingForInput(s, sessionsWithQueuedMessages) && isTop(s));
+  const needsInput = sorted.filter((s) => isSessionWaitingForInput(s, sessionsWithQueuedMessages) && isTop(s))
+    .sort((a, b) => (a.updated_at || 0) - (b.updated_at || 0));
   const working = sorted.filter((s) => (!isSessionWaitingForInput(s, sessionsWithQueuedMessages) && s.message_count > 0 && !s.is_pinned) && isTop(s));
 
   return { sorted, pinned, newSessions, needsInput, working, dismissed, subsByParent, forksByParent };
@@ -622,6 +635,7 @@ interface InboxStoreState {
   pendingMessages: Record<string, Message[]>;
   pagination: Record<string, PaginationState>;
   conversations: Record<string, ConversationMeta>;
+  userMessages: Record<string, UserMessage[]>;
 
   clientState: ClientState;
   clientStateInitialized: boolean;
@@ -665,7 +679,7 @@ interface InboxStoreState {
   pinSession: (id: string) => void;
   renameSession: (id: string, title: string) => void;
   switchProject: (convId: string, path: string) => void;
-  sendMessage: (convId: string, content: string, imageIds?: string[], images?: Array<{ media_type: string; storage_id?: string }>) => Promise<any>;
+  sendMessage: (convId: string, content: string, imageIds?: string[], clientId?: string) => void;
   resumeSession: (convId: string) => Promise<any>;
   sendEscape: (convId: string) => void;
   createSession: (opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string }) => Promise<any>;
@@ -699,6 +713,7 @@ interface InboxStoreState {
   // -- Message actions --
   setMessages: (convId: string, msgs: Message[], meta?: Partial<PaginationState>) => void;
   mergeMessages: (convId: string, msgs: Message[], direction: "prepend" | "append", meta?: Partial<PaginationState>) => void;
+  setUserMessages: (convId: string, msgs: UserMessage[]) => void;
   addOptimisticMessage: (convId: string, content: string, images?: Array<{ media_type: string; storage_id?: string }>) => string;
   markOptimisticAsQueued: (convId: string, content: string) => void;
   markOptimisticAsFailed: (convId: string, clientId: string) => void;
@@ -711,7 +726,6 @@ interface InboxStoreState {
 
   // -- Drafts --
   setDraft: (id: string, fields: Record<string, any>) => void;
-  setDraftLocal: (id: string, fields: Record<string, any>) => void;
   getDraft: (id: string) => Record<string, any> | undefined;
   moveDraft: (fromId: string, toId: string) => void;
   clearDraft: (id: string) => void;
@@ -720,6 +734,11 @@ interface InboxStoreState {
   // -- Session ID resolution --
   resolveSessionId: (sessionId: string, convexId: string) => void;
   getConvexId: (id: string) => string | undefined;
+  // In-memory map: stub id → in-flight createSession dispatch promise. Lets
+  // consumers await rekey directly instead of polling. Not synced/persisted.
+  pendingSessionCreates: Record<string, Promise<string>>;
+  trackSessionCreate: (stubId: string, promise: Promise<string>) => void;
+  awaitSessionCreate: (stubId: string) => Promise<string> | undefined;
 
   // -- Fork navigation --
   addOptimisticFork: (fork: ForkChild) => void;
@@ -868,6 +887,7 @@ function evictInactiveMessages(draft: any, activeConvId: string) {
     // NEVER evict pendingMessages — these are the user's outbound messages
     // and must survive until confirmed by the server
     delete draft.pagination[id];
+    delete draft.userMessages[id];
   }
 }
 
@@ -1075,6 +1095,7 @@ export const useInboxStore = create<InboxStoreState>(
   pendingMessages: {},
   pagination: {},
   conversations: {},
+  userMessages: {},
   // Seed UI from localStorage so layout-affecting prefs (sidebar collapsed,
   // zen mode, inbox shortcut bar) are correct on first paint. IDB hydration
   // fills in everything else and is the source of truth across tabs.
@@ -1082,6 +1103,8 @@ export const useInboxStore = create<InboxStoreState>(
   clientStateInitialized: false,
 
   drafts: {},
+
+  pendingSessionCreates: {},
 
   currentConversation: {},
   isolatedWorktreeMode: false,
@@ -1273,19 +1296,20 @@ export const useInboxStore = create<InboxStoreState>(
     this.conversations[convId].git_root = path;
   }),
 
-  sendMessage: action(function (this: Draft, convId: string, content: string, _imageIds?: string[], images?: Array<{ media_type: string; storage_id?: string }>) {
-    const id = `optimistic_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-    const msg = {
-      _id: id,
-      role: "user" as const,
-      content,
-      timestamp: Date.now(),
-      _isOptimistic: true as const,
-      _clientId: id,
-      ...(images && images.length > 0 ? { images } : {}),
-    };
-    if (!this.pendingMessages[convId]) this.pendingMessages[convId] = [];
-    this.pendingMessages[convId].push(msg);
+  // Send a user message to Convex through the store's normal sync. As an
+  // action() it rides the same persist + dispatch-outbox pipeline as every
+  // other store mutation: the call is queued in the outbox before firing and
+  // redriven on next load, so a reload mid-send can never drop the message
+  // (dispatch.sendMessage dedups on client_id, making redelivery safe). The
+  // on-screen optimistic copy is added separately via addOptimisticMessage
+  // (kept durable by the persisted pendingMessages map) and pruned once the
+  // server echoes it back. Fire-and-forget — status is read back from the
+  // synced pending_messages row, not a return value. Args mirror the server
+  // handler: [conversation_id, content, image_storage_ids, client_id].
+  sendMessage: action(function (this: Draft, _convId: string, _content: string, _imageIds?: string[], _clientId?: string) {
+    // No local mutation here: durability for the visible message comes from the
+    // persisted pendingMessages map. This body exists only so the middleware
+    // dispatches the args to the server and queues them in the outbox.
   }),
 
   resumeSession: action(function (_convId: string) {}),
@@ -1549,13 +1573,9 @@ export const useInboxStore = create<InboxStoreState>(
   // =====================
 
   advanceToNext: () => {
-    const sorted = get().sortedSessions();
+    const ordered = get().visualOrder();
     const currentId = get().currentSessionId;
-    const filter = get().activeProjectFilter;
-    const idleSessions = sorted.filter((s: InboxSession) =>
-      isSessionWaitingForInput(s) &&
-      (!filter || getProjectName(s.git_root, s.project_path) === filter)
-    );
+    const idleSessions = ordered.filter((s: InboxSession) => isSessionWaitingForInput(s));
     const currentIdleIdx = idleSessions.findIndex((s: InboxSession) => s._id === currentId);
     const nextIdle = idleSessions[currentIdleIdx + 1] || idleSessions[0];
     if (nextIdle && nextIdle._id !== currentId) {
@@ -1759,6 +1779,19 @@ export const useInboxStore = create<InboxStoreState>(
     evictInactiveMessages(this, convId);
   }),
 
+  setUserMessages: sync(function (this: Draft, convId: string, msgs: UserMessage[]) {
+    const prev = this.userMessages[convId];
+    // Convex hands back a fresh array on every reactive tick. Bail when the
+    // snapshot is unchanged (same length + edge ids) so consumers don't
+    // re-render on no-op updates — mirrors the messages-sync dedup.
+    if (prev && prev.length === msgs.length &&
+        prev[0]?._id === msgs[0]?._id &&
+        prev[prev.length - 1]?._id === msgs[msgs.length - 1]?._id) {
+      return;
+    }
+    this.userMessages[convId] = msgs;
+  }),
+
   addOptimisticMessage: sync(function (this: Draft, convId: string, content: string, images?: Array<{ media_type: string; storage_id?: string }>) {
     const id = `optimistic_${Date.now()}_${Math.random().toString(36).slice(2)}`;
     const msg: Message = {
@@ -1841,10 +1874,6 @@ export const useInboxStore = create<InboxStoreState>(
     this.clientState.drafts[id] = fields;
   }),
 
-  setDraftLocal: (id: string, fields: Record<string, any>) => {
-    set((s: InboxStoreState) => ({ drafts: { ...s.drafts, [id]: fields } }));
-  },
-
   getDraft: (id: string) => {
     return get().drafts[id];
   },
@@ -1907,6 +1936,23 @@ export const useInboxStore = create<InboxStoreState>(
     const sessions = get().sessions as Record<string, InboxSession>;
     const session = Object.values(sessions).find((s) => s.session_id === id || s._id === id);
     return session && isConvexId(session._id) ? session._id : undefined;
+  },
+
+  trackSessionCreate: (stubId: string, promise: Promise<string>) => {
+    set((s: InboxStoreState) => ({
+      pendingSessionCreates: { ...s.pendingSessionCreates, [stubId]: promise },
+    }));
+    promise.finally(() => {
+      set((s: InboxStoreState) => {
+        if (!s.pendingSessionCreates[stubId]) return s;
+        const { [stubId]: _, ...rest } = s.pendingSessionCreates;
+        return { pendingSessionCreates: rest };
+      });
+    });
+  },
+
+  awaitSessionCreate: (stubId: string) => {
+    return get().pendingSessionCreates[stubId];
   },
 
   // =====================
@@ -2277,17 +2323,12 @@ export function ensureHydrated(convId: string) {
 
 // -- IndexedDB cache: wire patch-driven writes + hydrate on load --
 
-// Exported promise that resolves once IDB hydration is complete. main.tsx
-// awaits this before mounting React so the first render sees real data
-// instead of empty defaults.
-export let idbReady: Promise<void> = Promise.resolve();
-
 if (typeof window !== "undefined") {
   (useInboxStore.getState() as any)._setIDBWrite(writePatchesToIDB);
   (useInboxStore.getState() as any)._setOutbox(enqueueDispatch, removeDispatch, loadOutbox);
 
   setHydrating(true);
-  idbReady = loadCache().then((cached) => {
+  void loadCache().then((cached) => {
     setHydrating(false);
     if (!cached) {
       useInboxStore.setState({ clientStateInitialized: true });
@@ -2378,7 +2419,7 @@ if (typeof window !== "undefined") {
 
     // Critical path: sidebar + current conversation + tabs render immediately
     apply(["sessions", "clientState",
-           "conversations", "pending", "teams", "teamMembers", "teamUnreadCount", "drafts",
+           "conversations", "pending", "pendingMessages", "teams", "teamMembers", "teamUnreadCount", "drafts",
            "tabs", "activeTabId",
            "sidePanelOpen", "sidePanelSessionId", "sidePanelUserClosed"]);
 

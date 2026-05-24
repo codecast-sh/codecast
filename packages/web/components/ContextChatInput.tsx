@@ -139,7 +139,8 @@ export function ContextChatInput({
 
     if (convexId) {
       store.resolveSessionId(sid, convexId);
-      store._dispatch("sendMessage", [convexId, fullMessage, null, clientId]);
+      // Durable send via the outbox — survives a reload before the server acks.
+      store.sendMessage(convexId, fullMessage, undefined, clientId);
       // createSession handles task linkage atomically; only docs/plans still need a separate link.
       if (linkedObjectId && contextType !== "task") {
         store._dispatch("linkConversation", [contextType, linkedObjectId, convexId]);

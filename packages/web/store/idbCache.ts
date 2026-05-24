@@ -90,6 +90,10 @@ const META_KEYS = new Set([
   // "messages" and "pagination" are now per-conversation in the conversationMessages table
   "conversations",
   "drafts",
+  // The user's outbound optimistic/queued/failed messages. Must persist so a
+  // reload mid-send can never drop a user message — they only leave this map
+  // once the server confirms them (pruned by client_id in setMessages).
+  "pendingMessages",
   "pending",
   "recentProjects",
   "collapsedSections",
@@ -107,6 +111,13 @@ const META_KEYS = new Set([
 ]);
 
 let _hydrating = false;
+
+// A top-level store key is durable iff it maps to a dedicated collection table
+// or is whitelisted as a meta blob. Keys that satisfy neither are silently
+// dropped on write — the class of bug that lost pending user messages.
+export function isPersistedStoreKey(key: string): boolean {
+  return key in COLLECTION_TABLES || META_KEYS.has(key);
+}
 
 export function writePatchesToIDB(patches: Patch[], state: any) {
   if (_hydrating) return;

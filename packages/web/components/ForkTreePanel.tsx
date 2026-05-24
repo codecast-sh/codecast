@@ -1,6 +1,7 @@
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useRef, useState, useMemo, useCallback } from "react";
+import { createPortal } from "react-dom";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 
 type TreeNode = {
@@ -98,7 +99,11 @@ function TreeRow({
   );
 }
 
-export function ForkTreePanel({
+// Shared tree body: fetches the full recursive fork tree, renders it as an
+// indented, keyboard-navigable list, and emits navigation on select. Both the
+// slide-in drawer (ForkTreePanel) and the header-anchored popover
+// (ForkTreePopover) render this so the tree looks and behaves identically.
+function ForkTreeContent({
   conversationId,
   open,
   onClose,
@@ -111,7 +116,6 @@ export function ForkTreePanel({
   activeBranchIds: Set<string>;
   onSwitchToConversation: (convId: string) => void;
 }) {
-  const panelRef = useRef<HTMLDivElement>(null);
   const selectedRef = useRef<HTMLButtonElement>(null);
   const result = useQuery(
     api.conversations.getConversationTree,
@@ -149,11 +153,6 @@ export function ForkTreePanel({
 
   useWatchEffect(() => {
     if (!open) return;
-    const handleClick = (e: MouseEvent) => {
-      if (panelRef.current && !panelRef.current.contains(e.target as Node)) {
-        onClose();
-      }
-    };
     const handleKey = (e: KeyboardEvent) => {
       if (e.key === "Escape" || e.key === "t") {
         e.preventDefault();
@@ -180,38 +179,18 @@ export function ForkTreePanel({
         return;
       }
     };
-    document.addEventListener("mousedown", handleClick);
     const raf = requestAnimationFrame(() => {
       document.addEventListener("keydown", handleKey, true);
     });
     return () => {
       cancelAnimationFrame(raf);
-      document.removeEventListener("mousedown", handleClick);
       document.removeEventListener("keydown", handleKey, true);
     };
   }, [open, onClose, flatNodes.length, selectedIdx, handleSelect]);
 
-  if (!open) return null;
-
   return (
-    <div
-      ref={panelRef}
-      className="absolute right-0 top-0 bottom-0 w-[280px] bg-sol-bg border-l border-sol-border z-30 flex flex-col shadow-xl animate-in slide-in-from-right duration-200"
-    >
-      <div className="flex items-center justify-between px-3 py-2 border-b border-sol-border shrink-0">
-        <span className="text-[10px] text-sol-text-dim font-medium uppercase tracking-wider">
-          Fork Tree
-        </span>
-        <button
-          onClick={onClose}
-          className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text transition-colors"
-        >
-          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-          </svg>
-        </button>
-      </div>
-      <div className="flex-1 overflow-y-auto p-2 space-y-0.5">
+    <>
+      <div className="flex-1 overflow-y-auto p-2 space-y-0.5 min-h-0">
         {!tree ? (
           <div className="flex items-center justify-center py-8 text-sol-text-dim text-xs">
             <svg className="w-4 h-4 animate-spin mr-2" fill="none" viewBox="0 0 24 24">
@@ -240,6 +219,142 @@ export function ForkTreePanel({
         <span><kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border">Enter</kbd> switch</span>
         <span><kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border">t</kbd> close</span>
       </div>
+    </>
+  );
+}
+
+export function ForkTreePanel({
+  conversationId,
+  open,
+  onClose,
+  activeBranchIds,
+  onSwitchToConversation,
+}: {
+  conversationId: string;
+  open: boolean;
+  onClose: () => void;
+  activeBranchIds: Set<string>;
+  onSwitchToConversation: (convId: string) => void;
+}) {
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  useWatchEffect(() => {
+    if (!open) return;
+    const handleClick = (e: MouseEvent) => {
+      if (panelRef.current && !panelRef.current.contains(e.target as Node)) {
+        onClose();
+      }
+    };
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [open, onClose]);
+
+  if (!open) return null;
+
+  return (
+    <div
+      ref={panelRef}
+      className="absolute right-0 top-0 bottom-0 w-[280px] bg-sol-bg border-l border-sol-border z-30 flex flex-col shadow-xl animate-in slide-in-from-right duration-200"
+    >
+      <div className="flex items-center justify-between px-3 py-2 border-b border-sol-border shrink-0">
+        <span className="text-[10px] text-sol-text-dim font-medium uppercase tracking-wider">
+          Fork Tree
+        </span>
+        <button
+          onClick={onClose}
+          className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text transition-colors"
+        >
+          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+      <ForkTreeContent
+        conversationId={conversationId}
+        open={open}
+        onClose={onClose}
+        activeBranchIds={activeBranchIds}
+        onSwitchToConversation={onSwitchToConversation}
+      />
     </div>
+  );
+}
+
+export function ForkTreePopover({
+  conversationId,
+  open,
+  onClose,
+  anchorEl,
+  activeBranchIds,
+  onSwitchToConversation,
+}: {
+  conversationId: string;
+  open: boolean;
+  onClose: () => void;
+  anchorEl: HTMLElement | null;
+  activeBranchIds: Set<string>;
+  onSwitchToConversation: (convId: string) => void;
+}) {
+  const popRef = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ top: number; left: number; width: number } | null>(null);
+
+  useWatchEffect(() => {
+    if (!open || !anchorEl) {
+      setPos(null);
+      return;
+    }
+    const width = 340;
+    const rect = anchorEl.getBoundingClientRect();
+    const left = Math.max(8, Math.min(rect.right - width, window.innerWidth - width - 8));
+    setPos({ top: rect.bottom + 6, left, width });
+  }, [open, anchorEl]);
+
+  useWatchEffect(() => {
+    if (!open) return;
+    const handleClick = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (popRef.current?.contains(t)) return;
+      if (anchorEl?.contains(t)) return;
+      onClose();
+    };
+    const raf = requestAnimationFrame(() => {
+      document.addEventListener("mousedown", handleClick);
+    });
+    return () => {
+      cancelAnimationFrame(raf);
+      document.removeEventListener("mousedown", handleClick);
+    };
+  }, [open, onClose, anchorEl]);
+
+  if (!open || !pos) return null;
+
+  return createPortal(
+    <div
+      ref={popRef}
+      style={{ position: "fixed", top: pos.top, left: pos.left, width: pos.width }}
+      className="z-[9999] max-h-[60vh] flex flex-col rounded-lg bg-sol-bg border border-sol-border shadow-xl ring-1 ring-black/5 animate-in fade-in slide-in-from-top-1 duration-150"
+    >
+      <div className="flex items-center justify-between px-3 py-2 border-b border-sol-border shrink-0">
+        <span className="text-[10px] text-sol-text-dim font-medium uppercase tracking-wider">
+          Branch tree
+        </span>
+        <button
+          onClick={onClose}
+          className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text transition-colors"
+        >
+          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+      <ForkTreeContent
+        conversationId={conversationId}
+        open={open}
+        onClose={onClose}
+        activeBranchIds={activeBranchIds}
+        onSwitchToConversation={onSwitchToConversation}
+      />
+    </div>,
+    document.body
   );
 }

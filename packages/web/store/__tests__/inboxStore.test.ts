@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "bun:test";
 import { categorizeSessions, getSessionRenderKey, isSessionDismissed, useInboxStore, type InboxSession } from "../inboxStore";
+import { isPersistedStoreKey } from "../idbCache";
 
 const baseSession: InboxSession = {
   _id: "conv1",
@@ -596,5 +597,55 @@ describe("dismiss is absolute — navigation/injection must not resurrect", () =
 
     useInboxStore.getState().unstashSession(alive._id);
     expect(isSessionDismissed(useInboxStore.getState().sessions[alive._id])).toBe(false);
+  });
+});
+
+describe("pending user messages must never be lost on reload", () => {
+  // Bug history: a sent-but-unconfirmed message vanished on cmd-r. Root cause:
+  // `pendingMessages` was absent from the IDB persistence allowlist, so the
+  // optimistic write was silently dropped and never rehydrated. These tests
+  // pin the two halves of the durability guarantee: the message lands in
+  // pendingMessages, and pendingMessages is a persisted key.
+
+  beforeEach(() => {
+    useInboxStore.setState({ messages: {}, pendingMessages: {}, pagination: {} });
+  });
+
+  it("addOptimisticMessage lands the message in the persisted pendingMessages map", () => {
+    const clientId = useInboxStore.getState().addOptimisticMessage("c1", "hello world");
+
+    const pending = useInboxStore.getState().pendingMessages.c1;
+    expect(pending).toHaveLength(1);
+    expect(pending[0].content).toBe("hello world");
+    expect(pending[0]._clientId).toBe(clientId);
+
+    // The half that broke: the key must be durable, or the above is lost on reload.
+    expect(isPersistedStoreKey("pendingMessages")).toBe(true);
+  });
+
+  it("keeps the message visible after a failed send (never drops it)", () => {
+    const store = useInboxStore.getState();
+    const clientId = store.addOptimisticMessage("c1", "retry me");
+    store.markOptimisticAsFailed("c1", clientId);
+
+    const pending = useInboxStore.getState().pendingMessages.c1;
+    expect(pending).toHaveLength(1);
+    expect(pending[0]._isFailed).toBe(true);
+  });
+
+  it("prunes a pending message only once the server confirms it by client_id", () => {
+    const store = useInboxStore.getState();
+    const clientId = store.addOptimisticMessage("c1", "delivered");
+
+    // Unrelated server message arrives — the pending message must survive.
+    store.setMessages("c1", [{ _id: "s1", role: "assistant", content: "hi", timestamp: 1 } as any]);
+    expect(useInboxStore.getState().pendingMessages.c1).toHaveLength(1);
+
+    // The server echoes the user message back with the matching client_id.
+    store.setMessages("c1", [
+      { _id: "s1", role: "assistant", content: "hi", timestamp: 1 } as any,
+      { _id: "s2", role: "user", content: "delivered", client_id: clientId, timestamp: 2 } as any,
+    ]);
+    expect(useInboxStore.getState().pendingMessages.c1).toHaveLength(0);
   });
 });

@@ -72,7 +72,7 @@ import { useForkNavigationStore } from "../store/forkNavigationStore";
 import { buildCompositeTimeline } from "../lib/compositeTimeline";
 import { useMessageSelection } from "../hooks/useMessageSelection";
 import { BranchSelector } from "./BranchSelector";
-import { ForkTreePanel } from "./ForkTreePanel";
+import { ForkTreePanel, ForkTreePopover } from "./ForkTreePanel";
 import { getApplyPatchInput, parseApplyPatchSections } from "../lib/applyPatchParser";
 import { parseFileChangeSummary, parseUnifiedDiffSections } from "../lib/unifiedDiffParser";
 import { setupDesktopDrag, desktopHeaderClass } from "../lib/desktop";
@@ -278,6 +278,16 @@ export type ConversationData = {
     message_count?: number;
     agent_type?: string;
   }>;
+  fork_siblings?: Array<{
+    _id: string;
+    title: string;
+    short_id?: string;
+    started_at: number;
+    username: string;
+    parent_message_uuid?: string;
+    message_count?: number;
+    agent_type?: string;
+  }>;
   main_message_counts_by_fork?: Record<string, number>;
 };
 
@@ -458,16 +468,29 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
     const trimmed = projectPath.trim();
     if (!trimmed) return;
     if (trimmed === currentPath && !forceIsolated) return;
+    const store = useInboxStore.getState();
     const id = storeSession?._id || conversation._id;
-    useInboxStore.getState().updateSessionProject(id, trimmed);
-    if (isConvexId(id)) {
-      reconfigureSession({
-        conversation_id: id as Id<"conversations">,
-        project_path: trimmed,
-        git_root: trimmed,
-        isolated: (forceIsolated ?? isolated) || undefined,
-      }).catch((err) => toast.error(err instanceof Error ? err.message : "Failed to switch project"));
+    const prevPath = currentPath;
+    store.updateSessionProject(id, trimmed);
+    // Always push the switch to the daemon so it kills + recreates the tmux at
+    // the new cwd. A freshly-created stub has no Convex id yet — its id arrives
+    // via the in-flight create promise, so wait for that rather than dropping
+    // the switch on the floor (which left the label and the tmux diverged).
+    let convexId = isConvexId(id) ? id : store.getConvexId(id);
+    if (!convexId) {
+      const pending = store.awaitSessionCreate(id);
+      if (pending) convexId = await pending.catch(() => undefined);
     }
+    if (!convexId) return;
+    reconfigureSession({
+      conversation_id: convexId as Id<"conversations">,
+      project_path: trimmed,
+      git_root: trimmed,
+      isolated: (forceIsolated ?? isolated) || undefined,
+    }).catch((err) => {
+      if (prevPath) useInboxStore.getState().updateSessionProject(convexId!, prevPath);
+      toast.error(err instanceof Error ? err.message : "Failed to switch project");
+    });
   }, [storeSession, conversation._id, reconfigureSession, currentPath, isolated]);
 
   return (
@@ -775,6 +798,23 @@ function stripSystemTags(content: string): string {
     .replace(/\n{3,}/g, '\n\n');
 }
 
+function cleanStickyContent(content: string): string {
+  const stMatch = content.match(/<scheduled-task\s+title="([^"]*)"[^>]*>([\s\S]*?)<\/scheduled-task>/);
+  if (stMatch) {
+    const title = stMatch[1].replace(/&quot;/g, '"');
+    const prompt = stMatch[2].trim();
+    return prompt ? `${title} — ${prompt}` : title;
+  }
+  return stripSystemTags(content)
+    .replace(/<task-notification>[\s\S]*?<\/task-notification>/g, "")
+    .replace(/<teammate-message\s+[^>]*>[\s\S]*?<\/teammate-message>/g, "")
+    .replace(/<scheduled-task[^>]*>[\s\S]*?<\/scheduled-task>/g, "")
+    .replace(/\[Image[:\s][^\]]*\]/gi, "")
+    .replace(/<image\b[^>]*\/?>\s*(?:<\/image>)?/gi, "")
+    .replace(/<[^>]+>/g, "")
+    .trim();
+}
+
 type ParsedApiError = {
   statusCode: number;
   message: string;
@@ -997,15 +1037,17 @@ function classifyUserMessage(
     return hasUserImages ? { kind: 'normal' } : { kind: 'empty' };
   }
   const t = content.trim();
-  if (t.startsWith('<scheduled-task')) return { kind: 'scheduled_task' };
+  const tNoReminders = t.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').replace(/<task-reminder>[\s\S]*?<\/task-reminder>/g, '').trim();
+  const tStripped = stripSystemTags(t).trim();
+  if (tNoReminders.startsWith('<scheduled-task')) return { kind: 'scheduled_task' };
   if (t.startsWith('{') && t.includes('__cc_poll')) {
     try { if (JSON.parse(t).__cc_poll) return { kind: 'poll_response' }; } catch {}
   }
   if (immediatePrev?.role === 'assistant' && immediatePrev?.tool_calls?.some(tc => tc.name === 'AskUserQuestion')) {
     return { kind: 'poll_response' };
   }
-  if (!stripSystemTags(t).trim()) return { kind: 'noise' };
-  if (isCommandMessage(t)) {
+  if (!tStripped) return { kind: 'noise' };
+  if (isCommandMessage(tNoReminders)) {
     if (isSkillExpansion(t)) {
       const cmdMatch = t.match(/<command-(?:name|message)>([^<]*)<\/command-(?:name|message)>/);
       return { kind: 'skill_expansion', cmdName: cmdMatch?.[1]?.replace(/^\//, "") };
@@ -1028,10 +1070,7 @@ function classifyUserMessage(
     if (!stripped || stripped.length < 4 || stripped.startsWith('Read the output file to retrieve the result:') || stripped.startsWith('Full transcript available at:')) return { kind: 'task_notification' };
   }
   if (immediatePrev?.role === 'assistant' && immediatePrev?.tool_calls?.some(tc => tc.name === 'Task' || tc.name === 'Agent')) {
-    // Only hide if the message is auto-generated (no human-visible text after stripping system tags).
-    // Genuine user messages typed while an agent is running must render normally.
-    const stripped = stripSystemTags(t).trim();
-    if (!stripped) return { kind: 'task_prompt' };
+    if (!tStripped) return { kind: 'task_prompt' };
   }
   if (isCompactionPromptMessage(t)) return { kind: 'compaction_prompt' };
   if (t.startsWith('Read the output file to retrieve the result:') || t.startsWith('Full transcript available at:')) return { kind: 'noise' };
@@ -1040,8 +1079,7 @@ function classifyUserMessage(
     return { kind: 'skill_expansion', cmdName: cmdMatch?.[1]?.replace(/^\//, "") };
   }
   if (contextPrev?.role === 'system' && contextPrev?.subtype === 'compact_boundary') {
-    const stripped = stripSystemTags(t).trim();
-    if (!stripped) return { kind: 'noise' };
+    if (!tStripped) return { kind: 'noise' };
     return { kind: 'compaction_summary' };
   }
   if (t.includes('<teammate-message') && !t.replace(/<teammate-message\s+[^>]*>[\s\S]*?<\/teammate-message>/g, '').replace(/<task-notification>[\s\S]*?<\/task-notification>/g, '').trim()) {
@@ -1069,7 +1107,7 @@ function classifyUserMessage(
 }
 
 function isStickyWorthy(kind: UserMessageKind): boolean {
-  return kind.kind === 'normal' || kind.kind === 'plan';
+  return kind.kind === 'normal' || kind.kind === 'plan' || kind.kind === 'scheduled_task';
 }
 
 function formatRelativeTime(ts: number): string {
@@ -1629,6 +1667,10 @@ function isPlanWriteToolCall(tc: ToolCall): boolean {
   } catch {
     return false;
   }
+}
+
+function isAlwaysVisibleToolCall(tc: ToolCall): boolean {
+  return isPlanWriteToolCall(tc) || tc.name === "AskUserQuestion";
 }
 
 interface ToolChangeRange {
@@ -3426,7 +3468,8 @@ function UserIcon({ avatarUrl }: { avatarUrl?: string | null }) {
   );
 }
 
-function CommandStatusLine({ content, timestamp }: { content: string; timestamp: number }) {
+function CommandStatusLine({ content: rawContent, timestamp }: { content: string; timestamp: number }) {
+  const content = rawContent.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').replace(/<task-reminder>[\s\S]*?<\/task-reminder>/g, '').trim();
   const cmdType = getCommandType(content);
   const cmdNameMatch = content.match(/<command-name>([^<]*)<\/command-name>/) || content.match(/<command-message>([^<]*)<\/command-message>/) || content.trim().match(/^\/([\w-]+)/);
   const cmdName = cmdNameMatch?.[1]?.replace(/^\//, "");
@@ -3616,11 +3659,12 @@ function TaskNotificationLine({ content, timestamp, agentNameToChildMap }: { con
   );
 }
 
-function ScheduledTaskBlock({ content, timestamp }: { content: string; timestamp: number }) {
+function ScheduledTaskBlock({ content: rawContent, timestamp }: { content: string; timestamp: number }) {
+  const content = rawContent.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim();
   const match = content.match(/<scheduled-task\s+title="([^"]*)"(?:\s+task-id="([^"]*)")?[^>]*>([\s\S]*?)<\/scheduled-task>/);
   const title = match?.[1]?.replace(/&quot;/g, '"') || "Scheduled Task";
   const taskId = match?.[2]?.slice(-8);
-  const prompt = match?.[3]?.trim() || content;
+  const prompt = match?.[3]?.trim() || cleanStickyContent(content);
 
   return (
     <div className="mb-2 mx-1 rounded border-l-2 border-sol-violet/60 bg-sol-violet/5">
@@ -3793,9 +3837,9 @@ function SkillCard({ name, description, path }: { name?: string; description?: s
   );
 }
 
-const SUMMARY_LABELS = /\b(Goal|Status|Next|Blocked|Plan|Result|Outcome|Context|Progress):/g;
+export const SUMMARY_LABELS = /\b(Goal|Status|Next|Blocked|Plan|Result|Outcome|Context|Progress):/g;
 
-function FormattedSummary({ text }: { text: string }) {
+export function FormattedSummary({ text }: { text: string }) {
   const parts = text.split(SUMMARY_LABELS);
   if (parts.length <= 1) return <>{text}</>;
   return (
@@ -3968,23 +4012,27 @@ function TeammateMessageCard({ teammateId, color, summary, content }: { teammate
 
   const borderColor = agentBorderMap[color || "blue"] || agentBorderMap.blue;
   const badgeColor = agentColorMap[color || "blue"] || agentColorMap.blue;
-  const isSummary = /summary|idle|away/i.test(summary || '');
+  const summaryKeyword = /summary|idle|away/i;
+  const isSummary = summaryKeyword.test(summary || '') || summaryKeyword.test(teammateId || '') || SUMMARY_LABELS.test(content);
+  SUMMARY_LABELS.lastIndex = 0;
 
   if (isSummary) {
+    const label = summary || (summaryKeyword.test(teammateId) ? teammateId : undefined);
+    const cleanContent = content.replace(/\s*\.{3,}\s*$/, '').replace(/\s+to\s*$/, '').trim();
     return (
-      <div className={`my-1.5 rounded-lg bg-sol-bg-alt/40 border ${borderColor} px-4 py-3`}>
-        <div className="flex items-center gap-2 mb-2">
-          <span className={`px-1.5 py-0.5 rounded border text-[10px] font-mono ${badgeColor}`}>
-            {teammateId}
-          </span>
-          {summary && (
-            <span className="text-[10px] uppercase tracking-wider font-medium text-sol-text-dim/60">
-              {summary}
+      <div className={`my-2 rounded-md border-l-2 ${borderColor} bg-sol-bg-alt/20 pl-4 pr-4 py-3`}>
+        {label && (
+          <div className="flex items-center gap-1.5 mb-2">
+            <svg className="w-2.5 h-2.5 text-sol-text-dim/40 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+            <span className="text-[10px] uppercase tracking-wider font-medium text-sol-text-dim/50">
+              {label}
             </span>
-          )}
-        </div>
-        <div className="text-[13px] text-sol-text-secondary break-words leading-relaxed whitespace-pre-line">
-          <FormattedSummary text={content} />
+          </div>
+        )}
+        <div className="text-[13px] text-sol-text-secondary break-words leading-[1.6] whitespace-pre-line">
+          <FormattedSummary text={cleanContent} />
         </div>
       </div>
     );
@@ -4005,7 +4053,7 @@ function TeammateMessageCard({ teammateId, color, summary, content }: { teammate
         )}
       </div>
       <div
-        className={`text-sm text-sol-text-secondary break-words leading-relaxed whitespace-pre-wrap ${isLong && !expanded ? "line-clamp-4" : ""}`}
+        className={`text-sm text-sol-text-secondary break-words leading-relaxed whitespace-pre-wrap ${isLong && !expanded ? "line-clamp-6" : ""}`}
       >
         {content}
       </div>
@@ -4098,7 +4146,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
 
   return (
     <div id={`msg-${messageId}`} className={`group relative scroll-mt-20 bg-sol-blue/10 -mx-4 px-4 py-4 rounded-lg border border-sol-blue/30 ${effectivelyCollapsed ? "mb-2" : "mb-6"} transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg message-highlight" : ""} ${shareSelectionMode ? "cursor-pointer" : ""} ${isSelectedForShare ? "bg-sol-cyan/10 border-2 border-sol-cyan ring-2 ring-sol-cyan/30" : ""} ${isPending ? "opacity-80 pending-stripes" : isQueued ? "opacity-90 queued-pulse" : ""}`} style={{ '--image-fade-bg': 'color-mix(in srgb, var(--sol-blue) 10%, var(--sol-bg))' } as React.CSSProperties} onClick={shareSelectionMode ? (() => onToggleShareSelection?.(messageId)) : undefined}>
-      <div className={`absolute -top-2 right-0 transition-opacity flex gap-0.5 z-10 bg-sol-bg rounded shadow-md px-0.5 ${shareSelectionMode ? "opacity-0 pointer-events-none" : "opacity-0 group-hover:opacity-100"}`}>
+      <div className={`absolute -top-2 right-0 transition-opacity flex gap-0.5 z-10 bg-sol-bg rounded shadow-md px-0.5 ${shareSelectionMode ? "opacity-0 pointer-events-none" : "opacity-100"}`}>
         {onStartShareSelection && (
           <button
             onClick={() => onStartShareSelection(messageId)}
@@ -4467,7 +4515,8 @@ function AssistantBlockImpl({
     const parts = parseInsightBlocks(displayContent);
     return parts.some(p => p.type === 'insight') ? parts : null;
   }, [displayContent]);
-  const hasContent = displayContent && displayContent.trim().length > 0;
+  const onlyAskUser = toolCalls && toolCalls.length > 0 && toolCalls.every(tc => tc.name === "AskUserQuestion");
+  const hasContent = displayContent && displayContent.trim().length > 0 && !onlyAskUser;
   const hasThinking = thinking && thinking.trim().length > 0;
   const hasToolCalls = toolCalls && toolCalls.length > 0;
   const hasImages = images?.some(img => !img.tool_use_id) ?? false;
@@ -4555,9 +4604,10 @@ function AssistantBlockImpl({
     return null;
   }
 
-  // When collapsed and only tool calls (no text content), hide completely -- unless it has plan writes
+  // When collapsed and only tool calls (no text content), hide completely -- unless always-visible
   const hasPlanWrite = hasToolCalls && toolCalls?.some(isPlanWriteToolCall);
-  if (collapsed && onlyToolCalls && !hasPlanWrite) {
+  const hasAlwaysVisible = hasPlanWrite || (hasToolCalls && toolCalls?.some(isAlwaysVisibleToolCall));
+  if (collapsed && onlyToolCalls && !hasAlwaysVisible) {
     return null;
   }
 
@@ -4664,7 +4714,7 @@ function AssistantBlockImpl({
         {!collapsed && hasThinking && showThinking && <ThinkingBlock content={thinking!} showContent={showThinking} />}
 
         {hasToolCalls && toolCalls?.map((tc) => {
-          if (collapsed && !isPlanWriteToolCall(tc)) return null;
+          if (collapsed && !isAlwaysVisibleToolCall(tc)) return null;
           return (tc.name === "Task" || tc.name === "Agent") ? (
             <TaskToolBlock
               key={tc.id}
@@ -4943,12 +4993,45 @@ function SystemBlockImpl({ content, subtype, timestamp, messageUuid, messageId, 
   }
 
   if ((subtype === "stop_hook_summary" || subtype === "local_command") && content) {
-    const label = subtype === "stop_hook_summary" ? "hook" : "command";
+    if (subtype === "local_command") {
+      const cmdName = content.match(/<command-name>([^<]*)<\/command-name>/)?.[1]?.replace(/^\//, "")
+        || content.match(/<command-message>([^<]*)<\/command-message>/)?.[1]?.replace(/^\//, "");
+      const stdout = content.match(/<local-command-stdout>([\s\S]*?)<\/local-command-stdout>/)?.[1]?.trim();
+      const stderr = content.match(/<local-command-stderr>([\s\S]*?)<\/local-command-stderr>/)?.[1]?.trim();
+      const output = stripAnsiCodes(stdout || stderr || "");
+      return (
+        <div className="mb-3 flex items-center gap-2 px-3 py-2 bg-sol-bg-alt/30 border-l-2 border-sol-cyan/30 text-xs">
+          <svg className="w-3 h-3 text-sol-cyan/60 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <polyline points="4 17 10 11 4 5" />
+          </svg>
+          {cmdName && <span className="font-mono text-sol-cyan/80 font-medium">/{cmdName}</span>}
+          {output && <span className="text-sol-text-muted font-mono truncate">{output.slice(0, 150)}</span>}
+          {!cmdName && !output && <span className="text-sol-text-dim font-mono truncate">{stripAnsiCodes(content.replace(/<[^>]+>/g, "")).slice(0, 150)}</span>}
+        </div>
+      );
+    }
     const trimmed = stripAnsiCodes(content).slice(0, 200);
     return (
       <div className="mb-3 flex items-center gap-2 px-3 py-2 bg-sol-bg-alt/30 border-l-2 border-sol-border text-xs">
-        <span className="text-[10px] text-sol-text-dim bg-sol-bg-highlight px-1.5 py-0.5 rounded font-mono">{label}</span>
+        <span className="text-[10px] text-sol-text-dim bg-sol-bg-highlight px-1.5 py-0.5 rounded font-mono">hook</span>
         <span className="text-sol-text-muted font-mono truncate">{trimmed}</span>
+      </div>
+    );
+  }
+
+  if (subtype === "away_summary" && content) {
+    const text = stripAnsiCodes(content).trim();
+    return (
+      <div className="my-2 rounded-lg bg-sol-bg-alt/40 border border-sol-border/40 px-4 py-3">
+        <div className="flex items-center gap-1.5 mb-2">
+          <svg className="w-3 h-3 text-sol-text-dim/50 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+          </svg>
+          <span className="text-[10px] uppercase tracking-wider font-medium text-sol-text-dim/60">away summary</span>
+        </div>
+        <div className="text-[13px] text-sol-text-secondary break-words leading-relaxed whitespace-pre-line">
+          <FormattedSummary text={text} />
+        </div>
       </div>
     );
   }
@@ -5974,12 +6057,34 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
     canQueryServer ? { conversation_id: conversationId as Id<"conversations"> } : "skip"
   );
 
+  // The send is fire-and-forget through the store sync, so we no longer get the
+  // message id back. Recover precise per-message status tracking from the
+  // conversation-scoped pending row once the server has it — keeps the stuck
+  // banner and the live-session kill-protection (messageReachedSession) intact.
+  useWatchEffect(() => {
+    if (pendingMessageId || !sentAt || !existingPending) return;
+    if (existingPending.status === "delivered") return;
+    setPendingMessageId(existingPending._id);
+  }, [pendingMessageId, sentAt, existingPending]);
+
   const isAgentStarting = agentStatus === "starting" || agentStatus === "resuming" || deliveryStatus === "starting";
   const isAgentDelivering = agentStatus === "connected" || deliveryStatus === "connected";
   const isAgentResuming = agentStatus === "resuming";
   const stuckThresholdMs = isAgentResuming ? 120_000 : isSessionStarting || isAgentStarting ? 60_000 : isSessionReady ? 30_000 : 15_000;
 
   const isExistingMessageDead = existingPending?.status === "failed" || existingPending?.status === "undeliverable";
+
+  // Daemon-reported agent_status is the authoritative "session is alive and processing"
+  // signal: it propagates via heartbeat seconds ahead of an assistant message reaching the
+  // timeline (which is what isConversationLive/isThinking rely on). Trust it as proof the
+  // message reached the session so we never resume — or worse, kill+restart — a live agent.
+  const isAgentActive = agentStatus === "thinking" || agentStatus === "working" || agentStatus === "compacting" || agentStatus === "permission_blocked";
+  // Durable, persisted proof of delivery: the daemon marks a message "injected" the moment
+  // it lands in tmux and "delivered" once acked. (It resets "injected"→"pending" if the
+  // session dies, so this is only set while the message genuinely sits in a live session.)
+  // Unlike the transient heartbeat this doesn't race propagation — once set, a kill+restart
+  // would only destroy a session that already has the message.
+  const messageReachedSession = messageStatus?.status === "injected" || messageStatus?.status === "delivered";
 
   useWatchEffect(() => {
     if (pendingMessageId) return;
@@ -5996,6 +6101,16 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
       setShowStuckBanner(true);
       return;
     }
+    // "injected" means the daemon already typed the message into the live session — it
+    // reached the agent (which may be mid-turn). The ack→"delivered" promotion can race or
+    // never fire (boot-time inject, resume/rekey divergence), but that's no reason to claim
+    // "Message not reaching session." Treat injected as delivered for the banner; the benign
+    // "Working/Processing" line covers it, and a genuinely dead session is still caught by the
+    // heartbeat-driven resume/restart guards below.
+    if (existingPending.status === "injected") {
+      setShowStuckBanner(false);
+      return;
+    }
     if (age > stuckThresholdMs) {
       setShowStuckBanner(true);
     } else {
@@ -6004,12 +6119,14 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
     }
   }, [existingPending, pendingMessageId, isWaitingForResponse, stuckThresholdMs, isExistingMessageDead]);
 
-  // Agent actively working proves the message reached the session — clear stale stuck banner
+  // Agent actively working — or durable proof the message was injected/delivered — proves it
+  // reached the session, so clear any stale stuck banner. messageReachedSession is the same
+  // signal the resume guards trust to NOT kill the session; keep the banner consistent with it.
   useWatchEffect(() => {
-    if (showStuckBanner && agentStatus && (agentStatus === "thinking" || agentStatus === "working" || agentStatus === "compacting" || agentStatus === "permission_blocked")) {
+    if (showStuckBanner && (isAgentActive || messageReachedSession)) {
       setShowStuckBanner(false);
     }
-  }, [showStuckBanner, agentStatus]);
+  }, [showStuckBanner, isAgentActive, messageReachedSession]);
 
   useWatchEffect(() => {
     if (!sentAt || !pendingMessageId) return;
@@ -6088,7 +6205,9 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
   const dismissLightbox = useCallback(() => { setLightboxImageIndex(null); textareaRef.current?.focus(); }, []);
   useWatchEffect(() => { onLightboxChange?.(lightboxImageIndex !== null); }, [lightboxImageIndex, onLightboxChange]);
   const lightboxSwipe = useSwipeToDismiss(dismissLightbox);
-  const sendMessage = useMutation(api.pendingMessages.sendMessageToSession);
+  // Durable send: routes through the store's dispatch outbox so a reload
+  // mid-send survives and is redriven on next load (idempotent on client_id).
+  const sendMessage = useInboxStore((s) => s.sendMessage);
   const generateUploadUrl = useMutation(api.images.generateUploadUrl);
   const convex = useConvex();
 
@@ -6138,7 +6257,27 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
   const waitForConvexId = useCallback(async (id: string): Promise<string> => {
     const resolved = useInboxStore.getState().getConvexId(id);
     if (resolved) return resolved;
-    for (let i = 0; i < 20; i++) {
+    // Prefer the in-flight createSession promise — deterministic and surfaces
+    // the real dispatch error if the server rejects. Polling is the fallback
+    // for cases where the promise was lost (e.g. reload mid-flight) or the
+    // rekey arrives via listInboxSessions altKey sync instead of the dispatch.
+    const inFlight = useInboxStore.getState().awaitSessionCreate(id);
+    if (inFlight) {
+      let createError: unknown = null;
+      try {
+        const convexId = await Promise.race([
+          inFlight,
+          new Promise<string>((_, rej) => setTimeout(() => rej(new Error("create timeout")), 30_000)),
+        ]);
+        if (convexId) return convexId;
+      } catch (e) {
+        createError = e;
+      }
+      const r2 = useInboxStore.getState().getConvexId(id);
+      if (r2) return r2;
+      if (createError) throw createError instanceof Error ? createError : new Error(String(createError));
+    }
+    for (let i = 0; i < 60; i++) {
       await new Promise((r) => setTimeout(r, 250));
       const r = useInboxStore.getState().getConvexId(id);
       if (r) return r;
@@ -6176,7 +6315,11 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
   }, [conversationId, resumeSessionMutation, restartSessionMutation, isResuming, isExistingMessageDead, messageStatus?.status]);
 
   useWatchEffect(() => {
-    if (isResuming && (isConversationLive || isThinking)) {
+    // Abort the resume the moment the session shows life. isAgentActive (daemon heartbeat)
+    // is the fast, authoritative signal — without it we'd escalate to a destructive
+    // kill+restart on a live, working agent just because no assistant message has reached
+    // the timeline yet (e.g. mid-compaction, mid-thinking, or a slow first delivery).
+    if (isResuming && (isConversationLive || isThinking || isAgentActive || messageReachedSession)) {
       setIsResuming(false);
       setShowStuckBanner(false);
       return;
@@ -6184,6 +6327,9 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
     if (!isResuming) return;
     const timeout = setTimeout(async () => {
       setIsResuming(false);
+      // Re-check at fire time: never kill a session the daemon reports as working or that
+      // already has the message in tmux.
+      if (isAgentActive || messageReachedSession) return;
       if (!forceRestartAttemptedRef.current && conversationId && isConvexId(conversationId)) {
         forceRestartAttemptedRef.current = true;
         try {
@@ -6195,14 +6341,16 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
       }
     }, 30_000);
     return () => clearTimeout(timeout);
-  }, [isResuming, isConversationLive, isThinking, conversationId, restartSessionMutation]);
+  }, [isResuming, isConversationLive, isThinking, isAgentActive, messageReachedSession, conversationId, restartSessionMutation]);
 
   useWatchEffect(() => {
     if (!showStuckBanner || !sessionId || isResuming || autoResumeTriggeredRef.current) return;
+    // Agent already processing, or the message already reached tmux — nothing to resume.
+    if (isAgentActive || messageReachedSession) return;
     if (!existingPending && !pendingMessageId) return;
     autoResumeTriggeredRef.current = true;
     handleForceResume();
-  }, [showStuckBanner, sessionId, isResuming, existingPending, pendingMessageId, handleForceResume]);
+  }, [showStuckBanner, sessionId, isResuming, isAgentActive, messageReachedSession, existingPending, pendingMessageId, handleForceResume]);
 
   const updateDraft = useCallback((text: string, images?: Array<{ storageId?: string; previewUrl?: string; name?: string }> | null) => {
     if (!text && (!images || images.length === 0)) {
@@ -6284,8 +6432,6 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
       }
     }
     if (!sendingRef.current) {
-      const existing = useInboxStore.getState().getDraft(conversationId);
-      useInboxStore.getState().setDraftLocal(conversationId, { ...existing, draft_message: val || null });
       if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
       draftTimerRef.current = setTimeout(() => {
         if (sendingRef.current) return;
@@ -6356,9 +6502,10 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
     }
   };
 
-  useWatchEffect(() => {
-    resetTextareaHeight();
-  }, [message]);
+  // useLayoutEffect so the height adjusts before paint — useEffect would
+  // cause a visible flicker when text wraps to a new line.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useLayoutEffect(resetTextareaHeight, [message]);
 
   const mountConvIdRef = useRef(conversationId);
   useWatchEffect(() => {
@@ -6530,12 +6677,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
       onMessageSent?.();
       try {
         const resolvedId = await waitForConvexId(forkId);
-        const msgId = await sendMessage({
-          conversation_id: resolvedId as Id<"conversations">,
-          content,
-          client_id: clientId,
-        });
-        setPendingMessageId(msgId);
+        sendMessage(resolvedId, content, undefined, clientId);
         setSentAt(Date.now());
         sentContentRef.current = content;
       } catch (error) {
@@ -6571,13 +6713,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
 
     try {
       const resolvedId = targetCanQuery ? targetConvId : await waitForConvexId(targetConvId);
-      const msgId = await sendMessage({
-        conversation_id: resolvedId as Id<"conversations">,
-        content: expandedContent,
-        image_storage_ids: storageIds.length > 0 ? storageIds : undefined,
-        client_id: clientId,
-      });
-      setPendingMessageId(msgId);
+      sendMessage(resolvedId, expandedContent, storageIds.length > 0 ? storageIds : undefined, clientId);
       setOptimisticSending(false);
       setSentAt(Date.now());
       sentContentRef.current = trimmed;
@@ -6607,12 +6743,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
       try {
         const expanded = await expandMentionsInMessage(next);
         const resolvedId = queueCanQuery ? queueTargetConvId : await waitForConvexId(queueTargetConvId);
-        const msgId = await sendMessage({
-          conversation_id: resolvedId as Id<"conversations">,
-          content: expanded,
-          client_id: clientId,
-        });
-        setPendingMessageId(msgId);
+        sendMessage(resolvedId, expanded, undefined, clientId);
         setSentAt(Date.now());
         sentContentRef.current = next;
         setShowStuckBanner(false);
@@ -7450,9 +7581,24 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const scrollProgressRef = useRef<HTMLDivElement>(null);
   const [navScrollProgress, setNavScrollProgress] = useState(1);
   const hasScrolledToTarget = useRef(false);
+  const [jumpPending, setJumpPending] = useState<'start' | 'end' | null>(null);
   const jumpDirectionRef = useRef<'start' | 'end' | null>(null);
   const isPaginatingRef = useRef(false);
-  const paginationCooldownRef = useRef(false);
+  // Sentinel pinned to the very top of the scrollable content. An
+  // IntersectionObserver on it triggers loadOlder — see the effect below.
+  const topSentinelRef = useRef<HTMLDivElement>(null);
+  // Set by that observer: true while the content top is within the observer's
+  // margin of the viewport. The scroll handler reads it so continued upward
+  // scrolling keeps paginating even when scrollTop never dips below the fixed
+  // threshold (tall messages keep it well above 300).
+  const nearTopRef = useRef(false);
+  // Suppresses scroll-triggered pagination while we programmatically move the
+  // scroll position (prepend restore, jump-to-edge, initial snap). Holds a
+  // deadline timestamp in ms; 0 means inactive. Self-expiring on purpose: a
+  // boolean latch could get stuck `true` if its clear (a starved rAF or a
+  // throttled background-tab timer) never ran, permanently killing "scroll to
+  // top → load older". A deadline can only ever block for a bounded window.
+  const paginationCooldownRef = useRef(0);
   const isVirtualizerCorrectingRef = useRef(false);
   const correctingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const paginationPropsRef = useRef({ hasMoreAbove: false, hasMoreBelow: false, isLoadingOlder: false, isLoadingNewer: false, onLoadOlder: undefined as (() => void) | undefined, onLoadNewer: undefined as (() => void) | undefined });
@@ -7510,9 +7656,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     prevTimelineLengthRef.current = 0;
     scrollAnchorRef.current = null;
     hasScrolledToTarget.current = false;
+    setJumpPending(null);
     jumpDirectionRef.current = null;
     isPaginatingRef.current = false;
-    paginationCooldownRef.current = false;
+    paginationCooldownRef.current = 0;
     isVirtualizerCorrectingRef.current = false;
     if (correctingTimerRef.current) clearTimeout(correctingTimerRef.current);
     correctingTimerRef.current = null;
@@ -7542,7 +7689,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const sendEscape = useMutation(api.conversations.sendEscapeToSession);
   const sendKeys = useMutation(api.conversations.sendKeysToSession);
   const rewindSession = useMutation(api.conversations.rewindSession);
-  const sendInlineMessage = useMutation(api.pendingMessages.sendMessageToSession);
+  // Durable send via the dispatch outbox (survives reload mid-send).
+  const sendInlineMessage = useInboxStore((s) => s.sendMessage);
   const toggleFavoriteMutation = useMutation(api.conversations.toggleFavorite);
   const restartSession = useMutation(api.conversations.restartSession);
   const repairSession = useMutation(api.conversations.repairSession);
@@ -7561,11 +7709,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     const clientId = addOptimisticMsg(effectiveConversationId, content);
     setUserScrolled(false);
     requestAnimationFrame(() => scrollToBottomFnRef.current());
-    try {
-      await sendInlineMessage({ conversation_id: effectiveConversationId as Id<"conversations">, content, client_id: clientId });
-    } catch {
-      toast.error("Failed to send message");
-    }
+    sendInlineMessage(effectiveConversationId, content, undefined, clientId);
   }, [conversation, effectiveConversationId, sendInlineMessage, addOptimisticMsg, setUserScrolled]);
   const managedSession = useInboxStore((s) => effectiveConversationId ? s.sessions[effectiveConversationId] : null);
   const isSessionLive = !!managedSession?.is_connected;
@@ -7654,7 +7798,15 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   }, [conversation, effectiveIsOwner, handleCycleMode]);
 
   const messagesFromConv = conversation?.messages;
-  const messages = useMemo<Message[]>(() => messagesFromConv || EMPTY_MESSAGES, [messagesFromConv]);
+  const messages = useMemo<Message[]>(() => {
+    if (!messagesFromConv) return EMPTY_MESSAGES;
+    const hasJSONLAskUser = messagesFromConv.some(m =>
+      m.tool_calls?.some(tc => tc.name === "AskUserQuestion") &&
+      !m.message_uuid?.startsWith("interactive-prompt-")
+    );
+    if (!hasJSONLAskUser) return messagesFromConv;
+    return messagesFromConv.filter(m => !m.message_uuid?.startsWith("interactive-prompt-"));
+  }, [messagesFromConv]);
 
   const agentNameToChildMap = useMemo(() => {
     const entries = conversation?.agent_name_entries;
@@ -7674,7 +7826,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
   const forkPointMap = useMemo(() => {
     const map: Record<string, Array<ForkChild>> = {};
-    const allForks = [...(conversation?.fork_children || []), ...optimisticForkChildren];
+    const allForks = [...(conversation?.fork_children || []), ...(conversation?.fork_siblings || []), ...optimisticForkChildren];
     const seen = new Set<string>();
     for (const fork of allForks) {
       if (seen.has(fork._id)) continue;
@@ -7685,13 +7837,15 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       }
     }
     return map;
-  }, [conversation?.fork_children, optimisticForkChildren]);
+  }, [conversation?.fork_children, conversation?.fork_siblings, optimisticForkChildren]);
 
   useWatchEffect(() => {
     if (!conversation?.fork_children) return;
     const serverIds = new Set(conversation.fork_children.map(f => f._id));
     pruneOptimisticForks(serverIds);
   }, [conversation?.fork_children, pruneOptimisticForks]);
+
+  const activeBranchId = conversation?.forked_from ? conversation._id.toString() : null;
 
   const handleStartShareSelection = useCallback((messageId: string) => {
     setShareSelectionMode(true);
@@ -7786,6 +7940,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const forkTreePanelOpen = useForkNavigationStore((s) => s.treePanelOpen);
   const toggleTreePanel = useForkNavigationStore((s) => s.toggleTreePanel);
   const forkSetSelectedIndex = useForkNavigationStore((s) => s.setSelectedIndex);
+  const [treePopoverOpen, setTreePopoverOpen] = useState(false);
+  const treeChipRef = useRef<HTMLButtonElement>(null);
 
   const timelineRef = useRef<any[]>([]);
 
@@ -7858,11 +8014,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     const forkResult = await doFork(lastMsg.message_uuid);
     if (!forkResult) return;
     const clientId = addOptimisticMsg(forkResult.conversationId, content);
-    try {
-      await sendInlineMessage({ conversation_id: forkResult.conversationId as Id<"conversations">, content, client_id: clientId });
-    } catch {
-      toast.error("Failed to send message to fork");
-    }
+    sendInlineMessage(forkResult.conversationId, content, undefined, clientId);
   }, [conversation, doFork, addOptimisticMsg, sendInlineMessage]);
 
   const isForkLoading = false;
@@ -7943,11 +8095,15 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     }
   }, []);
 
-  const navigatorUserMessages = useQuery(
-    api.conversations.getUserMessages,
-    deferredQueriesEnabled && conversation && isOwner && conversation.status === "active" && effectiveConversationId && isConvexId(effectiveConversationId)
-      ? { conversation_id: effectiveConversationId as Id<"conversations"> }
-      : "skip"
+  // Rewind/fork navigator reads the same cached list (populated by
+  // useConversationMessages), gated to owners of an active session since
+  // rewinding only applies there.
+  const cachedUserMessages = useInboxStore(
+    (s) => (conversation?._id ? s.userMessages[conversation._id] : undefined)
+  );
+  const navigatorUserMessages = useMemo(
+    () => (isOwner && conversation?.status === "active" ? cachedUserMessages : undefined),
+    [isOwner, conversation?.status, cachedUserMessages]
   );
 
   const handleSendEscape = useCallback(() => {
@@ -8027,6 +8183,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       const m = item.data as Message;
       if (m.role === 'user') { sawAssistantTextInTurn = false; continue; }
       if (m.role !== 'assistant') continue;
+      if (m.tool_calls?.some(isAlwaysVisibleToolCall)) {
+        set.add(m._id);
+        continue;
+      }
       const hasText = !!(m.content && m.content.trim().length > 0);
       if (!hasText) continue;
       if (!sawAssistantTextInTurn) {
@@ -8128,12 +8288,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     return !!(hasThinkingContent && !hasVisibleContent);
   }, [conversation, timeline, hasMoreBelow]);
 
-  const serverUserMessages = useQuery(
-    api.conversations.getUserMessages,
-    deferredQueriesEnabled && conversation?._id && isConvexId(conversation._id)
-      ? { conversation_id: conversation._id as Id<"conversations"> }
-      : "skip"
-  );
+  // Full navigable-message list from the store cache (populated once by
+  // useConversationMessages). Always complete regardless of pagination window,
+  // so the sticky header resolves the right prompt even deep in long threads.
+  const serverUserMessages = cachedUserMessages;
 
   const processedServerMsgIds = useMemo(() => {
     if (!serverUserMessages) return new Set<string>();
@@ -8166,14 +8324,23 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const serverStickyFallback = useMemo(() => {
     if (!serverUserMessages || serverUserMessages.length === 0 || !hasMoreAbove) return null;
     const localIds = new Set<string>();
+    let earliestLoadedTs = Infinity;
     for (const item of timeline) {
-      if (item.type === 'message') localIds.add((item.data as Message)._id);
+      if (item.type !== 'message') continue;
+      const m = item.data as Message;
+      localIds.add(m._id);
+      if (typeof m.timestamp === 'number' && m.timestamp < earliestLoadedTs) earliestLoadedTs = m.timestamp;
     }
-    for (let i = 0; i < serverUserMessages.length; i++) {
+    // Pick the latest user message that sits ABOVE the loaded window — the most
+    // recent prompt the reader scrolled past but that isn't paginated in yet.
+    // Returning the first not-loaded message instead would always surface the
+    // conversation's opening prompt when parked deep in a long thread.
+    for (let i = serverUserMessages.length - 1; i >= 0; i--) {
       const msg = serverUserMessages[i];
-      if (!localIds.has(msg._id) && processedServerMsgIds.has(msg._id)) {
-        return { id: msg._id, content: msg.content };
-      }
+      if (msg.role !== 'user') continue;
+      if (localIds.has(msg._id) || !processedServerMsgIds.has(msg._id)) continue;
+      if (msg.timestamp >= earliestLoadedTs) continue;
+      return { id: msg._id, content: msg.content };
     }
     return null;
   }, [serverUserMessages, timeline, hasMoreAbove, processedServerMsgIds]);
@@ -8528,7 +8695,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     if (msg.role === "assistant") {
       const hasTextContent = msg.content && msg.content.trim().length > 0;
       const toolCount = msg.tool_calls?.length || 0;
-      if (!hasTextContent && !msg.thinking && !msg.images?.length) return 8;
+      if (!hasTextContent && !msg.thinking && !msg.images?.length && toolCount === 0) return 8;
       if (!hasTextContent && toolCount > 0) return Math.min(toolCount * 30, 200);
       return 200;
     }
@@ -8566,6 +8733,27 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
   scrollToBottomFnRef.current = () => {
     if (timeline.length > 0) virtualizer.scrollToIndex(timeline.length - 1, { align: "end" });
+  };
+
+  // Scroll to absolute top or bottom of the loaded list with retries to handle
+  // virtualizer height-estimation drift. Reassigned every render so closures
+  // always capture the latest timeline/virtualizer.
+  const scrollToEdgeRef = useRef<(edge: 'top' | 'bottom') => void>(() => {});
+  scrollToEdgeRef.current = (edge) => {
+    const sc = containerRef.current;
+    if (!sc) return;
+    const pull = () => {
+      if (edge === 'top') {
+        if (timeline.length > 0) virtualizer.scrollToIndex(0, { align: 'start' });
+        sc.scrollTop = 0;
+      } else {
+        if (timeline.length > 0) virtualizer.scrollToIndex(timeline.length - 1, { align: 'end' });
+        sc.scrollTop = sc.scrollHeight;
+      }
+    };
+    pull();
+    requestAnimationFrame(pull);
+    [100, 300, 600].forEach((ms) => setTimeout(pull, ms));
   };
 
   // Fork navigation: message selection (Option+j/k to navigate, Option+f to fork)
@@ -8843,7 +9031,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       const scrolledUp = scrollTop < lastScrollTopRef.current - 2;
       lastScrollTopRef.current = scrollTop;
 
-      if (scrolledUp && !isNearBottom && !paginationCooldownRef.current) {
+      if (scrolledUp && !isNearBottom && Date.now() >= paginationCooldownRef.current) {
         setUserScrolled(true);
       }
 
@@ -8873,14 +9061,14 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       }
 
       const pp = paginationPropsRef.current;
-      if (scrollTop < 300 && pp.hasMoreAbove && !pp.isLoadingOlder && !pp.isLoadingNewer && !paginationCooldownRef.current && pp.onLoadOlder) {
+      if ((scrollTop < 300 || nearTopRef.current) && pp.hasMoreAbove && !pp.isLoadingOlder && !pp.isLoadingNewer && Date.now() >= paginationCooldownRef.current && pp.onLoadOlder) {
         scrollAnchorRef.current = scrollHeight;
         isPaginatingRef.current = true;
         pp.onLoadOlder();
       }
 
       const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
-      if (distanceFromBottom < 300 && pp.hasMoreBelow && !pp.isLoadingNewer && !pp.isLoadingOlder && !paginationCooldownRef.current && pp.onLoadNewer) {
+      if (distanceFromBottom < 300 && pp.hasMoreBelow && !pp.isLoadingNewer && !pp.isLoadingOlder && Date.now() >= paginationCooldownRef.current && pp.onLoadNewer) {
         isPaginatingRef.current = true;
         pp.onLoadNewer();
       }
@@ -8893,6 +9081,58 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       scrollContainer.removeEventListener("scroll", handleScroll);
     };
   });
+
+  // Reliable "load older on reaching the top": the scrollTop<300 check above
+  // only re-evaluates on scroll events, so when the trigger condition becomes
+  // true via virtualizer height re-measurement (no scroll event fires), it gets
+  // missed — the user has to wiggle up/down to nudge a scroll event through. An
+  // IntersectionObserver on a content-top sentinel reacts to layout changes too,
+  // so the previous page loads as soon as the top comes near, every time.
+  const tryLoadOlderRef = useRef<() => void>(() => {});
+  tryLoadOlderRef.current = () => {
+    const root = containerRef.current;
+    const pp = paginationPropsRef.current;
+    if (!root || !pp.hasMoreAbove || pp.isLoadingOlder || pp.isLoadingNewer || Date.now() < paginationCooldownRef.current || !pp.onLoadOlder) return;
+    scrollAnchorRef.current = root.scrollHeight;
+    isPaginatingRef.current = true;
+    // Arm a short cooldown immediately. isLoadingOlder is derived from
+    // paginationStatus via a prop, so it only flips to true on the next render —
+    // without this, the rAF pump (and rapid scroll events) re-enter loadMore()
+    // several times before that lands, which wedges usePaginatedQuery. The real
+    // load clears this cooldown when it settles (restore effect), so this just
+    // bridges the render gap; if the load stalls it also expires on its own.
+    paginationCooldownRef.current = Date.now() + 700;
+    pp.onLoadOlder();
+  };
+
+  // While the sentinel is in view, a short rAF pump keeps firing the guarded
+  // loader. This is what makes pagination reliable where a one-shot trigger
+  // fails: at the absolute top no scroll events fire and the (already
+  // intersecting) observer never re-fires, and mid-scroll the virtualizer's
+  // height re-measurement isn't a scroll event either. The pump only runs while
+  // near the top and stops the instant we scroll away or run out of older
+  // messages, so it's bounded — not a perpetual loop. tryLoadOlder is itself
+  // guarded by isLoadingOlder + cooldown, so this loads one page per network
+  // round-trip, not once per frame.
+  const hasContent = timeline.length > 0;
+  useWatchEffect(() => {
+    const root = containerRef.current;
+    const sentinel = topSentinelRef.current;
+    if (!root || !sentinel) return;
+    let raf = 0;
+    const pump = () => {
+      raf = 0;
+      if (!nearTopRef.current || !paginationPropsRef.current.hasMoreAbove) return;
+      tryLoadOlderRef.current();
+      raf = requestAnimationFrame(pump);
+    };
+    const observer = new IntersectionObserver((entries) => {
+      nearTopRef.current = entries.some((e) => e.isIntersecting);
+      if (nearTopRef.current && !raf) raf = requestAnimationFrame(pump);
+    }, { root, rootMargin: "1000px 0px 0px 0px", threshold: 0 });
+    observer.observe(sentinel);
+    return () => { observer.disconnect(); if (raf) cancelAnimationFrame(raf); };
+  }, [conversation?._id, hasContent]);
 
   const totalSize = virtualizer.getTotalSize();
   useWatchEffect(() => {
@@ -8929,10 +9169,11 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     const delta = scrollContainer.scrollHeight - scrollAnchorRef.current;
     scrollAnchorRef.current = null;
     if (delta <= 0) return;
-    paginationCooldownRef.current = true;
+    paginationCooldownRef.current = Date.now() + 400;
     scrollContainer.scrollTop += delta; // += keeps current position, doesn't reset it
     requestAnimationFrame(() => {
-      paginationCooldownRef.current = false;
+      paginationCooldownRef.current = 0;
+      scrollContainer.dispatchEvent(new Event('scroll'));
     });
   }, [timeline.length]);
 
@@ -8983,11 +9224,15 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     }
     const sc = containerRef.current;
     if (sc) {
-      paginationCooldownRef.current = true;
+      paginationCooldownRef.current = Date.now() + 1000;
       virtualizer.scrollToIndex(timeline.length - 1, { align: "end" });
       lastScrollTopRef.current = sc.scrollTop;
-      // Fallback: clear cooldown after virtualizer has had time to measure
-      setTimeout(() => { paginationCooldownRef.current = false; }, 1000);
+      // Fallback: clear cooldown after virtualizer has had time to measure,
+      // then re-run scroll handler so pagination fires if we're already near top.
+      setTimeout(() => {
+        paginationCooldownRef.current = 0;
+        sc.dispatchEvent(new Event('scroll'));
+      }, 1000);
     }
     setInitialScrollDone(true);
   }, [timeline.length, highlightQuery, initialScrollDone, virtualizer]);
@@ -9014,46 +9259,43 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     const sc = containerRef.current;
     if (!sc) return;
     let lastHeight = sc.scrollHeight;
-    let cooldownTimer: ReturnType<typeof setTimeout> | null = null;
     const observer = new ResizeObserver(() => {
-      if (userScrolledRef.current) return;
+      if (userScrolledRef.current || Date.now() < paginationCooldownRef.current) return;
       const newHeight = sc.scrollHeight;
       if (newHeight !== lastHeight) {
         lastHeight = newHeight;
         sc.scrollTop = sc.scrollHeight - sc.clientHeight;
         lastScrollTopRef.current = sc.scrollTop;
       }
-      if (paginationCooldownRef.current) {
-        if (cooldownTimer) clearTimeout(cooldownTimer);
-        cooldownTimer = setTimeout(() => { paginationCooldownRef.current = false; }, 300);
-      }
     });
     if (sc.firstElementChild) {
       observer.observe(sc.firstElementChild);
     }
     observer.observe(sc);
-    return () => { observer.disconnect(); if (cooldownTimer) clearTimeout(cooldownTimer); };
+    return () => observer.disconnect();
   }, [initialScrollDone, highlightQuery]);
 
-  // Scroll after jump to start/end
+  // After a jump (jumpToStart/jumpToEnd), wait for the data to arrive (timeline
+  // changes), then scroll to the target edge. Uses a ref so the effect only
+  // fires when timeline actually changes — not on the button click itself.
+  // Guard: skip while still loading initial jump data — the timeline may
+  // transiently contain stale fallback messages from the normal-mode store.
   useWatchEffect(() => {
-    if (jumpDirectionRef.current && timeline.length > 0) {
-      const dir = jumpDirectionRef.current;
-      jumpDirectionRef.current = null;
-      paginationCooldownRef.current = true;
+    if (!jumpDirectionRef.current || timeline.length === 0) return;
+    if (paginationPropsRef.current.isLoadingOlder || paginationPropsRef.current.isLoadingNewer) return;
+    const dir = jumpDirectionRef.current;
+    jumpDirectionRef.current = null;
+    paginationCooldownRef.current = Date.now() + 900;
+    if (dir === 'start') setUserScrolled(true);
+    else setUserScrolled(false);
+    const edge = dir === 'start' ? 'top' : 'bottom';
+    setTimeout(() => {
+      scrollToEdgeRef.current(edge);
       setTimeout(() => {
-        if (dir === 'start') {
-          virtualizer.scrollToIndex(0, { align: "start" });
-          setUserScrolled(true);
-        } else {
-          virtualizer.scrollToIndex(timeline.length - 1, { align: "end" });
-          setUserScrolled(false);
-        }
-        requestAnimationFrame(() => {
-          paginationCooldownRef.current = false;
-        });
-      }, 50);
-    }
+        paginationCooldownRef.current = 0;
+        setJumpPending(null);
+      }, 800);
+    }, 50);
   }, [timeline, virtualizer]);
 
   const scrollToHash = useCallback(() => {
@@ -9408,16 +9650,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           return null;
         case 'command': {
           if (collapsed) return null;
-          const cmdType = getCommandType(msg.content!);
-          if (cmdType === "output" || cmdType === "error" || cmdType === "caveat") {
-            return <CommandStatusLine key={msg._id} content={msg.content!} timestamp={msg.timestamp} />;
-          }
-          const cmdNameMatch = msg.content!.match(/<command-(?:name|message)>([^<]*)<\/command-(?:name|message)>/);
-          const cmdN = cmdNameMatch?.[1]?.replace(/^\//, "");
-          const cmdRest = cleanContent(msg.content!);
-          const cmdDisplay = cmdN ? (cmdRest ? `/${cmdN} ${cmdRest}` : `/${cmdN}`) : (cmdRest || msg.content!);
-          const cmdUserName = conversation?.user?.name || conversation?.user?.email?.split("@")[0];
-          return <UserPrompt key={msg._id} content={cmdDisplay} images={msg.images} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={collapsed} userName={cmdUserName} avatarUrl={conversation?.user?.avatar_url} onOpenComments={handleOpenComments} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={handleToggleMessageSelection} onStartShareSelection={handleStartShareSelection} onForkFromMessage={handleForkFromMessage} forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined} onBranchSwitch={handleBranchSwitch} activeBranchId={null} loadingBranchId={loadingBranchId} isPending={!!msg._isOptimistic} isQueued={!!msg._isQueued} mainMessageCount={msg.message_uuid ? conversation?.main_message_counts_by_fork?.[msg.message_uuid] : undefined} />;
+          return <CommandStatusLine key={msg._id} content={msg.content!} timestamp={msg.timestamp} />;
         }
         case 'interrupt':
           if (collapsed) return null;
@@ -9444,7 +9677,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         case 'normal': {
           if (!msg.content?.trim() && !msg.images?.some(img => !img.tool_use_id)) return null;
           const userName = conversation?.user?.name || conversation?.user?.email?.split("@")[0];
-          return <UserPrompt key={msg._id} content={msg.content || ""} images={msg.images} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={collapsed} userName={userName} avatarUrl={conversation?.user?.avatar_url} onOpenComments={handleOpenComments} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={handleToggleMessageSelection} onStartShareSelection={handleStartShareSelection} onForkFromMessage={handleForkFromMessage} forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined} onBranchSwitch={handleBranchSwitch} activeBranchId={null} loadingBranchId={loadingBranchId} isPending={!!msg._isOptimistic} isQueued={!!msg._isQueued} mainMessageCount={msg.message_uuid ? conversation?.main_message_counts_by_fork?.[msg.message_uuid] : undefined} />;
+          return <UserPrompt key={msg._id} content={msg.content || ""} images={msg.images} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={collapsed} userName={userName} avatarUrl={conversation?.user?.avatar_url} onOpenComments={handleOpenComments} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={handleToggleMessageSelection} onStartShareSelection={handleStartShareSelection} onForkFromMessage={handleForkFromMessage} forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined} onBranchSwitch={handleBranchSwitch} activeBranchId={activeBranchId} loadingBranchId={loadingBranchId} isPending={!!msg._isOptimistic} isQueued={!!msg._isQueued} mainMessageCount={msg.message_uuid ? conversation?.main_message_counts_by_fork?.[msg.message_uuid] : undefined} />;
         }
       }
     }
@@ -9519,8 +9752,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
       // In collapsed mode, only render messages if sequence is expanded OR this is the first with text
       if (collapsed && !isSequenceExpanded) {
-        const hasMsgPlanWrite = msg.tool_calls?.some(isPlanWriteToolCall);
-        if (!hasMsgPlanWrite) {
+        const hasAlwaysVisible = msg.tool_calls?.some(isAlwaysVisibleToolCall);
+        if (!hasAlwaysVisible) {
           const hasTextContent = msg.content && msg.content.trim().length > 0;
 
           // Check if there's an earlier assistant message with text content in this sequence
@@ -9595,7 +9828,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           onForkFromMessage={handleForkFromMessage}
           forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined}
           onBranchSwitch={handleBranchSwitch}
-          activeBranchId={null}
+          activeBranchId={activeBranchId}
           loadingBranchId={loadingBranchId}
           mainMessageCount={msg.message_uuid ? conversation?.main_message_counts_by_fork?.[msg.message_uuid] : undefined}
           model={conversation?.model}
@@ -9748,6 +9981,26 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                     </svg>
                     Parent
                   </Link>
+                )}
+
+                {((conversation.fork_children?.length ?? 0) > 0 || conversation.forked_from) && (
+                  <button
+                    ref={treeChipRef}
+                    onClick={() => setTreePopoverOpen((o) => !o)}
+                    className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] border transition-colors ${
+                      treePopoverOpen
+                        ? "bg-sol-cyan/20 text-sol-cyan border-sol-cyan/40"
+                        : "bg-sol-cyan/10 text-sol-cyan border-sol-cyan/30 hover:bg-sol-cyan/20"
+                    }`}
+                    title="Branch tree"
+                  >
+                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M6 3v12M6 15a3 3 0 103 3V6a3 3 0 10-3-3m12 12a3 3 0 10-3-3V6" />
+                    </svg>
+                    {(conversation.fork_children?.length ?? 0) > 0 && (
+                      <span className="tabular-nums">{conversation.fork_children!.length}</span>
+                    )}
+                  </button>
                 )}
 
                 {conversation.git_branch && (
@@ -9906,7 +10159,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   <TooltipContent side="bottom">Copy link</TooltipContent>
                 </Tooltip>
 
-                {managedSession?.tmux_session && (
+                {managedSession?.tmux_session && managedSession?.is_connected && (
                   <Tooltip>
                     <TooltipTrigger asChild>
                       <button
@@ -10199,6 +10452,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                 pendingScrollToMessageId: activeStickyMsg.id,
               });
             } else if (onJumpToStart) {
+              jumpDirectionRef.current = 'start';
+              setJumpPending('start');
               onJumpToStart();
             }
           }}
@@ -10222,7 +10477,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                 <UserIcon avatarUrl={conversation?.user?.avatar_url} />
                 <span className="text-sol-blue text-xs font-medium">{conversation?.user?.name || conversation?.user?.email?.split("@")[0] || "You"}</span>
               </div>
-              <div className="text-sm text-sol-text whitespace-pre-wrap break-words line-clamp-3 pl-8 pr-4">{activeStickyMsg.content.replace(/<task-notification>[\s\S]*?<\/task-notification>/g, "").replace(/<teammate-message\s+[^>]*>[\s\S]*?<\/teammate-message>/g, "").replace(/\[Image[:\s][^\]]*\]/gi, "").replace(/<image\b[^>]*\/?>\s*(?:<\/image>)?/gi, "").trim()}</div>
+              <div className="text-sm text-sol-text whitespace-pre-wrap break-words line-clamp-3 pl-8 pr-4">{cleanStickyContent(activeStickyMsg.content)}</div>
             </div>
           </div>
         </div>
@@ -10304,6 +10559,12 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
               position: "relative",
             }}
           >
+            {/* Top sentinel: an IntersectionObserver watches this to fire
+                loadOlder reliably. Unlike the scrollTop<300 check in the scroll
+                handler, the observer also reacts to virtualizer height
+                re-measurement, so reaching the top loads the previous page even
+                when no fresh scroll event fires. */}
+            <div ref={topSentinelRef} aria-hidden style={{ position: "absolute", top: 0, left: 0, width: 1, height: 1, pointerEvents: "none" }} />
             {/* Earlier messages indicator at top */}
             {hasMoreAbove && !isLoadingOlder && (
               <div className="sticky top-0 z-10 flex justify-center py-1 sm:py-2 pointer-events-none">
@@ -10435,6 +10696,20 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           onSwitchToConversation={handleTreeSwitchConversation}
         />
       )}
+
+      {conversation && (
+        <ForkTreePopover
+          conversationId={conversation._id.toString()}
+          open={treePopoverOpen}
+          onClose={() => setTreePopoverOpen(false)}
+          anchorEl={treeChipRef.current}
+          activeBranchIds={activeBranchIdSet}
+          onSwitchToConversation={(convId) => {
+            setTreePopoverOpen(false);
+            handleTreeSwitchConversation(convId);
+          }}
+        />
+      )}
       </div>
 
       {showMessageInput && conversation && !(pendingPermissions && pendingPermissions.length > 0) && (
@@ -10500,18 +10775,18 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                 onClick={() => {
                   if (hasMoreAbove && onJumpToStart) {
                     jumpDirectionRef.current = 'start';
+                    setJumpPending('start');
                     onJumpToStart();
                   } else {
-                    virtualizer.scrollToIndex(0, { align: "start" });
-                    requestAnimationFrame(() => {
-                      if (containerRef.current) containerRef.current.scrollTop = 0;
-                    });
+                    setUserScrolled(true);
+                    paginationCooldownRef.current = Date.now() + 1000;
+                    scrollToEdgeRef.current('top');
                   }
                 }}
                 className={`p-1.5 sm:p-2 rounded-full bg-sol-bg-alt border border-sol-border shadow-lg hover:bg-sol-cyan hover:text-white transition-all ${((!isNearTop && isScrollable) || hasMoreAbove) ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
                 aria-label="Scroll to top"
               >
-                {isLoadingOlder ? (
+                {(isLoadingOlder || jumpPending === 'start') ? (
                   <svg className="w-4 h-4 sm:w-5 sm:h-5 animate-spin" viewBox="0 0 24 24" fill="none">
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
@@ -10526,19 +10801,18 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                 onClick={() => {
                   if (hasMoreBelow && onJumpToEnd) {
                     jumpDirectionRef.current = 'end';
+                    setJumpPending('end');
                     onJumpToEnd();
                   } else {
-                    virtualizer.scrollToIndex(timeline.length - 1, { align: "end" });
-                    requestAnimationFrame(() => {
-                      if (containerRef.current) containerRef.current.scrollTop = containerRef.current.scrollHeight;
-                    });
+                    setUserScrolled(false);
+                    paginationCooldownRef.current = Date.now() + 1000;
+                    scrollToEdgeRef.current('bottom');
                   }
-                  setUserScrolled(false);
                 }}
                 className={`p-1.5 sm:p-2 rounded-full bg-sol-bg-alt border border-sol-border shadow-lg hover:bg-sol-cyan hover:text-white transition-all ${((userScrolled && isScrollable) || hasMoreBelow) ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
                 aria-label="Scroll to bottom"
               >
-                {isLoadingNewer ? (
+                {(isLoadingNewer || jumpPending === 'end') ? (
                   <svg className="w-4 h-4 sm:w-5 sm:h-5 animate-spin" viewBox="0 0 24 24" fill="none">
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />

@@ -5,9 +5,41 @@ import { createPortal } from "react-dom";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
-import { isCommandMessage, cleanContent, isSystemMessage } from "../lib/conversationProcessor";
+import { isCommandMessage, cleanContent } from "../lib/conversationProcessor";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { isConvexId, useInboxStore } from "../store/inboxStore";
+import type { Message } from "../store/inboxStore";
+
+const NOISE_PREFIXES = [
+  "<local-command-stdout>", "<local-command-stderr>", "<local-command-caveat>",
+  "[Request interrupted", "[Request cancelled",
+  "This session is being continued",
+  "Your task is to create a detailed summary",
+  "Please continue the conversation",
+  "Read the output file to retrieve the result:",
+  "Caveat:",
+];
+
+function stripContextTags(s: string): string {
+  return s
+    .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "")
+    .replace(/<task-notification>[\s\S]*?<\/task-notification>/g, "")
+    .replace(/<task-reminder>[\s\S]*?<\/task-reminder>/g, "")
+    .replace(/<teammate-message\s+[^>]*>[\s\S]*?<\/teammate-message>/g, "")
+    .trim();
+}
+
+function isHumanPrompt(m: Message): boolean {
+  if (m.role !== "user") return false;
+  if (m.subtype === "compact_boundary") return false;
+  if (m.tool_results && m.tool_results.length > 0) return false;
+  if (!m.content?.trim()) return false;
+  const stripped = stripContextTags(m.content);
+  if (!stripped) return false;
+  if (NOISE_PREFIXES.some(p => stripped.startsWith(p))) return false;
+  if (stripped.includes("Your task is to create a detailed summary of the conversation so far")) return false;
+  return true;
+}
 
 function getCommandLabel(content: string): string | null {
   const m = content.match(/<command-(?:name|message)>([^<]*)<\/command-(?:name|message)>/);
@@ -35,7 +67,7 @@ function formatTimeAgo(ts: number): string {
   return new Date(ts).toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
-type PM = { _id: string; display: string; isCmd: boolean; role: "user" | "assistant"; timestamp: number; commentCount: number };
+type PM = { _id: string; display: string; isCmd: boolean; timestamp: number; commentCount: number };
 
 type CommentEntry = {
   _id: string;
@@ -66,10 +98,6 @@ function HoverPreview({ message, rect, onMouseEnter, onMouseLeave, onDropdownEnt
       >
         <div className="flex items-center gap-2 p-3 pb-1 flex-shrink-0">
           <span className="text-[10px] text-sol-text-dim tabular-nums">#{message.originalIndex + 1}</span>
-          <span className="text-sol-text-dim/30">·</span>
-          <span className={`text-[10px] ${message.role === "assistant" ? "text-sol-orange/70" : "text-sol-text-dim"}`}>
-            {message.role === "assistant" ? "claude" : "you"}
-          </span>
           <span className="text-sol-text-dim/30">·</span>
           <span className="text-sol-text-dim text-[10px]">{formatTimeAgo(message.timestamp)}</span>
           {message.commentCount > 0 && (
@@ -307,15 +335,12 @@ function NavDropdown({
                   }`}
                 >
                   <div className="flex items-start gap-2">
-                    <span className={`text-[10px] tabular-nums w-4 text-right flex-shrink-0 pt-[2px] ${
-                      m.role === "assistant" ? "text-sol-orange/50" : "text-sol-text-dim/40"
-                    }`}>
+                    <span className="text-[10px] tabular-nums w-4 text-right flex-shrink-0 pt-[2px] text-sol-text-dim/40">
                       {m.originalIndex + 1}
                     </span>
                     <div className="flex-1 min-w-0">
                       <div className={`text-[12px] leading-snug line-clamp-2 ${
                         isCurrent ? "text-sol-text font-medium"
-                          : m.role === "assistant" ? "text-sol-text-dim italic"
                           : m.isCmd ? "text-sol-text-muted font-mono"
                           : "text-sol-text-muted"
                       }`}>
@@ -416,12 +441,25 @@ export function MessageNavButton({
   const openTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const messages = useQuery(
+  const canQuery = isConvexId(conversationId);
+  const queryUserMessages = useQuery(
     api.conversations.getUserMessages,
-    isConvexId(conversationId)
-      ? { conversation_id: conversationId as Id<"conversations"> }
-      : "skip"
+    canQuery ? { conversation_id: conversationId as Id<"conversations"> } : "skip"
   );
+
+  const loadedMessages = useInboxStore((s) => s.messages[conversationId]);
+  const messages = queryUserMessages ?? (loadedMessages
+    ? loadedMessages.filter(isHumanPrompt)
+    : undefined);
+
+  // Used only to decide whether to render a loading skeleton while the cache
+  // is still empty. `message_count` includes assistant + system messages, so
+  // it's an over-estimate of how many *user* messages the indicator will end
+  // up showing — fine for "should we reserve space?"
+  const storeMsgCount = useInboxStore((s) => {
+    const meta = s.conversations[conversationId] ?? s.sessions[conversationId];
+    return (meta as { message_count?: number } | undefined)?.message_count ?? 0;
+  });
 
   const commentSummary = useQuery(
     api.comments.getConversationCommentSummary,
@@ -452,14 +490,13 @@ export function MessageNavButton({
 
   const processed: PM[] = messages
     ? messages
-        .map((m: { _id: string; role?: string; content: string; timestamp: number }) => ({
+        .map((m: { _id: string; content?: string; timestamp: number }) => ({
           _id: m._id,
-          role: (m.role === "assistant" ? "assistant" : "user") as "user" | "assistant",
-          ...processUserMessage(m.content),
+          ...processUserMessage(m.content ?? ""),
           timestamp: m.timestamp,
           commentCount: commentsByMessage.get(m._id) || 0,
         }))
-        .filter((m: PM) => m.display.length > 0 && !isSystemMessage(m.display) && m.role === "user")
+        .filter((m: PM) => m.display.length > 0)
     : [];
 
   const total = processed.length;
@@ -508,6 +545,25 @@ export function MessageNavButton({
     return () => window.removeEventListener("keydown", handler);
   }, [open, handleClose]);
 
+  const isLoading = messages === undefined && isConvexId(conversationId);
+
+  // Skeleton: query in flight on a conversation with multiple messages.
+  // Reserves space + gives a subtle pulse so the indicator doesn't pop in
+  // late on big/cold conversations.
+  if (isLoading && storeMsgCount > 1) {
+    const skeletonCount = Math.min(Math.max(storeMsgCount, 6), 16);
+    return (
+      <div
+        className="flex flex-col gap-[3px] items-end justify-center px-2 py-1.5 rounded text-sol-text-dim animate-pulse"
+        aria-hidden
+      >
+        {Array.from({ length: skeletonCount }).map((_, i) => (
+          <span key={i} className="block rounded-full bg-current w-3 h-px opacity-50" />
+        ))}
+      </div>
+    );
+  }
+
   if (!messages || total <= 1) return null;
 
   const MAX_BARS = 24;
@@ -538,7 +594,6 @@ export function MessageNavButton({
           const isActive = mappedIndex === activeIndex;
           const msg = processed[mappedIndex];
           const hasComment = msg && msg.commentCount > 0;
-          const isAssistant = msg?.role === "assistant";
           return (
             <span
               key={i}
@@ -547,8 +602,6 @@ export function MessageNavButton({
                   ? "bg-sol-text w-4 h-[2.5px]"
                   : hasComment
                   ? "bg-sol-cyan w-3.5 h-[2px] opacity-70"
-                  : isAssistant
-                  ? "bg-sol-orange w-2.5 h-px opacity-30"
                   : "bg-current w-3 h-px opacity-35"
               }`}
             />
