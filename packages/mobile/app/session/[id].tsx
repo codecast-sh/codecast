@@ -860,6 +860,7 @@ function AskUserQuestionBlock({ tool, result }: { tool: ToolCall; result?: ToolR
     <RNView style={styles.askQuestionBlock}>
       {questions.map((q, i) => {
         const answer = answers[q.question];
+        const hasDescriptions = q.options.some(o => o.description);
         const isCustom = answer !== undefined && !q.options.some(
           o => o.label === answer || o.label.replace(' (Recommended)', '') === answer
         );
@@ -871,13 +872,12 @@ function AskUserQuestionBlock({ tool, result }: { tool: ToolCall; result?: ToolR
               </RNView>
             )}
             <RNText style={styles.questionText}>{q.question}</RNText>
-            <RNView style={styles.optionsRow}>
+            <RNView style={[styles.optionsRow, hasDescriptions && styles.optionsColumn]}>
               {q.options.map((opt, j) => {
                 const cleanLabel = opt.label.replace(' (Recommended)', '');
                 const isSelected = answer !== undefined && (opt.label === answer || cleanLabel === answer);
-                return (
+                const pill = (
                   <RNView
-                    key={j}
                     style={[
                       styles.optionPill,
                       isSelected && styles.optionPillSelected
@@ -892,6 +892,13 @@ function AskUserQuestionBlock({ tool, result }: { tool: ToolCall; result?: ToolR
                     ]}>
                       {opt.label}
                     </RNText>
+                  </RNView>
+                );
+                if (!opt.description) return <RNView key={j}>{pill}</RNView>;
+                return (
+                  <RNView key={j} style={styles.optionItem}>
+                    {pill}
+                    <RNText style={styles.optionDescription}>{opt.description}</RNText>
                   </RNView>
                 );
               })}
@@ -5160,6 +5167,21 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 4,
+  },
+  optionsColumn: {
+    flexDirection: 'column',
+    flexWrap: 'nowrap',
+    alignItems: 'flex-start',
+  },
+  optionItem: {
+    alignItems: 'flex-start',
+  },
+  optionDescription: {
+    fontSize: 11,
+    color: Theme.textDim,
+    marginTop: 2,
+    marginLeft: 2,
+    marginBottom: 2,
   },
   optionPill: {
     flexDirection: 'row',
