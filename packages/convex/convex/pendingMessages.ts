@@ -23,6 +23,20 @@ async function getAuthenticatedUserId(
   return null;
 }
 
+// Interactive-prompt / poll keystroke answers (tagged __cc_poll, mirrors the daemon's
+// parsePollMessage). These are fire-and-forget: they never echo to the agent's JSONL, so the
+// content-matched ack in addMessages can never fire for them. A successful inject IS their
+// delivery — re-injecting them on the stale-injected reset just re-sends menu keystrokes and
+// mis-navigates the agent's prompts.
+export function isControlMessage(content: string): boolean {
+  try {
+    const parsed = JSON.parse(content);
+    return parsed?.__cc_poll === true && (Array.isArray(parsed.keys) || Array.isArray(parsed.steps));
+  } catch {
+    return false;
+  }
+}
+
 export const sendMessageToSession = mutation({
   args: {
     conversation_id: v.id("conversations"),
@@ -110,6 +124,13 @@ export const updateMessageStatus = mutation({
       throw new Error("Unauthorized: can only update your own messages");
     }
 
+    // "delivered" is terminal: the agent echoed the message to its JSONL, so it was received.
+    // A stale retry timer or the daemon's post-inject DEDUP re-mark must NOT downgrade it back
+    // to injected/pending — that re-arms the 120s stuck-message reset and re-injects a duplicate.
+    if (message.status === "delivered") {
+      return { success: true };
+    }
+
     await ctx.db.patch(args.message_id, {
       status: args.status,
       delivered_at: args.delivered_at,
@@ -161,6 +182,13 @@ export const retryMessage = mutation({
       throw new Error("Unauthorized: can only retry your own messages");
     }
 
+    // Never re-queue an already-delivered message. Retry timers are scheduled before delivery
+    // confirms; if the ack lands first, the timer firing here would otherwise re-pend a
+    // delivered message and cause a duplicate injection.
+    if (message.status === "delivered") {
+      return { success: true };
+    }
+
     await ctx.db.patch(args.message_id, {
       status: "pending" as const,
       retry_count: message.retry_count + 1,
@@ -192,6 +220,35 @@ export async function resetConversationPendingMessages(
   }
 
   return resetCount;
+}
+
+// Mark a single pending message delivered (terminal) and clear the conversation's
+// has_pending_messages flag when nothing else is in flight. Shared by the content-matched
+// ack inside addMessages (the reliable path — fires whenever the agent echoes the message,
+// on any sync path) and available to other callers.
+export async function markPendingDelivered(
+  ctx: { db: any },
+  message: { _id: Id<"pending_messages">; conversation_id: Id<"conversations">; status: string }
+): Promise<void> {
+  if (message.status === "delivered") return;
+  await ctx.db.patch(message._id, { status: "delivered" as const, delivered_at: Date.now() });
+
+  const remainingPending = await ctx.db
+    .query("pending_messages")
+    .withIndex("by_conversation_status", (q: any) =>
+      q.eq("conversation_id", message.conversation_id).eq("status", "pending")
+    )
+    .first();
+  if (remainingPending) return;
+  const remainingInjected = await ctx.db
+    .query("pending_messages")
+    .withIndex("by_conversation_status", (q: any) =>
+      q.eq("conversation_id", message.conversation_id).eq("status", "injected")
+    )
+    .first();
+  if (!remainingInjected) {
+    await ctx.db.patch(message.conversation_id, { has_pending_messages: false });
+  }
 }
 
 export const getPendingMessages = query({
@@ -311,6 +368,12 @@ export const retryStuckMessages = internalMutation({
       .collect();
 
     for (const msg of injectedMessages) {
+      // Control messages have no JSONL echo to ack against; a stale "injected" one was already
+      // successfully injected, so promote it to terminal "delivered" rather than re-injecting.
+      if (isControlMessage(msg.content)) {
+        await markPendingDelivered(ctx, msg);
+        continue;
+      }
       await ctx.db.patch(msg._id, {
         status: "pending" as const,
         retry_count: msg.retry_count + 1,
