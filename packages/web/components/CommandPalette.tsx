@@ -486,6 +486,19 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
   const favorites = useInboxStore((s) => s.favorites);
   const bookmarks = useInboxStore((s) => s.bookmarks);
   const recentConversations = useQuery(api.conversations.listRecentSessions, open ? {} : "skip") ?? [];
+  const storeSessions = useInboxStore((s) => s.sessions);
+
+  // Merge locally-loaded inbox sessions (own, instant) with the server list
+  // (own + team-visible) so the palette mirrors the inbox and stays responsive.
+  const recentSessions = useMemo(() => {
+    const byId = new Map<string, any>();
+    for (const c of recentConversations) byId.set(c._id, c);
+    for (const s of Object.values(storeSessions)) {
+      if (s.is_subagent) continue;
+      byId.set(s._id, { ...byId.get(s._id), ...s });
+    }
+    return Array.from(byId.values()).sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
+  }, [recentConversations, storeSessions]);
 
   // Debounced search for async conversation results
   const [debouncedQuery, setDebouncedQuery] = useState("");
@@ -503,7 +516,7 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
 
   const projects = useMemo(() => {
     const dirMap = new Map<string, number>();
-    for (const c of recentConversations || []) {
+    for (const c of recentSessions) {
       const dir = c.git_root || c.project_path;
       if (dir) {
         const existing = dirMap.get(dir) || 0;
@@ -514,7 +527,7 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
       .sort((a, b) => b[1] - a[1])
       .slice(0, 6)
       .map(([path]) => path);
-  }, [recentConversations]);
+  }, [recentSessions]);
 
   // Global Cmd+K toggle — context-aware
   const storeOpenPalette = useInboxStore((s) => s.openPalette);
@@ -825,7 +838,7 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
   const showFavorites = favorites && favorites.length > 0;
   const showBookmarks = bookmarks && bookmarks.length > 0;
   const showWorkspaces = projects.length > 0;
-  const showRecent = recentConversations && recentConversations.length > 0;
+  const showRecent = recentSessions.length > 0;
 
   const groupClass = "px-1.5 [&_[cmdk-group-heading]]:px-2.5 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-widest [&_[cmdk-group-heading]]:text-sol-text-dim/70";
   const itemClass = "flex items-center gap-3 px-2.5 py-2 mx-1 rounded-lg text-sm text-sol-text-muted cursor-pointer transition-colors data-[selected=true]:bg-sol-cyan/10 data-[selected=true]:text-sol-text";
@@ -972,20 +985,34 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
 
         {showRecent && (
           <CommandPrimitive.Group heading="Recent Sessions" className={groupClass}>
-            {(query ? recentConversations : recentConversations.slice(0, 8)).map((conv: any) => (
+            {(query ? recentSessions : recentSessions.slice(0, 8)).map((conv: any) => {
+              const isTeam = conv.isOwn === false;
+              return (
               <CommandPrimitive.Item
                 key={`recent-${conv._id}`}
-                value={`session ${cleanTitle(conv.title || "")} ${conv.project_path || ""}|||${conv._id}`}
+                value={`session ${cleanTitle(conv.title || "")} ${conv.project_path || ""} ${conv.authorName || ""}|||${conv._id}`}
                 onSelect={() => navigateToSession(conv)}
                 className={`${itemClass} group`}
               >
-                <span className="text-sol-text-dim flex-shrink-0">
-                  <NavIcon type="session" />
-                </span>
+                {isTeam && conv.authorAvatar ? (
+                  <img src={conv.authorAvatar} alt={conv.authorName} className="w-4 h-4 rounded-full flex-shrink-0" />
+                ) : isTeam && conv.authorName ? (
+                  <div className="w-4 h-4 rounded-full flex-shrink-0 bg-sol-bg-highlight border border-sol-border/50 flex items-center justify-center text-[8px] font-medium text-sol-text-muted">
+                    {conv.authorName.split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase()}
+                  </div>
+                ) : (
+                  <span className="text-sol-text-dim flex-shrink-0">
+                    <NavIcon type="session" />
+                  </span>
+                )}
                 <span className="truncate flex-1">{cleanTitle(conv.title || "Untitled")}</span>
+                {isTeam && conv.authorName && (
+                  <span className="text-[10px] text-sol-text-dim flex-shrink-0">· {conv.authorName}</span>
+                )}
                 <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{timeAgo(conv.updated_at)}</span>
               </CommandPrimitive.Item>
-            ))}
+              );
+            })}
           </CommandPrimitive.Group>
         )}
 
@@ -1126,7 +1153,9 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
                   )}
                 </div>
                 <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">
-                  {result.matches?.length || 0} match{(result.matches?.length || 0) !== 1 ? "es" : ""}
+                  {result.titleMatch
+                    ? "title"
+                    : `${result.matches?.length || 0} match${(result.matches?.length || 0) !== 1 ? "es" : ""}`}
                 </span>
               </CommandPrimitive.Item>
             ))}
