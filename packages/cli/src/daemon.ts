@@ -5393,6 +5393,22 @@ export function classifyTmuxLiveState(region: string): TmuxLiveState {
   return "unknown";
 }
 
+// In bypassPermissions mode Claude Code still emits permission_prompt
+// Notifications for tools it auto-approves; those are phantom blocks (the agent
+// never pauses) and must be rewritten to "working" to avoid a dangling web
+// Approve/Deny dialog. AskUserQuestion is the exception: it genuinely blocks the
+// agent on a user prompt regardless of permission mode, so the status hook tags
+// it via `message` and we let that one through to the "needs input" bucket.
+export function isPhantomBypassPermissionBlock(
+  status: string | undefined,
+  permissionMode: string | undefined,
+  message: string | undefined,
+): boolean {
+  if (status !== "permission_blocked") return false;
+  if (permissionMode !== "bypassPermissions") return false;
+  return !(message || "").startsWith("AskUserQuestion");
+}
+
 const tmuxTargetLocks = new Map<string, Promise<void>>();
 // Cap how long a new caller will wait on an existing lock holder. Combined with the
 // Promise.race timeout in deliverMessage, this keeps a single hung inject from wedging
@@ -9941,7 +9957,7 @@ async function main(): Promise<void> {
       // The Notification event doesn't carry permission_mode, so fall back to
       // the last mode we observed for this session.
       const inheritedMode = data.permission_mode || prev?.permission_mode;
-      if (data.status === "permission_blocked" && inheritedMode === "bypassPermissions") {
+      if (isPhantomBypassPermissionBlock(data.status, inheritedMode, data.message)) {
         log(`Suppressing phantom permission_blocked in bypassPermissions mode for session ${sessionId.slice(0, 8)}`);
         data = { ...data, status: "working" };
       }
