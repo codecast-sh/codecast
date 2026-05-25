@@ -2124,6 +2124,13 @@ async function executeRemoteCommand(
             const blankCmdText = `env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT ${[blankBinary, ...safeBlankArgs].join(" ")}`;
             try {
               tmuxExecSync(["new-session", "-d", "-s", tmuxSession, "-c", cwd], { timeout: 5000 });
+              // Tag like the other creation paths so this session is discoverable
+              // by conversation (findLiveTmuxForConversation / warm-restart). Without
+              // the tag it is orphaned: a later fresh-start can't see it and spawns
+              // a duplicate.
+              await setTmuxSessionOption(tmuxSession, "@codecast_conversation_id", conversationId).catch(() => {});
+              await setTmuxSessionOption(tmuxSession, "@codecast_agent_type", blankAgentType).catch(() => {});
+              await setTmuxSessionOption(tmuxSession, "@codecast_project_path", cwd).catch(() => {});
               tmuxExecSync(["send-keys", "-t", tmuxSession, "-l", blankCmdText], { timeout: 5000 });
               tmuxExecSync(["send-keys", "-t", tmuxSession, "Enter"], { timeout: 5000 });
               startedSessionTmux.set(conversationId, {
@@ -7760,6 +7767,54 @@ const materializeInFlight = new Map<string, Promise<string | null>>();
 const materializedSessions = new Set<string>();
 const MATERIALIZE_COOLDOWN_MS = 5 * 60 * 1000;
 
+// Pure selector: from a set of tmux sessions tagged with a conversation id,
+// pick a live one belonging to this conversation. Used to reuse an existing
+// managed session instead of spawning a duplicate when the in-memory
+// startedSessionTmux cache is stale (e.g. resurrected from disk across a
+// daemon restart, pointing at a session that was killed in a prior lifetime).
+export function pickReusableConversationTmux(
+  candidates: Array<{ tmuxSession: string; conversationId: string | null; alive: boolean }>,
+  conversationId: string,
+): string | null {
+  for (const c of candidates) {
+    if (c.alive && c.conversationId === conversationId) return c.tmuxSession;
+  }
+  return null;
+}
+
+// tmux is the durable source of truth for "is a session for this conversation
+// already running?" — unlike startedSessionTmux, which persists to disk and
+// reloads stale entries on each daemon construction.
+async function findLiveTmuxForConversation(
+  conversationId: string,
+): Promise<StartedSessionInfo | null> {
+  if (!hasTmux()) return null;
+  try {
+    const { stdout } = await tmuxExec(["list-sessions", "-F", "#{session_name}"]);
+    const names = stdout
+      .trim()
+      .split("\n")
+      .filter(n => n.startsWith("cc-") || n.startsWith("cx-") || n.startsWith("gm-") || n.startsWith("ct-"));
+    const candidates: Array<{ tmuxSession: string; conversationId: string | null; alive: boolean }> = [];
+    for (const name of names) {
+      const convId = await getTmuxSessionOption(name, "@codecast_conversation_id");
+      // Only pay for the liveness check on a conversation match.
+      const alive = convId === conversationId ? await isTmuxAgentAlive(name) : false;
+      candidates.push({ tmuxSession: name, conversationId: convId, alive });
+    }
+    const match = pickReusableConversationTmux(candidates, conversationId);
+    if (!match) return null;
+    const projectPath =
+      (await getTmuxSessionOption(match, "@codecast_project_path")) || process.env.HOME || "/tmp";
+    const agentType =
+      ((await getTmuxSessionOption(match, "@codecast_agent_type")) as StartedSessionInfo["agentType"] | null) ||
+      "claude";
+    return { tmuxSession: match, projectPath, startedAt: Date.now(), agentType };
+  } catch {
+    return null;
+  }
+}
+
 async function startFreshSessionForDelivery(
   conversationId: string,
 ): Promise<StartedSessionInfo | null> {
@@ -7769,6 +7824,20 @@ async function startFreshSessionForDelivery(
   if (!hasTmux()) {
     logDelivery(`Cannot start fresh session: tmux not available`);
     return null;
+  }
+
+  // Before spawning ANOTHER blank session, consult tmux for a live one already
+  // tagged with this conversation. Guards against the double-start where the
+  // in-memory cache lost track of a running session (resume fallback, restart
+  // reload) and a redundant session would otherwise be created and the live one
+  // orphaned.
+  const reusable = await findLiveTmuxForConversation(conversationId);
+  if (reusable) {
+    startedSessionTmux.set(conversationId, reusable);
+    logDelivery(
+      `Reusing live tmux ${reusable.tmuxSession} for conv=${conversationId.slice(0, 12)} instead of starting fresh`,
+    );
+    return reusable;
   }
 
   const config = readConfig();
