@@ -160,6 +160,10 @@ export type InboxSession = {
   message_count: number;
   idle_summary?: string;
   is_idle: boolean;
+  // True when an AskUserQuestion poll is open and unanswered. The agent is
+  // blocked on the user, so this always means "needs input" regardless of the
+  // raced agent_status. Derived server-side from message data.
+  awaiting_input?: boolean;
   is_unresponsive?: boolean;
   is_connected?: boolean;
   has_pending: boolean;
@@ -510,11 +514,16 @@ export function isSessionEffectivelyIdle(
 }
 
 export function isSessionWaitingForInput(
-  session: Pick<InboxSession, "_id" | "is_idle" | "agent_status" | "message_count" | "is_pinned" | "has_pending">,
+  session: Pick<InboxSession, "_id" | "is_idle" | "agent_status" | "message_count" | "is_pinned" | "has_pending" | "awaiting_input">,
   sessionsWithQueuedMessages?: Set<string>,
 ): boolean {
   // Pending messages mean work is queued — session is not waiting for user input
   if (session.has_pending || sessionsWithQueuedMessages?.has(session._id)) return false;
+  // An open poll (AskUserQuestion) is the agent blocking on the user. This is
+  // the definition of needs-input and overrides agent_status — the daemon races
+  // status back to "working" while the poll is still open, so we never trust it
+  // here. A poll → NEEDS INPUT, always.
+  if (session.awaiting_input) return true;
   // Dead sessions (stopped/crashed) still need user attention if they have messages
   if (session.agent_status && DEAD_AGENT_STATUSES.has(session.agent_status)) {
     return session.message_count > 0 && !session.is_pinned;

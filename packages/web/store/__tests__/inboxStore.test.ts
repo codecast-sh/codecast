@@ -367,6 +367,52 @@ describe("categorizeSessions", () => {
     expect(needsInput.map((s) => s._id)).not.toContain("conv-stale-idle");
   });
 
+  it("classifies an open poll as Needs Input even when agent_status is raced to working", () => {
+    // The bug: an AskUserQuestion poll blocks the agent on the user, but the
+    // daemon races agent_status back to "working" while the poll is still open,
+    // burying it in the Working bucket. awaiting_input (derived server-side from
+    // the unanswered tool_use) must override agent_status: a poll is ALWAYS
+    // needs-input.
+    const openPoll: InboxSession = {
+      ...baseSession,
+      _id: "conv-open-poll",
+      session_id: "session-open-poll",
+      message_count: 5,
+      agent_status: "working",
+      is_idle: false,
+      awaiting_input: true,
+    };
+
+    const { needsInput, working } = categorizeSessions(
+      { [openPoll._id]: openPoll },
+      new Set(),
+    );
+
+    expect(needsInput.map((s) => s._id)).toContain("conv-open-poll");
+    expect(working.map((s) => s._id)).not.toContain("conv-open-poll");
+  });
+
+  it("a queued answer to a poll keeps it out of Needs Input (work is in flight)", () => {
+    // If the user already queued a message, the answer is being delivered —
+    // pending/queued takes precedence over the poll latch so we don't nag.
+    const polled: InboxSession = {
+      ...baseSession,
+      _id: "conv-poll-queued",
+      session_id: "session-poll-queued",
+      message_count: 5,
+      agent_status: "working",
+      awaiting_input: true,
+      has_pending: true,
+    };
+
+    const { needsInput } = categorizeSessions(
+      { [polled._id]: polled },
+      new Set(),
+    );
+
+    expect(needsInput.map((s) => s._id)).not.toContain("conv-poll-queued");
+  });
+
   it("sinks deferred sessions to the bottom of Needs Input", () => {
     // Defer (shift+backspace / "send to bottom") sets is_deferred. The needsInput
     // group must honor that flag, otherwise deferring a needs-input session is a no-op.
