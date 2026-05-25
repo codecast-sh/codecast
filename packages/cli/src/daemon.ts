@@ -5296,6 +5296,42 @@ export function interactivePromptMessageUuid(sessionId: string, prompt: Interact
   return `interactive-prompt-${sessionId}-${digest}`;
 }
 
+// A real AskUserQuestion writes its tool_use to the session JSONL the instant it's
+// emitted and blocks there until answered (verified: a ~17-min gap between the
+// tool_use line and its tool_result). The file watcher syncs that tool_use as a
+// full-fidelity AskUserQuestion card — header, multiSelect, and option descriptions
+// intact. So when the live tmux menu IS that AskUserQuestion, a scraped card would be
+// a degraded duplicate (bare labels, synthetic "Type something"/"Chat about this"
+// rows, no header). Detect the pending tool_use so the scrape can defer to the
+// authoritative JSONL path. Returns true only when the latest AskUserQuestion in the
+// tail has no matching tool_result yet (i.e. still blocking).
+export function jsonlHasPendingAskUserQuestion(jsonlText: string): boolean {
+  let lastAskId: string | null = null;
+  const resultIds = new Set<string>();
+  for (const line of jsonlText.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    let entry: any;
+    try { entry = JSON.parse(trimmed); } catch { continue; }
+    const content = entry?.message?.content;
+    if (!Array.isArray(content)) continue;
+    for (const block of content) {
+      if (block?.type === "tool_use" && block?.name === "AskUserQuestion" && block?.id) {
+        lastAskId = block.id;
+      } else if (block?.type === "tool_result" && block?.tool_use_id) {
+        resultIds.add(block.tool_use_id);
+      }
+    }
+  }
+  return lastAskId !== null && !resultIds.has(lastAskId);
+}
+
+export function sessionHasPendingAskUserQuestion(sessionId: string): boolean {
+  const jsonlPath = findSessionJsonlPath(sessionId);
+  if (!jsonlPath) return false;
+  try { return jsonlHasPendingAskUserQuestion(readFileTail(jsonlPath, 65536)); } catch { return false; }
+}
+
 async function checkForInteractivePrompt(
   tmuxTarget: string,
   sessionId: string,
@@ -5316,6 +5352,15 @@ async function checkForInteractivePrompt(
     }
 
     log(`Interactive prompt detected in session ${sessionId.slice(0, 8)}: "${prompt.question}" with ${prompt.options.length} options (confirmation=${!!prompt.isConfirmation})`);
+
+    // If this live menu is a real AskUserQuestion tool call, its tool_use is already
+    // in the JSONL and the file watcher syncs it as a full-fidelity card. Emitting a
+    // scraped card here would be a degraded duplicate, so defer to that path — it also
+    // sets the pending-prompt guard and the permission_blocked status.
+    if (!prompt.isConfirmation && sessionHasPendingAskUserQuestion(sessionId)) {
+      log(`Deferring to JSONL AskUserQuestion card for ${sessionId.slice(0, 8)} (skipping scraped duplicate)`);
+      return;
+    }
 
     const now = Date.now();
     pendingInteractivePrompts.set(sessionId, { timestamp: now, options: prompt.options, isConfirmation: prompt.isConfirmation });
