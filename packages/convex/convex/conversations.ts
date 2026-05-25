@@ -6015,12 +6015,18 @@ export const listInboxSessions = query({
       // belongs in "needs input", never "working". The daemon's agent_status is
       // raced (it sends permission_blocked once, then a later "working" signal
       // overwrites it while the poll is still open), so we derive the fact from
-      // the authoritative data instead: while a poll blocks, its assistant
-      // tool_use is the last synced message and no tool_result has arrived yet.
-      // Only check working-bucket candidates (non-idle, assistant-last) to keep
-      // this off the idle path entirely.
+      // the authoritative data: the chronologically-latest message is the
+      // assistant's AskUserQuestion tool_use (an answer would be a later-timestamped
+      // tool_result, so if the poll is still last, it's unanswered).
+      //
+      // Gate only on the working bucket (!isIdle) to keep this off the idle path.
+      // Do NOT pre-filter on conv.last_message_role — that field reflects sync
+      // batch order, which can disagree with timestamp order (Claude writes the
+      // poll's tool_use line out of order relative to surrounding entries), so it
+      // would miss exactly the blocked sessions we care about. The order("desc")
+      // read below is authoritative.
       let awaitingInput = false;
-      if (!isIdle && lastMsgRole === "assistant" && conv.message_count > 0) {
+      if (!isIdle && conv.message_count > 0) {
         const lastMsg = await ctx.db
           .query("messages")
           .withIndex("by_conversation_timestamp", (q) =>
