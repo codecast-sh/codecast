@@ -162,12 +162,13 @@ function NavDropdown({
   const currentItemRef = useRef<HTMLDivElement>(null);
   useMountEffect(() => setMounted(true));
 
+  // On open, default to the latest message (bottom). The current message stays
+  // highlighted via currentItemRef, but we don't scroll to center on it —
+  // newest-first is what's most relevant when the browser pops.
   useEffect(() => {
     if (mounted) {
       requestAnimationFrame(() => {
-        if (currentItemRef.current) {
-          currentItemRef.current.scrollIntoView({ block: "center" });
-        } else if (scrollRef.current) {
+        if (scrollRef.current) {
           scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
         }
       });

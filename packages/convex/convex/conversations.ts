@@ -11,7 +11,7 @@ import { resetConversationPendingMessages } from "./pendingMessages";
 import { advanceForkCopy, type ForkCopyCtx } from "./forkCopy";
 import { hasRecentPendingDaemonCommand } from "./daemonCommandUtils";
 import { shouldShowInInbox } from "./inboxFilters";
-import { filterAndMergeUserMessages } from "./userMessagesFilter";
+import { filterUserMessages } from "./userMessagesFilter";
 import {
   isTeamMember,
   canTeamMemberAccess,
@@ -7111,17 +7111,11 @@ export const getUserMessages = query({
         .first();
       if (!membership) return [];
     }
-    const [userMsgs, assistantMsgs] = await Promise.all([
-      ctx.db.query("messages")
-        .withIndex("by_conversation_role_timestamp", (q) =>
-          q.eq("conversation_id", args.conversation_id).eq("role", "user"))
-        .order("desc").collect(),
-      ctx.db.query("messages")
-        .withIndex("by_conversation_role_timestamp", (q) =>
-          q.eq("conversation_id", args.conversation_id).eq("role", "assistant"))
-        .order("desc").collect(),
-    ]);
-    return filterAndMergeUserMessages(userMsgs, assistantMsgs);
+    const userMsgs = await ctx.db.query("messages")
+      .withIndex("by_conversation_role_timestamp", (q) =>
+        q.eq("conversation_id", args.conversation_id).eq("role", "user"))
+      .order("desc").collect();
+    return filterUserMessages(userMsgs);
   },
 });
 
