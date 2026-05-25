@@ -392,6 +392,32 @@ describe("categorizeSessions", () => {
     expect(working.map((s) => s._id)).not.toContain("conv-open-poll");
   });
 
+  it("classifies a permission_blocked agent as Needs Input even within the 45s recency grace", () => {
+    // A permission prompt (Bash approval, resume menu, AskUserQuestion) reports
+    // agent_status=permission_blocked. The block event itself bumps updated_at, so
+    // the backend's is_idle stays false for the 45s recentlyUpdated grace, and a
+    // non-AskUserQuestion prompt has no awaiting_input message to derive from.
+    // Without treating permission_blocked as a hard "blocked on user" signal, the
+    // session sits in Working while it is actually waiting on the user.
+    const blocked: InboxSession = {
+      ...baseSession,
+      _id: "conv-perm-blocked",
+      session_id: "session-perm-blocked",
+      message_count: 5,
+      agent_status: "permission_blocked",
+      is_idle: false,
+      awaiting_input: false,
+    };
+
+    const { needsInput, working } = categorizeSessions(
+      { [blocked._id]: blocked },
+      new Set(),
+    );
+
+    expect(needsInput.map((s) => s._id)).toContain("conv-perm-blocked");
+    expect(working.map((s) => s._id)).not.toContain("conv-perm-blocked");
+  });
+
   it("an open poll overrides a stuck queued message → Needs Input", () => {
     // Deadlock case: a message is queued for the agent, but the agent is blocked
     // on a poll, so the message can't be delivered (you can't paste into a
