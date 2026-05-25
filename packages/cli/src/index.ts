@@ -357,11 +357,35 @@ for f in launchd.err.log launchd.out.log daemon.log; do
 done
 
 LAUNCHD_UID="gui/\$(id -u)"
-if launchctl print "\$LAUNCHD_UID/sh.codecast.daemon" 2>/dev/null | grep -q 'state = running'; then
+RUNNING=0
+launchctl print "\$LAUNCHD_UID/sh.codecast.daemon" 2>/dev/null | grep -q 'state = running' && RUNNING=1
+
+# A "running" launchd job is not proof of health. The daemon's setInterval-based
+# self-recovery (sleep detector, watchdog, event-loop monitor) does not survive a
+# long macOS sleep: the timers stop firing and never re-arm, so the process stays
+# alive but stops self-healing. Detect that via lastHeartbeatTick, which a healthy
+# daemon rewrites every ~30s, and force a restart when it goes stale. Mirrors the
+# binary watchdog's runWatchdog() staleness kill, which dev mode never invokes.
+STALE=0
+STATE_FILE="\${HOME}/.codecast/daemon.state"
+if [ "\$RUNNING" -eq 1 ] && [ -f "\$STATE_FILE" ]; then
+  TICK=\$(sed -n 's/.*"lastHeartbeatTick"[[:space:]]*:[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' "\$STATE_FILE")
+  [ -z "\$TICK" ] && TICK=\$(sed -n 's/.*"lastWatchdogCheck"[[:space:]]*:[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' "\$STATE_FILE")
+  if [ -n "\$TICK" ] && [ "\$TICK" -gt 0 ]; then
+    AGE=\$(( \$(date +%s) * 1000 - TICK ))
+    # 900000ms = 15min, mirrors HEARTBEAT_STALE_THRESHOLD_MS in daemon.ts
+    if [ "\$AGE" -gt 900000 ]; then
+      STALE=1
+      log "Daemon alive but heartbeat stale (\${AGE}ms) - event loop wedged, forcing restart"
+    fi
+  fi
+fi
+
+if [ "\$RUNNING" -eq 1 ] && [ "\$STALE" -eq 0 ]; then
   exit 0
 fi
 
-log "Dev-mode watchdog kickstarting launchd daemon"
+[ "\$RUNNING" -eq 0 ] && log "Dev-mode watchdog kickstarting launchd daemon (not running)"
 launchctl kickstart -k "\$LAUNCHD_UID/sh.codecast.daemon" >>"\$LOGFILE" 2>&1 || log "Failed to kickstart dev daemon"
 exit 0
 `;
