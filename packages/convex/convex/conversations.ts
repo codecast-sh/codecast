@@ -6011,6 +6011,29 @@ export const listInboxSessions = query({
           ? (!hasPending && !lastRoleIsUser && !recentlyUpdated)
           : !recentlyUpdated;
 
+      // An open AskUserQuestion poll is the agent blocking on the user — it
+      // belongs in "needs input", never "working". The daemon's agent_status is
+      // raced (it sends permission_blocked once, then a later "working" signal
+      // overwrites it while the poll is still open), so we derive the fact from
+      // the authoritative data instead: while a poll blocks, its assistant
+      // tool_use is the last synced message and no tool_result has arrived yet.
+      // Only check working-bucket candidates (non-idle, assistant-last) to keep
+      // this off the idle path entirely.
+      let awaitingInput = false;
+      if (!isIdle && lastMsgRole === "assistant" && conv.message_count > 0) {
+        const lastMsg = await ctx.db
+          .query("messages")
+          .withIndex("by_conversation_timestamp", (q) =>
+            q.eq("conversation_id", conv._id)
+          )
+          .order("desc")
+          .first();
+        if (lastMsg?.role === "assistant" && lastMsg.tool_calls?.some((tc) => tc.name === "AskUserQuestion")) {
+          awaitingInput = true;
+          isIdle = true; // blocked on the user, not actively working
+        }
+      }
+
       const deferred = conv.inbox_deferred_at && conv.inbox_deferred_at >= conv.updated_at;
 
       let implementationSession: { _id: string; title?: string } | undefined;
@@ -6071,6 +6094,7 @@ export const listInboxSessions = query({
         message_count: conv.message_count,
         idle_summary: conv.idle_summary,
         is_idle: isIdle,
+        awaiting_input: awaitingInput,
         is_unresponsive: isUnresponsive,
         is_connected: !!daemonAlive,
         has_pending: hasPending,
@@ -6130,6 +6154,7 @@ export const listInboxSessions = query({
           message_count: child.message_count,
           idle_summary: child.idle_summary,
           is_idle: childIsIdle,
+          awaiting_input: false,
           is_unresponsive: false,
           is_connected: !!childDaemon,
           has_pending: !!child.has_pending_messages,
