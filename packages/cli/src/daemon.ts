@@ -346,6 +346,7 @@ interface RemoteLog {
 
 let remoteLogQueue: RemoteLog[] = [];
 let syncServiceRef: SyncService | null = null;
+let retryQueueRef: RetryQueue | null = null;
 let conversationCacheRef: ConversationCache | null = null;
 let daemonVersion: string | undefined;
 let activeConfig: Config | null = null;
@@ -448,6 +449,12 @@ type HookStatusData = { status: AgentStatus; ts: number; permission_mode?: Permi
 type AppServerThreadStatus = { type?: string; activeFlags?: string[] };
 const lastHookStatus = new Map<string, HookStatusData>();
 const pendingInteractivePrompts = new Map<string, { timestamp: number; options: Array<{ label: string; description?: string }>; isConfirmation?: boolean }>();
+// Last synthetic-prompt uuid emitted per session. The heartbeat clears the pending
+// guard whenever the pane momentarily stops showing a menu, so a resumed session that
+// re-renders the same blocking menu would otherwise re-emit (and re-surface, since the
+// card carries timestamp:now) the identical prompt over and over. Suppress that here;
+// it's cleared on answer delivery so a genuine re-ask of the same question re-emits.
+const lastEmittedSyntheticPrompt = new Map<string, string>();
 const AGENT_STATUS_DIR = path.join(process.env.HOME || "", ".codecast", "agent-status");
 const skillsSyncedConversations = new Set<string>();
 
@@ -993,6 +1000,7 @@ async function pollDaemonCommands(): Promise<void> {
         pid: process.pid,
         autostart_enabled: isAutostartEnabled(),
         has_tmux: hasTmux(),
+        ...syncHealthFields(),
       }),
     });
     if (!response.ok) {
@@ -1064,6 +1072,18 @@ function computeLocalProjectRoots(): string[] {
   return Array.from(roots).slice(0, 300);
 }
 
+// Sync-backlog fields published on every heartbeat so the web can show a
+// "sync stalled" warning while the daemon is still alive (fresh heartbeat but
+// data isn't flowing). Reads the live retry queue, not the persisted state
+// snapshot (which only refreshes inside the retry executor).
+function syncHealthFields(): { pending_sync_count: number; oldest_pending_ms: number } {
+  const health = retryQueueRef?.getHealth();
+  return {
+    pending_sync_count: health?.pending ?? 0,
+    oldest_pending_ms: health?.oldestPendingMs ?? 0,
+  };
+}
+
 async function sendHeartbeat(): Promise<void> {
   const config = readConfig();
   if (!config?.auth_token || !config?.convex_url) {
@@ -1083,6 +1103,7 @@ async function sendHeartbeat(): Promise<void> {
         autostart_enabled: isAutostartEnabled(),
         has_tmux: hasTmux(),
         local_project_roots: computeLocalProjectRoots(),
+        ...syncHealthFields(),
       }),
     });
 
@@ -5368,6 +5389,15 @@ async function checkForInteractivePrompt(
     // Content-deterministic id: the same prompt detected by racing callers
     // upserts to one server row instead of N duplicate poll cards.
     const promptUuid = interactivePromptMessageUuid(sessionId, prompt);
+
+    // Don't re-emit (and re-surface) a synthetic prompt we already emitted for this
+    // session — a re-rendered blocking menu after a heartbeat guard-clear is the same
+    // prompt, not a new one. Distinct prompts have distinct uuids and still emit.
+    if (lastEmittedSyntheticPrompt.get(sessionId) === promptUuid) {
+      log(`Skipping re-emit of identical synthetic prompt for ${sessionId.slice(0, 8)}`);
+      return;
+    }
+
     await syncService.addMessages({
       conversationId,
       messages: [{
@@ -5389,6 +5419,7 @@ async function checkForInteractivePrompt(
       }],
     });
 
+    lastEmittedSyntheticPrompt.set(sessionId, promptUuid);
     log(`Synced interactive prompt as AskUserQuestion for session ${sessionId.slice(0, 8)}`);
   } catch (err) {
     log(`Interactive prompt check failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -8091,6 +8122,7 @@ async function deliverMessage(
 
   const pendingPrompt = pendingInteractivePrompts.get(sessionId || conversationId);
   pendingInteractivePrompts.delete(sessionId || conversationId);
+  lastEmittedSyntheticPrompt.delete(sessionId || conversationId);
 
   // If there's an active poll and the message is plain text (not already a poll response),
   // check if it matches one of the poll options and convert to a poll response
@@ -9925,6 +9957,8 @@ async function main(): Promise<void> {
     droppedPath: `${CONFIG_DIR}/dropped-operations.json`,
     onLog: (message, level) => log(message, level || "info"),
   });
+
+  retryQueueRef = retryQueue;
 
   const updateState = () => {
     saveDaemonState({
