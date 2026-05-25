@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parseInteractivePrompt } from "./daemon.js";
+import { parseInteractivePrompt, jsonlHasPendingAskUserQuestion } from "./daemon.js";
 
 // Regression coverage for dropped Q&A descriptions: Claude Code's AskUserQuestion
 // menu renders each option's description on indented continuation lines BELOW the
@@ -90,5 +90,44 @@ describe("parseInteractivePrompt option descriptions", () => {
       { label: "mac2-m2.metal", description: undefined },
       { label: "mac2.metal (cheapest)", description: undefined },
     ]);
+  });
+});
+
+// The real AskUserQuestion tool_use lands in the JSONL (full fidelity) while the
+// prompt blocks, so the daemon must NOT also emit a degraded scraped card. This
+// drives that decision: a scrape defers iff the latest AskUserQuestion is unanswered.
+describe("jsonlHasPendingAskUserQuestion", () => {
+  const ask = (id: string) =>
+    JSON.stringify({
+      type: "assistant",
+      message: { content: [{ type: "tool_use", name: "AskUserQuestion", id, input: { questions: [{ header: "Rollout", question: "q?", options: [{ label: "A", description: "desc" }] }] } }] },
+    });
+  const answer = (id: string) =>
+    JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, content: 'Your questions have been answered: "q?"="A"' }] } });
+  const text = (t: string) => JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: t }] } });
+
+  test("pending tool_use with no result → true", () => {
+    expect(jsonlHasPendingAskUserQuestion([text("working"), ask("toolu_1")].join("\n"))).toBe(true);
+  });
+
+  test("answered tool_use → false", () => {
+    expect(jsonlHasPendingAskUserQuestion([ask("toolu_1"), answer("toolu_1"), text("moving on")].join("\n"))).toBe(false);
+  });
+
+  test("no AskUserQuestion at all → false", () => {
+    expect(jsonlHasPendingAskUserQuestion([text("hello"), text("world")].join("\n"))).toBe(false);
+  });
+
+  test("latest is pending even if an earlier one was answered → true", () => {
+    expect(jsonlHasPendingAskUserQuestion([ask("toolu_1"), answer("toolu_1"), ask("toolu_2")].join("\n"))).toBe(true);
+  });
+
+  test("tolerates a truncated/garbage leading line (tail cut mid-line)", () => {
+    const garbage = '{"type":"assistant","message":{"content":[{"type":"tool_us';
+    expect(jsonlHasPendingAskUserQuestion([garbage, ask("toolu_9")].join("\n"))).toBe(true);
+  });
+
+  test("empty input → false", () => {
+    expect(jsonlHasPendingAskUserQuestion("")).toBe(false);
   });
 });
