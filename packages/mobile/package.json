@@ -17,6 +17,8 @@
     "update:production": "eas update --branch production"
   },
   "dependencies": {
+    "@codecast/convex": "workspace:*",
+    "@codecast/web": "workspace:*",
     "@convex-dev/auth": "^0.0.90",
     "@expo/vector-icons": "^15.0.3",
     "@react-navigation/native": "^7.1.8",
