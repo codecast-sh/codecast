@@ -8664,6 +8664,11 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         if (kind && kind.kind !== 'normal' && kind.kind !== 'plan' && kind.kind !== 'skill_expansion') return 0;
       }
       if (msg.role === "assistant") {
+        // Always-visible tool calls (AskUserQuestion polls, plan writes) render even
+        // with empty content — renderItem keeps them. estimateSize must agree, or the
+        // virtualizer gives them 0 height and the card never enters the viewport (the
+        // live /model poll vanishing from the web UI was exactly this desync).
+        if (msg.tool_calls?.some(isAlwaysVisibleToolCall)) return 200;
         // Only the first text-bearing assistant message in a turn renders (size 80).
         // All others collapse to 0. Membership check is O(1) thanks to the precomputed set.
         if (!assistantFirstTextInTurnSet.has(msg._id)) return 0;
