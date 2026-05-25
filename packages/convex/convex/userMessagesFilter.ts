@@ -1,8 +1,13 @@
-// Pure filter/merge/map logic for getUserMessages.
+// Pure filter/map logic for getUserMessages.
 //
-// Split out so we can unit-test the merge of user + assistant messages
-// without standing up a Convex ctx. The query handler in conversations.ts
-// owns the auth + index queries and then hands both arrays here.
+// Split out so we can unit-test the user-message filter without standing up a
+// Convex ctx. The query handler in conversations.ts owns the auth + index
+// query and then hands the user-message array here.
+//
+// IMPORTANT: this is user-prompt navigation data (message browser, rewind/fork
+// navigator). It is user-only by construction — assistant messages must never
+// be returned here. Keeping that invariant at the source means no client has to
+// re-filter by role (a guard that has been silently dropped by refactors twice).
 
 export type FilterableMessage = {
   _id: string;
@@ -18,7 +23,7 @@ export type FilterableMessage = {
 export type FilteredUserMessage = {
   _id: string;
   message_uuid?: string;
-  role: "user" | "assistant";
+  role: "user";
   content: string;
   timestamp: number;
 };
@@ -47,31 +52,26 @@ export function stripContextTags(s: string): string {
     .trim();
 }
 
-export function filterAndMergeUserMessages(
+export function filterUserMessages(
   userMsgs: FilterableMessage[],
-  assistantMsgs: FilterableMessage[],
 ): FilteredUserMessage[] {
-  return [...userMsgs, ...assistantMsgs]
+  return userMsgs
     .filter((m) => {
+      if (m.role !== "user") return false;
       if (m.subtype === "compact_boundary") return false;
       if (!m.content || !m.content.trim()) return false;
       const t = stripContextTags(m.content);
       if (!t) return false;
-      if (m.role === "user") {
-        if (USER_NOISE_PREFIXES.some((p) => t.startsWith(p))) return false;
-        if (t.includes(SUMMARY_MARKER)) return false;
-        if (m.tool_results && m.tool_results.length > 0 && t.length < 5) return false;
-      }
-      if (m.role === "assistant") {
-        if (m.tool_calls && m.tool_calls.length > 0 && t.length < 30) return false;
-      }
+      if (USER_NOISE_PREFIXES.some((p) => t.startsWith(p))) return false;
+      if (t.includes(SUMMARY_MARKER)) return false;
+      if (m.tool_results && m.tool_results.length > 0 && t.length < 5) return false;
       return true;
     })
     .sort((a, b) => a.timestamp - b.timestamp)
     .map((m) => ({
       _id: m._id,
       message_uuid: m.message_uuid,
-      role: m.role as "user" | "assistant",
+      role: "user" as const,
       content: (stripContextTags(m.content!) || m.content!).slice(0, 500),
       timestamp: m.timestamp,
     }));
