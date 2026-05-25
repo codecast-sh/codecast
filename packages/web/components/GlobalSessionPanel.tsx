@@ -301,7 +301,7 @@ export const SessionCard = memo(function SessionCard({
   isActive: boolean;
   isParentActive?: boolean;
   globalIndex: number;
-  onSelect: (index: number) => void;
+  onSelect: (session: InboxSession) => void;
   onDismiss?: (id: string) => void;
   onDefer?: (id: string) => void;
   onPin?: (id: string) => void;
@@ -400,8 +400,8 @@ export const SessionCard = memo(function SessionCard({
         <div
           role="button"
           tabIndex={0}
-          onClick={() => onSelect(globalIndex)}
-          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(globalIndex); } }}
+          onClick={() => onSelect(session)}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(session); } }}
           className="w-full text-left cursor-pointer px-2 py-1"
         >
           <div className="flex items-center gap-1.5">
@@ -514,8 +514,8 @@ export const SessionCard = memo(function SessionCard({
       <div
         role="button"
         tabIndex={0}
-        onClick={() => onSelect(globalIndex)}
-        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(globalIndex); } }}
+        onClick={() => onSelect(session)}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(session); } }}
         className="w-full text-left cursor-pointer px-2.5 sm:px-3 py-1.5 sm:py-2"
       >
         <div className={`flex items-center gap-1.5 leading-tight ${
@@ -978,7 +978,7 @@ export function SessionListPanel({
                   session={session}
                   isActive={session._id === activeSessionId}
                   globalIndex={0}
-                  onSelect={() => handleSelect(session)}
+                  onSelect={handleSelect}
                   onDismiss={handleAnimatedDismiss}
                   onDefer={s.deferSession}
                   onPin={s.pinSession}
@@ -992,7 +992,7 @@ export function SessionListPanel({
                     isActive={sub._id === activeSessionId}
                     isParentActive={session._id === activeSessionId}
                     globalIndex={0}
-                    onSelect={() => handleSelect(sub)}
+                    onSelect={handleSelect}
                     onDismiss={handleAnimatedDismiss}
                     variant={sectionVariant || "default"}
                   />
@@ -1108,8 +1108,8 @@ export function SessionListPanel({
                     session={session}
                     isActive={session._id === activeSessionId}
                     globalIndex={-1}
-                    onSelect={() => handleSelect(session)}
-                    onRestore={(id) => s.unstashSession(id)}
+                    onSelect={handleSelect}
+                    onRestore={s.unstashSession}
                     onKill={handleKillDismissed}
                     variant="dismissed"
                     forkColorKey={globalForksByParent.has(session._id) ? session._id : (session.forked_from ?? undefined)}
@@ -1121,8 +1121,8 @@ export function SessionListPanel({
                       isActive={sub._id === activeSessionId}
                       isParentActive={session._id === activeSessionId}
                       globalIndex={-1}
-                      onSelect={() => handleSelect(sub)}
-                      onRestore={(id) => s.unstashSession(id)}
+                      onSelect={handleSelect}
+                      onRestore={s.unstashSession}
                       onKill={handleKillDismissed}
                       variant="dismissed"
                     />

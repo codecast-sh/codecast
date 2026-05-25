@@ -74,7 +74,23 @@ export function applySyncTable<T extends { _id: string }>(
       if (newPending[excludeKey]?.type === "exclude") continue;
       const incomingRecord = incomingMap.get(id);
       if (incomingRecord) {
-        table[id] = applyFieldOverrides(incomingRecord);
+        const merged = applyFieldOverrides(incomingRecord);
+        const prevRecord = prev[id];
+        // Preserve the previous object identity when the record is unchanged.
+        // Convex live queries resend the ENTIRE result set as fresh objects on
+        // any change, so without this one updated row churns the identity of
+        // every other row and defeats React.memo for all of them (e.g. every
+        // SessionCard re-rendering on every session's heartbeat). updated_at is
+        // the canonical change signal already trusted by syncTable's no-op
+        // early-return. Skip the reuse when a pending field override produced a
+        // fresh object (merged !== incomingRecord) so local-first values stick.
+        table[id] =
+          merged === incomingRecord &&
+          prevRecord &&
+          (prevRecord as any).updated_at !== undefined &&
+          (prevRecord as any).updated_at === (incomingRecord as any).updated_at
+            ? prevRecord
+            : merged;
       } else if (isDelta) {
         table[id] = prev[id];
       }
