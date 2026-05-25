@@ -3102,6 +3102,43 @@ function recoverImagesFromBackup(
   return messages;
 }
 
+/**
+ * Resolve which queued subagent→parent links can be established now that
+ * `justCreatedSessionId` has been created and cached.
+ *
+ * Two orderings can leave a subagent orphaned, so both are handled here:
+ *  - this session is the PARENT of children still in the pending map, or
+ *  - this session is itself a pending CHILD whose parent was created while
+ *    our own createConversation await was still in flight (the parent-side
+ *    drain ran before we were cached and could not see us).
+ *
+ * Pure so it can be unit-tested without the daemon's async machinery.
+ */
+export function resolvePendingSubagentLinks(
+  justCreatedSessionId: string,
+  justCreatedConvId: string,
+  pending: Map<string, string>,
+  cache: Record<string, string>,
+): Array<{ parentConvId: string; childConvId: string; childSessionId: string; parentSessionId: string }> {
+  const links: Array<{ parentConvId: string; childConvId: string; childSessionId: string; parentSessionId: string }> = [];
+  for (const [childSessionId, parentSessionId] of pending) {
+    if (parentSessionId === justCreatedSessionId) {
+      // We are the parent: link any child already cached.
+      const childConvId = cache[childSessionId];
+      if (childConvId) {
+        links.push({ parentConvId: justCreatedConvId, childConvId, childSessionId, parentSessionId });
+      }
+    } else if (childSessionId === justCreatedSessionId) {
+      // We are the child: link to our parent if it is now cached.
+      const parentConvId = cache[parentSessionId];
+      if (parentConvId) {
+        links.push({ parentConvId, childConvId: justCreatedConvId, childSessionId, parentSessionId });
+      }
+    }
+  }
+  return links;
+}
+
 async function processSessionFile(
   filePath: string,
   sessionId: string,
@@ -3490,19 +3527,16 @@ async function processSessionFile(
           syncService.registerManagedSession(sessionId, process.pid, undefined, conversationId).catch(logConvexFailure);
         });
 
-        // Resolve any pending subagents waiting for this session as their parent
-        for (const [childSessionId, parentSessionId] of pendingSubagentParents) {
-          if (parentSessionId === sessionId) {
-            const childConvId = conversationCache[childSessionId];
-            if (childConvId) {
-              syncService.linkSessions(conversationId, childConvId, subagentDescriptions.get(childSessionId)).then(() => {
-                log(`Linked pending subagent ${childSessionId.slice(0, 8)} -> parent ${sessionId.slice(0, 8)}`);
-              }).catch((err) => {
-                log(`Failed to link subagent ${childSessionId.slice(0, 8)}: ${err}`);
-              });
-              pendingSubagentParents.delete(childSessionId);
-            }
-          }
+        // Resolve pending subagent links now that this session is cached —
+        // both when it is the parent of queued children AND when it is itself a
+        // queued child whose parent appeared during our in-flight create.
+        for (const link of resolvePendingSubagentLinks(sessionId, conversationId, pendingSubagentParents, conversationCache)) {
+          syncService.linkSessions(link.parentConvId, link.childConvId, subagentDescriptions.get(link.childSessionId)).then(() => {
+            log(`Linked pending subagent ${link.childSessionId.slice(0, 8)} -> parent ${link.parentSessionId.slice(0, 8)}`);
+          }).catch((err) => {
+            log(`Failed to link subagent ${link.childSessionId.slice(0, 8)}: ${err}`);
+          });
+          pendingSubagentParents.delete(link.childSessionId);
         }
       }
 
