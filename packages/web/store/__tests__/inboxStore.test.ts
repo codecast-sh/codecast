@@ -392,9 +392,11 @@ describe("categorizeSessions", () => {
     expect(working.map((s) => s._id)).not.toContain("conv-open-poll");
   });
 
-  it("a queued answer to a poll keeps it out of Needs Input (work is in flight)", () => {
-    // If the user already queued a message, the answer is being delivered —
-    // pending/queued takes precedence over the poll latch so we don't nag.
+  it("an open poll overrides a stuck queued message → Needs Input", () => {
+    // Deadlock case: a message is queued for the agent, but the agent is blocked
+    // on a poll, so the message can't be delivered (you can't paste into a
+    // blocking menu). The poll must win over has_pending, otherwise the session
+    // is hidden in Working forever with an undeliverable message.
     const polled: InboxSession = {
       ...baseSession,
       _id: "conv-poll-queued",
@@ -405,12 +407,32 @@ describe("categorizeSessions", () => {
       has_pending: true,
     };
 
-    const { needsInput } = categorizeSessions(
+    const { needsInput, working } = categorizeSessions(
       { [polled._id]: polled },
       new Set(),
     );
 
-    expect(needsInput.map((s) => s._id)).not.toContain("conv-poll-queued");
+    expect(needsInput.map((s) => s._id)).toContain("conv-poll-queued");
+    expect(working.map((s) => s._id)).not.toContain("conv-poll-queued");
+  });
+
+  it("a pinned poll stays in its own group, not duplicated into Needs Input", () => {
+    const pinnedPoll: InboxSession = {
+      ...baseSession,
+      _id: "conv-pinned-poll",
+      session_id: "session-pinned-poll",
+      message_count: 5,
+      awaiting_input: true,
+      is_pinned: true,
+    };
+
+    const { needsInput, pinned } = categorizeSessions(
+      { [pinnedPoll._id]: pinnedPoll },
+      new Set(),
+    );
+
+    expect(pinned.map((s) => s._id)).toContain("conv-pinned-poll");
+    expect(needsInput.map((s) => s._id)).not.toContain("conv-pinned-poll");
   });
 
   it("sinks deferred sessions to the bottom of Needs Input", () => {
