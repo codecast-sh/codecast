@@ -525,6 +525,15 @@ export function isSessionWaitingForInput(
   // the user must see the poll to resolve it. A poll → NEEDS INPUT, always
   // (except pinned, which lives in its own group).
   if (session.awaiting_input && !session.is_pinned) return true;
+  // A permission-blocked agent (a tool-use awaiting your approve/deny) is
+  // blocking on the user just like an open poll, and can't consume a queued
+  // message either. Route it to needs-input regardless of the is_idle grace
+  // window or a raced "working" status. Unlike a poll this isn't reflected in
+  // awaiting_input (that derives from an AskUserQuestion tool_use), so key off
+  // the daemon-reported status directly.
+  if (session.agent_status === "permission_blocked") {
+    return session.message_count > 0 && !session.is_pinned;
+  }
   // Pending messages mean work is queued — session is not waiting for user input
   if (session.has_pending || sessionsWithQueuedMessages?.has(session._id)) return false;
   // Dead sessions (stopped/crashed) still need user attention if they have messages
