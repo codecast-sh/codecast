@@ -2,6 +2,7 @@
   "expo": {
     "name": "Codecast",
     "slug": "codecast",
+    "platforms": ["ios", "android"],
     "version": "1.0.2",
     "runtimeVersion": {
       "policy": "appVersion"
