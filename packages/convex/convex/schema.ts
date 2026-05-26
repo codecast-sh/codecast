@@ -518,7 +518,10 @@ export default defineSchema({
       v.literal("injected"),
       v.literal("delivered"),
       v.literal("failed"),
-      v.literal("undeliverable")
+      v.literal("undeliverable"),
+      // User-initiated terminal state. The only way to stop the always-on retry loop short of
+      // delivery — the daemon's getPendingMessages never returns it and the healer never revives it.
+      v.literal("cancelled")
     ),
     created_at: v.number(),
     delivered_at: v.optional(v.number()),

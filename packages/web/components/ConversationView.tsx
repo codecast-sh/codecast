@@ -5911,14 +5911,20 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
   const [sentAt, setSentAt] = useState<number | null>(null);
   const [showStuckBanner, setShowStuckBanner] = useState(false);
   const [isResuming, setIsResuming] = useState(false);
+  // Distinct from isResuming: true only while a destructive kill+restart is in flight, so the
+  // footer can say "Killing & restarting" instead of the gentler "Waiting for connection".
+  const [isRestarting, setIsRestarting] = useState(false);
   const [optimisticSending, setOptimisticSending] = useState(false);
   const [showModeLabel, setShowModeLabel] = useState(false);
   const [modeTooltip, setModeTooltip] = useState(false);
   const modeLabelTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoResumeTriggeredRef = useRef(false);
-  const forceRestartAttemptedRef = useRef(false);
+  // Guards the one allowed automatic kill+restart: fires once when the daemon has declared a
+  // sent message undeliverable (delivery genuinely failed over many minutes), reset per message.
+  const autoRestartTriggeredRef = useRef(false);
   const resumeSessionMutation = useMutation(api.users.resumeSession);
   const restartSessionMutation = useMutation(api.conversations.restartSession);
+  const cancelMessageMutation = useMutation(api.pendingMessages.cancelPendingMessage);
   const addOptimistic = useInboxStore((s) => s.addOptimisticMessage);
   const markAsQueued = useInboxStore((s) => s.markOptimisticAsQueued);
   const sentContentRef = useRef<string | null>(null);
@@ -6091,7 +6097,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
     if (!existingPending) {
       if (!isWaitingForResponse) setShowStuckBanner(false);
       autoResumeTriggeredRef.current = false;
-      forceRestartAttemptedRef.current = false;
+      autoRestartTriggeredRef.current = false;
       return;
     }
     const age = Date.now() - existingPending.created_at;
@@ -6125,16 +6131,19 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
   useWatchEffect(() => {
     if (showStuckBanner && (isAgentActive || messageReachedSession)) {
       setShowStuckBanner(false);
+      setIsRestarting(false);
     }
   }, [showStuckBanner, isAgentActive, messageReachedSession]);
 
   useWatchEffect(() => {
     if (!sentAt || !pendingMessageId) return;
-    if (messageStatus?.status === "delivered") {
-      if (sentContentRef.current) {
+    // Both delivered (success) and cancelled (user stopped it) are terminal — tear down the
+    // tracker and banner either way so the composer returns to its resting state.
+    if (messageStatus?.status === "delivered" || messageStatus?.status === "cancelled") {
+      if (messageStatus?.status === "delivered" && sentContentRef.current) {
         markAsQueued(conversationId, sentContentRef.current);
-        sentContentRef.current = null;
       }
+      sentContentRef.current = null;
       setPendingMessageId(null);
       setSentAt(null);
       setShowStuckBanner(false);
@@ -6299,11 +6308,16 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
     }
   }, [onPopulateInput]);
 
-  const handleForceResume = useCallback(async () => {
+  const handleForceResume = useCallback(async (opts?: { auto?: boolean }) => {
     if (isResuming) return;
     setIsResuming(true);
+    // Automatic recovery here is always the gentle, non-destructive resume (re-attach + redeliver).
+    // The only automatic kill+restart lives in the confirmed-undeliverable effect below; this
+    // path kills only on an explicit human click of a dead-message control — never on idleness.
+    const shouldRestart = !opts?.auto && (isExistingMessageDead || messageStatus?.status === "failed" || messageStatus?.status === "undeliverable");
     try {
-      if (isExistingMessageDead || (messageStatus?.status === "failed" || messageStatus?.status === "undeliverable")) {
+      if (shouldRestart) {
+        setIsRestarting(true);
         await restartSessionMutation({ conversation_id: conversationId as Id<"conversations"> });
       } else {
         await resumeSessionMutation({ conversation_id: conversationId as Id<"conversations"> });
@@ -6311,46 +6325,77 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to resume session");
       setIsResuming(false);
+      setIsRestarting(false);
     }
   }, [conversationId, resumeSessionMutation, restartSessionMutation, isResuming, isExistingMessageDead, messageStatus?.status]);
 
+  // Stop the (otherwise indefinite) retry loop for a message that genuinely can't land. Resolve
+  // the id from either the precise tracker or the conversation-scoped pending row, since a reload
+  // mid-send leaves us with only the latter.
+  const handleCancelMessage = useCallback(async () => {
+    const id = pendingMessageId ?? (existingPending?._id as Id<"pending_messages"> | undefined);
+    if (!id) return;
+    try {
+      await cancelMessageMutation({ message_id: id });
+      setPendingMessageId(null);
+      setSentAt(null);
+      setShowStuckBanner(false);
+      setIsResuming(false);
+      setIsRestarting(false);
+      sentContentRef.current = null;
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to cancel message");
+    }
+  }, [pendingMessageId, existingPending, cancelMessageMutation]);
+
   useWatchEffect(() => {
-    // Abort the resume the moment the session shows life. isAgentActive (daemon heartbeat)
-    // is the fast, authoritative signal — without it we'd escalate to a destructive
-    // kill+restart on a live, working agent just because no assistant message has reached
-    // the timeline yet (e.g. mid-compaction, mid-thinking, or a slow first delivery).
+    // Clear the spinner/banner the moment the session shows life. isAgentActive (daemon
+    // heartbeat) is the fast, authoritative signal that the agent is alive — working,
+    // thinking, compacting, or waiting on input — so there's nothing to recover.
     if (isResuming && (isConversationLive || isThinking || isAgentActive || messageReachedSession)) {
       setIsResuming(false);
+      setIsRestarting(false);
       setShowStuckBanner(false);
       return;
     }
     if (!isResuming) return;
-    const timeout = setTimeout(async () => {
-      setIsResuming(false);
-      // Re-check at fire time: never kill a session the daemon reports as working or that
-      // already has the message in tmux.
-      if (isAgentActive || messageReachedSession) return;
-      if (!forceRestartAttemptedRef.current && conversationId && isConvexId(conversationId)) {
-        forceRestartAttemptedRef.current = true;
-        try {
-          await restartSessionMutation({ conversation_id: conversationId as Id<"conversations"> });
-          setIsResuming(true);
-        } catch {
-          toast.error("Session restart failed");
-        }
-      }
-    }, 30_000);
+    // No auto-kill: if the gentle resume hasn't revived the session in time, just stop the
+    // spinner so the manual "Force resume / Restart & retry" controls surface. We never
+    // escalate to a destructive kill on our own — that's a human decision.
+    const timeout = setTimeout(() => setIsResuming(false), 90_000);
     return () => clearTimeout(timeout);
-  }, [isResuming, isConversationLive, isThinking, isAgentActive, messageReachedSession, conversationId, restartSessionMutation]);
+  }, [isResuming, isConversationLive, isThinking, isAgentActive, messageReachedSession]);
 
   useWatchEffect(() => {
     if (!showStuckBanner || !sessionId || isResuming || autoResumeTriggeredRef.current) return;
     // Agent already processing, or the message already reached tmux — nothing to resume.
     if (isAgentActive || messageReachedSession) return;
+    // Confirmed-undeliverable is the restart effect's job, not a gentle resume's.
+    if (messageStatus?.status === "undeliverable") return;
+    // User cancelled this message — don't fight the cancellation by resuming.
+    if (messageStatus?.status === "cancelled") return;
     if (!existingPending && !pendingMessageId) return;
     autoResumeTriggeredRef.current = true;
-    handleForceResume();
-  }, [showStuckBanner, sessionId, isResuming, isAgentActive, messageReachedSession, existingPending, pendingMessageId, handleForceResume]);
+    handleForceResume({ auto: true });
+  }, [showStuckBanner, sessionId, isResuming, isAgentActive, messageReachedSession, messageStatus?.status, existingPending, pendingMessageId, handleForceResume]);
+
+  // The one allowed automatic kill+restart. Trigger is a CONFIRMED delivery failure, never
+  // idleness: the daemon marks a message "undeliverable" only after ~10 failed injects over
+  // many minutes — i.e. the message never made it back through sync. We additionally require
+  // the agent to be inactive, because a long-running/busy agent can trip "undeliverable" purely
+  // from being busy past the retry budget, and must never be killed mid-task. Fires once.
+  useWatchEffect(() => {
+    if (autoRestartTriggeredRef.current) return;
+    if (messageStatus?.status !== "undeliverable") return;
+    if (isAgentActive || messageReachedSession) return;
+    if (!conversationId || !isConvexId(conversationId)) return;
+    autoRestartTriggeredRef.current = true;
+    setIsRestarting(true);
+    toast("Message couldn't be delivered — restarting session…");
+    restartSessionMutation({ conversation_id: conversationId as Id<"conversations"> })
+      .then(() => setIsResuming(true))
+      .catch(() => { setIsRestarting(false); toast.error("Session restart failed"); });
+  }, [messageStatus?.status, isAgentActive, messageReachedSession, conversationId, restartSessionMutation]);
 
   const updateDraft = useCallback((text: string, images?: Array<{ storageId?: string; previewUrl?: string; name?: string }> | null) => {
     if (!text && (!images || images.length === 0)) {
@@ -7008,48 +7053,41 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
                     Ready
                   </span>
                 ) : showStuckBanner && sessionId ? (
-                  isResuming ? (
-                    isSessionStarting ? (
-                      <span className="flex items-center gap-1.5 text-sol-cyan">
-                        <span className="w-2 h-2 rounded-full bg-sol-cyan/50 animate-pulse" />
-                        Starting session — waiting for agent to connect...
+                  <span className="flex items-center gap-2">
+                    {isRestarting ? (
+                      <span className="flex items-center gap-1.5 text-sol-orange">
+                        <span className="w-2 h-2 rounded-full bg-sol-orange animate-pulse" />
+                        Killing &amp; restarting session…
                       </span>
+                    ) : isResuming ? (
+                      isSessionStarting ? (
+                        <span className="flex items-center gap-1.5 text-sol-cyan">
+                          <span className="w-2 h-2 rounded-full bg-sol-cyan/50 animate-pulse" />
+                          Starting session — waiting for agent to connect...
+                        </span>
+                      ) : (
+                        <span className="flex items-center gap-1.5 text-sol-yellow">
+                          <span className="w-2 h-2 rounded-full bg-sol-yellow animate-pulse" />
+                          Waiting for connection…
+                        </span>
+                      )
                     ) : (
-                      <span className="flex items-center gap-1.5 text-sol-yellow">
-                        <span className="w-2 h-2 rounded-full bg-sol-yellow animate-pulse" />
-                        Waiting for connection…
+                      <span className="flex items-center gap-1.5 text-sol-orange">
+                        <span className="w-2 h-2 rounded-full bg-sol-orange" />
+                        Disconnected
                       </span>
-                    )
-                  ) : (
-                    <span className="flex items-center gap-1.5 text-sol-orange">
-                      <span className="w-2 h-2 rounded-full bg-sol-orange" />
-                      {isExistingMessageDead || messageStatus?.status === "undeliverable"
-                        ? "Message undeliverable — session lost"
-                        : (existingPending || pendingMessageId)
-                          ? `Message not reaching session${messageStatus?.retry_count ? ` (retry ${messageStatus.retry_count})` : ""}`
-                          : "Session not responding"}
+                    )}
+                    {(pendingMessageId || existingPending) && (
                       <button
                         type="button"
-                        onClick={handleForceResume}
-                        className="ml-1 px-1.5 py-0.5 rounded bg-sol-orange/10 hover:bg-sol-orange/20 border border-sol-orange/30 text-sol-orange transition-colors text-[10px]"
+                        onClick={handleCancelMessage}
+                        className="text-[11px] text-sol-text-dim/60 hover:text-sol-orange underline underline-offset-2 transition-colors"
+                        title="Stop retrying and discard this message"
                       >
-                        {isExistingMessageDead || messageStatus?.status === "undeliverable" || messageStatus?.status === "failed" ? "Restart & retry" : "Force resume"}
+                        Cancel
                       </button>
-                      {existingPending?.content ? (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const text = existingPending.content ?? "";
-                            if (!text) { toast.error("No message to copy"); return; }
-                            setTimeout(() => { copyToClipboard(text).then(() => toast.success("Message copied")).catch(() => toast.error("Failed to copy")); });
-                          }}
-                          className="px-1.5 py-0.5 rounded bg-sol-base01/30 hover:bg-sol-base01/50 border border-sol-base01/40 text-sol-base1 transition-colors text-[10px]"
-                        >
-                          Copy last message
-                        </button>
-                      ) : null}
-                    </span>
-                  )
+                    )}
+                  </span>
                 ) : agentStatus === "thinking" ? (
                   <span className="flex items-center gap-1.5">
                     <span className="w-2 h-2 rounded-full bg-sol-violet/50 animate-pulse" />
