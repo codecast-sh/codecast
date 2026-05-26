@@ -135,9 +135,26 @@ export async function launchChrome(opts: LaunchChromeOptions): Promise<ChromeIns
   fs.mkdirSync(opts.userDataDir, { recursive: true });
   const args = [...defaultArgs(opts), ...(opts.extraArgs ?? [])];
 
-  const child = spawn(binaryPath, args, {
-    stdio: ["ignore", "ignore", "ignore"],
-    detached: true,
+  // A missing/invalid binary surfaces differently across runtimes: Node emits
+  // an async 'error' event on the child; Bun may throw synchronously OR emit
+  // 'error'. Capture all three into one ChromeLaunchError.
+  let child: ReturnType<typeof spawn>;
+  try {
+    child = spawn(binaryPath, args, {
+      stdio: ["ignore", "ignore", "ignore"],
+      detached: true,
+    });
+  } catch (err) {
+    throw new ChromeLaunchError(
+      `failed to spawn Chromium at '${binaryPath}': ${(err as Error).message}`,
+    );
+  }
+
+  // Latch the first spawn 'error' (e.g., ENOENT) so the readiness loop can
+  // fail fast instead of letting it become an unhandled exception.
+  let spawnError: Error | null = null;
+  child.on("error", (err) => {
+    spawnError = err;
   });
 
   // Detach from parent so it survives daemon restart. We track its pid.
@@ -153,6 +170,13 @@ export async function launchChrome(opts: LaunchChromeOptions): Promise<ChromeIns
   // CDP port goes from free → bound when Chrome is ready.
   // We poll isPortFree until it returns false (i.e., Chrome is listening).
   while (Date.now() < deadline) {
+    // A spawn 'error' (e.g., bad binary path) latched asynchronously → fail fast.
+    if (spawnError) {
+      throw new ChromeLaunchError(
+        `failed to spawn Chromium at '${binaryPath}': ${(spawnError as Error).message}`,
+        pid,
+      );
+    }
     // If the child crashed early, fail fast.
     if (!isPidAlive(pid)) {
       throw new ChromeLaunchError(

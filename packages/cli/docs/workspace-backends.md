@@ -8,7 +8,7 @@ or the `--backend` CLI flag. Default is `local`.
 |---|---|---|---|
 | `local` | git worktree on this machine | Default. Fast, free, full local power. | free |
 | `e2b` | E2B Firecracker microVM (Linux) | Ephemeral isolated runs; parallel agents; CI-like work. | ~$0.07/CPU-hour, per-second |
-| `mac` | Scaleway Apple Silicon Mac (tart VM) | Persistent macOS dev env; real macOS Chrome for claude-in-chrome; Xcode/iOS. | ~€0.11/host-hour |
+| `mac` | Scaleway Apple Silicon Mac (tart VM) | Persistent macOS dev env; real macOS Chrome for claude-in-chrome; Xcode/iOS. | M1-M ~€0.11/h, **24h min lease (~€2.64)** |
 
 All backends satisfy the same contract — `acquire / release / exec / readFile
 / writeFile / validate / list` — so the rest of codecast treats them
@@ -59,8 +59,9 @@ cast workspace acquire feat-x --backend e2b
 - `readFile`/`writeFile` use E2B's filesystem API.
 - `release` kills the sandbox (and stops billing).
 
-**Limits:** 24-hour max session (E2B platform limit). Linux only — no macOS
-tooling. Browser is headless Chromium in the Desktop Sandbox template.
+**Limits:** 1-hour max session by default (extendable via the SDK while in
+use). Linux only — no macOS tooling. Browser is headless Chromium in the
+Desktop Sandbox template.
 
 ## mac — persistent macOS dev environments
 
@@ -86,12 +87,12 @@ export SCALEWAY_PROJECT_ID="..."   # console.scaleway.com/project/settings
 cast workspace acquire feat-x --backend mac
 ```
 
-**Cost discipline:** hosts auto-stop after 30 min idle (resume in ~1 min) and
-auto-destroy after 24 h idle. Hourly billing means a forgotten host is ~€2.64/day
-— the auto-stop keeps that in check. Override with keep-alive if you need it.
-
-**First-run cost:** one M1 host-hour ≈ €0.11. Provisioning + a short session
-is well under €0.50.
+**Cost reality:** macOS cloud hosts have a **24-hour minimum lease** (Apple
+licensing — true on AWS, Scaleway, MacStadium alike; not avoidable). M1-M ≈
+€0.11/h → **~€2.64 minimum** committed per host, even if released immediately.
+So the discipline is: provision once, run many workspaces on it through the
+day, let it auto-destroy after the committed window. Don't spin a host up for a
+30-second task.
 
 ## Writing a custom backend
 

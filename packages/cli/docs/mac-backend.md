@@ -100,14 +100,33 @@ After the first acquire, subsequent ones reuse the host and skip 1-7. They take 
 
 ## Idle handling and cost discipline
 
-Scaleway bills hourly, no minimum, but a forgotten M1 host costs ~€2.64/day. We need automatic discipline:
+**Reality check (verified against the live Scaleway API):** every macOS server
+type carries `minimum_lease_duration = 86400s` — a **24-hour minimum billing
+commitment**. This is an **Apple licensing requirement** (macOS EULA mandates a
+24h minimum for cloud Mac rentals), identical across AWS EC2 Mac, Scaleway, and
+MacStadium. It is **not** a provider-specific quirk, and there is no sub-24h
+macOS option anywhere. (Scaleway's only 0s-minimum Apple Silicon type is
+`M2-L-ASAHI`, which runs Asahi **Linux** — useless for our real-macOS goal.)
 
-- Hosts in `~/.codecast/scaleway/hosts.json` carry `lastUsedAt` timestamp.
-- A background daemon (or `cast workspace mac status` invocation) checks idle time.
-- After configurable idle threshold (default 30 min after last workspace activity), the host is **stopped** (not destroyed — Scaleway lets you stop and resume billing). Subsequent acquire resumes it in ~minute, much faster than fresh provision.
-- After longer threshold (default 24h idle), the host is destroyed entirely.
+This changes the cost model fundamentally:
 
-User can override with `cast workspace mac keep-alive` to disable auto-stop.
+- Provisioning a host commits to ~24h of billing (M1-M ≈ €0.11/h → ~€2.64
+  minimum) **even if released seconds later**. Stopping early does NOT refund
+  the committed window.
+- Therefore the discipline is NOT "stop quickly to save money" — it's
+  **"provision deliberately, then amortize hard across the 24h window."** One
+  host should serve many workspaces for a full day before teardown.
+
+Concrete policy:
+
+- Hosts in `~/.codecast/scaleway/hosts.json` carry `lastUsedAt`.
+- `autoStopIdleHosts()` powers a host off after idle (default 30 min) to stop
+  *additional* charges beyond the committed window and free the hardware — but
+  understand the first 24h is already sunk.
+- `autoDestroyOldHosts()` destroys hosts idle > 24h (after the committed window
+  elapses, so destruction wastes nothing).
+- Best practice for users: provision once at the start of a Mac-heavy work
+  session, run all your workspaces on it that day, let it auto-destroy after.
 
 ## SandboxBackend method mapping
 
