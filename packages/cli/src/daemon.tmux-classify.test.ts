@@ -251,6 +251,21 @@ describe("classifyTmuxLiveState", () => {
     expect(classifyTmuxLiveState("  Update available: 1.1.36 → 1.1.40\n  Press enter to continue")).toBe("warning");
   });
 
+  test("idle beats 'Update available' persistent footer when input prompt is visible", () => {
+    // Regression: Claude Code's persistent footer renders "Update available! Run:
+    // brew upgrade claude-code" below the input box on every turn when an update
+    // is pending. It is NOT a blocking modal — the input prompt (❯) stays usable.
+    // Pre-fix, the classifier matched /Update available/ first and returned
+    // "warning", which made ensureTmuxReady press Enter against the still-visible
+    // banner, loop 3x, throw AGENT_STUCK_WARNING (and in practice AGENT_BUSY when
+    // the agent was also working), and abandon delivery — so no Codecast-launched
+    // tmux session could ever receive a message while any Claude update was
+    // available. Real blocker warnings replace the input box, so prompt-visible
+    // is a reliable "no modal" signal.
+    const region = "❯  \n──────────────\n  ⏵⏵ bypass permissions on (shift+tab to cycle)\n     Update available! Run: brew upgrade claude-code";
+    expect(classifyTmuxLiveState(region)).toBe("idle");
+  });
+
   test("exited: 'Resume this session with:' surfaced in the live region", () => {
     expect(classifyTmuxLiveState("Resume this session with: claude --resume abc123")).toBe("exited");
   });

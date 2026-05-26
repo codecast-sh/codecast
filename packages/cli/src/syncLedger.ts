@@ -146,25 +146,25 @@ export function findUnsyncedFiles(
             const stats = fs.statSync(fullPath);
             const fileAge = now - stats.mtimeMs;
 
-            // Skip files older than maxAge
-            if (fileAge > maxAgeMs) continue;
-
             const record = ledger[fullPath];
             const legacyPosition = positions[fullPath];
 
             if (record) {
-              // Check against sync ledger
+              // A ledger record means this file was tracked at some point. If the
+              // current size is past lastSyncedPosition, the remainder is unsynced
+              // — surface it regardless of age, otherwise stale-then-aged files
+              // (e.g. sync wedged 8 days ago) silently never recover. The age
+              // filter only protects against rediscovering long-abandoned files
+              // we never tracked.
               if (stats.mtimeMs > record.lastSyncedAt || stats.size > record.lastSyncedPosition) {
                 unsynced.push(fullPath);
               }
             } else if (legacyPosition !== undefined) {
-              // Fallback to legacy positions.json
               if (stats.size > legacyPosition) {
                 unsynced.push(fullPath);
               }
-              // If size == position, file is fully synced in legacy system
             } else {
-              // Never synced in either system
+              if (fileAge > maxAgeMs) continue;
               unsynced.push(fullPath);
             }
           } catch {
