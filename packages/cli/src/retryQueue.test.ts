@@ -1,4 +1,7 @@
 import { describe, it, expect, beforeEach } from "bun:test";
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
 import { RetryQueue } from "./retryQueue.js";
 
 describe("RetryQueue", () => {
@@ -269,6 +272,23 @@ describe("RetryQueue", () => {
     expect(pending[1].type).toBe("createConversation");
   });
 
+  it("reports zero health when the queue is empty", () => {
+    expect(queue.getHealth()).toEqual({ pending: 0, oldestPendingMs: 0 });
+  });
+
+  it("reports backlog size and the oldest pending op's age", () => {
+    queue.add("addMessage", { content: "a" });
+    queue.add("addMessage", { content: "b" });
+
+    // Backdate the first op to simulate a sustained stall. getPendingOperations
+    // returns the live op objects, so mutating createdAt affects the queue.
+    queue.getPendingOperations()[0].createdAt = Date.now() - 5 * 60 * 1000;
+
+    const health = queue.getHealth();
+    expect(health.pending).toBe(2);
+    expect(health.oldestPendingMs).toBeGreaterThanOrEqual(5 * 60 * 1000);
+  });
+
   it("should drop stale-conversation errors on first failure (no retries)", async () => {
     // Regression: previously, "Unauthorized: can only add messages to your own
     // conversations" was treated as transient — the queue retried forever, flooding
@@ -327,6 +347,56 @@ describe("RetryQueue", () => {
     expect((pending[0].params as { messages: unknown[] }).messages.length).toBe(25);
   });
 
+  it("never runs two ops for the same conversation concurrently", async () => {
+    // Regression: the server addMessages mutation reads+patches the conversation
+    // doc, so parallel ops for one conversation collided on that hot-doc → OCC
+    // retries → 60s timeouts → re-queue → a self-amplifying stall. The queue must
+    // serialize per-conversation even though global concurrency is >1.
+    const q = new RetryQueue({ initialDelayMs: 10, maxDelayMs: 50, concurrency: 5, onLog: () => {} });
+    let activeForConv = 0;
+    let maxConcurrentForConv = 0;
+    q.setExecutor(async (op) => {
+      if (op.params.conversationId === "hot") {
+        activeForConv++;
+        maxConcurrentForConv = Math.max(maxConcurrentForConv, activeForConv);
+        await new Promise((r) => setTimeout(r, 30));
+        activeForConv--;
+      }
+      return true;
+    });
+
+    // 4 ops for the same conversation + 1 for another, all ready at once.
+    for (let i = 0; i < 4; i++) q.add("addMessages", { conversationId: "hot", messages: [{ messageUuid: `h${i}` }] });
+    q.add("addMessages", { conversationId: "other", messages: [{ messageUuid: "o0" }] });
+
+    await q.waitForCompletion(2000);
+    expect(maxConcurrentForConv).toBe(1);
+    expect(q.getQueueSize()).toBe(0);
+  });
+
+  it("coalesces re-enqueued messages already pending for a conversation", async () => {
+    // Regression: while a batch is stuck, the live sync path re-reads the same
+    // backlog every poll and re-enqueues it, piling the same messages up 12x.
+    // Re-adding messages already queued for a conversation must be a no-op.
+    queue.add("addMessages", { conversationId: "c1", messages: [{ messageUuid: "a" }, { messageUuid: "b" }] });
+    expect(queue.getQueueSize()).toBe(1);
+
+    // Same two messages again → fully coalesced, no new op.
+    const dup = queue.add("addMessages", { conversationId: "c1", messages: [{ messageUuid: "a" }, { messageUuid: "b" }] });
+    expect(dup).toBe("");
+    expect(queue.getQueueSize()).toBe(1);
+
+    // Overlapping batch → only the genuinely-new message is queued.
+    queue.add("addMessages", { conversationId: "c1", messages: [{ messageUuid: "b" }, { messageUuid: "c" }] });
+    const ops = queue.getPendingOperations().filter((o) => o.params.conversationId === "c1");
+    const queuedUuids = ops.flatMap((o) => (o.params.messages as Array<{ messageUuid: string }>).map((m) => m.messageUuid));
+    expect(queuedUuids.sort()).toEqual(["a", "b", "c"]);
+
+    // A different conversation is unaffected by c1's pending set.
+    queue.add("addMessages", { conversationId: "c2", messages: [{ messageUuid: "a" }] });
+    expect(queue.getPendingOperations().some((o) => o.params.conversationId === "c2")).toBe(true);
+  });
+
   it("should handle rate limit delays", async () => {
     let attempts = 0;
     queue.setExecutor(async () => {
@@ -344,5 +414,49 @@ describe("RetryQueue", () => {
     await new Promise((r) => setTimeout(r, 2500));
     expect(attempts).toBe(2);
     expect(queue.getQueueSize()).toBe(0);
+  });
+
+  it("collapses a duplicate-bloated persisted queue on load (self-heal)", () => {
+    // Reproduces the 283-op / 16MB stuck queue: the live path re-enqueued the same
+    // messages every poll while a batch was jammed, so disk held the same uuids 12x.
+    // On restart the queue must collapse to its distinct messages, not drain dupes.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rq-load-"));
+    const persistPath = path.join(dir, "retry-queue.json");
+    try {
+      const dupOp = (n: number) => ({
+        id: `addMessages-${n}`,
+        type: "addMessages",
+        params: { conversationId: "hot", messages: [{ messageUuid: "a" }, { messageUuid: "b" }] },
+        attempts: 0,
+        nextRetryAt: Date.now(),
+        createdAt: Date.now(),
+        lastError: "timed out",
+      });
+      // 12 identical ops for one conversation + one op for another conversation.
+      const persisted = [
+        ...Array.from({ length: 12 }, (_, i) => dupOp(i)),
+        { id: "addMessages-other", type: "addMessages", params: { conversationId: "cold", messages: [{ messageUuid: "z" }] }, attempts: 0, nextRetryAt: Date.now(), createdAt: Date.now() },
+      ];
+      fs.writeFileSync(persistPath, JSON.stringify(persisted));
+
+      const logs: string[] = [];
+      const loaded = new RetryQueue({ persistPath, onLog: (m) => logs.push(m) });
+
+      // hot: only the first op survives (a,b once); cold: untouched.
+      const ops = loaded.getPendingOperations();
+      const hotUuids = ops
+        .filter((o) => o.params.conversationId === "hot")
+        .flatMap((o) => (o.params.messages as Array<{ messageUuid: string }>).map((m) => m.messageUuid));
+      expect(hotUuids.sort()).toEqual(["a", "b"]);
+      expect(ops.some((o) => o.params.conversationId === "cold")).toBe(true);
+      expect(logs.some((l) => l.includes("deduped"))).toBe(true);
+
+      // And the healed (collapsed) queue is rewritten to disk so the bloat is gone.
+      const rewritten = JSON.parse(fs.readFileSync(persistPath, "utf-8"));
+      const totalMsgs = rewritten.reduce((n: number, o: any) => n + (o.params?.messages?.length ?? 0), 0);
+      expect(totalMsgs).toBe(3); // a, b, z
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

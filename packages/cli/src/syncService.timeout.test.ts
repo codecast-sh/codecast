@@ -83,6 +83,102 @@ describe("SyncService.addMessages timeout regression", () => {
   });
 });
 
+describe("SyncService.uploadImage timeout regression", () => {
+  // A 260KB image message whose upload hung (un-timed fetch / generateUploadUrl)
+  // wedged the file-watcher: its position never advanced past the image and every
+  // later turn stopped syncing (session 2a081608 — web frozen ~1h behind tmux).
+  // Each network leg is now time-boxed so a hang degrades to null instead.
+  const smallPng = "aGVsbG8="; // "hello" — tiny, well under MAX_IMAGE_SIZE
+
+  it("returns null (does not hang) when generateUploadUrl never resolves", async () => {
+    const sync = new SyncService({ convexUrl: "http://localhost:0", userId: "u", authToken: "t" });
+    (sync as any).imageUploadTimeoutMs = 100;
+    (sync as any).client = { mutation: () => new Promise(() => { /* hangs forever */ }) };
+
+    const start = Date.now();
+    const result = await (sync as any).uploadImage(smallPng, "image/png");
+    expect(result).toBeNull();
+    expect(Date.now() - start).toBeLessThan(2000); // bounded, not hung
+  }, 5000);
+
+  it("returns null (does not hang) when the upload fetch never resolves", async () => {
+    const sync = new SyncService({ convexUrl: "http://localhost:0", userId: "u", authToken: "t" });
+    (sync as any).imageUploadTimeoutMs = 100;
+    (sync as any).client = { mutation: async () => "https://upload.example/url" };
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = (() => new Promise(() => { /* hangs forever */ })) as any;
+    try {
+      const start = Date.now();
+      const result = await (sync as any).uploadImage(smallPng, "image/png");
+      expect(result).toBeNull();
+      expect(Date.now() - start).toBeLessThan(2000);
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+  }, 5000);
+
+  it("returns the storageId on a prompt successful upload", async () => {
+    const sync = new SyncService({ convexUrl: "http://localhost:0", userId: "u", authToken: "t" });
+    (sync as any).client = { mutation: async () => "https://upload.example/url" };
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = (async () => ({ ok: true, json: async () => ({ storageId: "kg123" }) })) as any;
+    try {
+      const result = await (sync as any).uploadImage(smallPng, "image/png");
+      expect(result).toBe("kg123");
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+  });
+});
+
+describe("SyncService.offloadImages", () => {
+  // Offloading images BEFORE they enter the retry queue is what keeps the queue
+  // small and stops every retry re-uploading the same image. A 511KB inline
+  // screenshot persisted as raw base64 grew the retry queue to 16MB and, fighting
+  // for the conversation hot-doc, drove the 283-op stall.
+  const smallImg = "aGVsbG8="; // 5 decoded bytes
+  const hugeImg = "A".repeat(700_000); // ~525KB decoded, over MAX_INLINE_IMAGE_SIZE (500KB)
+
+  function make(authToken = "t") {
+    return new SyncService({ convexUrl: "http://localhost:0", userId: "u", authToken });
+  }
+
+  it("replaces data with storageId on successful upload (no raw base64 left)", async () => {
+    const sync = make();
+    (sync as any).uploadImage = async () => "kg-stored";
+    const msgs = [{ images: [{ mediaType: "image/png", data: hugeImg }] }];
+    await sync.offloadImages(msgs);
+    expect(msgs[0].images).toEqual([{ mediaType: "image/png", storageId: "kg-stored", toolUseId: undefined }]);
+    expect((msgs[0].images![0] as any).data).toBeUndefined();
+  });
+
+  it("drops an oversized image when upload fails (cannot inline, must not persist)", async () => {
+    const sync = make();
+    (sync as any).uploadImage = async () => null;
+    const msgs = [{ images: [{ mediaType: "image/png", data: hugeImg }] }];
+    await sync.offloadImages(msgs);
+    expect(msgs[0].images).toBeUndefined();
+  });
+
+  it("keeps a small image inline when upload fails", async () => {
+    const sync = make();
+    (sync as any).uploadImage = async () => null;
+    const msgs = [{ images: [{ mediaType: "image/png", data: smallImg }] }];
+    await sync.offloadImages(msgs);
+    expect(msgs[0].images).toEqual([{ mediaType: "image/png", data: smallImg }]);
+  });
+
+  it("is idempotent: an already-offloaded image is left untouched and not re-uploaded", async () => {
+    const sync = make();
+    let uploads = 0;
+    (sync as any).uploadImage = async () => { uploads++; return "should-not-happen"; };
+    const msgs = [{ images: [{ mediaType: "image/png", storageId: "kg-existing" }] }];
+    await sync.offloadImages(msgs);
+    expect(uploads).toBe(0);
+    expect(msgs[0].images).toEqual([{ mediaType: "image/png", storageId: "kg-existing" }]);
+  });
+});
+
 describe("chunkMessagesBySize", () => {
   it("keeps a batch within both the count and byte caps", () => {
     const msgs = Array.from({ length: 25 }, (_, i) => ({ id: i, body: "x" }));
