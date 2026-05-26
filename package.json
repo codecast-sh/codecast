@@ -24,12 +24,17 @@
     "@codecast/web": "workspace:*",
     "@tanstack/react-virtual": "^3.13.18",
     "convex": "^1.31.6",
+    "e2b": "^2.24.0",
     "nanoid": "^5.1.7"
   },
   "overrides": {
-    "@radix-ui/react-slot": "1.2.4"
+    "@radix-ui/react-slot": "1.2.4",
+    "react": "19.1.0",
+    "react-dom": "19.1.0"
   },
   "resolutions": {
-    "@radix-ui/react-slot": "1.2.4"
+    "@radix-ui/react-slot": "1.2.4",
+    "react": "19.1.0",
+    "react-dom": "19.1.0"
   }
 }
