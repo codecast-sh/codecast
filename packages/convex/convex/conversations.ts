@@ -10,7 +10,7 @@ import { internal } from "./_generated/api";
 import { resetConversationPendingMessages } from "./pendingMessages";
 import { advanceForkCopy, type ForkCopyCtx } from "./forkCopy";
 import { hasRecentPendingDaemonCommand } from "./daemonCommandUtils";
-import { shouldShowInInbox } from "./inboxFilters";
+import { shouldShowInInbox, isSessionIdle } from "./inboxFilters";
 import { filterUserMessages } from "./userMessagesFilter";
 import {
   isTeamMember,
@@ -5904,6 +5904,7 @@ export const listInboxSessions = query({
     );
 
     const agentStatusMap = new Map<string, "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "stopped" | "starting" | "resuming">();
+    const agentStatusUpdatedAtMap = new Map<string, number>();
     const tmuxSessionMap = new Map<string, string>();
     const permissionModeMap = new Map<string, string>();
     for (const s of managedSessions) {
@@ -5912,6 +5913,7 @@ export const listInboxSessions = query({
       if (s.tmux_session) tmuxSessionMap.set(cid, s.tmux_session);
       if (s.permission_mode) permissionModeMap.set(cid, s.permission_mode);
       if (!s.agent_status) continue;
+      if (s.agent_status_updated_at !== undefined) agentStatusUpdatedAtMap.set(cid, s.agent_status_updated_at);
       const heartbeatAlive = now - s.last_heartbeat < HEARTBEAT_ALIVE_MS;
       if (s.agent_status === "stopped" || s.agent_status === "idle") {
         agentStatusMap.set(cid, s.agent_status);
@@ -5997,19 +5999,21 @@ export const listInboxSessions = query({
         (hasPending && !recentlyUpdated)
       );
 
-      const agentStatusIdle = agentStatus
-        ? agentStatus !== "working" && agentStatus !== "compacting" && agentStatus !== "thinking" && agentStatus !== "connected" && agentStatus !== "starting" && agentStatus !== "resuming"
-        : false;
       // Even when the agent reports idle, recent activity (assistant just
       // finished streaming), pending messages, or a trailing user message all
-      // mean work is in flight — don't flag as idle yet. The recentlyUpdated
-      // grace mirrors the "working" pill in ConversationView so the inbox
-      // bucket and the per-conversation header agree.
-      let isIdle = agentStatus
-        ? agentStatusIdle && !hasPending && !lastRoleIsUser && !recentlyUpdated
-        : daemonAlive
-          ? (!hasPending && !lastRoleIsUser && !recentlyUpdated)
-          : !recentlyUpdated;
+      // mean work is in flight — don't flag as idle yet. The grace is measured
+      // from the agent's status-change time, not conv.updated_at, so a syncing
+      // message backlog can't hold a finished agent in "working". See
+      // isSessionIdle.
+      let isIdle = isSessionIdle({
+        agentStatus,
+        agentStatusUpdatedAt: agentStatusUpdatedAtMap.get(conv._id.toString()),
+        hasPending,
+        lastRoleIsUser,
+        recentlyUpdated,
+        daemonAlive,
+        now,
+      });
 
       // An open AskUserQuestion poll is the agent blocking on the user — it
       // belongs in "needs input", never "working". The daemon's agent_status is

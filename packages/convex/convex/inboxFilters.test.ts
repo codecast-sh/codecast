@@ -3,7 +3,10 @@ import {
   isNoiseTitle,
   isOrphanOrSubagent,
   shouldShowInInbox,
+  isSessionIdle,
+  AGENT_IDLE_GRACE_MS,
   type ConversationDoc,
+  type SessionIdleInput,
 } from "./inboxFilters";
 
 function conv(partial: Partial<ConversationDoc> = {}): ConversationDoc {
@@ -146,5 +149,72 @@ describe("shouldShowInInbox", () => {
 
   test("noise-prefixed title → hide", () => {
     expect(shouldShowInInbox(conv({ title: "[Request interrupted]" }))).toBe(false);
+  });
+});
+
+describe("isSessionIdle", () => {
+  const NOW = 1_000_000_000;
+  function idleInput(partial: Partial<SessionIdleInput> = {}): SessionIdleInput {
+    return {
+      agentStatus: "idle",
+      agentStatusUpdatedAt: NOW - 2 * AGENT_IDLE_GRACE_MS, // settled by default
+      hasPending: false,
+      lastRoleIsUser: false,
+      recentlyUpdated: false,
+      daemonAlive: true,
+      now: NOW,
+      ...partial,
+    };
+  }
+
+  test("REGRESSION: finished agent stays idle while a message backlog churns updated_at", () => {
+    // The bug: a done agent (status idle past the grace) was pinned in "working"
+    // because conv.updated_at kept advancing as a 285→552 message backlog synced
+    // in, holding recentlyUpdated=true. The grace must key off the status-change
+    // time instead, so the churn no longer matters.
+    expect(isSessionIdle(idleInput({ recentlyUpdated: true }))).toBe(true);
+  });
+
+  test("settled idle ignores a lagging last_message_role (final turn not synced yet)", () => {
+    expect(isSessionIdle(idleInput({ lastRoleIsUser: true }))).toBe(true);
+  });
+
+  test("stopped agent past the grace is idle", () => {
+    expect(isSessionIdle(idleInput({ agentStatus: "stopped", recentlyUpdated: true }))).toBe(true);
+  });
+
+  test("within the grace, a just-finished agent is NOT idle (anti-flicker preserved)", () => {
+    expect(
+      isSessionIdle(
+        idleInput({ agentStatusUpdatedAt: NOW - 1000, recentlyUpdated: true }),
+      ),
+    ).toBe(false);
+  });
+
+  test("pending work keeps a settled-idle agent out of idle", () => {
+    expect(isSessionIdle(idleInput({ hasPending: true }))).toBe(false);
+  });
+
+  test("active statuses are never idle, regardless of timestamps", () => {
+    for (const agentStatus of ["working", "thinking", "compacting", "connected", "starting", "resuming"]) {
+      expect(isSessionIdle(idleInput({ agentStatus }))).toBe(false);
+    }
+  });
+
+  test("missing status timestamp falls back to conv.updated_at recency", () => {
+    // Legacy session with no agent_status_updated_at: old behavior.
+    expect(
+      isSessionIdle(idleInput({ agentStatusUpdatedAt: undefined, recentlyUpdated: true })),
+    ).toBe(false);
+    expect(
+      isSessionIdle(idleInput({ agentStatusUpdatedAt: undefined, recentlyUpdated: false })),
+    ).toBe(true);
+  });
+
+  test("no daemon status: defers to liveness + recency", () => {
+    expect(isSessionIdle(idleInput({ agentStatus: undefined, daemonAlive: true, recentlyUpdated: true }))).toBe(false);
+    expect(isSessionIdle(idleInput({ agentStatus: undefined, daemonAlive: true, recentlyUpdated: false }))).toBe(true);
+    // Dead daemon, not recently updated → idle (needs user attention).
+    expect(isSessionIdle(idleInput({ agentStatus: undefined, daemonAlive: false, recentlyUpdated: false }))).toBe(true);
   });
 });
