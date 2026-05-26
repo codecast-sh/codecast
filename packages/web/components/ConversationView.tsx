@@ -6472,8 +6472,11 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
         setAcIndex(0);
         onMentionQuery?.(atMatch[1] || "");
       } else {
+        // No active @-mention: don't rebuild the mention index. buildMentionItems
+        // (in the parent) sorts/maps every session/task/doc/plan, and it only
+        // matters once the @ dropdown is open — doing it on every normal keystroke
+        // was pure waste on the typing hot path.
         setAcTrigger(null);
-        onMentionQuery?.("");
       }
     }
     if (!sendingRef.current) {
@@ -7838,12 +7841,26 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const messagesFromConv = conversation?.messages;
   const messages = useMemo<Message[]>(() => {
     if (!messagesFromConv) return EMPTY_MESSAGES;
-    const hasJSONLAskUser = messagesFromConv.some(m =>
-      m.tool_calls?.some(tc => tc.name === "AskUserQuestion") &&
-      !m.message_uuid?.startsWith("interactive-prompt-")
-    );
-    if (!hasJSONLAskUser) return messagesFromConv;
-    return messagesFromConv.filter(m => !m.message_uuid?.startsWith("interactive-prompt-"));
+    // A real (JSONL) AskUserQuestion tool call carries full fidelity. During the
+    // brief race before its tool_use is detected, the daemon may also emit a
+    // synthetic `interactive-prompt-` scrape of the same on-screen menu — a
+    // degraded duplicate that should be hidden. But that duplication only happens
+    // when the two land within seconds of each other. TUI slash menus (/model,
+    // /agents, …) are *only ever* synthetic and have no JSONL counterpart, so a
+    // conversation-global "drop all synthetic polls" filter wrongly erases them.
+    // Suppress a synthetic poll only when a real AUQ sits near it in time.
+    const realAskTimes = messagesFromConv
+      .filter(m =>
+        m.tool_calls?.some(tc => tc.name === "AskUserQuestion") &&
+        !m.message_uuid?.startsWith("interactive-prompt-")
+      )
+      .map(m => m.timestamp);
+    if (realAskTimes.length === 0) return messagesFromConv;
+    const DUP_WINDOW_MS = 2 * 60_000;
+    return messagesFromConv.filter(m => {
+      if (!m.message_uuid?.startsWith("interactive-prompt-")) return true;
+      return !realAskTimes.some(rt => Math.abs(rt - m.timestamp) <= DUP_WINDOW_MS);
+    });
   }, [messagesFromConv]);
 
   const agentNameToChildMap = useMemo(() => {
