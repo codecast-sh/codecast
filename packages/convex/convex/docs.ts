@@ -649,7 +649,7 @@ export const search = query({
 
     const results = await ctx.db
       .query("docs")
-      .withSearchIndex("search_docs", (q) => {
+      .withSearchIndex("search_docs_v2", (q) => {
         let search = q.search("title", args.query).eq("user_id", auth.userId);
         if (args.doc_type) search = search.eq("doc_type", args.doc_type as any);
         return search;
@@ -961,7 +961,7 @@ export const webSearch = query({
 
     const results = await ctx.db
       .query("docs")
-      .withSearchIndex("search_docs", (q) => {
+      .withSearchIndex("search_docs_v2", (q) => {
         let search = q.search("title", args.query).eq("user_id", userId);
         if (args.doc_type) search = search.eq("doc_type", args.doc_type as any);
         return search;
@@ -1349,7 +1349,7 @@ export const mentionSearch = query({
         const teamStr = String(teamId);
         const searchHits = await ctx.db
           .query("tasks")
-          .withSearchIndex("search_tasks", (s: any) => s.search("title", args.query))
+          .withSearchIndex("search_tasks_v2", (s: any) => s.search("title", args.query))
           .take(perType * 20);
         tasks = searchHits.filter((t: any) => String(t.team_id || "") === teamStr);
       } else if (teamId) {
@@ -1361,7 +1361,7 @@ export const mentionSearch = query({
       } else if (q) {
         tasks = await ctx.db
           .query("tasks")
-          .withSearchIndex("search_tasks", (s: any) => s.search("title", args.query).eq("user_id", userId))
+          .withSearchIndex("search_tasks_v2", (s: any) => s.search("title", args.query).eq("user_id", userId))
           .take(perType * 5);
       } else {
         tasks = await ctx.db
@@ -1395,7 +1395,7 @@ export const mentionSearch = query({
       } else if (q) {
         docs = await db.raw
           .query("docs")
-          .withSearchIndex("search_docs", (s: any) => s.search("title", args.query).eq("user_id", userId))
+          .withSearchIndex("search_docs_v2", (s: any) => s.search("title", args.query).eq("user_id", userId))
           .take(perType * 5);
       } else {
         docs = await db.raw

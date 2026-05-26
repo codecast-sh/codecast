@@ -267,7 +267,7 @@ export default defineSchema({
     .index("by_team_id", ["team_id"])
     .index("by_team_user_updated", ["team_id", "user_id", "updated_at"])
     .index("by_agent_type", ["agent_type"])
-    .vectorIndex("by_title_embedding", {
+    .vectorIndex("by_title_embedding_v2", {
       vectorField: "title_embedding",
       dimensions: 1024,
       filterFields: ["user_id"],
@@ -282,7 +282,7 @@ export default defineSchema({
     .index("by_user_pinned", ["user_id", "inbox_pinned_at"])
     .index("by_user_dismissed", ["user_id", "inbox_dismissed_at"])
     .index("by_workflow_run", ["workflow_run_id"])
-    .searchIndex("search_title", {
+    .searchIndex("search_title_v2", {
       searchField: "title",
       filterFields: ["user_id"],
     }),
@@ -362,11 +362,11 @@ export default defineSchema({
     .index("by_message_uuid", ["message_uuid"])
     .index("by_timestamp", ["timestamp"])
     .index("by_conversation_role_timestamp", ["conversation_id", "role", "timestamp"])
-    .searchIndex("search_content", {
+    .searchIndex("search_content_v2", {
       searchField: "content",
       filterFields: ["conversation_id"],
     })
-    .vectorIndex("by_embedding", {
+    .vectorIndex("by_embedding_v2", {
       vectorField: "embedding",
       dimensions: 1024,
       filterFields: ["conversation_id"],
@@ -402,7 +402,7 @@ export default defineSchema({
     .index("by_user_id", ["user_id"])
     .index("by_user_project", ["user_id", "project_path"])
     .index("by_team_id", ["team_id"])
-    .searchIndex("search_decisions", {
+    .searchIndex("search_decisions_v2", {
       searchField: "title",
       filterFields: ["user_id", "project_path"],
     }),
@@ -424,7 +424,7 @@ export default defineSchema({
     .index("by_user_id", ["user_id"])
     .index("by_user_name", ["user_id", "name"])
     .index("by_team_id", ["team_id"])
-    .searchIndex("search_patterns", {
+    .searchIndex("search_patterns_v2", {
       searchField: "name",
       filterFields: ["user_id"],
     }),
@@ -1270,7 +1270,7 @@ export default defineSchema({
     .index("by_workflow_run", ["workflow_run_id"])
     .index("by_assignee_status", ["assignee", "status"])
     .index("by_assignee_updated", ["assignee", "updated_at"])
-    .searchIndex("search_tasks", {
+    .searchIndex("search_tasks_v2", {
       searchField: "title",
       filterFields: ["user_id", "project_id", "status"],
     }),
@@ -1430,11 +1430,11 @@ export default defineSchema({
     .index("by_source_file", ["source_file"])
     .index("by_conversation_id", ["conversation_id"])
     .index("by_share_token", ["share_token"])
-    .searchIndex("search_docs", {
+    .searchIndex("search_docs_v2", {
       searchField: "title",
       filterFields: ["user_id", "doc_type", "project_id"],
     })
-    .vectorIndex("by_doc_embedding", {
+    .vectorIndex("by_doc_embedding_v2", {
       vectorField: "embedding",
       dimensions: 1024,
       filterFields: ["user_id"],

@@ -2640,7 +2640,7 @@ export const searchConversations = query({
     // cost of pulling more bytes per query.
     const searchResults = await ctx.db
       .query("messages")
-      .withSearchIndex("search_content", (q) => q.search("content", searchQuery))
+      .withSearchIndex("search_content_v2", (q) => q.search("content", searchQuery))
       .take(512);
 
     // Group messages by conversation (keep messages matching ANY term for context)
@@ -2674,7 +2674,7 @@ export const searchConversations = query({
     if (!userOnly) {
       const titleHits = await ctx.db
         .query("conversations")
-        .withSearchIndex("search_title", (q) => q.search("title", searchQuery))
+        .withSearchIndex("search_title_v2", (q) => q.search("title", searchQuery))
         .take(50);
       for (const conv of titleHits) {
         const convId = conv._id.toString();
@@ -3365,7 +3365,7 @@ export const searchForCLI = query({
     for (const term of terms.all) {
       const results = await ctx.db
         .query("messages")
-        .withSearchIndex("search_content", (q) => q.search("content", term))
+        .withSearchIndex("search_content_v2", (q) => q.search("content", term))
         .take(200);
       for (const msg of results) {
         const msgId = msg._id.toString();
@@ -4974,7 +4974,7 @@ export const feedForCLI = query({
       for (const term of terms.all) {
         const results = await ctx.db
           .query("messages")
-          .withSearchIndex("search_content", (q) => q.search("content", term))
+          .withSearchIndex("search_content_v2", (q) => q.search("content", term))
           .take(200);
         for (const msg of results) {
           const msgId = msg._id.toString();
