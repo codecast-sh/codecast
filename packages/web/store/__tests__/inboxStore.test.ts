@@ -788,3 +788,52 @@ describe("pending user messages must never be lost on reload", () => {
     expect(useInboxStore.getState().pendingMessages.c1).toHaveLength(0);
   });
 });
+
+// Regression: a finished agent stuck in "Working" because the sync layer dropped
+// the status flip. listInboxSessions derives agent_status/is_idle from
+// managed_sessions + an idle grace, so they change WITHOUT bumping updated_at;
+// the identity-reuse optimization used to swallow that, pinning the card in the
+// wrong bucket. The sessions config now lists those volatileFields. This drives
+// the real syncTable("sessions", ...) path end-to-end.
+describe("syncTable sessions — status flip without updated_at bump", () => {
+  beforeEach(() => {
+    useInboxStore.setState({ sessions: {}, conversations: {}, pending: {} } as any);
+  });
+
+  it("moves a session from Working to Needs Input when only the status changes", () => {
+    const store = useInboxStore.getState();
+    const working = {
+      ...baseSession, _id: "conv-flip", session_id: "sess-flip",
+      message_count: 5, agent_status: "working" as const, is_idle: false,
+      has_pending: false, updated_at: 1000,
+    };
+    store.syncTable("sessions", [working]);
+    let cat = categorizeSessions(useInboxStore.getState().sessions, new Set());
+    expect(cat.working.map((s) => s._id)).toContain("conv-flip");
+
+    // Agent finished its turn: server recomputes idle/stopped, but writes no new
+    // message, so updated_at is UNCHANGED.
+    store.syncTable("sessions", [{
+      ...working, agent_status: "idle" as const, is_idle: true, updated_at: 1000,
+    }]);
+    cat = categorizeSessions(useInboxStore.getState().sessions, new Set());
+    expect(cat.needsInput.map((s) => s._id)).toContain("conv-flip");
+    expect(cat.working.map((s) => s._id)).not.toContain("conv-flip");
+  });
+
+  it("preserves the session object ref across a heartbeat-only resend", () => {
+    const store = useInboxStore.getState();
+    const s = {
+      ...baseSession, _id: "conv-stable", session_id: "sess-stable",
+      message_count: 5, agent_status: "working" as const, is_idle: false,
+      has_pending: false, updated_at: 2000,
+    };
+    store.syncTable("sessions", [s]);
+    const first = useInboxStore.getState().sessions["conv-stable"];
+    // Same updated_at, same status (a heartbeat resends the whole set) — identity
+    // must hold so React.memo doesn't re-render every card.
+    store.syncTable("sessions", [{ ...s }]);
+    const second = useInboxStore.getState().sessions["conv-stable"];
+    expect(second).toBe(first);
+  });
+});
