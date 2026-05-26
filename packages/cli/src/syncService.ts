@@ -15,6 +15,12 @@ const MIN_REQUEST_INTERVAL_MS = 100;
 
 const ADD_MESSAGES_BATCH_TIMEOUT_MS = 60_000;
 const ADD_MESSAGES_BATCH_SIZE = 10;
+// uploadImage runs *before* the timed addMessages batch, so an un-timed upload
+// hang (slow network / contended backend) wedges the whole chunk: the file-watcher
+// can't advance its position past the image message and every later turn stops
+// syncing. Time-box each network leg so a stuck upload degrades to null (the caller
+// then inlines small images or drops oversized ones) instead of freezing the session.
+const UPLOAD_IMAGE_TIMEOUT_MS = 30_000;
 
 export async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
@@ -143,6 +149,9 @@ export class SyncService {
   private apiToken?: string;
   private lastRequestTime = 0;
   private throttleQueue: Promise<void> = Promise.resolve();
+  // Per-network-leg deadline for image uploads. A field (not the bare constant)
+  // only so tests can shorten it; production always uses UPLOAD_IMAGE_TIMEOUT_MS.
+  private imageUploadTimeoutMs = UPLOAD_IMAGE_TIMEOUT_MS;
 
   constructor(config: SyncConfig) {
     this.client = new ConvexHttpClient(config.convexUrl);
@@ -180,26 +189,68 @@ export class SyncService {
     this.apiToken = token;
   }
 
+  // Offload large inline images to Convex storage *before* the messages enter
+  // the send path or the retry queue, mutating each message's images in place:
+  // a successful upload replaces `data` with `storageId`; an upload that fails
+  // for an image too big to inline is dropped. This is what keeps the retry
+  // queue small (it used to persist 682KB of raw base64 per stuck op → a 16MB
+  // queue file) and stops every retry from re-uploading the same image. Idempotent:
+  // images that already carry a storageId are left untouched.
+  async offloadImages(
+    messages: Array<{ images?: Array<{ mediaType: string; data?: string; storageId?: string; toolUseId?: string }> }>,
+  ): Promise<void> {
+    for (const msg of messages) {
+      if (!msg.images || msg.images.length === 0) continue;
+      const kept: Array<{ mediaType: string; data?: string; storageId?: string; toolUseId?: string }> = [];
+      for (const img of msg.images.slice(0, MAX_IMAGES_PER_MESSAGE)) {
+        if (img.storageId || !img.data) {
+          kept.push(img);
+          continue;
+        }
+        const storageId = await this.uploadImage(img.data, img.mediaType);
+        if (storageId) {
+          kept.push({ mediaType: img.mediaType, storageId, toolUseId: img.toolUseId });
+          continue;
+        }
+        const dataBytes = Buffer.from(img.data, "base64").length;
+        if (dataBytes <= MAX_INLINE_IMAGE_SIZE) {
+          kept.push(img);
+        } else {
+          console.warn(`[SyncService] Image dropped at offload: upload failed and too large for inline (${dataBytes} bytes)`);
+        }
+      }
+      msg.images = kept.length > 0 ? kept : undefined;
+    }
+  }
+
   async uploadImage(base64Data: string, mediaType: string): Promise<string | null> {
     if (!base64Data) {
       console.warn("[SyncService] uploadImage called with no data");
       return null;
     }
     try {
-      const uploadUrl = await this.client.mutation(
-        "images:generateUploadUrl" as any,
-        { api_token: this.apiToken }
+      const uploadUrl = await withTimeout(
+        this.client.mutation(
+          "images:generateUploadUrl" as any,
+          { api_token: this.apiToken }
+        ),
+        this.imageUploadTimeoutMs,
+        "images:generateUploadUrl",
       );
       const binaryData = Buffer.from(base64Data, "base64");
       if (binaryData.length > MAX_IMAGE_SIZE) {
         console.warn(`[SyncService] Image too large: ${binaryData.length} bytes > ${MAX_IMAGE_SIZE}`);
         return null;
       }
-      const response = await fetch(uploadUrl, {
-        method: "POST",
-        headers: { "Content-Type": mediaType },
-        body: binaryData,
-      });
+      const response = await withTimeout(
+        fetch(uploadUrl, {
+          method: "POST",
+          headers: { "Content-Type": mediaType },
+          body: binaryData,
+        }),
+        this.imageUploadTimeoutMs,
+        "image upload fetch",
+      );
       if (!response.ok) {
         console.warn(`[SyncService] Image upload failed: HTTP ${response.status}`);
         return null;
@@ -481,7 +532,7 @@ export class SyncService {
       thinking?: string;
       toolCalls?: Array<{ id: string; name: string; input: Record<string, unknown> }>;
       toolResults?: Array<{ toolUseId: string; content: string; isError?: boolean }>;
-      images?: Array<{ mediaType: string; data: string; toolUseId?: string }>;
+      images?: Array<{ mediaType: string; data?: string; storageId?: string; toolUseId?: string }>;
       subtype?: string;
     }>;
   }): Promise<{ inserted: number; ids: string[] }> {
@@ -516,10 +567,16 @@ export class SyncService {
       if (msg.images && msg.images.length > 0) {
         const imagesToProcess = msg.images.slice(0, MAX_IMAGES_PER_MESSAGE);
         for (const img of imagesToProcess) {
+          // Already offloaded (e.g. by offloadImages before enqueue) — pass through.
+          if (img.storageId) {
+            images.push({ media_type: img.mediaType, storage_id: img.storageId, tool_use_id: img.toolUseId });
+            continue;
+          }
+          if (!img.data) continue;
           const storageId = await this.uploadImage(img.data, img.mediaType);
           if (storageId) {
             images.push({ media_type: img.mediaType, storage_id: storageId, tool_use_id: img.toolUseId });
-          } else if (img.data) {
+          } else {
             const dataBytes = Buffer.from(img.data, "base64").length;
             if (dataBytes <= MAX_INLINE_IMAGE_SIZE) {
               images.push({ media_type: img.mediaType, data: img.data, tool_use_id: img.toolUseId });

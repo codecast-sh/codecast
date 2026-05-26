@@ -90,14 +90,39 @@ export class RetryQueue {
         const data = JSON.parse(fs.readFileSync(this.persistPath, "utf-8"));
         if (Array.isArray(data)) {
           let splitFrom = 0;
+          let dedupedMsgs = 0;
+          // Per-conversation set of message_uuids already restored. A queue that
+          // jammed (e.g. an image batch stuck under OCC contention) accumulates the
+          // SAME messages many times over as the live path re-enqueues the backlog
+          // each poll — heal it here so a 16MB, 283-op file collapses to its distinct
+          // messages on restart instead of draining the duplicates one slow op at a time.
+          const seenByConv = new Map<string, Set<string>>();
           for (const op of data) {
             if (!op.id || !op.type || !op.params) continue;
-            // Heal oversized addMessages ops left from before the
-            // queue-time splitting fix — they would never fit a single
-            // mutation budget and jam the concurrency slots.
-            if (op.type === "addMessages") {
-              const msgs = op.params?.messages;
-              if (Array.isArray(msgs) && msgs.length > RETRY_BATCH_CHUNK) {
+
+            if (op.type === "addMessages" && Array.isArray(op.params?.messages)) {
+              const convId = typeof op.params.conversationId === "string" ? op.params.conversationId : null;
+              if (convId) {
+                let seen = seenByConv.get(convId);
+                if (!seen) { seen = new Set(); seenByConv.set(convId, seen); }
+                const before = op.params.messages.length;
+                const kept = op.params.messages.filter((m: unknown) => {
+                  const uuid = m && typeof m === "object" ? (m as { messageUuid?: string }).messageUuid : undefined;
+                  if (!uuid) return true; // can't dedup without a uuid — keep it
+                  if (seen!.has(uuid)) return false;
+                  seen!.add(uuid);
+                  return true;
+                });
+                dedupedMsgs += before - kept.length;
+                if (kept.length === 0) continue; // every message already restored elsewhere
+                op.params = { ...op.params, messages: kept };
+              }
+
+              // Heal oversized addMessages ops so they fit a single mutation budget
+              // and don't jam the concurrency slots. Split children inherit the
+              // parent's attempts so genuinely-failing ops still age toward drop.
+              const msgs = op.params.messages;
+              if (msgs.length > RETRY_BATCH_CHUNK) {
                 splitFrom++;
                 for (let i = 0; i < msgs.length; i += RETRY_BATCH_CHUNK) {
                   const chunkId = `${op.type}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}-c${i}`;
@@ -105,7 +130,7 @@ export class RetryQueue {
                     id: chunkId,
                     type: op.type,
                     params: { ...op.params, messages: msgs.slice(i, i + RETRY_BATCH_CHUNK) },
-                    attempts: 0,
+                    attempts: op.attempts ?? 0,
                     nextRetryAt: Date.now() + 1000,
                     createdAt: op.createdAt ?? Date.now(),
                     lastError: op.lastError,
@@ -118,8 +143,14 @@ export class RetryQueue {
             this.queue.set(op.id, op);
           }
           if (this.queue.size > 0) {
-            this.log(`Restored ${this.queue.size} operations from disk${splitFrom > 0 ? ` (split ${splitFrom} oversized addMessages ops)` : ''}`);
+            const heals = [
+              splitFrom > 0 ? `split ${splitFrom} oversized` : "",
+              dedupedMsgs > 0 ? `deduped ${dedupedMsgs} duplicate msgs` : "",
+            ].filter(Boolean).join(", ");
+            this.log(`Restored ${this.queue.size} operations from disk${heals ? ` (${heals})` : ""}`);
           }
+          // Rewrite the healed queue so the duplicate/raw-base64 bloat doesn't persist.
+          if (dedupedMsgs > 0 || splitFrom > 0) this.persist();
         }
       }
     } catch {
@@ -153,7 +184,32 @@ export class RetryQueue {
     error?: string
   ): string {
     if (type === "addMessages") {
-      const msgs = (params as { messages?: unknown[] }).messages;
+      let msgs = (params as { messages?: unknown[] }).messages;
+      const conversationId = (params as { conversationId?: string }).conversationId;
+
+      // Coalesce: drop messages already waiting in the queue for this conversation.
+      // The live sync path re-reads and re-enqueues the same backlog every poll
+      // while a batch is stuck, so without this the queue piles up the same
+      // messages 12x. Server-side addMessages dedups by message_uuid anyway, so
+      // dropping already-queued uuids here is purely a queue-size guard.
+      if (Array.isArray(msgs) && typeof conversationId === "string") {
+        const pending = this.pendingMessageUuids(conversationId);
+        if (pending.size > 0) {
+          const before = msgs.length;
+          msgs = msgs.filter(
+            (m) => !(m && typeof m === "object" && pending.has((m as { messageUuid?: string }).messageUuid ?? ""))
+          );
+          if (msgs.length === 0) {
+            this.log(`Coalesced addMessages: all ${before} msgs already queued for ${conversationId}, skipping`);
+            return "";
+          }
+          if (msgs.length < before) {
+            this.log(`Coalesced addMessages: dropped ${before - msgs.length}/${before} already-queued msgs for ${conversationId}`);
+          }
+          params = { ...params, messages: msgs };
+        }
+      }
+
       if (Array.isArray(msgs) && msgs.length > RETRY_BATCH_CHUNK) {
         const ids: string[] = [];
         for (let i = 0; i < msgs.length; i += RETRY_BATCH_CHUNK) {
@@ -165,6 +221,23 @@ export class RetryQueue {
       }
     }
     return this.addSingle(type, params, error);
+  }
+
+  // All message_uuids currently queued (pending or in-flight — failed in-flight
+  // ops stay in the queue until they succeed) for a conversation.
+  private pendingMessageUuids(conversationId: string): Set<string> {
+    const uuids = new Set<string>();
+    for (const op of this.queue.values()) {
+      if (op.type !== "addMessages") continue;
+      if (op.params.conversationId !== conversationId) continue;
+      const msgs = op.params.messages;
+      if (!Array.isArray(msgs)) continue;
+      for (const m of msgs) {
+        const uuid = m && typeof m === "object" ? (m as { messageUuid?: string }).messageUuid : undefined;
+        if (uuid) uuids.add(uuid);
+      }
+    }
+    return uuids;
   }
 
   private addSingle(
@@ -190,6 +263,14 @@ export class RetryQueue {
     this.log(`Queued ${type} for retry${rateLimitDelay ? ` (rate limited, ${delay}ms)` : ''} (id: ${id})`);
     this.scheduleNextCheck();
     return id;
+  }
+
+  // Serialization key for per-conversation concurrency control. Ops carrying a
+  // conversationId share a key (so they run one at a time); ops without one key
+  // off their unique id (so they stay fully parallel).
+  private conversationKey(op: RetryOperation): string {
+    const convId = op.params.conversationId;
+    return typeof convId === "string" ? `conv:${convId}` : `op:${op.id}`;
   }
 
   private calculateNextDelay(attempts: number): number {
@@ -253,7 +334,22 @@ export class RetryQueue {
       return;
     }
 
-    const batch = readyOps.slice(0, this.concurrency);
+    // Never run two ops for the same conversation concurrently. The server
+    // addMessages mutation reads+patches the conversation doc, so parallel ops
+    // for one conversation collide on that hot-doc → Convex OCC-retries the whole
+    // mutation → some exceed the 60s client timeout → re-queue → worse contention.
+    // That self-inflicted stampede is what turned one slow image batch into a
+    // permanent 283-op stall. Pick at most one ready op per conversation per cycle;
+    // siblings wait for the next cycle (which only runs after this batch fully drains).
+    const batch: RetryOperation[] = [];
+    const claimedConversations = new Set<string>();
+    for (const op of readyOps) {
+      if (batch.length >= this.concurrency) break;
+      const key = this.conversationKey(op);
+      if (claimedConversations.has(key)) continue;
+      claimedConversations.add(key);
+      batch.push(op);
+    }
 
     const processOp = async (op: RetryOperation): Promise<void> => {
       op.attempts++;
@@ -407,6 +503,19 @@ export class RetryQueue {
 
   getQueueSize(): number {
     return this.queue.size;
+  }
+
+  // Live sync-backlog snapshot for the heartbeat. `oldestPendingMs` is the age
+  // of the longest-waiting queued op, which lets the web distinguish a real
+  // stall (op stuck for minutes) from a transient retry that self-heals.
+  getHealth(): { pending: number; oldestPendingMs: number } {
+    const now = Date.now();
+    let oldestPendingMs = 0;
+    for (const op of this.queue.values()) {
+      const age = now - op.createdAt;
+      if (age > oldestPendingMs) oldestPendingMs = age;
+    }
+    return { pending: this.queue.size, oldestPendingMs };
   }
 
   getPendingOperations(): RetryOperation[] {
