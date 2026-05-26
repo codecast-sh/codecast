@@ -55,7 +55,11 @@ function CliAuthContent() {
       try {
         const tokenResult = await createToken({ name: decodeURIComponent(device) });
 
-        const response = await fetch(`http://localhost:${port}/callback`, {
+        // Target 127.0.0.1 explicitly (not "localhost"): on macOS "localhost"
+        // resolves to ::1 first, but the CLI auth server binds IPv4 only. Safari
+        // does not fall back from a refused IPv6 connection, so a "localhost"
+        // fetch fails with "Load failed". 127.0.0.1 matches the bind exactly.
+        const response = await fetch(`http://127.0.0.1:${port}/callback`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
