@@ -6277,14 +6277,17 @@ export function classifyTmuxLiveState(region: string): TmuxLiveState {
   // is also unique to the Rewind option list.
   if (/Esc to cancel|❯\s*\(current\)/i.test(region)) return "rewind";
   if (/What should Claude do instead\?/i.test(region)) return "interrupted";
+  // Input prompt visible = no blocking modal. Real warnings ("Press enter to
+  // continue", weekly-limit popup) replace the input box, so the prompt glyph
+  // disappears while they're up. Persistent footer banners — "Update available!
+  // Run: brew upgrade claude-code" sits below the input box on every turn —
+  // match the warning regex but DON'T block input; checking idle first prevents
+  // an Enter-press-loop that mis-classifies as AGENT_STUCK_WARNING for any
+  // Claude Code session with an update pending. Mirrors injectViaTmuxInner's
+  // own guard, which only acks warnings when no prompt is visible.
+  const promptVisible = region.includes("❯") || region.includes("›");
+  if (promptVisible) return "idle";
   if (/Press enter to continue|Update available|weekly limit|recorded with model|⚠/i.test(region)) return "warning";
-  // Ready: the live region contains an input-prompt glyph and none of the modal
-  // patterns above matched. Draft text typed into the input by the user counts as
-  // ready — the paste path's mandatory Escape+C-u clears it before pasting. The
-  // safety net is the modal pattern set above being checked first; if Claude Code
-  // ever ships a modal that uses `❯` with no other marker, the post-paste
-  // verification (input-still-has-our-text → reschedule) will catch it.
-  if (region.includes("❯") || region.includes("›")) return "idle";
   return "unknown";
 }
 
