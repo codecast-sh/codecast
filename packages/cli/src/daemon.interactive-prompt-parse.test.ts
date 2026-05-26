@@ -91,6 +91,47 @@ describe("parseInteractivePrompt option descriptions", () => {
       { label: "mac2.metal (cheapest)", description: undefined },
     ]);
   });
+
+  // An AskUserQuestion whose options carry a `preview` renders the preview as a
+  // box to the RIGHT of the options. tmux capture-pane flattens those columns
+  // onto the option rows, so the trailing "│ … │" got captured as each option's
+  // description — the web card showed box-drawing glyphs smeared across options
+  // (real incident: the "Disk headroom" poll). The scrape must never emit box
+  // art; descriptions from the side panel are dropped (the full-fidelity card
+  // comes from the JSONL tool_use instead).
+  test("strips the right-hand preview side-panel box, never emits box-drawing glyphs", () => {
+    const menu = [
+      " ☐ Disk headroom",
+      "",
+      "The fix is a from-scratch search-index rebuild, but the backend disk is 88% full and I can't resize the Railway volume via",
+      "CLI. How do you want to handle disk headroom before I push the rebuild?",
+      "",
+      "❯ 1. I'll bump the volume         ┌──────────────────────────────────────────────────────────┐",
+      "    (Recommended)                 │ Railway dashboard -> project codecast -> convex-backend  │",
+      "  2. Proceed now, watch disk,     │ -> Settings -> Volume -> increase size to ~400GB.        │",
+      "    abort if needed               │ Apply (brief restart). Then say 'done' and I deploy      │",
+      "  3. Let me inspect disk first    │ the index rename. Rebuild runs with ample headroom;      │",
+      "                                  │ old stale segments drop and likely net-reclaim space.    │",
+      "                                  └──────────────────────────────────────────────────────────┘",
+      "",
+      "Enter to select · ↑/↓ to navigate · n to add notes · Esc to cancel",
+    ].join("\n");
+
+    const prompt = parseInteractivePrompt(menu);
+    expect(prompt).not.toBeNull();
+    expect(prompt!.options.map(o => o.label)).toEqual([
+      "I'll bump the volume",
+      "Proceed now, watch disk,",
+      "Let me inspect disk first",
+    ]);
+    // The core invariant: no box-drawing characters anywhere in the parsed card.
+    const boxArt = /[─-╿]/; // Unicode "Box Drawing" block
+    expect(prompt!.question).not.toMatch(boxArt);
+    for (const o of prompt!.options) {
+      expect(o.label).not.toMatch(boxArt);
+      if (o.description !== undefined) expect(o.description).not.toMatch(boxArt);
+    }
+  });
 });
 
 // The real AskUserQuestion tool_use lands in the JSONL (full fidelity) while the
