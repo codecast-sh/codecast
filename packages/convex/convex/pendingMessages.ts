@@ -127,7 +127,9 @@ export const updateMessageStatus = mutation({
     // "delivered" is terminal: the agent echoed the message to its JSONL, so it was received.
     // A stale retry timer or the daemon's post-inject DEDUP re-mark must NOT downgrade it back
     // to injected/pending — that re-arms the 120s stuck-message reset and re-injects a duplicate.
-    if (message.status === "delivered") {
+    // "cancelled" is likewise terminal: the user stopped this message, so an in-flight daemon
+    // mark (injected/failed) must not revive it.
+    if (message.status === "delivered" || message.status === "cancelled") {
       return { success: true };
     }
 
@@ -198,6 +200,58 @@ export const retryMessage = mutation({
   },
 });
 
+// User-initiated stop. The retry loop is otherwise indefinite (the healer always revives a
+// stranded message), so this is the escape hatch for a message that genuinely can't land —
+// e.g. a conversation whose session is gone for good. Terminal: never revived.
+export const cancelPendingMessage = mutation({
+  args: {
+    message_id: v.id("pending_messages"),
+    api_token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!authUserId) {
+      throw new Error("Authentication failed: invalid token or session");
+    }
+
+    const message = await ctx.db.get(args.message_id);
+    if (!message) {
+      throw new Error("Message not found");
+    }
+    if (message.from_user_id.toString() !== authUserId.toString()) {
+      throw new Error("Unauthorized: can only cancel your own messages");
+    }
+
+    // Already terminal — nothing to stop.
+    if (message.status === "delivered" || message.status === "cancelled") {
+      return { success: true };
+    }
+
+    await ctx.db.patch(args.message_id, { status: "cancelled" as const });
+
+    // Clear the conversation flag if nothing else is still in flight.
+    const remainingPending = await ctx.db
+      .query("pending_messages")
+      .withIndex("by_conversation_status", (q) =>
+        q.eq("conversation_id", message.conversation_id).eq("status", "pending")
+      )
+      .first();
+    if (!remainingPending) {
+      const remainingInjected = await ctx.db
+        .query("pending_messages")
+        .withIndex("by_conversation_status", (q) =>
+          q.eq("conversation_id", message.conversation_id).eq("status", "injected")
+        )
+        .first();
+      if (!remainingInjected) {
+        await ctx.db.patch(message.conversation_id, { has_pending_messages: false });
+      }
+    }
+
+    return { success: true };
+  },
+});
+
 export async function resetConversationPendingMessages(
   ctx: { db: any },
   conversationId: Id<"conversations">
@@ -230,7 +284,9 @@ export async function markPendingDelivered(
   ctx: { db: any },
   message: { _id: Id<"pending_messages">; conversation_id: Id<"conversations">; status: string }
 ): Promise<void> {
-  if (message.status === "delivered") return;
+  // Both are terminal: delivered can't be re-delivered, and a user-cancelled message must not be
+  // resurrected by a late content-match ack (the ack scans all rows for the conversation).
+  if (message.status === "delivered" || message.status === "cancelled") return;
   await ctx.db.patch(message._id, { status: "delivered" as const, delivered_at: Date.now() });
 
   const remainingPending = await ctx.db
@@ -290,7 +346,12 @@ export const getConversationPendingMessage = query({
     const msgs = await ctx.db
       .query("pending_messages")
       .withIndex("by_conversation_id", (q) => q.eq("conversation_id", args.conversation_id))
-      .filter((q) => q.neq(q.field("status"), "delivered"))
+      .filter((q) =>
+        q.and(
+          q.neq(q.field("status"), "delivered"),
+          q.neq(q.field("status"), "cancelled")
+        )
+      )
       .collect();
 
     const owned = msgs.filter((m) => m.from_user_id.toString() === authUserId.toString());
@@ -333,74 +394,93 @@ export const getMessageStatus = query({
   },
 });
 
+// How long after send the healer keeps reviving a stranded message. Long enough that a daemon
+// outage or sleep of many minutes fully self-heals; bounded so we don't inject hours-stale
+// context into a session that has moved on. A live `pending` message is delivered by the
+// daemon's subscription at any age — this window only governs reviving non-pending strays.
+export const HEAL_WINDOW_MS = 60 * 60_000;
+// Give the JSONL-echo ack a chance to land before re-pending an "injected" message as failed.
+const INJECT_ACK_GRACE_MS = 120_000;
+
+export type HealAction =
+  | { kind: "skip" }
+  | { kind: "deliver_control" }
+  | { kind: "repend" };
+
+// Pure decision for the cron healer. The invariant: `retry_count` counts REAL failed delivery
+// attempts only — never elapsed wait time. So the healer never bumps it (and resets it to 0 on
+// revival, handing the daemon a fresh budget). This is the fix for messages dying on daemon
+// reconnect: the old cron bumped retry_count every 30s as a liveness poke, exhausting the
+// undeliverable budget while nothing was actually being delivered.
+export function planStuckMessageHeal(
+  msg: { status: string; content: string; created_at: number },
+  now: number
+): HealAction {
+  const age = now - msg.created_at;
+  if (age > HEAL_WINDOW_MS) return { kind: "skip" };
+
+  if (msg.status === "injected") {
+    if (age < INJECT_ACK_GRACE_MS) return { kind: "skip" };
+    // Control messages have no JSONL echo to ack against; a stale "injected" one was already
+    // successfully injected, so promote it to terminal "delivered" rather than re-injecting.
+    if (isControlMessage(msg.content)) return { kind: "deliver_control" };
+    return { kind: "repend" };
+  }
+  // "undeliverable" is NOT a dead-end: the daemon raises it after its gentle-retry budget is
+  // spent (a useful "escalate" signal), but the healer always revives it so delivery keeps
+  // moving forward with no client present. "failed" is the transient sync-failure sibling.
+  if (msg.status === "failed" || msg.status === "undeliverable") return { kind: "repend" };
+
+  // "pending" is owned by the daemon's live subscription and its own retry timers — the cron
+  // must not touch it (touching it here is what conflated waiting-time with the retry budget).
+  return { kind: "skip" };
+}
+
 export const retryStuckMessages = internalMutation({
   handler: async (ctx) => {
     const now = Date.now();
 
-    const pendingMessages = await ctx.db
-      .query("pending_messages")
-      .filter((q) =>
-        q.and(
-          q.eq(q.field("status"), "pending"),
-          q.lt(q.field("created_at"), now - 60_000),
-          q.gt(q.field("created_at"), now - 10 * 60_000),
-          q.lt(q.field("retry_count"), 10)
+    // Scan only the non-terminal, non-pending states that need cron intervention. `delivered`
+    // is terminal and `pending` is the daemon's to drive, so neither is queried.
+    const candidates: any[] = [];
+    for (const status of ["injected", "failed", "undeliverable"] as const) {
+      const rows = await ctx.db
+        .query("pending_messages")
+        .filter((q) =>
+          q.and(
+            q.eq(q.field("status"), status),
+            q.gt(q.field("created_at"), now - HEAL_WINDOW_MS)
+          )
         )
-      )
-      .collect();
-
-    for (const msg of pendingMessages) {
-      await ctx.db.patch(msg._id, {
-        retry_count: msg.retry_count + 1,
-      });
+        .collect();
+      candidates.push(...rows);
     }
 
-    // Reset stale "injected" messages (session may have died before ack)
-    const injectedMessages = await ctx.db
-      .query("pending_messages")
-      .filter((q) =>
-        q.and(
-          q.eq(q.field("status"), "injected"),
-          q.lt(q.field("created_at"), now - 120_000),
-          q.gt(q.field("created_at"), now - 10 * 60_000)
-        )
-      )
-      .collect();
-
-    for (const msg of injectedMessages) {
-      // Control messages have no JSONL echo to ack against; a stale "injected" one was already
-      // successfully injected, so promote it to terminal "delivered" rather than re-injecting.
-      if (isControlMessage(msg.content)) {
+    let revived = 0;
+    let controlsAcked = 0;
+    const reflag = new Set<Id<"conversations">>();
+    for (const msg of candidates) {
+      const action = planStuckMessageHeal(msg, now);
+      if (action.kind === "skip") continue;
+      if (action.kind === "deliver_control") {
         await markPendingDelivered(ctx, msg);
+        controlsAcked++;
         continue;
       }
       await ctx.db.patch(msg._id, {
         status: "pending" as const,
-        retry_count: msg.retry_count + 1,
+        retry_count: 0,
+        delivered_at: undefined,
       });
-      await ctx.db.patch(msg.conversation_id, { has_pending_messages: true });
+      reflag.add(msg.conversation_id);
+      revived++;
+    }
+    for (const convId of reflag) {
+      await ctx.db.patch(convId, { has_pending_messages: true });
     }
 
-    const failedMessages = await ctx.db
-      .query("pending_messages")
-      .filter((q) =>
-        q.and(
-          q.eq(q.field("status"), "failed"),
-          q.gt(q.field("created_at"), now - 10 * 60_000),
-          q.lt(q.field("retry_count"), 10)
-        )
-      )
-      .collect();
-
-    for (const msg of failedMessages) {
-      await ctx.db.patch(msg._id, {
-        status: "pending" as const,
-        retry_count: msg.retry_count + 1,
-      });
-    }
-
-    if (pendingMessages.length > 0 || failedMessages.length > 0 || injectedMessages.length > 0) {
-      console.log(`retryStuckMessages: bumped ${pendingMessages.length} pending, recovered ${failedMessages.length} failed, reset ${injectedMessages.length} stale injected`);
+    if (revived > 0 || controlsAcked > 0) {
+      console.log(`retryStuckMessages: revived ${revived} stranded message(s), acked ${controlsAcked} stale control msg(s)`);
     }
   },
 });

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { markPendingDelivered, isControlMessage } from "./pendingMessages";
+import { markPendingDelivered, isControlMessage, resetConversationPendingMessages, planStuckMessageHeal, HEAL_WINDOW_MS } from "./pendingMessages";
 
 // Fake ctx.db that records patches and answers by_conversation_status lookups from a
 // configurable set of "other" rows still in flight for the conversation.
@@ -105,5 +105,108 @@ describe("isControlMessage", () => {
     expect(isControlMessage("go")).toBe(false);
     expect(isControlMessage('{"__cc_poll":true}')).toBe(false); // missing keys/steps
     expect(isControlMessage("{not json")).toBe(false);
+  });
+});
+
+// Fake ctx.db that returns a fixed by_conversation_id collection and records patches.
+const createCollectCtx = (messages: Array<Record<string, any>>) => {
+  const patches: Array<{ id: string; patch: Record<string, unknown> }> = [];
+  const ctx = {
+    db: {
+      query() {
+        return {
+          withIndex(_index: string, builder: (q: any) => unknown) {
+            builder({ eq: () => ({ eq: () => {} }) });
+            return { async collect() { return messages; } };
+          },
+        };
+      },
+      async patch(id: string, patch: Record<string, unknown>) {
+        patches.push({ id, patch });
+      },
+    },
+  };
+  return { ctx, patches };
+};
+
+// Regression: a message that never reached a dead session is left as injected/failed/
+// undeliverable. resumeSession/restartSession call this on reconnect so those stranded
+// messages get redelivered instead of staying stuck and forcing a manual resend.
+describe("resetConversationPendingMessages", () => {
+  test("re-pends stranded injected/failed/undeliverable messages, leaving pending/delivered alone", async () => {
+    const messages = [
+      { _id: "m_injected", status: "injected", retry_count: 3, delivered_at: 123 },
+      { _id: "m_failed", status: "failed", retry_count: 5 },
+      { _id: "m_undeliverable", status: "undeliverable", retry_count: 12 },
+      { _id: "m_pending", status: "pending", retry_count: 0 },
+      { _id: "m_delivered", status: "delivered", retry_count: 1, delivered_at: 456 },
+    ];
+    const { ctx, patches } = createCollectCtx(messages);
+
+    const count = await resetConversationPendingMessages(ctx as any, "c1" as any);
+    expect(count).toBe(3);
+
+    for (const id of ["m_injected", "m_failed", "m_undeliverable"]) {
+      const p = patches.find((x) => x.id === id);
+      expect(p?.patch.status).toBe("pending");
+      expect(p?.patch.retry_count).toBe(0);
+      expect("delivered_at" in (p?.patch ?? {})).toBe(true);
+      expect(p?.patch.delivered_at).toBeUndefined();
+    }
+    // Already-pending and terminal-delivered rows must not be touched.
+    expect(patches.find((x) => x.id === "m_pending")).toBeUndefined();
+    expect(patches.find((x) => x.id === "m_delivered")).toBeUndefined();
+    // Conversation is re-flagged as having pending work so the inbox/daemon notice it.
+    expect(patches.find((x) => x.id === "c1")?.patch).toEqual({ has_pending_messages: true });
+  });
+
+  test("no-op when nothing is stranded (does not re-flag the conversation)", async () => {
+    const messages = [
+      { _id: "m_pending", status: "pending", retry_count: 0 },
+      { _id: "m_delivered", status: "delivered", retry_count: 1 },
+    ];
+    const { ctx, patches } = createCollectCtx(messages);
+
+    const count = await resetConversationPendingMessages(ctx as any, "c1" as any);
+    expect(count).toBe(0);
+    expect(patches).toHaveLength(0);
+  });
+});
+
+// The cron healer's decision logic. Core invariant under test: it never abandons a message
+// (undeliverable is non-terminal) and never consumes the real-attempt budget for waiting time.
+describe("planStuckMessageHeal", () => {
+  const now = 1_000_000_000_000;
+  const recent = (status: string, content = "hi", ageMs = 5 * 60_000) =>
+    planStuckMessageHeal({ status, content, created_at: now - ageMs }, now);
+
+  test("revives undeliverable — it is NOT a dead-end", () => {
+    expect(recent("undeliverable").kind).toBe("repend");
+  });
+
+  test("revives failed (transient sync failure)", () => {
+    expect(recent("failed").kind).toBe("repend");
+  });
+
+  test("re-pends an injected message once the ack grace has elapsed (session likely died)", () => {
+    expect(recent("injected", "real text", 3 * 60_000).kind).toBe("repend");
+  });
+
+  test("leaves a freshly-injected message alone so the JSONL ack can land", () => {
+    expect(recent("injected", "real text", 30_000).kind).toBe("skip");
+  });
+
+  test("acks a stale injected control message instead of re-injecting keystrokes", () => {
+    const control = '{"__cc_poll":true,"keys":["2"],"display":"Commit everything together"}';
+    expect(recent("injected", control, 3 * 60_000).kind).toBe("deliver_control");
+  });
+
+  test("NEVER touches a pending message — the daemon owns it, and bumping retry_count here was the bug", () => {
+    expect(recent("pending").kind).toBe("skip");
+  });
+
+  test("abandons messages older than the heal window (avoids injecting hours-stale context)", () => {
+    expect(recent("undeliverable", "hi", HEAL_WINDOW_MS + 1).kind).toBe("skip");
+    expect(recent("failed", "hi", HEAL_WINDOW_MS + 1).kind).toBe("skip");
   });
 });

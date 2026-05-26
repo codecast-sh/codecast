@@ -5,6 +5,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { hasRecentPendingDaemonCommand } from "./daemonCommandUtils";
 import { resolveTeamForPath } from "./privacy";
+import { resetConversationPendingMessages } from "./pendingMessages";
 
 export const getCurrentUser = query({
   args: {},
@@ -405,10 +406,15 @@ export const resumeSession = mutation({
       .withIndex("by_user_pending", (q) => q.eq("user_id", authUserId).eq("executed_at", undefined))
       .collect();
 
+    // Re-queue any stranded messages so the resume actually delivers them. A message that
+    // failed to reach a dead session sits as injected/failed/undeliverable; without this it
+    // stays stuck and the user has to manually resend. restartSession already does this — the
+    // missing call here was the asymmetry that left "Force resume" doing nothing visible.
     if (hasRecentPendingDaemonCommand(pendingCommands as any, {
       conversationId: args.conversation_id.toString(),
       command: "resume_session",
     })) {
+      await resetConversationPendingMessages(ctx, args.conversation_id);
       return { deduplicated: true };
     }
 
