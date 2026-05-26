@@ -150,13 +150,16 @@ export function findUnsyncedFiles(
             const legacyPosition = positions[fullPath];
 
             if (record) {
-              // A ledger record means this file was tracked at some point. If the
-              // current size is past lastSyncedPosition, the remainder is unsynced
-              // — surface it regardless of age, otherwise stale-then-aged files
-              // (e.g. sync wedged 8 days ago) silently never recover. The age
-              // filter only protects against rediscovering long-abandoned files
-              // we never tracked.
-              if (stats.mtimeMs > record.lastSyncedAt || stats.size > record.lastSyncedPosition) {
+              // JSONL session files are append-only, so size > lastSyncedPosition
+              // is the only real signal of unsynced content. We surface those
+              // regardless of age — otherwise a sync that wedged 8+ days ago
+              // never recovers (the age filter, applied unconditionally, used to
+              // hide them forever). An mtime newer than lastSyncedAt is NOT a
+              // reliable proxy for new content (touch, compact-in-place, or just
+              // clock skew can update mtime without appending bytes); using it
+              // here surfaces dozens of false-positive "pending" files that the
+              // sync loop can't drain because size == position is a no-op.
+              if (stats.size > record.lastSyncedPosition) {
                 unsynced.push(fullPath);
               }
             } else if (legacyPosition !== undefined) {
