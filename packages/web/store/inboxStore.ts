@@ -935,6 +935,11 @@ export type SyncOpts = {
   // delta-cursor queries (e.g. tasks.webList with `since`). Soft-deletes
   // arrive as updated rows; hard deletes are NOT supported in delta mode.
   isDelta?: boolean;
+  // Perf escape hatch for applySyncTable's identity reuse: by default it compares
+  // ALL scalar fields, so any per-push-churning scalar would re-render the row
+  // every push. List such a field here to exclude it from the version key. Safe
+  // to omit — a mistake here only costs an extra render, never a dropped update.
+  ignoreFields?: string[];
 };
 
 function applyMerge(local: any, server: any, spec: MergeSpec, initialized: boolean): any {
@@ -1494,7 +1499,9 @@ export const useInboxStore = create<InboxStoreState>(
     const prevCollection = (this as any)[field] || {};
     const { table, pending } = applySyncTable(
       field, incoming, this.pending, prevCollection,
-      config.isDelta ? { isDelta: true } : undefined,
+      (config.isDelta || config.ignoreFields)
+        ? { isDelta: config.isDelta, ignoreFields: config.ignoreFields }
+        : undefined,
     );
 
     if (config.altKey) {

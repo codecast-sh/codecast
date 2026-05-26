@@ -17,12 +17,45 @@ export type PendingEntry = {
  *             Clears when the server value matches the local value.
  */
 
+// Whether two records are equal across all SCALAR fields (string / number /
+// boolean / null / undefined). This is the version key for identity reuse (see
+// the call site): reuse the prev object only when nothing the UI renders has
+// changed.
+//
+// Why scalars only: Convex live queries resend nested objects/arrays as fresh
+// references on every push, so comparing them by reference would force endless
+// churn, and a deep compare is too costly on this hot path. We skip them and
+// rely on updated_at (itself a scalar, compared here) bumping on real content
+// edits to cover the nested case. ignoreFields opts a known per-push-churning
+// scalar out of the comparison — a perf escape hatch whose mistakes cost an
+// extra render, never a dropped update.
+//
+// This replaced an updated_at-only check, which silently dropped changes to any
+// field the server derives independently of updated_at (e.g. a session's
+// agent_status / is_idle, computed from managed_sessions + an idle grace) —
+// pinning a finished agent in the wrong inbox bucket until an unrelated edit
+// bumped updated_at.
+function scalarFieldsEqual(a: any, b: any, ignoreFields?: Set<string>): boolean {
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+  for (const k of keys) {
+    if (ignoreFields?.has(k)) continue;
+    const av = a[k];
+    const bv = b[k];
+    // null is a scalar for our purposes; only non-null objects/arrays are skipped.
+    const aScalar = av === null || typeof av !== "object";
+    const bScalar = bv === null || typeof bv !== "object";
+    if (!aScalar || !bScalar) continue;
+    if (av !== bv) return false;
+  }
+  return true;
+}
+
 export function applySyncTable<T extends { _id: string }>(
   tableName: string,
   incoming: T[],
   pending: Record<string, PendingEntry>,
   prev?: Record<string, T>,
-  opts?: { isDelta?: boolean },
+  opts?: { isDelta?: boolean; ignoreFields?: string[] },
 ): { table: Record<string, T>; pending: Record<string, PendingEntry> } {
   const newPending = { ...pending };
   const table: Record<string, T> = {};
@@ -30,6 +63,7 @@ export function applySyncTable<T extends { _id: string }>(
   const incomingIds = new Set(incomingMap.keys());
   const prefix = `${tableName}:`;
   const isDelta = !!opts?.isDelta;
+  const ignoreFields = opts?.ignoreFields ? new Set(opts.ignoreFields) : undefined;
 
   // Confirmed excludes — server no longer sends the record.
   // In delta mode the incoming set is partial by definition, so an absent
@@ -76,19 +110,19 @@ export function applySyncTable<T extends { _id: string }>(
       if (incomingRecord) {
         const merged = applyFieldOverrides(incomingRecord);
         const prevRecord = prev[id];
-        // Preserve the previous object identity when the record is unchanged.
-        // Convex live queries resend the ENTIRE result set as fresh objects on
-        // any change, so without this one updated row churns the identity of
-        // every other row and defeats React.memo for all of them (e.g. every
-        // SessionCard re-rendering on every session's heartbeat). updated_at is
-        // the canonical change signal already trusted by syncTable's no-op
-        // early-return. Skip the reuse when a pending field override produced a
+        // Preserve the previous object identity when nothing the UI renders has
+        // changed. Convex live queries resend the ENTIRE result set as fresh
+        // objects on any change, so without this one updated row churns the
+        // identity of every other row and defeats React.memo for all of them
+        // (e.g. every SessionCard re-rendering on every session's heartbeat).
+        // scalarFieldsEqual is the version key — it covers every scalar field,
+        // so a change the server derives independently of updated_at can't be
+        // swallowed. Skip the reuse when a pending field override produced a
         // fresh object (merged !== incomingRecord) so local-first values stick.
         table[id] =
           merged === incomingRecord &&
           prevRecord &&
-          (prevRecord as any).updated_at !== undefined &&
-          (prevRecord as any).updated_at === (incomingRecord as any).updated_at
+          scalarFieldsEqual(prevRecord, incomingRecord, ignoreFields)
             ? prevRecord
             : merged;
       } else if (isDelta) {
