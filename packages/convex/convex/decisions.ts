@@ -83,7 +83,7 @@ export const list = mutation({
     if (args.search) {
       const searchResults = await ctx.db
         .query("decisions")
-        .withSearchIndex("search_decisions", (q) =>
+        .withSearchIndex("search_decisions_v2", (q) =>
           q.search("title", args.search!).eq("user_id", result.userId)
         )
         .take(limit + offset);

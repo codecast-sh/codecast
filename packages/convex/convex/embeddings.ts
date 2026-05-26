@@ -192,7 +192,7 @@ export const semanticSearch = internalAction({
 
     const limit = args.limit || 20;
 
-    const results = await ctx.vectorSearch("messages", "by_embedding", {
+    const results = await ctx.vectorSearch("messages", "by_embedding_v2", {
       vector: queryEmbedding,
       limit: limit * 2,
     });
