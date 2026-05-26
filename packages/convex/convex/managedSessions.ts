@@ -288,6 +288,35 @@ export const unregisterManagedSession = mutation({
   },
 });
 
+// Daemon-authed catalog of this user's managed sessions, for the liveness
+// reconciler. Returns just the fields needed to re-verify a process is alive
+// (session_id, tmux_session, agent_pid) without the per-conversation joins
+// listActiveSessions does. Keep this lean — it's polled on a timer.
+export const listManagedSessionsForDaemon = query({
+  args: {
+    api_token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!authUserId) {
+      throw new Error("Authentication required");
+    }
+
+    const rows = await ctx.db
+      .query("managed_sessions")
+      .withIndex("by_user_id", (q: any) => q.eq("user_id", authUserId))
+      .collect();
+
+    return rows.map((s) => ({
+      session_id: s.session_id,
+      conversation_id: s.conversation_id,
+      tmux_session: s.tmux_session,
+      agent_pid: s.agent_pid,
+      last_metrics_at: s.last_metrics_at,
+    }));
+  },
+});
+
 export const isSessionManaged = query({
   args: {
     conversation_id: v.id("conversations"),

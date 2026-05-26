@@ -327,7 +327,7 @@ const MAX_LOG_QUEUE_SIZE = 500;
 const LOG_QUEUE_FILE = path.join(process.env.HOME || "", ".codecast", "log-queue.json");
 const EVENT_LOOP_CHECK_INTERVAL_MS = 30 * 1000; // 30 seconds
 const EVENT_LOOP_LAG_THRESHOLD_MS = 60 * 1000; // 1 minute of lag = frozen
-const HEARTBEAT_STALE_THRESHOLD_MS = 15 * 60 * 1000; // external watchdog: 15 min = deadlocked
+const HEARTBEAT_STALE_THRESHOLD_MS = 3 * 60 * 1000; // external watchdog: 3 min (6 missed 30s heartbeats) = deadlocked. Tight so recovery beats the 5-min "blocked" display after a sleep.
 const STUCK_CONNECTION_THRESHOLD_MS = 3 * 60 * 1000; // 3 min disconnected = stuck, trigger self-heal
 const SELF_HEAL_COOLDOWN_MS = 10 * 60 * 1000; // 10 min between self-heal restarts
 
@@ -479,6 +479,29 @@ const INJECTION_DEDUP_TTL_MS = 60_000;
 // from being injected concurrently (which causes an interrupt storm where each injection
 // Escapes the previous, none complete, and the retry cron resets them all to pending).
 const conversationDeliveryActive = new Set<string>();
+
+// A web message's whole point is the local tmux paste; that must never be blocked by a Convex
+// round-trip. The "injected" status is only an intermediate UI signal — the durable ack is the
+// content-matched promote-to-delivered in addMessages when the agent echoes the message to its
+// JSONL. So mark injected best-effort with a hard timeout and swallow failures: an un-timed
+// updateMessageStatus before the paste was wedging deliverMessage for the full 180s timeout
+// under Convex load, so the send-keys never ran and the message never reached the agent.
+const MARK_INJECTED_TIMEOUT_MS = 8_000;
+export function markInjectedBestEffort(
+  syncService: Pick<SyncService, "updateMessageStatus">,
+  messageId: string,
+  timeoutMs: number = MARK_INJECTED_TIMEOUT_MS,
+): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    syncService.updateMessageStatus({ messageId, status: "injected" }),
+    new Promise<void>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("mark_injected_timeout")), timeoutMs);
+    }),
+  ]).catch(err => {
+    logDelivery(`mark-injected best-effort skipped for msg=${messageId.slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`);
+  }).finally(() => { if (timer) clearTimeout(timer); });
+}
 
 function clearMessageDeliveryStateForConversation(conversationId: string): { inFlight: number; dedup: number } {
   let inFlight = 0;
@@ -1984,9 +2007,6 @@ async function executeRemoteCommand(
           error = "Missing session_id";
           break;
         }
-        // Forks tag their resume command (fork_daemon_args) so the resume can
-        // override a copied-in model the local CLI can't run. See claudeModelAlias.
-        if (parsed.fork && conversationId) forkResumeConversations.add(conversationId);
         // Fresh-session guard. If the conversation just had a session spawned
         // (startedSessionTmux still tracks it) and there's no linked Claude
         // session_id yet, an auto-resume from the UI's stuck-banner heuristic
@@ -2057,6 +2077,12 @@ async function executeRemoteCommand(
           }
           restartingSessionIds.delete(sessionId);
           if (conversationId) conversationResumeFailures.delete(conversationId);
+          // A resume revives the tmux pane just like a kill+restart does, so it shares the
+          // same redelivery contract: clear the local injection dedup and re-pend injected
+          // messages, else the re-queued pending message hits the "injected Ns ago" dedup
+          // branch and never reaches the freshly-resumed pane. (Server resumeSession already
+          // re-pends in Convex; this clears the *local* state that would otherwise suppress it.)
+          await clearConversationDeliveryAndResumeState(conversationId, sessionId, "resume_session");
           result = JSON.stringify({ resumed: true, session_id: sessionId });
           log(`[REMOTE] Force-resume succeeded for ${sessionId.slice(0, 8)}`);
         } else if (conversationId && projectPath) {
@@ -2096,6 +2122,9 @@ async function executeRemoteCommand(
                   }
                   restartingSessionIds.delete(sessionId);
                   if (conversationId) conversationResumeFailures.delete(conversationId);
+                  // Same redelivery contract as the plain-resume branch above — clear local
+                  // dedup so re-pended messages reach the reconstituted pane.
+                  await clearConversationDeliveryAndResumeState(conversationId, newSessionId, "resume_session_reconstitute");
                   result = JSON.stringify({ reconstituted: true, session_id: newSessionId });
                   log(`[REMOTE] Reconstituted + resumed session ${sessionId.slice(0, 8)}`);
                   reconstituted = true;
@@ -2984,10 +3013,17 @@ async function syncMessagesBatch(
   syncService: SyncService,
   retryQueue: RetryQueue,
 ): Promise<{ authExpired: boolean; conversationNotFound: boolean }> {
+  // Prepare + offload images ONCE. offloadImages mutates the prepared messages in
+  // place (raw base64 → storageId, or drops oversized images), so the same small
+  // array is reused for the send, the inline retry, and the retry-queue enqueue.
+  // Previously each of those re-ran messages.map(prepMessageForSync), so the queue
+  // persisted the full raw base64 and every retry re-uploaded the same image.
+  const prepared = messages.map(prepMessageForSync);
+  await syncService.offloadImages(prepared);
   try {
     await syncService.addMessages({
       conversationId,
-      messages: messages.map(prepMessageForSync),
+      messages: prepared,
     });
     resetAuthFailureCount();
     // If we just synced a user message from the JSONL, ack any injected pending messages
@@ -3013,7 +3049,7 @@ async function syncMessagesBatch(
       await new Promise(resolve => setTimeout(resolve, 2000));
       await syncService.addMessages({
         conversationId,
-        messages: messages.map(prepMessageForSync),
+        messages: prepared,
       });
       resetAuthFailureCount();
       log(`Batch retry succeeded for ${messages.length} messages`);
@@ -3026,7 +3062,7 @@ async function syncMessagesBatch(
       log(`Batch retry also failed, queueing as batch: ${retryErrMsg}`);
       retryQueue.add("addMessages", {
         conversationId,
-        messages: messages.map(prepMessageForSync),
+        messages: prepared,
       }, retryErrMsg);
       return { authExpired: false, conversationNotFound: false };
     }
@@ -5214,6 +5250,13 @@ async function findTmuxPaneForTty(tty: string): Promise<string | null> {
 
 type InteractivePrompt = { question: string; options: Array<{ label: string; description?: string }>; isConfirmation?: boolean };
 
+// Unicode "Box Drawing" block (┌┐└┘─│ …). An AskUserQuestion option's `preview`
+// renders as a box to the RIGHT of the options; tmux capture-pane flattens those
+// columns onto the option rows, so naive parsing captures "│ … │" as a description.
+// Such content is never an option's own description — we drop it so a scraped card
+// never carries box-drawing glyphs (the full-fidelity card comes from the JSONL).
+const BOX_DRAWING_CHARS = /[─-╿]/;
+
 export function parseInteractivePrompt(text: string): InteractivePrompt | null {
   const lines = text.split("\n");
   const optionPattern = /^\s*[❯>)]*\s*(\d+)[.)]\s+(.+?)(?:\s{2,}(.+?))?$/;
@@ -5235,7 +5278,13 @@ export function parseInteractivePrompt(text: string): InteractivePrompt | null {
       if (/^\s*[❯>]\s*\d/.test(lines[i])) hasCursorIndicator = true;
       const label = m[2].replace(/\s*[✓✗✔☑]\s*/g, "").trim();
       if (label.length > 200) { pendingDesc = []; continue; }
-      const descParts = [m[3]?.trim(), ...pendingDesc].filter((s): s is string => !!s);
+      // A same-line trailing segment is a real description only if it isn't the
+      // right-hand preview box flattened onto this row (see BOX_DRAWING_CHARS).
+      const inlineDesc = m[3]?.trim();
+      const descParts = [
+        inlineDesc && !BOX_DRAWING_CHARS.test(inlineDesc) ? inlineDesc : undefined,
+        ...pendingDesc,
+      ].filter((s): s is string => !!s);
       const description = descParts.length ? descParts.join(" ") : undefined;
       if (label) options.unshift({ label, description });
       pendingDesc = [];
@@ -5244,10 +5293,13 @@ export function parseInteractivePrompt(text: string): InteractivePrompt | null {
       const trimmed = lines[i].trim();
       const isIndented = /^\s{4,}/.test(lines[i]);
       const isSeparator = /^[─━═\-_]{3,}$/.test(trimmed);
-      if (trimmed && isIndented && !isSeparator && trimmed.length <= 300) {
+      // A row carrying any box-drawing glyph is the side-panel preview, not a
+      // continuation of the option's description — treat it as a gap, not text.
+      const isBoxArt = BOX_DRAWING_CHARS.test(trimmed);
+      if (trimmed && isIndented && !isSeparator && !isBoxArt && trimmed.length <= 300) {
         // Indented continuation line = description for the option just above it.
         pendingDesc.unshift(trimmed);
-      } else if (!trimmed || isIndented || isSeparator) {
+      } else if (!trimmed || isIndented || isSeparator || isBoxArt) {
         gapCount++;
         if (gapCount > 8) break;
       } else {
@@ -5369,6 +5421,12 @@ async function checkForInteractivePrompt(
     const prompt = parseInteractivePrompt(paneContent);
     if (!prompt) {
       log(`No interactive prompt found in ${tmuxTarget} for session ${sessionId.slice(0, 8)}`);
+      // Backstop: with no blocking prompt on screen, the live pane is the ground
+      // truth for whether this agent is idle or working. Correct a latched status
+      // (a lost lifecycle hook, or one wiped by a daemon restart) before returning.
+      // This runs both periodically (heartbeatHealthCheck) and right after a warm
+      // restart (the recovered-session scan), so a stale "working" can't persist.
+      reconcileStatusFromPane(paneContent, sessionId, conversationId, syncService);
       return;
     }
 
@@ -5378,9 +5436,21 @@ async function checkForInteractivePrompt(
     // in the JSONL and the file watcher syncs it as a full-fidelity card. Emitting a
     // scraped card here would be a degraded duplicate, so defer to that path — it also
     // sets the pending-prompt guard and the permission_blocked status.
-    if (!prompt.isConfirmation && sessionHasPendingAskUserQuestion(sessionId)) {
-      log(`Deferring to JSONL AskUserQuestion card for ${sessionId.slice(0, 8)} (skipping scraped duplicate)`);
-      return;
+    //
+    // The tool_use write can lag the on-screen render by a beat, and the heartbeat
+    // path calls us with delayMs=0, so a single point-in-time check can read the
+    // JSONL *before* the flush lands and wrongly fall through to a scraped card
+    // (this is how the "Disk headroom" poll shipped a garbled card). Poll briefly so
+    // the deferral wins the flush race. A genuine non-JSONL menu (e.g. the `--model`
+    // picker) never gains a pending tool_use, so it just costs this short settle.
+    if (!prompt.isConfirmation) {
+      for (let attempt = 0; attempt < 4; attempt++) {
+        if (sessionHasPendingAskUserQuestion(sessionId)) {
+          log(`Deferring to JSONL AskUserQuestion card for ${sessionId.slice(0, 8)} (skipping scraped duplicate)`);
+          return;
+        }
+        if (attempt < 3) await new Promise(r => setTimeout(r, 500));
+      }
     }
 
     const now = Date.now();
@@ -5508,6 +5578,115 @@ export function classifyTmuxLiveState(region: string): TmuxLiveState {
   // verification (input-still-has-our-text → reschedule) will catch it.
   if (region.includes("❯") || region.includes("›")) return "idle";
   return "unknown";
+}
+
+// Pane-state status reconcile — the tmux-session counterpart to
+// reconcileStatusFromTranscript. For a tmux-managed session the live pane is the
+// authoritative "is the agent busy right now" signal: the transcript can't tell
+// that a finished agent is idle when its last turn was cut off mid-tool (the JSONL
+// ends without an `end_turn` and reads "active" forever), and a daemon restart
+// wipes lastSentAgentStatus so the heartbeat re-asserts the server's stale active
+// status indefinitely. The pure decision below corrects only on a positive pane
+// signal, mirroring reconciledStatus:
+//   - idle pane + stale-active (or post-restart unknown) status -> idle
+//   - busy pane + quiet (or post-restart unknown) status        -> working
+// Modal/exited/unknown panes defer. classifyTmuxLiveState checks busy/modal
+// patterns before "idle" (a busy agent's type-ahead input box reads "busy", not
+// "idle"), so a false idle can't slip through.
+export function paneReconcileTarget(
+  state: TmuxLiveState,
+  stored: AgentStatus | undefined,
+): AgentStatus | null {
+  if (state === "idle") {
+    const staleActive = stored === "working" || stored === "thinking" || stored === "connected";
+    return stored === undefined || staleActive ? "idle" : null;
+  }
+  if (state === "busy") {
+    const quiet = stored === undefined || stored === "idle" || stored === "connected";
+    return quiet ? "working" : null;
+  }
+  return null;
+}
+
+function reconcileStatusFromPane(
+  paneContent: string,
+  sessionId: string,
+  conversationId: string,
+  syncService: SyncService,
+): void {
+  const state = classifyTmuxLiveState(extractTmuxLiveRegion(paneContent));
+  const stored = lastSentAgentStatus.get(sessionId);
+  const target = paneReconcileTarget(state, stored);
+  if (!target) return;
+  log(`[STATUS-PANE-RECONCILE] ${sessionId.slice(0, 8)} stored=${stored ?? "none"} pane=${state} -> ${target}`);
+  sendAgentStatus(syncService, conversationId, sessionId, target);
+}
+
+// Turn-completion state derived from a Claude JSONL transcript tail. This is the
+// universal ground truth for "is the agent mid-turn or done" -- every session
+// writes a transcript, unlike a tmux pane (a bare-terminal session has none).
+export type TranscriptTurnState =
+  | "idle"     // last real message is an assistant turn that ended (end_turn etc.)
+  | "active"   // mid-turn: a pending tool_use, or a user/tool_result awaiting reply
+  | "unknown"; // streaming/partial/no parseable real message -> defer, never guess
+
+// Classifies the most recent *real* message in a JSONL tail. `system`/meta lines
+// (and any partially-written final line that won't parse) are skipped so we land
+// on the last genuine user/assistant turn. The signal is structural:
+//   - assistant + stop_reason end_turn/stop_sequence/max_tokens -> turn ended (idle)
+//   - assistant + stop_reason tool_use                          -> mid-turn (active)
+//   - user (fresh prompt or tool_result)                        -> agent's move (active)
+//   - assistant with no/streaming stop_reason, or nothing real  -> unknown (defer)
+// AskUserQuestion-blocked sessions read as `active` (their last assistant turn is a
+// pending tool_use), so they are never mistaken for idle; the open-poll/needs-input
+// path owns that case.
+export function classifyTranscriptTail(tailContent: string): TranscriptTurnState {
+  const lines = tailContent.split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    let d: { type?: string; message?: { role?: string; stop_reason?: string | null } };
+    try {
+      d = JSON.parse(line);
+    } catch {
+      continue; // partial/corrupt line (e.g. mid-write tail) -> skip
+    }
+    const role = d.message?.role ?? (d.type === "user" || d.type === "assistant" ? d.type : undefined);
+    if (role === "assistant") {
+      const sr = d.message?.stop_reason;
+      if (sr === "tool_use") return "active";
+      if (sr === "end_turn" || sr === "stop_sequence" || sr === "max_tokens") return "idle";
+      return "unknown"; // streaming / unrecognized stop_reason -> defer
+    }
+    if (role === "user") return "active";
+    // system/meta entry -> keep scanning for the last real message
+  }
+  return "unknown";
+}
+
+// Decides whether the hook-driven status (lastSentAgentStatus) should be corrected
+// against the transcript turn-state. The status hook is a last-write-wins latch: if
+// a lifecycle transition is lost end-to-end (e.g. the Stop hook never reaches the
+// daemon), the latch freezes at the wrong value and the heartbeat re-broadcasts it
+// forever. The 2026-04-14 heartbeat-carries-status fix only repairs server<-daemon
+// drift; it cannot repair a wrong *local* value -- this does.
+//
+// Corrects only on a positive structural signal in either direction, deferring on
+// anything ambiguous, so it can never be wrong:
+//   - active (working/thinking) but transcript ended its turn  -> idle (lost Stop)
+//   - quiet (idle/connected) but transcript is mid-turn         -> working (lost activity hook)
+// Everything else is untouched: a genuine long tool run is `active` (never flipped to
+// idle), `unknown` defers, and permission_blocked/resuming/stopped/compacting are
+// owned by other code paths.
+export function reconciledStatus(
+  stored: AgentStatus | undefined,
+  turn: TranscriptTurnState,
+): AgentStatus | null {
+  const isActive = stored === "working" || stored === "thinking";
+  const isQuiet = stored === "idle" || stored === "connected";
+  if (isActive && turn === "idle") return "idle";
+  if (isQuiet && turn === "active") return "working";
+  return null;
 }
 
 // In bypassPermissions mode Claude Code still emits permission_prompt
@@ -6616,10 +6795,6 @@ const resumeInFlightStarted = new Map<string, number>();
 const RESUME_IN_FLIGHT_TIMEOUT_MS = 120_000;
 type ResumeFatalReason = "missing_conversation" | "session_not_found";
 const resumeFatalReasons = new Map<string, ResumeFatalReason>();
-// Conversations whose agent is being spawned as a fork. Fork history is copied
-// from the source and can reference a model the local CLI can't run, so these
-// resumes — and only these — get a model-alias override. See claudeModelAlias.
-const forkResumeConversations = new Set<string>();
 const conversationResumeFailures = new Map<string, { count: number; lastFailure: number }>();
 const CONVERSATION_RESUME_MAX_FAILURES = 3;
 const CONVERSATION_RESUME_COOLDOWN_MS = 5 * 60 * 1000; // 5 min cooldown after max failures
@@ -6670,13 +6845,22 @@ export function shouldStartBlankSessionAfterResumeFailure(reason: ResumeFatalRea
 // newer model ships, and `claude --resume` then dies with "the selected model
 // ... may not exist". Claude also accepts the short names opus/sonnet/haiku, which
 // always resolve to the current model of that line. Return the short name matching
-// the recorded model so a fork can resume on a live model instead of a dead
-// snapshot. Fork-only: a fork's copied history may carry a model the local CLI
-// can't run (e.g. forking another user's older session); normal resumes keep
-// whatever model the session already uses.
+// the recorded model so a resume lands on a live model instead of a dead snapshot.
 export function claudeModelAlias(jsonlContent: string): string | null {
   const m = jsonlContent.match(/"model"\s*:\s*"claude-(opus|sonnet|haiku)\b/);
   return m ? m[1] : null;
+}
+
+// Pick the `--model` flag for a resume. We override the model on EVERY resume,
+// not just forks: the reconstructed JSONL records whatever model the session last
+// ran on, which may be a now-retired pinned snapshot. Resolving to the line's
+// short alias (opus/sonnet/haiku) always lands on a live model and never goes
+// stale — if the recorded model is still current the alias resolves to it anyway.
+// An explicit --model in extraFlags always wins.
+export function resumeModelFlag(jsonlContent: string, extraFlags: string): string {
+  if (/(^|\s)--model(\s|=)/.test(extraFlags)) return "";
+  const alias = claudeModelAlias(jsonlContent);
+  return alias ? ` --model ${alias}` : "";
 }
 
 function stopManagedSessionHeartbeat(sessionId: string | undefined): void {
@@ -6706,10 +6890,68 @@ function ensureManagedSessionHeartbeat(sessionId: string): void {
     const count = (heartbeatHealthCheckCounter.get(sessionId) || 0) + 1;
     heartbeatHealthCheckCounter.set(sessionId, count);
     if (count % HEALTH_CHECK_EVERY_N_HEARTBEATS === 0) {
+      // Self-heal a status latch frozen on a lost hook transition. Runs for every
+      // session with a heartbeat -- including bare-terminal ones that have no tmux
+      // pane and so are skipped by heartbeatHealthCheck below.
+      try {
+        reconcileStatusFromTranscript(sessionId, syncServiceRef!);
+      } catch {}
       await heartbeatHealthCheck(sessionId);
     }
   }, 30000);
   resumeHeartbeatIntervals.set(sessionId, interval);
+}
+
+// Reads the last ~64KB of a file as UTF-8 without loading the whole thing --
+// transcripts run to MBs and this is called per-session on every heartbeat.
+function readFileTailSync(filePath: string, maxBytes = 64 * 1024): string {
+  const fd = fs.openSync(filePath, "r");
+  try {
+    const size = fs.fstatSync(fd).size;
+    const start = Math.max(0, size - maxBytes);
+    const len = size - start;
+    if (len <= 0) return "";
+    const buf = Buffer.allocUnsafe(len);
+    fs.readSync(fd, buf, 0, len, start);
+    return buf.toString("utf8");
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+// Self-heals a status latch frozen on a lost hook transition by reconciling
+// lastSentAgentStatus against the session's JSONL transcript (the universal
+// ground truth -- works for tmux-managed and bare-terminal sessions alike). The
+// decision is the pure reconciledStatus, which defers on any ambiguity. Only
+// Claude transcripts are parsed; codex/gemini formats differ, so we defer on them.
+function reconcileStatusFromTranscript(sessionId: string, syncService: SyncService): void {
+  // tmux-managed sessions are reconciled from the live pane (the authoritative
+  // busy/idle signal) by reconcileStatusFromPane. Skip the transcript path for
+  // them: a turn cut off mid-tool reads "active" forever, so the transcript would
+  // flip a pane-confirmed idle back to "working" every cycle. The transcript path
+  // remains the reconcile for bare-terminal sessions, which have no pane.
+  if (resumeSessionCache.has(sessionId)) return;
+  const stored = lastSentAgentStatus.get(sessionId);
+  // Cheap in-memory gate first: skip the file read entirely unless the stored
+  // status is one we'd ever correct.
+  if (!(stored === "working" || stored === "thinking" || stored === "idle" || stored === "connected")) {
+    return;
+  }
+  const file = findSessionFile(sessionId);
+  if (!file || file.agentType !== "claude") return; // only Claude JSONL is parsed here
+  let turn: TranscriptTurnState;
+  try {
+    turn = classifyTranscriptTail(readFileTailSync(file.path));
+  } catch {
+    return; // can't read the transcript -> defer, never guess
+  }
+  const corrected = reconciledStatus(stored, turn);
+  if (!corrected) return;
+  // Only now (a correction is warranted) pay the conversation-cache read.
+  const conversationId = readConversationCache()[sessionId];
+  if (!conversationId) return;
+  log(`[STATUS-RECONCILE] ${sessionId.slice(0, 8)} stored=${stored} turn=${turn} -> ${corrected}`);
+  sendAgentStatus(syncService, conversationId, sessionId, corrected);
 }
 
 async function heartbeatHealthCheck(sessionId: string): Promise<void> {
@@ -7097,6 +7339,76 @@ async function collectResourceSnapshot(): Promise<void> {
   }
 }
 
+const LIVENESS_RECONCILE_INTERVAL_MS = 120_000; // 2 min — conservative; daemon is load-sensitive
+
+// Periodic liveness reconciliation for the Sessions page.
+//
+// sessionProcessCache is otherwise seeded only by event-driven discovery (a
+// JSONL write), so a session that goes idle and stops writing is never
+// re-tracked after a daemon restart and wrongly shows as "dead". This sweep
+// re-establishes the session→pid mapping for every managed_sessions row whose
+// agent is still alive, so collectResourceSnapshot reports fresh metrics and the
+// page's liveness signal becomes accurate.
+//
+// Cheap by construction: one Convex query + one `tmux list-panes -a`, then a
+// bounded process-tree walk only for rows whose tmux session is actually live.
+async function reconcileSessionLiveness(): Promise<void> {
+  if (process.platform !== "darwin") return;
+  if (!syncServiceRef) return;
+  if (isInWakeGrace()) return;
+
+  const catalog = await syncServiceRef.listManagedSessions();
+  if (!catalog || catalog.length === 0) return;
+
+  // session_name -> pane_pid for every live pane, in one call.
+  const paneByTmux = new Map<string, number>();
+  if (hasTmux()) {
+    try {
+      const { stdout } = await tmuxExec(
+        ["list-panes", "-a", "-F", "#{session_name} #{pane_pid}"],
+        { timeout: 5000, killSignal: "SIGKILL" },
+      );
+      for (const line of stdout.trim().split("\n")) {
+        const [name, pid] = line.trim().split(/\s+/);
+        const n = parseInt(pid, 10);
+        if (name && !isNaN(n) && !paneByTmux.has(name)) paneByTmux.set(name, n);
+      }
+    } catch {}
+  }
+
+  // Rows needing resolution (skip ones collectResourceSnapshot already tracks).
+  const pending = catalog.filter((row) => !sessionProcessCache.has(row.session_id));
+
+  // Resolve agent pids with bounded concurrency — each resolution is a
+  // process-tree walk (pgrep), and doing ~160 sequentially stalls for tens of
+  // seconds under load. A small pool keeps the boot sweep to a few seconds
+  // without flooding the process table.
+  let seeded = 0;
+  const CONCURRENCY = 12;
+  for (let i = 0; i < pending.length; i += CONCURRENCY) {
+    const batch = pending.slice(i, i + CONCURRENCY);
+    await Promise.all(batch.map(async (row) => {
+      let agentPid: number | null = null;
+      const panePid = row.tmux_session ? paneByTmux.get(row.tmux_session) : undefined;
+      if (panePid !== undefined) {
+        agentPid = await findAgentPidInTree(panePid);
+      } else if (row.agent_pid && isProcessRunning(row.agent_pid) && isAgentProcess(row.agent_pid)) {
+        agentPid = row.agent_pid;
+      }
+      if (agentPid !== null) {
+        cacheSessionProcess(
+          row.session_id,
+          { pid: agentPid, tty: "", sessionId: row.session_id },
+          row.tmux_session,
+        );
+        seeded++;
+      }
+    }));
+  }
+
+  if (seeded > 0) log(`[LIVENESS] Reconciled ${seeded} live session(s) into process cache`);
+}
+
 function resolveSessionId(filePath: string): string {
   const name = path.basename(filePath, ".jsonl");
   if (CLAUDE_UUID_RE.test(name)) return name;
@@ -7438,13 +7750,9 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
     } catch (err) {
       log(`Failed to relocate session JSONL for ${resumeId.slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`);
     }
-    // Only fork resumes get a model override: the copied history can reference a
-    // model the local CLI can't run (a retired snapshot, or another user's model).
-    // Normal resumes keep whatever model the session already uses.
-    const isForkResume = !!conversationId && forkResumeConversations.has(conversationId);
-    const hasModelFlag = /(^|\s)--model(\s|=)/.test(extraFlags);
-    const modelAlias = (isForkResume && !hasModelFlag) ? claudeModelAlias(jsonlContent) : null;
-    const modelFlag = modelAlias ? ` --model ${modelAlias}` : "";
+    // Override the recorded model with its short alias so the resume never lands
+    // on a retired pinned snapshot. See resumeModelFlag.
+    const modelFlag = resumeModelFlag(jsonlContent, extraFlags);
     resumeCmd = `claude --resume ${resumeId}${modelFlag}${extraFlags ? " " + extraFlags : ""}`;
   }
 
@@ -8217,13 +8525,13 @@ async function deliverMessage(
         // intermittently for fresh sessions, raise this back up first.
         await new Promise(resolve => setTimeout(resolve, 500));
         const startedTmuxTarget = entry.tmuxSession + ":0.0";
-        // Mark "injected" BEFORE tmux send-keys. The send triggers Claude to write the user
-        // message to JSONL within ms, and the JSONL watcher calls ackInjectedMessages to flip
-        // "injected" → "delivered". If we flipped after the send, the ack could race ahead and
-        // find no "injected" row, leaving the status stuck until the 120s retry cron resets it
-        // and re-delivers the same message (duplicate reply).
-        await syncService.updateMessageStatus({ messageId, status: "injected" });
+        // Paste first — the local send-keys IS the delivery and must not wait on Convex. Mark
+        // "injected" best-effort after: the content-matched ack in addMessages flips the row to
+        // "delivered" when Claude echoes the message to JSONL, so a blocking mark before the
+        // paste is both unnecessary and a hang risk (an un-timed mark wedged the live-tmux path
+        // for the full 180s timeout under Convex load).
         await injectViaTmux(startedTmuxTarget, content);
+        markInjectedBestEffort(syncService, messageId);
         syncService.updateSessionAgentStatus(conversationId, "connected").catch(logConvexFailure);
         log(`Injected message to started session tmux ${entry.tmuxSession} for conversation ${conversationId.slice(0, 12)}`);
         const isPollResponse = !!parsePollMessage(content);
@@ -8326,12 +8634,14 @@ async function deliverMessage(
     const injectTarget = live.tmuxTarget.includes(":") ? live.tmuxTarget : live.tmuxTarget + ":0.0";
     const tmuxSessionName = injectTarget.split(":")[0];
     try {
-      // Mark "injected" BEFORE send-keys: the send triggers Claude to write the user message
-      // to JSONL within ms, and the JSONL watcher flips "injected" → "delivered". Flipping
-      // after the send lets the ack race ahead, find no "injected" row, and leave the status
-      // stuck until the retry cron re-delivers the same message (duplicate reply).
-      await syncService.updateMessageStatus({ messageId, status: "injected" });
+      // Paste first — the local send-keys IS the delivery and must not wait on Convex. Mark
+      // "injected" best-effort after (never a blocking await before): an un-timed mark here was
+      // wedging the whole delivery for the 180s timeout under Convex load, so the paste never
+      // ran. Correctness is preserved by the content-matched ack in addMessages, which flips the
+      // pending row to "delivered" when Claude echoes the message to its JSONL regardless of the
+      // intermediate "injected" status.
       await injectViaTmux(injectTarget, content);
+      markInjectedBestEffort(syncService, messageId);
       // A process-discovered pane can go stale between scan and inject — verify the agent
       // survived and fall through to auto-resume if it crashed (the original optimistic path).
       if (live.source === "process" && !(await isTmuxAgentAlive(tmuxSessionName))) {
@@ -8359,8 +8669,8 @@ async function deliverMessage(
     const termLabel = getTerminalLabel(live.proc.termProgram);
     logDelivery(`Trying ${termLabel} injection for tty=${live.proc.tty}`);
     try {
-      await syncService.updateMessageStatus({ messageId, status: "injected" });
       await injectViaTerminal(live.proc.tty, content, live.proc.termProgram);
+      markInjectedBestEffort(syncService, messageId);
       logDelivery(`Injected via ${termLabel} tty=${live.proc.tty}`);
       return true;
     } catch (err) {
@@ -8383,10 +8693,12 @@ async function deliverMessage(
   if (!tmuxAvailable) {
     logDelivery(`CANNOT auto-resume: tmux is not installed. Install with: brew install tmux`);
   }
-  // Mark "injected" BEFORE starting the resume. autoResumeSession spins up tmux + Claude and
-  // injects the content; Claude writes the user message to JSONL, and the JSONL watcher acks.
-  // If we marked after, the ack could race ahead and leave the status stuck.
-  await syncService.updateMessageStatus({ messageId, status: "injected" });
+  // Mark "injected" best-effort (non-blocking) before the resume. autoResumeSession spins up
+  // tmux + Claude and injects the content; the content-matched ack in addMessages flips the row
+  // to "delivered" when Claude echoes the message to JSONL, so this status write is not
+  // load-bearing. Keeping it non-blocking ensures a slow/stalled Convex mark can't wedge the
+  // resume+inject — the same failure mode fixed on the live-tmux path above.
+  markInjectedBestEffort(syncService, messageId);
   const resumed = await autoResumeSession(sessionId, content, titleCache, undefined, conversationId);
   if (resumed) {
     resetSessionDeliveryFailures(sessionId);
@@ -8620,30 +8932,41 @@ async function isTmuxAgentAlive(tmuxSession: string): Promise<boolean> {
   }
 }
 
-async function hasAgentProcessInTree(rootPid: number, maxDepth = 4): Promise<boolean> {
+// Walk a process tree (BFS, bounded depth) and return the first agent process
+// pid found, or null. The pid is what we seed into sessionProcessCache — it must
+// be the agent itself (not the parent shell) so the cache's isAgentProcess
+// revalidation keeps it alive.
+async function findAgentPidInTree(rootPid: number, maxDepth = 4): Promise<number | null> {
   const visited = new Set<number>();
-  async function scan(pids: number[], depth: number): Promise<boolean> {
-    if (depth > maxDepth || pids.length === 0) return false;
+  async function scan(pids: number[], depth: number): Promise<number | null> {
+    if (depth > maxDepth || pids.length === 0) return null;
     for (const pid of pids) {
       if (visited.has(pid)) continue;
       visited.add(pid);
-      if (isAgentProcess(pid)) return true;
+      if (isAgentProcess(pid)) return pid;
     }
     for (const pid of pids) {
       try {
         const { stdout } = await execAsync(`pgrep -P ${pid}`, { timeout: 3000, killSignal: "SIGKILL" });
         const children = stdout.trim().split(/\s+/).filter(Boolean).map(Number);
-        if (await scan(children, depth + 1)) return true;
+        const found = await scan(children, depth + 1);
+        if (found !== null) return found;
       } catch {}
     }
-    return false;
+    return null;
   }
+  // Include the root itself, then descend — a bare `claude` pane_pid is the agent.
+  if (isAgentProcess(rootPid)) return rootPid;
   try {
     const { stdout } = await execAsync(`pgrep -P ${rootPid}`, { timeout: 3000, killSignal: "SIGKILL" });
     const childPids = stdout.trim().split(/\s+/).filter(Boolean).map(Number);
     return scan(childPids, 1);
   } catch {}
-  return false;
+  return null;
+}
+
+async function hasAgentProcessInTree(rootPid: number, maxDepth = 4): Promise<boolean> {
+  return (await findAgentPidInTree(rootPid, maxDepth)) !== null;
 }
 
 function isAgentProcess(pid: number): boolean {
@@ -8678,12 +9001,79 @@ function spawnReplacement(): boolean {
   }
 }
 
+// Force launchd to relaunch this job via `kickstart -k` (kill + start). We do NOT
+// trust KeepAlive to notice our exit on its own: it has been observed to silently
+// not respawn after a self-heal exit, leaving the daemon dead for hours until a
+// manual kickstart. kickstart is an explicit imperative that works even when
+// KeepAlive is wedged, and because it SIGKILLs us externally it also doesn't depend
+// on our own exit timer firing — which matters when we're restarting precisely
+// because the timer subsystem is dead (post-sleep). Detached so it outlives our exit.
+// `-k` kills the current instance before starting; the brief sleep lets us flush
+// and (if timers are alive) exit gracefully first, but the kill makes restart happen
+// even if our own exit never does. Pure so the wiring (label, gui/$uid, -k) is testable
+// without spawning a real kickstart against the live daemon.
+export function buildLaunchdKickstartCommand(uid: number): string {
+  return `sleep 1; launchctl kickstart -k gui/${uid}/sh.codecast.daemon`;
+}
+
+function requestLaunchdRestart(): boolean {
+  if (platform !== "darwin" || !process.getuid) return false;
+  try {
+    const uid = process.getuid();
+    persistLogQueue(); // SIGKILL skips exit handlers; flush queued logs first
+    spawn("sh", ["-c", buildLaunchdKickstartCommand(uid)], {
+      detached: true,
+      stdio: "ignore",
+    }).unref();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function triggerSelfRestart(): void {
-  if (!isManagedByLaunchd()) {
+  if (isManagedByLaunchd()) {
+    // Imperatively kick launchd; kickstart -k kills this instance and starts a fresh
+    // one. Only fall through to the exit-and-trust-KeepAlive path if that fails.
+    if (requestLaunchdRestart()) return;
+  } else {
     const spawned = spawnReplacement();
     if (spawned) skipRespawn = true;
   }
   setTimeout(() => process.exit(0), 500);
+}
+
+// Cross-platform self-heal. setInterval/setTimeout do not reliably survive a long
+// system sleep (kqueue-timer death on macOS, similar hazards elsewhere): they stop
+// firing and never re-arm, so the daemon stays alive but every interval-based safety
+// net is dead. We cannot detect that from a timer (the detector would be dead too),
+// so we check from event-driven callbacks that DO resume on wake (file watcher, Convex
+// socket) and restart through the existing supervisor contract (launchd KeepAlive /
+// systemd Restart=always / self-respawn) to get a fresh timer subsystem. No OS-specific
+// code. lastEventLoopTick is refreshed by the event-loop monitor every ~30s; if it
+// drifts far past that, the monitor's timer is dead rather than merely slow.
+let lastEventLoopTick = Date.now();
+let selfHealing = false;
+const SELF_HEAL_TICK_STALE_MS = 5 * 60 * 1000;
+
+// Restart only when the event-loop monitor's timer is dead (tick far past its ~30s
+// cadence), never when it is merely slow under load, and never twice.
+export function shouldSelfHeal(
+  staleMs: number,
+  alreadyHealing: boolean,
+  thresholdMs: number = SELF_HEAL_TICK_STALE_MS,
+): boolean {
+  if (alreadyHealing) return false;
+  return staleMs > thresholdMs;
+}
+
+function selfHealIfTimersStalled(source: string): void {
+  const stale = Date.now() - lastEventLoopTick;
+  if (!shouldSelfHeal(stale, selfHealing)) return;
+  selfHealing = true;
+  log(`[SELF-HEAL] event-loop timer stalled ${Math.round(stale / 1000)}s (timers dead, likely post-sleep), restarting via ${source}`);
+  logLifecycle("self_heal_restart", `tick stalled ${Math.round(stale / 1000)}s, via ${source}`);
+  triggerSelfRestart();
 }
 
 const CRASH_FILE = path.join(CONFIG_DIR, "crash-count.json");
@@ -9268,6 +9658,7 @@ function startEventLoopMonitor(): NodeJS.Timeout {
     lastTickTime = now;
 
     saveDaemonState({ lastHeartbeatTick: now });
+    lastEventLoopTick = now;
 
     if (elapsed > EVENT_LOOP_LAG_THRESHOLD_MS) {
       logLifecycle("wake_detected", `System was suspended for ${Math.round(elapsed / 1000)}s, recovering`);
@@ -9809,6 +10200,14 @@ async function main(): Promise<void> {
     collectResourceSnapshot().catch(() => {});
   }, RESOURCE_MONITOR_INTERVAL_MS);
 
+  // Re-establish session→pid liveness mapping (esp. for idle sessions that don't
+  // write JSONL) so the Sessions page can tell live-idle from dead. Run once
+  // shortly after boot so the page recovers fast post-restart, then on a timer.
+  setTimeout(() => { reconcileSessionLiveness().catch(() => {}); }, 10_000);
+  setInterval(() => {
+    reconcileSessionLiveness().catch(() => {});
+  }, LIVENESS_RECONCILE_INTERVAL_MS);
+
   // Send initial heartbeat
   sendHeartbeat().catch(() => {});
 
@@ -10044,6 +10443,7 @@ async function main(): Promise<void> {
   });
 
   watcher.on("session", (event: SessionEvent) => {
+    selfHealIfTimersStalled("watcher");
     const filePath = event.filePath;
     lastWatcherEventTime = Date.now();
 
@@ -11054,6 +11454,7 @@ async function main(): Promise<void> {
         "pendingMessages:getPendingMessages" as any,
         { user_id: config.user_id, api_token: config.auth_token },
         async (messages: any) => {
+          selfHealIfTimersStalled("convex");
           if (!messages) {
             return;
           }

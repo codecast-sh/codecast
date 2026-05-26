@@ -949,6 +949,22 @@ export class SyncService {
     } catch {}
   }
 
+  async listManagedSessions(): Promise<Array<{
+    session_id: string;
+    conversation_id?: string;
+    tmux_session?: string;
+    agent_pid?: number;
+    last_metrics_at?: number;
+  }> | null> {
+    try {
+      return await this.client.query("managedSessions:listManagedSessionsForDaemon" as any, {
+        api_token: this.apiToken,
+      });
+    } catch {
+      return null;
+    }
+  }
+
   async checkManagedSession(conversationId: string): Promise<{ managed: boolean; session_id?: string; pid?: number } | null> {
     try {
       const result = await this.client.query("managedSessions:isSessionManaged" as any, {
