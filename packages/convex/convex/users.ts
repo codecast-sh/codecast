@@ -121,6 +121,8 @@ export const daemonHeartbeat = mutation({
     autostart_enabled: v.optional(v.boolean()),
     has_tmux: v.optional(v.boolean()),
     local_project_roots: v.optional(v.array(v.string())),
+    pending_sync_count: v.optional(v.number()),
+    oldest_pending_ms: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token, false);
@@ -137,6 +139,8 @@ export const daemonHeartbeat = mutation({
       daemon_pid: args.pid,
       autostart_enabled: args.autostart_enabled,
       has_tmux: args.has_tmux,
+      daemon_pending_sync_count: args.pending_sync_count ?? 0,
+      daemon_oldest_pending_ms: args.oldest_pending_ms ?? 0,
     };
     if (args.local_project_roots !== undefined) {
       patch.local_project_roots = args.local_project_roots;
@@ -430,6 +434,7 @@ export const resumeSession = mutation({
       created_at: Date.now(),
     });
 
+    await resetConversationPendingMessages(ctx, args.conversation_id);
     return { command_id: commandId };
   },
 });

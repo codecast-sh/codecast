@@ -1,4 +1,4 @@
-import { ReactNode, useState, useCallback, useRef, useMemo, createContext, useContext } from "react";
+import { ReactNode, useState, useCallback, useRef, useMemo, memo, createContext, useContext } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useEventListener } from "../hooks/useEventListener";
@@ -24,6 +24,7 @@ import { nanoid } from "nanoid";
 import { SetupPromptBanner } from "./SetupPromptBanner";
 import { DesktopAppBanner } from "./DesktopAppBanner";
 import { CliOfflineBanner } from "./CliOfflineBanner";
+import { DaemonStatusChip } from "./DaemonStatusChip";
 import { TmuxMissingBanner } from "./TmuxMissingBanner";
 import { FindBar } from "./FindBar";
 import { KeyboardShortcutsPanel } from "./KeyboardShortcutsHelp";
@@ -65,6 +66,52 @@ const DashboardNestCtx: React.Context<boolean> =
   (_g.__DashboardNestCtx as React.Context<boolean>) ??
   (_g.__DashboardNestCtx = createContext(false));
 
+// The "N agents running" badge is the ONLY thing in the dashboard shell that
+// needs the full sessions map. Keeping its subscription here (rather than in
+// DashboardLayoutInner) means a streaming session heartbeat re-renders just
+// this tiny button instead of the entire shell (Sidebar, CommandPalette,
+// keyboard panel, main content) on every tick.
+const ActiveAgentsBadge = memo(function ActiveAgentsBadge({ isOnInboxPage }: { isOnInboxPage: boolean }) {
+  const s = useTrackedStore([
+    s => s.sessions,
+    s => s.sessionsWithQueuedMessages,
+  ]);
+  const working = useMemo(
+    () => categorizeSessions(s.sessions, s.sessionsWithQueuedMessages).working,
+    [s.sessions, s.sessionsWithQueuedMessages],
+  );
+  if (working.length === 0) return null;
+  const activeAgentCount = working.length;
+  return (
+    <button
+      onClick={() => {
+        const store = useInboxStore.getState();
+        if (!store.sidePanelOpen) store.toggleSidePanel();
+        const firstWorking = working[0];
+        if (firstWorking) {
+          if (isOnInboxPage) store.setCurrentSession(firstWorking._id);
+          else store.selectPanelSession(firstWorking._id);
+        }
+      }}
+      className="hidden md:flex items-center gap-1.5 px-2 py-0.5 rounded-full cursor-pointer select-none transition-all duration-300"
+      style={{
+        background: 'color-mix(in srgb, var(--sol-green) 12%, transparent)',
+        border: '1px solid color-mix(in srgb, var(--sol-green) 20%, transparent)',
+        boxShadow: '0 0 10px color-mix(in srgb, var(--sol-green) 12%, transparent)',
+      }}
+      title={`${activeAgentCount} agent${activeAgentCount !== 1 ? 's' : ''} running`}
+    >
+      <span className="relative flex h-2 w-2">
+        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-sol-green opacity-40" style={{ animationDuration: '1.5s' }} />
+        <span className="relative inline-flex rounded-full h-2 w-2 bg-sol-green" />
+      </span>
+      <span className="text-[11px] font-mono font-bold tabular-nums" style={{ color: 'var(--sol-green)' }}>
+        {activeAgentCount}
+      </span>
+    </button>
+  );
+});
+
 export function DashboardLayout(props: DashboardLayoutProps) {
   const isNested = useContext(DashboardNestCtx);
   if (isNested) return <>{props.children}</>;
@@ -87,12 +134,10 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
     s => s.currentConversation?.source,
     s => s.sidePanelOpen,
     s => s.sidePanelSessionId,
-    s => s.sessions,
     s => s.currentSessionId,
     s => s.viewingDismissedId,
     s => s.newSession.isOpen,
     s => s.tabs.length,
-    s => s.sessionsWithQueuedMessages,
   ]);
   const isZenMode = s.clientState.ui?.zen_mode ?? false;
   const sidebarCollapsed = s.clientState.ui?.sidebar_collapsed ?? false;
@@ -156,8 +201,6 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
   const isOnWindowsPage = pathname === "/windows";
   const isFullWidthPage = isOnConversationPage || isOnCommitPage || isOnPRPage || isOnInboxPage || isOnTasksPage || isOnWorkflowsPage || isOnPlansPage || isOnDocsPage || isOnProjectsPage || isOnWindowsPage;
 
-  const categorized = useMemo(() => categorizeSessions(s.sessions, s.sessionsWithQueuedMessages), [s.sessions, s.sessionsWithQueuedMessages]);
-  const activeAgentCount = categorized.working.length;
 
   const showCollapsedRail = !s.sidePanelOpen && !isMobile;
   const showSessionList = s.sidePanelOpen && !isMobile;
@@ -584,37 +627,10 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
 
           {/* Right section: Actions */}
           <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
-            {activeAgentCount > 0 && (
-              <button
-                onClick={() => {
-                  if (!s.sidePanelOpen) s.toggleSidePanel();
-                  const store = useInboxStore.getState();
-                  const firstWorking = categorized.working[0];
-                  if (firstWorking) {
-                    if (isOnInboxPage) {
-                      store.setCurrentSession(firstWorking._id);
-                    } else {
-                      store.selectPanelSession(firstWorking._id);
-                    }
-                  }
-                }}
-                className="hidden md:flex items-center gap-1.5 px-2 py-0.5 rounded-full cursor-pointer select-none transition-all duration-300"
-                style={{
-                  background: 'color-mix(in srgb, var(--sol-green) 12%, transparent)',
-                  border: '1px solid color-mix(in srgb, var(--sol-green) 20%, transparent)',
-                  boxShadow: '0 0 10px color-mix(in srgb, var(--sol-green) 12%, transparent)',
-                }}
-                title={`${activeAgentCount} agent${activeAgentCount !== 1 ? 's' : ''} running`}
-              >
-                <span className="relative flex h-2 w-2">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-sol-green opacity-40" style={{ animationDuration: '1.5s' }} />
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-sol-green" />
-                </span>
-                <span className="text-[11px] font-mono font-bold tabular-nums" style={{ color: 'var(--sol-green)' }}>
-                  {activeAgentCount}
-                </span>
-              </button>
-            )}
+            <ErrorBoundary name="DaemonStatusChip" level="inline">
+              <DaemonStatusChip />
+            </ErrorBoundary>
+            <ActiveAgentsBadge isOnInboxPage={isOnInboxPage} />
             <button
               onClick={(e) => {
                 const ctx = resolveNewSessionContext();
