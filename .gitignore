@@ -84,3 +84,6 @@ VERIFICATION-*.md
 COMMENT-SYNC-VERIFICATION.md
 TESTING_PERMISSIONS.md
 .gstack/
+
+# Watchman transient cookies
+.watchman-cookie-*
