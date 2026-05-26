@@ -141,7 +141,9 @@ function AggregateOverview({ sessions }: { sessions: ClassifiedSession[] }) {
 
   const totals = useMemo(() => {
     let mem = 0, cpu = 0, procs = 0;
+    // Only live sessions contribute — dead rows carry stale pre-death metrics.
     for (const s of sessions) {
+      if (!s.isAlive) continue;
       mem += s.current_memory || 0;
       cpu += s.current_cpu || 0;
       procs += s.current_pid_count || 0;
@@ -511,7 +513,7 @@ function SessionsView() {
                           </>
                         )}
                         <span className="text-zinc-700">|</span>
-                        <span>pid:{session.pid}</span>
+                        <span>pid:{session.agent_pid ?? session.pid}</span>
                         {session.message_count != null && (
                           <>
                             <span className="text-zinc-700">|</span>
@@ -526,19 +528,21 @@ function SessionsView() {
                             <span className="text-violet-600">subagent</span>
                           </>
                         )}
-                        {session.current_memory != null && session.current_memory > 0 && (
+                        {/* Resource metrics reflect a live process tree — suppress for
+                            dead rows where the numbers are stale pre-death values. */}
+                        {session.isAlive && session.current_memory != null && session.current_memory > 0 && (
                           <>
                             <span className="text-zinc-700">|</span>
                             <span className="text-sky-500">{(session.current_memory / (1024 * 1024)).toFixed(0)}MB</span>
                           </>
                         )}
-                        {session.current_cpu != null && session.current_cpu > 0 && (
+                        {session.isAlive && session.current_cpu != null && session.current_cpu > 0 && (
                           <>
                             <span className="text-zinc-700">|</span>
                             <span className="text-amber-500">{session.current_cpu.toFixed(1)}%</span>
                           </>
                         )}
-                        {session.current_pid_count != null && session.current_pid_count > 0 && (
+                        {session.isAlive && session.current_pid_count != null && session.current_pid_count > 0 && (
                           <>
                             <span className="text-zinc-700">|</span>
                             <span>{session.current_pid_count} procs</span>
