@@ -59,13 +59,19 @@ interface E2bSandboxCreateOpts {
   envs?: Record<string, string>;
 }
 
+interface E2bCmdResult {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+}
+
 interface E2bSandbox {
   readonly sandboxId: string;
   commands: {
     run(
       command: string,
       opts?: { cwd?: string; envs?: Record<string, string>; timeoutMs?: number },
-    ): Promise<{ stdout: string; stderr: string; exitCode: number }>;
+    ): Promise<E2bCmdResult>;
   };
   files: {
     read(path: string): Promise<string | Buffer>;
@@ -75,11 +81,36 @@ interface E2bSandbox {
   kill(): Promise<void>;
 }
 
+/**
+ * E2B's commands.run() THROWS CommandExitError on non-zero exit. For exec()
+ * we want shell-like semantics: return the exit code, never throw. This
+ * helper normalizes both paths. The thrown error carries exitCode/stdout/
+ * stderr on the error object.
+ */
+async function runCommandNoThrow(
+  sandbox: E2bSandbox,
+  command: string,
+  opts?: { cwd?: string; envs?: Record<string, string>; timeoutMs?: number },
+): Promise<E2bCmdResult> {
+  try {
+    return await sandbox.commands.run(command, opts);
+  } catch (err) {
+    const e = err as { exitCode?: number; stdout?: string; stderr?: string };
+    if (typeof e.exitCode === "number") {
+      return { stdout: e.stdout ?? "", stderr: e.stderr ?? "", exitCode: e.exitCode };
+    }
+    throw err; // not a command-exit error (e.g., sandbox gone) — propagate
+  }
+}
+
 /** Load the SDK at runtime; throw a clear error if absent. */
 async function loadE2bSdk(): Promise<E2bSdk> {
   try {
-    // @ts-expect-error — optional dependency, may not be installed
-    const mod = await import("e2b");
+    // Construct the specifier so TypeScript doesn't statically resolve it:
+    // 'e2b' is an OPTIONAL dependency and may be absent at type-check time
+    // (when present, a literal import would make the @ts-expect-error stale).
+    const specifier = "e2b";
+    const mod = await import(specifier);
     return mod as unknown as E2bSdk;
   } catch (err) {
     throw new Error(
@@ -170,15 +201,17 @@ export const E2bBackend: SandboxBackend = {
     const sandbox = await sdk.Sandbox.create({
       apiKey: requireApiKey(),
       template: opts.branch?.startsWith("e2b/") ? opts.branch.slice(4) : undefined,
-      timeoutMs: 24 * 60 * 60 * 1000, // 24h max (E2B limit)
+      // E2B caps sandbox lifetime at 1 hour. Sandboxes can be extended via
+      // setTimeout() while in use if longer sessions are needed.
+      timeoutMs: 60 * 60 * 1000,
       envs: env,
     });
     sandboxCache.set(sandbox.sandboxId, sandbox);
 
-    // Clone repo into /workspace on the sandbox. We use the local repo's
-    // HEAD remote URL; if none, we tar up the repo and push it. For v1 the
-    // simpler clone-from-origin path is sufficient.
-    const workspacePath = `/workspace/${name}`;
+    // Clone repo into the sandbox user's home. E2B sandboxes run as the
+    // non-root 'user' (home /home/user); / is not writable. We use the local
+    // repo's remote URL if present, else tar up the repo and push it.
+    const workspacePath = `/home/user/${name}`;
     if (!opts.skipSetup) {
       // Clone fresh. The user may want to override the source URL via opt.
       const cloneUrl = await getRepoRemoteUrl(repoRoot);
@@ -196,7 +229,7 @@ export const E2bBackend: SandboxBackend = {
         ...manifest.setup.generate,
         ...manifest.setup.migrate,
       ]) {
-        const r = await sandbox.commands.run(cmd, { cwd: workspacePath, envs: env });
+        const r = await runCommandNoThrow(sandbox, cmd, { cwd: workspacePath, envs: env });
         if (r.exitCode !== 0) {
           throw new Error(
             `e2b setup '${cmd}' exited ${r.exitCode}\nstderr:\n${r.stderr}`,
@@ -263,7 +296,7 @@ export const E2bBackend: SandboxBackend = {
     if (s.e2bSandboxId) {
       try {
         const sandbox = await getOrConnectSandbox(s.e2bSandboxId);
-        const r = await sandbox.commands.run("test -d " + JSON.stringify(s.path));
+        const r = await runCommandNoThrow(sandbox, "test -d " + JSON.stringify(s.path));
         checks.push({
           name: "workspace-dir",
           ok: r.exitCode === 0,
@@ -310,7 +343,7 @@ export const E2bBackend: SandboxBackend = {
     const sandbox = await getOrConnectSandbox(s.e2bSandboxId);
     const cwd = opts.cwd ? `${s.path}/${opts.cwd}` : s.path;
     const start = Date.now();
-    const r = await sandbox.commands.run(command, {
+    const r = await runCommandNoThrow(sandbox, command, {
       cwd,
       envs: { ...s.env, ...(opts.env ?? {}) },
       timeoutMs: opts.timeoutMs,
@@ -367,10 +400,12 @@ async function pushRepoTarball(
   destPath: string,
 ): Promise<void> {
   // Create a tarball of the repo (excluding .codecast/worktrees/ and node_modules).
+  // Omit `encoding` entirely so execSync returns a Buffer (passing a string
+  // encoding would decode to text and corrupt the gzip bytes).
   const tar = execSync(
     `tar --exclude=.codecast/worktrees --exclude=node_modules --exclude=target -cz -C ${JSON.stringify(repoRoot)} .`,
-    { encoding: "buffer" as BufferEncoding, maxBuffer: 1024 * 1024 * 1024 },
-  ) as unknown as Buffer;
+    { maxBuffer: 1024 * 1024 * 1024 },
+  );
   await sandbox.files.write(`/tmp/repo.tgz`, tar);
   await sandbox.commands.run(
     `mkdir -p ${destPath} && tar -xzf /tmp/repo.tgz -C ${destPath} && rm /tmp/repo.tgz`,

@@ -68,25 +68,30 @@ describe("E2bBackend — credential + SDK guards", () => {
 });
 
 describe("MacMiniBackend — credential guards", () => {
-  test("acquire without SCALEWAY_API_TOKEN throws a clear setup error", async () => {
+  test("acquire without Scaleway secret throws a clear setup error", async () => {
     const oldToken = process.env.SCALEWAY_API_TOKEN;
+    const oldSecret = process.env.SCALEWAY_SECRET_KEY;
     const oldProj = process.env.SCALEWAY_PROJECT_ID;
     delete process.env.SCALEWAY_API_TOKEN;
+    delete process.env.SCALEWAY_SECRET_KEY;
     delete process.env.SCALEWAY_PROJECT_ID;
     try {
       await expect(MacMiniBackend.acquire(repoRoot, "feat-x")).rejects.toThrow(
-        /SCALEWAY_API_TOKEN env var is not set/,
+        /SCALEWAY_SECRET_KEY \(or SCALEWAY_API_TOKEN\) env var is not set/,
       );
     } finally {
       if (oldToken !== undefined) process.env.SCALEWAY_API_TOKEN = oldToken;
+      if (oldSecret !== undefined) process.env.SCALEWAY_SECRET_KEY = oldSecret;
       if (oldProj !== undefined) process.env.SCALEWAY_PROJECT_ID = oldProj;
     }
   });
 
-  test("acquire with token but no project throws project error", async () => {
+  test("acquire with secret but no project throws project error", async () => {
     const oldToken = process.env.SCALEWAY_API_TOKEN;
+    const oldSecret = process.env.SCALEWAY_SECRET_KEY;
     const oldProj = process.env.SCALEWAY_PROJECT_ID;
-    process.env.SCALEWAY_API_TOKEN = "fake-token-for-test";
+    process.env.SCALEWAY_SECRET_KEY = "fake-secret-for-test";
+    delete process.env.SCALEWAY_API_TOKEN;
     delete process.env.SCALEWAY_PROJECT_ID;
     try {
       await expect(MacMiniBackend.acquire(repoRoot, "feat-x")).rejects.toThrow(
@@ -95,6 +100,8 @@ describe("MacMiniBackend — credential guards", () => {
     } finally {
       if (oldToken !== undefined) process.env.SCALEWAY_API_TOKEN = oldToken;
       else delete process.env.SCALEWAY_API_TOKEN;
+      if (oldSecret !== undefined) process.env.SCALEWAY_SECRET_KEY = oldSecret;
+      else delete process.env.SCALEWAY_SECRET_KEY;
       if (oldProj !== undefined) process.env.SCALEWAY_PROJECT_ID = oldProj;
     }
   });

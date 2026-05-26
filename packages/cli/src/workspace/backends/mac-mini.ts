@@ -44,7 +44,11 @@ import type {
 
 const SCALEWAY_HOSTS_DIR = path.join(os.homedir(), ".codecast/scaleway");
 const SCALEWAY_HOSTS_FILE = path.join(SCALEWAY_HOSTS_DIR, "hosts.json");
-const DEFAULT_ZONE = "fr-par-3"; // Scaleway Apple Silicon availability zone
+// fr-par-3 carries high stock of M1-M; fr-par-1 has the wider M2/M4 range.
+const DEFAULT_ZONE = "fr-par-3";
+// Scaleway commercial type names are like "M1-M", "M2-M", "M4-S" (NOT
+// "mac-m1-m1"). M1-M is the cheapest macOS option and high-stock in fr-par-3.
+const DEFAULT_TYPE = "M1-M";
 
 // --------------------------------------------------------------------------
 // Host metadata persisted locally
@@ -55,13 +59,19 @@ interface ScalewayHostMeta {
   id: string;
   /** Public IPv6 or IPv4 we SSH to. */
   address: string;
+  /**
+   * SSH username. Scaleway Apple Silicon servers use a family-based user
+   * (e.g., "m1" for M1, "m2"/"m4" for newer) returned as ssh_username on the
+   * create response — NOT root.
+   */
+  sshUsername: string;
   /** Last time any workspace activity touched this host. */
   lastUsedAt: string;
   /** Whether the host is currently stopped (still billable for storage, not compute). */
   stopped: boolean;
   /** Zone the host lives in. */
   zone: string;
-  /** Commercial type (e.g., mac-m1-m1, mac-m2-m2pro). */
+  /** Commercial type (e.g., "M1-M", "M2-M", "M4-S"). */
   commercialType: string;
 }
 
@@ -94,10 +104,12 @@ function sshKeyPath(hostId: string): string {
 // --------------------------------------------------------------------------
 
 function requireToken(): string {
-  const t = process.env.SCALEWAY_API_TOKEN;
+  // Scaleway authenticates API calls with the SECRET KEY in the X-Auth-Token
+  // header (the access key is just the identifier). Accept either env name.
+  const t = process.env.SCALEWAY_SECRET_KEY ?? process.env.SCALEWAY_API_TOKEN;
   if (!t) {
     throw new Error(
-      `SCALEWAY_API_TOKEN env var is not set. Get a token at https://console.scaleway.com/iam/api-keys`,
+      `SCALEWAY_SECRET_KEY (or SCALEWAY_API_TOKEN) env var is not set. Get one at https://console.scaleway.com/iam/api-keys`,
     );
   }
   return t;
@@ -113,16 +125,17 @@ function requireProject(): string {
   return p;
 }
 
+// The apple-silicon API returns the server object FLAT (not wrapped in a
+// `server` key, unlike some other Scaleway products). status goes
+// starting → ready; ssh_username is the family user (e.g. "m1").
 interface ScalewayServerResponse {
-  server: {
-    id: string;
-    name: string;
-    ip: string;
-    ipv6: { address: string } | null;
-    status: string;
-    commercial_type: string;
-    zone: string;
-  };
+  id: string;
+  name: string;
+  ip: string;
+  ssh_username: string;
+  status: string;
+  type: string;
+  zone: string;
 }
 
 async function scalewayApi<T>(
@@ -152,8 +165,14 @@ async function provisionHost(opts?: {
   commercialType?: string;
 }): Promise<ScalewayHostMeta> {
   const zone = opts?.zone ?? DEFAULT_ZONE;
-  const commercialType = opts?.commercialType ?? "mac-m1-m1";
+  const commercialType = opts?.commercialType ?? DEFAULT_TYPE;
 
+  // NOTE: Apple's macOS licensing mandates a 24-hour minimum lease for cloud
+  // Macs (minimum_lease_duration=86400s on all macOS server types). Creating
+  // a host commits to ~24h of billing even if released immediately. This is
+  // an Apple constraint, identical across AWS/Scaleway/MacStadium — not a
+  // provider quirk. Provision deliberately; reuse the host across many
+  // workspaces within the 24h window.
   const created = await scalewayApi<ScalewayServerResponse>(
     "POST",
     `/apple-silicon/v1alpha1/zones/${zone}/servers`,
@@ -163,7 +182,8 @@ async function provisionHost(opts?: {
       project_id: requireProject(),
     },
   );
-  const id = created.server.id;
+  const id = created.id;
+  const sshUsername = created.ssh_username || "m1";
   // Poll until ready (can take 8-15 min).
   for (let i = 0; i < 60; i++) {
     await new Promise((r) => setTimeout(r, 15_000));
@@ -171,11 +191,11 @@ async function provisionHost(opts?: {
       "GET",
       `/apple-silicon/v1alpha1/zones/${zone}/servers/${id}`,
     );
-    if (status.server.status === "ready") {
-      const address = status.server.ipv6?.address ?? status.server.ip;
+    if (status.status === "ready") {
       const meta: ScalewayHostMeta = {
         id,
-        address,
+        address: status.ip,
+        sshUsername: status.ssh_username || sshUsername,
         zone,
         commercialType,
         lastUsedAt: new Date().toISOString(),
@@ -186,7 +206,7 @@ async function provisionHost(opts?: {
       writeHosts(file);
       return meta;
     }
-    if (status.server.status === "error") {
+    if (status.status === "error") {
       throw new Error(`Scaleway provisioning failed: server status='error'`);
     }
   }
@@ -265,11 +285,13 @@ function sshExec(
   opts: { stdin?: string; envs?: Record<string, string>; timeoutMs?: number } = {},
 ): { stdout: string; stderr: string; exitCode: number | null } {
   const ssh = "ssh";
+  // Scaleway Apple Silicon uses a family-based SSH user (e.g. "m1"), not root.
+  const user = target.host.sshUsername || "m1";
   const args: string[] = [
     "-i", sshKeyPath(target.host.id),
     "-o", "StrictHostKeyChecking=accept-new",
     "-o", "UserKnownHostsFile=" + path.join(SCALEWAY_HOSTS_DIR, target.host.id, "known_hosts"),
-    `root@${target.host.address}`,
+    `${user}@${target.host.address}`,
   ];
   // Run inside tart VM if target.vm provided.
   let remoteCmd = command;
