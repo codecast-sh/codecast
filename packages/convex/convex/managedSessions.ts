@@ -234,7 +234,14 @@ export const heartbeat = mutation({
       const tsStale = args.client_ts && session.agent_status_updated_at && args.client_ts < session.agent_status_updated_at;
       if (!tsStale) {
         patch.agent_status = args.agent_status;
-        patch.agent_status_updated_at = args.client_ts || now;
+        // Only advance the change-time on an actual status change. The heartbeat
+        // re-sends the current status every ~90s (to self-heal dropped
+        // transitions), so bumping this unconditionally would make it track
+        // "last heard" instead of "entered this status" — and idle detection
+        // needs the latter to know how long an agent has been waiting.
+        if (args.agent_status !== session.agent_status) {
+          patch.agent_status_updated_at = args.client_ts || now;
+        }
       }
     }
 
@@ -439,7 +446,13 @@ export const updateAgentStatus = mutation({
     const tsStale = args.client_ts && session.agent_status_updated_at && args.client_ts < session.agent_status_updated_at;
     if (!tsStale) {
       patch.agent_status = args.agent_status;
-      patch.agent_status_updated_at = args.client_ts || Date.now();
+      // Advance the change-time only on an actual change so the field stays a
+      // "when did the agent enter this status" signal (idle detection relies on
+      // it). Redundant same-status updates — e.g. PreToolUse re-firing "working"
+      // each tool call — must not reset it.
+      if (args.agent_status !== session.agent_status) {
+        patch.agent_status_updated_at = args.client_ts || Date.now();
+      }
     }
 
     // Active status updates prove the daemon is alive — refresh heartbeat too.
