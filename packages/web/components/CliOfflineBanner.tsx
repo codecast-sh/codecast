@@ -4,40 +4,15 @@ import { useInboxStore } from "../store/inboxStore";
 import { copyToClipboard } from "../lib/utils";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useCurrentUser } from "../hooks/useCurrentUser";
+import {
+  offlineTierFor,
+  formatDuration,
+  type OfflineTier,
+} from "../hooks/useDaemonHealth";
 
-const ONE_MIN_MS = 60 * 1000;
-const ONE_HOUR_MS = 60 * ONE_MIN_MS;
-const ONE_DAY_MS = 24 * ONE_HOUR_MS;
+const DISMISS_DURATION_MS = 30 * 60 * 1000;
 
-const WARN_AFTER_MS = 10 * ONE_MIN_MS;
-const ALERT_AFTER_MS = ONE_HOUR_MS;
-const SEVERE_AFTER_MS = ONE_DAY_MS;
-
-const DISMISS_DURATION_MS = 30 * ONE_MIN_MS;
-
-type Tier = "warn" | "alert" | "severe";
-
-function tierFor(offlineMs: number): Tier | null {
-  if (offlineMs >= SEVERE_AFTER_MS) return "severe";
-  if (offlineMs >= ALERT_AFTER_MS) return "alert";
-  if (offlineMs >= WARN_AFTER_MS) return "warn";
-  return null;
-}
-
-function formatStale(ms: number): string {
-  if (ms >= ONE_DAY_MS) {
-    const days = Math.floor(ms / ONE_DAY_MS);
-    return `${days} day${days === 1 ? "" : "s"}`;
-  }
-  if (ms >= ONE_HOUR_MS) {
-    const hours = Math.floor(ms / ONE_HOUR_MS);
-    return `${hours}h`;
-  }
-  const mins = Math.max(1, Math.floor(ms / ONE_MIN_MS));
-  return `${mins} min`;
-}
-
-const TIER_STYLES: Record<Tier, { wrap: string; icon: string }> = {
+const TIER_STYLES: Record<OfflineTier, { wrap: string; icon: string }> = {
   warn: {
     wrap: "bg-gradient-to-r from-sol-yellow/10 via-sol-yellow/5 to-sol-yellow/10 border-b border-sol-yellow/30",
     icon: "text-sol-yellow",
@@ -69,13 +44,13 @@ export function CliOfflineBanner() {
   if (!lastSeen) return null;
 
   const offlineDuration = Date.now() - lastSeen;
-  const tier = tierFor(offlineDuration);
+  const tier = offlineTierFor(offlineDuration);
   if (!tier) return null;
 
   // Honor dismiss only while we're in the same (or lower) tier than when it was dismissed.
   // If the situation has escalated to a worse tier since dismiss, surface the banner again.
   const dismissedOfflineDuration = dismissedTs > 0 ? dismissedTs - lastSeen : -1;
-  const dismissedTier = dismissedOfflineDuration > 0 ? tierFor(dismissedOfflineDuration) : null;
+  const dismissedTier = dismissedOfflineDuration > 0 ? offlineTierFor(dismissedOfflineDuration) : null;
   const dismissActive = dismissedTs > 0 && Date.now() - dismissedTs < DISMISS_DURATION_MS;
   const tierEscalated =
     dismissedTier === null
@@ -85,7 +60,7 @@ export function CliOfflineBanner() {
   if (dismissActive && !tierEscalated) return null;
 
   const command = tier === "warn" ? "cast status" : "cast restart";
-  const stale = formatStale(offlineDuration);
+  const stale = formatDuration(offlineDuration);
   const message =
     tier === "warn"
       ? `CLI hasn't synced in ${stale}.`

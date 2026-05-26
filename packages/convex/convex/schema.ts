@@ -61,6 +61,10 @@ export default defineSchema({
     has_tmux: v.optional(v.boolean()),
     daemon_pid: v.optional(v.number()),
     last_heartbeat: v.optional(v.number()),
+    // Sync backlog reported on each heartbeat. Lets the web show a "sync
+    // stalled" warning while the daemon is alive but data isn't flowing.
+    daemon_pending_sync_count: v.optional(v.number()),
+    daemon_oldest_pending_ms: v.optional(v.number()),
     agent_permission_modes: v.optional(v.object({
       claude: v.optional(v.union(v.literal("default"), v.literal("bypass"))),
       codex: v.optional(v.union(v.literal("default"), v.literal("full_auto"), v.literal("bypass"))),
