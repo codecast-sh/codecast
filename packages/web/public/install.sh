@@ -75,14 +75,53 @@ mv "${TEMP_FILE}" "${INSTALL_DIR}/codecast"
 chmod +x "${INSTALL_DIR}/codecast"
 ln -sf "${INSTALL_DIR}/codecast" "${INSTALL_DIR}/cast"
 
-if ! echo "${PATH}" | grep -q "${INSTALL_DIR}"; then
-  echo ""
-  echo "Warning: ${INSTALL_DIR} is not in your PATH"
-  echo "Add this to your shell profile (~/.zshrc or ~/.bashrc):"
-  echo "  export PATH=\"\${HOME}/.local/bin:\${PATH}\""
-  echo ""
-  export PATH="${INSTALL_DIR}:${PATH}"
-fi
+# Append a PATH line to a shell profile, idempotently. Sets CONFIGURED_PROFILE on success.
+add_to_path() {
+  profile="$1"
+  line="$2"
+  # Only touch a profile whose parent directory exists (so we don't create stray dirs)
+  [ -d "$(dirname "${profile}")" ] || return 0
+  # Skip if this profile already references the install dir
+  if [ -f "${profile}" ] && grep -qs '\.local/bin' "${profile}"; then
+    return 0
+  fi
+  printf '\n# Added by codecast installer\n%s\n' "${line}" >> "${profile}"
+  echo "  Added ${INSTALL_DIR} to PATH in ${profile}"
+  CONFIGURED_PROFILE="${profile}"
+}
+
+CONFIGURED_PROFILE=""
+case ":${PATH}:" in
+  *":${INSTALL_DIR}:"*)
+    : # already on PATH, nothing to do
+    ;;
+  *)
+    echo ""
+    echo "Adding ${INSTALL_DIR} to your PATH..."
+    POSIX_LINE="export PATH=\"\$HOME/.local/bin:\$PATH\""
+    case "$(basename "${SHELL:-/bin/sh}")" in
+      zsh)
+        add_to_path "${ZDOTDIR:-$HOME}/.zshrc" "${POSIX_LINE}"
+        ;;
+      bash)
+        add_to_path "${HOME}/.bashrc" "${POSIX_LINE}"
+        if [ -f "${HOME}/.bash_profile" ]; then
+          add_to_path "${HOME}/.bash_profile" "${POSIX_LINE}"
+        else
+          add_to_path "${HOME}/.profile" "${POSIX_LINE}"
+        fi
+        ;;
+      fish)
+        add_to_path "${HOME}/.config/fish/config.fish" "fish_add_path \"\$HOME/.local/bin\""
+        ;;
+      *)
+        add_to_path "${HOME}/.profile" "${POSIX_LINE}"
+        ;;
+    esac
+    # Make cast usable for the rest of THIS script run (does not affect the parent shell)
+    export PATH="${INSTALL_DIR}:${PATH}"
+    ;;
+esac
 
 # Check for stale installs that might shadow the new binary
 for CMD_NAME in codecast cast; do
@@ -103,9 +142,25 @@ fi
 echo "cast installed successfully! (also available as codecast)"
 echo ""
 
+if [ -n "${CONFIGURED_PROFILE}" ]; then
+  echo "PATH updated in ${CONFIGURED_PROFILE}."
+  echo "To use 'cast' in this shell right now, run:"
+  echo "  source \"${CONFIGURED_PROFILE}\""
+  echo "Otherwise just open a new terminal."
+  echo ""
+fi
+
 if [ -n "${TOKEN}" ]; then
   echo "Linking device..."
-  "${INSTALL_DIR}/codecast" login "${TOKEN}"
+  # When installed via `curl | sh`, this script's stdin is the pipe, not a
+  # terminal, so the login wizard's prompts (sync settings, memory, stable)
+  # can't read input. Redirect from the controlling terminal so onboarding
+  # runs interactively; fall back to the pipe for headless/CI installs.
+  if [ -r /dev/tty ]; then
+    "${INSTALL_DIR}/codecast" login "${TOKEN}" < /dev/tty
+  else
+    "${INSTALL_DIR}/codecast" login "${TOKEN}"
+  fi
 else
   # Restart daemon if it was running before
   if [ -n "${OLD_PID}" ] && [ -f "${HOME}/.codecast/config.json" ]; then

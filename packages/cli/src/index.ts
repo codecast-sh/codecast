@@ -11,7 +11,7 @@ import { maskToken } from "./redact.js";
 import { CODECAST_STATUS_HOOK } from "./statusHook.js";
 import { AuthServer } from "./authServer.js";
 import { c, fmt, icons } from "./colors.js";
-import { ensureTmux, hasTmux, tryInstallTmux } from "./tmux.js";
+import { ensureTmux, tryInstallTmux } from "./tmux.js";
 import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, ensureCastAlias } from "./update.js";
 import { glob } from "glob";
 import { getPosition, setPosition } from "./positionTracker.js";
@@ -373,8 +373,8 @@ if [ "\$RUNNING" -eq 1 ] && [ -f "\$STATE_FILE" ]; then
   [ -z "\$TICK" ] && TICK=\$(sed -n 's/.*"lastWatchdogCheck"[[:space:]]*:[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' "\$STATE_FILE")
   if [ -n "\$TICK" ] && [ "\$TICK" -gt 0 ]; then
     AGE=\$(( \$(date +%s) * 1000 - TICK ))
-    # 900000ms = 15min, mirrors HEARTBEAT_STALE_THRESHOLD_MS in daemon.ts
-    if [ "\$AGE" -gt 900000 ]; then
+    # 180000ms = 3min, mirrors HEARTBEAT_STALE_THRESHOLD_MS in daemon.ts
+    if [ "\$AGE" -gt 180000 ]; then
       STALE=1
       log "Daemon alive but heartbeat stale (\${AGE}ms) - event loop wedged, forcing restart"
     fi
@@ -1560,6 +1560,64 @@ function getDeviceName(): string {
   return `${platformName} - ${hostname}`;
 }
 
+// Shared post-authentication onboarding, run by BOTH the browser flow (runAuth)
+// and the setup-token flow (runLogin). Installs hooks + autostart unconditionally
+// (these must happen on every install), then runs the interactive setup wizard.
+// When there is no TTY (e.g. `curl | sh -s -- <token>` without /dev/tty), it
+// applies recommended defaults instead of blocking on prompts.
+async function runOnboarding(config: Config): Promise<void> {
+  installSlashCommand();
+  installSessionRegisterHook();
+  installStatusHook();
+  installTaskPulseHook();
+
+  showWelcome();
+
+  if (process.stdin.isTTY) {
+    await promptProjectSelection(config);
+    await promptTeamSelection(config);
+    await promptMemoryEnablement();
+    await promptStableEnablement();
+
+    if (!ensureTmux()) {
+      try {
+        const shouldInstall = await confirm({ message: "Install tmux now?", default: true });
+        if (shouldInstall) {
+          tryInstallTmux();
+        }
+      } catch {}
+    }
+  } else {
+    // No interactive terminal (piped/headless install): apply the recommended
+    // defaults and point at the per-feature commands instead of hanging.
+    if (config.sync_mode === undefined) {
+      config.sync_mode = "all";
+      config.sync_projects = [];
+      writeConfig(config);
+      await updateSyncSettingsOnServer(config);
+    }
+    console.log(`${fmt.muted("Non-interactive install — applied defaults (sync: all projects).")}`);
+    console.log(`${fmt.muted("Configure anytime:")}`);
+    console.log(`  ${fmt.cmd("cast sync-settings")}   ${fmt.muted("project & team sync")}`);
+    console.log(`  ${fmt.cmd("cast memory")}          ${fmt.muted("agent memory")}`);
+    console.log(`  ${fmt.cmd("cast stable")}          ${fmt.muted("stable context")}\n`);
+    ensureTmux();
+  }
+
+  if (!isDaemonRunning()) {
+    console.log("Starting daemon...");
+    startDaemon();
+  }
+
+  // Set up autostart so daemon restarts on reboot/crash
+  if (ensureAutostart()) {
+    console.log("Auto-start configured (daemon will restart automatically)");
+  }
+
+  console.log("\nStatus:");
+  showStatus();
+}
+
 async function runLogin(setupToken: string): Promise<void> {
   console.log("\n=== cast Login ===\n");
   console.log("Exchanging setup token...\n");
@@ -1614,23 +1672,7 @@ async function runLogin(setupToken: string): Promise<void> {
     console.log(`API Token: ${maskToken(config.auth_token || "")}`);
     console.log(`Config: ${CONFIG_FILE}\n`);
 
-    if (!hasTmux()) {
-      console.log("tmux is recommended for full functionality (auto-resume, session management).\n");
-      try {
-        const shouldInstall = await confirm({ message: "Install tmux now?", default: true });
-        if (shouldInstall) {
-          tryInstallTmux();
-        }
-      } catch {}
-    }
-
-    if (!isDaemonRunning()) {
-      console.log("Starting daemon...");
-      startDaemon();
-    }
-
-    console.log("\nStatus:");
-    showStatus();
+    await runOnboarding(config);
   } catch (err) {
     console.error("Failed to connect to server:", (err as Error).message);
     process.exit(1);
@@ -1698,47 +1740,12 @@ async function runAuth(): Promise<void> {
     }
   }
 
-  installSlashCommand();
-  installSessionRegisterHook();
-  installStatusHook();
-  installTaskPulseHook();
-
   console.log(`${fmt.success(icons.check)} ${c.bold}Authenticated successfully!${c.reset}\n`);
   console.log(`  ${fmt.muted("User")}     ${fmt.id(config.user_id || "")}`);
   console.log(`  ${fmt.muted("Token")}    ${fmt.value(maskToken(config.auth_token || ""))}`);
   console.log(`  ${fmt.muted("Config")}   ${fmt.path(CONFIG_FILE)}\n`);
 
-  showWelcome();
-
-  await promptProjectSelection(config);
-
-  await promptTeamSelection(config);
-
-  await promptMemoryEnablement();
-
-  await promptStableEnablement();
-
-  if (!ensureTmux()) {
-    try {
-      const shouldInstall = await confirm({ message: "Install tmux now?", default: true });
-      if (shouldInstall) {
-        tryInstallTmux();
-      }
-    } catch {}
-  }
-
-  if (!isDaemonRunning()) {
-    console.log("Starting daemon...");
-    startDaemon();
-  }
-
-  // Set up autostart so daemon restarts on reboot/crash
-  if (ensureAutostart()) {
-    console.log("Auto-start configured (daemon will restart automatically)");
-  }
-
-  console.log("\nStatus:");
-  showStatus();
+  await runOnboarding(config);
 }
 
 async function promptProjectSelection(config: Config): Promise<void> {
@@ -2624,10 +2631,7 @@ async function promptStableEnablement(): Promise<void> {
   });
 
   if (enableStable) {
-    (config as any).stable_mode = "solo";
-    (config as any).stable_global = false;
-    writeConfig(config);
-    installStableHook();
+    applyStableMode(config as Config, "solo", false);
     console.log(`\nStable context enabled (solo, current project).`);
     console.log(`${fmt.muted("Run")} ${fmt.cmd("cast stable team")} ${fmt.muted("for team-wide context, or")} ${fmt.cmd("cast stable off")} ${fmt.muted("to disable.")}\n`);
   } else {
@@ -5808,6 +5812,17 @@ function installWatchdogScript(): void {
   fs.writeFileSync(WATCHDOG_SCRIPT_PATH, buildWatchdogShellScript(), { mode: 0o755 });
 }
 
+// Bootstrap the watchdog LaunchAgent AND force it to run once immediately.
+// RunAtLoad + StartInterval don't fire while the Mac is asleep, so bootstrapping
+// right before a sleep leaves the watchdog dormant at runs=0 — precisely when the
+// daemon's own sleep-killed timers most need a backstop. The kickstart guarantees
+// the watchdog executes at least once (runs>=1) and starts its 5-min cadence now,
+// instead of waiting up to 300s that a sleep can swallow.
+function bootstrapWatchdog(uid: string, watchdogPlistPath: string): void {
+  spawnSync("launchctl", ["bootstrap", uid, watchdogPlistPath], { stdio: "ignore" });
+  spawnSync("launchctl", ["kickstart", `${uid}/sh.codecast.watchdog`], { stdio: "ignore" });
+}
+
 function setupMacOS(disable: boolean): void {
   const home = process.env.HOME;
   if (!home) {
@@ -5886,7 +5901,7 @@ ${programArgs}
     <string>${WATCHDOG_SCRIPT_PATH}</string>
   </array>
   <key>StartInterval</key>
-  <integer>300</integer>
+  <integer>60</integer>
   <key>RunAtLoad</key>
   <true/>
   <key>StandardOutPath</key>
@@ -5899,8 +5914,8 @@ ${programArgs}
 
   spawnSync("launchctl", ["bootout", uid, watchdogPlistPath], { stdio: "ignore" });
   fs.writeFileSync(watchdogPlistPath, watchdogPlistContent, { mode: 0o644 });
-  spawnSync("launchctl", ["bootstrap", uid, watchdogPlistPath], { stdio: "ignore" });
-  console.log("Watchdog LaunchAgent installed (checks every 5min)");
+  bootstrapWatchdog(uid, watchdogPlistPath);
+  console.log("Watchdog LaunchAgent installed (checks every 1min)");
 
   console.log(`\nDaemon: ${executablePath} ${args.join(" ")}`);
   console.log("Auto-start enabled with watchdog");
@@ -6057,7 +6072,7 @@ ${programArgs}
     <string>${WATCHDOG_SCRIPT_PATH}</string>
   </array>
   <key>StartInterval</key>
-  <integer>300</integer>
+  <integer>60</integer>
   <key>RunAtLoad</key>
   <true/>
   <key>StandardOutPath</key>
@@ -6068,7 +6083,7 @@ ${programArgs}
 </plist>
 `;
         fs.writeFileSync(watchdogPlistPath, wdContent, { mode: 0o644 });
-        spawnSync("launchctl", ["bootstrap", uid, watchdogPlistPath], { stdio: "ignore" });
+        bootstrapWatchdog(uid, watchdogPlistPath);
       }
       return true;
     } else if (platform === "linux") {
@@ -7032,6 +7047,28 @@ program
         (config as any)[s.enabledKey] = false;
         console.log(`  ${icons.cross} skipped`);
       }
+    }
+
+    // Stable mode — inject recent session history into every new conversation
+    if (!options.all) {
+      const currentStable: "solo" | "team" | "off" = (config as any).stable_mode ?? "off";
+      console.log(`\n  ${c.bold}Stable Mode${c.reset} — inject recent session history into every new conversation`);
+      console.log(fmt.muted(`  Adds a SessionStart hook that feeds recent sessions into each new session.`));
+      const stableChoice = await select<"solo" | "team" | "off">({
+        message: `Enable stable mode? [${currentStable}]`,
+        choices: [
+          { name: "Solo — your recent sessions (last 7 days)", value: "solo" },
+          { name: "Team — all team activity (last 14 days)", value: "team" },
+          { name: "None — off", value: "off" },
+        ],
+        default: currentStable,
+      });
+      applyStableMode(config, stableChoice, (config as any).stable_global === true);
+      console.log(
+        stableChoice === "off"
+          ? `  ${icons.cross} stable mode off`
+          : `  ${icons.check} stable mode: ${stableChoice}`
+      );
     }
 
     writeConfig(config);
@@ -12273,6 +12310,22 @@ function removeStableHook(): void {
   fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 4));
 }
 
+// Apply a stable-mode choice: persist config keys and sync the SessionStart hook.
+// Shared by the `cast stable` command and the `cast install` flow.
+function applyStableMode(config: Config, mode: "solo" | "team" | "off", isGlobal: boolean): void {
+  if (mode === "off") {
+    delete (config as any).stable_mode;
+    delete (config as any).stable_global;
+    writeConfig(config);
+    removeStableHook();
+    return;
+  }
+  (config as any).stable_mode = mode;
+  (config as any).stable_global = isGlobal;
+  writeConfig(config);
+  installStableHook();
+}
+
 program
   .command("stable")
   .description(
@@ -12319,19 +12372,13 @@ program
     }
 
     if (mode === "off") {
-      delete (config as any).stable_mode;
-      delete (config as any).stable_global;
-      writeConfig(config);
-      removeStableHook();
+      applyStableMode(config, "off", false);
       console.log(`${fmt.muted("○")} Stable mode disabled`);
       return;
     }
 
     const isGlobal = !!options.global;
-    (config as any).stable_mode = mode;
-    (config as any).stable_global = isGlobal;
-    writeConfig(config);
-    installStableHook();
+    applyStableMode(config, mode as "solo" | "team", isGlobal);
 
     const scope = isGlobal ? "all projects" : "current project";
     console.log(`${fmt.accent("◉")} Stable mode: ${c.bold}${mode}${c.reset} ${fmt.muted(`(${scope})`)}`);
