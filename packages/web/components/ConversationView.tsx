@@ -3187,7 +3187,7 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
                         onSendMessage!(JSON.stringify({ __cc_poll: true, keys: [pollKey], display: cleanLabel }));
                       }
                     }}
-                    className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border transition-colors cursor-pointer ${
+                    className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-lg border transition-colors cursor-pointer ${
                       isLocalSelected
                         ? "bg-sol-violet/20 border-sol-violet/50 text-sol-violet"
                         : "border-sol-violet/30 text-sol-violet/80 hover:bg-sol-violet/15 hover:border-sol-violet/50 hover:text-sol-violet"
@@ -3204,7 +3204,7 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
                 ) : (
                   <span
                     key={j}
-                    className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border ${
+                    className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-lg border ${
                       isSelected || isLocalSelected
                         ? "bg-sol-green/15 border-sol-green/40 text-sol-green"
                         : "border-sol-border/30 text-sol-text-dim"
@@ -3226,7 +3226,7 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
                     setOtherOpen(prev => ({ ...prev, [i]: true }));
                     setSelections(prev => { const next = { ...prev }; delete next[i]; return next; });
                   }}
-                  className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border transition-colors cursor-pointer ${
+                  className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-lg border transition-colors cursor-pointer ${
                     isOtherSelected
                       ? "bg-sol-blue/20 border-sol-blue/50 text-sol-blue"
                       : "border-sol-border/30 text-sol-text-dim hover:border-sol-blue/40 hover:text-sol-blue/80"
@@ -3241,7 +3241,7 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
                 </button>
               )}
               {!isInteractive && (isCustom || isOtherSelected) && (
-                <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border bg-sol-blue/15 border-sol-blue/40 text-sol-blue">
+                <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-lg border bg-sol-blue/15 border-sol-blue/40 text-sol-blue">
                   <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
                   </svg>
@@ -5759,6 +5759,112 @@ function MessageNavigator({ userMessages, onRewind, onFork, onClose, forkPointMa
   );
 }
 
+type RailMessage = { _id: string; preview: string; index: number; fraction: number };
+
+// Right-edge navigation rail: one tick per user message, positioned by its
+// fraction through the conversation. Hovering the rail reveals a flyout list of
+// message previews; clicking a tick or a preview jumps to that message. Pure
+// navigation aid — no rewind/fork, so it renders for any conversation.
+function UserMessageRail({ messages, onJump }: {
+  messages: RailMessage[];
+  onJump: (messageId: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const rowRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+
+  const show = useCallback(() => {
+    if (closeTimer.current) { clearTimeout(closeTimer.current); closeTimer.current = null; }
+    setOpen(true);
+  }, []);
+  const scheduleClose = useCallback(() => {
+    if (closeTimer.current) clearTimeout(closeTimer.current);
+    closeTimer.current = setTimeout(() => { setOpen(false); setActiveId(null); }, 120);
+  }, []);
+  useMountEffect(() => () => { if (closeTimer.current) clearTimeout(closeTimer.current); });
+
+  const hoverTick = useCallback((id: string) => {
+    setActiveId(id);
+    const row = rowRefs.current[id];
+    if (row) row.scrollIntoView({ block: "nearest" });
+  }, []);
+
+  if (messages.length < 2) return null;
+
+  return (
+    <div
+      className="absolute right-0 top-0 bottom-0 z-30 flex items-stretch pointer-events-none select-none"
+      onMouseEnter={show}
+      onMouseLeave={scheduleClose}
+    >
+      {/* Flyout preview list */}
+      <div
+        className={`pointer-events-auto self-center mr-1 transition-all duration-150 ease-out ${open ? "opacity-100 translate-x-0" : "opacity-0 translate-x-2 pointer-events-none"}`}
+        onMouseEnter={show}
+        onMouseLeave={scheduleClose}
+      >
+        <div className="w-72 max-h-[60vh] overflow-y-auto rounded-lg border border-sol-blue/30 bg-sol-bg-alt/95 backdrop-blur shadow-2xl py-1.5">
+          <div className="px-3 py-1 text-[10px] uppercase tracking-wider text-sol-blue/50 font-medium sticky top-0 bg-sol-bg-alt/95 backdrop-blur">
+            {messages.length} messages
+          </div>
+          {messages.map((m, idx) => {
+            const isActive = m._id === activeId;
+            return (
+              <button
+                key={m._id}
+                ref={el => { rowRefs.current[m._id] = el; }}
+                onClick={() => { onJump(m._id); setOpen(false); setActiveId(null); }}
+                onMouseEnter={() => setActiveId(m._id)}
+                className={`w-full text-left px-3 py-1.5 flex items-start gap-2.5 transition-colors ${isActive ? "bg-sol-blue/20" : "hover:bg-sol-bg-highlight"}`}
+              >
+                <span className={`text-[10px] font-mono mt-0.5 shrink-0 w-5 text-right ${isActive ? "text-sol-cyan" : "text-sol-blue/40"}`}>{idx + 1}</span>
+                <span
+                  className={`text-xs leading-snug ${isActive ? "text-sol-text" : "text-sol-text-secondary"}`}
+                  style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}
+                >
+                  {m.preview}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Tick rail */}
+      <div
+        className="pointer-events-auto relative w-4 my-3 cursor-pointer"
+        onMouseEnter={show}
+        onMouseLeave={scheduleClose}
+      >
+        {messages.map((m) => {
+          const isActive = m._id === activeId;
+          return (
+            <button
+              key={m._id}
+              onClick={() => { onJump(m._id); }}
+              onMouseEnter={() => hoverTick(m._id)}
+              aria-label={`Jump to message ${m.index + 1}`}
+              className="absolute right-0 flex items-center justify-end group"
+              style={{ top: `${m.fraction * 100}%`, transform: "translateY(-50%)", height: 12 }}
+            >
+              <span
+                className={`block h-[2px] rounded-full transition-all duration-150 ${
+                  isActive
+                    ? "w-4 bg-sol-cyan shadow-[0_0_6px_rgba(0,205,205,0.6)]"
+                    : open
+                      ? "w-3 bg-sol-blue/60 group-hover:bg-sol-cyan"
+                      : "w-2 bg-sol-text-dim/40 group-hover:bg-sol-cyan"
+                }`}
+              />
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function GuestJoinCTA() {
   return (
     <div className="bg-sol-bg border-t border-sol-border/30">
@@ -8112,6 +8218,46 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   timelineRef.current = timeline;
   scrollCtxRef.current = { messageCount: conversation?.message_count || messages.length, messagesLen: messages.length, timelineLen: timeline.length, loadedStartIndex: conversation?.loaded_start_index ?? 0 };
 
+  // User-message markers for the right-side navigation rail. Derived straight
+  // from the loaded timeline (not the rewind-gated navigatorUserMessages) so the
+  // rail works on any conversation, owned or shared. `fraction` positions each
+  // marker proportionally by timeline index — robust under virtualization where
+  // off-screen messages have no measured pixel offset.
+  const railUserMessages = useMemo(() => {
+    const out: { _id: string; preview: string; index: number; fraction: number }[] = [];
+    const denom = Math.max(timeline.length - 1, 1);
+    for (let i = 0; i < timeline.length; i++) {
+      const item = timeline[i];
+      if (item.type !== 'message') continue;
+      const m = item.data as Message;
+      if (m.role !== 'user') continue;
+      const raw = safeString(m.content);
+      let preview = cleanStickyContent(raw).replace(/\s+/g, ' ').trim();
+      if (!preview) {
+        // Image-only or otherwise text-less user turn: keep it navigable with a
+        // placeholder rather than dropping the marker entirely.
+        if (/\[image|<image|!\[/i.test(raw)) preview = "Image";
+        else continue;
+      }
+      out.push({ _id: m._id, preview, index: i, fraction: i / denom });
+    }
+    return out;
+  }, [timeline]);
+
+  if (typeof window !== 'undefined') {
+    const roles: Record<string, number> = {};
+    const userDump: any[] = [];
+    for (const it of timeline) {
+      if (it.type === 'message') {
+        const d = it.data as any;
+        const r = d.role || 'none';
+        roles[r] = (roles[r] || 0) + 1;
+        if (r === 'user') userDump.push({ ct: typeof d.content, raw: safeString(d.content).slice(0, 100), cleaned: cleanStickyContent(safeString(d.content)).slice(0, 100) });
+      }
+    }
+    (window as any).__railDebug = { embedded, railCount: railUserMessages.length, timelineLen: timeline.length, roles, userDump, sample: railUserMessages.slice(0, 3) };
+  }
+
   const [navigatorOpen, setNavigatorOpen] = useState(false);
   const populateInputRef = useRef<((text: string) => void) | null>(null);
   const dropFilesRef = useRef<((files: File[]) => void) | null>(null);
@@ -9052,28 +9198,27 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     return () => el.removeEventListener('scroll', onScroll);
   }, [stickyUserMsgIndices, virtualizer, timeline, fallbackStickyContent, serverStickyFallback, headerHeight, stickyDisabled]);
 
-  useImperativeHandle(ref, () => ({
-    scrollToMessage: (messageId: string) => {
-      const itemIndex = timeline.findIndex(item => {
-        if (item.type === 'message') {
-          return item.data._id === messageId;
-        }
-        return false;
-      });
+  const scrollToMessageById = useCallback((messageId: string) => {
+    const itemIndex = timeline.findIndex(item =>
+      item.type === 'message' && item.data._id === messageId
+    );
 
-      if (itemIndex >= 0) {
-        setUserScrolled(true);
-        virtualizer.scrollToIndex(itemIndex, { align: "center", behavior: "smooth" });
-        setHighlightedMessageId(messageId);
-        setTimeout(() => setHighlightedMessageId(null), 2000);
-      } else if (conversation?._id) {
-        useInboxStore.setState({
-          pendingNavigateId: conversation._id,
-          pendingScrollToMessageId: messageId,
-        });
-      }
+    if (itemIndex >= 0) {
+      setUserScrolled(true);
+      virtualizer.scrollToIndex(itemIndex, { align: "center", behavior: "smooth" });
+      setHighlightedMessageId(messageId);
+      setTimeout(() => setHighlightedMessageId(null), 2000);
+    } else if (conversation?._id) {
+      useInboxStore.setState({
+        pendingNavigateId: conversation._id,
+        pendingScrollToMessageId: messageId,
+      });
     }
-  }), [timeline, virtualizer, conversation?._id]);
+  }, [timeline, virtualizer, conversation?._id]);
+
+  useImperativeHandle(ref, () => ({
+    scrollToMessage: scrollToMessageById,
+  }), [scrollToMessageById]);
 
   useMountEffect(() => {
     const scrollContainer = containerRef.current;
@@ -10219,7 +10364,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   <TooltipContent side="bottom">Copy link</TooltipContent>
                 </Tooltip>
 
-                {managedSession?.tmux_session && managedSession?.is_connected && (
+                {managedSession?.tmux_session && (
                   <Tooltip>
                     <TooltipTrigger asChild>
                       <button
@@ -10283,7 +10428,11 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                         Copy ID ({conversation.short_id})
                       </DropdownMenuItem>
                     )}
-                    <DropdownMenuItem onSelect={() => setTimeout(handleCopyAll)}>
+                    {/* Run synchronously (no setTimeout) so handleCopyAll's
+                        navigator.clipboard.write() fires inside the click's
+                        transient user activation — deferring it loses activation
+                        and the clipboard write hangs forever. */}
+                    <DropdownMenuItem onSelect={() => handleCopyAll()}>
                       <svg className="w-3 h-3 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
                       </svg>
@@ -10551,6 +10700,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       )}
 
       <div className={`flex-1 min-h-0 relative flex ${isImageLightboxActive ? "invisible" : ""}`}>
+      <UserMessageRail messages={railUserMessages} onJump={scrollToMessageById} />
       {targetMessageId && timeline.length === 0 && (
         <div className="absolute inset-0 z-20 flex items-center justify-center pointer-events-none">
           <div className="flex items-center gap-2 px-4 py-2 rounded-full bg-sol-bg-alt/90 border border-sol-border text-sol-text-muted text-xs shadow-sm">

@@ -8,9 +8,8 @@ import { useParams, useRouter } from "next/navigation";
 import { useInboxStore } from "../../../store/inboxStore";
 import { useTheme } from "../../../components/ThemeProvider";
 import Link from "next/link";
-import { FileText, CheckCircle2, Circle, CircleDot, CircleDotDashed, XCircle } from "lucide-react";
+import { FileText, CheckCircle2, Circle, CircleDot, CircleDotDashed, XCircle, MessageSquare } from "lucide-react";
 import { getLabelColor } from "../../../lib/labelColors";
-import { MarkdownRenderer } from "../../../components/tools/MarkdownRenderer";
 import { cleanContent } from "../../../lib/conversationProcessor";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 
@@ -95,7 +94,7 @@ function UserProfileContent() {
 
   const heatmap = useQuery(
     api.users.getUserActivityHeatmap,
-    profileUser?._id ? { user_id: profileUser._id, days: 180 } : "skip"
+    profileUser?._id ? { user_id: profileUser._id, days: 371 } : "skip"
   );
 
   const heatmapData = useMemo(() => heatmap || null, [heatmap]);
@@ -167,7 +166,7 @@ function UserProfileContent() {
           {groupedDays.map(([date, groups]) => (
             <div key={date}>
               <DayHeader date={date} count={groups.reduce((n: number, g: SessionGroupData | EventItem) => n + (g.type === "session" ? g.messages.length : 1), 0)} items={groups.flatMap((g: SessionGroupData | EventItem) => g.type === "session" ? g.messages : [g.item])} />
-              <div className="space-y-2">
+              <div className="space-y-1">
                 {groups.map((group: SessionGroupData | EventItem, gi: number) =>
                   group.type === "session" ? (
                     <SessionGroup key={`sg-${group.sessionId}-${gi}`} group={group} router={router} />
@@ -234,6 +233,10 @@ function ActivityHeatmap({ data }: { data: any[] }) {
     return () => ro.disconnect();
   }, []);
 
+  // Fit a full year of weeks to the container width at a compact cell size
+  const gap = 2;
+  const weeks = Math.max(20, Math.min(53, Math.floor((containerW - gap) / (13 + gap))));
+
   const { grid, maxHours, totalHours, totalSessions, months } = useMemo(() => {
     const map: Record<string, { hours: number; sessions: number }> = {};
     let max = 0, totalH = 0, totalS = 0;
@@ -246,7 +249,6 @@ function ActivityHeatmap({ data }: { data: any[] }) {
     if (max === 0) max = 1;
 
     const today = new Date(); today.setHours(0, 0, 0, 0);
-    const weeks = 26;
     const startDay = new Date(today);
     startDay.setDate(startDay.getDate() - startDay.getDay() - (weeks - 1) * 7);
 
@@ -270,10 +272,10 @@ function ActivityHeatmap({ data }: { data: any[] }) {
     }
 
     return { grid: rows, maxHours: max, totalHours: totalH, totalSessions: totalS, months: monthLabels };
-  }, [data]);
+  }, [data, weeks]);
 
-  const gap = 2;
-  const cellSize = Math.max(8, Math.floor((containerW - grid.length * gap) / grid.length));
+  // Exact cell size to fill the container width across the chosen number of weeks
+  const cellSize = Math.min(16, Math.max(8, Math.floor((containerW - grid.length * gap) / grid.length)));
   const step = cellSize + gap;
   const svgW = grid.length * step;
   const svgH = 7 * step;
@@ -597,6 +599,21 @@ function groupItemsBySessions(items: any[]): (SessionGroupData | EventItem)[] {
   return result;
 }
 
+function TimeGutter({ ts }: { ts?: number }) {
+  return (
+    <span className="text-[9px] text-sol-base01/20 tabular-nums w-10 text-right flex-shrink-0 select-none pr-2 self-center">
+      {ts ? fmtTime(ts) : ""}
+    </span>
+  );
+}
+
+function oneLineOf(preview?: string): string | null {
+  if (!preview) return null;
+  const c = cleanContent(preview);
+  if (!c) return null;
+  return c.replace(/\s+/g, " ").trim() || null;
+}
+
 function SessionGroup({ group, router }: { group: SessionGroupData; router: ReturnType<typeof useRouter> }) {
   const href = `/conversation/${group.sessionId}`;
   const meta = group.meta;
@@ -606,83 +623,70 @@ function SessionGroup({ group, router }: { group: SessionGroupData; router: Retu
   const isLive = meta.status === "active" && group.messages.length > 0 && (Date.now() - group.messages[0].timestamp < 3600000);
   const lastTs = group.messages[0]?.timestamp;
   const displayTitle = group.title === "Untitled" && project ? project : group.title;
+  const iconColor = isLive ? "text-sol-green" : meta.status === "idle" ? "text-sol-yellow/50" : "text-sol-blue/40";
 
-  const statusDot = isLive
-    ? "bg-sol-green animate-pulse"
-    : meta.status === "stopped" ? "bg-sol-base01/20"
-    : meta.status === "idle" ? "bg-sol-yellow/40"
-    : "bg-sol-blue/25";
+  // duration_ms is wall-clock across the session's whole lifetime; cap absurd values
+  const saneDuration = meta.duration_ms && meta.duration_ms < 24 * 3600000 ? duration : null;
 
-  return (
-    <div className={`rounded-lg overflow-hidden border ${isLive ? "border-sol-green/20 bg-sol-green/[0.03]" : "border-sol-border/8 bg-sol-bg-alt/20"} transition-colors hover:border-sol-border/20`}>
-      <div
-        className="flex items-center gap-2 px-3 py-2 cursor-pointer group"
-        onClick={() => router.push(href)}
-      >
-        <span className={`w-2 h-2 rounded-full flex-shrink-0 ${statusDot}`} />
-        <span className="text-[12px] font-medium text-sol-text/75 truncate group-hover:text-sol-text transition-colors">
-          {displayTitle}
-        </span>
-        {isLive && <span className="text-[8px] font-bold text-sol-green uppercase tracking-widest">live</span>}
-        <span className="flex-1" />
-        {project && project !== displayTitle && (
-          <span className="text-[9px] font-mono text-sol-cyan/50 bg-sol-cyan/8 px-1.5 py-0.5 rounded flex-shrink-0">{project}</span>
-        )}
-        <div className="flex items-center gap-1.5 flex-shrink-0">
-          {msgCount && <span className="text-[9px] text-sol-base01/30 tabular-nums">{msgCount}</span>}
-          {duration && <span className="text-[9px] text-sol-base01/25 tabular-nums">{duration}</span>}
-          {lastTs && <span className="text-[9px] text-sol-base01/20 tabular-nums">{fmtTime(lastTs)}</span>}
+  const Meta = ({ showCount = true }: { showCount?: boolean }) => (
+    <>
+      {isLive && <span className="text-[8px] font-bold text-sol-green uppercase tracking-widest flex-shrink-0">live</span>}
+      <span className="flex-1" />
+      {project && project !== displayTitle && <span className="text-[9px] font-mono text-sol-cyan/40 flex-shrink-0">{project}</span>}
+      {showCount && msgCount > 0 && <span className="text-[9px] text-sol-base01/25 tabular-nums flex-shrink-0">{msgCount} msg</span>}
+      {saneDuration && <span className="text-[9px] text-sol-green/30 tabular-nums flex-shrink-0">{saneDuration}</span>}
+    </>
+  );
+
+  // Single message → collapse to one inline row: the message is primary, title is a dim trailing chip
+  if (group.messages.length === 1) {
+    const line = oneLineOf(group.messages[0].preview);
+    const titleEchoesMsg = line && displayTitle.toLowerCase().startsWith(line.slice(0, 18).toLowerCase());
+    return (
+      <div className="flex items-baseline pr-2 rounded hover:bg-sol-blue/[0.045] transition-colors cursor-pointer group" onClick={() => router.push(href)}>
+        <TimeGutter ts={lastTs} />
+        <div className="flex items-baseline gap-1.5 min-w-0 flex-1">
+          <MessageSquare className={`w-3 h-3 flex-shrink-0 self-center ${iconColor}`} />
+          {line
+            ? <span className="text-[11.5px] text-sol-text/65 truncate group-hover:text-sol-text/90 transition-colors">{line}</span>
+            : <span className="text-[12px] font-medium text-sol-text/70 truncate">{displayTitle}</span>}
+          {line && !titleEchoesMsg && <span className="text-[9px] text-sol-base01/30 truncate max-w-[160px] flex-shrink-0">in {displayTitle}</span>}
+          <Meta showCount={false} />
         </div>
       </div>
-      <div>
+    );
+  }
+
+  return (
+    <div className={`rounded-md ${isLive ? "bg-sol-green/[0.02]" : ""}`}>
+      <div className="flex items-baseline pr-2 rounded hover:bg-sol-bg-alt/25 transition-colors cursor-pointer group" onClick={() => router.push(href)}>
+        <TimeGutter ts={lastTs} />
+        <div className="flex items-baseline gap-1.5 min-w-0 flex-1">
+          <MessageSquare className={`w-3 h-3 flex-shrink-0 self-center ${iconColor}`} />
+          <span className="text-[12px] font-semibold text-sol-text/75 truncate group-hover:text-sol-text transition-colors">{displayTitle}</span>
+          <Meta />
+        </div>
+      </div>
+      <div className="pb-0.5">
         {group.messages.map((msg, i) => (
-          <MessageRow key={`${msg.timestamp}-${i}`} item={msg} isFirst={i === 0} total={group.messages.length} router={router} />
+          <MessageRow key={`${msg.timestamp}-${i}`} item={msg} router={router} />
         ))}
       </div>
     </div>
   );
 }
 
-function MessageRow({ item, isFirst, router }: { item: any; isFirst: boolean; total?: number; router: ReturnType<typeof useRouter> }) {
-  const [expanded, setExpanded] = useState(false);
+function MessageRow({ item, router }: { item: any; router: ReturnType<typeof useRouter> }) {
   const href = `/conversation/${item.entity_id}`;
-
-  const cleanPreview = useMemo(() => {
-    if (!item.preview) return null;
-    return cleanContent(item.preview) || null;
-  }, [item.preview]);
-
-  if (!cleanPreview) return null;
-
-  const lineCount = cleanPreview.split("\n").length;
-  const isLong = cleanPreview.length > 280 || lineCount > 4;
-  const shouldTruncate = isLong && !expanded;
+  const oneLine = useMemo(() => oneLineOf(item.preview), [item.preview]);
+  if (!oneLine) return null;
 
   return (
-    <div
-      className={`flex cursor-pointer hover:bg-sol-blue/[0.04] transition-colors border-t border-sol-border/5`}
-      onClick={() => router.push(href)}
-    >
-      <div className={`w-[3px] flex-shrink-0 ${isFirst ? "bg-sol-blue/50" : "bg-sol-blue/15"}`} />
-      <div className={`flex-1 min-w-0 px-3 ${isFirst ? "py-2.5" : "py-1.5"}`}>
-        <div className={`break-words ${shouldTruncate ? "max-h-[4.5em] overflow-y-hidden" : ""} ${isFirst ? "text-sol-text text-[13px]" : "text-sol-text/70 text-[12px]"}`}>
-          <MarkdownRenderer
-            content={shouldTruncate ? cleanPreview.slice(0, 250) + "..." : cleanPreview}
-            className={`prose prose-invert prose-sm max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_p]:my-0.5 [&_pre]:max-h-[6em] [&_pre]:overflow-hidden [&_code]:text-[11px] [&_ul]:my-0.5 [&_ol]:my-0.5`}
-          />
-        </div>
-        <div className="flex items-center gap-2 mt-1">
-          {isLong && (
-            <button
-              className="text-[9px] text-sol-blue/50 hover:text-sol-blue/80 transition-colors"
-              onClick={(e) => { e.stopPropagation(); setExpanded(!expanded); }}
-            >
-              {expanded ? "less" : `more`}
-            </button>
-          )}
-          <span className="flex-1" />
-          <span className="text-[9px] text-sol-base01/18 tabular-nums select-none">{fmtTime(item.timestamp)}</span>
-        </div>
+    <div className="flex items-baseline pr-2 rounded hover:bg-sol-blue/[0.05] transition-colors cursor-pointer" onClick={() => router.push(href)}>
+      <TimeGutter ts={item.timestamp} />
+      <div className="flex items-baseline gap-1.5 min-w-0 flex-1 pl-[18px]">
+        <span className="text-sol-blue/25 flex-shrink-0 text-[11px] leading-none select-none translate-y-[1px]">›</span>
+        <span className="text-[11.5px] text-sol-text/55 truncate flex-1 leading-snug">{oneLine}</span>
       </div>
     </div>
   );
@@ -698,20 +702,22 @@ function EventRow({ item, router }: { item: any; router: ReturnType<typeof useRo
 
   return (
     <div
-      className={`flex items-center gap-1.5 py-[3px] px-2 rounded hover:bg-sol-bg-alt/30 transition-colors ${href ? "cursor-pointer" : ""} group`}
+      className={`flex items-baseline pr-2 rounded hover:bg-sol-bg-alt/30 transition-colors ${href ? "cursor-pointer" : ""} group`}
       onClick={href ? () => router.push(href) : undefined}
     >
-      <span className="text-[9px] text-sol-base01/18 tabular-nums w-8 text-right flex-shrink-0 select-none">{fmtTime(item.timestamp)}</span>
-      {isTask && item.meta?.status && (
-        <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${TASK_STATUS_DOTS[item.meta.status] || "bg-sol-base01/20"}`} />
-      )}
-      {isDoc && <FileText className="w-3 h-3 flex-shrink-0 text-sol-cyan/30" />}
-      <span className={`text-[9px] flex-shrink-0 ${verbColor}`}>{item.verb}</span>
-      <span className="text-[11px] text-sol-text/40 truncate flex-1 group-hover:text-sol-text/60 transition-colors leading-tight">
-        {isTask && item.entity_short_id && <span className="font-mono text-[9px] text-sol-base01/25 mr-1">{item.entity_short_id}</span>}
-        {item.entity_title || item.verb}
-      </span>
-      {item.meta?.priority === "high" && <span className="w-1.5 h-1.5 rounded-full bg-sol-red/40 flex-shrink-0" />}
+      <TimeGutter ts={item.timestamp} />
+      <div className="flex items-baseline gap-1.5 min-w-0 flex-1">
+        {isTask && (
+          <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 self-center ${TASK_STATUS_DOTS[item.meta?.status] || "bg-sol-base01/20"}`} />
+        )}
+        {isDoc && <FileText className="w-3 h-3 flex-shrink-0 self-center text-sol-cyan/30" />}
+        <span className={`text-[9.5px] font-medium flex-shrink-0 ${verbColor}`}>{item.verb}</span>
+        <span className="text-[11.5px] text-sol-text/65 truncate flex-1 group-hover:text-sol-text/90 transition-colors leading-tight">
+          {isTask && item.entity_short_id && <span className="font-mono text-[9px] text-sol-base01/25 mr-1">{item.entity_short_id}</span>}
+          {item.entity_title || item.verb}
+        </span>
+        {item.meta?.priority === "high" && item.meta?.status !== "done" && <span className="w-1.5 h-1.5 rounded-full bg-sol-red/40 flex-shrink-0 self-center" />}
+      </div>
     </div>
   );
 }

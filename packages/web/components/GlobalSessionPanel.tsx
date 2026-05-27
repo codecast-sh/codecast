@@ -7,7 +7,7 @@ import { useRouter } from "next/navigation";
 import { ConversationDiffLayout } from "./ConversationDiffLayout";
 import { ConversationData, FormattedSummary } from "./ConversationView";
 import { useConversationMessages } from "../hooks/useConversationMessages";
-import { useInboxStore, useTrackedStore, InboxSession, getSessionRenderKey, isConvexId, categorizeSessions, isInterruptControlMessage, getProjectName, isFork } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, InboxSession, getSessionRenderKey, isConvexId, categorizeSessions, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend } from "../store/inboxStore";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "./ui/tooltip";
 import { cleanTitle, msgCountColor } from "../lib/conversationProcessor";
 import { SharePopover } from "./SharePopover";
@@ -198,9 +198,9 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
       )}
       {sessionError && resumeState === "idle" && (
         <div className="absolute top-0 left-0 right-0 z-10 flex items-center gap-2 px-4 py-1.5 bg-sol-red/90 text-sol-bg text-xs backdrop-blur-sm">
-          <span className="w-1.5 h-1.5 rounded-full bg-sol-bg" />
-          {sessionError}
-          <button onClick={handleManualResume} className="ml-1 px-1.5 py-0.5 rounded bg-sol-bg/20 hover:bg-sol-bg/30 transition-colors">
+          <span className="w-1.5 h-1.5 rounded-full bg-sol-bg flex-shrink-0" />
+          <span className="truncate min-w-0 flex-1" title={sessionError}>{sessionError}</span>
+          <button onClick={handleManualResume} className="ml-1 px-1.5 py-0.5 rounded bg-sol-bg/20 hover:bg-sol-bg/30 transition-colors flex-shrink-0">
             Resume
           </button>
         </div>
@@ -316,6 +316,13 @@ export const SessionCard = memo(function SessionCard({
   const isWorking = variant === "working";
   const isDismissed = variant === "dismissed";
   const isSubagent = !!session.is_subagent || !!session.parent_conversation_id || !!session.worktree_name;
+  // Local-first "pending working": a message has been sent but the daemon
+  // hasn't confirmed delivery yet (status not active). Reading the durable
+  // pendingMessages map directly returns a stable boolean, so only this card
+  // re-renders when its own pending state flips — not the whole list. Clears
+  // the moment status goes active or the server echoes the message.
+  const isPendingSend = useInboxStore((st) => convHasPendingSend(st.pendingMessages[session._id]));
+  const isPendingWorking = isPendingSend && !isAgentActive(session);
   const displayTitle = cleanTitle(session.title || "New Session");
   const isSlashCommand = displayTitle.startsWith("/");
   const cleanedUserMsg = cleanUserMessage(session.last_user_message);
@@ -605,13 +612,19 @@ export const SessionCard = memo(function SessionCard({
             {session.is_unresponsive && !session.session_error && (
               <span className="w-1.5 h-1.5 rounded-full bg-sol-orange" title="Session unresponsive" />
             )}
-            {session.has_pending && !session.is_unresponsive && (
+            {session.has_pending && !session.is_unresponsive && !isPendingWorking && (
               <span className="w-1.5 h-1.5 rounded-full bg-sol-yellow animate-pulse" title="Message pending" />
             )}
-            {!isWorking && !isDismissed && session.is_idle && !session.is_connected && !session.session_error && !session.is_unresponsive && !session.has_pending && session.message_count > 0 && (
+            {!isWorking && !isDismissed && session.is_idle && !session.is_connected && !session.session_error && !session.is_unresponsive && !session.has_pending && !isPendingWorking && session.message_count > 0 && (
               <span className="w-1.5 h-1.5 rounded-full bg-sol-text-dim/40 ring-1 ring-sol-text-dim/20" title="Session idle" />
             )}
-            {isWorking && (
+            {isPendingWorking && (
+              <span className="inline-flex items-center gap-0.5 px-1 py-0 rounded text-[9px] font-semibold bg-sol-yellow/10 text-sol-yellow border border-sol-yellow/30" title="Sent — waiting to confirm delivery">
+                <span className="w-1 h-1 rounded-full bg-sol-yellow animate-pulse" />
+                pending
+              </span>
+            )}
+            {isWorking && !isPendingWorking && (
               <span className="relative flex h-2 w-2" title="Working">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-sol-green opacity-75" />
                 <span className="relative inline-flex rounded-full h-2 w-2 bg-sol-green" />
@@ -839,6 +852,7 @@ export function SessionListPanel({
     s => s.hiddenSessionCount,
     s => s.sessions,
     s => s.sessionsWithQueuedMessages,
+    s => s.pendingMessages,
     s => s.activeProjectFilter,
     s => s.collapsedSections,
   ]);
@@ -859,9 +873,10 @@ export function SessionListPanel({
     }
   }, [onSessionSelect]);
 
+  const pendingSendIds = useMemo(() => sessionsWithPendingSend(s.pendingMessages), [s.pendingMessages]);
   const { sorted: sortedSessions, pinned, newSessions, needsInput, working, dismissed: dismissedList, subsByParent: globalSubByParent, forksByParent: globalForksByParent } = useMemo(
-    () => categorizeSessions(s.sessions, s.sessionsWithQueuedMessages),
-    [s.sessions, s.sessionsWithQueuedMessages],
+    () => categorizeSessions(s.sessions, s.sessionsWithQueuedMessages, pendingSendIds),
+    [s.sessions, s.sessionsWithQueuedMessages, pendingSendIds],
   );
 
   const activeSessions = useMemo(() => [...pinned, ...newSessions, ...needsInput, ...working], [pinned, newSessions, needsInput, working]);
@@ -1155,16 +1170,20 @@ export function CollapsedSessionRail() {
   const s = useTrackedStore([
     s => s.sessions,
     s => s.sessionsWithQueuedMessages,
+    s => s.pendingMessages,
   ]);
 
+  const pendingSendIds = useMemo(() => sessionsWithPendingSend(s.pendingMessages), [s.pendingMessages]);
   const { pinned, needsInput, working, newSessions } = useMemo(
-    () => categorizeSessions(s.sessions, s.sessionsWithQueuedMessages),
-    [s.sessions, s.sessionsWithQueuedMessages],
+    () => categorizeSessions(s.sessions, s.sessionsWithQueuedMessages, pendingSendIds),
+    [s.sessions, s.sessionsWithQueuedMessages, pendingSendIds],
   );
 
   const getStatusStyle = (sess: InboxSession): { bg: string; pulse: boolean } => {
     if (sess.session_error) return { bg: "#dc322f", pulse: false };
     if (sess.is_unresponsive) return { bg: "#cb4b16", pulse: false };
+    // Pending send not yet confirmed by the daemon → amber, pulsing.
+    if (pendingSendIds.has(sess._id) && !isAgentActive(sess)) return { bg: "#b58900", pulse: true };
     if (sess.is_pinned && sess.is_idle) return { bg: "#d33682", pulse: false };
     if (!sess.is_idle && sess.message_count > 0) return { bg: "#859900", pulse: true };
     if (sess.is_idle && sess.message_count > 0) return { bg: "#b58900", pulse: false };
