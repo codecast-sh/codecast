@@ -924,7 +924,7 @@ function installStatusHook(): void {
       timeout: 5,
     };
 
-    for (const event of ["UserPromptSubmit", "PreToolUse", "PreCompact", "Stop", "Notification", "SessionStart"] as const) {
+    for (const event of ["UserPromptSubmit", "PreToolUse", "PreCompact", "Stop", "PermissionRequest", "Notification", "SessionStart"] as const) {
       if (!settings.hooks[event]) settings.hooks[event] = [];
 
       const hookArray = settings.hooks[event] as any[];
@@ -1626,7 +1626,7 @@ async function runLogin(setupToken: string): Promise<void> {
   console.log("Exchanging setup token...\n");
 
   try {
-    const response = await fetch(`${CONVEX_URL.replace(".cloud", ".site")}/cli/exchange-token`, {
+    const response = await cliFetch(`${CONVEX_URL.replace(".cloud", ".site")}/cli/exchange-token`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ token: setupToken }),
