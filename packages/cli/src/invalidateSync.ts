@@ -56,18 +56,46 @@ export const backoff = createBackoff({
   },
 });
 
+export interface InvalidateSyncOptions {
+  // Coalesce bursts of invalidations: wait this long after the last event before
+  // running. A continuously-firing source (e.g. a streaming agent appending to its
+  // JSONL) would otherwise trigger one sync per event; debouncing collapses that
+  // burst into a single fat batch. Default 0 = run immediately (legacy behavior).
+  debounceMs?: number;
+  // Upper bound on how long a pending change can be held by debounce, so a source
+  // that never goes quiet still flushes. 0 = no cap.
+  maxWaitMs?: number;
+}
+
 export class InvalidateSync {
   private _invalidated = false;
   private _invalidatedDouble = false;
   private _stopped = false;
   private _command: () => Promise<void>;
   private _pendings: (() => void)[] = [];
+  private _debounceMs: number;
+  private _maxWaitMs: number;
+  private _debounceTimer: ReturnType<typeof setTimeout> | null = null;
+  private _firstPendingAt = 0;
 
-  constructor(command: () => Promise<void>) {
+  constructor(command: () => Promise<void>, options: InvalidateSyncOptions = {}) {
     this._command = command;
+    this._debounceMs = options.debounceMs ?? 0;
+    this._maxWaitMs = options.maxWaitMs ?? 0;
   }
 
   invalidate(): void {
+    if (this._stopped) {
+      return;
+    }
+    if (this._debounceMs > 0) {
+      this._scheduleDebounced();
+      return;
+    }
+    this._invalidateNow();
+  }
+
+  private _invalidateNow(): void {
     if (this._stopped) {
       return;
     }
@@ -82,13 +110,45 @@ export class InvalidateSync {
     }
   }
 
+  private _scheduleDebounced(): void {
+    const now = Date.now();
+    if (this._firstPendingAt === 0) {
+      this._firstPendingAt = now;
+    }
+    // Cap total hold time so a session that streams without pause still flushes.
+    if (this._maxWaitMs > 0 && now - this._firstPendingAt >= this._maxWaitMs) {
+      this._fireDebounced();
+      return;
+    }
+    if (this._debounceTimer) {
+      clearTimeout(this._debounceTimer);
+    }
+    this._debounceTimer = setTimeout(() => this._fireDebounced(), this._debounceMs);
+  }
+
+  private _fireDebounced(): void {
+    if (this._debounceTimer) {
+      clearTimeout(this._debounceTimer);
+      this._debounceTimer = null;
+    }
+    this._firstPendingAt = 0;
+    this._invalidateNow();
+  }
+
   async invalidateAndAwait(): Promise<void> {
     if (this._stopped) {
       return;
     }
     await new Promise<void>((resolve) => {
       this._pendings.push(resolve);
-      this.invalidate();
+      // Explicit await means the caller wants the work to run now — bypass debounce
+      // and flush any pending debounced change immediately.
+      if (this._debounceTimer) {
+        clearTimeout(this._debounceTimer);
+        this._debounceTimer = null;
+      }
+      this._firstPendingAt = 0;
+      this._invalidateNow();
     });
   }
 
@@ -104,6 +164,10 @@ export class InvalidateSync {
   stop(): void {
     if (this._stopped) {
       return;
+    }
+    if (this._debounceTimer) {
+      clearTimeout(this._debounceTimer);
+      this._debounceTimer = null;
     }
     this._notifyPendings();
     this._stopped = true;
