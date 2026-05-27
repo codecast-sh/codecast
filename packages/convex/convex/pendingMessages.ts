@@ -411,8 +411,27 @@ export function planStuckMessageHeal(
   // the transient sync-failure sibling.
   if (msg.status === "failed" || msg.status === "undeliverable") return { kind: "repend" };
 
-  // "pending" is owned by the daemon's live subscription and its own retry timers — the cron
-  // must not touch it (touching it here is what conflated waiting-time with the retry budget).
+  // "pending" is normally the daemon's live subscription to drive — but only WHILE delivery is
+  // actually in flight (the first ~seconds). The retry-forever design had a single point of
+  // failure here: the daemon's pending->injected write (markInjectedBestEffort) races an 8s
+  // timeout and swallows failure, and this deployment drops writes under OCC load. When that
+  // write is lost the row is stuck "pending" forever — the cron skipped pending entirely, and
+  // getPendingMessages only re-fires the reactive subscription when the pending SET changes,
+  // which a dropped write never does. So a message whose Enter was lost AND whose status write
+  // dropped had no backstop at all. Revive it once it is older than any legitimate in-flight
+  // delivery (and, via the cron's readiness gate, only when the session is idle and ready). This
+  // can never duplicate a delivered message: anything that actually reached the agent is promoted
+  // to terminal "delivered" by the content-matched ack in addMessages, so a row still "pending"
+  // at this age provably never landed. We don't bump retry_count (repend resets it), so this
+  // never conflates elapsed wait time with the real-attempt budget — the original "don't touch
+  // pending" bug is structurally avoided.
+  if (msg.status === "pending") {
+    if (age < INJECT_ACK_GRACE_MS) return { kind: "skip" };
+    // Leave poll-keystroke control messages to the normal flow: re-pending a keystroke risks
+    // double-selecting a poll option, and they aren't the stranded-text case this backstop targets.
+    if (isControlMessage(msg.content)) return { kind: "skip" };
+    return { kind: "repend" };
+  }
   return { kind: "skip" };
 }
 
@@ -442,13 +461,22 @@ export const retryStuckMessages = internalMutation({
   handler: async (ctx) => {
     const now = Date.now();
 
-    // Scan only the non-terminal, non-pending states that need cron intervention. `delivered`
-    // is terminal and `pending` is the daemon's to drive, so neither is queried.
+    // Scan every non-terminal state. `delivered`/`cancelled` are terminal so they're skipped.
+    // `pending` is included because a dropped daemon status-write (markInjectedBestEffort) can
+    // strand a never-delivered message there with no other backstop; planStuckMessageHeal only
+    // revives a pending row once it's older than any legitimate in-flight delivery, so fresh
+    // pending (the daemon's live work) is left untouched.
+    // Read ONLY non-terminal rows via the by_status index. The previous
+    // `.filter().collect()` scanned the entire pending_messages table (every
+    // delivered/cancelled row in history) on every 30s run, holding a read
+    // dependency on the whole table that OCC-conflicted with every addMessages
+    // pending-write — a self-amplifying stampede that timed out syncs and let the
+    // backlog (and thus the scan cost) grow without bound.
     const candidates: any[] = [];
-    for (const status of ["injected", "failed", "undeliverable"] as const) {
+    for (const status of ["pending", "injected", "failed", "undeliverable"] as const) {
       const rows = await ctx.db
         .query("pending_messages")
-        .filter((q) => q.eq(q.field("status"), status))
+        .withIndex("by_status", (q: any) => q.eq("status", status))
         .collect();
       candidates.push(...rows);
     }
@@ -557,6 +585,40 @@ export const restoreCancelledMessages = internalMutation({
       }
     }
     return { restored, conversations: affectedConvs.size, dry_run: !!args.dry_run };
+  },
+});
+
+// EXPLICIT, USER-INITIATED bulk cancel. The cardinal rule forbids the system from EVER dropping a
+// user message on its own — but the user can choose to stop messages, and this is the bulk form of
+// that (cancel = the same terminal state as the per-message cancelPendingMessage button). It is
+// only ever invoked by hand on explicit request (e.g. "kill the really old pending messages"),
+// never wired into a cron. Cancels non-terminal messages older than `older_than_ms` and clears the
+// conversation flag. dry_run reports the count without mutating.
+export const cancelOldPendingMessages = internalMutation({
+  args: { older_than_ms: v.number(), dry_run: v.optional(v.boolean()) },
+  handler: async (ctx, args) => {
+    const cutoff = Date.now() - args.older_than_ms;
+    const affectedConvs = new Set<Id<"conversations">>();
+    let cancelled = 0;
+    for (const status of ["pending", "injected", "failed", "undeliverable"] as const) {
+      const rows = await ctx.db
+        .query("pending_messages")
+        .filter((q) => q.and(q.eq(q.field("status"), status), q.lt(q.field("created_at"), cutoff)))
+        .collect();
+      for (const r of rows) {
+        affectedConvs.add(r.conversation_id);
+        if (!args.dry_run) {
+          await ctx.db.patch(r._id, { status: "cancelled" as const });
+        }
+        cancelled++;
+      }
+    }
+    if (!args.dry_run) {
+      for (const convId of affectedConvs) {
+        await clearHasPendingIfQuiet(ctx, convId);
+      }
+    }
+    return { cancelled, conversations: affectedConvs.size, dry_run: !!args.dry_run };
   },
 });
 

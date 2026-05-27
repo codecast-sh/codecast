@@ -539,7 +539,11 @@ export default defineSchema({
   })
     .index("by_conversation_id", ["conversation_id"])
     .index("by_conversation_status", ["conversation_id", "status"])
-    .index("by_user_status", ["from_user_id", "status"]),
+    .index("by_user_status", ["from_user_id", "status"])
+    // Lets the global retryStuckMessages cron read ONLY the handful of non-terminal
+    // rows instead of `.filter()`-scanning the entire table (which read-conflicts
+    // with every addMessages pending-write → OCC stampede → 60s sync timeouts).
+    .index("by_status", ["status"]),
 
   // One row per machine the user runs a codecast daemon on. The remote Mac is
   // just another device. device_id is a stable hash of ~/.codecast/.machine_key
