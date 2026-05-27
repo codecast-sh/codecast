@@ -63,6 +63,93 @@ export const registerDevice = mutation({
   },
 });
 
+/**
+ * Owner device of a conversation. Used by daemons to enforce the single-owner
+ * invariant on session-targeted commands (resume/kill/inject): a daemon skips
+ * commands for conversations owned by another device.
+ */
+export const getConversationOwner = query({
+  args: { api_token: v.optional(v.string()), conversation_id: v.id("conversations") },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) return null;
+    const conv = await ctx.db.get(args.conversation_id);
+    if (!conv || conv.user_id.toString() !== userId.toString()) return null;
+    return { owner_device_id: (conv as any).owner_device_id ?? null };
+  },
+});
+
+/** Resolve a session_id to its conversation (api_token authed) for the move flow. */
+export const resolveConversationBySession = query({
+  args: { api_token: v.optional(v.string()), session_id: v.string() },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) return null;
+    const conv = await ctx.db
+      .query("conversations")
+      .withIndex("by_session_id", (q: any) => q.eq("session_id", args.session_id))
+      .filter((q: any) => q.eq(q.field("user_id"), userId))
+      .first();
+    if (!conv) return null;
+    return {
+      _id: conv._id,
+      short_id: conv.short_id ?? null,
+      owner_device_id: (conv as any).owner_device_id ?? null,
+      project_path: conv.project_path ?? null,
+      status: conv.status,
+      title: conv.title ?? null,
+    };
+  },
+});
+
+/**
+ * Server side of `cast remote move`: flip a conversation's owner to the target
+ * device, repoint its project_path to the remote worktree, and enqueue a
+ * resume_session command (which only the owner device will execute, per the
+ * daemon's single-owner guard). One mutation = atomic handoff of ownership.
+ */
+export const moveSessionToDevice = mutation({
+  args: {
+    api_token: v.optional(v.string()),
+    conversation_id: v.id("conversations"),
+    owner_device_id: v.string(),
+    project_path: v.string(),
+    resume: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) throw new Error("Authentication required");
+    const conv = await ctx.db.get(args.conversation_id);
+    if (!conv || conv.user_id.toString() !== userId.toString()) throw new Error("not your conversation");
+
+    await ctx.db.patch(args.conversation_id, {
+      owner_device_id: args.owner_device_id,
+      project_path: args.project_path,
+      status: "active" as const,
+      updated_at: Date.now(),
+    });
+
+    let commandId: string | undefined;
+    if (args.resume !== false) {
+      const agentType =
+        conv.agent_type === "codex" ? "codex" : conv.agent_type === "gemini" ? "gemini" : "claude";
+      const id = await ctx.db.insert("daemon_commands", {
+        user_id: userId,
+        command: "resume_session" as const,
+        args: JSON.stringify({
+          session_id: conv.session_id,
+          agent_type: agentType,
+          conversation_id: args.conversation_id,
+          project_path: args.project_path,
+        }),
+        created_at: Date.now(),
+      });
+      commandId = id;
+    }
+    return { ok: true, command_id: commandId, owner_device_id: args.owner_device_id };
+  },
+});
+
 /** List the user's devices (for the web UI + `cast remote hosts`). */
 export const listDevices = query({
   args: { api_token: v.optional(v.string()) },
