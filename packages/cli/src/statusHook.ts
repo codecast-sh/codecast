@@ -32,19 +32,49 @@ case "$EVENT" in
     ;;
   PreCompact) STATUS="compacting" ;;
   Stop) STATUS="idle" ;;
+  PermissionRequest)
+    # Claude Code's first-class permission event (CC >= ~2.1.x). Unlike the generic
+    # Notification ("Claude needs your permission", no tool name), it carries the
+    # real tool_name + tool_input + permission_mode, so the daemon can name the
+    # blocked tool and build a preview without parsing the transcript. This is the
+    # authoritative source for the web Approve/Deny card. AskUserQuestion arrives
+    # here too; we tag it by name so the daemon routes it to needs-input.
+    TOOL=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('tool_name',''))" 2>/dev/null)
+    if [ -n "$TOOL" ]; then
+      STATUS="permission_blocked"
+      # Build ,"message":"Tool: preview" with single-quoted python only — a literal
+      # double quote here would close the bash -c "..." string (the bug the old
+      # permission_prompt block had), so the JSON is emitted via json.dumps.
+      EXTRA=$(echo "$INPUT" | python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+ti=d.get('tool_input') or {}
+prev=''
+for k in ('command','file_path','pattern','path','url'):
+    v=ti.get(k)
+    if isinstance(v,str) and v:
+        prev=v
+        break
+tool=d.get('tool_name','')
+msg=tool if not prev else tool+': '+prev
+print(','+json.dumps({'message':msg[:300]})[1:-1])
+" 2>/dev/null)
+    fi
+    ;;
   Notification)
     case "$NOTIF_TYPE" in
       permission_prompt)
         STATUS="permission_blocked"
+        # Forward only transcript_path so the daemon resolves the real tool from
+        # the transcript. The Notification message is now a generic "Claude needs
+        # your permission" with no tool name, so forwarding it would only mislead
+        # extraction. Emitted via json.dumps (single quotes only) — bare double
+        # quotes inside this bash -c "..." string silently break it.
         EXTRA=$(echo "$INPUT" | python3 -c "
 import sys,json
 d=json.load(sys.stdin)
-parts=[]
-m=d.get('message','')
 t=d.get('transcript_path','')
-if m: parts.append(',\"message\":'+json.dumps(m))
-if t: parts.append(',\"transcript_path\":'+json.dumps(t))
-print(''.join(parts))
+print((','+json.dumps({'transcript_path':t})[1:-1]) if t else '')
 " 2>/dev/null)
         ;;
       idle_prompt) STATUS="idle" ;;

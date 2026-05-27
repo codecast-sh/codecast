@@ -11,7 +11,7 @@ import { CODECAST_STATUS_HOOK } from "./statusHook.js";
 let home: string;
 let hookFile: string;
 
-function runHook(payload: Record<string, unknown>): { status: string; message?: string; permission_mode?: string } {
+function runHook(payload: Record<string, unknown>): { status: string; message?: string; permission_mode?: string; transcript_path?: string } {
   execFileSync("bash", [hookFile], {
     input: JSON.stringify(payload),
     env: { ...process.env, HOME: home },
@@ -57,5 +57,65 @@ describe("codecast-status hook event mapping", () => {
   test("Stop -> idle and UserPromptSubmit -> thinking are unchanged", () => {
     expect(runHook({ session_id: "stop-1", hook_event_name: "Stop" }).status).toBe("idle");
     expect(runHook({ session_id: "ups-1", hook_event_name: "UserPromptSubmit" }).status).toBe("thinking");
+  });
+
+  // CC >= 2.1.x fires a first-class PermissionRequest event with the real tool
+  // name + input. The daemon turns this into the web Approve/Deny card, so the
+  // hook must report permission_blocked and carry "Tool: preview" as the message.
+  test("PermissionRequest for Edit -> permission_blocked with tool name + preview", () => {
+    const out = runHook({
+      session_id: "perm-edit",
+      hook_event_name: "PermissionRequest",
+      tool_name: "Edit",
+      tool_input: { file_path: "/tmp/notes.txt", old_string: "a", new_string: "b" },
+      permission_mode: "default",
+    });
+    expect(out.status).toBe("permission_blocked");
+    // Daemon splits the tool off the first token; the preview gives the card detail.
+    expect(out.message).toBe("Edit: /tmp/notes.txt");
+    expect(out.permission_mode).toBe("default");
+  });
+
+  test("PermissionRequest for Bash carries the command as preview", () => {
+    const out = runHook({
+      session_id: "perm-bash",
+      hook_event_name: "PermissionRequest",
+      tool_name: "Bash",
+      tool_input: { command: "rm -rf build", description: "clean" },
+    });
+    expect(out.status).toBe("permission_blocked");
+    expect(out.message).toBe("Bash: rm -rf build");
+  });
+
+  // AskUserQuestion arrives via PermissionRequest too; it must be tagged by name so
+  // the daemon routes it to needs-input (and never suppresses it in bypass mode).
+  test("PermissionRequest for AskUserQuestion -> tagged by name", () => {
+    const out = runHook({
+      session_id: "perm-auq",
+      hook_event_name: "PermissionRequest",
+      tool_name: "AskUserQuestion",
+      tool_input: { questions: [{ question: "Which?", options: [] }] },
+      permission_mode: "bypassPermissions",
+    });
+    expect(out.status).toBe("permission_blocked");
+    expect(out.message).toBe("AskUserQuestion");
+  });
+
+  // The legacy Notification path must still forward the transcript_path (so the
+  // daemon can resolve the tool) — the old block silently produced an empty EXTRA
+  // because of unescaped double quotes inside the bash -c "..." python.
+  test("Notification permission_prompt forwards transcript_path, not the generic message", () => {
+    const out = runHook({
+      session_id: "perm-notif",
+      hook_event_name: "Notification",
+      notification_type: "permission_prompt",
+      message: "Claude needs your permission",
+      transcript_path: "/tmp/session.jsonl",
+    });
+    expect(out.status).toBe("permission_blocked");
+    expect(out.transcript_path).toBe("/tmp/session.jsonl");
+    // The generic, tool-less message must not be forwarded — it would poison the
+    // daemon's first-token tool extraction (yielding a bogus "Claude" tool).
+    expect(out.message).toBeUndefined();
   });
 });
