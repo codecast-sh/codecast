@@ -8252,7 +8252,11 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         const d = it.data as any;
         const r = d.role || 'none';
         roles[r] = (roles[r] || 0) + 1;
-        if (r === 'user') userDump.push({ ct: typeof d.content, raw: safeString(d.content).slice(0, 100), cleaned: cleanStickyContent(safeString(d.content)).slice(0, 100) });
+        if (r === 'user') {
+          const strFields: Record<string, string> = {};
+          for (const k of Object.keys(d)) { const v = d[k]; if (typeof v === 'string' && v.length > 0 && v.length < 200) strFields[k] = v.slice(0, 80); }
+          userDump.push({ keys: Object.keys(d), strFields });
+        }
       }
     }
     (window as any).__railDebug = { embedded, railCount: railUserMessages.length, timelineLen: timeline.length, roles, userDump, sample: railUserMessages.slice(0, 3) };
