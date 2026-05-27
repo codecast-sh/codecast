@@ -776,12 +776,15 @@ export const getUserAbstractActivity = query({
     let teamActivityStats = null;
     let recentCommits: Array<{ message: string; branch?: string; filesChanged?: number; timestamp: number }> = [];
 
-    if (user.team_id) {
-      const teamEvents = await ctx.db
+    if (args.team_id || user.team_id) {
+      const teamEventsRaw = await ctx.db
         .query("team_activity_events")
         .withIndex("by_actor", (q) => q.eq("actor_user_id", args.user_id))
         .order("desc")
-        .take(15);
+        .take(args.team_id ? 60 : 15);
+      const teamEvents = args.team_id
+        ? teamEventsRaw.filter(e => String(e.team_id) === String(args.team_id)).slice(0, 15)
+        : teamEventsRaw;
 
       const weekEvents = teamEvents.filter(e => e.timestamp > oneWeekAgo);
       const monthEvents = teamEvents.filter(e => e.timestamp > oneMonthAgo);
@@ -920,11 +923,12 @@ export const getUserActivityHeatmap = query({
     // start-day bucketing would hide today's work on multi-day sessions.
     // Subagent/child sessions are included (no parent filter) to match the
     // pre-existing query semantics and the 5422-session header total.
-    for await (const c of ctx.db
-      .query("conversations")
-      .withIndex("by_user_updated", (q) =>
-        q.eq("user_id", args.user_id).gte("updated_at", recentCutoff)
-      )) {
+    const recentConvos = args.team_id
+      ? ctx.db.query("conversations").withIndex("by_team_user_updated", (q: any) =>
+          q.eq("team_id", args.team_id).eq("user_id", args.user_id).gte("updated_at", recentCutoff))
+      : ctx.db.query("conversations").withIndex("by_user_updated", (q) =>
+          q.eq("user_id", args.user_id).gte("updated_at", recentCutoff));
+    for await (const c of recentConvos) {
       const upd = c.updated_at ?? c.started_at;
       if (!upd) continue;
       seen.add(String(c._id));
@@ -942,6 +946,7 @@ export const getUserActivityHeatmap = query({
 
     for (const e of events) {
       if (e.timestamp < cutoff || e.timestamp >= recentCutoff) continue;
+      if (args.team_id && String(e.team_id) !== String(args.team_id)) continue;
       if (e.event_type !== "session_started" && e.event_type !== "session_completed") continue;
       const cid = e.related_conversation_id ? String(e.related_conversation_id) : `evt-${e._id}`;
       if (seen.has(cid)) continue;
@@ -966,6 +971,7 @@ export const getUserActivityHeatmap = query({
 
     for (const ins of insights) {
       if (ins.generated_at >= recentCutoff) continue;
+      if (args.team_id && String(ins.team_id) !== String(args.team_id)) continue;
       const cid = String(ins.conversation_id);
       if (seen.has(cid)) continue;
       seen.add(cid);
