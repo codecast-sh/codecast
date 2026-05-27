@@ -33,7 +33,7 @@ import { markSynced, getSyncRecord, findUnsyncedFiles, type SyncRecord } from ".
 import { SyncService, AuthExpiredError } from "./syncService.js";
 import { redactSecrets, maskToken } from "./redact.js";
 import { RetryQueue, type RetryOperation } from "./retryQueue.js";
-import { InvalidateSync } from "./invalidateSync.js";
+import { InvalidateSync, type InvalidateSyncOptions } from "./invalidateSync.js";
 import { promisify } from "util";
 import { detectPermissionPrompt } from "./permissionDetector.js";
 import { handlePermissionRequest } from "./permissionHandler.js";
@@ -475,6 +475,12 @@ function sendLogImmediate(level: LogLevel, message: string, metadata?: RemoteLog
 }
 
 const IDLE_DEBOUNCE_MS = 5_000;
+// Coalesce a streaming agent's rapid JSONL appends into fewer, fatter addMessages
+// batches. Each batch is a server mutation that reads+patches the conversation
+// hot-doc and schedules side-effects, so cutting batch count is the cheapest way to
+// relieve a saturated backend when many sessions sync at once. 300ms keeps the web
+// view feeling near-live; maxWait flushes a session that never pauses.
+const MESSAGE_SYNC_DEBOUNCE: InvalidateSyncOptions = { debounceMs: 300, maxWaitMs: 2_000 };
 const idleTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const lastIdleNotifiedSize = new Map<string, number>();
 const lastWorkingStatusSent = new Map<string, number>();
@@ -1263,6 +1269,23 @@ async function executeRemoteCommand(
 
   let result: string | undefined;
   let error: string | undefined;
+
+  // Single-owner guard: skip session-targeted commands for conversations owned
+  // by ANOTHER device. Both daemons poll the same user-scoped command queue, so
+  // without this a non-owner daemon would race the owner (resume/kill/inject).
+  const SESSION_COMMANDS = new Set(["resume_session", "kill_session", "send_keys", "escape", "rewind"]);
+  if (SESSION_COMMANDS.has(command) && commandArgs && syncServiceRef) {
+    try {
+      const convId = JSON.parse(commandArgs)?.conversation_id;
+      if (convId) {
+        const owner = await syncServiceRef.getConversationOwner(convId);
+        if (owner && owner !== deviceId()) {
+          log(`[OWNER] skipping ${command} for ${String(convId).slice(0, 12)} — owned by device ${owner.slice(0, 8)} (not ${deviceId().slice(0, 8)})`);
+          return; // leave the command for the owner device
+        }
+      }
+    } catch { /* on any error, fall through and execute (fail-open) */ }
+  }
 
   try {
     switch (command) {
@@ -3286,6 +3309,19 @@ export function resolvePendingSubagentLinks(
   return links;
 }
 
+// Cap how many bytes a single sync pass reads from a file. A large unsynced
+// backlog (e.g. an old, image-heavy session that gets resumed) used to be re-read
+// in full every pass and synced as one all-or-nothing batch — which never completed
+// within the sync window on an actively-growing file, so the position never advanced
+// and the backlog grew without bound. Reading a bounded window and advancing the
+// position after each successfully-synced chunk makes progress monotonic and
+// guarantees convergence.
+const SYNC_BYTES_PER_PASS = 4 * 1024 * 1024;
+// How many bounded passes one invocation will chain before yielding to the next
+// file-watch event / watchdog. Drains up to SYNC_BYTES_PER_PASS * this per trigger
+// so a large idle backlog catches up fast instead of trickling at the 5-min watchdog.
+const MAX_SYNC_CONTINUATIONS = 6;
+
 async function processSessionFile(
   filePath: string,
   sessionId: string,
@@ -3300,6 +3336,7 @@ async function processSessionFile(
   updateStateCallback: () => void,
   parentConversationId?: string,
   overrideAgentType?: "claude_code",
+  continuationDepth: number = 0,
 ): Promise<void> {
   const isSubagent = filePath.split(path.sep).includes("subagents");
     let lastPosition = getPosition(filePath);
@@ -3340,15 +3377,29 @@ async function processSessionFile(
   let fd;
   try {
     fd = fs.openSync(filePath, "r");
-    const buffer = Buffer.alloc(stats.size - lastPosition);
-    fs.readSync(fd, buffer, 0, buffer.length, lastPosition);
+    const available = stats.size - lastPosition;
+    // Read at most SYNC_BYTES_PER_PASS so a large backlog drains in bounded,
+    // convergent steps (see constant above) rather than one giant batch.
+    let readLen = Math.min(available, SYNC_BYTES_PER_PASS);
+    let buffer = Buffer.alloc(readLen);
+    fs.readSync(fd, buffer, 0, readLen, lastPosition);
+    let rawContent = buffer.toString("utf-8");
+    let lastNewline = rawContent.lastIndexOf("\n");
+    // A single JSONL entry larger than the cap (e.g. a big inlined image) has no
+    // newline within the capped window. Read the whole remaining file so we never
+    // stall forever on one oversized line.
+    if (lastNewline < 0 && readLen < available) {
+      readLen = available;
+      buffer = Buffer.alloc(readLen);
+      fs.readSync(fd, buffer, 0, readLen, lastPosition);
+      rawContent = buffer.toString("utf-8");
+      lastNewline = rawContent.lastIndexOf("\n");
+    }
     fs.closeSync(fd);
 
-    const rawContent = buffer.toString("utf-8");
     // Only process complete lines — a trailing partial line (no newline at end)
     // may be a large JSONL entry (e.g. screenshot) still being written.
     // By not advancing the position past incomplete data, we re-read it next poll.
-    const lastNewline = rawContent.lastIndexOf("\n");
     const newContent = lastNewline >= 0 ? rawContent.slice(0, lastNewline + 1) : "";
     const bytesConsumed = lastNewline >= 0 ? Buffer.byteLength(rawContent.slice(0, lastNewline + 1), "utf-8") : 0;
     if (!newContent) {
@@ -4103,6 +4154,33 @@ async function processSessionFile(
     }
 
     updateStateCallback();
+
+    // Drain any remaining known backlog in bounded passes instead of waiting for the
+    // next file-watch event or the 5-min watchdog. markSynced/setPosition above have
+    // already advanced the position, so each continuation is durable forward progress
+    // and the next pass picks up from the new position.
+    if (
+      bytesConsumed > 0 &&
+      lastPosition + bytesConsumed < stats.size &&
+      continuationDepth < MAX_SYNC_CONTINUATIONS
+    ) {
+      await processSessionFile(
+        filePath,
+        sessionId,
+        projectPath,
+        syncService,
+        userId,
+        teamId,
+        conversationCache,
+        retryQueue,
+        pendingMessages,
+        titleCache,
+        updateStateCallback,
+        parentConversationId,
+        overrideAgentType,
+        continuationDepth + 1,
+      );
+    }
   } catch (err: any) {
     if (err.code === 'EACCES' || err.code === 'EPERM') {
       log(`Warning: Permission denied reading ${filePath}. Will retry when permissions are restored.`);
@@ -6124,13 +6202,13 @@ async function injectViaTmuxInner(target: string, content: string): Promise<void
   await new Promise(resolve => setTimeout(resolve, enterDelay));
   await tmuxExec(["send-keys", "-t", target, "Enter"]);
 
-  // Post-submit: verify the agent started processing.
-  // Tightened from 5×600ms (3s) to 3×400ms (1.2s). The verify loop is
-  // observational — early termination just means "we couldn't confirm
-  // activity in 1.2s", which is fine: the real signal of delivery is
-  // the JSONL ack from the daemon's file watcher (separate path).
+  // Post-submit: verify the agent started processing, and re-press Enter if it didn't. The
+  // ultimate backstop for a lost message is the Convex healer (it revives any never-acked row,
+  // including a stranded "pending", once the session is idle), but that takes minutes — this loop
+  // recovers a dropped Enter in seconds, which is the common case ("text landed, Enter never
+  // came through"). 5×400ms (2s) gives a lost Enter several corrective presses.
   let rePasted = false;
-  for (let retry = 0; retry < 3; retry++) {
+  for (let retry = 0; retry < 5; retry++) {
     await new Promise(resolve => setTimeout(resolve, 400));
     try {
       const { stdout: postCheck } = await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${captureLines}`]);
@@ -6155,8 +6233,15 @@ async function injectViaTmuxInner(target: string, content: string): Promise<void
         break;
       }
 
-      if (inputStuck) {
-        log(`Enter may not have submitted (retry ${retry + 1}), sending Enter again to ${target}`);
+      // Re-press Enter if either the input-detection heuristic still sees our text in the box,
+      // OR we positively confirmed the paste landed yet see no sign the agent picked it up. The
+      // second clause is the safety net for when tmuxPromptStillHasInput misses (a prompt glyph it
+      // doesn't recognize, or TUI line-wrapping breaking the 40-char prefix match) while our text
+      // is provably still sitting there unsubmitted — the exact "text landed but Enter never came
+      // through" failure. Re-pressing Enter is safe: the only text in the box is the message we
+      // want to submit, so it either submits that text or no-ops on an already-cleared prompt.
+      if (inputStuck || (pasteConfirmed && hasPrompt)) {
+        log(`Enter may not have submitted (retry ${retry + 1}, stuck=${inputStuck}), sending Enter again to ${target}`);
         await tmuxExec(["send-keys", "-t", target, "Enter"]);
         continue;
       }
@@ -7806,6 +7891,22 @@ async function resolveLiveTmuxTarget(
 }
 
 async function autoResumeSession(sessionId: string, content: string, titleCache: TitleCache, cwdOverride?: string, conversationId?: string, agentTypeHint?: "claude" | "codex" | "cursor" | "gemini"): Promise<boolean> {
+  // Remote-device safety gate: a remote daemon (the cloud Mac) ONLY manages
+  // sessions explicitly OWNED by it. Unlike the primary local daemon, it must
+  // NOT adopt/reconstitute/resume unowned sessions — doing so reconstitutes the
+  // user's real sessions from Convex and double-manages them (cross-device
+  // stomp). The local primary daemon keeps its legacy adopt-unowned behavior.
+  if (process.env.CODECAST_REMOTE_DEVICE === "1") {
+    if (!conversationId) {
+      log(`[OWNER] remote daemon skipping resume of ${sessionId.slice(0, 8)} — no conversation id to verify ownership`);
+      return false;
+    }
+    const owner = syncServiceRef ? await syncServiceRef.getConversationOwner(conversationId) : null;
+    if (owner !== deviceId()) {
+      log(`[OWNER] remote daemon skipping resume of ${sessionId.slice(0, 8)} — owner=${owner ? owner.slice(0, 8) : "unowned"} (this device ${deviceId().slice(0, 8)})`);
+      return false;
+    }
+  }
   // Deduplicate concurrent resume attempts on the same session
   const existing = resumeInFlight.get(sessionId);
   if (existing) {
@@ -10747,7 +10848,7 @@ async function main(): Promise<void> {
           titleCache,
           updateState
         );
-      });
+      }, MESSAGE_SYNC_DEBOUNCE);
       fileSyncs.set(filePath, sync);
     }
 
@@ -11020,7 +11121,7 @@ async function main(): Promise<void> {
               titleCache,
               updateState
             );
-          });
+          }, MESSAGE_SYNC_DEBOUNCE);
           fileSyncs.set(transcriptPath, sync);
           sync.invalidate();
         }
@@ -11344,7 +11445,7 @@ async function main(): Promise<void> {
           pendingMessages,
           updateState
         );
-      });
+      }, MESSAGE_SYNC_DEBOUNCE);
       cursorSyncs.set(dbPath, sync);
     }
 
@@ -11408,7 +11509,7 @@ async function main(): Promise<void> {
           pendingMessages,
           updateState
         );
-      });
+      }, MESSAGE_SYNC_DEBOUNCE);
       cursorTranscriptSyncs.set(filePath, sync);
     }
 
@@ -11600,7 +11701,7 @@ async function main(): Promise<void> {
           titleCache,
           updateState
         );
-      });
+      }, MESSAGE_SYNC_DEBOUNCE);
       codexSyncs.set(filePath, sync);
     }
 
@@ -11649,7 +11750,7 @@ async function main(): Promise<void> {
           titleCache,
           updateState
         );
-      });
+      }, MESSAGE_SYNC_DEBOUNCE);
       geminiSyncs.set(filePath, sync);
     }
 
