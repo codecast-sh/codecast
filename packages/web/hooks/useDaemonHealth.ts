@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useInboxStore } from "../store/inboxStore";
 
 const ONE_MIN_MS = 60 * 1000;
@@ -13,6 +13,24 @@ export const OFFLINE_SEVERE_AFTER_MS = ONE_DAY_MS;
 // failed ops that clear within a couple of minutes are normal transient
 // retries, not a sync problem worth alarming the user about.
 export const SYNC_STALL_AFTER_MS = 2 * ONE_MIN_MS;
+
+// How often we re-evaluate wall-clock so an offline daemon escalates tiers
+// without a new heartbeat (which, by definition, isn't coming).
+const TICK_MS = 30 * 1000;
+
+// A tick that lands much later than its period means our own process was
+// suspended (machine asleep) or heavily throttled (backgrounded tab). The
+// wall-clock that elapsed is time WE weren't listening, not time the daemon
+// was silent — so it must not count as staleness.
+const SLEEP_JUMP_MS = 2 * TICK_MS;
+
+// After we (re)start observing — fresh mount or waking from a sleep/background
+// gap — suppress the offline verdict for one recovery cycle. The currentUser
+// subscription that feeds `daemon_last_seen` can stall while we're suspended;
+// useRecoveryPoll re-fetches the true value within ~10-15s of resuming, so this
+// just covers the visual gap before that lands. A genuinely dead daemon stays
+// stale past the grace and the banner returns; a healthy one never flashes.
+const OBSERVE_GRACE_MS = 30 * 1000;
 
 export type OfflineTier = "warn" | "alert" | "severe";
 
@@ -53,9 +71,15 @@ export type DaemonHealth =
 export function computeDaemonHealth(
   user: DaemonHealthInput | null | undefined,
   now: number,
+  opts?: { recentlyWoke?: boolean },
 ): DaemonHealth {
   const lastSeen = user?.daemon_last_seen || user?.last_heartbeat;
   if (!lastSeen) return { kind: "unknown" };
+
+  // Just started observing: the daemon hasn't had its heartbeat cycle to
+  // re-check-in and the value we hold may predate a sleep. Don't alarm on a gap
+  // we can't yet attribute to the daemon rather than to our own downtime.
+  if (opts?.recentlyWoke) return { kind: "ok" };
 
   const offlineMs = now - lastSeen;
   const tier = offlineTierFor(offlineMs);
@@ -73,15 +97,58 @@ export function computeDaemonHealth(
 }
 
 // Re-evaluates as wall-clock advances so an offline daemon escalates tiers even
-// without a new heartbeat (which, by definition, isn't coming).
+// without a new heartbeat. Crucially, it ignores wall-clock that elapsed while
+// this tab wasn't observing (sleep, backgrounding, or a cold mount): that gap
+// reflects our own downtime, not the daemon's silence, and would otherwise fire
+// a false "offline" banner on every wake.
 export function useDaemonHealth(): DaemonHealth {
   const user = useInboxStore((s) => s.currentUser);
   const [now, setNow] = useState(() => Date.now());
+  // Mount counts as a fresh start of observation, so grace applies immediately.
+  const wokeAtRef = useRef(Date.now());
+  const lastTickRef = useRef(Date.now());
 
   useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 30 * 1000);
-    return () => clearInterval(id);
+    const observe = () => {
+      const t = Date.now();
+      if (t - lastTickRef.current > SLEEP_JUMP_MS) {
+        // A gap this large between observations means we were suspended
+        // (machine asleep, or a heavily throttled background tab).
+        wokeAtRef.current = t;
+      }
+      lastTickRef.current = t;
+      setNow(t);
+    };
+
+    const id = setInterval(observe, TICK_MS);
+
+    // A backgrounded tab pauses its subscription without our interval seeing a
+    // gap. Only count it as a wake if we were hidden long enough for the value
+    // to have plausibly gone stale — a quick tab-switch must not reset grace.
+    let hiddenAt = 0;
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") {
+        hiddenAt = Date.now();
+        return;
+      }
+      const t = Date.now();
+      if (hiddenAt && t - hiddenAt > SLEEP_JUMP_MS) wokeAtRef.current = t;
+      hiddenAt = 0;
+      lastTickRef.current = t;
+      setNow(t);
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+
+    return () => {
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
   }, []);
 
-  return computeDaemonHealth(user as DaemonHealthInput | null | undefined, now);
+  const recentlyWoke = now - wokeAtRef.current < OBSERVE_GRACE_MS;
+  return computeDaemonHealth(
+    user as DaemonHealthInput | null | undefined,
+    now,
+    { recentlyWoke },
+  );
 }
