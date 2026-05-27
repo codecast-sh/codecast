@@ -11,6 +11,11 @@ const MAX_BATCH_BYTES = 900_000;
 const MAX_IMAGE_SIZE = 5_000_000;
 const MAX_INLINE_IMAGE_SIZE = 500_000;
 const MAX_IMAGES_PER_MESSAGE = 10;
+// Upload images concurrently rather than one-at-a-time. Uploads go to file storage
+// (not the conversation hot-doc), so they don't contend on OCC; serializing them
+// made an image-heavy sync chunk slower than the live file grew, so the session
+// never caught up. Bounded so a burst can't stampede the backend.
+const IMAGE_UPLOAD_CONCURRENCY = 6;
 
 const MIN_REQUEST_INTERVAL_MS = 100;
 
@@ -230,28 +235,59 @@ export class SyncService {
   async offloadImages(
     messages: Array<{ images?: Array<{ mediaType: string; data?: string; storageId?: string; toolUseId?: string }> }>,
   ): Promise<void> {
-    for (const msg of messages) {
-      if (!msg.images || msg.images.length === 0) continue;
-      const kept: Array<{ mediaType: string; data?: string; storageId?: string; toolUseId?: string }> = [];
-      for (const img of msg.images.slice(0, MAX_IMAGES_PER_MESSAGE)) {
-        if (img.storageId || !img.data) {
-          kept.push(img);
-          continue;
-        }
-        const storageId = await this.uploadImage(img.data, img.mediaType);
-        if (storageId) {
-          kept.push({ mediaType: img.mediaType, storageId, toolUseId: img.toolUseId });
-          continue;
-        }
-        const dataBytes = Buffer.from(img.data, "base64").length;
-        if (dataBytes <= MAX_INLINE_IMAGE_SIZE) {
-          kept.push(img);
+    type Img = { mediaType: string; data?: string; storageId?: string; toolUseId?: string };
+
+    // Simple counting semaphore so uploads run with bounded concurrency across the
+    // whole batch instead of one image at a time.
+    let active = 0;
+    const waiters: Array<() => void> = [];
+    const acquire = (): Promise<void> =>
+      new Promise<void>((resolve) => {
+        if (active < IMAGE_UPLOAD_CONCURRENCY) {
+          active++;
+          resolve();
         } else {
-          console.warn(`[SyncService] Image dropped at offload: upload failed and too large for inline (${dataBytes} bytes)`);
+          waiters.push(() => {
+            active++;
+            resolve();
+          });
         }
+      });
+    const release = (): void => {
+      active--;
+      waiters.shift()?.();
+    };
+
+    // Resolve a single image to its persisted form (or null = drop). Order-preserving
+    // because callers map over the original array.
+    const resolveImage = async (img: Img): Promise<Img | null> => {
+      if (img.storageId || !img.data) return img;
+      await acquire();
+      let storageId: string | null;
+      try {
+        storageId = await this.uploadImage(img.data, img.mediaType);
+      } finally {
+        release();
       }
-      msg.images = kept.length > 0 ? kept : undefined;
-    }
+      if (storageId) {
+        return { mediaType: img.mediaType, storageId, toolUseId: img.toolUseId };
+      }
+      const dataBytes = Buffer.from(img.data, "base64").length;
+      if (dataBytes <= MAX_INLINE_IMAGE_SIZE) return img;
+      console.warn(`[SyncService] Image dropped at offload: upload failed and too large for inline (${dataBytes} bytes)`);
+      return null;
+    };
+
+    await Promise.all(
+      messages.map(async (msg) => {
+        if (!msg.images || msg.images.length === 0) return;
+        const resolved = await Promise.all(
+          msg.images.slice(0, MAX_IMAGES_PER_MESSAGE).map(resolveImage),
+        );
+        const kept = resolved.filter((x): x is Img => x !== null);
+        msg.images = kept.length > 0 ? kept : undefined;
+      }),
+    );
   }
 
   async uploadImage(base64Data: string, mediaType: string): Promise<string | null> {
@@ -808,6 +844,19 @@ export class SyncService {
         api_token: this.apiToken,
       });
     } catch {}
+  }
+
+  /** Owner device of a conversation (single-owner guard). null if unknown/unowned. */
+  async getConversationOwner(conversationId: string): Promise<string | null> {
+    try {
+      const res = await this.client.query("devices:getConversationOwner" as any, {
+        api_token: this.apiToken,
+        conversation_id: conversationId,
+      });
+      return (res && (res as any).owner_device_id) || null;
+    } catch {
+      return null;
+    }
   }
 
   async registerManagedSession(sessionId: string, pid: number, tmuxSession?: string, conversationId?: string): Promise<{ notOwner?: boolean; owner?: string } | void> {
