@@ -6,6 +6,7 @@ import { useInboxStore, InboxSession, isSessionWaitingForInput, isSub, isConvexI
 import { soundIdle } from "../lib/sounds";
 import { useConvexSync } from "./useConvexSync";
 import { useMountEffect } from "./useMountEffect";
+import { useRecoveryPoll } from "./useRecoveryPoll";
 
 function deepMerge(target: any, source: any): any {
   const result = { ...target };
@@ -48,7 +49,7 @@ export function useSyncInboxSessions() {
   const prevActiveIdsRef = useRef<Set<string> | null>(null);
   const prevIdleMapRef = useRef<Map<string, boolean> | null>(null);
   const lastSyncRef = useRef(Date.now());
-  const recoveryInFlightRef = useRef(false);
+  const lastUserSyncRef = useRef(Date.now());
 
   const dispatchRef = useRef(dispatchMutation);
   dispatchRef.current = dispatchMutation;
@@ -138,41 +139,36 @@ export function useSyncInboxSessions() {
 
   useConvexSync(currentUser, useCallback((data: any) => {
     useInboxStore.getState().syncTable("currentUser", data);
+    lastUserSyncRef.current = Date.now();
   }, []));
 
-  // Recovery heartbeat: the listInboxSessions subscription can silently stall
-  // after sleep/wake or WebSocket reconnection. Poll via one-shot query to
-  // catch divergence — same pattern as useConversationMessages' watermark loop.
-  // eslint-disable-next-line no-restricted-syntax -- polled recovery; effect manages its own interval
-  useEffect(() => {
-    const STALE_THRESHOLD = 15_000;
-    const POLL_INTERVAL = 10_000;
+  // Recovery heartbeat: a Convex subscription can silently stall after
+  // sleep/wake or WebSocket reconnection, and each one stalls independently.
+  // Poll a one-shot query to catch divergence — same pattern as
+  // useConversationMessages' watermark loop.
+  useRecoveryPoll(lastSyncRef, useCallback(async () => {
+    const fresh: any = await convex.query(api.conversations.listInboxSessions, { show_all: showAll });
+    if (!fresh) return;
+    const sessions = fresh.sessions ?? fresh;
+    syncTable("sessions", sessions as unknown as InboxSession[]);
+    if (typeof fresh.hidden_count === "number") {
+      useInboxStore.setState({ hiddenSessionCount: fresh.hidden_count });
+    }
+    bgSyncMessages(sessions);
+    lastSyncRef.current = Date.now();
+  }, [convex, showAll, syncTable, bgSyncMessages]), 15_000);
 
-    const tick = async () => {
-      if (recoveryInFlightRef.current) return;
-      if (Date.now() - lastSyncRef.current < STALE_THRESHOLD) return;
-
-      recoveryInFlightRef.current = true;
-      try {
-        const fresh: any = await convex.query(api.conversations.listInboxSessions, { show_all: showAll });
-        if (!fresh) return;
-        const sessions = fresh.sessions ?? fresh;
-        syncTable("sessions", sessions as unknown as InboxSession[]);
-        if (typeof fresh.hidden_count === "number") {
-          useInboxStore.setState({ hiddenSessionCount: fresh.hidden_count });
-        }
-        bgSyncMessages(sessions);
-        lastSyncRef.current = Date.now();
-      } catch (err) {
-        console.warn("[useSyncInboxSessions] recovery fetch failed", err);
-      } finally {
-        recoveryInFlightRef.current = false;
-      }
-    };
-
-    const id = setInterval(tick, POLL_INTERVAL);
-    return () => clearInterval(id);
-  }, [convex, showAll, syncTable, bgSyncMessages]);
+  // currentUser carries daemon_last_seen — the input to the CLI-offline banner.
+  // Its subscription stalls independently of listInboxSessions (sessions can
+  // keep syncing while the user doc freezes), which made the banner climb a
+  // false "offline for Nh" while the daemon was healthy. The daemon refreshes
+  // this every ~30s via heartbeat, so a 45s gap means the subscription stalled.
+  useRecoveryPoll(lastUserSyncRef, useCallback(async () => {
+    const fresh: any = await convex.query(api.users.getCurrentUser);
+    if (fresh === undefined) return;
+    useInboxStore.getState().syncTable("currentUser", fresh);
+    lastUserSyncRef.current = Date.now();
+  }, [convex]), 45_000);
 
   // When the current session becomes dismissed elsewhere, hop to its
   // implementation_session if one exists so the user isn't stranded.

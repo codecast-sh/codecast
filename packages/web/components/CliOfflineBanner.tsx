@@ -7,6 +7,7 @@ import { useCurrentUser } from "../hooks/useCurrentUser";
 import {
   offlineTierFor,
   formatDuration,
+  useDaemonHealth,
   type OfflineTier,
 } from "../hooks/useDaemonHealth";
 
@@ -34,18 +35,22 @@ export function CliOfflineBanner() {
   const [copied, setCopied] = useState(false);
 
   const { user } = useCurrentUser();
+  // Share the daemon-health hook with the chip so both get the same wall-clock
+  // freshness and the post-wake grace (raw Date.now() here would re-introduce
+  // the false "offline" banner that climbs while a stalled subscription freezes
+  // daemon_last_seen).
+  const health = useDaemonHealth();
 
   useMountEffect(() => { setMounted(true); });
 
   if (!mounted) return null;
   if (user === undefined) return null;
+  if (health.kind !== "offline") return null;
 
-  const lastSeen = user?.daemon_last_seen || user?.last_heartbeat;
-  if (!lastSeen) return null;
-
-  const offlineDuration = Date.now() - lastSeen;
-  const tier = offlineTierFor(offlineDuration);
-  if (!tier) return null;
+  const tier = health.tier;
+  const offlineDuration = health.offlineMs;
+  // Dismiss math needs how stale the daemon was at the moment of dismissal.
+  const lastSeen = user?.daemon_last_seen || user?.last_heartbeat || 0;
 
   // Honor dismiss only while we're in the same (or lower) tier than when it was dismissed.
   // If the situation has escalated to a worse tier since dismiss, surface the banner again.

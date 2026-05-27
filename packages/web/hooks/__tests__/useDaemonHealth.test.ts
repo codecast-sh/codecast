@@ -66,4 +66,19 @@ describe("computeDaemonHealth", () => {
     );
     expect(health).toMatchObject({ kind: "offline", tier: "alert" });
   });
+
+  it("suppresses a stale gap during the post-wake grace window", () => {
+    // A subscription that froze while we were asleep must not read as offline
+    // until the recovery poll has had a chance to refresh the true value.
+    const stale = { daemon_last_seen: NOW - OFFLINE_ALERT_AFTER_MS };
+    expect(computeDaemonHealth(stale, NOW, { recentlyWoke: true }).kind).toBe("ok");
+    expect(computeDaemonHealth(stale, NOW, { recentlyWoke: false })).toMatchObject({
+      kind: "offline",
+      tier: "alert",
+    });
+  });
+
+  it("still reports unknown during grace when no daemon ever checked in", () => {
+    expect(computeDaemonHealth(null, NOW, { recentlyWoke: true })).toEqual({ kind: "unknown" });
+  });
 });
