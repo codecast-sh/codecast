@@ -69,14 +69,19 @@ function UserProfileContent() {
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id) as Id<"teams"> | undefined;
   const teamId = activeTeamId || currentUser?.active_team_id || currentUser?.team_id;
 
+  // Own profile shows everything across teams; a teammate's profile is scoped
+  // to the current workspace so you see their contribution to *this* team.
+  const isOwn = !!currentUser?._id && currentUser._id === profileUser?._id;
+  const scopeTeamId = isOwn ? undefined : teamId;
+
   const aa = useQuery(
     api.users.getUserAbstractActivity,
-    profileUser?._id ? { user_id: profileUser._id } : "skip"
+    profileUser?._id ? { user_id: profileUser._id, team_id: scopeTeamId } : "skip"
   );
 
   const feed = useQuery(
     api.users.getUserProfileFeed,
-    profileUser?._id ? { user_id: profileUser._id, team_id: teamId, limit: 200 } : "skip"
+    profileUser?._id ? { user_id: profileUser._id, team_id: scopeTeamId, limit: 200 } : "skip"
   );
 
   const userTasks = useQuery(
@@ -94,7 +99,7 @@ function UserProfileContent() {
 
   const heatmap = useQuery(
     api.users.getUserActivityHeatmap,
-    profileUser?._id ? { user_id: profileUser._id, days: 371 } : "skip"
+    profileUser?._id ? { user_id: profileUser._id, days: 371, team_id: scopeTeamId } : "skip"
   );
 
   const heatmapData = useMemo(() => heatmap || null, [heatmap]);
@@ -177,7 +182,7 @@ function UserProfileContent() {
               </div>
             </div>
           ))}
-          {filtered && filtered.length === 0 && <div className="text-[11px] text-sol-base01/30 text-center py-16">No recent activity</div>}
+          {filtered && filtered.length === 0 && <div className="text-[11px] text-sol-base01/30 text-center py-16">{isOwn ? "No recent activity" : "No recent activity in this workspace"}</div>}
           {!filtered && <div className="text-[11px] text-sol-base01/20 text-center py-16 animate-pulse">Loading...</div>}
         </div>
       )}
@@ -408,7 +413,7 @@ function TimelineChart({ data }: { data: Array<{ date: string; hours: number; se
   return (
     <div className="mt-3">
       <div className="flex items-baseline justify-between mb-2">
-        <span className="text-[9px] text-sol-base01/30 uppercase tracking-widest font-bold">Sessions Per Day</span>
+        <span className="text-[9px] text-sol-base01/30 uppercase tracking-widest font-bold">Hours Per Day</span>
         <span className="text-[9px] text-sol-base01/25 tabular-nums">{allDays.length} days</span>
       </div>
       <div ref={containerRef} className="w-full relative" onMouseLeave={() => setHovered(null)}>

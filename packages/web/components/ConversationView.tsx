@@ -5793,11 +5793,9 @@ function UserMessageRail({ messages, onJump }: {
   if (messages.length < 2) return null;
 
   return (
-    <div
-      className="absolute right-0 top-0 bottom-0 z-30 flex items-stretch pointer-events-none select-none"
-      onMouseEnter={show}
-      onMouseLeave={scheduleClose}
-    >
+    // Container is non-interactive; the tick column and flyout below opt back in
+    // with pointer-events-auto so the rail never blocks clicks on the conversation.
+    <div className="absolute right-0 top-0 bottom-0 z-30 flex items-stretch pointer-events-none select-none">
       {/* Flyout preview list */}
       <div
         className={`pointer-events-auto self-center mr-1 transition-all duration-150 ease-out ${open ? "opacity-100 translate-x-0" : "opacity-0 translate-x-2 pointer-events-none"}`}
@@ -8236,31 +8234,14 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       if (!preview) {
         // Image-only or otherwise text-less user turn: keep it navigable with a
         // placeholder rather than dropping the marker entirely.
-        if (/\[image|<image|!\[/i.test(raw)) preview = "Image";
+        const hasImages = Array.isArray((m as any).images) && (m as any).images.length > 0;
+        if (hasImages || /\[image|<image|!\[/i.test(raw)) preview = "Image";
         else continue;
       }
       out.push({ _id: m._id, preview, index: i, fraction: i / denom });
     }
     return out;
   }, [timeline]);
-
-  if (typeof window !== 'undefined') {
-    const roles: Record<string, number> = {};
-    const userDump: any[] = [];
-    for (const it of timeline) {
-      if (it.type === 'message') {
-        const d = it.data as any;
-        const r = d.role || 'none';
-        roles[r] = (roles[r] || 0) + 1;
-        if (r === 'user') {
-          const strFields: Record<string, string> = {};
-          for (const k of Object.keys(d)) { const v = d[k]; if (typeof v === 'string' && v.length > 0 && v.length < 200) strFields[k] = v.slice(0, 80); }
-          userDump.push({ keys: Object.keys(d), strFields });
-        }
-      }
-    }
-    (window as any).__railDebug = { embedded, railCount: railUserMessages.length, timelineLen: timeline.length, roles, userDump, sample: railUserMessages.slice(0, 3) };
-  }
 
   const [navigatorOpen, setNavigatorOpen] = useState(false);
   const populateInputRef = useRef<((text: string) => void) | null>(null);
