@@ -1,4 +1,4 @@
-import { mutation, query } from "./_generated/server";
+import { mutation, query, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
@@ -187,6 +187,27 @@ async function extractDocsFromMessages(
       }
     }
   }
+}
+
+// Cheap in-memory pre-filter so we only schedule the (DB-touching) extractDocs
+// mutation for batches that could actually yield a doc. Mirrors the conditions in
+// extractDocsFromMessages but avoids JSON.parse — a `.md` substring is enough to
+// decide whether the precise parse downstream is worth a scheduled mutation.
+function hasDocExtractionCandidate(messages: DocExtractionMessage[]): boolean {
+  for (const msg of messages) {
+    if (msg.role === "assistant" && msg.content && msg.content.length > 5000) {
+      const headingCount = (msg.content.match(/^#{1,3}\s/gm) || []).length;
+      if (headingCount >= 3) return true;
+    }
+    if (msg.tool_calls) {
+      for (const tc of msg.tool_calls) {
+        if ((tc.name === "Write" || tc.name === "Edit") && typeof tc.input === "string" && tc.input.includes(".md")) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
 }
 
 export const getMessageTimestamp = query({
@@ -559,6 +580,22 @@ export const addMessages = mutation({
     let insertedCount = 0;
     let lastUserContentStored: string | undefined;
 
+    // Collect pending_messages ONCE per batch instead of once per user message.
+    // This was the dominant per-message read amplifier on the write hot-path —
+    // a 25-message batch with several user turns re-scanned the whole pending set
+    // each time. Most batches have no pending rows, so we skip the read entirely
+    // unless the batch actually carries a user message. consumedPendingIds keeps a
+    // pending row from matching two different user messages in the same batch.
+    const batchHasUserMsg = args.messages.some((m) => m.role === "user");
+    const pendingMsgs = batchHasUserMsg
+      ? await ctx.db
+          .query("pending_messages")
+          .withIndex("by_conversation_id", (q) => q.eq("conversation_id", args.conversation_id))
+          .collect()
+      : [];
+    const pendingSorted = [...pendingMsgs].sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
+    const consumedPendingIds = new Set<Id<"pending_messages">>();
+
     for (const msg of args.messages) {
       const msgTimestamp = msg.timestamp || Date.now();
 
@@ -639,15 +676,11 @@ export const addMessages = mutation({
       let images = msg.images;
       let contentToStore = safeContent;
       let clientIdToStore: string | undefined;
-      if (msg.role === "user") {
-        const pendingMsgs = await ctx.db
-          .query("pending_messages")
-          .withIndex("by_conversation_id", (q) => q.eq("conversation_id", args.conversation_id))
-          .collect();
+      if (msg.role === "user" && pendingSorted.length > 0) {
         const c = (safeContent || "").replace(/\[Image[:\s][^\]]*\]/gi, "").trim();
         const cFlat = c.replace(/\s+/g, " ").trim();
-        const sorted = [...pendingMsgs].sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
-        const matchingPending = sorted.find(pm => {
+        const matchingPending = pendingSorted.find(pm => {
+          if (consumedPendingIds.has(pm._id)) return false;
           const pc = redactSecrets(pm.content).replace(/\[image\]/gi, "").trim();
           const pcFlat = pc.replace(/\r?\n/g, " ").replace(/\s+/g, " ").trim();
           const contentMatch = cFlat === pcFlat || c === pc;
@@ -658,6 +691,7 @@ export const addMessages = mutation({
           return true;
         });
         if (matchingPending) {
+          consumedPendingIds.add(matchingPending._id);
           contentToStore = redactSecrets(matchingPending.content);
           clientIdToStore = matchingPending.client_id;
           if (!images || images.length === 0) {
@@ -744,11 +778,15 @@ export const addMessages = mutation({
       const lastUserTs = userMsgs.length > 0
         ? userMsgs.reduce((max, m) => Math.max(max, m.timestamp || 0), 0)
         : 0;
-      if (args.api_token || lastUserTs > 0) {
+      // Only record user activity when there's a user-message timestamp to advance.
+      // daemon_last_seen is already refreshed by the 30s daemonHeartbeat, so we no
+      // longer schedule a write to the shared (per-user) doc on every assistant/tool
+      // batch — that scheduled mutation fired for all of a user's sessions at once and
+      // serialized on one hot doc. Assistant/tool-only batches now schedule nothing.
+      if (lastUserTs > 0) {
         await ctx.scheduler.runAfter(0, internal.users.updateUserActivity, {
           userId: conversation.user_id,
-          daemonSeen: !!args.api_token,
-          messageTimestamp: lastUserTs > 0 ? lastUserTs : undefined,
+          messageTimestamp: lastUserTs,
         });
       }
 
@@ -769,11 +807,34 @@ export const addMessages = mutation({
 
     }
 
+    // Doc extraction touches the docs table (index reads + inserts/patches) and is
+    // not latency-critical, so keep it off the addMessages transaction. Schedule it
+    // only when a batch plausibly contains a doc — re-passing args.messages is size-safe
+    // since that exact payload already fit this mutation's arg limit.
+    if (hasDocExtractionCandidate(args.messages)) {
+      await ctx.scheduler.runAfter(0, internal.messages.extractDocs, {
+        conversation_id: args.conversation_id,
+        messages: args.messages,
+      });
+    }
+
+    return { inserted: insertedCount, ids };
+  },
+});
+
+// Off-hot-path doc extraction (scheduled by addMessages). Re-fetches the conversation
+// so it works on the latest team/privacy fields rather than a stale snapshot.
+export const extractDocs = internalMutation({
+  args: {
+    conversation_id: v.id("conversations"),
+    messages: v.array(messageValidator),
+  },
+  handler: async (ctx, args) => {
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation) return;
     try {
       await extractDocsFromMessages(ctx, args.messages, conversation, args.conversation_id);
     } catch {}
-
-    return { inserted: insertedCount, ids };
   },
 });
 
