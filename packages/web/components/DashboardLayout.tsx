@@ -29,7 +29,7 @@ import { TmuxMissingBanner } from "./TmuxMissingBanner";
 import { FindBar } from "./FindBar";
 import { KeyboardShortcutsPanel } from "./KeyboardShortcutsHelp";
 import { NewSessionModal } from "./ConversationList";
-import { useInboxStore, useTrackedStore, categorizeSessions } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, categorizeSessions, sessionsWithPendingSend } from "../store/inboxStore";
 import { useShortcutAction, useShortcutContext, useGlobalShortcutActions, formatShortcutLabel } from "../shortcuts";
 import { usePrefetch } from "../hooks/usePrefetch";
 import { desktopHeaderClass, setupDesktopDrag, isElectron } from "../lib/desktop";
@@ -75,10 +75,11 @@ const ActiveAgentsBadge = memo(function ActiveAgentsBadge({ isOnInboxPage }: { i
   const s = useTrackedStore([
     s => s.sessions,
     s => s.sessionsWithQueuedMessages,
+    s => s.pendingMessages,
   ]);
   const working = useMemo(
-    () => categorizeSessions(s.sessions, s.sessionsWithQueuedMessages).working,
-    [s.sessions, s.sessionsWithQueuedMessages],
+    () => categorizeSessions(s.sessions, s.sessionsWithQueuedMessages, sessionsWithPendingSend(s.pendingMessages)).working,
+    [s.sessions, s.sessionsWithQueuedMessages, s.pendingMessages],
   );
   if (working.length === 0) return null;
   const activeAgentCount = working.length;

@@ -82,6 +82,7 @@ export function GlobalSearch() {
   const [userOnly, setUserOnly] = useState(false);
   const [selectedTeamId, setSelectedTeamId] = useState<Id<"teams"> | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const [panelTop, setPanelTop] = useState(0);
   const router = useRouter();
 
   const userTeams = useInboxStore((s) => s.teams);
@@ -92,6 +93,19 @@ export function GlobalSearch() {
     }, 200);
     return () => clearTimeout(timer);
   }, [query]);
+
+  // The results panel is viewport-centered (position: fixed), so anchor its
+  // vertical offset to the input's bottom edge rather than relying on top-full.
+  const recomputePanelTop = useCallback(() => {
+    const rect = inputRef.current?.getBoundingClientRect();
+    if (rect) setPanelTop(rect.bottom + 8);
+  }, []);
+
+  useWatchEffect(() => {
+    if (isOpen && query.length >= 2) recomputePanelTop();
+  }, [isOpen, query, recomputePanelTop]);
+
+  useEventListener("resize", recomputePanelTop);
 
   const searchResults = useQuery(
     api.conversations.searchConversations,
@@ -233,7 +247,10 @@ export function GlobalSearch() {
       </div>
 
       {isOpen && query.length >= 2 && (
-        <div className="absolute top-full left-1/2 -translate-x-1/2 w-[1200px] mt-2 bg-sol-bg border border-sol-border rounded-xl shadow-2xl shadow-black/50 overflow-hidden">
+        <div
+          style={{ top: panelTop }}
+          className="fixed left-1/2 -translate-x-1/2 w-[min(1200px,calc(100vw-2rem))] bg-sol-bg border border-sol-border rounded-xl shadow-2xl shadow-black/50 overflow-hidden z-[9999]"
+        >
             {!searchResults ? (
               <div className="px-4 py-8 text-center">
                 <div className="inline-block w-5 h-5 border-2 border-sol-base01 border-t-amber-500 rounded-full animate-spin" />

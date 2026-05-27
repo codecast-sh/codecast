@@ -8,7 +8,7 @@ import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { cleanTitle, msgCountColor } from "../lib/conversationProcessor";
 import { shouldShowSession } from "../lib/sessionFilters";
-import { useInboxStore, categorizeSessions } from "../store/inboxStore";
+import { useInboxStore, categorizeSessions, sessionsWithPendingSend } from "../store/inboxStore";
 import { useConvexSync } from "../hooks/useConvexSync";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { TeamIcon } from "./TeamIcon";
@@ -280,9 +280,10 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
   const openCreateModal = useInboxStore((s) => s.openCreateModal);
   const inboxSessions = useInboxStore((s) => s.sessions);
   const sessionsWithQueuedMessages = useInboxStore((s) => s.sessionsWithQueuedMessages);
+  const pendingMessages = useInboxStore((s) => s.pendingMessages);
   const needsInputCount = useMemo(
-    () => categorizeSessions(inboxSessions, sessionsWithQueuedMessages).needsInput.length,
-    [inboxSessions, sessionsWithQueuedMessages],
+    () => categorizeSessions(inboxSessions, sessionsWithQueuedMessages, sessionsWithPendingSend(pendingMessages)).needsInput.length,
+    [inboxSessions, sessionsWithQueuedMessages, pendingMessages],
   );
   const openNewSession = useInboxStore((s) => s.openNewSession);
   const hasUsedDesktop = useInboxStore((s) => s.clientState.dismissed?.has_used_desktop ?? false);
@@ -297,6 +298,7 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
   const favoritesQuery = useQuery(api.conversations.listFavorites);
   const bookmarksQuery = useQuery(api.bookmarks.listBookmarks);
   const favorites = favoritesQuery ?? useInboxStore.getState().favorites;
+  const [showAllFavorites, setShowAllFavorites] = useState(false);
   const bookmarks = bookmarksQuery ?? useInboxStore.getState().bookmarks;
   const toggleBookmark = useMutation(api.bookmarks.toggleBookmark);
   const allSavedViews = useInboxStore((s) => s.clientState.ui?.saved_views);
@@ -645,7 +647,7 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
               Favorites
             </div>
             <div className="space-y-0.5">
-              {favorites.slice(0, 5).map((fav: any) => (
+              {(showAllFavorites ? favorites : favorites.slice(0, 5)).map((fav: any) => (
                 <div key={fav._id} className="flex items-center group">
                   <a
                     href={`/conversation/${fav._id}`}
@@ -682,6 +684,14 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
                   </button>
                 </div>
               ))}
+              {favorites.length > 5 && (
+                <button
+                  onClick={() => setShowAllFavorites(v => !v)}
+                  className="w-full px-4 py-1.5 text-xs text-sol-text-dim hover:text-sol-text transition-colors text-left"
+                >
+                  {showAllFavorites ? "Show less" : `${favorites.length - 5} more…`}
+                </button>
+              )}
             </div>
           </div>
         )}
@@ -701,8 +711,14 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
                   className="flex items-center gap-2 px-4 py-1.5 text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60 transition-colors group cursor-pointer"
                   onClick={() => {
                     const store = useInboxStore.getState();
-                    store.navigateToSession(bookmark.conversation_id);
-                    useInboxStore.setState({ pendingScrollToMessageId: bookmark.message_id });
+                    // Pair the navigation target with the scroll target atomically so the
+                    // inbox's pendingNavigateId watcher resolves them together. Setting them
+                    // separately (navigateToSession + a later setState) raced the cache-hit
+                    // watcher, which pinned the scroll to the *previous* conversation.
+                    useInboxStore.setState({
+                      pendingNavigateId: bookmark.conversation_id,
+                      pendingScrollToMessageId: bookmark.message_id,
+                    });
                     const activeTab = store.tabs.find((t: any) => t.id === store.activeTabId);
                     if (activeTab) {
                       store.updateTab(activeTab.id, { path: "/inbox" });
@@ -720,8 +736,9 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
                       e.stopPropagation();
                       toggleBookmark({ conversation_id: bookmark.conversation_id, message_id: bookmark.message_id });
                     }}
-                    className="opacity-0 group-hover:opacity-100 text-sol-text-dim hover:text-sol-red transition-all flex-shrink-0"
+                    className="opacity-40 group-hover:opacity-100 text-sol-text-dim hover:text-sol-red transition-all flex-shrink-0"
                     title="Remove bookmark"
+                    aria-label="Remove bookmark"
                   >
                     <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
                       <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />

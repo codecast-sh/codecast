@@ -7,6 +7,7 @@ import { MarketingLayout } from "./layouts/MarketingLayout";
 import { PaletteLayout } from "./layouts/PaletteLayout";
 import { SettingsLayout } from "./layouts/SettingsLayout";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { useMentionLinkNavigation } from "@/hooks/useMentionLinkNavigation";
 
 const Landing = lazy(() => import("@/app/(marketing)/page"));
 const About = lazy(() => import("@/app/(marketing)/about/page"));
@@ -94,6 +95,7 @@ function RouteFallback() {
 }
 
 export function App() {
+  useMentionLinkNavigation();
   return (
     <Suspense fallback={<BootFallback />}>
     <Providers>
