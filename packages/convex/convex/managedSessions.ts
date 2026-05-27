@@ -1,4 +1,4 @@
-import { mutation, query } from "./_generated/server";
+import { mutation, query, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
@@ -31,11 +31,36 @@ export const registerManagedSession = mutation({
     tmux_session: v.optional(v.string()),
     conversation_id: v.optional(v.id("conversations")),
     api_token: v.optional(v.string()),
+    // Device claiming this session. When set, we stamp the conversation's
+    // owner_device_id (single-owner invariant). If the conversation is already
+    // owned by a DIFFERENT device that is still online, we refuse the claim
+    // and return { notOwner: true } so the calling daemon backs off.
+    device_id: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!authUserId) {
       throw new Error("Authentication required");
+    }
+
+    // Single-owner guard: refuse to manage a session owned by another live
+    // device. "Live" = that device heartbeated within the online window.
+    if (args.device_id && args.conversation_id) {
+      const conv = await ctx.db.get(args.conversation_id);
+      const owner = (conv as any)?.owner_device_id as string | undefined;
+      if (owner && owner !== args.device_id) {
+        const ownerDevice = await ctx.db
+          .query("devices")
+          .withIndex("by_user_device", (q: any) =>
+            q.eq("user_id", authUserId).eq("device_id", owner),
+          )
+          .first();
+        const ownerOnline = ownerDevice && Date.now() - ownerDevice.last_seen < 2 * 60 * 1000;
+        if (ownerOnline) {
+          return { notOwner: true as const, owner } as any;
+        }
+        // Owner offline → fall through and reclaim (stamp below).
+      }
     }
 
     const existing = await ctx.db
@@ -63,6 +88,9 @@ export const registerManagedSession = mutation({
           ...(args.tmux_session !== undefined ? { tmux_session: args.tmux_session } : {}),
           ...(args.conversation_id !== undefined ? { conversation_id: args.conversation_id } : {}),
         });
+        if (args.device_id && args.conversation_id) {
+          await ctx.db.patch(args.conversation_id, { owner_device_id: args.device_id });
+        }
         return existing._id;
       }
     }
@@ -95,6 +123,11 @@ export const registerManagedSession = mutation({
       started_at: now,
       last_heartbeat: now,
     });
+
+    // Claim ownership: stamp this device as the conversation's owner.
+    if (args.device_id && args.conversation_id) {
+      await ctx.db.patch(args.conversation_id, { owner_device_id: args.device_id });
+    }
 
     return id;
   },
@@ -548,14 +581,26 @@ export const reportMetrics = mutation({
     if (session.user_id.toString() !== authUserId.toString()) return;
 
     const now = Date.now();
-    await ctx.db.patch(session._id, {
-      current_cpu: args.cpu,
-      current_memory: args.memory,
-      current_pid_count: args.pid_count,
-      last_metrics_at: now,
-      ...(args.agent_pid !== undefined ? { agent_pid: args.agent_pid } : {}),
-      ...(args.awake_idle_ms !== undefined ? { awake_idle_ms: args.awake_idle_ms } : {}),
-    });
+    // The managed_sessions doc is in the read set of listInboxSessions' whole-table
+    // collect, so patching it every 30s × N sessions invalidates that subscription
+    // continuously (→ re-collect + isolate memory thrash). The live metric values
+    // live in session_metrics (inserted below) for the graphs; the copies on the
+    // registry doc only feed the metrics views and tolerate staleness. So throttle
+    // the hot-doc patch to ~5min/session (or when agent_pid changes), instead of
+    // hammering it on every report.
+    const SNAPSHOT_THROTTLE_MS = 5 * 60 * 1000;
+    const snapshotStale = !session.last_metrics_at || now - session.last_metrics_at > SNAPSHOT_THROTTLE_MS;
+    const agentPidChanged = args.agent_pid !== undefined && args.agent_pid !== session.agent_pid;
+    if (snapshotStale || agentPidChanged) {
+      await ctx.db.patch(session._id, {
+        current_cpu: args.cpu,
+        current_memory: args.memory,
+        current_pid_count: args.pid_count,
+        last_metrics_at: now,
+        ...(args.agent_pid !== undefined ? { agent_pid: args.agent_pid } : {}),
+        ...(args.awake_idle_ms !== undefined ? { awake_idle_ms: args.awake_idle_ms } : {}),
+      });
+    }
 
     await ctx.db.insert("session_metrics", {
       session_id: args.session_id,
@@ -743,5 +788,33 @@ export const getConversationBySessionId = query({
       conversation_id: conversation._id,
       session_id: conversation.session_id,
     };
+  },
+});
+
+// Reap dead managed_sessions. The daemon heartbeats every live session every ~30s,
+// so a row not heartbeated in over an hour belongs to a session whose process/tmux
+// is long gone. These rows accumulate (one per resumed/forked tmux session that was
+// never cleanly unregistered) and bloat every listInboxSessions `.collect()` of
+// managed_sessions — the read grows unboundedly, inflating the cost of the hottest
+// inbox query. A periodic sweep keeps the table lean. Deletion is safe: if such a
+// session ever revives, the daemon re-registers it via registerManagedSession.
+export const reapStaleManagedSessions = internalMutation({
+  args: { cutoffMs: v.optional(v.number()), max: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const cutoff = Date.now() - (args.cutoffMs ?? 60 * 60 * 1000); // 1h default
+    const max = args.max ?? 1000;
+    // Range-scan only the stale rows via the by_heartbeat index. This keeps the
+    // read set to the rows we delete (last_heartbeat < cutoff). Live sessions get
+    // fresh heartbeats (> cutoff), so their constant writes fall OUTSIDE this range
+    // and can't invalidate the sweep — avoiding the OCC stampede a full-table scan
+    // hits while reportMetrics/heartbeat are writing.
+    const stale = await ctx.db
+      .query("managed_sessions")
+      .withIndex("by_heartbeat", (q: any) => q.lt("last_heartbeat", cutoff))
+      .take(max);
+    for (const s of stale) {
+      await ctx.db.delete(s._id);
+    }
+    return { deleted: stale.length, hasMore: stale.length === max };
   },
 });

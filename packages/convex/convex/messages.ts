@@ -8,6 +8,7 @@ import { shouldGenerateTitle } from "./titleGeneration";
 import { canTeamMemberAccess } from "./privacy";
 import { redactSecrets } from "./redact";
 import { markPendingDelivered } from "./pendingMessages";
+import { nextAgentStatusOnAddMessages } from "./inboxFilters";
 
 function classifyDocContent(content: string): "plan" | "design" | "spec" | "investigation" | "handoff" | "note" {
   const first2k = content.slice(0, 2000).toLowerCase();
@@ -410,14 +411,18 @@ export const addMessage = mutation({
     }
     await ctx.db.patch(args.conversation_id, convPatch);
 
-    if (args.role === "assistant") {
+    const hasToolResultReply = args.role === "user" && !!args.tool_results && args.tool_results.length > 0;
+    if (args.role === "assistant" || hasToolResultReply) {
       const session = await ctx.db
         .query("managed_sessions")
         .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", args.conversation_id))
         .first();
-      if (session && session.agent_status === "idle") {
+      const nextStatus = session
+        ? nextAgentStatusOnAddMessages(session.agent_status, args.role === "assistant", hasToolResultReply)
+        : null;
+      if (session && nextStatus) {
         await ctx.db.patch(session._id, {
-          agent_status: "working" as const,
+          agent_status: nextStatus,
           agent_status_updated_at: Date.now(),
         });
       }
@@ -717,14 +722,20 @@ export const addMessages = mutation({
       await ctx.db.patch(args.conversation_id, convPatch);
 
       const hasAssistantMsg = args.messages.some((m) => m.role === "assistant");
-      if (hasAssistantMsg) {
+      const hasToolResultReply = args.messages.some(
+        (m) => m.role === "user" && !!m.tool_results && m.tool_results.length > 0,
+      );
+      if (hasAssistantMsg || hasToolResultReply) {
         const session = await ctx.db
           .query("managed_sessions")
           .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", args.conversation_id))
           .first();
-        if (session && session.agent_status === "idle") {
+        const nextStatus = session
+          ? nextAgentStatusOnAddMessages(session.agent_status, hasAssistantMsg, hasToolResultReply)
+          : null;
+        if (session && nextStatus) {
           await ctx.db.patch(session._id, {
-            agent_status: "working" as const,
+            agent_status: nextStatus,
             agent_status_updated_at: Date.now(),
           });
         }
@@ -763,6 +774,46 @@ export const addMessages = mutation({
     } catch {}
 
     return { inserted: insertedCount, ids };
+  },
+});
+
+export const existingMessageUuids = query({
+  args: {
+    conversation_id: v.string(),
+    message_uuids: v.array(v.string()),
+    api_token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!authUserId) {
+      throw new Error("Authentication failed: invalid token or session");
+    }
+
+    const conversationId = ctx.db.normalizeId("conversations", args.conversation_id);
+    if (!conversationId) {
+      return [];
+    }
+
+    const conversation = await ctx.db.get(conversationId);
+    if (!conversation) {
+      throw new Error("Conversation not found");
+    }
+    if (conversation.user_id.toString() !== authUserId.toString()) {
+      throw new Error("Unauthorized: can only read your own conversations");
+    }
+
+    const unique = Array.from(new Set(args.message_uuids)).slice(0, MAX_BATCH_SIZE);
+    const existing: string[] = [];
+    for (const uuid of unique) {
+      const found = await ctx.db
+        .query("messages")
+        .withIndex("by_conversation_uuid", (q) =>
+          q.eq("conversation_id", conversationId).eq("message_uuid", uuid)
+        )
+        .first();
+      if (found?.message_uuid) existing.push(found.message_uuid);
+    }
+    return existing;
   },
 });
 

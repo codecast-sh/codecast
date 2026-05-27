@@ -46,6 +46,29 @@ const ACTIVE_AGENT_STATUSES = new Set([
   "resuming",
 ]);
 
+// Decides whether a batch of freshly-synced messages should bump
+// managed_sessions.agent_status back to "working". Two cases, both meaning the
+// agent is actively producing again:
+//   - an assistant turn arrives while the session was parked idle by the grace
+//   - a user message carrying tool_results arrives while the session is
+//     permission_blocked — the agent received its input back (an AskUserQuestion
+//     answer, or a permissioned tool that just completed). The "working"
+//     PreToolUse hook that normally clears permission_blocked is fire-and-forget
+//     and can be lost under load, latching the session in "Needs Input" forever
+//     even though the transcript shows it resumed; this is the durable,
+//     hook-independent clear. Gated on tool_results so a free-form user chat
+//     can't clear a genuinely pending prompt (those messages carry none).
+// Returns the next status, or null to leave it unchanged.
+export function nextAgentStatusOnAddMessages(
+  currentStatus: string | undefined,
+  hasAssistantMsg: boolean,
+  hasToolResultReply: boolean,
+): "working" | null {
+  if (hasAssistantMsg && currentStatus === "idle") return "working";
+  if (hasToolResultReply && currentStatus === "permission_blocked") return "working";
+  return null;
+}
+
 export interface SessionIdleInput {
   /** managed_sessions.agent_status, coerced for heartbeat staleness by the caller. */
   agentStatus?: string;

@@ -1,4 +1,4 @@
-import { mutation, query, internalMutation } from "./_generated/server";
+import { mutation, query, internalMutation, internalQuery } from "./_generated/server";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
@@ -139,25 +139,9 @@ export const updateMessageStatus = mutation({
     });
 
     // Only clear has_pending_messages when moving to a terminal state (delivered)
-    // and no other in-flight messages remain
+    // and no other in-flight messages remain.
     if (args.status === "delivered") {
-      const remainingPending = await ctx.db
-        .query("pending_messages")
-        .withIndex("by_conversation_status", (q) =>
-          q.eq("conversation_id", message.conversation_id).eq("status", "pending")
-        )
-        .first();
-      if (!remainingPending) {
-        const remainingInjected = await ctx.db
-          .query("pending_messages")
-          .withIndex("by_conversation_status", (q) =>
-            q.eq("conversation_id", message.conversation_id).eq("status", "injected")
-          )
-          .first();
-        if (!remainingInjected) {
-          await ctx.db.patch(message.conversation_id, { has_pending_messages: false });
-        }
-      }
+      await clearHasPendingIfQuiet(ctx, message.conversation_id);
     }
 
     return { success: true };
@@ -184,10 +168,12 @@ export const retryMessage = mutation({
       throw new Error("Unauthorized: can only retry your own messages");
     }
 
-    // Never re-queue an already-delivered message. Retry timers are scheduled before delivery
-    // confirms; if the ack lands first, the timer firing here would otherwise re-pend a
-    // delivered message and cause a duplicate injection.
-    if (message.status === "delivered") {
+    // Never re-queue a message that's already reached a terminal state. Retry timers are
+    // scheduled before delivery confirms; if the ack lands first, the timer firing here would
+    // otherwise re-pend a delivered message and cause a duplicate injection. "cancelled" is
+    // likewise terminal — a daemon retry timer for an in-flight message that the user (or the
+    // stale-backlog cleanup) cancelled must not resurrect it to pending.
+    if (message.status === "delivered" || message.status === "cancelled") {
       return { success: true };
     }
 
@@ -230,23 +216,7 @@ export const cancelPendingMessage = mutation({
     await ctx.db.patch(args.message_id, { status: "cancelled" as const });
 
     // Clear the conversation flag if nothing else is still in flight.
-    const remainingPending = await ctx.db
-      .query("pending_messages")
-      .withIndex("by_conversation_status", (q) =>
-        q.eq("conversation_id", message.conversation_id).eq("status", "pending")
-      )
-      .first();
-    if (!remainingPending) {
-      const remainingInjected = await ctx.db
-        .query("pending_messages")
-        .withIndex("by_conversation_status", (q) =>
-          q.eq("conversation_id", message.conversation_id).eq("status", "injected")
-        )
-        .first();
-      if (!remainingInjected) {
-        await ctx.db.patch(message.conversation_id, { has_pending_messages: false });
-      }
-    }
+    await clearHasPendingIfQuiet(ctx, message.conversation_id);
 
     return { success: true };
   },
@@ -276,6 +246,32 @@ export async function resetConversationPendingMessages(
   return resetCount;
 }
 
+// Clear a conversation's has_pending_messages flag once nothing is still in flight — no
+// `pending` and no `injected` message remains. Every terminal transition (delivered, cancelled)
+// funnels through here so the flag, and therefore the inbox "Working" bucket, can never drift
+// from the actual message state.
+export async function clearHasPendingIfQuiet(
+  ctx: { db: any },
+  conversationId: Id<"conversations">
+): Promise<void> {
+  const remainingPending = await ctx.db
+    .query("pending_messages")
+    .withIndex("by_conversation_status", (q: any) =>
+      q.eq("conversation_id", conversationId).eq("status", "pending")
+    )
+    .first();
+  if (remainingPending) return;
+  const remainingInjected = await ctx.db
+    .query("pending_messages")
+    .withIndex("by_conversation_status", (q: any) =>
+      q.eq("conversation_id", conversationId).eq("status", "injected")
+    )
+    .first();
+  if (!remainingInjected) {
+    await ctx.db.patch(conversationId, { has_pending_messages: false });
+  }
+}
+
 // Mark a single pending message delivered (terminal) and clear the conversation's
 // has_pending_messages flag when nothing else is in flight. Shared by the content-matched
 // ack inside addMessages (the reliable path — fires whenever the agent echoes the message,
@@ -288,23 +284,7 @@ export async function markPendingDelivered(
   // resurrected by a late content-match ack (the ack scans all rows for the conversation).
   if (message.status === "delivered" || message.status === "cancelled") return;
   await ctx.db.patch(message._id, { status: "delivered" as const, delivered_at: Date.now() });
-
-  const remainingPending = await ctx.db
-    .query("pending_messages")
-    .withIndex("by_conversation_status", (q: any) =>
-      q.eq("conversation_id", message.conversation_id).eq("status", "pending")
-    )
-    .first();
-  if (remainingPending) return;
-  const remainingInjected = await ctx.db
-    .query("pending_messages")
-    .withIndex("by_conversation_status", (q: any) =>
-      q.eq("conversation_id", message.conversation_id).eq("status", "injected")
-    )
-    .first();
-  if (!remainingInjected) {
-    await ctx.db.patch(message.conversation_id, { has_pending_messages: false });
-  }
+  await clearHasPendingIfQuiet(ctx, message.conversation_id);
 }
 
 export const getPendingMessages = query({
@@ -394,11 +374,11 @@ export const getMessageStatus = query({
   },
 });
 
-// How long after send the healer keeps reviving a stranded message. Long enough that a daemon
-// outage or sleep of many minutes fully self-heals; bounded so we don't inject hours-stale
-// context into a session that has moved on. A live `pending` message is delivered by the
-// daemon's subscription at any age — this window only governs reviving non-pending strays.
-export const HEAL_WINDOW_MS = 60 * 60_000;
+// A user message is never dropped, and there is no age ceiling: a stranded message stays alive
+// until it is delivered. What the cron gates on is not age but session READINESS (see
+// retryStuckMessages / readyConversationIds) — it only re-pends a stray when the session is live
+// and idle, so a busy/blocked/offline session just waits instead of thrashing. planStuckMessageHeal
+// is the pure per-message decision once the session is known ready.
 // Give the JSONL-echo ack a chance to land before re-pending an "injected" message as failed.
 const INJECT_ACK_GRACE_MS = 120_000;
 
@@ -417,7 +397,6 @@ export function planStuckMessageHeal(
   now: number
 ): HealAction {
   const age = now - msg.created_at;
-  if (age > HEAL_WINDOW_MS) return { kind: "skip" };
 
   if (msg.status === "injected") {
     if (age < INJECT_ACK_GRACE_MS) return { kind: "skip" };
@@ -427,13 +406,36 @@ export function planStuckMessageHeal(
     return { kind: "repend" };
   }
   // "undeliverable" is NOT a dead-end: the daemon raises it after its gentle-retry budget is
-  // spent (a useful "escalate" signal), but the healer always revives it so delivery keeps
-  // moving forward with no client present. "failed" is the transient sync-failure sibling.
+  // spent (a useful "escalate" signal), but it is revived (once the session is idle — see the
+  // cron's readiness gate) so delivery keeps moving forward with no client present. "failed" is
+  // the transient sync-failure sibling.
   if (msg.status === "failed" || msg.status === "undeliverable") return { kind: "repend" };
 
   // "pending" is owned by the daemon's live subscription and its own retry timers — the cron
   // must not touch it (touching it here is what conflated waiting-time with the retry budget).
   return { kind: "skip" };
+}
+
+const HEARTBEAT_ALIVE_MS = 90 * 1000;
+
+// The cron only revives a stranded message when its session is live AND idle — i.e. ready to
+// receive it right now. A user message is NEVER dropped: if the session is busy, blocked, stopped,
+// resuming, or gone, the message is left untouched and revived on a later tick once the session
+// recovers (becomes idle). This readiness gate is what keeps a backlog from stampeding the daemon
+// into mass resumes (storm) or re-injecting into a busy agent (thrash) — when blocked we simply
+// wait; the second the session is idle, every queued message for it goes.
+async function readyConversationIds(ctx: { db: any }, now: number): Promise<Set<string>> {
+  const live = await ctx.db
+    .query("managed_sessions")
+    .withIndex("by_heartbeat", (q: any) => q.gt("last_heartbeat", now - HEARTBEAT_ALIVE_MS))
+    .collect();
+  const ready = new Set<string>();
+  for (const s of live) {
+    if (s.conversation_id && s.agent_status === "idle") {
+      ready.add(s.conversation_id.toString());
+    }
+  }
+  return ready;
 }
 
 export const retryStuckMessages = internalMutation({
@@ -446,20 +448,24 @@ export const retryStuckMessages = internalMutation({
     for (const status of ["injected", "failed", "undeliverable"] as const) {
       const rows = await ctx.db
         .query("pending_messages")
-        .filter((q) =>
-          q.and(
-            q.eq(q.field("status"), status),
-            q.gt(q.field("created_at"), now - HEAL_WINDOW_MS)
-          )
-        )
+        .filter((q) => q.eq(q.field("status"), status))
         .collect();
       candidates.push(...rows);
     }
 
+    const ready = await readyConversationIds(ctx, now);
+
     let revived = 0;
     let controlsAcked = 0;
+    let waiting = 0;
     const reflag = new Set<Id<"conversations">>();
     for (const msg of candidates) {
+      // Session not ready to receive (busy / blocked / stopped / gone): leave the message
+      // exactly as-is — preserved, never dropped — and revive it once the session is idle.
+      if (!ready.has(msg.conversation_id.toString())) {
+        waiting++;
+        continue;
+      }
       const action = planStuckMessageHeal(msg, now);
       if (action.kind === "skip") continue;
       if (action.kind === "deliver_control") {
@@ -480,8 +486,77 @@ export const retryStuckMessages = internalMutation({
     }
 
     if (revived > 0 || controlsAcked > 0) {
-      console.log(`retryStuckMessages: revived ${revived} stranded message(s), acked ${controlsAcked} stale control msg(s)`);
+      console.log(`retryStuckMessages: revived ${revived} for idle sessions, acked ${controlsAcked} control msg(s), ${waiting} waiting on a busy/offline session`);
     }
+  },
+});
+
+// Non-terminal states: a message in any of these is still "in flight" and keeps the
+// conversation's has_pending_messages flag true (and the inbox card in "Working").
+const NON_TERMINAL_STATUSES = ["pending", "injected", "failed", "undeliverable"] as const;
+
+// One-time audit: bucket every non-terminal (still-in-flight) pending message by age, so we can
+// see the backlog of strays before flipping on always-deliver. Read-only.
+export const auditStrandedMessages = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const now = Date.now();
+    const HOUR = 60 * 60_000;
+    const buckets = { under_1h: 0, h1_to_6h: 0, h6_to_24h: 0, d1_to_7d: 0, over_7d: 0 };
+    const byStatus: Record<string, number> = {};
+    let total = 0;
+    let oldestAgeMs = 0;
+    for (const status of NON_TERMINAL_STATUSES) {
+      const rows = await ctx.db
+        .query("pending_messages")
+        .filter((q) => q.eq(q.field("status"), status))
+        .collect();
+      byStatus[status] = rows.length;
+      for (const r of rows) {
+        total++;
+        const age = now - r.created_at;
+        if (age > oldestAgeMs) oldestAgeMs = age;
+        if (age < HOUR) buckets.under_1h++;
+        else if (age < 6 * HOUR) buckets.h1_to_6h++;
+        else if (age < 24 * HOUR) buckets.h6_to_24h++;
+        else if (age < 7 * 24 * HOUR) buckets.d1_to_7d++;
+        else buckets.over_7d++;
+      }
+    }
+    return { total, byStatus, buckets, oldestAgeHours: Math.round((oldestAgeMs / HOUR) * 10) / 10 };
+  },
+});
+
+// Restore messages that were cancelled by automated cleanup back to a deliverable state.
+// CARDINAL RULE: a user-typed message is never dropped. An earlier maintenance pass wrongly
+// cancelled a backlog of stranded messages; this returns them to "undeliverable" (non-terminal),
+// so the readiness-gated cron will deliver each one the moment its session is idle again — never
+// storming, never thrashing, but never lost. `min_age_ms` scopes the restore to the
+// machine-cancelled backlog (older than the window) so genuine recent user cancellations are left
+// alone. There is intentionally NO function that cancels user messages automatically.
+export const restoreCancelledMessages = internalMutation({
+  args: { min_age_ms: v.number(), dry_run: v.optional(v.boolean()) },
+  handler: async (ctx, args) => {
+    const cutoff = Date.now() - args.min_age_ms;
+    const affectedConvs = new Set<Id<"conversations">>();
+    let restored = 0;
+    const cancelled = await ctx.db
+      .query("pending_messages")
+      .filter((q) => q.and(q.eq(q.field("status"), "cancelled"), q.lt(q.field("created_at"), cutoff)))
+      .collect();
+    for (const r of cancelled) {
+      affectedConvs.add(r.conversation_id);
+      if (!args.dry_run) {
+        await ctx.db.patch(r._id, { status: "undeliverable" as const, retry_count: 0, delivered_at: undefined });
+      }
+      restored++;
+    }
+    if (!args.dry_run) {
+      for (const convId of affectedConvs) {
+        await ctx.db.patch(convId, { has_pending_messages: true });
+      }
+    }
+    return { restored, conversations: affectedConvs.size, dry_run: !!args.dry_run };
   },
 });
 

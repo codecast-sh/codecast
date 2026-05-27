@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { markPendingDelivered, isControlMessage, resetConversationPendingMessages, planStuckMessageHeal, HEAL_WINDOW_MS } from "./pendingMessages";
+import { markPendingDelivered, isControlMessage, resetConversationPendingMessages, planStuckMessageHeal } from "./pendingMessages";
 
 // Fake ctx.db that records patches and answers by_conversation_status lookups from a
 // configurable set of "other" rows still in flight for the conversation.
@@ -174,7 +174,8 @@ describe("resetConversationPendingMessages", () => {
 });
 
 // The cron healer's decision logic. Core invariant under test: it never abandons a message
-// (undeliverable is non-terminal) and never consumes the real-attempt budget for waiting time.
+// (undeliverable is non-terminal, and there is no age ceiling) and never consumes the
+// real-attempt budget for waiting time.
 describe("planStuckMessageHeal", () => {
   const now = 1_000_000_000_000;
   const recent = (status: string, content = "hi", ageMs = 5 * 60_000) =>
@@ -205,8 +206,10 @@ describe("planStuckMessageHeal", () => {
     expect(recent("pending").kind).toBe("skip");
   });
 
-  test("abandons messages older than the heal window (avoids injecting hours-stale context)", () => {
-    expect(recent("undeliverable", "hi", HEAL_WINDOW_MS + 1).kind).toBe("skip");
-    expect(recent("failed", "hi", HEAL_WINDOW_MS + 1).kind).toBe("skip");
+  test("revives stranded messages regardless of age — a pending message must always reach delivery", () => {
+    const old = 9 * 60 * 60_000; // 9h, well past the former 1h heal window
+    expect(recent("undeliverable", "hi", old).kind).toBe("repend");
+    expect(recent("failed", "hi", old).kind).toBe("repend");
+    expect(recent("injected", "real text", old).kind).toBe("repend");
   });
 });

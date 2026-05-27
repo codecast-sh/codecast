@@ -960,7 +960,13 @@ export const webList = query({
     // collect blew the Convex isolate's 96 MiB memory limit on heavy users
     // (TooMuchMemoryCarryOver, 2026-05-13). Older rows are still reachable via
     // delta polling after the cursor advances.
-    const MAX_INITIAL = 2000;
+    // Initial-load cap. Each task row can carry a large body, and Convex loads
+    // whole documents (no field projection), so a big MAX_INITIAL pulls tens of
+    // MiB into the isolate and trips the memory limit (TooMuchMemoryCarryOver),
+    // forcing isolate restarts that disrupt every other in-flight function on the
+    // backend. 300 most-recent rows is plenty for the list view; older rows are
+    // still reachable via delta polling once the cursor advances.
+    const MAX_INITIAL = 300;
     const collectByUser = async (uid: any) => isDelta
       ? await ctx.db.query("tasks").withIndex("by_user_updated", (q: any) =>
           q.eq("user_id", uid).gt("updated_at", since!)).collect()

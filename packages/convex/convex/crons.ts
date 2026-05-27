@@ -34,4 +34,11 @@ crons.interval(
   internal.taskMining.backfillAllTeams
 );
 
+crons.interval(
+  "reap stale managed sessions",
+  { minutes: 10 },
+  internal.managedSessions.reapStaleManagedSessions,
+  {}
+);
+
 export default crons;

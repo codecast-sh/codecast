@@ -38,33 +38,11 @@ export const generateTitle = internalAction({
 
     const { messages } = conversation;
 
-    const firstSlice = messages.slice(0, 4);
-    const lastSlice = messages.length > 10 ? messages.slice(-12) : [];
-
-    const selectedMessages = [...firstSlice];
-    for (const msg of lastSlice) {
-      if (!selectedMessages.find(m => m._id === msg._id)) {
-        selectedMessages.push(msg);
-      }
-    }
-
-    const truncateMessage = (content: string | undefined, maxLen: number) => {
-      if (!content) return "[no text]";
-      if (content.length <= maxLen) return content;
-      return content.slice(0, maxLen) + "...";
-    };
-
-    const messageText = selectedMessages
-      .map(m => {
-        const role = m.role === "assistant" ? "Assistant" : "User";
-        const content = truncateMessage(m.content, 400);
-        return `${role}: ${content}`;
-      })
-      .join("\n\n");
+    const messageText = buildTitleMessageContext(messages);
 
     const prompt = `Generate a title and subtitle for this coding session.
 
-Title: 2-5 words max. Short noun phrase or verb phrase identifying the core task. Think git branch names but readable.
+Title: 2-5 words max. Short noun phrase or verb phrase naming what the session is CURRENTLY working on. Think git branch names but readable. Sessions often start on one task and drift to another — when the most recent activity has moved on from how the session started, title it after the current focus, not the original request.
 Examples: "Auth redirect fix", "Dark mode settings", "Replace chokidar", "Inbox card redesign", "FD leak debug"
 Anti-examples (too verbose): "Investigate Non-Resumable Session Root Cause", "Implement agent-triggered community chat with leave option", "Add Sessions tab to mobile with chronological summaries"
 
@@ -176,6 +154,35 @@ export const getConversationForTitle = internalQuery({
     };
   },
 });
+
+// Build the conversation excerpt fed to the title model. Weighted toward recent
+// activity: a small "how it started" window for origin context plus a larger,
+// explicitly-labeled "most recent activity" window. The labels let the prompt's
+// "title after the current focus" instruction bind to the right block — without
+// them the model can't tell which messages are "now" and reliably re-derives the
+// session's opening task, leaving the title stuck while the work moves on.
+export function buildTitleMessageContext(
+  messages: Array<{ role: string; content?: string }>,
+): string {
+  const truncate = (content: string | undefined, maxLen: number) => {
+    if (!content) return "[no text]";
+    return content.length <= maxLen ? content : content.slice(0, maxLen) + "...";
+  };
+  const fmt = (m: { role: string; content?: string }) =>
+    `${m.role === "assistant" ? "Assistant" : "User"}: ${truncate(m.content, 400)}`;
+
+  const HEAD = 3;
+  const RECENT = 14;
+  const head = messages.slice(0, HEAD);
+  // Non-overlapping recent window. For short sessions this is just the remainder.
+  const recent =
+    messages.length > HEAD + RECENT ? messages.slice(-RECENT) : messages.slice(HEAD);
+
+  const sections: string[] = [];
+  if (head.length) sections.push(`=== How the session started ===\n${head.map(fmt).join("\n\n")}`);
+  if (recent.length) sections.push(`=== Most recent activity ===\n${recent.map(fmt).join("\n\n")}`);
+  return sections.join("\n\n");
+}
 
 export function shouldGenerateTitle(messageCount: number): boolean {
   if (messageCount === 2) return true;
