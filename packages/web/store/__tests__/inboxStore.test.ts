@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "bun:test";
-import { categorizeSessions, getSessionRenderKey, isSessionDismissed, useInboxStore, type InboxSession } from "../inboxStore";
+import { categorizeSessions, getSessionRenderKey, isSessionDismissed, pendingSendConsumed, sessionsWithPendingSend, useInboxStore, type InboxSession } from "../inboxStore";
 import { isPersistedStoreKey } from "../idbCache";
 
 const baseSession: InboxSession = {
@@ -298,6 +298,117 @@ describe("categorizeSessions", () => {
     expect(needsInput.map((s) => s._id)).not.toContain("conv-queued");
   });
 
+  it("moves an idle session with an unconfirmed pending send into Working (local-first)", () => {
+    // The durable signal: a sent-but-unconfirmed message lives in
+    // pendingMessages. Independent of ConversationView being mounted, that
+    // session must show as Working ("pending"), not sit in Needs Input.
+    const idleSession: InboxSession = {
+      ...baseSession,
+      _id: "conv-pending-send",
+      session_id: "session-pending-send",
+      message_count: 5,
+      agent_status: "idle",
+      is_idle: true,
+      has_pending: false,
+    };
+
+    const { needsInput, working } = categorizeSessions(
+      { [idleSession._id]: idleSession },
+      new Set(),
+      new Set(["conv-pending-send"]),
+    );
+
+    expect(working.map((s) => s._id)).toContain("conv-pending-send");
+    expect(needsInput.map((s) => s._id)).not.toContain("conv-pending-send");
+  });
+
+  it("routes an UNRESPONSIVE session with a stuck has_pending to Needs Input, not Working", () => {
+    // Regression (iOS-sim case): a message was queued, the daemon then died, and
+    // has_pending stayed latched true. The session is idle and the dead daemon
+    // can't deliver — it needs the user (resume/restart), so it must NOT keep a
+    // "working" badge just because has_pending is set.
+    const deadDaemon: InboxSession = {
+      ...baseSession,
+      _id: "conv-unresponsive",
+      session_id: "session-unresponsive",
+      message_count: 9,
+      is_idle: true,
+      has_pending: true,
+      is_unresponsive: true,
+    };
+
+    const { needsInput, working } = categorizeSessions(
+      { [deadDaemon._id]: deadDaemon },
+      new Set(),
+    );
+    expect(needsInput.map((s) => s._id)).toContain("conv-unresponsive");
+    expect(working.map((s) => s._id)).not.toContain("conv-unresponsive");
+  });
+
+  it("keeps a RESPONSIVE session with has_pending in Working (live daemon will deliver)", () => {
+    const liveDaemon: InboxSession = {
+      ...baseSession,
+      _id: "conv-live-pending",
+      session_id: "session-live-pending",
+      message_count: 9,
+      is_idle: true,
+      has_pending: true,
+      is_unresponsive: false,
+    };
+
+    const { needsInput, working } = categorizeSessions(
+      { [liveDaemon._id]: liveDaemon },
+      new Set(),
+    );
+    expect(working.map((s) => s._id)).toContain("conv-live-pending");
+    expect(needsInput.map((s) => s._id)).not.toContain("conv-live-pending");
+  });
+
+  it("routes a STOPPED session with has_pending to Needs Input (won't pick it up)", () => {
+    const stoppedPending: InboxSession = {
+      ...baseSession,
+      _id: "conv-stopped-pending",
+      session_id: "session-stopped-pending",
+      message_count: 4,
+      is_idle: true,
+      has_pending: true,
+      agent_status: "stopped",
+    };
+
+    const { needsInput, working } = categorizeSessions(
+      { [stoppedPending._id]: stoppedPending },
+      new Set(),
+    );
+    expect(needsInput.map((s) => s._id)).toContain("conv-stopped-pending");
+    expect(working.map((s) => s._id)).not.toContain("conv-stopped-pending");
+  });
+
+  it("moves a brand-new session (0 messages) with a pending first message into Working, out of New", () => {
+    const newSession: InboxSession = {
+      ...baseSession,
+      _id: "conv-new-pending",
+      session_id: "session-new-pending",
+      message_count: 0,
+      is_idle: true,
+    };
+
+    const withPending = categorizeSessions(
+      { [newSession._id]: newSession },
+      new Set(),
+      new Set(["conv-new-pending"]),
+    );
+    expect(withPending.working.map((s) => s._id)).toContain("conv-new-pending");
+    expect(withPending.newSessions.map((s) => s._id)).not.toContain("conv-new-pending");
+
+    // Without a pending send the same session stays in New.
+    const withoutPending = categorizeSessions(
+      { [newSession._id]: newSession },
+      new Set(),
+    );
+    expect(withoutPending.newSessions.map((s) => s._id)).toContain("conv-new-pending");
+    expect(withoutPending.working.map((s) => s._id)).not.toContain("conv-new-pending");
+  });
+
   it("keeps a working session out of Needs Input even when the previous turn was interrupted", () => {
     // Regression: resume after interrupt leaves last_user_message as the
     // interrupt control text while agent_status flips to "working". An old
@@ -442,7 +553,110 @@ describe("categorizeSessions", () => {
     expect(working.map((s) => s._id)).not.toContain("conv-poll-queued");
   });
 
+  it("a fresh client send moves a poll-blocked LIVE session into Working (pending pill)", () => {
+    // The user's complaint: an agent is blocked on an open AskUserQuestion, the
+    // user answers via free text (the poll's "Other" path), and that send sits in
+    // the durable pendingMessages map (the amber "pending" pill). The user has
+    // acted — the session must move to Working, not stay in Needs Input. The
+    // client send (pendingSendIds, 3rd arg) overrides awaiting_input on a live
+    // daemon. Contrast with the test above: a server-only has_pending with NO
+    // client send keeps the poll-deadlock protection.
+    const polledWithSend: InboxSession = {
+      ...baseSession,
+      _id: "conv-poll-sent",
+      session_id: "session-poll-sent",
+      message_count: 5,
+      agent_status: "working",
+      is_idle: false,
+      awaiting_input: true,
+      has_pending: false,
+    };
+
+    const { needsInput, working } = categorizeSessions(
+      { [polledWithSend._id]: polledWithSend },
+      new Set(),
+      new Set(["conv-poll-sent"]),
+    );
+
+    expect(working.map((s) => s._id)).toContain("conv-poll-sent");
+    expect(needsInput.map((s) => s._id)).not.toContain("conv-poll-sent");
+  });
+
+  it("a fresh client send moves a permission-blocked LIVE session into Working", () => {
+    const blockedWithSend: InboxSession = {
+      ...baseSession,
+      _id: "conv-perm-sent",
+      session_id: "session-perm-sent",
+      message_count: 5,
+      agent_status: "permission_blocked",
+      is_idle: false,
+      awaiting_input: false,
+    };
+
+    const { needsInput, working } = categorizeSessions(
+      { [blockedWithSend._id]: blockedWithSend },
+      new Set(),
+      new Set(["conv-perm-sent"]),
+    );
+
+    expect(working.map((s) => s._id)).toContain("conv-perm-sent");
+    expect(needsInput.map((s) => s._id)).not.toContain("conv-perm-sent");
+  });
+
+  it("a client send to a STOPPED session stays in Working (pending pill, retried forever)", () => {
+    // Invariant: a client pending send (the amber "pending" pill) ALWAYS means
+    // Working, even on a stopped daemon. The message is retried forever and a
+    // launchd-revived daemon will deliver it; the dedicated "daemon offline"
+    // affordance is the global banner, not a per-card bounce into Needs Input. A
+    // pending card must never appear outside Working — that mismatch (pill in
+    // Needs Input) is the impossible state we're guarding against. Contrast a
+    // stale SERVER-only has_pending with NO client send, which still routes a dead
+    // daemon to Needs Input (see the unresponsive/stopped has_pending tests above).
+    const stoppedWithSend: InboxSession = {
+      ...baseSession,
+      _id: "conv-dead-sent",
+      session_id: "session-dead-sent",
+      message_count: 5,
+      agent_status: "stopped",
+      is_idle: true,
+      awaiting_input: false,
+    };
+
+    const { needsInput, working } = categorizeSessions(
+      { [stoppedWithSend._id]: stoppedWithSend },
+      new Set(),
+      new Set(["conv-dead-sent"]),
+    );
+
+    expect(working.map((s) => s._id)).toContain("conv-dead-sent");
+    expect(needsInput.map((s) => s._id)).not.toContain("conv-dead-sent");
+  });
+
+  it("a client send to an UNRESPONSIVE session stays in Working (pending pill)", () => {
+    // The screenshot state: a card showing the amber "pending" pill must never sit
+    // outside Working. A stale daemon heartbeat (is_unresponsive) doesn't change that
+    // — the client pending send overrides it, same as the stopped case above.
+    const unresponsiveWithSend: InboxSession = {
+      ...baseSession,
+      _id: "conv-unresp-sent",
+      session_id: "session-unresp-sent",
+      message_count: 5,
+      is_idle: true,
+      is_unresponsive: true,
+    };
+
+    const { needsInput, working } = categorizeSessions(
+      { [unresponsiveWithSend._id]: unresponsiveWithSend },
+      new Set(),
+      new Set(["conv-unresp-sent"]),
+    );
+
+    expect(working.map((s) => s._id)).toContain("conv-unresp-sent");
+    expect(needsInput.map((s) => s._id)).not.toContain("conv-unresp-sent");
+  });
+
   it("a pinned poll stays in its own group, not duplicated into Needs Input", () => {
+
     const pinnedPoll: InboxSession = {
       ...baseSession,
       _id: "conv-pinned-poll",
@@ -835,5 +1049,153 @@ describe("syncTable sessions — status flip without updated_at bump", () => {
     store.syncTable("sessions", [{ ...s }]);
     const second = useInboxStore.getState().sessions["conv-stable"];
     expect(second).toBe(first);
+  });
+});
+
+describe("syncTable sessions — stale optimistic pending-send reconcile", () => {
+  const optimistic = (content: string, ts = 1) => ({
+    _id: `opt_${ts}`, role: "user" as const, content, timestamp: ts, _isOptimistic: true as const, _clientId: `opt_${ts}`,
+  });
+
+  beforeEach(() => {
+    useInboxStore.setState({
+      sessions: {}, conversations: {}, pending: {}, pendingMessages: {}, currentSessionId: null,
+    } as any);
+  });
+
+  it("prunes a never-echoed optimistic send (e.g. /model) once the agent goes active", () => {
+    const store = useInboxStore.getState();
+    useInboxStore.setState({ pendingMessages: { "conv-model": [optimistic("/model")] } } as any);
+    // The agent picked up the command → status active. /model never echoes back as
+    // a user-message row, so this is the only path that can clear the phantom.
+    store.syncTable("sessions", [{
+      ...baseSession, _id: "conv-model", session_id: "sess-model",
+      message_count: 3, agent_status: "working" as const, is_idle: false, updated_at: 10,
+    }]);
+    expect(useInboxStore.getState().pendingMessages["conv-model"]).toBeUndefined();
+    expect(sessionsWithPendingSend(useInboxStore.getState().pendingMessages).has("conv-model")).toBe(false);
+  });
+
+  it("prunes an optimistic send once the session is stopped (dead, won't deliver)", () => {
+    const store = useInboxStore.getState();
+    useInboxStore.setState({ pendingMessages: { "conv-dead": [optimistic("hello")] } } as any);
+    store.syncTable("sessions", [{
+      ...baseSession, _id: "conv-dead", session_id: "sess-dead",
+      message_count: 3, agent_status: "stopped" as const, is_idle: true, updated_at: 10,
+    }]);
+    expect(useInboxStore.getState().pendingMessages["conv-dead"]).toBeUndefined();
+  });
+
+  it("does NOT prune the focused conversation (setMessages owns it via echo)", () => {
+    const store = useInboxStore.getState();
+    useInboxStore.setState({
+      pendingMessages: { "conv-open": [optimistic("typing...")] },
+      currentSessionId: "conv-open",
+    } as any);
+    store.syncTable("sessions", [{
+      ...baseSession, _id: "conv-open", session_id: "sess-open",
+      message_count: 3, agent_status: "working" as const, is_idle: false, updated_at: 10,
+    }]);
+    expect(useInboxStore.getState().pendingMessages["conv-open"]?.length).toBe(1);
+  });
+
+  it("does NOT prune an in-flight send the server has queued (has_pending=true)", () => {
+    const store = useInboxStore.getState();
+    useInboxStore.setState({ pendingMessages: { "conv-fresh": [optimistic("just sent")] } } as any);
+    // The server accepted the send into its durable queue (has_pending true) but the
+    // daemon hasn't picked it up yet (idle) — the optimistic must survive.
+    store.syncTable("sessions", [{
+      ...baseSession, _id: "conv-fresh", session_id: "sess-fresh",
+      message_count: 3, agent_status: "idle" as const, is_idle: true, has_pending: true, updated_at: 10,
+    }]);
+    expect(useInboxStore.getState().pendingMessages["conv-fresh"]?.length).toBe(1);
+  });
+
+  it("prunes a leftover optimistic on an idle session with nothing queued (the /model & late-delivery case)", () => {
+    // Regression (Activity-feed footage-app case): a delivered-and-answered send (or
+    // a /model that never echoes) lingered on a session that's now idle with no
+    // daemon (agent_status undefined) and has_pending=false. is_idle && !has_pending
+    // is the server-authoritative "this is stale" signal — must prune even without an
+    // active/stopped status.
+    const store = useInboxStore.getState();
+    useInboxStore.setState({ pendingMessages: { "conv-leftover": [optimistic("/model")] } } as any);
+    store.syncTable("sessions", [{
+      ...baseSession, _id: "conv-leftover", session_id: "sess-leftover",
+      message_count: 50, is_idle: true, has_pending: false, updated_at: 10,
+    }]);
+    expect(useInboxStore.getState().pendingMessages["conv-leftover"]).toBeUndefined();
+  });
+
+  it("keeps a FAILED send so the user can retry, even after the agent goes active", () => {
+    const store = useInboxStore.getState();
+    useInboxStore.setState({
+      pendingMessages: { "conv-failed": [{ ...optimistic("oops"), _isFailed: true as const }] },
+    } as any);
+    store.syncTable("sessions", [{
+      ...baseSession, _id: "conv-failed", session_id: "sess-failed",
+      message_count: 3, agent_status: "working" as const, is_idle: false, updated_at: 10,
+    }]);
+    expect(useInboxStore.getState().pendingMessages["conv-failed"]?.length).toBe(1);
+  });
+
+  it("does NOT prune on a STALE pre-send snapshot (the flicker regression)", () => {
+    // The flicker: an idle session at updated_at=100 gets a client send. Before the
+    // server's sendMessage mutation lands (which sets has_pending + bumps updated_at),
+    // a stale snapshot — still updated_at=100, is_idle, has_pending=false — arrives.
+    // The absence-prune used to fire on it, dropping the pending pill and bouncing the
+    // card out of Working into Needs Input for a beat. The send baseline (=100) must
+    // keep it: the server has NOT advanced past the send, so nothing is consumed.
+    const store = useInboxStore.getState();
+    useInboxStore.setState({
+      pendingMessages: { "conv-flicker": [{ ...optimistic("just sent", 101), _sentBaselineTs: 100 }] },
+    } as any);
+    store.syncTable("sessions", [{
+      ...baseSession, _id: "conv-flicker", session_id: "sess-flicker",
+      message_count: 5, agent_status: "idle" as const, is_idle: true, has_pending: false, updated_at: 100,
+    }]);
+    expect(useInboxStore.getState().pendingMessages["conv-flicker"]?.length).toBe(1);
+  });
+
+  it("prunes once the server advances PAST the send (idle, nothing queued)", () => {
+    // Same baseline=100, but now a snapshot at updated_at=200 proves the server has
+    // processed the send and the agent is idle with nothing queued (delivered-and-
+    // answered, or a never-echoing /model). Now it's genuinely stale → prune.
+    const store = useInboxStore.getState();
+    useInboxStore.setState({
+      pendingMessages: { "conv-advanced": [{ ...optimistic("/model", 101), _sentBaselineTs: 100 }] },
+    } as any);
+    store.syncTable("sessions", [{
+      ...baseSession, _id: "conv-advanced", session_id: "sess-advanced",
+      message_count: 5, is_idle: true, has_pending: false, updated_at: 200,
+    }]);
+    expect(useInboxStore.getState().pendingMessages["conv-advanced"]).toBeUndefined();
+  });
+});
+
+describe("pendingSendConsumed — server-advanced gate", () => {
+  const idleNoPending = { agent_status: "idle" as const, is_idle: true, has_pending: false };
+
+  it("never consumes via absence before the server advances past the send", () => {
+    // updated_at == baseline → stale pre-send snapshot → not consumed.
+    expect(pendingSendConsumed({ ...idleNoPending, updated_at: 100 }, 100)).toBe(false);
+    // updated_at < baseline → even staler → not consumed.
+    expect(pendingSendConsumed({ ...idleNoPending, updated_at: 50 }, 100)).toBe(false);
+  });
+
+  it("consumes via absence once updated_at moves past the baseline", () => {
+    expect(pendingSendConsumed({ ...idleNoPending, updated_at: 101 }, 100)).toBe(true);
+  });
+
+  it("an ACTIVE status consumes immediately, regardless of the baseline gate", () => {
+    // The daemon is provably acting — a positive signal, not absence.
+    expect(pendingSendConsumed(
+      { agent_status: "working", is_idle: false, has_pending: false, updated_at: 1 }, 100,
+    )).toBe(true);
+  });
+
+  it("a fresh has_pending send is never consumed even after the server advances", () => {
+    expect(pendingSendConsumed(
+      { agent_status: "idle", is_idle: true, has_pending: true, updated_at: 200 }, 100,
+    )).toBe(false);
   });
 });

@@ -338,20 +338,28 @@ export function QueuePageClient() {
   }, [pendingNavigateId, pendingScrollToMessageId, sessions, navigateToSession]);
 
   // Consume pendingScrollToMessageId / pendingHighlightQuery on cache-hit navigation:
-  // navigateToSession sets currentSessionId directly when sessions[id] is in store,
-  // bypassing pendingNavigateId, so the watcher above never fires for deep-links to
-  // already-cached sessions (Sidebar bookmarks, CommandPalette, MessageBrowserPopover).
+  // navigateToSession sets currentSessionId (or viewingDismissedId for a dismissed
+  // target) directly when sessions[id] is in store, bypassing pendingNavigateId, so the
+  // watcher above never fires for deep-links to already-cached sessions.
+  //
+  // Bail while a pendingNavigateId navigation is in flight: that scroll target belongs
+  // to the *incoming* conversation, and the watcher above owns pairing it. Consuming it
+  // here would pin it to the stale currentSessionId (the conversation we're leaving).
+  // Use viewingDismissedId as the view target so bookmarks into dismissed conversations
+  // scroll to the right message instead of keying off the previous session.
   useWatchEffect(() => {
-    if (!currentSessionId) return;
+    if (pendingNavigateId) return;
+    const viewSessionId = viewingDismissedId ?? currentSessionId;
+    if (!viewSessionId) return;
     if (!pendingScrollToMessageId && !pendingHighlightQuery) return;
     const scrollTarget = pendingScrollToMessageId;
     const highlight = pendingHighlightQuery;
     useInboxStore.setState({ pendingScrollToMessageId: null, pendingHighlightQuery: null });
     if (highlight) setActiveHighlight(highlight);
     if (scrollTarget) {
-      setScrollTarget({ sessionId: currentSessionId, messageId: scrollTarget });
+      setScrollTarget({ sessionId: viewSessionId, messageId: scrollTarget });
     }
-  }, [currentSessionId, pendingScrollToMessageId, pendingHighlightQuery]);
+  }, [currentSessionId, viewingDismissedId, pendingNavigateId, pendingScrollToMessageId, pendingHighlightQuery]);
 
   const prevSessionRef = useRef(currentSessionId);
   prevSessionRef.current = currentSessionId;
@@ -473,6 +481,9 @@ export function QueuePageClient() {
             lastUserMessage={viewingDismissedSession.last_user_message}
             sessionError={viewingDismissedSession.session_error}
             onBack={handleBack}
+            targetMessageId={scrollTarget?.sessionId === viewingDismissedSession._id ? scrollTarget.messageId : undefined}
+            highlightQuery={activeHighlight}
+            onClearHighlight={handleClearHighlight}
           />
         </ErrorBoundary>
       ) : currentSession ? (

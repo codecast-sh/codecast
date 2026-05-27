@@ -210,6 +210,13 @@ export type Message = {
   _clientId?: string;
   _isFailed?: true;
   client_id?: string;
+  // The conversation's server-stamped `updated_at` at the instant this optimistic
+  // send was added. The server bumps `updated_at` when it accepts the send, so a
+  // later snapshot whose `updated_at` exceeds this baseline proves the server has
+  // processed our message — the only safe moment to let the absence-based prune
+  // (is_idle && !has_pending) drop the pending pill. Without it a stale pre-send
+  // snapshot prunes a just-sent message and flickers the card out of Working.
+  _sentBaselineTs?: number;
 };
 
 // The complete, non-paginated set of navigable (user + assistant) messages for
@@ -499,12 +506,110 @@ export function isInterruptControlMessage(raw: string | null | undefined): boole
 const ACTIVE_AGENT_STATUSES: Set<string> = new Set(["working", "compacting", "thinking", "connected", "starting", "resuming"]);
 const DEAD_AGENT_STATUSES: Set<string> = new Set(["stopped"]);
 
+// Stable empty set so callers that omit pendingSendIds don't allocate and
+// don't churn memoized identities.
+const EMPTY_PENDING_SEND_IDS: ReadonlySet<string> = new Set<string>();
+
+// The daemon definitively reports the agent as running. Used both to
+// short-circuit idle detection and to decide when a "pending working" send has
+// been confirmed (status flipped active) vs is still in-flight.
+export function isAgentActive(session: Pick<InboxSession, "agent_status">): boolean {
+  return !!session.agent_status && ACTIVE_AGENT_STATUSES.has(session.agent_status);
+}
+
+// A queued/optimistic outbound message is a "pending send" until the server
+// echoes it back (which prunes it) or it fails. This is the durable,
+// persisted, local-first signal that we've sent something and are waiting to
+// confirm delivery — independent of whether ConversationView is mounted.
+export function convHasPendingSend(pending?: Message[]): boolean {
+  return !!pending?.some((m) => !m._isFailed);
+}
+
+// Conversation ids that currently have an unconfirmed outbound message.
+export function sessionsWithPendingSend(
+  pendingMessages: Record<string, Message[]>,
+): Set<string> {
+  const ids = new Set<string>();
+  for (const id in pendingMessages) {
+    if (convHasPendingSend(pendingMessages[id])) ids.add(id);
+  }
+  return ids;
+}
+
+// A pending optimistic send is "consumed" once the daemon proves it acted on it:
+// the agent picked it up (status went active) or the session is dead (stopped,
+// won't ever pick it up). At that point the optimistic entry is stale and must be
+// dropped — otherwise it shows a phantom "pending" pill and pins an idle session
+// in Working forever. This is the durable, view-independent prune that the
+// echo-based prune in setMessages can't do: setMessages only runs for the
+// conversation currently open AND only matches messages the server echoes back as
+// user-message rows — slash commands like /model never echo, so without this they
+// linger indefinitely.
+export function pendingSendConsumed(
+  session: Pick<InboxSession, "agent_status" | "is_idle" | "has_pending" | "updated_at"> | undefined,
+  sentBaselineTs?: number,
+): boolean {
+  if (!session) return false;
+  const status = session.agent_status;
+  // Definitive positive signal: the daemon is provably acting on our send right
+  // now, so the optimistic stand-in has served its purpose. A stale "working" from
+  // a prior turn is harmless here — the card stays in Working either way.
+  if (status && ACTIVE_AGENT_STATUSES.has(status)) return true;
+  // Everything below is an ABSENCE signal ("nothing is happening") — and a stale
+  // snapshot that predates our send looks identical. Only trust it once the server
+  // has provably advanced PAST the send: the conversation's server-stamped
+  // updated_at (bumped when the backend accepted the message) moved beyond the
+  // baseline we captured at send time. Until then keep the pending pill — a
+  // just-sent message must never disappear before the server has even seen it.
+  const serverAdvanced = sentBaselineTs != null && (session.updated_at ?? 0) > sentBaselineTs;
+  if (!serverAdvanced) return false;
+  // The session is dead (stopped) and the server has caught up past our send, so
+  // it was delivered-then-stopped rather than queued-against-a-live-daemon.
+  if (status && DEAD_AGENT_STATUSES.has(status)) return true;
+  // Server-authoritative leftover check: the backend is idle with nothing queued
+  // (has_pending false) AS OF a snapshot newer than our send, so any lingering
+  // client optimistic is stale — the message was delivered-and-answered, or was a
+  // control command like /model that never echoes back as a user-message row. A
+  // genuinely in-flight send shows has_pending true until delivered, so this can't
+  // prune a real pending send.
+  return !!session.is_idle && !session.has_pending;
+}
+
+// Prune consumed/stale optimistic sends for a synced session. The conversation
+// currently being viewed is left to setMessages (echo-based prune) so a just-sent
+// message stays visible in the open thread until its real row syncs in. Failed
+// sends are kept (the user may retry them). Returns true if anything changed.
+function reconcilePendingSendForSession(
+  pendingMessages: Record<string, Message[]>,
+  convId: string,
+  session: Pick<InboxSession, "agent_status" | "is_idle" | "has_pending" | "updated_at"> | undefined,
+  focusedConvId: string | null,
+): boolean {
+  if (convId === focusedConvId) return false;
+  const pending = pendingMessages[convId];
+  if (!pending?.length) return false;
+  // Protect the LATEST send: don't prune until the server has advanced past it.
+  // Legacy entries (persisted before _sentBaselineTs existed) fall back to their
+  // own client timestamp.
+  let baseline = 0;
+  for (const m of pending) {
+    if (m._isFailed) continue;
+    baseline = Math.max(baseline, m._sentBaselineTs ?? m.timestamp);
+  }
+  if (!pendingSendConsumed(session, baseline)) return false;
+  const kept = pending.filter((m) => m._isFailed);
+  if (kept.length === pending.length) return false;
+  if (kept.length === 0) delete pendingMessages[convId];
+  else pendingMessages[convId] = kept;
+  return true;
+}
+
 export function isSessionEffectivelyIdle(
   session: Pick<InboxSession, "is_idle" | "agent_status">,
 ): boolean {
   // Daemon-reported ACTIVE statuses are a definitive "working" signal —
   // short-circuit to non-idle for fast UI response when status flips.
-  if (session.agent_status && ACTIVE_AGENT_STATUSES.has(session.agent_status)) {
+  if (isAgentActive(session)) {
     return false;
   }
   // Otherwise defer to the backend's composite is_idle, which already
@@ -514,30 +619,42 @@ export function isSessionEffectivelyIdle(
 }
 
 export function isSessionWaitingForInput(
-  session: Pick<InboxSession, "_id" | "is_idle" | "agent_status" | "message_count" | "is_pinned" | "has_pending" | "awaiting_input">,
+  session: Pick<InboxSession, "_id" | "is_idle" | "agent_status" | "message_count" | "is_pinned" | "has_pending" | "awaiting_input" | "is_unresponsive">,
   sessionsWithQueuedMessages?: Set<string>,
 ): boolean {
+  const dead = !!session.agent_status && DEAD_AGENT_STATUSES.has(session.agent_status);
+  const canDeliver = !session.is_unresponsive && !dead;
+  // A message the user just sent/queued from the client (the durable
+  // pendingMessages map, surfaced as the amber "pending" pill) means they have
+  // already acted: it belongs in WORKING, not NEEDS INPUT. This wins over an
+  // open poll or a permission block — sending a message IS how you answer an
+  // AskUserQuestion (the free-text "Other" path) or unblock the agent, so a
+  // fresh send means "I responded, get to work," never "still waiting on me."
+  // NOT gated on canDeliver: the pending pill is the user's "I acted" signal and
+  // the message is retried forever until even a momentarily-dead daemon (revived
+  // by launchd) delivers it. A pending card must stay in Working with its pill,
+  // never bounce to Needs Input. Contrast the server-only has_pending below, which
+  // a dead daemon can't act on and which therefore routes to needs-attention.
+  if (sessionsWithQueuedMessages?.has(session._id)) return false;
   // An open poll (AskUserQuestion) is the agent blocking on the user — the
-  // definition of needs-input. It overrides BOTH the raced agent_status (the
-  // daemon flips status back to "working" while the poll is still open) AND a
-  // queued message: a poll-blocked agent can't receive a normal delivery (you
-  // can't paste text into a blocking menu), so the pending message is stuck and
-  // the user must see the poll to resolve it. A poll → NEEDS INPUT, always
+  // definition of needs-input. It overrides the raced agent_status (the daemon
+  // flips back to "working" while the poll is still open). A poll → NEEDS INPUT
   // (except pinned, which lives in its own group).
   if (session.awaiting_input && !session.is_pinned) return true;
   // A permission-blocked agent (a tool-use awaiting your approve/deny) is
-  // blocking on the user just like an open poll, and can't consume a queued
-  // message either. Route it to needs-input regardless of the is_idle grace
-  // window or a raced "working" status. Unlike a poll this isn't reflected in
-  // awaiting_input (that derives from an AskUserQuestion tool_use), so key off
-  // the daemon-reported status directly.
+  // blocking on the user just like an open poll. Unlike a poll this isn't
+  // reflected in awaiting_input (that derives from an AskUserQuestion tool_use),
+  // so key off the daemon-reported status directly.
   if (session.agent_status === "permission_blocked") {
     return session.message_count > 0 && !session.is_pinned;
   }
-  // Pending messages mean work is queued — session is not waiting for user input
-  if (session.has_pending || sessionsWithQueuedMessages?.has(session._id)) return false;
+  // Server-side queued message (has_pending) with no client send: counts as work
+  // in flight only on a live daemon. A poll/permission block above already won,
+  // so this routes a plain busy/idle session with a server-queued message to
+  // working; a dead daemon falls through to the needs-attention path below.
+  if (canDeliver && session.has_pending) return false;
   // Dead sessions (stopped/crashed) still need user attention if they have messages
-  if (session.agent_status && DEAD_AGENT_STATUSES.has(session.agent_status)) {
+  if (dead) {
     return session.message_count > 0 && !session.is_pinned;
   }
   return isSessionEffectivelyIdle(session) &&
@@ -574,6 +691,7 @@ export interface CategorizedSessions {
 export function categorizeSessions(
   sessions: Record<string, InboxSession>,
   sessionsWithQueuedMessages: Set<string>,
+  pendingSendIds: ReadonlySet<string> = EMPTY_PENDING_SEND_IDS,
 ): CategorizedSessions {
   const sorted = sortSessions(sessions);
   const dismissed = Object.values(sessions)
@@ -607,16 +725,26 @@ export function categorizeSessions(
 
   const isTop = (s: InboxSession) => !subsWithParent.has(s._id);
 
+  // A pending send is in-flight work just like a locally-queued message: it
+  // pushes the session OUT of needs-input and INTO working. Fold the two sets
+  // so the existing isSessionWaitingForInput guard handles both with no extra
+  // param. A brand-new session (message_count 0) with a pending first message
+  // also belongs in Working, not New.
+  const inFlight = pendingSendIds.size === 0
+    ? sessionsWithQueuedMessages
+    : new Set<string>([...sessionsWithQueuedMessages, ...pendingSendIds]);
+  const hasPendingSend = (s: InboxSession) => pendingSendIds.has(s._id);
+
   const pinned = sorted.filter((s) => s.is_pinned && isTop(s));
-  const newSessions = sorted.filter((s) => s.message_count === 0 && !s.is_pinned && isTop(s))
+  const newSessions = sorted.filter((s) => s.message_count === 0 && !s.is_pinned && !hasPendingSend(s) && isTop(s))
     .sort((a, b) => (a.is_connected ? 1 : 0) - (b.is_connected ? 1 : 0));
-  const needsInput = sorted.filter((s) => isSessionWaitingForInput(s, sessionsWithQueuedMessages) && isTop(s))
+  const needsInput = sorted.filter((s) => isSessionWaitingForInput(s, inFlight) && isTop(s))
     .sort((a, b) => {
       // Deferred sessions sink to the bottom of the group; otherwise earliest-updated first.
       if (!!a.is_deferred !== !!b.is_deferred) return a.is_deferred ? 1 : -1;
       return (a.updated_at || 0) - (b.updated_at || 0);
     });
-  const working = sorted.filter((s) => (!isSessionWaitingForInput(s, sessionsWithQueuedMessages) && s.message_count > 0 && !s.is_pinned) && isTop(s));
+  const working = sorted.filter((s) => (!isSessionWaitingForInput(s, inFlight) && (s.message_count > 0 || hasPendingSend(s)) && !s.is_pinned) && isTop(s));
 
   return { sorted, pinned, newSessions, needsInput, working, dismissed, subsByParent, forksByParent };
 }
@@ -625,9 +753,10 @@ export function visualOrderSessions(
   sessions: Record<string, InboxSession>,
   sessionsWithQueuedMessages: Set<string>,
   projectFilter?: string | null,
+  pendingSendIds: ReadonlySet<string> = EMPTY_PENDING_SEND_IDS,
 ): InboxSession[] {
   const { pinned, newSessions, needsInput, working } =
-    categorizeSessions(sessions, sessionsWithQueuedMessages);
+    categorizeSessions(sessions, sessionsWithQueuedMessages, pendingSendIds);
   const result: InboxSession[] = [];
   for (const section of [pinned, newSessions, needsInput, working]) {
     for (const s of section) {
@@ -979,6 +1108,14 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
     transform(draft, table, incoming) {
       for (const s of incoming as any[]) {
         if (!draft.conversations[s._id]) draft.conversations[s._id] = { _id: s._id };
+        // Drop stale optimistic sends now that we have authoritative status —
+        // keeps phantom "pending" pills from pinning idle sessions in Working.
+        reconcilePendingSendForSession(
+          draft.pendingMessages,
+          s._id,
+          (table[s._id] as InboxSession | undefined) ?? s,
+          draft.currentSessionId,
+        );
       }
       if (!draft.currentSessionId && !draft.showMySessions &&
           Object.keys(table).length > 0 && draft.clientStateInitialized) {
@@ -1207,7 +1344,7 @@ export const useInboxStore = create<InboxStoreState>(
     let newSessionId = this.currentSessionId;
     if (this.currentSessionId && allIds.includes(this.currentSessionId)) {
       const removedSet = new Set(allIds);
-      const ordered = visualOrderSessions(this.sessions as Record<string, InboxSession>, this.sessionsWithQueuedMessages, this.activeProjectFilter);
+      const ordered = visualOrderSessions(this.sessions as Record<string, InboxSession>, this.sessionsWithQueuedMessages, this.activeProjectFilter, sessionsWithPendingSend(this.pendingMessages));
       const idx = ordered.findIndex(s => s._id === this.currentSessionId);
       const next = ordered.slice(idx + 1).find(s => !removedSet.has(s._id))
         ?? ordered.find(s => !removedSet.has(s._id));
@@ -1597,7 +1734,7 @@ export const useInboxStore = create<InboxStoreState>(
   },
 
   visualOrder: () => {
-    return visualOrderSessions(get().sessions, get().sessionsWithQueuedMessages, get().activeProjectFilter);
+    return visualOrderSessions(get().sessions, get().sessionsWithQueuedMessages, get().activeProjectFilter, sessionsWithPendingSend(get().pendingMessages));
   },
 
   // =====================
@@ -1738,7 +1875,7 @@ export const useInboxStore = create<InboxStoreState>(
   markKilling: action(function (this: Draft, id: string) {
     let newSessionId = this.currentSessionId;
     if (this.currentSessionId === id) {
-      const ordered = visualOrderSessions(this.sessions as Record<string, InboxSession>, this.sessionsWithQueuedMessages, this.activeProjectFilter);
+      const ordered = visualOrderSessions(this.sessions as Record<string, InboxSession>, this.sessionsWithQueuedMessages, this.activeProjectFilter, sessionsWithPendingSend(this.pendingMessages));
       const idx = ordered.findIndex(s => s._id === id);
       const next = ordered.slice(idx + 1).find(s => s._id !== id)
         ?? ordered.find(s => s._id !== id);
@@ -1759,7 +1896,7 @@ export const useInboxStore = create<InboxStoreState>(
     const pending = this.pendingMessages[convId] || [];
     if (pending.length > 0) {
       const serverUserMsgs = msgs.filter((m: Message) => m.role === "user");
-      this.pendingMessages[convId] = pending.filter((m: Message) => {
+      const kept = pending.filter((m: Message) => {
         if (m._clientId) {
           return !serverUserMsgs.some((s: Message) => s.client_id === m._clientId);
         }
@@ -1769,6 +1906,13 @@ export const useInboxStore = create<InboxStoreState>(
           Math.abs(s.timestamp - m.timestamp) < 120_000
         );
       });
+      // Only reassign when something was actually pruned. The filter is a
+      // remove-only pass, so equal length means identical contents — keeping
+      // the old reference avoids churning pendingMessages identity on every
+      // streaming tick while a send is in-flight (defeats SessionCard memo).
+      if (kept.length !== pending.length) {
+        this.pendingMessages[convId] = kept;
+      }
     }
     // Server data only — pending messages are merged at read time.
     //
@@ -1833,6 +1977,9 @@ export const useInboxStore = create<InboxStoreState>(
       timestamp: Date.now(),
       _isOptimistic: true,
       _clientId: id,
+      // Snapshot the conversation's current server updated_at so the absence-prune
+      // can later tell "server has processed my send" from "stale pre-send snapshot."
+      _sentBaselineTs: this.sessions[convId]?.updated_at,
       ...(images && images.length > 0 ? { images } : {}),
     };
     if (!this.pendingMessages[convId]) this.pendingMessages[convId] = [];
