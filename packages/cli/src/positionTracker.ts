@@ -1,49 +1,33 @@
 import * as fs from "fs";
 import * as path from "path";
+import { CachedJsonStore } from "./cachedJsonStore.js";
 
 const CONFIG_DIR = process.env.HOME + "/.codecast";
 const POSITIONS_FILE = path.join(CONFIG_DIR, "positions.json");
 
-interface Positions {
-  [filePath: string]: number;
-}
-
-function ensureConfigDir(): void {
-  if (!fs.existsSync(CONFIG_DIR)) {
-    fs.mkdirSync(CONFIG_DIR, { recursive: true });
-  }
-}
-
-function loadPositions(): Positions {
-  try {
-    if (fs.existsSync(POSITIONS_FILE)) {
-      return JSON.parse(fs.readFileSync(POSITIONS_FILE, "utf-8"));
+// Cached, debounced store. Reads hit memory; writes coalesce into a background
+// flush instead of synchronously rewriting the whole (formerly multi-megabyte,
+// monotonically-growing) file on every sync. Dead transcripts are pruned on load
+// so the file can't bloat unbounded — the root cause of the daemon falling behind.
+const store = new CachedJsonStore<number>({
+  filePath: POSITIONS_FILE,
+  keepOnLoad: (filePath) => {
+    try {
+      return fs.existsSync(filePath);
+    } catch {
+      return true; // transient stat failure — keep the entry rather than lose position
     }
-  } catch {
-    /* ignore parse errors, start fresh */
-  }
-  return {};
-}
-
-function savePositions(positions: Positions): void {
-  ensureConfigDir();
-  const tempFile = POSITIONS_FILE + ".tmp";
-  fs.writeFileSync(tempFile, JSON.stringify(positions, null, 2));
-  fs.renameSync(tempFile, POSITIONS_FILE);
-}
+  },
+});
 
 export function getPosition(filePath: string): number {
-  return loadPositions()[filePath] || 0;
+  return store.get(filePath) || 0;
 }
 
 export function setPosition(filePath: string, offset: number): void {
-  const positions = loadPositions();
-  positions[filePath] = offset;
-  savePositions(positions);
+  store.set(filePath, offset);
 }
 
 export function clearPosition(filePath: string): void {
-  const positions = loadPositions();
-  delete positions[filePath];
-  savePositions(positions);
+  store.delete(filePath);
 }
