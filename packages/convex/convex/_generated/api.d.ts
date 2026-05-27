@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as _authdiag from "../_authdiag.js";
 import type * as admin_mergeUser from "../admin_mergeUser.js";
 import type * as agentTasks from "../agentTasks.js";
 import type * as apiTokens from "../apiTokens.js";
@@ -25,6 +26,7 @@ import type * as daemonCommandUtils from "../daemonCommandUtils.js";
 import type * as daemonLogs from "../daemonLogs.js";
 import type * as data from "../data.js";
 import type * as decisions from "../decisions.js";
+import type * as devices from "../devices.js";
 import type * as dispatch from "../dispatch.js";
 import type * as docSync from "../docSync.js";
 import type * as docs from "../docs.js";
@@ -77,6 +79,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  _authdiag: typeof _authdiag;
   admin_mergeUser: typeof admin_mergeUser;
   agentTasks: typeof agentTasks;
   apiTokens: typeof apiTokens;
@@ -94,6 +97,7 @@ declare const fullApi: ApiFromModules<{
   daemonLogs: typeof daemonLogs;
   data: typeof data;
   decisions: typeof decisions;
+  devices: typeof devices;
   dispatch: typeof dispatch;
   docSync: typeof docSync;
   docs: typeof docs;

@@ -4,6 +4,7 @@ import {
   isOrphanOrSubagent,
   shouldShowInInbox,
   isSessionIdle,
+  nextAgentStatusOnAddMessages,
   AGENT_IDLE_GRACE_MS,
   type ConversationDoc,
   type SessionIdleInput,
@@ -216,5 +217,43 @@ describe("isSessionIdle", () => {
     expect(isSessionIdle(idleInput({ agentStatus: undefined, daemonAlive: true, recentlyUpdated: false }))).toBe(true);
     // Dead daemon, not recently updated → idle (needs user attention).
     expect(isSessionIdle(idleInput({ agentStatus: undefined, daemonAlive: false, recentlyUpdated: false }))).toBe(true);
+  });
+});
+
+describe("nextAgentStatusOnAddMessages", () => {
+  test("answering an AskUserQuestion (user tool_result) clears a stuck permission_blocked", () => {
+    // The core regression: the resume "working" hook was lost, so the session
+    // is latched in permission_blocked. The synced answer (user + tool_result)
+    // must clear it to "working".
+    expect(nextAgentStatusOnAddMessages("permission_blocked", false, true)).toBe("working");
+  });
+
+  test("the poll card itself (assistant, no user tool_result) never clears permission_blocked", () => {
+    // The synthetic AskUserQuestion poll is written as a role:"assistant" msg.
+    // It must NOT clear the block it represents.
+    expect(nextAgentStatusOnAddMessages("permission_blocked", true, false)).toBeNull();
+  });
+
+  test("a genuinely pending prompt is untouched by a free-form user chat", () => {
+    // Free-form user chat carries no tool_results, so hasToolResultReply=false.
+    expect(nextAgentStatusOnAddMessages("permission_blocked", false, false)).toBeNull();
+  });
+
+  test("assistant turn bumps an idle (grace-parked) session back to working", () => {
+    expect(nextAgentStatusOnAddMessages("idle", true, false)).toBe("working");
+  });
+
+  test("does not disturb already-active or other statuses", () => {
+    expect(nextAgentStatusOnAddMessages("working", true, true)).toBeNull();
+    expect(nextAgentStatusOnAddMessages("thinking", true, false)).toBeNull();
+    expect(nextAgentStatusOnAddMessages("stopped", false, true)).toBeNull();
+    // assistant msg does not clear permission_blocked (only a tool_result does)
+    expect(nextAgentStatusOnAddMessages("permission_blocked", true, false)).toBeNull();
+    // tool_result does not bump idle (only an assistant turn does)
+    expect(nextAgentStatusOnAddMessages("idle", false, true)).toBeNull();
+  });
+
+  test("no managed session status (undefined) is a no-op", () => {
+    expect(nextAgentStatusOnAddMessages(undefined, true, true)).toBeNull();
   });
 });

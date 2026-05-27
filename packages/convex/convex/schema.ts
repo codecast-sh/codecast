@@ -259,6 +259,11 @@ export default defineSchema({
     subagent_description: v.optional(v.string()),
     icon: v.optional(v.string()),
     icon_color: v.optional(v.string()),
+    // Which device currently OWNS (runs) this session. Set by the managing
+    // daemon. Absent = legacy/unowned. The single-owner invariant: a daemon
+    // only manages sessions whose owner_device_id matches its own device id.
+    // "Move to remote" flips this from the local device to the Mac's device.
+    owner_device_id: v.optional(v.string()),
   })
     .index("by_user_id", ["user_id"])
     .index("by_user_updated", ["user_id", "updated_at"])
@@ -286,6 +291,7 @@ export default defineSchema({
     .index("by_user_pinned", ["user_id", "inbox_pinned_at"])
     .index("by_user_dismissed", ["user_id", "inbox_dismissed_at"])
     .index("by_workflow_run", ["workflow_run_id"])
+    .index("by_owner_device", ["user_id", "owner_device_id"])
     .searchIndex("search_title_v2", {
       searchField: "title",
       filterFields: ["user_id"],
@@ -535,6 +541,23 @@ export default defineSchema({
     .index("by_conversation_status", ["conversation_id", "status"])
     .index("by_user_status", ["from_user_id", "status"]),
 
+  // One row per machine the user runs a codecast daemon on. The remote Mac is
+  // just another device. device_id is a stable hash of ~/.codecast/.machine_key
+  // (see remote/device.ts). Per-device fields (local_project_roots) live here
+  // rather than on the user doc, so multiple machines don't clobber each other.
+  devices: defineTable({
+    user_id: v.id("users"),
+    device_id: v.string(),
+    label: v.string(),
+    platform: v.string(),
+    last_seen: v.number(),
+    status: v.optional(v.union(v.literal("online"), v.literal("offline"))),
+    is_remote: v.optional(v.boolean()),
+    local_project_roots: v.optional(v.array(v.string())),
+  })
+    .index("by_user_id", ["user_id"])
+    .index("by_user_device", ["user_id", "device_id"]),
+
   managed_sessions: defineTable({
     session_id: v.string(),
     conversation_id: v.optional(v.id("conversations")),
@@ -562,7 +585,8 @@ export default defineSchema({
     .index("by_session_id", ["session_id"])
     .index("by_conversation_id", ["conversation_id"])
     .index("by_user_id", ["user_id"])
-    .index("by_user_heartbeat", ["user_id", "last_heartbeat"]),
+    .index("by_user_heartbeat", ["user_id", "last_heartbeat"])
+    .index("by_heartbeat", ["last_heartbeat"]),
 
   session_metrics: defineTable({
     session_id: v.string(),

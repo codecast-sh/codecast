@@ -123,6 +123,11 @@ export const daemonHeartbeat = mutation({
     local_project_roots: v.optional(v.array(v.string())),
     pending_sync_count: v.optional(v.number()),
     oldest_pending_ms: v.optional(v.number()),
+    // Device identity (remote/device.ts). When present, upsert a per-device
+    // row so multiple machines don't clobber each other's project roots.
+    device_id: v.optional(v.string()),
+    device_label: v.optional(v.string()),
+    is_remote_device: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token, false);
@@ -147,6 +152,36 @@ export const daemonHeartbeat = mutation({
       patch.local_project_roots_updated_at = now;
     }
     await ctx.db.patch(auth.userId, patch);
+
+    // Per-device row upsert (multi-machine). Additive: the user-doc write above
+    // stays for backward compat until the read path moves to devices (H4).
+    if (args.device_id) {
+      const existingDevice = await ctx.db
+        .query("devices")
+        .withIndex("by_user_device", (q) =>
+          q.eq("user_id", auth.userId).eq("device_id", args.device_id!),
+        )
+        .first();
+      const devicePatch = {
+        label: args.device_label ?? args.platform,
+        platform: args.platform,
+        last_seen: now,
+        status: "online" as const,
+        ...(args.is_remote_device !== undefined ? { is_remote: args.is_remote_device } : {}),
+        ...(args.local_project_roots !== undefined
+          ? { local_project_roots: args.local_project_roots }
+          : {}),
+      };
+      if (existingDevice) {
+        await ctx.db.patch(existingDevice._id, devicePatch);
+      } else {
+        await ctx.db.insert("devices", {
+          user_id: auth.userId,
+          device_id: args.device_id,
+          ...devicePatch,
+        });
+      }
+    }
 
     const allPendingCommands = await ctx.db
       .query("daemon_commands")

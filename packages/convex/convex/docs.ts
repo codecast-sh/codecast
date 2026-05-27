@@ -821,7 +821,7 @@ export const webListPaginated = query({
     // convMap/user/plan lookups below.
     const paginationOpts = {
       ...args.paginationOpts,
-      numItems: Math.min(args.paginationOpts.numItems, 30),
+      numItems: Math.min(args.paginationOpts.numItems, 12),
     };
     const cursor = parseCursor(paginationOpts.cursor);
 
