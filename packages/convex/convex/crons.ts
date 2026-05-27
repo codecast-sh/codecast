@@ -18,7 +18,10 @@ crons.interval(
 
 crons.interval(
   "retry stuck pending messages",
-  { seconds: 30 },
+  // Backstop only — the daemon drives live delivery via getPendingMessages. 30s was
+  // needlessly aggressive and (with the old full-table scan) drove a scheduler
+  // pileup. 60s keeps just-idle messages responsive while halving revive churn.
+  { seconds: 60 },
   internal.pendingMessages.retryStuckMessages
 );
 

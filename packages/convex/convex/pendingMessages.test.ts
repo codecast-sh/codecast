@@ -202,14 +202,28 @@ describe("planStuckMessageHeal", () => {
     expect(recent("injected", control, 3 * 60_000).kind).toBe("deliver_control");
   });
 
-  test("NEVER touches a pending message — the daemon owns it, and bumping retry_count here was the bug", () => {
-    expect(recent("pending").kind).toBe("skip");
+  test("leaves a fresh pending message to the daemon's live subscription", () => {
+    // Within the in-flight grace the daemon owns delivery — the cron must not race it
+    // (and must never bump retry_count for waiting time, the original pending bug).
+    expect(recent("pending", "real text", 30_000).kind).toBe("skip");
   });
 
-  test("revives stranded messages regardless of age — a pending message must always reach delivery", () => {
+  test("revives an abandoned pending message — a dropped status-write left it with no backstop", () => {
+    // Past the grace, a still-pending row provably never landed (a delivered message is promoted
+    // to terminal "delivered" by the content-match ack), so reviving it can't duplicate delivery.
+    expect(recent("pending", "real text", 3 * 60_000).kind).toBe("repend");
+  });
+
+  test("does NOT revive a pending poll-keystroke control message (re-pending could double-select)", () => {
+    const control = '{"__cc_poll":true,"keys":["2"],"display":"Commit everything together"}';
+    expect(recent("pending", control, 3 * 60_000).kind).toBe("skip");
+  });
+
+  test("revives stranded messages regardless of age — a message must always reach delivery", () => {
     const old = 9 * 60 * 60_000; // 9h, well past the former 1h heal window
     expect(recent("undeliverable", "hi", old).kind).toBe("repend");
     expect(recent("failed", "hi", old).kind).toBe("repend");
     expect(recent("injected", "real text", old).kind).toBe("repend");
+    expect(recent("pending", "real text", old).kind).toBe("repend");
   });
 });
