@@ -1,5 +1,6 @@
 import { ConvexHttpClient, ConvexClient } from "convex/browser";
 import { redactSecrets } from "./redact.js";
+import { deviceId } from "./remote/device.js";
 import { hashPath } from "./hash.js";
 
 const MAX_CONTENT_SIZE = 100_000;
@@ -14,7 +15,7 @@ const MAX_IMAGES_PER_MESSAGE = 10;
 const MIN_REQUEST_INTERVAL_MS = 100;
 
 const ADD_MESSAGES_BATCH_TIMEOUT_MS = 60_000;
-const ADD_MESSAGES_BATCH_SIZE = 10;
+const ADD_MESSAGES_BATCH_SIZE = 25;
 // uploadImage runs *before* the timed addMessages batch, so an un-timed upload
 // hang (slow network / contended backend) wedges the whole chunk: the file-watcher
 // can't advance its position past the image message and every later turn stops
@@ -152,6 +153,15 @@ export class SyncService {
   // Per-network-leg deadline for image uploads. A field (not the bare constant)
   // only so tests can shorten it; production always uses UPLOAD_IMAGE_TIMEOUT_MS.
   private imageUploadTimeoutMs = UPLOAD_IMAGE_TIMEOUT_MS;
+  // Serializes addMessages per conversation. The server's addMessages reads+patches
+  // the conversation document on every batch, so two addMessages for the SAME
+  // conversation running at once collide on that one doc — Convex OCC-retries the
+  // loser, and under sustained concurrency (live file-watch sync + the watchdog +
+  // reconciliation + the retry queue all targeting one active conversation) a write
+  // can retry-starve past the 60s client timeout, re-queue, and snowball into a
+  // permanent "sync stalled". Different conversations write different docs and stay
+  // fully parallel; only same-conversation writes are chained.
+  private conversationWriteChains = new Map<string, Promise<unknown>>();
 
   constructor(config: SyncConfig) {
     this.client = new ConvexHttpClient(config.convexUrl);
@@ -187,6 +197,27 @@ export class SyncService {
 
   setApiToken(token: string): void {
     this.apiToken = token;
+  }
+
+  private async existingMessageUuids(conversationId: string, messageUuids: string[]): Promise<Set<string> | null> {
+    if (messageUuids.length === 0) return new Set();
+    await this.throttle();
+    try {
+      const existing = await this.client.query(
+        "messages:existingMessageUuids" as any,
+        {
+          conversation_id: conversationId,
+          message_uuids: messageUuids,
+          api_token: this.apiToken,
+        }
+      );
+      return new Set(Array.isArray(existing) ? existing : []);
+    } catch (error) {
+      if (isAuthError(error)) {
+        throw new AuthExpiredError();
+      }
+      return null;
+    }
   }
 
   // Offload large inline images to Convex storage *before* the messages enter
@@ -535,6 +566,7 @@ export class SyncService {
       images?: Array<{ mediaType: string; data?: string; storageId?: string; toolUseId?: string }>;
       subtype?: string;
     }>;
+    reconcileRemoteExisting?: boolean;
   }): Promise<{ inserted: number; ids: string[] }> {
     if (params.messages.length === 0) {
       return { inserted: 0, ids: [] };
@@ -600,6 +632,22 @@ export class SyncService {
       });
     }
 
+    let sendMessages = preparedMessages;
+    if (params.reconcileRemoteExisting) {
+      const uuids = sendMessages
+        .map((msg) => msg.message_uuid)
+        .filter((uuid): uuid is string => typeof uuid === "string" && uuid.length > 0);
+      if (uuids.length > 0) {
+        const existing = await this.existingMessageUuids(params.conversationId, uuids);
+        if (existing && existing.size > 0) {
+          sendMessages = sendMessages.filter((msg) => !msg.message_uuid || !existing.has(msg.message_uuid));
+          if (sendMessages.length === 0) {
+            return { inserted: 0, ids: [] };
+          }
+        }
+      }
+    }
+
     // Batch by bytes, not just count. A single message can carry a large
     // inline image (up to MAX_INLINE_IMAGE_SIZE when Convex storage upload
     // fails), so a count-only cap of BATCH_SIZE lets an image-heavy batch grow
@@ -608,37 +656,60 @@ export class SyncService {
     // every retry identically, and because sync advances the file position only
     // after a batch lands, the whole tail behind it stays stuck forever. An
     // oversized single message still goes out alone (one message can't split).
-    const batches = chunkMessagesBySize(preparedMessages);
-    let totalInserted = 0;
-    const allIds: string[] = [];
+    const batches = chunkMessagesBySize(sendMessages);
 
-    for (const batch of batches) {
-      await this.throttle();
-      try {
-        const result = await withTimeout(
-          this.client.mutation(
-            "messages:addMessages" as any,
-            {
-              conversation_id: params.conversationId,
-              messages: batch,
-              api_token: this.apiToken,
-            }
-          ),
-          ADD_MESSAGES_BATCH_TIMEOUT_MS,
-          `addMessages batch (${batch.length} msgs)`
-        );
-        const typed = result as { inserted: number; ids: string[] };
-        totalInserted += typed.inserted;
-        allIds.push(...typed.ids);
-      } catch (error) {
-        if (isAuthError(error)) {
-          throw new AuthExpiredError();
+    // Serialize the actual writes per conversation so concurrent sync triggers
+    // don't stampede the one conversation doc (see conversationWriteChains).
+    return this.withConversationLock(params.conversationId, async () => {
+      let totalInserted = 0;
+      const allIds: string[] = [];
+
+      for (const batch of batches) {
+        await this.throttle();
+        try {
+          const result = await withTimeout(
+            this.client.mutation(
+              "messages:addMessages" as any,
+              {
+                conversation_id: params.conversationId,
+                messages: batch,
+                api_token: this.apiToken,
+              }
+            ),
+            ADD_MESSAGES_BATCH_TIMEOUT_MS,
+            `addMessages batch (${batch.length} msgs)`
+          );
+          const typed = result as { inserted: number; ids: string[] };
+          totalInserted += typed.inserted;
+          allIds.push(...typed.ids);
+        } catch (error) {
+          if (isAuthError(error)) {
+            throw new AuthExpiredError();
+          }
+          throw error;
         }
-        throw error;
       }
-    }
 
-    return { inserted: totalInserted, ids: allIds };
+      return { inserted: totalInserted, ids: allIds };
+    });
+  }
+
+  // Runs `fn` after any in-flight addMessages for the same conversation settles,
+  // so writes to one conversation doc never overlap (the OCC-stampede fix above).
+  // Each call chains onto the previous one's settled tail; errors are isolated so
+  // one failed write can't reject the next queued write. Map entries self-GC when a
+  // conversation's chain drains. Distinct conversations never share a chain.
+  private withConversationLock<T>(convId: string, fn: () => Promise<T>): Promise<T> {
+    const prev = this.conversationWriteChains.get(convId) ?? Promise.resolve();
+    const run = prev.then(fn, fn);
+    const tail = run.then(() => {}, () => {});
+    this.conversationWriteChains.set(convId, tail);
+    tail.then(() => {
+      if (this.conversationWriteChains.get(convId) === tail) {
+        this.conversationWriteChains.delete(convId);
+      }
+    });
+    return run;
   }
 
   async updateSyncCursor(params: {
@@ -739,15 +810,20 @@ export class SyncService {
     } catch {}
   }
 
-  async registerManagedSession(sessionId: string, pid: number, tmuxSession?: string, conversationId?: string): Promise<void> {
+  async registerManagedSession(sessionId: string, pid: number, tmuxSession?: string, conversationId?: string): Promise<{ notOwner?: boolean; owner?: string } | void> {
     try {
-      await this.client.mutation("managedSessions:registerManagedSession" as any, {
+      const res = await this.client.mutation("managedSessions:registerManagedSession" as any, {
         session_id: sessionId,
         pid,
         tmux_session: tmuxSession,
         conversation_id: conversationId,
         api_token: this.apiToken,
+        device_id: deviceId(),
       });
+      // Single-owner invariant: another live device owns this session → caller backs off.
+      if (res && typeof res === "object" && (res as any).notOwner) {
+        return { notOwner: true, owner: (res as any).owner };
+      }
     } catch {}
   }
 
@@ -901,6 +977,25 @@ export class SyncService {
         {
           conversation_id: conversationId,
           error,
+          api_token: this.apiToken,
+        }
+      );
+    } catch {}
+  }
+
+  /**
+   * Claim a conversation for this device on a successful start: stamps
+   * owner_device_id and clears any stale session_error (e.g. a "clone it first"
+   * refusal another device wrote when it lacked the checkout).
+   */
+  async claimSession(conversationId: string): Promise<void> {
+    if (!this.apiToken) return;
+    try {
+      await this.client.mutation(
+        "devices:claimConversation" as any,
+        {
+          conversation_id: conversationId,
+          device_id: deviceId(),
           api_token: this.apiToken,
         }
       );

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
-import { classifyTranscriptTail, paneReconcileTarget, reconciledStatus } from "./daemon.js";
+import { classifyCodexTranscriptTail, classifyTranscriptTail, paneReconcileTarget, reconciledStatus, transcriptTailLastRealRole, permissionBlockedRecoveryTarget } from "./daemon.js";
 import type { TranscriptTurnState } from "./daemon.js";
 
 // Regression test for the "session stuck in 'working' (or 'stopped') forever" bug,
@@ -55,6 +55,52 @@ describe("classifyTranscriptTail", () => {
     expect(classifyTranscriptTail("")).toBe("unknown");
     expect(classifyTranscriptTail([sysMeta(), sysMeta()].join("\n"))).toBe("unknown");
     expect(classifyTranscriptTail("not json at all")).toBe("unknown");
+  });
+});
+
+// Codex has no Stop-hook equivalent and its watcher-driven idle transition rides a
+// setTimeout that dies across macOS sleep, so the heartbeat-driven transcript
+// reconcile is its only durable latch recovery. These fixtures mirror the real
+// ~/.codex rollout JSONL shape (event_msg turn-boundary records).
+const codexEvt = (type: string) => JSON.stringify({ type: "event_msg", payload: { type } });
+const codexResp = (ptype: string) => JSON.stringify({ type: "response_item", payload: { type: ptype } });
+
+describe("classifyCodexTranscriptTail", () => {
+  test("turn completed -> idle (the latched-working case)", () => {
+    expect(classifyCodexTranscriptTail(codexEvt("task_complete"))).toBe("idle");
+    expect(classifyCodexTranscriptTail(codexEvt("turn_aborted"))).toBe("idle");
+  });
+
+  test("turn in flight (task_started / fresh user_message) -> active", () => {
+    expect(classifyCodexTranscriptTail(codexEvt("task_started"))).toBe("active");
+    expect(classifyCodexTranscriptTail(codexEvt("user_message"))).toBe("active");
+  });
+
+  test("scans past intra-turn noise to the last boundary event", () => {
+    // Real tail shape: a completed turn trailed by token_count / agent_message /
+    // response_item deltas — must still read as idle.
+    expect(classifyCodexTranscriptTail([
+      codexEvt("task_started"),
+      codexResp("function_call"),
+      codexEvt("agent_message"),
+      codexEvt("task_complete"),
+      codexEvt("token_count"),
+      codexResp("message"),
+    ].join("\n"))).toBe("idle");
+  });
+
+  test("a new turn after a completed one reads as active", () => {
+    expect(classifyCodexTranscriptTail([
+      codexEvt("task_complete"),
+      codexEvt("user_message"),
+      codexEvt("task_started"),
+    ].join("\n"))).toBe("active");
+  });
+
+  test("no boundary event / unparseable -> unknown (defer)", () => {
+    expect(classifyCodexTranscriptTail("")).toBe("unknown");
+    expect(classifyCodexTranscriptTail([codexResp("reasoning"), codexEvt("token_count")].join("\n"))).toBe("unknown");
+    expect(classifyCodexTranscriptTail("not json")).toBe("unknown");
   });
 });
 
@@ -161,6 +207,47 @@ describe("classifyTranscriptTail on real transcripts", () => {
       fs.closeSync(fd);
       const turn = classifyTranscriptTail(buf.toString("utf8"));
       expect(["idle", "active", "unknown"]).toContain(turn);
+    }
+  });
+});
+
+// Daemon-side recovery for a permission_blocked latch (the one status reconciledStatus
+// and the pane reconcile both refuse to touch). When the resume "working" hook after a
+// user answers an AskUserQuestion is lost, the session freezes in "Needs Input". The
+// transcript distinguishes answered (tail ends in a user turn) from still-pending (tail
+// ends in the assistant tool_use).
+describe("transcriptTailLastRealRole", () => {
+  test("answered prompt: tail ends in a user turn (tool_result)", () => {
+    expect(transcriptTailLastRealRole([asst("tool_use"), userMsg("tool_result")].join("\n"))).toBe("user");
+  });
+  test("pending prompt: tail ends in the assistant tool_use", () => {
+    expect(transcriptTailLastRealRole(asst("tool_use"))).toBe("assistant");
+  });
+  test("skips system/meta lines to the last real message", () => {
+    expect(transcriptTailLastRealRole([userMsg("tool_result"), sysMeta()].join("\n"))).toBe("user");
+    expect(transcriptTailLastRealRole([asst("tool_use"), sysMeta()].join("\n"))).toBe("assistant");
+  });
+  test("partial/corrupt final line is skipped", () => {
+    expect(transcriptTailLastRealRole([userMsg("tool_result"), '{"type":"assi'].join("\n"))).toBe("user");
+  });
+  test("nothing real -> null", () => {
+    expect(transcriptTailLastRealRole([sysMeta(), ""].join("\n"))).toBeNull();
+  });
+});
+
+describe("permissionBlockedRecoveryTarget", () => {
+  test("permission_blocked + answered (user tail) -> working", () => {
+    expect(permissionBlockedRecoveryTarget("permission_blocked", "user")).toBe("working");
+  });
+  test("permission_blocked + still pending (assistant tail) -> defer", () => {
+    expect(permissionBlockedRecoveryTarget("permission_blocked", "assistant")).toBeNull();
+  });
+  test("permission_blocked + unparseable tail -> defer", () => {
+    expect(permissionBlockedRecoveryTarget("permission_blocked", null)).toBeNull();
+  });
+  test("only acts on permission_blocked; leaves every other status alone", () => {
+    for (const s of ["working", "idle", "thinking", "connected", "stopped", "resuming", undefined] as const) {
+      expect(permissionBlockedRecoveryTarget(s, "user")).toBeNull();
     }
   });
 });

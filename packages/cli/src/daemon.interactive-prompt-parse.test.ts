@@ -134,6 +134,106 @@ describe("parseInteractivePrompt option descriptions", () => {
   });
 });
 
+// Newer AskUserQuestion menus print a short label "chip" ("□ Stale pending policy")
+// on its own line above the question, and the question itself wraps across several
+// rows. The scrape used to drop the chip (no header on the web card) and take only the
+// LAST wrapped line as the question (a mid-sentence fragment). These cover both fixes.
+describe("parseInteractivePrompt header chip + wrapped question", () => {
+  test("extracts the header chip and stitches a multi-line wrapped question", () => {
+    const menu = [
+      "────────────────────────────────────────────────────",
+      "□ Stale pending policy",
+      "",
+      "How should old undelivered pending messages be resolved? (Today they strand",
+      "after 1h and pin the session in 'Working' forever.)",
+      "",
+      "❯ 1. Deliver if recent, else resolve",
+      "     Keep reviving + delivering (resume the session) up to a cutoff (e.g. 24h); anything older is marked terminal so it drops",
+      "     out of Working WITHOUT injecting into a long-dead session. No 'really old' state, no surprise resurrection of sessions",
+      "     you've moved on from.",
+      "  2. Always deliver, any age",
+      "     Healer revives at any age; daemon resumes even long-finished sessions to inject. Literal 'send them'.",
+      "  3. Resolve only, never auto-inject",
+      "     Old strays are marked terminal + flag cleared so they leave Working; never auto-injected.",
+      "  4. Type something.",
+      "────────────────",
+      "  5. Chat about this",
+      "",
+      "Enter to select · ↑/↓ to navigate · Esc to cancel",
+    ].join("\n");
+
+    const prompt = parseInteractivePrompt(menu);
+    expect(prompt).not.toBeNull();
+    expect(prompt!.header).toBe("Stale pending policy");
+    // The full question, not just the trailing "after 1h …" fragment.
+    expect(prompt!.question).toBe(
+      "How should old undelivered pending messages be resolved? (Today they strand after 1h and pin the session in 'Working' forever.)",
+    );
+    expect(prompt!.options.map(o => o.label)).toEqual([
+      "Deliver if recent, else resolve",
+      "Always deliver, any age",
+      "Resolve only, never auto-inject",
+      "Type something.",
+      "Chat about this",
+    ]);
+  });
+
+  // The selected option's `preview` renders as a box to the RIGHT of the options, and a
+  // standalone "Notes: press n to add notes" line sits below them. The header chip and a
+  // single-line question must survive; the box art must be dropped; and the "n to add
+  // notes" footer must validate the menu even when no option is pre-selected (no ❯).
+  test("single-line header + right-hand preview box + 'n to add notes' footer", () => {
+    const menu = [
+      "──────────────────────────────────────",
+      "□ Direction",
+      "",
+      "How do you want to proceed on the budget work?",
+      "",
+      "  1. Ship the small fix first        ┌───────────────────────────────────────────┐",
+      "  2. Write the v4 design doc         │ Step 1: dedicated outreach_generation bucket │",
+      "  3. Both, in sequence               │         (+ regression test, verify)          │",
+      "                                     │ Step 2: v4 design doc (_ctx-extension)       │",
+      "                                     │                                              │",
+      "                                     │ Stops the bleeding now AND lands             │",
+      "                                     │ the durable architecture proposal.           │",
+      "                                     └───────────────────────────────────────────┘",
+      "",
+      "              Notes: press n to add notes",
+      "",
+      "Chat about this",
+    ].join("\n");
+
+    const prompt = parseInteractivePrompt(menu);
+    expect(prompt).not.toBeNull();
+    expect(prompt!.header).toBe("Direction");
+    expect(prompt!.question).toBe("How do you want to proceed on the budget work?");
+    expect(prompt!.options.map(o => o.label)).toEqual([
+      "Ship the small fix first",
+      "Write the v4 design doc",
+      "Both, in sequence",
+    ]);
+    const boxArt = /[─-╿]/;
+    expect(prompt!.question).not.toMatch(boxArt);
+    for (const o of prompt!.options) {
+      expect(o.label).not.toMatch(boxArt);
+      if (o.description !== undefined) expect(o.description).not.toMatch(boxArt);
+    }
+  });
+
+  test("legacy menu with no chip yields no header", () => {
+    const menu = [
+      "Pick an instance type",
+      "❯ 1. mac2-m2pro.metal",
+      "  2. mac2.metal",
+      "Enter to select · Esc to cancel",
+    ].join("\n");
+
+    const prompt = parseInteractivePrompt(menu);
+    expect(prompt!.header).toBeUndefined();
+    expect(prompt!.question).toBe("Pick an instance type");
+  });
+});
+
 // The real AskUserQuestion tool_use lands in the JSONL (full fidelity) while the
 // prompt blocks, so the daemon must NOT also emit a degraded scraped card. This
 // drives that decision: a scrape defers iff the latest AskUserQuestion is unanswered.

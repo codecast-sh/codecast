@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { Command } from "commander";
 import { registerWorkspaceCommand } from "./workspace/cli.js";
+import { registerRemoteCommand } from "./remote/cli.js";
 import open from "open";
 import * as fs from "fs";
 import * as path from "path";
@@ -8,11 +9,13 @@ import * as os from "os";
 import { spawn, spawnSync, execSync } from "child_process";
 import { fileURLToPath } from "url";
 import { maskToken } from "./redact.js";
+import { cliFetch, cliFetchRead } from "./cliHttp.js";
 import { CODECAST_STATUS_HOOK } from "./statusHook.js";
 import { AuthServer } from "./authServer.js";
 import { c, fmt, icons } from "./colors.js";
 import { ensureTmux, tryInstallTmux } from "./tmux.js";
 import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, ensureCastAlias } from "./update.js";
+import { checkForDesktopUpdate } from "./desktopUpdate.js";
 import { glob } from "glob";
 import { getPosition, setPosition } from "./positionTracker.js";
 import { encryptToken, decryptToken, isEncryptedToken, TokenDecryptError } from "./tokenEncryption.js";
@@ -726,7 +729,7 @@ async function fetchAllMessages(
   maxMessages: number = 500,
   fullContent: boolean = false
 ): Promise<FullReadResult | { error: string }> {
-  const firstResponse = await fetch(`${siteUrl}/cli/read`, {
+  const firstResponse = await cliFetchRead(`${siteUrl}/cli/read`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -749,7 +752,7 @@ async function fetchAllMessages(
   let currentLine = 26;
   while (currentLine <= totalMessages && currentLine <= maxMessages) {
     const endLine = Math.min(currentLine + 24, totalMessages, maxMessages);
-    const response = await fetch(`${siteUrl}/cli/read`, {
+    const response = await cliFetchRead(`${siteUrl}/cli/read`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -1807,7 +1810,7 @@ async function updateSyncSettingsOnServer(config: Config): Promise<void> {
 
   try {
     const siteUrl = config.convex_url.replace(".cloud", ".site");
-    await fetch(`${siteUrl}/cli/sync-settings/update`, {
+    await cliFetch(`${siteUrl}/cli/sync-settings/update`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -2865,6 +2868,7 @@ program
   });
 
 registerWorkspaceCommand(program);
+registerRemoteCommand(program);
 
 program
   .command("auth")
@@ -3074,7 +3078,7 @@ program
 
     for (const fix of fixes) {
       try {
-        const response = await fetch(`${siteUrl}/api/mutation`, {
+        const response = await cliFetch(`${siteUrl}/api/mutation`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -3158,7 +3162,7 @@ program
     console.log(`Healing historical sessions (dismiss threshold: ${dismissOlderThanDays}d)\n`);
 
     for (;;) {
-      const response = await fetch(`${siteUrl}/api/mutation`, {
+      const response = await cliFetch(`${siteUrl}/api/mutation`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -3366,7 +3370,22 @@ program
     if (retryOps.length === 0) {
       row("Items", fmt.success("0") + fmt.muted(" (empty)"), 2);
     } else {
-      row("Items", fmt.number(retryOps.length) + fmt.muted(" pending retry"), 2);
+      const grouped = new Set<string>();
+      let logical = 0;
+      for (const op of retryOps) {
+        if (op?.type === "addMessages" && typeof op?.params?.conversationId === "string") {
+          grouped.add(op.params.conversationId);
+        } else {
+          logical++;
+        }
+      }
+      logical += grouped.size;
+      row(
+        "Items",
+        fmt.number(logical) + fmt.muted(` pending stream${logical === 1 ? "" : "s"}`) +
+          (retryOps.length !== logical ? fmt.muted(` (${retryOps.length} raw chunks)`) : ""),
+        2,
+      );
       for (const op of retryOps.slice(0, 3)) {
         const attempts = op.attempts || 0;
         console.log(`      ${fmt.muted(icons.bullet)} ${fmt.value(op.type)} ${fmt.muted(`(attempt ${attempts}/${10})`)}`);
@@ -3618,7 +3637,7 @@ async function fetchTeams(config: Config): Promise<Team[]> {
   if (!config.auth_token || !config.convex_url) return [];
   try {
     const siteUrl = config.convex_url.replace(".cloud", ".site");
-    const response = await fetch(`${siteUrl}/cli/teams`, {
+    const response = await cliFetchRead(`${siteUrl}/cli/teams`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ api_token: config.auth_token }),
@@ -3635,7 +3654,7 @@ async function fetchProjectsWithTeams(config: Config): Promise<ProjectWithTeam[]
   if (!config.auth_token || !config.convex_url) return [];
   try {
     const siteUrl = config.convex_url.replace(".cloud", ".site");
-    const response = await fetch(`${siteUrl}/cli/teams/projects`, {
+    const response = await cliFetchRead(`${siteUrl}/cli/teams/projects`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ api_token: config.auth_token, limit: 30 }),
@@ -3660,7 +3679,7 @@ async function updateDirectoryMapping(config: Config, pathPrefix: string, teamId
     if (teamId !== null) {
       body.team_id = teamId;
     }
-    const response = await fetch(`${siteUrl}/cli/teams/mappings/update`, {
+    const response = await cliFetch(`${siteUrl}/cli/teams/mappings/update`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -3684,7 +3703,7 @@ async function countConversationsForPath(config: Config, pathPrefix: string): Pr
   if (!config.auth_token || !config.convex_url) return 0;
   try {
     const siteUrl = config.convex_url.replace(".cloud", ".site");
-    const response = await fetch(`${siteUrl}/cli/conversations/count`, {
+    const response = await cliFetchRead(`${siteUrl}/cli/conversations/count`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ api_token: config.auth_token, path_prefix: pathPrefix }),
@@ -3701,7 +3720,7 @@ async function deleteConversationsForPath(config: Config, pathPrefix: string): P
   if (!config.auth_token || !config.convex_url) return { conversationsDeleted: 0, messagesDeleted: 0 };
   try {
     const siteUrl = config.convex_url.replace(".cloud", ".site");
-    const response = await fetch(`${siteUrl}/cli/conversations/delete-by-path`, {
+    const response = await cliFetch(`${siteUrl}/cli/conversations/delete-by-path`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ api_token: config.auth_token, path_prefix: pathPrefix }),
@@ -4319,7 +4338,7 @@ program
     }
 
     try {
-      const response = await fetch(`${siteUrl}/cli/search`, {
+      const response = await cliFetchRead(`${siteUrl}/cli/search`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -4412,7 +4431,7 @@ program
     }
 
     try {
-      const response = await fetch(`${siteUrl}/cli/feed`, {
+      const response = await cliFetchRead(`${siteUrl}/cli/feed`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -4494,7 +4513,7 @@ program
     }
 
     try {
-      const response = await fetch(`${siteUrl}/cli/feed`, {
+      const response = await cliFetchRead(`${siteUrl}/cli/feed`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -4765,7 +4784,7 @@ async function selectAndAttachFromLiveSessions(
 
   if (sessionIds.length > 0) {
     try {
-      const resp = await fetch(`${siteUrl}/cli/sessions`, {
+      const resp = await cliFetchRead(`${siteUrl}/cli/sessions`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ api_token: config.auth_token, session_ids: sessionIds }),
@@ -4904,7 +4923,7 @@ program
 
     if (exactSessionId) {
       try {
-        const sessionLookupResponse = await fetch(`${siteUrl}/cli/sessions`, {
+        const sessionLookupResponse = await cliFetchRead(`${siteUrl}/cli/sessions`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -4974,7 +4993,7 @@ program
     const isShortId = queryWords.length === 1 && /^[a-z0-9]{5,10}$/i.test(queryWords[0]) && !exactSessionId;
     if (isShortId) {
       try {
-        const exportResp = await fetch(`${siteUrl}/cli/export`, {
+        const exportResp = await cliFetchRead(`${siteUrl}/cli/export`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -5058,7 +5077,7 @@ program
     }));
 
     const fetchResumePage = async (offset: number): Promise<{ conversations: any[]; hasMore: boolean }> => {
-      const response = await fetch(`${siteUrl}/cli/feed`, {
+      const response = await cliFetchRead(`${siteUrl}/cli/feed`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -5542,7 +5561,7 @@ function launchCodex(sessionId: string, extraArgs?: string, showArgsHint?: boole
 async function fetchLocalCheckouts(siteUrl: string, apiToken: string, gitRemoteUrl: string): Promise<string[]> {
   if (!gitRemoteUrl) return [];
   try {
-    const resp = await fetch(`${siteUrl}/cli/local-checkouts`, {
+    const resp = await cliFetchRead(`${siteUrl}/cli/local-checkouts`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ api_token: apiToken, git_remote_url: gitRemoteUrl }),
@@ -5679,7 +5698,7 @@ program
     const siteUrl = config.convex_url.replace(".cloud", ".site");
 
     try {
-      const response = await fetch(`${siteUrl}/cli/read`, {
+      const response = await cliFetchRead(`${siteUrl}/cli/read`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -6548,7 +6567,7 @@ program
     const siteUrl = config.convex_url.replace(".cloud", ".site");
 
     const getLinks = async (): Promise<{ dashboard_url: string; share_url: string; title?: string; slug?: string; started_at?: number } | null> => {
-      const response = await fetch(`${siteUrl}/cli/session-links`, {
+      const response = await cliFetchRead(`${siteUrl}/cli/session-links`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -6625,7 +6644,7 @@ program
         ? new Date().setHours(0, 0, 0, 0)
         : now - 7 * 24 * 60 * 60 * 1000;
 
-      const feedResponse = await fetch(`${siteUrl}/cli/feed`, {
+      const feedResponse = await cliFetchRead(`${siteUrl}/cli/feed`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -6763,7 +6782,7 @@ program
       }
 
       try {
-        const feedResponse = await fetch(`${siteUrl}/cli/feed`, {
+        const feedResponse = await cliFetchRead(`${siteUrl}/cli/feed`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -6836,7 +6855,7 @@ program
       const todayStart = new Date();
       todayStart.setHours(0, 0, 0, 0);
 
-      const feedResponse = await fetch(`${siteUrl}/cli/feed`, {
+      const feedResponse = await cliFetchRead(`${siteUrl}/cli/feed`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -7107,7 +7126,7 @@ program
 
     if (options.list) {
       try {
-        const response = await fetch(`${siteUrl}/cli/bookmark/list`, {
+        const response = await cliFetchRead(`${siteUrl}/cli/bookmark/list`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -7151,7 +7170,7 @@ program
 
     if (options.delete) {
       try {
-        const response = await fetch(`${siteUrl}/cli/bookmark/delete`, {
+        const response = await cliFetch(`${siteUrl}/cli/bookmark/delete`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -7188,7 +7207,7 @@ program
     }
 
     try {
-      const response = await fetch(`${siteUrl}/cli/bookmark`, {
+      const response = await cliFetch(`${siteUrl}/cli/bookmark`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -7260,7 +7279,7 @@ program
       const tags = options.tags ? options.tags.split(",").map((t: string) => t.trim()) : undefined;
 
       try {
-        const response = await fetch(`${siteUrl}/cli/decisions/add`, {
+        const response = await cliFetch(`${siteUrl}/cli/decisions/add`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -7297,7 +7316,7 @@ program
       }
 
       try {
-        const response = await fetch(`${siteUrl}/cli/decisions/delete`, {
+        const response = await cliFetch(`${siteUrl}/cli/decisions/delete`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -7328,7 +7347,7 @@ program
     const projectPath = options.project === "." ? process.cwd() : options.project;
 
     try {
-      const response = await fetch(`${siteUrl}/cli/decisions`, {
+      const response = await cliFetchRead(`${siteUrl}/cli/decisions`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -7401,7 +7420,7 @@ program
       const tags = options.tags ? options.tags.split(",").map((t: string) => t.trim()) : undefined;
 
       try {
-        const response = await fetch(`${siteUrl}/cli/patterns/add`, {
+        const response = await cliFetch(`${siteUrl}/cli/patterns/add`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -7440,7 +7459,7 @@ program
       }
 
       try {
-        const response = await fetch(`${siteUrl}/cli/patterns/show`, {
+        const response = await cliFetchRead(`${siteUrl}/cli/patterns/show`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -7469,7 +7488,7 @@ program
       const limit = parseInt(options.limit);
 
       try {
-        const response = await fetch(`${siteUrl}/cli/patterns`, {
+        const response = await cliFetchRead(`${siteUrl}/cli/patterns`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -7502,7 +7521,7 @@ program
       }
 
       try {
-        const response = await fetch(`${siteUrl}/cli/patterns/delete`, {
+        const response = await cliFetch(`${siteUrl}/cli/patterns/delete`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -7530,7 +7549,7 @@ program
     const tags = options.tags ? options.tags.split(",").map((t: string) => t.trim()) : undefined;
 
     try {
-      const response = await fetch(`${siteUrl}/cli/patterns`, {
+      const response = await cliFetchRead(`${siteUrl}/cli/patterns`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -7585,7 +7604,7 @@ program
     const limit = parseInt(options.limit);
 
     try {
-      const response = await fetch(`${siteUrl}/cli/similar`, {
+      const response = await cliFetchRead(`${siteUrl}/cli/similar`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -7645,7 +7664,7 @@ program
     const limit = parseInt(options.limit);
 
     try {
-      const response = await fetch(`${siteUrl}/cli/blame`, {
+      const response = await cliFetchRead(`${siteUrl}/cli/blame`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -7735,7 +7754,7 @@ program
         process.exit(1);
       }
 
-      const linksResp = await fetch(`${siteUrl}/cli/session-links`, {
+      const linksResp = await cliFetchRead(`${siteUrl}/cli/session-links`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ session_id: sessionId, api_token: config.auth_token }),
@@ -7779,7 +7798,7 @@ program
 
     try {
       console.log(messageUuid ? `Forking from message...` : `Forking entire conversation...`);
-      const response = await fetch(`${siteUrl}/cli/fork`, {
+      const response = await cliFetch(`${siteUrl}/cli/fork`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -7892,7 +7911,7 @@ program
     const siteUrl = config.convex_url.replace(".cloud", ".site");
 
     try {
-      const response = await fetch(`${siteUrl}/cli/tree`, {
+      const response = await cliFetchRead(`${siteUrl}/cli/tree`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -7989,6 +8008,24 @@ program
       }
       process.exit(1);
     }
+  });
+
+program
+  .command("desktop-update")
+  .description("Update the Codecast desktop app out-of-band (bypasses the wedged macOS auto-updater)")
+  .option("-f, --force", "Reinstall even if already current; quit the app first if running")
+  .action(async (opts) => {
+    if (process.platform !== "darwin") {
+      console.error("Desktop auto-update is macOS-only.");
+      process.exit(1);
+    }
+    const applied = await checkForDesktopUpdate((msg) => console.log(msg), { force: opts.force === true });
+    if (applied) {
+      console.log("Desktop app updated and relaunched.");
+    } else if (!opts.force) {
+      console.log("No desktop update applied (already current, app running, or unavailable). Use --force to reinstall.");
+    }
+    process.exit(applied ? 0 : 1);
   });
 
 program
@@ -8181,7 +8218,7 @@ Question: ${query}`,
       }
       const runSearch = async (q: string) => {
         if (process.env.ASK_DEBUG) console.error(`[ask] hitting search with query="${q}"`);
-        const resp = await fetch(`${siteUrl}/cli/search`, {
+        const resp = await cliFetchRead(`${siteUrl}/cli/search`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -8255,7 +8292,7 @@ Question: ${query}`,
         const minLine = Math.max(1, Math.min(...matchLines) - paddingLines);
         const maxLine = Math.max(...matchLines) + paddingLines;
 
-        const readResponse = await fetch(`${siteUrl}/cli/read`, {
+        const readResponse = await cliFetchRead(`${siteUrl}/cli/read`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -8444,7 +8481,7 @@ program
       const relatedFiles: Map<string, number> = new Map();
 
       if (searchQuery) {
-        const searchResponse = await fetch(`${siteUrl}/cli/search`, {
+        const searchResponse = await cliFetchRead(`${siteUrl}/cli/search`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -8478,7 +8515,7 @@ program
       }
 
       for (const filePath of filePaths) {
-        const similarResponse = await fetch(`${siteUrl}/cli/similar`, {
+        const similarResponse = await cliFetchRead(`${siteUrl}/cli/similar`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -8513,7 +8550,7 @@ program
       if (sessions.size > 0) {
         for (const [sessId] of Array.from(sessions).slice(0, 5)) {
           try {
-            const touchesResponse = await fetch(`${siteUrl}/cli/blame`, {
+            const touchesResponse = await cliFetchRead(`${siteUrl}/cli/blame`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
@@ -8654,7 +8691,7 @@ schedule
     const sessionId = findCurrentSessionFromProcess(getRealCwd());
     if (sessionId) {
       try {
-        const resp = await fetch(`${siteUrl}/cli/sessions`, {
+        const resp = await cliFetchRead(`${siteUrl}/cli/sessions`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ api_token: config.auth_token, session_ids: [sessionId] }),
@@ -8676,7 +8713,7 @@ schedule
     }
 
     try {
-      const response = await fetch(`${siteUrl}/cli/tasks/create`, {
+      const response = await cliFetch(`${siteUrl}/cli/tasks/create`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -8738,7 +8775,7 @@ schedule
       const body: any = { api_token: config.auth_token };
       if (options.status) body.status = options.status;
 
-      const response = await fetch(`${siteUrl}/cli/tasks/list`, {
+      const response = await cliFetchRead(`${siteUrl}/cli/tasks/list`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -8814,7 +8851,7 @@ schedule
     if (!taskId) return;
 
     try {
-      const response = await fetch(`${siteUrl}/cli/tasks/complete`, {
+      const response = await cliFetch(`${siteUrl}/cli/tasks/complete`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -8880,7 +8917,7 @@ schedule
     if (!taskId) return;
 
     // Get task details to find last_run_conversation_id
-    const response = await fetch(`${siteUrl}/cli/tasks/list`, {
+    const response = await cliFetchRead(`${siteUrl}/cli/tasks/list`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ api_token: config.auth_token }),
@@ -8945,7 +8982,7 @@ async function taskAction(action: string, id: string, successMsg: string): Promi
   if (!taskId) return;
 
   try {
-    const response = await fetch(`${siteUrl}/cli/tasks/${action}`, {
+    const response = await cliFetch(`${siteUrl}/cli/tasks/${action}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ api_token: config.auth_token, task_id: taskId }),
@@ -8973,7 +9010,7 @@ async function resolveTaskId(config: any, siteUrl: string, idInput: string): Pro
 
   // Otherwise, search by suffix
   try {
-    const response = await fetch(`${siteUrl}/cli/tasks/list`, {
+    const response = await cliFetchRead(`${siteUrl}/cli/tasks/list`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ api_token: config.auth_token }),
@@ -9028,7 +9065,10 @@ function getCliEndpoint(): { siteUrl: string; apiToken: string } {
 
 async function cliPost(urlPath: string, body: Record<string, any>): Promise<any> {
   const { siteUrl, apiToken } = getCliEndpoint();
-  const response = await fetch(`${siteUrl}${urlPath}`, {
+  // Bound the call with a timeout so a slow/contended backend can't hang the CLI
+  // forever. No auto-retry here: cliPost serves mutating endpoints too, and a
+  // timed-out create may have committed server-side.
+  const response = await cliFetch(`${siteUrl}${urlPath}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ api_token: apiToken, ...body }),
@@ -12534,7 +12574,7 @@ workflow
       process.exit(1);
     }
     const siteUrl = config.convex_url.replace(".cloud", ".site");
-    const resp = await fetch(`${siteUrl}/cli/workflow-runs/get`, {
+    const resp = await cliFetchRead(`${siteUrl}/cli/workflow-runs/get`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ api_token: config.auth_token, run_id: runId }),
@@ -12734,7 +12774,7 @@ workflow
       ...(n.goal_gate !== undefined ? { goal_gate: n.goal_gate } : {}),
     }));
 
-    const response = await fetch(`${siteUrl}/cli/workflows/upsert`, {
+    const response = await cliFetch(`${siteUrl}/cli/workflows/upsert`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

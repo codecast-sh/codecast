@@ -289,6 +289,17 @@ describe("RetryQueue", () => {
     expect(health.oldestPendingMs).toBeGreaterThanOrEqual(5 * 60 * 1000);
   });
 
+  it("reports logical queue size by conversation for addMessages", () => {
+    queue.add("addMessages", { conversationId: "hot-a", messages: [{ messageUuid: "a1" }] });
+    queue.add("addMessages", { conversationId: "hot-a", messages: [{ messageUuid: "a2" }] });
+    queue.add("addMessages", { conversationId: "hot-b", messages: [{ messageUuid: "b1" }] });
+    queue.add("addMessage", { conversationId: "other", content: "single" });
+
+    expect(queue.getQueueSize()).toBe(3);
+    expect(queue.getLogicalQueueSize()).toBe(3);
+    expect(queue.getHealth().pending).toBe(3);
+  });
+
   it("should drop stale-conversation errors on first failure (no retries)", async () => {
     // Regression: previously, "Unauthorized: can only add messages to your own
     // conversations" was treated as transient — the queue retried forever, flooding
@@ -347,6 +358,21 @@ describe("RetryQueue", () => {
     expect((pending[0].params as { messages: unknown[] }).messages.length).toBe(25);
   });
 
+  it("splits addMessages batches by serialized bytes, not only count", () => {
+    const huge = "x".repeat(400_000);
+    const msgs = [
+      { messageUuid: "a", content: huge },
+      { messageUuid: "b", content: huge },
+      { messageUuid: "c", content: huge },
+    ];
+    queue.add("addMessages", { conversationId: "conv", messages: msgs });
+
+    const pending = queue.getPendingOperations().filter((o) => o.params.conversationId === "conv");
+    expect(pending.length).toBeGreaterThan(1);
+    const totalMsgs = pending.reduce((n, op) => n + (op.params as { messages: unknown[] }).messages.length, 0);
+    expect(totalMsgs).toBe(3);
+  });
+
   it("never runs two ops for the same conversation concurrently", async () => {
     // Regression: the server addMessages mutation reads+patches the conversation
     // doc, so parallel ops for one conversation collided on that hot-doc → OCC
@@ -374,6 +400,27 @@ describe("RetryQueue", () => {
     expect(q.getQueueSize()).toBe(0);
   });
 
+  it("does not let one hanging retry block ready work for other conversations", async () => {
+    const q = new RetryQueue({ initialDelayMs: 10, maxDelayMs: 50, concurrency: 2, onLog: () => {} });
+    let fastCompleted = 0;
+    q.setExecutor(async (op) => {
+      if (op.params.conversationId === "hot") {
+        await new Promise(() => {});
+      }
+      fastCompleted++;
+      return true;
+    });
+
+    q.add("addMessages", { conversationId: "hot", messages: [{ messageUuid: "h0" }] });
+    q.add("addMessages", { conversationId: "c1", messages: [{ messageUuid: "a" }] });
+    q.add("addMessages", { conversationId: "c2", messages: [{ messageUuid: "b" }] });
+
+    await new Promise((r) => setTimeout(r, 250));
+    expect(fastCompleted).toBe(2);
+    expect(q.getPendingOperations().filter((o) => o.params.conversationId !== "hot").length).toBe(0);
+    q.stop();
+  });
+
   it("coalesces re-enqueued messages already pending for a conversation", async () => {
     // Regression: while a batch is stuck, the live sync path re-reads the same
     // backlog every poll and re-enqueues it, piling the same messages up 12x.
@@ -397,6 +444,16 @@ describe("RetryQueue", () => {
     expect(queue.getPendingOperations().some((o) => o.params.conversationId === "c2")).toBe(true);
   });
 
+  it("compacts a conversation backlog into chunked addMessages ops", () => {
+    queue.add("addMessages", { conversationId: "hot", messages: [{ messageUuid: "a" }] });
+    queue.add("addMessages", { conversationId: "hot", messages: [{ messageUuid: "b" }, { messageUuid: "c" }] });
+    queue.add("addMessages", { conversationId: "hot", messages: [{ messageUuid: "d" }] });
+
+    const hotOps = queue.getPendingOperations().filter((o) => o.params.conversationId === "hot");
+    expect(hotOps.length).toBe(1);
+    expect((hotOps[0].params.messages as Array<{ messageUuid: string }>).map((m) => m.messageUuid)).toEqual(["a", "b", "c", "d"]);
+  });
+
   it("should handle rate limit delays", async () => {
     let attempts = 0;
     queue.setExecutor(async () => {
@@ -414,6 +471,28 @@ describe("RetryQueue", () => {
     await new Promise((r) => setTimeout(r, 2500));
     expect(attempts).toBe(2);
     expect(queue.getQueueSize()).toBe(0);
+  });
+
+  it("splits a timed-out addMessages retry into smaller chunks instead of retrying the same payload forever", async () => {
+    const q = new RetryQueue({ initialDelayMs: 10, maxDelayMs: 50, maxAttempts: 5, onLog: () => {} });
+    const attempts: number[] = [];
+    q.setExecutor(async (op) => {
+      const len = (op.params.messages as unknown[]).length;
+      attempts.push(len);
+      if (len > 3) throw new Error(`addMessages batch (${len} msgs) timed out after 60000ms`);
+      return true;
+    });
+
+    q.add("addMessages", {
+      conversationId: "hot",
+      messages: Array.from({ length: 6 }, (_, i) => ({ messageUuid: `m${i}` })),
+    });
+
+    await q.waitForCompletion(2000);
+    expect(attempts).toContain(6);
+    expect(attempts.some((n) => n < 6)).toBe(true);
+    expect(q.getQueueSize()).toBe(0);
+    q.stop();
   });
 
   it("collapses a duplicate-bloated persisted queue on load (self-heal)", () => {
@@ -458,5 +537,94 @@ describe("RetryQueue", () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it("compacts many persisted addMessages ops for one conversation on load", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rq-compact-"));
+    const persistPath = path.join(dir, "retry-queue.json");
+    try {
+      const persisted = Array.from({ length: 6 }, (_, i) => ({
+        id: `addMessages-${i}`,
+        type: "addMessages",
+        params: { conversationId: "hot", messages: [{ messageUuid: `m${i}` }] },
+        attempts: 0,
+        nextRetryAt: Date.now(),
+        createdAt: Date.now() + i,
+      }));
+      fs.writeFileSync(persistPath, JSON.stringify(persisted));
+
+      const loaded = new RetryQueue({ persistPath, onLog: () => {} });
+      const ops = loaded.getPendingOperations().filter((o) => o.params.conversationId === "hot");
+      expect(ops.length).toBe(1);
+      expect((ops[0].params.messages as Array<{ messageUuid: string }>).map((m) => m.messageUuid)).toEqual([
+        "m0", "m1", "m2", "m3", "m4", "m5",
+      ]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("compacts newly queued backlog behind an active conversation write", async () => {
+    const q = new RetryQueue({ initialDelayMs: 10, maxDelayMs: 50, concurrency: 1, onLog: () => {} });
+    let releaseFirst!: () => void;
+    const firstStarted = new Promise<void>((resolve) => {
+      q.setExecutor(async (op) => {
+        const uuids = (op.params.messages as Array<{ messageUuid: string }>).map((m) => m.messageUuid);
+        if (uuids[0] === "m1") {
+          resolve();
+          await new Promise<void>((r) => { releaseFirst = r; });
+        }
+        return true;
+      });
+    });
+
+    q.add("addMessages", { conversationId: "hot", messages: [{ messageUuid: "m1" }] });
+    await firstStarted;
+
+    q.add("addMessages", { conversationId: "hot", messages: [{ messageUuid: "m2" }] });
+    q.add("addMessages", { conversationId: "hot", messages: [{ messageUuid: "m3" }] });
+
+    const hotOps = q.getPendingOperations().filter((o) => o.params.conversationId === "hot");
+    expect(hotOps.length).toBe(2);
+    const waiting = hotOps.find((o) => !(o.params.messages as Array<{ messageUuid: string }>).some((m) => m.messageUuid === "m1"));
+    expect(waiting).toBeDefined();
+    expect((waiting!.params.messages as Array<{ messageUuid: string }>).map((m) => m.messageUuid)).toEqual(["m2", "m3"]);
+
+    releaseFirst();
+    await q.waitForCompletion(1000);
+    q.stop();
+  });
+
+  it("learns a smaller retry chunk size for a conversation after a timeout", async () => {
+    const q = new RetryQueue({ initialDelayMs: 10, maxDelayMs: 50, concurrency: 1, onLog: () => {} });
+    let attempts = 0;
+    q.setExecutor(async (op) => {
+      attempts++;
+      const len = (op.params.messages as Array<unknown>).length;
+      if (attempts === 1) throw new Error(`addMessages batch (${len} msgs) timed out after 60000ms`);
+      return false; // keep the reshaped queue around for inspection
+    });
+
+    const mk = (start: number) => Array.from({ length: 25 }, (_, i) => ({ messageUuid: `m${start + i}` }));
+    q.add("addMessages", { conversationId: "hot", messages: mk(0) });
+    q.add("addMessages", { conversationId: "hot", messages: mk(100) });
+    q.add("addMessages", { conversationId: "hot", messages: mk(200) });
+
+    await new Promise((r) => setTimeout(r, 120));
+
+    const hotOps = q.getPendingOperations().filter((o) => o.params.conversationId === "hot");
+    expect(hotOps.length).toBeGreaterThan(3);
+    expect(hotOps.every((o) => (o.params.messages as Array<unknown>).length <= 13)).toBe(true);
+    q.stop();
+  });
+
+  it("reports whether a conversation already has queued work", () => {
+    expect(queue.hasPendingConversation("hot")).toBe(false);
+    queue.add("addMessages", {
+      conversationId: "hot",
+      messages: [{ messageUuid: "m1" }],
+    });
+    expect(queue.hasPendingConversation("hot")).toBe(true);
+    expect(queue.hasPendingConversation("cold")).toBe(false);
   });
 });
