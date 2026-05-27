@@ -57,6 +57,29 @@ const DEFAULT_CONCURRENCY = 5;
 // sub-batch hitting the 60s timeout aborted the whole op, and the same
 // blob got re-queued forever, jamming the concurrency=5 slots.
 const RETRY_BATCH_CHUNK = 25;
+const RETRY_BATCH_MAX_BYTES = 900_000;
+
+function chunkRetryMessages<T>(
+  messages: T[],
+  maxCount: number = RETRY_BATCH_CHUNK,
+  maxBytes: number = RETRY_BATCH_MAX_BYTES,
+): T[][] {
+  const batches: T[][] = [];
+  let current: T[] = [];
+  let currentBytes = 0;
+  for (const msg of messages) {
+    const bytes = Buffer.byteLength(JSON.stringify(msg));
+    if (current.length > 0 && (current.length >= maxCount || currentBytes + bytes > maxBytes)) {
+      batches.push(current);
+      current = [];
+      currentBytes = 0;
+    }
+    current.push(msg);
+    currentBytes += bytes;
+  }
+  if (current.length > 0) batches.push(current);
+  return batches;
+}
 
 export class RetryQueue {
   private queue: Map<string, RetryOperation> = new Map();
@@ -71,6 +94,9 @@ export class RetryQueue {
   private log: (message: string, level?: LogLevel) => void;
   private processing = false;
   private rateLimitedUntil = 0;
+  private activeKeys = new Set<string>();
+  private activeOpIds = new Set<string>();
+  private conversationChunkLimits = new Map<string, number>();
 
   constructor(config: RetryQueueConfig = {}) {
     this.initialDelayMs = config.initialDelayMs ?? DEFAULT_INITIAL_DELAY;
@@ -91,6 +117,7 @@ export class RetryQueue {
         if (Array.isArray(data)) {
           let splitFrom = 0;
           let dedupedMsgs = 0;
+          let compactedOps = 0;
           // Per-conversation set of message_uuids already restored. A queue that
           // jammed (e.g. an image batch stuck under OCC contention) accumulates the
           // SAME messages many times over as the live path re-enqueues the backlog
@@ -122,14 +149,15 @@ export class RetryQueue {
               // and don't jam the concurrency slots. Split children inherit the
               // parent's attempts so genuinely-failing ops still age toward drop.
               const msgs = op.params.messages;
-              if (msgs.length > RETRY_BATCH_CHUNK) {
+              const chunks = chunkRetryMessages(msgs);
+              if (chunks.length > 1) {
                 splitFrom++;
-                for (let i = 0; i < msgs.length; i += RETRY_BATCH_CHUNK) {
+                for (let i = 0; i < chunks.length; i++) {
                   const chunkId = `${op.type}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}-c${i}`;
                   this.queue.set(chunkId, {
                     id: chunkId,
                     type: op.type,
-                    params: { ...op.params, messages: msgs.slice(i, i + RETRY_BATCH_CHUNK) },
+                    params: { ...op.params, messages: chunks[i] },
                     attempts: op.attempts ?? 0,
                     nextRetryAt: Date.now() + 1000,
                     createdAt: op.createdAt ?? Date.now(),
@@ -142,15 +170,21 @@ export class RetryQueue {
             op.nextRetryAt = Date.now() + 1000;
             this.queue.set(op.id, op);
           }
+          const preCompactSize = this.queue.size;
+          for (const convId of seenByConv.keys()) {
+            this.compactAddMessagesConversation(convId);
+          }
+          compactedOps = preCompactSize - this.queue.size;
           if (this.queue.size > 0) {
             const heals = [
               splitFrom > 0 ? `split ${splitFrom} oversized` : "",
               dedupedMsgs > 0 ? `deduped ${dedupedMsgs} duplicate msgs` : "",
+              compactedOps > 0 ? `compacted ${compactedOps} ops` : "",
             ].filter(Boolean).join(", ");
             this.log(`Restored ${this.queue.size} operations from disk${heals ? ` (${heals})` : ""}`);
           }
           // Rewrite the healed queue so the duplicate/raw-base64 bloat doesn't persist.
-          if (dedupedMsgs > 0 || splitFrom > 0) this.persist();
+          if (dedupedMsgs > 0 || splitFrom > 0 || compactedOps > 0) this.persist();
         }
       }
     } catch {
@@ -210,17 +244,107 @@ export class RetryQueue {
         }
       }
 
-      if (Array.isArray(msgs) && msgs.length > RETRY_BATCH_CHUNK) {
+      const maxCount =
+        typeof conversationId === "string"
+          ? this.conversationChunkLimits.get(conversationId) ?? RETRY_BATCH_CHUNK
+          : RETRY_BATCH_CHUNK;
+      const chunks = Array.isArray(msgs) ? chunkRetryMessages(msgs, maxCount) : [];
+      if (chunks.length > 1) {
         const ids: string[] = [];
-        for (let i = 0; i < msgs.length; i += RETRY_BATCH_CHUNK) {
-          const chunk = msgs.slice(i, i + RETRY_BATCH_CHUNK);
+        for (let i = 0; i < chunks.length; i++) {
+          const chunk = chunks[i];
           ids.push(this.addSingle(type, { ...params, messages: chunk }, error));
+        }
+        if (typeof conversationId === "string") {
+          this.compactQueuedAddMessagesConversation(conversationId);
+          this.persist();
         }
         this.log(`Split oversized addMessages (${msgs.length} msgs) into ${ids.length} retry chunks`);
         return ids[0] ?? "";
       }
+      const id = this.addSingle(type, params, error);
+      if (typeof conversationId === "string") {
+        this.compactQueuedAddMessagesConversation(conversationId);
+        this.persist();
+      }
+      return id;
     }
     return this.addSingle(type, params, error);
+  }
+
+  hasPendingConversation(conversationId: string): boolean {
+    for (const op of this.queue.values()) {
+      if (op.params.conversationId === conversationId) return true;
+    }
+    return false;
+  }
+
+  private compactQueuedAddMessagesConversation(conversationId: string): void {
+    this.compactAddMessagesConversation(
+      conversationId,
+      new Set(
+        [...this.activeOpIds]
+          .map((id) => this.queue.get(id))
+          .filter((op): op is RetryOperation => !!op)
+          .filter((op) => op.type === "addMessages" && op.params.conversationId === conversationId)
+          .map((op) => op.id),
+      ),
+    );
+  }
+
+  private compactAddMessagesConversation(conversationId: string, excludeOpIds: Set<string> = new Set()): void {
+    const matching = [...this.queue.values()].filter(
+      (op) => op.type === "addMessages" && op.params.conversationId === conversationId && !excludeOpIds.has(op.id)
+    );
+    if (matching.length <= 1) return;
+
+    const ordered = matching.sort((a, b) => a.createdAt - b.createdAt);
+    const mergedMessages: unknown[] = [];
+    const seen = new Set<string>();
+    let attempts = 0;
+    let createdAt = Date.now();
+    let nextRetryAt = Date.now() + 1000;
+    let lastError: string | undefined;
+
+    for (const op of ordered) {
+      attempts = Math.max(attempts, op.attempts);
+      createdAt = Math.min(createdAt, op.createdAt);
+      nextRetryAt = Math.min(nextRetryAt, op.nextRetryAt);
+      if (op.lastError) lastError = op.lastError;
+      const msgs = Array.isArray(op.params.messages) ? op.params.messages : [];
+      for (const msg of msgs) {
+        const uuid = msg && typeof msg === "object" ? (msg as { messageUuid?: string }).messageUuid : undefined;
+        if (uuid) {
+          if (seen.has(uuid)) continue;
+          seen.add(uuid);
+        }
+        mergedMessages.push(msg);
+      }
+    }
+
+    for (const op of matching) {
+      this.queue.delete(op.id);
+    }
+
+    const chunks = chunkRetryMessages(
+      mergedMessages,
+      this.conversationChunkLimits.get(conversationId) ?? RETRY_BATCH_CHUNK,
+    );
+    for (let i = 0; i < chunks.length; i++) {
+      const id = `addMessages-${Date.now()}-${Math.random().toString(36).slice(2, 8)}-c${i}`;
+      this.queue.set(id, {
+        id,
+        type: "addMessages",
+        params: {
+          conversationId,
+          messages: chunks[i],
+        },
+        attempts,
+        nextRetryAt,
+        createdAt,
+        lastError,
+      });
+    }
   }
 
   // All message_uuids currently queued (pending or in-flight — failed in-flight
@@ -238,6 +362,37 @@ export class RetryQueue {
       }
     }
     return uuids;
+  }
+
+  private splitTimedOutAddMessagesOperation(op: RetryOperation): boolean {
+    if (op.type !== "addMessages") return false;
+    const conversationId = typeof op.params.conversationId === "string" ? op.params.conversationId : null;
+    const msgs = Array.isArray(op.params.messages) ? op.params.messages : [];
+    if (!conversationId || msgs.length <= 1) return false;
+
+    const mid = Math.ceil(msgs.length / 2);
+    const nextLimit = Math.max(1, mid);
+    const prevLimit = this.conversationChunkLimits.get(conversationId) ?? RETRY_BATCH_CHUNK;
+    if (nextLimit < prevLimit) {
+      this.conversationChunkLimits.set(conversationId, nextLimit);
+    }
+    const halves = [msgs.slice(0, mid), msgs.slice(mid)].filter((chunk) => chunk.length > 0);
+    this.queue.delete(op.id);
+    for (let i = 0; i < halves.length; i++) {
+      const id = `${op.type}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}-s${i}`;
+      this.queue.set(id, {
+        id,
+        type: op.type,
+        params: { ...op.params, messages: halves[i] },
+        attempts: op.attempts,
+        nextRetryAt: Date.now() + 1000,
+        createdAt: op.createdAt,
+        lastError: op.lastError,
+      });
+    }
+    this.compactQueuedAddMessagesConversation(conversationId);
+    this.log(`Split timed-out addMessages retry for ${conversationId} from ${msgs.length} msgs into ${halves.map((h) => h.length).join("+")} (new limit ${this.conversationChunkLimits.get(conversationId)})`);
+    return true;
   }
 
   private addSingle(
@@ -323,14 +478,16 @@ export class RetryQueue {
 
     const readyOps: RetryOperation[] = [];
     for (const op of this.queue.values()) {
-      if (op.nextRetryAt <= now) {
+      if (op.nextRetryAt <= now && !this.activeKeys.has(this.conversationKey(op))) {
         readyOps.push(op);
       }
     }
 
     if (readyOps.length === 0) {
       this.processing = false;
-      this.scheduleNextCheck();
+      if (this.activeKeys.size === 0) {
+        this.scheduleNextCheck();
+      }
       return;
     }
 
@@ -343,12 +500,18 @@ export class RetryQueue {
     // siblings wait for the next cycle (which only runs after this batch fully drains).
     const batch: RetryOperation[] = [];
     const claimedConversations = new Set<string>();
+    const availableSlots = Math.max(0, this.concurrency - this.activeKeys.size);
     for (const op of readyOps) {
-      if (batch.length >= this.concurrency) break;
+      if (batch.length >= availableSlots) break;
       const key = this.conversationKey(op);
       if (claimedConversations.has(key)) continue;
       claimedConversations.add(key);
       batch.push(op);
+    }
+
+    if (batch.length === 0) {
+      this.processing = false;
+      return;
     }
 
     const processOp = async (op: RetryOperation): Promise<void> => {
@@ -373,12 +536,20 @@ export class RetryQueue {
           this.log(`Rate limited globally for ${rateLimitDelay}ms`, "warn");
         }
         this.handleFailure(op, errorMsg);
+      } finally {
+        this.activeKeys.delete(this.conversationKey(op));
+        this.activeOpIds.delete(op.id);
+        this.persist();
+        this.scheduleNextCheck();
+        this.processQueue().catch(() => {});
       }
     };
 
-    await Promise.all(batch.map(processOp));
-    this.persist();
-
+    for (const op of batch) {
+      this.activeKeys.add(this.conversationKey(op));
+      this.activeOpIds.add(op.id);
+      void processOp(op);
+    }
     this.processing = false;
     this.scheduleNextCheck();
   }
@@ -400,6 +571,10 @@ export class RetryQueue {
 
   private handleFailure(op: RetryOperation, error: string): void {
     op.lastError = error;
+
+    if (error.includes("timed out after") && this.splitTimedOutAddMessagesOperation(op)) {
+      return;
+    }
 
     if (this.isStaleConversationError(error)) {
       this.log(
@@ -505,6 +680,19 @@ export class RetryQueue {
     return this.queue.size;
   }
 
+  getLogicalQueueSize(): number {
+    let count = 0;
+    const pendingAddMessagesConversations = new Set<string>();
+    for (const op of this.queue.values()) {
+      if (op.type === "addMessages" && typeof op.params.conversationId === "string") {
+        pendingAddMessagesConversations.add(op.params.conversationId);
+        continue;
+      }
+      count++;
+    }
+    return count + pendingAddMessagesConversations.size;
+  }
+
   // Live sync-backlog snapshot for the heartbeat. `oldestPendingMs` is the age
   // of the longest-waiting queued op, which lets the web distinguish a real
   // stall (op stuck for minutes) from a transient retry that self-heals.
@@ -515,7 +703,7 @@ export class RetryQueue {
       const age = now - op.createdAt;
       if (age > oldestPendingMs) oldestPendingMs = age;
     }
-    return { pending: this.queue.size, oldestPendingMs };
+    return { pending: this.getLogicalQueueSize(), oldestPendingMs };
   }
 
   getPendingOperations(): RetryOperation[] {

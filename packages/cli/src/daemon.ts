@@ -7,6 +7,7 @@ import { Database } from "bun:sqlite";
 import { execSync, execFileSync, exec, execFile, spawn } from "child_process";
 import { watch as chokidarWatch } from "chokidar";
 import { SessionWatcher, type SessionEvent } from "./sessionWatcher.js";
+import { deviceId, deviceLabel } from "./remote/device.js";
 import { CursorWatcher, type CursorSessionEvent } from "./cursorWatcher.js";
 import { CursorTranscriptWatcher, type CursorTranscriptEvent } from "./cursorTranscriptWatcher.js";
 import { CodexWatcher, type CodexSessionEvent } from "./codexWatcher.js";
@@ -37,6 +38,7 @@ import { promisify } from "util";
 import { detectPermissionPrompt } from "./permissionDetector.js";
 import { handlePermissionRequest } from "./permissionHandler.js";
 import { getVersion, performUpdate, ensureCastAlias } from "./update.js";
+import { checkForDesktopUpdate } from "./desktopUpdate.js";
 import { performReconciliation, repairDiscrepancies } from "./reconciliation.js";
 import { TaskScheduler } from "./taskScheduler.js";
 import { hasTmux } from "./tmux.js";
@@ -132,6 +134,34 @@ function resolveLocalRepo(remotePath: string): string | null {
   const parts = remotePath.split(path.sep).filter(Boolean);
   const repoName = parts[parts.length - 1];
   if (!repoName) return null;
+
+  // 1. Explicit user override (config.json `project_mappings`): full recorded path wins,
+  //    then basename. Authoritative and never auto-clobbered.
+  const userMap = readConfig()?.project_mappings;
+  if (userMap) {
+    for (const key of [remotePath, repoName]) {
+      const mapped = userMap[key];
+      if (mapped && fs.existsSync(mapped)) {
+        log(`Resolved remote CWD ${remotePath} -> ${mapped} (user mapping)`);
+        return mapped;
+      }
+    }
+  }
+
+  // 2. Learned map: paths/basenames the daemon has observed running locally. This is what
+  //    lets a fork of a conversation recorded on another machine resolve to wherever the
+  //    repo actually lives here, even when that's off the convention paths below.
+  const learned = readProjectMap();
+  for (const key of [remotePath, repoName]) {
+    const mapped = learned[key];
+    if (mapped && fs.existsSync(mapped)) {
+      log(`Resolved remote CWD ${remotePath} -> ${mapped} (learned mapping)`);
+      return mapped;
+    }
+  }
+
+  // 3. Convention search. On a hit, learn it so future lookups — and other-machine forks
+  //    sharing this basename — resolve in one step.
   const home = process.env.HOME || "/tmp";
   const candidates = [
     path.join(home, "src", repoName),
@@ -143,6 +173,7 @@ function resolveLocalRepo(remotePath: string): string | null {
   for (const candidate of candidates) {
     if (fs.existsSync(candidate)) {
       log(`Resolved remote CWD ${remotePath} -> ${candidate}`);
+      recordProjectMapping(repoName, candidate);
       return candidate;
     }
   }
@@ -213,6 +244,10 @@ const PID_FILE = path.join(CONFIG_DIR, "daemon.pid");
 const VERSION_FILE = path.join(CONFIG_DIR, "daemon.version");
 const HOOK_PORT_FILE = path.join(CONFIG_DIR, "hook-port");
 const STARTED_SESSIONS_FILE = path.join(CONFIG_DIR, "started-sessions.json");
+// Learned project-path map: basename/recorded-path -> local dir, auto-populated from
+// repos observed locally (see recordProjectMapping). Lets cross-machine forks resume
+// in the right working directory even when the repo lives off the convention paths.
+const PROJECT_MAP_FILE = path.join(CONFIG_DIR, "project-paths.json");
 const APP_SERVER_THREADS_FILE = path.join(CONFIG_DIR, "app-server-threads.json");
 const PID_FILE_STALE_GRACE_MS = 2_000;
 
@@ -239,6 +274,13 @@ interface Config {
     gemini?: Record<string, string>;
     cursor?: Record<string, string>;
   };
+  // Opt out of the daemon updating the desktop app out-of-band (default: on).
+  desktop_auto_update?: boolean;
+  // Explicit project-path overrides for resuming sessions/forks recorded on another
+  // machine. Keys are the recorded (remote) project path OR its basename; values are
+  // the local directory to resume in. Authoritative — checked before the learned map
+  // and the convention search in resolveLocalRepo, and never auto-clobbered.
+  project_mappings?: Record<string, string>;
 }
 
 function getPermissionFlags(agentType: "claude" | "codex" | "cursor" | "gemini", config?: Config | null): string | null {
@@ -1115,9 +1157,12 @@ async function sendHeartbeat(): Promise<void> {
 
   try {
     const siteUrl = config.convex_url.replace(".cloud", ".site");
+    // Bound the request: an untimed fetch here can hang indefinitely (observed
+    // on a long-running daemon), starving device presence. Fail fast + retry.
     const response = await fetch(`${siteUrl}/cli/heartbeat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      signal: AbortSignal.timeout(15000),
       body: JSON.stringify({
         api_token: config.auth_token,
         version: daemonVersion || "unknown",
@@ -1126,6 +1171,9 @@ async function sendHeartbeat(): Promise<void> {
         autostart_enabled: isAutostartEnabled(),
         has_tmux: hasTmux(),
         local_project_roots: computeLocalProjectRoots(),
+        device_id: deviceId(),
+        device_label: deviceLabel(),
+        is_remote_device: process.env.CODECAST_REMOTE_DEVICE === "1",
         ...syncHealthFields(),
       }),
     });
@@ -1565,6 +1613,9 @@ async function executeRemoteCommand(
           if (conversationId) {
             const initialManagedSessionId = getInitialManagedSessionId(agentType, expectedSessionId, codexThreadId);
             registerAppServerConversation(conversationId, codexThreadId, { cwd, approvalPolicy: codexApprovalPolicy });
+            // This device now owns and runs the session — claim it and clear any
+            // stale "clone it first" error a different device may have left.
+            syncServiceRef?.claimSession(conversationId).catch(logConvexFailure);
             if (initialManagedSessionId && syncServiceRef) {
               syncServiceRef.markSessionActive(conversationId).catch(logConvexFailure);
               syncServiceRef.registerManagedSession(initialManagedSessionId, process.pid, undefined, conversationId).catch(logConvexFailure);
@@ -1620,6 +1671,9 @@ async function executeRemoteCommand(
               worktreePath: worktreeResult?.worktreePath,
             });
             log(`[REMOTE] Registered started session tmux for conversation ${conversationId.slice(0, 12)}`);
+            // This device now owns and runs the session — claim it and clear any
+            // stale "clone it first" error a different device may have left.
+            syncServiceRef?.claimSession(conversationId).catch(logConvexFailure);
             if (initialManagedSessionId) {
               registerManagedStartedSession(conversationId, initialManagedSessionId, tmuxSession);
             }
@@ -2562,6 +2616,34 @@ function saveConversationCache(cache: ConversationCache): void {
   fs.writeFileSync(cacheFile, JSON.stringify(cache, null, 2));
 }
 
+let projectMapCache: Record<string, string> | null = null;
+function readProjectMap(): Record<string, string> {
+  if (projectMapCache) return projectMapCache;
+  try {
+    projectMapCache = JSON.parse(fs.readFileSync(PROJECT_MAP_FILE, "utf-8")) as Record<string, string>;
+  } catch {
+    projectMapCache = {};
+  }
+  return projectMapCache;
+}
+
+// Remember that a repo identified by `key` (its basename, or a recorded remote path)
+// lives at `localDir` on this machine. Gated to actual git-repo roots so the map stays a
+// small, accurate index — this excludes $HOME, /tmp, and parent dirs like ~/src that a
+// project-dir scan would otherwise decode and record as misleading entries. Only persists
+// real, changed entries.
+function recordProjectMapping(key: string, localDir: string): void {
+  if (!key || !localDir) return;
+  if (!fs.existsSync(path.join(localDir, ".git"))) return;
+  const map = readProjectMap();
+  if (map[key] === localDir) return;
+  map[key] = localDir;
+  try {
+    fs.writeFileSync(PROJECT_MAP_FILE, JSON.stringify(map, null, 2));
+    projectMapCache = map;
+  } catch {}
+}
+
 function readTitleCache(): TitleCache {
   const cacheFile = path.join(CONFIG_DIR, "titles.json");
   if (!fs.existsSync(cacheFile)) {
@@ -3020,6 +3102,14 @@ async function syncMessagesBatch(
   // persisted the full raw base64 and every retry re-uploaded the same image.
   const prepared = messages.map(prepMessageForSync);
   await syncService.offloadImages(prepared);
+  if (retryQueue.hasPendingConversation(conversationId)) {
+    log(`Conversation ${conversationId.slice(0, 12)} already has retry backlog; buffering ${messages.length} new msgs into retry queue`);
+    retryQueue.add("addMessages", {
+      conversationId,
+      messages: prepared,
+    }, "conversation backlog already queued");
+    return { authExpired: false, conversationNotFound: false };
+  }
   try {
     await syncService.addMessages({
       conversationId,
@@ -5248,7 +5338,7 @@ async function findTmuxPaneForTty(tty: string): Promise<string | null> {
   }
 }
 
-type InteractivePrompt = { question: string; options: Array<{ label: string; description?: string }>; isConfirmation?: boolean };
+type InteractivePrompt = { question: string; options: Array<{ label: string; description?: string }>; isConfirmation?: boolean; header?: string };
 
 // Unicode "Box Drawing" block (┌┐└┘─│ …). An AskUserQuestion option's `preview`
 // renders as a box to the RIGHT of the options; tmux capture-pane flattens those
@@ -5256,6 +5346,38 @@ type InteractivePrompt = { question: string; options: Array<{ label: string; des
 // Such content is never an option's own description — we drop it so a scraped card
 // never carries box-drawing glyphs (the full-fidelity card comes from the JSONL).
 const BOX_DRAWING_CHARS = /[─-╿]/;
+
+// Newer AskUserQuestion menus print a short label "chip" on its own line above the
+// question — e.g. "□ Stale pending policy". The glyph is a box/ballot character
+// (NOT in the Box Drawing block, so BOX_DRAWING_CHARS won't catch it). The web card
+// renders this as `header`; the scrape used to drop it so scraped cards had no chip.
+const HEADER_CHIP = /^[□☐☑☒▢▣◻◼◽◾■]\s*(.+)$/;
+const SEPARATOR_LINE = /^[─━═\-_]{5,}$/;
+
+// Pull the header chip and the (possibly multi-line) question out of the lines above
+// the first option. The question can wrap across several rows; the menu renderer
+// breaks it mid-sentence, so taking only the last line truncated it. Walk upward from
+// the first option, stitching contiguous text until a blank line, separator, cursor
+// row, or the chip bounds it — anything past those belongs to a prior turn. The chip
+// itself can sit a blank line above the question, so scan for it independently.
+function extractPromptHeading(lines: string[], firstOptionIdx: number): { header?: string; question: string } {
+  const start = Math.max(0, firstOptionIdx - 8);
+  let header: string | undefined;
+  for (let i = firstOptionIdx - 1; i >= start; i--) {
+    const chip = lines[i].trim().match(HEADER_CHIP);
+    if (chip) { header = chip[1].trim(); break; }
+  }
+  const qLines: string[] = [];
+  for (let i = firstOptionIdx - 1; i >= start; i--) {
+    const trimmed = lines[i].trim();
+    if (HEADER_CHIP.test(trimmed)) break;
+    if (!trimmed) { if (qLines.length) break; else continue; }
+    if (/^[❯>]/.test(trimmed) || SEPARATOR_LINE.test(trimmed)) break;
+    qLines.unshift(trimmed);
+  }
+  const question = qLines.join(" ") || header || "Select an option";
+  return { header, question };
+}
 
 export function parseInteractivePrompt(text: string): InteractivePrompt | null {
   const lines = text.split("\n");
@@ -5310,13 +5432,10 @@ export function parseInteractivePrompt(text: string): InteractivePrompt | null {
 
   if (options.length >= 2 && firstOptionIdx >= 0) {
     const tail = lines.slice(firstOptionIdx).join("\n");
-    const hasFooter = /enter to (confirm|select)|esc(ape)? to (exit|cancel)|↑.*↓|←.*→|arrow keys/i.test(tail);
+    const hasFooter = /enter to (confirm|select)|esc(ape)? to (exit|cancel)|↑.*↓|←.*→|arrow keys|(?:press\s+)?n\s+to\s+add\s+notes/i.test(tail);
     if (hasCursorIndicator || hasFooter) {
-      const headerLines = lines.slice(Math.max(0, firstOptionIdx - 5), firstOptionIdx)
-        .map(l => l.trim())
-        .filter(l => l.length > 0 && !/^[❯>]/.test(l) && !/^[─━═─\-_]{5,}$/.test(l));
-      const question = headerLines[headerLines.length - 1] || "Select an option";
-      return { question, options };
+      const { header, question } = extractPromptHeading(lines, firstOptionIdx);
+      return { question, options, ...(header ? { header } : {}) };
     }
   }
 
@@ -5481,6 +5600,7 @@ async function checkForInteractivePrompt(
           input: {
             questions: [{
               question: prompt.question,
+              ...(prompt.header ? { header: prompt.header } : {}),
               options: prompt.options,
               ...(prompt.isConfirmation ? { isConfirmation: true } : {}),
             }],
@@ -5664,6 +5784,33 @@ export function classifyTranscriptTail(tailContent: string): TranscriptTurnState
   return "unknown";
 }
 
+// Codex's rollout JSONL marks turn boundaries with `event_msg` records instead of
+// a per-message stop_reason. A turn ends with `task_complete` (and `turn_aborted`/
+// `task_aborted` for interrupted ones); a turn is in flight after `task_started`
+// or a fresh `user_message`. Everything else (`agent_message`, `token_count`,
+// `response_item` deltas) is intra-turn noise we scan past. We read the tail back
+// to front and decide on the first boundary event, mirroring classifyTranscriptTail
+// so reconciledStatus can treat both agent types identically.
+export function classifyCodexTranscriptTail(tailContent: string): TranscriptTurnState {
+  const lines = tailContent.split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    let d: { type?: string; payload?: { type?: string } };
+    try {
+      d = JSON.parse(line);
+    } catch {
+      continue; // partial/corrupt line (mid-write tail) -> skip
+    }
+    if (d.type !== "event_msg") continue;
+    const t = d.payload?.type;
+    if (t === "task_complete" || t === "turn_complete" || t === "task_aborted" || t === "turn_aborted") return "idle";
+    if (t === "task_started" || t === "user_message") return "active";
+    // token_count / agent_message / reasoning etc. -> intra-turn, keep scanning
+  }
+  return "unknown";
+}
+
 // Decides whether the hook-driven status (lastSentAgentStatus) should be corrected
 // against the transcript turn-state. The status hook is a last-write-wins latch: if
 // a lifecycle transition is lost end-to-end (e.g. the Stop hook never reaches the
@@ -5687,6 +5834,45 @@ export function reconciledStatus(
   if (isActive && turn === "idle") return "idle";
   if (isQuiet && turn === "active") return "working";
   return null;
+}
+
+// The role of the most recent *real* (non-system/meta) message in a Claude JSONL
+// tail, or null if none parses. Mirrors classifyTranscriptTail's role logic so the
+// two stay consistent. Used to recover a stuck permission_blocked: an answered
+// prompt's tail ends in a USER turn (the AskUserQuestion answer / a permissioned
+// tool's tool_result is a type:"user" entry appended after the blocking assistant
+// tool_use), while a still-pending prompt ends in the assistant tool_use.
+export function transcriptTailLastRealRole(tailContent: string): "user" | "assistant" | null {
+  const lines = tailContent.split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    let d: { type?: string; message?: { role?: string } };
+    try {
+      d = JSON.parse(line);
+    } catch {
+      continue; // partial/corrupt line (mid-write tail) -> skip
+    }
+    const role = d.message?.role ?? (d.type === "user" || d.type === "assistant" ? d.type : undefined);
+    if (role === "user" || role === "assistant") return role;
+    // system/meta entry -> keep scanning for the last real message
+  }
+  return null;
+}
+
+// permission_blocked is a latch with no other recovery path: the daemon doesn't
+// drive AskUserQuestion resolution, reconciledStatus deliberately skips it, and the
+// pane reconcile can't tell an answered poll from a pending one. So a lost resume
+// "working" hook freezes the session in "Needs Input". Recover only on the positive
+// signal that the prompt was answered -- the transcript tail's last real message is
+// a user turn. A still-pending prompt ends in the assistant tool_use (lastRole
+// "assistant") and is left untouched, so this can never clear a live prompt.
+export function permissionBlockedRecoveryTarget(
+  stored: AgentStatus | undefined,
+  lastRealRole: "user" | "assistant" | null,
+): AgentStatus | null {
+  if (stored !== "permission_blocked") return null;
+  return lastRealRole === "user" ? "working" : null;
 }
 
 // In bypassPermissions mode Claude Code still emits permission_prompt
@@ -6919,29 +7105,60 @@ function readFileTailSync(filePath: string, maxBytes = 64 * 1024): string {
   }
 }
 
-// Self-heals a status latch frozen on a lost hook transition by reconciling
+// Self-heals a status latch frozen on a lost lifecycle transition by reconciling
 // lastSentAgentStatus against the session's JSONL transcript (the universal
 // ground truth -- works for tmux-managed and bare-terminal sessions alike). The
-// decision is the pure reconciledStatus, which defers on any ambiguity. Only
-// Claude transcripts are parsed; codex/gemini formats differ, so we defer on them.
+// decision is the pure reconciledStatus, which defers on any ambiguity. Claude and
+// Codex transcripts are both parsed (each via its own tail classifier); Codex in
+// particular has no Stop-hook equivalent and its watcher-driven idle transition
+// rides a setTimeout that dies across macOS sleep, so this heartbeat-driven path
+// is its only durable latch recovery. Gemini/Cursor formats are not yet classified.
 function reconcileStatusFromTranscript(sessionId: string, syncService: SyncService): void {
+  const stored = lastSentAgentStatus.get(sessionId);
+
+  // permission_blocked recovery runs for ALL sessions, tmux-managed included:
+  // it's the one latch neither the pane reconcile (paneReconcileTarget defers on
+  // it) nor reconciledStatus recovers, and the pane can't distinguish an answered
+  // poll from a pending one. The transcript can -- a tail ending in a user turn
+  // means the prompt was answered. Restricted to Claude (Codex permission blocks
+  // are recovered by startCodexPermissionPoller's own working transition).
+  if (stored === "permission_blocked") {
+    const file = findSessionFile(sessionId);
+    if (!file || file.agentType !== "claude") return;
+    let lastRole: "user" | "assistant" | null;
+    try {
+      lastRole = transcriptTailLastRealRole(readFileTailSync(file.path));
+    } catch {
+      return; // can't read the transcript -> defer, never guess
+    }
+    const corrected = permissionBlockedRecoveryTarget(stored, lastRole);
+    if (!corrected) return;
+    const conversationId = readConversationCache()[sessionId];
+    if (!conversationId) return;
+    log(`[STATUS-RECONCILE] ${sessionId.slice(0, 8)} stored=permission_blocked lastRole=${lastRole ?? "none"} -> ${corrected}`);
+    sendAgentStatus(syncService, conversationId, sessionId, corrected);
+    return;
+  }
+
   // tmux-managed sessions are reconciled from the live pane (the authoritative
   // busy/idle signal) by reconcileStatusFromPane. Skip the transcript path for
   // them: a turn cut off mid-tool reads "active" forever, so the transcript would
   // flip a pane-confirmed idle back to "working" every cycle. The transcript path
   // remains the reconcile for bare-terminal sessions, which have no pane.
   if (resumeSessionCache.has(sessionId)) return;
-  const stored = lastSentAgentStatus.get(sessionId);
   // Cheap in-memory gate first: skip the file read entirely unless the stored
   // status is one we'd ever correct.
   if (!(stored === "working" || stored === "thinking" || stored === "idle" || stored === "connected")) {
     return;
   }
   const file = findSessionFile(sessionId);
-  if (!file || file.agentType !== "claude") return; // only Claude JSONL is parsed here
+  if (!file) return;
   let turn: TranscriptTurnState;
   try {
-    turn = classifyTranscriptTail(readFileTailSync(file.path));
+    const tail = readFileTailSync(file.path);
+    if (file.agentType === "claude") turn = classifyTranscriptTail(tail);
+    else if (file.agentType === "codex") turn = classifyCodexTranscriptTail(tail);
+    else return; // gemini/cursor formats not classified yet -> defer
   } catch {
     return; // can't read the transcript -> defer, never guess
   }
@@ -7322,13 +7539,30 @@ async function collectResourceSnapshot(): Promise<void> {
     // Push metrics for every live session here (not only resume-managed ones),
     // so the Sessions page sees fresh metrics — and thus liveness — for anything
     // with a real process tree, including sessions reporting a "stopped" status.
+    //
+    // Bounded concurrency: firing one mutation per session at once (a burst of N
+    // simultaneous POSTs for N live sessions, every tick) saturates the daemon's
+    // outbound connection pool and file descriptors, starving the message-sync
+    // mutations of sockets so they hang to their 60s timeout while the backend is
+    // actually idle. A small worker pool caps in-flight metric requests so syncs
+    // always have headroom. Metrics are best-effort and unawaited per-call, so the
+    // pool just paces them across the tick.
     if (syncServiceRef) {
-      for (const [sessionId, r] of resources) {
-        const agentPid = sessionProcessCache.get(sessionId)?.pid;
-        syncServiceRef.reportSessionMetrics(
-          sessionId, r.cpu, r.memory, r.pidCount, agentPid, sessionAwakeIdleMs.get(sessionId) ?? 0,
-        ).catch(() => {});
-      }
+      const entries = [...resources.entries()];
+      const METRICS_CONCURRENCY = 4;
+      let idx = 0;
+      const worker = async () => {
+        while (idx < entries.length) {
+          const [sessionId, r] = entries[idx++];
+          const agentPid = sessionProcessCache.get(sessionId)?.pid;
+          await syncServiceRef!.reportSessionMetrics(
+            sessionId, r.cpu, r.memory, r.pidCount, agentPid, sessionAwakeIdleMs.get(sessionId) ?? 0,
+          ).catch(() => {});
+        }
+      };
+      await Promise.all(
+        Array.from({ length: Math.min(METRICS_CONCURRENCY, entries.length) }, worker),
+      );
     }
 
     if (resources.size > 0) {
@@ -8768,6 +9002,9 @@ async function repairProjectPaths(syncService: SyncService): Promise<void> {
 
     const decodedPath = decodeProjectDirName(dir);
     const resolvedDir = decodedPath && fs.existsSync(decodedPath) ? decodedPath : null;
+    // Learn this repo's local home so a fork recorded on another machine (different
+    // absolute path, same basename) resolves here even if it lives off-convention.
+    if (resolvedDir) recordProjectMapping(path.basename(resolvedDir), resolvedDir);
 
     for (const file of sessionFiles) {
       const filePath = path.join(dirPath, file);
@@ -9674,17 +9911,29 @@ function startEventLoopMonitor(): NodeJS.Timeout {
 
 function startVersionChecker(syncService: SyncService): NodeJS.Timeout {
   checkForForcedUpdate(syncService);
+  maybeUpdateDesktopApp();
 
   return setInterval(() => {
     checkForForcedUpdate(syncService);
+    maybeUpdateDesktopApp();
   }, VERSION_CHECK_INTERVAL_MS);
+}
+
+// Out-of-band updater for the Codecast desktop app: Squirrel.Mac's in-app
+// auto-update is wedged on macOS 26 (launchd never runs its ShipIt helper), so
+// the daemon — which updates over a Squirrel-independent channel — finishes the
+// job. Gated on config (opt-out) and guarded against disrupting a running app.
+function maybeUpdateDesktopApp(): void {
+  const config = readConfig();
+  if (config?.desktop_auto_update === false) return;
+  checkForDesktopUpdate((msg) => log(msg)).catch(() => {});
 }
 
 function logHealthReport(retryQueue: RetryQueue): void {
   const claudeProjectsDir = path.join(process.env.HOME || "", ".claude", "projects");
   const unsyncedFiles = findUnsyncedFiles(claudeProjectsDir);
   const droppedOps = retryQueue.getDroppedOperations();
-  const queueSize = retryQueue.getQueueSize();
+  const queueSize = retryQueue.getLogicalQueueSize();
 
   if (unsyncedFiles.length > 0 || droppedOps.length > 0 || queueSize > 10) {
     logWarn(
@@ -10137,6 +10386,14 @@ async function main(): Promise<void> {
   });
   syncServiceRef = syncService;
 
+  // Register this device EARLY + on its own interval, so device presence never
+  // depends on the rest of (potentially slow/headless-stalling) init. Logs the
+  // first result for diagnosability.
+  // Register this device early + on its own interval, so device presence never
+  // depends on later (potentially slow) init steps.
+  void sendHeartbeat().catch(() => {});
+  setInterval(() => { sendHeartbeat().catch(() => {}); }, 30_000);
+
   // Check for forced updates immediately on startup before anything else
   // This allows recovery from broken versions by downloading a fix early
   try {
@@ -10352,6 +10609,7 @@ async function main(): Promise<void> {
     initialDelayMs: 3000,
     maxDelayMs: 60000,
     maxAttempts: 15,
+    concurrency: 12,
     persistPath: `${CONFIG_DIR}/retry-queue.json`,
     droppedPath: `${CONFIG_DIR}/dropped-operations.json`,
     onLog: (message, level) => log(message, level || "info"),
@@ -10362,7 +10620,7 @@ async function main(): Promise<void> {
   const updateState = () => {
     saveDaemonState({
       lastSyncTime: Date.now(),
-      pendingQueueSize: retryQueue.getQueueSize(),
+      pendingQueueSize: retryQueue.getLogicalQueueSize(),
     });
   };
 
@@ -10406,7 +10664,7 @@ async function main(): Promise<void> {
           subtype?: string;
         }>;
       };
-      await syncService.addMessages(params);
+      await syncService.addMessages({ ...params, reconcileRemoteExisting: true });
       updateState();
       log(`Retry: Batch synced ${params.messages.length} messages for ${params.conversationId.slice(0, 12)}`);
       return true;
