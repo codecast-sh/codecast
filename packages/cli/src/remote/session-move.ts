@@ -393,6 +393,37 @@ function copyGitignoredFiles(host: RemoteHost, localCwd: string, remoteCwd: stri
 }
 
 /**
+ * Make the remote claude able to resume non-interactively in `remoteCwd`:
+ *   - seed ~/.claude.json so the first-run theme/onboarding picker is skipped
+ *   - pre-trust the worktree path so the folder-trust dialog is skipped
+ * Without this, a resumed session hangs on an interactive prompt.
+ */
+export function ensureRemoteClaudeReady(host: RemoteHost, remoteCwd: string): void {
+  const script = `python3 - ${shq(remoteCwd)} << 'PY'
+import json, os, sys
+p = os.path.expanduser("~/.claude.json")
+try:
+    d = json.load(open(p))
+except Exception:
+    d = {}
+d.setdefault("hasCompletedOnboarding", True)
+d.setdefault("theme", "dark")
+d.setdefault("bypassPermissionsModeAccepted", True)
+d.setdefault("projects", {})
+d["projects"][sys.argv[1]] = {"hasTrustDialogAccepted": True, "hasCompletedProjectOnboarding": True, "allowedTools": [], "projectOnboardingSeenCount": 1}
+json.dump(d, open(p, "w"), indent=1)
+print("claude ready for", sys.argv[1])
+PY`;
+  ssh(host, script);
+}
+
+/** Re-copy a fresh credential to the remote (the local keychain stays current;
+ * the remote copy expires after ~1h). Call around remote activity. */
+export function refreshRemoteCredential(host: RemoteHost): boolean {
+  return copyCredentialToRemote(host);
+}
+
+/**
  * Run a one-shot prompt against the session on the remote (print mode).
  * Defaults to `acceptEdits` so a moved session can actually make code changes
  * autonomously — print mode without a permission flag silently blocks all
