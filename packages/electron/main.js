@@ -5,6 +5,10 @@ const fs = require("fs");
 
 app.name = "Codecast";
 
+// Squirrel.Mac registers its install helper as a launchd job named
+// "<build.appId>.ShipIt". Keep this in sync with electron-builder's appId.
+const SHIPIT_LABEL = "sh.codecast.desktop.ShipIt";
+
 // Pin Chromium's download path to our userData dir so macOS TCC never
 // probes ~/Documents or ~/Downloads and triggers the permission dialog.
 const _ud = app.getPath("userData");
@@ -470,11 +474,53 @@ function buildAppMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
+// Install a downloaded update and relaunch.
+//
+// electron-updater delegates to Electron's native Squirrel.Mac, which stages
+// the new bundle, registers the ShipIt launchd helper, and relies on launchd
+// to run it once the app quits. On macOS 26 (Darwin 25.x) launchd accepts the
+// job but never runs it: the app quits, nothing swaps the bundle, the app
+// never relaunches, and the "ready to install" banner reappears (verified --
+// the job sits "submitted, not running" and a manual `launchctl kickstart`
+// completes the install every time).
+//
+// So we still call quitAndInstall() to stage + register the job, but also spawn
+// a detached watcher that survives our exit. It waits ~12s for the version on
+// disk to change (i.e. Squirrel's own trigger worked); if it never does, it
+// force-runs the already-registered ShipIt job itself. Gating on the version
+// change makes the kickstart a true fallback, so we never double-install.
+let updateInstallTriggered = false;
+function installUpdateAndRestart() {
+  if (updateInstallTriggered) return;
+  updateInstallTriggered = true;
+  if (process.platform === "darwin") {
+    try {
+      const { spawn } = require("child_process");
+      const uid = process.getuid();
+      const oldVersion = app.getVersion();
+      // .../Contents/MacOS/Codecast -> .../Contents/Info.plist
+      const infoPlist = path.join(path.dirname(path.dirname(app.getPath("exe"))), "Info.plist");
+      const script = [
+        `for i in $(seq 1 24); do`,
+        `  cur=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "${infoPlist}" 2>/dev/null)`,
+        `  if [ -n "$cur" ] && [ "$cur" != "${oldVersion}" ]; then exit 0; fi`,
+        `  sleep 0.5`,
+        `done`,
+        `/bin/launchctl kickstart -p gui/${uid}/${SHIPIT_LABEL}`,
+      ].join("\n");
+      spawn("/bin/sh", ["-c", script], { detached: true, stdio: "ignore" }).unref();
+    } catch (e) {
+      console.error("update install fallback failed to spawn:", e?.message);
+    }
+  }
+  autoUpdater.quitAndInstall();
+}
+
 // IPC handlers
 ipcMain.handle("get-app-version", () => app.getVersion());
 ipcMain.handle("set-badge-count", (_e, count) => app.setBadgeCount(count));
 ipcMain.handle("get-env", () => (currentBaseUrl === PROD_URL ? "prod" : "local"));
-ipcMain.handle("restart-for-update", () => autoUpdater.quitAndInstall());
+ipcMain.handle("restart-for-update", () => installUpdateAndRestart());
 ipcMain.handle("show-notification", (_e, { title, body, data }) => {
   showNativeNotification(title, body, () => {
     if (mainWindow) {
@@ -605,7 +651,7 @@ app.whenReady().then(() => {
     showNativeNotification(
       `Codecast ${info.version} is ready`,
       "Click to restart and install the update.",
-      () => autoUpdater.quitAndInstall(),
+      () => installUpdateAndRestart(),
     );
   });
   autoUpdater.on("error", (err) => {
