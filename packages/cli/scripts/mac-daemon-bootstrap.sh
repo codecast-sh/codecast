@@ -19,6 +19,6 @@ rsync -az -e "$RSYNC_E" --exclude '*.test.ts' "$SRC/" "$MUSER@$IP:$DEST/"
 echo "[2] remove stale daemon.js shadow (bun resolves import('./daemon.js') to it, not daemon.ts)"
 $SSH "rm -f $DEST/daemon.js"
 
-echo "[3] (re)start daemon from source, remote-device flag"
-$SSH 'export PATH="$HOME/.bun/bin:$PATH"; export CODECAST_REMOTE_DEVICE=1; cd /Users/m1/work/codecast/packages/cli; pkill -f "index.ts _daemon" 2>/dev/null; sleep 2; nohup bun run src/index.ts _daemon > /tmp/macdaemon.log 2>&1 & echo "  daemon pid $!"'
+echo "[3] (re)start daemon from source, remote-device flag (tmux on PATH via ~/.local/bin)"
+$SSH 'export PATH="$HOME/.local/bin:$HOME/.bun/bin:$PATH"; export CODECAST_REMOTE_DEVICE=1; cd /Users/m1/work/codecast/packages/cli; pkill -f "index.ts _daemon" 2>/dev/null; sleep 2; nohup bun run src/index.ts _daemon > /tmp/macdaemon.log 2>&1 & echo "  daemon pid $!"'
 echo "[done] tail daemon.log: ssh $MUSER@$IP 'tail -f ~/.codecast/daemon.log'"
