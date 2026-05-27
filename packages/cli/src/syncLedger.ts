@@ -1,11 +1,14 @@
 import * as fs from "fs";
 import * as path from "path";
+import { CachedJsonStore } from "./cachedJsonStore.js";
 
 const CONFIG_DIR = process.env.HOME + "/.codecast";
 const LEDGER_FILE = path.join(CONFIG_DIR, "sync-ledger.json");
 const POSITIONS_FILE = path.join(CONFIG_DIR, "positions.json");
 
-// Load legacy positions.json for backward compatibility
+// Load legacy positions.json for backward compatibility. Read straight from disk:
+// this is only a one-time fallback for ledger entries that predate the ledger, so
+// staleness relative to the live position tracker doesn't matter.
 function loadPositions(): Record<string, number> {
   try {
     if (fs.existsSync(POSITIONS_FILE)) {
@@ -29,34 +32,24 @@ interface SyncLedger {
   [filePath: string]: SyncRecord;
 }
 
-function ensureConfigDir(): void {
-  if (!fs.existsSync(CONFIG_DIR)) {
-    fs.mkdirSync(CONFIG_DIR, { recursive: true });
-  }
-}
-
-function loadLedger(): SyncLedger {
-  try {
-    if (fs.existsSync(LEDGER_FILE)) {
-      return JSON.parse(fs.readFileSync(LEDGER_FILE, "utf-8"));
+// Cached, debounced store. Replaces the old full-file read-modify-write on every
+// markSynced (which on a 1MB+ ledger blocked the daemon event loop ~15ms per sync
+// and grew without bound). Dead transcripts are pruned on load.
+const store = new CachedJsonStore<SyncRecord>({
+  filePath: LEDGER_FILE,
+  keepOnLoad: (filePath) => {
+    try {
+      return fs.existsSync(filePath);
+    } catch {
+      return true; // transient stat failure — keep the entry rather than re-sync from 0
     }
-  } catch {
-    /* ignore parse errors, start fresh */
-  }
-  return {};
-}
-
-function saveLedger(ledger: SyncLedger): void {
-  ensureConfigDir();
-  const tempFile = LEDGER_FILE + ".tmp";
-  fs.writeFileSync(tempFile, JSON.stringify(ledger, null, 2));
-  fs.renameSync(tempFile, LEDGER_FILE);
-}
+  },
+});
 
 export function getSyncRecord(filePath: string): SyncRecord | null {
-  const ledger = loadLedger();
-  if (ledger[filePath]) {
-    return ledger[filePath];
+  const record = store.get(filePath);
+  if (record) {
+    return record;
   }
 
   // Fallback to legacy positions.json
@@ -77,14 +70,12 @@ export function updateSyncRecord(
   filePath: string,
   update: Partial<SyncRecord>
 ): void {
-  const ledger = loadLedger();
-  const existing = ledger[filePath] || {
+  const existing = store.get(filePath) || {
     lastSyncedAt: 0,
     lastSyncedPosition: 0,
     messageCount: 0,
   };
-  ledger[filePath] = { ...existing, ...update };
-  saveLedger(ledger);
+  store.set(filePath, { ...existing, ...update });
 }
 
 export function markSynced(
@@ -102,11 +93,11 @@ export function markSynced(
 }
 
 export function getAllSyncRecords(): SyncLedger {
-  return loadLedger();
+  return store.getAll();
 }
 
 export function getStaleFiles(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): string[] {
-  const ledger = loadLedger();
+  const ledger = store.getAll();
   const now = Date.now();
   const stale: string[] = [];
 
@@ -136,7 +127,7 @@ export function findUnsyncedFiles(
   baseDir: string,
   maxAgeMs: number = 7 * 24 * 60 * 60 * 1000
 ): string[] {
-  const ledger = loadLedger();
+  const ledger = store.getAll();
   const positions = loadPositions(); // Fallback to legacy positions.json
   const now = Date.now();
   const unsynced: string[] = [];
