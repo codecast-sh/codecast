@@ -208,6 +208,13 @@ export class RetryQueue {
     }
   }
 
+  /** Flush the queue to disk on demand. Used after an executor mutates an op's
+   *  params in place (e.g. offloading image base64 → storageId) so the shrunk
+   *  payload survives a restart and isn't re-processed as raw base64. */
+  persistNow(): void {
+    this.persist();
+  }
+
   setExecutor(executor: (op: RetryOperation) => Promise<boolean>): void {
     this.executor = executor;
   }
