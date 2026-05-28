@@ -130,7 +130,10 @@ export const daemonHeartbeat = mutation({
     is_remote_device: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
-    const auth = await verifyApiToken(ctx, args.api_token, false);
+    // updateLastUsed=true here is the ONLY token-doc refresh: heartbeat is a
+    // single call per 30s, so its throttled last_used_at write can't create the
+    // cross-session OCC contention that the per-message write path did.
+    const auth = await verifyApiToken(ctx, args.api_token, true);
     if (!auth) {
       return { error: "Unauthorized" };
     }
