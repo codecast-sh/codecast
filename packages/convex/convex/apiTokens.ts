@@ -187,10 +187,21 @@ export const renameToken = mutation({
   },
 });
 
+// last_used_at is telemetry, not a correctness signal. Refresh it at most this
+// often, and only from the single daemonHeartbeat call (updateLastUsed=true) —
+// never from the message hot path. See updateLastUsed below.
+const TOKEN_LAST_USED_THROTTLE_MS = 10 * 60 * 1000;
+
 export async function verifyApiToken(
   ctx: { db: any },
   token: string,
-  updateLastUsed: boolean = true
+  // Default false: every authenticated CLI mutation reads this one api_tokens
+  // doc, so writing last_used_at here turned a pure-read auth check into a
+  // shared-doc write that ALL of a user's concurrent writes (50+ sessions)
+  // read. Patching it forced OCC conflicts across every in-flight write, and
+  // under load that compounded into a total write-path stall. Auth is now a
+  // pure read; only daemonHeartbeat (one call / 30s) refreshes last_used_at.
+  updateLastUsed: boolean = false
 ): Promise<{ userId: Id<"users">; tokenId: Id<"api_tokens"> } | null> {
   const tokenHash = await hashToken(token);
   const tokenDoc = await ctx.db
@@ -206,7 +217,7 @@ export async function verifyApiToken(
     return null;
   }
 
-  if (updateLastUsed && Date.now() - (tokenDoc.last_used_at || 0) > 60_000) {
+  if (updateLastUsed && Date.now() - (tokenDoc.last_used_at || 0) > TOKEN_LAST_USED_THROTTLE_MS) {
     try {
       await ctx.db.patch(tokenDoc._id, {
         last_used_at: Date.now(),
