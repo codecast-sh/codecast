@@ -174,19 +174,39 @@ else
   DMG_NAME="Codecast-${ELECTRON_VERSION}-arm64.dmg"
 
   echo "   Uploading to R2..."
-  npx wrangler r2 object put "codecast/$DMG_NAME" --file "$DMG_FILE" --remote
+  # Versioned filenames never change content, so cache them hard at the Cloudflare edge.
+  IMMUTABLE_CC="public, max-age=31536000, immutable"
+
+  npx wrangler r2 object put "codecast/$DMG_NAME" --file "$DMG_FILE" --remote \
+    --content-type "application/x-apple-diskimage" --cache-control "$IMMUTABLE_CC"
 
   ZIP_FILE=$(find dist -name "*-mac.zip" -maxdepth 1 -newer dist/mac-arm64 | head -1)
   YML_FILE="dist/latest-mac.yml"
   if [ -n "$ZIP_FILE" ] && [ -f "$YML_FILE" ]; then
     ZIP_NAME=$(basename "$ZIP_FILE")
-    npx wrangler r2 object put "codecast/desktop/$ZIP_NAME" --file "$ZIP_FILE" --remote
-    npx wrangler r2 object put "codecast/desktop/latest-mac.yml" --file "$YML_FILE" --remote
-    echo "   ✓ Auto-update artifacts uploaded (desktop/$ZIP_NAME + latest-mac.yml)"
+    npx wrangler r2 object put "codecast/desktop/$ZIP_NAME" --file "$ZIP_FILE" --remote \
+      --content-type "application/zip" --cache-control "$IMMUTABLE_CC"
+
+    # The zip blockmap is what lets electron-updater do differential (delta) downloads --
+    # without it every update pulls the full zip instead of just the changed blocks.
+    ZIP_BLOCKMAP="$ZIP_FILE.blockmap"
+    if [ -f "$ZIP_BLOCKMAP" ]; then
+      npx wrangler r2 object put "codecast/desktop/$(basename "$ZIP_BLOCKMAP")" --file "$ZIP_BLOCKMAP" --remote \
+        --content-type "application/octet-stream" --cache-control "$IMMUTABLE_CC"
+    else
+      echo "   WARNING: $ZIP_BLOCKMAP not found -- delta updates disabled for this release"
+    fi
+
+    # The manifest changes every release and is polled to detect updates, so it must never
+    # be edge-cached or clients would keep seeing the old version.
+    npx wrangler r2 object put "codecast/desktop/latest-mac.yml" --file "$YML_FILE" --remote \
+      --content-type "text/yaml" --cache-control "no-cache"
+    echo "   ✓ Auto-update artifacts uploaded (desktop/$ZIP_NAME + blockmap + latest-mac.yml)"
   else
     echo "   WARNING: Auto-update artifacts not found, uploading manual zip fallback"
     ditto -c -k --keepParent dist/mac-arm64/Codecast.app /tmp/Codecast-mac-arm64.zip
-    npx wrangler r2 object put codecast/Codecast-mac-arm64.zip --file /tmp/Codecast-mac-arm64.zip --remote
+    npx wrangler r2 object put codecast/Codecast-mac-arm64.zip --file /tmp/Codecast-mac-arm64.zip --remote \
+      --content-type "application/zip" --cache-control "$IMMUTABLE_CC"
   fi
   cd ../..
   echo "$LAST_DESKTOP_UPDATE" > "$LAST_DESKTOP_MARKER"
