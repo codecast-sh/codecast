@@ -28,7 +28,7 @@ export function shouldShowInInbox(conv: ConversationDoc): boolean {
   if (isOrphanOrSubagent(conv)) return false;
   if (conv.status === "completed" && conv.message_count === 0) return false;
   if (isNoiseTitle(conv.title)) return false;
-  if (conv.inbox_killed_at) return false;
+  if (conv.inbox_killed_at && !conv.inbox_pinned_at) return false;
   return true;
 }
 
