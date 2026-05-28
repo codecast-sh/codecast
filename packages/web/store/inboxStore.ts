@@ -1440,7 +1440,10 @@ export const useInboxStore = create<InboxStoreState>(
     const newPinned = !this.sessions[id]?.is_pinned;
     const pinnedAt = newPinned ? Date.now() : null;
     if (this.sessions[id]) this.sessions[id].is_pinned = newPinned;
-    if (this.conversations[id]) (this.conversations[id] as any).inbox_pinned_at = pinnedAt;
+    if (this.conversations[id]) {
+      (this.conversations[id] as any).inbox_pinned_at = pinnedAt;
+      if (newPinned) (this.conversations[id] as any).inbox_killed_at = undefined;
+    }
   }),
 
   renameSession: action(function (this: Draft, id: string, title: string) {
