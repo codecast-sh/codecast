@@ -45,14 +45,25 @@ ARTIFACTS=(
   "dist/Codecast-${NEW_VERSION}-arm64.dmg.blockmap"
   "dist/latest-mac.yml"
 )
+# Versioned binaries are immutable, but latest-mac.yml is polled for new releases.
+IMMUTABLE_CC="public, max-age=31536000, immutable"
 for f in "${ARTIFACTS[@]}"; do
   if [ ! -f "$f" ]; then
     echo "  ERROR: $f not found"
     exit 1
   fi
+  case "$f" in
+    *.dmg) CT="application/x-apple-diskimage"; CC="$IMMUTABLE_CC" ;;
+    *.zip) CT="application/zip"; CC="$IMMUTABLE_CC" ;;
+    *.blockmap) CT="application/octet-stream"; CC="$IMMUTABLE_CC" ;;
+    *.yml) CT="text/yaml"; CC="no-cache" ;;
+    *) CT="application/octet-stream"; CC="$IMMUTABLE_CC" ;;
+  esac
   echo "  $(basename $f)"
   aws s3 cp "$f" "s3://$R2_BUCKET/desktop/$(basename $f)" \
     --endpoint-url "$R2_ENDPOINT" \
+    --content-type "$CT" \
+    --cache-control "$CC" \
     --quiet
 done
 
