@@ -10765,6 +10765,20 @@ async function main(): Promise<void> {
           subtype?: string;
         }>;
       };
+      // Offload any still-inline images to file storage before re-sending, then
+      // persist so the queue stops carrying raw base64 across attempts. Images
+      // are normally offloaded at enqueue (syncMessagesBatch), but when the
+      // upload mutation is failing (e.g. a backend write-path stall) the base64
+      // is kept inline and persisted. The first retry after recovery replaces it
+      // with a storageId reference once, instead of re-uploading the same bytes
+      // (and re-bloating retry-queue.json / dropped-operations.json) every time.
+      const hasInlineImage = params.messages.some(
+        (m) => Array.isArray(m.images) && m.images.some((i: any) => i?.data && !i?.storageId),
+      );
+      if (hasInlineImage) {
+        await syncService.offloadImages(params.messages as any);
+        retryQueue.persistNow();
+      }
       await syncService.addMessages({ ...params, reconcileRemoteExisting: true });
       updateState();
       log(`Retry: Batch synced ${params.messages.length} messages for ${params.conversationId.slice(0, 12)}`);
