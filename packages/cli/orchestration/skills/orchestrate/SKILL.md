@@ -89,7 +89,7 @@ cast task show <task_short_id>
   Agent(
     name: "review-<task_short_id>",
     subagent_type: "reviewer",
-    prompt: "Review task <task_short_id> on branch ashot/<worktree_name>. Plan: <plan_id>"
+    prompt: "Review task <task_short_id> on branch codecast/<worktree_name>. Plan: <plan_id>"
   )
   ```
 
@@ -98,7 +98,7 @@ cast task show <task_short_id>
 - Decide: can you unblock it (re-scope, split task, fix dependency)? Or escalate to the user?
 
 **If the worker failed silently** (no status update):
-- Check if the worktree has changes: `git -C .conductor/<name> diff --stat`
+- Check if the worktree has changes: `git -C .codecast/worktrees/<name> diff --stat`
 - If no changes, re-queue the task
 - If partial changes, review them and decide
 
