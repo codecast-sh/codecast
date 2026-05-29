@@ -870,8 +870,8 @@ Agent:
   1. Reads plan via cast plan show
   2. Identifies ready tasks (open, not blocked)
   3. For each ready task (up to concurrency limit):
-     a. Creates worktree: wt <task-short-id>
-     b. Spawns implementer: agent-spawn.sh implementor impl-<task-id> .conductor/<task-id> "Work on task ct-xxx. Plan context: ..."
+     a. Creates workspace: cast workspace acquire <task-short-id>
+     b. Spawns implementer: agent-spawn.sh implementer impl-<task-id> .codecast/worktrees/<task-id> "Work on task ct-xxx. Plan context: ..."
      c. Implementer binds to plan + task on startup
   4. Monitors progress via cast plan show (progress auto-updates)
   5. When all tasks done, verifies acceptance criteria

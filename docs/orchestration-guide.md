@@ -194,7 +194,7 @@ Agent prompts are bundled into the CLI (no external config files needed). Three 
 The workhorse. Gets a task, creates a worktree, implements the feature, tests it, rebases onto main, commits. Uses Opus for maximum capability.
 
 Key behaviors:
-- Creates isolated worktree (`wt <task-id>`)
+- Creates isolated workspace (`cast workspace acquire <task-id>`)
 - Claims task (`cast task start`)
 - Implements and tests (including visual verification via Chrome extension or simulator)
 - Posts progress comments
