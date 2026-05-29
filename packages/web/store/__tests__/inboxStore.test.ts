@@ -761,6 +761,24 @@ describe("mergeMessages — sync-recovery safety net", () => {
     expect(out.map((m: any) => m._id)).toEqual(["m1", "m2", "m3", "m4", "m5"]);
   });
 
+  it("dedupes exact replayed server messages without UUIDs", () => {
+    const store = useInboxStore.getState();
+    const original = { ...msg("m1", 1), content: "same assistant text" };
+    const replay = { ...msg("m1-replay", 1), content: "same assistant text" };
+
+    store.setMessages("c1", [original, replay]);
+
+    expect(useInboxStore.getState().messages.c1.map((m: any) => m._id)).toEqual(["m1"]);
+  });
+
+  it("dedupes exact replayed server messages across recovery merges", () => {
+    const store = useInboxStore.getState();
+    store.setMessages("c1", [{ ...msg("m1", 1), content: "same assistant text" }]);
+    store.mergeMessages("c1", [{ ...msg("m1-replay", 1), content: "same assistant text" }], "append", { initialized: true });
+
+    expect(useInboxStore.getState().messages.c1.map((m: any) => m._id)).toEqual(["m1"]);
+  });
+
   it("converges on the server set after a stall + recovery sequence", () => {
     const store = useInboxStore.getState();
     // Initial load: paginated query returns 3 messages.
