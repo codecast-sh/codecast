@@ -21,6 +21,8 @@ import {
   resolveLocalSession,
   ensureRemoteClaudeReady,
   refreshRemoteCredential,
+  loadRemoteHost,
+  performMoveToRemote,
   type MoveResult,
   type RemoteHost,
 } from "./session-move.js";
@@ -50,32 +52,6 @@ interface ScalewayHostMeta {
   zone: string;
   commercialType: string;
   stopped?: boolean;
-}
-
-/** Load a usable remote Mac host from the Scaleway registry. */
-function loadRemoteHost(hostId?: string): RemoteHost {
-  if (!fs.existsSync(HOSTS_FILE)) {
-    throw new Error(
-      `No remote hosts registered. Provision a Mac (cast remote provision — TODO) or add ${HOSTS_FILE}.`,
-    );
-  }
-  const { hosts } = JSON.parse(fs.readFileSync(HOSTS_FILE, "utf-8")) as { hosts: ScalewayHostMeta[] };
-  const host = hostId
-    ? hosts.find((h) => h.id === hostId)
-    : hosts.find((h) => !h.stopped) ?? hosts[0];
-  if (!host) throw new Error(`No usable remote host found in ${HOSTS_FILE}`);
-
-  // Per-host key (written at provision) or the shared d7 test key as fallback.
-  const perHost = path.join(SCALEWAY_DIR, host.id, "id_ed25519");
-  const fallback = path.join(SCALEWAY_DIR, "d7_id_ed25519");
-  const keyPath = fs.existsSync(perHost) ? perHost : fallback;
-
-  return {
-    address: host.address,
-    user: host.sshUsername || "m1",
-    keyPath,
-    remoteBaseDir: `/Users/${host.sshUsername || "m1"}/work`,
-  };
 }
 
 function readMoves(): Record<string, MoveResult> {

@@ -43,80 +43,43 @@ describe("heartbeat carries agent_status", () => {
     expect(syncServiceSource).toMatch(forward);
   });
 
-  test("every heartbeatManagedSession call from daemon.ts passes a status argument", () => {
-    // Find every heartbeatManagedSession(...) call-site in daemon.ts
-    const callPattern = /heartbeatManagedSession\s*\(([^)]*)\)/g;
-    const calls: Array<{ args: string; line: number }> = [];
-    for (const m of daemonSource.matchAll(callPattern)) {
-      const line =
-        daemonSource.slice(0, m.index ?? 0).split("\n").length;
-      calls.push({ args: m[1].trim(), line });
-    }
-    // We expect at least the three interval call-sites to exist.
-    expect(calls.length).toBeGreaterThanOrEqual(3);
-
-    // Each call must pass two arguments (sessionId + a status var/literal).
-    // The second arg proves heartbeat is carrying status -- empty single-arg
-    // calls reintroduce the 'stuck working' bug.
-    const bad = calls.filter((c) => {
-      const parts = c.args.split(",").map((p) => p.trim()).filter(Boolean);
-      return parts.length < 2;
-    });
-    if (bad.length > 0) {
-      const summary = bad
-        .map(
-          (c) =>
-            `  - line ${c.line}: heartbeatManagedSession(${c.args}) is missing the status arg`,
-        )
-        .join("\n");
-      throw new Error(
-        `Found ${bad.length} heartbeat call-site(s) not carrying agent_status. This reintroduces the 'stuck working' bug:\n${summary}`,
-      );
-    }
-    expect(bad.length).toBe(0);
+  test("syncService exposes a batched heartbeat that forwards to the batch mutation", () => {
+    // Heartbeats are now flushed for the whole fleet in one batched mutation per
+    // tick (collapsing the inbox-invalidation storm), not one call per session.
+    expect(syncServiceSource).toMatch(/async\s+heartbeatManagedSessionsBatch\s*\(/);
+    expect(syncServiceSource).toContain("managedSessions:heartbeatBatch");
   });
 
-  test("daemon.ts sources the heartbeat status from lastSentAgentStatus in each interval", () => {
-    // At each call-site, the surrounding ~6 lines must include
-    // `lastSentAgentStatus.get(sessionId)` -- the local map of last-reported
-    // statuses. Without this, the heartbeat would carry a stale or fabricated
-    // status.
-    const callIndices: number[] = [];
-    const callRe = /heartbeatManagedSession\s*\(/g;
-    for (const m of daemonSource.matchAll(callRe)) {
-      callIndices.push(m.index ?? 0);
-    }
-    expect(callIndices.length).toBeGreaterThanOrEqual(3);
-
-    const bad: Array<{ line: number; context: string }> = [];
-    for (const idx of callIndices) {
-      const windowStart = daemonSource.lastIndexOf("\n", idx - 1);
-      // Look back up to ~400 chars for the status source line.
-      const contextStart = Math.max(0, windowStart - 400);
-      const context = daemonSource.slice(contextStart, idx);
-      if (!context.includes("lastSentAgentStatus.get(sessionId)")) {
-        const line = daemonSource.slice(0, idx).split("\n").length;
-        bad.push({ line, context: context.slice(-120).replace(/\s+/g, " ") });
-      }
-    }
-    if (bad.length > 0) {
-      const summary = bad
-        .map((b) => `  - line ${b.line}: preceding context: ...${b.context}`)
-        .join("\n");
-      throw new Error(
-        `Found ${bad.length} heartbeat call-site(s) whose status arg is not sourced from lastSentAgentStatus.get:\n${summary}`,
-      );
-    }
-    expect(bad.length).toBe(0);
+  test("the batched flush carries agent_status sourced from lastSentAgentStatus", () => {
+    // The 'stuck working' guard holds only if the batch payload carries each
+    // session's agent_status, read from the local lastSentAgentStatus map (not a
+    // stale or fabricated value). Pin that the flush builds its payload that way.
+    const idx = daemonSource.indexOf("async function flushManagedHeartbeats");
+    expect(idx).toBeGreaterThanOrEqual(0);
+    const body = daemonSource.slice(idx, idx + 2000);
+    expect(body).toContain("lastSentAgentStatus.get(sessionId)");
+    expect(body).toContain("agent_status: status");
   });
 
-  test("logHeartbeatStatus helper is defined and called at each heartbeat interval", () => {
+  test("the batch mutation reuses the single heartbeat's status-patch logic", () => {
+    // Both heartbeat paths must compute the agent_status patch identically (the
+    // change-only agent_status_updated_at rule), or the batched path could
+    // reintroduce the latched-status bug. They share buildHeartbeatPatch.
+    const managedSessionsSource = fs.readFileSync(
+      path.join(path.dirname(daemonPath), "..", "..", "convex", "convex", "managedSessions.ts"),
+      "utf8",
+    );
+    expect(managedSessionsSource).toContain("function buildHeartbeatPatch(");
+    const batchIdx = managedSessionsSource.indexOf("export const heartbeatBatch");
+    expect(batchIdx).toBeGreaterThanOrEqual(0);
+    expect(managedSessionsSource.slice(batchIdx, batchIdx + 1500)).toContain("buildHeartbeatPatch(");
+  });
+
+  test("logHeartbeatStatus helper is defined and called in the flush", () => {
     // Helper must exist so we can diagnose 'stuck in X' from logs.
     expect(daemonSource).toContain("function logHeartbeatStatus(");
-    // And it must be invoked at each heartbeat site -- at least 3 calls.
-    const callRe = /logHeartbeatStatus\s*\(/g;
-    const calls = [...daemonSource.matchAll(callRe)];
-    // One declaration site (function logHeartbeatStatus(...)) + 3+ call sites.
-    expect(calls.length).toBeGreaterThanOrEqual(4);
+    const calls = [...daemonSource.matchAll(/logHeartbeatStatus\s*\(/g)];
+    // declaration + at least one call site (the per-session loop in the flush).
+    expect(calls.length).toBeGreaterThanOrEqual(2);
   });
 });

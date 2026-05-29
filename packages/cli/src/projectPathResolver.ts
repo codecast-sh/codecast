@@ -84,3 +84,51 @@ export async function resolveLocalProjectPath(
 
   return null;
 }
+
+export interface ResumeCwdInput {
+  /** Explicit caller override (e.g. a `cast remote move` worktree path). Wins if it exists. */
+  cwdOverride?: string | null;
+  /** The cwd recorded in the session transcript — authoritative for where it ran. */
+  recordedCwd?: string | null;
+  /** Convention/learned/user-mapping resolver (the daemon's resolveLocalRepo). */
+  resolveLocalRepo: (p: string) => string | null;
+  /** Remap via the conversation's git remote (resolveLocalProjectPath wrapper). Optional. */
+  remapViaRemote?: () => Promise<string | null>;
+  /** File-existence check (overridable for tests). */
+  exists?: (p: string) => boolean;
+}
+
+// Resolve the directory a resumed/reconstituted session must run in — or null to
+// REFUSE. Resolution order:
+//   1. an explicit override that exists locally (remote-move worktree)
+//   2. the recorded transcript cwd, if it exists locally (same machine — the
+//      common case for every local resume)
+//   3. the convention/learned/user-mapping resolver (forks, renamed checkouts)
+//   4. a git-remote remap to a sibling checkout
+//
+// Returns null when none resolve. Callers MUST NOT fall back to $HOME: doing so
+// runs the agent in the wrong directory AND mislabels the project as the home
+// dir — `claude --resume` relocates the transcript under
+// ~/.claude/projects/-Users-<home>/, and the daemon later decodes project_path
+// from that slug (e.g. "/Users/m1"). Mirror start_session: surface "clone it
+// first" and let the owning device handle it.
+export async function resolveResumeCwd(input: ResumeCwdInput): Promise<string | null> {
+  const exists = input.exists ?? defaultExists;
+
+  const override = input.cwdOverride?.trim() || null;
+  if (override && exists(override)) return override;
+
+  const recorded = input.recordedCwd?.trim() || null;
+  if (recorded) {
+    if (exists(recorded)) return recorded;
+    const viaLocal = input.resolveLocalRepo(recorded);
+    if (viaLocal && exists(viaLocal)) return viaLocal;
+  }
+
+  if (input.remapViaRemote) {
+    const viaRemote = await input.remapViaRemote();
+    if (viaRemote && exists(viaRemote)) return viaRemote;
+  }
+
+  return null;
+}

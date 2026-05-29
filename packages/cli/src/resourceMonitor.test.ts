@@ -6,7 +6,11 @@ import {
   collectSessionResources,
   formatResourcesLog,
   nextAwakeIdleMs,
+  shouldReportMetrics,
+  isSessionActive,
+  IDLE_METRICS_REFRESH_MS,
   type ProcessInfo,
+  type ReportedMetrics,
 } from "./resourceMonitor.js";
 
 describe("resourceMonitor", () => {
@@ -174,6 +178,47 @@ describe("resourceMonitor", () => {
       expect(result).toContain("cpu=15.5%");
       expect(result).toContain("mem=100.0MB");
       expect(result).toContain("procs=5");
+    });
+  });
+
+  describe("shouldReportMetrics", () => {
+    const base: ReportedMetrics = { cpu: 0, memory: 100_000_000, pidCount: 1, agentPid: 42, at: 1_000_000 };
+    const cur = { cpu: 0, memory: 100_000_000, pidCount: 1, agentPid: 42 };
+
+    it("always reports when there is no prior sample", () => {
+      expect(shouldReportMetrics({ cur, prev: undefined, status: "idle", now: base.at })).toBe(true);
+    });
+
+    it("skips an idle, flat, recently-reported session (the fleet-saturation case)", () => {
+      expect(shouldReportMetrics({ cur, prev: base, status: "idle", now: base.at + 30_000 })).toBe(false);
+      expect(shouldReportMetrics({ cur, prev: base, status: "stopped", now: base.at + 60_000 })).toBe(false);
+    });
+
+    it("reports active sessions every tick for full-fidelity graphs", () => {
+      expect(shouldReportMetrics({ cur, prev: base, status: "working", now: base.at + 30_000 })).toBe(true);
+      // burning CPU counts as active even with an idle status
+      expect(shouldReportMetrics({ cur: { ...cur, cpu: 25 }, prev: base, status: "idle", now: base.at + 30_000 })).toBe(true);
+    });
+
+    it("reports on a meaningful change while idle", () => {
+      // ≥10% memory swing
+      expect(shouldReportMetrics({ cur: { ...cur, memory: 115_000_000 }, prev: base, status: "idle", now: base.at + 30_000 })).toBe(true);
+      // process-tree shape change
+      expect(shouldReportMetrics({ cur: { ...cur, pidCount: 3 }, prev: base, status: "idle", now: base.at + 30_000 })).toBe(true);
+      // agent_pid change (the server snapshot patch keys off this)
+      expect(shouldReportMetrics({ cur: { ...cur, agentPid: 99 }, prev: base, status: "idle", now: base.at + 30_000 })).toBe(true);
+    });
+
+    it("re-reports an idle session on the slow keep-alive cadence", () => {
+      expect(shouldReportMetrics({ cur, prev: base, status: "idle", now: base.at + IDLE_METRICS_REFRESH_MS - 1 })).toBe(false);
+      expect(shouldReportMetrics({ cur, prev: base, status: "idle", now: base.at + IDLE_METRICS_REFRESH_MS })).toBe(true);
+    });
+
+    it("isSessionActive matches the idle accounting definition", () => {
+      expect(isSessionActive(0, "idle")).toBe(false);
+      expect(isSessionActive(5, "idle")).toBe(true);
+      expect(isSessionActive(0, "working")).toBe(true);
+      expect(isSessionActive(0, undefined)).toBe(false);
     });
   });
 });

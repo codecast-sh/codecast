@@ -4,10 +4,11 @@ import * as path from "path";
 import { randomUUID, createHash } from "node:crypto";
 import * as http from "http";
 import { Database } from "bun:sqlite";
-import { execSync, execFileSync, exec, execFile, spawn } from "child_process";
+import { execSync, execFileSync, exec, execFile, spawn, spawnSync } from "child_process";
 import { watch as chokidarWatch } from "chokidar";
 import { SessionWatcher, type SessionEvent } from "./sessionWatcher.js";
 import { deviceId, deviceLabel } from "./remote/device.js";
+import { loadRemoteHost, performMoveToRemote } from "./remote/session-move.js";
 import { CursorWatcher, type CursorSessionEvent } from "./cursorWatcher.js";
 import { CursorTranscriptWatcher, type CursorTranscriptEvent } from "./cursorTranscriptWatcher.js";
 import { CodexWatcher, type CodexSessionEvent } from "./codexWatcher.js";
@@ -43,7 +44,7 @@ import { performReconciliation, repairDiscrepancies } from "./reconciliation.js"
 import { TaskScheduler } from "./taskScheduler.js";
 import { hasTmux } from "./tmux.js";
 import { formatFeedResults } from "./formatter.js";
-import { collectSessionResources, formatResourcesLog, nextAwakeIdleMs, type SessionResources } from "./resourceMonitor.js";
+import { collectSessionResources, formatResourcesLog, nextAwakeIdleMs, shouldReportMetrics, type ReportedMetrics, type SessionResources } from "./resourceMonitor.js";
 import {
   fetchExport,
   generateClaudeCodeJsonl,
@@ -59,7 +60,7 @@ import {
   extractJsonlPermissionMode,
   rewriteSubagentJsonlToUuid,
 } from "./resumeCommand.js";
-import { resolveLocalProjectPath } from "./projectPathResolver.js";
+import { resolveLocalProjectPath, resolveResumeCwd } from "./projectPathResolver.js";
 
 const ENRICHED_PATH = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
 const EXEC_TIMEOUT_MS = 10_000;
@@ -193,6 +194,62 @@ function localSessionDir(remotePath?: string): string | undefined {
   return resolveLocalRepo(remotePath) ?? remotePath;
 }
 
+// Resolve the cwd a resume/reconstitute must run in, or null to REFUSE. Wires the
+// daemon's resolveLocalRepo + (when a conversation is known) a git-remote remap
+// through the sync service. Mirrors the start_session contract so a resume that
+// lands on a machine without the checkout never silently runs in $HOME (which
+// mislabels the project as the home dir — see resolveResumeCwd).
+async function resolveResumeCwdOrRefuse(opts: {
+  recordedCwd?: string;
+  cwdOverride?: string;
+  conversationId?: string;
+}): Promise<string | null> {
+  const conversationId = opts.conversationId;
+  return resolveResumeCwd({
+    cwdOverride: opts.cwdOverride,
+    recordedCwd: opts.recordedCwd,
+    resolveLocalRepo,
+    remapViaRemote: (conversationId && syncServiceRef)
+      ? async () => {
+          const svc = syncServiceRef!;
+          const info = await svc.getProjectInfo(conversationId).catch(() => null);
+          const resolved = await resolveLocalProjectPath({
+            projectPath: info?.project_path ?? opts.recordedCwd ?? null,
+            gitRoot: info?.git_root ?? null,
+            gitRemoteUrl: info?.git_remote_url ?? null,
+            findCandidates: (url) => svc.findLocalCheckouts(url).catch(() => []),
+          });
+          return resolved?.path ?? null;
+        }
+      : undefined,
+  });
+}
+
+// When a resume can't be placed in a real local checkout, mirror start_session:
+// stay silent if another device owns the conversation (it will run it), else
+// surface "clone it first" on the conversation. Never falls back to $HOME.
+async function refuseResumeNoLocalCheckout(
+  sessionId: string,
+  conversationId: string | undefined,
+  recordedCwd: string | undefined,
+): Promise<void> {
+  const short = sessionId.slice(0, 8);
+  if (conversationId && syncServiceRef) {
+    const owner = await syncServiceRef.getConversationOwner(conversationId).catch(() => null);
+    if (owner && owner !== deviceId()) {
+      log(`[REMOTE] resume ${short}: no local checkout for ${recordedCwd ?? "<unknown>"}, owned by ${owner.slice(0, 8)} — staying silent`);
+      return;
+    }
+    const info = await syncServiceRef.getProjectInfo(conversationId).catch(() => null);
+    const remote = info?.git_remote_url ?? "<unknown remote>";
+    const err = `No local checkout for ${remote} (recorded path ${recordedCwd ?? "unknown"} doesn't exist here). Clone it first.`;
+    syncServiceRef.setSessionError(conversationId, err).catch(() => {});
+    log(`[REMOTE] resume refused for ${short}: ${err}`);
+  } else {
+    log(`Cannot auto-resume ${short}: recorded cwd ${recordedCwd ?? "<unknown>"} not found locally; refusing (no $HOME fallback)`);
+  }
+}
+
 function validatePath(p: string): string | null {
   if (!p || typeof p !== "string") return null;
   if (!path.isAbsolute(p)) return null;
@@ -281,6 +338,12 @@ interface Config {
   // the local directory to resume in. Authoritative — checked before the learned map
   // and the convention search in resolveLocalRepo, and never auto-clobbered.
   project_mappings?: Record<string, string>;
+  // Tier 3 "warm pool": proactively re-resume up to N most-recently-active sessions
+  // whose agent died unexpectedly (terminal closed / crash) while the conversation was
+  // still hot, so the next message lands on a live agent instead of a cold boot. 0 (the
+  // default) disables it — re-warming is speculative (it can resurrect a session the
+  // user deliberately closed and costs a claude process per slot), so it's opt-in.
+  warm_pool_size?: number;
 }
 
 function getPermissionFlags(agentType: "claude" | "codex" | "cursor" | "gemini", config?: Config | null): string | null {
@@ -1506,6 +1569,16 @@ async function executeRemoteCommand(
             findCandidates: (url) => syncServiceRef!.findLocalCheckouts(url).catch(() => []),
           });
           if (!resolved) {
+            // Don't clobber a session another device already owns. With device
+            // routing this daemon shouldn't even receive a start_session it can't
+            // run, but if it does (untargeted broadcast fallback), the machine
+            // that actually has the checkout wins — we stay silent rather than
+            // stamping a bogus "clone it first" banner over a live session.
+            const owner = await syncServiceRef.getConversationOwner(conversationId).catch(() => null);
+            if (owner && owner !== deviceId()) {
+              log(`[REMOTE] start_session: no local checkout, but ${String(conversationId).slice(0, 12)} is owned by ${owner.slice(0, 8)} — staying silent`);
+              break;
+            }
             const remote = projectInfo?.git_remote_url ?? "<unknown remote>";
             error = `No local checkout for ${remote} (recorded path ${rawPath} doesn't exist here). Clone it first.`;
             log(`[REMOTE] start_session refused: ${error}`);
@@ -1521,6 +1594,21 @@ async function executeRemoteCommand(
           log(`[REMOTE] start_session refused: ${error}`);
           break;
         }
+
+        // Atomic pre-spawn claim: this daemon has resolved a runnable cwd, so now
+        // race for ownership BEFORE spawning. Targeted commands already own the
+        // conversation (no-op win). For a broadcast start_session (target couldn't
+        // be resolved → every daemon with the checkout reaches here), Convex
+        // serializes the claim so exactly one daemon wins; the losers skip,
+        // preventing a double-spawn across machines.
+        if (conversationId && syncServiceRef) {
+          const claim = await syncServiceRef.claimConversationForStart(conversationId);
+          if (!claim.won) {
+            log(`[REMOTE] start_session: ${String(conversationId).slice(0, 12)} owned by ${claim.owner?.slice(0, 8) ?? "another live device"} — skipping spawn`);
+            break;
+          }
+        }
+
         let worktreeResult: WorktreeResult | null = null;
 
         if (isolated && cwd) {
@@ -2044,8 +2132,7 @@ async function executeRemoteCommand(
             resumeSessionCache.delete(sessionId);
             if (!result) result = "killed_tmux";
           }
-          const hbInterval = resumeHeartbeatIntervals.get(sessionId);
-          if (hbInterval) { clearInterval(hbInterval); resumeHeartbeatIntervals.delete(sessionId); }
+          stopManagedSessionHeartbeat(sessionId);
           stopCodexPermissionPoller(sessionId);
           sessionProcessCache.delete(sessionId);
           resumeInFlight.delete(sessionId);
@@ -2163,8 +2250,16 @@ async function executeRemoteCommand(
           result = JSON.stringify({ resumed: true, session_id: sessionId });
           log(`[REMOTE] Force-resume succeeded for ${sessionId.slice(0, 8)}`);
         } else if (conversationId && projectPath) {
-          log(`[REMOTE] Resume failed for ${sessionId.slice(0, 8)}, reconstituting session from DB...`);
-          const cwd = resolveLocalRepo(projectPath) || process.env.HOME || "/tmp";
+          // Reconstitution AND the blank-session fallback below both run in `cwd`.
+          // Resolve it to a real local checkout or refuse — never $HOME, which
+          // would reconstitute/spawn in the home dir and mislabel the project.
+          const cwd = await resolveResumeCwdOrRefuse({ recordedCwd: projectPath, cwdOverride: projectPath, conversationId });
+          if (!cwd) {
+            await refuseResumeNoLocalCheckout(sessionId, conversationId, projectPath);
+            restartingSessionIds.delete(sessionId);
+            break;
+          }
+          log(`[REMOTE] Resume failed for ${sessionId.slice(0, 8)}, reconstituting session from DB in ${cwd}...`);
           let reconstituted = false;
 
           if (config?.convex_url && config?.auth_token) {
@@ -2228,7 +2323,7 @@ async function executeRemoteCommand(
               break;
             }
             const blankAgentType = resumeAgentType || "claude";
-            log(`[REMOTE] Starting blank ${blankAgentType} session in ${projectPath}`);
+            log(`[REMOTE] Starting blank ${blankAgentType} session in ${cwd}`);
             const shortId = Math.random().toString(36).slice(2, 8);
             const tmuxSession = `cc-${blankAgentType}-${shortId}`;
             let blankBinary: string;
@@ -2472,6 +2567,35 @@ async function executeRemoteCommand(
         fs.unlinkSync(resolved);
         result = JSON.stringify({ success: true });
         log(`[CONFIG] Deleted ${resolved}`);
+        break;
+      }
+      case "move_to_device": {
+        // Web-triggered move: THIS (source) daemon performs the local-only
+        // transfer to the destination device, then flips ownership + resumes
+        // there. Only reaches us because the command was target_device_id'd to us.
+        const parsed = commandArgs ? JSON.parse(commandArgs) : {};
+        const sessionId: string | undefined = parsed.session_id;
+        const conversationId: string | undefined = parsed.conversation_id;
+        const toDeviceId: string | undefined = parsed.to_device_id;
+        if (!sessionId || !conversationId || !toDeviceId) {
+          error = "move_to_device: missing session_id/conversation_id/to_device_id";
+          break;
+        }
+        log(`[MOVE] moving ${sessionId.slice(0, 8)} -> device ${toDeviceId.slice(0, 8)}`);
+        const host = loadRemoteHost();
+        const move = performMoveToRemote(host, sessionId);
+        log(`[MOVE] transferred to ${host.user}@${host.address}:${move.remoteCwd}; flipping ownership + resuming`);
+        await syncServiceRef!.getClient().mutation("devices:moveSessionToDevice" as any, {
+          api_token: config.auth_token,
+          conversation_id: conversationId,
+          owner_device_id: toDeviceId,
+          project_path: move.remoteCwd,
+          resume: true,
+        });
+        // Stop the local copy of this session so only the destination runs it.
+        await clearConversationDeliveryAndResumeState(conversationId, sessionId, "move_to_device").catch(() => {});
+        result = JSON.stringify({ moved: true, to: toDeviceId, remoteCwd: move.remoteCwd });
+        log(`[MOVE] done — ${sessionId.slice(0, 8)} now owned by ${toDeviceId.slice(0, 8)}`);
         break;
       }
       default:
@@ -5051,10 +5175,10 @@ function detectSessionAgentType(sessionId: string): "claude" | "codex" | "cursor
 
 function tryRegisterSessionProcess(sessionId: string, agentType: "claude" | "codex" | "cursor" | "gemini"): void {
   try {
-    // Heartbeat intervals are in-memory and lost on daemon restart, while registry
+    // Heartbeat membership is in-memory and lost on daemon restart, while registry
     // files persist on disk. Always ensure heartbeat is running for known sessions,
     // even when skipping the expensive process discovery below.
-    if (syncServiceRef && !resumeHeartbeatIntervals.has(sessionId)) {
+    if (syncServiceRef && !managedHeartbeatSessions.has(sessionId)) {
       const cache = readConversationCache();
       const conversationId = cache[sessionId];
       if (conversationId) {
@@ -5087,17 +5211,7 @@ function tryRegisterSessionProcess(sessionId: string, agentType: "claude" | "cod
           }).catch(() => {
             syncServiceRef!.registerManagedSession(sessionId, result.pid, undefined, conversationId).catch(() => {});
           });
-          if (!resumeHeartbeatIntervals.has(sessionId)) {
-            const interval = setInterval(async () => {
-              try {
-                const status = lastSentAgentStatus.get(sessionId);
-                logHeartbeatStatus(sessionId, status);
-                const result = await syncServiceRef!.heartbeatManagedSession(sessionId, status);
-                await processHeartbeatResponse(sessionId, result);
-              } catch {}
-            }, 30000);
-            resumeHeartbeatIntervals.set(sessionId, interval);
-          }
+          ensureManagedSessionHeartbeat(sessionId);
         }
       }
     }).catch(() => {});
@@ -6650,8 +6764,19 @@ function findSessionFile(sessionId: string): SessionFileInfo | null {
 }
 
 const resumeSessionCache = new Map<string, string>();
-const resumeHeartbeatIntervals = new Map<string, NodeJS.Timeout>();
-const heartbeatHealthCheckCounter = new Map<string, number>();
+// Sessions whose liveness we heartbeat. A single global flush loop batches all
+// of these into ONE mutation per tick (flushManagedHeartbeats) instead of one
+// mutation per session — so the inbox/plans/tasks subscriptions, which collect
+// every managed_sessions row, are invalidated once per flush rather than once
+// per session per 30s. See managedSessions:heartbeatBatch.
+const managedHeartbeatSessions = new Set<string>();
+let heartbeatFlushTimer: NodeJS.Timeout | null = null;
+let heartbeatFlushInProgress = false;
+let heartbeatFlushCount = 0;
+const HEARTBEAT_FLUSH_INTERVAL_MS = 30_000;
+// Cap the per-transaction slice so a write conflict retries a bounded number of
+// rows, not the whole fleet.
+const HEARTBEAT_BATCH_SIZE = 25;
 const HEALTH_CHECK_EVERY_N_HEARTBEATS = 3;
 
 // Tmux-kill policy: the daemon only tears down a managed tmux session in
@@ -6662,12 +6787,11 @@ const HEALTH_CHECK_EVERY_N_HEARTBEATS = 3;
 // a worker. Operators drive repair via the UI's Kill & restart action when
 // they see a session looks wedged.
 
-async function processHeartbeatResponse(_sessionId: string, _result?: { found: boolean; dismissed?: boolean }): Promise<void> {
-  // The previous "dismissed + idle for 1h → kill" auto-reap has been removed.
-  // Dismissal is a UI state, not a worker-lifecycle signal: a user can dismiss
-  // a card and still expect the agent to be running when they return. Workers
-  // now live until the user explicitly kills them.
-}
+// Heartbeat responses are intentionally ignored. The old "dismissed + idle for
+// 1h → kill" auto-reap was removed: dismissal is a UI state, not a worker
+// lifecycle signal — a user can dismiss a card and still expect the agent
+// running when they return. Workers live until the user explicitly kills them.
+// (The batched heartbeat therefore returns only a count, not per-session state.)
 
 // Codex tmux pane monitoring for permission prompts
 const codexPermissionPollers = new Map<string, NodeJS.Timeout>();
@@ -7064,34 +7188,96 @@ const RESTART_GUARD_TTL_MS = 60_000;
 const resumeInFlight = new Map<string, Promise<boolean>>();
 const resumeInFlightStarted = new Map<string, number>();
 const RESUME_IN_FLIGHT_TIMEOUT_MS = 120_000;
+
+// How long to wait for a cold-resumed agent to render its prompt before giving up.
+// A `claude --resume` replays the whole transcript on boot, so the window scales
+// with JSONL size. The floor was 15s, which was too tight for a from-scratch
+// (reconstituted) session — the boot would still be initializing when the poll
+// gave up, and the optimistic inject pasted into a half-booted/dead shell. 30s
+// floor gives a normal cold boot room to finish.
+export function resumeReadinessPollMs(jsonlSizeBytes: number): number {
+  if (jsonlSizeBytes > 10_000_000) return 90_000;
+  if (jsonlSizeBytes > 1_000_000) return 45_000;
+  return 30_000;
+}
+
+// ---- Tier 3: warm pool selection (pure policy, unit-tested) ----
+// Only an ACTIVE recent session whose agent has DIED is a warm candidate. The
+// recency window is deliberately short and mirrors the watchdog's idle-stale cutoff:
+// once a session has been idle long enough to be marked completed it is no longer
+// "hot", and re-warming it would resurrect work the user (or the agent) finished.
+// Circuit-broken and fatally-failed sessions are excluded so we never pile resume
+// attempts onto something that's already failing.
+export const WARM_POOL_ACTIVE_STATUSES = new Set(["idle", "working", "thinking", "connected"]);
+
+export interface WarmCandidate {
+  sessionId: string;
+  status: string;      // last hook status for the session
+  tsMs: number;        // when that status was observed (ms epoch)
+  agentAlive: boolean; // is a live agent already attached?
+  circuitOpen: boolean;
+  fatal: boolean;
+}
+
+export function selectSessionsToWarm(
+  candidates: WarmCandidate[],
+  nowMs: number,
+  opts: { recencyWindowMs: number; cap: number },
+): string[] {
+  if (opts.cap <= 0) return [];
+  return candidates
+    .filter(c => WARM_POOL_ACTIVE_STATUSES.has(c.status))
+    .filter(c => nowMs - c.tsMs <= opts.recencyWindowMs)
+    .filter(c => !c.agentAlive)   // already warm — nothing to do
+    .filter(c => !c.circuitOpen)  // already failing — don't pile on
+    .filter(c => !c.fatal)        // unrecoverable — don't try
+    .sort((a, b) => b.tsMs - a.tsMs) // most-recently-active first
+    .slice(0, opts.cap)
+    .map(c => c.sessionId);
+}
+
 type ResumeFatalReason = "missing_conversation" | "session_not_found";
 const resumeFatalReasons = new Map<string, ResumeFatalReason>();
 const conversationResumeFailures = new Map<string, { count: number; lastFailure: number }>();
 const CONVERSATION_RESUME_MAX_FAILURES = 3;
 const CONVERSATION_RESUME_COOLDOWN_MS = 5 * 60 * 1000; // 5 min cooldown after max failures
 
-const sessionDeliveryFailures = new Map<string, { count: number; lastFailure: number }>();
+// The circuit breaker is reason-aware. A FATAL failure (no conversation, retired
+// model, session JSONL truly gone) means "stop trying for a while" — the long
+// cooldown. A TRANSIENT failure (a resume we just launched died, a slow/raced
+// boot, a one-off SESSION_EXITED during inject) means "back off briefly, then
+// retry" — a short cooldown. Treating both the same is what turned a single
+// recoverable cold-boot into a 5-minute dead session: 3 quick transient give-ups
+// tripped the 300s breaker even though the identical resume succeeded moments
+// later. The cooldown is set by the MOST RECENT failure's severity.
+const sessionDeliveryFailures = new Map<string, { count: number; lastFailure: number; cooldownMs: number }>();
 const SESSION_CIRCUIT_BREAKER_THRESHOLD = 3;
-const SESSION_CIRCUIT_BREAKER_COOLDOWN_MS = 300_000; // 5 minutes
+const SESSION_CIRCUIT_BREAKER_COOLDOWN_MS = 300_000; // 5 minutes — fatal failures
+const SESSION_CIRCUIT_BREAKER_TRANSIENT_COOLDOWN_MS = 15_000; // 15s — transient (slow/raced boot)
 
-function isSessionCircuitOpen(sessionId: string): boolean {
+export function isSessionCircuitOpen(sessionId: string): boolean {
   const entry = sessionDeliveryFailures.get(sessionId);
   if (!entry) return false;
   if (entry.count >= SESSION_CIRCUIT_BREAKER_THRESHOLD) {
-    if (Date.now() - entry.lastFailure < SESSION_CIRCUIT_BREAKER_COOLDOWN_MS) return true;
+    if (Date.now() - entry.lastFailure < entry.cooldownMs) return true;
     sessionDeliveryFailures.delete(sessionId);
   }
   return false;
 }
 
-function recordSessionDeliveryFailure(sessionId: string): void {
-  const entry = sessionDeliveryFailures.get(sessionId) || { count: 0, lastFailure: 0 };
-  entry.count++;
-  entry.lastFailure = Date.now();
-  sessionDeliveryFailures.set(sessionId, entry);
+export function recordSessionDeliveryFailure(sessionId: string, opts?: { transient?: boolean }): void {
+  const prev = sessionDeliveryFailures.get(sessionId);
+  const cooldownMs = opts?.transient
+    ? SESSION_CIRCUIT_BREAKER_TRANSIENT_COOLDOWN_MS
+    : SESSION_CIRCUIT_BREAKER_COOLDOWN_MS;
+  sessionDeliveryFailures.set(sessionId, {
+    count: (prev?.count ?? 0) + 1,
+    lastFailure: Date.now(),
+    cooldownMs,
+  });
 }
 
-function resetSessionDeliveryFailures(sessionId: string): void {
+export function resetSessionDeliveryFailures(sessionId: string): void {
   sessionDeliveryFailures.delete(sessionId);
 }
 
@@ -7136,41 +7322,90 @@ export function resumeModelFlag(jsonlContent: string, extraFlags: string): strin
 
 function stopManagedSessionHeartbeat(sessionId: string | undefined): void {
   if (!sessionId) return;
-  const interval = resumeHeartbeatIntervals.get(sessionId);
-  if (interval) {
-    clearInterval(interval);
-    resumeHeartbeatIntervals.delete(sessionId);
-  }
-  heartbeatHealthCheckCounter.delete(sessionId);
+  managedHeartbeatSessions.delete(sessionId);
 }
 
 function ensureManagedSessionHeartbeat(sessionId: string): void {
-  if (!syncServiceRef || resumeHeartbeatIntervals.has(sessionId)) return;
-  heartbeatHealthCheckCounter.set(sessionId, 0);
-  const interval = setInterval(async () => {
+  if (!syncServiceRef) return;
+  managedHeartbeatSessions.add(sessionId);
+  ensureHeartbeatFlushLoop();
+}
+
+function ensureHeartbeatFlushLoop(): void {
+  if (heartbeatFlushTimer || !syncServiceRef) return;
+  heartbeatFlushTimer = setInterval(() => { void flushManagedHeartbeats(); }, HEARTBEAT_FLUSH_INTERVAL_MS);
+}
+
+// Run an async op over items with bounded concurrency (a small worker pool), so
+// a fleet-wide pass doesn't fire N tmux/network calls at once.
+async function runBounded<T>(items: T[], concurrency: number, fn: (item: T) => Promise<void>): Promise<void> {
+  let idx = 0;
+  const worker = async () => { while (idx < items.length) await fn(items[idx++]); };
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
+}
+
+// Deterministically place a session in one of `mod` buckets — used to spread the
+// per-session health check across flush ticks instead of running the whole fleet
+// on one tick.
+export function heartbeatHealthCheckBucket(sessionId: string, mod: number): number {
+  let h = 0;
+  for (let i = 0; i < sessionId.length; i++) h = (h * 31 + sessionId.charCodeAt(i)) >>> 0;
+  return h % mod;
+}
+
+// One flush per HEARTBEAT_FLUSH_INTERVAL_MS for the WHOLE fleet: collapses N
+// per-session heartbeat transactions into ⌈N/25⌉ batched ones, so the inbox
+// subscription recomputes ~once per flush instead of ~once per session.
+async function flushManagedHeartbeats(): Promise<void> {
+  if (!syncServiceRef || managedHeartbeatSessions.size === 0) return;
+  // Re-entrancy guard: the flush does the batched sends AND a bounded tmux
+  // health-check pass, which under load can run past one interval. Skipping a
+  // tick while the prior flush is still in flight keeps flushes from piling up
+  // (registration stamps last_heartbeat fresh, so a skipped tick is harmless).
+  if (heartbeatFlushInProgress) return;
+  heartbeatFlushInProgress = true;
+  try {
+    await runHeartbeatFlush();
+  } finally {
+    heartbeatFlushInProgress = false;
+  }
+}
+
+async function runHeartbeatFlush(): Promise<void> {
+  const ids = [...managedHeartbeatSessions];
+  const flushTick = heartbeatFlushCount++;
+  const now = Date.now();
+
+  // Batched liveness write. logHeartbeatStatus stays per-session (throttled,
+  // local-only). Resource metrics are pushed separately by collectResourceSnapshot.
+  const payload = ids.map((sessionId) => {
+    const status = lastSentAgentStatus.get(sessionId);
+    logHeartbeatStatus(sessionId, status);
+    return status
+      ? { session_id: sessionId, agent_status: status, client_ts: now }
+      : { session_id: sessionId };
+  });
+  const batchCount = Math.ceil(payload.length / HEARTBEAT_BATCH_SIZE);
+  for (let i = 0; i < payload.length; i += HEARTBEAT_BATCH_SIZE) {
     try {
-      const status = lastSentAgentStatus.get(sessionId);
-      logHeartbeatStatus(sessionId, status);
-      const result = await syncServiceRef!.heartbeatManagedSession(sessionId, status);
-      await processHeartbeatResponse(sessionId, result);
+      await syncServiceRef.heartbeatManagedSessionsBatch(payload.slice(i, i + HEARTBEAT_BATCH_SIZE));
     } catch {}
+  }
+  // One line/tick to confirm the fleet flushes in a handful of transactions
+  // (each = one inbox invalidation) rather than ~N. Pre-batch this was N/30s.
+  log(`[HEARTBEAT-FLUSH] sessions=${ids.length} batches=${batchCount}`);
 
-    // Resource metrics (incl. agent_pid + awake-idle) are reported centrally by
-    // collectResourceSnapshot for every live session, so nothing to push here.
-
-    const count = (heartbeatHealthCheckCounter.get(sessionId) || 0) + 1;
-    heartbeatHealthCheckCounter.set(sessionId, count);
-    if (count % HEALTH_CHECK_EVERY_N_HEARTBEATS === 0) {
-      // Self-heal a status latch frozen on a lost hook transition. Runs for every
-      // session with a heartbeat -- including bare-terminal ones that have no tmux
-      // pane and so are skipped by heartbeatHealthCheck below.
-      try {
-        reconcileStatusFromTranscript(sessionId, syncServiceRef!);
-      } catch {}
-      await heartbeatHealthCheck(sessionId);
-    }
-  }, 30000);
-  resumeHeartbeatIntervals.set(sessionId, interval);
+  // Self-heal pass (local): reconcile a status latched on a lost hook transition
+  // against the transcript/pane. Sharded by session so only ~1/N of the fleet
+  // runs each tick (every session every N ticks ≈ 90s), and bounded so the tmux
+  // captures stay gentle. heartbeatHealthCheck also reconstitutes a session whose
+  // tmux has vanished.
+  const phase = flushTick % HEALTH_CHECK_EVERY_N_HEARTBEATS;
+  const due = ids.filter((id) => heartbeatHealthCheckBucket(id, HEALTH_CHECK_EVERY_N_HEARTBEATS) === phase);
+  for (const sessionId of due) {
+    try { reconcileStatusFromTranscript(sessionId, syncServiceRef); } catch {}
+  }
+  await runBounded(due, 5, (sessionId) => heartbeatHealthCheck(sessionId).catch(() => {}));
 }
 
 // Reads the last ~64KB of a file as UTF-8 without loading the whole thing --
@@ -7305,7 +7540,6 @@ async function handleDeadSession(sessionId: string, tmuxSession: string): Promis
   resumeSessionCache.delete(sessionId);
   stopCodexPermissionPoller(sessionId);
   stopManagedSessionHeartbeat(sessionId);
-  heartbeatHealthCheckCounter.delete(sessionId);
 
   const cache = readConversationCache();
   const conversationId = cache[sessionId];
@@ -7571,6 +7805,9 @@ const RESOURCE_MONITOR_INTERVAL_MS = 30_000;
 // session look "idle for hours" the moment it wakes. A session's counter resets
 // to 0 whenever it shows activity (CPU above the floor or a working status).
 const sessionAwakeIdleMs = new Map<string, number>();
+// Last metrics actually pushed per session, so shouldReportMetrics can skip
+// re-reporting idle, unchanged sessions every tick (see resourceMonitor.ts).
+const lastReportedMetrics = new Map<string, ReportedMetrics>();
 let lastResourceTickAt = 0;
 // A gap larger than this between resource ticks means the daemon was suspended
 // (sleep) or stalled — either way that interval is not real awake-idle time.
@@ -7620,6 +7857,9 @@ async function collectResourceSnapshot(): Promise<void> {
     for (const sessionId of sessionAwakeIdleMs.keys()) {
       if (!resources.has(sessionId)) sessionAwakeIdleMs.delete(sessionId);
     }
+    for (const sessionId of lastReportedMetrics.keys()) {
+      if (!resources.has(sessionId)) lastReportedMetrics.delete(sessionId);
+    }
 
     // Push metrics for every live session here (not only resume-managed ones),
     // so the Sessions page sees fresh metrics — and thus liveness — for anything
@@ -7632,6 +7872,8 @@ async function collectResourceSnapshot(): Promise<void> {
     // actually idle. A small worker pool caps in-flight metric requests so syncs
     // always have headroom. Metrics are best-effort and unawaited per-call, so the
     // pool just paces them across the tick.
+    let metricsReported = 0;
+    let metricsSkipped = 0;
     if (syncServiceRef) {
       const entries = [...resources.entries()];
       const METRICS_CONCURRENCY = 4;
@@ -7640,6 +7882,16 @@ async function collectResourceSnapshot(): Promise<void> {
         while (idx < entries.length) {
           const [sessionId, r] = entries[idx++];
           const agentPid = sessionProcessCache.get(sessionId)?.pid;
+          const status = lastSentAgentStatus.get(sessionId);
+          // Skip flat, idle, recently-reported sessions: this is what keeps the
+          // per-tick write burst proportional to ACTIVE sessions rather than the
+          // whole fleet, leaving socket headroom for message sync.
+          if (!shouldReportMetrics({ cur: { cpu: r.cpu, memory: r.memory, pidCount: r.pidCount, agentPid }, prev: lastReportedMetrics.get(sessionId), status, now })) {
+            metricsSkipped++;
+            continue;
+          }
+          metricsReported++;
+          lastReportedMetrics.set(sessionId, { cpu: r.cpu, memory: r.memory, pidCount: r.pidCount, agentPid, at: now });
           await syncServiceRef!.reportSessionMetrics(
             sessionId, r.cpu, r.memory, r.pidCount, agentPid, sessionAwakeIdleMs.get(sessionId) ?? 0,
           ).catch(() => {});
@@ -7651,7 +7903,7 @@ async function collectResourceSnapshot(): Promise<void> {
     }
 
     if (resources.size > 0) {
-      log(`[RESOURCES] ${formatResourcesLog(resources)}`);
+      log(`[RESOURCES] metrics reported=${metricsReported} skipped=${metricsSkipped} | ${formatResourcesLog(resources)}`);
     }
   } catch (err) {
     log(`[RESOURCES] Collection failed: ${err instanceof Error ? err.message : String(err)}`, "warn");
@@ -7818,8 +8070,7 @@ async function resolveLiveTmuxTarget(
   const dropCache = () => {
     resumeSessionCache.delete(sessionId);
     stopCodexPermissionPoller(sessionId);
-    const hbInterval = resumeHeartbeatIntervals.get(sessionId);
-    if (hbInterval) { clearInterval(hbInterval); resumeHeartbeatIntervals.delete(sessionId); }
+    stopManagedSessionHeartbeat(sessionId);
   };
 
   // 1. Cached resume tmux — verified before use; self-heals on gone/dead.
@@ -8028,19 +8279,32 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
   const title = titleCache[sessionId] || extractSummaryTitle(jsonlContent);
   const slug = title ? slugify(title) : "";
 
-  const validOverride = cwdOverride && fs.existsSync(cwdOverride) ? cwdOverride : undefined;
+  // Resolve where to resume. A recorded transcript cwd we can't map to a local
+  // checkout means refusing (mirrors start_session) — NOT $HOME, which would run
+  // the agent in the wrong dir and mislabel the project as the home dir. Gemini
+  // transcripts carry no cwd, so they have nothing to refuse on and keep $HOME.
+  const recordedCwd =
+    agentType === "codex" ? (extractCodexCwd(jsonlContent) || undefined)
+    : agentType === "gemini" ? undefined
+    : (extractCwd(jsonlContent) || undefined);
+  const resolvedCwd = await resolveResumeCwdOrRefuse({ recordedCwd, cwdOverride, conversationId });
+  if (resolvedCwd) {
+    cwd = resolvedCwd;
+  } else if (agentType === "gemini" && !recordedCwd) {
+    cwd = process.env.HOME || "/tmp";
+  } else {
+    await refuseResumeNoLocalCheckout(sessionId, conversationId, recordedCwd);
+    return false;
+  }
 
   if (agentType === "codex") {
-    cwd = validOverride || resolveLocalRepo(extractCodexCwd(jsonlContent) || "") || process.env.HOME || "/tmp";
     let extraFlags = config?.codex_args || "";
     const permFlags = getPermissionFlags("codex", config);
     if (permFlags) extraFlags = extraFlags ? extraFlags + " " + permFlags : permFlags;
     resumeCmd = `codex resume ${sessionId}${extraFlags ? " " + extraFlags : ""}`;
   } else if (agentType === "gemini") {
-    cwd = validOverride || process.env.HOME || "/tmp";
     resumeCmd = `gemini --resume latest`;
   } else {
-    cwd = validOverride || resolveLocalRepo(extractCwd(jsonlContent) || "") || process.env.HOME || "/tmp";
     const jsonlBypass = extractJsonlPermissionMode(jsonlContent) === "bypassPermissions";
     const extraFlags = combineClaudeResumeFlags(
       config?.claude_args,
@@ -8109,18 +8373,10 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
       await injectViaTmux(live.tmuxTarget.includes(":") ? live.tmuxTarget : live.tmuxTarget + ":0.0", content);
     }
     // Ensure heartbeat + sync registration exist (may be missing after daemon restart)
-    if (syncServiceRef && conversationId && !resumeHeartbeatIntervals.has(sessionId)) {
+    if (syncServiceRef && conversationId && !managedHeartbeatSessions.has(sessionId)) {
       syncServiceRef.registerManagedSession(sessionId, process.pid, bareName, conversationId).catch(logConvexFailure);
       syncServiceRef.updateSessionAgentStatus(conversationId, "connected").catch(logConvexFailure);
-      const interval = setInterval(async () => {
-        try {
-          const status = lastSentAgentStatus.get(sessionId);
-          logHeartbeatStatus(sessionId, status);
-          const result = await syncServiceRef!.heartbeatManagedSession(sessionId, status);
-          await processHeartbeatResponse(sessionId, result);
-        } catch {}
-      }, 30000);
-      resumeHeartbeatIntervals.set(sessionId, interval);
+      ensureManagedSessionHeartbeat(sessionId);
     }
     return true;
   }
@@ -8169,9 +8425,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
     // Scale readiness poll based on JSONL file size — large sessions take much longer to resume
     let jsonlSize = 0;
     try { jsonlSize = fs.statSync(jsonlPath).size; } catch {}
-    const maxPollMs = jsonlSize > 10_000_000 ? 90_000
-      : jsonlSize > 1_000_000 ? 45_000
-      : 15_000;
+    const maxPollMs = resumeReadinessPollMs(jsonlSize);
     const maxIterations = Math.ceil(maxPollMs / 250);
     const startTime = Date.now();
     let ready = false;
@@ -8186,6 +8440,19 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
               resumeFatalReasons.set(sessionId, fatalReason);
             }
             logDelivery(`Auto-resume FATAL for ${shortId}: agent crashed. Pane: ${paneContent.slice(0, 300)}`);
+            try { await tmuxExec(["kill-session", "-t", tmuxSession]); } catch {}
+            return false;
+          }
+          // The resume exited straight back to a bare shell (Claude prints "Resume this
+          // session with: …" on exit; a failed launch leaves a shell command-not-found).
+          // This is the failure that produced "SESSION_EXITED: agent has exited" — the
+          // old poll didn't recognize it, waited the full window, then pasted into the
+          // dead shell. Detect it and abort fast WITHOUT recording a fatal reason: a
+          // bare-shell exit is transient (an identical resume succeeds moments later once
+          // any prior holder is gone), so the delivery loop's short-cooldown retry path
+          // takes over instead of locking the session for 5 minutes.
+          if (classifyTmuxLiveState(extractTmuxLiveRegion(paneContent)) === "exited") {
+            logDelivery(`Auto-resume EXITED for ${shortId}: resume dropped to a bare shell, aborting (transient). Pane: ${paneContent.slice(-200)}`);
             try { await tmuxExec(["kill-session", "-t", tmuxSession]); } catch {}
             return false;
           }
@@ -9074,8 +9341,14 @@ async function deliverMessage(
     return true;
   }
 
-  recordSessionDeliveryFailure(sessionId);
-  logDelivery(`DELIVERY FAILED: all methods exhausted for session=${sessionId.slice(0, 8)} conv=${conversationId.slice(0, 12)}`);
+  // Only a genuinely-unrecoverable resume (recorded in resumeFatalReasons: missing
+  // conversation, retired model, session truly gone) earns the long 5-min cooldown.
+  // Everything else — a resume we launched that died, a slow/raced cold boot, a
+  // one-off SESSION_EXITED during inject — is transient and gets the short backoff,
+  // so a recoverable hiccup can no longer masquerade as a dead session for minutes.
+  const fatal = resumeFatalReasons.has(sessionId);
+  recordSessionDeliveryFailure(sessionId, { transient: !fatal });
+  logDelivery(`DELIVERY FAILED: all methods exhausted for session=${sessionId.slice(0, 8)} conv=${conversationId.slice(0, 12)} (${fatal ? "fatal" : "transient"})`);
   return false;
 }
 
@@ -9323,6 +9596,39 @@ let skipRespawn = false;
 
 function isManagedByLaunchd(): boolean {
   return !!process.env.XPC_SERVICE_NAME;
+}
+
+// Mutual supervision: the launchd watchdog revives the daemon, and the daemon
+// (here) revives the watchdog. As long as either is alive it restores the other,
+// so the pair survives sleep, crashes, `cast stop`, and the upgrade/login races
+// that can boot one of them out of launchd. Without this the watchdog had no
+// backstop — once it was booted out nothing brought it back, and a daemon that
+// then died stayed dead (the 30-min outage we hit). Throttled so the periodic
+// health tick doesn't shell out to launchctl when the watchdog is already healthy.
+let lastWatchdogEnsureAt = 0;
+function ensureWatchdogSupervised(force = false): void {
+  if (platform !== "darwin" || !process.getuid || !isManagedByLaunchd()) return;
+  const now = Date.now();
+  if (!force && now - lastWatchdogEnsureAt < 4 * 60 * 1000) return;
+  lastWatchdogEnsureAt = now;
+  try {
+    const uid = process.getuid();
+    const domain = `gui/${uid}`;
+    const label = "sh.codecast.watchdog";
+    const loaded =
+      spawnSync("launchctl", ["print", `${domain}/${label}`], { stdio: "ignore" }).status === 0;
+    if (loaded) return;
+    const plistPath = `${process.env.HOME}/Library/LaunchAgents/${label}.plist`;
+    if (!fs.existsSync(plistPath)) {
+      log(`Watchdog plist missing (${plistPath}) — run 'cast setup' to restore supervision`);
+      return;
+    }
+    log("Watchdog launchd job not loaded — bootstrapping it");
+    spawnSync("launchctl", ["bootstrap", domain, plistPath], { stdio: "ignore" });
+    spawnSync("launchctl", ["kickstart", `${domain}/${label}`], { stdio: "ignore" });
+  } catch (err) {
+    log(`ensureWatchdogSupervised failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
 }
 
 function spawnReplacement(): boolean {
@@ -10100,6 +10406,79 @@ function startReconciliation(
   }, RECONCILIATION_INTERVAL_MS);
 }
 
+// Tier 3 warm pool. Opt-in via config.warm_pool_size (default 0 = off). Re-resumes
+// the N most-recently-active sessions whose agent has died, so a follow-up lands on a
+// live agent instead of a cold boot. Reuses autoResumeSession in resume-only mode
+// (empty content) — and autoResumeSession self-guards against duplicating a live
+// agent, so a stale aliveness read here can only cost a cheap no-op, never a double
+// spawn. Bounded by cap and a short recency window; runs at the end of the watchdog
+// tick, after stale status files are reaped, so just-completed sessions are excluded.
+const WARM_POOL_RECENCY_WINDOW_MS = 15 * 60 * 1000;
+
+async function prewarmRecentlyActiveSessions(deps: WatchdogDependencies): Promise<void> {
+  const cap = deps.config.warm_pool_size ?? 0;
+  if (cap <= 0) return;
+  if (!hasTmux()) return;
+
+  const now = Date.now();
+  let files: string[];
+  try {
+    if (!fs.existsSync(AGENT_STATUS_DIR)) return;
+    files = fs.readdirSync(AGENT_STATUS_DIR).filter(f => f.endsWith(".json"));
+  } catch { return; }
+
+  // Cheap prefilter (status + recency + has conversation) so the expensive aliveness
+  // probe runs on a handful of sessions, not all of them.
+  const prefiltered: Array<{ sessionId: string; convId: string; status: string; tsMs: number }> = [];
+  for (const file of files) {
+    const sessionId = file.replace(".json", "");
+    try {
+      const data = JSON.parse(fs.readFileSync(path.join(AGENT_STATUS_DIR, file), "utf-8")) as HookStatusData;
+      if (!data.ts) continue;
+      const tsMs = data.ts * 1000;
+      if (now - tsMs > WARM_POOL_RECENCY_WINDOW_MS) continue;
+      if (!WARM_POOL_ACTIVE_STATUSES.has(data.status)) continue;
+      const convId = deps.conversationCache[sessionId];
+      if (!convId) continue;
+      prefiltered.push({ sessionId, convId, status: data.status, tsMs });
+    } catch {}
+  }
+  if (prefiltered.length === 0) return;
+
+  const candidates: WarmCandidate[] = [];
+  for (const p of prefiltered) {
+    let agentAlive = false;
+    try {
+      const live = await resolveLiveTmuxTarget(p.convId, p.sessionId, "claude");
+      agentAlive = !!live.tmuxTarget;
+    } catch {}
+    candidates.push({
+      sessionId: p.sessionId,
+      status: p.status,
+      tsMs: p.tsMs,
+      agentAlive,
+      circuitOpen: isSessionCircuitOpen(p.sessionId),
+      fatal: resumeFatalReasons.has(p.sessionId),
+    });
+  }
+
+  const toWarm = selectSessionsToWarm(candidates, now, { recencyWindowMs: WARM_POOL_RECENCY_WINDOW_MS, cap });
+  const aliveCount = candidates.filter(c => c.agentAlive).length;
+  log(`Warm pool: evaluated ${candidates.length} recent active session(s) — ${aliveCount} already warm, ${candidates.length - aliveCount} dead, warming ${toWarm.length} (cap=${cap})`);
+  if (toWarm.length === 0) return;
+  log(`Warm pool: re-warming session(s) with dead agents: ${toWarm.map(s => s.slice(0, 8)).join(", ")}`);
+  for (const sessionId of toWarm) {
+    const convId = deps.conversationCache[sessionId];
+    try {
+      // Empty content = resume-only: spin up the agent, inject nothing.
+      const ok = await autoResumeSession(sessionId, "", deps.titleCache, undefined, convId);
+      log(`Warm pool: ${ok ? "re-warmed" : "failed to re-warm"} session ${sessionId.slice(0, 8)}`);
+    } catch (err) {
+      log(`Warm pool: error re-warming ${sessionId.slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+}
+
 function startWatchdog(
   deps: WatchdogDependencies
 ): NodeJS.Timeout {
@@ -10188,6 +10567,12 @@ function startWatchdog(
         }
       }
     } catch {}
+
+    // Tier 3 warm pool (opt-in): after stale files are reaped above, re-warm the most
+    // recently-active sessions whose agent has died so a follow-up skips the cold boot.
+    try { await prewarmRecentlyActiveSessions(deps); } catch (err) {
+      log(`Warm pool tick error: ${err instanceof Error ? err.message : String(err)}`);
+    }
 
     // Check for watcher staleness -- only restart if idle for 60+ min.
     // Short idle periods are normal (no active sessions, nighttime, etc.)
@@ -10465,6 +10850,10 @@ async function main(): Promise<void> {
 
   saveDaemonState({ connected: false, runtimeVersion: getVersion(), lastHeartbeatTick: Date.now() });
 
+  // Guarantee our supervisor exists. If an upgrade/login race left the watchdog
+  // booted out, restore it now so the daemon is never left without a backstop.
+  ensureWatchdogSupervised(true);
+
   // Start heartbeat immediately so the daemon doesn't appear "blocked" during slow init
   const eventLoopMonitorInterval = startEventLoopMonitor();
 
@@ -10522,6 +10911,7 @@ async function main(): Promise<void> {
     logHealthSummary();
     sendHeartbeat().catch(() => {});
     checkDiskVersionMismatch();
+    ensureWatchdogSupervised();
   }, HEALTH_REPORT_INTERVAL_MS);
 
   setInterval(() => {
@@ -12096,7 +12486,7 @@ async function main(): Promise<void> {
       log("Setting up daemon commands subscription");
       commandUnsubscribe = subscriptionClient.onUpdate(
         "users:getMyPendingCommands" as any,
-        { api_token: config.auth_token },
+        { api_token: config.auth_token, device_id: deviceId() },
         async (commands: any) => {
           if (!commands || !Array.isArray(commands) || commands.length === 0) {
             return;
