@@ -65,7 +65,7 @@ import { PlanBadge, TaskBadge } from "./PlanTaskHoverCard";
 import { EntityIdPill, EntityAwareCode, EntityAwareLink, renderWithMentions } from "./EntityIdPill";
 import { remarkEntityIds } from "../lib/remarkEntityIds";
 import { ConversationTree } from "./ConversationTree";
-import { useInboxStore, isConvexId, type ForkChild } from "../store/inboxStore";
+import { useInboxStore, isConvexId, type ForkChild, type InboxSession } from "../store/inboxStore";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { soundSend } from "../lib/sounds";
 import { useForkNavigationStore } from "../store/forkNavigationStore";
@@ -7834,6 +7834,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const sendEscape = useMutation(api.conversations.sendEscapeToSession);
   const sendKeys = useMutation(api.conversations.sendKeysToSession);
   const rewindSession = useMutation(api.conversations.rewindSession);
+  const moveToRemoteMutation = useMutation(api.devices.moveToRemote);
   // Durable send via the dispatch outbox (survives reload mid-send).
   const sendInlineMessage = useInboxStore((s) => s.sendMessage);
   const toggleFavoriteMutation = useMutation(api.conversations.toggleFavorite);
@@ -7843,6 +7844,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const addOptimisticMsg = useInboxStore((s) => s.addOptimisticMessage);
   const moveDraft = useInboxStore((s) => s.moveDraft);
   const navigateToSession = useInboxStore((s) => s.navigateToSession);
+  const injectSession = useInboxStore((s) => s.injectSession);
   const optimisticForkChildren = useInboxStore((s) => s.optimisticForkChildren);
 
   const { user: currentUser } = useCurrentUser();
@@ -8104,6 +8106,31 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
   const timelineRef = useRef<any[]>([]);
 
+  // Switch to a freshly created fork instantly from local state. injectSession seeds
+  // sessions[id] AND sets currentSessionId in one action, so the inbox renders the
+  // fork immediately — no server round-trip, no skeleton. Its real metadata/messages
+  // reconcile in the background via getConversationWithMeta + listMessages as the
+  // server-side copy advances. Deliberately NOT router.push('/conversation/{id}'): that
+  // routes through the redirector page (resolveConversation + loading skeleton +
+  // redirect to /inbox), reloading the conversation. QueuePageClient syncs the URL via
+  // history.replaceState. Server-derived fields (title prefix, exact message_count) are
+  // approximate here and get corrected by the meta subscription within a tick.
+  const seedForkSession = useCallback((convId: string, fields: Partial<InboxSession>) => {
+    injectSession({
+      _id: convId,
+      session_id: convId,
+      title: conversation?.title,
+      updated_at: Date.now(),
+      project_path: conversation?.project_path,
+      git_root: conversation?.git_root,
+      agent_type: conversation?.agent_type || "claude_code",
+      message_count: 0,
+      is_idle: true,
+      has_pending: false,
+      ...fields,
+    });
+  }, [conversation?.title, conversation?.project_path, conversation?.git_root, conversation?.agent_type, injectSession]);
+
   const doFork = useCallback(async (messageUuid: string): Promise<{ forkSessionId: string; conversationId: string } | null> => {
     if (!conversation?._id) return null;
     // Must be a valid UUID so the daemon can resume without ID remapping
@@ -8131,16 +8158,19 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         session_id: forkSessionId,
       });
       resolveForkSessionId(forkSessionId, result.conversation_id);
-      // Navigate to the new fork's own conversation. URL reflects identity.
-      navigateToSession(result.conversation_id);
-      router.push(`/conversation/${result.conversation_id}`);
+      seedForkSession(result.conversation_id, {
+        session_id: forkSessionId,
+        title: conversation.title ? `Fork: ${conversation.title}` : "Fork",
+        forked_from: conversation._id.toString(),
+        parent_message_uuid: messageUuid,
+      });
       toast.success("Forked");
       return { forkSessionId, conversationId: result.conversation_id };
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to fork");
       return null;
     }
-  }, [conversation?._id, conversation?.title, conversation?.user, conversation?.agent_type, forkFromMessage, forkSetMessages, addOptimisticFork, resolveForkSessionId, navigateToSession, router, currentUser?._id]);
+  }, [conversation?._id, conversation?.title, forkFromMessage, forkSetMessages, addOptimisticFork, resolveForkSessionId, seedForkSession, currentUser?._id, conversation?.user]);
 
   const handleForkFromMessage = useCallback(async (messageUuid: string) => {
     const tl = timelineRef.current;
@@ -8968,11 +8998,13 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     enabled: isOwner,
   });
 
-  // BranchSelector / tree panel: switching branches is navigation. We route through
-  // next/navigation so the URL changes via the app's router (in tab mode this updates
-  // the tab's path so the TabPane remounts the target conversation). navigateToSession
-  // still primes the store so the message panel switches without a flash.
-  // null = navigate to the conversation's parent (back to "main"); otherwise navigate to that fork.
+  // BranchSelector / tree panel: switching branches is a local, store-driven switch —
+  // the same instant path the sidebar uses. navigateToSession sets currentSessionId, the
+  // inbox re-renders from cache, and QueuePageClient's URL-sync effect updates the address
+  // bar via history.replaceState. Routing through `/conversation/{id}` here would instead
+  // bounce through the redirector page (server resolveConversation + loading skeleton +
+  // redirect back to /inbox) — a full reload for data the store already has.
+  // null = switch to the conversation's parent (back to "main"); otherwise switch to that fork.
   const handleBranchSwitch = useCallback((_messageUuid: string, convId: string | null) => {
     let targetId: string | undefined;
     if (convId === null) {
@@ -8984,14 +9016,12 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     if (!targetId) return;
     if (targetId === conversation?._id?.toString()) return;
     navigateToSession(targetId);
-    router.push(`/conversation/${targetId}`);
-  }, [conversation?.forked_from, conversation?._id, navigateToSession, router]);
+  }, [conversation?.forked_from, conversation?._id, navigateToSession]);
 
   const handleTreeSwitchConversation = useCallback((convId: string) => {
     if (convId === conversation?._id?.toString()) return;
     navigateToSession(convId);
-    router.push(`/conversation/${convId}`);
-  }, [conversation?._id, navigateToSession, router]);
+  }, [conversation?._id, navigateToSession]);
 
   // Tree panel highlight: just the currently-viewed conversation.
   const activeBranchIdSet = useMemo(
@@ -9251,7 +9281,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       }
 
       const pp = paginationPropsRef.current;
-      if ((scrollTop < 300 || nearTopRef.current) && pp.hasMoreAbove && !pp.isLoadingOlder && !pp.isLoadingNewer && Date.now() >= paginationCooldownRef.current && pp.onLoadOlder) {
+      if ((scrollTop < 1200 || nearTopRef.current) && pp.hasMoreAbove && !pp.isLoadingOlder && !pp.isLoadingNewer && Date.now() >= paginationCooldownRef.current && pp.onLoadOlder) {
         scrollAnchorRef.current = scrollHeight;
         isPaginatingRef.current = true;
         pp.onLoadOlder();
@@ -9319,7 +9349,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     const observer = new IntersectionObserver((entries) => {
       nearTopRef.current = entries.some((e) => e.isIntersecting);
       if (nearTopRef.current && !raf) raf = requestAnimationFrame(pump);
-    }, { root, rootMargin: "1000px 0px 0px 0px", threshold: 0 });
+    }, { root, rootMargin: "2000px 0px 0px 0px", threshold: 0 });
     observer.observe(sentinel);
     return () => { observer.disconnect(); if (raf) cancelAnimationFrame(raf); };
   }, [conversation?._id, hasContent]);
@@ -10424,6 +10454,19 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                       Copy all messages
                     </DropdownMenuItem>
                     {isOwner && (
+                      <DropdownMenuItem onSelect={() => {
+                        toast.info("Moving session to remote Mac…");
+                        moveToRemoteMutation({ conversation_id: conversation._id as Id<"conversations"> })
+                          .then((r: any) => toast.success(`Moving to remote device ${String(r?.dest ?? "").slice(0, 8)}…`))
+                          .catch((e: any) => toast.error(e?.message || "Move failed"));
+                      }}>
+                        <svg className="w-3 h-3 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12h14M12 5l7 7-7 7" />
+                        </svg>
+                        Move to remote Mac
+                      </DropdownMenuItem>
+                    )}
+                    {isOwner && (
                       <DropdownMenuItem onSelect={() => setTimeout(() => useInboxStore.setState({ renamingSessionId: conversation._id }))}>
                         <svg className="w-3 h-3 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
@@ -10521,8 +10564,14 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                                       target_agent_type: t,
                                     }).then((result) => {
                                       moveDraft(conversation._id.toString(), result.conversation_id);
-                                      navigateToSession(result.conversation_id);
-                                      router.push(convLink(result.conversation_id));
+                                      // Agent-switch forks are siblings (parent_conversation_id, not
+                                      // forked_from). Switch instantly from local state — same no-reload
+                                      // path as doFork.
+                                      seedForkSession(result.conversation_id, {
+                                        agent_type: t,
+                                        parent_conversation_id: conversation._id.toString(),
+                                        parent_message_uuid: "agent-switch",
+                                      });
                                     }).catch((err) => {
                                       toast.error(err instanceof Error ? err.message : "Failed to switch agent");
                                     });
