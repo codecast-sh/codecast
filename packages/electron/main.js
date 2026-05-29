@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, Tray, globalShortcut, ipcMain, nativeImage, shell, screen, Notification } = require("electron");
+const { app, BrowserWindow, Menu, Tray, globalShortcut, ipcMain, nativeImage, shell, screen, Notification, session } = require("electron");
 const { autoUpdater } = require("electron-updater");
 const path = require("path");
 const fs = require("fs");
@@ -30,8 +30,20 @@ function showNativeNotification(title, body, onClick) {
 }
 
 const PROD_URL = "https://codecast.sh";
-const LOCAL_URL = "http://local.codecast.sh";
+// Dev mode. Must be https: the http origin 301-redirects to https (nginx
+// single-auth-origin fix), and http/https are separate localStorage origins
+// so the Convex auth token only lives on https. Loading http here would
+// redirect anyway — point straight at https to skip the round-trip.
+const LOCAL_URL = "https://local.codecast.sh";
 const BASE_URL = process.env.CODECAST_URL || PROD_URL;
+
+// local.codecast.sh resolves to 127.0.0.1 and is served with a locally
+// generated mkcert dev certificate. mkcert's CA is in the macOS keychain so
+// Safari/Chrome trust it, but Electron's bundled Chromium rejects it
+// (ERR_CERT_AUTHORITY_INVALID), which makes dev mode fail to load entirely.
+// We trust the cert for this one loopback host only (see the verify proc in
+// app.whenReady) — production validation is left fully intact.
+const LOCAL_DEV_HOST = "local.codecast.sh";
 
 const DEFAULT_SHORTCUTS = {
   toggleWindow: "CommandOrControl+Alt+Space",
@@ -612,6 +624,15 @@ function registerShortcuts() {
 }
 
 app.whenReady().then(() => {
+  // Trust the local mkcert dev cert at the network-service layer. This runs
+  // before any cert check, so unlike the "certificate-error" event it also
+  // covers the Vite HMR WebSocket — not just the page load. callback(0) =
+  // trust; callback(-3) = defer to Chromium's normal verification, so every
+  // other host (production included) stays strict.
+  session.defaultSession.setCertificateVerifyProc((request, callback) => {
+    callback(request.hostname === LOCAL_DEV_HOST ? 0 : -3);
+  });
+
   app.setAboutPanelOptions({
     applicationName: "Codecast",
     copyright: "Codecast",
