@@ -5,6 +5,8 @@ import {
   shouldShowInInbox,
   isSessionIdle,
   nextAgentStatusOnAddMessages,
+  isApiErrorBanner,
+  apiErrorBatchAction,
   AGENT_IDLE_GRACE_MS,
   type ConversationDoc,
   type SessionIdleInput,
@@ -255,5 +257,57 @@ describe("nextAgentStatusOnAddMessages", () => {
 
   test("no managed session status (undefined) is a no-op", () => {
     expect(nextAgentStatusOnAddMessages(undefined, true, true)).toBeNull();
+  });
+});
+
+describe("isApiErrorBanner", () => {
+  test("matches the real-world login/401 banner", () => {
+    expect(isApiErrorBanner("Please run /login · API Error: 401 Invalid authentication credentials")).toBe(true);
+  });
+
+  test("matches other Claude Code error banners", () => {
+    expect(isApiErrorBanner("Not logged in · Please run /login")).toBe(true);
+    expect(isApiErrorBanner("API Error: 529 Overloaded")).toBe(true);
+    expect(isApiErrorBanner("API Error: Connection error.")).toBe(true);
+    expect(isApiErrorBanner("Invalid API key · Please run /login")).toBe(true);
+    expect(isApiErrorBanner("Credit balance is too low")).toBe(true);
+    expect(isApiErrorBanner("  please run /login  ")).toBe(true); // trimmed + case-insensitive
+  });
+
+  test("ignores empty / nullish content", () => {
+    expect(isApiErrorBanner(undefined)).toBe(false);
+    expect(isApiErrorBanner(null)).toBe(false);
+    expect(isApiErrorBanner("")).toBe(false);
+    expect(isApiErrorBanner("   ")).toBe(false);
+  });
+
+  test("does not flag a real assistant turn that merely discusses an API error", () => {
+    expect(isApiErrorBanner("The API error 401 you saw earlier means the token expired; here is how to refresh it.")).toBe(false);
+    expect(isApiErrorBanner("Let me check why the login flow returns a 401.")).toBe(false);
+    // Long content is never a banner even if it opens with the phrase.
+    expect(isApiErrorBanner("API Error: 500 ".concat("x".repeat(500)))).toBe(false);
+  });
+});
+
+describe("apiErrorBatchAction", () => {
+  test("real turn after a pending banner -> supersede", () => {
+    expect(apiErrorBatchAction({ batchHasRealTurn: true, batchHasBanner: false, conversationPending: true })).toBe("supersede");
+  });
+
+  test("banner and real turn in the same batch -> supersede", () => {
+    expect(apiErrorBatchAction({ batchHasRealTurn: true, batchHasBanner: true, conversationPending: false })).toBe("supersede");
+  });
+
+  test("banner-only batch -> mark_pending", () => {
+    expect(apiErrorBatchAction({ batchHasRealTurn: false, batchHasBanner: true, conversationPending: false })).toBe("mark_pending");
+  });
+
+  test("ordinary traffic (no banner, not pending) -> none, so no DB scan", () => {
+    expect(apiErrorBatchAction({ batchHasRealTurn: true, batchHasBanner: false, conversationPending: false })).toBe("none");
+    expect(apiErrorBatchAction({ batchHasRealTurn: false, batchHasBanner: false, conversationPending: false })).toBe("none");
+  });
+
+  test("a still-erroring session (pending, banner-only) does not supersede", () => {
+    expect(apiErrorBatchAction({ batchHasRealTurn: false, batchHasBanner: true, conversationPending: true })).toBe("mark_pending");
   });
 });
