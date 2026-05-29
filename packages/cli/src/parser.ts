@@ -414,30 +414,62 @@ function extractCodexTextAndImages(
   };
 }
 
+function stableCodexHash(input: unknown): string {
+  const text = JSON.stringify(input);
+  let hash = 2166136261;
+  for (let i = 0; i < text.length; i++) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+function codexItemUuid(entry: CodexSessionEntry, kind: string): string {
+  const payload = entry.payload;
+  if (payload.id) return `codex-${kind}-${payload.id}`;
+  if (payload.call_id) return `codex-${kind}-${payload.call_id}`;
+  return `codex-${kind}-${stableCodexHash({
+    timestamp: entry.timestamp,
+    type: payload.type,
+    role: payload.role,
+    name: payload.name,
+    content: payload.content,
+    summary: payload.summary,
+    arguments: payload.arguments,
+    output: payload.output,
+    input: payload.input,
+  })}`;
+}
+
 export function parseCodexSessionFile(content: string): ParsedMessage[] {
   const lines = content.split("\n");
   const messages: ParsedMessage[] = [];
   let pendingAssistantThinking = "";
+  let pendingAssistantThinkingUuid: string | undefined;
   let lastTimestamp = Date.now();
 
   const takePendingThinking = () => {
     const thinking = pendingAssistantThinking.trim();
+    const uuid = pendingAssistantThinkingUuid;
     pendingAssistantThinking = "";
-    return thinking || undefined;
+    pendingAssistantThinkingUuid = undefined;
+    return { thinking: thinking || undefined, uuid };
   };
 
   const pushAssistantMessage = (message: {
+    uuid?: string;
     timestamp: number;
     content?: string;
     toolCalls?: ToolCall[];
     images?: ImageBlock[];
   }) => {
     const contentText = message.content?.trim() || "";
-    const thinking = takePendingThinking();
+    const { thinking, uuid: thinkingUuid } = takePendingThinking();
     if (!contentText && !thinking && !(message.toolCalls && message.toolCalls.length > 0) && !(message.images && message.images.length > 0)) {
       return;
     }
     messages.push({
+      uuid: message.uuid || thinkingUuid,
       role: "assistant",
       content: contentText,
       timestamp: message.timestamp,
@@ -448,6 +480,7 @@ export function parseCodexSessionFile(content: string): ParsedMessage[] {
   };
 
   const pushToolResultMessage = (message: {
+    uuid?: string;
     timestamp: number;
     toolUseId: string;
     content: string;
@@ -455,6 +488,7 @@ export function parseCodexSessionFile(content: string): ParsedMessage[] {
     images?: ImageBlock[];
   }) => {
     messages.push({
+      uuid: message.uuid,
       role: "assistant",
       content: "",
       timestamp: message.timestamp,
@@ -485,6 +519,7 @@ export function parseCodexSessionFile(content: string): ParsedMessage[] {
     if (payload.type === "message") {
       const role = payload.role;
       if (role === "developer" || role === "system") continue;
+      const uuid = codexItemUuid(entry, "message");
 
       const { text, images } = extractCodexTextAndImages(payload.content);
       const trimmedText = text.trim();
@@ -499,6 +534,7 @@ export function parseCodexSessionFile(content: string): ParsedMessage[] {
           trimmedText.startsWith("<app-context>");
         if ((trimmedText || images.length > 0) && !isSystemContext) {
           messages.push({
+            uuid,
             role: "user",
             content: trimmedText,
             timestamp,
@@ -507,6 +543,7 @@ export function parseCodexSessionFile(content: string): ParsedMessage[] {
         }
       } else if (role === "assistant") {
         pushAssistantMessage({
+          uuid,
           timestamp,
           content: trimmedText,
           images,
@@ -520,6 +557,7 @@ export function parseCodexSessionFile(content: string): ParsedMessage[] {
         : summaryArray.map((c) => c.text || "").join("\n");
       if (thinkingText) {
         pendingAssistantThinking += (pendingAssistantThinking ? "\n" : "") + thinkingText;
+        pendingAssistantThinkingUuid = pendingAssistantThinkingUuid || codexItemUuid(entry, "reasoning");
       }
     } else if (payload.type === "function_call") {
       let args: Record<string, unknown> = {};
@@ -540,6 +578,7 @@ export function parseCodexSessionFile(content: string): ParsedMessage[] {
         }
       }
       pushAssistantMessage({
+        uuid: codexItemUuid(entry, "function-call"),
         timestamp,
         toolCalls: [{
           id: payload.call_id || "",
@@ -550,6 +589,7 @@ export function parseCodexSessionFile(content: string): ParsedMessage[] {
     } else if (payload.type === "function_call_output") {
       const outputParsed = extractCodexTextAndImages(payload.output);
       pushToolResultMessage({
+        uuid: codexItemUuid(entry, "function-output"),
         timestamp,
         toolUseId: payload.call_id || "",
         content: typeof payload.output === "string"
@@ -563,6 +603,7 @@ export function parseCodexSessionFile(content: string): ParsedMessage[] {
       });
     } else if (payload.type === "custom_tool_call") {
       pushAssistantMessage({
+        uuid: codexItemUuid(entry, "custom-tool-call"),
         timestamp,
         toolCalls: [{
           id: payload.call_id || "",
@@ -573,6 +614,7 @@ export function parseCodexSessionFile(content: string): ParsedMessage[] {
     } else if (payload.type === "custom_tool_call_output") {
       const outputParsed = extractCodexTextAndImages(payload.output);
       pushToolResultMessage({
+        uuid: codexItemUuid(entry, "custom-tool-output"),
         timestamp,
         toolUseId: payload.call_id || "",
         content: typeof payload.output === "string"
@@ -587,9 +629,10 @@ export function parseCodexSessionFile(content: string): ParsedMessage[] {
     }
   }
 
-  const trailingThinking = takePendingThinking();
+  const { thinking: trailingThinking, uuid: trailingThinkingUuid } = takePendingThinking();
   if (trailingThinking) {
     messages.push({
+      uuid: trailingThinkingUuid,
       role: "assistant",
       content: "",
       timestamp: lastTimestamp,
