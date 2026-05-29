@@ -111,13 +111,21 @@ export default defineSchema({
       v.literal("config_create"),
       v.literal("config_delete"),
       v.literal("run_workflow"),
-      v.literal("reinstall")
+      v.literal("reinstall"),
+      v.literal("move_to_device")
     ),
     args: v.optional(v.string()),
     created_at: v.number(),
     executed_at: v.optional(v.number()),
     result: v.optional(v.string()),
     error: v.optional(v.string()),
+    // Device this command is routed to. When set, only the daemon whose
+    // deviceId() matches executes it — the poll filters the rest out, so
+    // session commands (start/resume) go to the one machine that owns the
+    // checkout instead of being raced by every daemon. Undefined = broadcast
+    // (device-agnostic commands like status/restart, or sessions whose owner
+    // can't be resolved yet).
+    target_device_id: v.optional(v.string()),
   }).index("by_user_pending", ["user_id", "executed_at"]),
 
   teams: defineTable({
@@ -240,6 +248,11 @@ export default defineSchema({
     )),
     last_message_preview: v.optional(v.string()),
     has_pending_messages: v.optional(v.boolean()),
+    // True while the conversation's newest message is a transient Claude Code
+    // API/auth-error banner (see isApiErrorBanner). Cleared when a real turn
+    // supersedes it. Gates the banner-cleanup scan in addMessages so the common
+    // (no-error) write path never pays for the extra read.
+    pending_api_error: v.optional(v.boolean()),
     session_error: v.optional(v.string()),
     active_plan_id: v.optional(v.id("plans")),
     active_task_id: v.optional(v.id("tasks")),
