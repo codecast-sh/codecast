@@ -264,6 +264,93 @@ describe("parser - codex images", () => {
     });
     expect(messages[3].content).toBe("The main overview is in README.md.");
   });
+
+  test("assigns stable UUIDs from codex response item ids and call ids", () => {
+    const lines = [
+      JSON.stringify({
+        timestamp: "2026-02-25T00:00:00.000Z",
+        type: "response_item",
+        payload: {
+          id: "user_1",
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "Run tests" }],
+        },
+      }),
+      JSON.stringify({
+        timestamp: "2026-02-25T00:00:01.000Z",
+        type: "response_item",
+        payload: {
+          id: "msg_1",
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "I’ll run them." }],
+        },
+      }),
+      JSON.stringify({
+        timestamp: "2026-02-25T00:00:02.000Z",
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "exec_command",
+          call_id: "call_1",
+          arguments: "{\"cmd\":\"bun test\"}",
+        },
+      }),
+      JSON.stringify({
+        timestamp: "2026-02-25T00:00:03.000Z",
+        type: "response_item",
+        payload: {
+          type: "function_call_output",
+          call_id: "call_1",
+          output: "ok",
+        },
+      }),
+    ];
+
+    const first = parseCodexSessionFile(lines.join("\n"));
+    const second = parseCodexSessionFile(lines.join("\n"));
+
+    expect(first.map((m) => m.uuid)).toEqual([
+      "codex-message-user_1",
+      "codex-message-msg_1",
+      "codex-function-call-call_1",
+      "codex-function-output-call_1",
+    ]);
+    expect(second.map((m) => m.uuid)).toEqual(first.map((m) => m.uuid));
+  });
+
+  test("synthesizes stable UUIDs for codex items without ids", () => {
+    const jsonl = JSON.stringify({
+      timestamp: "2026-02-25T00:00:00.000Z",
+      type: "response_item",
+      payload: {
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: "No explicit id" }],
+      },
+    });
+
+    const first = parseCodexSessionFile(jsonl);
+    const second = parseCodexSessionFile(jsonl);
+    const withEarlierLine = parseCodexSessionFile([
+      JSON.stringify({
+        timestamp: "2026-02-24T23:59:59.000Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "Earlier item" }],
+        },
+      }),
+      jsonl,
+    ].join("\n"));
+
+    expect(first).toHaveLength(1);
+    expect(first[0].uuid).toMatch(/^codex-message-/);
+    expect(second[0].uuid).toBe(first[0].uuid);
+    expect(withEarlierLine[1].uuid).toBe(first[0].uuid);
+  });
 });
 
 describe("parser - thinking content extraction", () => {
