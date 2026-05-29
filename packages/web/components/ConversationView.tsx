@@ -5759,110 +5759,6 @@ function MessageNavigator({ userMessages, onRewind, onFork, onClose, forkPointMa
   );
 }
 
-type RailMessage = { _id: string; preview: string; index: number; fraction: number };
-
-// Right-edge navigation rail: one tick per user message, positioned by its
-// fraction through the conversation. Hovering the rail reveals a flyout list of
-// message previews; clicking a tick or a preview jumps to that message. Pure
-// navigation aid — no rewind/fork, so it renders for any conversation.
-function UserMessageRail({ messages, onJump }: {
-  messages: RailMessage[];
-  onJump: (messageId: string) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const [activeId, setActiveId] = useState<string | null>(null);
-  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const rowRefs = useRef<Record<string, HTMLButtonElement | null>>({});
-
-  const show = useCallback(() => {
-    if (closeTimer.current) { clearTimeout(closeTimer.current); closeTimer.current = null; }
-    setOpen(true);
-  }, []);
-  const scheduleClose = useCallback(() => {
-    if (closeTimer.current) clearTimeout(closeTimer.current);
-    closeTimer.current = setTimeout(() => { setOpen(false); setActiveId(null); }, 120);
-  }, []);
-  useMountEffect(() => () => { if (closeTimer.current) clearTimeout(closeTimer.current); });
-
-  const hoverTick = useCallback((id: string) => {
-    setActiveId(id);
-    const row = rowRefs.current[id];
-    if (row) row.scrollIntoView({ block: "nearest" });
-  }, []);
-
-  if (messages.length < 2) return null;
-
-  return (
-    // Container is non-interactive; the tick column and flyout below opt back in
-    // with pointer-events-auto so the rail never blocks clicks on the conversation.
-    <div className="absolute right-0 top-0 bottom-0 z-30 flex items-stretch pointer-events-none select-none">
-      {/* Flyout preview list */}
-      <div
-        className={`pointer-events-auto self-center mr-1 transition-all duration-150 ease-out ${open ? "opacity-100 translate-x-0" : "opacity-0 translate-x-2 pointer-events-none"}`}
-        onMouseEnter={show}
-        onMouseLeave={scheduleClose}
-      >
-        <div className="w-72 max-h-[60vh] overflow-y-auto rounded-lg border border-sol-blue/30 bg-sol-bg-alt/95 backdrop-blur shadow-2xl py-1.5">
-          <div className="px-3 py-1 text-[10px] uppercase tracking-wider text-sol-blue/50 font-medium sticky top-0 bg-sol-bg-alt/95 backdrop-blur">
-            {messages.length} messages
-          </div>
-          {messages.map((m, idx) => {
-            const isActive = m._id === activeId;
-            return (
-              <button
-                key={m._id}
-                ref={el => { rowRefs.current[m._id] = el; }}
-                onClick={() => { onJump(m._id); setOpen(false); setActiveId(null); }}
-                onMouseEnter={() => setActiveId(m._id)}
-                className={`w-full text-left px-3 py-1.5 flex items-start gap-2.5 transition-colors ${isActive ? "bg-sol-blue/20" : "hover:bg-sol-bg-highlight"}`}
-              >
-                <span className={`text-[10px] font-mono mt-0.5 shrink-0 w-5 text-right ${isActive ? "text-sol-cyan" : "text-sol-blue/40"}`}>{idx + 1}</span>
-                <span
-                  className={`text-xs leading-snug ${isActive ? "text-sol-text" : "text-sol-text-secondary"}`}
-                  style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}
-                >
-                  {m.preview}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* Tick rail */}
-      <div
-        className="pointer-events-auto relative w-4 my-3 cursor-pointer"
-        onMouseEnter={show}
-        onMouseLeave={scheduleClose}
-      >
-        {messages.map((m) => {
-          const isActive = m._id === activeId;
-          return (
-            <button
-              key={m._id}
-              onClick={() => { onJump(m._id); }}
-              onMouseEnter={() => hoverTick(m._id)}
-              aria-label={`Jump to message ${m.index + 1}`}
-              className="absolute right-0 flex items-center justify-end group"
-              style={{ top: `${m.fraction * 100}%`, transform: "translateY(-50%)", height: 12 }}
-            >
-              <span
-                className={`block h-[2px] rounded-full transition-all duration-150 ${
-                  isActive
-                    ? "w-4 bg-sol-cyan shadow-[0_0_6px_rgba(0,205,205,0.6)]"
-                    : open
-                      ? "w-3 bg-sol-blue/60 group-hover:bg-sol-cyan"
-                      : "w-2 bg-sol-text-dim/40 group-hover:bg-sol-cyan"
-                }`}
-              />
-            </button>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
 function GuestJoinCTA() {
   return (
     <div className="bg-sol-bg border-t border-sol-border/30">
@@ -8246,32 +8142,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   timelineRef.current = timeline;
   scrollCtxRef.current = { messageCount: conversation?.message_count || messages.length, messagesLen: messages.length, timelineLen: timeline.length, loadedStartIndex: conversation?.loaded_start_index ?? 0 };
 
-  // User-message markers for the right-side navigation rail. Derived straight
-  // from the loaded timeline (not the rewind-gated navigatorUserMessages) so the
-  // rail works on any conversation, owned or shared. `fraction` positions each
-  // marker proportionally by timeline index — robust under virtualization where
-  // off-screen messages have no measured pixel offset.
-  const railUserMessages = useMemo(() => {
-    const out: { _id: string; preview: string; index: number; fraction: number }[] = [];
-    const denom = Math.max(timeline.length - 1, 1);
-    for (let i = 0; i < timeline.length; i++) {
-      const item = timeline[i];
-      if (item.type !== 'message') continue;
-      const m = item.data as Message;
-      if (m.role !== 'user') continue;
-      const raw = safeString(m.content);
-      let preview = cleanStickyContent(raw).replace(/\s+/g, ' ').trim();
-      if (!preview) {
-        // Image-only or otherwise text-less user turn: keep it navigable with a
-        // placeholder rather than dropping the marker entirely.
-        const hasImages = Array.isArray((m as any).images) && (m as any).images.length > 0;
-        if (hasImages || /\[image|<image|!\[/i.test(raw)) preview = "Image";
-        else continue;
-      }
-      out.push({ _id: m._id, preview, index: i, fraction: i / denom });
-    }
-    return out;
-  }, [timeline]);
 
   const [navigatorOpen, setNavigatorOpen] = useState(false);
   const populateInputRef = useRef<((text: string) => void) | null>(null);
@@ -10734,7 +10604,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       )}
 
       <div className={`flex-1 min-h-0 relative flex ${isImageLightboxActive ? "invisible" : ""}`}>
-      <UserMessageRail messages={railUserMessages} onJump={scrollToMessageById} />
       {targetMessageId && timeline.length === 0 && (
         <div className="absolute inset-0 z-20 flex items-center justify-center pointer-events-none">
           <div className="flex items-center gap-2 px-4 py-2 rounded-full bg-sol-bg-alt/90 border border-sol-border text-sol-text-muted text-xs shadow-sm">
