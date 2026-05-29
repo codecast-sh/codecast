@@ -8,38 +8,6 @@ import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { isCommandMessage, cleanContent } from "../lib/conversationProcessor";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { isConvexId, useInboxStore } from "../store/inboxStore";
-import type { Message } from "../store/inboxStore";
-
-const NOISE_PREFIXES = [
-  "<local-command-stdout>", "<local-command-stderr>", "<local-command-caveat>",
-  "[Request interrupted", "[Request cancelled",
-  "This session is being continued",
-  "Your task is to create a detailed summary",
-  "Please continue the conversation",
-  "Read the output file to retrieve the result:",
-  "Caveat:",
-];
-
-function stripContextTags(s: string): string {
-  return s
-    .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "")
-    .replace(/<task-notification>[\s\S]*?<\/task-notification>/g, "")
-    .replace(/<task-reminder>[\s\S]*?<\/task-reminder>/g, "")
-    .replace(/<teammate-message\s+[^>]*>[\s\S]*?<\/teammate-message>/g, "")
-    .trim();
-}
-
-function isHumanPrompt(m: Message): boolean {
-  if (m.role !== "user") return false;
-  if (m.subtype === "compact_boundary") return false;
-  if (m.tool_results && m.tool_results.length > 0) return false;
-  if (!m.content?.trim()) return false;
-  const stripped = stripContextTags(m.content);
-  if (!stripped) return false;
-  if (NOISE_PREFIXES.some(p => stripped.startsWith(p))) return false;
-  if (stripped.includes("Your task is to create a detailed summary of the conversation so far")) return false;
-  return true;
-}
 
 function getCommandLabel(content: string): string | null {
   const m = content.match(/<command-(?:name|message)>([^<]*)<\/command-(?:name|message)>/);
@@ -264,7 +232,7 @@ function NavDropdown({
     <>
       {pinned && <div className="fixed inset-0 z-[9998] pointer-events-auto" onClick={onClose} />}
       <div
-        className="fixed z-[9999] bg-sol-bg border border-sol-border/30 rounded-xl shadow-2xl overflow-hidden flex flex-col"
+        className="fixed z-[9999] bg-sol-bg-alt/95 backdrop-blur border border-sol-blue/30 rounded-lg shadow-2xl overflow-hidden flex flex-col"
         style={{ top, left, width: dropdownWidth, maxHeight: "min(600px, 75vh)" }}
         onMouseEnter={onMouseEnter}
         onMouseLeave={onMouseLeave}
@@ -317,6 +285,7 @@ function NavDropdown({
               const isCurrent = m._id === currentMessageId;
               const isFocused = filterIdx === focusIndex;
               const isHovered = m._id === hoveredId;
+              const isActive = isFocused || isHovered;
               return (
                 <div
                   key={m._id}
@@ -325,26 +294,24 @@ function NavDropdown({
                   onMouseEnter={(e) => handleItemHover(m._id, e.currentTarget, m)}
                   onMouseLeave={handleItemLeave}
                   onClick={() => navigateToMessage(m)}
-                  className={`px-3 py-2 cursor-pointer transition-colors border-l-2 ${
-                    isCurrent
-                      ? "border-sol-cyan bg-sol-bg-alt/50"
-                      : isFocused
-                      ? "border-sol-text-dim bg-sol-bg-alt/40"
-                      : isHovered
-                      ? "border-transparent bg-sol-bg-alt/30"
-                      : "border-transparent"
+                  className={`px-3 py-2 cursor-pointer transition-colors ${
+                    isActive
+                      ? "bg-sol-blue/20"
+                      : isCurrent
+                      ? "bg-sol-blue/10"
+                      : "hover:bg-sol-bg-highlight"
                   }`}
                 >
                   <div className="flex items-start gap-2">
-                    <span className="text-[10px] tabular-nums w-4 text-right flex-shrink-0 pt-[2px] text-sol-text-dim/40">
+                    <span className={`text-[10px] tabular-nums w-4 text-right flex-shrink-0 pt-[2px] ${
+                      isActive || isCurrent ? "text-sol-cyan" : "text-sol-blue/40"
+                    }`}>
                       {m.originalIndex + 1}
                     </span>
                     <div className="flex-1 min-w-0">
                       <div className={`text-[12px] leading-snug line-clamp-2 ${
-                        isCurrent ? "text-sol-text font-medium"
-                          : m.isCmd ? "text-sol-text-muted font-mono"
-                          : "text-sol-text-muted"
-                      }`}>
+                        isActive || isCurrent ? "text-sol-text" : "text-sol-text-secondary"
+                      } ${m.isCmd ? "font-mono" : ""} ${isCurrent ? "font-medium" : ""}`}>
                         {m.display}
                       </div>
                       <div className="flex items-center gap-1.5 mt-1">
@@ -391,7 +358,7 @@ function NavDropdown({
                     }
                   }}
                   className={`px-3 py-2 cursor-pointer transition-colors ${
-                    isHovered ? "bg-sol-bg-alt/40" : ""
+                    isHovered ? "bg-sol-blue/20" : "hover:bg-sol-bg-highlight"
                   }`}
                 >
                   <div className="flex items-center gap-1.5 mb-0.5">
@@ -443,15 +410,21 @@ export function MessageNavButton({
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const canQuery = isConvexId(conversationId);
+
+  // Source from the complete, pagination-independent user-message cache that
+  // useConversationMessages keeps populated (same list the rewind navigator
+  // uses). The indicator must reflect the WHOLE conversation regardless of
+  // which message window is scrolled in — reading the paginated array instead
+  // meant it stayed empty (or hidden) until earlier pages were loaded.
+  const cachedUserMessages = useInboxStore((s) => s.userMessages[conversationId]);
+  // Fallback query only while the shared cache hasn't landed yet (Convex dedups
+  // it against useConversationMessages' identical subscription). Never falls
+  // back to the truncated paginated set.
   const queryUserMessages = useQuery(
     api.conversations.getUserMessages,
-    canQuery ? { conversation_id: conversationId as Id<"conversations"> } : "skip"
+    canQuery && !cachedUserMessages ? { conversation_id: conversationId as Id<"conversations"> } : "skip"
   );
-
-  const loadedMessages = useInboxStore((s) => s.messages[conversationId]);
-  const messages = queryUserMessages ?? (loadedMessages
-    ? loadedMessages.filter(isHumanPrompt)
-    : undefined);
+  const messages = cachedUserMessages ?? queryUserMessages;
 
   // Used only to decide whether to render a loading skeleton while the cache
   // is still empty. `message_count` includes assistant + system messages, so
