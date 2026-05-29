@@ -7,7 +7,7 @@
   "license": "MIT",
   "scripts": {
     "start": "electron .",
-    "dev": "CODECAST_URL=http://local.codecast.sh electron .",
+    "dev": "CODECAST_URL=https://local.codecast.sh electron .",
     "build": "NOTARIZE_KEYCHAIN_PROFILE=codecast electron-builder -m",
     "build:dir": "electron-builder -m --config.mac.target=dir",
     "build:local": "electron-builder -m --config.mac.target=dir --config.mac.identity=null",
