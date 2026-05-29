@@ -360,8 +360,13 @@ for f in launchd.err.log launchd.out.log daemon.log; do
 done
 
 LAUNCHD_UID="gui/\$(id -u)"
+DAEMON_LABEL="sh.codecast.daemon"
+DAEMON_PLIST="\${HOME}/Library/LaunchAgents/sh.codecast.daemon.plist"
+PRINT="\$(launchctl print "\$LAUNCHD_UID/\$DAEMON_LABEL" 2>/dev/null)"
+LOADED=0
 RUNNING=0
-launchctl print "\$LAUNCHD_UID/sh.codecast.daemon" 2>/dev/null | grep -q 'state = running' && RUNNING=1
+[ -n "\$PRINT" ] && LOADED=1
+printf '%s' "\$PRINT" | grep -q 'state = running' && RUNNING=1
 
 # A "running" launchd job is not proof of health. The daemon's setInterval-based
 # self-recovery (sleep detector, watchdog, event-loop monitor) does not survive a
@@ -388,8 +393,20 @@ if [ "\$RUNNING" -eq 1 ] && [ "\$STALE" -eq 0 ]; then
   exit 0
 fi
 
-[ "\$RUNNING" -eq 0 ] && log "Dev-mode watchdog kickstarting launchd daemon (not running)"
-launchctl kickstart -k "\$LAUNCHD_UID/sh.codecast.daemon" >>"\$LOGFILE" 2>&1 || log "Failed to kickstart dev daemon"
+# Not healthy. A cast stop / upgrade / login race can leave the job booted-out
+# (removed from launchd entirely), in which case kickstart alone fails forever
+# because there is no target. Re-register it from the plist first so kickstart
+# has something to start, then force a fresh start.
+if [ "\$LOADED" -eq 0 ]; then
+  if [ -f "\$DAEMON_PLIST" ]; then
+    log "daemon launchd job not loaded - bootstrapping from plist"
+    launchctl bootstrap "\$LAUNCHD_UID" "\$DAEMON_PLIST" >>"\$LOGFILE" 2>&1 || log "bootstrap failed"
+  else
+    log "daemon plist missing at \$DAEMON_PLIST - run 'cast setup' to restore supervision"
+  fi
+fi
+[ "\$RUNNING" -eq 0 ] && log "watchdog reviving daemon (loaded=\$LOADED stale=\$STALE)"
+launchctl kickstart -k "\$LAUNCHD_UID/\$DAEMON_LABEL" >>"\$LOGFILE" 2>&1 || log "Failed to kickstart daemon"
 exit 0
 `;
   }

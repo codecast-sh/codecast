@@ -22,6 +22,52 @@ export interface SessionResources {
 export const IDLE_CPU_FLOOR_PCT = 2;
 const WORKING_STATUSES = new Set(["working", "thinking", "compacting", "starting", "resuming"]);
 
+// A session is "active" this tick if it's burning CPU or its agent_status is a
+// working state. Single source of truth for both idle accounting and the metrics
+// report gate, so the two never disagree about what counts as idle.
+export function isSessionActive(cpu: number, status: string | undefined): boolean {
+  return cpu >= IDLE_CPU_FLOOR_PCT || (status !== undefined && WORKING_STATUSES.has(status));
+}
+
+// Idle sessions' metrics are flat, but the old code reported every session every
+// tick — one session_metrics insert (+ a cleanup scan) per session per 30s. With
+// a fleet of ~100 mostly-idle sessions that burst saturates the daemon's socket
+// pool and starves message-sync mutations (they hang to their 60s timeout). Cap
+// how often an idle/unchanged session re-reports so per-tick write volume tracks
+// the number of ACTIVE sessions, not the total.
+export const IDLE_METRICS_REFRESH_MS = 3 * 60 * 1000;
+const METRICS_MEM_DELTA_FRAC = 0.1; // a ≥10% memory move is worth reporting
+
+export interface ReportedMetrics {
+  cpu: number;
+  memory: number;
+  pidCount: number;
+  agentPid?: number;
+  at: number;
+}
+
+/**
+ * Decide whether a metrics report is worth sending given the last one sent for
+ * this session. Active sessions always report (full-fidelity graphs); idle ones
+ * report only on a meaningful change (cpu, pid count, process-tree shape, a
+ * memory swing, or an agent_pid change the server's snapshot patch needs) or a
+ * slow keep-alive so the graph/liveness never goes stale.
+ */
+export function shouldReportMetrics(args: {
+  cur: { cpu: number; memory: number; pidCount: number; agentPid?: number };
+  prev: ReportedMetrics | undefined;
+  status: string | undefined;
+  now: number;
+}): boolean {
+  const { cur, prev, status, now } = args;
+  if (!prev) return true; // never reported
+  if (isSessionActive(cur.cpu, status)) return true; // working or burning CPU
+  if (cur.agentPid !== prev.agentPid) return true; // feeds the server snapshot patch
+  if (cur.pidCount !== prev.pidCount) return true; // process tree changed
+  if (Math.abs(cur.memory - prev.memory) >= prev.memory * METRICS_MEM_DELTA_FRAC) return true;
+  return now - prev.at >= IDLE_METRICS_REFRESH_MS; // otherwise a slow keep-alive
+}
+
 /**
  * Per-tick update of a session's awake-idle counter.
  *
@@ -38,8 +84,7 @@ export function nextAwakeIdleMs(params: {
   elapsedMs: number;
   sleepSkip: boolean;
 }): number {
-  const active = params.cpu >= IDLE_CPU_FLOOR_PCT || (params.status !== undefined && WORKING_STATUSES.has(params.status));
-  if (active) return 0;
+  if (isSessionActive(params.cpu, params.status)) return 0;
   if (params.sleepSkip) return params.prevIdleMs;
   return params.prevIdleMs + params.elapsedMs;
 }

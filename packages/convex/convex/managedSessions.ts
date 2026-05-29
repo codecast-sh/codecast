@@ -225,11 +225,44 @@ export const updateManagedSessionId = mutation({
   },
 });
 
+const agentStatusValidator = v.union(
+  v.literal("working"), v.literal("idle"), v.literal("permission_blocked"),
+  v.literal("compacting"), v.literal("thinking"), v.literal("connected"),
+  v.literal("stopped"), v.literal("starting"), v.literal("resuming"),
+);
+
+// Shared by heartbeat + heartbeatBatch: compute one session's heartbeat patch.
+// last_heartbeat always advances. The heartbeat carries the daemon's current
+// agent_status so the server self-heals a dropped transition — but only
+// overwrites when the incoming client_ts isn't older than the stored change
+// time, and only advances agent_status_updated_at on an ACTUAL status change
+// (the heartbeat re-sends the current status, so bumping it unconditionally
+// would track "last heard" instead of "entered this status", which idle
+// detection depends on).
+function buildHeartbeatPatch(
+  session: { agent_status?: string; agent_status_updated_at?: number },
+  agentStatus: string | undefined,
+  clientTs: number | undefined,
+  now: number,
+): Record<string, any> {
+  const patch: Record<string, any> = { last_heartbeat: now };
+  if (agentStatus) {
+    const tsStale = clientTs && session.agent_status_updated_at && clientTs < session.agent_status_updated_at;
+    if (!tsStale) {
+      patch.agent_status = agentStatus;
+      if (agentStatus !== session.agent_status) {
+        patch.agent_status_updated_at = clientTs || now;
+      }
+    }
+  }
+  return patch;
+}
+
 export const heartbeat = mutation({
   args: {
     session_id: v.string(),
     api_token: v.optional(v.string()),
-    agent_status: v.optional(v.union(v.literal("working"), v.literal("idle"), v.literal("permission_blocked"), v.literal("compacting"), v.literal("thinking"), v.literal("connected"), v.literal("stopped"), v.literal("starting"), v.literal("resuming"))),
+    agent_status: v.optional(agentStatusValidator),
     client_ts: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
@@ -259,26 +292,7 @@ export const heartbeat = mutation({
     }
 
     const now = Date.now();
-    const patch: Record<string, any> = { last_heartbeat: now };
-
-    // Heartbeat carries the daemon's current agent_status so the server's view
-    // self-heals if a transition mutation was dropped in flight.
-    if (args.agent_status) {
-      const tsStale = args.client_ts && session.agent_status_updated_at && args.client_ts < session.agent_status_updated_at;
-      if (!tsStale) {
-        patch.agent_status = args.agent_status;
-        // Only advance the change-time on an actual status change. The heartbeat
-        // re-sends the current status every ~90s (to self-heal dropped
-        // transitions), so bumping this unconditionally would make it track
-        // "last heard" instead of "entered this status" — and idle detection
-        // needs the latter to know how long an agent has been waiting.
-        if (args.agent_status !== session.agent_status) {
-          patch.agent_status_updated_at = args.client_ts || now;
-        }
-      }
-    }
-
-    await ctx.db.patch(session._id, patch);
+    await ctx.db.patch(session._id, buildHeartbeatPatch(session, args.agent_status, args.client_ts, now));
 
     let dismissed = false;
     if (session.conversation_id) {
@@ -289,6 +303,49 @@ export const heartbeat = mutation({
     }
 
     return { found: true, dismissed };
+  },
+});
+
+// Batched liveness heartbeat for many sessions in ONE transaction.
+//
+// Per-session heartbeats are individually cheap, but each is a separate
+// transaction, and EVERY commit that touches a managed_sessions row invalidates
+// the queries that .collect() them (listInboxSessions, plans, tasks, …). With a
+// large fleet that's ~N invalidations every 30s → the app's most expensive
+// query recomputes dozens of times/sec for no visible change. Folding all of a
+// daemon's heartbeats into one transaction collapses those N invalidations into
+// 1: the inbox recomputes once per flush instead of once per session. The daemon
+// caps batch size so a write conflict only retries a bounded slice, not the
+// whole fleet. (No dismissed-read here — the daemon ignores the response.)
+export const heartbeatBatch = mutation({
+  args: {
+    api_token: v.optional(v.string()),
+    sessions: v.array(v.object({
+      session_id: v.string(),
+      agent_status: v.optional(agentStatusValidator),
+      client_ts: v.optional(v.number()),
+    })),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!authUserId) {
+      throw new Error("Authentication required");
+    }
+
+    const now = Date.now();
+    let updated = 0;
+    for (const entry of args.sessions) {
+      const session = await ctx.db
+        .query("managed_sessions")
+        .withIndex("by_session_id", (q: any) => q.eq("session_id", entry.session_id))
+        .first();
+      // Silently skip unknown / cross-user rows (a stale daemon can carry either);
+      // throwing would abort the whole batch and pollute logs every 30s.
+      if (!session || session.user_id.toString() !== authUserId.toString()) continue;
+      await ctx.db.patch(session._id, buildHeartbeatPatch(session, entry.agent_status, entry.client_ts, now));
+      updated++;
+    }
+    return { updated };
   },
 });
 
@@ -600,6 +657,21 @@ export const reportMetrics = mutation({
         ...(args.agent_pid !== undefined ? { agent_pid: args.agent_pid } : {}),
         ...(args.awake_idle_ms !== undefined ? { awake_idle_ms: args.awake_idle_ms } : {}),
       });
+
+      // Prune the time series on the throttled snapshot cadence (~5min/session),
+      // not on every insert. The per-insert range-scan was N scans/30s of pure
+      // overhead competing with message-sync mutations for the worker pool; a few
+      // extra minutes of rows past the 2h cutoff before pruning is harmless.
+      const cutoff = now - 2 * 60 * 60 * 1000;
+      const old = await ctx.db
+        .query("session_metrics")
+        .withIndex("by_session_collected", (q: any) =>
+          q.eq("session_id", args.session_id).lt("collected_at", cutoff)
+        )
+        .collect();
+      for (const row of old) {
+        await ctx.db.delete(row._id);
+      }
     }
 
     await ctx.db.insert("session_metrics", {
@@ -610,18 +682,6 @@ export const reportMetrics = mutation({
       pid_count: args.pid_count,
       collected_at: now,
     });
-
-    // Clean up metrics older than 2 hours
-    const cutoff = now - 2 * 60 * 60 * 1000;
-    const old = await ctx.db
-      .query("session_metrics")
-      .withIndex("by_session_collected", (q: any) =>
-        q.eq("session_id", args.session_id).lt("collected_at", cutoff)
-      )
-      .collect();
-    for (const row of old) {
-      await ctx.db.delete(row._id);
-    }
   },
 });
 

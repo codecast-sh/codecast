@@ -889,6 +889,26 @@ export class SyncService {
     } catch {}
   }
 
+  // Liveness heartbeat for many sessions in one transaction — see
+  // managedSessions:heartbeatBatch. The daemon flushes the whole fleet through
+  // this on a single timer instead of one mutation per session, so the inbox
+  // subscription is invalidated once per flush rather than once per session.
+  async heartbeatManagedSessionsBatch(
+    sessions: Array<{
+      session_id: string;
+      agent_status?: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "stopped" | "starting" | "resuming";
+      client_ts?: number;
+    }>,
+  ): Promise<{ updated: number } | undefined> {
+    if (sessions.length === 0) return;
+    try {
+      return await this.client.mutation("managedSessions:heartbeatBatch" as any, {
+        api_token: this.apiToken,
+        sessions,
+      });
+    } catch {}
+  }
+
   async reportSessionMetrics(sessionId: string, cpu: number, memory: number, pidCount: number, agentPid?: number, awakeIdleMs?: number): Promise<void> {
     try {
       await this.client.mutation("managedSessions:reportMetrics" as any, {
@@ -1049,6 +1069,29 @@ export class SyncService {
         }
       );
     } catch {}
+  }
+
+  /**
+   * Atomic pre-spawn ownership claim. Returns { won: false } if another LIVE
+   * device already owns this conversation, so the caller skips spawning — the
+   * tie-break that stops two daemons both starting a broadcast start_session.
+   * Fail-open: on any transient error we return won:true rather than block.
+   */
+  async claimConversationForStart(conversationId: string): Promise<{ won: boolean; owner?: string }> {
+    if (!this.apiToken) return { won: true };
+    try {
+      const res = await this.client.mutation(
+        "devices:claimConversationForStart" as any,
+        {
+          conversation_id: conversationId,
+          device_id: deviceId(),
+          api_token: this.apiToken,
+        }
+      );
+      return (res as { won: boolean; owner?: string }) ?? { won: true };
+    } catch {
+      return { won: true };
+    }
   }
 
   async markSessionCompleted(conversationId: string): Promise<void> {

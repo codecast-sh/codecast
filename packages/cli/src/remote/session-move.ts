@@ -423,6 +423,43 @@ export function refreshRemoteCredential(host: RemoteHost): boolean {
   return copyCredentialToRemote(host);
 }
 
+const SCALEWAY_DIR = path.join(os.homedir(), ".codecast", "scaleway");
+
+/** Load a usable remote Mac host from the Scaleway registry (shared by CLI + daemon). */
+export function loadRemoteHost(hostId?: string): RemoteHost {
+  const hostsFile = path.join(SCALEWAY_DIR, "hosts.json");
+  if (!fs.existsSync(hostsFile)) {
+    throw new Error(`No remote hosts registered (${hostsFile}).`);
+  }
+  const { hosts } = JSON.parse(fs.readFileSync(hostsFile, "utf-8")) as {
+    hosts: Array<{ id: string; address: string; sshUsername: string; stopped?: boolean }>;
+  };
+  const host = hostId ? hosts.find((h) => h.id === hostId) : hosts.find((h) => !h.stopped) ?? hosts[0];
+  if (!host) throw new Error(`No usable remote host found in ${hostsFile}`);
+  const perHost = path.join(SCALEWAY_DIR, host.id, "id_ed25519");
+  const fallback = path.join(SCALEWAY_DIR, "d7_id_ed25519");
+  const keyPath = fs.existsSync(perHost) ? perHost : fallback;
+  return {
+    address: host.address,
+    user: host.sshUsername || "m1",
+    keyPath,
+    remoteBaseDir: `/Users/${host.sshUsername || "m1"}/work`,
+  };
+}
+
+/**
+ * Transfer-only half of a move (the local-machine actions): push the worktree
+ * (git-over-SSH), relocate the transcript, copy a fresh credential, and prep
+ * remote claude (onboarding + folder trust). Returns the remote placement.
+ * The OWNERSHIP flip + resume is a separate Convex mutation the caller runs.
+ */
+export function performMoveToRemote(host: RemoteHost, sessionId: string): MoveResult {
+  const move = pushSession(sessionId, host);
+  ensureRemoteClaudeReady(host, move.remoteCwd);
+  refreshRemoteCredential(host);
+  return move;
+}
+
 /**
  * Run a one-shot prompt against the session on the remote (print mode).
  * Defaults to `acceptEdits` so a moved session can actually make code changes
