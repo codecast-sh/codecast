@@ -1,5 +1,6 @@
 import { mutation, query, internalMutation, internalQuery, type QueryCtx, type MutationCtx } from "./_generated/server";
 import { v } from "convex/values";
+import { enqueueStartSession } from "./devices";
 import { findConversationBySessionReference } from "./conversationSessionLookup";
 import { paginationOptsValidator } from "convex/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
@@ -716,21 +717,14 @@ export const createQuickSession = mutation({
     });
 
     const daemonAgentType = agentType === "codex" ? "codex" : agentType === "gemini" ? "gemini" : "claude";
-    const daemonArgs: Record<string, any> = {
-      agent_type: daemonAgentType,
-      project_path: args.project_path || args.git_root,
-      conversation_id: conversationId,
-      session_id: sessionId,
-    };
-    if (args.isolated) {
-      daemonArgs.isolated = true;
-      if (args.worktree_name) daemonArgs.worktree_name = args.worktree_name;
-    }
-    await ctx.db.insert("daemon_commands", {
-      user_id: userId,
-      command: "start_session",
-      args: JSON.stringify(daemonArgs),
-      created_at: now,
+    await enqueueStartSession(ctx, userId, {
+      conversationId,
+      agentType: daemonAgentType,
+      projectPath: args.project_path || args.git_root,
+      sessionId,
+      isolated: args.isolated,
+      worktreeName: args.worktree_name,
+      createdAt: now,
     });
 
     return conversationId;
@@ -5851,6 +5845,10 @@ export const getConversationsBySessionIds = query({
 export const listInboxSessions = query({
   args: {
     show_all: v.optional(v.boolean()),
+    // Ignored cache-buster: lets the recovery poll force a real round-trip
+    // instead of being served the live subscription's stalled cache. See the
+    // matching `_probe` arg on users.getCurrentUser.
+    _probe: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -6219,6 +6217,19 @@ export const setSessionError = mutation({
     if (!convId) return;
     const conv = await ctx.db.get(convId);
     if (!conv || conv.user_id !== userId) return;
+    // A "couldn't start / no local checkout" error is impossible if the session
+    // is actually running. Reject stale error writes (device-agnostic, so it holds
+    // even for un-upgraded daemons) when a live managed session exists — that's a
+    // second machine lacking the checkout racing the one that already started it.
+    // Clearing the error (error=undefined) always passes through.
+    if (args.error) {
+      const managed = await ctx.db
+        .query("managed_sessions")
+        .withIndex("by_conversation_id", (q) => q.eq("conversation_id", convId))
+        .collect();
+      const now = Date.now();
+      if (managed.some((s) => now - s.last_heartbeat < 2 * 60 * 1000)) return;
+    }
     await ctx.db.patch(convId, {
       session_error: args.error,
     });
@@ -6437,17 +6448,13 @@ export const reconfigureSession = mutation({
     const updated = { ...conv, ...patch };
     const agentType = updated.agent_type || "claude_code";
     const daemonAgentType = agentType === "codex" ? "codex" : agentType === "gemini" ? "gemini" : "claude";
-    await ctx.db.insert("daemon_commands", {
-      user_id: userId,
-      command: "start_session",
-      args: JSON.stringify({
-        agent_type: daemonAgentType,
-        project_path: updated.project_path || updated.git_root,
-        conversation_id: args.conversation_id,
-        session_id: updated.session_id,
-        ...(args.isolated ? { isolated: true } : {}),
-      }),
-      created_at: Date.now(),
+    await enqueueStartSession(ctx, userId, {
+      conversationId: args.conversation_id,
+      agentType: daemonAgentType,
+      projectPath: updated.project_path || updated.git_root,
+      gitRoot: updated.git_root,
+      sessionId: updated.session_id,
+      isolated: args.isolated,
     });
   },
 });
@@ -7078,15 +7085,12 @@ export const switchSessionProject = mutation({
 
     const agentType = conv.agent_type || "claude_code";
     const daemonAgentType = agentType === "codex" ? "codex" : agentType === "gemini" ? "gemini" : "claude";
-    await ctx.db.insert("daemon_commands", {
-      user_id: userId,
-      command: "start_session",
-      args: JSON.stringify({
-        agent_type: daemonAgentType,
-        project_path: args.project_path,
-        conversation_id: args.conversation_id,
-      }),
-      created_at: now + 1,
+    await enqueueStartSession(ctx, userId, {
+      conversationId: args.conversation_id,
+      agentType: daemonAgentType,
+      projectPath: args.project_path,
+      gitRoot: args.project_path,
+      createdAt: now + 1,
     });
   },
 });
@@ -7119,15 +7123,12 @@ export const switchSessionAgent = mutation({
       created_at: now,
     });
 
-    await ctx.db.insert("daemon_commands", {
-      user_id: userId,
-      command: "start_session",
-      args: JSON.stringify({
-        agent_type: daemonAgentType,
-        project_path: conv.project_path || conv.git_root,
-        conversation_id: args.conversation_id,
-      }),
-      created_at: now + 1,
+    await enqueueStartSession(ctx, userId, {
+      conversationId: args.conversation_id,
+      agentType: daemonAgentType,
+      projectPath: conv.project_path || conv.git_root,
+      gitRoot: conv.git_root,
+      createdAt: now + 1,
     });
   },
 });

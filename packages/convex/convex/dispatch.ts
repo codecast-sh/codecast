@@ -1,6 +1,7 @@
 import { mutation } from "./_generated/server";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
+import { enqueueStartSession } from "./devices";
 import { Id } from "./_generated/dataModel";
 import { checkRateLimit } from "./rateLimit";
 import { resolveTeamForPath } from "./privacy";
@@ -148,11 +149,12 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     });
     const agentType = conv.agent_type || "claude_code";
     const daemonType = agentType === "codex" ? "codex" : agentType === "gemini" ? "gemini" : "claude";
-    await ctx.db.insert("daemon_commands", {
-      user_id: userId,
-      command: "start_session" as const,
-      args: JSON.stringify({ agent_type: daemonType, project_path: path, conversation_id: convId }),
-      created_at: now + 1,
+    await enqueueStartSession(ctx, userId, {
+      conversationId: convId as Id<"conversations">,
+      agentType: daemonType,
+      projectPath: path,
+      gitRoot: path,
+      createdAt: now + 1,
     });
   },
 
@@ -230,11 +232,12 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     }
 
     const daemonType = agentType === "codex" ? "codex" : agentType === "gemini" ? "gemini" : "claude";
-    await ctx.db.insert("daemon_commands", {
-      user_id: userId,
-      command: "start_session" as const,
-      args: JSON.stringify({ agent_type: daemonType, project_path: resolvedProjectPath || resolvedGitRoot, conversation_id: conversationId }),
-      created_at: now,
+    await enqueueStartSession(ctx, userId, {
+      conversationId,
+      agentType: daemonType,
+      projectPath: resolvedProjectPath || resolvedGitRoot,
+      gitRoot: resolvedGitRoot,
+      createdAt: now,
     });
 
     return conversationId;
@@ -302,6 +305,59 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       created_at: Date.now(),
     });
     return { command_id: commandId };
+  },
+
+  // Web-triggered "move to remote": enqueue a move_to_device command targeted
+  // at the session's CURRENT owner device (the machine that has the checkout +
+  // credential). That daemon performs the local-only transfer (git/jsonl/cred),
+  // then flips ownership + resumes on the destination device.
+  // args: [conversationId, toDeviceId?]  (toDeviceId defaults to the online remote device)
+  moveToRemote: async (ctx, userId, [convId, toDeviceId]: [string, string | undefined]) => {
+    const conv = await ctx.db.get(convId as Id<"conversations">);
+    if (!conv || conv.user_id.toString() !== userId.toString()) throw new Error("Unauthorized");
+
+    const now = Date.now();
+    const ONLINE = 2 * 60 * 1000;
+    const devices = await ctx.db
+      .query("devices")
+      .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+      .collect();
+    const online = devices.filter((d: any) => now - d.last_seen < ONLINE);
+
+    // Destination: explicit, else the online remote device.
+    const dest = toDeviceId
+      ? online.find((d: any) => d.device_id === toDeviceId)
+      : online.find((d: any) => d.is_remote);
+    if (!dest) throw new Error("No online destination device (start the remote daemon)");
+
+    // Source daemon = current owner if online, else the online local device.
+    const ownerOnline = conv.owner_device_id && online.some((d: any) => d.device_id === conv.owner_device_id);
+    const source = ownerOnline
+      ? conv.owner_device_id
+      : (online.find((d: any) => !d.is_remote)?.device_id ?? null);
+    if (!source) throw new Error("No online source device to perform the move");
+    if (source === dest.device_id) throw new Error("Session is already on that device");
+
+    const pendingCommands = await ctx.db
+      .query("daemon_commands")
+      .withIndex("by_user_pending", (q: any) => q.eq("user_id", userId).eq("executed_at", undefined))
+      .collect();
+    if (hasRecentPendingDaemonCommand(pendingCommands as any, { conversationId: convId, command: "move_to_device" })) {
+      return { deduplicated: true };
+    }
+
+    const commandId = await ctx.db.insert("daemon_commands", {
+      user_id: userId,
+      command: "move_to_device" as const,
+      args: JSON.stringify({
+        conversation_id: convId,
+        session_id: conv.session_id,
+        to_device_id: dest.device_id,
+      }),
+      created_at: now,
+      target_device_id: source, // only the source daemon executes the transfer
+    });
+    return { command_id: commandId, source, dest: dest.device_id };
   },
 
   linkConversation: async (ctx, userId, [objectType, objectId, conversationId]: [string, string, string]) => {

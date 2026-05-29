@@ -1,6 +1,7 @@
 import { mutation, query, internalMutation } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
+import { enqueueStartSession } from "./devices";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { hasRecentPendingDaemonCommand } from "./daemonCommandUtils";
@@ -9,6 +10,25 @@ import { resetConversationPendingMessages } from "./pendingMessages";
 
 export const getCurrentUser = query({
   args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      return null;
+    }
+    return await ctx.db.get(userId);
+  },
+});
+
+// Identical payload to getCurrentUser, but a distinct function nothing
+// subscribes to via useQuery. The web recovery poll uses this so its one-shot
+// gets a unique query token: ConvexReactClient.query() returns the cached value
+// of any live subscription sharing the token, so probing getCurrentUser itself
+// would just re-read the stalled cache it's trying to refresh. With no live
+// subscriber here the token is never cached and the probe always round-trips —
+// the safety net that keeps the daemon-stale banner from sticking until reload.
+// `_probe` (ignored) varies per call as extra insurance against future callers.
+export const getCurrentUserProbe = query({
+  args: { _probe: v.optional(v.number()) },
   handler: async (ctx) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) {
@@ -206,6 +226,19 @@ export const daemonHeartbeat = mutation({
       }
     }
 
+    // Device routing: a command with a target_device_id is delivered ONLY to that
+    // daemon. This is what stops every daemon from racing a session command —
+    // start_session/resume go to the one machine that owns the checkout. Untargeted
+    // commands (status/restart, or sessions with no resolvable owner) broadcast to
+    // all daemons. Rollout-safe: a daemon that doesn't identify itself (pre-routing
+    // CLI) sees everything, so new sessions still start before the fleet upgrades.
+    const visibleCommands =
+      args.device_id === undefined
+        ? pendingCommands
+        : pendingCommands.filter(
+            (c) => c.target_device_id === undefined || c.target_device_id === args.device_id,
+          );
+
     const user = await ctx.db.get(auth.userId);
 
     const minVersionConfig = await ctx.db
@@ -214,7 +247,7 @@ export const daemonHeartbeat = mutation({
       .unique();
 
     return {
-      commands: pendingCommands.map((c) => ({
+      commands: visibleCommands.map((c) => ({
         id: c._id,
         command: c.command,
         args: c.args,
@@ -2421,6 +2454,11 @@ export const deleteAccount = mutation({
 export const getMyPendingCommands = query({
   args: {
     api_token: v.string(),
+    // The polling daemon's device id. Commands targeted at another device are
+    // filtered out so only the owning daemon executes session commands. This is
+    // the real-time twin of the heartbeat poll's routing filter. Optional for
+    // backward compat: a daemon that omits it only sees untargeted commands.
+    device_id: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token, false);
@@ -2439,6 +2477,13 @@ export const getMyPendingCommands = query({
 
     return commands
       .filter((c) => now - c._creationTime < COMMAND_TTL_MS)
+      .filter(
+        (c) =>
+          // Rollout-safe: a daemon that doesn't identify itself sees everything.
+          args.device_id === undefined ||
+          c.target_device_id === undefined ||
+          c.target_device_id === args.device_id,
+      )
       .map((c) => ({
         id: c._id,
         command: c.command,
@@ -2483,17 +2528,13 @@ export const startSession = mutation({
       short_id: conversationId.toString().slice(0, 7),
     });
 
-    const commandId = await ctx.db.insert("daemon_commands", {
-      user_id: userId,
-      command: "start_session",
-      args: JSON.stringify({
-        agent_type: args.agent_type,
-        project_path: args.project_path,
-        prompt: args.prompt,
-        conversation_id: conversationId,
-        session_id: sessionId,
-      }),
-      created_at: now,
+    const commandId = await enqueueStartSession(ctx, userId, {
+      conversationId,
+      agentType: args.agent_type,
+      projectPath: args.project_path,
+      sessionId,
+      prompt: args.prompt,
+      createdAt: now,
     });
 
     return { command_id: commandId, conversation_id: conversationId };

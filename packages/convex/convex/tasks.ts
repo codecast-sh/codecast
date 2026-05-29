@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { internalMutation, mutation, query } from "./_generated/server";
 import { verifyApiToken } from "./apiTokens";
+import { enqueueStartSession } from "./devices";
 import { Id } from "./_generated/dataModel";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { createDataContext, scopeByProject } from "./data";
@@ -1543,12 +1544,11 @@ export const assignToAgent = mutation({
     await ctx.db.patch(conversationId, { has_pending_messages: true } as any);
 
     const daemonAgentType = agent_type === "claude_code" ? "claude" : agent_type === "codex" ? "codex" : agent_type === "cursor" ? "cursor" : "gemini";
-    await ctx.db.insert("daemon_commands", {
-      user_id: userId,
-      command: "start_session",
-      args: JSON.stringify({ agent_type: daemonAgentType, conversation_id: conversationId }),
-      created_at: now,
-    } as any);
+    await enqueueStartSession(ctx, userId, {
+      conversationId,
+      agentType: daemonAgentType,
+      createdAt: now,
+    });
 
     return { conversationId, sessionId };
   },
