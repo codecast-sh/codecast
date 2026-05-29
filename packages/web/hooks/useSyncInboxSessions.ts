@@ -147,7 +147,10 @@ export function useSyncInboxSessions() {
   // Poll a one-shot query to catch divergence — same pattern as
   // useConversationMessages' watermark loop.
   useRecoveryPoll(lastSyncRef, useCallback(async () => {
-    const fresh: any = await convex.query(api.conversations.listInboxSessions, { show_all: showAll });
+    // `_probe` makes this a novel query token so Convex round-trips instead of
+    // serving the (possibly stalled) cache of the live listInboxSessions
+    // subscription — otherwise the "recovery" just re-reads the staleness.
+    const fresh: any = await convex.query(api.conversations.listInboxSessions, { show_all: showAll, _probe: Date.now() });
     if (!fresh) return;
     const sessions = fresh.sessions ?? fresh;
     syncTable("sessions", sessions as unknown as InboxSession[]);
@@ -163,8 +166,14 @@ export function useSyncInboxSessions() {
   // keep syncing while the user doc freezes), which made the banner climb a
   // false "offline for Nh" while the daemon was healthy. The daemon refreshes
   // this every ~30s via heartbeat, so a 45s gap means the subscription stalled.
+  //
+  // Probe via getCurrentUserProbe, NOT getCurrentUser: ConvexReactClient.query()
+  // returns the locally-cached result of any live subscription sharing the
+  // (fn, args) token, so a bare getCurrentUser() probe reads back the exact
+  // stale value it's meant to replace. getCurrentUserProbe has no live
+  // subscriber, so its token is never cached and this always round-trips.
   useRecoveryPoll(lastUserSyncRef, useCallback(async () => {
-    const fresh: any = await convex.query(api.users.getCurrentUser);
+    const fresh: any = await convex.query(api.users.getCurrentUserProbe, { _probe: Date.now() });
     if (fresh === undefined) return;
     useInboxStore.getState().syncTable("currentUser", fresh);
     lastUserSyncRef.current = Date.now();
