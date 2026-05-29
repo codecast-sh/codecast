@@ -69,6 +69,49 @@ export function nextAgentStatusOnAddMessages(
   return null;
 }
 
+// Recognizes a Claude Code API/auth-error *banner* turn — the one-liner the CLI
+// emits when an Anthropic request fails (expired OAuth token, overload, bad key).
+// These are transient TUI state, not real conversation turns: when the CLI's
+// next attempt succeeds it rewinds the banner out of its transcript and replays
+// the turn for real. The daemon's file-watcher, however, has usually already
+// synced the banner to a durable message — and append-only sync never un-syncs
+// it, leaving a stale "Please run /login" card on a session that actually
+// recovered. We detect these so the server can supersede them once a genuine
+// turn follows. Anchored prefixes + a length cap keep a real assistant message
+// that merely *discusses* an API error from being mistaken for a banner.
+const API_ERROR_BANNER_RE =
+  /^(?:please run \/login|not logged in|invalid api key|credit balance is too low|api error\b|oauth (?:token|authentication))/i;
+
+export function isApiErrorBanner(content: string | null | undefined): boolean {
+  if (!content) return false;
+  const trimmed = content.trim();
+  if (trimmed.length === 0 || trimmed.length > 400) return false;
+  return API_ERROR_BANNER_RE.test(trimmed);
+}
+
+// Decides what an addMessages batch should do about stale API-error banners.
+//   - "supersede": a real turn arrived; delete banner(s) that precede it and
+//     clear the pending flag. Triggered when the conversation was flagged
+//     pending OR this very batch also carries a banner (recovery landing in one
+//     batch). The actual deletion is timestamp-scoped by the caller so a banner
+//     that is itself the newest message is never removed.
+//   - "mark_pending": a banner-only batch (agent is mid-error) — remember it so
+//     a later real turn can clear it.
+//   - "none": ordinary traffic; no banner involved, no DB scan (keeps the write
+//     hot path free of an extra read).
+export type ApiErrorBatchAction = "supersede" | "mark_pending" | "none";
+
+export function apiErrorBatchAction(input: {
+  batchHasRealTurn: boolean;
+  batchHasBanner: boolean;
+  conversationPending: boolean;
+}): ApiErrorBatchAction {
+  const { batchHasRealTurn, batchHasBanner, conversationPending } = input;
+  if (batchHasRealTurn && (conversationPending || batchHasBanner)) return "supersede";
+  if (batchHasBanner && !batchHasRealTurn) return "mark_pending";
+  return "none";
+}
+
 export interface SessionIdleInput {
   /** managed_sessions.agent_status, coerced for heartbeat staleness by the caller. */
   agentStatus?: string;

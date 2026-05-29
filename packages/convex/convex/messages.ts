@@ -1,4 +1,4 @@
-import { mutation, query, internalMutation } from "./_generated/server";
+import { mutation, query, internalMutation, type MutationCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
@@ -8,7 +8,7 @@ import { shouldGenerateTitle } from "./titleGeneration";
 import { canTeamMemberAccess } from "./privacy";
 import { redactSecrets } from "./redact";
 import { markPendingDelivered } from "./pendingMessages";
-import { nextAgentStatusOnAddMessages } from "./inboxFilters";
+import { nextAgentStatusOnAddMessages, isApiErrorBanner, apiErrorBatchAction } from "./inboxFilters";
 
 function classifyDocContent(content: string): "plan" | "design" | "spec" | "investigation" | "handoff" | "note" {
   const first2k = content.slice(0, 2000).toLowerCase();
@@ -419,11 +419,35 @@ export const addMessage = mutation({
     });
     const newMessageCount = conversation.message_count + 1;
     const now = Date.now();
+
+    // Mirror addMessages' API-error banner supersession on the single-message
+    // retry path so a banner inserted here is cleared once a real turn lands.
+    const msgIsBanner = args.role === "assistant" && isApiErrorBanner(contentToStore);
+    const msgIsRealTurn =
+      !msgIsBanner &&
+      ((args.role === "assistant" && (!!contentToStore?.trim() || (safeToolCalls?.length ?? 0) > 0)) ||
+        (args.role === "user" &&
+          (!!contentToStore?.trim() || (safeToolResults?.length ?? 0) > 0 || (images?.length ?? 0) > 0)));
+    const wasPendingApiError = conversation.pending_api_error === true;
+    let supersededBanners = 0;
+    if (
+      apiErrorBatchAction({
+        batchHasRealTurn: msgIsRealTurn,
+        batchHasBanner: msgIsBanner,
+        conversationPending: wasPendingApiError,
+      }) === "supersede"
+    ) {
+      supersededBanners = await supersedeApiErrorBanners(ctx, args.conversation_id, msgTimestamp);
+    }
+
     const convPatch: Record<string, unknown> = {
-      message_count: newMessageCount,
+      message_count: newMessageCount - supersededBanners,
       updated_at: now,
       last_message_role: args.role,
     };
+    if (msgIsBanner !== wasPendingApiError) {
+      convPatch.pending_api_error = msgIsBanner;
+    }
     if (args.role === "user" && contentToStore?.trim()) {
       convPatch.last_message_preview = redactSecrets(contentToStore).replace(/\[Image[:\s][^\]]*\]/gi, "").trim().slice(0, 200);
       convPatch.last_user_message_at = msgTimestamp;
@@ -515,6 +539,30 @@ export const addMessage = mutation({
 });
 
 const MAX_BATCH_SIZE = 25;
+
+// Deletes Claude Code API/auth-error banner messages (see isApiErrorBanner) that
+// precede `beforeTs` in a conversation — used to retract a stale banner once a
+// genuine turn supersedes it. Bounded to the recent tail (banners only ever sit
+// at the end of a conversation) so it stays cheap. Returns how many were removed.
+export async function supersedeApiErrorBanners(
+  ctx: MutationCtx,
+  conversationId: Id<"conversations">,
+  beforeTs: number,
+): Promise<number> {
+  const recent = await ctx.db
+    .query("messages")
+    .withIndex("by_conversation_timestamp", (q) => q.eq("conversation_id", conversationId))
+    .order("desc")
+    .take(12);
+  let deleted = 0;
+  for (const r of recent) {
+    if (r.timestamp < beforeTs && r.role === "assistant" && isApiErrorBanner(r.content)) {
+      await ctx.db.delete(r._id);
+      deleted++;
+    }
+  }
+  return deleted;
+}
 
 const messageValidator = v.object({
   message_uuid: v.optional(v.string()),
@@ -735,11 +783,51 @@ export const addMessages = mutation({
       // as just-active and pollute the inbox's "needs input" / "working"
       // buckets. Math.max guards against clock skew or out-of-order batches.
       const maxMsgTs = args.messages.reduce((max, m) => Math.max(max, m.timestamp || 0), 0);
+
+      // --- Supersede transient Claude Code API/auth-error banners ---
+      // The CLI rewinds these out of its transcript on a successful retry, but
+      // the daemon's append-only sync has already persisted the banner. Once a
+      // genuine turn lands, delete the stale banner(s) that precede it; a
+      // banner-only batch just flips the gate flag so a later turn can clear it.
+      // The deletion scan only runs on the rare recovery batch — ordinary
+      // traffic skips it entirely.
+      type IncomingMsg = (typeof args.messages)[number];
+      const isBannerMsg = (m: IncomingMsg) => m.role === "assistant" && isApiErrorBanner(m.content);
+      const isRealTurn = (m: IncomingMsg) =>
+        !isBannerMsg(m) &&
+        ((m.role === "assistant" && (!!m.content?.trim() || (m.tool_calls?.length ?? 0) > 0)) ||
+          (m.role === "user" &&
+            (!!m.content?.trim() || (m.tool_results?.length ?? 0) > 0 || (m.images?.length ?? 0) > 0)));
+      const batchHasBanner = args.messages.some(isBannerMsg);
+      const batchHasRealTurn = args.messages.some(isRealTurn);
+      const maxRealTurnTs = args.messages.reduce(
+        (max, m) => (isRealTurn(m) ? Math.max(max, m.timestamp || 0) : max),
+        0,
+      );
+      const newestMsg = args.messages.reduce((a, b) => ((b.timestamp || 0) >= (a.timestamp || 0) ? b : a));
+      const wasPendingApiError = conversation.pending_api_error === true;
+
+      let supersededBanners = 0;
+      if (
+        apiErrorBatchAction({
+          batchHasRealTurn,
+          batchHasBanner,
+          conversationPending: wasPendingApiError,
+        }) === "supersede"
+      ) {
+        supersededBanners = await supersedeApiErrorBanners(ctx, args.conversation_id, maxRealTurnTs);
+      }
+
       const convPatch: Record<string, unknown> = {
-        message_count: newMessageCount,
+        message_count: newMessageCount - supersededBanners,
         updated_at: Math.max(conversation.updated_at, maxMsgTs || Date.now()),
         last_message_role: lastMsg.role,
       };
+      // Keep the gate flag in lockstep with "newest message is a banner".
+      const nextPendingApiError = isBannerMsg(newestMsg);
+      if (nextPendingApiError !== wasPendingApiError) {
+        convPatch.pending_api_error = nextPendingApiError;
+      }
       const userMsgs = args.messages.filter((m) => m.role === "user");
       if (userMsgs.length > 0) {
         const lastUserMsg = userMsgs[userMsgs.length - 1];
