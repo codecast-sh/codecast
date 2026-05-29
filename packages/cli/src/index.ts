@@ -24,6 +24,12 @@ import { getLastReconciliation, performReconciliation, repairDiscrepancies } fro
 import { parseSessionFile, extractSlug } from "./parser.js";
 import { SyncService } from "./syncService.js";
 import { resolveLocalProjectPath } from "./projectPathResolver.js";
+import {
+  buildDaemonPlistXml,
+  buildWatchdogPlistXml,
+  buildWatchdogShellScript,
+  watchdogPlistNeedsUpgrade,
+} from "./supervision.js";
 import * as readline from "readline";
 import {
   fetchExport,
@@ -333,117 +339,6 @@ const WATCHDOG_SCRIPT_PATH = path.join(CONFIG_DIR, "watchdog.sh");
 
 function shellEscapeForSh(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
-}
-
-function buildWatchdogShellScript(): string {
-  const execPath = process.execPath;
-  const isBinary = !execPath.endsWith("/bun") && !execPath.endsWith("/node") && !execPath.includes("node_modules");
-  const { executablePath, args } = getExecutableInfo("_watchdog");
-  const watchdogCommand = [executablePath, ...args].map(shellEscapeForSh).join(" ");
-
-  if (!isBinary) {
-    return `#!/bin/sh
-LOGFILE="\${HOME}/.codecast/watchdog-shell.log"
-log() { printf '[%s] %s\\n' "\$(date '+%Y-%m-%d %H:%M:%S')" "\$1" >> "\$LOGFILE"; }
-
-# Rotate oversized logs. copytruncate (copy then truncate-in-place) keeps launchd's
-# open append fd valid so it resumes writing at offset 0 after we shrink the file.
-MAX_LOG_BYTES=52428800
-rotate_log() {
-  [ -f "\$1" ] || return 0
-  sz=\$(wc -c < "\$1" 2>/dev/null | tr -d '[:space:]')
-  [ "\${sz:-0}" -gt "\$MAX_LOG_BYTES" ] || return 0
-  cp "\$1" "\$1.1" 2>/dev/null && : > "\$1" && log "rotated \$1 (\$sz bytes)"
-}
-for f in launchd.err.log launchd.out.log daemon.log; do
-  rotate_log "\${HOME}/.codecast/\$f"
-done
-
-LAUNCHD_UID="gui/\$(id -u)"
-DAEMON_LABEL="sh.codecast.daemon"
-DAEMON_PLIST="\${HOME}/Library/LaunchAgents/sh.codecast.daemon.plist"
-PRINT="\$(launchctl print "\$LAUNCHD_UID/\$DAEMON_LABEL" 2>/dev/null)"
-LOADED=0
-RUNNING=0
-[ -n "\$PRINT" ] && LOADED=1
-printf '%s' "\$PRINT" | grep -q 'state = running' && RUNNING=1
-
-# A "running" launchd job is not proof of health. The daemon's setInterval-based
-# self-recovery (sleep detector, watchdog, event-loop monitor) does not survive a
-# long macOS sleep: the timers stop firing and never re-arm, so the process stays
-# alive but stops self-healing. Detect that via lastHeartbeatTick, which a healthy
-# daemon rewrites every ~30s, and force a restart when it goes stale. Mirrors the
-# binary watchdog's runWatchdog() staleness kill, which dev mode never invokes.
-STALE=0
-STATE_FILE="\${HOME}/.codecast/daemon.state"
-if [ "\$RUNNING" -eq 1 ] && [ -f "\$STATE_FILE" ]; then
-  TICK=\$(sed -n 's/.*"lastHeartbeatTick"[[:space:]]*:[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' "\$STATE_FILE")
-  [ -z "\$TICK" ] && TICK=\$(sed -n 's/.*"lastWatchdogCheck"[[:space:]]*:[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' "\$STATE_FILE")
-  if [ -n "\$TICK" ] && [ "\$TICK" -gt 0 ]; then
-    AGE=\$(( \$(date +%s) * 1000 - TICK ))
-    # 180000ms = 3min, mirrors HEARTBEAT_STALE_THRESHOLD_MS in daemon.ts
-    if [ "\$AGE" -gt 180000 ]; then
-      STALE=1
-      log "Daemon alive but heartbeat stale (\${AGE}ms) - event loop wedged, forcing restart"
-    fi
-  fi
-fi
-
-if [ "\$RUNNING" -eq 1 ] && [ "\$STALE" -eq 0 ]; then
-  exit 0
-fi
-
-# Not healthy. A cast stop / upgrade / login race can leave the job booted-out
-# (removed from launchd entirely), in which case kickstart alone fails forever
-# because there is no target. Re-register it from the plist first so kickstart
-# has something to start, then force a fresh start.
-if [ "\$LOADED" -eq 0 ]; then
-  if [ -f "\$DAEMON_PLIST" ]; then
-    log "daemon launchd job not loaded - bootstrapping from plist"
-    launchctl bootstrap "\$LAUNCHD_UID" "\$DAEMON_PLIST" >>"\$LOGFILE" 2>&1 || log "bootstrap failed"
-  else
-    log "daemon plist missing at \$DAEMON_PLIST - run 'cast setup' to restore supervision"
-  fi
-fi
-[ "\$RUNNING" -eq 0 ] && log "watchdog reviving daemon (loaded=\$LOADED stale=\$STALE)"
-launchctl kickstart -k "\$LAUNCHD_UID/\$DAEMON_LABEL" >>"\$LOGFILE" 2>&1 || log "Failed to kickstart daemon"
-exit 0
-`;
-  }
-
-  return `#!/bin/sh
-LOGFILE="\${HOME}/.codecast/watchdog-shell.log"
-log() { printf '[%s] %s\\n' "\$(date '+%Y-%m-%d %H:%M:%S')" "\$1" >> "\$LOGFILE"; }
-
-${watchdogCommand} 2>>"\$LOGFILE" && exit 0
-log "Watchdog failed (exit \$?), checking for update"
-
-DL_HOST="https://dl.codecast.sh"
-LATEST="\$(curl -fsSL "\$DL_HOST/latest.json" 2>/dev/null)" || { log "Failed to fetch latest.json"; exit 1; }
-VERSION="\$(printf '%s' "\$LATEST" | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/p')"
-[ -z "\$VERSION" ] && { log "Could not parse version"; exit 1; }
-
-LAST_DL_FILE="\${HOME}/.codecast/last_download_version"
-LAST_DL="\$(cat "\$LAST_DL_FILE" 2>/dev/null || true)"
-if [ "\$VERSION" = "\$LAST_DL" ]; then
-  log "v\$VERSION already tried and failed, waiting for new release"
-  exit 1
-fi
-
-OS="\$(uname -s)"; ARCH="\$(uname -m)"
-case "\$OS" in Darwin*) P="darwin";; Linux*) P="linux";; *) log "Unsupported OS: \$OS"; exit 1;; esac
-case "\$ARCH" in x86_64|amd64) A="x64";; arm64|aarch64) A="arm64";; *) log "Unsupported arch: \$ARCH"; exit 1;; esac
-
-DIR="\${HOME}/.local/bin"; mkdir -p "\$DIR"
-TMP="\$(mktemp)"
-log "Downloading codecast v\$VERSION (\$P-\$A)"
-curl -fsSL "\$DL_HOST/codecast-\$P-\$A" -o "\$TMP" 2>>"\$LOGFILE" || { rm -f "\$TMP"; log "Download failed"; exit 1; }
-mv "\$TMP" "\$DIR/codecast" && chmod +x "\$DIR/codecast"
-printf '%s' "\$VERSION" > "\$LAST_DL_FILE"
-log "Installed v\$VERSION, retrying watchdog"
-
-"\$DIR/codecast" -- _watchdog 2>>"\$LOGFILE" || { log "Still failed after update"; exit 1; }
-`;
 }
 
 const __filename = fileURLToPath(import.meta.url);
@@ -5845,15 +5740,17 @@ function installWatchdogScript(): void {
   if (!fs.existsSync(CONFIG_DIR)) {
     fs.mkdirSync(CONFIG_DIR, { recursive: true });
   }
-  fs.writeFileSync(WATCHDOG_SCRIPT_PATH, buildWatchdogShellScript(), { mode: 0o755 });
+  const execPath = process.execPath;
+  const isBinary = !execPath.endsWith("/bun") && !execPath.endsWith("/node") && !execPath.includes("node_modules");
+  const { executablePath, args } = getExecutableInfo("_watchdog");
+  const watchdogCommand = [executablePath, ...args].map(shellEscapeForSh).join(" ");
+  fs.writeFileSync(WATCHDOG_SCRIPT_PATH, buildWatchdogShellScript({ isBinary, watchdogCommand }), { mode: 0o755 });
 }
 
-// Bootstrap the watchdog LaunchAgent AND force it to run once immediately.
-// RunAtLoad + StartInterval don't fire while the Mac is asleep, so bootstrapping
-// right before a sleep leaves the watchdog dormant at runs=0 — precisely when the
-// daemon's own sleep-killed timers most need a backstop. The kickstart guarantees
-// the watchdog executes at least once (runs>=1) and starts its 5-min cadence now,
-// instead of waiting up to 300s that a sleep can swallow.
+// Bootstrap the watchdog LaunchAgent AND force its resident loop to start now. The
+// watchdog is a KeepAlive long-running loop (see supervision.ts), so RunAtLoad would
+// normally start it — but bootstrapping right before a sleep can leave it dormant
+// until wake. The kickstart guarantees the loop is up immediately and begins polling.
 function bootstrapWatchdog(uid: string, watchdogPlistPath: string): void {
   spawnSync("launchctl", ["bootstrap", uid, watchdogPlistPath], { stdio: "ignore" });
   spawnSync("launchctl", ["kickstart", `${uid}/sh.codecast.watchdog`], { stdio: "ignore" });
@@ -5894,64 +5791,21 @@ function setupMacOS(disable: boolean): void {
     .map((arg) => `    <string>${arg}</string>`)
     .join("\n");
 
-  const plistContent = `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>sh.codecast.daemon</string>
-  <key>ProgramArguments</key>
-  <array>
-${programArgs}
-  </array>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>KeepAlive</key>
-  <true/>
-  <key>ThrottleInterval</key>
-  <integer>10</integer>
-  <key>StandardOutPath</key>
-  <string>${CONFIG_DIR}/launchd.out.log</string>
-  <key>StandardErrorPath</key>
-  <string>${CONFIG_DIR}/launchd.err.log</string>
-</dict>
-</plist>
-`;
+  const plistContent = buildDaemonPlistXml({ programArgsXml: programArgs, configDir: CONFIG_DIR });
 
   spawnSync("launchctl", ["bootout", uid, plistPath], { stdio: "ignore" });
   fs.writeFileSync(plistPath, plistContent, { mode: 0o644 });
   spawnSync("launchctl", ["bootstrap", uid, plistPath], { stdio: "ignore" });
   console.log("Daemon LaunchAgent installed");
 
-  // Watchdog plist (runs every 5 minutes via shell wrapper for self-healing)
+  // Watchdog plist: resident KeepAlive loop (see supervision.ts)
   installWatchdogScript();
-  const watchdogPlistContent = `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>sh.codecast.watchdog</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/bin/sh</string>
-    <string>${WATCHDOG_SCRIPT_PATH}</string>
-  </array>
-  <key>StartInterval</key>
-  <integer>60</integer>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>StandardOutPath</key>
-  <string>${CONFIG_DIR}/watchdog.out.log</string>
-  <key>StandardErrorPath</key>
-  <string>${CONFIG_DIR}/watchdog.err.log</string>
-</dict>
-</plist>
-`;
+  const watchdogPlistContent = buildWatchdogPlistXml({ scriptPath: WATCHDOG_SCRIPT_PATH, configDir: CONFIG_DIR });
 
   spawnSync("launchctl", ["bootout", uid, watchdogPlistPath], { stdio: "ignore" });
   fs.writeFileSync(watchdogPlistPath, watchdogPlistContent, { mode: 0o644 });
   bootstrapWatchdog(uid, watchdogPlistPath);
-  console.log("Watchdog LaunchAgent installed (checks every 1min)");
+  console.log("Watchdog LaunchAgent installed (resident, checks every 1min)");
 
   console.log(`\nDaemon: ${executablePath} ${args.join(" ")}`);
   console.log("Auto-start enabled with watchdog");
@@ -6040,8 +5894,7 @@ function ensureAutostart(): boolean {
       };
       const watchdogNeedsUpgrade = (ppath: string): boolean => {
         try {
-          const content = fs.readFileSync(ppath, "utf-8");
-          return !content.includes("/bin/sh");
+          return watchdogPlistNeedsUpgrade(fs.readFileSync(ppath, "utf-8"));
         } catch { return false; }
       };
       const daemonBroken = daemonExists && plistNeedsRepair(plistPath);
@@ -6068,56 +5921,13 @@ function ensureAutostart(): boolean {
       if (!fs.existsSync(plistPath)) {
         const { executablePath, args } = getExecutableInfo();
         const programArgs = [executablePath, ...args].map((arg) => `    <string>${arg}</string>`).join("\n");
-        const plistContent = `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>sh.codecast.daemon</string>
-  <key>ProgramArguments</key>
-  <array>
-${programArgs}
-  </array>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>KeepAlive</key>
-  <true/>
-  <key>ThrottleInterval</key>
-  <integer>10</integer>
-  <key>StandardOutPath</key>
-  <string>${CONFIG_DIR}/launchd.out.log</string>
-  <key>StandardErrorPath</key>
-  <string>${CONFIG_DIR}/launchd.err.log</string>
-</dict>
-</plist>
-`;
+        const plistContent = buildDaemonPlistXml({ programArgsXml: programArgs, configDir: CONFIG_DIR });
         fs.writeFileSync(plistPath, plistContent, { mode: 0o644 });
         spawnSync("launchctl", ["bootstrap", uid, plistPath], { stdio: "ignore" });
       }
 
       if (!fs.existsSync(watchdogPlistPath)) {
-        const wdContent = `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>sh.codecast.watchdog</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/bin/sh</string>
-    <string>${WATCHDOG_SCRIPT_PATH}</string>
-  </array>
-  <key>StartInterval</key>
-  <integer>60</integer>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>StandardOutPath</key>
-  <string>${CONFIG_DIR}/watchdog.out.log</string>
-  <key>StandardErrorPath</key>
-  <string>${CONFIG_DIR}/watchdog.err.log</string>
-</dict>
-</plist>
-`;
+        const wdContent = buildWatchdogPlistXml({ scriptPath: WATCHDOG_SCRIPT_PATH, configDir: CONFIG_DIR });
         fs.writeFileSync(watchdogPlistPath, wdContent, { mode: 0o644 });
         bootstrapWatchdog(uid, watchdogPlistPath);
       }

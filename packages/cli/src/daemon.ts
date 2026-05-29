@@ -12,6 +12,7 @@ import { loadRemoteHost, performMoveToRemote } from "./remote/session-move.js";
 import { CursorWatcher, type CursorSessionEvent } from "./cursorWatcher.js";
 import { CursorTranscriptWatcher, type CursorTranscriptEvent } from "./cursorTranscriptWatcher.js";
 import { CodexWatcher, type CodexSessionEvent } from "./codexWatcher.js";
+import { watchdogHeartbeatStale, WATCHDOG_HEARTBEAT_FILENAME } from "./supervision.js";
 import {
   CodexAppServer,
   threadItemsToMessages,
@@ -9605,6 +9606,12 @@ function isManagedByLaunchd(): boolean {
 // backstop — once it was booted out nothing brought it back, and a daemon that
 // then died stayed dead (the 30-min outage we hit). Throttled so the periodic
 // health tick doesn't shell out to launchctl when the watchdog is already healthy.
+//
+// "Loaded" is NOT "alive". A StartInterval watchdog was observed wedged at runs=1
+// for 27h — launchd listed it as loaded while it had stopped firing entirely, so a
+// loaded-only check (the old behavior here) saw "fine" and never revived it. The
+// resident watchdog now stamps a heartbeat file every loop; we treat a stale stamp
+// as a dead loop and kickstart it, mirroring how the watchdog judges the daemon.
 let lastWatchdogEnsureAt = 0;
 function ensureWatchdogSupervised(force = false): void {
   if (platform !== "darwin" || !process.getuid || !isManagedByLaunchd()) return;
@@ -9617,15 +9624,26 @@ function ensureWatchdogSupervised(force = false): void {
     const label = "sh.codecast.watchdog";
     const loaded =
       spawnSync("launchctl", ["print", `${domain}/${label}`], { stdio: "ignore" }).status === 0;
-    if (loaded) return;
-    const plistPath = `${process.env.HOME}/Library/LaunchAgents/${label}.plist`;
-    if (!fs.existsSync(plistPath)) {
-      log(`Watchdog plist missing (${plistPath}) — run 'cast setup' to restore supervision`);
+    if (!loaded) {
+      const plistPath = `${process.env.HOME}/Library/LaunchAgents/${label}.plist`;
+      if (!fs.existsSync(plistPath)) {
+        log(`Watchdog plist missing (${plistPath}) — run 'cast setup' to restore supervision`);
+        return;
+      }
+      log("Watchdog launchd job not loaded — bootstrapping it");
+      spawnSync("launchctl", ["bootstrap", domain, plistPath], { stdio: "ignore" });
+      spawnSync("launchctl", ["kickstart", `${domain}/${label}`], { stdio: "ignore" });
       return;
     }
-    log("Watchdog launchd job not loaded — bootstrapping it");
-    spawnSync("launchctl", ["bootstrap", domain, plistPath], { stdio: "ignore" });
-    spawnSync("launchctl", ["kickstart", `${domain}/${label}`], { stdio: "ignore" });
+    // Loaded — but is the loop actually running? Stale heartbeat ⇒ wedged/dead loop.
+    let heartbeat: string | null = null;
+    try {
+      heartbeat = fs.readFileSync(path.join(CONFIG_DIR, WATCHDOG_HEARTBEAT_FILENAME), "utf-8");
+    } catch { heartbeat = null; }
+    if (watchdogHeartbeatStale(heartbeat, now)) {
+      log("Watchdog loaded but heartbeat stale — kickstarting the wedged loop");
+      spawnSync("launchctl", ["kickstart", "-k", `${domain}/${label}`], { stdio: "ignore" });
+    }
   } catch (err) {
     log(`ensureWatchdogSupervised failed: ${err instanceof Error ? err.message : String(err)}`);
   }
