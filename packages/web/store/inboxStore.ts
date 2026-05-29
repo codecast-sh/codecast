@@ -1012,6 +1012,33 @@ function stripImageRef(s: string): string {
   return s.replace(/\[Image[:\s][^\]]*\]/gi, "").trim();
 }
 
+function messageReplayKey(message: Message): string | null {
+  if (message._isOptimistic || message._isQueued || message._isFailed) return null;
+  if (message.message_uuid) return `uuid:${message.message_uuid}`;
+  return `exact:${JSON.stringify([
+    message.role,
+    message.timestamp,
+    message.content || "",
+    message.thinking || "",
+    message.tool_calls || null,
+    message.tool_results || null,
+    message.images || null,
+    message.subtype || "",
+  ])}`;
+}
+
+function dedupeReplayedMessages(messages: Message[]): Message[] {
+  const out: Message[] = [];
+  const seen = new Set<string>();
+  for (const message of messages) {
+    const key = messageReplayKey(message);
+    if (key && seen.has(key)) continue;
+    if (key) seen.add(key);
+    out.push(message);
+  }
+  return out;
+}
+
 // Max conversations to keep messages in the Zustand store (in-memory).
 // Others are evicted but remain in IDB for instant reload.
 const MAX_IN_MEMORY_CONVERSATIONS = 50;
@@ -1895,6 +1922,7 @@ export const useInboxStore = create<InboxStoreState>(
   // =====================
 
   setMessages: sync(function (this: Draft, convId: string, msgs: Message[], meta?: Partial<PaginationState>) {
+    msgs = dedupeReplayedMessages(msgs);
     // Prune confirmed messages from pendingMessages
     const pending = this.pendingMessages[convId] || [];
     if (pending.length > 0) {
@@ -1941,9 +1969,15 @@ export const useInboxStore = create<InboxStoreState>(
   }),
 
   mergeMessages: sync(function (this: Draft, convId: string, msgs: Message[], direction: "prepend" | "append", meta?: Partial<PaginationState>) {
+    msgs = dedupeReplayedMessages(msgs);
     const existing = this.messages[convId] || [];
     const existingIds = new Set(existing.map((m: Message) => m._id));
-    const unique = msgs.filter((m: Message) => !existingIds.has(m._id));
+    const existingReplayKeys = new Set(existing.map(messageReplayKey).filter((key): key is string => !!key));
+    const unique = msgs.filter((m: Message) => {
+      if (existingIds.has(m._id)) return false;
+      const key = messageReplayKey(m);
+      return !key || !existingReplayKeys.has(key);
+    });
     if (unique.length === 0 && !meta) return;
 
     const merged = direction === "prepend"
