@@ -421,7 +421,11 @@ export function useConversationMessages(
         setTargetLoadOlderTs(msgs[0].timestamp);
       }
     } else if (paginationStatus === "CanLoadMore") {
-      loadMore(50);
+      // Larger page = far fewer round-trips to walk back through history.
+      // This was loadMore(50), which made reaching the top of a long
+      // conversation take dozens of tiny fetches; 200 keeps it snappy while
+      // staying bounded (the old loadMore(10000) defeated virtualization).
+      loadMore(200);
     }
   }, [targetMode, targetAroundData, targetHasMoreAbove, targetIsLoadingOlder, paginationStatus, loadMore]);
 
