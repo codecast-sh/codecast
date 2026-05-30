@@ -434,6 +434,9 @@ interface DaemonState {
   connected?: boolean;
   lastSyncTime?: number;
   pendingQueueSize?: number;
+  pendingSyncMessages?: number;
+  pendingSyncConversations?: number;
+  pendingSyncOldestMs?: number;
   timestamp?: number;
   authExpired?: boolean;
   authFailureCount?: number;
@@ -1241,11 +1244,18 @@ function computeLocalProjectRoots(): string[] {
 // "sync stalled" warning while the daemon is still alive (fresh heartbeat but
 // data isn't flowing). Reads the live retry queue, not the persisted state
 // snapshot (which only refreshes inside the retry executor).
-function syncHealthFields(): { pending_sync_count: number; oldest_pending_ms: number } {
+function syncHealthFields(): {
+  pending_sync_count: number;
+  oldest_pending_ms: number;
+  pending_sync_messages: number;
+  pending_sync_conversations: number;
+} {
   const health = retryQueueRef?.getHealth();
   return {
     pending_sync_count: health?.pending ?? 0,
     oldest_pending_ms: health?.oldestPendingMs ?? 0,
+    pending_sync_messages: health?.messages ?? 0,
+    pending_sync_conversations: health?.conversations ?? 0,
   };
 }
 
@@ -11266,9 +11276,15 @@ async function main(): Promise<void> {
   retryQueueRef = retryQueue;
 
   const updateState = () => {
+    const health = retryQueue.getHealth();
     saveDaemonState({
       lastSyncTime: Date.now(),
-      pendingQueueSize: retryQueue.getLogicalQueueSize(),
+      pendingQueueSize: health.pending,
+      // Honest backlog summary for `cast status` so "synced" stops lying while
+      // messages sit in the retry queue. One cheap pass over the queued ops.
+      pendingSyncMessages: health.messages,
+      pendingSyncConversations: health.conversations,
+      pendingSyncOldestMs: health.oldestPendingMs,
     });
   };
 

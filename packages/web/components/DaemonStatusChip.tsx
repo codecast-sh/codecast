@@ -30,10 +30,18 @@ function viewFor(health: ReturnType<typeof useDaemonHealth>): ChipView | null {
   }
   if (health.kind === "sync_stalled") {
     const stalled = formatDuration(health.stalledMs);
+    // Prefer the honest message count; fall back to logical ops for older
+    // daemons that don't report it yet.
+    const count = health.messages > 0 ? health.messages : health.pending;
+    const unit = health.messages > 0 ? "message" : "operation";
+    const convoNote =
+      health.conversations > 0
+        ? ` across ${health.conversations} conversation${health.conversations === 1 ? "" : "s"}`
+        : "";
     return {
       colorVar: "--sol-yellow",
-      label: `sync stalled (${health.pending})`,
-      title: `Daemon is online but ${health.pending} sync operation${health.pending === 1 ? "" : "s"} have been stuck for ${stalled}. Run cast status to inspect (click to copy).`,
+      label: `syncing ${count}, oldest ${stalled} behind`,
+      title: `Daemon is online but ${count} ${unit}${count === 1 ? "" : "s"}${convoNote} have been waiting to sync for ${stalled}. Run cast status to inspect (click to copy).`,
       command: "cast status",
     };
   }

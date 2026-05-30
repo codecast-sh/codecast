@@ -59,6 +59,8 @@ export interface DaemonHealthInput {
   last_heartbeat?: number | null;
   daemon_pending_sync_count?: number | null;
   daemon_oldest_pending_ms?: number | null;
+  daemon_pending_sync_messages?: number | null;
+  daemon_pending_sync_conversations?: number | null;
 }
 
 export type DaemonHealth =
@@ -66,7 +68,9 @@ export type DaemonHealth =
   | { kind: "unknown" }
   | { kind: "ok" }
   | { kind: "offline"; tier: OfflineTier; offlineMs: number }
-  | { kind: "sync_stalled"; pending: number; stalledMs: number };
+  // `pending` is the logical op count; `messages`/`conversations` are the honest
+  // backlog depth so the chip can say "syncing N messages across M convos".
+  | { kind: "sync_stalled"; pending: number; messages: number; conversations: number; stalledMs: number };
 
 export function computeDaemonHealth(
   user: DaemonHealthInput | null | undefined,
@@ -90,7 +94,13 @@ export function computeDaemonHealth(
   const pending = user?.daemon_pending_sync_count ?? 0;
   const oldest = user?.daemon_oldest_pending_ms ?? 0;
   if (pending > 0 && oldest >= SYNC_STALL_AFTER_MS) {
-    return { kind: "sync_stalled", pending, stalledMs: oldest };
+    return {
+      kind: "sync_stalled",
+      pending,
+      messages: user?.daemon_pending_sync_messages ?? 0,
+      conversations: user?.daemon_pending_sync_conversations ?? 0,
+      stalledMs: oldest,
+    };
   }
 
   return { kind: "ok" };
