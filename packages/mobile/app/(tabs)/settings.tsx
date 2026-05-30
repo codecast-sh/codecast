@@ -8,6 +8,7 @@ import type { Id } from '@codecast/convex/convex/_generated/dataModel';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Theme, Spacing } from '@/constants/Theme';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
+import { DevicesSection } from '@/components/DevicesSection';
 
 const THEME_OPTIONS = [
   { key: undefined, label: 'System', icon: 'mobile' as const },
@@ -301,6 +302,8 @@ export default function SettingsScreen() {
           </TouchableOpacity>
         </RNView>
       </RNView>
+
+      <DevicesSection />
 
       {activeTeam && (
         <RNView style={styles.section}>
