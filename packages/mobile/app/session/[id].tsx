@@ -12,6 +12,7 @@ import Feather from '@expo/vector-icons/Feather';
 import Svg, { Path } from 'react-native-svg';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { PermissionCard } from '@/components/PermissionCard';
+import { DeviceChip } from '@/components/DevicesSection';
 import { renderInlineMarkdown, MarkdownContent, MarkdownTextBlock, CodeBlockWithCopy, CodeBlockFullscreen, HighlightedCodeText } from '@/components/MarkdownRenderer';
 import { Theme, Spacing } from '@/constants/Theme';
 const LinearGradient = ({ colors, style, children, pointerEvents }: { colors: string[]; style?: any; children?: any; pointerEvents?: string }) => {
@@ -3954,6 +3955,7 @@ export default function SessionDetailScreen() {
                     <RNText style={styles.gitBranchText} numberOfLines={1}>{conversation.git_branch}</RNText>
                   </Pressable>
                 )}
+                <DeviceChip ownerDeviceId={(conversation as any).owner_device_id} />
                 {latestUsage && (
                   <RNView style={styles.usageBadge}>
                     <FontAwesome name="bar-chart" size={9} color={Theme.textDim} />
