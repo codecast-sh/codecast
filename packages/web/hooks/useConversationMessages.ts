@@ -38,7 +38,7 @@ export function useConversationMessages(
   // explicit targetMessageId was supplied, derive it from the hash. This makes deep
   // links work whatever path got us here (full-page load, palette nav, bookmark).
   const [hashTarget] = useState<string | undefined>(() => {
-    if (typeof window === "undefined") return undefined;
+    if (typeof window === "undefined" || !window.location) return undefined;
     const hash = window.location.hash;
     if (!hash.startsWith("#msg-")) return undefined;
     const m = window.location.pathname.match(/^\/conversation\/([^/]+)$/);

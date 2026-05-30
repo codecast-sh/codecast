@@ -3,7 +3,7 @@ import { useSyncExternalStore, useRef } from "react";
 import { mutativeMiddleware, action, asyncAction, sync } from "./mutativeMiddleware";
 import { applySyncTable, applySyncRecord, type PendingEntry } from "./syncProtocol";
 import { soundDismiss, soundKill } from "../lib/sounds";
-import { loadCache, writePatchesToIDB, setHydrating, loadConversationMessages, writeConversationMessages, enqueueDispatch, removeDispatch, loadOutbox } from "./idbCache";
+import { loadCache, writePatchesToIDB, setHydrating, loadConversationMessages, writeConversationMessages, enqueueDispatch, removeDispatch, loadOutbox, PERSISTENCE_AVAILABLE } from "./idbCache";
 
 export type { PendingEntry } from "./syncProtocol";
 
@@ -2542,7 +2542,7 @@ export function ensureHydrated(convId: string) {
 
 // -- IndexedDB cache: wire patch-driven writes + hydrate on load --
 
-if (typeof window !== "undefined") {
+if (PERSISTENCE_AVAILABLE) {
   (useInboxStore.getState() as any)._setIDBWrite(writePatchesToIDB);
   (useInboxStore.getState() as any)._setOutbox(enqueueDispatch, removeDispatch, loadOutbox);
 

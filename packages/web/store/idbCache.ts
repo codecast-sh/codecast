@@ -10,6 +10,8 @@ export type OutboxEntry = {
   ts: number;
 };
 
+export const PERSISTENCE_AVAILABLE = typeof window !== "undefined";
+
 class CacheDB extends Dexie {
   sessions!: Dexie.Table<any, string>;
   tasks!: Dexie.Table<any, string>;

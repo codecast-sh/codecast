@@ -5,44 +5,22 @@ import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useInboxStore, InboxSession, isSessionWaitingForInput, isSub, isConvexId } from "../store/inboxStore";
 import { soundIdle } from "../lib/sounds";
 import { useConvexSync } from "./useConvexSync";
-import { useMountEffect } from "./useMountEffect";
 import { useRecoveryPoll } from "./useRecoveryPoll";
-
-function deepMerge(target: any, source: any): any {
-  const result = { ...target };
-  for (const key of Object.keys(source)) {
-    const sv = source[key];
-    const tv = result[key];
-    if (sv && typeof sv === "object" && !Array.isArray(sv) && tv && typeof tv === "object" && !Array.isArray(tv)) {
-      result[key] = deepMerge(tv, sv);
-    } else {
-      result[key] = sv;
-    }
-  }
-  return result;
-}
+import { useEnsureDispatch } from "./useEnsureDispatch";
 
 export function useSyncInboxSessions() {
+  // Wire the store's server dispatch (split out so a screen can ensure dispatch
+  // without these inbox subscriptions — see useEnsureDispatch).
+  useEnsureDispatch();
+
   const convex = useConvex();
   const showAll = useInboxStore((s) => s.clientState.ui?.show_old_sessions ?? true);
   const inboxSessions = useQuery(api.conversations.listInboxSessions, { show_all: showAll });
   const clientState = useQuery(api.client_state.get, {});
   const currentUser = useQuery(api.users.getCurrentUser);
   const bgFetchingRef = useRef(new Set<string>());
-  const dispatchMutation = useMutation(api.dispatch.dispatch).withOptimisticUpdate(
-    (localStore, { patches }) => {
-      if (!patches?.client_state) return;
-      const current = localStore.getQuery(api.client_state.get, {});
-      if (!current) return;
-      const updates = (patches.client_state as any)._;
-      if (!updates) return;
-      localStore.setQuery(api.client_state.get, {}, deepMerge(current, updates));
-    }
-  );
 
   const syncTable = useInboxStore((s) => s.syncTable);
-  const _setDispatch = useInboxStore((s) => s._setDispatch);
-  const _setDispatchError = useInboxStore((s) => s._setDispatchError);
   const pruneDrafts = useMutation(api.client_state.pruneDeadDrafts);
   const prunedRef = useRef(false);
 
@@ -50,17 +28,6 @@ export function useSyncInboxSessions() {
   const prevIdleMapRef = useRef<Map<string, boolean> | null>(null);
   const lastSyncRef = useRef(Date.now());
   const lastUserSyncRef = useRef(Date.now());
-
-  const dispatchRef = useRef(dispatchMutation);
-  dispatchRef.current = dispatchMutation;
-
-  useMountEffect(() => {
-    _setDispatch((action, args, patches, result) => dispatchRef.current({ action, args, patches, result }));
-    _setDispatchError((action, error) => {
-      console.error(`[sync] dispatch failed after retries: ${action}`, error);
-      useInboxStore.setState(s => ({ dispatchErrors: s.dispatchErrors + 1 }));
-    });
-  });
 
   // Background-sync messages for inbox sessions so clicks are instant.
   // When session metadata updates arrive, detect sessions with new messages

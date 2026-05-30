@@ -58,6 +58,13 @@
     ".next/types/**/*.ts"
   ],
   "exclude": [
-    "node_modules"
+    "node_modules",
+    // Platform-extension files (and their tests) target React Native / mobile-only
+    // deps (expo-sqlite). Metro resolves them for the native bundle; the web build
+    // and typecheck must never touch them.
+    "**/*.native.ts",
+    "**/*.native.tsx",
+    "**/*.native.test.ts",
+    "**/*.native.test.tsx"
   ]
 }
