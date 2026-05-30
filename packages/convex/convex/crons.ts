@@ -44,4 +44,13 @@ crons.interval(
   {}
 );
 
+crons.interval(
+  // Kicks off the retention drain; pruneOldLogs self-reschedules to chew through
+  // the ~9.5M-row backlog, then settles into trimming rows past the 3-day window.
+  "prune old daemon logs",
+  { minutes: 10 },
+  internal.daemonLogs.pruneOldLogs,
+  {}
+);
+
 export default crons;
