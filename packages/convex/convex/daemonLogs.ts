@@ -1,4 +1,5 @@
 import { mutation, query, internalMutation } from "./_generated/server";
+import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
@@ -7,6 +8,20 @@ const isAdmin = (user: { role?: string } | null) => user?.role === "admin";
 
 const MAX_LOGS_PER_BATCH = 100;
 const MAX_MESSAGE_LENGTH = 2000;
+
+// daemon_logs was the dominant unpruned write-leak (~300k rows/day, mostly
+// [HEARTBEAT] lines at "info" level). Persist only actionable levels; drop the
+// routine debug/info firehose before it hits Postgres. This is the single
+// chokepoint for both /cli/log and /cli/log-batch, so it takes effect for every
+// daemon on deploy regardless of the daemon's own version.
+export function shouldPersistLog(level: string): boolean {
+  return level === "warn" || level === "error";
+}
+
+// Steady-state retention: keep 3 days of warn/error. The backlog is ~9.5M rows,
+// so the prune must DRAIN, not just cap growth.
+const RETENTION_MS = 3 * 24 * 60 * 60 * 1000;
+const PRUNE_BATCH_SIZE = 4000;
 
 export const insertBatch = mutation({
   args: {
@@ -42,7 +57,9 @@ export const insertBatch = mutation({
       throw new Error("Unauthorized: invalid API token");
     }
 
-    const logs = args.logs.slice(0, MAX_LOGS_PER_BATCH);
+    const logs = args.logs
+      .slice(0, MAX_LOGS_PER_BATCH)
+      .filter((log) => shouldPersistLog(log.level));
     let inserted = 0;
 
     for (const log of logs) {
@@ -381,5 +398,35 @@ export const clearOfflineAlerts = internalMutation({
       await ctx.db.delete(log._id);
     }
     return { deleted: offlineLogs.length };
+  },
+});
+
+// Deletes daemon_logs older than RETENTION_MS in a single large batch via the
+// by_timestamp index, then self-reschedules while it deleted a full batch so a
+// single cron kick drains the multi-million-row backlog. Stops once a partial
+// batch signals we've caught up to the retention window. Uses ctx.db.delete
+// only — never raw SQL, which corrupts Convex's MVCC documents/indexes tables.
+export const pruneOldLogs = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const cutoff = Date.now() - RETENTION_MS;
+
+    const stale = await ctx.db
+      .query("daemon_logs")
+      .withIndex("by_timestamp", (q) => q.lt("timestamp", cutoff))
+      .order("asc")
+      .take(PRUNE_BATCH_SIZE);
+
+    for (const log of stale) {
+      await ctx.db.delete(log._id);
+    }
+
+    // A full batch means there's almost certainly more to drain; keep going on a
+    // fresh transaction. A partial batch means we've reached the retention edge.
+    if (stale.length === PRUNE_BATCH_SIZE) {
+      await ctx.scheduler.runAfter(0, internal.daemonLogs.pruneOldLogs, {});
+    }
+
+    return { deleted: stale.length, drained: stale.length < PRUNE_BATCH_SIZE };
   },
 });

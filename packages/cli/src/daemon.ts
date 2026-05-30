@@ -997,21 +997,33 @@ let lastWatcherEventTime = Date.now();
 
 const HEALTH_REPORT_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
+// Only actionable levels are worth uploading. debug/info (dominated by the
+// [HEARTBEAT] firehose) bloated the server's daemon_logs table, so they stay
+// local-only. The server also drops them on insert; this just avoids the upload.
+function shouldUploadLog(level: LogLevel): boolean {
+  return level === "warn" || level === "error";
+}
+
+function enqueueRemoteLog(entry: RemoteLog): void {
+  if (!shouldUploadLog(entry.level)) return;
+  remoteLogQueue.push(entry);
+  if (remoteLogQueue.length > MAX_LOG_QUEUE_SIZE) {
+    remoteLogQueue.shift();
+  }
+}
+
 function log(message: string, level: LogLevel = "info", metadata?: RemoteLog["metadata"]): void {
   const timestamp = new Date().toISOString();
   const levelTag = level === "info" ? "" : `[${level.toUpperCase()}] `;
   const line = `[${timestamp}] ${levelTag}${message}\n`;
   fs.appendFileSync(LOG_FILE, line);
 
-  remoteLogQueue.push({
+  enqueueRemoteLog({
     level,
     message: message.slice(0, 2000),
     metadata,
     timestamp: Date.now(),
   });
-  if (remoteLogQueue.length > MAX_LOG_QUEUE_SIZE) {
-    remoteLogQueue.shift();
-  }
 }
 
 function logError(message: string, error?: Error, sessionId?: string): void {
@@ -1029,15 +1041,12 @@ function logWarn(message: string, sessionId?: string): void {
 
 function logDelivery(message: string, metadata?: RemoteLog["metadata"]): void {
   log(message, "info", metadata);
-  remoteLogQueue.push({
+  enqueueRemoteLog({
     level: "info",
     message: `[DELIVERY] ${message.slice(0, 2000)}`,
     metadata,
     timestamp: Date.now(),
   });
-  if (remoteLogQueue.length > MAX_LOG_QUEUE_SIZE) {
-    remoteLogQueue.shift();
-  }
 }
 
 // Standard catch handler for fire-and-forget Convex calls. Previously these used
@@ -1052,7 +1061,7 @@ function logConvexFailure(err: unknown): void {
 function logLifecycle(event: string, details?: string): void {
   const message = details ? `[LIFECYCLE] ${event}: ${details}` : `[LIFECYCLE] ${event}`;
   log(message, "info");
-  remoteLogQueue.push({
+  enqueueRemoteLog({
     level: "info",
     message,
     metadata: { error_code: event },
@@ -1097,7 +1106,7 @@ function logHealthSummary(): void {
 
   log(summary, "info");
 
-  remoteLogQueue.push({
+  enqueueRemoteLog({
     level: "info",
     message: summary,
     metadata: {
