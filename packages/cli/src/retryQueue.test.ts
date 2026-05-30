@@ -273,7 +273,13 @@ describe("RetryQueue", () => {
   });
 
   it("reports zero health when the queue is empty", () => {
-    expect(queue.getHealth()).toEqual({ pending: 0, oldestPendingMs: 0 });
+    expect(queue.getHealth()).toEqual({
+      ops: 0,
+      pending: 0,
+      messages: 0,
+      conversations: 0,
+      oldestPendingMs: 0,
+    });
   });
 
   it("reports backlog size and the oldest pending op's age", () => {
@@ -287,6 +293,29 @@ describe("RetryQueue", () => {
     const health = queue.getHealth();
     expect(health.pending).toBe(2);
     expect(health.oldestPendingMs).toBeGreaterThanOrEqual(5 * 60 * 1000);
+  });
+
+  it("reports message and conversation counts across queued addMessages ops", () => {
+    // Two conversations, several messages each, plus a non-addMessages op.
+    queue.add("addMessages", { conversationId: "hot-a", messages: [{ messageUuid: "a1" }, { messageUuid: "a2" }] });
+    queue.add("addMessages", { conversationId: "hot-a", messages: [{ messageUuid: "a3" }] });
+    queue.add("addMessages", { conversationId: "hot-b", messages: [{ messageUuid: "b1" }] });
+    queue.add("createConversation", { conversationId: "hot-c", sessionId: "s1" });
+
+    // Backdate the oldest op so age reflects how far behind we are.
+    const oldest = queue.getPendingOperations()[0];
+    oldest.createdAt = Date.now() - 160_000;
+
+    const health = queue.getHealth();
+    // hot-a's two adds compact into one op → 2 addMessages ops + 1 createConversation.
+    expect(health.ops).toBe(3);
+    // 3 messages from addMessages (a1,a2,a3 for hot-a coalesced; b1 for hot-b).
+    expect(health.messages).toBe(4);
+    // hot-a, hot-b, hot-c all carry a conversationId.
+    expect(health.conversations).toBe(3);
+    // Logical size: 2 addMessages-conversations + 1 non-addMessages op.
+    expect(health.pending).toBe(3);
+    expect(health.oldestPendingMs).toBeGreaterThanOrEqual(160_000);
   });
 
   it("reports logical queue size by conversation for addMessages", () => {

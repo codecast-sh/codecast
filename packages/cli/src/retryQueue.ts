@@ -741,17 +741,51 @@ export class RetryQueue {
     return count + pendingAddMessagesConversations.size;
   }
 
-  // Live sync-backlog snapshot for the heartbeat. `oldestPendingMs` is the age
-  // of the longest-waiting queued op, which lets the web distinguish a real
-  // stall (op stuck for minutes) from a transient retry that self-heals.
-  getHealth(): { pending: number; oldestPendingMs: number } {
+  // Live sync-backlog snapshot for `cast status` and the heartbeat. The point is
+  // to make "synced" stop lying while data sits in the queue, so it reports what
+  // a human needs to gauge how far behind we are:
+  //   - ops:           queued retry operations (raw work units)
+  //   - pending:       logical size (per-conversation for addMessages) — kept for
+  //                    back-compat with the existing heartbeat field
+  //   - messages:      total messages waiting across all addMessages ops
+  //   - conversations: distinct conversations with any queued work
+  //   - oldestPendingMs: age of the longest-waiting op = how far behind we are
+  // One pass over the queued ops (not the messages on disk), so it stays cheap
+  // enough to call on every heartbeat across 100+ sessions.
+  getHealth(): {
+    ops: number;
+    pending: number;
+    messages: number;
+    conversations: number;
+    oldestPendingMs: number;
+  } {
     const now = Date.now();
     let oldestPendingMs = 0;
+    let messages = 0;
+    const conversations = new Set<string>();
+    const addMessagesConversations = new Set<string>();
+    let nonAddMessagesOps = 0;
     for (const op of this.queue.values()) {
       const age = now - op.createdAt;
       if (age > oldestPendingMs) oldestPendingMs = age;
+      const convId = typeof op.params.conversationId === "string" ? op.params.conversationId : null;
+      if (convId) conversations.add(convId);
+      if (op.type === "addMessages" && Array.isArray(op.params.messages)) {
+        messages += op.params.messages.length;
+        if (convId) addMessagesConversations.add(convId);
+        else nonAddMessagesOps++;
+      } else {
+        nonAddMessagesOps++;
+      }
     }
-    return { pending: this.getLogicalQueueSize(), oldestPendingMs };
+    return {
+      ops: this.queue.size,
+      // Logical size mirrors getLogicalQueueSize without a second pass.
+      pending: addMessagesConversations.size + nonAddMessagesOps,
+      messages,
+      conversations: conversations.size,
+      oldestPendingMs,
+    };
   }
 
   getPendingOperations(): RetryOperation[] {
