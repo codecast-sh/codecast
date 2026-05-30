@@ -63,6 +63,7 @@
     "dexie": "^4.3.0",
     "diff": "^8.0.2",
     "diff-match-patch": "^1.0.5",
+    "expo-sqlite": "~16.0.10",
     "hono": "^4.12.8",
     "lowlight": "^3.3.0",
     "lucide-react": "^0.556.0",

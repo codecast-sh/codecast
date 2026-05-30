@@ -29,7 +29,9 @@ const CRITICAL_UI_KEYS = ["sidebar_collapsed", "zen_mode", "inbox_shortcuts_hidd
 const CRITICAL_PREFS_LS_KEY = "codecast-critical-ui";
 
 function readCriticalUiPrefs(): Record<string, any> {
-  if (typeof window === "undefined") return {};
+  // Guard on localStorage itself (not window): React Native may define `window`
+  // without a DOM Storage, and SSR has neither.
+  if (typeof localStorage === "undefined") return {};
   try {
     const raw = localStorage.getItem(CRITICAL_PREFS_LS_KEY);
     if (!raw) return {};
@@ -43,7 +45,7 @@ function readCriticalUiPrefs(): Record<string, any> {
 }
 
 function writeCriticalUiPrefs(partial: Record<string, any>) {
-  if (typeof window === "undefined") return;
+  if (typeof localStorage === "undefined") return;
   let toWrite: Record<string, any> | null = null;
   for (const k of CRITICAL_UI_KEYS) {
     if (Object.prototype.hasOwnProperty.call(partial, k)) {
