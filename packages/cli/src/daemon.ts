@@ -61,7 +61,7 @@ import {
   extractJsonlPermissionMode,
   rewriteSubagentJsonlToUuid,
 } from "./resumeCommand.js";
-import { resolveLocalProjectPath, resolveResumeCwd, pickProjectPath } from "./projectPathResolver.js";
+import { resolveLocalProjectPath, resolveResumeCwd, pickProjectPath, chooseSessionTranscript, type TranscriptCandidate } from "./projectPathResolver.js";
 
 const ENRICHED_PATH = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
 const EXEC_TIMEOUT_MS = 10_000;
@@ -11373,6 +11373,11 @@ async function main(): Promise<void> {
 
   const watcher = new SessionWatcher();
   const fileSyncs = new Map<string, InvalidateSync>();
+  // One canonical transcript per session UUID. `claude --resume` copies the
+  // prior transcript into the new cwd's project dir, so the same UUID can be
+  // watched under two slugs and sync the SAME conversation twice. We pick the
+  // copy that lives in a real local checkout and skip the stale resume artifact.
+  const canonicalTranscripts = new Map<string, TranscriptCandidate>();
 
   watcher.on("ready", () => {
     log("Session watcher ready (depth=2)");
@@ -11408,6 +11413,27 @@ async function main(): Promise<void> {
       return;
     }
 
+    // Dedup duplicate-UUID transcripts: skip a resume-copy artifact whose
+    // resolved project dir doesn't exist locally when another already-watched
+    // copy lives in a real checkout. Server dedups by message_uuid, so this only
+    // trims redundant writes; it never drops the copy in a real local checkout.
+    let projectExists = false;
+    try { projectExists = fs.existsSync(projectPath) && fs.statSync(projectPath).isDirectory(); } catch {}
+    const incoming: TranscriptCandidate = { filePath, projectPath, projectExists };
+    const choice = chooseSessionTranscript(incoming, canonicalTranscripts.get(event.sessionId));
+    if (choice.action === "skip") {
+      const existing = fileSyncs.get(filePath);
+      if (existing) { existing.stop(); fileSyncs.delete(filePath); }
+      log(`Skipping duplicate transcript for session ${event.sessionId.slice(0, 8)}: ${choice.reason}`);
+      return;
+    }
+    // Incoming wins. If it supersedes a stale prior copy (the artifact registered
+    // first because it changed first), stop that copy's sync too.
+    if (choice.supersededFilePath) {
+      const stale = fileSyncs.get(choice.supersededFilePath);
+      if (stale) { stale.stop(); fileSyncs.delete(choice.supersededFilePath); }
+    }
+    canonicalTranscripts.set(event.sessionId, incoming);
 
     let sync = fileSyncs.get(filePath);
     if (!sync) {
