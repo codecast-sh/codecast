@@ -1,12 +1,13 @@
 import { mutation, query, internalMutation } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
-import { enqueueStartSession } from "./devices";
+import { enqueueStartSession, getOnlineLocalRoots } from "./devices";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { hasRecentPendingDaemonCommand } from "./daemonCommandUtils";
 import { resolveTeamForPath } from "./privacy";
 import { resetConversationPendingMessages } from "./pendingMessages";
+import { normalizeProjectPath } from "./projectPaths";
 
 export const getCurrentUser = query({
   args: {},
@@ -159,25 +160,62 @@ export const daemonHeartbeat = mutation({
     }
 
     const now = Date.now();
-    const patch: Record<string, any> = {
-      daemon_last_seen: now,
-      last_heartbeat: now,
-      cli_version: args.version,
-      cli_platform: args.platform,
-      daemon_pid: args.pid,
-      autostart_enabled: args.autostart_enabled,
-      has_tmux: args.has_tmux,
-      daemon_pending_sync_count: args.pending_sync_count ?? 0,
-      daemon_oldest_pending_ms: args.oldest_pending_ms ?? 0,
-    };
-    if (args.local_project_roots !== undefined) {
-      patch.local_project_roots = args.local_project_roots;
-      patch.local_project_roots_updated_at = now;
-    }
-    await ctx.db.patch(auth.userId, patch);
+    // Coalesce the user-doc write. This doc is HOT: webListPaginated and the
+    // daemon-health queries read it, so an unconditional patch every 30s beat
+    // (× the whole fleet) invalidated those subscriptions ~per-second and drove
+    // the OCC contention / 1011 WS storm. Mirror updateUserActivity: read first,
+    // patch only what changed, and refresh the volatile liveness/queue fields on
+    // a throttle (the readers only need minute-granularity online detection).
+    const HEARTBEAT_WRITE_THROTTLE_MS = 50 * 1000;
+    const existingUser = await ctx.db.get(auth.userId);
+    const newPending = args.pending_sync_count ?? 0;
+    const newOldest = args.oldest_pending_ms ?? 0;
 
-    // Per-device row upsert (multi-machine). Additive: the user-doc write above
-    // stays for backward compat until the read path moves to devices (H4).
+    const patch: Record<string, any> = {};
+    // Sticky fields: write only on actual change.
+    if (existingUser?.cli_version !== args.version) patch.cli_version = args.version;
+    if (existingUser?.cli_platform !== args.platform) patch.cli_platform = args.platform;
+    if (existingUser?.daemon_pid !== args.pid) patch.daemon_pid = args.pid;
+    if (existingUser?.autostart_enabled !== args.autostart_enabled) patch.autostart_enabled = args.autostart_enabled;
+    if (existingUser?.has_tmux !== args.has_tmux) patch.has_tmux = args.has_tmux;
+
+    // Volatile liveness/queue fields: refresh on a throttle, when queue zeroness
+    // flips (so a newly-stuck queue still surfaces promptly), or when we're already
+    // writing a sticky change anyway.
+    const lastSeenStale =
+      !existingUser?.daemon_last_seen || now - existingUser.daemon_last_seen > HEARTBEAT_WRITE_THROTTLE_MS;
+    const queueZeronessFlipped =
+      ((existingUser?.daemon_pending_sync_count ?? 0) === 0) !== (newPending === 0);
+    if (lastSeenStale || queueZeronessFlipped || Object.keys(patch).length > 0) {
+      patch.daemon_last_seen = now;
+      patch.last_heartbeat = now;
+      patch.daemon_pending_sync_count = newPending;
+      patch.daemon_oldest_pending_ms = newOldest;
+    }
+
+    if (args.local_project_roots !== undefined) {
+      // NOTE: every daemon overwrites this per-user field, so for multi-machine
+      // users it flip-flops between machines on each heartbeat. Read paths now use
+      // the per-device union (getOnlineLocalRoots) instead; this write is retained
+      // only for rollback safety and can be dropped once nothing depends on it.
+      // Write only when the set actually changed — an unconditional rewrite is a
+      // needless invalidation of every user-doc reader.
+      const prev = existingUser?.local_project_roots;
+      const next = args.local_project_roots;
+      const rootsChanged =
+        !prev || prev.length !== next.length || prev.some((p: string, i: number) => p !== next[i]);
+      if (rootsChanged) {
+        patch.local_project_roots = next;
+        patch.local_project_roots_updated_at = now;
+      }
+    }
+
+    if (Object.keys(patch).length > 0) {
+      await ctx.db.patch(auth.userId, patch);
+    }
+
+    // Per-device row upsert (multi-machine): the stable, non-clobbered source the
+    // read paths consume via getOnlineLocalRoots (union across online devices).
     if (args.device_id) {
       const existingDevice = await ctx.db
         .query("devices")
@@ -239,7 +277,10 @@ export const daemonHeartbeat = mutation({
             (c) => c.target_device_id === undefined || c.target_device_id === args.device_id,
           );
 
-    const user = await ctx.db.get(auth.userId);
+    // Reuse the doc read above for the return payload — these fields are sticky
+    // (untouched by the heartbeat patch), so the pre-patch snapshot is correct and
+    // we avoid a second read of the hot user doc.
+    const user = existingUser;
 
     const minVersionConfig = await ctx.db
       .query("system_config")
@@ -2124,31 +2165,13 @@ export const getRecentProjectPaths = query({
       .order("desc")
       .take(200);
 
-    // Hide paths the daemon can't see locally. If the daemon hasn't published
-    // a list (older CLI, or first heartbeat hasn't landed yet), don't filter —
-    // showing too much is better than showing nothing.
-    const user = await ctx.db.get(userId);
-    const localRoots = user?.local_project_roots;
-    const FRESH_MS = 10 * 60 * 1000;
-    const isLocalFilterActive =
-      Array.isArray(localRoots) &&
-      localRoots.length > 0 &&
-      user?.local_project_roots_updated_at !== undefined &&
-      Date.now() - user.local_project_roots_updated_at < FRESH_MS;
-    const localRootSet = isLocalFilterActive ? new Set(localRoots) : null;
-
-    const normalizeProjectPath = (raw: string): string | null => {
-      let p = raw;
-      p = p.replace(/\/\.conductor\/[^/]+$/, '');
-      p = p.replace(/\/\.codecast\/worktrees\/[^/]+$/, '');
-      if (/^\/(tmp|var|private\/tmp)\//.test(p)) return null;
-      const parts = p.split('/');
-      const srcIdx = parts.findIndex(s => s === 'src' || s === 'projects' || s === 'repos' || s === 'code');
-      if (srcIdx >= 0 && srcIdx < parts.length - 1) {
-        return parts.slice(0, srcIdx + 2).join('/');
-      }
-      return p;
-    };
+    // Hide paths none of the user's machines can see locally. Read the union of
+    // online devices' roots (NOT the per-user field, which every daemon clobbers
+    // on each heartbeat — that made the list flip-flop between machines). Empty
+    // union (no device online/reporting) → don't filter: showing too much beats
+    // showing nothing.
+    const onlineRoots = await getOnlineLocalRoots(ctx, userId);
+    const localRootSet = onlineRoots.length > 0 ? new Set(onlineRoots) : null;
 
     const pathCounts = new Map<string, { count: number; lastActive: number }>();
     for (const conv of conversations) {
