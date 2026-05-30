@@ -804,10 +804,18 @@ export const webListPaginated = query({
     const userId = await getAuthUserId(ctx);
     if (!userId) return { page: [], isDone: true, continueCursor: "" };
 
-    const user = await ctx.db.get(userId);
-    const resolvedTeamId = args.workspace === "team" && args.team_id
-      ? args.team_id
-      : !args.workspace ? user?.active_team_id : undefined;
+    // Only read the (hot, heartbeat-churned) user doc when we actually need its
+    // active_team_id — i.e. when the caller didn't pin a workspace. Reading it
+    // unconditionally made this subscription invalidate on every daemon heartbeat.
+    let resolvedTeamId: typeof args.team_id | undefined;
+    if (args.workspace === "team" && args.team_id) {
+      resolvedTeamId = args.team_id;
+    } else if (!args.workspace) {
+      const user = await ctx.db.get(userId);
+      resolvedTeamId = user?.active_team_id;
+    } else {
+      resolvedTeamId = undefined;
+    }
     const effectiveWorkspace = args.scope === "projects"
       ? "personal" as const
       : args.workspace;
