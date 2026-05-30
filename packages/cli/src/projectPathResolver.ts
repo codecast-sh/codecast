@@ -132,3 +132,42 @@ export async function resolveResumeCwd(input: ResumeCwdInput): Promise<string | 
 
   return null;
 }
+
+export interface PickProjectPathInput {
+  /** decodeProjectDirName(slug) — the path implied by the ~/.claude/projects folder name. */
+  decodedSlugPath: string;
+  /** extractCwd(transcript head) — the cwd recorded inside the transcript. Authoritative. */
+  recordedCwd?: string | null;
+  /** process.env.HOME — the bare home dir is never a real project. */
+  home?: string | null;
+  /** Directory-existence check (overridable for tests). */
+  exists?: (p: string) => boolean;
+}
+
+// Decide a discovered transcript's project_path from its folder SLUG vs the cwd
+// recorded inside it.
+//
+// The transcript's `cwd` is authoritative — it's the physical directory the
+// agent actually ran in. The slug (~/.claude/projects/<name>) is only a
+// fallback: it's lossy ("/" and "." both encode to "-") and can be flat wrong
+// when a transcript is copied or resumed into a FOREIGN dir. Canonical failure:
+// a session offloaded to a remote Mac whose checkout was absent, so an old
+// resume fell back to $HOME and wrote the JSONL under `-Users-<remoteuser>` →
+// decodes to the bare home dir → mislabels the whole conversation as e.g.
+// "/Users/m1". resolveResumeCwd now prevents NEW occurrences; this heals
+// already-mislocated and cross-machine transcripts at sync time.
+//
+// Rule: a real, existing, non-$HOME slug dir wins — that keeps normal sessions
+// and cross-machine forks (which live under a real project dir, even when their
+// recorded cwd points at another machine) correctly labeled. Otherwise the
+// transcript's own cwd wins. The decoded slug is the last resort.
+export function pickProjectPath(input: PickProjectPathInput): string {
+  const exists = input.exists ?? defaultExists;
+  const decoded = input.decodedSlugPath;
+  const home = input.home?.trim() || null;
+  const recordedCwd = input.recordedCwd?.trim() || null;
+
+  if (decoded && decoded !== home && exists(decoded)) return decoded;
+  if (recordedCwd) return recordedCwd;
+  return decoded;
+}
