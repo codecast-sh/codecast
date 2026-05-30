@@ -6128,6 +6128,7 @@ export const listInboxSessions = query({
         icon_color: conv.icon_color,
         team_id: conv.team_id ?? null,
         is_private: conv.is_private ?? false,
+        owner_device_id: (conv as any).owner_device_id ?? null,
       });
 
       // Don't surface subagents under a dismissed parent — they used to be
