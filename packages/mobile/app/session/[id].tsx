@@ -2858,6 +2858,10 @@ function MessageInput({ conversationId, isActive, draft }: { conversationId: Id<
     setMessage('');
     draftRef.current = '';
     setSelectedImages([]);
+    // Clear the draft both on the server and in the local cache. Without the
+    // local clear, the persisted conversation keeps the stale draft and a
+    // restart-right-after-send would re-hydrate it into the composer (cache-first).
+    store.syncRecord('conversations', conversationId, { draft_message: null });
     patchConversation({ id: conversationId, fields: { draft_message: null } }).catch(() => {});
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 

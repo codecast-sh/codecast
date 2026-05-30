@@ -105,18 +105,24 @@ export function useRecoveryPoll(
 
     const id = setInterval(tick, pollMs);
 
+    // Wake-event re-checks are a browser optimization. React Native has no
+    // document/window event model (and `document` is undefined there), so
+    // feature-detect before wiring them — the interval above still drives
+    // recovery on every platform.
+    const doc = typeof document !== "undefined" ? document : undefined;
+    const win = typeof window !== "undefined" ? window : undefined;
     const onVisible = () => {
-      if (document.visibilityState === "visible") tick();
+      if (doc?.visibilityState === "visible") tick();
     };
-    document.addEventListener("visibilitychange", onVisible);
-    window.addEventListener("focus", tick);
-    window.addEventListener("online", tick);
+    doc?.addEventListener?.("visibilitychange", onVisible);
+    win?.addEventListener?.("focus", tick);
+    win?.addEventListener?.("online", tick);
 
     return () => {
       clearInterval(id);
-      document.removeEventListener("visibilitychange", onVisible);
-      window.removeEventListener("focus", tick);
-      window.removeEventListener("online", tick);
+      doc?.removeEventListener?.("visibilitychange", onVisible);
+      win?.removeEventListener?.("focus", tick);
+      win?.removeEventListener?.("online", tick);
     };
   }, [lastSyncRef, staleMs, pollMs]);
 }
