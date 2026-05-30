@@ -1,6 +1,6 @@
 import { StyleSheet, FlatList, ActivityIndicator, ScrollView, TouchableOpacity, TextInput, KeyboardAvoidingView, Platform, Share, View as RNView, Text as RNText, Linking, Image, ActionSheetIOS, Alert, Pressable, Clipboard, Modal, Animated, Dimensions, useWindowDimensions } from 'react-native';
 import { useLocalSearchParams, Stack, useRouter } from 'expo-router';
-import { useQuery, useMutation, useConvex } from 'convex/react';
+import { useQuery, useMutation } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
 import { Id } from '@codecast/convex/convex/_generated/dataModel';
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
@@ -11,6 +11,8 @@ import FontAwesome from '@expo/vector-icons/FontAwesome';
 import Feather from '@expo/vector-icons/Feather';
 import Svg, { Path } from 'react-native-svg';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
+import { useConversationMessages } from '@codecast/web/hooks/useConversationMessages';
+import { useEnsureDispatch } from '@codecast/web/hooks/useEnsureDispatch';
 import { PermissionCard } from '@/components/PermissionCard';
 import { DeviceChip } from '@/components/DevicesSection';
 import { renderInlineMarkdown, MarkdownContent, MarkdownTextBlock, CodeBlockWithCopy, CodeBlockFullscreen, HighlightedCodeText } from '@/components/MarkdownRenderer';
@@ -78,6 +80,11 @@ type Message = {
     cache_creation_input_tokens?: number;
     cache_read_input_tokens?: number;
   };
+  // Optimistic-send markers merged in by useConversationMessages.
+  _isOptimistic?: true;
+  _isQueued?: true;
+  _isFailed?: true;
+  _clientId?: string;
 };
 
 type UsageData = {
@@ -199,6 +206,7 @@ type ConversationData = {
   child_conversation_map?: Record<string, string>;
   child_conversations?: Array<{ _id: string; title: string; is_subagent?: boolean; first_message_preview?: string }>;
   short_id?: string;
+  draft_message?: string | null;
 };
 
 // --- Markdown rendering ---
@@ -2751,27 +2759,14 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
   );
 }
 
-// --- Pending messages & input ---
-
-type PendingMessage = {
-  _id: string;
-  conversation_id: string;
-  content: string;
-  status: 'pending' | 'delivered' | 'failed';
-  created_at: number;
-  retry_count: number;
-};
+// --- Message input ---
 
 function MessageInput({ conversationId, isActive, draft }: { conversationId: Id<"conversations">; isActive: boolean; draft?: string | null }) {
   const [message, setMessage] = useState(draft || '');
-  const [isSending, setIsSending] = useState(false);
-  const [lastStatus, setLastStatus] = useState<'delivered' | 'failed' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedImages, setSelectedImages] = useState<{ uri: string; storageId?: string; uploading: boolean }[]>([]);
   const managedSession = useQuery(api.managedSessions.isSessionManaged, { conversation_id: conversationId });
 
-  const sendMessage = useMutation(api.pendingMessages.sendMessageToSession);
-  const retryMessage = useMutation(api.pendingMessages.retryMessage);
   const patchConversation = useMutation(api.conversations.patchConversation);
   const generateUploadUrl = useMutation(api.images.generateUploadUrl);
 
@@ -2785,12 +2780,6 @@ function MessageInput({ conversationId, isActive, draft }: { conversationId: Id<
     }, 1000);
     return () => clearTimeout(t);
   }, [message]);
-
-  const pendingMessages = useQuery(api.pendingMessages.getPendingMessages, {}) as PendingMessage[] | undefined;
-
-  const conversationPendingMessages = pendingMessages?.filter(
-    (msg) => msg.conversation_id === conversationId
-  ) || [];
 
   const uploadToStorage = async (uri: string) => {
     const uploadUrl = await generateUploadUrl({});
@@ -2842,42 +2831,37 @@ function MessageInput({ conversationId, isActive, draft }: { conversationId: Id<
     setSelectedImages(prev => prev.filter(img => img.uri !== uri));
   };
 
-  const handleSend = async () => {
+  // Optimistic, non-blocking send (mirrors web ContextChatInput). The message
+  // is added to the store as pending and rendered instantly; sendMessage is
+  // fire-and-forget (rides the store outbox, dedups on client_id). The input
+  // clears synchronously — no await, no spinner, no lock.
+  const handleSend = () => {
     const trimmedMessage = message.trim();
-    if ((!trimmedMessage && selectedImages.length === 0) || isSending) return;
+    if (!trimmedMessage && selectedImages.length === 0) return;
 
-    setIsSending(true);
-    setError(null);
-
-    const hasUploading = selectedImages.some(img => img.uploading);
-    if (hasUploading) {
+    if (selectedImages.some(img => img.uploading)) {
       setError('Images still uploading...');
-      setIsSending(false);
       return;
     }
+    setError(null);
 
-    try {
-      await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-      const storageIds = selectedImages.filter(img => img.storageId).map(img => img.storageId!);
-      await sendMessage({
-        conversation_id: conversationId,
-        content: trimmedMessage || (storageIds.length > 0 ? '[image]' : ''),
-        ...(storageIds.length > 0 ? { image_storage_ids: storageIds as Id<"_storage">[] } : {}),
-      });
-      setMessage('');
-      draftRef.current = '';
-      patchConversation({ id: conversationId, fields: { draft_message: null } }).catch(() => {});
-      setSelectedImages([]);
-      setLastStatus('delivered');
-      setTimeout(() => setLastStatus(null), 2000);
-      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to send message');
-      setLastStatus('failed');
-      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-    } finally {
-      setIsSending(false);
-    }
+    const storageIds = selectedImages.filter(img => img.storageId).map(img => img.storageId!);
+    const content = trimmedMessage || (storageIds.length > 0 ? '[image]' : '');
+
+    const store = useInboxStore.getState();
+    const images = storageIds.length
+      ? storageIds.map(sid => ({ media_type: 'image/jpeg', storage_id: sid }))
+      : undefined;
+    const clientId = store.addOptimisticMessage(conversationId, content, images);
+
+    // Clear the input immediately so the screen never feels blocked.
+    setMessage('');
+    draftRef.current = '';
+    setSelectedImages([]);
+    patchConversation({ id: conversationId, fields: { draft_message: null } }).catch(() => {});
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+
+    store.sendMessage(conversationId, content, storageIds.length ? storageIds : undefined, clientId);
   };
 
   return (
@@ -2950,7 +2934,6 @@ function MessageInput({ conversationId, isActive, draft }: { conversationId: Id<
         <TouchableOpacity
           style={styles.imageButton}
           onPress={pickImage}
-          disabled={isSending}
           activeOpacity={0.7}
         >
           <FontAwesome name="plus" size={20} color={Theme.textMuted} />
@@ -2963,28 +2946,15 @@ function MessageInput({ conversationId, isActive, draft }: { conversationId: Id<
           placeholderTextColor={Theme.textMuted0}
           multiline
           maxLength={10000}
-          editable={!isSending}
           blurOnSubmit={false}
         />
         <TouchableOpacity
-          style={[styles.sendButton, ((!message.trim() && selectedImages.length === 0) || isSending) && styles.sendButtonDisabled]}
+          style={[styles.sendButton, (!message.trim() && selectedImages.length === 0) && styles.sendButtonDisabled]}
           onPress={handleSend}
-          disabled={(!message.trim() && selectedImages.length === 0) || isSending}
+          disabled={!message.trim() && selectedImages.length === 0}
           activeOpacity={0.7}
         >
-          {isSending ? (
-            <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-              <ActivityIndicator size="small" color="#fff" />
-              <RNText style={styles.sendButtonText}>Sending</RNText>
-            </RNView>
-          ) : lastStatus === 'delivered' ? (
-            <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-              <FontAwesome name="check" size={12} color="#fff" />
-              <RNText style={styles.sendButtonText}>Sent</RNText>
-            </RNView>
-          ) : (
-            <FontAwesome name="arrow-up" size={16} color="#fff" />
-          )}
+          <FontAwesome name="arrow-up" size={16} color="#fff" />
         </TouchableOpacity>
       </RNView>
       {!isActive && (
@@ -3020,13 +2990,16 @@ function TreeNodeView({ node, depth, router, currentId, onClose }: { node: TreeN
 
 export default function SessionDetailScreen() {
   const { id, message: highlightMessageParam } = useLocalSearchParams<{ id: string; message?: string }>();
-  const convex = useConvex();
+  // Wire the store's server dispatch (idempotent — just sets a ref). The inbox
+  // tab mounts useSyncInboxSessions and stays mounted under this pushed screen,
+  // so dispatch is usually already wired; but a cold deep-link can reach this
+  // screen before any tab mounts, and without this store.sendMessage would
+  // dispatch to a no-op. We wire ONLY dispatch here (not the inbox
+  // subscriptions/soundIdle that useSyncInboxSessions owns) to avoid duplicate
+  // subscriptions and double-firing idle sounds.
+  useEnsureDispatch();
   const flatListRef = useRef<FlatList>(null);
-  const [olderMessages, setOlderMessages] = useState<Message[]>([]);
-  const [loadingOlder, setLoadingOlder] = useState(false);
   const loadCooldownRef = useRef(false);
-  const [olderHasMore, setOlderHasMore] = useState(true);
-  const [olderOldestTs, setOlderOldestTs] = useState<number | null>(null);
   const [initialScrollDone, setInitialScrollDone] = useState(false);
   const [userScrolled, setUserScrolled] = useState(false);
   const [isNearTop, setIsNearTop] = useState(true);
@@ -3061,10 +3034,24 @@ export default function SessionDetailScreen() {
   const didInitialScrollRef = useRef(false);
   const initialScrollDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const conversation = useQuery(
-    api.conversations.getAllMessages,
-    id ? { conversation_id: id as Id<"conversations">, limit: 50 } : "skip"
-  ) as ConversationData | null | undefined;
+  // Everything comes from the shared inboxStore via the canonical web hook: the
+  // pending-merged message list AND the rich conversation metadata (fork/share/
+  // child/agent/git/model/draft). The hook subscribes to getConversationWithMeta
+  // — which spreads the full conversation doc — and syncs it into the store, so
+  // there's no need for a separate getAllMessages query. It also hydrates from
+  // the local cache, subscribes to live deltas, and runs watermark recovery.
+  // targetMessageId is the deep-link target (the ?message= param) so the hook
+  // loads the window around it.
+  const {
+    conversation: storeConversation,
+    hasMoreAbove: hookHasMoreAbove,
+    isLoadingOlder: hookIsLoadingOlder,
+    loadOlder: hookLoadOlder,
+    jumpToStart: hookJumpToStart,
+    jumpToEnd: hookJumpToEnd,
+  } = useConversationMessages(id as string, highlightMessageParam || undefined);
+
+  const conversation = (storeConversation as ConversationData | null) ?? undefined;
 
   // git_diff blobs live off the conversation doc now; fetch them lazily (only
   // when the diff panel is open) via the dedicated side-table query.
@@ -3106,19 +3093,13 @@ export default function SessionDetailScreen() {
     id ? { conversation_id: id as string } : "skip"
   ) as { tree: TreeNode } | { error: string } | null | undefined;
 
-  const hasMoreAbove = olderHasMore && (conversation?.has_more_above !== false);
+  const hasMoreAbove = hookHasMoreAbove;
+  const loadingOlder = hookIsLoadingOlder;
+  const loadOlderMessages = hookLoadOlder;
 
   const allMessages = useMemo(() => {
-    const recent = conversation?.messages || [];
-    const msgs = olderMessages.length === 0
-      ? recent
-      : (() => {
-          const recentIds = new Set(recent.map((m) => m._id));
-          return [
-            ...olderMessages.filter((m) => !recentIds.has(m._id)),
-            ...recent,
-          ];
-        })();
+    // Store-backed, pending-merged message list from useConversationMessages.
+    const msgs = conversation?.messages || [];
     const synthetic: Message[] = [];
     if (commits && commits.length > 0) {
       for (const c of commits) {
@@ -3148,7 +3129,7 @@ export default function SessionDetailScreen() {
     const merged = [...msgs, ...synthetic];
     merged.sort((a, b) => a.timestamp - b.timestamp);
     return merged;
-  }, [conversation?.messages, olderMessages, commits, pullRequests]);
+  }, [conversation?.messages, commits, pullRequests]);
 
   const invertedMessages = useMemo(() => [...allMessages].reverse(), [allMessages]);
 
@@ -3597,9 +3578,6 @@ export default function SessionDetailScreen() {
   }, [conversation?._id, allMessages]);
 
   useEffect(() => {
-    setOlderMessages([]);
-    setOlderHasMore(true);
-    setOlderOldestTs(null);
     setInitialScrollDone(false);
     didInitialScrollRef.current = false;
     if (initialScrollDebounceRef.current) {
@@ -3664,47 +3642,22 @@ export default function SessionDetailScreen() {
     }
   }, [allMessages, initialScrollDone]);
 
-  const loadOlderMessages = useCallback(async () => {
-    if (loadingOlder || !id) return;
-
-    const beforeTs = olderOldestTs ?? conversation?.oldest_timestamp;
-    if (!beforeTs) return;
-
-    setLoadingOlder(true);
-    try {
-      const result = await convex.query(api.conversations.getOlderMessages, {
-        conversation_id: id as Id<"conversations">,
-        before_timestamp: beforeTs,
-        limit: 50,
-      });
-
-      if (result && result.messages.length > 0) {
-        setOlderMessages(prev => {
-          const existingIds = new Set(prev.map(m => m._id));
-          const newMsgs = result.messages.filter((m: Message) => !existingIds.has(m._id));
-          return [...newMsgs, ...prev];
-        });
-        setOlderOldestTs(result.oldest_timestamp);
-        setOlderHasMore(result.has_more);
-      } else {
-        setOlderHasMore(false);
-      }
-    } catch {
-      setOlderHasMore(false);
-    } finally {
-      setLoadingOlder(false);
-      loadCooldownRef.current = true;
-      setTimeout(() => { loadCooldownRef.current = false; }, 500);
-    }
-  }, [convex, id, loadingOlder, olderOldestTs, conversation?.oldest_timestamp]);
+  // Older-message pagination is driven by the shared hook: loadOlder grows the
+  // store's message window (usePaginatedQuery.loadMore) and the rendered list
+  // re-derives from conversation.messages. The cooldown debounces scroll-driven
+  // triggers so we don't fire loadOlder on every onScroll frame near the top.
+  const handleLoadOlder = useCallback(() => {
+    if (loadingOlder) return;
+    loadOlderMessages();
+    loadCooldownRef.current = true;
+    setTimeout(() => { loadCooldownRef.current = false; }, 500);
+  }, [loadingOlder, loadOlderMessages]);
 
   const handleJumpToEnd = useCallback(() => {
     if (!id || jumpingToEnd) return;
     setJumpingToEnd(true);
     try {
-      setOlderMessages([]);
-      setOlderHasMore(true);
-      setOlderOldestTs(null);
+      hookJumpToEnd();
       setTimeout(() => {
         flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
         setUserScrolled(false);
@@ -3715,9 +3668,9 @@ export default function SessionDetailScreen() {
     } finally {
       setTimeout(() => setJumpingToEnd(false), 120);
     }
-  }, [id, jumpingToEnd, showToast]);
+  }, [id, jumpingToEnd, hookJumpToEnd, showToast]);
 
-  const handleJumpToStart = useCallback(async () => {
+  const handleJumpToStart = useCallback(() => {
     if (!id || jumpingToStart) return;
 
     if (!hasMoreAbove) {
@@ -3727,56 +3680,19 @@ export default function SessionDetailScreen() {
 
     setJumpingToStart(true);
     try {
-      const existingIds = new Set<string>(allMessages.map((message) => message._id));
-      const loadedMessages: Message[] = [];
-      let beforeTs = olderOldestTs ?? conversation?.oldest_timestamp ?? null;
-      let hasMore = true;
-      let latestOldest: number | null = beforeTs;
-
-      while (hasMore && beforeTs !== null) {
-        const result = await convex.query(api.conversations.getOlderMessages, {
-          conversation_id: id as Id<"conversations">,
-          before_timestamp: beforeTs,
-          limit: 100,
-        });
-
-        if (!result || result.messages.length === 0) {
-          hasMore = false;
-          break;
-        }
-
-        for (const message of result.messages) {
-          if (!existingIds.has(message._id)) {
-            existingIds.add(message._id);
-            loadedMessages.push(message);
-          }
-        }
-
-        beforeTs = result.oldest_timestamp;
-        latestOldest = result.oldest_timestamp;
-        hasMore = result.has_more;
-      }
-
-      if (loadedMessages.length > 0) {
-        setOlderMessages((prev) => {
-          const prevIds = new Set(prev.map((message) => message._id));
-          const merged = [...loadedMessages.filter((message) => !prevIds.has(message._id)), ...prev];
-          merged.sort((a, b) => a.timestamp - b.timestamp);
-          return merged;
-        });
-      }
-
-      setOlderHasMore(false);
-      setOlderOldestTs(latestOldest);
+      // Hook loads the window at the very start of the conversation (target
+      // mode); allMessages re-derives from it. Scroll to the oldest once it
+      // lands — the hook's isLoadingOlder gates the spinner meanwhile.
+      hookJumpToStart();
       setTimeout(() => {
         flatListRef.current?.scrollToEnd({ animated: true });
-      }, 40);
+      }, 400);
     } catch {
       showToast('Failed to jump to start');
     } finally {
-      setJumpingToStart(false);
+      setTimeout(() => setJumpingToStart(false), 400);
     }
-  }, [id, jumpingToStart, hasMoreAbove, allMessages, olderOldestTs, conversation?.oldest_timestamp, convex, showToast]);
+  }, [id, jumpingToStart, hasMoreAbove, hookJumpToStart, showToast]);
 
   const handleScroll = useCallback((event: any) => {
     const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
@@ -3824,9 +3740,9 @@ export default function SessionDetailScreen() {
 
     // Load older messages when near the top (large offset in inverted list)
     if (distanceFromTop < 100 && hasMoreAbove && !loadingOlder && !loadCooldownRef.current && initialScrollDone) {
-      loadOlderMessages();
+      handleLoadOlder();
     }
-  }, [hasMoreAbove, loadingOlder, loadOlderMessages, initialScrollDone, floatingHeaderHeight, floatingHeaderY, searchVisible, userScrolled]);
+  }, [hasMoreAbove, loadingOlder, handleLoadOlder, initialScrollDone, floatingHeaderHeight, floatingHeaderY, searchVisible, userScrolled]);
 
   const lastMessageAt = conversation?.messages?.length
     ? conversation.messages[conversation.messages.length - 1]?.timestamp
@@ -4079,7 +3995,7 @@ export default function SessionDetailScreen() {
                       <RNText style={styles.loadMorePillText}>Loading older messages...</RNText>
                     </RNView>
                   ) : (
-                    <Pressable onPress={loadOlderMessages} style={styles.loadMorePill}>
+                    <Pressable onPress={handleLoadOlder} style={styles.loadMorePill}>
                       <FontAwesome name="chevron-up" size={10} color={Theme.textMuted0} />
                       <RNText style={styles.loadMorePillText}>
                         {conversation.message_count && allMessages.length < conversation.message_count
@@ -4156,11 +4072,17 @@ export default function SessionDetailScreen() {
             const isSearchDimmed = searchMatchIds && !searchMatchIds.has(item._id);
             const isCurrentSearchMatch = searchMatchList.length > 0 && searchMatchList[currentMatchIndex] === item._id;
             const isHighlighted = highlightedMessageId === item._id;
+            // Optimistic-send affordances: pending (optimistic/queued) renders
+            // dimmed with a "Sending"/"Queued" indicator; failed renders dimmed
+            // with a distinct "Failed to send" indicator.
+            const isPending = item._isOptimistic || item._isQueued;
+            const isFailed = item._isFailed;
             return (
               <RNView style={[
                 isSearchDimmed ? { opacity: 0.25 } : undefined,
                 (isCurrentSearchMatch || isHighlighted) && styles.searchHighlight,
                 shareSelectionMode && { paddingLeft: 28 },
+                (isPending || isFailed) && { opacity: 0.55 },
               ]}>
                 {shareSelectionMode && (
                   <Pressable
@@ -4192,6 +4114,22 @@ export default function SessionDetailScreen() {
                   childConversationMap={conversation.child_conversation_map}
                   bookmarkedSet={bookmarkedSet}
               />
+                {isPending && (
+                  <RNView style={styles.pendingStatusRow}>
+                    <ActivityIndicator size="small" color={Theme.textDim} />
+                    <RNText style={styles.pendingStatusText}>
+                      {item._isQueued ? 'Queued' : 'Sending'}
+                    </RNText>
+                  </RNView>
+                )}
+                {isFailed && (
+                  <RNView style={styles.pendingStatusRow}>
+                    <FontAwesome name="exclamation-circle" size={11} color={Theme.red} />
+                    <RNText style={[styles.pendingStatusText, { color: Theme.red }]}>
+                      Failed to send
+                    </RNText>
+                  </RNView>
+                )}
               </RNView>
             );
           }}
@@ -5064,11 +5002,6 @@ const styles = StyleSheet.create({
   },
   sendButtonDisabled: {
     backgroundColor: Theme.bgHighlight,
-  },
-  sendButtonText: {
-    color: '#fff',
-    fontSize: 12,
-    fontWeight: '600',
   },
   // Specialized tool blocks
   specialToolBlock: {
@@ -6137,6 +6070,20 @@ const styles = StyleSheet.create({
   loadMorePillText: {
     fontSize: 11,
     color: Theme.textMuted0,
+  },
+  pendingStatusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    alignSelf: 'flex-end',
+    paddingHorizontal: 16,
+    paddingTop: 2,
+    paddingBottom: 4,
+  },
+  pendingStatusText: {
+    fontSize: 10,
+    color: Theme.textDim,
+    fontStyle: 'italic',
   },
   scrollProgressTrackWrap: {
     position: 'absolute',

@@ -71,7 +71,8 @@
           "organization": "codecast-a2",
           "project": "react-native"
         }
-      ]
+      ],
+      "expo-sqlite"
     ],
     "experiments": {
       "typedRoutes": true

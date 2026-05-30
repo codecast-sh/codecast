@@ -123,6 +123,17 @@ if [[ -f "$LAST_MOBILE_OTA_MARKER" ]] && [[ "$(cat "$LAST_MOBILE_OTA_MARKER")" =
 else
   COMMIT_MSG=$(git log -1 --format=%s -- packages/mobile/)
   cd packages/mobile
+  # Watchman wedges silently on macOS when its launchd agent is loaded-but-not-started
+  # (e.g. after a `watchman shutdown-server`), making Metro/eas hang forever on
+  # "Waiting for Watchman watch-project". Kickstart the agent first so the OTA bundles
+  # instead of hanging. See memory: watchman_wedged_stale_metro_bundles.
+  if [[ "$(uname)" == "Darwin" ]] && command -v watchman >/dev/null 2>&1; then
+    if ! timeout 8 watchman version >/dev/null 2>&1; then
+      echo "   watchman wedged — kickstarting com.github.facebook.watchman"
+      launchctl kickstart -k "gui/$(id -u)/com.github.facebook.watchman" 2>/dev/null || true
+      timeout 8 watchman version >/dev/null 2>&1 && echo "   watchman recovered" || echo "   WARNING: watchman still wedged; OTA may hang"
+    fi
+  fi
   if $PREVIEW_ONLY; then
     echo "   Pushing to preview branch..."
     eas update --branch preview --message "$COMMIT_MSG" --non-interactive
