@@ -8,6 +8,7 @@ import { hasRecentPendingDaemonCommand } from "./daemonCommandUtils";
 import { resolveTeamForPath } from "./privacy";
 import { resetConversationPendingMessages } from "./pendingMessages";
 import { normalizeProjectPath } from "./projectPaths";
+import { backlogFieldsPatch } from "./heartbeatBacklog";
 
 export const getCurrentUser = query({
   args: {},
@@ -193,8 +194,12 @@ export const daemonHeartbeat = mutation({
       patch.last_heartbeat = now;
       patch.daemon_pending_sync_count = newPending;
       patch.daemon_oldest_pending_ms = newOldest;
-      patch.daemon_pending_sync_messages = args.pending_sync_messages ?? 0;
-      patch.daemon_pending_sync_conversations = args.pending_sync_conversations ?? 0;
+      // Only patch the per-table backlog fields when the daemon actually sent
+      // them. During a mixed-version rollout an OLD daemon omits these (undefined),
+      // and coercing to 0 would clobber a real backlog → the web chip shows
+      // "syncing 0 messages" while we're actually behind. backlogFieldsPatch leaves
+      // an absent field untouched.
+      Object.assign(patch, backlogFieldsPatch(args));
     }
 
     if (args.local_project_roots !== undefined) {

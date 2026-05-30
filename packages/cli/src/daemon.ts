@@ -3360,28 +3360,20 @@ async function syncMessagesBatch(
       return { authExpired: false, conversationNotFound: true };
     }
 
-    log(`Batch sync failed (${messages.length} msgs), retrying batch once: ${errMsg}`);
-    try {
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      await syncService.addMessages({
-        conversationId,
-        messages: prepared,
-      });
-      resetAuthFailureCount();
-      log(`Batch retry succeeded for ${messages.length} messages`);
-      return { authExpired: false, conversationNotFound: false };
-    } catch (retryErr) {
-      const retryErrMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
-      if (isStaleConversationError(retryErrMsg)) {
-        return { authExpired: false, conversationNotFound: true };
-      }
-      log(`Batch retry also failed, queueing as batch: ${retryErrMsg}`);
-      retryQueue.add("addMessages", {
-        conversationId,
-        messages: prepared,
-      }, retryErrMsg);
-      return { authExpired: false, conversationNotFound: false };
-    }
+    // Hand the failed batch straight to the retry queue instead of burning a
+    // second full inline attempt here. The old inline retry slept 2s then ran
+    // another addMessages that could itself hit the 28s timeout — ~58s total
+    // holding this file's per-file InvalidateSync slot before the op even
+    // reached the queue, during which `cast status` and the live path saw
+    // nothing. The retry queue now drains fast (collapse-on-recovery), so it's
+    // the right owner of retries; a transient single blip just lands on the
+    // queue's short initial backoff (~seconds) instead of a sub-minute freeze.
+    log(`Batch sync failed (${messages.length} msgs), queueing for retry: ${errMsg}`);
+    retryQueue.add("addMessages", {
+      conversationId,
+      messages: prepared,
+    }, errMsg);
+    return { authExpired: false, conversationNotFound: false };
   }
 }
 
@@ -11271,6 +11263,11 @@ async function main(): Promise<void> {
     persistPath: `${CONFIG_DIR}/retry-queue.json`,
     droppedPath: `${CONFIG_DIR}/dropped-operations.json`,
     onLog: (message, level) => log(message, level || "info"),
+    // Refresh the persisted health snapshot as the queue accumulates, so `cast
+    // status` reflects backlog while it piles up — not only after the first
+    // drain. updateState is declared just below; onEnqueue only fires from
+    // add(), which runs well after setup, so the forward reference is safe.
+    onEnqueue: () => updateState(),
   });
 
   retryQueueRef = retryQueue;

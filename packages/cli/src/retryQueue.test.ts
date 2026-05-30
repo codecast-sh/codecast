@@ -309,7 +309,7 @@ describe("RetryQueue", () => {
     const health = queue.getHealth();
     // hot-a's two adds compact into one op → 2 addMessages ops + 1 createConversation.
     expect(health.ops).toBe(3);
-    // 3 messages from addMessages (a1,a2,a3 for hot-a coalesced; b1 for hot-b).
+    // 4 messages from addMessages (a1,a2,a3 for hot-a coalesced; b1 for hot-b).
     expect(health.messages).toBe(4);
     // hot-a, hot-b, hot-c all carry a conversationId.
     expect(health.conversations).toBe(3);
@@ -765,6 +765,83 @@ describe("RetryQueue", () => {
     // "real" messages drained in enqueue order, regardless of the recovery collapse.
     const realOrder = order.filter((u) => u.startsWith("r"));
     expect(realOrder).toEqual(["r1", "r2", "r3"]);
+    q.stop();
+  });
+
+  it("recovery collapse preserves attempts so a persistently-failing op still hits maxAttempts", async () => {
+    // Regression: collapseBackoffOnRecovery used to zero `attempts` on every
+    // remaining op when one succeeded. A non-network op that keeps failing while
+    // OTHER ops intermittently succeed would have its attempt count reset on each
+    // success → it would NEVER reach maxAttempts and would be pardoned forever,
+    // so the queue could never shed a permanently-bad op. The collapse must only
+    // pull nextRetryAt forward, never reset attempts: the failing op's real attempt
+    // count is preserved and the maxAttempts drop still fires.
+    const logs2: string[] = [];
+    const q = new RetryQueue({
+      initialDelayMs: 1000, // long enough that ops stay parked between manual nudges
+      maxDelayMs: 60_000,
+      maxAttempts: 3,
+      concurrency: 5,
+      onLog: (m) => logs2.push(m),
+    });
+
+    let okShouldSucceed = false;
+    q.setExecutor(async (op) => {
+      if (op.params.conversationId === "bad") {
+        throw new Error("Server error 500"); // non-network → counts toward maxAttempts
+      }
+      return okShouldSucceed; // "ok" drains only when we arm it, triggering a collapse
+    });
+
+    q.add("addMessages", { conversationId: "bad", messages: [{ messageUuid: "x1" }] });
+
+    // Drive two failure rounds with an intervening "recovery" collapse between each.
+    // If the collapse zeroed attempts, the bad op would never accumulate toward the
+    // maxAttempts=3 drop no matter how many rounds run.
+    for (let round = 0; round < 4; round++) {
+      // Make the bad op due and process it (it fails, attempts++).
+      const bad = q.getPendingOperations().find((o) => o.params.conversationId === "bad");
+      if (!bad) break;
+      bad.nextRetryAt = Date.now() - 1;
+      q.start();
+      await new Promise((r) => setTimeout(r, 60));
+
+      // Simulate the backend recovering for an UNRELATED conversation: enqueue an
+      // "ok" op, let it succeed, which fires collapseBackoffOnRecovery over the
+      // still-parked bad op. Under the old code this reset bad.attempts to 0.
+      okShouldSucceed = true;
+      q.add("addMessages", { conversationId: `ok${round}`, messages: [{ messageUuid: `o${round}` }] });
+      q.getPendingOperations()
+        .filter((o) => String(o.params.conversationId).startsWith("ok"))
+        .forEach((o) => { o.nextRetryAt = Date.now() - 1; });
+      q.start();
+      await new Promise((r) => setTimeout(r, 60));
+      okShouldSucceed = false;
+    }
+
+    // The bad op was dropped at maxAttempts — not pardoned into perpetuity.
+    expect(q.hasPendingConversation("bad")).toBe(false);
+    expect(logs2.some((l) => l.startsWith("Max retries reached. DROPPED: addMessages"))).toBe(true);
+    q.stop();
+  });
+
+  it("fires onEnqueue when an op is added so the status snapshot refreshes on accumulation", () => {
+    // Regression: `cast status` reads a persisted snapshot that was refreshed only
+    // on sync success / drain. During the accumulation phase (before any retry
+    // succeeds) it printed "Queue: empty" while messages piled into the queue.
+    // The onEnqueue hook lets the daemon refresh its health snapshot as backlog
+    // grows, not only when it drains.
+    let snapshots = 0;
+    const q = new RetryQueue({
+      initialDelayMs: 1000,
+      onEnqueue: () => { snapshots++; },
+      onLog: () => {},
+    });
+    expect(snapshots).toBe(0);
+    q.add("addMessages", { conversationId: "c1", messages: [{ messageUuid: "m1" }] });
+    expect(snapshots).toBe(1); // refreshed on the first enqueue, before any drain
+    q.add("addMessage", { conversationId: "c2", content: "x" });
+    expect(snapshots).toBe(2);
     q.stop();
   });
 });
