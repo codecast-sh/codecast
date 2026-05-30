@@ -1637,7 +1637,9 @@ export default defineSchema({
   })
     .index("by_user_id", ["user_id"])
     .index("by_user_timestamp", ["user_id", "timestamp"])
-    .index("by_user_level", ["user_id", "level"]),
+    .index("by_user_level", ["user_id", "level"])
+    // Cross-user scan by age, for the retention prune that drains old rows.
+    .index("by_timestamp", ["timestamp"]),
 
   plan_templates: defineTable({
     user_id: v.id("users"),
