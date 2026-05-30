@@ -60,6 +60,94 @@ describe("parseInteractivePrompt option descriptions", () => {
     ]);
   });
 
+  // A multiSelect AskUserQuestion renders a checkbox between the number and the
+  // label ("1. [ ] Restart"), indents each option's description only 2 spaces — the
+  // SAME column as the non-cursor option rows ("  2.") — and tops the menu with a
+  // "← ☐ Tab ✔ Tab →" question selector. The old parser required 4-space indented
+  // descriptions, so it broke its bottom-up scan at the first 2-space description,
+  // captured only the last 1-2 synthetic rows, stitched the dropped options' text
+  // into a garbled "question", and left "[ ]" glued to the labels. Real incident:
+  // the "Rollout" poll on jx71p2f scraped a card whose only options were
+  // "[ ] Type something" (desc "Submit") and "Chat about this".
+  test("parses a multiSelect menu: strips checkboxes, keeps all options + 2-space descriptions", () => {
+    const sep = "─".repeat(60);
+    const menu = [
+      sep,
+      "←  ☐ Rollout  ✔ Submit  →",
+      "",
+      "How do you want to roll out the fix? (Code is done + tested, currently uncommitted.)",
+      "",
+      "❯ 1. [ ] Restart local daemon",
+      "  launchctl kickstart -k the local daemon: activates the fix locally AND self-heals jx75xtr's 'm1' label via",
+      "  repairProjectPaths. Live tmux sessions survive; brief management gap.",
+      "  2. [ ] Redeploy + clean remote Mac",
+      "  Push updated daemon source to m1@51.159.120.28, restart its daemon, and delete the stale -Users-m1/1a0facc6.jsonl so it",
+      "  stops re-asserting /Users/m1.",
+      "  3. [ ] Commit the change",
+      "  Commit the daemon.ts + projectPathResolver.ts + test changes to a branch. Lets you roll out daemon restarts on your own",
+      "  schedule.",
+      "  4. [ ] Just leave it for now",
+      "  Code stays uncommitted in the working tree; you handle activation later. I'll stop here.",
+      "  5. [ ] Type something",
+      "     Submit",
+      sep,
+      "  6. Chat about this",
+      "",
+      "Enter to select · ↑/↓ to navigate · Esc to cancel",
+    ].join("\n");
+
+    const prompt = parseInteractivePrompt(menu);
+    expect(prompt).not.toBeNull();
+    expect(prompt!.question).toBe(
+      "How do you want to roll out the fix? (Code is done + tested, currently uncommitted.)",
+    );
+    expect(prompt!.options).toEqual([
+      {
+        label: "Restart local daemon",
+        description:
+          "launchctl kickstart -k the local daemon: activates the fix locally AND self-heals jx75xtr's 'm1' label via repairProjectPaths. Live tmux sessions survive; brief management gap.",
+      },
+      {
+        label: "Redeploy + clean remote Mac",
+        description:
+          "Push updated daemon source to m1@51.159.120.28, restart its daemon, and delete the stale -Users-m1/1a0facc6.jsonl so it stops re-asserting /Users/m1.",
+      },
+      {
+        label: "Commit the change",
+        description:
+          "Commit the daemon.ts + projectPathResolver.ts + test changes to a branch. Lets you roll out daemon restarts on your own schedule.",
+      },
+      {
+        label: "Just leave it for now",
+        description: "Code stays uncommitted in the working tree; you handle activation later. I'll stop here.",
+      },
+      { label: "Type something", description: undefined },
+      { label: "Chat about this", description: undefined },
+    ]);
+    // No checkbox glyphs may survive into any label, and the tab-bar selector must
+    // not leak into the question/header.
+    for (const o of prompt!.options) expect(o.label).not.toMatch(/[\[\]☐☑✔]/);
+    expect(prompt!.question).not.toMatch(/Rollout|Submit|→/);
+  });
+
+  // A checked multiSelect box ("[x]" / "[✓]") must strip just like the empty one.
+  test("strips checked-checkbox variants from multiSelect labels", () => {
+    const menu = [
+      "Which to enable?",
+      "❯ 1. [x] Caching          Speeds up repeat reads",
+      "  2. [✓] Compression",
+      "  3. [ ] Telemetry",
+      "Enter to select · ↑/↓ to navigate · Esc to cancel",
+    ].join("\n");
+
+    const prompt = parseInteractivePrompt(menu);
+    expect(prompt!.options).toEqual([
+      { label: "Caching", description: "Speeds up repeat reads" },
+      { label: "Compression", description: undefined },
+      { label: "Telemetry", description: undefined },
+    ]);
+  });
+
   test("still parses same-line descriptions (legacy 2-space format)", () => {
     const menu = [
       "Pick an instance type",
