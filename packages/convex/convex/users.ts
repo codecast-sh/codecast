@@ -144,6 +144,8 @@ export const daemonHeartbeat = mutation({
     local_project_roots: v.optional(v.array(v.string())),
     pending_sync_count: v.optional(v.number()),
     oldest_pending_ms: v.optional(v.number()),
+    pending_sync_messages: v.optional(v.number()),
+    pending_sync_conversations: v.optional(v.number()),
     // Device identity (remote/device.ts). When present, upsert a per-device
     // row so multiple machines don't clobber each other's project roots.
     device_id: v.optional(v.string()),
@@ -191,6 +193,8 @@ export const daemonHeartbeat = mutation({
       patch.last_heartbeat = now;
       patch.daemon_pending_sync_count = newPending;
       patch.daemon_oldest_pending_ms = newOldest;
+      patch.daemon_pending_sync_messages = args.pending_sync_messages ?? 0;
+      patch.daemon_pending_sync_conversations = args.pending_sync_conversations ?? 0;
     }
 
     if (args.local_project_roots !== undefined) {
