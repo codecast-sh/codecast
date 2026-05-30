@@ -6,6 +6,11 @@ import { verifyApiToken } from "./apiTokens";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { createDataContext, scopedFetch, resolveEffectiveTeam } from "./data";
 import { resolveTeamForPath } from "./privacy";
+import {
+  webDocsNeedsUserDoc,
+  resolveWebDocsTeamId,
+  clampWebDocsPageSize,
+} from "./webDocsPagination";
 
 function generatePlanShortId(): string {
   const chars = "0123456789abcdefghijklmnopqrstuvwxyz";
@@ -807,15 +812,14 @@ export const webListPaginated = query({
     // Only read the (hot, heartbeat-churned) user doc when we actually need its
     // active_team_id — i.e. when the caller didn't pin a workspace. Reading it
     // unconditionally made this subscription invalidate on every daemon heartbeat.
-    let resolvedTeamId: typeof args.team_id | undefined;
-    if (args.workspace === "team" && args.team_id) {
-      resolvedTeamId = args.team_id;
-    } else if (!args.workspace) {
-      const user = await ctx.db.get(userId);
-      resolvedTeamId = user?.active_team_id;
-    } else {
-      resolvedTeamId = undefined;
-    }
+    // The branch logic lives in webDocsPagination.ts so the invariant is tested.
+    const userActiveTeamId = webDocsNeedsUserDoc(args)
+      ? (await ctx.db.get(userId))?.active_team_id
+      : undefined;
+    const resolvedTeamId: typeof args.team_id | undefined = resolveWebDocsTeamId(
+      args,
+      userActiveTeamId
+    ) as typeof args.team_id | undefined;
     const effectiveWorkspace = args.scope === "projects"
       ? "personal" as const
       : args.workspace;
@@ -824,12 +828,12 @@ export const webListPaginated = query({
     // Defensive clamp: Convex returns full documents from storage before our
     // strip step runs, so a single page that includes a doc with multi-MB
     // content/entries can blow the 64MB query memory cap. Originally 100 —
-    // lowered to 30 after observing TooMuchMemoryCarryOver on this UDF
-    // (2026-05-13). 30 items × ~200KB/doc leaves headroom for the
-    // convMap/user/plan lookups below.
+    // lowered after observing TooMuchMemoryCarryOver on this UDF (2026-05-13),
+    // now WEB_DOCS_MAX_PAGE=12, which leaves headroom for the convMap/user/plan
+    // lookups below. Clamp lives in webDocsPagination.ts so it's tested.
     const paginationOpts = {
       ...args.paginationOpts,
-      numItems: Math.min(args.paginationOpts.numItems, 12),
+      numItems: clampWebDocsPageSize(args.paginationOpts.numItems),
     };
     const cursor = parseCursor(paginationOpts.cursor);
 
