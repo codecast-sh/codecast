@@ -232,7 +232,7 @@ function NavDropdown({
     <>
       {pinned && <div className="fixed inset-0 z-[9998] pointer-events-auto" onClick={onClose} />}
       <div
-        className="fixed z-[9999] bg-sol-bg-alt border border-sol-blue/30 rounded-lg shadow-2xl overflow-hidden flex flex-col"
+        className="fixed z-[9999] bg-sol-bg-alt/99 backdrop-blur-md border border-sol-blue/30 rounded-lg shadow-2xl overflow-hidden flex flex-col"
         style={{ top, left, width: dropdownWidth, maxHeight: "min(600px, 75vh)" }}
         onMouseEnter={onMouseEnter}
         onMouseLeave={onMouseLeave}
