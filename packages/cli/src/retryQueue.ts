@@ -532,6 +532,7 @@ export class RetryQueue {
         if (success) {
           this.queue.delete(op.id);
           this.log(`Retry succeeded for ${op.type} (id: ${op.id})`);
+          this.collapseBackoffOnRecovery(this.conversationKey(op));
         } else {
           this.handleFailure(op, "Operation returned false");
         }
@@ -559,6 +560,46 @@ export class RetryQueue {
     }
     this.processing = false;
     this.scheduleNextCheck();
+  }
+
+  // A successful drain is live proof the backend is reachable. The exponential
+  // backoff (and the 5-min network cap) only exists to avoid hammering a DOWN
+  // backend — once one op commits, every remaining op that is still parked on a
+  // stale backoff delay should retry immediately instead of waiting out minutes
+  // of accumulated delay. Without this, a conversation that hit a few 60s
+  // timeouts stays frozen on the web for minutes after the backend recovers,
+  // while its new messages pile up behind it.
+  //
+  // Scope is global, not just same-conversation: one commit proves the whole
+  // backend is up, so collapsing every conversation's backoff turns a fleet-wide
+  // stall into a fleet-wide recovery in seconds. This only changes WHEN ops run,
+  // never their order — per-conversation serialization (activeKeys) still runs
+  // same-conversation ops strictly one at a time, and an in-flight op (whose key
+  // is active) keeps its successors parked until it settles, so ordering and the
+  // "never two ops for one conversation at once" guarantee are untouched.
+  private collapseBackoffOnRecovery(succeededKey: string): void {
+    const now = Date.now();
+    // Don't pull retries earlier than a global rate-limit window; the backend is
+    // up but explicitly throttling us, so honor the cool-off it asked for.
+    const floor = this.rateLimitedUntil > now ? this.rateLimitedUntil : now;
+    let collapsed = 0;
+    for (const op of this.queue.values()) {
+      if (op.nextRetryAt > floor) {
+        op.nextRetryAt = floor;
+        // Reset the accumulated backoff so a subsequent failure restarts from the
+        // initial delay rather than resuming a stale multi-minute curve.
+        op.attempts = 0;
+        op.rateLimitDelayMs = undefined;
+        collapsed++;
+      }
+    }
+    if (collapsed > 0) {
+      this.log(
+        `Backend recovered (drained ${succeededKey}); collapsed backoff on ${collapsed} queued op(s) for immediate retry`
+      );
+      this.persist();
+      this.scheduleNextCheck();
+    }
   }
 
   private isNetworkError(error: string): boolean {
