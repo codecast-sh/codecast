@@ -45,6 +45,13 @@ export const registerManagedSession = mutation({
 
     // Single-owner guard: refuse to manage a session owned by another live
     // device. "Live" = that device heartbeated within the online window.
+    //
+    // Exception — a REMOTE owner never blocks a local registration. A remote box
+    // only legitimately owns a session that was explicitly moved to it, and a move
+    // kills the local process. So a LOCAL device presenting a live process here has
+    // the real checkout and is the rightful owner: it reclaims (this is exactly the
+    // self-heal for a session the remote auto-claimed and can't serve, and it also
+    // implements "bring back from remote"). Only a live LOCAL peer blocks.
     if (args.device_id && args.conversation_id) {
       const conv = await ctx.db.get(args.conversation_id);
       const owner = (conv as any)?.owner_device_id as string | undefined;
@@ -55,11 +62,14 @@ export const registerManagedSession = mutation({
             q.eq("user_id", authUserId).eq("device_id", owner),
           )
           .first();
-        const ownerOnline = ownerDevice && Date.now() - ownerDevice.last_seen < 2 * 60 * 1000;
+        const ownerOnline =
+          ownerDevice &&
+          !ownerDevice.is_remote &&
+          Date.now() - ownerDevice.last_seen < 2 * 60 * 1000;
         if (ownerOnline) {
           return { notOwner: true as const, owner } as any;
         }
-        // Owner offline → fall through and reclaim (stamp below).
+        // Owner offline, or owner is a remote box → fall through and reclaim (stamp below).
       }
     }
 
@@ -89,7 +99,12 @@ export const registerManagedSession = mutation({
           ...(args.conversation_id !== undefined ? { conversation_id: args.conversation_id } : {}),
         });
         if (args.device_id && args.conversation_id) {
-          await ctx.db.patch(args.conversation_id, { owner_device_id: args.device_id });
+          // Registering a live local process for this conversation disproves any
+          // "couldn't start / no local checkout - clone it first" banner stamped
+          // before the session came up. Piggyback the clear on the ownership patch
+          // we already write (no extra read/write). setSessionError handles the
+          // reverse: refusing to WRITE such a banner while the session is live.
+          await ctx.db.patch(args.conversation_id, { owner_device_id: args.device_id, session_error: undefined });
         }
         return existing._id;
       }
@@ -124,9 +139,11 @@ export const registerManagedSession = mutation({
       last_heartbeat: now,
     });
 
-    // Claim ownership: stamp this device as the conversation's owner.
+    // Claim ownership: stamp this device as the conversation's owner. Also clear
+    // any stale "no local checkout" banner — a fresh local process disproves it
+    // (see the matching patch on the re-registration path above).
     if (args.device_id && args.conversation_id) {
-      await ctx.db.patch(args.conversation_id, { owner_device_id: args.device_id });
+      await ctx.db.patch(args.conversation_id, { owner_device_id: args.device_id, session_error: undefined });
     }
 
     return id;
@@ -239,23 +256,40 @@ const agentStatusValidator = v.union(
 // (the heartbeat re-sends the current status, so bumping it unconditionally
 // would track "last heard" instead of "entered this status", which idle
 // detection depends on).
+// Refresh last_heartbeat at most this often. Every managed_sessions write
+// invalidates listInboxSessions (it .collect()s the whole table), so an
+// unconditional last_heartbeat=now on every 30s beat — ×N sessions ×N
+// heartbeat sources — was a needless invalidation/OCC firehose. The liveness
+// window is 90s everywhere (HEARTBEAT_ALIVE_MS), so throttling the timestamp
+// write to 45s keeps the row at most ~60s stale: always live with a full beat
+// of margin. A status change always writes through immediately.
+const HEARTBEAT_REFRESH_MS = 45 * 1000;
+
+// Returns null when there is nothing worth writing (status unchanged AND the
+// heartbeat timestamp is still fresh) so callers can skip the patch entirely.
 function buildHeartbeatPatch(
-  session: { agent_status?: string; agent_status_updated_at?: number },
+  session: { agent_status?: string; agent_status_updated_at?: number; last_heartbeat?: number },
   agentStatus: string | undefined,
   clientTs: number | undefined,
   now: number,
-): Record<string, any> {
-  const patch: Record<string, any> = { last_heartbeat: now };
+): Record<string, any> | null {
+  const patch: Record<string, any> = {};
+  let statusChanged = false;
   if (agentStatus) {
     const tsStale = clientTs && session.agent_status_updated_at && clientTs < session.agent_status_updated_at;
-    if (!tsStale) {
+    // Only write agent_status when it actually changes — re-writing the same
+    // value is a no-op mutation that still invalidates every reader.
+    if (!tsStale && agentStatus !== session.agent_status) {
       patch.agent_status = agentStatus;
-      if (agentStatus !== session.agent_status) {
-        patch.agent_status_updated_at = clientTs || now;
-      }
+      patch.agent_status_updated_at = clientTs || now;
+      statusChanged = true;
     }
   }
-  return patch;
+  const heartbeatStale = !session.last_heartbeat || now - session.last_heartbeat > HEARTBEAT_REFRESH_MS;
+  if (statusChanged || heartbeatStale) {
+    patch.last_heartbeat = now;
+  }
+  return Object.keys(patch).length > 0 ? patch : null;
 }
 
 export const heartbeat = mutation({
@@ -292,7 +326,8 @@ export const heartbeat = mutation({
     }
 
     const now = Date.now();
-    await ctx.db.patch(session._id, buildHeartbeatPatch(session, args.agent_status, args.client_ts, now));
+    const patch = buildHeartbeatPatch(session, args.agent_status, args.client_ts, now);
+    if (patch) await ctx.db.patch(session._id, patch);
 
     let dismissed = false;
     if (session.conversation_id) {
@@ -342,7 +377,9 @@ export const heartbeatBatch = mutation({
       // Silently skip unknown / cross-user rows (a stale daemon can carry either);
       // throwing would abort the whole batch and pollute logs every 30s.
       if (!session || session.user_id.toString() !== authUserId.toString()) continue;
-      await ctx.db.patch(session._id, buildHeartbeatPatch(session, entry.agent_status, entry.client_ts, now));
+      const patch = buildHeartbeatPatch(session, entry.agent_status, entry.client_ts, now);
+      if (!patch) continue;
+      await ctx.db.patch(session._id, patch);
       updated++;
     }
     return { updated };

@@ -1,8 +1,15 @@
-import { mutation, query } from "./_generated/server";
+import { mutation, query, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
+import {
+  DEVICE_ONLINE_MS,
+  pathUnderRoot,
+  pickOwnerDevice,
+  type RoutableDevice,
+} from "./deviceRouting";
+import { normalizeProjectPath } from "./projectPaths";
 
 async function getAuthenticatedUserId(
   ctx: { db: any },
@@ -17,62 +24,50 @@ async function getAuthenticatedUserId(
   return null;
 }
 
-const DEVICE_ONLINE_MS = 2 * 60 * 1000; // a device is "online" if seen within 2 min
-
-/** True if `p` is at or below a known project root (`root` or a child of it). */
-function pathUnderRoot(p: string, root: string): boolean {
-  return p === root || p.startsWith(root.endsWith("/") ? root : root + "/");
-}
-
 /**
- * Resolve which device should OWN (and therefore run) a session, deterministically,
- * so `start_session` is routed to one machine instead of raced by every daemon.
- *
- * Priority:
- *   1. The conversation's existing owner, if it's still online (sticky ownership).
- *   2. The online device whose `local_project_roots` contain the project path —
- *      i.e. the machine that actually has the checkout (most-recently-seen wins ties).
- *   3. The only online device, if there's exactly one (single-machine users:
- *      unambiguous even when roots are stale/empty).
- *   4. null — genuinely ambiguous (multiple daemons, none matches). Caller leaves
- *      the command untargeted (broadcast) and the daemon-side guards arbitrate.
+ * DB-backed wrapper around {@link pickOwnerDevice}: loads the user's devices and
+ * delegates the (pure) routing decision. Used to target `start_session` at one
+ * machine instead of letting every daemon race it.
  */
 export async function resolveOwnerDevice(
   ctx: { db: any },
   userId: Id<"users">,
   opts: { projectPath?: string | null; gitRoot?: string | null; ownerDeviceId?: string | null },
 ): Promise<string | null> {
+  const devices = await ctx.db
+    .query("devices")
+    .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+    .collect();
+  return pickOwnerDevice(devices as RoutableDevice[], opts, Date.now());
+}
+
+/**
+ * Union of `local_project_roots` across the user's currently-online devices.
+ *
+ * Replaces the legacy per-user `users.local_project_roots`, which every daemon
+ * overwrote on each heartbeat — so a multi-machine user (e.g. a local Mac plus a
+ * remote one) saw the field flip-flop every 30s, and the recent-projects filter
+ * flickered with it. Per-device roots are stable, so unioning the online ones
+ * gives every machine's real checkouts at once.
+ *
+ * Returns [] when no device is online / reporting — callers treat that as
+ * "don't filter" (show unfiltered rather than nothing).
+ */
+export async function getOnlineLocalRoots(
+  ctx: { db: any },
+  userId: Id<"users">,
+): Promise<string[]> {
   const now = Date.now();
   const devices = await ctx.db
     .query("devices")
     .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
     .collect();
-  const online = devices.filter((d: any) => now - d.last_seen < DEVICE_ONLINE_MS);
-  if (online.length === 0) return null;
-
-  // 1. Sticky owner, if still online.
-  if (opts.ownerDeviceId && online.some((d: any) => d.device_id === opts.ownerDeviceId)) {
-    return opts.ownerDeviceId;
+  const roots = new Set<string>();
+  for (const d of devices) {
+    if (now - d.last_seen >= DEVICE_ONLINE_MS) continue;
+    for (const r of d.local_project_roots ?? []) roots.add(r);
   }
-
-  // 2. Device that has the checkout.
-  const paths = [opts.gitRoot, opts.projectPath].filter((p): p is string => !!p);
-  if (paths.length > 0) {
-    const matches = online
-      .filter((d: any) =>
-        (d.local_project_roots ?? []).some((r: string) =>
-          paths.some((p) => pathUnderRoot(p, r)),
-        ),
-      )
-      .sort((a: any, b: any) => b.last_seen - a.last_seen);
-    if (matches.length > 0) return matches[0].device_id;
-  }
-
-  // 3. Exactly one daemon online — unambiguous.
-  if (online.length === 1) return online[0].device_id;
-
-  // 4. Ambiguous.
-  return null;
+  return Array.from(roots);
 }
 
 /**
@@ -181,7 +176,12 @@ export const registerDevice = mutation({
 /**
  * Owner device of a conversation. Used by daemons to enforce the single-owner
  * invariant on session-targeted commands (resume/kill/inject): a daemon skips
- * commands for conversations owned by another device.
+ * commands for conversations owned by another LIVE LOCAL device.
+ *
+ * Also reports whether that owner is a remote box (and whether it's online), so a
+ * local daemon can tell the difference between "another laptop owns this, back
+ * off" and "a remote owns this but can only serve an explicitly-moved session —
+ * if I have the checkout I should reclaim it" (the auto-claim self-heal).
  */
 export const getConversationOwner = query({
   args: { api_token: v.optional(v.string()), conversation_id: v.id("conversations") },
@@ -190,7 +190,18 @@ export const getConversationOwner = query({
     if (!userId) return null;
     const conv = await ctx.db.get(args.conversation_id);
     if (!conv || conv.user_id.toString() !== userId.toString()) return null;
-    return { owner_device_id: (conv as any).owner_device_id ?? null };
+    const owner = (conv as any).owner_device_id ?? null;
+    let owner_is_remote = false;
+    let owner_online = false;
+    if (owner) {
+      const ownerDevice = await ctx.db
+        .query("devices")
+        .withIndex("by_user_device", (q: any) => q.eq("user_id", userId).eq("device_id", owner))
+        .first();
+      owner_is_remote = !!ownerDevice?.is_remote;
+      owner_online = !!ownerDevice && Date.now() - ownerDevice.last_seen < DEVICE_ONLINE_MS;
+    }
+    return { owner_device_id: owner, owner_is_remote, owner_online };
   },
 });
 
@@ -310,6 +321,265 @@ export const moveToRemote = mutation({
   },
 });
 
+/**
+ * One-time self-heal for the auto-claim deadlock: clear `owner_device_id` on any
+ * conversation a REMOTE device owns but cannot legitimately serve, so routing
+ * re-resolves it to the local machine. A conversation is reclaimed when EITHER:
+ *
+ *   (a) its `project_path` is under some LOCAL device's `local_project_roots`
+ *       (it demonstrably belongs to a laptop/desktop), OR
+ *   (b) its `project_path` is junk — `normalizeProjectPath` returns null (a bare
+ *       home dir like /Users/m1, or a temp dir). A real move always points at a
+ *       worktree under the remote's home (/Users/m1/work/<repo>), never bare home,
+ *       so a bare-home owner is always the resume-$HOME-fallback mislabel.
+ *
+ * Legitimately moved sessions (project_path = a real path under the remote's home)
+ * match neither rule and are left untouched.
+ *
+ * Run: npx convex run devices:reclaimAutoClaimedRemoteSessions '{"user_id":"<id>"}'
+ */
+export const reclaimAutoClaimedRemoteSessions = internalMutation({
+  args: { dry_run: v.optional(v.boolean()), user_id: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const scopeUser = args.user_id ? ctx.db.normalizeId("users", args.user_id) : null;
+    const devices = await ctx.db.query("devices").collect();
+    // Per-user union of local (non-remote) project roots, and the remote devices.
+    const localRoots = new Map<string, string[]>(); // userId -> roots
+    const remotes: any[] = [];
+    for (const d of devices) {
+      if (scopeUser && d.user_id.toString() !== scopeUser.toString()) continue;
+      const uid = d.user_id.toString();
+      if (d.is_remote) {
+        remotes.push(d);
+      } else {
+        const cur = localRoots.get(uid) ?? [];
+        for (const r of d.local_project_roots ?? []) cur.push(r);
+        localRoots.set(uid, cur);
+      }
+    }
+
+    const cleared: Array<{ conversation: string; from_device: string; project_path: string | null; rule: string }> = [];
+    for (const remote of remotes) {
+      const roots = localRoots.get(remote.user_id.toString()) ?? [];
+      const owned = await ctx.db
+        .query("conversations")
+        .withIndex("by_owner_device", (q: any) =>
+          q.eq("user_id", remote.user_id).eq("owner_device_id", remote.device_id),
+        )
+        .collect();
+      for (const conv of owned) {
+        const p = conv.project_path as string | undefined;
+        const belongsLocal = !!p && roots.some((r) => pathUnderRoot(p, r));
+        const junkPath = !p || normalizeProjectPath(p) === null;
+        if (!belongsLocal && !junkPath) continue;
+        cleared.push({
+          conversation: conv.short_id ?? conv._id,
+          from_device: remote.device_id.slice(0, 8),
+          project_path: p ?? null,
+          rule: belongsLocal ? "belongs-local" : "junk-path",
+        });
+        if (!args.dry_run) {
+          await ctx.db.patch(conv._id, { owner_device_id: undefined, session_error: undefined });
+        }
+      }
+    }
+    return { cleared_count: cleared.length, dry_run: !!args.dry_run, cleared };
+  },
+});
+
+/** TEMP: run the live routing decision for a user's recent conversations. */
+export const _debugResolveOwner = internalMutation({
+  args: { user_id: v.string() },
+  handler: async (ctx, args) => {
+    const uid = ctx.db.normalizeId("users", args.user_id)!;
+    const convs = await ctx.db
+      .query("conversations")
+      .withIndex("by_user_id", (q: any) => q.eq("user_id", uid))
+      .order("desc")
+      .take(60);
+    const sample = convs.filter((c: any) => c.project_path && c.session_id).slice(0, 12);
+    const out = [];
+    for (const c of sample) {
+      const target = await resolveOwnerDevice(ctx, uid, {
+        projectPath: c.project_path,
+        gitRoot: c.git_root ?? null,
+        ownerDeviceId: c.owner_device_id ?? null,
+      });
+      out.push({
+        conv: c.short_id ?? String(c._id).slice(0, 8),
+        path: c.project_path,
+        current_owner: c.owner_device_id ? c.owner_device_id.slice(0, 8) : null,
+        routes_to: target ? target.slice(0, 8) : null,
+        routes_to_remote: target ? !!(await ctx.db
+          .query("devices")
+          .withIndex("by_user_device", (q: any) => q.eq("user_id", uid).eq("device_id", target))
+          .first())?.is_remote : false,
+      });
+    }
+    return out;
+  },
+});
+
+/** TEMP: list recent local idle conversations that are safe e2e repro targets. */
+export const _debugListLocalCandidates = internalMutation({
+  args: { user_id: v.string(), prefix: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const uid = ctx.db.normalizeId("users", args.user_id)!;
+    const prefix = args.prefix ?? "/Users/ashot/src/codecast";
+    const convs = await ctx.db
+      .query("conversations")
+      .withIndex("by_user_id", (q: any) => q.eq("user_id", uid))
+      .order("desc")
+      .take(400);
+    const out = convs
+      .filter(
+        (c: any) =>
+          typeof c.project_path === "string" &&
+          c.project_path.startsWith(prefix) &&
+          c.session_id &&
+          !c.has_pending_messages &&
+          (c.status === "completed" || c.status === "active"),
+      )
+      .slice(0, 10)
+      .map((c: any) => ({
+        id: c._id,
+        short: c.short_id,
+        path: c.project_path,
+        status: c.status,
+        owner: c.owner_device_id ? c.owner_device_id.slice(0, 8) : null,
+        updated_s: Math.round((Date.now() - (c.updated_at ?? 0)) / 1000),
+      }));
+    return out;
+  },
+});
+
+/** TEMP: reproduce the auto-claim bug — force owner=remote, then enqueue a pending message. */
+export const _debugRepro = internalMutation({
+  args: { conversation_id: v.id("conversations"), content: v.string() },
+  handler: async (ctx, args) => {
+    const conv = await ctx.db.get(args.conversation_id);
+    if (!conv) throw new Error("no conv");
+    const remote = (await ctx.db.query("devices").collect()).find(
+      (d: any) => d.user_id.toString() === conv.user_id.toString() && d.is_remote,
+    );
+    if (!remote) throw new Error("no remote device for user");
+    await ctx.db.patch(args.conversation_id, { owner_device_id: remote.device_id });
+    const msgId = await ctx.db.insert("pending_messages", {
+      conversation_id: args.conversation_id,
+      from_user_id: conv.user_id,
+      content: args.content,
+      status: "pending" as const,
+      created_at: Date.now(),
+      retry_count: 0,
+    });
+    await ctx.db.patch(args.conversation_id, {
+      has_pending_messages: true,
+      updated_at: Date.now(),
+      ...(conv.status === "completed" ? { status: "active" as const } : {}),
+    });
+    return { forced_owner: remote.device_id.slice(0, 8), pending_message: msgId };
+  },
+});
+
+/** TEMP: report a conversation's owner + its pending-message statuses. */
+export const _debugConvState = internalMutation({
+  args: { conversation_id: v.id("conversations") },
+  handler: async (ctx, args) => {
+    const conv = await ctx.db.get(args.conversation_id);
+    if (!conv) throw new Error("no conv");
+    const pend = await ctx.db
+      .query("pending_messages")
+      .withIndex("by_conversation_status", (q: any) => q.eq("conversation_id", args.conversation_id))
+      .collect();
+    return {
+      owner: conv.owner_device_id ? conv.owner_device_id.slice(0, 8) : null,
+      has_pending: conv.has_pending_messages ?? false,
+      status: conv.status,
+      session_error: (conv as any).session_error ?? null,
+      pending: pend.map((m: any) => ({ status: m.status, retry: m.retry_count, content: m.content.slice(0, 40) })),
+    };
+  },
+});
+
+/** TEMP diagnostic: device flags + remote-owned conversations. Remove after use. */
+export const _debugDeviceOwnership = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const devices = await ctx.db.query("devices").collect();
+    const now = Date.now();
+    const deviceRows = devices.map((d: any) => ({
+      id: d.device_id.slice(0, 8),
+      label: d.label,
+      is_remote: d.is_remote ?? null,
+      roots: (d.local_project_roots ?? []).length,
+      seen_s: Math.round((now - d.last_seen) / 1000),
+    }));
+    const remoteOwned: any[] = [];
+    for (const d of devices) {
+      if (!d.is_remote) continue;
+      const convs = await ctx.db
+        .query("conversations")
+        .withIndex("by_owner_device", (q: any) =>
+          q.eq("user_id", d.user_id).eq("owner_device_id", d.device_id),
+        )
+        .collect();
+      for (const c of convs)
+        remoteOwned.push({ conv: c.short_id ?? String(c._id).slice(0, 10), path: c.project_path ?? null, status: c.status });
+    }
+    return { devices: deviceRows, remoteOwnedCount: remoteOwned.length, remoteOwned: remoteOwned.slice(0, 40) };
+  },
+});
+
+/**
+ * Explicitly (re)assign which device runs a conversation, then resume it there.
+ * Powers the web/mobile "Run on this device" / "Bring back here" controls — the
+ * user-driven counterpart to auto-routing. Stamps owner_device_id, clears any
+ * stale session_error, and enqueues a resume_session targeted at that device so
+ * only it acts. Use moveToRemote for a remote box (it also transfers the worktree);
+ * this is for re-homing ownership to a device that already has the checkout.
+ */
+export const reassignToDevice = mutation({
+  args: {
+    api_token: v.optional(v.string()),
+    conversation_id: v.id("conversations"),
+    device_id: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) throw new Error("Authentication required");
+    const conv = await ctx.db.get(args.conversation_id);
+    if (!conv || conv.user_id.toString() !== userId.toString()) throw new Error("not your conversation");
+    const device = await ctx.db
+      .query("devices")
+      .withIndex("by_user_device", (q: any) => q.eq("user_id", userId).eq("device_id", args.device_id))
+      .first();
+    if (!device) throw new Error("Unknown device");
+
+    await ctx.db.patch(args.conversation_id, {
+      owner_device_id: args.device_id,
+      session_error: undefined,
+      status: "active" as const,
+      updated_at: Date.now(),
+    });
+
+    const agentType =
+      conv.agent_type === "codex" ? "codex" : conv.agent_type === "gemini" ? "gemini" : "claude";
+    const commandId = await ctx.db.insert("daemon_commands", {
+      user_id: userId,
+      command: "resume_session" as const,
+      args: JSON.stringify({
+        session_id: conv.session_id,
+        agent_type: agentType,
+        conversation_id: args.conversation_id,
+        ...(conv.project_path ? { project_path: conv.project_path } : {}),
+      }),
+      created_at: Date.now(),
+      target_device_id: args.device_id,
+    });
+    return { ok: true, command_id: commandId, device_id: args.device_id, label: device.label };
+  },
+});
+
 /** List the user's devices (for the web UI + `cast remote hosts`). */
 export const listDevices = query({
   args: { api_token: v.optional(v.string()) },
@@ -396,9 +666,26 @@ export const claimConversationForStart = mutation({
           q.eq("user_id", userId).eq("device_id", owner),
         )
         .first();
-      const ownerOnline = ownerDevice && Date.now() - ownerDevice.last_seen < DEVICE_ONLINE_MS;
+      // A live LOCAL owner blocks the claim. A remote owner does not: a local
+      // daemon that resolved a checkout is the rightful owner over a remote that
+      // can't serve the session (mirrors registerManagedSession's reclaim rule).
+      const ownerOnline =
+        ownerDevice && !ownerDevice.is_remote && Date.now() - ownerDevice.last_seen < DEVICE_ONLINE_MS;
       if (ownerOnline) return { won: false as const, owner }; // another live daemon owns it
-      // Owner offline → reclaim.
+      // Owner offline, or owner is a remote box → reclaim.
+    }
+    // A REMOTE device may never auto-claim a session it doesn't already own — the
+    // remote only runs sessions explicitly moved to it (which stamp ownership up
+    // front, so owner === device_id and we never reach here). This stops a remote
+    // from winning a broadcast start_session and stranding it (the core deadlock).
+    if (owner !== args.device_id) {
+      const me = await ctx.db
+        .query("devices")
+        .withIndex("by_user_device", (q: any) =>
+          q.eq("user_id", userId).eq("device_id", args.device_id),
+        )
+        .first();
+      if (me?.is_remote) return { won: false as const, owner };
     }
     await ctx.db.patch(convId, { owner_device_id: args.device_id });
     return { won: true as const };
