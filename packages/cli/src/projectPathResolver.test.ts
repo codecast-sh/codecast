@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { resolveLocalProjectPath, resolveResumeCwd } from "./projectPathResolver.js";
+import { resolveLocalProjectPath, resolveResumeCwd, pickProjectPath } from "./projectPathResolver.js";
 
 const remote = "git@github.com:union-mobile/outreach.git";
 
@@ -151,5 +151,61 @@ describe("resolveResumeCwd", () => {
       exists: (p) => p === "/Users/ashot/src/outreach",
     });
     expect(cwd).toBe("/Users/ashot/src/outreach");
+  });
+});
+
+describe("pickProjectPath", () => {
+  const HOME = "/Users/m1";
+
+  test("normal session: real non-$HOME slug dir wins", () => {
+    // The everyday case — slug decodes to the same dir the session ran in.
+    expect(pickProjectPath({
+      decodedSlugPath: "/Users/ashot/src/outreach",
+      recordedCwd: "/Users/ashot/src/outreach",
+      home: HOME,
+      exists: (p) => p === "/Users/ashot/src/outreach",
+    })).toBe("/Users/ashot/src/outreach");
+  });
+
+  test("cross-machine fork: real local slug dir wins over a foreign recorded cwd", () => {
+    // Fork lives under a real local project dir; its transcript still carries the
+    // original author's (foreign, non-local) cwd. The local dir must win.
+    expect(pickProjectPath({
+      decodedSlugPath: "/Users/ashot/src/outreach",
+      recordedCwd: "/Users/ec2-user/src/outreach",
+      home: HOME,
+      exists: (p) => p === "/Users/ashot/src/outreach",
+    })).toBe("/Users/ashot/src/outreach");
+  });
+
+  test("THE BUG: a transcript parked in the bare $HOME dir is relabeled to its real cwd", () => {
+    // Remote-offloaded session: an old resume fell back to $HOME, so the JSONL sits
+    // under ~/.claude/projects/-Users-m1/ → slug decodes to /Users/m1 (which exists,
+    // it's the home dir). Without the fix this returns "/Users/m1" → label "m1".
+    expect(pickProjectPath({
+      decodedSlugPath: HOME,
+      recordedCwd: "/Users/ashot/src/union-mobile/outreach",
+      home: HOME,
+      exists: (p) => p === HOME, // home dir exists; the real project does not (foreign machine)
+    })).toBe("/Users/ashot/src/union-mobile/outreach");
+  });
+
+  test("foreign slug that doesn't exist locally falls back to the recorded cwd", () => {
+    expect(pickProjectPath({
+      decodedSlugPath: "/Users/ashot/src/union-mobile/outreach",
+      recordedCwd: "/Users/ashot/src/union-mobile/outreach",
+      home: HOME,
+      exists: () => false, // nothing exists on this (remote) machine
+    })).toBe("/Users/ashot/src/union-mobile/outreach");
+  });
+
+  test("$HOME slug with no recorded cwd falls back to the decoded slug (last resort)", () => {
+    // A genuinely home-dir-run session (rare) or a cwd-less transcript: don't drop it.
+    expect(pickProjectPath({
+      decodedSlugPath: HOME,
+      recordedCwd: null,
+      home: HOME,
+      exists: (p) => p === HOME,
+    })).toBe(HOME);
   });
 });
