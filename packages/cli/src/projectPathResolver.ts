@@ -171,3 +171,62 @@ export function pickProjectPath(input: PickProjectPathInput): string {
   if (recordedCwd) return recordedCwd;
   return decoded;
 }
+
+export interface TranscriptCandidate {
+  /** The ~/.claude/projects/<slug>/<uuid>.jsonl path. */
+  filePath: string;
+  /** resolveTranscriptProjectPath(filePath, slug) — the project this copy resolves to. */
+  projectPath: string;
+  /** Does projectPath exist as a directory on this machine? */
+  projectExists: boolean;
+}
+
+export type TranscriptChoice =
+  // `supersededFilePath` is set only when the incoming transcript replaces a
+  // different prior copy that resolved to a non-existent dir (a promotion). It is
+  // absent when there was no prior copy or when both copies are legitimately
+  // syncing (ambiguous), so callers don't tear down a still-valid sibling.
+  | { action: "sync"; reason: string; supersededFilePath?: string }
+  | { action: "skip"; reason: string; canonicalFilePath: string };
+
+// `claude --resume` copies the prior transcript into the new cwd's project dir,
+// so a single session UUID can appear as two .jsonl files under two slugs — both
+// watched, both syncing the SAME conversation (keyed by UUID), doubling write
+// load. The stale copy is the remote-resume artifact: it lands under a slug that
+// decodes to a foreign/home dir that does NOT exist locally (e.g. -Users-m1 ->
+// /Users/m1), exactly the home-fallback path pickProjectPath already heals. The
+// live copy lives under the real local checkout, so its projectPath exists.
+//
+// Decide whether an incoming transcript should be synced or skipped as a stale
+// duplicate of an already-watched canonical file for the same UUID. CONSERVATIVE:
+// only skip a copy whose project dir does NOT exist when the canonical one's
+// DOES. If both exist, neither exists, or there is no prior file, sync (the
+// server dedups by message_uuid, so syncing both is correct, just redundant).
+// We never skip a transcript living in a real local checkout — message loss is
+// never traded for reduced write load.
+export function chooseSessionTranscript(
+  incoming: TranscriptCandidate,
+  canonical: TranscriptCandidate | undefined
+): TranscriptChoice {
+  if (!canonical || canonical.filePath === incoming.filePath) {
+    return { action: "sync", reason: "no prior transcript for this session UUID" };
+  }
+  if (incoming.projectExists && !canonical.projectExists) {
+    return {
+      action: "sync",
+      reason: `incoming resolves to real checkout ${incoming.projectPath}; prior ${canonical.filePath} resolves to non-existent ${canonical.projectPath} — incoming becomes canonical`,
+      supersededFilePath: canonical.filePath,
+    };
+  }
+  if (!incoming.projectExists && canonical.projectExists) {
+    return {
+      action: "skip",
+      reason: `duplicate of ${canonical.filePath} (real checkout ${canonical.projectPath}); incoming resolves to non-existent ${incoming.projectPath} — stale resume artifact`,
+      canonicalFilePath: canonical.filePath,
+    };
+  }
+  return {
+    action: "sync",
+    reason: "two transcripts for the same UUID but neither is a clear stale artifact — sync both, server dedups",
+  };
+}
