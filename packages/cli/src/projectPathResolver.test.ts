@@ -1,5 +1,11 @@
 import { describe, test, expect } from "bun:test";
-import { resolveLocalProjectPath, resolveResumeCwd, pickProjectPath } from "./projectPathResolver.js";
+import {
+  resolveLocalProjectPath,
+  resolveResumeCwd,
+  pickProjectPath,
+  chooseSessionTranscript,
+  type TranscriptCandidate,
+} from "./projectPathResolver.js";
 
 const remote = "git@github.com:union-mobile/outreach.git";
 
@@ -207,5 +213,70 @@ describe("pickProjectPath", () => {
       home: HOME,
       exists: (p) => p === HOME,
     })).toBe(HOME);
+  });
+});
+
+describe("chooseSessionTranscript", () => {
+  // The live duplicate observed in pl-79: one session UUID, two .jsonl copies.
+  const live: TranscriptCandidate = {
+    filePath: "/Users/ashot/.claude/projects/-Users-ashot-src-union-mobile/f0d46305.jsonl",
+    projectPath: "/Users/ashot/src/union-mobile",
+    projectExists: true, // real local checkout
+  };
+  const stale: TranscriptCandidate = {
+    filePath: "/Users/ashot/.claude/projects/-Users-m1/f0d46305.jsonl",
+    projectPath: "/Users/m1",
+    projectExists: false, // resume artifact: /Users/m1 doesn't exist locally
+  };
+
+  test("first transcript for a UUID always syncs", () => {
+    const choice = chooseSessionTranscript(live, undefined);
+    expect(choice.action).toBe("sync");
+  });
+
+  test("the same file re-firing is not treated as a duplicate", () => {
+    const choice = chooseSessionTranscript(live, live);
+    expect(choice.action).toBe("sync");
+  });
+
+  test("skips the stale resume artifact when a real-checkout copy is canonical", () => {
+    // live registered first (newer mtime); stale m1 copy arrives second.
+    const choice = chooseSessionTranscript(stale, live);
+    expect(choice.action).toBe("skip");
+    if (choice.action === "skip") {
+      expect(choice.canonicalFilePath).toBe(live.filePath);
+    }
+  });
+
+  test("promotes the real-checkout copy over an artifact registered first", () => {
+    // Ordering flip: the m1 artifact changed first and registered as canonical;
+    // the live copy then arrives and must win, superseding the artifact's sync.
+    const choice = chooseSessionTranscript(live, stale);
+    expect(choice.action).toBe("sync");
+    if (choice.action === "sync") {
+      expect(choice.supersededFilePath).toBe(stale.filePath);
+    }
+  });
+
+  test("keeps both when both copies live in real checkouts (no clear artifact)", () => {
+    const other: TranscriptCandidate = {
+      filePath: "/Users/ashot/.claude/projects/-Users-ashot-src-other/f0d46305.jsonl",
+      projectPath: "/Users/ashot/src/other",
+      projectExists: true,
+    };
+    const choice = chooseSessionTranscript(other, live);
+    expect(choice.action).toBe("sync");
+    if (choice.action === "sync") {
+      expect(choice.supersededFilePath).toBeUndefined();
+    }
+  });
+
+  test("keeps both when neither copy resolves to a real dir (never drop blindly)", () => {
+    const stale2: TranscriptCandidate = { ...stale, filePath: "/x/-Users-other/f0d46305.jsonl", projectPath: "/Users/other" };
+    const choice = chooseSessionTranscript(stale2, stale);
+    expect(choice.action).toBe("sync");
+    if (choice.action === "sync") {
+      expect(choice.supersededFilePath).toBeUndefined();
+    }
   });
 });
