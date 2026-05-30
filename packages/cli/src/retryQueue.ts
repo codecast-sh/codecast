@@ -44,6 +44,12 @@ export interface RetryQueueConfig {
   persistPath?: string;
   droppedPath?: string;
   onLog?: (message: string, level?: LogLevel) => void;
+  // Fired when the queue grows (an op is enqueued). Lets the daemon refresh its
+  // persisted health snapshot as backlog ACCUMULATES, not only when it drains —
+  // otherwise `cast status` reads a success-only snapshot and prints "Queue:
+  // empty" while messages pile into the queue. The drain side already refreshes
+  // via the executor, so this hook only needs to cover enqueue.
+  onEnqueue?: () => void;
 }
 
 const DEFAULT_INITIAL_DELAY = 1000;
@@ -92,6 +98,7 @@ export class RetryQueue {
   private persistPath: string | null;
   private droppedPath: string | null;
   private log: (message: string, level?: LogLevel) => void;
+  private onEnqueue: () => void;
   private processing = false;
   private rateLimitedUntil = 0;
   private activeKeys = new Set<string>();
@@ -106,6 +113,7 @@ export class RetryQueue {
     this.persistPath = config.persistPath ?? null;
     this.droppedPath = config.droppedPath ?? null;
     this.log = config.onLog ?? (() => {});
+    this.onEnqueue = config.onEnqueue ?? (() => {});
     this.load();
   }
 
@@ -424,6 +432,9 @@ export class RetryQueue {
     this.persist();
     this.log(`Queued ${type} for retry${rateLimitDelay ? ` (rate limited, ${delay}ms)` : ''} (id: ${id})`);
     this.scheduleNextCheck();
+    // Refresh the daemon's health snapshot as backlog accumulates so `cast
+    // status` reflects the queue immediately, not only after the first drain.
+    this.onEnqueue();
     return id;
   }
 
@@ -584,11 +595,20 @@ export class RetryQueue {
     const floor = this.rateLimitedUntil > now ? this.rateLimitedUntil : now;
     let collapsed = 0;
     for (const op of this.queue.values()) {
+      // Skip ops that are currently in flight: their attempt is already running,
+      // and an in-flight op for a serialized conversation will reschedule itself
+      // when it settles. Touching its fields here is a no-op at best and races
+      // the executor at worst.
+      if (this.activeOpIds.has(op.id)) continue;
       if (op.nextRetryAt > floor) {
+        // The collapse benefit is ENTIRELY in pulling nextRetryAt to ~now so the
+        // op drains immediately instead of waiting out a stale multi-minute
+        // backoff. We deliberately do NOT zero `attempts`: the true attempt count
+        // must be preserved so a persistently-failing non-network op still reaches
+        // maxAttempts and gets dropped (zeroing it pardoned such ops forever across
+        // repeated recovery events). Clear only the rate-limit hold, since the
+        // backend just proved it isn't throttling us.
         op.nextRetryAt = floor;
-        // Reset the accumulated backoff so a subsequent failure restarts from the
-        // initial delay rather than resuming a stale multi-minute curve.
-        op.attempts = 0;
         op.rateLimitDelayMs = undefined;
         collapsed++;
       }
