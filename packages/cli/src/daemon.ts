@@ -61,7 +61,7 @@ import {
   extractJsonlPermissionMode,
   rewriteSubagentJsonlToUuid,
 } from "./resumeCommand.js";
-import { resolveLocalProjectPath, resolveResumeCwd } from "./projectPathResolver.js";
+import { resolveLocalProjectPath, resolveResumeCwd, pickProjectPath } from "./projectPathResolver.js";
 
 const ENRICHED_PATH = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
 const EXEC_TIMEOUT_MS = 10_000;
@@ -226,6 +226,20 @@ async function resolveResumeCwdOrRefuse(opts: {
   });
 }
 
+// "Clone it first" is only an actionable banner when we can name what's missing:
+// a git remote to clone, or a concrete recorded path that simply isn't here. A
+// remote session that carried NEITHER (e.g. a Codex run resumed from another host
+// with no cwd and no remote) gives the daemon zero evidence a local checkout is
+// even expected — stamping "No local checkout for <unknown remote> (recorded path
+// unknown)" is a non-actionable false positive. Returns false in that case so the
+// caller stays silent (and clears any stale banner) instead.
+export function noLocalCheckoutBannerActionable(args: {
+  remote: string | null | undefined;
+  recordedPath: string | null | undefined;
+}): boolean {
+  return !!(args.remote || args.recordedPath);
+}
+
 // When a resume can't be placed in a real local checkout, mirror start_session:
 // stay silent if another device owns the conversation (it will run it), else
 // surface "clone it first" on the conversation. Never falls back to $HOME.
@@ -242,8 +256,15 @@ async function refuseResumeNoLocalCheckout(
       return;
     }
     const info = await syncServiceRef.getProjectInfo(conversationId).catch(() => null);
-    const remote = info?.git_remote_url ?? "<unknown remote>";
-    const err = `No local checkout for ${remote} (recorded path ${recordedCwd ?? "unknown"} doesn't exist here). Clone it first.`;
+    const remote = info?.git_remote_url ?? null;
+    // Nothing to clone, nothing to point at → clear any stale banner and stay
+    // silent rather than scaring the user with a dead-end "clone it first".
+    if (!noLocalCheckoutBannerActionable({ remote, recordedPath: recordedCwd })) {
+      syncServiceRef.setSessionError(conversationId).catch(() => {});
+      log(`[REMOTE] resume ${short}: no local checkout and no remote/path to act on — staying silent (cleared any stale banner)`);
+      return;
+    }
+    const err = `No local checkout for ${remote ?? "<unknown remote>"} (recorded path ${recordedCwd ?? "unknown"} doesn't exist here). Clone it first.`;
     syncServiceRef.setSessionError(conversationId, err).catch(() => {});
     log(`[REMOTE] resume refused for ${short}: ${err}`);
   } else {
@@ -1335,16 +1356,21 @@ async function executeRemoteCommand(
   let error: string | undefined;
 
   // Single-owner guard: skip session-targeted commands for conversations owned
-  // by ANOTHER device. Both daemons poll the same user-scoped command queue, so
-  // without this a non-owner daemon would race the owner (resume/kill/inject).
+  // by ANOTHER LIVE LOCAL device. Both daemons poll the same user-scoped command
+  // queue, so without this a non-owner daemon would race the owner.
+  //
+  // A REMOTE owner does NOT cause a skip: it can only serve a session that was
+  // explicitly moved to it, so if THIS (local) daemon received the command it has
+  // the checkout and should run it — reclaiming a session the remote auto-owned
+  // but can't serve. (registerManagedSession then stamps ownership back here.)
   const SESSION_COMMANDS = new Set(["resume_session", "kill_session", "send_keys", "escape", "rewind"]);
   if (SESSION_COMMANDS.has(command) && commandArgs && syncServiceRef) {
     try {
       const convId = JSON.parse(commandArgs)?.conversation_id;
       if (convId) {
-        const owner = await syncServiceRef.getConversationOwner(convId);
-        if (owner && owner !== deviceId()) {
-          log(`[OWNER] skipping ${command} for ${String(convId).slice(0, 12)} — owned by device ${owner.slice(0, 8)} (not ${deviceId().slice(0, 8)})`);
+        const info = await syncServiceRef.getConversationOwnerInfo(convId);
+        if (info && info.ownerDeviceId !== deviceId() && info.ownerOnline && !info.ownerIsRemote) {
+          log(`[OWNER] skipping ${command} for ${String(convId).slice(0, 12)} — owned by live local device ${info.ownerDeviceId.slice(0, 8)} (not ${deviceId().slice(0, 8)})`);
           return; // leave the command for the owner device
         }
       }
@@ -1580,8 +1606,15 @@ async function executeRemoteCommand(
               log(`[REMOTE] start_session: no local checkout, but ${String(conversationId).slice(0, 12)} is owned by ${owner.slice(0, 8)} — staying silent`);
               break;
             }
-            const remote = projectInfo?.git_remote_url ?? "<unknown remote>";
-            error = `No local checkout for ${remote} (recorded path ${rawPath} doesn't exist here). Clone it first.`;
+            const remote = projectInfo?.git_remote_url ?? null;
+            // Nothing to clone, nothing to point at → clear any stale banner and
+            // stay silent. (Same rule as refuseResumeNoLocalCheckout.)
+            if (!noLocalCheckoutBannerActionable({ remote, recordedPath: rawPath })) {
+              syncServiceRef.setSessionError(conversationId).catch(() => {});
+              log(`[REMOTE] start_session: no local checkout and no remote/path to act on — staying silent (cleared any stale banner)`);
+              break;
+            }
+            error = `No local checkout for ${remote ?? "<unknown remote>"} (recorded path ${rawPath} doesn't exist here). Clone it first.`;
             log(`[REMOTE] start_session refused: ${error}`);
             syncServiceRef.setSessionError(conversationId, error).catch(() => {});
             break;
@@ -3162,6 +3195,32 @@ function decodeProjectDirName(dirName: string): string {
   return resolved;
 }
 
+// A transcript's cwd never changes, so memoize the (small) head read by file.
+const transcriptProjectPathCache = new Map<string, string>();
+
+/**
+ * Project path for a discovered transcript file. Trusts the cwd recorded INSIDE
+ * the transcript over the (lossy, copyable) ~/.claude/projects folder slug — a
+ * transcript resumed/copied into a foreign or $HOME dir would otherwise mislabel
+ * the conversation (e.g. "/Users/m1"). See pickProjectPath for the rule.
+ * `dirName` is the project-dir slug (the folder name).
+ */
+function resolveTranscriptProjectPath(filePath: string, dirName: string): string {
+  const cached = transcriptProjectPathCache.get(filePath);
+  if (cached !== undefined) return cached;
+  const decodedSlugPath = decodeProjectDirName(dirName);
+  let recordedCwd: string | undefined;
+  try { recordedCwd = extractCwd(readFileHead(filePath, 65536)); } catch {}
+  const result = pickProjectPath({ decodedSlugPath, recordedCwd, home: process.env.HOME });
+  // Only memoize a trustworthy answer: a found cwd, or a slug that resolved to a
+  // real non-$HOME project. A not-yet-populated transcript (no cwd line yet)
+  // stays re-checkable so a transient guess isn't cached for the session's life.
+  if (recordedCwd || (decodedSlugPath && decodedSlugPath !== process.env.HOME)) {
+    transcriptProjectPathCache.set(filePath, result);
+  }
+  return result;
+}
+
 async function flushPendingMessagesBatch(
   pendingMsgs: Array<{ uuid?: string; role: "human" | "assistant" | "system"; content: string; timestamp: number; thinking?: string; toolCalls?: any; toolResults?: any; images?: any; subtype?: string }>,
   conversationId: string,
@@ -3636,7 +3695,11 @@ async function processSessionFile(
       const firstMessageTimestamp = messages[0]?.timestamp;
       const dirName = path.basename(path.dirname(filePath));
       const decodedPath = dirName ? decodeProjectDirName(dirName) : undefined;
-      const actualProjectPath = (decodedPath && fs.existsSync(decodedPath) ? decodedPath : null) || extractCwd(headContent) || projectPath;
+      const actualProjectPath = pickProjectPath({
+        decodedSlugPath: decodedPath || projectPath,
+        recordedCwd: extractCwd(headContent),
+        home: process.env.HOME,
+      });
       const gitInfo = actualProjectPath ? getGitInfo(actualProjectPath) : undefined;
 
       const firstUserMessage = messages.find(msg => msg.role === "user");
@@ -3923,7 +3986,11 @@ async function processSessionFile(
       const firstMsgTimestamp = messages[0]?.timestamp;
       const retryDirName = path.basename(path.dirname(filePath));
       const retryDecoded = retryDirName ? decodeProjectDirName(retryDirName) : undefined;
-      const retryProjectPath = (retryDecoded && fs.existsSync(retryDecoded) ? retryDecoded : null) || extractCwd(retryHeadContent) || projectPath;
+      const retryProjectPath = pickProjectPath({
+        decodedSlugPath: retryDecoded || projectPath,
+        recordedCwd: extractCwd(retryHeadContent),
+        home: process.env.HOME,
+      });
       const gitInfo = retryProjectPath ? getGitInfo(retryProjectPath) : undefined;
 
       retryQueue.add("createConversation", {
@@ -3957,7 +4024,7 @@ async function processSessionFile(
           if (block.name === "ExitPlanMode" && block.input?.plan && !planModeSynced.has(sessionId)) {
             planModeSynced.add(sessionId);
             const dirName = path.basename(path.dirname(filePath));
-            const projPath = dirName ? decodeProjectDirName(dirName) : undefined;
+            const projPath = dirName ? resolveTranscriptProjectPath(filePath, dirName) : undefined;
             try {
               const planShortId = await syncService.syncPlanFromPlanMode({
                 sessionId,
@@ -4096,7 +4163,11 @@ async function processSessionFile(
     const firstMessageTimestamp = messages[0]?.timestamp;
     const recreateDirName = path.basename(path.dirname(filePath));
     const recreateDecoded = recreateDirName ? decodeProjectDirName(recreateDirName) : undefined;
-    const recreateProjectPath = (recreateDecoded && fs.existsSync(recreateDecoded) ? recreateDecoded : null) || extractCwd(recreateHeadContent) || projectPath;
+    const recreateProjectPath = pickProjectPath({
+      decodedSlugPath: recreateDecoded || projectPath,
+      recordedCwd: extractCwd(recreateHeadContent),
+      home: process.env.HOME,
+    });
     const gitInfo = recreateProjectPath ? getGitInfo(recreateProjectPath) : undefined;
 
     try {
@@ -5547,6 +5618,18 @@ const BOX_DRAWING_CHARS = /[─-╿]/;
 const HEADER_CHIP = /^[□☐☑☒▢▣◻◼◽◾■]\s*(.+)$/;
 const SEPARATOR_LINE = /^[─━═\-_]{5,}$/;
 
+// A multiSelect AskUserQuestion renders a checkbox between the number and the
+// label — "1. [ ] Restart" / "2. [x] Redeploy" (or a unicode ballot box). It's a
+// selection-state glyph, not part of the label, so strip it off the front. Only a
+// 0-or-1-char bracket pair counts, so real bracketed labels like "[Recommended]"
+// survive.
+const CHECKBOX_PREFIX = /^\s*(?:\[[ xX*✓✔·]?\]|[□☐☑☒▢▣◻◼◽◾])\s*/;
+// Claude Code appends two synthetic affordance rows to every AskUserQuestion menu:
+// a free-text "Type something" row and a "Chat about this" escape hatch. They carry
+// no real description — and the free-text row renders a "Submit" button beneath it
+// that must not be scraped as its description.
+const SYNTHETIC_OPTION = /^(?:type something\.?|chat about this)$/i;
+
 // Pull the header chip and the (possibly multi-line) question out of the lines above
 // the first option. The question can wrap across several rows; the menu renderer
 // breaks it mid-sentence, so taking only the last line truncated it. Walk upward from
@@ -5591,7 +5674,10 @@ export function parseInteractivePrompt(text: string): InteractivePrompt | null {
       if (lastOptionIdx < 0) lastOptionIdx = i;
       firstOptionIdx = i;
       if (/^\s*[❯>]\s*\d/.test(lines[i])) hasCursorIndicator = true;
-      const label = m[2].replace(/\s*[✓✗✔☑]\s*/g, "").trim();
+      const label = m[2]
+        .replace(CHECKBOX_PREFIX, "")        // multiSelect checkbox: "[ ]" / "[x]" / "☐"
+        .replace(/\s*[✓✗✔☑]\s*/g, "")        // stray selection glyphs anywhere
+        .trim();
       if (label.length > 200) { pendingDesc = []; continue; }
       // A same-line trailing segment is a real description only if it isn't the
       // right-hand preview box flattened onto this row (see BOX_DRAWING_CHARS).
@@ -5600,13 +5686,22 @@ export function parseInteractivePrompt(text: string): InteractivePrompt | null {
         inlineDesc && !BOX_DRAWING_CHARS.test(inlineDesc) ? inlineDesc : undefined,
         ...pendingDesc,
       ].filter((s): s is string => !!s);
-      const description = descParts.length ? descParts.join(" ") : undefined;
+      // The synthetic "Type something" / "Chat about this" rows never have a real
+      // description; the "Submit" button under the free-text row would otherwise be
+      // mis-scraped as one.
+      const description = SYNTHETIC_OPTION.test(label)
+        ? undefined
+        : descParts.length ? descParts.join(" ") : undefined;
       if (label) options.unshift({ label, description });
       pendingDesc = [];
       gapCount = 0;
     } else if (options.length > 0) {
       const trimmed = lines[i].trim();
-      const isIndented = /^\s{4,}/.test(lines[i]);
+      // A continuation/description line is indented past the flush-left question.
+      // multiSelect menus indent descriptions only 2 spaces — the same column as
+      // non-cursor option rows ("  2.") — so the old 4-space floor treated every
+      // such description as prose and broke the bottom-up scan, dropping options.
+      const isIndented = /^\s{2,}/.test(lines[i]);
       const isSeparator = /^[─━═\-_]{3,}$/.test(trimmed);
       // A row carrying any box-drawing glyph is the side-panel preview, not a
       // continuation of the option's description — treat it as a gap, not text.
@@ -9376,9 +9471,10 @@ async function repairProjectPaths(syncService: SyncService): Promise<void> {
       .filter(f => f.endsWith(".jsonl") && f !== "sessions-index.json");
 
     const decodedPath = decodeProjectDirName(dir);
-    const resolvedDir = decodedPath && fs.existsSync(decodedPath) ? decodedPath : null;
+    const resolvedDir = decodedPath && decodedPath !== process.env.HOME && fs.existsSync(decodedPath) ? decodedPath : null;
     // Learn this repo's local home so a fork recorded on another machine (different
     // absolute path, same basename) resolves here even if it lives off-convention.
+    // (Never the bare $HOME — that's the fingerprint of a stray $HOME-fallback dir.)
     if (resolvedDir) recordProjectMapping(path.basename(resolvedDir), resolvedDir);
 
     for (const file of sessionFiles) {
@@ -9388,11 +9484,10 @@ async function repairProjectPaths(syncService: SyncService): Promise<void> {
       try {
         checked++;
 
-        let projectPath: string | null = resolvedDir;
-        if (!projectPath) {
-          const content = readFileHead(filePath, 5000);
-          projectPath = extractCwd(content) || null;
-        }
+        // Trust the transcript's recorded cwd over the (lossy, copyable) folder
+        // slug; a transcript resumed/copied into a foreign or $HOME dir would
+        // otherwise re-clobber project_path to e.g. "/Users/m1" on every startup.
+        const projectPath = resolveTranscriptProjectPath(filePath, dir);
         if (!projectPath) continue;
 
         const gitInfo = getGitInfo(projectPath);
@@ -9458,7 +9553,12 @@ async function backfillPlanModeFromJSONL(syncService: SyncService): Promise<void
 
         if (!planContent) continue;
 
-        const projPath = decodedPath && fs.existsSync(decodedPath) ? decodedPath : undefined;
+        // Trust the transcript cwd over a slug that only resolves to $HOME (a
+        // stray $HOME-fallback dir); keep undefined when nothing resolves.
+        const projPath =
+          decodedPath && decodedPath !== process.env.HOME && fs.existsSync(decodedPath)
+            ? decodedPath
+            : (extractCwd(content) || undefined);
         const planShortId = await syncService.syncPlanFromPlanMode({
           sessionId,
           planContent,
@@ -10497,6 +10597,31 @@ async function prewarmRecentlyActiveSessions(deps: WatchdogDependencies): Promis
   }
 }
 
+// Decide whether the stale-status watchdog should mark a session "completed".
+// The watchdog's job is to catch sessions that ended without a SessionEnd hook,
+// using idle time as a proxy for "the agent died". But a live agent simply
+// waiting for the user's next prompt is indistinguishable from a dead one by
+// time alone — so we ONLY reap when the agent process is genuinely gone. Marking
+// a live, idle-waiting session completed flips its conversation to "stopped" in
+// the UI and stops the web from streaming the next turn until a manual reload
+// (root cause of "tmux messages didn't sync to the web UI" after an idle gap).
+// `hasLiveAgentProcess` is a positive signal only; when no process is found we
+// fall back to the original time-based behavior (never more aggressive).
+export function shouldMarkSessionCompleted(args: {
+  status: string | undefined;
+  ageMs: number;
+  hasLiveAgentProcess: boolean;
+  idleStaleMs?: number;
+  activeStaleMs?: number;
+}): boolean {
+  if (args.hasLiveAgentProcess) return false;
+  const idleStaleMs = args.idleStaleMs ?? 10 * 60 * 1000;
+  const activeStaleMs = args.activeStaleMs ?? 30 * 60 * 1000;
+  const threshold =
+    args.status === "idle" || args.status === "stopped" ? idleStaleMs : activeStaleMs;
+  return args.ageMs >= threshold;
+}
+
 function startWatchdog(
   deps: WatchdogDependencies
 ): NodeJS.Timeout {
@@ -10573,11 +10698,17 @@ function startWatchdog(
             const data = JSON.parse(raw) as HookStatusData;
             if (!data.ts) continue;
             const ageMs = now - data.ts * 1000;
+            // Cheap time gate first, so we only pay for a process lookup on
+            // sessions that are actually stale by time.
             const threshold = (data.status === "idle" || data.status === "stopped") ? IDLE_STALE_MS : ACTIVE_STALE_MS;
             if (ageMs < threshold) continue;
             const convId = deps.conversationCache[sessionId];
             if (!convId) { try { fs.unlinkSync(filePath); } catch {} continue; }
-            log(`Watchdog: stale ${data.status} session ${sessionId.slice(0, 8)} (${Math.round(ageMs / 60000)}min), marking completed`);
+            // Stale by time — but is the agent actually gone, or just idling for
+            // the user? Only reap when no live process remains (see predicate).
+            const liveProcess = await findSessionProcess(sessionId, detectSessionAgentType(sessionId)).catch(() => null);
+            if (!shouldMarkSessionCompleted({ status: data.status, ageMs, hasLiveAgentProcess: !!liveProcess, idleStaleMs: IDLE_STALE_MS, activeStaleMs: ACTIVE_STALE_MS })) continue;
+            log(`Watchdog: stale ${data.status} session ${sessionId.slice(0, 8)} (${Math.round(ageMs / 60000)}min, no live process), marking completed`);
             deps.syncService.markSessionCompleted(convId).catch(logConvexFailure);
             sendAgentStatus(deps.syncService, convId, sessionId, "stopped");
             try { fs.unlinkSync(filePath); } catch {}
@@ -10657,8 +10788,7 @@ function startWatchdog(
       const parts = filePath.split(path.sep);
       const sessionId = resolveSessionId(filePath);
       const projectDirName = parts[parts.length - 2];
-      const decoded = decodeProjectDirName(projectDirName);
-      const projectPath = decoded && fs.existsSync(decoded) ? decoded : projectDirName.replace(/-/g, path.sep).replace(/^-/, "");
+      const projectPath = resolveTranscriptProjectPath(filePath, projectDirName);
 
       if (deps.config.excluded_paths && isPathExcluded(projectPath, deps.config.excluded_paths)) {
         return;
@@ -11238,10 +11368,10 @@ async function main(): Promise<void> {
       return;
     }
 
-    // event.projectPath is the encoded directory name — decode it to the real
-    // filesystem path so sync_mode:"selected" matching works correctly.
-    const decoded = decodeProjectDirName(event.projectPath);
-    const projectPath = decoded && fs.existsSync(decoded) ? decoded : event.projectPath;
+    // event.projectPath is the encoded directory name. Resolve the real path —
+    // preferring the transcript's recorded cwd over the (lossy, copyable) slug —
+    // so sync_mode:"selected" matching and the project label are both correct.
+    const projectPath = resolveTranscriptProjectPath(filePath, event.projectPath);
 
     if (isPathExcluded(projectPath, config.excluded_paths)) {
       log(`Skipping sync for excluded path: ${projectPath}`);
@@ -11525,8 +11655,7 @@ async function main(): Promise<void> {
         // Session file exists but watcher never saw it — bootstrap the sync
         const parts = transcriptPath.split(path.sep);
         const projectDirName = parts[parts.length - 2];
-        const decoded = decodeProjectDirName(projectDirName);
-        const projectPath = decoded && fs.existsSync(decoded) ? decoded : projectDirName.replace(/-/g, path.sep).replace(/^-/, "");
+        const projectPath = resolveTranscriptProjectPath(transcriptPath, projectDirName);
 
         if (isProjectAllowedToSync(projectPath, config) && !isPathExcluded(projectPath, config.excluded_paths)) {
           const sync = new InvalidateSync(async () => {
@@ -11684,8 +11813,7 @@ async function main(): Promise<void> {
         } else {
           projectDirName = parts[parts.length - 2];
         }
-        const decoded = decodeProjectDirName(projectDirName);
-        const projectPath = decoded && fs.existsSync(decoded) ? decoded : projectDirName.replace(/-/g, path.sep).replace(/^-/, "");
+        const projectPath = resolveTranscriptProjectPath(filePath, projectDirName);
 
         if (config.excluded_paths && isPathExcluded(projectPath, config.excluded_paths)) {
           continue;

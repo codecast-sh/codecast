@@ -848,12 +848,30 @@ export class SyncService {
 
   /** Owner device of a conversation (single-owner guard). null if unknown/unowned. */
   async getConversationOwner(conversationId: string): Promise<string | null> {
+    return (await this.getConversationOwnerInfo(conversationId))?.ownerDeviceId ?? null;
+  }
+
+  /**
+   * Owner device of a conversation, with whether that owner is a remote box and
+   * online. Lets a local daemon distinguish "another laptop owns this, back off"
+   * from "a remote owns this but can only serve an explicitly-moved session — if I
+   * have the checkout I should reclaim it." null if unknown/unowned.
+   */
+  async getConversationOwnerInfo(
+    conversationId: string,
+  ): Promise<{ ownerDeviceId: string; ownerIsRemote: boolean; ownerOnline: boolean } | null> {
     try {
       const res = await this.client.query("devices:getConversationOwner" as any, {
         api_token: this.apiToken,
         conversation_id: conversationId,
       });
-      return (res && (res as any).owner_device_id) || null;
+      const ownerDeviceId = res && (res as any).owner_device_id;
+      if (!ownerDeviceId) return null;
+      return {
+        ownerDeviceId,
+        ownerIsRemote: !!(res as any).owner_is_remote,
+        ownerOnline: !!(res as any).owner_online,
+      };
     } catch {
       return null;
     }
