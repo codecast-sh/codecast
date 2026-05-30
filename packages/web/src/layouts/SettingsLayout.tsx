@@ -5,13 +5,14 @@ import { DashboardLayout } from "@/components/DashboardLayout";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { Button } from "@/components/ui/button";
 import {
-  Terminal, Bot, RefreshCw, User, KeyRound, Users, Plug, Monitor, Bell,
+  Terminal, Bot, RefreshCw, User, KeyRound, Users, Plug, Monitor, Bell, Laptop,
 } from "lucide-react";
 import { useIsDesktop } from "@/lib/desktop";
 
 const baseTabs = [
   { name: "CLI", path: "/settings/cli", icon: Terminal },
   { name: "Agents", path: "/settings/agents", icon: Bot },
+  { name: "Devices", path: "/settings/devices", icon: Laptop },
   { name: "Sync & Privacy", path: "/settings/sync", icon: RefreshCw },
   { name: "General", path: "/settings/profile", icon: User },
   { name: "Accounts", path: "/settings/accounts", icon: KeyRound },

@@ -192,6 +192,9 @@ export type InboxSession = {
   dismissed_at?: number;
   team_id?: string | null;
   is_private?: boolean;
+  // Which device currently runs this session (null = unassigned; auto-routing
+  // picks the most-recently-active local machine on next send).
+  owner_device_id?: string | null;
 };
 
 export type Message = {

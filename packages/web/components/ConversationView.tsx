@@ -55,6 +55,7 @@ import { useMutation, useQuery, useConvex, useConvexAuth } from "convex/react";
 import { api as _typedApi } from "@codecast/convex/convex/_generated/api";
 const api = _typedApi as any;
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
+import { DeviceBadge, RunOnDeviceItems } from "./DeviceBadge";
 import { CommentPanel } from "./CommentPanel";
 import { PermissionStack } from "./PermissionCard";
 import { copyToClipboard, shareOrigin, canonicalUrl } from "../lib/utils";
@@ -7569,7 +7570,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const [showThinking, setShowThinking] = useState(false);
   const [expandedSequences, setExpandedSequences] = useState<Set<string>>(new Set());
   const [diffExpanded, setDiffExpanded] = useState(false);
-  const router = useRouter();
   const convex = useConvex();
   const convexConvId = conversation?._id && isConvexId(conversation._id) ? conversation._id as Id<"conversations"> : undefined;
   // Defer non-critical Convex queries one macrotask past a conversation switch so the
@@ -7730,7 +7730,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const sendEscape = useMutation(api.conversations.sendEscapeToSession);
   const sendKeys = useMutation(api.conversations.sendKeysToSession);
   const rewindSession = useMutation(api.conversations.rewindSession);
-  const moveToRemoteMutation = useMutation(api.devices.moveToRemote);
   // Durable send via the dispatch outbox (survives reload mid-send).
   const sendInlineMessage = useInboxStore((s) => s.sendMessage);
   const toggleFavoriteMutation = useMutation(api.conversations.toggleFavorite);
@@ -8017,8 +8016,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       session_id: convId,
       title: conversation?.title,
       updated_at: Date.now(),
-      project_path: conversation?.project_path,
-      git_root: conversation?.git_root,
+      project_path: conversation?.project_path ?? undefined,
+      git_root: conversation?.git_root ?? undefined,
       agent_type: conversation?.agent_type || "claude_code",
       message_count: 0,
       is_idle: true,
@@ -10063,6 +10062,15 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                 {conversation.parent_conversation_id && (
                   <Link
                     href={convLink(conversation.parent_conversation_id)}
+                    onClick={(e) => {
+                      // Plain left-click is an instant, store-driven switch (same as the
+                      // BranchSelector chips) — bypass the /conversation redirector so the
+                      // parent loads from cache without the resolveConversation + skeleton
+                      // bounce. Modified clicks fall through to the Link for open-in-new-tab.
+                      if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+                      e.preventDefault();
+                      navigateToSession(conversation.parent_conversation_id!);
+                    }}
                     className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/30 hover:bg-sol-cyan/20 transition-colors"
                     title="View parent conversation"
                   >
@@ -10112,6 +10120,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                     </svg>
                     <span className="truncate">{conversation.git_branch}</span>
                   </span>
+                )}
+
+                {isOwner && (
+                  <DeviceBadge ownerDeviceId={(conversation as any).owner_device_id} />
                 )}
 
                 {!isOwner && conversation.user && (
@@ -10324,17 +10336,14 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                       Copy all messages
                     </DropdownMenuItem>
                     {isOwner && (
-                      <DropdownMenuItem onSelect={() => {
-                        toast.info("Moving session to remote Mac…");
-                        moveToRemoteMutation({ conversation_id: conversation._id as Id<"conversations"> })
-                          .then((r: any) => toast.success(`Moving to remote device ${String(r?.dest ?? "").slice(0, 8)}…`))
-                          .catch((e: any) => toast.error(e?.message || "Move failed"));
-                      }}>
-                        <svg className="w-3 h-3 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12h14M12 5l7 7-7 7" />
-                        </svg>
-                        Move to remote Mac
-                      </DropdownMenuItem>
+                      <>
+                        <DropdownMenuSeparator />
+                        <RunOnDeviceItems
+                          conversationId={conversation._id}
+                          ownerDeviceId={(conversation as any).owner_device_id}
+                        />
+                        <DropdownMenuSeparator />
+                      </>
                     )}
                     {isOwner && (
                       <DropdownMenuItem onSelect={() => setTimeout(() => useInboxStore.setState({ renamingSessionId: conversation._id }))}>

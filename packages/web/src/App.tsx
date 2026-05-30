@@ -71,6 +71,7 @@ const Palette = lazy(() => import("@/app/palette/page"));
 const Settings = lazy(() => import("@/app/settings/page"));
 const SettingsCli = lazy(() => import("@/app/settings/cli/page"));
 const SettingsAgents = lazy(() => import("@/app/settings/agents/page"));
+const SettingsDevices = lazy(() => import("@/app/settings/devices/page"));
 const SettingsSync = lazy(() => import("@/app/settings/sync/page"));
 const SettingsProfile = lazy(() => import("@/app/settings/profile/page"));
 const SettingsAccounts = lazy(() => import("@/app/settings/accounts/page"));
@@ -180,6 +181,7 @@ export function App() {
               <Route index element={<E name="Settings"><Settings /></E>} />
               <Route path="cli" element={<E name="SettingsCli"><SettingsCli /></E>} />
               <Route path="agents" element={<E name="SettingsAgents"><SettingsAgents /></E>} />
+              <Route path="devices" element={<E name="SettingsDevices"><SettingsDevices /></E>} />
               <Route path="sync" element={<E name="SettingsSync"><SettingsSync /></E>} />
               <Route path="profile" element={<E name="SettingsProfile"><SettingsProfile /></E>} />
               <Route path="accounts" element={<E name="SettingsAccounts"><SettingsAccounts /></E>} />

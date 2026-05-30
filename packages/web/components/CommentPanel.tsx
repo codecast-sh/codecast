@@ -3,6 +3,7 @@ import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
+import { useInboxStore } from "../store/inboxStore";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { remarkEntityIds } from "../lib/remarkEntityIds";
@@ -30,10 +31,23 @@ export function CommentPanel({ conversationId, messageId, onClose }: CommentPane
     message_id: messageId,
   });
 
-  const conversation = useQuery(api.conversations.getConversation, { conversation_id: conversationId });
+  // Only team_id is needed here (to resolve @-mention members). It's already in
+  // the store, synced by useConversationMessages — so read it from there rather
+  // than refetching the conversation. Fall back to the metadata-only query (not
+  // getConversation, which also drags in ~100 messages) for the rare case where
+  // this panel is mounted without the conversation primed in the store.
+  const storeTeamId = useInboxStore((s) => {
+    const meta = s.conversations[conversationId] ?? s.sessions[conversationId];
+    return (meta as { team_id?: Id<"teams"> } | undefined)?.team_id;
+  });
+  const metaFallback = useQuery(
+    api.conversations.getConversationWithMeta,
+    storeTeamId ? "skip" : { conversation_id: conversationId }
+  );
+  const teamId = storeTeamId ?? metaFallback?.team_id;
   const teamMembers = useQuery(
     api.users.getTeamMembers,
-    conversation?.team_id ? { team_id: conversation.team_id } : "skip"
+    teamId ? { team_id: teamId } : "skip"
   );
 
   const addComment = useMutation(api.comments.addComment);
