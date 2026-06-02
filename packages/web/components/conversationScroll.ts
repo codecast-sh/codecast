@@ -1,0 +1,121 @@
+// Pure scroll-pinning decision logic for ConversationView, extracted so it can be
+// unit-tested without a DOM. See conversationScroll.test.ts.
+
+/**
+ * Distance (px) from the very bottom within which the viewport still counts as
+ * "parked at the bottom" for auto-pin purposes. Deliberately tiny — it only
+ * absorbs sub-pixel/rounding jitter, so any real scroll-up (even a small nudge)
+ * stops the auto-pin instead of snapping the user back down.
+ */
+export const BOTTOM_PIN_EPSILON_PX = 8;
+
+export interface AutoPinInput {
+  /** scrollHeight measured BEFORE this resize (the cached previous value). */
+  prevHeight: number;
+  /**
+   * Current scrollTop. When content grows it appends below the fold, so scrollTop
+   * has not moved yet — comparing it against `prevHeight` tells us where the user
+   * was relative to the *old* bottom, i.e. whether they were following the stream.
+   */
+  scrollTop: number;
+  clientHeight: number;
+  /** User has deliberately scrolled away from the bottom (wheel/keyboard/scrollbar). */
+  userScrolled: boolean;
+  /** A pagination/jump cooldown is active; auto-pin must stand down. */
+  cooldownActive: boolean;
+  /** The virtualizer is mid scroll-position correction (an off-screen item re-measured). */
+  virtualizerCorrecting: boolean;
+  /** Override the epsilon (mainly for tests). */
+  epsilonPx?: number;
+}
+
+/**
+ * Decide whether the auto-pin observer should glue the view to the bottom after a
+ * content-height change.
+ *
+ * The view is pinned ONLY when it was already at the bottom *before* the change —
+ * measured against the previous height, because scrollTop has not moved yet. This
+ * reads the real scroll position instead of trusting a "userScrolled" flag that a
+ * small nudge or a non-wheel (scrollbar/keyboard) scroll may never have set, which
+ * was the root cause of "I scroll up a bit and get snapped to the bottom".
+ */
+export function shouldPinToBottom(i: AutoPinInput): boolean {
+  if (i.userScrolled || i.cooldownActive || i.virtualizerCorrecting) return false;
+  const distanceFromBottom = i.prevHeight - i.scrollTop - i.clientHeight;
+  const epsilon = i.epsilonPx ?? BOTTOM_PIN_EPSILON_PX;
+  return distanceFromBottom <= epsilon;
+}
+
+export interface JumpReadyInput {
+  /** The in-flight jump's direction, or null when no jump is pending. */
+  direction: "start" | "end" | null;
+  /** The timeline currently has at least one item to scroll to. */
+  hasTimeline: boolean;
+  /** The destination page is still being fetched (older side / top). */
+  isLoadingOlder: boolean;
+  /**
+   * The destination page is still being fetched (newer side / bottom). For a
+   * jump-to-end this MUST include the normal-mode "LoadingFirstPage" state —
+   * the live tail isn't in the store yet, so scrolling now lands on stale
+   * content and then jumps again when the real page arrives.
+   */
+  isLoadingNewer: boolean;
+}
+
+/**
+ * The single gate for "perform the jump's one scroll now". The whole point of
+ * the jump UX is that we MUST NOT scroll until the destination data is actually
+ * present — the view stays frozen (spinner up) through the entire load, then
+ * this returns true exactly once and we do a single atomic scroll to the edge.
+ *
+ * Returns false when there's no jump, nothing to scroll to, or either side is
+ * still loading. The caller clears the jump direction after acting, so this
+ * naturally fires only on the first ready frame.
+ */
+export function isJumpReadyToScroll(i: JumpReadyInput): boolean {
+  if (!i.direction || !i.hasTimeline) return false;
+  if (i.isLoadingOlder || i.isLoadingNewer) return false;
+  return true;
+}
+
+export interface LoadOlderInput {
+  /**
+   * The content-top is near the viewport: either scrollTop is inside the
+   * preload band, or the top sentinel is inside the IntersectionObserver's
+   * margin. On a SHORT loaded window (content barely taller than the viewport)
+   * this is true even while parked at the very bottom — the content-top never
+   * leaves the band — which is exactly why `nearTop` alone is not enough.
+   */
+  nearTop: boolean;
+  /**
+   * The user has scrolled up off the live tail. FALSE on initial load and
+   * while following the stream at the bottom. This is the discriminator that
+   * `nearTop` can't provide on a short window: "reaching back for history"
+   * (scrolled up) vs "following the tail" (parked at the bottom).
+   */
+  userScrolled: boolean;
+  hasMoreAbove: boolean;
+  isLoadingOlder: boolean;
+  /** A jump-to-end / live-tail fetch is in flight; don't fight it. */
+  isLoadingNewer: boolean;
+  /** A pagination/jump cooldown is active; auto-load must stand down. */
+  cooldownActive: boolean;
+}
+
+/**
+ * Decide whether to auto-load the previous (older) page.
+ *
+ * The trigger is "the top is approaching" — but acting on that ALONE made the
+ * view spontaneously paginate upward and jump: on any conversation whose loaded
+ * window is shorter than the preload band, the content-top sits permanently
+ * inside the band, so sitting at the live tail satisfied `nearTop` and the rAF
+ * pump fired `loadOlder` page after page with no user input (the spinning
+ * up-arrow + scroll jumping). Requiring a real scroll-up (`userScrolled`) gates
+ * that out: we only pull history once the user has actually left the tail to go
+ * looking for it, which is the only time it's wanted.
+ */
+export function shouldLoadOlder(i: LoadOlderInput): boolean {
+  if (!i.hasMoreAbove || i.isLoadingOlder || i.isLoadingNewer || i.cooldownActive) return false;
+  if (!i.userScrolled) return false;
+  return i.nearTop;
+}
