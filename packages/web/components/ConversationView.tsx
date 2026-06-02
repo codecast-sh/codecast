@@ -23,6 +23,7 @@ import { KeyCap, MenuKeyCaps } from "./KeyboardShortcutsHelp";
 import { toast } from "sonner";
 import { CodeBlock } from "./CodeBlock";
 import { useDiffViewerStore } from "../store/diffViewerStore";
+import { shouldPinToBottom, isJumpReadyToScroll, shouldLoadOlder } from "./conversationScroll";
 
 function copyMessageLink(conversationId: string | undefined, messageId: string) {
   const url = `${shareOrigin()}/conversation/${conversationId}#msg-${messageId}`;
@@ -7622,7 +7623,11 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const scrollProgressRef = useRef<HTMLDivElement>(null);
   const [navScrollProgress, setNavScrollProgress] = useState(1);
   const hasScrolledToTarget = useRef(false);
-  const [jumpPending, setJumpPending] = useState<'start' | 'end' | null>(null);
+  const [jumpPending, _setJumpPending] = useState<'start' | 'end' | null>(null);
+  // Synchronous mirror of jumpPending so scroll handlers / effects can read it
+  // without going through React state (which lags a render behind).
+  const jumpPendingRef = useRef<'start' | 'end' | null>(null);
+  const setJumpPending = useCallback((v: 'start' | 'end' | null) => { jumpPendingRef.current = v; _setJumpPending(v); }, []);
   const jumpDirectionRef = useRef<'start' | 'end' | null>(null);
   const isPaginatingRef = useRef(false);
   // Sentinel pinned to the very top of the scrollable content. An
@@ -8840,6 +8845,11 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         if (timeline.length > 0) virtualizer.scrollToIndex(timeline.length - 1, { align: 'end' });
         sc.scrollTop = sc.scrollHeight;
       }
+      // Force the virtualizer to recompute its visible range against the offset
+      // we just wrote. Programmatic scrollTop writes don't reliably emit a
+      // scroll event (same-value writes, batching), so without this the list can
+      // paint one frame showing the items from the *previous* offset.
+      sc.dispatchEvent(new Event('scroll', { bubbles: true }));
     };
     pull();
     requestAnimationFrame(pull);
@@ -8971,6 +8981,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     let ticking = false;
     const check = () => {
       ticking = false;
+      // Frozen during a pending jump — the sticky header must not flip to the
+      // target edge before the view actually moves there.
+      if (jumpPendingRef.current) return;
       const scrollTop = el.scrollTop;
       if (scrollTop <= headerHeight + 40) {
         prevStickyMsgIdRef.current = null;
@@ -9120,7 +9133,12 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       const scrolledUp = scrollTop < lastScrollTopRef.current - 2;
       lastScrollTopRef.current = scrollTop;
 
-      if (scrolledUp && !isNearBottom && Date.now() >= paginationCooldownRef.current) {
+      // Latch on ANY genuine upward scroll, not only >100px ones. The old
+      // `!isNearBottom` gate meant a small nudge inside the 100px buffer never
+      // registered, so the new-message auto-scroll kept snapping the user back
+      // down. Virtualizer scroll corrections (an off-screen item re-measuring)
+      // move scrollTop on their own, so they're excluded to avoid false latches.
+      if (scrolledUp && !isVirtualizerCorrectingRef.current && Date.now() >= paginationCooldownRef.current) {
         setUserScrolled(true);
       }
 
@@ -9128,7 +9146,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         setUserScrolled(false);
       }
 
-      if (scrollProgressRef.current) {
+      if (scrollProgressRef.current && !jumpPendingRef.current) {
         const ctx = scrollCtxRef.current;
         const totalMessages = ctx.messageCount;
         const isPaginated = totalMessages > 150;
@@ -9150,7 +9168,14 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       }
 
       const pp = paginationPropsRef.current;
-      if ((scrollTop < 1200 || nearTopRef.current) && pp.hasMoreAbove && !pp.isLoadingOlder && !pp.isLoadingNewer && Date.now() >= paginationCooldownRef.current && pp.onLoadOlder) {
+      if (pp.onLoadOlder && shouldLoadOlder({
+        nearTop: scrollTop < 1200 || nearTopRef.current,
+        userScrolled: userScrolledRef.current,
+        hasMoreAbove: pp.hasMoreAbove,
+        isLoadingOlder: pp.isLoadingOlder,
+        isLoadingNewer: pp.isLoadingNewer,
+        cooldownActive: Date.now() < paginationCooldownRef.current,
+      })) {
         scrollAnchorRef.current = scrollHeight;
         isPaginatingRef.current = true;
         pp.onLoadOlder();
@@ -9181,7 +9206,15 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   tryLoadOlderRef.current = () => {
     const root = containerRef.current;
     const pp = paginationPropsRef.current;
-    if (!root || !pp.hasMoreAbove || pp.isLoadingOlder || pp.isLoadingNewer || Date.now() < paginationCooldownRef.current || !pp.onLoadOlder) return;
+    if (!root || !pp.onLoadOlder) return;
+    if (!shouldLoadOlder({
+      nearTop: nearTopRef.current,
+      userScrolled: userScrolledRef.current,
+      hasMoreAbove: pp.hasMoreAbove,
+      isLoadingOlder: pp.isLoadingOlder,
+      isLoadingNewer: pp.isLoadingNewer,
+      cooldownActive: Date.now() < paginationCooldownRef.current,
+    })) return;
     scrollAnchorRef.current = root.scrollHeight;
     isPaginatingRef.current = true;
     // Arm a short cooldown immediately. isLoadingOlder is derived from
@@ -9211,7 +9244,13 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     let raf = 0;
     const pump = () => {
       raf = 0;
-      if (!nearTopRef.current || !paginationPropsRef.current.hasMoreAbove) return;
+      // Stop the pump the instant any precondition lapses — including the user
+      // not having scrolled up (parked at the tail). Without the userScrolled
+      // gate here, a short window keeps the sentinel permanently intersecting,
+      // so the pump would rAF-loop forever doing nothing. A later scroll-up
+      // loads via the scroll handler + post-restore synthetic scroll, so the
+      // pump doesn't need to self-restart for that case.
+      if (!nearTopRef.current || !paginationPropsRef.current.hasMoreAbove || !userScrolledRef.current) return;
       tryLoadOlderRef.current();
       raf = requestAnimationFrame(pump);
     };
@@ -9225,7 +9264,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
   const totalSize = virtualizer.getTotalSize();
   useWatchEffect(() => {
-    if (!scrollProgressRef.current) return;
+    // Frozen while a jump is pending: the progress bar must not move until the
+    // single post-load scroll lands (the completion effect sets it explicitly).
+    if (!scrollProgressRef.current || jumpPendingRef.current) return;
     const totalMessages = conversation?.message_count || messages.length;
     const isPaginated = totalMessages > 150;
     let progress: number;
@@ -9349,10 +9390,24 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     if (!sc) return;
     let lastHeight = sc.scrollHeight;
     const observer = new ResizeObserver(() => {
-      if (userScrolledRef.current || Date.now() < paginationCooldownRef.current) return;
       const newHeight = sc.scrollHeight;
-      if (newHeight !== lastHeight) {
-        lastHeight = newHeight;
+      if (newHeight === lastHeight) return;
+      // Pin only when the viewport was parked at the bottom *before* this growth.
+      // scrollTop hasn't moved yet (new content grows below the fold), so comparing
+      // it to the previous height tells us whether the user was actually following
+      // the stream — not whether a flag happened to be set. This fixes the case
+      // where a small nudge or a scrollbar/keyboard scroll never latched
+      // userScrolled and the next re-measure snapped the user back to the bottom.
+      const pin = shouldPinToBottom({
+        prevHeight: lastHeight,
+        scrollTop: sc.scrollTop,
+        clientHeight: sc.clientHeight,
+        userScrolled: userScrolledRef.current,
+        cooldownActive: Date.now() < paginationCooldownRef.current,
+        virtualizerCorrecting: isVirtualizerCorrectingRef.current,
+      });
+      lastHeight = newHeight;
+      if (pin) {
         sc.scrollTop = sc.scrollHeight - sc.clientHeight;
         lastScrollTopRef.current = sc.scrollTop;
       }
@@ -9364,28 +9419,59 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     return () => observer.disconnect();
   }, [initialScrollDone, highlightQuery]);
 
-  // After a jump (jumpToStart/jumpToEnd), wait for the data to arrive (timeline
-  // changes), then scroll to the target edge. Uses a ref so the effect only
-  // fires when timeline actually changes — not on the button click itself.
-  // Guard: skip while still loading initial jump data — the timeline may
-  // transiently contain stale fallback messages from the normal-mode store.
-  useWatchEffect(() => {
-    if (!jumpDirectionRef.current || timeline.length === 0) return;
-    if (paginationPropsRef.current.isLoadingOlder || paginationPropsRef.current.isLoadingNewer) return;
-    const dir = jumpDirectionRef.current;
+  // After a jump (jumpToStart/jumpToEnd) the target page loads and the timeline
+  // swaps to the new window. We scroll to the target edge in a *layout* effect —
+  // the same commit as the swap, before the browser paints — so the user sees a
+  // single jump (old position → edge), never the freshly-loaded content sitting
+  // at the old scroll offset. The jumpDirectionRef guard ensures this fires only
+  // for a real jump (not the button click or normal pagination); the isLoading
+  // guard waits for the real data (the timeline transiently holds stale
+  // normal-mode fallback messages while the first page is loading).
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useLayoutEffect(() => {
+    if (!isJumpReadyToScroll({
+      direction: jumpDirectionRef.current,
+      hasTimeline: timeline.length > 0,
+      isLoadingOlder: paginationPropsRef.current.isLoadingOlder,
+      isLoadingNewer: paginationPropsRef.current.isLoadingNewer,
+    })) return;
+    const dir = jumpDirectionRef.current!;
     jumpDirectionRef.current = null;
     paginationCooldownRef.current = Date.now() + 900;
-    if (dir === 'start') setUserScrolled(true);
-    else setUserScrolled(false);
-    const edge = dir === 'start' ? 'top' : 'bottom';
-    setTimeout(() => {
-      scrollToEdgeRef.current(edge);
-      setTimeout(() => {
-        paginationCooldownRef.current = 0;
-        setJumpPending(null);
-      }, 800);
-    }, 50);
+    setUserScrolled(dir === 'start');
+
+    scrollToEdgeRef.current(dir === 'start' ? 'top' : 'bottom');
+
+    // Indicators were frozen for the whole pending window; snap them to the edge
+    // we just landed on so they move in lockstep with this single jump rather
+    // than lying ("at the top") while the content was still elsewhere.
+    const edgeProgress = dir === 'start' ? 0 : 1;
+    if (scrollProgressRef.current) scrollProgressRef.current.style.height = `${edgeProgress * 100}%`;
+    setNavScrollProgress(edgeProgress);
+
+    // Release the freeze one frame later — after the scroll has landed — so the
+    // spinner and the frozen indicators all clear together, never mid-motion.
+    const raf = requestAnimationFrame(() => {
+      paginationCooldownRef.current = 0;
+      setJumpPending(null);
+    });
+    return () => cancelAnimationFrame(raf);
   }, [timeline, virtualizer]);
+
+  // Cancel an in-flight jump (clicking the spinner) — leave the user exactly
+  // where they are. Clear jumpDirectionRef FIRST so the completion effect above
+  // won't fire a scroll, hide the spinner, then exit target mode (onJumpToEnd).
+  // We deliberately do NOT scroll: during a start-jump the on-screen content is
+  // still the pre-jump window (the normal subscription is kept alive across the
+  // jump — see useConversationMessages — so that window never collapsed), so
+  // simply dropping the target overlay leaves scrollTop pointing at the same
+  // content. Releasing the freeze lets the indicators recompute to match.
+  const handleCancelJump = useCallback(() => {
+    jumpDirectionRef.current = null;
+    setJumpPending(null);
+    paginationCooldownRef.current = Date.now() + 500;
+    onJumpToEnd?.();
+  }, [onJumpToEnd, setJumpPending]);
 
   const scrollToHash = useCallback(() => {
     if (!timeline.length || !window.location.hash) return;
@@ -10533,7 +10619,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           {taskStats && <TaskProgressRow taskStats={taskStats} />}
         </div>
         {conversation && (
-          <div className="absolute top-full right-3 mt-12 z-30">
+          <div className="absolute top-full right-3 mt-24 z-30">
             <MessageNavButton
               conversationId={conversation._id}
               currentMessageId={activeStickyMsg?.id ?? null}
@@ -10895,7 +10981,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           <div className="flex flex-col gap-2">
               <button
                 onClick={() => {
-                  if (hasMoreAbove && onJumpToStart) {
+                  if (jumpPending === 'start') {
+                    handleCancelJump();
+                  } else if (hasMoreAbove && onJumpToStart) {
                     jumpDirectionRef.current = 'start';
                     setJumpPending('start');
                     onJumpToStart();
@@ -10905,14 +10993,22 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                     scrollToEdgeRef.current('top');
                   }
                 }}
-                className={`p-1.5 sm:p-2 rounded-full bg-sol-bg-alt border border-sol-border shadow-lg hover:bg-sol-cyan hover:text-white transition-all ${((!isNearTop && isScrollable) || hasMoreAbove) ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
-                aria-label="Scroll to top"
+                className={`group p-1.5 sm:p-2 rounded-full bg-sol-bg-alt border border-sol-border shadow-lg hover:bg-sol-cyan hover:text-white transition-all ${((!isNearTop && isScrollable) || hasMoreAbove || jumpPending === 'start') ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
+                aria-label={jumpPending === 'start' ? "Cancel jump to top" : "Scroll to top"}
+                title={jumpPending === 'start' ? "Cancel" : undefined}
               >
                 {(isLoadingOlder || jumpPending === 'start') ? (
-                  <svg className="w-4 h-4 sm:w-5 sm:h-5 animate-spin" viewBox="0 0 24 24" fill="none">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                  </svg>
+                  <>
+                    {/* Spinner by default; reveal a cancel (×) on hover so the
+                        in-flight jump can be aborted by clicking it. */}
+                    <svg className="w-4 h-4 sm:w-5 sm:h-5 animate-spin group-hover:hidden" viewBox="0 0 24 24" fill="none">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                    <svg className="w-4 h-4 sm:w-5 sm:h-5 hidden group-hover:block" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </>
                 ) : (
                   <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 10l7-7m0 0l7 7m-7-7v18" />
@@ -10921,7 +11017,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
               </button>
               <button
                 onClick={() => {
-                  if (hasMoreBelow && onJumpToEnd) {
+                  if (jumpPending === 'end') {
+                    handleCancelJump();
+                  } else if (hasMoreBelow && onJumpToEnd) {
                     jumpDirectionRef.current = 'end';
                     setJumpPending('end');
                     onJumpToEnd();
@@ -10931,14 +11029,22 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                     scrollToEdgeRef.current('bottom');
                   }
                 }}
-                className={`p-1.5 sm:p-2 rounded-full bg-sol-bg-alt border border-sol-border shadow-lg hover:bg-sol-cyan hover:text-white transition-all ${((userScrolled && isScrollable) || hasMoreBelow) ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
-                aria-label="Scroll to bottom"
+                className={`group p-1.5 sm:p-2 rounded-full bg-sol-bg-alt border border-sol-border shadow-lg hover:bg-sol-cyan hover:text-white transition-all ${((userScrolled && isScrollable) || hasMoreBelow || jumpPending === 'end') ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
+                aria-label={jumpPending === 'end' ? "Cancel jump to bottom" : "Scroll to bottom"}
+                title={jumpPending === 'end' ? "Cancel" : undefined}
               >
                 {(isLoadingNewer || jumpPending === 'end') ? (
-                  <svg className="w-4 h-4 sm:w-5 sm:h-5 animate-spin" viewBox="0 0 24 24" fill="none">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                  </svg>
+                  <>
+                    {/* Spinner by default; reveal a cancel (×) on hover so the
+                        in-flight jump can be aborted by clicking it. */}
+                    <svg className="w-4 h-4 sm:w-5 sm:h-5 animate-spin group-hover:hidden" viewBox="0 0 24 24" fill="none">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                    <svg className="w-4 h-4 sm:w-5 sm:h-5 hidden group-hover:block" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </>
                 ) : (
                   <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
