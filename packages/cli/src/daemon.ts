@@ -297,6 +297,55 @@ function validateTmuxTarget(target: string): boolean {
   return /^[a-zA-Z0-9_.:-]+$/.test(target);
 }
 
+// SIGKILL a process AND every descendant. `tmux kill-session` only SIGHUPs the
+// pane's foreground group, so claude's children — MCP servers, `caffeinate`,
+// tool subprocesses in their own process groups — routinely survive, orphaned to
+// init. Walk the parent→child tree with `pgrep -P` and kill leaves-first so a
+// dying parent can't reparent a child out from under us before we reach it.
+async function reapPidTree(rootPid: number): Promise<number> {
+  if (!Number.isInteger(rootPid) || rootPid <= 1 || rootPid === process.pid) return 0;
+  const ordered: number[] = [];
+  const queue = [rootPid];
+  const seen = new Set<number>([rootPid]);
+  while (queue.length) {
+    const pid = queue.shift()!;
+    ordered.push(pid);
+    try {
+      const { stdout } = await execAsync(`pgrep -P ${pid}`, { timeout: 3000, killSignal: "SIGKILL" });
+      for (const tok of stdout.trim().split(/\s+/)) {
+        const child = parseInt(tok, 10);
+        if (Number.isInteger(child) && child > 1 && child !== process.pid && !seen.has(child)) {
+          seen.add(child);
+          queue.push(child);
+        }
+      }
+    } catch {}
+  }
+  let killed = 0;
+  for (const pid of ordered.reverse()) {
+    try { process.kill(pid, "SIGKILL"); killed++; } catch {}
+  }
+  return killed;
+}
+
+// Fully terminate a tmux session: reap each pane's whole process tree (so no
+// orphaned claude/MCP/caffeinate survives), THEN kill the session. Order matters
+// — once the session is gone we can't enumerate its pane pids.
+async function killTmuxSessionAndTree(tmuxSession: string): Promise<void> {
+  if (!validateTmuxTarget(tmuxSession)) return;
+  try {
+    const { stdout } = await tmuxExec(
+      ["list-panes", "-t", tmuxSession, "-F", "#{pane_pid}"],
+      { timeout: 3000, killSignal: "SIGKILL" },
+    );
+    for (const tok of stdout.trim().split(/\s+/)) {
+      const panePid = parseInt(tok, 10);
+      if (Number.isInteger(panePid)) await reapPidTree(panePid);
+    }
+  } catch {}
+  try { await tmuxExec(["kill-session", "-t", tmuxSession]); } catch {}
+}
+
 // Sleep/wake detection: if the last tick was more than 30s ago, we probably just woke from sleep.
 // During the wake grace period, skip polling to let tmux recover and avoid zombie accumulation.
 let lastTickTime = Date.now();
@@ -983,6 +1032,16 @@ const permissionJustResolved = new Set<string>();
 // stale pending_permissions records left over from before the phantom-suppression
 // fix shipped. After the first sweep per session we leave it alone.
 const bypassPermissionsCleaned = new Set<string>();
+// Sessions currently blocked on an AskUserQuestion. A PreToolUse AskUserQuestion hook
+// is the one timely, reliable signal that the agent is waiting for input: Claude Code
+// buffers the tool_use so the JSONL stays empty until answered, and a raw-iTerm
+// (non-tmux) session has no pane to scrape. The follow-up Notification events that
+// arrive during the wait are context-free (no tool name) and look identical to a
+// phantom bypass auto-approve, so without this memory they downgrade the honest
+// permission_blocked status back to "working" — leaving the web showing "working/stuck"
+// for the entire wait. We hold the block until a non-blocked status arrives (the answer
+// landed and the agent moved on). See classifyBypassBlock.
+const awaitingAskUserQuestion = new Set<string>();
 
 const syncStats = {
   messagesSynced: 0,
@@ -2123,10 +2182,8 @@ async function executeRemoteCommand(
 
         const started = startedSessionTmux.get(conversationId);
         if (started && validateTmuxTarget(started.tmuxSession)) {
-          try {
-            await tmuxExec(["kill-session", "-t", started.tmuxSession]);
-            log(`[REMOTE] Killed started tmux session ${started.tmuxSession} for conversation ${conversationId.slice(0, 12)}`);
-          } catch {}
+          await killTmuxSessionAndTree(started.tmuxSession);
+          log(`[REMOTE] Killed started tmux session ${started.tmuxSession} (+process tree) for conversation ${conversationId.slice(0, 12)}`);
           deleteStartedSession(conversationId);
           result = "killed_tmux";
         }
@@ -2140,26 +2197,17 @@ async function executeRemoteCommand(
             const tmuxTarget = await findTmuxPaneForTty(proc.tty);
             if (tmuxTarget && validateTmuxTarget(tmuxTarget)) {
               const tmuxSessionName = tmuxTarget.split(":")[0];
-              try {
-                await tmuxExec(["kill-session", "-t", tmuxSessionName]);
-                log(`[REMOTE] Killed tmux session ${tmuxSessionName} for conversation ${conversationId.slice(0, 12)}`);
-                result = "killed_tmux";
-              } catch {
-                try {
-                  process.kill(proc.pid, "SIGKILL");
-                  result = "killed_sigkill";
-                  log(`[REMOTE] Sent SIGKILL to pid ${proc.pid} for conversation ${conversationId.slice(0, 12)}`);
-                } catch (killErr) {
-                  error = `Failed to kill pid ${proc.pid}: ${killErr}`;
-                }
-              }
+              await killTmuxSessionAndTree(tmuxSessionName);
+              await reapPidTree(proc.pid); // belt-and-suspenders for anything outside the pane
+              result = "killed_tmux";
+              log(`[REMOTE] Killed tmux ${tmuxSessionName} + process tree for conversation ${conversationId.slice(0, 12)}`);
             } else {
-              try {
-                process.kill(proc.pid, "SIGKILL");
+              const n = await reapPidTree(proc.pid);
+              if (n > 0) {
                 result = "killed_sigkill";
-                log(`[REMOTE] Sent SIGKILL to pid ${proc.pid} for conversation ${conversationId.slice(0, 12)}`);
-              } catch (killErr) {
-                error = `Failed to kill pid ${proc.pid}: ${killErr}`;
+                log(`[REMOTE] SIGKILLed pid ${proc.pid} + descendants (${n} procs) for conversation ${conversationId.slice(0, 12)}`);
+              } else {
+                error = `Failed to kill pid ${proc.pid}`;
               }
             }
           }
@@ -2168,10 +2216,8 @@ async function executeRemoteCommand(
         if (sessionId) {
           const cachedTmux = resumeSessionCache.get(sessionId);
           if (cachedTmux && validateTmuxTarget(cachedTmux)) {
-            try {
-              await tmuxExec(["kill-session", "-t", cachedTmux]);
-              log(`[REMOTE] Killed cached resume tmux ${cachedTmux} for session ${sessionId.slice(0, 8)}`);
-            } catch {}
+            await killTmuxSessionAndTree(cachedTmux);
+            log(`[REMOTE] Killed cached resume tmux ${cachedTmux} (+process tree) for session ${sessionId.slice(0, 8)}`);
             resumeSessionCache.delete(sessionId);
             if (!result) result = "killed_tmux";
           }
@@ -2188,11 +2234,9 @@ async function executeRemoteCommand(
               if (!validateTmuxTarget(tmuxName)) continue;
               const alive = await isTmuxAgentAlive(tmuxName);
               if (!alive) {
-                try {
-                  await tmuxExec(["kill-session", "-t", tmuxName]);
-                  log(`[REMOTE] Killed zombie tmux session ${tmuxName} for session ${sessionId}`);
-                  if (!result) result = "killed_zombie";
-                } catch {}
+                await killTmuxSessionAndTree(tmuxName);
+                log(`[REMOTE] Killed zombie tmux session ${tmuxName} (+process tree) for session ${sessionId}`);
+                if (!result) result = "killed_zombie";
               }
             }
           } catch {}
@@ -4228,8 +4272,7 @@ async function processSessionFile(
 
     const lastMessage = messages[messages.length - 1];
     const wasInterrupted = lastMessage?.role === "user" &&
-      (lastMessage.content?.trim().startsWith("[Request interrupted") ||
-       lastMessage.content?.trim().startsWith("[Request cancelled"));
+      isInterruptControlMessage(lastMessage.content);
 
     const lastAssistantMessage = messages.filter(m => m.role === "assistant").pop();
     if (lastAssistantMessage && conversationId) {
@@ -6039,6 +6082,34 @@ function reconcileStatusFromPane(
   sendAgentStatus(syncService, conversationId, sessionId, target);
 }
 
+// Recognizes the synthetic control message Claude Code appends when the user
+// interrupts a turn (ESC / Ctrl-C): "[Request interrupted ...]" or
+// "[Request cancelled ...]". It is NOT a fresh prompt — the agent was stopped
+// and is now parked at the prompt waiting on the user. Mirrors the web's
+// isInterruptControlMessage and the server's isInterruptMsg so all three layers
+// agree that an interrupt is not "the agent's move."
+export function isInterruptControlMessage(text: string | null | undefined): boolean {
+  const t = text?.trim();
+  if (!t) return false;
+  return t.startsWith("[Request interrupted") || t.startsWith("[Request cancelled");
+}
+
+// Leading surface text of a JSONL message's `content`, which is either a raw
+// string or an array of content blocks (text / tool_use / tool_result …).
+// Returns the first text block's text (or the string itself); "" when there is
+// no surface text. Enough to recognize the interrupt control message above.
+function jsonlMessageText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    for (const block of content) {
+      if (block && typeof block === "object" && (block as { type?: string }).type === "text") {
+        return String((block as { text?: unknown }).text ?? "");
+      }
+    }
+  }
+  return "";
+}
+
 // Turn-completion state derived from a Claude JSONL transcript tail. This is the
 // universal ground truth for "is the agent mid-turn or done" -- every session
 // writes a transcript, unlike a tmux pane (a bare-terminal session has none).
@@ -6062,7 +6133,7 @@ export function classifyTranscriptTail(tailContent: string): TranscriptTurnState
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = lines[i].trim();
     if (!line) continue;
-    let d: { type?: string; message?: { role?: string; stop_reason?: string | null } };
+    let d: { type?: string; message?: { role?: string; stop_reason?: string | null; content?: unknown } };
     try {
       d = JSON.parse(line);
     } catch {
@@ -6075,7 +6146,19 @@ export function classifyTranscriptTail(tailContent: string): TranscriptTurnState
       if (sr === "end_turn" || sr === "stop_sequence" || sr === "max_tokens") return "idle";
       return "unknown"; // streaming / unrecognized stop_reason -> defer
     }
-    if (role === "user") return "active";
+    if (role === "user") {
+      // A [Request interrupted]/[Request cancelled] control message is not a fresh
+      // prompt: the user stopped the agent mid-turn and it is now parked at the
+      // prompt. Reading it as "active" (the agent's move) is exactly what kept
+      // bare-terminal interrupted sessions latched in "working" — the reconcile
+      // heartbeat re-derived "active" every cycle, so reconciledStatus flipped a
+      // freshly-idle session back to working forever, and the server never saw an
+      // idle status to route into needs-input. An interrupt is turn-ended (idle),
+      // mirroring Codex's task_aborted. (tmux sessions self-heal via the pane
+      // reconcile; bare-terminal ones have only this transcript signal.)
+      if (isInterruptControlMessage(jsonlMessageText(d.message?.content))) return "idle";
+      return "active";
+    }
     // system/meta entry -> keep scanning for the last real message
   }
   return "unknown";
@@ -6186,6 +6269,32 @@ export function isPhantomBypassPermissionBlock(
   if (status !== "permission_blocked") return false;
   if (permissionMode !== "bypassPermissions") return false;
   return !(message || "").startsWith("AskUserQuestion");
+}
+
+// Decide whether one hook event's permission_blocked should be suppressed as a phantom
+// bypass auto-approve, accounting for an in-progress AskUserQuestion block. `blocked` is
+// mutated in place across the event stream for a session:
+//   - a PreToolUse AskUserQuestion hook (message="AskUserQuestion") opens the block
+//   - any non-blocked status closes it (the answer landed and the agent moved on)
+// While the block is open, a context-free permission_blocked Notification is the agent
+// genuinely waiting — not a phantom — so it must not be suppressed. This is what keeps
+// the web honest ("waiting for input", not "working/stuck") for raw-iTerm sessions whose
+// question can't be scraped from a pane or read from the buffered JSONL until answered.
+export function classifyBypassBlock(
+  blocked: Set<string>,
+  sessionId: string,
+  status: string | undefined,
+  permissionMode: string | undefined,
+  message: string | undefined,
+): { suppress: boolean } {
+  if (status === "permission_blocked" && (message || "").startsWith("AskUserQuestion")) {
+    blocked.add(sessionId);
+  } else if (status && status !== "permission_blocked") {
+    blocked.delete(sessionId);
+  }
+  const suppress =
+    isPhantomBypassPermissionBlock(status, permissionMode, message) && !blocked.has(sessionId);
+  return { suppress };
 }
 
 const tmuxTargetLocks = new Map<string, Promise<void>>();
@@ -9262,6 +9371,27 @@ async function deliverMessage(
     const freshCache = readConversationCache();
     const freshReverse = buildReverseConversationCache(freshCache);
     sessionId = freshReverse[conversationId];
+
+    // OWNER GATE (split-brain guard). We have no started tmux and no cached
+    // session for this conversation, so the only ways forward below are to
+    // materialize from the server or spawn a brand-new session in $HOME. Neither
+    // is ours to do if a *different* live, non-remote device owns this
+    // conversation — that owner will deliver. A non-owner fabricating a fallback
+    // session is exactly how m1 hijacked an owned conversation and answered with
+    // an expired-auth 401 (see [OWNER] guard on session commands above; this is
+    // the un-gated delivery twin). Fail-open on any lookup error.
+    if (!sessionId) {
+      try {
+        const info = await syncService.getConversationOwnerInfo(conversationId);
+        if (info && info.ownerDeviceId !== deviceId() && info.ownerOnline && !info.ownerIsRemote) {
+          // Don't write agent status here — the owner is authoritative and may
+          // already have set "working"; a non-owner "idle" write would clobber it.
+          logDelivery(`[OWNER] skipping delivery for ${conversationId.slice(0, 12)} — owned by live local device ${info.ownerDeviceId.slice(0, 8)} (not ${deviceId().slice(0, 8)}), no local session to serve it`);
+          return false;
+        }
+      } catch { /* on any error, fall through and try to deliver (fail-open) */ }
+    }
+
     if (sessionId) {
       conversationCache[sessionId] = conversationId;
       log(`Found session ${sessionId.slice(0, 8)} for conversation ${conversationId.slice(0, 12)} via disk cache refresh`);
@@ -11458,8 +11588,15 @@ async function main(): Promise<void> {
       // that has no way to resolve, because the agent has already moved on.
       // The Notification event doesn't carry permission_mode, so fall back to
       // the last mode we observed for this session.
+      //
+      // EXCEPT while an AskUserQuestion block is open (classifyBypassBlock tracks it):
+      // those follow-up Notifications are context-free (no tool name) and look identical
+      // to a phantom here, but the agent really IS waiting. Suppressing them downgrades
+      // the honest "waiting for input" status to "working" and the web falls behind for
+      // the whole wait — worst for raw-iTerm sessions, where the question can't be
+      // scraped from a pane or read from the buffered JSONL until it's answered.
       const inheritedMode = data.permission_mode || prev?.permission_mode;
-      if (isPhantomBypassPermissionBlock(data.status, inheritedMode, data.message)) {
+      if (classifyBypassBlock(awaitingAskUserQuestion, sessionId, data.status, inheritedMode, data.message).suppress) {
         log(`Suppressing phantom permission_blocked in bypassPermissions mode for session ${sessionId.slice(0, 8)}`);
         data = { ...data, status: "working" };
       }
