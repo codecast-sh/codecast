@@ -1711,6 +1711,18 @@ async function executeRemoteCommand(
           }
         }
 
+        // One backend per conversation. A cross-agent reconfigure (Codex<->Claude)
+        // or a same-agent restart enqueues a fresh start_session; tear down whatever
+        // backend is currently bound BEFORE spawning so the prior agent's app-server
+        // thread or tmux can't keep answering in parallel (the split-brain that
+        // strands the first user turn and orphans a welcome-screen pane). This is
+        // agent-agnostic, so it also clears stale delivery/resume state for the
+        // Codex path, which previously only the tmux path did.
+        if (conversationId) {
+          await teardownConversationBackendsLive(conversationId, { interruptActiveTurn: true });
+          await clearConversationDeliveryAndResumeState(conversationId, undefined, "RECONFIG");
+        }
+
         let worktreeResult: WorktreeResult | null = null;
 
         if (isolated && cwd) {
@@ -1849,9 +1861,10 @@ async function executeRemoteCommand(
           // Kill-before-create makes start_session idempotent: clicking the folder
           // switcher repeatedly just keeps respawning into the latest cwd.
           if (conversationId) {
+            // Belt-and-suspenders: also kill an untracked tmux that happens to use
+            // this agent's deterministic name. The teardown above already handled
+            // the tracked backend, started-session registry, and delivery state.
             try { await tmuxExec(["kill-session", "-t", tmuxSession]); } catch {}
-            deleteStartedSession(conversationId);
-            await clearConversationDeliveryAndResumeState(conversationId, undefined, "RECONFIG");
           }
           tmuxExecSync(["new-session", "-d", "-s", tmuxSession, "-c", cwd], { timeout: 5000 });
           // Tag the tmux so warm-restart can rebuild startedSessionTmux from `tmux ls`.
@@ -2160,31 +2173,22 @@ async function executeRemoteCommand(
           break;
         }
 
-        const killThreadId = appServerConversations.get(conversationId);
-        if (killThreadId && codexAppServerInstance?.running) {
-          const activeTurnId = findActiveTurnForThread(killThreadId);
-          if (activeTurnId) {
-            try {
-              await codexAppServerInstance.turnInterrupt(killThreadId, activeTurnId);
-            } catch {}
-          }
-          removeAppServerThreadRegistration(appServerThreads, appServerConversations, conversationId, killThreadId);
-          forgetPersistedAppServerConversation(conversationId);
-          stopManagedSessionHeartbeat(killThreadId);
+        // Tear down every backend bound to this conversation (app-server thread
+        // and/or tmux), then stamp the kill-specific server status. Shared with
+        // start_session so "one backend per conversation" is enforced identically
+        // -- and so a split-brained conversation gets BOTH backends killed, not
+        // just the first one matched.
+        const teardown = await teardownConversationBackendsLive(conversationId, { interruptActiveTurn: true });
+        if (teardown.killedAppServer && teardown.appServerThreadId) {
           if (syncServiceRef) {
             syncServiceRef.markSessionCompleted(conversationId).catch(logConvexFailure);
-            sendAgentStatus(syncServiceRef, conversationId, killThreadId, "stopped");
+            sendAgentStatus(syncServiceRef, conversationId, teardown.appServerThreadId, "stopped");
           }
           result = "killed_app_server";
-          log(`[REMOTE] Killed app-server thread ${killThreadId.slice(0, 8)} for conversation ${conversationId.slice(0, 12)}`);
+          log(`[REMOTE] Killed app-server thread ${teardown.appServerThreadId.slice(0, 8)} for conversation ${conversationId.slice(0, 12)}`);
           break;
         }
-
-        const started = startedSessionTmux.get(conversationId);
-        if (started && validateTmuxTarget(started.tmuxSession)) {
-          await killTmuxSessionAndTree(started.tmuxSession);
-          log(`[REMOTE] Killed started tmux session ${started.tmuxSession} (+process tree) for conversation ${conversationId.slice(0, 12)}`);
-          deleteStartedSession(conversationId);
+        if (teardown.killedTmux) {
           result = "killed_tmux";
         }
 
@@ -7067,6 +7071,91 @@ function findActiveTurnForThread(threadId: string): string | undefined {
     if (progress.threadId === threadId) return turnId;
   }
   return undefined;
+}
+
+/**
+ * Tear down EVERY live backend bound to a conversation, regardless of agent type.
+ *
+ * A conversation must own exactly one backend. A cross-agent reconfigure
+ * (Codex <-> Claude, allowed pre-first-message) or a same-agent restart enqueues
+ * a fresh start_session. The Codex start registers an app-server thread and
+ * returns BEFORE the tmux kill-before-create block, so without this a later
+ * Claude start would leave the Codex thread alive alongside the new tmux (and
+ * vice-versa) -- a split-brain where two agents answer one conversation, the
+ * first user turn is stranded on the loser, and an orphan welcome-screen pane is
+ * left behind (ct-33497).
+ *
+ * Dependencies are injected so this is unit-testable without a real tmux /
+ * app-server. Server-side status is intentionally left to callers: kill_session
+ * marks the session completed; start_session is about to re-register and claim.
+ */
+export async function teardownConversationBackends(
+  conversationId: string,
+  deps: {
+    appServerConversations: Map<string, string>;
+    appServerThreads: Map<string, AppServerThreadEntry>;
+    startedTmux: { get(conversationId: string): { tmuxSession: string } | undefined };
+    killTmuxTree: (tmuxSession: string) => Promise<void>;
+    deleteStarted: (conversationId: string) => void;
+    stopHeartbeat: (sessionId: string) => void;
+    forgetPersisted: (conversationId: string) => void;
+    isValidTmuxTarget?: (target: string) => boolean;
+    interruptActiveTurn?: (threadId: string) => Promise<void>;
+    onLog?: (message: string) => void;
+  },
+): Promise<{ killedAppServer: boolean; killedTmux: boolean; appServerThreadId?: string }> {
+  let killedAppServer = false;
+  let killedTmux = false;
+
+  // 1. App-server agent (Codex) thread.
+  const appServerThreadId = deps.appServerConversations.get(conversationId);
+  if (appServerThreadId) {
+    if (deps.interruptActiveTurn) {
+      try { await deps.interruptActiveTurn(appServerThreadId); } catch {}
+    }
+    removeAppServerThreadRegistration(deps.appServerThreads, deps.appServerConversations, conversationId, appServerThreadId);
+    deps.forgetPersisted(conversationId);
+    deps.stopHeartbeat(appServerThreadId);
+    killedAppServer = true;
+    deps.onLog?.(`[REMOTE] Tore down app-server thread ${appServerThreadId.slice(0, 8)} for conversation ${conversationId.slice(0, 12)}`);
+  }
+
+  // 2. tmux-backed agent (Claude/Cursor/Gemini). The registry holds whatever
+  //    agent was last started, so this kills a different-typed tmux too.
+  const started = deps.startedTmux.get(conversationId);
+  if (started && (deps.isValidTmuxTarget ? deps.isValidTmuxTarget(started.tmuxSession) : true)) {
+    await deps.killTmuxTree(started.tmuxSession);
+    deps.deleteStarted(conversationId);
+    killedTmux = true;
+    deps.onLog?.(`[REMOTE] Tore down started tmux ${started.tmuxSession} (+process tree) for conversation ${conversationId.slice(0, 12)}`);
+  }
+
+  return { killedAppServer, killedTmux, appServerThreadId };
+}
+
+/** Bind {@link teardownConversationBackends} to the daemon's live globals. */
+function teardownConversationBackendsLive(
+  conversationId: string,
+  opts: { interruptActiveTurn?: boolean } = {},
+): Promise<{ killedAppServer: boolean; killedTmux: boolean; appServerThreadId?: string }> {
+  return teardownConversationBackends(conversationId, {
+    appServerConversations,
+    appServerThreads,
+    startedTmux: startedSessionTmux,
+    killTmuxTree: killTmuxSessionAndTree,
+    deleteStarted: deleteStartedSession,
+    stopHeartbeat: stopManagedSessionHeartbeat,
+    forgetPersisted: forgetPersistedAppServerConversation,
+    isValidTmuxTarget: validateTmuxTarget,
+    interruptActiveTurn: opts.interruptActiveTurn
+      ? async (threadId: string) => {
+          if (!codexAppServerInstance?.running) return;
+          const activeTurnId = findActiveTurnForThread(threadId);
+          if (activeTurnId) await codexAppServerInstance.turnInterrupt(threadId, activeTurnId);
+        }
+      : undefined,
+    onLog: log,
+  });
 }
 
 function clearLiveAppServerThreadRegistrations(): void {
