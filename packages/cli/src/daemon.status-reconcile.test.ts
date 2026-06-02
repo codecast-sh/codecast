@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
-import { classifyCodexTranscriptTail, classifyTranscriptTail, paneReconcileTarget, reconciledStatus, transcriptTailLastRealRole, permissionBlockedRecoveryTarget } from "./daemon.js";
+import { classifyCodexTranscriptTail, classifyTranscriptTail, isInterruptControlMessage, paneReconcileTarget, reconciledStatus, transcriptTailLastRealRole, permissionBlockedRecoveryTarget } from "./daemon.js";
 import type { TranscriptTurnState } from "./daemon.js";
 
 // Regression test for the "session stuck in 'working' (or 'stopped') forever" bug,
@@ -19,6 +19,10 @@ const asst = (stop_reason: string | null) =>
 const userMsg = (kind: "prompt" | "tool_result") =>
   JSON.stringify({ type: "user", message: { role: "user", content: [{ type: kind === "tool_result" ? "tool_result" : "text" }] } });
 const sysMeta = () => JSON.stringify({ type: "system", subtype: "hook", content: [] });
+// The synthetic control message Claude Code appends when the user interrupts a
+// turn. Both on-disk shapes occur: a text content-block array, and a raw string.
+const interruptMsg = (shape: "block" | "string" = "block", text = "[Request interrupted by user]") =>
+  JSON.stringify({ type: "user", message: { role: "user", content: shape === "string" ? text : [{ type: "text", text }] } });
 
 describe("classifyTranscriptTail", () => {
   test("last assistant turn ended -> idle", () => {
@@ -34,6 +38,24 @@ describe("classifyTranscriptTail", () => {
   test("ball in the agent's court (user prompt or tool_result) -> active", () => {
     expect(classifyTranscriptTail(userMsg("prompt"))).toBe("active");
     expect(classifyTranscriptTail(userMsg("tool_result"))).toBe("active");
+  });
+
+  test("trailing interrupt control message -> idle, not active (the bare-terminal bug)", () => {
+    // The user pressed ESC mid-turn; the agent is parked at the prompt. Reading
+    // this as "active" is what latched interrupted bare-terminal sessions in
+    // "working" forever (the reconcile heartbeat re-derived active every cycle).
+    expect(classifyTranscriptTail(interruptMsg("block"))).toBe("idle");
+    expect(classifyTranscriptTail(interruptMsg("string"))).toBe("idle");
+    expect(classifyTranscriptTail(interruptMsg("string", "[Request cancelled]"))).toBe("idle");
+    // Trailing system/meta after the interrupt (mode / permission-mode lines that
+    // Claude Code writes last) must not hide it.
+    expect(classifyTranscriptTail([interruptMsg("block"), sysMeta()].join("\n"))).toBe("idle");
+  });
+
+  test("interrupt detection does not misfire on a real prompt that merely mentions one", () => {
+    // A genuine user prompt is still the agent's move, even if its text discusses
+    // interrupts — only a leading control marker counts.
+    expect(classifyTranscriptTail(interruptMsg("string", "fix the [Request interrupted] handling"))).toBe("active");
   });
 
   test("skips trailing system/meta lines to find the last real turn", () => {
@@ -55,6 +77,38 @@ describe("classifyTranscriptTail", () => {
     expect(classifyTranscriptTail("")).toBe("unknown");
     expect(classifyTranscriptTail([sysMeta(), sysMeta()].join("\n"))).toBe("unknown");
     expect(classifyTranscriptTail("not json at all")).toBe("unknown");
+  });
+});
+
+describe("isInterruptControlMessage", () => {
+  test("matches the interrupt/cancel control markers (leading, after trim)", () => {
+    expect(isInterruptControlMessage("[Request interrupted by user]")).toBe(true);
+    expect(isInterruptControlMessage("[Request interrupted by user for tool use]")).toBe(true);
+    expect(isInterruptControlMessage("[Request cancelled]")).toBe(true);
+    expect(isInterruptControlMessage("  \n[Request interrupted by user]")).toBe(true);
+  });
+  test("does not match ordinary prompts or empty/nullish input", () => {
+    expect(isInterruptControlMessage("please continue")).toBe(false);
+    expect(isInterruptControlMessage("see [Request interrupted] note")).toBe(false);
+    expect(isInterruptControlMessage("")).toBe(false);
+    expect(isInterruptControlMessage(null)).toBe(false);
+    expect(isInterruptControlMessage(undefined)).toBe(false);
+  });
+});
+
+// End-to-end: the exact bug. A bare-terminal session latched at "working" whose
+// transcript ends in a user interrupt must reconcile to "idle" — which is what
+// lets the server/web route it into NEEDS INPUT. Before the fix the interrupt
+// read as "active" and reconciledStatus left it (or flipped it back to) working.
+describe("interrupted bare-terminal session reconciles to idle (the full chain)", () => {
+  test("working + interrupt tail -> idle", () => {
+    const turn = classifyTranscriptTail([asst("tool_use"), interruptMsg("block")].join("\n"));
+    expect(turn).toBe("idle");
+    expect(reconciledStatus("working", turn)).toBe("idle");
+  });
+  test("once idle, the interrupt tail no longer flips it back to working", () => {
+    const turn = classifyTranscriptTail(interruptMsg("string"));
+    expect(reconciledStatus("idle", turn)).toBeNull();
   });
 });
 
