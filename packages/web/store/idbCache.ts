@@ -1,5 +1,6 @@
 import Dexie from "dexie";
 import type { Patch } from "mutative";
+import { diffCollection } from "./idbCollectionDiff";
 
 export type OutboxEntry = {
   id: string;
@@ -114,6 +115,19 @@ const META_KEYS = new Set([
 
 let _hydrating = false;
 
+// What each collection table currently holds on disk, by id → row reference.
+// Lets writePatchesToIDB persist only the rows that actually changed (and delete
+// the ones that disappeared) instead of clearing + re-pouring the whole table.
+// Seeded from loadCache so the first post-hydrate write diffs against disk, not
+// an empty set (which would leave pruned rows stranded as ghosts).
+const lastPersisted = new Map<string, Map<string, any>>();
+
+// Test hook: the shadow lives at module scope and would otherwise leak across
+// tests that reset the underlying storage out from under it.
+export function _resetPersistedShadow() {
+  lastPersisted.clear();
+}
+
 // A top-level store key is durable iff it maps to a dedicated collection table
 // or is whitelisted as a meta blob. Keys that satisfy neither are silently
 // dropped on write — the class of bug that lost pending user messages.
@@ -135,10 +149,17 @@ export function writePatchesToIDB(patches: Patch[], state: any) {
     if (table) {
       const data = state[key];
       if (data && typeof data === "object") {
-        table
-          .clear()
-          .then(() => table.bulkPut(Object.values(data)))
-          .catch(() => {});
+        const { puts, deletes, next } = diffCollection(lastPersisted.get(key), data);
+        lastPersisted.set(key, next);
+        if (puts.length || deletes.length) {
+          // One transaction so a row is never momentarily absent: removed rows
+          // and changed rows commit together, and unchanged rows are never
+          // touched. Replaces the old clear()+bulkPut full-table rewrite.
+          db.transaction("rw", table, async () => {
+            if (deletes.length) await table.bulkDelete(deletes);
+            if (puts.length) await table.bulkPut(puts);
+          }).catch(() => {});
+        }
       }
     } else if (META_KEYS.has(key)) {
       db.meta.put({ key, value: state[key] }).catch(() => {});
@@ -159,12 +180,17 @@ export async function loadCache(): Promise<Record<string, any> | null> {
 
     collectionEntries.forEach(([key], i) => {
       const rows = collectionResults[i];
+      // Seed the persistence shadow with what's on disk (even an empty table) so
+      // the first write after hydrate diffs against reality and can prune rows
+      // the server has since deleted.
+      const shadow = new Map<string, any>();
       if (rows.length > 0) {
         const map: Record<string, any> = {};
-        for (const row of rows) map[row._id] = row;
+        for (const row of rows) { map[row._id] = row; shadow.set(row._id, row); }
         result[key] = map;
         hasData = true;
       }
+      lastPersisted.set(key, shadow);
     });
 
     for (const row of metaRows) {

@@ -5,6 +5,7 @@
 // bundler and tsconfig never touch it.
 import Storage from "expo-sqlite/kv-store";
 import type { Patch } from "mutative";
+import { diffCollection } from "./idbCollectionDiff";
 
 export type OutboxEntry = {
   id: string;
@@ -53,6 +54,17 @@ const OUTBOX_KEY = "dispatchOutbox";
 
 let _hydrating = false;
 
+// What each collection currently holds on disk, by id → row reference. The KV
+// engine stores a collection as a single JSON blob, so it can't rewrite one row
+// — but it CAN skip the rewrite entirely when a sync changed nothing (the common
+// case: live queries re-push identical rows constantly). Seeded from loadCache.
+const lastPersisted = new Map<string, Map<string, any>>();
+
+// Test hook — see idbCache.ts.
+export function _resetPersistedShadow() {
+  lastPersisted.clear();
+}
+
 export const PERSISTENCE_AVAILABLE = true;
 
 // A top-level store key is durable iff it maps to a dedicated collection or is
@@ -75,7 +87,12 @@ export function writePatchesToIDB(patches: Patch[], state: any) {
     if (COLLECTION_TABLES.has(key)) {
       const data = state[key];
       if (data && typeof data === "object") {
-        Storage.setItem(COLLECTION_PREFIX + key, JSON.stringify(Object.values(data))).catch(() => {});
+        const { puts, deletes, next } = diffCollection(lastPersisted.get(key), data);
+        lastPersisted.set(key, next);
+        // Whole-blob engine: rewrite only when something actually changed.
+        if (puts.length || deletes.length) {
+          Storage.setItem(COLLECTION_PREFIX + key, JSON.stringify(Object.values(data))).catch(() => {});
+        }
       }
     } else if (META_KEYS.has(key)) {
       Storage.setItem(META_PREFIX + key, JSON.stringify(state[key])).catch(() => {});
@@ -100,12 +117,16 @@ export async function loadCache(): Promise<Record<string, any> | null> {
       const raw = byKey.get(COLLECTION_PREFIX + key);
       if (raw == null) continue;
       const rows = JSON.parse(raw) as any[];
+      // Seed the persistence shadow with what's on disk so the first write after
+      // hydrate diffs against reality (see idbCache.ts).
+      const shadow = new Map<string, any>();
       if (rows.length > 0) {
         const map: Record<string, any> = {};
-        for (const row of rows) map[row._id] = row;
+        for (const row of rows) { map[row._id] = row; shadow.set(row._id, row); }
         result[key] = map;
         hasData = true;
       }
+      lastPersisted.set(key, shadow);
     }
 
     for (const key of metaKeys) {
