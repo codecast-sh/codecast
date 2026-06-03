@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
+import { findConversationByAnyRef } from "./conversationSessionLookup";
 
 async function getAuthenticatedUserId(
   ctx: { db: any },
@@ -37,6 +38,56 @@ export function isControlMessage(content: string): boolean {
   }
 }
 
+// Shared insert path for queueing a message to a conversation's daemon: dedups on
+// client_id, inserts the pending row, and wakes the conversation (un-dismisses,
+// flips completed→active). Both human sends (sendMessageToSession) and session→
+// session sends (sendSessionMessage) funnel through here so the wake-up rules
+// stay in one place.
+async function enqueuePendingMessage(
+  ctx: { db: any },
+  conversation: any,
+  fromUserId: Id<"users">,
+  fields: {
+    content: string;
+    image_storage_id?: Id<"_storage">;
+    image_storage_ids?: Id<"_storage">[];
+    client_id?: string;
+  }
+): Promise<Id<"pending_messages">> {
+  if (fields.client_id) {
+    const existing = await ctx.db
+      .query("pending_messages")
+      .withIndex("by_conversation_status", (q: any) =>
+        q.eq("conversation_id", conversation._id)
+      )
+      .filter((q: any) => q.eq(q.field("client_id"), fields.client_id))
+      .first();
+    if (existing) return existing._id;
+  }
+
+  const messageId = await ctx.db.insert("pending_messages", {
+    conversation_id: conversation._id,
+    from_user_id: fromUserId,
+    content: fields.content,
+    image_storage_id: fields.image_storage_id,
+    image_storage_ids: fields.image_storage_ids,
+    client_id: fields.client_id,
+    status: "pending" as const,
+    created_at: Date.now(),
+    retry_count: 0,
+  });
+
+  await ctx.db.patch(conversation._id, {
+    updated_at: Date.now(),
+    has_pending_messages: true,
+    ...(conversation.status === "completed" ? { status: "active" } : {}),
+    ...(conversation.inbox_dismissed_at ? { inbox_dismissed_at: undefined } : {}),
+    ...(conversation.inbox_killed_at ? { inbox_killed_at: undefined } : {}),
+  });
+
+  return messageId;
+}
+
 export const sendMessageToSession = mutation({
   args: {
     conversation_id: v.id("conversations"),
@@ -61,39 +112,68 @@ export const sendMessageToSession = mutation({
       throw new Error("Unauthorized: can only send messages to your own conversations");
     }
 
-    if (args.client_id) {
-      const existing = await ctx.db
-        .query("pending_messages")
-        .withIndex("by_conversation_status", (q) =>
-          q.eq("conversation_id", args.conversation_id)
-        )
-        .filter((q) => q.eq(q.field("client_id"), args.client_id))
-        .first();
-      if (existing) return existing._id;
-    }
-
-    const messageId = await ctx.db.insert("pending_messages", {
-      conversation_id: args.conversation_id,
-      from_user_id: authUserId,
+    return await enqueuePendingMessage(ctx, conversation, authUserId, {
       content: args.content,
       image_storage_id: args.image_storage_id,
       image_storage_ids: args.image_storage_ids,
       client_id: args.client_id,
-      status: "pending" as const,
-      created_at: Date.now(),
-      retry_count: 0,
+    });
+  },
+});
+
+// The wire format for a session→session message. The body is wrapped so the
+// receiving agent (and the web client) can tell who sent it. Keep this tag name
+// in sync with the parser in packages/web/components/ConversationView.tsx
+// (classifyUserMessage / SessionMessageBlock).
+export function formatSessionMessage(fromShortId: string, body: string): string {
+  return `<session-message from="${fromShortId}">\n${body}\n</session-message>`;
+}
+
+// Send a message from one of the user's sessions to another. The text is injected
+// into the target session as a normal user turn (via the existing pending_messages
+// rail), wrapped so both the agent and the UI can attribute it to the sender.
+export const sendSessionMessage = mutation({
+  args: {
+    to: v.string(),
+    from: v.optional(v.string()),
+    body: v.string(),
+    client_id: v.optional(v.string()),
+    api_token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!authUserId) {
+      throw new Error("Authentication failed: invalid token or session");
+    }
+
+    const body = (args.body ?? "").trim();
+    if (!body) throw new Error("Message body is empty");
+
+    const target = await findConversationByAnyRef(ctx, args.to, authUserId);
+    if (!target) {
+      throw new Error(`No session found for "${args.to}" (you can only message your own sessions)`);
+    }
+
+    // Resolve the sender to its short_id for attribution. The CLI passes whatever
+    // detectCurrentSessionId found (a Claude session_id) or an explicit --from ref;
+    // an unresolvable/missing sender still delivers, just without a clickable pill.
+    let fromShortId = "unknown";
+    if (args.from) {
+      const sender = await findConversationByAnyRef(ctx, args.from, authUserId);
+      if (sender) fromShortId = sender.short_id ?? sender._id.toString().slice(0, 7);
+      else if (/^jx[a-z0-9]{5,}$/i.test(args.from.trim())) fromShortId = args.from.trim().slice(0, 7);
+    }
+
+    const messageId = await enqueuePendingMessage(ctx, target, authUserId, {
+      content: formatSessionMessage(fromShortId, body),
+      client_id: args.client_id,
     });
 
-    const now = Date.now();
-    await ctx.db.patch(args.conversation_id, {
-      updated_at: now,
-      has_pending_messages: true,
-      ...(conversation.status === "completed" ? { status: "active" } : {}),
-      ...(conversation.inbox_dismissed_at ? { inbox_dismissed_at: undefined } : {}),
-      ...(conversation.inbox_killed_at ? { inbox_killed_at: undefined } : {}),
-    });
-
-    return messageId;
+    return {
+      message_id: messageId,
+      to_short_id: target.short_id ?? target._id.toString().slice(0, 7),
+      from_short_id: fromShortId,
+    };
   },
 });
 
