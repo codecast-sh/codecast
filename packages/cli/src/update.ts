@@ -7,9 +7,10 @@ import pkg from "../package.json";
 const VERSION = pkg.version;
 const MEMORY_VERSION = "4";
 const TASK_VERSION = "1";
-const WORK_VERSION = "5";
+const WORK_VERSION = "6"; // bumped: messaging docs split out into MESSAGING_SNIPPET
 const PLAN_VERSION = "2";
 const WORKFLOW_VERSION = "1";
+const MESSAGING_VERSION = "1";
 const LATEST_URL = "https://dl.codecast.sh/latest.json";
 const UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours
 
@@ -108,6 +109,10 @@ export function getPlanVersion(): string {
 
 export function getWorkflowVersion(): string {
   return WORKFLOW_VERSION;
+}
+
+export function getMessagingVersion(): string {
+  return MESSAGING_VERSION;
 }
 
 export async function checkForUpdates(force = false): Promise<string | null> {
