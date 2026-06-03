@@ -29,6 +29,7 @@ import { MentionList, type MentionItem } from "./MentionList";
 import { MentionNodeView } from "./MentionNodeView";
 import { SlashCommandExtension } from "./SlashCommandExtension";
 import { DateMentionExtension } from "./DateMentionExtension";
+import { TabIndentExtension } from "./TabIndentExtension";
 import { EntityIdExtension } from "./EntityIdExtension";
 import { BubbleToolbar } from "./BubbleToolbar";
 import { ImageUploadPlaceholder, uploadImageWithPlaceholder } from "./ImageUploadPlugin";
@@ -240,6 +241,7 @@ function buildExtensions(onMentionQuery: MentionQueryFn, placeholder: string) {
     }),
     SlashCommandExtension,
     DateMentionExtension,
+    TabIndentExtension,
     EntityIdExtension,
     Typography,
     Highlight.configure({ HTMLAttributes: { class: "editor-highlight" } }),

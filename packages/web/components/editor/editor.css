@@ -15,6 +15,13 @@
   min-height: 40vh;
 }
 
+/* Preserve tabs/spaces so TabIndentExtension's inserted \t renders as an
+   indent instead of collapsing to a single space (ProseMirror's default). */
+.doc-editor .tiptap {
+  white-space: pre-wrap;
+  tab-size: 4;
+}
+
 /* Headings */
 .doc-editor .tiptap h1 {
   font-size: 1.5em;
