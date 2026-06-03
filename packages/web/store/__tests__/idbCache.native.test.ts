@@ -29,11 +29,15 @@ const {
   setHydrating,
   isPersistedStoreKey,
   PERSISTENCE_AVAILABLE,
+  _resetPersistedShadow,
 } = await import("../idbCache.native");
 
 describe("idbCache.native", () => {
   beforeEach(() => {
     kv.clear();
+    // The persistence shadow lives at module scope; reset it so a prior test's
+    // writes don't make this test's diff think nothing changed.
+    _resetPersistedShadow();
     setHydrating(false);
   });
 
@@ -78,6 +82,35 @@ describe("idbCache.native", () => {
 
   it("returns null when nothing is stored", async () => {
     expect(await loadCache()).toBeNull();
+  });
+
+  it("skips the rewrite when a sync changed nothing", async () => {
+    const a = { _id: "a", title: "Alpha" };
+    const state = { sessions: { a } };
+    writePatchesToIDB([{ op: "replace", path: ["sessions"], value: {} } as any], state);
+    await Promise.resolve();
+    expect(kv.has("col:sessions")).toBe(true);
+
+    // Same row reference re-pushed (the live-query churn case). Clear storage and
+    // observe the storage key directly — loadCache would re-seed the shadow, so
+    // assert on the raw blob: if the diff correctly skips, the key is never set.
+    kv.clear();
+    writePatchesToIDB([{ op: "replace", path: ["sessions"], value: {} } as any], state);
+    await Promise.resolve();
+    expect(kv.has("col:sessions")).toBe(false);
+  });
+
+  it("prunes rows that disappeared from the collection", async () => {
+    const a = { _id: "a", title: "Alpha" };
+    const b = { _id: "b", title: "Beta" };
+    writePatchesToIDB([{ op: "replace", path: ["sessions"], value: {} } as any], { sessions: { a, b } });
+    await Promise.resolve();
+    expect((await loadCache())!.sessions).toEqual({ a, b });
+
+    // b is gone (a snapshot prune). The persisted set must drop it, not keep it.
+    writePatchesToIDB([{ op: "replace", path: ["sessions"], value: {} } as any], { sessions: { a } });
+    await Promise.resolve();
+    expect((await loadCache())!.sessions).toEqual({ a });
   });
 
   it("no-ops writes while hydrating", async () => {
