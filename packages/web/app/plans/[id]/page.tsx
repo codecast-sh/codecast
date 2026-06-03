@@ -4,10 +4,11 @@ import { useParams } from "next/navigation";
 import { useMutation, useQuery } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useMountEffect } from "../../../hooks/useMountEffect";
-import { shareOrigin, copyToClipboard } from "../../../lib/utils";
+import { shareOrigin, canonicalUrl } from "../../../lib/utils";
 import { AuthGuard } from "../../../components/AuthGuard";
 import { DashboardLayout } from "../../../components/DashboardLayout";
 import { DocumentDetailLayout } from "../../../components/DocumentDetailLayout";
+import { SharePopover } from "../../../components/SharePopover";
 import "../../../components/editor/editor.css";
 import {
   PlanProgressBar,
@@ -28,8 +29,6 @@ import {
   Zap,
   Layers,
   GitBranch,
-  Link2,
-  Check,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -114,21 +113,6 @@ export default function PlanDetailPage() {
   const generateShareLink = useMutation(api.plans.generateShareLink);
 
   const [activeTab, setActiveTab] = useState<PlanTab>("overview");
-  const [shareCopied, setShareCopied] = useState(false);
-
-  const handleShare = useCallback(async () => {
-    if (!plan) return;
-    try {
-      const result = await generateShareLink({ short_id: plan.short_id });
-      const url = `${shareOrigin()}/share/plan/${result.share_token}`;
-      await copyToClipboard(url);
-      setShareCopied(true);
-      toast.success("Share link copied to clipboard");
-      setTimeout(() => setShareCopied(false), 2000);
-    } catch (e: any) {
-      toast.error(e.message || "Failed to generate share link");
-    }
-  }, [plan, generateShareLink]);
 
   const handleTitleChange = useCallback(
     (title: string) => {
@@ -205,13 +189,16 @@ export default function PlanDetailPage() {
             </>
           }
           topBarRight={
-            <button
-              onClick={handleShare}
-              className={`p-1.5 rounded-md transition-colors ${shareCopied ? "text-sol-green" : "text-sol-text-dim hover:text-sol-cyan"}`}
-              title="Copy share link"
-            >
-              {shareCopied ? <Check className="w-3.5 h-3.5" /> : <Link2 className="w-3.5 h-3.5" />}
-            </button>
+            <SharePopover
+              hasTeam={false}
+              hasShareToken={!!(plan as any).share_token}
+              shareUrl={(plan as any).share_token ? `${shareOrigin()}/share/plan/${(plan as any).share_token}` : null}
+              pageUrl={canonicalUrl()}
+              onGenerateShareLink={async () => {
+                const result = await generateShareLink({ short_id: plan.short_id });
+                return `${shareOrigin()}/share/plan/${result.share_token}`;
+              }}
+            />
           }
           metaContent={
             <>

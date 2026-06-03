@@ -1,18 +1,20 @@
 import { useState } from "react";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
-import { Tooltip, TooltipTrigger, TooltipContent } from "./ui/tooltip";
+import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "./ui/tooltip";
 import { copyToClipboard } from "../lib/utils";
 import { toast } from "sonner";
 
 interface SharePopoverProps {
-  isPrivate: boolean;
+  isPrivate?: boolean;
   teamVisibility?: string | null;
   hasShareToken: boolean;
   hasTeam: boolean;
-  onSetPrivate: () => Promise<void>;
-  onSetTeamVisibility: (mode: "summary" | "full") => Promise<void>;
+  onSetPrivate?: () => Promise<void>;
+  onSetTeamVisibility?: (mode: "summary" | "full") => Promise<void>;
   onGenerateShareLink: () => Promise<string>;
   shareUrl: string | null;
+  /** Internal, auth-required page URL. When provided, a "Page link" row is shown above the public link. */
+  pageUrl?: string;
 }
 
 type VisibilityMode = "private" | "summary" | "full";
@@ -37,7 +39,7 @@ function getShareStatus(isPrivate: boolean, teamVisibility: string | null | unde
 }
 
 export function SharePopover({
-  isPrivate,
+  isPrivate = false,
   teamVisibility,
   hasShareToken,
   hasTeam,
@@ -45,11 +47,13 @@ export function SharePopover({
   onSetTeamVisibility,
   onGenerateShareLink,
   shareUrl,
+  pageUrl,
 }: SharePopoverProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
   const [isGeneratingLink, setIsGeneratingLink] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [pageCopied, setPageCopied] = useState(false);
 
   const currentMode: VisibilityMode = isPrivate ? "private" : (teamVisibility as VisibilityMode || "summary");
   const status = getShareStatus(isPrivate, teamVisibility, hasShareToken, hasTeam);
@@ -59,9 +63,9 @@ export function SharePopover({
     setIsUpdating(true);
     try {
       if (mode === "private") {
-        await onSetPrivate();
+        await onSetPrivate?.();
       } else {
-        await onSetTeamVisibility(mode);
+        await onSetTeamVisibility?.(mode);
       }
     } finally {
       setIsUpdating(false);
@@ -97,11 +101,20 @@ export function SharePopover({
     }
   };
 
+  const handleCopyPageLink = async () => {
+    if (!pageUrl) return;
+    await copyToClipboard(pageUrl);
+    setPageCopied(true);
+    toast.success("Link copied");
+    setTimeout(() => setPageCopied(false), 2000);
+  };
+
   const tooltipLabel = status.label || "Share settings";
 
   return (
     <Popover open={isOpen} onOpenChange={setIsOpen}>
-      <Tooltip>
+      <TooltipProvider>
+        <Tooltip>
         <TooltipTrigger asChild>
           <span className="inline-flex">
             <PopoverTrigger asChild>
@@ -120,7 +133,8 @@ export function SharePopover({
           </span>
         </TooltipTrigger>
         <TooltipContent side="bottom">{tooltipLabel}</TooltipContent>
-      </Tooltip>
+        </Tooltip>
+      </TooltipProvider>
       <PopoverContent
         align="end"
         className="w-72 bg-sol-bg border-sol-border p-0"
@@ -186,8 +200,29 @@ export function SharePopover({
             </div>
           )}
 
+          {pageUrl && (
+            <div className="space-y-1.5">
+              <span className="text-xs font-medium text-sol-text-dim uppercase tracking-wide">Page link</span>
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={pageUrl}
+                  readOnly
+                  className="flex-1 text-xs bg-sol-bg-alt border border-sol-border rounded px-2 py-1.5 text-sol-text-dim truncate"
+                />
+                <button
+                  onClick={handleCopyPageLink}
+                  className="shrink-0 px-2 py-1.5 text-xs bg-sol-cyan/20 hover:bg-sol-cyan/30 text-sol-cyan rounded transition-colors"
+                >
+                  {pageCopied ? "Copied" : "Copy"}
+                </button>
+              </div>
+              <p className="text-[11px] text-sol-text-dim">Teammates with access can open</p>
+            </div>
+          )}
+
           <div className="space-y-2">
-            <span className="text-xs font-medium text-sol-text-dim uppercase tracking-wide">Link</span>
+            <span className="text-xs font-medium text-sol-text-dim uppercase tracking-wide">{pageUrl ? "Public link" : "Link"}</span>
 
             {hasShareToken && shareUrl ? (
               <div className="space-y-1.5">
@@ -209,7 +244,7 @@ export function SharePopover({
               </div>
             ) : (
               <div className="space-y-1.5">
-                <p className="text-[11px] text-sol-text-dim">Create a link anyone can use to view this conversation</p>
+                <p className="text-[11px] text-sol-text-dim">Create a link anyone can open without signing in</p>
                 <button
                   onClick={handleCreateLink}
                   disabled={isGeneratingLink}
