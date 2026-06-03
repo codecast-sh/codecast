@@ -51,9 +51,13 @@ mkdir -p "${INSTALL_DIR}"
 echo "Downloading cast..."
 TEMP_FILE="$(mktemp)"
 if command -v curl >/dev/null 2>&1; then
-  curl -fsSL "${DOWNLOAD_URL}" -o "${TEMP_FILE}"
+  # --progress-bar (instead of -s) so the ~70MB binary shows download movement
+  # rather than looking frozen; -f still fails on HTTP errors, -L still follows
+  # redirects. The bar goes to stderr, which is the user's terminal under `| sh`.
+  curl -fL --progress-bar "${DOWNLOAD_URL}" -o "${TEMP_FILE}"
 elif command -v wget >/dev/null 2>&1; then
-  wget -q "${DOWNLOAD_URL}" -O "${TEMP_FILE}"
+  # --show-progress keeps the bar while -q silences wget's other chatter.
+  wget -q --show-progress "${DOWNLOAD_URL}" -O "${TEMP_FILE}"
 else
   echo "Error: curl or wget is required"
   exit 1
