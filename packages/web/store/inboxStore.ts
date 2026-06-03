@@ -939,6 +939,11 @@ interface InboxStoreState {
   // -- Task / Doc / Plan / Project state --
   tasks: Record<string, TaskItem>;
   taskActiveSessions: Record<string, any>;
+  // Progress of the full task reconcile crawl (useSyncTasks). Ephemeral UI state
+  // so any task view can show "loading all tasks… N" and never imply the list is
+  // complete while pages are still streaming in. `loaded` counts rows crawled so
+  // far this run; `loading` is true until the final page lands.
+  taskLoadProgress: { loading: boolean; loaded: number };
   docs: Record<string, DocItem>;
   plans: Record<string, PlanItem>;
   projects: Record<string, ProjectItem>;
@@ -2224,6 +2229,7 @@ export const useInboxStore = create<InboxStoreState>(
 
   tasks: {},
   taskActiveSessions: {} as Record<string, any>,
+  taskLoadProgress: { loading: false, loaded: 0 },
   mentionIndex: { tasks: {}, docs: {}, plans: {} },
   docs: {},
   plans: {},

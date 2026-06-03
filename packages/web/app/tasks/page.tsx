@@ -45,6 +45,7 @@ import {
   Check,
   MessageSquare,
   FolderKanban,
+  Loader2,
 } from "lucide-react";
 
 type TaskStatus = "backlog" | "open" | "in_progress" | "in_review" | "done" | "dropped";
@@ -708,6 +709,7 @@ export function TaskListContent() {
   const { status: urlStatus, view: viewMode, sort: sortBy, priority: priorityFilter, label: labelFilter, assignee: assigneeFilter, statuses: statusesFilter, sourceFilter, setParam } = useTaskUrlState();
   const setTaskFilter = useInboxStore((s) => s.setTaskFilter);
   const tasks = useInboxStore((s) => s.tasks);
+  const taskLoadProgress = useInboxStore((s) => s.taskLoadProgress);
   const projects = useInboxStore((s) => s.projects);
   const showCreate = useInboxStore((s) => s.createModal === 'task');
   const openCreateModal = useInboxStore((s) => s.openCreateModal);
@@ -1128,6 +1130,15 @@ export function TaskListContent() {
           listFooter={undefined}
           headerExtra={
             <>
+              {taskLoadProgress.loading && (
+                <span
+                  className="flex items-center gap-1.5 px-2 py-1 text-[11px] font-mono rounded-md border border-sol-yellow/40 bg-sol-yellow/10 text-sol-yellow whitespace-nowrap"
+                  title="Loading every task in this workspace — the list is not yet complete"
+                >
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  loading all tasks… {taskLoadProgress.loaded.toLocaleString()}
+                </span>
+              )}
               <div className="flex items-center rounded-md border border-sol-border/40 overflow-hidden">
                 <button
                   onClick={() => setParam({ source: "" })}

@@ -825,8 +825,12 @@ export const webListPaginated = query({
     // strip step runs, so a single page that includes a doc with multi-MB
     // content/entries can blow the 64MB query memory cap. Originally 100 —
     // lowered to 30 after observing TooMuchMemoryCarryOver on this UDF
-    // (2026-05-13). 30 items × ~200KB/doc leaves headroom for the
-    // convMap/user/plan lookups below.
+    // (2026-05-13), then tightened to 12. Confirmed 2026-05-30: bumping to 24
+    // re-triggered TooMuchMemoryCarryOver (~63 MiB carryover) because Convex
+    // loads each doc's full content/entries into the isolate heap before
+    // stripDoc runs — so per-doc size, not count, is the binding limit. The
+    // webListPaginated invalidation storm is addressed client-side instead (cap
+    // the auto-load of all pages in useSyncDocs), not by enlarging the page.
     const paginationOpts = {
       ...args.paginationOpts,
       numItems: Math.min(args.paginationOpts.numItems, 12),
