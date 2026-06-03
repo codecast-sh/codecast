@@ -87,7 +87,7 @@ export function useSyncInboxSessions() {
     }
     bgSyncMessages(sessions);
     lastSyncRef.current = Date.now();
-  }, [syncTable, bgSyncMessages]));
+  }, [syncTable, bgSyncMessages]), { coalesceMs: 300 });
 
   useConvexSync(clientState, useCallback((data: any) => {
     useInboxStore.getState().syncTable("clientState", data);
