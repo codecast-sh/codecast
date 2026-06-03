@@ -38,7 +38,7 @@ import { useSyncInboxSessions } from "../hooks/useSyncInboxSessions";
 import { useSyncDocs, useSyncMentionDocs } from "../hooks/useSyncDocs";
 import { useSyncMentionPlans } from "../hooks/useSyncPlans";
 import { useSyncMentionTasks } from "../hooks/useSyncTasks";
-import { isInboxSessionView } from "../lib/inboxRouting";
+import { isInboxSessionView, resolveSessionSelectKind } from "../lib/inboxRouting";
 import { useSessionSwitcher } from "../hooks/useSessionSwitcher";
 import { SessionSwitcher } from "./SessionSwitcher";
 import { TabBar } from "./TabBar";
@@ -149,6 +149,11 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
   };
   const [isMobile, setIsMobile] = useState(false);
   const pathname = usePathname();
+  // The real browser URL from react-router. `pathname` (usePathname compat) can
+  // report the active in-app tab's route instead — e.g. on Settings it returns a
+  // carried "/inbox" tab — so use this when we need to know the page that's
+  // actually mounted, not the tab the user last worked in.
+  const routerLocation = useLocation();
   const router = useRouter();
 
   const [desktopClass, setDesktopClass] = useState("");
@@ -200,13 +205,17 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
   const isOnDocsPage = pathname === "/docs" || (pathname?.startsWith("/docs/") ?? false);
   const isOnProjectsPage = pathname === "/projects" || (pathname?.startsWith("/projects/") ?? false);
   const isOnWindowsPage = pathname === "/windows";
+  // Settings is a modal-like surface, not a working surface — selecting a session
+  // there means "I'm done configuring, take me to it", not "peek beside". Keyed off
+  // the real router URL because `pathname` lies here (returns the carried tab route).
+  const isOnSettingsPage = routerLocation.pathname.startsWith("/settings");
   const isFullWidthPage = isOnConversationPage || isOnCommitPage || isOnPRPage || isOnInboxPage || isOnTasksPage || isOnWorkflowsPage || isOnPlansPage || isOnDocsPage || isOnProjectsPage || isOnWindowsPage;
 
 
   const showCollapsedRail = !s.sidePanelOpen && !isMobile;
   const showSessionList = s.sidePanelOpen && !isMobile;
   const showMobileSessionList = s.sidePanelOpen && isMobile;
-  const showConversationColumn = !!s.sidePanelSessionId && !isOnInboxPage && !isOnConversationPage && !isMobile;
+  const showConversationColumn = !!s.sidePanelSessionId && !isOnInboxPage && !isOnConversationPage && !isOnSettingsPage && !isMobile;
 
   // Clear stale conversation-column session on full conversation pages so the
   // column doesn't reappear when navigating away. Only clear the session ID;
@@ -249,17 +258,21 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
     ? (conversationPageId ?? s.currentSessionId)
     : s.sidePanelSessionId;
 
-  // Conversation pages (ViewerView for non-owner access) redirect to inbox on
-  // session select — single codepath for viewing your own sessions.
-  const handleConversationSessionSelect = useCallback((id: string) => {
+  // Leave the current page and open the session in the inbox. Used by
+  // conversation pages (ViewerView for non-owner access) and by Settings/config
+  // — surfaces where selecting a session means "go work on it", not "peek
+  // alongside". Routes through navigateToSession so forks/dismissed/pending all
+  // resolve correctly.
+  const handleLeaveAndOpenSession = useCallback((id: string) => {
     useInboxStore.getState().navigateToSession(id);
     router.push('/inbox');
   }, [router]);
 
-  const sessionListOnSelect = isOnInboxPage
+  const sessionSelectKind = resolveSessionSelectKind({ isOnSettingsPage, isOnInboxPage, isOnConversationPage });
+  const sessionListOnSelect = sessionSelectKind === "leave"
+    ? handleLeaveAndOpenSession
+    : sessionSelectKind === "inboxInPlace"
     ? handleInboxSessionSelect
-    : isOnConversationPage
-    ? handleConversationSessionSelect
     : s.selectPanelSession;
 
   useMountEffect(() => {
@@ -397,10 +410,19 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
     }
   }, [resolveNewSessionContext, router, isOnInboxPage, isOnConversationPage, createQuickSession, s.openNewSession]);
 
-  // Bridge for Electron global shortcut / menu "New Session" — opens the
-  // same NewSessionModal used by the in-app flow.
+  // Bridge for the Electron global "New Session" shortcut / tray / dock / app
+  // menu and the in-app `codecast-new-session` event. These must do exactly what
+  // the in-app Ctrl+N does: create a blank session and route to it (the inline
+  // project + agent picker). They must NOT pop the modal — the modal
+  // (openNewSession) is reserved for explicit "pick a different directory"
+  // actions like the ProjectSwitcher "other" button. handleQuickCreate is read
+  // through a ref so the once-mounted bridge always calls the latest closure.
+  const quickCreateRef = useRef(handleQuickCreate);
+  useWatchEffect(() => {
+    quickCreateRef.current = handleQuickCreate;
+  }, [handleQuickCreate]);
   useMountEffect(() => {
-    const open = () => useInboxStore.getState().openNewSession();
+    const open = () => quickCreateRef.current();
     (window as any).__CODECAST_NEW_SESSION = open;
     window.addEventListener('codecast-new-session', open);
     return () => {
@@ -491,7 +513,6 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
     );
   }
 
-  const routerLocation = useLocation();
   const hasTabs = s.tabs.length > 0 && !isNonTabRoute(routerLocation.pathname);
   const content = hasTabs ? <TabContent /> : children;
 
