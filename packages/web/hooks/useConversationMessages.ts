@@ -95,7 +95,15 @@ export function useConversationMessages(
   // =============================================
   // NORMAL MODE: Convex paginated subscription (background sync)
   // =============================================
-  const useNormalMode = !targetMode && canQuery;
+  // Kept alive during a jump-to-START (jumpMode === "start") even though that
+  // is technically target mode. Reason: usePaginatedQuery resets to its first
+  // 40 items when its args flip to "skip" and back, which would collapse the
+  // loaded window. Keeping it mounted preserves the accumulated pages so a
+  // CANCELLED start-jump can drop straight back to the exact scroll position
+  // (the window never shrank out from under the user). Deep-link / timestamp
+  // target navigation (jumpMode "center" or a targetMessageId) still turns it
+  // off — those genuinely replace the view and don't need the live window.
+  const useNormalMode = (!targetMode || jumpMode === "start") && canQuery;
 
   const { results: descResults, status: paginationStatus, loadMore } = usePaginatedQuery(
     api.conversations.listMessages,
@@ -411,7 +419,13 @@ export function useConversationMessages(
     ? (targetIsLoadingOlder || (!!jumpMode && !targetInitializedRef.current))
     : paginationStatus === "LoadingMore";
 
-  const isLoadingNewer = targetMode ? targetIsLoadingNewer : false;
+  // In normal mode the "destination" of a jump-to-end is the live tail. While
+  // its first page is still being fetched (LoadingFirstPage) the store holds
+  // stale/empty content, so the jump-completion effect must treat this as "not
+  // ready yet" and hold the scroll — otherwise it scrolls against stale content
+  // and then jumps again when the real page lands. The button itself is hidden
+  // at the bottom, so this never surfaces a spurious spinner on initial load.
+  const isLoadingNewer = targetMode ? targetIsLoadingNewer : (paginationStatus === "LoadingFirstPage");
 
   const loadOlder = useCallback(() => {
     if (targetMode) {

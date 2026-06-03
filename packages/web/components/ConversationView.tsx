@@ -7649,14 +7649,14 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const setJumpPending = useCallback((v: 'start' | 'end' | null) => { jumpPendingRef.current = v; _setJumpPending(v); }, []);
   const jumpDirectionRef = useRef<'start' | 'end' | null>(null);
   const isPaginatingRef = useRef(false);
-  // Sentinel pinned to the very top of the scrollable content. An
-  // IntersectionObserver on it triggers loadOlder — see the effect below.
-  const topSentinelRef = useRef<HTMLDivElement>(null);
-  // Set by that observer: true while the content top is within the observer's
-  // margin of the viewport. The scroll handler reads it so continued upward
-  // scrolling keeps paginating even when scrollTop never dips below the fixed
-  // threshold (tall messages keep it well above 300).
-  const nearTopRef = useRef(false);
+  // Armed by a genuine user scroll-up (wheel/touch) and CONSUMED on each
+  // older-page load. This is what keeps "scroll to the top → load older" from
+  // running away: the virtualizer re-estimates item heights after every prepend,
+  // which jerks scrollTop around and re-crosses any position-based trigger band
+  // with no user input. A wheel event, by contrast, is only ever produced by the
+  // user's hand — never by the virtualizer or a programmatic scroll — so gating
+  // on it ties loading to real scrolling. Stop scrolling and loading stops.
+  const loadOlderArmedRef = useRef(false);
   // Suppresses scroll-triggered pagination while we programmatically move the
   // scroll position (prepend restore, jump-to-edge, initial snap). Holds a
   // deadline timestamp in ms; 0 means inactive. Self-expiring on purpose: a
@@ -7664,8 +7664,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   // throttled background-tab timer) never ran, permanently killing "scroll to
   // top → load older". A deadline can only ever block for a bounded window.
   const paginationCooldownRef = useRef(0);
-  const isVirtualizerCorrectingRef = useRef(false);
-  const correctingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Captured at load-older trigger time: the topmost visible message element and
+  // its exact viewport offset, so we can pin it right back once the older page
+  // mounts above it. DOM-measured (not virtualizer estimates) → pixel-perfect.
+  const prependAnchorRef = useRef<{ id: string; relTop: number; scrollHeight: number } | null>(null);
   const paginationPropsRef = useRef({ hasMoreAbove: false, hasMoreBelow: false, isLoadingOlder: false, isLoadingNewer: false, onLoadOlder: undefined as (() => void) | undefined, onLoadNewer: undefined as (() => void) | undefined });
   paginationPropsRef.current = { hasMoreAbove: !!hasMoreAbove, hasMoreBelow: !!hasMoreBelow, isLoadingOlder: !!isLoadingOlder, isLoadingNewer: !!isLoadingNewer, onLoadOlder, onLoadNewer };
   const scrollCtxRef = useRef({ messageCount: 0, messagesLen: 0, timelineLen: 0, loadedStartIndex: 0 });
@@ -7725,9 +7727,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     jumpDirectionRef.current = null;
     isPaginatingRef.current = false;
     paginationCooldownRef.current = 0;
-    isVirtualizerCorrectingRef.current = false;
-    if (correctingTimerRef.current) clearTimeout(correctingTimerRef.current);
-    correctingTimerRef.current = null;
     scrollCtxRef.current = { messageCount: 0, messagesLen: 0, timelineLen: 0, loadedStartIndex: 0 };
     knownItemIdsRef.current = new Set();
     newItemIdsRef.current = new Set();
@@ -7817,17 +7816,19 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const [optimisticMode, setOptimisticMode] = useState<string | null>(null);
   const optimisticTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const handleCycleMode = useCallback(() => {
-    if (!conversation || !effectiveIsOwner || conversation.status !== "active") return;
-    sendKeys({ conversation_id: (effectiveConversationId || conversation._id) as Id<"conversations">, keys: "BTab" });
+    // convexConvId is undefined until the session exists server-side; a not-yet-started
+    // draft carries a stub id and has no live process to receive keystrokes.
+    if (!conversation || !effectiveIsOwner || conversation.status !== "active" || !convexConvId) return;
+    sendKeys({ conversation_id: convexConvId, keys: "BTab" });
     const currentMode = optimisticMode || managedSession?.permission_mode || "default";
     const nextIdx = (CC_MODE_ORDER.indexOf(currentMode) + 1) % CC_MODE_ORDER.length;
     setOptimisticMode(CC_MODE_ORDER[nextIdx]);
     clearTimeout(optimisticTimerRef.current);
     optimisticTimerRef.current = setTimeout(() => setOptimisticMode(null), 8000);
-  }, [conversation, effectiveIsOwner, sendKeys, optimisticMode, managedSession?.permission_mode, effectiveConversationId]);
+  }, [conversation, effectiveIsOwner, sendKeys, optimisticMode, managedSession?.permission_mode, convexConvId]);
 
   const handleEnableBypass = useCallback(() => {
-    if (!conversation || !effectiveIsOwner || conversation.status !== "active") return;
+    if (!conversation || !effectiveIsOwner || conversation.status !== "active" || !convexConvId) return;
     const currentMode = optimisticMode || managedSession?.permission_mode || "default";
     const currentIdx = CC_MODE_ORDER.indexOf(currentMode);
     const targetIdx = CC_MODE_ORDER.indexOf("bypassPermissions");
@@ -7835,11 +7836,11 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     const steps = (targetIdx - currentIdx + CC_MODE_ORDER.length) % CC_MODE_ORDER.length;
     if (steps === 0) return;
     const keys = Array(steps).fill("BTab").join(" ");
-    sendKeys({ conversation_id: (effectiveConversationId || conversation._id) as Id<"conversations">, keys });
+    sendKeys({ conversation_id: convexConvId, keys });
     setOptimisticMode("bypassPermissions");
     clearTimeout(optimisticTimerRef.current);
     optimisticTimerRef.current = setTimeout(() => setOptimisticMode(null), 8000);
-  }, [conversation, effectiveIsOwner, sendKeys, optimisticMode, managedSession?.permission_mode, effectiveConversationId]);
+  }, [conversation, effectiveIsOwner, sendKeys, optimisticMode, managedSession?.permission_mode, convexConvId]);
   useWatchEffect(() => {
     if (optimisticMode && managedSession?.permission_mode === optimisticMode) {
       setOptimisticMode(null);
@@ -8216,10 +8217,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   );
 
   const handleSendEscape = useCallback(() => {
-    if (!conversation || !effectiveIsOwner || conversation.status !== "active" || !effectiveConversationId) return;
-    sendEscape({ conversation_id: effectiveConversationId as Id<"conversations"> });
+    if (!conversation || !effectiveIsOwner || conversation.status !== "active" || !convexConvId) return;
+    sendEscape({ conversation_id: convexConvId });
     toast.info("Escape sent to session");
-  }, [conversation, effectiveIsOwner, sendEscape, effectiveConversationId]);
+  }, [conversation, effectiveIsOwner, sendEscape, convexConvId]);
 
   const handleMessageSent = useCallback(() => {
     setUserScrolled(false);
@@ -8236,10 +8237,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     if (!msg.message_uuid || !conversation) return;
     setNavigatorOpen(false);
     handleForkFromMessage(msg.message_uuid);
-    if (effectiveIsOwner && conversation.status === "active") {
-      rewindSession({ conversation_id: (effectiveConversationId || conversation._id) as Id<"conversations">, steps_back: indexFromEnd + 1 });
+    if (effectiveIsOwner && conversation.status === "active" && convexConvId) {
+      rewindSession({ conversation_id: convexConvId, steps_back: indexFromEnd + 1 });
     }
-  }, [handleForkFromMessage, conversation, effectiveIsOwner, rewindSession, effectiveConversationId]);
+  }, [handleForkFromMessage, conversation, effectiveIsOwner, rewindSession, convexConvId]);
 
   const handleNavigatorFork = useCallback((msg: NavUserMessage) => {
     if (!msg.message_uuid) return;
@@ -8825,28 +8826,29 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     paddingStart: 16,
     paddingEnd: 100,
     isScrollingResetDelay: 150,
+    // Native chat anchoring (virtual-core 3.17+). The virtualizer itself owns
+    // bottom-pinning because it's the only thing that knows whether *it* moved
+    // the scroll or the user did — a question the old code guessed at from
+    // outside with isVirtualizerCorrectingRef and got wrong (the "parked at the
+    // bottom, then yanked up a page" jump).
+    //   anchorTo:'end'      — when within scrollEndThreshold of the bottom, any
+    //                         size change (streaming growth OR an off-screen
+    //                         message above re-measuring) re-pins to the bottom;
+    //                         and older-message prepends keep the visible item
+    //                         stable by key (replaces the manual scrollTop+=delta
+    //                         restore — running both double-shifted the view).
+    //   followOnAppend:auto — follow a newly appended message ONLY if already at
+    //                         the tail; a reader scrolled up is left in place.
+    //   scrollEndThreshold  — the pin/follow tolerance; 8px matches the old
+    //                         hand-tuned epsilon so a small real scroll-up unpins
+    //                         instead of snapping back down.
+    anchorTo: "end",
+    followOnAppend: "auto",
+    scrollEndThreshold: 8,
   });
 
-  // Hook into virtualizer's scroll correction to prevent the scroll handler
-  // from falsely clearing userScrolled. When items above the viewport get
-  // measured (e.g. large markdown files grow from 200px estimate to 3000px+),
-  // TanStack adjusts scrollTop upward. The scroll handler sees this as
-  // "scrolled down near bottom" (scrollTop increased, scrollHeight not yet
-  // updated) and clears userScrolled — which lets the ResizeObserver auto-pin
-  // snap to bottom. This flag blocks that false positive.
-  virtualizer.shouldAdjustScrollPositionOnItemSizeChange = (item: any, _delta: number) => {
-    const sc = containerRef.current;
-    const shouldAdjust = sc ? item.start < sc.scrollTop : false;
-    if (shouldAdjust) {
-      isVirtualizerCorrectingRef.current = true;
-      if (correctingTimerRef.current) clearTimeout(correctingTimerRef.current);
-      correctingTimerRef.current = setTimeout(() => { isVirtualizerCorrectingRef.current = false; }, 100);
-    }
-    return shouldAdjust;
-  };
-
   scrollToBottomFnRef.current = () => {
-    if (timeline.length > 0) virtualizer.scrollToIndex(timeline.length - 1, { align: "end" });
+    virtualizer.scrollToEnd({ behavior: "auto" });
   };
 
   // Scroll to absolute top or bottom of the loaded list with retries to handle
@@ -9152,16 +9154,16 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       const scrolledUp = scrollTop < lastScrollTopRef.current - 2;
       lastScrollTopRef.current = scrollTop;
 
-      // Latch on ANY genuine upward scroll, not only >100px ones. The old
-      // `!isNearBottom` gate meant a small nudge inside the 100px buffer never
-      // registered, so the new-message auto-scroll kept snapping the user back
-      // down. Virtualizer scroll corrections (an off-screen item re-measuring)
-      // move scrollTop on their own, so they're excluded to avoid false latches.
-      if (scrolledUp && !isVirtualizerCorrectingRef.current && Date.now() >= paginationCooldownRef.current) {
+      // Latch on ANY genuine upward scroll, not only >100px ones, so a small
+      // nudge inside the 100px buffer still registers. The virtualizer owns
+      // bottom-pinning natively now (anchorTo:'end'), so we no longer special-
+      // case library scroll corrections here; the pagination cooldown below
+      // already masks the prepend-driven offset adjustment.
+      if (scrolledUp && Date.now() >= paginationCooldownRef.current) {
         setUserScrolled(true);
       }
 
-      if (isNearBottom && scrolledDown && !isVirtualizerCorrectingRef.current) {
+      if (isNearBottom && scrolledDown) {
         setUserScrolled(false);
       }
 
@@ -9186,20 +9188,12 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         scrollProgressRef.current.style.height = `${progress * 100}%`;
       }
 
+      // Load OLDER is owned entirely by the wheel handler (one page per scroll-up
+      // to the top — see maybeLoadOlderRef below). The scroll handler only drives
+      // load NEWER, which is reachable solely in target mode (jumped into the
+      // middle); normal mode stays anchored to the live tail, so hasMoreBelow is
+      // always false there and this stays dormant.
       const pp = paginationPropsRef.current;
-      if (pp.onLoadOlder && shouldLoadOlder({
-        nearTop: scrollTop < 1200 || nearTopRef.current,
-        userScrolled: userScrolledRef.current,
-        hasMoreAbove: pp.hasMoreAbove,
-        isLoadingOlder: pp.isLoadingOlder,
-        isLoadingNewer: pp.isLoadingNewer,
-        cooldownActive: Date.now() < paginationCooldownRef.current,
-      })) {
-        scrollAnchorRef.current = scrollHeight;
-        isPaginatingRef.current = true;
-        pp.onLoadOlder();
-      }
-
       const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
       if (distanceFromBottom < 300 && pp.hasMoreBelow && !pp.isLoadingNewer && !pp.isLoadingOlder && Date.now() >= paginationCooldownRef.current && pp.onLoadNewer) {
         isPaginatingRef.current = true;
@@ -9215,71 +9209,56 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     };
   });
 
-  // Reliable "load older on reaching the top": the scrollTop<300 check above
-  // only re-evaluates on scroll events, so when the trigger condition becomes
-  // true via virtualizer height re-measurement (no scroll event fires), it gets
-  // missed — the user has to wiggle up/down to nudge a scroll event through. An
-  // IntersectionObserver on a content-top sentinel reacts to layout changes too,
-  // so the previous page loads as soon as the top comes near, every time.
-  const tryLoadOlderRef = useRef<() => void>(() => {});
-  tryLoadOlderRef.current = () => {
-    const root = containerRef.current;
+  // Load the previous (older) page when the user scrolls the content near the top.
+  // The trigger is the WHEEL handler (below), not a scroll/position observer:
+  // every load consumes an "arm" that only a genuine wheel-up sets, so a page is
+  // pulled once per scroll-up to the top and never again on its own. This is what
+  // tamed the runaway — the virtualizer re-estimates item heights after each
+  // prepend, jerking scrollTop back across any position band with no user input;
+  // the old rAF pump rode that thrash and ripped through every remaining page
+  // from a single scroll. A wheel event is the one signal the virtualizer can't
+  // forge, so loading now tracks the user's hand: stop scrolling and it stops.
+  const TOP_LOAD_TRIGGER_PX = 600;
+  const maybeLoadOlderRef = useRef<() => void>(() => {});
+  maybeLoadOlderRef.current = () => {
+    const sc = containerRef.current;
     const pp = paginationPropsRef.current;
-    if (!root || !pp.onLoadOlder) return;
+    if (!sc || !pp.onLoadOlder) return;
+    if (!loadOlderArmedRef.current) return;
     if (!shouldLoadOlder({
-      nearTop: nearTopRef.current,
+      nearTop: sc.scrollTop < TOP_LOAD_TRIGGER_PX,
       userScrolled: userScrolledRef.current,
       hasMoreAbove: pp.hasMoreAbove,
       isLoadingOlder: pp.isLoadingOlder,
       isLoadingNewer: pp.isLoadingNewer,
       cooldownActive: Date.now() < paginationCooldownRef.current,
     })) return;
-    scrollAnchorRef.current = root.scrollHeight;
+    loadOlderArmedRef.current = false; // consume — one page per scroll-up to the top
+    // Pixel-perfect prepend: remember the topmost visible message and its exact
+    // viewport offset; the layout effect below pins it right back after the older
+    // page mounts above, so the text on screen never moves.
+    {
+      const scTop = sc.getBoundingClientRect().top;
+      let anchorEl: Element | null = null;
+      for (const m of sc.querySelectorAll('[id^="msg-"]')) {
+        if (m.getBoundingClientRect().bottom > scTop + 1) { anchorEl = m; break; }
+      }
+      prependAnchorRef.current = anchorEl
+        ? { id: anchorEl.id, relTop: anchorEl.getBoundingClientRect().top - scTop, scrollHeight: sc.scrollHeight }
+        : null;
+      // If the older page never arrives (empty result), drop the anchor so it
+      // can't be misapplied to a later streaming append.
+      const captured = prependAnchorRef.current;
+      if (captured) setTimeout(() => { if (prependAnchorRef.current === captured) prependAnchorRef.current = null; }, 3000);
+    }
     isPaginatingRef.current = true;
-    // Arm a short cooldown immediately. isLoadingOlder is derived from
-    // paginationStatus via a prop, so it only flips to true on the next render —
-    // without this, the rAF pump (and rapid scroll events) re-enter loadMore()
-    // several times before that lands, which wedges usePaginatedQuery. The real
-    // load clears this cooldown when it settles (restore effect), so this just
-    // bridges the render gap; if the load stalls it also expires on its own.
+    // Bridge the render gap: isLoadingOlder (a prop derived from paginationStatus)
+    // only flips true on the next render, so a burst of wheel events could
+    // otherwise re-enter loadMore before it lands. The restore effect clears this
+    // cooldown when the page settles; it also self-expires if the load stalls.
     paginationCooldownRef.current = Date.now() + 700;
     pp.onLoadOlder();
   };
-
-  // While the sentinel is in view, a short rAF pump keeps firing the guarded
-  // loader. This is what makes pagination reliable where a one-shot trigger
-  // fails: at the absolute top no scroll events fire and the (already
-  // intersecting) observer never re-fires, and mid-scroll the virtualizer's
-  // height re-measurement isn't a scroll event either. The pump only runs while
-  // near the top and stops the instant we scroll away or run out of older
-  // messages, so it's bounded — not a perpetual loop. tryLoadOlder is itself
-  // guarded by isLoadingOlder + cooldown, so this loads one page per network
-  // round-trip, not once per frame.
-  const hasContent = timeline.length > 0;
-  useWatchEffect(() => {
-    const root = containerRef.current;
-    const sentinel = topSentinelRef.current;
-    if (!root || !sentinel) return;
-    let raf = 0;
-    const pump = () => {
-      raf = 0;
-      // Stop the pump the instant any precondition lapses — including the user
-      // not having scrolled up (parked at the tail). Without the userScrolled
-      // gate here, a short window keeps the sentinel permanently intersecting,
-      // so the pump would rAF-loop forever doing nothing. A later scroll-up
-      // loads via the scroll handler + post-restore synthetic scroll, so the
-      // pump doesn't need to self-restart for that case.
-      if (!nearTopRef.current || !paginationPropsRef.current.hasMoreAbove || !userScrolledRef.current) return;
-      tryLoadOlderRef.current();
-      raf = requestAnimationFrame(pump);
-    };
-    const observer = new IntersectionObserver((entries) => {
-      nearTopRef.current = entries.some((e) => e.isIntersecting);
-      if (nearTopRef.current && !raf) raf = requestAnimationFrame(pump);
-    }, { root, rootMargin: "2000px 0px 0px 0px", threshold: 0 });
-    observer.observe(sentinel);
-    return () => { observer.disconnect(); if (raf) cancelAnimationFrame(raf); };
-  }, [conversation?._id, hasContent]);
 
   const totalSize = virtualizer.getTotalSize();
   useWatchEffect(() => {
@@ -9307,62 +9286,54 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     setNavScrollProgress(progress);
   }, [conversation?.message_count, messages.length, timeline.length, conversation?.loaded_start_index, totalSize]);
 
-  // Restore scroll position after loading older messages.
-  // useLayoutEffect runs after DOM mutations but before paint, so the user never sees
-  // the intermediate state. scrollHeight delta = exact size of prepended content.
+  // Pixel-perfect older-page prepend. The virtualizer's own anchorTo:'end' is
+  // estimate-based and doesn't reliably hold the scroll when a page mounts above
+  // (we measured the view snapping to the freshly-loaded content), so we finalize
+  // it ourselves: pin the message captured at trigger time back to the EXACT
+  // viewport offset it had before the load — visible text must not move a pixel.
+  // It runs in a layout effect (after the virtualizer's own anchor write, before
+  // paint) and targets an ABSOLUTE position, so it's idempotent: it composes with
+  // the library anchor instead of fighting it (an additive scrollTop+=delta would
+  // double-compensate). The rAF re-pin catches any late virtualizer/measure write.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useLayoutEffect(() => {
-    if (scrollAnchorRef.current === null) return;
-    const scrollContainer = containerRef.current;
-    if (!scrollContainer) return;
-    const delta = scrollContainer.scrollHeight - scrollAnchorRef.current;
-    scrollAnchorRef.current = null;
-    if (delta <= 0) return;
-    paginationCooldownRef.current = Date.now() + 400;
-    scrollContainer.scrollTop += delta; // += keeps current position, doesn't reset it
-    requestAnimationFrame(() => {
-      paginationCooldownRef.current = 0;
-      scrollContainer.dispatchEvent(new Event('scroll'));
-    });
+    const a = prependAnchorRef.current;
+    if (!a) return;
+    prependAnchorRef.current = null;
+    const sc = containerRef.current;
+    if (!sc) return;
+    paginationCooldownRef.current = Date.now() + 500;
+    const pinExact = () => {
+      const el = sc.querySelector(`#${CSS.escape(a.id)}`);
+      if (!el) return false;
+      const correction = (el.getBoundingClientRect().top - sc.getBoundingClientRect().top) - a.relTop;
+      if (correction !== 0) sc.scrollTop += correction;
+      lastScrollTopRef.current = sc.scrollTop;
+      return true;
+    };
+    if (!pinExact()) {
+      // Anchor scrolled out of the render window (the estimate-based virtualizer
+      // didn't hold position): coarse-restore by how much the content grew to pull
+      // it back into view, then pin it exactly on the next frame.
+      const grew = sc.scrollHeight - a.scrollHeight;
+      if (grew > 0) { sc.scrollTop += grew; lastScrollTopRef.current = sc.scrollTop; }
+    }
+    requestAnimationFrame(() => { pinExact(); paginationCooldownRef.current = 0; });
   }, [timeline.length]);
 
-  // New messages auto-scroll (only after initial scroll is done)
+  // Pagination bookkeeping only. A timeline growth from loading an older/newer
+  // page must NOT be seen as a fresh append by other effects (the new-item
+  // settle gate at knownItemIdsRef reads isPaginatingRef), so clear the flag
+  // here. Scrolling the tail into view on a genuine new message is handled
+  // natively by the virtualizer (followOnAppend) — no manual scroll.
   useWatchEffect(() => {
     const hasNewMessages = timeline.length > prevTimelineLengthRef.current;
     prevTimelineLengthRef.current = timeline.length;
-
     if (!initialScrollDone) return;
-
     if (hasNewMessages && isPaginatingRef.current) {
       isPaginatingRef.current = false;
-      return;
     }
-
-    if (hasNewMessages && timeline.length > 0 && !highlightQuery && !targetMessageId && !window.location.hash && !hasMoreBelow && !userScrolledRef.current) {
-      const el = containerRef.current;
-      if (el) {
-        el.style.scrollBehavior = "smooth";
-        virtualizer.scrollToIndex(timeline.length - 1, { align: "end" });
-        requestAnimationFrame(() => {
-          el.scrollTop = el.scrollHeight;
-          lastScrollTopRef.current = el.scrollTop;
-          setTimeout(() => { el.style.scrollBehavior = ""; }, 500);
-        });
-      }
-      setUserScrolled(false);
-    }
-  }, [timeline.length, virtualizer, highlightQuery, targetMessageId, hasMoreBelow, initialScrollDone]);
-
-  useWatchEffect(() => {
-    if (isWaitingForResponse && containerRef.current && isNearBottomRef.current && !userScrolledRef.current) {
-      virtualizer.scrollToIndex(timeline.length - 1, { align: "end" });
-      requestAnimationFrame(() => {
-        if (containerRef.current) {
-          lastScrollTopRef.current = containerRef.current.scrollTop;
-        }
-      });
-    }
-  }, [isWaitingForResponse, virtualizer, timeline.length]);
+  }, [timeline.length, initialScrollDone]);
 
   // Initial scroll: snap to bottom using virtualizer (not raw scrollHeight which desyncs with estimates)
   useLayoutEffect(() => {
@@ -9388,55 +9359,27 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
   // Detect user scroll-up via wheel events (fires synchronously, no race condition
   // with the async scroll event). This ensures userScrolledRef is set before any
-  // re-render or auto-correct effect can run.
+  // re-render or auto-correct effect can run. A real wheel-up is also the only
+  // thing that arms an older-page load (consumed per load below) — the signal the
+  // virtualizer can't forge, which is what keeps loading from running away.
   useWatchEffect(() => {
     const sc = containerRef.current;
     if (!sc) return;
     const onWheel = (e: WheelEvent) => {
-      if (e.deltaY < 0) setUserScrolled(true);
+      if (e.deltaY < 0) {
+        setUserScrolled(true);
+        loadOlderArmedRef.current = true;
+        maybeLoadOlderRef.current(); // load older if this scroll-up reached the top
+      }
     };
     sc.addEventListener('wheel', onWheel, { passive: true });
     return () => sc.removeEventListener('wheel', onWheel);
   }, [setUserScrolled]);
 
-  // Auto-pin: observe scroll container size changes and pin to bottom.
-  // Uses ResizeObserver instead of rAF loop to avoid fighting with the
-  // virtualizer's item measurement or triggering spurious pagination.
-  useWatchEffect(() => {
-    if (!initialScrollDone) return;
-    if (window.location.hash || highlightQuery) return;
-    const sc = containerRef.current;
-    if (!sc) return;
-    let lastHeight = sc.scrollHeight;
-    const observer = new ResizeObserver(() => {
-      const newHeight = sc.scrollHeight;
-      if (newHeight === lastHeight) return;
-      // Pin only when the viewport was parked at the bottom *before* this growth.
-      // scrollTop hasn't moved yet (new content grows below the fold), so comparing
-      // it to the previous height tells us whether the user was actually following
-      // the stream — not whether a flag happened to be set. This fixes the case
-      // where a small nudge or a scrollbar/keyboard scroll never latched
-      // userScrolled and the next re-measure snapped the user back to the bottom.
-      const pin = shouldPinToBottom({
-        prevHeight: lastHeight,
-        scrollTop: sc.scrollTop,
-        clientHeight: sc.clientHeight,
-        userScrolled: userScrolledRef.current,
-        cooldownActive: Date.now() < paginationCooldownRef.current,
-        virtualizerCorrecting: isVirtualizerCorrectingRef.current,
-      });
-      lastHeight = newHeight;
-      if (pin) {
-        sc.scrollTop = sc.scrollHeight - sc.clientHeight;
-        lastScrollTopRef.current = sc.scrollTop;
-      }
-    });
-    if (sc.firstElementChild) {
-      observer.observe(sc.firstElementChild);
-    }
-    observer.observe(sc);
-    return () => observer.disconnect();
-  }, [initialScrollDone, highlightQuery]);
+  // Bottom-pinning during streaming/new content is native now: anchorTo:'end'
+  // re-pins on every item size change when within scrollEndThreshold of the
+  // bottom, so the hand-rolled ResizeObserver auto-pin (and its shouldPinToBottom
+  // "was I at the bottom?" heuristic) is gone.
 
   // After a jump (jumpToStart/jumpToEnd) the target page loads and the timeline
   // swaps to the new window. We scroll to the target edge in a *layout* effect —
@@ -9860,6 +9803,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         case 'scheduled_task':
           if (collapsed) return null;
           return <ScheduledTaskBlock key={msg._id} content={msg.content!} timestamp={msg.timestamp} />;
+        case 'session_message':
+          if (collapsed) return null;
+          return <SessionMessageBlock key={msg._id} from={kind.from} body={kind.body} timestamp={msg.timestamp} />;
         case 'task_prompt':
           return null;
         case 'compaction_summary':
@@ -10394,9 +10340,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                     {effectiveIsOwner && conversation?.session_id && (
                       <>
                         <DropdownMenuItem onSelect={() => {
+                          if (!convexConvId) return;
                           setTimeout(async () => {
                             try {
-                              await restartSession({ conversation_id: (effectiveConversationId || conversation._id) as Id<"conversations"> });
+                              await restartSession({ conversation_id: convexConvId });
                               toast.success("Restarting session, retrying pending messages...");
                             } catch { toast.error("Failed to restart session"); }
                           });
@@ -10407,9 +10354,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                           Kill & restart
                         </DropdownMenuItem>
                         <DropdownMenuItem onSelect={() => {
+                          if (!convexConvId) return;
                           setTimeout(async () => {
                             try {
-                              await repairSession({ conversation_id: (effectiveConversationId || conversation._id) as Id<"conversations"> });
+                              await repairSession({ conversation_id: convexConvId });
                               toast.success("Repairing session, retrying pending messages...");
                             } catch { toast.error("Failed to repair session"); }
                           });
@@ -10786,12 +10734,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
               position: "relative",
             }}
           >
-            {/* Top sentinel: an IntersectionObserver watches this to fire
-                loadOlder reliably. Unlike the scrollTop<300 check in the scroll
-                handler, the observer also reacts to virtualizer height
-                re-measurement, so reaching the top loads the previous page even
-                when no fresh scroll event fires. */}
-            <div ref={topSentinelRef} aria-hidden style={{ position: "absolute", top: 0, left: 0, width: 1, height: 1, pointerEvents: "none" }} />
             {/* Earlier messages indicator at top */}
             {hasMoreAbove && !isLoadingOlder && (
               <div className="sticky top-0 z-10 flex justify-center py-1 sm:py-2 pointer-events-none">

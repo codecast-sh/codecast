@@ -1,50 +1,11 @@
-// Pure scroll-pinning decision logic for ConversationView, extracted so it can be
+// Pure scroll-decision logic for ConversationView, extracted so it can be
 // unit-tested without a DOM. See conversationScroll.test.ts.
-
-/**
- * Distance (px) from the very bottom within which the viewport still counts as
- * "parked at the bottom" for auto-pin purposes. Deliberately tiny — it only
- * absorbs sub-pixel/rounding jitter, so any real scroll-up (even a small nudge)
- * stops the auto-pin instead of snapping the user back down.
- */
-export const BOTTOM_PIN_EPSILON_PX = 8;
-
-export interface AutoPinInput {
-  /** scrollHeight measured BEFORE this resize (the cached previous value). */
-  prevHeight: number;
-  /**
-   * Current scrollTop. When content grows it appends below the fold, so scrollTop
-   * has not moved yet — comparing it against `prevHeight` tells us where the user
-   * was relative to the *old* bottom, i.e. whether they were following the stream.
-   */
-  scrollTop: number;
-  clientHeight: number;
-  /** User has deliberately scrolled away from the bottom (wheel/keyboard/scrollbar). */
-  userScrolled: boolean;
-  /** A pagination/jump cooldown is active; auto-pin must stand down. */
-  cooldownActive: boolean;
-  /** The virtualizer is mid scroll-position correction (an off-screen item re-measured). */
-  virtualizerCorrecting: boolean;
-  /** Override the epsilon (mainly for tests). */
-  epsilonPx?: number;
-}
-
-/**
- * Decide whether the auto-pin observer should glue the view to the bottom after a
- * content-height change.
- *
- * The view is pinned ONLY when it was already at the bottom *before* the change —
- * measured against the previous height, because scrollTop has not moved yet. This
- * reads the real scroll position instead of trusting a "userScrolled" flag that a
- * small nudge or a non-wheel (scrollbar/keyboard) scroll may never have set, which
- * was the root cause of "I scroll up a bit and get snapped to the bottom".
- */
-export function shouldPinToBottom(i: AutoPinInput): boolean {
-  if (i.userScrolled || i.cooldownActive || i.virtualizerCorrecting) return false;
-  const distanceFromBottom = i.prevHeight - i.scrollTop - i.clientHeight;
-  const epsilon = i.epsilonPx ?? BOTTOM_PIN_EPSILON_PX;
-  return distanceFromBottom <= epsilon;
-}
+//
+// Bottom-pinning ("stay glued to the tail while streaming") is NOT here anymore:
+// it's owned natively by the virtualizer via anchorTo:'end' (virtual-core 3.17+),
+// which can re-pin correctly because it knows whether it or the user moved the
+// scroll. The old shouldPinToBottom heuristic guessed that from outside and got
+// it wrong. What remains here is pagination/jump gating, which is still ours.
 
 export interface JumpReadyInput {
   /** The in-flight jump's direction, or null when no jump is pending. */

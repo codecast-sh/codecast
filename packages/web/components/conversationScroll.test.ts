@@ -1,58 +1,9 @@
 import { test, expect, describe } from "bun:test";
-import { shouldPinToBottom, BOTTOM_PIN_EPSILON_PX, isJumpReadyToScroll, shouldLoadOlder } from "./conversationScroll";
+import { isJumpReadyToScroll, shouldLoadOlder } from "./conversationScroll";
 
-// Baseline: a 1000px-tall list in a 400px viewport => bottom scrollTop is 600.
-const base = {
-  prevHeight: 1000,
-  clientHeight: 400,
-  userScrolled: false,
-  cooldownActive: false,
-  virtualizerCorrecting: false,
-};
-
-describe("shouldPinToBottom", () => {
-  test("pins when parked exactly at the bottom (streaming follow)", () => {
-    expect(shouldPinToBottom({ ...base, scrollTop: 600 })).toBe(true);
-  });
-
-  test("stays pinned across repeated growth while at the bottom", () => {
-    // Each growth event finds us at the (previous) bottom, so it keeps following.
-    expect(shouldPinToBottom({ ...base, prevHeight: 1000, scrollTop: 600 })).toBe(true);
-    expect(shouldPinToBottom({ ...base, prevHeight: 1500, scrollTop: 1100 })).toBe(true);
-    expect(shouldPinToBottom({ ...base, prevHeight: 3000, scrollTop: 2600 })).toBe(true);
-  });
-
-  // THE REGRESSION: nudging up 50px stayed within the old 100px "near bottom"
-  // buffer, so userScrolled never latched and the old observer snapped us down.
-  test("does NOT pin after a small (50px) scroll-up — the reported bug", () => {
-    expect(shouldPinToBottom({ ...base, scrollTop: 550 })).toBe(false);
-  });
-
-  test("does NOT pin after a large scroll-up", () => {
-    expect(shouldPinToBottom({ ...base, scrollTop: 100 })).toBe(false);
-  });
-
-  test("absorbs sub-pixel jitter within the epsilon", () => {
-    expect(shouldPinToBottom({ ...base, scrollTop: 600 - BOTTOM_PIN_EPSILON_PX })).toBe(true);
-    expect(shouldPinToBottom({ ...base, scrollTop: 600 - (BOTTOM_PIN_EPSILON_PX + 1) })).toBe(false);
-  });
-
-  test("never pins while the user has explicitly scrolled (flag set)", () => {
-    expect(shouldPinToBottom({ ...base, scrollTop: 600, userScrolled: true })).toBe(false);
-  });
-
-  test("never pins during a pagination/jump cooldown", () => {
-    expect(shouldPinToBottom({ ...base, scrollTop: 600, cooldownActive: true })).toBe(false);
-  });
-
-  test("never pins while the virtualizer is correcting an off-screen item", () => {
-    expect(shouldPinToBottom({ ...base, scrollTop: 600, virtualizerCorrecting: true })).toBe(false);
-  });
-
-  test("treats overshoot past the bottom as at-bottom", () => {
-    expect(shouldPinToBottom({ ...base, scrollTop: 620 })).toBe(true);
-  });
-});
+// Bottom-pinning is no longer gated here — the virtualizer owns it natively via
+// anchorTo:'end' (virtual-core 3.17+), so there is nothing pure to unit-test for
+// it. What remains testable is the pagination/jump gating below.
 
 describe("isJumpReadyToScroll", () => {
   const ready = {
