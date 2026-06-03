@@ -23,7 +23,9 @@ import { KeyCap, MenuKeyCaps } from "./KeyboardShortcutsHelp";
 import { toast } from "sonner";
 import { CodeBlock } from "./CodeBlock";
 import { useDiffViewerStore } from "../store/diffViewerStore";
-import { shouldPinToBottom, isJumpReadyToScroll, shouldLoadOlder } from "./conversationScroll";
+import { isJumpReadyToScroll, shouldLoadOlder } from "./conversationScroll";
+import { parseInsightBlocks } from "./insightBlocks";
+import { parseScheduleCadence } from "./scheduleCadence";
 
 function copyMessageLink(conversationId: string | undefined, messageId: string) {
   const url = `${shareOrigin()}/conversation/${conversationId}#msg-${messageId}`;
@@ -66,6 +68,7 @@ import { MessageSharePopover } from "./MessageSharePopover";
 import { PlanBadge, TaskBadge } from "./PlanTaskHoverCard";
 import { EntityIdPill, EntityAwareCode, EntityAwareLink, renderWithMentions } from "./EntityIdPill";
 import { remarkEntityIds } from "../lib/remarkEntityIds";
+import { parseSessionMessage } from "./sessionMessage";
 import { ConversationTree } from "./ConversationTree";
 import { useInboxStore, isConvexId, type ForkChild, type InboxSession } from "../store/inboxStore";
 import { useCurrentUser } from "../hooks/useCurrentUser";
@@ -80,7 +83,7 @@ import { parseFileChangeSummary, parseUnifiedDiffSections } from "../lib/unified
 import { setupDesktopDrag, desktopHeaderClass } from "../lib/desktop";
 import { MessageNavButton } from "./MessageBrowserPopover";
 import type { MentionItem } from "./editor/MentionList";
-import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, Clock } from "lucide-react";
+import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, Clock, CornerDownRight } from "lucide-react";
 import { ComposeEditor, type ComposeEditorHandle } from "./editor/ComposeEditor";
 import { useMentionQuery } from "../hooks/useMentionQuery";
 
@@ -1020,7 +1023,8 @@ type UserMessageKind =
   | { kind: 'teammate_events' }
   | { kind: 'continuation' }
   | { kind: 'poll_response' }
-  | { kind: 'scheduled_task' };
+  | { kind: 'scheduled_task' }
+  | { kind: 'session_message'; from: string; body: string };
 
 const STICKY_NOISE_PREFIXES = ["[Request interrupted", "<task-notification>", "Your task is to create a detailed summary", "Full transcript available at:", "[Codecast import]"];
 
@@ -1042,6 +1046,14 @@ function classifyUserMessage(
   const tNoReminders = t.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').replace(/<task-reminder>[\s\S]*?<\/task-reminder>/g, '').trim();
   const tStripped = stripSystemTags(t).trim();
   if (tNoReminders.startsWith('<scheduled-task')) return { kind: 'scheduled_task' };
+  // A session message is injected via tmux, so the daemon's input-clearing
+  // keystrokes (Ctrl-A/Ctrl-K) occasionally leak in as leading control chars
+  // ahead of the wrapper. Strip leading control/whitespace before detecting it.
+  const tInjectClean = tNoReminders.replace(/^[\u0000-\u001f\s]+/, '');
+  if (tInjectClean.startsWith('<session-message')) {
+    const parsed = parseSessionMessage(tInjectClean);
+    if (parsed) return { kind: 'session_message', from: parsed.from, body: parsed.body };
+  }
   if (t.startsWith('{') && t.includes('__cc_poll')) {
     try { if (JSON.parse(t).__cc_poll) return { kind: 'poll_response' }; } catch {}
   }
@@ -1109,7 +1121,7 @@ function classifyUserMessage(
 }
 
 function isStickyWorthy(kind: UserMessageKind): boolean {
-  return kind.kind === 'normal' || kind.kind === 'plan' || kind.kind === 'scheduled_task';
+  return kind.kind === 'normal' || kind.kind === 'plan' || kind.kind === 'scheduled_task' || kind.kind === 'session_message';
 }
 
 function formatRelativeTime(ts: number): string {
@@ -2771,6 +2783,11 @@ function CastCommandBlock({ tool, result }: { tool: ToolCall; result?: ToolResul
     return ids;
   }, [args, output]);
 
+  const scheduleCadence = useMemo(
+    () => (cat === "schedule" && isCreate ? parseScheduleCadence(args) : null),
+    [cat, isCreate, args]
+  );
+
   const docConvexId = useMemo(() => {
     if (cat !== "doc") return null;
     const fa = args?.match(/^"([^"]*)"/) || args?.match(/^'([^']*)'/) || args?.match(/^(\S+)/);
@@ -2864,6 +2881,12 @@ function CastCommandBlock({ tool, result }: { tool: ToolCall; result?: ToolResul
 
     return (
       <>
+        {scheduleCadence && (
+          <span className="px-1 py-0.5 rounded text-[10px] font-mono bg-sol-orange/15 text-sol-orange/90 flex-shrink-0">
+            {scheduleCadence}
+          </span>
+        )}
+
         {entityIds.length > 0 && entityIds.map(id => (
           <EntityIdPill key={id} shortId={id} />
         ))}
@@ -3681,6 +3704,32 @@ function ScheduledTaskBlock({ content: rawContent, timestamp }: { content: strin
   );
 }
 
+function SessionMessageBlock({ from, body, timestamp }: { from: string; body: string; timestamp: number }) {
+  return (
+    <div className="mb-2 mx-1 rounded border-l-2 border-sol-cyan/60 bg-sol-cyan/5">
+      <div className="flex items-center gap-2 px-3 pt-2 pb-1">
+        <CornerDownRight className="w-3.5 h-3.5 text-sol-cyan/70 shrink-0" />
+        <span className="text-[11px] font-medium tracking-wide uppercase text-sol-cyan/70 shrink-0">Message from</span>
+        {from && from !== "unknown" ? (
+          <EntityIdPill shortId={from} />
+        ) : (
+          <span className="text-xs text-sol-text-muted">another session</span>
+        )}
+        <span className="text-[10px] text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
+      </div>
+      <div className="px-3 pb-2 text-sm text-sol-text prose prose-invert prose-sm max-w-none">
+        <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={[rehypeHighlight]}
+          components={{
+            code: EntityAwareCode,
+            a: EntityAwareLink,
+            pre: ({ node, children, ...props }) => renderMarkdownPre(node, children, props),
+          }}
+        >{body}</ReactMarkdown>
+      </div>
+    </div>
+  );
+}
+
 const USER_CONTENT_MAX_HEIGHT = 1800;
 
 function parseSkillBlocks(text: string): { parts: Array<{ type: 'text' | 'skill'; content: string; skillName?: string; skillDesc?: string; skillPath?: string }>} {
@@ -3774,36 +3823,6 @@ function ContextBlockPill({ ctx }: { ctx: ParsedContextBlock }) {
       {ctx.id && <EntityIdPill shortId={ctx.id} />}
     </button>
   );
-}
-
-type InsightPart = { type: 'text'; content: string } | { type: 'insight'; label: string; content: string };
-
-function parseInsightBlocks(text: string): InsightPart[] {
-  if (!text || typeof text !== 'string') {
-    return [{ type: 'text', content: String(text || '') }];
-  }
-  const insightRegex = /`([★✦⭐☆\*])\s+([\w\s]+?)\s*─+`([\s\S]*?)`─+`/g;
-  const parts: InsightPart[] = [];
-  let lastIndex = 0;
-  let match;
-  while ((match = insightRegex.exec(text)) !== null) {
-    if (match.index > lastIndex) {
-      const before = text.slice(lastIndex, match.index).trim();
-      if (before) parts.push({ type: 'text', content: before });
-    }
-    parts.push({
-      type: 'insight',
-      label: match[2].trim(),
-      content: match[3].trim(),
-    });
-    lastIndex = match.index + match[0].length;
-  }
-  if (lastIndex < text.length) {
-    const remaining = text.slice(lastIndex).trim();
-    if (remaining) parts.push({ type: 'text', content: remaining });
-  }
-  if (parts.length === 0) parts.push({ type: 'text', content: text });
-  return parts;
 }
 
 function InsightCard({ label, content }: { label: string; content: string }) {

@@ -224,6 +224,9 @@ function NavDropdown({
   const dropdownWidth = 420;
   const margin = 8;
   const left = Math.max(margin, triggerRect.left - dropdownWidth - 8);
+  // Top-align the panel to the trigger. The nav button itself sits below the
+  // header's sticky-message banner, so top-aligning here keeps the panel clear
+  // of that banner without pushing it unnecessarily far down.
   const top = Math.max(margin, triggerRect.top);
 
   const hasComments = comments.length > 0;
