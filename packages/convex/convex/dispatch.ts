@@ -5,6 +5,7 @@ import { enqueueStartSession } from "./devices";
 import { Id } from "./_generated/dataModel";
 import { checkRateLimit } from "./rateLimit";
 import { resolveTeamForPath } from "./privacy";
+import { pickInheritedGitMeta, type GitMetaSource } from "./projectPaths";
 import { hasRecentPendingDaemonCommand } from "./daemonCommandUtils";
 import { nextShortId } from "./counters";
 import { resolveAssigneeStr, resolveAssigneeToUserId, recalcPlanProgress, notifySubscribers, subscribeUser } from "./tasks";
@@ -172,6 +173,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     // Resolve project_path from linked task (or its team mapping) before falling back to client-supplied path.
     let resolvedProjectPath = opts.project_path;
     let resolvedGitRoot = opts.git_root;
+    let resolvedGitRemoteUrl: string | undefined = undefined;
     let linkedTask: any = null;
     if (opts.linked_object?.type === "task" && opts.linked_object.id) {
       try {
@@ -185,14 +187,47 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
               .first()));
         if (!hasAccess) {
           linkedTask = null;
-        } else if (!resolvedProjectPath) {
-          if (linkedTask.project_path) {
-            resolvedProjectPath = linkedTask.project_path;
-          } else if (linkedTask.team_id) {
-            const teamMapping = mappings.find((m: any) => m.team_id.toString() === linkedTask.team_id.toString());
-            if (teamMapping) resolvedProjectPath = teamMapping.path_prefix;
+        } else {
+          if (!resolvedProjectPath) {
+            if (linkedTask.project_path) {
+              resolvedProjectPath = linkedTask.project_path;
+            } else if (linkedTask.team_id) {
+              const teamMapping = mappings.find((m: any) => m.team_id.toString() === linkedTask.team_id.toString());
+              if (teamMapping) resolvedProjectPath = teamMapping.path_prefix;
+            }
+            if (!resolvedGitRoot) resolvedGitRoot = resolvedProjectPath;
           }
-          if (!resolvedGitRoot) resolvedGitRoot = resolvedProjectPath;
+
+          // A task stores project_path but never git_remote_url. Without the
+          // remote, a daemon on a different machine than where the task last ran
+          // can't map the task's foreign recorded path to the user's local
+          // checkout (resolveLocalProjectPath needs the remote) → spurious
+          // "clone it first" banner. Recover it from the task's own source
+          // conversations, which a daemon stamped git metadata onto.
+          const sourceIds: Id<"conversations">[] = [];
+          if (linkedTask.created_from_conversation) sourceIds.push(linkedTask.created_from_conversation);
+          for (const cid of (linkedTask.conversation_ids ?? [])) {
+            if (!sourceIds.some((s) => s.toString() === cid.toString())) sourceIds.push(cid);
+          }
+          const sources: GitMetaSource[] = [];
+          for (const cid of sourceIds) {
+            const c = await ctx.db.get(cid).catch(() => null);
+            // Only the user's own sessions — git metadata stays within the user.
+            if (c && c.user_id.toString() === userId.toString()) {
+              sources.push({ git_remote_url: c.git_remote_url, git_root: c.git_root, updated_at: c.updated_at, started_at: c.started_at });
+            }
+          }
+          const inherited = pickInheritedGitMeta(sources);
+          if (inherited.git_remote_url) {
+            resolvedGitRemoteUrl = inherited.git_remote_url;
+            // Prefer the real repo root over a full foreign path so the daemon
+            // can preserve the in-repo subpath when it remaps to a local checkout.
+            if (inherited.git_root && resolvedProjectPath
+                && resolvedProjectPath.startsWith(inherited.git_root)
+                && inherited.git_root !== resolvedGitRoot) {
+              resolvedGitRoot = inherited.git_root;
+            }
+          }
         }
       }
     }
@@ -211,6 +246,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       session_id: sessionId,
       project_path: resolvedProjectPath,
       git_root: resolvedGitRoot,
+      ...(resolvedGitRemoteUrl ? { git_remote_url: resolvedGitRemoteUrl } : {}),
       started_at: now,
       updated_at: now,
       message_count: 0,
