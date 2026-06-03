@@ -27,10 +27,13 @@ function CliAuthContent() {
     }
 
     if (!isAuthenticated) {
+      // Most people running `cast auth` already have an account — send them to
+      // sign-in (which links to sign-up), not the other way around. /login
+      // preserves return_to and bounces back here once the session exists.
       const returnUrl = encodeURIComponent(
         `/auth/cli?nonce=${nonce}&port=${port}&device=${encodeURIComponent(device)}`
       );
-      router.push(`/signup?return_to=${returnUrl}`);
+      router.push(`/login?return_to=${returnUrl}`);
       return;
     }
 
@@ -52,14 +55,25 @@ function CliAuthContent() {
     const sendAuth = async () => {
       setStatus("sending");
 
+      let tokenResult: { token: string };
       try {
-        const tokenResult = await createToken({ name: decodeURIComponent(device) });
+        tokenResult = await createToken({ name: decodeURIComponent(device) });
+      } catch (err) {
+        console.error("Auth token mint error:", err);
+        setStatus("error");
+        setErrorMessage(
+          "Couldn't create an API token for this device. Please reload this page and try again."
+        );
+        return;
+      }
 
-        // Target 127.0.0.1 explicitly (not "localhost"): on macOS "localhost"
-        // resolves to ::1 first, but the CLI auth server binds IPv4 only. Safari
-        // does not fall back from a refused IPv6 connection, so a "localhost"
-        // fetch fails with "Load failed". 127.0.0.1 matches the bind exactly.
-        const response = await fetch(`http://127.0.0.1:${port}/callback`, {
+      // Target 127.0.0.1 explicitly (not "localhost"): on macOS "localhost"
+      // resolves to ::1 first, but the CLI auth server binds IPv4 only. Safari
+      // does not fall back from a refused IPv6 connection, so a "localhost"
+      // fetch fails with "Load failed". 127.0.0.1 matches the bind exactly.
+      let response: Response;
+      try {
+        response = await fetch(`http://127.0.0.1:${port}/callback`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -70,19 +84,31 @@ function CliAuthContent() {
             nonce: nonce,
           }),
         });
-
-        if (!response.ok) {
-          throw new Error("Failed to send authentication to CLI");
-        }
-
-        setStatus("success");
       } catch (err) {
-        console.error("Auth callback error:", err);
+        // fetch() only throws on a transport failure: nothing is listening on
+        // that port (cast auth not running, or it already timed out), or the
+        // browser blocked the loopback call. Name the cause — a bare "Failed to
+        // fetch" tells the user nothing.
+        console.error("Auth callback connection error:", err);
         setStatus("error");
         setErrorMessage(
-          err instanceof Error ? err.message : "Failed to connect to CLI"
+          `Couldn't reach the cast CLI on 127.0.0.1:${port}. It may have stopped waiting.`
         );
+        return;
       }
+
+      if (!response.ok) {
+        // The server answered but refused — most often a stale nonce from an
+        // earlier `cast auth` run still holding the port.
+        console.error("Auth callback rejected:", response.status);
+        setStatus("error");
+        setErrorMessage(
+          "The CLI rejected this sign-in. It may be left over from an earlier 'cast auth' run."
+        );
+        return;
+      }
+
+      setStatus("success");
     };
 
     sendAuth();
@@ -142,10 +168,27 @@ function CliAuthContent() {
             <h1 className="text-2xl font-semibold text-white mb-2">
               Authentication Failed
             </h1>
-            <p className="text-sol-text-muted mb-4">{errorMessage}</p>
-            <p className="text-sol-text-muted text-sm">
-              Please return to your terminal and try again with &apos;cast auth&apos;
-            </p>
+            <p className="text-sol-text-muted mb-5">{errorMessage}</p>
+            <div className="text-left bg-sol-bg/50 border border-sol-border rounded-lg p-4 text-sm">
+              <p className="text-sol-text-muted mb-2">To finish connecting:</p>
+              <ol className="list-decimal list-inside space-y-1.5 text-sol-text-muted">
+                <li>
+                  Re-run <code className="text-amber-400">cast auth</code> in your
+                  terminal and complete it within 5 minutes.
+                </li>
+                <li>
+                  Or skip the browser entirely: open{" "}
+                  <a
+                    href="/settings/cli"
+                    className="text-amber-400 hover:text-amber-300 underline"
+                  >
+                    Settings → CLI
+                  </a>
+                  , generate a token, and run{" "}
+                  <code className="text-amber-400">cast login &lt;token&gt;</code>.
+                </li>
+              </ol>
+            </div>
           </div>
         </div>
       </div>

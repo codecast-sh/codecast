@@ -1594,6 +1594,17 @@ async function runLogin(setupToken: string): Promise<void> {
   }
 }
 
+// Shown whenever the browser auth flow can't complete. The token path
+// (cast login) skips the localhost callback entirely, so it still works when
+// the browser <-> CLI handshake itself is what's broken.
+function authFallbackHint(): string {
+  return (
+    `\nOr link this device with a token instead (skips the browser handshake):\n` +
+    `  1. Open ${WEB_URL}/settings/cli and click "Generate Install Command"\n` +
+    `  2. Run:  cast login <token>`
+  );
+}
+
 async function runAuth(): Promise<void> {
   console.log(`\n${c.bold}cast${c.reset} ${fmt.muted("Authentication")}\n`);
 
@@ -1606,15 +1617,25 @@ async function runAuth(): Promise<void> {
     console.log();
   }
 
-  console.log(`${fmt.muted("Opening browser for authentication...")}\n`);
-
   const authServer = new AuthServer({ port: 42424, timeout: 300000 });
   const nonce = authServer.getNonce();
-  const port = authServer.getPort();
   const deviceName = encodeURIComponent(getDeviceName());
+
+  // Bind the local callback listener FIRST, then build the URL from the port we
+  // actually bound to. If 42424 was taken we move to the next port, and the
+  // browser must be handed the real one or its callback POST goes nowhere.
+  let port: number;
+  try {
+    port = await authServer.listen();
+  } catch (err) {
+    console.error(`\nCould not start the local auth listener: ${(err as Error).message}`);
+    console.error(authFallbackHint());
+    process.exit(1);
+  }
 
   const cliUrl = `${WEB_URL}/auth/cli?nonce=${nonce}&port=${port}&device=${deviceName}`;
 
+  console.log(`${fmt.muted("Opening browser for authentication...")}\n`);
   console.log(`${fmt.muted("If the browser doesn't open, visit:")}\n  ${fmt.accent(cliUrl)}\n`);
 
   try {
@@ -1623,13 +1644,13 @@ async function runAuth(): Promise<void> {
     console.log(fmt.muted("Could not open browser automatically."));
   }
 
-  console.log(`${fmt.muted("Waiting for authentication...")}\n`);
+  console.log(`${fmt.muted("Waiting for authentication (up to 5 minutes)...")}\n`);
 
-  const authResult = await authServer.start();
+  const authResult = await authServer.waitForCallback();
 
   if (!authResult || !authResult.apiToken) {
     console.error("\nAuthentication failed or timed out.");
-    console.error("Please try again with 'cast auth'");
+    console.error(authFallbackHint());
     process.exit(1);
   }
 
