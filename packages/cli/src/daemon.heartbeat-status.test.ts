@@ -61,6 +61,15 @@ describe("heartbeat carries agent_status", () => {
     expect(body).toContain("agent_status: status");
   });
 
+  test("managed started sessions stamp the real session id onto tmux", () => {
+    const idx = daemonSource.indexOf("function registerManagedStartedSession");
+    expect(idx).toBeGreaterThanOrEqual(0);
+    const body = daemonSource.slice(idx, idx + 900);
+    expect(body).toContain('"@codecast_conversation_id"');
+    expect(body).toContain('"@codecast_session_id"');
+    expect(body).toContain("registerManagedSession(sessionId");
+  });
+
   test("the batch mutation reuses the single heartbeat's status-patch logic", () => {
     // Both heartbeat paths must compute the agent_status patch identically (the
     // change-only agent_status_updated_at rule), or the batched path could

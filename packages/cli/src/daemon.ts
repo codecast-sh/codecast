@@ -979,47 +979,59 @@ function truncateForNotification(text: string, maxLen = 200): string {
   return result;
 }
 
+// Find the tool_use the session is genuinely *blocked* on (has no matching
+// tool_result yet). Returns null when the newest tool_use already completed —
+// that tool is not pending, so reporting it would spawn a phantom Approve/Deny
+// footer. This matters because Claude Code buffers the AskUserQuestion tool_use
+// and doesn't flush it to the transcript until it's answered: while the session
+// waits on a question, the newest tool_use physically present in the JSONL is
+// the previous (already-resolved) Read/Bash. Without the completed-id guard that
+// finished tool gets mis-reported as a pending permission.
+export function extractPendingToolUseFromTail(tailContent: string): { tool_name: string; arguments_preview: string } | null {
+  const lines = tailContent.trim().split("\n");
+  const tail = lines.slice(-20);
+
+  let lastToolUse: { name: string; input: any; id?: string } | null = null;
+  const completedToolIds = new Set<string>();
+
+  for (const line of tail) {
+    try {
+      const entry = JSON.parse(line);
+      const msg = entry.message || entry;
+      const blocks = Array.isArray(msg.content) ? msg.content : [];
+      for (const block of blocks) {
+        if (block.type === "tool_result") completedToolIds.add(block.tool_use_id);
+        if (block.type === "tool_use") lastToolUse = { name: block.name, input: block.input, id: block.id };
+      }
+    } catch {}
+  }
+
+  if (!lastToolUse) return null;
+  if (lastToolUse.id && completedToolIds.has(lastToolUse.id)) return null;
+
+  let preview = "";
+  if (lastToolUse.input) {
+    if (typeof lastToolUse.input.command === "string") {
+      preview = lastToolUse.input.command;
+    } else if (typeof lastToolUse.input.file_path === "string") {
+      preview = lastToolUse.input.file_path;
+    } else if (typeof lastToolUse.input.pattern === "string") {
+      preview = lastToolUse.input.pattern;
+    } else {
+      preview = JSON.stringify(lastToolUse.input).slice(0, 300);
+    }
+  }
+  if (lastToolUse.input?.description) {
+    preview = `${lastToolUse.input.description}\n${preview}`;
+  }
+
+  return { tool_name: lastToolUse.name, arguments_preview: preview.slice(0, 500) };
+}
+
 function extractPendingToolUseFromTranscript(transcriptPath: string): { tool_name: string; arguments_preview: string } | null {
   try {
     if (!transcriptPath || !fs.existsSync(transcriptPath)) return null;
-    const tailContent = readFileTail(transcriptPath, 32768);
-    const lines = tailContent.trim().split("\n");
-    const tail = lines.slice(-20);
-
-    let lastToolUse: { name: string; input: any } | null = null;
-    const completedToolIds = new Set<string>();
-
-    for (const line of tail) {
-      try {
-        const entry = JSON.parse(line);
-        const msg = entry.message || entry;
-        const blocks = Array.isArray(msg.content) ? msg.content : [];
-        for (const block of blocks) {
-          if (block.type === "tool_result") completedToolIds.add(block.tool_use_id);
-          if (block.type === "tool_use") lastToolUse = { name: block.name, input: block.input };
-        }
-      } catch {}
-    }
-
-    if (!lastToolUse) return null;
-
-    let preview = "";
-    if (lastToolUse.input) {
-      if (typeof lastToolUse.input.command === "string") {
-        preview = lastToolUse.input.command;
-      } else if (typeof lastToolUse.input.file_path === "string") {
-        preview = lastToolUse.input.file_path;
-      } else if (typeof lastToolUse.input.pattern === "string") {
-        preview = lastToolUse.input.pattern;
-      } else {
-        preview = JSON.stringify(lastToolUse.input).slice(0, 300);
-      }
-    }
-    if (lastToolUse.input?.description) {
-      preview = `${lastToolUse.input.description}\n${preview}`;
-    }
-
-    return { tool_name: lastToolUse.name, arguments_preview: preview.slice(0, 500) };
+    return extractPendingToolUseFromTail(readFileTail(transcriptPath, 32768));
   } catch {
     return null;
   }
@@ -1657,12 +1669,30 @@ async function executeRemoteCommand(
           cwd = validatedRaw;
         } else if (conversationId && syncServiceRef) {
           const projectInfo = await syncServiceRef.getProjectInfo(conversationId).catch(() => null);
-          const resolved = await resolveLocalProjectPath({
+          const recordedRoot = projectInfo?.git_root ?? null;
+          let resolved = await resolveLocalProjectPath({
             projectPath: projectInfo?.project_path ?? rawPath,
-            gitRoot: projectInfo?.git_root ?? null,
+            gitRoot: recordedRoot,
             gitRemoteUrl: projectInfo?.git_remote_url ?? null,
             findCandidates: (url) => syncServiceRef!.findLocalCheckouts(url).catch(() => []),
           });
+          // Fallback mirroring the resume path (resolveResumeCwd): when the
+          // git-remote lookup can't place the session — no remote recorded, or
+          // the remote string differs across machines (SSH vs HTTPS) so the
+          // exact-match candidate query misses — fall back to the
+          // user/learned/convention resolver. Key it on the REPO ROOT so its
+          // basename is the repo name (not a leaf subdir like "outreach"), then
+          // re-append the in-repo subpath. start_session lacked this step, so a
+          // foreign recorded path that resume could repair still refused here.
+          if (!resolved) {
+            const localRepoRoot = resolveLocalRepo(recordedRoot ?? rawPath);
+            if (localRepoRoot) {
+              const subpath = recordedRoot && rawPath.startsWith(recordedRoot) ? rawPath.slice(recordedRoot.length) : "";
+              const full = subpath ? path.join(localRepoRoot, subpath) : localRepoRoot;
+              const placed = validatePath(full) ?? localRepoRoot;
+              resolved = { path: placed, remapped: true, reason: `convention-resolved ${rawPath} → ${placed}` };
+            }
+          }
           if (!resolved) {
             // Don't clobber a session another device already owns. With device
             // routing this daemon shouldn't even receive a start_session it can't
@@ -3000,7 +3030,24 @@ function isPathExcluded(projectPath: string, excludedPaths?: string): boolean {
   return false;
 }
 
-function isProjectAllowedToSync(projectPath: string, config: Config): boolean {
+// Integration tests (daemon.inject-clear.test.ts) drive a REAL claude under a
+// throwaway project dir, so its transcript lands in ~/.claude/projects like any
+// other and would otherwise be synced as a phantom inbox conversation. The dir
+// name carries this marker; the daemon refuses to sync any project whose path
+// contains it. A single lowercase token (no dots or hyphens) so it survives both
+// the exact recorded-cwd resolution AND the lossy dir-name slug decode (where
+// every "/" and "." collapses to "-"). Enforced on every machine regardless of
+// the user's excluded_paths config.
+export const TEST_SCRATCH_DIRNAME = "codecasttestscratch";
+
+export function isTestScratchPath(projectPath: string): boolean {
+  return !!projectPath && projectPath.includes(TEST_SCRATCH_DIRNAME);
+}
+
+export function isProjectAllowedToSync(projectPath: string, config: Config): boolean {
+  if (isTestScratchPath(projectPath)) {
+    return false;
+  }
   if (!config.sync_mode || config.sync_mode === "all") {
     return true;
   }
@@ -5293,6 +5340,16 @@ function buildReverseConversationCache(cache: ConversationCache): Record<string,
     reverse[convId] = sessionId;
   }
   return reverse;
+}
+
+export function findCachedSessionIdForConversation(
+  cache: Record<string, string>,
+  conversationId: string,
+): string | undefined {
+  for (const [sessionId, convId] of Object.entries(cache)) {
+    if (convId === conversationId) return sessionId;
+  }
+  return undefined;
 }
 
 function detectSessionAgentType(sessionId: string): "claude" | "codex" | "cursor" | "gemini" {
@@ -7874,6 +7931,8 @@ async function handleDeadSession(sessionId: string, tmuxSession: string): Promis
 
 function registerManagedStartedSession(conversationId: string, sessionId: string, tmuxSession: string): void {
   if (!syncServiceRef) return;
+  setTmuxSessionOption(tmuxSession, "@codecast_conversation_id", conversationId).catch(() => {});
+  setTmuxSessionOption(tmuxSession, "@codecast_session_id", sessionId).catch(() => {});
   syncServiceRef.markSessionActive(conversationId).catch(logConvexFailure);
   syncServiceRef.registerManagedSession(sessionId, process.pid, tmuxSession, conversationId).catch(logConvexFailure);
   ensureManagedSessionHeartbeat(sessionId);
@@ -11384,6 +11443,18 @@ async function main(): Promise<void> {
 
           if (tmuxConvId) {
             const agentType = (tmuxAgentType as StartedSessionInfo["agentType"] | null) || "claude";
+            const cachedSessionId = findCachedSessionIdForConversation(conversationCache, tmuxConvId);
+            if (cachedSessionId) {
+              resumeSessionCache.set(cachedSessionId, tmuxSession);
+              if (syncServiceRef) {
+                registerManagedStartedSession(tmuxConvId, cachedSessionId, tmuxSession);
+                if (agentType === "codex") {
+                  startCodexPermissionPoller(cachedSessionId, tmuxSession, tmuxConvId, syncServiceRef);
+                }
+              }
+              recovered++;
+              continue;
+            }
             startedSessionTmux.set(tmuxConvId, {
               tmuxSession,
               projectPath: tmuxProjectPath || process.env.HOME || "/tmp",
@@ -11919,7 +11990,11 @@ async function main(): Promise<void> {
     const colonMatch = message.match(/^(\w+):\s/);
     if (colonMatch) return colonMatch[1];
     const m = message.match(/permission to use (\w+)/i) || message.match(/allow (\w+)/i);
-    return m?.[1] || "Bash";
+    // No "Bash" default: the generic permission_prompt Notification carries an
+    // empty message, so the only honest tool source is the transcript. Guessing
+    // "Bash" here manufactures a phantom Approve/Deny when extraction finds no
+    // genuinely-pending tool (e.g. while a buffered AskUserQuestion is open).
+    return m?.[1] || "";
   }
 
   function findTranscriptForSession(sessionId: string): string | null {

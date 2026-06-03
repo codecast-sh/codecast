@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
-import { classifyCodexTranscriptTail, classifyTranscriptTail, isInterruptControlMessage, paneReconcileTarget, reconciledStatus, transcriptTailLastRealRole, permissionBlockedRecoveryTarget } from "./daemon.js";
+import { classifyCodexTranscriptTail, classifyTranscriptTail, findCachedSessionIdForConversation, isInterruptControlMessage, paneReconcileTarget, reconciledStatus, transcriptTailLastRealRole, permissionBlockedRecoveryTarget } from "./daemon.js";
 import type { TranscriptTurnState } from "./daemon.js";
 
 // Regression test for the "session stuck in 'working' (or 'stopped') forever" bug,
@@ -240,6 +240,20 @@ describe("paneReconcileTarget", () => {
       expect(paneReconcileTarget(state, "working")).toBeNull();
       expect(paneReconcileTarget(state, undefined)).toBeNull();
     }
+  });
+});
+
+describe("warm-restart session id recovery", () => {
+  test("recovers the real transcript session id from a conversation-tagged tmux", () => {
+    const cache = {
+      "5e9f3b9b-a08c-4b97-980c-7e5c1e5e3039": "jx75mtdncevqqf6esgrmja255587w9pn",
+      "b66907ab-bf95-445f-ba0b-df9c4933d41b": "jx7dtgcj63bmrg09g8dvzx974587x61d",
+    };
+
+    expect(findCachedSessionIdForConversation(cache, "jx75mtdncevqqf6esgrmja255587w9pn")).toBe(
+      "5e9f3b9b-a08c-4b97-980c-7e5c1e5e3039",
+    );
+    expect(findCachedSessionIdForConversation(cache, "missing")).toBeUndefined();
   });
 });
 

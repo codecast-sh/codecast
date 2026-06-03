@@ -24,7 +24,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
-import { injectViaTmux } from "./daemon.js";
+import { injectViaTmux, TEST_SCRATCH_DIRNAME } from "./daemon.js";
 
 function hasBin(name: string): boolean {
   const r = spawnSync("which", [name], { encoding: "utf8" });
@@ -71,7 +71,13 @@ function jsonlPathFor(projectDir: string, sessionUuid: string): string {
 describe.skipIf(!CAN_RUN)("injectViaTmux clears stale draft before pasting", () => {
   const sessionUuid = randomUUID();
   const tmuxSession = `cc-inject-clear-test-${process.pid}`;
-  const projectDir = path.join(os.tmpdir(), `cc-inject-clear-${process.pid}-${Date.now()}`);
+  // Run under the shared scratch marker dir so the daemon's isProjectAllowedToSync
+  // refuses to sync this real claude session — otherwise its transcript lands in
+  // ~/.claude/projects like any other and leaks into the inbox as a phantom
+  // conversation. Stays under os.tmpdir() and dot-free so jsonlPathFor's
+  // slash-only encoding still resolves the transcript location.
+  const scratchRoot = path.join(os.tmpdir(), TEST_SCRATCH_DIRNAME);
+  const projectDir = path.join(scratchRoot, `inject-clear-${process.pid}-${Date.now()}`);
   const target = `${tmuxSession}:0.0`;
   let jsonlPath = "";
 
@@ -102,6 +108,11 @@ describe.skipIf(!CAN_RUN)("injectViaTmux clears stale draft before pasting", () 
     // available for debugging. Only clean it up on success path.
     if (process.env.KEEP_INJECT_TEST_ARTIFACTS !== "1") {
       if (fs.existsSync(projectDir)) fs.rmSync(projectDir, { recursive: true });
+      // Remove the shared scratch root too, but only if no concurrent run still
+      // has a session dir under it.
+      if (fs.existsSync(scratchRoot) && fs.readdirSync(scratchRoot).length === 0) {
+        fs.rmdirSync(scratchRoot);
+      }
       const projectsDir = path.dirname(jsonlPath);
       if (fs.existsSync(projectsDir) && fs.readdirSync(projectsDir).length === 0) {
         fs.rmdirSync(projectsDir);
