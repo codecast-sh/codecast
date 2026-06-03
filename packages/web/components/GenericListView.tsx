@@ -1,5 +1,6 @@
 "use client";
 import { ReactNode, useState, useCallback, useMemo, useEffect, useRef } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { useRouter } from "next/navigation";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { FilterDropdown } from "./FilterDropdown";
@@ -189,6 +190,53 @@ export function GenericListView<T>({
 
   const focusedItem = visibleItems[focusIndex] || null;
 
+  // Flatten groups + items into a single ordered list of "rows" so the whole
+  // view (group headers AND item rows) can be virtualized as one stream. Each
+  // item row carries its index into `visibleItems` so keyboard focus and the
+  // rendered row stay in lockstep. Without virtualization every task/doc in the
+  // workspace was a live DOM node and re-rendered on every j/k press — O(N) per
+  // keystroke. Now only the visible window (~window height) is mounted.
+  type RowEntry =
+    | { kind: "header"; key: string; group: ListGroup<T>; collapsed: boolean }
+    | { kind: "item"; key: string; item: T; focusIndex: number };
+  const rowModel = useMemo<RowEntry[]>(() => {
+    const rows: RowEntry[] = [];
+    if (displayGroups) {
+      let fi = 0;
+      for (const g of displayGroups) {
+        const collapsed = collapsedGroups.has(g.key);
+        rows.push({ kind: "header", key: `__hdr_${g.key}`, group: g, collapsed });
+        if (!collapsed) {
+          for (const item of g.items) {
+            rows.push({ kind: "item", key: getItemId(item), item, focusIndex: fi });
+            fi++;
+          }
+        }
+      }
+    } else {
+      displayFlatItems.forEach((item, i) => {
+        rows.push({ kind: "item", key: getItemId(item), item, focusIndex: i });
+      });
+    }
+    return rows;
+  }, [displayGroups, displayFlatItems, collapsedGroups, getItemId]);
+
+  // focusIndex (index into visibleItems) → rowModel index, so keyboard nav can
+  // scroll the right virtual row into view.
+  const focusToRowIndex = useMemo(() => {
+    const map: number[] = [];
+    rowModel.forEach((r, idx) => { if (r.kind === "item") map[r.focusIndex] = idx; });
+    return map;
+  }, [rowModel]);
+
+  const rowVirtualizer = useVirtualizer({
+    count: rowModel.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: (i) => (rowModel[i]?.kind === "header" ? 38 : 45),
+    getItemKey: (i) => rowModel[i]?.key ?? i,
+    overscan: 12,
+  });
+
   useWatchEffect(() => {
     if (focusIndex >= visibleItems.length && visibleItems.length > 0) {
       setFocusIndex(visibleItems.length - 1);
@@ -202,8 +250,8 @@ export function GenericListView<T>({
   }, [focusIndex]);
 
   useWatchEffect(() => {
-    const el = document.querySelector('[data-list-focused="true"]');
-    if (el) (el as HTMLElement).scrollIntoView({ block: "nearest" });
+    const rowIdx = focusToRowIndex[focusIndex];
+    if (rowIdx != null) rowVirtualizer.scrollToIndex(rowIdx, { align: "auto" });
   }, [focusIndex]);
 
   const toggleSelect = useCallback((id: string) => {
@@ -408,6 +456,30 @@ export function GenericListView<T>({
     );
   };
 
+  const renderGroupHeader = (g: ListGroup<T>, isCollapsed: boolean) => (
+    <div className="w-full flex items-center gap-2 px-4 py-2 bg-sol-bg-alt/30 border-b border-sol-border/20">
+      <button
+        onClick={() => toggleGroup(g.key)}
+        className="flex items-center gap-2 flex-1 hover:bg-sol-bg-alt/50 transition-colors text-left"
+      >
+        <svg
+          className={`w-3 h-3 text-sol-text-dim transition-transform ${isCollapsed ? "" : "rotate-90"}`}
+          fill="currentColor"
+          viewBox="0 0 20 20"
+        >
+          <path d="M6 4l8 6-8 6V4z" />
+        </svg>
+        {g.icon}
+        <span className="text-xs font-medium text-sol-text-dim uppercase tracking-wide">
+          {g.label}
+        </span>
+        <span className="text-xs text-sol-text-dim">({g.items.length})</span>
+        {g.badge}
+      </button>
+      {g.extra}
+    </div>
+  );
+
   return (
     <div className="h-full flex flex-col">
       {/* Header */}
@@ -588,16 +660,24 @@ export function GenericListView<T>({
                   </button>
                 )}
               </div>
-            ) : displayGroups ? (
-              <GroupedList
-                groups={displayGroups}
-                collapsedGroups={collapsedGroups}
-                onToggleGroup={toggleGroup}
-                renderRow={renderItemRow}
-              />
             ) : (
-              <div>
-                {displayFlatItems.map((item, i) => renderItemRow(item, i))}
+              <div style={{ height: rowVirtualizer.getTotalSize(), width: "100%", position: "relative" }}>
+                {rowVirtualizer.getVirtualItems().map((vi) => {
+                  const row = rowModel[vi.index];
+                  if (!row) return null;
+                  return (
+                    <div
+                      key={vi.key}
+                      data-index={vi.index}
+                      ref={rowVirtualizer.measureElement}
+                      style={{ position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${vi.start}px)` }}
+                    >
+                      {row.kind === "header"
+                        ? renderGroupHeader(row.group, row.collapsed)
+                        : renderItemRow(row.item, row.focusIndex)}
+                    </div>
+                  );
+                })}
               </div>
             )}
 
@@ -640,54 +720,5 @@ export function GenericListView<T>({
 
       {children}
     </div>
-  );
-}
-
-function GroupedList<T>({
-  groups,
-  collapsedGroups,
-  onToggleGroup,
-  renderRow,
-}: {
-  groups: ListGroup<T>[];
-  collapsedGroups: Set<string>;
-  onToggleGroup: (key: string) => void;
-  renderRow: (item: T, globalIdx: number) => ReactNode;
-}) {
-  let globalIdx = 0;
-  return (
-    <>
-      {groups.map((g) => {
-        const isCollapsed = collapsedGroups.has(g.key);
-        const startIdx = globalIdx;
-        if (!isCollapsed) globalIdx += g.items.length;
-        return (
-          <div key={g.key}>
-            <div className="w-full flex items-center gap-2 px-4 py-2 bg-sol-bg-alt/30 border-b border-sol-border/20">
-              <button
-                onClick={() => onToggleGroup(g.key)}
-                className="flex items-center gap-2 flex-1 hover:bg-sol-bg-alt/50 transition-colors text-left"
-              >
-                <svg
-                  className={`w-3 h-3 text-sol-text-dim transition-transform ${isCollapsed ? "" : "rotate-90"}`}
-                  fill="currentColor"
-                  viewBox="0 0 20 20"
-                >
-                  <path d="M6 4l8 6-8 6V4z" />
-                </svg>
-                {g.icon}
-                <span className="text-xs font-medium text-sol-text-dim uppercase tracking-wide">
-                  {g.label}
-                </span>
-                <span className="text-xs text-sol-text-dim">({g.items.length})</span>
-                {g.badge}
-              </button>
-              {g.extra}
-            </div>
-            {!isCollapsed && g.items.map((item, i) => renderRow(item, startIdx + i))}
-          </div>
-        );
-      })}
-    </>
   );
 }
