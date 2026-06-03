@@ -5,10 +5,11 @@ import { useInboxStore, DocDetail } from "../../../store/inboxStore";
 import { useSyncDocDetail } from "../../../hooks/useSyncDocs";
 import { DetailSplitLayout } from "../../../components/DetailSplitLayout";
 import { DocListContent } from "../page";
-import { shareOrigin, copyToClipboard } from "../../../lib/utils";
+import { shareOrigin, canonicalUrl } from "../../../lib/utils";
 import { useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { DocumentDetailLayout } from "../../../components/DocumentDetailLayout";
+import { SharePopover } from "../../../components/SharePopover";
 import { ErrorBoundary } from "../../../components/ErrorBoundary";
 import { SessionCardInner } from "../../../components/ActivityFeed";
 import { WatchButton } from "../../../components/WatchButton";
@@ -28,8 +29,6 @@ import {
   ArrowDown,
   Minus,
   Tag,
-  Link2,
-  Check,
 } from "lucide-react";
 import Link from "next/link";
 import { toast } from "sonner";
@@ -156,21 +155,6 @@ function DocDetailContent() {
   const pinDoc = useInboxStore((s) => s.pinDoc);
   const promoteToPlan = useMutation(api.docs.webPromoteToPlan);
   const generateShareLink = useMutation(api.docs.generateShareLink);
-  const [shareCopied, setShareCopied] = useState(false);
-
-  const handleShare = useCallback(async () => {
-    if (!data) return;
-    try {
-      const result = await generateShareLink({ id: data._id as any });
-      const url = `${shareOrigin()}/share/doc/${result.share_token}`;
-      await copyToClipboard(url);
-      setShareCopied(true);
-      toast.success("Share link copied to clipboard");
-      setTimeout(() => setShareCopied(false), 2000);
-    } catch (e: any) {
-      toast.error(e.message || "Failed to generate share link");
-    }
-  }, [data, generateShareLink]);
 
   const handleTitleChange = useCallback(
     (title: string) => {
@@ -246,13 +230,16 @@ function DocDetailContent() {
           }
           topBarRight={
             <>
-              <button
-                onClick={handleShare}
-                className={`p-1.5 rounded-md transition-colors ${shareCopied ? "text-sol-green" : "text-sol-text-dim hover:text-sol-cyan"}`}
-                title="Copy share link"
-              >
-                {shareCopied ? <Check className="w-3.5 h-3.5" /> : <Link2 className="w-3.5 h-3.5" />}
-              </button>
+              <SharePopover
+                hasTeam={false}
+                hasShareToken={!!(doc as any).share_token}
+                shareUrl={(doc as any).share_token ? `${shareOrigin()}/share/doc/${(doc as any).share_token}` : null}
+                pageUrl={canonicalUrl()}
+                onGenerateShareLink={async () => {
+                  const result = await generateShareLink({ id: doc._id as any });
+                  return `${shareOrigin()}/share/doc/${result.share_token}`;
+                }}
+              />
               <button
                 onClick={handlePin}
                 className={`p-1.5 rounded-md transition-colors ${doc.pinned ? "text-sol-yellow" : "text-sol-text-dim hover:text-sol-yellow"}`}

@@ -5,9 +5,9 @@ import { useMentionQuery } from "../hooks/useMentionQuery";
 import { useImageUpload } from "../hooks/useImageUpload";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { ContextChatInput } from "./ContextChatInput";
-import { ArrowLeft, Edit3, Eye, MoreHorizontal, Copy, Check, X, Link2 } from "lucide-react";
+import { ArrowLeft, Edit3, Eye, MoreHorizontal, Copy, Check, X } from "lucide-react";
 import Link from "next/link";
-import { copyToClipboard, canonicalUrl } from "../lib/utils";
+import { copyToClipboard } from "../lib/utils";
 import { toast } from "sonner";
 
 interface DocumentDetailLayoutProps {
@@ -48,7 +48,6 @@ export function DocumentDetailLayout({
   const [isEditing, setIsEditing] = useState(initialEditable);
   const [showMeta, setShowMeta] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [linkCopied, setLinkCopied] = useState(false);
   const handleMentionQuery = useMentionQuery();
   const handleImageUpload = useImageUpload();
   const getMarkdownRef = useRef<(() => string) | null>(null);
@@ -56,16 +55,6 @@ export function DocumentDetailLayout({
     () => getMarkdownRef.current?.() ?? markdownContent,
     [markdownContent]
   );
-
-  const handleCopyLink = () => {
-    copyToClipboard(canonicalUrl())
-      .then(() => {
-        setLinkCopied(true);
-        setTimeout(() => setLinkCopied(false), 2000);
-        toast.success("Link copied!");
-      })
-      .catch(() => toast.error("Failed to copy link"));
-  };
 
   const handleCopyMarkdown = () => {
     const md = getMarkdownRef.current?.() ?? markdownContent;
@@ -98,13 +87,6 @@ export function DocumentDetailLayout({
             title="Copy as Markdown"
           >
             {copied ? <Check className="w-3.5 h-3.5 text-sol-green" /> : <Copy className="w-3.5 h-3.5" />}
-          </button>
-          <button
-            onClick={handleCopyLink}
-            className="p-1.5 rounded-md text-xs flex items-center gap-1 text-sol-text-dim hover:text-sol-text transition-colors"
-            title="Copy link"
-          >
-            {linkCopied ? <Check className="w-3.5 h-3.5 text-sol-green" /> : <Link2 className="w-3.5 h-3.5" />}
           </button>
           <button
             onClick={() => setIsEditing(!isEditing)}
