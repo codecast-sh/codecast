@@ -3131,4 +3131,7 @@ cliRoute("/cli/workflow-runs/poll-gate", async (ctx, body) => ctx.runMutation(ap
 cliRoute("/cli/workflow-runs/set-primary", async (ctx, body) => ctx.runMutation(api.workflow_runs.setPrimarySession, body));
 cliRoute("/cli/workflow-runs/respond-gate", async (ctx, body) => ctx.runMutation(api.workflow_runs.respondToGateFromCli, body));
 
+// Session-to-session messaging
+cliRoute("/cli/messages/send", async (ctx, body) => ctx.runMutation(api.pendingMessages.sendSessionMessage, body));
+
 export default http;

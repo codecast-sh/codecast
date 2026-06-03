@@ -2016,6 +2016,12 @@ If blocked, say so explicitly:
 
 When you reference another session in your messages, include its short ID (e.g. \`jx7c6zk\`). These render as interactive cards in the UI showing title, status, message count, and project. Find session IDs via \`cast search\`, \`cast feed\`, or \`cast context\`. Use bare IDs for inline references or \`@[Session Title jx7c6zk]\` for explicit mentions.
 
+### Messaging another session
+
+You can message another of your sessions directly with \`cast send <session_id> "<text>"\`. The text is injected into that session as a new turn, attributed to you, so the recipient can act on it and reply. Use this to hand off work, ask a session that owns context a question, or coordinate parallel efforts — instead of routing everything through the human.
+
+A message from another session arrives as a turn wrapped like \`<session-message from="jx7c6zk">…</session-message>\`. Treat it as coming from that peer session; reply by sending back to its ID with \`cast send jx7c6zk "<text>"\`.
+
 ### After compaction
 
 When your context gets compacted, re-read your task or plan context (\`cast task context --current\` / \`cast plan context --current\`) to reground yourself. Don't rely on memory of earlier conversation alone.
@@ -2042,6 +2048,7 @@ cast plan context --current                # Context for session's current plan
 cast plan comment <plan_id> "note"         # Add comment (progress by default)
 cast plan comment <plan_id> "x" -d -r "y" # Decision with rationale
 cast plan done/drop <plan_id>             # Close or abandon a plan
+cast send <session_id> "<text>"            # Message another session
 cast doc create "Title" [-c content] [-t type]
 cast doc show/ls/edit/search/comment
 \`\`\`
@@ -2819,6 +2826,38 @@ program
   .argument("<token>", "Setup token from the web dashboard")
   .action(async (token: string) => {
     await runLogin(token);
+  });
+
+program
+  .command("send")
+  .description(
+    "Send a message to another session\n\n" +
+    "The text is injected into the target session as a new turn, attributed to\n" +
+    "this session so the recipient (and the dashboard) can see who sent it.\n\n" +
+    "Examples:\n" +
+    "  cast send jx7c6zk \"can you take the auth half?\"\n" +
+    "  cast send jx7c6zk \"done\" --from jx7abcd"
+  )
+  .argument("<session_id>", "Target session short ID (e.g. jx7c6zk)")
+  .argument("<text>", "Message text")
+  .option("--from <id>", "Override sender session (default: detect current session)")
+  .action(async (sessionId: string, text: string, options: any) => {
+    const body = (text ?? "").trim();
+    if (!body) {
+      console.error("Message text is empty");
+      process.exit(1);
+    }
+    const from = options.from || detectCurrentSessionId() || undefined;
+    const result = await cliPost("/cli/messages/send", {
+      to: sessionId,
+      from,
+      body,
+    });
+    const fromNote =
+      result.from_short_id && result.from_short_id !== "unknown"
+        ? ` ${c.dim}from${c.reset} ${c.cyan}${result.from_short_id}${c.reset}`
+        : "";
+    console.log(`${c.green}✓${c.reset} sent to ${c.cyan}${result.to_short_id || sessionId}${c.reset}${fromNote}`);
   });
 
 program
