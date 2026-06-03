@@ -748,6 +748,9 @@ export const listActiveSessions = query({
       let worktreeName: string | undefined;
       let headline: string | undefined;
       let isSubagent: boolean | undefined;
+      let conversationUpdatedAt: number | undefined;
+      let lastMessagePreview: string | undefined;
+      let lastMessageRole: string | undefined;
 
       if (session.conversation_id) {
         const conv = await ctx.db.get(session.conversation_id);
@@ -762,6 +765,13 @@ export const listActiveSessions = query({
           gitBranch = conv.git_branch;
           worktreeName = conv.worktree_name;
           isSubagent = conv.is_subagent;
+          // updated_at moves on real conversation activity (messages, status) but
+          // NOT on idle heartbeats or metrics writes — the honest "last active"
+          // signal. The preview/role give every row something identifiable even
+          // when no insight headline exists (common for short/dead sessions).
+          conversationUpdatedAt = conv.updated_at;
+          lastMessagePreview = conv.last_message_preview;
+          lastMessageRole = conv.last_message_role;
 
           const insight = await ctx.db
             .query("session_insights")
@@ -801,6 +811,9 @@ export const listActiveSessions = query({
         worktree_name: worktreeName,
         headline,
         is_subagent: isSubagent,
+        conversation_updated_at: conversationUpdatedAt,
+        last_message_preview: lastMessagePreview,
+        last_message_role: lastMessageRole,
       });
     }
 
