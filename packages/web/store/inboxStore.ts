@@ -174,6 +174,9 @@ export type InboxSession = {
   permission_mode?: string | null;
   is_deferred?: boolean;
   is_pinned?: boolean;
+  // When the user pinned this session (Date.now() ms). Drives a stable order in
+  // the Pinned group so cards don't reshuffle on agent status churn.
+  inbox_pinned_at?: number | null;
   inbox_dismissed_at?: number | null;
   last_user_message?: string | null;
   session_error?: string;
@@ -740,7 +743,20 @@ export function categorizeSessions(
     : new Set<string>([...sessionsWithQueuedMessages, ...pendingSendIds]);
   const hasPendingSend = (s: InboxSession) => pendingSendIds.has(s._id);
 
-  const pinned = sorted.filter((s) => s.is_pinned && isTop(s));
+  // Pinning is a manual curation gesture, so the Pinned group gets its own
+  // stable order by pin time (oldest pin first, new pins append to the bottom)
+  // — never the activity-based sortSessions order, which reshuffles cards
+  // whenever an agent's status flickers (working/idle, poll open/close), even
+  // while the user reads them. Ascending keeps existing pins put when you add
+  // a new one.
+  const pinned = sorted
+    .filter((s) => s.is_pinned && isTop(s))
+    .sort((a, b) => {
+      const at = a.inbox_pinned_at ?? 0;
+      const bt = b.inbox_pinned_at ?? 0;
+      if (at !== bt) return at - bt;
+      return a._id < b._id ? -1 : a._id > b._id ? 1 : 0;
+    });
   const newSessions = sorted.filter((s) => s.message_count === 0 && !s.is_pinned && !hasPendingSend(s) && isTop(s))
     .sort((a, b) => (a.is_connected ? 1 : 0) - (b.is_connected ? 1 : 0));
   const needsInput = sorted.filter((s) => isSessionWaitingForInput(s, inFlight) && isTop(s))
@@ -1392,7 +1408,10 @@ export const useInboxStore = create<InboxStoreState>(
       const wasPinned = sess?.is_pinned;
       if (sess) {
         sess.inbox_dismissed_at = now;
-        if (wasPinned) sess.is_pinned = false;
+        if (wasPinned) {
+          sess.is_pinned = false;
+          sess.inbox_pinned_at = null;
+        }
       }
       if (this.conversations[sid]) {
         (this.conversations[sid] as any).inbox_dismissed_at = now;
@@ -1413,7 +1432,10 @@ export const useInboxStore = create<InboxStoreState>(
 
     if (this.sessions[currentId]) {
       this.sessions[currentId].inbox_dismissed_at = now;
-      if (this.sessions[currentId].is_pinned) this.sessions[currentId].is_pinned = false;
+      if (this.sessions[currentId].is_pinned) {
+        this.sessions[currentId].is_pinned = false;
+        this.sessions[currentId].inbox_pinned_at = null;
+      }
     }
     if (this.conversations[currentId]) {
       (this.conversations[currentId] as any).inbox_dismissed_at = now;
@@ -1476,7 +1498,10 @@ export const useInboxStore = create<InboxStoreState>(
   pinSession: action(function (this: Draft, id: string) {
     const newPinned = !this.sessions[id]?.is_pinned;
     const pinnedAt = newPinned ? Date.now() : null;
-    if (this.sessions[id]) this.sessions[id].is_pinned = newPinned;
+    if (this.sessions[id]) {
+      this.sessions[id].is_pinned = newPinned;
+      this.sessions[id].inbox_pinned_at = pinnedAt;
+    }
     if (this.conversations[id]) {
       (this.conversations[id] as any).inbox_pinned_at = pinnedAt;
       if (newPinned) (this.conversations[id] as any).inbox_killed_at = undefined;

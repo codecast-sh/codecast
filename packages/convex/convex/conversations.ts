@@ -6108,6 +6108,7 @@ export const listInboxSessions = query({
         has_pending: hasPending,
         is_deferred: !!deferred,
         is_pinned: pinned,
+        inbox_pinned_at: conv.inbox_pinned_at ?? null,
         inbox_dismissed_at: conv.inbox_dismissed_at ?? null,
         agent_status: agentStatus,
         tmux_session: tmuxSessionMap.get(conv._id.toString()) ?? null,
@@ -6169,6 +6170,7 @@ export const listInboxSessions = query({
           has_pending: !!child.has_pending_messages,
           is_deferred: false,
           is_pinned: false,
+          inbox_pinned_at: null,
           inbox_dismissed_at: child.inbox_dismissed_at ?? null,
           agent_status: childAgentStatus,
           tmux_session: tmuxSessionMap.get(child._id.toString()) ?? null,
@@ -6303,6 +6305,7 @@ export const dismissFromInbox = mutation({
 const PATCHABLE_FIELDS = new Set([
   "inbox_dismissed_at",
   "inbox_deferred_at",
+  "inbox_pinned_at",
   "draft_message",
   "project_path",
   "git_root",

@@ -675,6 +675,69 @@ describe("categorizeSessions", () => {
     expect(needsInput.map((s) => s._id)).not.toContain("conv-pinned-poll");
   });
 
+  it("orders pinned by pin time (oldest first) and ignores activity status", () => {
+    // Each pinned session has a different live status. If the pinned group
+    // inherited the activity-based sort, these would order by working/idle/
+    // awaiting_input and reshuffle on every status flicker. They must instead
+    // hold a stable order keyed only on inbox_pinned_at.
+    const oldestPin: InboxSession = {
+      ...baseSession,
+      _id: "conv-pin-oldest",
+      session_id: "session-pin-oldest",
+      message_count: 5,
+      is_pinned: true,
+      inbox_pinned_at: 100,
+      agent_status: "working", // most "active" — would sort last under sortSessions
+      is_idle: false,
+    };
+    const middlePin: InboxSession = {
+      ...baseSession,
+      _id: "conv-pin-middle",
+      session_id: "session-pin-middle",
+      message_count: 5,
+      is_pinned: true,
+      inbox_pinned_at: 200,
+      awaiting_input: true, // would sort first under sortSessions
+    };
+    const newestPin: InboxSession = {
+      ...baseSession,
+      _id: "conv-pin-newest",
+      session_id: "session-pin-newest",
+      message_count: 5,
+      is_pinned: true,
+      inbox_pinned_at: 300,
+      agent_status: "idle",
+      is_idle: true,
+    };
+
+    const sessions = {
+      [oldestPin._id]: oldestPin,
+      [middlePin._id]: middlePin,
+      [newestPin._id]: newestPin,
+    };
+
+    const { pinned } = categorizeSessions(sessions, new Set());
+    expect(pinned.map((s) => s._id)).toEqual([
+      "conv-pin-oldest",
+      "conv-pin-middle",
+      "conv-pin-newest",
+    ]);
+
+    // Flip the live status of every pinned session. Pin time is unchanged, so
+    // the order must be byte-for-byte identical — no reshuffle on status churn.
+    const churned = {
+      [oldestPin._id]: { ...oldestPin, agent_status: "idle" as const, is_idle: true },
+      [middlePin._id]: { ...middlePin, awaiting_input: false, agent_status: "working" as const, is_idle: false },
+      [newestPin._id]: { ...newestPin, agent_status: "working" as const, is_idle: false },
+    };
+    const after = categorizeSessions(churned, new Set());
+    expect(after.pinned.map((s) => s._id)).toEqual([
+      "conv-pin-oldest",
+      "conv-pin-middle",
+      "conv-pin-newest",
+    ]);
+  });
+
   it("sinks deferred sessions to the bottom of Needs Input", () => {
     // Defer (shift+backspace / "send to bottom") sets is_deferred. The needsInput
     // group must honor that flag, otherwise deferring a needs-input session is a no-op.
