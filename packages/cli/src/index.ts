@@ -14,7 +14,7 @@ import { CODECAST_STATUS_HOOK } from "./statusHook.js";
 import { AuthServer } from "./authServer.js";
 import { c, fmt, icons } from "./colors.js";
 import { ensureTmux, tryInstallTmux } from "./tmux.js";
-import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, ensureCastAlias } from "./update.js";
+import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, ensureCastAlias } from "./update.js";
 import { checkForDesktopUpdate } from "./desktopUpdate.js";
 import { glob } from "glob";
 import { getPosition, setPosition } from "./positionTracker.js";
@@ -365,6 +365,8 @@ interface Config {
   plan_version?: string;
   workflow_enabled?: boolean;
   workflow_version?: string;
+  messaging_enabled?: boolean;
+  messaging_version?: string;
   orch_enabled?: boolean;
   orch_version?: string;
   claude_args?: string;
@@ -2016,12 +2018,6 @@ If blocked, say so explicitly:
 
 When you reference another session in your messages, include its short ID (e.g. \`jx7c6zk\`). These render as interactive cards in the UI showing title, status, message count, and project. Find session IDs via \`cast search\`, \`cast feed\`, or \`cast context\`. Use bare IDs for inline references or \`@[Session Title jx7c6zk]\` for explicit mentions.
 
-### Messaging another session
-
-You can message another of your sessions directly with \`cast send <session_id> "<text>"\`. The text is injected into that session as a new turn, attributed to you, so the recipient can act on it and reply. Use this to hand off work, ask a session that owns context a question, or coordinate parallel efforts — instead of routing everything through the human.
-
-A message from another session arrives as a turn wrapped like \`<session-message from="jx7c6zk">…</session-message>\`. Treat it as coming from that peer session; reply by sending back to its ID with \`cast send jx7c6zk "<text>"\`.
-
 ### After compaction
 
 When your context gets compacted, re-read your task or plan context (\`cast task context --current\` / \`cast plan context --current\`) to reground yourself. Don't rely on memory of earlier conversation alone.
@@ -2048,7 +2044,6 @@ cast plan context --current                # Context for session's current plan
 cast plan comment <plan_id> "note"         # Add comment (progress by default)
 cast plan comment <plan_id> "x" -d -r "y" # Decision with rationale
 cast plan done/drop <plan_id>             # Close or abandon a plan
-cast send <session_id> "<text>"            # Message another session
 cast doc create "Title" [-c content] [-t type]
 cast doc show/ls/edit/search/comment
 \`\`\`
@@ -2089,6 +2084,20 @@ digraph my_flow {
 }
 \`\`\`
 ${WORKFLOW_SNIPPET_END}
+`;
+
+const MESSAGING_SNIPPET_END = "<!-- /codecast-messaging -->";
+const MESSAGING_SNIPPET = `
+## Messaging
+
+You can message another of your sessions directly with \`cast send <session_id> "<text>"\`. The text is injected into that session as a new turn, attributed to you, so the recipient can act on it and reply. Use this to hand off work, ask a session that owns context a question, or coordinate parallel efforts — instead of routing everything through the human.
+
+A message from another session arrives as a turn wrapped like \`<session-message from="jx7c6zk">…</session-message>\`. Treat it as coming from that peer session; reply by sending back to its ID with \`cast send jx7c6zk "<text>"\`.
+
+\`\`\`bash
+cast send <session_id> "<text>"            # Message another session
+\`\`\`
+${MESSAGING_SNIPPET_END}
 `;
 
 interface SnippetTarget {
@@ -2327,6 +2336,56 @@ function installWorkflowSnippet(update = false): { installed: boolean; updated: 
 
   for (const target of targets) {
     const result = installWorkflowSnippetToFile(target.filePath, target.dirPath, update);
+    if (result.installed) anyInstalled = true;
+    if (result.updated) anyUpdated = true;
+  }
+
+  return { installed: anyInstalled, updated: anyUpdated };
+}
+
+function installMessagingSnippetToFile(filePath: string, dirPath: string, update: boolean): { installed: boolean; updated: boolean } {
+  if (!fs.existsSync(dirPath)) {
+    fs.mkdirSync(dirPath, { recursive: true });
+  }
+
+  let existing = "";
+  if (fs.existsSync(filePath)) {
+    existing = fs.readFileSync(filePath, "utf-8");
+  }
+
+  const hasMessaging = existing.includes("## Messaging") && existing.includes(MESSAGING_SNIPPET_END);
+  if (hasMessaging && !update) {
+    return { installed: false, updated: false };
+  }
+
+  if (hasMessaging && update) {
+    const msgStart = existing.indexOf("## Messaging");
+    let msgEnd = existing.length;
+
+    const endMarkerIdx = existing.indexOf(MESSAGING_SNIPPET_END, msgStart);
+    if (endMarkerIdx !== -1) {
+      msgEnd = endMarkerIdx + MESSAGING_SNIPPET_END.length;
+      if (existing[msgEnd] === "\n") msgEnd++;
+    }
+
+    const before = existing.slice(0, msgStart);
+    const after = existing.slice(msgEnd);
+    existing = before + after;
+    fs.writeFileSync(filePath, existing.trimEnd() + "\n" + MESSAGING_SNIPPET, { mode: 0o600 });
+    return { installed: true, updated: true };
+  }
+
+  fs.writeFileSync(filePath, existing + MESSAGING_SNIPPET, { mode: 0o600 });
+  return { installed: true, updated: false };
+}
+
+function installMessagingSnippet(update = false): { installed: boolean; updated: boolean } {
+  const targets = getSnippetTargets();
+  let anyInstalled = false;
+  let anyUpdated = false;
+
+  for (const target of targets) {
+    const result = installMessagingSnippetToFile(target.filePath, target.dirPath, update);
     if (result.installed) anyInstalled = true;
     if (result.updated) anyUpdated = true;
   }
@@ -6840,6 +6899,21 @@ program
         reEnable: "cast memory",
       },
       {
+        name: "Messaging",
+        desc: "Session-to-session messages",
+        detail:
+          "Adds `cast send <session> \"...\"` so your sessions can message each other directly.\n" +
+          "  The text lands as a new turn in the target session, attributed to the sender, and\n" +
+          "  renders as a card in the dashboard showing who sent it. Pairs with the sessions/\n" +
+          "  recall family above — it's about coordinating sessions, not tracking work items.\n" +
+          "  Writes to: CLAUDE.md (adds a ## Messaging section with the send command)",
+        enabledKey: "messaging_enabled" as const,
+        versionKey: "messaging_version" as const,
+        getVersion: getMessagingVersion,
+        install: installMessagingSnippet,
+        reEnable: "cast messaging install",
+      },
+      {
         name: "Tasks & Plans",
         desc: "Work tracking for agents",
         detail:
@@ -6918,6 +6992,30 @@ program
 
     let anyInstalled = false;
 
+    // Stable mode — a SessionStart hook (not a markdown snippet), so it's a
+    // solo/team/off choice rather than a boolean. It belongs with the sessions/
+    // recall family, so it's offered right after Memory.
+    const runStableSelect = async () => {
+      const currentStable: "solo" | "team" | "off" = (config as any).stable_mode ?? "off";
+      console.log(`\n  ${c.bold}Stable${c.reset} — inject recent session history into every new conversation`);
+      console.log(fmt.muted(`  Adds a SessionStart hook that feeds recent sessions into each new session.`));
+      const stableChoice = await select<"solo" | "team" | "off">({
+        message: `Enable stable mode? [${currentStable}]`,
+        choices: [
+          { name: "Solo — your recent sessions (last 7 days)", value: "solo" },
+          { name: "Team — all team activity (last 14 days)", value: "team" },
+          { name: "None — off", value: "off" },
+        ],
+        default: currentStable,
+      });
+      applyStableMode(config, stableChoice, (config as any).stable_global === true);
+      console.log(
+        stableChoice === "off"
+          ? `  ${icons.cross} stable mode off`
+          : `  ${icons.check} stable mode: ${stableChoice}`
+      );
+    };
+
     for (const s of snippets) {
       const enabled = (config as any)[s.enabledKey];
       const status = enabled === true ? fmt.success("enabled") : enabled === false ? fmt.muted("disabled") : fmt.muted("not set up");
@@ -6953,28 +7051,11 @@ program
         (config as any)[s.enabledKey] = false;
         console.log(`  ${icons.cross} skipped`);
       }
-    }
 
-    // Stable mode — inject recent session history into every new conversation
-    if (!options.all) {
-      const currentStable: "solo" | "team" | "off" = (config as any).stable_mode ?? "off";
-      console.log(`\n  ${c.bold}Stable Mode${c.reset} — inject recent session history into every new conversation`);
-      console.log(fmt.muted(`  Adds a SessionStart hook that feeds recent sessions into each new session.`));
-      const stableChoice = await select<"solo" | "team" | "off">({
-        message: `Enable stable mode? [${currentStable}]`,
-        choices: [
-          { name: "Solo — your recent sessions (last 7 days)", value: "solo" },
-          { name: "Team — all team activity (last 14 days)", value: "team" },
-          { name: "None — off", value: "off" },
-        ],
-        default: currentStable,
-      });
-      applyStableMode(config, stableChoice, (config as any).stable_global === true);
-      console.log(
-        stableChoice === "off"
-          ? `  ${icons.cross} stable mode off`
-          : `  ${icons.check} stable mode: ${stableChoice}`
-      );
+      // Offer Stable right after Memory — same sessions/recall family.
+      if (s.enabledKey === "memory_enabled") {
+        await runStableSelect();
+      }
     }
 
     writeConfig(config);
