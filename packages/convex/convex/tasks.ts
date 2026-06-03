@@ -1,4 +1,5 @@
 import { v } from "convex/values";
+import { paginationOptsValidator } from "convex/server";
 import { internalMutation, mutation, query } from "./_generated/server";
 import { verifyApiToken } from "./apiTokens";
 import { enqueueStartSession } from "./devices";
@@ -927,6 +928,84 @@ export const context = query({
 
 // --- Web-facing queries (use Convex auth, no api_token) ---
 
+// Enrich a page of task rows in place with creator/assignee/plan/source info.
+// Shared by webList (the live delta channel) and webListPaginated (the full
+// reconcile crawl) so both return identical task shapes. Mutates `result` in
+// place — the spread form `{...t, ...}` doubled peak heap and was a top
+// contributor to TooMuchMemoryCarryOver on these UDFs.
+async function enrichTasks(ctx: any, result: any[]): Promise<any[]> {
+  const allUserIds = new Set<string>();
+  for (const t of result) {
+    allUserIds.add(t.user_id.toString());
+    if (t.assignee) allUserIds.add(t.assignee.toString());
+  }
+  const userMap = new Map<string, { name: string; image?: string; github_username?: string }>();
+  for (const uid of allUserIds) {
+    try {
+      const u = await ctx.db.get(uid as Id<"users">);
+      if (u) userMap.set(uid, { name: u.name || u.email || "Unknown", image: u.image || u.github_avatar_url, github_username: u.github_username });
+    } catch {
+      const lower = uid.toLowerCase();
+      const u = await ctx.db.query("users").withIndex("by_github_username", (q: any) => q.eq("github_username", uid)).first()
+        || await ctx.db.query("users").withIndex("by_github_username", (q: any) => q.eq("github_username", lower)).first();
+      if (u) {
+        userMap.set(uid, { name: u.name || u.email || "Unknown", image: u.image || u.github_avatar_url, github_username: u.github_username });
+      }
+    }
+  }
+
+  const planIds = new Set<string>();
+  for (const t of result) {
+    if (t.plan_id) planIds.add(t.plan_id.toString());
+  }
+  const planMap = new Map<string, { _id: any; short_id: string; title: string; status: string }>();
+  for (const pid of planIds) {
+    try {
+      const p = await ctx.db.get(pid as Id<"plans">);
+      if (p) planMap.set(pid, { _id: p._id, short_id: p.short_id, title: p.title, status: p.status });
+    } catch {}
+  }
+
+  // NOTE: activeSession enrichment is intentionally NOT inlined here — it caused
+  // the list queries to subscribe to managed_sessions and conversations, both of
+  // which churn on every daemon heartbeat (~30s per active session), re-shipping
+  // a multi-MB response every few seconds. Live-session overlay lives in
+  // `webActiveSessions` (small, cheap to invalidate); the web client merges it.
+
+  const sourceConvIds = new Set<string>();
+  for (const t of result) {
+    if (t.created_from_conversation) {
+      sourceConvIds.add(t.created_from_conversation.toString());
+    }
+  }
+  const sourceConvMap = new Map<string, { agent_type?: string; session_id?: string; title?: string }>();
+  for (const cid of sourceConvIds) {
+    try {
+      const c = await ctx.db.get(cid as Id<"conversations">);
+      if (c) sourceConvMap.set(cid, { agent_type: c.agent_type, session_id: c.session_id, title: c.title || undefined });
+    } catch {}
+  }
+
+  for (const t of result) {
+    t.creator = userMap.get(t.user_id.toString()) || null;
+    t.assignee_info = t.assignee ? userMap.get(t.assignee.toString()) || null : null;
+    t.plan = t.plan_id ? planMap.get(t.plan_id.toString()) || null : null;
+    t.source_agent_type = t.created_from_conversation
+      ? sourceConvMap.get(t.created_from_conversation.toString())?.agent_type || null
+      : null;
+    if (t.created_from_conversation) {
+      const sc = sourceConvMap.get(t.created_from_conversation.toString());
+      t.origin_session = sc?.session_id
+        ? { conversation_id: t.created_from_conversation.toString(), session_id: sc.session_id, title: sc.title }
+        : null;
+    } else {
+      t.origin_session = null;
+    }
+    t.session_count = (t.conversation_ids || []).length;
+  }
+  return result;
+}
+
 export const webList = query({
   args: {
     project_id: v.optional(v.string()),
@@ -1094,60 +1173,6 @@ export const webList = query({
     // Client-side filtering handles everything; we never want to silently drop items.
     const result = tasks;
 
-    // Enrich with creator and assignee info
-    const allUserIds = new Set<string>();
-    for (const t of result) {
-      allUserIds.add(t.user_id.toString());
-      if (t.assignee) allUserIds.add(t.assignee.toString());
-    }
-    const userMap = new Map<string, { name: string; image?: string; github_username?: string }>();
-    for (const uid of allUserIds) {
-      try {
-        const u = await ctx.db.get(uid as Id<"users">);
-        if (u) userMap.set(uid, { name: u.name || u.email || "Unknown", image: u.image || u.github_avatar_url, github_username: u.github_username });
-      } catch {
-        const lower = uid.toLowerCase();
-        const u = await ctx.db.query("users").withIndex("by_github_username", (q: any) => q.eq("github_username", uid)).first()
-          || await ctx.db.query("users").withIndex("by_github_username", (q: any) => q.eq("github_username", lower)).first();
-        if (u) {
-          userMap.set(uid, { name: u.name || u.email || "Unknown", image: u.image || u.github_avatar_url, github_username: u.github_username });
-        }
-      }
-    }
-
-    const planIds = new Set<string>();
-    for (const t of result) {
-      if (t.plan_id) planIds.add(t.plan_id.toString());
-    }
-    const planMap = new Map<string, { _id: any; short_id: string; title: string; status: string }>();
-    for (const pid of planIds) {
-      try {
-        const p = await ctx.db.get(pid as Id<"plans">);
-        if (p) planMap.set(pid, { _id: p._id, short_id: p.short_id, title: p.title, status: p.status });
-      } catch {}
-    }
-
-    // NOTE: activeSession enrichment was previously inlined here, but it caused
-    // webList to subscribe to managed_sessions and conversations — both of
-    // which churn on every daemon heartbeat (~30s per active session). The
-    // result: a 13MB response re-shipped every few seconds, regardless of
-    // whether any task actually changed. Live-session overlay now lives in
-    // `webActiveSessions` (small, cheap to invalidate). Web client merges.
-
-    const sourceConvIds = new Set<string>();
-    for (const t of result) {
-      if (t.created_from_conversation) {
-        sourceConvIds.add(t.created_from_conversation.toString());
-      }
-    }
-    const sourceConvMap = new Map<string, { agent_type?: string; session_id?: string; title?: string }>();
-    for (const cid of sourceConvIds) {
-      try {
-        const c = await ctx.db.get(cid as Id<"conversations">);
-        if (c) sourceConvMap.set(cid, { agent_type: c.agent_type, session_id: c.session_id, title: c.title || undefined });
-      } catch {}
-    }
-
     // Compute the delta cursor from the *unfiltered* row set so the next
     // subscription doesn't keep re-fetching rows the local filters dropped.
     // For full-snapshot mode (no `since`) cursor still reflects the newest
@@ -1157,27 +1182,57 @@ export const webList = query({
       if (typeof t.updated_at === "number" && t.updated_at > cursor) cursor = t.updated_at;
     }
 
-    // In-place enrichment instead of `{...t, ...}` — the spread doubled peak
-    // heap (both `result` and the enriched array alive simultaneously) and
-    // was a top contributor to TooMuchMemoryCarryOver on this UDF.
-    for (const t of result as any[]) {
-      t.creator = userMap.get(t.user_id.toString()) || null;
-      t.assignee_info = t.assignee ? userMap.get(t.assignee.toString()) || null : null;
-      t.plan = t.plan_id ? planMap.get(t.plan_id.toString()) || null : null;
-      t.source_agent_type = t.created_from_conversation
-        ? sourceConvMap.get(t.created_from_conversation.toString())?.agent_type || null
-        : null;
-      if (t.created_from_conversation) {
-        const sc = sourceConvMap.get(t.created_from_conversation.toString());
-        t.origin_session = sc?.session_id
-          ? { conversation_id: t.created_from_conversation.toString(), session_id: sc.session_id, title: sc.title }
-          : null;
-      } else {
-        t.origin_session = null;
-      }
-      t.session_count = (t.conversation_ids || []).length;
-    }
+    await enrichTasks(ctx, result);
     return { items: result, hasMore: false, cursor, isDelta };
+  },
+});
+
+// Full, uncapped task loader — paginated so the client can crawl EVERY task in
+// a workspace into its store without the 96 MiB isolate OOM that an unbounded
+// collect triggers (TooMuchMemoryCarryOver). webList caps the live snapshot at
+// the 300 most-recently-updated rows; on a busy team that window is entirely
+// consumed by recently-dropped tasks, hiding cold open tasks (e.g. ones assigned
+// to teammates) forever — there was no "load more". This query is the load-more:
+// the client (useSyncTasks) pages through it one-shot (NOT a live subscription),
+// pacing the crawl, and surfaces a visible "loading all tasks" state.
+//
+// Soft-deleted (status="dropped") rows are excluded — they are deletions the UI
+// never renders; loading thousands of them would only waste pages and store.
+// Scoping mirrors webList: team view → all team tasks; personal/unscoped → mine.
+export const webListPaginated = query({
+  args: {
+    workspace: v.optional(v.union(v.literal("personal"), v.literal("team"), v.literal("all"))),
+    team_id: v.optional(v.id("teams")),
+    project_path: v.optional(v.string()),
+    include_derived: v.optional(v.boolean()),
+    paginationOpts: paginationOptsValidator,
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return { page: [], isDone: true, continueCursor: "" };
+
+    // Defensive clamp. Task docs are small (~2 KB avg, ~8 KB max observed), so
+    // 500/page is well under the 64 MB query memory cap — but cap it so a future
+    // task with a huge body can't blow the isolate mid-crawl.
+    const paginationOpts = {
+      ...args.paginationOpts,
+      numItems: Math.min(args.paginationOpts.numItems, 500),
+    };
+
+    // Primary stream: newest-updated first, scoped to the workspace. Team view
+    // reads by_team_updated so EVERY team task (any assignee, any age) is
+    // reachable across pages — the whole point of the fix.
+    const base = (args.workspace === "team" && args.team_id)
+      ? ctx.db.query("tasks").withIndex("by_team_updated", (q: any) => q.eq("team_id", args.team_id)).order("desc")
+      : ctx.db.query("tasks").withIndex("by_user_updated", (q: any) => q.eq("user_id", userId)).order("desc");
+
+    const result = await base.paginate(paginationOpts);
+
+    let rows = result.page.filter((t: any) => t.status !== "dropped");
+    if (args.project_path) rows = scopeByProject(rows, args.project_path);
+    await enrichTasks(ctx, rows);
+
+    return { page: rows, isDone: result.isDone, continueCursor: result.continueCursor };
   },
 });
 
