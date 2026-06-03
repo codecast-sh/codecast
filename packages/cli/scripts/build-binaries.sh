@@ -6,8 +6,10 @@ cd "$(dirname "$0")/.."
 OUTPUT_DIR="../web/binaries"
 mkdir -p "$OUTPUT_DIR"
 
-echo "Rebuilding daemon.js from source..."
-bun build src/daemon.ts --outfile src/daemon.js --target node
+# Refuse to build if a stale src/*.js shadow is present — it would hijack
+# import("./daemon.js") and silently bundle old code. The --compile step below
+# bundles daemon.ts directly, so no pre-compiled daemon.js intermediate is needed.
+bash scripts/guard-no-src-shadow.sh
 
 echo "Building codecast binaries..."
 
