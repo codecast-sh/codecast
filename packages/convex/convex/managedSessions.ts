@@ -901,30 +901,44 @@ export const getConversationBySessionId = query({
   },
 });
 
-// Reap dead managed_sessions. The daemon heartbeats every live session every ~30s,
-// so a row not heartbeated in over an hour belongs to a session whose process/tmux
-// is long gone. These rows accumulate (one per resumed/forked tmux session that was
-// never cleanly unregistered) and bloat every listInboxSessions `.collect()` of
-// managed_sessions — the read grows unboundedly, inflating the cost of the hottest
-// inbox query. A periodic sweep keeps the table lean. Deletion is safe: if such a
-// session ever revives, the daemon re-registers it via registerManagedSession.
+// Reap dead managed_sessions — rows whose daemon stopped heartbeating (a crash, a
+// kill, or a forked tmux that was never cleanly unregistered). This is pure
+// housekeeping, NOT correctness: clean shutdowns delete their own row, and every
+// reader already ignores stale rows by filtering on heartbeat age
+// (HEARTBEAT_ALIVE_MS), so a dead row never shows up as "live". The reaper just
+// stops the registry growing without bound — Convex won't drop the row on its own
+// (a dead session's final row is its newest version, not a superseded one).
+//
+// The one non-obvious bit: `last_heartbeat` is indexed and rewritten every ~45s per
+// live session, and Convex keeps ~10 days of old index versions, so the OLD end of
+// `by_heartbeat` is a multi-million-row tombstone graveyard. An unbounded
+// `lt(cutoff)` scan timed out fetching even one row. The fix is the LOWER bound:
+// gte(cutoff - WINDOW) lets the index seek straight to the recent sliver and skip
+// the graveyard. That range is also disjoint from live heartbeats (which land at
+// > cutoff), so the deletes never collide with heartbeat writes. Everything in range
+// is dead by definition. WINDOW only needs to exceed the gap between cron runs so a
+// death is always caught before it ages out — 6h gives the 10-min cron wide margin.
+const REAP_WINDOW_MS = 6 * 60 * 60 * 1000;
 export const reapStaleManagedSessions = internalMutation({
-  args: { cutoffMs: v.optional(v.number()), max: v.optional(v.number()) },
+  args: { cutoffMs: v.optional(v.number()) },
   handler: async (ctx, args) => {
-    const cutoff = Date.now() - (args.cutoffMs ?? 60 * 60 * 1000); // 1h default
-    const max = args.max ?? 1000;
-    // Range-scan only the stale rows via the by_heartbeat index. This keeps the
-    // read set to the rows we delete (last_heartbeat < cutoff). Live sessions get
-    // fresh heartbeats (> cutoff), so their constant writes fall OUTSIDE this range
-    // and can't invalidate the sweep — avoiding the OCC stampede a full-table scan
-    // hits while reportMetrics/heartbeat are writing.
-    const stale = await ctx.db
+    const cutoff = Date.now() - (args.cutoffMs ?? 60 * 60 * 1000); // dead = no beat in 1h
+    const readStart = Date.now();
+    const dead = await ctx.db
       .query("managed_sessions")
-      .withIndex("by_heartbeat", (q: any) => q.lt("last_heartbeat", cutoff))
-      .take(max);
-    for (const s of stale) {
-      await ctx.db.delete(s._id);
+      .withIndex("by_heartbeat", (q: any) =>
+        q.gte("last_heartbeat", cutoff - REAP_WINDOW_MS).lt("last_heartbeat", cutoff)
+      )
+      .collect();
+    const readMs = Date.now() - readStart;
+
+    for (const s of dead) await ctx.db.delete(s._id);
+
+    if (dead.length > 0) {
+      console.log(
+        `reapStaleManagedSessions: deleted ${dead.length} dead session(s) (scan ${readMs}ms)`
+      );
     }
-    return { deleted: stale.length, hasMore: stale.length === max };
+    return { deleted: dead.length };
   },
 });

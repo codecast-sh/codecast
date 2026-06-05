@@ -32,6 +32,24 @@ export function shouldShowInInbox(conv: ConversationDoc): boolean {
   return true;
 }
 
+// Whether `parent` is a conversation an orchestration worker can safely be
+// nested under at spawn time. We only stamp a worker's parent_conversation_id
+// when this holds, because listInboxSessions surfaces a child *only* under a
+// parent that is itself in the inbox and not dismissed (see the `dismissed`
+// guard in that query). Linking to a parent that fails this test would make
+// the worker vanish entirely instead of nesting. When it returns false the
+// caller leaves the worker top-level and the client's plan-grouping fallback
+// takes over.
+export function isViableInboxParent(
+  parent: ConversationDoc | null | undefined,
+  userId: string,
+): boolean {
+  if (!parent) return false;
+  if (parent.user_id.toString() !== userId) return false;
+  if (parent.inbox_dismissed_at) return false;
+  return shouldShowInInbox(parent);
+}
+
 // Anti-flicker grace before a finished agent is treated as idle. Mirrors the
 // "working" pill in ConversationView so the inbox bucket and the per-conversation
 // header agree for the moment right after a turn ends.

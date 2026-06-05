@@ -209,6 +209,38 @@ export const getExistingInsight = internalQuery({
   },
 });
 
+// Lazy per-card enrichment for the unified activity feed. The feed lists every
+// team-visible session straight from listConversations; a card calls this only
+// when it is expanded, to pull its AI summary if one already exists. Read-only:
+// returns null when the session was never summarized, in which case the card
+// stays plain (or the client triggers regenerateSessionInsight on demand).
+export const getSessionInsight = query({
+  args: { conversation_id: v.id("conversations") },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return null;
+    const insight = await ctx.db
+      .query("session_insights")
+      .withIndex("by_conversation_id", (q) => q.eq("conversation_id", args.conversation_id))
+      .first();
+    if (!insight) return null;
+    return {
+      conversation_id: insight.conversation_id,
+      summary: insight.summary,
+      headline: insight.headline,
+      key_changes: insight.key_changes,
+      timeline: insight.timeline,
+      turns: insight.turns,
+      outcome_type: insight.outcome_type,
+      blockers: insight.blockers,
+      next_action: insight.next_action,
+      themes: insight.themes,
+      generated_at: insight.generated_at,
+      metadata: insight.metadata,
+    };
+  },
+});
+
 export const getBackfillCandidates = internalQuery({
   args: {
     team_id: v.id("teams"),

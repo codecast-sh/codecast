@@ -5,10 +5,9 @@ import { enqueueStartSession } from "./devices";
 import { Id } from "./_generated/dataModel";
 import { checkRateLimit } from "./rateLimit";
 import { resolveTeamForPath } from "./privacy";
-import { pickInheritedGitMeta, type GitMetaSource } from "./projectPaths";
 import { hasRecentPendingDaemonCommand } from "./daemonCommandUtils";
 import { nextShortId } from "./counters";
-import { resolveAssigneeStr, resolveAssigneeToUserId, recalcPlanProgress, notifySubscribers, subscribeUser } from "./tasks";
+import { resolveAssigneeStr, resolveAssigneeToUserId, recalcPlanProgress, notifySubscribers, subscribeUser, resolveWorkerParentConversation, resolveTaskGitContext } from "./tasks";
 import { internal } from "./_generated/api";
 
 type TableConfig =
@@ -188,46 +187,15 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
         if (!hasAccess) {
           linkedTask = null;
         } else {
-          if (!resolvedProjectPath) {
-            if (linkedTask.project_path) {
-              resolvedProjectPath = linkedTask.project_path;
-            } else if (linkedTask.team_id) {
-              const teamMapping = mappings.find((m: any) => m.team_id.toString() === linkedTask.team_id.toString());
-              if (teamMapping) resolvedProjectPath = teamMapping.path_prefix;
-            }
-            if (!resolvedGitRoot) resolvedGitRoot = resolvedProjectPath;
-          }
-
-          // A task stores project_path but never git_remote_url. Without the
-          // remote, a daemon on a different machine than where the task last ran
-          // can't map the task's foreign recorded path to the user's local
-          // checkout (resolveLocalProjectPath needs the remote) → spurious
-          // "clone it first" banner. Recover it from the task's own source
-          // conversations, which a daemon stamped git metadata onto.
-          const sourceIds: Id<"conversations">[] = [];
-          if (linkedTask.created_from_conversation) sourceIds.push(linkedTask.created_from_conversation);
-          for (const cid of (linkedTask.conversation_ids ?? [])) {
-            if (!sourceIds.some((s) => s.toString() === cid.toString())) sourceIds.push(cid);
-          }
-          const sources: GitMetaSource[] = [];
-          for (const cid of sourceIds) {
-            const c = await ctx.db.get(cid).catch(() => null);
-            // Only the user's own sessions — git metadata stays within the user.
-            if (c && c.user_id.toString() === userId.toString()) {
-              sources.push({ git_remote_url: c.git_remote_url, git_root: c.git_root, updated_at: c.updated_at, started_at: c.started_at });
-            }
-          }
-          const inherited = pickInheritedGitMeta(sources);
-          if (inherited.git_remote_url) {
-            resolvedGitRemoteUrl = inherited.git_remote_url;
-            // Prefer the real repo root over a full foreign path so the daemon
-            // can preserve the in-repo subpath when it remaps to a local checkout.
-            if (inherited.git_root && resolvedProjectPath
-                && resolvedProjectPath.startsWith(inherited.git_root)
-                && inherited.git_root !== resolvedGitRoot) {
-              resolvedGitRoot = inherited.git_root;
-            }
-          }
+          // Resolve project_path/git_root/git_remote_url from the task. Shared
+          // with tasks.assignToAgent so both task-launch paths route identically.
+          const resolved = await resolveTaskGitContext(ctx, userId, linkedTask, mappings, {
+            project_path: resolvedProjectPath,
+            git_root: resolvedGitRoot,
+          });
+          resolvedProjectPath = resolved.project_path;
+          resolvedGitRoot = resolved.git_root;
+          resolvedGitRemoteUrl = resolved.git_remote_url;
         }
       }
     }
@@ -238,6 +206,17 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       conversationPath,
       linkedTask?.team_id
     );
+
+    // Nest orchestration workers under their plan's creator session so they
+    // don't clutter the top-level inbox. The plan is found via a linked task
+    // or a directly-linked plan; resolveWorkerParentConversation only returns
+    // a parent that the inbox will actually render the child under.
+    const workerPlanId: Id<"plans"> | undefined =
+      (linkedTask?.plan_id as Id<"plans"> | undefined) ??
+      (opts.linked_object?.type === "plan" && opts.linked_object.id
+        ? (opts.linked_object.id as Id<"plans">)
+        : undefined);
+    const parentConversationId = await resolveWorkerParentConversation(ctx, userId, workerPlanId);
 
     const conversationId = await ctx.db.insert("conversations", {
       user_id: userId,
@@ -254,6 +233,12 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       auto_shared: autoShared || undefined,
       status: "active" as const,
       ...(linkedTask ? { active_task_id: linkedTask._id } : {}),
+      // Stamp the plan so the inbox can group plan workers even without a viable
+      // parent session to nest under (the grouping fallback).
+      ...(workerPlanId ? { active_plan_id: workerPlanId } : {}),
+      ...(parentConversationId
+        ? { parent_conversation_id: parentConversationId, is_subagent: true }
+        : {}),
     });
 
     await ctx.db.patch(conversationId, { short_id: conversationId.toString().slice(0, 7) });
