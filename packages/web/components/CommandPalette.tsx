@@ -48,7 +48,9 @@ import {
 
 const api = _api as any;
 
-type ActionMode = "status" | "priority" | "labels" | "assign" | "type" | "plan_status";
+type ActionMode = "status" | "priority" | "labels" | "assign" | "type" | "plan_status" | "agent_run";
+
+const DEFAULT_AGENT_RUN_MESSAGE = "lets do this task";
 
 const PLAN_STATUS_OPTIONS = [
   { key: "draft", icon: Circle, label: "Draft", color: "text-neutral-500", shortcut: "1" },
@@ -185,6 +187,13 @@ function ActionSubmenu({
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
+  // Two-step state for the "Start agent run" mode: pick an agent, then compose
+  // the initial message before launching a run per selected task.
+  const [agentStep, setAgentStep] = useState<"pick" | "message">("pick");
+  const [selectedAgentKey, setSelectedAgentKey] = useState<string | null>(null);
+  const [agentMessage, setAgentMessage] = useState(DEFAULT_AGENT_RUN_MESSAGE);
+  const messageRef = useRef<HTMLTextAreaElement>(null);
+
   const webUpdatePlan = useMutation(api.plans.webUpdate);
   const assignToAgent = useMutation(api.tasks.assignToAgent);
   const updateTask = useInboxStore((s) => s.updateTask);
@@ -199,8 +208,17 @@ function ActionSubmenu({
   useWatchEffect(() => {
     setSearch("");
     setHighlightIndex(0);
+    setAgentStep("pick");
+    setSelectedAgentKey(null);
+    setAgentMessage(DEFAULT_AGENT_RUN_MESSAGE);
     setTimeout(() => inputRef.current?.focus(), 0);
   }, [mode]);
+
+  useWatchEffect(() => {
+    if (mode === "agent_run" && agentStep === "message") {
+      setTimeout(() => messageRef.current?.focus(), 0);
+    }
+  }, [mode, agentStep]);
 
   const items = useMemo(() => {
     const q = search.toLowerCase();
@@ -246,14 +264,18 @@ function ActionSubmenu({
       return matched;
     }
     if (mode === "assign") {
-      const agents = AGENT_OPTIONS.map((a) => ({ ...a, type: "agent" as const, image: undefined }));
       const members = (teamMembers || []).filter(Boolean).map((m: any) => ({
         key: m._id,
         label: currentUser && m._id === currentUser._id ? `${m.name} (you)` : m.name,
         type: "user" as const,
         image: m.image || m.github_avatar_url,
       }));
-      return [...agents, ...members].filter((o) => o.label.toLowerCase().includes(q));
+      return members.filter((o) => o.label.toLowerCase().includes(q));
+    }
+    if (mode === "agent_run") {
+      return AGENT_OPTIONS
+        .filter((o) => o.label.toLowerCase().includes(q))
+        .map((a, i) => ({ ...a, type: "agent" as const, image: undefined, shortcut: String(i + 1) }));
     }
     if (mode === "plan_status") {
       return PLAN_STATUS_OPTIONS
@@ -272,6 +294,13 @@ function ActionSubmenu({
     const item = items[index] as any;
     if (!item || !target) return;
     const count = targets.length;
+
+    // Agent-run picks an agent, then advances to the message step (not a fire).
+    if (mode === "agent_run") {
+      setSelectedAgentKey(item.key);
+      setAgentStep("message");
+      return;
+    }
 
     if (targetType === "task") {
       const applyTaskUpdate = (fields: Record<string, any>) => {
@@ -294,16 +323,9 @@ function ActionSubmenu({
         applyTaskUpdate({ labels: newLabels });
         toast.success(`${item.active ? "Removed" : "Added"} label: ${item.key}`);
       } else if (mode === "assign") {
-        if (item.key.startsWith("agent:")) {
-          for (const t of targets as TaskItem[]) {
-            assignToAgent({ short_id: t.short_id, agent_type: item.key.replace("agent:", "") }).catch(() => {});
-          }
-          toast.success(`Starting session with ${item.label}...`);
-        } else {
-          applyTaskUpdate({ assignee: item.key });
-          const member = (teamMembers || []).find((m: any) => m._id === item.key);
-          toast.success(`Assigned to ${member?.name || "user"}`);
-        }
+        applyTaskUpdate({ assignee: item.key });
+        const member = (teamMembers || []).find((m: any) => m._id === item.key);
+        toast.success(`Assigned to ${member?.name || "user"}`);
       }
     } else if (targetType === "plan") {
       if (mode === "plan_status") {
@@ -326,6 +348,34 @@ function ActionSubmenu({
     }
     onClose();
   }, [items, target, targets, targetType, mode, currentLabels, onClose, updateTask, webUpdatePlan, assignToAgent, updateDoc, teamMembers, router]);
+
+  // Launch a session per selected task with the chosen agent + initial message.
+  const launchAgentRun = useCallback(() => {
+    if (!selectedAgentKey) return;
+    const agentType = selectedAgentKey.replace("agent:", "");
+    const agentLabel = AGENT_OPTIONS.find((a) => a.key === selectedAgentKey)?.label || "agent";
+    const msg = agentMessage.trim() || undefined;
+    const runnable = (targets as TaskItem[]).filter((t) => t && t.short_id);
+    if (!runnable.length) {
+      toast.error("No tasks to run");
+      return;
+    }
+    Promise.allSettled(
+      runnable.map((t) => assignToAgent({ short_id: t.short_id, agent_type: agentType, initial_message: msg }))
+    ).then((results) => {
+      const failures = results.filter((r) => r.status === "rejected") as PromiseRejectedResult[];
+      const ok = runnable.length - failures.length;
+      if (failures.length) console.error("[agent_run] failures", failures.map((f) => f.reason));
+      if (!ok) {
+        toast.error(`Couldn't start ${agentLabel}: ${failures[0]?.reason?.message || "failed"}`);
+      } else if (failures.length) {
+        toast.warning(`Started ${ok}/${runnable.length} ${agentLabel} runs — ${failures.length} failed`);
+      } else {
+        toast.success(ok === 1 ? `Starting ${agentLabel}` : `Starting ${ok} ${agentLabel} sessions`);
+      }
+    });
+    onClose();
+  }, [selectedAgentKey, agentMessage, targets, assignToAgent, onClose]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === "Escape" || (e.key === "Backspace" && search === "")) {
@@ -366,8 +416,9 @@ function ActionSubmenu({
     mode === "status" ? "Change status..." :
     mode === "priority" ? "Set priority..." :
     mode === "labels" ? "Toggle label..." :
-    mode === "assign" ? "Assign to person or agent..." :
+    mode === "assign" ? "Assign to person..." :
     mode === "type" ? "Change document type..." :
+    mode === "agent_run" ? "Start agent run — pick an agent..." :
     "Select...";
 
   const itemClass = (i: number) =>
@@ -376,6 +427,71 @@ function ActionSubmenu({
         ? "bg-sol-bg-highlight text-sol-text"
         : "text-sol-text-muted hover:bg-sol-bg-alt/50"
     }`;
+
+  // Second step of "Start agent run": compose the initial message, then launch.
+  if (mode === "agent_run" && agentStep === "message") {
+    const agentLabel = AGENT_OPTIONS.find((a) => a.key === selectedAgentKey)?.label || "Agent";
+    const count = targets.length;
+    const targetSummary = count === 1 ? (targets[0] as TaskItem).short_id : `${count} tasks`;
+    return (
+      <>
+        <div className="flex items-center gap-2 px-4 py-2 border-b border-sol-border/30">
+          <button
+            onClick={() => setAgentStep("pick")}
+            className="text-xs px-1.5 py-0.5 rounded bg-sol-bg-alt border border-sol-border/50 text-sol-text-dim hover:text-sol-text transition-colors flex-shrink-0"
+          >
+            &larr;
+          </button>
+          <Bot className={`w-4 h-4 flex-shrink-0 ${AGENT_COLORS[selectedAgentKey || ""] || "text-sol-violet"}`} />
+          <span className="text-sm text-sol-text">{agentLabel}</span>
+          <span className="text-xs text-sol-text-dim font-mono">· {targetSummary}</span>
+        </div>
+        <div className="p-4">
+          <label className="block text-[10px] font-semibold uppercase tracking-widest text-sol-text-dim/70 mb-2">
+            Initial message
+          </label>
+          <textarea
+            ref={messageRef}
+            value={agentMessage}
+            onChange={(e) => setAgentMessage(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                launchAgentRun();
+              } else if (e.key === "Escape") {
+                e.preventDefault();
+                setAgentStep("pick");
+              }
+            }}
+            rows={4}
+            placeholder="Message the agent starts with..."
+            className="w-full resize-none rounded-lg bg-sol-bg-alt/40 border border-sol-border/40 px-3 py-2 text-sm text-sol-text placeholder:text-sol-text-dim/60 outline-none focus:border-sol-cyan/50 transition-colors"
+          />
+          <button
+            onClick={launchAgentRun}
+            className="mt-3 w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-sol-cyan/15 hover:bg-sol-cyan/25 border border-sol-cyan/30 text-sol-cyan text-sm font-medium transition-colors"
+          >
+            <Bot className="w-4 h-4" />
+            {count === 1 ? `Launch ${agentLabel}` : `Launch ${count} ${agentLabel} runs`}
+          </button>
+        </div>
+        <div className="flex items-center gap-3 px-4 py-2 border-t border-sol-border/30 text-[10px] text-sol-text-dim">
+          <span className="flex items-center gap-1">
+            <CornerDownLeft className="w-3 h-3" />
+            launch
+          </span>
+          <span className="flex items-center gap-1">
+            <kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/40 font-mono">&#8679;&#9166;</kbd>
+            newline
+          </span>
+          <span className="flex items-center gap-1">
+            <kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/40 font-mono">esc</kbd>
+            back
+          </span>
+        </div>
+      </>
+    );
+  }
 
   return (
     <>
@@ -409,10 +525,10 @@ function ActionSubmenu({
               onMouseEnter={() => setHighlightIndex(i)}
               className={itemClass(i)}
             >
-              {mode === "assign" ? (
-                item.type === "agent" ? (
-                  <Bot className={`w-4 h-4 flex-shrink-0 ${AGENT_COLORS[item.key] || "text-sol-violet"}`} />
-                ) : item.image ? (
+              {item.type === "agent" ? (
+                <Bot className={`w-4 h-4 flex-shrink-0 ${AGENT_COLORS[item.key] || "text-sol-violet"}`} />
+              ) : mode === "assign" ? (
+                item.image ? (
                   <img src={item.image} alt={item.label} className="w-4 h-4 rounded-full flex-shrink-0" />
                 ) : (
                   <div className="w-4 h-4 rounded-full flex-shrink-0 bg-sol-bg-highlight border border-sol-border/50 flex items-center justify-center text-[8px] font-medium text-sol-text-muted">
@@ -431,8 +547,8 @@ function ActionSubmenu({
                   {item.shortcut}
                 </kbd>
               )}
-              {mode === "assign" && item.type === "agent" && (
-                <span className="text-[10px] text-sol-text-dim font-mono">start session</span>
+              {item.type === "agent" && (
+                <span className="text-[10px] text-sol-text-dim font-mono">&rarr;</span>
               )}
             </button>
           );
@@ -695,7 +811,7 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
     if (!targets.length) return;
     const target = targets[0] as any;
 
-    if (["status", "priority", "labels", "assign", "type", "plan_status"].includes(actionKey)) {
+    if (["status", "priority", "labels", "assign", "type", "plan_status", "agent_run"].includes(actionKey)) {
       setActionMode(actionKey as ActionMode);
       return;
     }
@@ -795,6 +911,7 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
     { key: "priority", label: "Set priority...", icon: ArrowUp, shortcut: "P" },
     { key: "labels", label: "Add labels...", icon: Tag, shortcut: "L" },
     { key: "assign", label: "Assign to...", icon: User, shortcut: "A" },
+    { key: "agent_run", label: "Start agent run...", icon: Bot, shortcut: "R" },
     { key: "copy", label: "Copy task ID", icon: Copy, shortcut: "\u2318." },
     { key: "drop", label: "Drop task", icon: Trash2, shortcut: "D" },
   ], []);
@@ -1079,8 +1196,10 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
             <CommandPrimitive.Item
               value="__compose__"
               onSelect={() => {
-                if (standalone && isElectron()) {
-                  window.__CODECAST_ELECTRON__?.paletteNewSession?.();
+                if (standalone) {
+                  // Flip this palette window into the compose popup, carrying
+                  // the typed text in as the first message.
+                  window.dispatchEvent(new CustomEvent('codecast-compose', { detail: query.trim() }));
                 } else {
                   closePalette();
                   window.dispatchEvent(new CustomEvent('codecast-new-session'));

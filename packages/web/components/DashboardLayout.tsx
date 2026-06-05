@@ -25,6 +25,7 @@ import { SetupPromptBanner } from "./SetupPromptBanner";
 import { DesktopAppBanner } from "./DesktopAppBanner";
 import { CliOfflineBanner } from "./CliOfflineBanner";
 import { DaemonStatusChip } from "./DaemonStatusChip";
+import { SyncStatusChip } from "./SyncStatusChip";
 import { TmuxMissingBanner } from "./TmuxMissingBanner";
 import { FindBar } from "./FindBar";
 import { KeyboardShortcutsPanel } from "./KeyboardShortcutsHelp";
@@ -568,7 +569,7 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
           </Panel>
         </Group>
       </div>
-      {showCollapsedRail && <ErrorBoundary name="SessionRail" level="inline"><CollapsedSessionRail /></ErrorBoundary>}
+      {showCollapsedRail && <ErrorBoundary name="SessionRail" level="inline"><CollapsedSessionRail onSelect={sessionListOnSelect} /></ErrorBoundary>}
     </div>
   );
 
@@ -626,6 +627,16 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
             )}
           </div>
 
+          {/* Team switcher and avatars — left-aligned */}
+          <div className="hidden sm:flex items-center gap-2 flex-shrink-0">
+            <ErrorBoundary name="TeamSwitcher" level="inline">
+              <TeamSwitcher />
+            </ErrorBoundary>
+            <ErrorBoundary name="TeamAvatarBar" level="inline">
+              <TeamAvatarBar />
+            </ErrorBoundary>
+          </div>
+
           {/* Center section: Search */}
           <div className="hidden sm:flex flex-1 justify-center min-w-0">
             <div className="w-full max-w-md">
@@ -635,22 +646,15 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
             </div>
           </div>
 
-          {/* Team switcher and avatars */}
-          <div className="hidden sm:flex items-center gap-2">
-            <ErrorBoundary name="TeamSwitcher" level="inline">
-              <TeamSwitcher />
-            </ErrorBoundary>
-            <ErrorBoundary name="TeamAvatarBar" level="inline">
-              <TeamAvatarBar />
-            </ErrorBoundary>
-          </div>
-
           <div className="hidden md:block flex-shrink-0 mx-1" style={{ width: 1, minWidth: 1, height: 20, backgroundColor: "var(--sol-text-dim)", opacity: 0.35 }} />
 
           {/* Right section: Actions */}
           <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
             <ErrorBoundary name="DaemonStatusChip" level="inline">
               <DaemonStatusChip />
+            </ErrorBoundary>
+            <ErrorBoundary name="SyncStatusChip" level="inline">
+              <SyncStatusChip />
             </ErrorBoundary>
             <ActiveAgentsBadge isOnInboxPage={isOnInboxPage} />
             <button

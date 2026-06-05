@@ -3,11 +3,10 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { useParams } from "next/navigation";
 import ReactMarkdown from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
-import remarkGfm from "remark-gfm";
 import Link from "next/link";
 import { CodeBlock } from "@/components/CodeBlock";
 import { CollapsibleImage } from "@/components/tools/MarkdownRenderer";
-import { remarkEntityIds } from "@/lib/remarkEntityIds";
+import { entityRemarkPlugins } from "@/lib/remarkEntityIds";
 import { EntityAwareCode, EntityAwareLink } from "@/components/EntityIdPill";
 
 function formatRelativeTime(ts: number): string {
@@ -214,7 +213,7 @@ function MarkdownContentBlock({ content, label, timestamp }: { content: string; 
       </div>
       <div className="px-4 py-3 prose prose-invert prose-sm max-w-none text-sol-text">
         <ReactMarkdown
-          remarkPlugins={[remarkGfm, remarkEntityIds]}
+          remarkPlugins={entityRemarkPlugins}
           rehypePlugins={[rehypeHighlight]}
           components={{
             code: EntityAwareCode,
@@ -321,7 +320,7 @@ function MessageBlock({ message, isTarget }: { message: any; isTarget?: boolean 
           {hasContent && (
             <div className="pl-7 prose prose-invert prose-sm max-w-none text-sol-text">
               <ReactMarkdown
-                remarkPlugins={[remarkGfm, remarkEntityIds]}
+                remarkPlugins={entityRemarkPlugins}
                 rehypePlugins={[rehypeHighlight]}
                 components={{
                   code: EntityAwareCode,

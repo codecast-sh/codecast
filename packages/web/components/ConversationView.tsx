@@ -10,7 +10,6 @@ import { useConvexSync } from "../hooks/useConvexSync";
 import { createPortal } from "react-dom";
 import ReactMarkdownBase from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
-import remarkGfm from "remark-gfm";
 import { rehypeSearchHighlight } from "../lib/rehypeSearchHighlight";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { isCommandMessage, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractSkillsFromMessages, extractFilePaths, isSystemMessage } from "../lib/conversationProcessor";
@@ -67,10 +66,10 @@ import { useImageGallery, ImageGalleryProvider } from "./ImageGallery";
 import { MessageSharePopover } from "./MessageSharePopover";
 import { PlanBadge, TaskBadge } from "./PlanTaskHoverCard";
 import { EntityIdPill, EntityAwareCode, EntityAwareLink, renderWithMentions } from "./EntityIdPill";
-import { remarkEntityIds } from "../lib/remarkEntityIds";
-import { parseSessionMessage } from "./sessionMessage";
+import { entityRemarkPlugins } from "../lib/remarkEntityIds";
+import { parseInboundSessionMessage, isSessionMessage } from "./sessionMessage";
 import { ConversationTree } from "./ConversationTree";
-import { useInboxStore, isConvexId, type ForkChild, type InboxSession } from "../store/inboxStore";
+import { useInboxStore, isConvexId, computeNewDividerIndex, type ForkChild, type InboxSession, type OptimisticImage } from "../store/inboxStore";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { soundSend } from "../lib/sounds";
 import { useForkNavigationStore } from "../store/forkNavigationStore";
@@ -83,7 +82,7 @@ import { parseFileChangeSummary, parseUnifiedDiffSections } from "../lib/unified
 import { setupDesktopDrag, desktopHeaderClass } from "../lib/desktop";
 import { MessageNavButton } from "./MessageBrowserPopover";
 import type { MentionItem } from "./editor/MentionList";
-import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, Clock, CornerDownRight } from "lucide-react";
+import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, Clock, CornerDownRight, CornerUpRight, BookOpen, Check } from "lucide-react";
 import { ComposeEditor, type ComposeEditorHandle } from "./editor/ComposeEditor";
 import { useMentionQuery } from "../hooks/useMentionQuery";
 
@@ -127,8 +126,6 @@ function renderMarkdownPre(node: any, children: any, props: any) {
   }
   return <pre {...(props as any)}>{children as any}</pre>;
 }
-
-const entityRemarkPlugins = [remarkGfm, remarkEntityIds];
 
 function parseSearchTerms(query: string): string[] {
   const terms: string[] = [];
@@ -182,6 +179,11 @@ type ImageData = {
   data?: string;
   storage_id?: string;
   tool_use_id?: string;
+  // Set on an optimistic message whose image is still uploading: a local blob:
+  // URL for the thumbnail, plus a flag to overlay an upload spinner. Cleared
+  // (swapped for storage_id) once the background upload completes.
+  preview_url?: string;
+  uploading?: boolean;
 };
 
 function formatMessagePartsForCopy(
@@ -379,6 +381,13 @@ type ConversationViewProps = {
   headerLeft?: React.ReactNode;
   headerEnd?: React.ReactNode;
   hideHeader?: boolean;
+  /**
+   * Compose-popup hook. When set, the message input sends on Enter / Cmd+Enter
+   * and then calls this with `navigate` = whether the user held Cmd/Ctrl
+   * (Enter → fire-and-forget, Cmd+Enter → send & open). Used by ComposeView in
+   * the floating new-session window; undefined everywhere else.
+   */
+  onSubmitWithIntent?: (navigate: boolean) => void;
 };
 
 export interface ConversationViewHandle {
@@ -416,6 +425,38 @@ function ForkCopyingState({ copied, total }: { copied: number; total?: number })
   );
 }
 
+// Single sticky pill at the top/bottom edge of the message list. The leading
+// icon is a directional chevron when idle and a spinner while a page is
+// loading — same pill, glyph swaps in place (no second stacked pill).
+function EdgeMessagesIndicator({
+  dir,
+  loading,
+  children,
+}: {
+  dir: "up" | "down";
+  loading: boolean;
+  children: React.ReactNode;
+}) {
+  const isUp = dir === "up";
+  return (
+    <div className={`sticky ${isUp ? "top-0" : "bottom-0"} z-10 flex justify-center py-1 sm:py-2 pointer-events-none`}>
+      <div className="flex items-center gap-1 sm:gap-1.5 px-2 sm:px-3 py-0.5 sm:py-1 rounded-full bg-sol-bg border border-sol-border text-sol-text-muted0 text-[10px] sm:text-xs shadow-sm pointer-events-auto">
+        {loading ? (
+          <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+          </svg>
+        ) : (
+          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={isUp ? "M5 15l7-7 7 7" : "M19 9l-7 7-7-7"} />
+          </svg>
+        )}
+        {children}
+      </div>
+    </div>
+  );
+}
+
 function MessagesUnavailableState({
   forkStatus,
   forkCopied,
@@ -444,8 +485,18 @@ function MessagesUnavailableState({
   );
 }
 
+// The folder glyph is shown on the picker header and on every project chip.
+// Factored out so the path data lives once instead of being copy-pasted.
+function FolderGlyph({ className = "w-3 h-3" }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
+    </svg>
+  );
+}
+
 function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
-  const freshProjects = useQuery(api.users.getRecentProjectPaths, { limit: 8 });
+  const freshProjects = useQuery(api.users.getRecentProjectPaths, { limit: 15 });
   const cachedProjects = useInboxStore((s) => s.recentProjects);
   const setRecentProjects = useInboxStore((s) => s.setRecentProjects);
   const storeSession = useInboxStore((s) =>
@@ -468,6 +519,55 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
   }, [recentProjects, currentPath]);
 
   const visibleProjects = otherProjects.slice(0, 6);
+
+  // --- keyboard picker ---------------------------------------------------
+  // The chip row doubles as a keyboard listbox. It is dormant for mouse users
+  // (renders exactly as before); pressing ↑ from the message box activates it.
+  const [picking, setPicking] = useState(false);
+  const [filter, setFilter] = useState("");
+  const [hi, setHi] = useState(0);
+  const pickerRef = useRef<HTMLInputElement>(null);
+  const prevFocusRef = useRef<HTMLElement | null>(null);
+
+  // While navigating with the keyboard: the default visible chips, or — once the
+  // user types — a live filter across ALL recent projects, so the "other"
+  // overflow is reachable without the mouse. Reuses the modal's match rule.
+  const pickList = useMemo<{ path: string }[]>(() => {
+    if (filter.trim()) {
+      const q = filter.toLowerCase();
+      return recentProjects.filter((p: { path: string }) => p.path.toLowerCase().includes(q));
+    }
+    const base: { path: string }[] = currentPath ? [{ path: currentPath }] : [];
+    return base.concat(visibleProjects);
+  }, [filter, recentProjects, currentPath, visibleProjects]);
+
+  const clampedHi = Math.min(hi, Math.max(0, pickList.length - 1));
+
+  const exitPicker = useCallback((restoreFocus = true) => {
+    setPicking(false);
+    setFilter("");
+    if (restoreFocus) prevFocusRef.current?.focus();
+  }, []);
+
+  const focusPicker = useCallback(() => {
+    prevFocusRef.current = document.activeElement as HTMLElement | null;
+    setFilter("");
+    setHi(0);
+    setPicking(true);
+    requestAnimationFrame(() => pickerRef.current?.focus());
+    return true;
+  }, []);
+
+  // Expose the focus hook so the message box's ↑ gesture can hand off into the
+  // picker. Mirrors window.__CODECAST_NEW_SESSION — present only while this
+  // null-state surface is mounted, so the gesture is inert in normal convos.
+  useMountEffect(() => {
+    const w = window as unknown as { __CODECAST_FOCUS_PROJECTS?: () => boolean };
+    w.__CODECAST_FOCUS_PROJECTS = focusPicker;
+    return () => {
+      if (w.__CODECAST_FOCUS_PROJECTS === focusPicker) delete w.__CODECAST_FOCUS_PROJECTS;
+    };
+  });
 
   const handleSwitch = useCallback(async (projectPath: string, forceIsolated?: boolean) => {
     const trimmed = projectPath.trim();
@@ -498,58 +598,142 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
     });
   }, [storeSession, conversation._id, reconfigureSession, currentPath, isolated]);
 
+  // Focus lives in a real <input> (below) so the global capture-phase shortcut
+  // dispatcher treats us as "typing" and suppresses single-letter hotkeys
+  // (f/t/d/…). Letters + Backspace are handled natively by the input (onChange);
+  // we only intercept the keys that drive chip selection.
+  const handlePickerKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "ArrowRight") {
+      e.preventDefault();
+      setHi((i) => (pickList.length ? (i + 1) % pickList.length : 0));
+      return;
+    }
+    if (e.key === "ArrowLeft") {
+      e.preventDefault();
+      setHi((i) => (pickList.length ? (i - 1 + pickList.length) % pickList.length : 0));
+      return;
+    }
+    if (e.key === "Enter") {
+      e.preventDefault();
+      const sel = pickList[Math.min(hi, Math.max(0, pickList.length - 1))];
+      if (sel) handleSwitch(sel.path);
+      exitPicker();
+      return;
+    }
+    // ↓/Esc/Tab drop back to the message box (↓ mirrors the ↑ that entered).
+    if (e.key === "ArrowDown" || e.key === "Escape" || e.key === "Tab") {
+      e.preventDefault();
+      e.stopPropagation();
+      exitPicker();
+    }
+  }, [pickList, hi, handleSwitch, exitPicker]);
+
   return (
     <div className="flex flex-col items-center gap-3">
         {currentPath ? (
           <div className="flex items-center gap-2 text-sol-text-muted text-xs cursor-default" title={currentPath}>
-            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
-            </svg>
+            <FolderGlyph className="w-3.5 h-3.5" />
             <span className="font-medium text-sol-text">{currentName}</span>
           </div>
         ) : recentProjects.length > 0 ? (
           <div className="text-sol-text-dim text-xs">select a project</div>
         ) : null}
 
-      <div className="flex flex-wrap justify-center gap-1.5">
-        {currentPath && (
-          <button
-            onClick={() => handleSwitch(currentPath)}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border border-sol-cyan/40 bg-sol-cyan/5 text-sol-cyan transition-all"
-            title={currentPath}
-          >
-            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
-            </svg>
-            <span>{currentName}</span>
-          </button>
-        )}
-        {visibleProjects.map((p: { path: string }) => {
-          const name = p.path.split("/").filter(Boolean).pop();
-          return (
+      <div
+        className={`flex flex-wrap justify-center gap-1.5 rounded-lg transition-all ${picking ? "ring-1 ring-sol-cyan/40 bg-sol-cyan/[0.03] p-1.5" : ""}`}
+      >
+        {picking ? (
+          pickList.length === 0 ? (
+            <span className="text-xs text-sol-text-dim px-2.5 py-1">no match for &ldquo;{filter}&rdquo;</span>
+          ) : (
+            pickList.map((p, i) => {
+              const name = p.path.split("/").filter(Boolean).pop();
+              const isHi = i === clampedHi;
+              const isCurrent = p.path === currentPath;
+              return (
+                <button
+                  key={p.path}
+                  // onMouseDown (not onClick) + preventDefault keeps the filter
+                  // input focused so the click isn't lost to an onBlur teardown.
+                  onMouseDown={(e) => { e.preventDefault(); handleSwitch(p.path); exitPicker(); }}
+                  onMouseEnter={() => setHi(i)}
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border transition-all ${
+                    isHi
+                      ? "border-sol-cyan/70 bg-sol-cyan/15 text-sol-cyan ring-1 ring-sol-cyan/50"
+                      : isCurrent
+                        ? "border-sol-cyan/40 bg-sol-cyan/5 text-sol-cyan"
+                        : "border-sol-border/40 text-sol-text-dim"
+                  }`}
+                  title={p.path}
+                >
+                  <FolderGlyph />
+                  <span>{name}</span>
+                </button>
+              );
+            })
+          )
+        ) : (
+          <>
+            {currentPath && (
+              <button
+                onClick={() => handleSwitch(currentPath)}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border border-sol-cyan/40 bg-sol-cyan/5 text-sol-cyan transition-all"
+                title={currentPath}
+              >
+                <FolderGlyph />
+                <span>{currentName}</span>
+              </button>
+            )}
+            {visibleProjects.map((p: { path: string }) => {
+              const name = p.path.split("/").filter(Boolean).pop();
+              return (
+                <button
+                  key={p.path}
+                  onClick={() => handleSwitch(p.path)}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-cyan/40 hover:bg-sol-cyan/5 transition-all"
+                  title={p.path}
+                >
+                  <FolderGlyph />
+                  <span>{name}</span>
+                </button>
+              );
+            })}
             <button
-              key={p.path}
-              onClick={() => handleSwitch(p.path)}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-cyan/40 hover:bg-sol-cyan/5 transition-all"
-              title={p.path}
+              onClick={() => openNewSession({ projectPath: currentPath || undefined })}
+              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs rounded-md border border-dashed border-sol-border/50 text-sol-text-dim hover:text-sol-cyan hover:border-sol-cyan/40 hover:bg-sol-cyan/5 transition-all"
             >
-              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
+              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6.75 12a.75.75 0 11-1.5 0 .75.75 0 011.5 0zM12.75 12a.75.75 0 11-1.5 0 .75.75 0 011.5 0zM18.75 12a.75.75 0 11-1.5 0 .75.75 0 011.5 0z" />
               </svg>
-              <span>{name}</span>
+              <span>other</span>
             </button>
-          );
-        })}
-        <button
-          onClick={() => openNewSession({ projectPath: currentPath || undefined })}
-          className="inline-flex items-center gap-1 px-2.5 py-1 text-xs rounded-md border border-dashed border-sol-border/50 text-sol-text-dim hover:text-sol-cyan hover:border-sol-cyan/40 hover:bg-sol-cyan/5 transition-all"
-        >
-          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M6.75 12a.75.75 0 11-1.5 0 .75.75 0 011.5 0zM12.75 12a.75.75 0 11-1.5 0 .75.75 0 011.5 0zM18.75 12a.75.75 0 11-1.5 0 .75.75 0 011.5 0z" />
-          </svg>
-          <span>other</span>
-        </button>
+          </>
+        )}
       </div>
+
+      {picking ? (
+        <div className="flex items-center gap-2 text-[11px] font-mono">
+          <input
+            ref={pickerRef}
+            value={filter}
+            onChange={(e) => { setFilter(e.target.value); setHi(0); }}
+            onKeyDown={handlePickerKeyDown}
+            onBlur={() => exitPicker(false)}
+            placeholder="type to filter…"
+            spellCheck={false}
+            autoComplete="off"
+            className="w-28 bg-transparent text-sol-cyan placeholder:text-sol-text-dim outline-none border-0 p-0"
+          />
+          <span className="text-sol-text-dim/70">←/→ move · ↵ select · esc back</span>
+        </div>
+      ) : recentProjects.length > 0 ? (
+        <button
+          onClick={focusPicker}
+          className="text-[10px] text-sol-text-dim/60 hover:text-sol-text-dim transition-colors"
+        >
+          press ↑ to pick a folder
+        </button>
+      ) : null}
 
       <button
         onClick={() => {
@@ -662,6 +846,55 @@ function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedW
           ))}
         </select>
       )}
+    </div>
+  );
+}
+
+export interface NewSessionAgentControls {
+  showWorkflow: boolean;
+  onToggleWorkflow: () => void;
+  selectedWorkflowId: string;
+  onSelectWorkflow: (id: string) => void;
+  workflows: Array<{ _id: string; name: string }> | undefined;
+}
+
+/**
+ * The new-session "null state" pickers — project picker (tabs + isolated-worktree
+ * toggle) + agent picker — for a conversation with no messages yet. This is the
+ * ONE definition used both by the in-app empty conversation (ConversationView's
+ * empty state) and the floating compose popup (ComposeView). The message input
+ * stays with each host (the in-app rich MessageInput pinned at the bottom; the
+ * popup's lightweight one) since they need very different wiring. Pass
+ * `agentControls` to drive workflow selection from the host; omitted, it manages
+ * its own local state (the popup case).
+ */
+export function NewSessionView({ conversation, agentControls }: { conversation: ConversationData; agentControls?: NewSessionAgentControls }) {
+  const [localShowWorkflow, setLocalShowWorkflow] = useState(false);
+  const [localWorkflowId, setLocalWorkflowId] = useState("");
+  const ac: NewSessionAgentControls = agentControls ?? {
+    showWorkflow: localShowWorkflow,
+    onToggleWorkflow: () => setLocalShowWorkflow((v) => !v),
+    selectedWorkflowId: localWorkflowId,
+    onSelectWorkflow: setLocalWorkflowId,
+    workflows: undefined,
+  };
+  // Project picker sits up top; a flex spacer pushes the agent picker down so it
+  // pins to the bottom, directly above the message input (the host renders the
+  // input right after this view). Needs a full-height parent.
+  return (
+    <div className="flex flex-col items-center w-full flex-1 min-h-0">
+      <ErrorBoundary name="ProjectSwitcher" level="inline">
+        <ProjectSwitcher conversation={conversation} />
+      </ErrorBoundary>
+      <div className="flex-1" />
+      <AgentSwitcher
+        conversation={conversation}
+        showWorkflow={ac.showWorkflow}
+        onToggleWorkflow={ac.onToggleWorkflow}
+        selectedWorkflowId={ac.selectedWorkflowId}
+        onSelectWorkflow={ac.onSelectWorkflow}
+        workflows={ac.workflows}
+      />
     </div>
   );
 }
@@ -1028,6 +1261,18 @@ type UserMessageKind =
 
 const STICKY_NOISE_PREFIXES = ["[Request interrupted", "<task-notification>", "Your task is to create a detailed summary", "Full transcript available at:", "[Codecast import]"];
 
+// Dedup key for matching a still-pending message against its eventual JSONL echo.
+// The daemon collapses newlines to spaces on inject (injectViaTmux) and a few control
+// chars can leak in, so we strip reminders + control chars and flatten all whitespace —
+// the multi-line stored pending content and the single-line echoed copy normalize equal.
+export function normalizePendingContent(s: string): string {
+  return (s || "")
+    .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "")
+    .replace(/[\u0000-\u001f]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function classifyUserMessage(
   msg: Message,
   agentType?: string,
@@ -1121,7 +1366,9 @@ function classifyUserMessage(
 }
 
 function isStickyWorthy(kind: UserMessageKind): boolean {
-  return kind.kind === 'normal' || kind.kind === 'plan' || kind.kind === 'scheduled_task' || kind.kind === 'session_message';
+  // Session messages (cast send from another session) are excluded: the sticky
+  // pill surfaces what the human said, not machine-delivered cross-session msgs.
+  return kind.kind === 'normal' || kind.kind === 'plan' || kind.kind === 'scheduled_task';
 }
 
 function formatRelativeTime(ts: number): string {
@@ -2757,6 +3004,91 @@ function CastEntityCard({ type, shortId, convexId }: { type: "task" | "plan" | "
   );
 }
 
+// Pull the message body out of a `cast send <id> "<body>"` arg string, tolerating
+// embedded escaped quotes and trailing flags (e.g. `"done" --from jx7abcd`).
+function extractSendBody(args: string): string {
+  const t = args.trim();
+  const dq = t.match(/^"((?:[^"\\]|\\.)*)"/);
+  if (dq) return dq[1].replace(/\\"/g, '"');
+  const sq = t.match(/^'((?:[^'\\]|\\.)*)'/);
+  if (sq) return sq[1].replace(/\\'/g, "'");
+  // Unquoted body: drop any trailing --flags so they don't render as message text.
+  return t.replace(/\s+--\w[\s\S]*$/, "").trim() || t;
+}
+
+// Dedicated rendering for the two session-addressed cast commands:
+//   cast send <id> "<body>"   → outgoing twin of the incoming SessionMessageBlock
+//   cast read <id> <range>    → compact "read" row with a clickable target pill
+// Both render the target session as an EntityIdPill (clickable card), so they read
+// as conversations between sessions rather than opaque shell invocations.
+function CastSessionRefBlock({ cat, target, args, fullCmd, output, isError }: {
+  cat: string; target: string; args: string; fullCmd: string; output: string; isError: boolean;
+}) {
+  const [expanded, setExpanded] = useState(false);
+
+  if (cat === "send") {
+    const body = extractSendBody(args);
+    return (
+      <div className="my-2 mx-1 rounded border-l-2 border-sol-blue/60 bg-sol-blue/5">
+        <div className="flex items-center gap-2 px-3 pt-2 pb-1">
+          <CornerUpRight className="w-3.5 h-3.5 text-sol-blue/70 shrink-0" />
+          <span className="text-[11px] font-medium tracking-wide uppercase text-sol-blue/70 shrink-0">Message to</span>
+          <EntityIdPill shortId={target} />
+          {isError ? (
+            <span className="text-sol-red/80 text-[10px] ml-auto shrink-0">failed</span>
+          ) : (
+            <span className="text-sol-green/70 text-[10px] ml-auto shrink-0 inline-flex items-center gap-0.5"><Check className="w-3 h-3" />sent</span>
+          )}
+        </div>
+        <div className="px-3 pb-2 text-sm text-sol-text prose prose-invert prose-sm max-w-none">
+          <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={[rehypeHighlight]}
+            components={{
+              code: EntityAwareCode,
+              a: EntityAwareLink,
+              pre: ({ node, children, ...props }) => renderMarkdownPre(node, children, props),
+            }}
+          >{body}</ReactMarkdown>
+        </div>
+      </div>
+    );
+  }
+
+  // cast read <id> <range>
+  const range = args.trim();
+  return (
+    <div className="my-0.5">
+      <div
+        className="flex items-baseline gap-1.5 text-xs cursor-pointer group flex-wrap"
+        onClick={() => setExpanded(!expanded)}
+      >
+        <span className="flex items-center gap-1 font-mono flex-shrink-0 text-sol-violet/80">
+          <BookOpen className="w-3 h-3" />
+          <span className="group-hover:underline">read</span>
+        </span>
+        <EntityIdPill shortId={target} />
+        {range && <span className="text-sol-text-dim font-mono">{range}</span>}
+        {isError && <span className="text-sol-red/80 text-[10px]">(error)</span>}
+      </div>
+      {expanded && (
+        <div className="mt-1 rounded border border-sol-border/30 bg-sol-bg-alt max-h-80 overflow-auto">
+          <div className="px-1.5 sm:px-2 py-1 sm:py-1.5 border-b border-sol-border/20 bg-sol-bg-highlight/30">
+            <pre className="text-[11px] sm:text-xs font-mono text-sol-green whitespace-pre-wrap break-all">
+              $ {fullCmd}
+            </pre>
+          </div>
+          {output && output.trim() ? (
+            <pre className={`p-1.5 sm:p-2 text-[11px] sm:text-xs font-mono overflow-x-auto whitespace-pre-wrap ${isError ? "text-sol-red" : "text-sol-text-secondary"}`}>
+              {renderAnsi(output)}
+            </pre>
+          ) : (
+            <div className="p-2 text-xs text-sol-text-dim">No output</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function CastCommandBlock({ tool, result }: { tool: ToolCall; result?: ToolResult }) {
   const [expanded, setExpanded] = useState(false);
   const cast = parseCastCommand(tool)!;
@@ -2927,6 +3259,14 @@ function CastCommandBlock({ tool, result }: { tool: ToolCall; result?: ToolResul
   };
 
   const subLabel = subcommand ? subcommand.replace(/-/g, " ") : "";
+
+  // `cast send <id> "…"` / `cast read <id> <range>` address another session — the
+  // subcommand slot holds the session short ID. Render those as their own block
+  // (clickable target pill + body/range) instead of a generic shell-command row.
+  const sessionTarget = (cat === "send" || cat === "read") && /^jx[a-z0-9]{5,}$/i.test(subcommand) ? subcommand : null;
+  if (sessionTarget) {
+    return <CastSessionRefBlock cat={cat} target={sessionTarget} args={args} fullCmd={cast.fullCmd} output={output} isError={!!isError} />;
+  }
 
   return (
     <div className="my-0.5">
@@ -3422,11 +3762,16 @@ function ImageBlock({ image }: { image: ImageData }) {
   const storageResolved = image.storage_id ? storageUrl !== undefined : true;
   const storageMissing = image.storage_id && storageUrl === null;
 
-  const src = image.storage_id
-    ? (typeof storageUrl === "string" ? storageUrl : undefined)
-    : image.data
-      ? `data:${image.media_type};base64,${image.data}`
-      : undefined;
+  // While uploading we only have the local blob: preview. After the upload
+  // resolves we prefer the real storage URL but fall back to the preview until
+  // getImageUrl returns, so the thumbnail never flickers to "Loading…".
+  const src = image.uploading && image.preview_url
+    ? image.preview_url
+    : image.storage_id
+      ? (typeof storageUrl === "string" ? storageUrl : image.preview_url || undefined)
+      : image.data
+        ? `data:${image.media_type};base64,${image.data}`
+        : image.preview_url || undefined;
 
   useWatchEffect(() => {
     if (src && gallery) gallery.register(src);
@@ -3469,11 +3814,19 @@ function ImageBlock({ image }: { image: ImageData }) {
           onError={() => setErrored(true)}
         />
       </div>
-      {loaded && (
+      {loaded && !image.uploading && (
         <div
           className="absolute bottom-0 left-0 right-0 h-20 pointer-events-none"
           style={{ background: 'linear-gradient(to bottom, transparent, var(--image-fade-bg, var(--sol-bg, #0a0a0a)))' }}
         />
+      )}
+      {image.uploading && (
+        <div className="absolute inset-0 rounded-t bg-black/40 flex items-center justify-center z-20" style={{ height: IMAGE_COLLAPSED_HEIGHT }}>
+          <svg className="w-6 h-6 animate-spin text-white" fill="none" viewBox="0 0 24 24">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+          </svg>
+        </div>
       )}
     </div>
   );
@@ -3704,20 +4057,35 @@ function ScheduledTaskBlock({ content: rawContent, timestamp }: { content: strin
   );
 }
 
-function SessionMessageBlock({ from, body, timestamp }: { from: string; body: string; timestamp: number }) {
+function SessionMessageBlock({ from, body, timestamp, pendingStatus, recipientActive }: { from: string; body: string; timestamp: number; pendingStatus?: string; recipientActive?: boolean }) {
+  // pendingStatus set ⇒ this is a server-side pending_messages row that hasn't reached the
+  // recipient's transcript yet (queued — typically because the recipient is mid-turn).
+  const isPending = !!pendingStatus;
+  const queueLabel = !isPending
+    ? null
+    : pendingStatus === "failed" || pendingStatus === "undeliverable"
+    ? "queued · retrying"
+    : recipientActive === false
+    ? "queued · recipient offline"
+    : "queued · recipient busy";
   return (
-    <div className="mb-2 mx-1 rounded border-l-2 border-sol-cyan/60 bg-sol-cyan/5">
+    <div className={`mb-2 mx-1 rounded border-l-2 ${isPending ? "border-amber-500/50 bg-amber-500/5" : "border-sol-cyan/60 bg-sol-cyan/5"}`}>
       <div className="flex items-center gap-2 px-3 pt-2 pb-1">
-        <CornerDownRight className="w-3.5 h-3.5 text-sol-cyan/70 shrink-0" />
-        <span className="text-[11px] font-medium tracking-wide uppercase text-sol-cyan/70 shrink-0">Message from</span>
+        <CornerDownRight className={`w-3.5 h-3.5 shrink-0 ${isPending ? "text-amber-400/70" : "text-sol-cyan/70"}`} />
+        <span className={`text-[11px] font-medium tracking-wide uppercase shrink-0 ${isPending ? "text-amber-400/80" : "text-sol-cyan/70"}`}>Message from</span>
         {from && from !== "unknown" ? (
           <EntityIdPill shortId={from} />
         ) : (
           <span className="text-xs text-sol-text-muted">another session</span>
         )}
+        {queueLabel && (
+          <span className="inline-flex items-center gap-1 text-[10px] font-mono text-amber-400 bg-amber-500/15 border border-amber-500/25 rounded px-1.5 py-0.5 shrink-0">
+            <Clock className="w-2.5 h-2.5" />{queueLabel}
+          </span>
+        )}
         <span className="text-[10px] text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
       </div>
-      <div className="px-3 pb-2 text-sm text-sol-text prose prose-invert prose-sm max-w-none">
+      <div className={`px-3 pb-2 text-sm text-sol-text prose prose-invert prose-sm max-w-none ${isPending ? "opacity-70" : ""}`}>
         <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={[rehypeHighlight]}
           components={{
             code: EntityAwareCode,
@@ -4090,7 +4458,7 @@ function TeammateMessageCard({ teammateId, color, summary, content }: { teammate
   );
 }
 
-function UserPromptImpl({ content, timestamp, messageId, conversationId, collapsed, userName, avatarUrl, onOpenComments, isHighlighted, shareSelectionMode, isSelectedForShare, onToggleShareSelection, onStartShareSelection, onForkFromMessage, forkChildren, messageUuid, images, onBranchSwitch, activeBranchId, loadingBranchId, isPending, isQueued, mainMessageCount }: { content: string; timestamp: number; messageId: string; conversationId?: Id<"conversations">; collapsed?: boolean; userName?: string; avatarUrl?: string | null; onOpenComments?: (messageId: string) => void; isHighlighted?: boolean; shareSelectionMode?: boolean; isSelectedForShare?: boolean; onToggleShareSelection?: (messageId: string) => void; onStartShareSelection?: (messageId: string) => void; onForkFromMessage?: (messageUuid: string) => void; forkChildren?: Array<{ _id: string; title: string; short_id?: string; started_at?: number; username?: string; message_count?: number; agent_type?: string }>; messageUuid?: string; images?: ImageData[]; onBranchSwitch?: (messageUuid: string, convId: string | null) => void; activeBranchId?: string | null; loadingBranchId?: string | null; isPending?: boolean; isQueued?: boolean; mainMessageCount?: number }) {
+function UserPromptImpl({ content, timestamp, messageId, conversationId, collapsed, userName, avatarUrl, onOpenComments, isHighlighted, shareSelectionMode, isSelectedForShare, onToggleShareSelection, onStartShareSelection, onForkFromMessage, forkChildren, messageUuid, images, onBranchSwitch, activeBranchId, loadingBranchId, isPending, isQueued, mainMessageCount }: { content: string; timestamp: number; messageId: string; conversationId?: Id<"conversations">; collapsed?: boolean; userName?: string; avatarUrl?: string | null; onOpenComments?: (messageId: string) => void; isHighlighted?: boolean; shareSelectionMode?: boolean; isSelectedForShare?: boolean; onToggleShareSelection?: (messageId: string) => void; onStartShareSelection?: (messageId: string) => void; onForkFromMessage?: (messageUuid: string) => void; forkChildren?: ForkChild[]; messageUuid?: string; images?: ImageData[]; onBranchSwitch?: (messageUuid: string, convId: string | null) => void; activeBranchId?: string | null; loadingBranchId?: string | null; isPending?: boolean; isQueued?: boolean; mainMessageCount?: number }) {
   const [isExpanded, setIsExpanded] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
   const [isTruncated, setIsTruncated] = useState(false);
@@ -4131,7 +4499,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
     return () => { document.removeEventListener('keydown', handleKey); document.body.style.overflow = ''; };
   }, [fullscreen]);
 
-  const isRealMessageId = messageId && !messageId.startsWith("optimistic_");
+  const isRealMessageId = !!messageId && isConvexId(messageId);
   const commentCount = useQuery(api.comments.getCommentCount,
     isRealMessageId ? { message_id: messageId as Id<"messages"> } : "skip"
   );
@@ -4507,7 +4875,7 @@ function AssistantBlockImpl({
   taskSubjectMap?: Record<string, string>;
   taskRecordMap?: TaskRecordMaps;
   onForkFromMessage?: (messageUuid: string) => void;
-  forkChildren?: Array<{ _id: string; title: string; short_id?: string; started_at?: number; username?: string; message_count?: number; agent_type?: string }>;
+  forkChildren?: ForkChild[];
   onBranchSwitch?: (messageUuid: string, convId: string | null) => void;
   activeBranchId?: string | null;
   loadingBranchId?: string | null;
@@ -4542,7 +4910,7 @@ function AssistantBlockImpl({
   const hasToolCalls = toolCalls && toolCalls.length > 0;
   const hasImages = images?.some(img => !img.tool_use_id) ?? false;
 
-  const isRealMessageId = messageId && !messageId.startsWith("optimistic_");
+  const isRealMessageId = !!messageId && isConvexId(messageId);
   const commentCount = useQuery(api.comments.getCommentCount,
     isRealMessageId ? { message_id: messageId as Id<"messages"> } : "skip"
   );
@@ -5217,7 +5585,7 @@ function PlanBlockImpl({ content, timestamp, collapsed, messageId, conversationI
   const contentRef = useRef<HTMLDivElement>(null);
   const [isOverflowing, setIsOverflowing] = useState(false);
 
-  const isRealMessageId = messageId && !messageId.startsWith("optimistic_");
+  const isRealMessageId = !!messageId && isConvexId(messageId);
   const commentCount = useQuery(api.comments.getCommentCount,
     isRealMessageId ? { message_id: messageId as Id<"messages"> } : "skip"
   );
@@ -5896,7 +6264,7 @@ const ForkReplyInput = memo(function ForkReplyInput({ userName, userAvatar, onFo
   );
 });
 
-const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, onSendAndDismiss, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, isSessionStarting, isSessionReady, sessionId, agentType, agentStatus, deliveryStatus, pendingPermissionsCount, hasAskUserQuestion, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onSendEscape, onOpenNavigator, onPopulateInput, permissionMode, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch, onGateSend, skills, filePaths, mentionItemsRef, onMentionQuery }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; onSendAndDismiss?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; isSessionStarting?: boolean; isSessionReady?: boolean; sessionId?: string; agentType?: string; agentStatus?: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "starting" | "resuming"; deliveryStatus?: string; pendingPermissionsCount?: number; hasAskUserQuestion?: boolean; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string) => void) | null>; permissionMode?: string; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void>; onGateSend?: (content: string) => Promise<void>; skills?: SkillItem[]; filePaths?: string[]; mentionItemsRef?: React.MutableRefObject<MentionItem[]>; onMentionQuery?: (q: string) => void }) {
+export const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, onSendAndDismiss, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, isSessionStarting, isSessionReady, sessionId, agentType, agentStatus, deliveryStatus, pendingPermissionsCount, hasAskUserQuestion, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onSendEscape, onOpenNavigator, onPopulateInput, permissionMode, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch, onGateSend, skills, filePaths, mentionItemsRef, onMentionQuery, onSubmitWithIntent }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; onSendAndDismiss?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; isSessionStarting?: boolean; isSessionReady?: boolean; sessionId?: string; agentType?: string; agentStatus?: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "starting" | "resuming"; deliveryStatus?: string; pendingPermissionsCount?: number; hasAskUserQuestion?: boolean; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string) => void) | null>; permissionMode?: string; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void>; onGateSend?: (content: string) => Promise<void>; skills?: SkillItem[]; filePaths?: string[]; mentionItemsRef?: React.MutableRefObject<MentionItem[]>; onMentionQuery?: (q: string) => void; onSubmitWithIntent?: (navigate: boolean) => void }) {
   const sacredKey = sessionId || conversationId;
   const sacredKeyRef = useRef(sacredKey);
   const convIdRef = useRef(conversationId);
@@ -5909,7 +6277,6 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
   const messageRef = useRef(message);
   messageRef.current = message;
   const sendingRef = useRef(false);
-  const [isWaitingForUpload, setIsWaitingForUpload] = useState(false);
   const [isFocused, setIsFocused] = useState(false);
   const [composeMode, setComposeMode] = useState(false);
   const [composeHasContent, setComposeHasContent] = useState(false);
@@ -6284,35 +6651,8 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
   }, [convex]);
   pastedImagesRef.current = pastedImages;
 
-  const waitForConvexId = useCallback(async (id: string): Promise<string> => {
-    const resolved = useInboxStore.getState().getConvexId(id);
-    if (resolved) return resolved;
-    // Prefer the in-flight createSession promise — deterministic and surfaces
-    // the real dispatch error if the server rejects. Polling is the fallback
-    // for cases where the promise was lost (e.g. reload mid-flight) or the
-    // rekey arrives via listInboxSessions altKey sync instead of the dispatch.
-    const inFlight = useInboxStore.getState().awaitSessionCreate(id);
-    if (inFlight) {
-      let createError: unknown = null;
-      try {
-        const convexId = await Promise.race([
-          inFlight,
-          new Promise<string>((_, rej) => setTimeout(() => rej(new Error("create timeout")), 30_000)),
-        ]);
-        if (convexId) return convexId;
-      } catch (e) {
-        createError = e;
-      }
-      const r2 = useInboxStore.getState().getConvexId(id);
-      if (r2) return r2;
-      if (createError) throw createError instanceof Error ? createError : new Error(String(createError));
-    }
-    for (let i = 0; i < 60; i++) {
-      await new Promise((r) => setTimeout(r, 250));
-      const r = useInboxStore.getState().getConvexId(id);
-      if (r) return r;
-    }
-    throw new Error("Session not yet created on server");
+  const waitForConvexId = useCallback((id: string): Promise<string> => {
+    return useInboxStore.getState().awaitConvexId(id);
   }, []);
 
   useMountEffect(() => {
@@ -6605,37 +6945,48 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
     });
   }, [updateDraft, message]);
 
-  const clearAllImages = useCallback(() => {
-    pastedImages.forEach(img => URL.revokeObjectURL(img.previewUrl));
+  // revoke=false transfers blob ownership to the pending bubble (so its
+  // thumbnail keeps rendering after the composer clears on send).
+  const clearAllImages = useCallback((revoke = true) => {
+    if (revoke) pastedImages.forEach(img => URL.revokeObjectURL(img.previewUrl));
     setPastedImages([]);
     setSelectedImageIndex(null);
     setLightboxImageIndex(null);
   }, [pastedImages]);
 
-  const uploadImage = useCallback(async (file: File) => {
+  // In-flight uploads keyed by previewUrl, each resolving to the server storage
+  // id (or null on failure). Held in a ref so a backgrounded send can await the
+  // real result after this component unmounts (e.g. the user switched sessions).
+  const uploadPromisesRef = useRef<Map<string, Promise<string | null>>>(new Map());
+
+  const uploadImage = useCallback((file: File) => {
     const previewUrl = URL.createObjectURL(file);
-    const placeholder = { file, previewUrl, uploading: true };
-    setPastedImages(prev => [...prev, placeholder]);
-    try {
-      const uploadUrl = await generateUploadUrl({});
-      const result = await fetch(uploadUrl, {
-        method: "POST",
-        headers: { "Content-Type": file.type },
-        body: file,
-      });
-      if (!result.ok) throw new Error(`Upload failed: ${result.status} ${result.statusText}`);
-      const { storageId } = await result.json();
-      setPastedImages(prev => {
-        const next = prev.map(img => img.previewUrl === previewUrl ? { ...img, storageId, uploading: false } : img);
-        updateDraft(message, next.map(i => ({ storageId: i.storageId as string, previewUrl: i.previewUrl, name: i.file.name })));
-        return next;
-      });
-    } catch (err: any) {
-      console.error("[uploadImage] failed:", err);
-      toast.error(err?.message?.includes("Authentication") ? "Upload failed: not authenticated" : `Failed to upload image: ${err?.message || "unknown error"}`);
-      URL.revokeObjectURL(previewUrl);
-      setPastedImages(prev => prev.filter(img => img.previewUrl !== previewUrl));
-    }
+    setPastedImages(prev => [...prev, { file, previewUrl, uploading: true }]);
+    const promise = (async (): Promise<string | null> => {
+      try {
+        const uploadUrl = await generateUploadUrl({});
+        const result = await fetch(uploadUrl, {
+          method: "POST",
+          headers: { "Content-Type": file.type },
+          body: file,
+        });
+        if (!result.ok) throw new Error(`Upload failed: ${result.status} ${result.statusText}`);
+        const { storageId } = await result.json();
+        setPastedImages(prev => {
+          const next = prev.map(img => img.previewUrl === previewUrl ? { ...img, storageId, uploading: false } : img);
+          updateDraft(message, next.map(i => ({ storageId: i.storageId as string, previewUrl: i.previewUrl, name: i.file.name })));
+          return next;
+        });
+        return storageId as string;
+      } catch (err: any) {
+        console.error("[uploadImage] failed:", err);
+        toast.error(err?.message?.includes("Authentication") ? "Upload failed: not authenticated" : `Failed to upload image: ${err?.message || "unknown error"}`);
+        setPastedImages(prev => prev.filter(img => img.previewUrl !== previewUrl));
+        return null;
+      }
+    })();
+    uploadPromisesRef.current.set(previewUrl, promise);
+    return previewUrl;
   }, [generateUploadUrl, updateDraft, message]);
 
   useWatchEffect(() => {
@@ -6690,31 +7041,13 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
       await onWorkflowLaunch(goal);
       return;
     }
-    const hasUploadingImages = pastedImages.some(img => img.uploading);
-    const readyImages = pastedImages.filter(img => !img.uploading && img.storageId);
-    const canSend = message.trim() || readyImages.length > 0 || hasUploadingImages;
+    // Snapshot the composer's images. Ready ones already carry a storageId;
+    // still-uploading ones are handed to the pending bubble (preview + spinner)
+    // and finished in the background — either way the input unblocks instantly.
+    const submitImages = pastedImagesRef.current.filter(img => img.storageId || img.uploading);
+    const hasUploadingImages = submitImages.some(img => img.uploading);
+    const canSend = message.trim() || submitImages.length > 0;
     if (!canSend) return;
-
-    if (hasUploadingImages) {
-      setIsWaitingForUpload(true);
-      const waitForUploads = () => new Promise<void>((resolve) => {
-        const check = () => {
-          const current = pastedImagesRef.current;
-          if (current.every(img => !img.uploading)) {
-            resolve();
-          } else {
-            setTimeout(check, 100);
-          }
-        };
-        check();
-      });
-      await waitForUploads();
-      setIsWaitingForUpload(false);
-    }
-
-    const finalImages = pastedImagesRef.current.filter(img => !img.uploading && img.storageId);
-    const finalCanSend = message.trim() || finalImages.length > 0;
-    if (!finalCanSend) return;
 
     // If a message is selected, fork from it then send the new content
     if (isSelectionActive && selectedMessageUuid && onForkFromMessage) {
@@ -6757,9 +7090,14 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
 
     const targetConvId = conversationId;
     const targetCanQuery = canQueryServer;
-    const trimmed = message.trim() || (finalImages.length > 0 ? "[image]" : "");
-    const storageIds = finalImages.map(img => img.storageId!);
-    const optimisticImages = finalImages.map(img => ({ media_type: img.file.type, storage_id: img.storageId as string }));
+    const trimmed = message.trim() || (submitImages.length > 0 ? "[image]" : "");
+    // The optimistic bubble shows ready images via storage_id, and still-
+    // uploading ones via their local preview + a spinner (dropped on resolve).
+    const optimisticImages: OptimisticImage[] = submitImages.map(img =>
+      img.storageId
+        ? { media_type: img.file.type, storage_id: img.storageId as string }
+        : { media_type: img.file.type, preview_url: img.previewUrl, uploading: true }
+    );
     sendingRef.current = true;
     if (isInactive) setOptimisticSending(true);
     if (draftTimerRef.current) {
@@ -6771,26 +7109,71 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
     setMessage("");
     messageRef.current = "";
     setSelectedQueueIndex(null);
-    clearAllImages();
+    // When images are still uploading their blobs now belong to the pending
+    // bubble; the background task revokes them once the upload resolves.
+    clearAllImages(!hasUploadingImages);
     useInboxStore.getState().clearDraftFinal(targetConvId);
     if (composeMode) { composeRef.current?.clear(); setComposeMode(false); setComposeHasContent(false); }
     sendingRef.current = false;
     requestAnimationFrame(() => textareaRef.current?.focus());
     onMessageSent?.();
 
-    const expandedContent = await expandMentionsInMessage(trimmed);
+    // Common send tail: expand mentions, resolve the (possibly still-creating)
+    // conversation id, then durably send. Reused by the immediate and the
+    // upload-deferred paths. Store calls go through getState() so this is safe
+    // to run after the component unmounts (user switched sessions).
+    const finishSend = async (ids: string[]) => {
+      try {
+        const expandedContent = await expandMentionsInMessage(trimmed);
+        const resolvedId = targetCanQuery ? targetConvId : await useInboxStore.getState().awaitConvexId(targetConvId);
+        sendMessage(resolvedId, expandedContent, ids.length > 0 ? ids : undefined, clientId);
+        setOptimisticSending(false);
+        setSentAt(Date.now());
+        sentContentRef.current = trimmed;
+        setShowStuckBanner(false);
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "Failed to send message");
+        useInboxStore.getState().markOptimisticAsFailed(targetConvId, clientId);
+        setOptimisticSending(false);
+      }
+    };
 
-    try {
-      const resolvedId = targetCanQuery ? targetConvId : await waitForConvexId(targetConvId);
-      sendMessage(resolvedId, expandedContent, storageIds.length > 0 ? storageIds : undefined, clientId);
-      setOptimisticSending(false);
-      setSentAt(Date.now());
-      sentContentRef.current = trimmed;
-      setShowStuckBanner(false);
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to send message");
-      useInboxStore.getState().markOptimisticAsFailed(targetConvId, clientId);
-      setOptimisticSending(false);
+    if (hasUploadingImages) {
+      // Detached: finish the in-flight uploads, swap the bubble's previews for
+      // real storage records (drops the spinner), then send. Awaits the upload
+      // promises captured in the ref, not component state, so it survives a
+      // session switch. The user can already type/send the next message.
+      void (async () => {
+        const tasks = submitImages.map(img => ({
+          previewUrl: img.previewUrl,
+          mediaType: img.file.type,
+          promise: img.storageId
+            ? Promise.resolve<string | null>(img.storageId as string)
+            : (uploadPromisesRef.current.get(img.previewUrl) ?? Promise.resolve<string | null>(null)),
+        }));
+        const settled = await Promise.all(tasks.map(t => t.promise.then(storageId => ({ ...t, storageId }))));
+        const resolvedImages: OptimisticImage[] = settled
+          .filter(t => t.storageId)
+          .map(t => ({ media_type: t.mediaType, storage_id: t.storageId as string }));
+        // Every upload failed and there was no text — nothing real to send.
+        // uploadImage already toasted each failure; just fail the bubble.
+        if (resolvedImages.length === 0 && !message.trim()) {
+          useInboxStore.getState().markOptimisticAsFailed(targetConvId, clientId);
+          tasks.forEach(t => uploadPromisesRef.current.delete(t.previewUrl));
+          return;
+        }
+        useInboxStore.getState().resolvePendingUploads(targetConvId, clientId, resolvedImages);
+        // Free the handed-off blobs after the bubble has re-rendered without
+        // its preview_url (resolvePendingUploads stripped it), so a still-
+        // mounted ImageBlock never loads a revoked URL and gets stuck errored.
+        tasks.forEach(t => {
+          uploadPromisesRef.current.delete(t.previewUrl);
+          setTimeout(() => URL.revokeObjectURL(t.previewUrl), 1000);
+        });
+        await finishSend(resolvedImages.map(i => i.storage_id as string));
+      })();
+    } else {
+      await finishSend(submitImages.map(img => img.storageId as string));
     }
   };
 
@@ -6991,6 +7374,19 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
       }
     }
 
+    // ↑ on the first line steps up into the new-session project picker (mirrors
+    // the image / queued-message gestures above). Self-gating: the global hook
+    // exists only while that picker is mounted, so ↑ is untouched in normal convos.
+    if (e.key === "ArrowUp" && pastedImages.length === 0 && queuedMessages.length === 0 && selectedImageIndex === null && selectedQueueIndex === null) {
+      const ta = textareaRef.current;
+      const onFirstLine = !!ta && ta.selectionStart === ta.selectionEnd && ta.value.slice(0, ta.selectionStart).indexOf("\n") === -1;
+      const focusProjects = (window as unknown as { __CODECAST_FOCUS_PROJECTS?: () => boolean }).__CODECAST_FOCUS_PROJECTS;
+      if (onFirstLine && focusProjects?.()) {
+        e.preventDefault();
+        return;
+      }
+    }
+
     if (e.key === "Escape") {
       e.preventDefault();
       e.stopPropagation();
@@ -7013,6 +7409,15 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
     if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "e") {
       e.preventDefault();
       toggleCompose();
+      return;
+    }
+    // Compose-popup intent: Enter fires-and-forgets, Cmd/Ctrl+Enter sends & opens.
+    // Only active when onSubmitWithIntent is provided (the new-session window);
+    // normal inputs fall through to the queue/send behavior below.
+    if (onSubmitWithIntent && e.key === "Enter" && !e.shiftKey && !e.altKey) {
+      e.preventDefault();
+      const navigate = e.metaKey || e.ctrlKey;
+      handleSubmit(e).then(() => onSubmitWithIntent(navigate));
       return;
     }
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
@@ -7046,7 +7451,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
     }
   };
 
-  const canSubmit = hasContent && !isWaitingForUpload;
+  const canSubmit = hasContent;
 
   return (
     <div className={`shrink-0 pointer-events-none sticky bottom-0 ${lightboxImageIndex !== null ? "z-[10002]" : "z-10"}`}>
@@ -7468,7 +7873,6 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
                     onPaste={handlePaste}
                     onFocus={() => setIsFocused(true)}
                     onBlur={() => { setIsFocused(false); setAcTrigger(null); }}
-                    disabled={isWaitingForUpload}
                     placeholder={onGateSend ? "Send a message to continue the workflow..." : onWorkflowLaunch ? "Goal override (optional) — press send to run workflow..." : agentStatus === "permission_blocked" ? ((pendingPermissionsCount ?? 0) > 0 ? "Approve or deny permission to continue..." : hasAskUserQuestion ? "Answer the question to continue..." : "Send a message...") : "Send a message..."}
                     rows={1}
                     className={`flex-1 bg-transparent text-sm placeholder:text-sol-text-dim focus:outline-none disabled:opacity-50 resize-none overflow-hidden leading-relaxed py-1 ${isSelectionActive && !isSelectionEditedRef.current ? "text-sol-text-dim italic" : "text-sol-text"}`}
@@ -7489,16 +7893,9 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
                       disabled={!canSubmit}
                       className={`w-8 h-8 rounded-full transition-colors flex items-center justify-center border ${!canSubmit ? "border-sol-border/30 text-sol-text-dim/25 cursor-not-allowed" : "border-sol-blue/50 bg-sol-blue/20 text-sol-blue hover:bg-sol-blue/30 hover:border-sol-blue hover:text-sol-blue"}`}
                     >
-                      {isWaitingForUpload ? (
-                        <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                        </svg>
-                      ) : (
-                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M12 19V5M5 12l7-7 7 7" />
-                        </svg>
-                      )}
+                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 19V5M5 12l7-7 7 7" />
+                      </svg>
                     </button>
                   </div>
                 </div>
@@ -7579,7 +7976,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
 const CC_MODE_ORDER = ["default", "plan", "acceptEdits", "bypassPermissions", "dontAsk"];
 
 export const ConversationView = forwardRef<ConversationViewHandle, ConversationViewProps>(
-  function ConversationView({ conversation, commits = [], pullRequests = [], backHref, backLabel = "Back", headerExtra, headerLeft, headerEnd, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, onLoadOlder, onLoadNewer, onJumpToStart, onJumpToEnd, onJumpToTimestamp, highlightQuery: propHighlightQuery, onClearHighlight: propClearHighlight, embedded, showMessageInput = true, targetMessageId, isOwner = true, onSendAndAdvance, onSendAndDismiss, autoFocusInput, fallbackStickyContent, onBack, subHeaderContent, hideHeader }, ref) {
+  function ConversationView({ conversation, commits = [], pullRequests = [], backHref, backLabel = "Back", headerExtra, headerLeft, headerEnd, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, onLoadOlder, onLoadNewer, onJumpToStart, onJumpToEnd, onJumpToTimestamp, highlightQuery: propHighlightQuery, onClearHighlight: propClearHighlight, embedded, showMessageInput = true, targetMessageId, isOwner = true, onSendAndAdvance, onSendAndDismiss, autoFocusInput, fallbackStickyContent, onBack, subHeaderContent, hideHeader, onSubmitWithIntent }, ref) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [userScrolled, _setUserScrolled] = useState(false);
   const userScrolledRef = useRef(false);
@@ -8139,6 +8536,22 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   // setMessages/mergeMessages/buildCompositeTimeline do to the server message arrays.
   const pendingConvId = effectiveConversationId || conversation?._id || '';
   const pendingMsgs = useInboxStore((s) => s.pendingMessages[pendingConvId] ?? EMPTY_PENDING);
+  // Server-side pending row — the SAME pending_messages rail a human web send uses. The local
+  // optimistic queue above only exists in the browser that hit Send; this surfaces a queued
+  // message to EVERY viewer, and to CLI-originated `cast send`s that no browser optimistically
+  // rendered, so it shows as pending immediately (before the JSONL echo) instead of nothing.
+  const serverPending = useQuery(
+    api.pendingMessages.getConversationPendingMessage,
+    isConvexId(pendingConvId) ? { conversation_id: pendingConvId as Id<"conversations"> } : "skip"
+  );
+  // Slack-style "New" divider anchor: "seen up to" advances only when you leave
+  // a session, so it holds steady for the whole visit. Everything strictly after
+  // it arrived while you were away.
+  const unreadAnchorAt = useInboxStore((s) => s._seenUpToAt[pendingConvId] ?? 0);
+  // Upper bound for the "New" divider — the moment you last focused this
+  // session (re-stamped on every entry, including window-focus). Messages newer
+  // than this arrived while you were here watching and must not be split off.
+  const enteredAt = useInboxStore((s) => s._lastViewedAt[pendingConvId] ?? 0);
 
   const timeline: TimelineItem[] = useMemo(() => {
     const base = buildCompositeTimeline(
@@ -8146,25 +8559,54 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       commits,
       pullRequests,
     ) as TimelineItem[];
-    if (pendingMsgs.length === 0) return base;
     // Guaranteed render: append any pending messages not already in the timeline.
     // This is the ONLY merge point — the store never mixes pending into messages[].
     const seen = new Set<string>();
+    const seenContent = new Set<string>();
     for (const item of base) {
       if (item.type === 'message') {
         const m = item.data as any;
         seen.add(m._id);
         if (m.client_id) seen.add(m.client_id);
+        if (m.role === 'user' && m.content) seenContent.add(normalizePendingContent(m.content));
       }
     }
-    const toAdd = pendingMsgs.filter((m: any) =>
+    const toAdd: any[] = pendingMsgs.filter((m: any) =>
       !seen.has(m._id) && (!m._clientId || !seen.has(m._clientId))
     );
+    for (const m of toAdd) if (m.content) seenContent.add(normalizePendingContent(m.content));
+    // Server-side pending row: a queued message (e.g. a CLI `cast send`) that no browser
+    // optimistically rendered. Surface it as a pending bubble for every viewer — but only if
+    // its content isn't already on screen as a synced message or a local optimistic copy
+    // (the sender's own browser already shows it via addOptimisticMessage). Dropped the moment
+    // the real JSONL echo lands, since that fills seenContent with the same normalized key.
+    if (serverPending && serverPending.status !== 'delivered' && serverPending.status !== 'cancelled') {
+      const norm = normalizePendingContent(serverPending.content);
+      if (norm && !seenContent.has(norm)) {
+        toAdd.push({
+          _id: `serverpending_${pendingConvId}`,
+          role: 'user',
+          content: serverPending.content,
+          timestamp: serverPending.created_at,
+          _isOptimistic: true,
+          _serverPendingStatus: serverPending.status,
+        });
+      }
+    }
     if (toAdd.length === 0) return base;
     return [...base, ...toAdd.map((m: any) => ({ type: 'message' as const, data: m, timestamp: m.timestamp }))];
-  }, [messages, commits, pullRequests, pendingMsgs]);
+  }, [messages, commits, pullRequests, pendingMsgs, serverPending, pendingConvId]);
   timelineRef.current = timeline;
   scrollCtxRef.current = { messageCount: conversation?.message_count || messages.length, messagesLen: messages.length, timelineLen: timeline.length, loadedStartIndex: conversation?.loaded_start_index ?? 0 };
+
+  // Index of the first timeline item that arrived while you were away — newer
+  // than your last leave (`unreadAnchorAt`) but no newer than your last focus
+  // (`enteredAt`). The "New" divider renders above this row; -1 = nothing new
+  // (first-ever visit, or everything unseen actually arrived live this visit).
+  const firstUnseenIndex = useMemo(
+    () => computeNewDividerIndex(timeline, unreadAnchorAt, enteredAt),
+    [timeline, unreadAnchorAt, enteredAt],
+  );
 
 
   const [navigatorOpen, setNavigatorOpen] = useState(false);
@@ -8407,6 +8849,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     if (!serverUserMessages) return new Set<string>();
     const ids = new Set<string>();
     for (const m of serverUserMessages) {
+      if (isSessionMessage(m.content)) continue;
       const display = cleanContent(m.content);
       if (display.length > 0 && !isSystemMessage(display)) ids.add(m._id);
     }
@@ -8481,7 +8924,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       const fresh = new Set<string>();
       for (const id of currentIds) {
         if (!knownItemIdsRef.current.has(id)) {
-          if (!id.startsWith("optimistic_")) {
+          if (isConvexId(id)) {
             const item = timeline.find(i => {
               if (i.type === 'message') return (i.data as Message)._id === id;
               if (i.type === 'commit') return `commit-${(i.data as any).sha || (i.data as any)._id}` === id;
@@ -8915,8 +9358,26 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     }
     if (!targetId) return;
     if (targetId === conversation?._id?.toString()) return;
+    // Show a spinner on the clicked chip immediately. A fork that isn't already
+    // in the inbox store has to be fetched + injected before the view switches
+    // (QueuePageClient's pendingNavigate → directConv path), and without this
+    // the click looked like a no-op. Cleared when the conversation actually
+    // changes (effect below) or by a safety timeout if the switch never lands.
+    setLoadingBranchId(convId === null ? "main" : targetId);
     navigateToSession(targetId);
   }, [conversation?.forked_from, conversation?._id, navigateToSession]);
+
+  // Clear the branch-switch spinner once we've landed on a new conversation, and
+  // guard against a switch that never resolves (e.g. a teammate's private fork
+  // the resolver denies) by timing the spinner out instead of hanging forever.
+  useWatchEffect(() => {
+    if (loadingBranchId) setLoadingBranchId(null);
+  }, [conversation?._id]);
+  useWatchEffect(() => {
+    if (!loadingBranchId) return;
+    const t = setTimeout(() => setLoadingBranchId(null), 8000);
+    return () => clearTimeout(t);
+  }, [loadingBranchId]);
 
   const handleTreeSwitchConversation = useCallback((convId: string) => {
     if (convId === conversation?._id?.toString()) return;
@@ -9002,6 +9463,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     let ticking = false;
     const check = () => {
       ticking = false;
+      if ((window as any).__STICKY_DEBUG) { (((window as any).__STICKY_TOP) ??= []).push({ scrollTop: el.scrollTop, headerHeight, stickyDisabled, jumpPending: !!jumpPendingRef.current, idxCount: stickyUserMsgIndices.length, serverFb: serverStickyFallback?.id ?? null, svrLen: (serverUserMessages?.length ?? -1), hasMoreAbove: paginationPropsRef.current.hasMoreAbove, fb: !!fallbackStickyContent }); }
       // Frozen during a pending jump — the sticky header must not flip to the
       // target edge before the view actually moves there.
       if (jumpPendingRef.current) return;
@@ -9014,7 +9476,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         setStickyMsgVisible(false);
         return;
       }
-      if (stickyDisabled) {
+      if (stickyDisabled && localStorage.getItem('__STICKY_FORCE') !== '1') {
         setActiveStickyMsg(null);
         setStickyMsgVisible(false);
         return;
@@ -9047,6 +9509,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           }
         }
       }
+      if ((window as any).__STICKY_DEBUG) { (((window as any).__STICKY_LOG) ??= []).push({ scrollTop, headerHeight, stickyDisabled, idxCount: stickyUserMsgIndices.length, bestIdx, serverFb: serverStickyFallback?.id ?? null, fb: !!fallbackStickyContent, clientHeight: el.clientHeight, hasMoreAbove: paginationPropsRef.current.hasMoreAbove, svrLen: (serverUserMessages?.length ?? -1) }); }
       if (bestIdx !== null) {
         let hideForNextMsg = false;
         const stickyBottom = headerHeight + (stickyElRef.current?.offsetHeight ?? 0);
@@ -9805,7 +10268,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           return <ScheduledTaskBlock key={msg._id} content={msg.content!} timestamp={msg.timestamp} />;
         case 'session_message':
           if (collapsed) return null;
-          return <SessionMessageBlock key={msg._id} from={kind.from} body={kind.body} timestamp={msg.timestamp} />;
+          return <SessionMessageBlock key={msg._id} from={kind.from} body={kind.body} timestamp={msg.timestamp} pendingStatus={(msg as any)._serverPendingStatus} recipientActive={conversation?.status === "active"} />;
         case 'task_prompt':
           return null;
         case 'compaction_summary':
@@ -10678,7 +11141,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         </div>
       )}
       <div ref={containerRef} className="flex-1 min-h-0 overflow-y-auto" style={{ overflowAnchor: "none" }}>
-        <div className="flex flex-col">
+        <div className="flex flex-col min-h-full">
         {(!conversation || timeline.length === 0) ? (
           <div className={`flex-1 flex flex-col items-center gap-3 ${hideHeader ? "justify-start pt-6" : "justify-start pt-16"}`}>
             {conversation && (
@@ -10688,6 +11151,17 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   forkStatus={conversation.fork_status}
                   forkCopied={conversation.fork_copied}
                   forkTotal={conversation.fork_copy_total}
+                />
+              ) : isOwner ? (
+                <NewSessionView
+                  conversation={conversation}
+                  agentControls={{
+                    showWorkflow,
+                    onToggleWorkflow: () => setShowWorkflow((v) => !v),
+                    selectedWorkflowId,
+                    onSelectWorkflow: setSelectedWorkflowId,
+                    workflows: workflows as any,
+                  }}
                 />
               ) : (
                 <ErrorBoundary name="ProjectSwitcher" level="inline">
@@ -10734,30 +11208,13 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
               position: "relative",
             }}
           >
-            {/* Earlier messages indicator at top */}
-            {hasMoreAbove && !isLoadingOlder && (
-              <div className="sticky top-0 z-10 flex justify-center py-1 sm:py-2 pointer-events-none">
-                <div className="flex items-center gap-1 sm:gap-1.5 px-2 sm:px-3 py-0.5 sm:py-1 rounded-full bg-sol-bg border border-sol-border text-sol-text-muted0 text-[10px] sm:text-xs shadow-sm pointer-events-auto">
-                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
-                  </svg>
-                  {conversation?.message_count && messages.length < conversation.message_count
-                    ? `${conversation.message_count - messages.length} earlier messages`
-                    : "Scroll up to load more"}
-                </div>
-              </div>
-            )}
-            {/* Loading indicator at top */}
-            {isLoadingOlder && (
-              <div className="sticky top-0 z-10 flex justify-center py-1 sm:py-2 pointer-events-none">
-                <div className="flex items-center gap-1.5 sm:gap-2 px-2 sm:px-3 py-1 sm:py-1.5 rounded-full bg-sol-bg-alt/90 border border-sol-border text-sol-text-muted text-[10px] sm:text-xs pointer-events-auto">
-                  <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                  </svg>
-                  Loading older messages...
-                </div>
-              </div>
+            {/* Earlier messages indicator at top (chevron, or spinner while loading) */}
+            {(hasMoreAbove || isLoadingOlder) && (
+              <EdgeMessagesIndicator dir="up" loading={!!isLoadingOlder}>
+                {conversation?.message_count && messages.length < conversation.message_count
+                  ? `${conversation.message_count - messages.length} earlier messages`
+                  : "Scroll up to load more"}
+              </EdgeMessagesIndicator>
             )}
             {virtualizer.getVirtualItems().map((virtualItem) => {
               const item = timeline[virtualItem.index];
@@ -10783,6 +11240,13 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                 >
                   {content && (
                     <div className={`max-w-7xl mx-auto px-4 sm:px-5 md:px-6 ${collapsed ? "py-0.5" : "py-0.5 sm:py-1"} ${isNew ? "animate-message-in" : ""} ${isForkSelected ? "ring-2 ring-sol-cyan/60 bg-sol-cyan/5 rounded-lg" : ""} ${isBelowForkSelection ? "opacity-30 pointer-events-none" : ""} transition-opacity`}>
+                      {virtualItem.index === firstUnseenIndex && (
+                        <div className="flex items-center gap-3 mt-1 mb-3 select-none" aria-label="New messages">
+                          <div className="flex-1 h-px" style={{ background: 'linear-gradient(to right, transparent, var(--sol-orange))' }} />
+                          <span className="text-[10px] font-semibold uppercase tracking-[0.15em]" style={{ color: 'var(--sol-orange)' }}>New</span>
+                          <div className="flex-1 h-px" style={{ background: 'linear-gradient(to left, transparent, var(--sol-orange))' }} />
+                        </div>
+                      )}
                       {content}
                       {virtualItem.index === timeline.length - 1 && !hasMoreBelow && (now - lastActivityAt) > 5 * 60 * 1000 && (
                         <div className="flex items-center gap-3 mt-5 mb-1">
@@ -10796,28 +11260,12 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                 </div>
               );
             })}
-            {/* Loading indicator at bottom */}
-            {isLoadingNewer && (
-              <div className="sticky bottom-0 z-10 flex justify-center py-2 pointer-events-none">
-                <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-sol-bg-alt/90 border border-sol-border text-sol-text-muted text-xs pointer-events-auto">
-                  <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                  </svg>
-                  Loading newer messages...
-                </div>
-              </div>
-            )}
-            {/* Later messages indicator at bottom - hide when near top to avoid confusing placement */}
-            {hasMoreBelow && !isLoadingNewer && !isNearTop && (
-              <div className="sticky bottom-0 z-10 flex justify-center py-2 pointer-events-none">
-                <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-sol-bg border border-sol-border text-sol-text-muted0 text-xs shadow-sm pointer-events-auto">
-                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                  </svg>
-                  Scroll down to load more
-                </div>
-              </div>
+            {/* Later messages indicator at bottom (chevron, or spinner while loading);
+                hide the idle state when near top to avoid confusing placement */}
+            {((hasMoreBelow && !isNearTop) || isLoadingNewer) && (
+              <EdgeMessagesIndicator dir="down" loading={!!isLoadingNewer}>
+                Scroll down to load more
+              </EdgeMessagesIndicator>
             )}
           </div>
           {conversation?.child_conversations && conversation.child_conversations.length > 0 && !hasMoreBelow && (() => {
@@ -10906,21 +11354,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                     </button>
                   ))}
                 </div>
-              ) : (
-                conversation.status === "active" && (conversation.message_count ?? 0) === 0 && (!conversation.messages || conversation.messages.length === 0) && isOwner && (
-                  <div className="absolute left-0 right-0 bottom-full">
-                    <AgentSwitcher
-                      conversation={conversation}
-                      showWorkflow={showWorkflow}
-                      onToggleWorkflow={() => setShowWorkflow(v => !v)}
-                      selectedWorkflowId={selectedWorkflowId}
-                      onSelectWorkflow={setSelectedWorkflowId}
-                      workflows={workflows as any}
-                    />
-                  </div>
-                )
-              )}
-              <MessageInput key={conversation.session_id || conversation._id} conversationId={conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} onSendAndDismiss={onSendAndDismiss} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} isSessionStarting={isSessionStarting} isSessionReady={isSessionReady} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={isSessionDisconnected || conversation.status !== "active" ? undefined : managedSession?.agent_status as any} deliveryStatus={managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} hasAskUserQuestion={hasAskUserQuestion} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={handleForkFromMessage} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onGateSend={workflowRun?.status === "paused" ? handleGateRespond : undefined} skills={sessionSkills} filePaths={sessionFilePaths} mentionItemsRef={mentionItemsRef} onMentionQuery={handleMentionQuery} />
+              ) : null}
+              <MessageInput key={conversation.session_id || conversation._id} conversationId={conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} onSendAndDismiss={onSendAndDismiss} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} isSessionStarting={isSessionStarting} isSessionReady={isSessionReady} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={isSessionDisconnected || conversation.status !== "active" ? undefined : managedSession?.agent_status as any} deliveryStatus={managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} hasAskUserQuestion={hasAskUserQuestion} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={handleForkFromMessage} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onGateSend={workflowRun?.status === "paused" ? handleGateRespond : undefined} skills={sessionSkills} filePaths={sessionFilePaths} mentionItemsRef={mentionItemsRef} onMentionQuery={handleMentionQuery} onSubmitWithIntent={onSubmitWithIntent} />
             </>
           )}
           {navigatorOpen && navigatorUserMessages && navigatorUserMessages.length > 0 && (
@@ -11043,7 +11478,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         </div>
       )}
 
-      {commentMessageId && !commentMessageId.startsWith("optimistic_") && conversation && (
+      {commentMessageId && isConvexId(commentMessageId) && conversation && (
         <CommentPanel
           conversationId={conversation._id as Id<"conversations">}
           messageId={commentMessageId}

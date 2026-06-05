@@ -5,8 +5,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useInboxStore } from "../store/inboxStore";
 import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import { remarkEntityIds } from "../lib/remarkEntityIds";
+import { entityRemarkPlugins } from "../lib/remarkEntityIds";
 import { EntityAwareCode, EntityAwareLink } from "./EntityIdPill";
 import { toast } from "sonner";
 
@@ -207,7 +206,7 @@ export function CommentPanel({ conversationId, messageId, onClose }: CommentPane
           </div>
           <div className="text-sol-text text-sm prose prose-invert prose-sm max-w-none">
             <ReactMarkdown
-              remarkPlugins={[remarkGfm, remarkEntityIds]}
+              remarkPlugins={entityRemarkPlugins}
               components={{
                 code: EntityAwareCode,
                 a: EntityAwareLink,
