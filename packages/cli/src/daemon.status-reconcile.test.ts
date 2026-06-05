@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
-import { classifyCodexTranscriptTail, classifyTranscriptTail, findCachedSessionIdForConversation, isInterruptControlMessage, paneReconcileTarget, reconciledStatus, transcriptTailLastRealRole, permissionBlockedRecoveryTarget } from "./daemon.js";
+import { classifyCodexTranscriptTail, classifyTranscriptTail, findCachedSessionIdForConversation, isInterruptControlMessage, paneReconcileTarget, reconciledStatus, transcriptTailLastRealRole, permissionBlockedRecoveryTarget, registerManagedStartedSession, isSessionPaneTracked } from "./daemon.js";
 import type { TranscriptTurnState } from "./daemon.js";
 
 // Regression test for the "session stuck in 'working' (or 'stopped') forever" bug,
@@ -226,10 +226,30 @@ describe("paneReconcileTarget", () => {
     expect(paneReconcileTarget("busy", "thinking")).toBeNull();
   });
 
+  // The "stuck working" inbox bug: a tmux session parked on a buffered
+  // AskUserQuestion. Claude Code hides the question's tool_use from the JSONL until
+  // answered, so the transcript can't see it — only the pane can. The pane reconcile
+  // is the authority and recovers a permission_blocked latch ONCE THE MENU IS GONE.
+  // (Its sole caller runs it only after parseInteractivePrompt confirmed no menu, and
+  // a live menu classifies as rewind/unknown anyway — never idle/busy — so this can
+  // never clear a still-open prompt.)
+  test("idle pane + permission_blocked -> idle (question answered, agent finished, resume hook lost)", () => {
+    expect(paneReconcileTarget("idle", "permission_blocked")).toBe("idle");
+  });
+  test("busy pane + permission_blocked -> working (question answered, agent resumed)", () => {
+    expect(paneReconcileTarget("busy", "permission_blocked")).toBe("working");
+  });
+  test("a live menu (rewind/unknown pane) never clears permission_blocked", () => {
+    // While the AskUserQuestion menu is up the pane never reads idle/busy, so the
+    // block stays put — the agent is genuinely waiting on the user.
+    for (const state of ["rewind", "interrupted", "warning", "unknown"] as const) {
+      expect(paneReconcileTarget(state, "permission_blocked")).toBeNull();
+    }
+  });
+
   test("never overrides statuses owned by other code paths", () => {
-    // permission_blocked / resuming are not bare idle/busy panes anyway, but be
-    // explicit: the pane reconcile must not stomp them or a terminal "stopped".
-    for (const stored of ["permission_blocked", "resuming", "stopped"] as const) {
+    // resuming / a terminal "stopped" must never be stomped by the pane reconcile.
+    for (const stored of ["resuming", "stopped"] as const) {
       expect(paneReconcileTarget("idle", stored)).toBeNull();
       expect(paneReconcileTarget("busy", stored)).toBeNull();
     }
@@ -254,6 +274,21 @@ describe("warm-restart session id recovery", () => {
       "5e9f3b9b-a08c-4b97-980c-7e5c1e5e3039",
     );
     expect(findCachedSessionIdForConversation(cache, "missing")).toBeUndefined();
+  });
+});
+
+// A freshly-started session (never resumed, no daemon restart since it started) must still be
+// pane-tracked, or the periodic health sweep skips it and a buffered AskUserQuestion on it
+// stays invisible on the web until answered. Regression for jx7e0c1 (session 54c97147): its
+// poll only synced after an unrelated daemon restart warm-recovered it into the cache.
+describe("started session is pane-tracked for the interactive-prompt sweep", () => {
+  test("registerManagedStartedSession tracks a fresh started session immediately", () => {
+    const sid = "11111111-2222-4333-8444-555555555555";
+    expect(isSessionPaneTracked(sid)).toBe(false);
+    // No syncServiceRef in tests: the function records the pane (local bookkeeping) then
+    // returns at the guard — exercising exactly the line that closes the gap.
+    registerManagedStartedSession("jx7e0c1b0crwpsfyj5y017mgmd87ybtc", sid, "cc-claude-testpane");
+    expect(isSessionPaneTracked(sid)).toBe(true);
   });
 });
 

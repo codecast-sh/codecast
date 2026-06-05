@@ -10,7 +10,7 @@ const TASK_VERSION = "1";
 const WORK_VERSION = "6"; // bumped: messaging docs split out into MESSAGING_SNIPPET
 const PLAN_VERSION = "2";
 const WORKFLOW_VERSION = "1";
-const MESSAGING_VERSION = "1";
+const MESSAGING_VERSION = "4"; // bumped: messaging snippet tightened (teammate / peer-or-boss)
 const LATEST_URL = "https://dl.codecast.sh/latest.json";
 const UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours
 
