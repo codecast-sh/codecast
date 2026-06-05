@@ -85,6 +85,93 @@ export async function resolveLocalProjectPath(
   return null;
 }
 
+export interface LocalRepoInput {
+  /** The (possibly foreign) recorded path to resolve, e.g. /Users/m1/work/codecast/packages/cli */
+  remotePath: string;
+  /** $HOME for the convention search (~/src/<repo>, ~/projects/<repo>, …). */
+  home: string;
+  /** Explicit user mappings (config `project_mappings`): full-path OR basename → local path. */
+  userMap?: Record<string, string> | null;
+  /** Learned mappings the daemon has observed locally: full-path OR basename → local path. */
+  learnedMap?: Record<string, string> | null;
+  /** Container dirs under $HOME to probe. Defaults to src/projects/code/repos and $HOME itself. */
+  conventionDirs?: string[];
+  /** Directory-existence check (overridable for tests). */
+  exists?: (p: string) => boolean;
+  /** Invoked on a convention hit so the daemon can persist basename → local repo. */
+  onLearn?: (basename: string, localPath: string) => void;
+}
+
+// Resolve a (possibly foreign) recorded path to a local one by repo CONVENTION —
+// no git remote required. Used by the daemon for start_session, resume, and
+// cross-machine forks.
+//
+// Walks the path from the LEAF up to the root. For each segment it tries to map
+// that segment's basename to a local repo (explicit map, then learned map, then
+// ~/<dir>/<name> convention) and re-appends the descendant subpath.
+//
+// Why walk up: a recorded path is frequently a SUBDIR inside a repo
+// (/Users/m1/work/codecast/packages/cli). The leaf ("cli") is not the repo; an
+// ancestor ("codecast") is. Trying only the leaf — the original behavior —
+// refused these even though the repo IS checked out locally, which stamped a
+// dead-end "clone it first" banner on brand-new sessions seeded from another
+// machine's path.
+//
+// Safety: we walk DEEPEST segment first (the repo nests below its container
+// dirs), and skip generic container/home segments so "work"/"src" can never
+// masquerade as a repo. The first real repo match wins; when its subpath is
+// absent locally we fall back to the repo root (the agent can cd from there),
+// matching resolveLocalProjectPath.
+const GENERIC_PATH_SEGMENTS = new Set([
+  "work", "src", "code", "repos", "projects", "dev", "developer",
+  "users", "home", "tmp", "documents", "desktop", "downloads",
+]);
+
+export function resolveLocalRepoPath(input: LocalRepoInput): string | null {
+  const exists = input.exists ?? defaultExists;
+  const remotePath = input.remotePath?.trim();
+  if (!remotePath) return null;
+  if (exists(remotePath)) return remotePath;
+
+  const maps = [input.userMap, input.learnedMap].filter(Boolean) as Record<string, string>[];
+  // A full-path mapping is the most specific signal — honor it before walking.
+  for (const map of maps) {
+    const mapped = map[remotePath];
+    if (mapped && exists(mapped)) return mapped;
+  }
+
+  const conventionDirs = input.conventionDirs ?? ["src", "projects", "code", "repos", ""];
+  const home = input.home;
+
+  const resolveBase = (name: string): string | null => {
+    for (const map of maps) {
+      const mapped = map[name];
+      if (mapped && exists(mapped)) return mapped;
+    }
+    for (const dir of conventionDirs) {
+      const candidate = dir ? `${home}/${dir}/${name}` : `${home}/${name}`;
+      if (exists(candidate)) {
+        input.onLearn?.(name, candidate);
+        return candidate;
+      }
+    }
+    return null;
+  };
+
+  const parts = remotePath.split("/").filter(Boolean);
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const name = parts[i];
+    if (!name || GENERIC_PATH_SEGMENTS.has(name.toLowerCase())) continue;
+    const base = resolveBase(name);
+    if (!base) continue;
+    const sub = parts.slice(i + 1);
+    if (sub.length === 0) return base; // leaf names the repo itself (original behavior)
+    const full = [base, ...sub].join("/");
+    return exists(full) ? full : base; // deepest repo match wins; subpath optional
+  }
+  return null;
+}
+
 export interface ResumeCwdInput {
   /** Explicit caller override (e.g. a `cast remote move` worktree path). Wins if it exists. */
   cwdOverride?: string | null;
