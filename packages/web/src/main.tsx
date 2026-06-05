@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter } from "react-router";
 import { initAnalytics, setupErrorToasts } from "../lib/analytics";
+import { armChunkReloadGuardReset } from "../components/ErrorBoundary";
 import { App } from "./App";
 import "../store/inboxStore";
 import "../app/globals.css";
@@ -22,6 +23,10 @@ const idle: (cb: () => void) => void =
   ((cb) => setTimeout(cb, 1));
 
 idle(() => initAnalytics());
+
+// If this load stays up (no immediate chunk re-crash), clear the auto-reload
+// guard so a future stale-chunk crash in this tab can recover on its own.
+armChunkReloadGuardReset();
 
 // Warm the cache for the most-visited app routes so the first navigation
 // (or direct landing) doesn't pay a chunk-fetch waterfall. Skip for visitors
