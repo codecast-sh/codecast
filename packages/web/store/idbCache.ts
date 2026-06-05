@@ -90,6 +90,12 @@ const COLLECTION_TABLES: Record<string, Dexie.Table<any, string>> = {
 
 const META_KEYS = new Set([
   "clientState",
+  // Per-session view tracking — must survive refresh so the Tab switcher still
+  // opens the genuinely last-viewed session, and the "New" divider still shows
+  // what arrived while the app was closed.
+  "_lastViewedAt",
+  "_seenUpToAt",
+  "_seenMessageCount",
   // "messages" and "pagination" are now per-conversation in the conversationMessages table
   "conversations",
   "drafts",
@@ -104,6 +110,7 @@ const META_KEYS = new Set([
   "teams",
   "teamMembers",
   "teamUnreadCount",
+  "docProjectPaths",
   "favorites",
   "bookmarks",
   "tabs",
@@ -245,4 +252,3 @@ export async function loadOutbox(): Promise<OutboxEntry[]> {
     return [];
   }
 }
-

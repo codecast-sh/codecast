@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it } from "bun:test";
-import { categorizeSessions, getSessionRenderKey, isSessionDismissed, pendingSendConsumed, sessionsWithPendingSend, useInboxStore, type InboxSession } from "../inboxStore";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { categorizeSessions, computeNewDividerIndex, getSessionRenderKey, isConvexId, isSessionDismissed, orchestrationGroupLabelOf, pendingSendConsumed, sessionsWithPendingSend, unionHydrate, useInboxStore, worktreeKeyOf, type InboxSession } from "../inboxStore";
 import { isPersistedStoreKey } from "../idbCache";
 
 const baseSession: InboxSession = {
@@ -909,6 +909,80 @@ describe("mergeMessages — sync-recovery safety net", () => {
   });
 });
 
+describe("syncTable sessions — liberal delta cache (never prune by absence)", () => {
+  // The inbox is a liberal cache, like tasks/docs: the live listInboxSessions
+  // window syncs as a DELTA overlay (isDelta:true on the sessions registry
+  // config), so a row the server stops returning is NOT deleted locally. The
+  // cache accumulates; sessions leave only when explicitly dismissed (an
+  // in-window update that overlays) or killed — never because they aged out of
+  // the server's narrow recent window. These pin that invariant plus the
+  // cross-device dismissal path.
+  const active: InboxSession = { ...baseSession, _id: "a0000000000000000000000000000001", session_id: "s-active" };
+  const olderActive: InboxSession = { ...baseSession, _id: "a0000000000000000000000000000002", session_id: "s-older" };
+  const dismissed: InboxSession = {
+    ...baseSession, _id: "a0000000000000000000000000000003", session_id: "s-dismissed", inbox_dismissed_at: 50,
+  };
+
+  beforeEach(() => {
+    useInboxStore.setState({
+      sessions: {},
+      conversations: {},
+      pendingMessages: {},
+      pending: {},
+      currentSessionId: null,
+      showMySessions: false,
+      clientStateInitialized: false, // skip the transform's auto-select
+      clientState: {},
+    });
+  });
+
+  it("keeps BOTH active and dismissed sessions when a later payload omits them", () => {
+    const sync = useInboxStore.getState().syncTable;
+    sync("sessions", [active, olderActive, dismissed]);
+    expect(Object.keys(useInboxStore.getState().sessions)).toHaveLength(3);
+
+    // A later live window only carries the most-recent active session — the
+    // older active one and the dismissed one fell out of the server's window.
+    // Delta overlay must retain them: absence is not deletion.
+    sync("sessions", [active]);
+
+    const s = useInboxStore.getState();
+    expect(s.sessions[active._id]).toBeDefined();
+    expect(s.sessions[olderActive._id]).toBeDefined();  // not pruned
+    expect(s.sessions[dismissed._id]).toBeDefined();     // not pruned
+    expect(isSessionDismissed(s.sessions[dismissed._id])).toBe(true);
+  });
+
+  it("applies a dismissal arriving in a later delta (e.g. dismissed on another device)", () => {
+    const sync = useInboxStore.getState().syncTable;
+    sync("sessions", [active]);
+    expect(isSessionDismissed(useInboxStore.getState().sessions[active._id])).toBe(false);
+
+    // Another device dismissed it: the row comes back in-window with the flag
+    // set, and the delta overlays the new field onto the cached row.
+    sync("sessions", [{ ...active, inbox_dismissed_at: 1234 }]);
+
+    expect(isSessionDismissed(useInboxStore.getState().sessions[active._id])).toBe(true);
+  });
+
+  it("a killed session stays gone even though the server still returns it", () => {
+    // The explicit-removal counterpart to the liberal cache: under delta, a kill
+    // must STICK. markKilling deletes the row inside an action(), so the
+    // middleware plants a sessions:<id> exclude. The server still returns the
+    // conversation (marked completed, in-window), but the exclude blocks the
+    // delta from resurrecting it. (Raw setState skipped the exclude → re-added.)
+    const store = useInboxStore.getState();
+    store.syncTable("sessions", [active]);
+    expect(useInboxStore.getState().sessions[active._id]).toBeDefined();
+
+    store.markKilling(active._id);
+    expect(useInboxStore.getState().sessions[active._id]).toBeUndefined();
+
+    store.syncTable("sessions", [active]); // server still sends it
+    expect(useInboxStore.getState().sessions[active._id]).toBeUndefined();
+  });
+});
+
 describe("dismiss is absolute — navigation/injection must not resurrect", () => {
   // Bug history: dismissed sessions kept reappearing in prod because
   // navigateToSession and injectSession silently cleared `inbox_dismissed_at`
@@ -1081,6 +1155,50 @@ describe("pending user messages must never be lost on reload", () => {
       { _id: "s2", role: "user", content: "delivered", client_id: clientId, timestamp: 2 } as any,
     ]);
     expect(useInboxStore.getState().pendingMessages.c1).toHaveLength(0);
+  });
+
+  it("carries an uploading image (preview + spinner flag) on the optimistic bubble", () => {
+    const store = useInboxStore.getState();
+    store.addOptimisticMessage("c1", "[image]", [
+      { media_type: "image/png", preview_url: "blob:fake", uploading: true },
+    ]);
+
+    const pending = useInboxStore.getState().pendingMessages.c1;
+    expect(pending).toHaveLength(1);
+    expect(pending[0].images?.[0]).toMatchObject({ preview_url: "blob:fake", uploading: true });
+    expect(pending[0].images?.[0].storage_id).toBeUndefined();
+  });
+
+  it("resolvePendingUploads swaps the uploading preview for the real storage record", () => {
+    const store = useInboxStore.getState();
+    const clientId = store.addOptimisticMessage("c1", "[image]", [
+      { media_type: "image/png", preview_url: "blob:fake", uploading: true },
+    ]);
+
+    store.resolvePendingUploads("c1", clientId, [
+      { media_type: "image/png", storage_id: "kg_real_id" },
+    ]);
+
+    const img = useInboxStore.getState().pendingMessages.c1[0].images?.[0];
+    expect(img).toMatchObject({ storage_id: "kg_real_id" });
+    expect(img.uploading).toBeUndefined();
+    expect(img.preview_url).toBeUndefined();
+  });
+
+  it("resolvePendingUploads only touches the matching client_id", () => {
+    const store = useInboxStore.getState();
+    const a = store.addOptimisticMessage("c1", "first", [
+      { media_type: "image/png", preview_url: "blob:a", uploading: true },
+    ]);
+    store.addOptimisticMessage("c1", "second", [
+      { media_type: "image/png", preview_url: "blob:b", uploading: true },
+    ]);
+
+    store.resolvePendingUploads("c1", a, [{ media_type: "image/png", storage_id: "kg_a" }]);
+
+    const pending = useInboxStore.getState().pendingMessages.c1;
+    expect(pending[0].images?.[0]).toMatchObject({ storage_id: "kg_a" });
+    expect(pending[1].images?.[0]).toMatchObject({ preview_url: "blob:b", uploading: true });
   });
 });
 
@@ -1278,5 +1396,286 @@ describe("pendingSendConsumed — server-advanced gate", () => {
     expect(pendingSendConsumed(
       { agent_status: "idle", is_idle: true, has_pending: true, updated_at: 200 }, 100,
     )).toBe(false);
+  });
+});
+
+describe("session-view recording (MRU order + unread divider anchor)", () => {
+  const realNow = Date.now;
+  let clock = 1000;
+
+  beforeEach(() => {
+    clock = 1000;
+    (Date as unknown as { now: () => number }).now = () => clock;
+    useInboxStore.setState({
+      sessions: {},
+      conversations: {},
+      clientState: {},
+      currentSessionId: null,
+      _lastViewedAt: {},
+      _seenUpToAt: {},
+    });
+  });
+
+  afterEach(() => {
+    (Date as unknown as { now: () => number }).now = realNow;
+  });
+
+  it("records an 'entered at' timestamp every time you switch into a session", () => {
+    clock = 1000;
+    useInboxStore.getState().setCurrentSession("A");
+    expect(useInboxStore.getState()._lastViewedAt.A).toBe(1000);
+    // First-ever visit: nothing seen before, so no divider anchor → no "New" line.
+    expect(useInboxStore.getState()._seenUpToAt.A).toBeUndefined();
+  });
+
+  it("MRU is exact: the session you just opened is strictly the most recent (no tie with the one you left)", () => {
+    clock = 1000; useInboxStore.getState().setCurrentSession("A");
+    clock = 2000; useInboxStore.getState().setCurrentSession("B");
+    clock = 3000; useInboxStore.getState().setCurrentSession("C");
+
+    const { _lastViewedAt } = useInboxStore.getState();
+    const order = ["A", "B", "C"].sort((a, b) => (_lastViewedAt[b] ?? 0) - (_lastViewedAt[a] ?? 0));
+    expect(order).toEqual(["C", "B", "A"]);
+    // The just-left session (B) must NOT share the current session's timestamp.
+    expect(_lastViewedAt.B).toBeLessThan(_lastViewedAt.C);
+  });
+
+  it("freezes the divider anchor at where you left off, and holds it across the visit", () => {
+    clock = 1000; useInboxStore.getState().setCurrentSession("A"); // open A
+    clock = 2000; useInboxStore.getState().setCurrentSession("B"); // leave A at 2000
+    clock = 5000; useInboxStore.getState().setCurrentSession("A"); // come back to A
+
+    // Anchor for A is the moment you left it last time — messages after t=2000 are "New".
+    expect(useInboxStore.getState()._seenUpToAt.A).toBe(2000);
+    // MRU still advanced.
+    expect(useInboxStore.getState()._lastViewedAt.A).toBe(5000);
+  });
+
+  it("re-opening the session you're already on advances MRU but never moves the divider", () => {
+    clock = 1000; useInboxStore.getState().setCurrentSession("A");
+    clock = 2000; useInboxStore.getState().setCurrentSession("B");
+    clock = 5000; useInboxStore.getState().setCurrentSession("A"); // anchor.A = 2000
+    clock = 6000; useInboxStore.getState().setCurrentSession("A"); // same session again
+
+    expect(useInboxStore.getState()._seenUpToAt.A).toBe(2000); // divider unchanged
+    expect(useInboxStore.getState()._lastViewedAt.A).toBe(6000); // MRU advanced
+  });
+
+  it("records views through navigateToSession too (not just setCurrentSession)", () => {
+    useInboxStore.setState({
+      sessions: {
+        A: { ...baseSession, _id: "A" },
+        B: { ...baseSession, _id: "B" },
+      },
+    });
+    clock = 1000; useInboxStore.getState().navigateToSession("A");
+    clock = 2000; useInboxStore.getState().navigateToSession("B");
+    const s = useInboxStore.getState();
+    expect(s._lastViewedAt.A).toBe(1000);
+    expect(s._lastViewedAt.B).toBe(2000);
+    expect(s._seenUpToAt.A).toBe(2000); // leaving A marked it seen
+  });
+
+  it("persists both view-tracking maps across a reload", () => {
+    expect(isPersistedStoreKey("_lastViewedAt")).toBe(true);
+    expect(isPersistedStoreKey("_seenUpToAt")).toBe(true);
+  });
+});
+
+describe("computeNewDividerIndex — unread band is (seenUpToAt, enteredAt]", () => {
+  // Helper: a timeline is just ascending timestamps.
+  const tl = (...ts: number[]) => ts.map((t) => ({ timestamp: t }));
+
+  it("anchors the divider above the first message that arrived while away", () => {
+    // Left at 2000, returned at 5000; messages at 3000/4000 landed in between.
+    expect(computeNewDividerIndex(tl(1000, 3000, 4000), 2000, 5000)).toBe(1);
+  });
+
+  it("does NOT split a message you send while focused (the reported bug)", () => {
+    // Caught up on entry (all msgs <= anchor), then you send at 6000 while here.
+    // entered at 5000, so 6000 is live — no divider.
+    expect(computeNewDividerIndex(tl(1000, 2000, 6000), 2000, 5000)).toBe(-1);
+  });
+
+  it("does NOT split live agent replies that arrive after you entered", () => {
+    // Nothing waiting on entry; agent streams 6000/7000 while you watch.
+    expect(computeNewDividerIndex(tl(2000, 6000, 7000), 2000, 5000)).toBe(-1);
+  });
+
+  it("keeps the divider above the away-message even as live ones stack below it", () => {
+    // 3000 arrived while away; 6000 is a live send after entering at 5000.
+    // Divider stays above 3000, not the live message.
+    expect(computeNewDividerIndex(tl(1000, 3000, 6000), 2000, 5000)).toBe(1);
+  });
+
+  it("re-focusing after messages arrived while blurred surfaces them", () => {
+    // Entry re-stamped to 9000 on window-focus; a 7000 msg arrived while blurred.
+    expect(computeNewDividerIndex(tl(1000, 7000), 2000, 9000)).toBe(1);
+  });
+
+  it("shows no divider on a first-ever visit (no seen anchor yet)", () => {
+    expect(computeNewDividerIndex(tl(1000, 2000), 0, 5000)).toBe(-1);
+  });
+
+  it("shows no divider when nothing is newer than the seen anchor", () => {
+    expect(computeNewDividerIndex(tl(1000, 1500), 2000, 5000)).toBe(-1);
+  });
+
+  it("falls back to the open interval when entry time is unknown", () => {
+    // Defensive: enteredAt 0 means 'no upper bound' → first unseen wins.
+    expect(computeNewDividerIndex(tl(1000, 3000), 2000, 0)).toBe(1);
+  });
+});
+
+describe("orchestration grouping", () => {
+  const WT = "/Users/x/src/codecast/.codecast/worktrees/arch-hardening-top-six";
+  const PLAN = { _id: "pl1", short_id: "pl-85", title: "Architecture hardening", status: "done" };
+  const mk = (id: string, over: Partial<InboxSession> = {}): InboxSession => ({
+    ...baseSession,
+    _id: id,
+    session_id: `s-${id}`,
+    message_count: 5,
+    is_idle: false,
+    is_connected: true,
+    ...over,
+  });
+
+  it("worktreeKeyOf parses worktree paths and prefers explicit worktree_name", () => {
+    expect(worktreeKeyOf(mk("a", { project_path: WT }))).toBe("arch-hardening-top-six");
+    expect(worktreeKeyOf(mk("b", { git_root: "/Users/x/proj/.conductor/fix-auth" }))).toBe("fix-auth");
+    expect(worktreeKeyOf(mk("c", { worktree_name: "explicit", project_path: WT }))).toBe("explicit");
+    expect(worktreeKeyOf(mk("d", { project_path: "/Users/x/src/codecast" }))).toBeNull();
+  });
+
+  it("orchestrationGroupLabelOf prefers the plan, then the worktree, else null", () => {
+    expect(orchestrationGroupLabelOf(mk("a", { active_plan: PLAN }))).toBe("pl-85 · Architecture hardening");
+    expect(orchestrationGroupLabelOf(mk("b", { project_path: WT }))).toBe("⑂ arch-hardening-top-six");
+    // plan wins even when a worktree is also present
+    expect(orchestrationGroupLabelOf(mk("c", { active_plan: PLAN, project_path: WT }))).toBe("pl-85 · Architecture hardening");
+    expect(orchestrationGroupLabelOf(mk("d", { project_path: "/Users/x/src/codecast" }))).toBeNull();
+  });
+
+  it("clusters >=2 plan workers (main-repo path) under the plan label", () => {
+    // The real shape: workers carry active_plan but a plain main-repo project_path.
+    const sessions = {
+      a: mk("a", { active_plan: PLAN, project_path: "/Users/x/src/codecast", updated_at: 3 }),
+      b: mk("b", { active_plan: PLAN, project_path: "/Users/x/src/codecast", updated_at: 2 }),
+      main: mk("main", { project_path: "/Users/x/src/codecast", updated_at: 4 }),
+    };
+    const r = categorizeSessions(sessions, new Set());
+    expect(r.orchestrationGroups.get("pl-85 · Architecture hardening")?.map((s) => s._id).sort())
+      .toEqual(["a", "b"]);
+    const flat = new Set([...r.pinned, ...r.newSessions, ...r.needsInput, ...r.working].map((s) => s._id));
+    expect(flat.has("a")).toBe(false);
+    expect(flat.has("b")).toBe(false);
+    // a plain main-repo session (no plan) is never grouped and stays flat
+    expect(flat.has("main")).toBe(true);
+  });
+
+  it("clusters >=2 same-worktree workers (no plan) under the worktree label", () => {
+    const sessions = {
+      a: mk("a", { project_path: WT, updated_at: 3 }),
+      b: mk("b", { project_path: WT, updated_at: 2 }),
+      main: mk("main", { project_path: "/Users/x/src/codecast", updated_at: 4 }),
+    };
+    const r = categorizeSessions(sessions, new Set());
+    expect(r.orchestrationGroups.get("⑂ arch-hardening-top-six")?.map((s) => s._id).sort())
+      .toEqual(["a", "b"]);
+    expect(new Set([...r.needsInput, ...r.working].map((s) => s._id)).has("main")).toBe(true);
+  });
+
+  it("leaves a lone worker (cluster of 1) inline", () => {
+    const sessions = {
+      a: mk("a", { active_plan: PLAN, project_path: "/Users/x/src/codecast" }),
+      main: mk("main", { project_path: "/Users/x/src/codecast" }),
+    };
+    const r = categorizeSessions(sessions, new Set());
+    expect(r.orchestrationGroups.size).toBe(0);
+    const flat = new Set([...r.needsInput, ...r.working].map((s) => s._id));
+    expect(flat.has("a")).toBe(true);
+  });
+
+  it("does not group a worker already nested under a conversation parent", () => {
+    const sessions = {
+      parent: mk("parent", { project_path: "/Users/x/src/codecast" }),
+      a: mk("a", { active_plan: PLAN, parent_conversation_id: "parent" }),
+      b: mk("b", { active_plan: PLAN, parent_conversation_id: "parent" }),
+    };
+    const r = categorizeSessions(sessions, new Set());
+    expect(r.orchestrationGroups.size).toBe(0);
+    expect(r.subsByParent.get("parent")?.length).toBe(2);
+  });
+
+  it("does not pull pinned workers into an orchestration group", () => {
+    const sessions = {
+      a: mk("a", { active_plan: PLAN, is_pinned: true, inbox_pinned_at: 5 }),
+      b: mk("b", { active_plan: PLAN, is_pinned: true, inbox_pinned_at: 6 }),
+    };
+    const r = categorizeSessions(sessions, new Set());
+    expect(r.orchestrationGroups.size).toBe(0);
+    expect(r.pinned.map((s) => s._id).sort()).toEqual(["a", "b"]);
+  });
+});
+
+describe("isConvexId — the guard for message-id-keyed queries", () => {
+  // The client timeline carries synthetic message ids the server never stored:
+  //   optimistic_*    — the sender's own local echo (addOptimisticMessage)
+  //   serverpending_* — a queued row (e.g. CLI `cast send`) surfaced to every viewer
+  // Comment/bookmark/comment-panel guards feed message ids straight into queries
+  // validated as v.id("messages"). isConvexId is the whitelist that must reject
+  // BOTH prefixes — a serverpending_ id slipping through is what threw
+  // ArgumentValidationError on comments.getCommentCount.
+  it("accepts a real 32-char Convex document id", () => {
+    expect(isConvexId("jx7bymh2ctsex27p4ez7ekrvjh883gr4")).toBe(true);
+  });
+
+  it("rejects the optimistic_ echo prefix", () => {
+    expect(isConvexId("optimistic_1780684505504_abc123")).toBe(false);
+  });
+
+  it("rejects the serverpending_ queued-row prefix", () => {
+    expect(isConvexId("serverpending_jx7bymh2ctsex27p4ez7ekrvjh883gr4")).toBe(false);
+  });
+
+  it("rejects commit-/pr- timeline ids and the empty string", () => {
+    expect(isConvexId("commit-abc123")).toBe(false);
+    expect(isConvexId("pr-jx7bymh2ctsex27p4ez7ekrvjh883gr4")).toBe(false);
+    expect(isConvexId("")).toBe(false);
+  });
+});
+
+describe("unionHydrate — cache as the floor (jx799py repro)", () => {
+  // Bug: /tasks (and now delta sessions) collapse to the live window on load,
+  // then stream back in. IDB holds the full set the whole time; the deferred
+  // hydration's empty-gate skipped IDB because a windowed live payload had
+  // already filled the store. Union-merge makes the cache the floor.
+  it("backfills cached rows the live window omits; live wins per-id", () => {
+    // IDB has the full set (N=5). The live payload is a recent-window subset (2).
+    const idb = Object.fromEntries(
+      Array.from({ length: 5 }, (_, i) => [`t${i}`, { _id: `t${i}`, title: `idb-${i}` }]),
+    );
+    const liveWindow = {
+      t0: { _id: "t0", title: "live-0" },
+      t1: { _id: "t1", title: "live-1" },
+    };
+
+    const merged = unionHydrate(idb, liveWindow) as Record<string, { _id: string; title: string }>;
+
+    // Full set survives — NOT collapsed to the 2-row live window.
+    expect(Object.keys(merged).length).toBe(5);
+    // Live rows win per-id; cache backfills the rest.
+    expect(merged.t0.title).toBe("live-0");
+    expect(merged.t1.title).toBe("live-1");
+    expect(merged.t4.title).toBe("idb-4");
+  });
+
+  it("returns the cache untouched when no live data has landed yet", () => {
+    const idb = { a: { _id: "a" }, b: { _id: "b" } };
+    expect(unionHydrate(idb, undefined)).toEqual(idb);
+  });
+
+  it("returns the live set when there is no cache", () => {
+    const live = { a: { _id: "a" } };
+    expect(unionHydrate(undefined, live)).toEqual(live);
   });
 });
