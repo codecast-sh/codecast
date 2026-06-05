@@ -15,6 +15,7 @@ import { AuthServer } from "./authServer.js";
 import { c, fmt, icons } from "./colors.js";
 import { ensureTmux, tryInstallTmux } from "./tmux.js";
 import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, ensureCastAlias } from "./update.js";
+import { type SnippetTarget, getSnippetTargets, MESSAGING_SNIPPET_END, installMessagingSnippet, ensureMessagingForMemory } from "./snippets.js";
 import { checkForDesktopUpdate } from "./desktopUpdate.js";
 import { glob } from "glob";
 import { getPosition, setPosition } from "./positionTracker.js";
@@ -2086,48 +2087,9 @@ digraph my_flow {
 ${WORKFLOW_SNIPPET_END}
 `;
 
-const MESSAGING_SNIPPET_END = "<!-- /codecast-messaging -->";
-const MESSAGING_SNIPPET = `
-## Messaging
+// MESSAGING_SNIPPET + MESSAGING_SNIPPET_END live in ./snippets.ts (shared with the daemon).
 
-You can message another of your sessions directly with \`cast send <session_id> "<text>"\`. The text is injected into that session as a new turn, attributed to you, so the recipient can act on it and reply. Use this to hand off work, ask a session that owns context a question, or coordinate parallel efforts — instead of routing everything through the human.
-
-A message from another session arrives as a turn wrapped like \`<session-message from="jx7c6zk">…</session-message>\`. Treat it as coming from that peer session; reply by sending back to its ID with \`cast send jx7c6zk "<text>"\`.
-
-\`\`\`bash
-cast send <session_id> "<text>"            # Message another session
-\`\`\`
-${MESSAGING_SNIPPET_END}
-`;
-
-interface SnippetTarget {
-  filePath: string;
-  dirPath: string;
-  label: string;
-}
-
-function getSnippetTargets(): SnippetTarget[] {
-  const home = os.homedir();
-  const targets: SnippetTarget[] = [
-    { filePath: path.join(home, ".claude", "CLAUDE.md"), dirPath: path.join(home, ".claude"), label: "~/.claude/CLAUDE.md" },
-  ];
-
-  const codexDir = path.join(home, ".codex");
-  if (fs.existsSync(codexDir)) {
-    targets.push({ filePath: path.join(codexDir, "AGENTS.md"), dirPath: codexDir, label: "~/.codex/AGENTS.md" });
-  }
-
-  const cursorDir = path.join(home, ".cursor");
-  if (fs.existsSync(cursorDir)) {
-    const rulesDir = path.join(cursorDir, "rules");
-    if (!fs.existsSync(rulesDir)) {
-      fs.mkdirSync(rulesDir, { recursive: true });
-    }
-    targets.push({ filePath: path.join(rulesDir, "codecast.mdc"), dirPath: rulesDir, label: "~/.cursor/rules/codecast.mdc" });
-  }
-
-  return targets;
-}
+// SnippetTarget + getSnippetTargets live in ./snippets.ts (shared with the daemon).
 
 function installSnippetToFile(filePath: string, dirPath: string, update: boolean): { installed: boolean; updated: boolean } {
   if (!fs.existsSync(dirPath)) {
@@ -2343,55 +2305,7 @@ function installWorkflowSnippet(update = false): { installed: boolean; updated: 
   return { installed: anyInstalled, updated: anyUpdated };
 }
 
-function installMessagingSnippetToFile(filePath: string, dirPath: string, update: boolean): { installed: boolean; updated: boolean } {
-  if (!fs.existsSync(dirPath)) {
-    fs.mkdirSync(dirPath, { recursive: true });
-  }
-
-  let existing = "";
-  if (fs.existsSync(filePath)) {
-    existing = fs.readFileSync(filePath, "utf-8");
-  }
-
-  const hasMessaging = existing.includes("## Messaging") && existing.includes(MESSAGING_SNIPPET_END);
-  if (hasMessaging && !update) {
-    return { installed: false, updated: false };
-  }
-
-  if (hasMessaging && update) {
-    const msgStart = existing.indexOf("## Messaging");
-    let msgEnd = existing.length;
-
-    const endMarkerIdx = existing.indexOf(MESSAGING_SNIPPET_END, msgStart);
-    if (endMarkerIdx !== -1) {
-      msgEnd = endMarkerIdx + MESSAGING_SNIPPET_END.length;
-      if (existing[msgEnd] === "\n") msgEnd++;
-    }
-
-    const before = existing.slice(0, msgStart);
-    const after = existing.slice(msgEnd);
-    existing = before + after;
-    fs.writeFileSync(filePath, existing.trimEnd() + "\n" + MESSAGING_SNIPPET, { mode: 0o600 });
-    return { installed: true, updated: true };
-  }
-
-  fs.writeFileSync(filePath, existing + MESSAGING_SNIPPET, { mode: 0o600 });
-  return { installed: true, updated: false };
-}
-
-function installMessagingSnippet(update = false): { installed: boolean; updated: boolean } {
-  const targets = getSnippetTargets();
-  let anyInstalled = false;
-  let anyUpdated = false;
-
-  for (const target of targets) {
-    const result = installMessagingSnippetToFile(target.filePath, target.dirPath, update);
-    if (result.installed) anyInstalled = true;
-    if (result.updated) anyUpdated = true;
-  }
-
-  return { installed: anyInstalled, updated: anyUpdated };
-}
+// installMessagingSnippet lives in ./snippets.ts (shared with the daemon).
 
 function installOrchestration(update = false): { installed: boolean; updated: boolean } {
   const orchSrc = path.resolve(__dirname, "..", "orchestration");
@@ -2532,6 +2446,19 @@ async function promptMemoryEnablement(): Promise<void> {
     writeConfig(config);
     const targets = getSnippetTargets();
     console.log(`Work snippet installed in ${targets.map(t => t.label).join(", ")}.`);
+  }
+  // Messaging is on by default for memory installs; ensureMessagingForMemory
+  // backfills it (continuity for anyone who had it inside the old work snippet)
+  // and refreshes it on a version bump. Returns null for non-memory installs.
+  const msgPatch = ensureMessagingForMemory(config);
+  if (msgPatch) {
+    const wasNew = config.messaging_enabled === undefined;
+    Object.assign(config, msgPatch);
+    writeConfig(config);
+    const targets = getSnippetTargets();
+    console.log(`Messaging snippet ${wasNew ? "installed" : "updated to latest version"} in ${targets.map(t => t.label).join(", ")}.`);
+  } else if (config.messaging_enabled) {
+    installMessagingSnippet(false);
   }
   if (config.task_enabled && config.task_version !== getTaskVersion()) {
     const result = installTaskSnippet(true);
@@ -2950,6 +2877,10 @@ program
         if (config.task_enabled) installTaskSnippet(true);
         if (config.work_enabled) installWorkSnippet(true);
         if (config.workflow_enabled) installWorkflowSnippet(true);
+        // Messaging is on by default for memory installs — backfill/refresh + persist.
+        const msgPatch = ensureMessagingForMemory(config);
+        if (msgPatch) { Object.assign(config, msgPatch); writeConfig(config); }
+        else if (config.messaging_enabled) installMessagingSnippet(true);
         if (config.orch_enabled) installOrchestration(true);
         installSessionRegisterHook();
         installStatusHook();
@@ -6340,6 +6271,16 @@ program
         changed = true;
       }
 
+      // Remove messaging snippet
+      const msgStart = content.indexOf("## Messaging");
+      if (msgStart !== -1 && content.includes(MESSAGING_SNIPPET_END)) {
+        const msgEndMarker = content.indexOf(MESSAGING_SNIPPET_END, msgStart);
+        let msgEnd = msgEndMarker !== -1 ? msgEndMarker + MESSAGING_SNIPPET_END.length : content.length;
+        if (content[msgEnd] === "\n") msgEnd++;
+        content = content.slice(0, msgStart) + content.slice(msgEnd);
+        changed = true;
+      }
+
       if (changed) {
         fs.writeFileSync(filePath, content.trimEnd() + "\n");
         console.log(`Removed codecast snippets from ${filePath.replace(home, "~")}`);
@@ -7955,6 +7896,10 @@ program
       if (config.task_enabled) installTaskSnippet(true);
       if (config.work_enabled) installWorkSnippet(true);
       if (config.workflow_enabled) installWorkflowSnippet(true);
+      // Messaging is on by default for memory installs — backfill/refresh + persist.
+      const msgPatch = ensureMessagingForMemory(config);
+      if (msgPatch) { Object.assign(config, msgPatch); writeConfig(config); }
+      else if (config.messaging_enabled) installMessagingSnippet(true);
       if (config.orch_enabled) installOrchestration(true);
       installSessionRegisterHook();
       installStatusHook();
@@ -12799,6 +12744,42 @@ workflow
       console.log("Your agents can now use DOT-based workflow templates.");
     } else {
       console.log("Workflow snippet is up to date.");
+    }
+  });
+
+const messaging = program
+  .command("messaging")
+  .description("Manage the session-to-session messaging snippet")
+  .showHelpAfterError(true);
+
+messaging
+  .command("install")
+  .description("Install messaging snippet into agent config (CLAUDE.md, AGENTS.md)")
+  .option("--disable", "Remove messaging snippet and disable")
+  .action(async (options: any) => {
+    const config = readConfig() || {};
+
+    if (options.disable) {
+      config.messaging_enabled = false;
+      writeConfig(config);
+      console.log("Messaging snippet disabled. Run 'cast messaging install' to re-enable.");
+      return;
+    }
+
+    const result = installMessagingSnippet(true);
+    config.messaging_enabled = true;
+    config.messaging_version = getMessagingVersion();
+    writeConfig(config);
+
+    const targets = getSnippetTargets();
+    const targetList = targets.map(t => t.label).join(", ");
+    if (result.updated) {
+      console.log(`Messaging snippet updated in ${targetList}`);
+    } else if (result.installed) {
+      console.log(`Messaging snippet installed in ${targetList}`);
+      console.log("Your sessions can now message each other with 'cast send'.");
+    } else {
+      console.log("Messaging snippet is up to date.");
     }
   });
 
