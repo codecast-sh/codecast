@@ -216,7 +216,7 @@ function FavoriteButton({
   );
 }
 
-type Conversation = {
+export type Conversation = {
   _id: string;
   user_id: string;
   title?: string;
@@ -379,7 +379,7 @@ function GeminiIcon({ className = "w-4 h-4" }: { className?: string }) {
   );
 }
 
-function AgentIcon({ agentType, className = "w-4 h-4" }: { agentType: string; className?: string }) {
+export function AgentIcon({ agentType, className = "w-4 h-4" }: { agentType: string; className?: string }) {
   if (agentType === "codex" || agentType === "codex_cli") {
     return (
       <span className={`${className} rounded bg-[#0f0f0f] flex items-center justify-center shrink-0`}>
@@ -499,7 +499,7 @@ function getRelativeTime(timestamp: number): string {
   return date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
-function ConversationCard({ conv, filter, isFocused, onNavigate, hasTeam }: {
+export function ConversationCard({ conv, filter, isFocused, onNavigate, hasTeam }: {
   conv: Conversation;
   filter: "my" | "team";
   isFocused: boolean;

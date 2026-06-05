@@ -865,9 +865,13 @@ export function SessionListPanel({
     if (isConvexId(id)) {
       killSessionMutation({ conversation_id: id as Id<"conversations">, mark_completed: true }).catch(() => {});
     }
-    const newSessions = { ...useInboxStore.getState().sessions };
-    delete newSessions[id];
-    useInboxStore.setState({ sessions: newSessions });
+    // Route the local removal through markKilling (an action that deletes the row
+    // inside a draft) rather than a raw setState. The middleware then plants a
+    // pending "exclude" for sessions:id, so the now-liberal delta cache won't
+    // re-add the killed session on the next sync (the server still returns it,
+    // marked completed, until it ages out of the window). Raw setState skipped
+    // the middleware → no exclude → the card came back.
+    useInboxStore.getState().markKilling(id);
   }, [killSessionMutation]);
 
   const handleSelect = useCallback((session: InboxSession) => {
@@ -877,12 +881,15 @@ export function SessionListPanel({
   }, [onSessionSelect]);
 
   const pendingSendIds = useMemo(() => sessionsWithPendingSend(s.pendingMessages), [s.pendingMessages]);
-  const { sorted: sortedSessions, pinned, newSessions, needsInput, working, dismissed: dismissedList, subsByParent: globalSubByParent, forksByParent: globalForksByParent } = useMemo(
+  const { sorted: sortedSessions, pinned, newSessions, needsInput, working, dismissed: dismissedList, subsByParent: globalSubByParent, forksByParent: globalForksByParent, orchestrationGroups: globalOrchestrationGroups } = useMemo(
     () => categorizeSessions(s.sessions, s.sessionsWithQueuedMessages, pendingSendIds),
     [s.sessions, s.sessionsWithQueuedMessages, pendingSendIds],
   );
 
-  const activeSessions = useMemo(() => [...pinned, ...newSessions, ...needsInput, ...working], [pinned, newSessions, needsInput, working]);
+  const orchestrationGroupMembers = useMemo(() => Array.from(globalOrchestrationGroups.values()).flat(), [globalOrchestrationGroups]);
+  // Grouped workers are held out of the flat buckets; fold them back in for the
+  // header count and project chips so totals stay accurate.
+  const activeSessions = useMemo(() => [...pinned, ...newSessions, ...needsInput, ...working, ...orchestrationGroupMembers], [pinned, newSessions, needsInput, working, orchestrationGroupMembers]);
 
   const projectCounts = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -1085,6 +1092,46 @@ export function SessionListPanel({
         {renderSection("New", filteredNew, "text-sol-blue")}
         {renderSection("Needs Input", filteredNeedsInput, "text-sol-yellow")}
         {renderSection("Working", filteredWorking, "text-sol-green", "working")}
+        {Array.from(globalOrchestrationGroups.entries()).map(([label, members]) => {
+          const visible = filterByProject(members);
+          if (visible.length === 0) return null;
+          const key = `grp:${label}`;
+          const collapsed = !!s.collapsedSections[key];
+          const needsCount = visible.filter((m) => m.awaiting_input).length;
+          return (
+            <div key={key}>
+              <button
+                onClick={() => s.toggleCollapsedSection(key)}
+                className="w-full px-3 py-1.5 bg-sol-bg border-b border-sol-border/30 flex items-center justify-between gap-2"
+                title={`Orchestration workers: ${label}`}
+              >
+                <span className="text-[10px] font-semibold uppercase tracking-wider text-teal-500 flex items-center gap-1.5 min-w-0">
+                  <span className="truncate normal-case font-mono text-teal-400/90">{label}</span>
+                  <span className="opacity-70">({visible.length})</span>
+                  {needsCount > 0 && <span className="text-sol-yellow normal-case">· {needsCount} needs input</span>}
+                </span>
+                <svg className={`w-3 h-3 transition-transform text-teal-500 shrink-0 ${collapsed ? "" : "rotate-180"}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+              {!collapsed && visible.map((session) => (
+                <div key={session._id} className="border-b border-sol-border/30">
+                  <SessionCard
+                    session={session}
+                    isActive={session._id === activeSessionId}
+                    globalIndex={0}
+                    onSelect={handleSelect}
+                    onDismiss={handleAnimatedDismiss}
+                    onDefer={s.deferSession}
+                    onPin={s.pinSession}
+                    variant={"default"}
+                    forkColorKey={globalForksByParent.has(session._id) ? session._id : (session.forked_from ?? undefined)}
+                  />
+                </div>
+              ))}
+            </div>
+          );
+        })}
         {sortedSessions.length === 0 && (
           <div className="px-3 py-8 text-center text-sm text-sol-text-dim">
             No active sessions
@@ -1169,12 +1216,16 @@ export function SessionListPanel({
 
 // -- CollapsedSessionRail --
 
-export function CollapsedSessionRail() {
+export function CollapsedSessionRail({ onSelect }: { onSelect?: (sessionId: string) => void } = {}) {
   const s = useTrackedStore([
     s => s.sessions,
     s => s.sessionsWithQueuedMessages,
     s => s.pendingMessages,
   ]);
+  // Clicking a dot should switch to the session the same way clicking a row in
+  // the expanded list does. The caller passes the page-aware select handler
+  // (leave / inbox-in-place / peek). Fall back to peek when used standalone.
+  const handleSelect = onSelect ?? s.selectPanelSession;
 
   const pendingSendIds = useMemo(() => sessionsWithPendingSend(s.pendingMessages), [s.pendingMessages]);
   const { pinned, needsInput, working, newSessions } = useMemo(
@@ -1213,7 +1264,7 @@ export function CollapsedSessionRail() {
                       <button
                         className={`w-1.5 h-1.5 rounded-full flex-shrink-0 transition-all hover:scale-[2] cursor-pointer ${status.pulse ? "animate-pulse" : ""}`}
                         style={{ backgroundColor: status.bg }}
-                        onClick={(e) => { e.stopPropagation(); s.selectPanelSession(sess._id); }}
+                        onClick={(e) => { e.stopPropagation(); handleSelect(sess._id); }}
                       />
                     </TooltipTrigger>
                     <TooltipContent side="left">{cleanTitle(sess.title || "New Session")}</TooltipContent>

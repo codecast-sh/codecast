@@ -7,6 +7,7 @@ import { FilterDropdown } from "./FilterDropdown";
 import { useInboxStore } from "../store/inboxStore";
 import { toast } from "sonner";
 import { KeyCap } from "./KeyboardShortcutsHelp";
+import { SyncProgressBadge } from "./SyncProgressBadge";
 import {
   Plus,
   SlidersHorizontal,
@@ -100,6 +101,9 @@ export interface GenericListViewProps<T> {
   onItemEdit?: (item: T, newTitle: string) => void;
 
   getSearchText?: (item: T) => string;
+  /** When set, a subtle "syncing N" whisper renders next to the title while the
+   *  reconcile crawl for this scope ("tasks" | "docs") is still streaming in. */
+  syncScope?: string;
   headerExtra?: ReactNode;
   listFooter?: ReactNode;
   customContent?: (helpers: { openPaletteForItems: (items: T[], mode?: string) => void }) => ReactNode;
@@ -136,6 +140,7 @@ export function GenericListView<T>({
   renderPreview,
   onItemEdit,
   getSearchText,
+  syncScope,
   headerExtra,
   listFooter,
   customContent,
@@ -486,6 +491,7 @@ export function GenericListView<T>({
       <div className="flex items-center justify-between px-6 py-4 border-b border-sol-border/30 min-h-0">
         <div className="flex items-center gap-4 min-w-0 overflow-hidden">
           <h1 className="text-lg font-semibold text-sol-text tracking-tight flex-shrink-0 cq-hide-compact">{title}</h1>
+          {syncScope && <SyncProgressBadge scope={syncScope} />}
           <div className="flex gap-1 flex-nowrap overflow-hidden">
             {tabs.map((tab) => (
               <button

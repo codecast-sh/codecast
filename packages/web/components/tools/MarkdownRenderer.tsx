@@ -1,12 +1,11 @@
 import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import { useState } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useImageGallery } from "../ImageGallery";
 import { CodeBlock } from "../CodeBlock";
 import { MermaidDiagram } from "../MermaidDiagram";
-import { remarkEntityIds } from "../../lib/remarkEntityIds";
+import { entityRemarkPlugins } from "../../lib/remarkEntityIds";
 import { EntityAwareCode, EntityAwareLink } from "../EntityIdPill";
 
 function extractTextFromHast(node: any): string {
@@ -104,7 +103,7 @@ export function MarkdownRenderer({ content, filePath = '', className = '' }: Mar
   return (
     <div className={`prose prose-invert prose-sm max-w-none ${className}`}>
       <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkEntityIds]}
+        remarkPlugins={entityRemarkPlugins}
         rehypePlugins={[rehypeHighlight]}
         components={{
           code: EntityAwareCode,
