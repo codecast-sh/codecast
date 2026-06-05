@@ -636,6 +636,66 @@ export const auditStrandedMessages = internalQuery({
   },
 });
 
+// Per-message diagnostic for "the cron keeps logging revived N / M waiting but nothing clears".
+// Read-only. For every non-terminal message it reproduces the cron's readiness gate verdict and
+// joins the consuming session(s) so we can see WHY a row won't reach terminal `delivered`:
+//   - ready_per_gate true  -> the cron revives it every tick; if it never clears, the bound session
+//     reads idle+live but isn't actually consuming the re-pend (false-idle / split-brain / wrong owner).
+//   - ready_per_gate false -> parked by design on a busy/blocked/offline session (the "waiting" bucket).
+export const diagnoseStuckMessages = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const now = Date.now();
+    const candidates: any[] = [];
+    for (const status of NON_TERMINAL_STATUSES) {
+      const r = await ctx.db
+        .query("pending_messages")
+        .withIndex("by_status", (q: any) => q.eq("status", status))
+        .collect();
+      candidates.push(...r);
+    }
+    const out = [];
+    for (const m of candidates) {
+      const conv: any = await ctx.db.get(m.conversation_id);
+      const sessions = await ctx.db
+        .query("managed_sessions")
+        .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", m.conversation_id))
+        .collect();
+      const sess = sessions.map((s: any) => ({
+        session_id: s.session_id,
+        agent_status: s.agent_status ?? null,
+        heartbeat_age_s: Math.round((now - s.last_heartbeat) / 1000),
+        live: now - s.last_heartbeat < HEARTBEAT_ALIVE_MS,
+        pid: s.pid,
+      }));
+      const ready = sess.some((s) => s.live && s.agent_status === "idle");
+      out.push({
+        msg_id: m._id,
+        status: m.status,
+        age_min: Math.round((now - m.created_at) / 60000),
+        retry_count: m.retry_count,
+        is_control: isControlMessage(m.content),
+        preview: m.content.slice(0, 60),
+        conversation_id: m.conversation_id,
+        conv_title: conv?.title ?? null,
+        conv_has_pending_flag: conv?.has_pending_messages ?? null,
+        conv_owner_device_id: conv?.owner_device_id ?? null,
+        conv_project_path: conv?.project_path ?? null,
+        ready_per_gate: ready,
+        session_count: sess.length,
+        sessions: sess,
+      });
+    }
+    out.sort((a, b) => Number(b.ready_per_gate) - Number(a.ready_per_gate) || b.age_min - a.age_min);
+    return {
+      count: out.length,
+      revived_bucket: out.filter((m) => m.ready_per_gate).length,
+      waiting_bucket: out.filter((m) => !m.ready_per_gate).length,
+      messages: out,
+    };
+  },
+});
+
 // Restore messages that were cancelled by automated cleanup back to a deliverable state.
 // CARDINAL RULE: a user-typed message is never dropped. An earlier maintenance pass wrongly
 // cancelled a backlog of stranded messages; this returns them to "undeliverable" (non-terminal),

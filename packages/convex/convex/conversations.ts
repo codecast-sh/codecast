@@ -96,6 +96,18 @@ async function mapForkDetails(ctx: { db: any }, forks: any[]) {
         parent_message_uuid: fork.parent_message_uuid,
         agent_type: fork.agent_type,
         message_count: fork.message_count,
+        // Free fields straight off the conversation row — no extra reads. The
+        // client subtracts fork_copied (messages inherited from the parent up to
+        // the fork point) from message_count to show this branch's *own* size,
+        // and uses updated_at to derive an unread badge against its local
+        // _seenMessageCount cursor. The rest enriches the hover.
+        updated_at: fork.updated_at,
+        last_message_preview: fork.last_message_preview,
+        last_message_role: fork.last_message_role,
+        last_user_message_at: fork.last_user_message_at,
+        status: fork.status,
+        git_branch: fork.git_branch,
+        fork_copied: fork.fork_copied,
       };
     })
   );

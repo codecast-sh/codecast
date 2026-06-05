@@ -8,8 +8,102 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { createDataContext, scopeByProject } from "./data";
 import { nextShortId } from "./counters";
 import { internal } from "./_generated/api";
+import { isViableInboxParent } from "./inboxFilters";
+import { pickInheritedGitMeta, type GitMetaSource } from "./projectPaths";
 
 const VALID_TASK_STATUSES = ["backlog", "open", "in_progress", "in_review", "done", "dropped"] as const;
+
+// Resolve the orchestrator conversation a task's worker session should nest
+// under: the session that created the task's plan
+// (plans.created_from_conversation_id), which is the de-facto orchestrator and
+// — unlike plans.current_session_id — is stamped once and never churned by
+// per-worker auto-binding. Returns undefined when there's no plan, no recorded
+// creator, or the creator isn't a renderable inbox parent, in which case the
+// worker stays top-level and the client's plan-grouping fallback handles it.
+export async function resolveWorkerParentConversation(
+  ctx: any,
+  userId: Id<"users">,
+  planId: Id<"plans"> | undefined,
+): Promise<Id<"conversations"> | undefined> {
+  if (!planId) return undefined;
+  let plan;
+  try {
+    plan = await ctx.db.get(planId);
+  } catch {
+    return undefined;
+  }
+  const creatorId = plan?.created_from_conversation_id as Id<"conversations"> | undefined;
+  if (!creatorId) return undefined;
+  let parent;
+  try {
+    parent = await ctx.db.get(creatorId);
+  } catch {
+    return undefined;
+  }
+  return isViableInboxParent(parent, userId.toString()) ? creatorId : undefined;
+}
+
+/**
+ * Resolve the project/git context a task-bound session must launch in:
+ * `project_path` (the task's own, or its team's directory mapping), `git_root`,
+ * and the `git_remote_url` recovered from the task's source conversations (a task
+ * itself stores no remote). Shared by `dispatch.createSession` and
+ * `tasks.assignToAgent` so both task-launch paths stamp the conversation and
+ * route the daemon identically — without a project_path the conversation can't
+ * be started by any daemon (the "start agent run did nothing" bug). `seed` lets
+ * a caller-supplied path win over the task's.
+ */
+export async function resolveTaskGitContext(
+  ctx: any,
+  userId: Id<"users">,
+  task: any,
+  mappings: any[],
+  seed?: { project_path?: string; git_root?: string },
+): Promise<{ project_path?: string; git_root?: string; git_remote_url?: string }> {
+  let project_path = seed?.project_path;
+  let git_root = seed?.git_root;
+  let git_remote_url: string | undefined;
+
+  if (!project_path) {
+    if (task.project_path) {
+      project_path = task.project_path;
+    } else if (task.team_id) {
+      const teamMapping = mappings.find((m: any) => m.team_id?.toString() === task.team_id.toString());
+      if (teamMapping) project_path = teamMapping.path_prefix;
+    }
+    if (!git_root) git_root = project_path;
+  }
+
+  // A task stores project_path but never git_remote_url; recover it from the
+  // task's source conversations (which a daemon stamped git metadata onto) so a
+  // daemon on a different machine can remap a foreign path to the local checkout.
+  const sourceIds: Id<"conversations">[] = [];
+  if (task.created_from_conversation) sourceIds.push(task.created_from_conversation);
+  for (const cid of (task.conversation_ids ?? [])) {
+    if (!sourceIds.some((s) => s.toString() === cid.toString())) sourceIds.push(cid);
+  }
+  const sources: GitMetaSource[] = [];
+  for (const cid of sourceIds) {
+    const c = await ctx.db.get(cid).catch(() => null);
+    if (c && c.user_id.toString() === userId.toString()) {
+      sources.push({ git_remote_url: c.git_remote_url, git_root: c.git_root, updated_at: c.updated_at, started_at: c.started_at });
+    }
+  }
+  const inherited = pickInheritedGitMeta(sources);
+  if (inherited.git_remote_url) {
+    git_remote_url = inherited.git_remote_url;
+    // Prefer the real repo root over a foreign full path so the daemon can keep
+    // the in-repo subpath when remapping to a local checkout.
+    if (inherited.git_root && project_path
+        && project_path.startsWith(inherited.git_root)
+        && inherited.git_root !== git_root) {
+      git_root = inherited.git_root;
+    }
+  }
+
+  return { project_path, git_root, git_remote_url };
+}
+
 type TaskStatus = typeof VALID_TASK_STATUSES[number];
 
 function assertValidTaskStatus(status: string | undefined): asserts status is TaskStatus | undefined {
@@ -1547,8 +1641,11 @@ export const assignToAgent = mutation({
   args: {
     short_id: v.string(),
     agent_type: v.union(v.literal("claude_code"), v.literal("codex"), v.literal("cursor"), v.literal("gemini")),
+    // Optional lead-in the user types before launch (defaults to "lets do this
+    // task" in the palette). Prepended to the structured task prompt below.
+    initial_message: v.optional(v.string()),
   },
-  handler: async (ctx, { short_id, agent_type }) => {
+  handler: async (ctx, { short_id, agent_type, initial_message }) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
 
@@ -1557,15 +1654,38 @@ export const assignToAgent = mutation({
       .withIndex("by_short_id", (q) => q.eq("short_id", short_id))
       .first();
     if (!task) throw new Error("Task not found");
-    if (task.user_id.toString() !== userId.toString()) throw new Error("Unauthorized");
+    // Allow the task's creator OR any member of its team — matches the access
+    // check in dispatch.createSession. Without the team clause, "start agent run"
+    // on a shared team task is silently rejected as Unauthorized.
+    const hasAccess = task.user_id.toString() === userId.toString()
+      || (task.team_id && !!(await ctx.db
+          .query("team_memberships")
+          .withIndex("by_user_team", (q: any) => q.eq("user_id", userId).eq("team_id", task.team_id))
+          .first()));
+    if (!hasAccess) throw new Error("Unauthorized");
 
     const now = Date.now();
     const sessionId = crypto.randomUUID();
+
+    const workerPlanId = (task as any).plan_id as Id<"plans"> | undefined;
+    const parentConversationId = await resolveWorkerParentConversation(ctx, userId, workerPlanId);
+
+    // Without a project_path the daemon has nowhere to launch the session, so the
+    // run silently never starts. Resolve it (and git_root/remote) from the task
+    // the same way dispatch.createSession does.
+    const mappings = await ctx.db
+      .query("directory_team_mappings")
+      .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+      .collect();
+    const { project_path, git_root, git_remote_url } = await resolveTaskGitContext(ctx, userId, task, mappings);
 
     const conversationId = await ctx.db.insert("conversations", {
       user_id: userId,
       agent_type,
       session_id: sessionId,
+      project_path,
+      git_root,
+      ...(git_remote_url ? { git_remote_url } : {}),
       started_at: now,
       updated_at: now,
       message_count: 0,
@@ -1573,6 +1693,12 @@ export const assignToAgent = mutation({
       is_private: false,
       active_task_id: task._id,
       title: task.title.slice(0, 80),
+      // Stamp the plan so the inbox can group plan workers even when there's no
+      // viable parent session to nest under (the grouping fallback).
+      ...(workerPlanId ? { active_plan_id: workerPlanId } : {}),
+      ...(parentConversationId
+        ? { parent_conversation_id: parentConversationId, is_subagent: true }
+        : {}),
     } as any);
     await ctx.db.patch(conversationId, { short_id: conversationId.toString().slice(0, 7) } as any);
 
@@ -1588,10 +1714,14 @@ export const assignToAgent = mutation({
     }
     lines.push(`\nTask ID: ${task.short_id} · Priority: ${(task as any).priority || "medium"}`);
 
+    // Lead with the user's instruction when supplied, then the task scaffold.
+    const lead = initial_message?.trim();
+    const content = lead ? `${lead}\n\n${lines.join("\n")}` : lines.join("\n");
+
     await ctx.db.insert("pending_messages", {
       conversation_id: conversationId,
       from_user_id: userId,
-      content: lines.join("\n"),
+      content,
       status: "pending",
       created_at: now,
       retry_count: 0,
@@ -1602,6 +1732,8 @@ export const assignToAgent = mutation({
     await enqueueStartSession(ctx, userId, {
       conversationId,
       agentType: daemonAgentType,
+      projectPath: project_path || git_root,
+      gitRoot: git_root,
       createdAt: now,
     });
 

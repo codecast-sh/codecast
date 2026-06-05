@@ -3,6 +3,7 @@ import {
   isNoiseTitle,
   isOrphanOrSubagent,
   shouldShowInInbox,
+  isViableInboxParent,
   isSessionIdle,
   nextAgentStatusOnAddMessages,
   isApiErrorBanner,
@@ -86,6 +87,32 @@ describe("isOrphanOrSubagent", () => {
   });
 });
 
+describe("isViableInboxParent", () => {
+  const USER = "usr_default";
+  test("null/undefined parent → not viable", () => {
+    expect(isViableInboxParent(null, USER)).toBe(false);
+    expect(isViableInboxParent(undefined, USER)).toBe(false);
+  });
+  test("ordinary active session owned by user → viable", () => {
+    expect(isViableInboxParent(conv(), USER)).toBe(true);
+  });
+  test("parent owned by a different user → not viable", () => {
+    expect(isViableInboxParent(conv({ user_id: "usr_other" as any }), USER)).toBe(false);
+  });
+  test("dismissed parent → not viable (children of a dismissed parent aren't surfaced)", () => {
+    expect(isViableInboxParent(conv({ inbox_dismissed_at: 100 }), USER)).toBe(false);
+  });
+  test("parent that is itself a subagent → not viable", () => {
+    expect(isViableInboxParent(conv({ is_subagent: true }), USER)).toBe(false);
+  });
+  test("killed (not pinned) parent → not viable", () => {
+    expect(isViableInboxParent(conv({ inbox_killed_at: 100 }), USER)).toBe(false);
+  });
+  test("completed parent with no messages → not viable", () => {
+    expect(isViableInboxParent(conv({ status: "completed", message_count: 0 }), USER)).toBe(false);
+  });
+});
+
 // Inbox visibility is now a single filter. Dismissed conversations stay in the
 // inbox — clients categorize them via the `inbox_dismissed_at` field.
 describe("shouldShowInInbox", () => {
@@ -108,11 +135,14 @@ describe("shouldShowInInbox", () => {
     expect(shouldShowInInbox(conv({ inbox_killed_at: 100 }))).toBe(false);
   });
 
-  test("killed + pinned → hide", () => {
+  // Pin revives a killed conversation, mirroring "dismissed + pinned" above.
+  // See 8f9490f7 "revive killed conversations on send or pin"; the filter only
+  // hides a killed conv when it is NOT pinned (inbox_killed_at && !inbox_pinned_at).
+  test("killed + pinned → in inbox (pin revives)", () => {
     expect(shouldShowInInbox(conv({
       inbox_killed_at: 100,
       inbox_pinned_at: 200,
-    }))).toBe(false);
+    }))).toBe(true);
   });
 
   test("killed + dismissed → hide", () => {
