@@ -40,6 +40,7 @@ import { promisify } from "util";
 import { detectPermissionPrompt } from "./permissionDetector.js";
 import { handlePermissionRequest } from "./permissionHandler.js";
 import { getVersion, performUpdate, ensureCastAlias } from "./update.js";
+import { ensureMessagingForMemory } from "./snippets.js";
 import { checkForDesktopUpdate } from "./desktopUpdate.js";
 import { performReconciliation, repairDiscrepancies } from "./reconciliation.js";
 import { TaskScheduler } from "./taskScheduler.js";
@@ -61,7 +62,7 @@ import {
   extractJsonlPermissionMode,
   rewriteSubagentJsonlToUuid,
 } from "./resumeCommand.js";
-import { resolveLocalProjectPath, resolveResumeCwd, pickProjectPath } from "./projectPathResolver.js";
+import { resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, pickProjectPath } from "./projectPathResolver.js";
 
 const ENRICHED_PATH = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
 const EXEC_TIMEOUT_MS = 10_000;
@@ -130,56 +131,26 @@ async function tmuxSessionMatchesFullSessionId(sessionName: string, sessionId: s
   return isTmuxSessionMetadataMatch(stored, sessionId);
 }
 
+// Map a (possibly foreign) recorded path to a local checkout by convention.
+// Pure resolution lives in resolveLocalRepoPath (projectPathResolver) so it's
+// unit-testable; this wires in the daemon's config/learned maps, $HOME, logging,
+// and the learn-on-hit side effect. The pure resolver walks ancestors of the
+// path so a SUBDIR recorded on another machine
+// (/Users/m1/work/codecast/packages/cli) resolves via its repo ancestor
+// ("codecast") even though the leaf ("cli") names no repo — see
+// resolveLocalRepoPath for the rationale.
 function resolveLocalRepo(remotePath: string): string | null {
-  if (!remotePath) return null;
-  if (fs.existsSync(remotePath)) return remotePath;
-  const parts = remotePath.split(path.sep).filter(Boolean);
-  const repoName = parts[parts.length - 1];
-  if (!repoName) return null;
-
-  // 1. Explicit user override (config.json `project_mappings`): full recorded path wins,
-  //    then basename. Authoritative and never auto-clobbered.
-  const userMap = readConfig()?.project_mappings;
-  if (userMap) {
-    for (const key of [remotePath, repoName]) {
-      const mapped = userMap[key];
-      if (mapped && fs.existsSync(mapped)) {
-        log(`Resolved remote CWD ${remotePath} -> ${mapped} (user mapping)`);
-        return mapped;
-      }
-    }
+  const resolved = resolveLocalRepoPath({
+    remotePath,
+    home: process.env.HOME || "/tmp",
+    userMap: readConfig()?.project_mappings ?? null,
+    learnedMap: readProjectMap(),
+    onLearn: (name, localDir) => recordProjectMapping(name, localDir),
+  });
+  if (resolved && resolved !== remotePath) {
+    log(`Resolved remote CWD ${remotePath} -> ${resolved}`);
   }
-
-  // 2. Learned map: paths/basenames the daemon has observed running locally. This is what
-  //    lets a fork of a conversation recorded on another machine resolve to wherever the
-  //    repo actually lives here, even when that's off the convention paths below.
-  const learned = readProjectMap();
-  for (const key of [remotePath, repoName]) {
-    const mapped = learned[key];
-    if (mapped && fs.existsSync(mapped)) {
-      log(`Resolved remote CWD ${remotePath} -> ${mapped} (learned mapping)`);
-      return mapped;
-    }
-  }
-
-  // 3. Convention search. On a hit, learn it so future lookups — and other-machine forks
-  //    sharing this basename — resolve in one step.
-  const home = process.env.HOME || "/tmp";
-  const candidates = [
-    path.join(home, "src", repoName),
-    path.join(home, "projects", repoName),
-    path.join(home, "code", repoName),
-    path.join(home, "repos", repoName),
-    path.join(home, repoName),
-  ];
-  for (const candidate of candidates) {
-    if (fs.existsSync(candidate)) {
-      log(`Resolved remote CWD ${remotePath} -> ${candidate}`);
-      recordProjectMapping(repoName, candidate);
-      return candidate;
-    }
-  }
-  return null;
+  return resolved;
 }
 
 // Claude indexes a session by the slug of the cwd it runs in:
@@ -226,18 +197,19 @@ async function resolveResumeCwdOrRefuse(opts: {
   });
 }
 
-// "Clone it first" is only an actionable banner when we can name what's missing:
-// a git remote to clone, or a concrete recorded path that simply isn't here. A
-// remote session that carried NEITHER (e.g. a Codex run resumed from another host
-// with no cwd and no remote) gives the daemon zero evidence a local checkout is
-// even expected — stamping "No local checkout for <unknown remote> (recorded path
-// unknown)" is a non-actionable false positive. Returns false in that case so the
-// caller stays silent (and clears any stale banner) instead.
+// "Clone it first" is only an actionable banner when there is a git remote to
+// clone. This predicate is consulted ONLY after every resolution attempt has
+// already failed (recorded path absent here, no git-remote checkout, and no
+// convention/ancestor match via resolveLocalRepo). At that point a recorded path
+// alone gives the user nothing to act on — they can't recreate another machine's
+// home dir, and "No local checkout for <unknown remote> (recorded path
+// /Users/m1/…)" is a dead end. So a foreign path with no remote is suppressed
+// (stay silent, clear any stale banner); only a nameable remote earns the banner.
 export function noLocalCheckoutBannerActionable(args: {
   remote: string | null | undefined;
-  recordedPath: string | null | undefined;
+  recordedPath?: string | null | undefined;
 }): boolean {
-  return !!(args.remote || args.recordedPath);
+  return !!args.remote;
 }
 
 // When a resume can't be placed in a real local checkout, mirror start_session:
@@ -638,6 +610,10 @@ const pendingInteractivePrompts = new Map<string, { timestamp: number; options: 
 // it's cleared on answer delivery so a genuine re-ask of the same question re-emits.
 const lastEmittedSyntheticPrompt = new Map<string, string>();
 const AGENT_STATUS_DIR = path.join(process.env.HOME || "", ".codecast", "agent-status");
+// Where codecast-status.sh drops a pending AskUserQuestion's full tool_input, keyed by
+// session id. The buffered turn isn't in the JSONL yet, so this sidecar is the only
+// full-fidelity source for the question while it waits to be answered.
+const ASK_INPUT_DIR = path.join(process.env.HOME || "", ".codecast", "ask-input");
 const skillsSyncedConversations = new Set<string>();
 
 // Post-compaction message recovery: CC sometimes goes idle after compacting instead of
@@ -5715,7 +5691,7 @@ async function findTmuxPaneForTty(tty: string): Promise<string | null> {
   }
 }
 
-type InteractivePrompt = { question: string; options: Array<{ label: string; description?: string }>; isConfirmation?: boolean; header?: string };
+type InteractivePrompt = { question: string; options: Array<{ label: string; description?: string }>; isConfirmation?: boolean; header?: string; firstOptionIdx?: number };
 
 // Unicode "Box Drawing" block (┌┐└┘─│ …). An AskUserQuestion option's `preview`
 // renders as a box to the RIGHT of the options; tmux capture-pane flattens those
@@ -5836,7 +5812,7 @@ export function parseInteractivePrompt(text: string): InteractivePrompt | null {
     const hasFooter = /enter to (confirm|select)|esc(ape)? to (exit|cancel)|↑.*↓|←.*→|arrow keys|(?:press\s+)?n\s+to\s+add\s+notes/i.test(tail);
     if (hasCursorIndicator || hasFooter) {
       const { header, question } = extractPromptHeading(lines, firstOptionIdx);
-      return { question, options, ...(header ? { header } : {}) };
+      return { question, options, firstOptionIdx, ...(header ? { header } : {}) };
     }
   }
 
@@ -5858,6 +5834,115 @@ export function parseInteractivePrompt(text: string): InteractivePrompt | null {
   }
 
   return null;
+}
+
+// Claude Code renders each assistant message with a leading bullet ("⏺" on current
+// builds, "●" on older ones) and indents its continuation lines two spaces. A turn
+// that ends in AskUserQuestion is buffered out of the JSONL until answered, so while
+// the question is pending the reasoning that motivates it lives ONLY in the rendered
+// pane. Pull that prose block back out so the web question card can show *why* it's
+// being asked — best-effort while pending, replaced byte-exact when the turn flushes.
+const ASSISTANT_BULLET = /^(?:⏺|●)\s+/;
+// Markers that bound this turn from above: a user prompt ("❯ …" / "> …"), the working
+// spinner ("✻ …" / "✶ …"), or a tool bullet ("⏺ Bash(…)") / its result gutter ("⎿ …")
+// / a collapsed-output summary. Crossing one means we've walked into a prior turn or a
+// tool call, not the prose that precedes the question.
+const PROSE_STOP_ABOVE = /^\s*(?:❯|>|✻|✶|✳)\s/;
+const TOOLISH_LINE = /^(?:⏺\s+\w+\(|⎿|\s*(?:Called|Running)\b.*\(ctrl\+o)/;
+
+// Extract the assistant prose immediately above an interactive prompt's menu. Returns
+// "" when there's no preceding prose (e.g. a bare slash menu or a tool call sits right
+// above the dialog). Anchored on parseInteractivePrompt's option index so numbered
+// lists *inside* the prose ("1. Task-tool subagents …") can't be mistaken for the menu.
+export function extractAssistantProseAbovePrompt(paneText: string): string {
+  const parsed = parseInteractivePrompt(paneText);
+  if (!parsed || parsed.isConfirmation || parsed.firstOptionIdx == null) return "";
+  const firstOptionIdx = parsed.firstOptionIdx;
+  const lines = paneText.split("\n");
+
+  // dialogTop: the topmost chrome row that caps the menu. Walk up from the options past
+  // the question/tab/blank rows to the first full-width rule or header chip (bounded to a
+  // short window so a far-away rule from a PRIOR turn — e.g. an "★ Insight ───" block —
+  // can't be mistaken for it)...
+  let chromeBottom = -1;
+  for (let i = firstOptionIdx - 1, floor = Math.max(0, firstOptionIdx - 20); i >= floor; i--) {
+    const t = lines[i].trim();
+    if (SEPARATOR_LINE.test(t) || HEADER_CHIP.test(t)) { chromeBottom = i; break; }
+  }
+  if (chromeBottom < 0) return "";
+  // ...then absorb any contiguous chrome/blank rows above it, so a separator sitting
+  // over a header chip (older menu format) becomes the true top instead of dangling as
+  // a stray "───" line at the end of the recovered prose.
+  let dialogTop = chromeBottom;
+  for (let i = chromeBottom - 1; i >= 0; i--) {
+    const t = lines[i].trim();
+    if (!(SEPARATOR_LINE.test(t) || HEADER_CHIP.test(t))) break; // blank or prose ends the run
+    dialogTop = i;
+  }
+
+  // proseStart: the nearest assistant bullet above dialogTop. Bail if we cross a turn
+  // boundary or a tool bullet first — then no buffered prose precedes this question.
+  let proseStart = -1;
+  for (let i = dialogTop - 1, floor = Math.max(0, dialogTop - 100); i >= floor; i--) {
+    const raw = lines[i];
+    if (!raw.trim()) continue;
+    if (ASSISTANT_BULLET.test(raw)) { proseStart = TOOLISH_LINE.test(raw) ? -1 : i; break; }
+    if (PROSE_STOP_ABOVE.test(raw) || TOOLISH_LINE.test(raw)) break;
+  }
+  if (proseStart < 0) return "";
+
+  // Collect [proseStart, dialogTop): strip the bullet off the first line and the 2-space
+  // gutter off the rest. Keep blank lines and inner "───"/list rows — they're part of the
+  // reasoning, and markdown reflow on the client smooths the TUI's hard wraps.
+  const out: string[] = [];
+  for (let i = proseStart; i < dialogTop; i++) {
+    const s = (i === proseStart ? lines[i].replace(ASSISTANT_BULLET, "") : lines[i].replace(/^ {1,2}/, ""));
+    out.push(s.replace(/\s+$/, ""));
+  }
+  while (out.length && !out[out.length - 1].trim()) out.pop();
+  return out.join("\n").trim().slice(0, 6000);
+}
+
+// A real AskUserQuestion's full tool_input (every question, header, option label AND
+// description, multiSelect) is handed to us by the PreToolUse/PermissionRequest hook —
+// the one place it exists while the turn is buffered. The hook drops it in a per-session
+// sidecar (codecast-status.sh) because it's too large to ride the status URL. Read it so
+// the card is full-fidelity instead of a box-art-stripped scrape. Stale files (>5min, or
+// from a prior question) are ignored; the live menu's question is the cross-check.
+function readAskUserQuestionInput(sessionId: string): { questions: any[] } | null {
+  try {
+    const p = path.join(ASK_INPUT_DIR, `${sessionId}.json`);
+    const stat = fs.statSync(p);
+    if (Date.now() - stat.mtimeMs > 5 * 60_000) return null;
+    const parsed = JSON.parse(fs.readFileSync(p, "utf8"));
+    if (Array.isArray(parsed?.questions) && parsed.questions.length) return { questions: parsed.questions };
+  } catch {}
+  return null;
+}
+
+// Guard against a stale sidecar (a prior question's tool_input) being stamped onto the
+// menu now on screen: only trust it when its first question matches the scraped one.
+// Both are normalized to alphanumerics so the scrape's wrapping/glyph noise doesn't
+// defeat the match; a 24-char overlap either way is a confident same-question signal.
+export function sidecarMatchesScrape(questions: any[], scrapedQuestion: string): boolean {
+  const norm = (s: string) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  const sq = norm(questions?.[0]?.question);
+  const pq = norm(scrapedQuestion);
+  if (sq.length < 8 || pq.length < 8) return false;
+  return sq.includes(pq.slice(0, 24)) || pq.includes(sq.slice(0, 24));
+}
+
+// Build the AskUserQuestion card's `questions`: the hook's real tool_input when it's for
+// THIS on-screen question (full option descriptions, header, multiSelect — all of which
+// the box-art scrape loses), otherwise the scraped prompt as a graceful fallback.
+export function resolveInteractiveQuestions(prompt: InteractivePrompt, sidecar: { questions: any[] } | null): any[] {
+  if (sidecar && sidecarMatchesScrape(sidecar.questions, prompt.question)) return sidecar.questions;
+  return [{
+    question: prompt.question,
+    ...(prompt.header ? { header: prompt.header } : {}),
+    options: prompt.options,
+    ...(prompt.isConfirmation ? { isConfirmation: true } : {}),
+  }];
 }
 
 type PollMessage = { keys?: string[]; steps?: Array<{ key: string; text?: string }>; text?: string; display?: string };
@@ -5937,7 +6022,10 @@ async function checkForInteractivePrompt(
   await new Promise(resolve => setTimeout(resolve, delayMs));
 
   try {
-    const { stdout: paneContent } = await tmuxExec(["capture-pane", "-p", "-J", "-t", tmuxTarget, "-S", "-50"]);
+    // -200 (vs the old -50): a long reasoning block above the menu must stay in the
+    // capture so extractAssistantProseAbovePrompt can recover the full prose. The menu
+    // sits at the bottom either way, so parseInteractivePrompt is unaffected.
+    const { stdout: paneContent } = await tmuxExec(["capture-pane", "-p", "-J", "-t", tmuxTarget, "-S", "-200"]);
     const prompt = parseInteractivePrompt(paneContent);
     if (!prompt) {
       log(`No interactive prompt found in ${tmuxTarget} for session ${sessionId.slice(0, 8)}`);
@@ -5988,26 +6076,45 @@ async function checkForInteractivePrompt(
       return;
     }
 
+    // The assistant's reasoning that motivates this question is buffered out of the
+    // JSONL until answered, so scrape it off the pane — without it the web user can't
+    // judge the question. Empty for confirmations / bare slash menus (no preceding prose).
+    const prose = prompt.isConfirmation ? "" : extractAssistantProseAbovePrompt(paneContent);
+
+    // Prefer the hook's full tool_input (option descriptions + headers + multiSelect,
+    // which the box-art-stripped scrape loses) when it's for THIS question; else fall
+    // back to the scrape. Both self-correct to the real JSONL card once answered.
+    const sidecar = prompt.isConfirmation ? null : readAskUserQuestionInput(sessionId);
+    const questions = resolveInteractiveQuestions(prompt, sidecar);
+    if (prose) log(`Recovered ${prose.length} chars of buffered prose for ${sessionId.slice(0, 8)}'s question`);
+
     await syncService.addMessages({
       conversationId,
-      messages: [{
-        messageUuid: promptUuid,
-        role: "assistant" as const,
-        content: "",
-        timestamp: now,
-        toolCalls: [{
-          id: promptUuid,
-          name: "AskUserQuestion",
-          input: {
-            questions: [{
-              question: prompt.question,
-              ...(prompt.header ? { header: prompt.header } : {}),
-              options: prompt.options,
-              ...(prompt.isConfirmation ? { isConfirmation: true } : {}),
-            }],
-          },
-        }],
-      }],
+      messages: [
+        // Prose as its OWN message just before the card, so it renders ABOVE the question
+        // (the order the terminal shows, and the order the real JSONL messages take once
+        // flushed) instead of below it. The "…-prose" uuid still begins with
+        // "interactive-prompt-", so the same client dedup that drops the scraped card on
+        // answer sweeps this too — and if the session dies unanswered, the reasoning is
+        // preserved rather than lost with the buffer.
+        ...(prose ? [{
+          messageUuid: `${promptUuid}-prose`,
+          role: "assistant" as const,
+          content: prose,
+          timestamp: now - 1,
+        }] : []),
+        {
+          messageUuid: promptUuid,
+          role: "assistant" as const,
+          content: "",
+          timestamp: now,
+          toolCalls: [{
+            id: promptUuid,
+            name: "AskUserQuestion",
+            input: { questions },
+          }],
+        },
+      ],
     });
 
     lastEmittedSyntheticPrompt.set(sessionId, promptUuid);
@@ -6114,16 +6221,28 @@ export function classifyTmuxLiveState(region: string): TmuxLiveState {
 // Modal/exited/unknown panes defer. classifyTmuxLiveState checks busy/modal
 // patterns before "idle" (a busy agent's type-ahead input box reads "busy", not
 // "idle"), so a false idle can't slip through.
+//
+// permission_blocked is treated as recoverable here too — but ONLY because the
+// sole caller (reconcileStatusFromPane via checkForInteractivePrompt) runs this
+// AFTER parseInteractivePrompt confirmed there is NO interactive menu on the pane.
+// So an idle/busy pane with a permission_blocked latch means the AskUserQuestion
+// was dismissed/answered and the resume hook was lost. This is the tmux fix for
+// "session parked on a buffered AskUserQuestion shows working/needs-input forever":
+// Claude Code buffers the question's tool_use out of the JSONL until answered, so
+// the transcript can't see it and reconcileStatusFromTranscript must defer to this
+// pane signal for tmux sessions. While the menu IS up, classifyTmuxLiveState reads
+// it as rewind/unknown (and the caller defers anyway), so the block can't be
+// cleared out from under a still-waiting agent.
 export function paneReconcileTarget(
   state: TmuxLiveState,
   stored: AgentStatus | undefined,
 ): AgentStatus | null {
   if (state === "idle") {
-    const staleActive = stored === "working" || stored === "thinking" || stored === "connected";
+    const staleActive = stored === "working" || stored === "thinking" || stored === "connected" || stored === "permission_blocked";
     return stored === undefined || staleActive ? "idle" : null;
   }
   if (state === "busy") {
-    const quiet = stored === undefined || stored === "idle" || stored === "connected";
+    const quiet = stored === undefined || stored === "idle" || stored === "connected" || stored === "permission_blocked";
     return quiet ? "working" : null;
   }
   return null;
@@ -7796,13 +7915,20 @@ function readFileTailSync(filePath: string, maxBytes = 64 * 1024): string {
 function reconcileStatusFromTranscript(sessionId: string, syncService: SyncService): void {
   const stored = lastSentAgentStatus.get(sessionId);
 
-  // permission_blocked recovery runs for ALL sessions, tmux-managed included:
-  // it's the one latch neither the pane reconcile (paneReconcileTarget defers on
-  // it) nor reconciledStatus recovers, and the pane can't distinguish an answered
-  // poll from a pending one. The transcript can -- a tail ending in a user turn
-  // means the prompt was answered. Restricted to Claude (Codex permission blocks
-  // are recovered by startCodexPermissionPoller's own working transition).
+  // permission_blocked recovery. tmux-managed sessions are handled by the PANE
+  // (paneReconcileTarget now recovers permission_blocked once the menu is gone) —
+  // the transcript MUST defer to it here, because Claude Code buffers an
+  // AskUserQuestion's tool_use out of the JSONL until it is answered. So when the
+  // agent runs an auto-approved tool (e.g. Bash in bypassPermissions) and THEN
+  // asks a question, the transcript tail is the earlier tool's tool_result (a user
+  // turn) while the real question is invisible — reading "tail ends in a user turn
+  // => answered" would wrongly flip a still-waiting agent to "working" and latch it
+  // there (this was the "stuck working" inbox bug). Bare-terminal sessions have no
+  // pane, so they keep the transcript recovery as their only signal. Restricted to
+  // Claude (Codex permission blocks are recovered by startCodexPermissionPoller's
+  // own working transition).
   if (stored === "permission_blocked") {
+    if (resumeSessionCache.has(sessionId)) return; // tmux: pane is authoritative
     const file = findSessionFile(sessionId);
     if (!file || file.agentType !== "claude") return;
     let lastRole: "user" | "assistant" | null;
@@ -7929,13 +8055,28 @@ async function handleDeadSession(sessionId: string, tmuxSession: string): Promis
   }
 }
 
-function registerManagedStartedSession(conversationId: string, sessionId: string, tmuxSession: string): void {
+export function registerManagedStartedSession(conversationId: string, sessionId: string, tmuxSession: string): void {
+  // Track the pane immediately, exactly as a resumed/warm-recovered session is. The periodic
+  // health sweep (heartbeatHealthCheck) and the pane-authoritative status reconcile both gate
+  // on resumeSessionCache membership. A freshly-started session that was never resumed wasn't
+  // in it, so a buffered AskUserQuestion parked on such a session went un-scraped — invisible
+  // on the web until it was answered (or until a daemon restart warm-recovered the session
+  // into the cache, which was the only reason it ever recovered). Set before the syncServiceRef
+  // guard: this is local bookkeeping that doesn't depend on the sync client.
+  resumeSessionCache.set(sessionId, tmuxSession);
   if (!syncServiceRef) return;
   setTmuxSessionOption(tmuxSession, "@codecast_conversation_id", conversationId).catch(() => {});
   setTmuxSessionOption(tmuxSession, "@codecast_session_id", sessionId).catch(() => {});
   syncServiceRef.markSessionActive(conversationId).catch(logConvexFailure);
   syncServiceRef.registerManagedSession(sessionId, process.pid, tmuxSession, conversationId).catch(logConvexFailure);
   ensureManagedSessionHeartbeat(sessionId);
+}
+
+// Test/inspection seam: whether a session's pane is tracked (present in resumeSessionCache),
+// which is what makes it eligible for the periodic interactive-prompt scrape and the
+// pane-authoritative status reconcile.
+export function isSessionPaneTracked(sessionId: string): boolean {
+  return resumeSessionCache.has(sessionId);
 }
 
 function deleteStartedSession(conversationId: string): void {
@@ -11260,6 +11401,20 @@ async function main(): Promise<void> {
 
   activeConfig = readConfig();
   loadPersistedLogQueue();
+
+  // Messaging is on by default for memory installs. Backfill/refresh it here so
+  // every daemon distributes the snippet onto its own machine's CLAUDE.md on
+  // startup (including after a self-update restart) — no interactive `cast` needed.
+  try {
+    const msgPatch = ensureMessagingForMemory(activeConfig);
+    if (msgPatch) {
+      patchConfig(msgPatch);
+      Object.assign(activeConfig as object, msgPatch);
+      log("Ensured messaging snippet for memory install");
+    }
+  } catch (e) {
+    logError("ensureMessagingForMemory failed", e instanceof Error ? e : new Error(String(e)));
+  }
 
   // Report crash recovery if we had crashes before this successful startup
   let crashRecoveryInfo = "";
