@@ -2826,8 +2826,8 @@ if (PERSISTENCE_AVAILABLE) {
 
   setHydrating(true);
   void loadCache().then((cached) => {
-    setHydrating(false);
     if (!cached) {
+      setHydrating(false);
       useInboxStore.setState({ clientStateInitialized: true });
       return;
     }
@@ -2968,6 +2968,16 @@ if (PERSISTENCE_AVAILABLE) {
     requestAnimationFrame(() => {
       apply(["tasks", "docs", "plans", "projects", "favorites", "bookmarks",
              "recentProjects", "docProjectPaths", "collapsedSections", "sidebarNavExpanded"]);
+      // Re-enable IDB write-through only AFTER the deferred collections land.
+      // If a live delta arrives while write-through is open but the store still
+      // holds just the windowed payload (tasks' 300, sessions' ~30d), then
+      // diffCollection would diff that window against the full on-disk shadow and
+      // bulkDelete every cached row outside it — pruning the shared IndexedDB
+      // before unionHydrate merges it back (the cross-tab "disappear then stream
+      // back" race jx799py found). Post-hydration the store holds the full union,
+      // so delta overlays never drop rows; write-through then deletes only on a
+      // real removal (dismiss/kill) or the crawl's authoritative snapshot.
+      setHydrating(false);
     });
   });
 }

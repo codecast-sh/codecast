@@ -1291,14 +1291,8 @@ function classifyUserMessage(
   const tNoReminders = t.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').replace(/<task-reminder>[\s\S]*?<\/task-reminder>/g, '').trim();
   const tStripped = stripSystemTags(t).trim();
   if (tNoReminders.startsWith('<scheduled-task')) return { kind: 'scheduled_task' };
-  // A session message is injected via tmux, so the daemon's input-clearing
-  // keystrokes (Ctrl-A/Ctrl-K) occasionally leak in as leading control chars
-  // ahead of the wrapper. Strip leading control/whitespace before detecting it.
-  const tInjectClean = tNoReminders.replace(/^[\u0000-\u001f\s]+/, '');
-  if (tInjectClean.startsWith('<session-message')) {
-    const parsed = parseSessionMessage(tInjectClean);
-    if (parsed) return { kind: 'session_message', from: parsed.from, body: parsed.body };
-  }
+  const sessionMsg = parseInboundSessionMessage(t);
+  if (sessionMsg) return { kind: 'session_message', from: sessionMsg.from, body: sessionMsg.body };
   if (t.startsWith('{') && t.includes('__cc_poll')) {
     try { if (JSON.parse(t).__cc_poll) return { kind: 'poll_response' }; } catch {}
   }
