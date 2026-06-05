@@ -28,5 +28,14 @@ contextBridge.exposeInMainWorld("__CODECAST_ELECTRON__", {
     ipcRenderer.on("palette-show", handler);
     return () => ipcRenderer.removeListener("palette-show", handler);
   },
+  // Compose popup: main asks the palette window to show the new-session
+  // compose view; the window reports back how to finish (fire-and-forget vs
+  // send & open) so main can manage focus.
+  onComposeShow: (cb) => {
+    const handler = () => cb();
+    ipcRenderer.on("compose-show", handler);
+    return () => ipcRenderer.removeListener("compose-show", handler);
+  },
+  composeSubmit: (data) => ipcRenderer.send("compose-submit", data),
   platform: process.platform,
 });

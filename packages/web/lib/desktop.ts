@@ -13,6 +13,9 @@ declare global {
       paletteHide: () => void;
       paletteNewSession: () => void;
       onPaletteShow: (cb: () => void) => () => void;
+      // Compose popup (floating new-session window):
+      onComposeShow: (cb: () => void) => () => void;
+      composeSubmit: (data: { conversationId?: string; navigate: boolean }) => void;
       platform: string;
     };
   }
