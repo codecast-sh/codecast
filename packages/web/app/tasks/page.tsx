@@ -45,7 +45,6 @@ import {
   Check,
   MessageSquare,
   FolderKanban,
-  Loader2,
 } from "lucide-react";
 
 type TaskStatus = "backlog" | "open" | "in_progress" | "in_review" | "done" | "dropped";
@@ -709,7 +708,6 @@ export function TaskListContent() {
   const { status: urlStatus, view: viewMode, sort: sortBy, priority: priorityFilter, label: labelFilter, assignee: assigneeFilter, statuses: statusesFilter, sourceFilter, setParam } = useTaskUrlState();
   const setTaskFilter = useInboxStore((s) => s.setTaskFilter);
   const tasks = useInboxStore((s) => s.tasks);
-  const taskLoadProgress = useInboxStore((s) => s.taskLoadProgress);
   const projects = useInboxStore((s) => s.projects);
   const showCreate = useInboxStore((s) => s.createModal === 'task');
   const openCreateModal = useInboxStore((s) => s.openCreateModal);
@@ -754,7 +752,20 @@ export function TaskListContent() {
     [updateTask]
   );
 
-  const tasksList = useMemo(() => Object.values(tasks), [tasks]);
+  // Defensive team scoping. `store.tasks` is a single global collection shared
+  // across teams; it is NOT cleared on team switch, and the live sync only
+  // overlays (never prunes — see useSyncTasks). Pruning of other-team rows is
+  // owned solely by the throttled reconcile crawl, so after switching teams the
+  // previously-viewed team's tasks linger here (and survive reloads via IDB)
+  // until that crawl catches up. Mirror the server's workspace scoping at read
+  // time: in a team view keep this team's tasks plus server-rescued teamless
+  // orphans; in the personal view keep only teamless tasks.
+  const tasksList = useMemo(() => {
+    const all = Object.values(tasks);
+    return all.filter((t) =>
+      activeTeamId ? (!t.team_id || t.team_id === activeTeamId) : !t.team_id
+    );
+  }, [tasks, activeTeamId]);
 
   const allLabels = useMemo(() => {
     const set = new Set<string>(DEFAULT_LABELS);
@@ -795,6 +806,14 @@ export function TaskListContent() {
     } else if (statusesFilter) {
       const set = new Set(statusesFilter.split(","));
       list = list.filter((t) => set.has(t.status));
+    } else if (viewMode !== "kanban" && sourceFilter !== "triage" && sourceFilter !== "dismissed") {
+      // Default "Active" tab (no explicit status selected): exclude terminal
+      // states so the list contents match the tab's label AND its badge count
+      // (taskCounts.active, which already excludes done/dropped). Without this,
+      // done/dropped tasks leak into the Active view. The kanban board is a
+      // full-pipeline view that legitimately renders Done/Dropped columns, so
+      // it keeps all statuses; likewise the triage/dismissed source views.
+      list = list.filter((t) => t.status !== "done" && t.status !== "dropped");
     }
 
     if (priorityFilter) list = list.filter((t) => t.priority === priorityFilter);
@@ -802,7 +821,7 @@ export function TaskListContent() {
     if (assigneeFilter === "_unassigned") list = list.filter((t) => !t.assignee);
     else if (assigneeFilter) list = list.filter((t) => t.assignee === assigneeFilter);
     return list;
-  }, [sourceFilteredTasks, priorityFilter, labelFilter, assigneeFilter, statusFilter, statusesFilter]);
+  }, [sourceFilteredTasks, priorityFilter, labelFilter, assigneeFilter, statusFilter, statusesFilter, sourceFilter, viewMode]);
 
   const sortWithinGroup = useCallback((tasks: TaskItem[]) => {
     return [...tasks].sort((a, b) => {
@@ -1128,17 +1147,9 @@ export function TaskListContent() {
           )}
           onItemEdit={handleTitleEdit}
           listFooter={undefined}
+          syncScope="tasks"
           headerExtra={
             <>
-              {taskLoadProgress.loading && (
-                <span
-                  className="flex items-center gap-1.5 px-2 py-1 text-[11px] font-mono rounded-md border border-sol-yellow/40 bg-sol-yellow/10 text-sol-yellow whitespace-nowrap"
-                  title="Loading every task in this workspace — the list is not yet complete"
-                >
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  loading all tasks… {taskLoadProgress.loaded.toLocaleString()}
-                </span>
-              )}
               <div className="flex items-center rounded-md border border-sol-border/40 overflow-hidden">
                 <button
                   onClick={() => setParam({ source: "" })}

@@ -21,7 +21,7 @@ import { AuthGuard } from "../../../components/AuthGuard";
 import { DashboardLayout } from "../../../components/DashboardLayout";
 import { ErrorBoundary } from "../../../components/ErrorBoundary";
 import { ContextChatInput } from "../../../components/ContextChatInput";
-import { SessionCardInner } from "../../../components/ActivityFeed";
+import { FeedCard } from "../../../components/ActivityFeed";
 import { WatchButton } from "../../../components/WatchButton";
 
 const api = _api as any;
@@ -1015,10 +1015,10 @@ function TaskDetailContent() {
                 .map((conv: any) => {
                   const sid = conv._id;
                   return (
-                  <SessionCardInner
+                  <FeedCard
                     key={conv._id}
-                    item={{ ...conv, conversation_id: sid, status: conv.is_active ? "active" : conv.status }}
-                    compact
+                    conv={{ ...conv, _id: sid } as any}
+                    showActor={false}
                     onNavigate={() => {
                       const store = useInboxStore.getState();
                       if (!store.sessions[sid]) {

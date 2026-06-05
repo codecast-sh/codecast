@@ -1,9 +1,8 @@
 import { useState } from "react";
 import { Rocket, ChevronDown, ChevronRight } from "lucide-react";
 import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
-import { remarkEntityIds } from "../../lib/remarkEntityIds";
+import { entityRemarkPlugins } from "../../lib/remarkEntityIds";
 import { EntityAwareCode, EntityAwareLink } from "../EntityIdPill";
 import type { ToolViewProps } from "@/lib/toolRegistry";
 
@@ -115,7 +114,7 @@ export function TaskToolView({ input, output }: ToolViewProps) {
             <div className="p-3 bg-muted/20 border-t border-muted">
               <div className="prose prose-sm dark:prose-invert max-w-none prose-pre:bg-black/50 prose-pre:border prose-pre:border-muted prose-code:text-cyan-400 prose-code:bg-black/30 prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:before:content-none prose-code:after:content-none">
                 <ReactMarkdown
-                  remarkPlugins={[remarkGfm, remarkEntityIds]}
+                  remarkPlugins={entityRemarkPlugins}
                   rehypePlugins={[rehypeHighlight]}
                   components={{
                     code: EntityAwareCode,
