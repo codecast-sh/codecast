@@ -15,6 +15,7 @@ interface ErrorBoundaryProps {
 interface ErrorBoundaryState {
   error: Error | null;
   showDetails: boolean;
+  isChunk: boolean;
 }
 
 // Narrowly-scoped: errors that mean "the JS the browser has is incompatible
@@ -41,16 +42,33 @@ function isChunkLoadError(msg: string): boolean {
 // recurs (e.g. the deploy is mid-rollout), we never silently reload more
 // than once — instead we surface the error UI so the user can see what's
 // happening.
-const RELOAD_COUNT_KEY = "eb_reload_count";
+export const RELOAD_COUNT_KEY = "eb_reload_count";
 const MAX_AUTO_RELOADS = 1;
+
+// Reset the auto-reload guard after the app has run stably, so the "reload at
+// most once" cap is per stale-chunk INCIDENT, not per whole tab session.
+// Without this, one early chunk error spends the single allowed reload, and a
+// LATER genuine stale-chunk crash (e.g. navigating to a new lazy route after a
+// deploy) hits the dead-end error UI instead of recovering. A reload that
+// immediately re-crashes never survives the delay to call this, so the
+// infinite-loop guard still holds.
+export function armChunkReloadGuardReset(delayMs = 15_000): void {
+  setTimeout(() => {
+    try {
+      sessionStorage.removeItem(RELOAD_COUNT_KEY);
+    } catch {
+      // sessionStorage unavailable — nothing to reset.
+    }
+  }, delayMs);
+}
 
 const _recentErrors = new Set<string>();
 
 export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
-  state: ErrorBoundaryState = { error: null, showDetails: false };
+  state: ErrorBoundaryState = { error: null, showDetails: false, isChunk: false };
 
   static getDerivedStateFromError(error: Error) {
-    return { error };
+    return { error, isChunk: !!error.message && isChunkLoadError(error.message) };
   }
 
   componentDidCatch(error: Error, info: React.ErrorInfo) {
@@ -90,8 +108,19 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
   }
 
   reset = () => {
-    this.setState({ error: null, showDetails: false });
+    this.setState({ error: null, showDetails: false, isChunk: false });
     this.props.onReset?.();
+  };
+
+  // A stale-chunk error can't be cleared by re-rendering — the browser caches
+  // the failed dynamic import, so a soft reset re-hits the same rejection.
+  // Only a full reload fetches the current chunk hashes.
+  retry = () => {
+    if (this.state.isChunk) {
+      window.location.reload();
+    } else {
+      this.reset();
+    }
   };
 
   toggleDetails = () => {
@@ -113,7 +142,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
             <button onClick={this.toggleDetails} className="hover:text-gray-300 cursor-pointer" title="Show error details">
               Failed to load{name ? ` ${name}` : ""}
             </button>
-            <button onClick={this.reset} className="text-sol-cyan hover:underline">retry</button>
+            <button onClick={this.retry} className="text-sol-cyan hover:underline">{this.state.isChunk ? "reload" : "retry"}</button>
           </div>
           {this.state.showDetails && this.state.error && (
             <div className="absolute bottom-full left-2 right-2 mb-1 z-50 rounded-lg border border-sol-border bg-sol-bg shadow-xl shadow-black/40 max-w-lg">
@@ -144,11 +173,11 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
             {name ? `${name} crashed` : "Something went wrong"}
           </p>
           <button
-            onClick={this.reset}
+            onClick={this.retry}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md bg-sol-bg-alt text-sol-cyan border border-sol-cyan/20 hover:bg-sol-cyan/10 transition-colors"
           >
             <RefreshCw className="w-3 h-3" />
-            Retry
+            {this.state.isChunk ? "Reload" : "Retry"}
           </button>
         </div>
       </div>
