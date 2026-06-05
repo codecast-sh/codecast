@@ -133,7 +133,7 @@ function CliAuthContent() {
         <div className="max-w-md w-full bg-sol-bg-alt/50 rounded-lg p-8 border border-sol-border">
           <div className="text-center">
             <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-amber-400 mx-auto mb-4"></div>
-            <h1 className="text-2xl font-semibold text-white mb-2">
+            <h1 className="text-2xl font-semibold text-sol-text mb-2">
               Authenticating CLI
             </h1>
             <p className="text-sol-text-muted">
@@ -165,7 +165,7 @@ function CliAuthContent() {
                 />
               </svg>
             </div>
-            <h1 className="text-2xl font-semibold text-white mb-2">
+            <h1 className="text-2xl font-semibold text-sol-text mb-2">
               Authentication Failed
             </h1>
             <p className="text-sol-text-muted mb-5">{errorMessage}</p>
@@ -214,7 +214,7 @@ function CliAuthContent() {
               />
             </svg>
           </div>
-          <h1 className="text-2xl font-semibold text-white mb-2">
+          <h1 className="text-2xl font-semibold text-sol-text mb-2">
             CLI Authenticated
           </h1>
           <p className="text-sol-text-muted mb-2">
