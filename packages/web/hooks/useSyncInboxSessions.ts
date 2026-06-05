@@ -7,6 +7,48 @@ import { soundIdle } from "../lib/sounds";
 import { useConvexSync } from "./useConvexSync";
 import { useRecoveryPoll } from "./useRecoveryPoll";
 import { useEnsureDispatch } from "./useEnsureDispatch";
+import { useWatchEffect } from "./useWatchEffect";
+
+export function waitingSoundKey(session: InboxSession, queued: Set<string>): string | null {
+  if (!isSessionWaitingForInput(session, queued)) return null;
+  const kind = session.awaiting_input
+    ? "awaiting_input"
+    : session.agent_status === "permission_blocked"
+    ? "permission_blocked"
+    : session.agent_status || (session.is_unresponsive ? "unresponsive" : "idle");
+  return `${session._id}:${session.message_count}:${kind}`;
+}
+
+export function shouldPlayWaitingSound(
+  sessions: InboxSession[],
+  queued: Set<string>,
+  prevWaiting: Map<string, boolean> | null,
+  notifiedKeys: Map<string, string>,
+): { play: boolean; nextWaiting: Map<string, boolean> } {
+  let play = false;
+  const nextWaiting = new Map<string, boolean>();
+
+  for (const session of sessions) {
+    if (session.inbox_dismissed_at) continue;
+    const id = session._id.toString();
+    const key = isSub(session) ? null : waitingSoundKey(session, queued);
+    nextWaiting.set(id, !!key);
+    if (!key) continue;
+
+    const lastKey = notifiedKeys.get(id);
+    if (!prevWaiting?.has(id)) {
+      notifiedKeys.set(id, key);
+      continue;
+    }
+
+    if (lastKey !== key) {
+      play = true;
+      notifiedKeys.set(id, key);
+    }
+  }
+
+  return { play, nextWaiting };
+}
 
 export function useSyncInboxSessions() {
   // Wire the store's server dispatch (split out so a screen can ensure dispatch
@@ -25,7 +67,8 @@ export function useSyncInboxSessions() {
   const prunedRef = useRef(false);
 
   const prevActiveIdsRef = useRef<Set<string> | null>(null);
-  const prevIdleMapRef = useRef<Map<string, boolean> | null>(null);
+  const prevWaitingMapRef = useRef<Map<string, boolean> | null>(null);
+  const notifiedWaitingKeysRef = useRef(new Map<string, string>());
   const lastSyncRef = useRef(Date.now());
   const lastUserSyncRef = useRef(Date.now());
 
@@ -64,23 +107,14 @@ export function useSyncInboxSessions() {
   useConvexSync(inboxSessions, useCallback((data: any) => {
     const sessions = data.sessions ?? data;
     const queued = useInboxStore.getState().sessionsWithQueuedMessages;
-    const prev = prevIdleMapRef.current;
-    if (prev) {
-      for (const s of sessions) {
-        if (isSub(s as InboxSession)) continue;
-        if (s.inbox_dismissed_at) continue;
-        const id = s._id.toString();
-        if (isSessionWaitingForInput(s as InboxSession, queued) && prev.has(id) && !prev.get(id)) {
-          soundIdle();
-          break;
-        }
-      }
-    }
-    prevIdleMapRef.current = new Map(
-      sessions
-        .filter((s: any) => !s.inbox_dismissed_at)
-        .map((s: any) => [s._id.toString(), isSessionWaitingForInput(s as InboxSession, queued)])
+    const soundState = shouldPlayWaitingSound(
+      sessions as InboxSession[],
+      queued,
+      prevWaitingMapRef.current,
+      notifiedWaitingKeysRef.current,
     );
+    if (soundState.play) soundIdle();
+    prevWaitingMapRef.current = soundState.nextWaiting;
     syncTable("sessions", sessions as unknown as InboxSession[]);
     if (typeof data.hidden_count === "number") {
       useInboxStore.setState({ hiddenSessionCount: data.hidden_count });
@@ -168,6 +202,16 @@ export function useSyncInboxSessions() {
       }
     }
     prevActiveIdsRef.current = activeIds;
+  }, [inboxSessions]);
+
+  // Publish the inbox's first-load state so the header SyncStatusChip spins
+  // during the cold-open "data syncing in" phase. The live subscription returns
+  // undefined until the first server response lands; after that it updates in
+  // place, so this only lights up on a genuine cold open, not on warm in-app
+  // navigation. Kept in `liveLoading` (not `syncProgress`) so the chip tracks
+  // this fast first payload, never the minutes-long background reconcile crawl.
+  useWatchEffect(() => {
+    useInboxStore.getState().setLiveLoading("sessions", inboxSessions === undefined);
   }, [inboxSessions]);
 
   return { activeSessions: inboxSessions };

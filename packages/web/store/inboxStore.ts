@@ -202,6 +202,17 @@ export type InboxSession = {
   owner_device_id?: string | null;
 };
 
+// An image attached to an outbound (optimistic) message. While its upload is in
+// flight it carries a local `preview_url` (blob:) + `uploading: true` so the
+// pending bubble can show a thumbnail + spinner; once uploaded it carries the
+// real `storage_id` and the spinner clears.
+export type OptimisticImage = {
+  media_type: string;
+  storage_id?: string;
+  preview_url?: string;
+  uploading?: boolean;
+};
+
 export type Message = {
   _id: string;
   message_uuid?: string;
@@ -266,6 +277,16 @@ export type ForkChild = {
   parent_message_uuid?: string;
   message_count?: number;
   agent_type?: string;
+  // Enriches the BranchSelector chip + hover; all free off the conversation row
+  // (see mapForkDetails). fork_copied = messages inherited from the parent up to
+  // the fork point, so message_count - fork_copied is this branch's own size.
+  updated_at?: number;
+  last_message_preview?: string;
+  last_message_role?: string;
+  last_user_message_at?: number;
+  status?: string;
+  git_branch?: string;
+  fork_copied?: number;
 };
 
 
@@ -685,6 +706,34 @@ export function isFork(s: InboxSession): boolean {
   return !!s.forked_from;
 }
 
+// Group key for a session running in an isolated worktree (an orchestration
+// worker), or null for an ordinary checkout. Workers spawned for a plan/task
+// land in `.codecast/worktrees/<name>` (or `.conductor/<name>` for the `wt`
+// helper); we cluster them under that name in the inbox so a fan-out reads as
+// one collapsible group instead of N loose top-level cards. Prefers the
+// explicit worktree_name, falling back to parsing the project path.
+const WORKTREE_PATH_RE = /\/\.(?:codecast\/worktrees|conductor)\/([^/]+)/;
+export function worktreeKeyOf(s: InboxSession): string | null {
+  if (s.worktree_name) return s.worktree_name;
+  const path = s.project_path || s.git_root || "";
+  const m = path.match(WORKTREE_PATH_RE);
+  return m ? m[1] : null;
+}
+
+// Display label used to cluster orchestration workers in the inbox, or null if
+// the session isn't a worker. Prefers the PLAN — the reliable, persisted signal
+// a worker carries (active_plan, stamped at creation) — and falls back to the
+// worktree for an isolated session without a plan. The label doubles as the
+// group's identity (plan short_id keeps distinct plans apart).
+export function orchestrationGroupLabelOf(s: InboxSession): string | null {
+  if (s.active_plan) {
+    const title = s.active_plan.title?.trim();
+    return title ? `${s.active_plan.short_id} · ${title}` : s.active_plan.short_id;
+  }
+  const wt = worktreeKeyOf(s);
+  return wt ? `⑂ ${wt}` : null;
+}
+
 export interface CategorizedSessions {
   sorted: InboxSession[];
   pinned: InboxSession[];
@@ -694,6 +743,11 @@ export interface CategorizedSessions {
   dismissed: InboxSession[];
   subsByParent: Map<string, InboxSession[]>;
   forksByParent: Map<string, InboxSession[]>;
+  // Top-level worker sessions clustered by plan (or worktree as a fallback),
+  // keyed by display label, ≥2 per group. Members are pulled OUT of
+  // pinned/new/needsInput/working so the inbox shows one group instead of N
+  // loose cards.
+  orchestrationGroups: Map<string, InboxSession[]>;
 }
 
 export function categorizeSessions(
@@ -733,6 +787,28 @@ export function categorizeSessions(
 
   const isTop = (s: InboxSession) => !subsWithParent.has(s._id);
 
+  // Cluster top-level orchestration workers by plan (or worktree) so a fan-out
+  // collapses into one labeled group instead of N loose cards. Only sessions
+  // not already nested under a conversation parent and not pinned are eligible;
+  // a lone worker (cluster of 1) stays inline. Members are then held out of the
+  // flat buckets below via isFlat.
+  const orchestrationGroups = new Map<string, InboxSession[]>();
+  for (const s of sorted) {
+    if (!isTop(s) || s.is_pinned) continue;
+    const label = orchestrationGroupLabelOf(s);
+    if (!label) continue;
+    if (!orchestrationGroups.has(label)) orchestrationGroups.set(label, []);
+    orchestrationGroups.get(label)!.push(s);
+  }
+  for (const [label, members] of Array.from(orchestrationGroups)) {
+    if (members.length < 2) orchestrationGroups.delete(label);
+  }
+  const groupedIds = new Set(
+    Array.from(orchestrationGroups.values()).flat().map((s) => s._id),
+  );
+  // Flat = top-level AND not folded into an orchestration group.
+  const isFlat = (s: InboxSession) => isTop(s) && !groupedIds.has(s._id);
+
   // A pending send is in-flight work just like a locally-queued message: it
   // pushes the session OUT of needs-input and INTO working. Fold the two sets
   // so the existing isSessionWaitingForInput guard handles both with no extra
@@ -757,17 +833,17 @@ export function categorizeSessions(
       if (at !== bt) return at - bt;
       return a._id < b._id ? -1 : a._id > b._id ? 1 : 0;
     });
-  const newSessions = sorted.filter((s) => s.message_count === 0 && !s.is_pinned && !hasPendingSend(s) && isTop(s))
+  const newSessions = sorted.filter((s) => s.message_count === 0 && !s.is_pinned && !hasPendingSend(s) && isFlat(s))
     .sort((a, b) => (a.is_connected ? 1 : 0) - (b.is_connected ? 1 : 0));
-  const needsInput = sorted.filter((s) => isSessionWaitingForInput(s, inFlight) && isTop(s))
+  const needsInput = sorted.filter((s) => isSessionWaitingForInput(s, inFlight) && isFlat(s))
     .sort((a, b) => {
       // Deferred sessions sink to the bottom of the group; otherwise earliest-updated first.
       if (!!a.is_deferred !== !!b.is_deferred) return a.is_deferred ? 1 : -1;
       return (a.updated_at || 0) - (b.updated_at || 0);
     });
-  const working = sorted.filter((s) => (!isSessionWaitingForInput(s, inFlight) && (s.message_count > 0 || hasPendingSend(s)) && !s.is_pinned) && isTop(s));
+  const working = sorted.filter((s) => (!isSessionWaitingForInput(s, inFlight) && (s.message_count > 0 || hasPendingSend(s)) && !s.is_pinned) && isFlat(s));
 
-  return { sorted, pinned, newSessions, needsInput, working, dismissed, subsByParent, forksByParent };
+  return { sorted, pinned, newSessions, needsInput, working, dismissed, subsByParent, forksByParent, orchestrationGroups };
 }
 
 export function visualOrderSessions(
@@ -776,10 +852,14 @@ export function visualOrderSessions(
   projectFilter?: string | null,
   pendingSendIds: ReadonlySet<string> = EMPTY_PENDING_SEND_IDS,
 ): InboxSession[] {
-  const { pinned, newSessions, needsInput, working } =
+  const { pinned, newSessions, needsInput, working, orchestrationGroups } =
     categorizeSessions(sessions, sessionsWithQueuedMessages, pendingSendIds);
   const result: InboxSession[] = [];
-  for (const section of [pinned, newSessions, needsInput, working]) {
+  // Orchestration-grouped workers are held out of the flat buckets for the
+  // grouped inbox view; append them here so flat-list consumers (keyboard nav,
+  // the /sessions list) still see every session.
+  const sections = [pinned, newSessions, needsInput, working, ...Array.from(orchestrationGroups.values())];
+  for (const section of sections) {
     for (const s of section) {
       if (projectFilter && getProjectName(s.git_root, s.project_path) !== projectFilter) continue;
       result.push(s);
@@ -804,7 +884,23 @@ interface InboxStoreState {
   showMySessions: boolean;
   setShowMySessions: (show: boolean) => void;
   hiddenSessionCount: number;
+  // MRU "entered at" per session — bumped only when you switch INTO a session.
+  // Drives the Tab switcher order + message eviction. Kept separate from
+  // _seenUpToAt so the current session is always strictly the most recent (no
+  // ties with the session you just left). Persisted so it survives a refresh.
   _lastViewedAt: Record<string, number>;
+  // "Seen up to" per session — advanced only when you LEAVE a session. The
+  // Slack-style "New" divider sits above the first message newer than this.
+  // Because it only moves on leave, it stays constant for the whole visit, so
+  // the line holds its position while you read. Persisted so reopening the app
+  // still shows what arrived while you were gone.
+  _seenUpToAt: Record<string, number>;
+  // "Seen message_count" per session — the conversation's message_count at the
+  // moment you LEFT it (same leave-time semantics as _seenUpToAt). Powers the
+  // unread badge on branch chips, where the fork's own messages aren't loaded:
+  // unread = message_count - max(seenCount, fork_copied). Absent (never opened)
+  // falls back to fork_copied, so the whole post-fork branch reads as unread.
+  _seenMessageCount: Record<string, number>;
 
   messages: Record<string, Message[]>;
   pendingMessages: Record<string, Message[]>;
@@ -889,9 +985,12 @@ interface InboxStoreState {
   setMessages: (convId: string, msgs: Message[], meta?: Partial<PaginationState>) => void;
   mergeMessages: (convId: string, msgs: Message[], direction: "prepend" | "append", meta?: Partial<PaginationState>) => void;
   setUserMessages: (convId: string, msgs: UserMessage[]) => void;
-  addOptimisticMessage: (convId: string, content: string, images?: Array<{ media_type: string; storage_id?: string }>) => string;
+  addOptimisticMessage: (convId: string, content: string, images?: Array<OptimisticImage>) => string;
   markOptimisticAsQueued: (convId: string, content: string) => void;
   markOptimisticAsFailed: (convId: string, clientId: string) => void;
+  // Swap an optimistic message's still-uploading images for their resolved
+  // server records (drops the spinner) once a backgrounded upload completes.
+  resolvePendingUploads: (convId: string, clientId: string, images: Array<OptimisticImage>) => void;
   setPagination: (convId: string, update: Partial<PaginationState>) => void;
   initPagination: (convId: string) => void;
 
@@ -909,6 +1008,10 @@ interface InboxStoreState {
   // -- Session ID resolution --
   resolveSessionId: (sessionId: string, convexId: string) => void;
   getConvexId: (id: string) => string | undefined;
+  // Resolve a (possibly still-being-created) session to its real Convex id,
+  // awaiting the in-flight createSession dispatch / polling the rekey. Usable
+  // from non-React code (background senders) since it only reads store state.
+  awaitConvexId: (id: string) => Promise<string>;
   // In-memory map: stub id → in-flight createSession dispatch promise. Lets
   // consumers await rekey directly instead of polling. Not synced/persisted.
   pendingSessionCreates: Record<string, Promise<string>>;
@@ -951,15 +1054,26 @@ interface InboxStoreState {
   // -- Sidebar nav expanded sections --
   sidebarNavExpanded: Record<string, boolean>;
   toggleSidebarNav: (section: string) => void;
+  // Mark a live subscription's cold-open first-load (see `liveLoading`).
+  setLiveLoading: (scope: string, loading: boolean) => void;
 
   // -- Task / Doc / Plan / Project state --
   tasks: Record<string, TaskItem>;
   taskActiveSessions: Record<string, any>;
-  // Progress of the full task reconcile crawl (useSyncTasks). Ephemeral UI state
-  // so any task view can show "loading all tasks… N" and never imply the list is
-  // complete while pages are still streaming in. `loaded` counts rows crawled so
-  // far this run; `loading` is true until the final page lands.
-  taskLoadProgress: { loading: boolean; loaded: number };
+  // Progress of the full reconcile crawls (useSyncTasks / useSyncDocs), keyed by
+  // scope ("tasks" | "docs"). Ephemeral UI state so any list view can show a
+  // subtle "syncing N" badge and never imply the list is complete while pages
+  // are still streaming in. `loaded` counts rows crawled so far this run;
+  // `loading` is true until the final page lands.
+  syncProgress: Record<string, { loading: boolean; loaded: number }>;
+  // First-load state of the LIVE data subscriptions (sessions / docs / tasks),
+  // keyed by scope. Deliberately separate from `syncProgress`, which tracks the
+  // background reconcile crawl: that crawl pages through EVERY row at a throttled
+  // pace and can run for minutes, so gating the header spinner on it kept it lit
+  // ~forever. `liveLoading[scope]` is true only until the subscription delivers
+  // its first payload on a cold open, then false — so the header SyncStatusChip
+  // reflects "the data I'm looking at is still loading", not housekeeping.
+  liveLoading: Record<string, boolean>;
   docs: Record<string, DocItem>;
   plans: Record<string, PlanItem>;
   projects: Record<string, ProjectItem>;
@@ -1098,6 +1212,56 @@ function evictInactiveMessages(draft: any, activeConvId: string) {
   }
 }
 
+// Record that the user switched INTO session `id`. The single source of truth
+// for "last viewed", called from EVERY navigation primitive so a visit is
+// recorded no matter how a session was opened (inbox click, deep-link, ?s=,
+// popstate, Tab palette, dedicated session window, desktop window-focus). Must
+// run while `prevId` still holds the session being left (i.e. before the caller
+// reassigns currentSessionId/sidePanelSessionId).
+//
+//   - _lastViewedAt[id] -> now: entered-at, drives MRU order. Only ever bumped
+//     here, so the session you just opened is always strictly the most recent.
+//   - _seenUpToAt[prevId] -> now: leaving the previous session means you've now
+//     seen everything in it; advancing here (and NOT for `id`) is what keeps the
+//     "New" divider for `id` frozen at where you left off last time.
+function recordSessionView(draft: any, id: string, prevId?: string | null) {
+  if (!id) return;
+  const now = Date.now();
+  if (prevId && prevId !== id) {
+    draft._seenUpToAt[prevId] = now;
+    // Snapshot what you'd seen by the time you left, so a branch chip's unread
+    // badge counts only what arrived afterward. Prefer the freshest count we
+    // hold for prevId; if we have none, leave any prior cursor untouched.
+    const seenCount = draft.conversations[prevId]?.message_count
+      ?? draft.sessions[prevId]?.message_count;
+    if (typeof seenCount === "number") draft._seenMessageCount[prevId] = seenCount;
+  }
+  draft._lastViewedAt[id] = now;
+}
+
+// Index of the timeline row the Slack-style "New" divider sits above, or -1 for
+// none. The unread band is the half-open interval (seenUpToAt, enteredAt]:
+//   - lower bound `seenUpToAt`  — when you last LEFT this session (frozen for
+//     the visit), so the line holds its place while you read.
+//   - upper bound `enteredAt`   — when you last FOCUSED this session (re-stamped
+//     on every entry, incl. window-focus). Anything newer than this arrived
+//     while you were here watching — your own sends, live agent replies — and
+//     must NOT get a "New" line. Without this bound the first live message after
+//     a caught-up entry wrongly anchored the divider.
+// timeline is ascending by timestamp, so the first row past `seenUpToAt` is the
+// earliest unseen; we only honor it when it predates `enteredAt`.
+export function computeNewDividerIndex(
+  timeline: readonly { timestamp: number }[],
+  seenUpToAt: number,
+  enteredAt: number,
+): number {
+  if (!seenUpToAt) return -1;
+  const idx = timeline.findIndex((it) => it.timestamp > seenUpToAt);
+  if (idx === -1) return -1;
+  if (enteredAt && timeline[idx].timestamp > enteredAt) return -1;
+  return idx;
+}
+
 // -- Sync infrastructure --
 
 export type MergePolicy = "replace" | "local_wins" | "set_union" | "deep_merge";
@@ -1158,6 +1322,15 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
   sessions: {
     altKey: "session_id",
     keepSelected: "currentSessionId",
+    // Liberal cache: the live listInboxSessions window syncs as a DELTA overlay
+    // (like tasks/docs), so a session the server stops returning is NOT pruned
+    // locally — the inbox accumulates across syncs and across cold-open reloads.
+    // Sessions leave only on an explicit gesture: a dismissal (an in-window
+    // update that overlays here, including one made on another device) re-buckets
+    // them, and a kill removes them via an exclude-pending entry. Without this the
+    // snapshot prune mirrored the server's narrow recent-window and evicted older
+    // (especially dismissed) sessions on every sync and every reload.
+    isDelta: true,
     transform(draft, table, incoming) {
       for (const s of incoming as any[]) {
         if (!draft.conversations[s._id]) draft.conversations[s._id] = { _id: s._id };
@@ -1310,6 +1483,8 @@ export const useInboxStore = create<InboxStoreState>(
   setShowMySessions: (show: boolean) => set({ showMySessions: show }),
   hiddenSessionCount: 0,
   _lastViewedAt: {},
+  _seenUpToAt: {},
+  _seenMessageCount: {},
 
   messages: {},
   pendingMessages: {},
@@ -1836,6 +2011,7 @@ export const useInboxStore = create<InboxStoreState>(
   },
 
   setCurrentSession: action(function (this: Draft, id: string) {
+    recordSessionView(this, id, this.currentSessionId);
     this.currentSessionId = id;
     this.viewingDismissedId = null;
     this.clientState.current_conversation_id = id;
@@ -1875,6 +2051,7 @@ export const useInboxStore = create<InboxStoreState>(
     if (isSessionDismissed(session)) {
       this.viewingDismissedId = session._id;
     } else {
+      recordSessionView(this, session._id, this.currentSessionId);
       this.currentSessionId = session._id;
       this.viewingDismissedId = null;
       this.clientState.current_conversation_id = session._id;
@@ -1923,6 +2100,7 @@ export const useInboxStore = create<InboxStoreState>(
       if (isSessionDismissed(session)) {
         this.viewingDismissedId = id;
       } else {
+        recordSessionView(this, id, this.currentSessionId);
         this.currentSessionId = id;
         this.viewingDismissedId = null;
         this.clientState.current_conversation_id = id;
@@ -1933,9 +2111,13 @@ export const useInboxStore = create<InboxStoreState>(
     }
   }),
 
-  touchMru: (id: string) => {
-    set({ _lastViewedAt: { ...get()._lastViewedAt, [id]: Date.now() } });
-  },
+  // Public "I am now viewing `id` as the current session" — delegates to the
+  // shared recorder so it persists (action() → IDB) and updates the divider
+  // anchor. Used by the inbox effect + restore paths; the navigation primitives
+  // above already record on their own.
+  touchMru: action(function (this: Draft, id: string) {
+    recordSessionView(this, id, this.currentSessionId);
+  }),
 
   markKilling: action(function (this: Draft, id: string) {
     let newSessionId = this.currentSessionId;
@@ -2040,7 +2222,7 @@ export const useInboxStore = create<InboxStoreState>(
     this.userMessages[convId] = msgs;
   }),
 
-  addOptimisticMessage: sync(function (this: Draft, convId: string, content: string, images?: Array<{ media_type: string; storage_id?: string }>) {
+  addOptimisticMessage: sync(function (this: Draft, convId: string, content: string, images?: Array<OptimisticImage>) {
     const id = `optimistic_${Date.now()}_${Math.random().toString(36).slice(2)}`;
     const msg: Message = {
       _id: id,
@@ -2085,6 +2267,14 @@ export const useInboxStore = create<InboxStoreState>(
     if (pending) {
       this.pendingMessages[convId] = pending.map(mark);
     }
+  }),
+
+  resolvePendingUploads: sync(function (this: Draft, convId: string, clientId: string, images: Array<OptimisticImage>) {
+    const pending = this.pendingMessages[convId];
+    if (!pending) return;
+    this.pendingMessages[convId] = pending.map((m) =>
+      m._clientId === clientId || m._id === clientId ? { ...m, images } : m
+    );
   }),
 
   setPagination: action(function (this: Draft, convId: string, update: Partial<PaginationState>) {
@@ -2206,6 +2396,37 @@ export const useInboxStore = create<InboxStoreState>(
     return get().pendingSessionCreates[stubId];
   },
 
+  awaitConvexId: async (id: string): Promise<string> => {
+    const resolved = get().getConvexId(id);
+    if (resolved) return resolved;
+    // Prefer the in-flight createSession promise — deterministic and surfaces
+    // the real dispatch error if the server rejects. Polling is the fallback
+    // for cases where the promise was lost (e.g. reload mid-flight) or the
+    // rekey arrives via listInboxSessions altKey sync instead of the dispatch.
+    const inFlight = get().awaitSessionCreate(id);
+    if (inFlight) {
+      let createError: unknown = null;
+      try {
+        const convexId = await Promise.race([
+          inFlight,
+          new Promise<string>((_, rej) => setTimeout(() => rej(new Error("create timeout")), 30_000)),
+        ]);
+        if (convexId) return convexId;
+      } catch (e) {
+        createError = e;
+      }
+      const r2 = get().getConvexId(id);
+      if (r2) return r2;
+      if (createError) throw createError instanceof Error ? createError : new Error(String(createError));
+    }
+    for (let i = 0; i < 60; i++) {
+      await new Promise((r) => setTimeout(r, 250));
+      const r = get().getConvexId(id);
+      if (r) return r;
+    }
+    throw new Error("Session not yet created on server");
+  },
+
   // =====================
   // FORK NAVIGATION
   // =====================
@@ -2251,10 +2472,14 @@ export const useInboxStore = create<InboxStoreState>(
   toggleSidebarNav: (section: string) => set((s: any) => ({
     sidebarNavExpanded: { ...s.sidebarNavExpanded, [section]: !s.sidebarNavExpanded[section] },
   })),
+  setLiveLoading: (scope: string, loading: boolean) => set((s: any) => ({
+    liveLoading: { ...s.liveLoading, [scope]: loading },
+  })),
 
   tasks: {},
   taskActiveSessions: {} as Record<string, any>,
-  taskLoadProgress: { loading: false, loaded: 0 },
+  syncProgress: {},
+  liveLoading: {},
   mentionIndex: { tasks: {}, docs: {}, plans: {} },
   docs: {},
   plans: {},
@@ -2411,6 +2636,10 @@ export const useInboxStore = create<InboxStoreState>(
   }),
 
   selectPanelSession: action(function (this: Draft, sessionId: string | null) {
+    // The side panel is a genuine way of viewing a session (used by the Tab
+    // switcher off the inbox page), so record it. Its "previous" is the panel's
+    // own session, not the main currentSessionId.
+    if (sessionId) recordSessionView(this, sessionId, this.sidePanelSessionId);
     this.sidePanelSessionId = sessionId;
   }),
 
@@ -2573,6 +2802,22 @@ export function ensureHydrated(convId: string) {
   });
 }
 
+// Cache-as-floor hydration merge for id-keyed collections. IndexedDB rows are
+// the base; whatever live data already landed in the store wins per-id. A
+// windowed live payload — listInboxSessions' recent window, tasks.webList's
+// take(300) — must never empty-gate out the full cached collection: that race
+// (live fills the store before the deferred IDB hydration runs) is what made
+// tasks/sessions collapse to the live window on every load and stream back in.
+// Union-merge backfills the omitted rows while keeping live freshness; genuine
+// deletions are reconciled by the reconcile crawl's authoritative onComplete
+// snapshot, not by hydration.
+export function unionHydrate<T extends Record<string, unknown>>(
+  idbVal: T | undefined,
+  liveVal: T | undefined,
+): T {
+  return { ...(idbVal ?? {}), ...(liveVal ?? {}) } as T;
+}
+
 // -- IndexedDB cache: wire patch-driven writes + hydrate on load --
 
 if (PERSISTENCE_AVAILABLE) {
@@ -2639,14 +2884,17 @@ if (PERSISTENCE_AVAILABLE) {
             }
           }
           updates[key] = merged;
-        } else if (key === "collapsedSections" || key === "sidebarNavExpanded") {
+        } else if (key === "collapsedSections" || key === "sidebarNavExpanded" || key === "_lastViewedAt" || key === "_seenUpToAt" || key === "_seenMessageCount") {
           updates[key] = { ...val, ...cur };
         } else if (key === "teamUnreadCount") {
           if (state.teamUnreadCount == null) updates[key] = val;
         } else if (Array.isArray(val)) {
           if (cur?.length === 0) updates[key] = val;
         } else if (typeof val === "object") {
-          if (Object.keys(cur || {}).length === 0) updates[key] = val;
+          // Cache as the floor: backfill cached rows the live window omitted,
+          // live wins per-id. (Was an empty-gate that skipped IDB entirely once
+          // any live row had landed — see unionHydrate.)
+          updates[key] = unionHydrate(val, cur);
         } else {
           updates[key] = val;
         }
@@ -2669,8 +2917,25 @@ if (PERSISTENCE_AVAILABLE) {
     delete cached.messages;
     delete cached.pagination;
 
+    // A persisted optimistic message whose image is still `uploading` was
+    // orphaned by a reload mid-upload: the in-memory upload+send task didn't
+    // survive, and resolvePendingUploads (which clears the flag) never ran. It
+    // can't complete on its own, so surface it as failed instead of a forever
+    // spinner, and drop the now-dead blob preview.
+    if (cached.pendingMessages && typeof cached.pendingMessages === "object") {
+      for (const msgs of Object.values(cached.pendingMessages) as Message[][]) {
+        if (!Array.isArray(msgs)) continue;
+        for (const m of msgs) {
+          if ((m as any)?.images?.some((img: any) => img?.uploading)) {
+            (m as any)._isFailed = true;
+            (m as any).images = (m as any).images.filter((img: any) => !img?.uploading);
+          }
+        }
+      }
+    }
+
     // Critical path: sidebar + current conversation + tabs render immediately
-    apply(["sessions", "clientState",
+    apply(["sessions", "clientState", "_lastViewedAt", "_seenUpToAt", "_seenMessageCount",
            "conversations", "pending", "pendingMessages", "teams", "teamMembers", "teamUnreadCount", "drafts",
            "tabs", "activeTabId",
            "sidePanelOpen", "sidePanelSessionId", "sidePanelUserClosed"]);
@@ -2687,6 +2952,9 @@ if (PERSISTENCE_AVAILABLE) {
     if (!st.currentSessionId) {
       const persistedId = st.clientState?.current_conversation_id;
       if (persistedId && st.sessions[persistedId]) {
+        // The divider anchor (_seenUpToAt) is persisted, so reopening the app to
+        // this session naturally shows what arrived while it was closed — no
+        // special seeding needed here.
         useInboxStore.setState({ currentSessionId: persistedId });
       }
     }
@@ -2699,7 +2967,7 @@ if (PERSISTENCE_AVAILABLE) {
     // Deferred: list views + secondary data render next frame
     requestAnimationFrame(() => {
       apply(["tasks", "docs", "plans", "projects", "favorites", "bookmarks",
-             "recentProjects", "collapsedSections", "sidebarNavExpanded"]);
+             "recentProjects", "docProjectPaths", "collapsedSections", "sidebarNavExpanded"]);
     });
   });
 }
