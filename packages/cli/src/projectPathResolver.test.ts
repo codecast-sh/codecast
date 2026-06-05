@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { resolveLocalProjectPath, resolveResumeCwd, pickProjectPath } from "./projectPathResolver.js";
+import { resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, pickProjectPath } from "./projectPathResolver.js";
 
 const remote = "git@github.com:union-mobile/outreach.git";
 
@@ -84,6 +84,82 @@ describe("resolveLocalProjectPath", () => {
       exists: (p) => p !== "/Users/ec2-user/src/outreach",
     });
     expect(result?.path).toBe("/Users/ashot/src/outreach");
+  });
+});
+
+describe("resolveLocalRepoPath", () => {
+  const HOME = "/Users/ashot";
+
+  test("recorded path unchanged when it exists locally", () => {
+    expect(
+      resolveLocalRepoPath({ remotePath: "/Users/ashot/src/codecast", home: HOME, exists: (p) => p === "/Users/ashot/src/codecast" }),
+    ).toBe("/Users/ashot/src/codecast");
+  });
+
+  // THE BUG: a brand-new session seeded from another machine's SUBDIR path. The
+  // leaf ("cli") names no local repo, so the old leaf-only resolver refused and
+  // stamped "clone it first". Walking up finds "codecast" → ~/src/codecast and
+  // re-appends packages/cli.
+  test("walks up a foreign subdir path to the repo ancestor and re-appends the subpath", () => {
+    const local = new Set(["/Users/ashot/src/codecast", "/Users/ashot/src/codecast/packages/cli"]);
+    expect(
+      resolveLocalRepoPath({
+        remotePath: "/Users/m1/work/codecast/packages/cli",
+        home: HOME,
+        exists: (p) => local.has(p),
+      }),
+    ).toBe("/Users/ashot/src/codecast/packages/cli");
+  });
+
+  test("non-leaf match without the subpath keeps walking — no generic-ancestor false positive", () => {
+    // A coincidental ~/src/work exists but isn't the repo; the subpath under it
+    // doesn't exist, so we must NOT return it. "codecast" resolves instead.
+    const local = new Set(["/Users/ashot/src/work", "/Users/ashot/src/codecast"]);
+    expect(
+      resolveLocalRepoPath({
+        remotePath: "/Users/m1/work/codecast/sub",
+        home: HOME,
+        exists: (p) => local.has(p),
+      }),
+    ).toBe("/Users/ashot/src/codecast"); // subpath "sub" missing → repo root, not ~/src/work
+  });
+
+  test("leaf-only foreign path (no subdir) resolves to the local repo root", () => {
+    expect(
+      resolveLocalRepoPath({
+        remotePath: "/Users/ec2-user/work/codecast",
+        home: HOME,
+        exists: (p) => p === "/Users/ashot/src/codecast",
+      }),
+    ).toBe("/Users/ashot/src/codecast");
+  });
+
+  test("explicit user mapping (full path) wins over convention", () => {
+    expect(
+      resolveLocalRepoPath({
+        remotePath: "/Users/m1/work/codecast/packages/cli",
+        home: HOME,
+        userMap: { "/Users/m1/work/codecast/packages/cli": "/Users/ashot/elsewhere/cli" },
+        exists: (p) => p === "/Users/ashot/elsewhere/cli",
+      }),
+    ).toBe("/Users/ashot/elsewhere/cli");
+  });
+
+  test("learns the basename → repo mapping on a convention hit", () => {
+    const learned: Array<[string, string]> = [];
+    resolveLocalRepoPath({
+      remotePath: "/Users/m1/work/codecast/packages/cli",
+      home: HOME,
+      exists: (p) => p === "/Users/ashot/src/codecast" || p === "/Users/ashot/src/codecast/packages/cli",
+      onLearn: (name, local) => learned.push([name, local]),
+    });
+    expect(learned).toContainEqual(["codecast", "/Users/ashot/src/codecast"]);
+  });
+
+  test("returns null when no ancestor maps to a local repo", () => {
+    expect(
+      resolveLocalRepoPath({ remotePath: "/Users/m1/work/nope/deep", home: HOME, exists: () => false }),
+    ).toBeNull();
   });
 });
 
