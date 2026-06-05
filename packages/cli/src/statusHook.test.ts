@@ -119,3 +119,53 @@ describe("codecast-status hook event mapping", () => {
     expect(out.message).toBeUndefined();
   });
 });
+
+// A pending AskUserQuestion buffers its tool_input out of the JSONL, so the hook drops
+// the real questions in a per-session sidecar the daemon reads to build a full-fidelity
+// card. These run the actual bash+python and assert the file lands (or doesn't).
+describe("codecast-status hook AskUserQuestion sidecar", () => {
+  function readSidecar(sessionId: string): any {
+    const p = path.join(home, ".codecast", "ask-input", `${sessionId}.json`);
+    return JSON.parse(fs.readFileSync(p, "utf-8"));
+  }
+  function sidecarExists(sessionId: string): boolean {
+    return fs.existsSync(path.join(home, ".codecast", "ask-input", `${sessionId}.json`));
+  }
+
+  test("PreToolUse AskUserQuestion writes the full tool_input questions", () => {
+    const questions = [{
+      question: "Where should the button live?",
+      header: "Scope",
+      options: [
+        { label: "Global", description: "every route" },
+        { label: "Sessions page", description: "all filters" },
+      ],
+      multiSelect: false,
+    }];
+    runHook({
+      session_id: "sidecar-auq",
+      hook_event_name: "PreToolUse",
+      tool_name: "AskUserQuestion",
+      tool_input: { questions },
+      permission_mode: "bypassPermissions",
+    });
+    const sc = readSidecar("sidecar-auq");
+    expect(sc.questions).toEqual(questions);          // descriptions + header + multiSelect intact
+    expect(typeof sc.ts).toBe("number");
+  });
+
+  test("PermissionRequest AskUserQuestion also writes the sidecar", () => {
+    runHook({
+      session_id: "sidecar-perm",
+      hook_event_name: "PermissionRequest",
+      tool_name: "AskUserQuestion",
+      tool_input: { questions: [{ question: "Which?", options: [{ label: "A" }] }] },
+    });
+    expect(readSidecar("sidecar-perm").questions[0].question).toBe("Which?");
+  });
+
+  test("ordinary tools never write a sidecar", () => {
+    runHook({ session_id: "sidecar-bash", hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "ls" } });
+    expect(sidecarExists("sidecar-bash")).toBe(false);
+  });
+});
