@@ -309,7 +309,7 @@ function togglePalette() {
   }
 }
 
-function showPalette() {
+function positionPaletteWindow() {
   if (!paletteWindow) return;
   // Reposition to center of current display
   const cursor = screen.getCursorScreenPoint();
@@ -323,7 +323,27 @@ function showPalette() {
   );
   paletteWindow.show();
   paletteWindow.focus();
+}
+
+function showPalette() {
+  if (!paletteWindow) return;
+  positionPaletteWindow();
   paletteWindow.webContents.send("palette-show");
+}
+
+// Summon the same palette window into new-session compose mode. Used by the
+// global "New Session" shortcut and the tray/dock/app menus.
+function showCompose() {
+  if (!paletteWindow) {
+    createPaletteWindow();
+    paletteWindow.once("ready-to-show", () => {
+      positionPaletteWindow();
+      paletteWindow.webContents.send("compose-show");
+    });
+    return;
+  }
+  positionPaletteWindow();
+  paletteWindow.webContents.send("compose-show");
 }
 
 function hidePalette() {
@@ -372,7 +392,7 @@ function createTray() {
     { label: "Inbox", click: () => navigateMain("/inbox") },
     { label: "Tasks", click: () => navigateMain("/tasks") },
     { type: "separator" },
-    { label: "New Session", click: () => { mainWindow?.show(); mainWindow?.focus(); mainWindow?.webContents.executeJavaScript("window.__CODECAST_NEW_SESSION && window.__CODECAST_NEW_SESSION()"); } },
+    { label: "New Session", click: () => showCompose() },
     { label: "Command Palette", click: () => togglePalette() },
     { type: "separator" },
     { label: "Quit Codecast", click: () => app.quit() },
@@ -407,14 +427,7 @@ function buildAppMenu() {
         {
           label: "New Session",
           accelerator: "CommandOrControl+N",
-          click: () => {
-            if (!mainWindow) return;
-            mainWindow.show();
-            mainWindow.focus();
-            mainWindow.webContents.executeJavaScript(
-              "window.__CODECAST_NEW_SESSION && window.__CODECAST_NEW_SESSION()"
-            );
-          },
+          click: () => showCompose(),
         },
         { type: "separator" },
         { role: "close" },
@@ -575,6 +588,24 @@ ipcMain.on("palette-new-session", () => {
   }
 });
 
+// The compose popup reports back after the user sends the first message. The
+// session was already created + the message sent from the popup's renderer; all
+// we do here is manage focus:
+//   navigate → bring Codecast forward on the new conversation (Cmd+Enter)
+//   else     → fire-and-forget: hide the popup and step out of the app (Enter)
+ipcMain.on("compose-submit", (_e, data) => {
+  hidePalette();
+  if (data?.navigate && data?.conversationId && mainWindow) {
+    mainWindow.show();
+    mainWindow.focus();
+    mainWindow.webContents.executeJavaScript(
+      `window.dispatchEvent(new CustomEvent('codecast-navigate', { detail: ${JSON.stringify("/conversation/" + data.conversationId)} }))`
+    );
+  } else if (!data?.navigate && process.platform === "darwin") {
+    app.hide();
+  }
+});
+
 // Settings IPC
 ipcMain.handle("get-shortcuts", () => loadSettings());
 ipcMain.handle("set-shortcut", (_e, key, accelerator) => {
@@ -609,12 +640,7 @@ function registerShortcuts() {
 
   if (shortcuts.newSession) {
     globalShortcut.register(shortcuts.newSession, () => {
-      if (!mainWindow) return;
-      mainWindow.show();
-      mainWindow.focus();
-      mainWindow.webContents.executeJavaScript(
-        "window.__CODECAST_NEW_SESSION && window.__CODECAST_NEW_SESSION()"
-      );
+      showCompose();
     });
   }
 
@@ -644,7 +670,7 @@ app.whenReady().then(() => {
   createPaletteWindow();
   if (app.dock) {
     app.dock.setMenu(Menu.buildFromTemplate([
-      { label: "New Session", click: () => { mainWindow?.show(); mainWindow?.focus(); mainWindow?.webContents.executeJavaScript("window.__CODECAST_NEW_SESSION && window.__CODECAST_NEW_SESSION()"); } },
+      { label: "New Session", click: () => showCompose() },
       { label: "Dashboard", click: () => navigateMain("/dashboard") },
       { label: "Inbox", click: () => navigateMain("/inbox") },
     ]));
