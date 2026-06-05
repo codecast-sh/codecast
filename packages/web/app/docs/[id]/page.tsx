@@ -11,7 +11,7 @@ import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { DocumentDetailLayout } from "../../../components/DocumentDetailLayout";
 import { SharePopover } from "../../../components/SharePopover";
 import { ErrorBoundary } from "../../../components/ErrorBoundary";
-import { SessionCardInner } from "../../../components/ActivityFeed";
+import { FeedCard } from "../../../components/ActivityFeed";
 import { WatchButton } from "../../../components/WatchButton";
 import { Badge } from "../../../components/ui/badge";
 import "../../../components/editor/editor.css";
@@ -309,10 +309,10 @@ function DocDetailContent() {
                   ).map((conv: any) => {
                     const sid = conv._id;
                     return (
-                    <SessionCardInner
+                    <FeedCard
                       key={conv._id}
-                      item={{ ...conv, conversation_id: sid }}
-                      compact
+                      conv={{ ...conv, _id: sid } as any}
+                      showActor={false}
                       onNavigate={() => {
                         const store = useInboxStore.getState();
                         if (!store.sessions[sid]) {

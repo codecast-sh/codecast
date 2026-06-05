@@ -8,6 +8,7 @@ import { useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { GenericListView, ListGroup, ItemRowState } from "../../components/GenericListView";
 import { getLabelColor, DEFAULT_LABELS } from "../../lib/labelColors";
+import { docMatchesProjectFilter } from "../../lib/docFilters";
 import {
   FileText,
   Pin,
@@ -180,9 +181,27 @@ export function DocListContent() {
     let list = sourceFilteredDocs;
     if (docType) list = list.filter((d) => d.doc_type === docType);
     if (labelFilter) list = list.filter((d) => d.labels?.includes(labelFilter));
-    if (projectFilter) list = list.filter((d) => d.source_file?.startsWith(projectFilter));
+    if (projectFilter) list = list.filter((d) => docMatchesProjectFilter(d, projectFilter));
     return list;
   }, [sourceFilteredDocs, docType, labelFilter, projectFilter]);
+
+  const filteredDocsIgnoringSource = useMemo(() => {
+    let list = docsList;
+    if (docType) list = list.filter((d) => d.doc_type === docType);
+    if (labelFilter) list = list.filter((d) => d.labels?.includes(labelFilter));
+    if (projectFilter) list = list.filter((d) => docMatchesProjectFilter(d, projectFilter));
+    return list;
+  }, [docsList, docType, labelFilter, projectFilter]);
+
+  useEffect(() => {
+    if (
+      sourceFilter === "human" &&
+      filteredDocs.length === 0 &&
+      filteredDocsIgnoringSource.some((d) => d.source !== "human")
+    ) {
+      setParam({ source: "" });
+    }
+  }, [sourceFilter, filteredDocs, filteredDocsIgnoringSource, setParam]);
 
   const typeCounts = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -306,6 +325,7 @@ export function DocListContent() {
           </button>
         </div>
       ) : undefined}
+      syncScope="docs"
       headerExtra={
         <div className="flex items-center rounded-md border border-sol-border/40 overflow-hidden">
           <button

@@ -3,7 +3,10 @@ import { useQuery, usePaginatedQuery, useConvex } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, DocDetail } from "../store/inboxStore";
 import { useConvexSync } from "./useConvexSync";
+import { useWatchEffect } from "./useWatchEffect";
+import { runReconcileCrawl } from "./reconcileCrawl";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
+import { useWorkspaceArgs, type WorkspaceArgs as StoreWorkspaceArgs } from "./useWorkspaceArgs";
 
 const api = _api as any;
 
@@ -40,12 +43,11 @@ const RECONCILE_PAGE_SIZE = 24;
 // Full reconcile is a one-shot crawl, not a live subscription. Throttle it per
 // workspace so re-mounts lean on the cache instead of re-crawling every time.
 const RECONCILE_THROTTLE_MS = 5 * 60 * 1000;
-const RECONCILE_PAGE_DELAY_MS = 200; // pace the crawl so it never bursts the backend
-const reconcileLastRun = new Map<string, number>();
+const RECONCILE_PAGE_DELAY_MS = 60; // pace the crawl so it never bursts the backend
 
 type WorkspaceArgs =
-  | { team_id: Id<"teams">; workspace: "team" }
-  | { workspace: "personal" }
+  | Extract<StoreWorkspaceArgs, { workspace: "team" }>
+  | Extract<StoreWorkspaceArgs, { workspace: "personal" }>
   | "skip";
 
 /**
@@ -79,6 +81,13 @@ export function useSyncDocsPaginated(wsArgs: WorkspaceArgs) {
     }, [syncTable])
   );
 
+  // Header SyncStatusChip: spin only while the LIVE first page is loading on a
+  // cold open. The background reconcile crawl below is housekeeping (it pages
+  // every doc at a throttled pace, for minutes) and must NOT drive the chip.
+  useWatchEffect(() => {
+    useInboxStore.getState().setLiveLoading("docs", status === "LoadingFirstPage");
+  }, [status]);
+
   // 2) BACKGROUND RECONCILE: crawl every page once (one-shot queries, NOT live
   //    subscriptions), then snapshot-sync the full set to prune deletions and
   //    fill the cache. Throttled per workspace + paced. A nonce ticks every
@@ -91,55 +100,38 @@ export function useSyncDocsPaginated(wsArgs: WorkspaceArgs) {
     return () => clearInterval(id);
   }, []);
   useEffect(() => {
-    if (wsArgs === "skip") return;
-    const last = reconcileLastRun.get(wsKey) ?? 0;
-    if (Date.now() - last < RECONCILE_THROTTLE_MS) return;
-    reconcileLastRun.set(wsKey, Date.now());
-
-    let cancelled = false;
-    (async () => {
-      const all: any[] = [];
-      let cursor: string | null = null;
-      for (let i = 0; i < 1000; i++) {
-        let page: any;
-        try {
-          page = await convex.query(api.docs.webListPaginated, {
-            ...(wsArgs as object),
-            paginationOpts: { numItems: RECONCILE_PAGE_SIZE, cursor },
-          });
-        } catch {
-          // Backend hiccup mid-crawl: don't snapshot a partial set (it would
-          // prune real docs). Leave the cache as-is; allow a retry next mount.
-          reconcileLastRun.set(wsKey, 0);
-          return;
-        }
-        if (cancelled || !page) return;
-        all.push(...(page.page ?? []));
-        if (page.isDone || !page.continueCursor) break;
-        cursor = page.continueCursor;
-        await new Promise((r) => setTimeout(r, RECONCILE_PAGE_DELAY_MS));
-      }
-      if (cancelled) return;
-      const projectPaths = dedupeProjectPaths([
-        ...new Set(all.map((d) => d.project_path).filter(Boolean) as string[]),
-      ]);
-      // Only attach `extra` when the derived paths actually changed. `extra`
-      // forces syncTable past its no-op guard, so passing it every crawl would
-      // rewrite `docs` (and re-persist it) every 5 minutes even when nothing
-      // changed. When paths are stable, a plain snapshot lets the guard short-
-      // circuit an unchanged crawl entirely.
-      const prevPaths = useInboxStore.getState().docProjectPaths;
-      const pathsChanged =
-        prevPaths.length !== projectPaths.length ||
-        projectPaths.some((p, i) => prevPaths[i] !== p);
-      useInboxStore
-        .getState()
-        .syncTable("docs", all, pathsChanged ? { extra: { docProjectPaths: projectPaths } } : {});
-    })();
-
-    return () => {
-      cancelled = true;
-    };
+    runReconcileCrawl({
+      namespace: "docs",
+      wsKey,
+      throttleMs: RECONCILE_THROTTLE_MS,
+      pageDelayMs: RECONCILE_PAGE_DELAY_MS,
+      maxPages: 1000,
+      fetchPage: async (cursor) => {
+        const page = await convex.query(api.docs.webListPaginated, {
+          ...(wsArgs as object),
+          paginationOpts: { numItems: RECONCILE_PAGE_SIZE, cursor },
+        });
+        return { rows: page.page ?? [], isDone: page.isDone, continueCursor: page.continueCursor };
+      },
+      onPage: (rows) => syncTable("docs", rows, { isDelta: true }),
+      onComplete: (all) => {
+        const projectPaths = dedupeProjectPaths([
+          ...new Set(all.map((d) => d.project_path).filter(Boolean) as string[]),
+        ]);
+        // Only attach `extra` when the derived paths actually changed. `extra`
+        // forces syncTable past its no-op guard, so passing it every crawl would
+        // rewrite `docs` (and re-persist it) every 5 minutes even when nothing
+        // changed. When paths are stable, a plain snapshot lets the guard short-
+        // circuit an unchanged crawl entirely.
+        const prevPaths = useInboxStore.getState().docProjectPaths;
+        const pathsChanged =
+          prevPaths.length !== projectPaths.length ||
+          projectPaths.some((p, i) => prevPaths[i] !== p);
+        useInboxStore
+          .getState()
+          .syncTable("docs", all, pathsChanged ? { extra: { docProjectPaths: projectPaths } } : {});
+      },
+    });
   }, [convex, wsKey, reconcileNonce]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return { ready: status !== "LoadingFirstPage" };
@@ -149,16 +141,7 @@ export function useSyncDocsPaginated(wsArgs: WorkspaceArgs) {
  * Web-specific wrapper — reads workspace args from the store.
  */
 export function useSyncDocs() {
-  const activeTeamId = useInboxStore(
-    (s) => s.clientState.ui?.active_team_id
-  ) as Id<"teams"> | undefined;
-  const initialized = useInboxStore((s) => s.clientStateInitialized);
-
-  const wsArgs: WorkspaceArgs = !initialized ? "skip" : activeTeamId
-    ? { team_id: activeTeamId, workspace: "team" as const }
-    : { workspace: "personal" as const };
-
-  return useSyncDocsPaginated(wsArgs);
+  return useSyncDocsPaginated(useWorkspaceArgs());
 }
 
 /**
