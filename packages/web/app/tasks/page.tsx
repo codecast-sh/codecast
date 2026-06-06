@@ -5,7 +5,7 @@ import { useRouter, useSearchParams, useParams, usePathname } from "next/navigat
 import Link from "next/link";
 import { useQuery } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
-import { useInboxStore, TaskItem, TaskViewPrefs, ProjectItem } from "../../store/inboxStore";
+import { useInboxStore, TaskItem, TaskViewPrefs, ProjectItem, resolveAssigneeInfo } from "../../store/inboxStore";
 import { useSyncTasks, useSyncTaskDetail } from "../../hooks/useSyncTasks";
 
 import { GenericListView, ListGroup, ItemRowState } from "../../components/GenericListView";
@@ -45,6 +45,8 @@ import {
   Check,
   MessageSquare,
   FolderKanban,
+  Layers,
+  Activity,
 } from "lucide-react";
 
 type TaskStatus = "backlog" | "open" | "in_progress" | "in_review" | "done" | "dropped";
@@ -149,6 +151,24 @@ export function TaskRow({ task, state, triageMode, onTriage }: { task: TaskItem;
       )}
       {activeSession ? (
         <ActiveSessionBadge session={activeSession} className="cq-hide-compact" />
+      ) : task.origin_session ? (
+        <span className="flex items-center gap-1 flex-shrink-0 cq-hide-compact">
+          <ActiveSessionBadge
+            session={{
+              _id: task.origin_session.conversation_id,
+              session_id: task.origin_session.session_id,
+              title: task.origin_session.title,
+              started_by: task.origin_session.started_by,
+              last_message_at: task.origin_session.last_message_at,
+            }}
+            dormant
+          />
+          {task.session_count && task.session_count > 1 ? (
+            <span className="text-[10px] text-sol-text-dim font-mono" title={`${task.session_count} sessions`}>
+              <Link2 className="w-3 h-3 inline mr-0.5" />{task.session_count}
+            </span>
+          ) : null}
+        </span>
       ) : task.session_count && task.session_count > 0 ? (
         <span className="text-[10px] text-sol-text-dim flex-shrink-0 font-mono cq-hide-compact" title={`${task.session_count} session${task.session_count > 1 ? "s" : ""}`}>
           <Link2 className="w-3 h-3 inline mr-0.5" />{task.session_count}
@@ -328,8 +348,11 @@ function ExecutionDetails({ data }: { data: any }) {
 function TaskPreviewPanel({ taskId, onClose, onOpen }: { taskId: string; onClose: () => void; onOpen: () => void }) {
   useSyncTaskDetail(taskId);
   const data = useInboxStore((s) => s.tasks[taskId]);
+  const rosterMembers = useInboxStore((s) => s.teamMembers);
+  const rosterCurrentUser = useInboxStore((s) => s.currentUser);
 
   if (!data) return null;
+  const assigneeInfo = resolveAssigneeInfo((data as any).assignee, (data as any).assignee_info, rosterMembers as any[], rosterCurrentUser);
 
   const status = STATUS_CONFIG[data.status as TaskStatus] || STATUS_CONFIG.open;
   const priority = PRIORITY_CONFIG[data.priority as TaskPriority] || PRIORITY_CONFIG.medium;
@@ -374,11 +397,11 @@ function TaskPreviewPanel({ taskId, onClose, onOpen }: { taskId: string; onClose
             })}
           </div>
         )}
-        {(data as any).assignee_info && (
+        {assigneeInfo && (
           <div className="flex items-center gap-2 mb-3 text-xs">
             <span className="text-sol-text-dim">Assignee</span>
-            <CreatorAvatar creator={(data as any).assignee_info} />
-            <span className="text-sol-text-muted">{(data as any).assignee_info.name}</span>
+            <CreatorAvatar creator={assigneeInfo} />
+            <span className="text-sol-text-muted">{assigneeInfo.name}</span>
           </div>
         )}
         {data.description && (
@@ -459,9 +482,21 @@ function KanbanCard({
       <div className="flex items-start justify-between gap-2 mb-2">
         <span className="text-[10px] font-mono text-sol-text-dim leading-none mt-0.5">{task.short_id}</span>
         <div className="flex items-center gap-1.5 flex-shrink-0">
-          {activeSession && (
+          {activeSession ? (
             <ActiveSessionBadge session={activeSession} compact />
-          )}
+          ) : task.origin_session ? (
+            <ActiveSessionBadge
+              session={{
+                _id: task.origin_session.conversation_id,
+                session_id: task.origin_session.session_id,
+                title: task.origin_session.title,
+                started_by: task.origin_session.started_by,
+                last_message_at: task.origin_session.last_message_at,
+              }}
+              dormant
+              compact
+            />
+          ) : null}
           {assignee ? (() => {
             const av = assignee.image ? (
               <img src={assignee.image} alt={assignee.name} className="w-4 h-4 rounded-full" title={assignee.name} />
@@ -672,6 +707,9 @@ function useTaskUrlState() {
   const sourceFilter = hasUrlParams
     ? (searchParams.get("source") || "")
     : (taskView?.source ?? "");
+  const session = hasUrlParams
+    ? (searchParams.get("session") || "")
+    : (taskView?.session ?? "");
 
   const setParam = useCallback((updates: Record<string, string>) => {
     const prefs: Record<string, any> = {};
@@ -699,16 +737,17 @@ function useTaskUrlState() {
     }
   }, [searchParams, router, taskView, updateClientUI, isDetailPage]);
 
-  return { status, view, sort, priority, label, assignee, statuses, sourceFilter, setParam };
+  return { status, view, sort, priority, label, assignee, statuses, sourceFilter, session, setParam };
 }
 
 export function TaskListContent() {
   const router = useRouter();
   const params = useParams();
-  const { status: urlStatus, view: viewMode, sort: sortBy, priority: priorityFilter, label: labelFilter, assignee: assigneeFilter, statuses: statusesFilter, sourceFilter, setParam } = useTaskUrlState();
+  const { status: urlStatus, view: viewMode, sort: sortBy, priority: priorityFilter, label: labelFilter, assignee: assigneeFilter, statuses: statusesFilter, sourceFilter, session: sessionFilter, setParam } = useTaskUrlState();
   const setTaskFilter = useInboxStore((s) => s.setTaskFilter);
   const tasks = useInboxStore((s) => s.tasks);
   const projects = useInboxStore((s) => s.projects);
+  const taskActiveSessions = useInboxStore((s) => s.taskActiveSessions);
   const showCreate = useInboxStore((s) => s.createModal === 'task');
   const openCreateModal = useInboxStore((s) => s.openCreateModal);
   const saveView = useInboxStore((s) => s.saveView);
@@ -797,16 +836,19 @@ export function TaskListContent() {
     return tasksList.filter(isTriage).length;
   }, [tasksList]);
 
-  const filteredTasks = useMemo(() => {
+  const baseFilteredTasks = useMemo(() => {
     let list = sourceFilteredTasks;
 
-    // Status filtering: tab bar (single) or dropdown (multi)
-    if (statusFilter) {
+    // Status filtering. Precedence: a single-status tab (open/done/…) wins; then
+    // the multi-status dropdown; then the per-tab fallback. The "All" tab imposes
+    // no status constraint of its own but still honours the dropdown, and unlike
+    // the default "Active" tab it does NOT hide terminal Done/Dropped.
+    if (statusFilter && statusFilter !== "all") {
       list = list.filter((t) => t.status === statusFilter);
     } else if (statusesFilter) {
       const set = new Set(statusesFilter.split(","));
       list = list.filter((t) => set.has(t.status));
-    } else if (viewMode !== "kanban" && sourceFilter !== "triage" && sourceFilter !== "dismissed") {
+    } else if (statusFilter !== "all" && viewMode !== "kanban" && sourceFilter !== "triage" && sourceFilter !== "dismissed") {
       // Default "Active" tab (no explicit status selected): exclude terminal
       // states so the list contents match the tab's label AND its badge count
       // (taskCounts.active, which already excludes done/dropped). Without this,
@@ -822,6 +864,36 @@ export function TaskListContent() {
     else if (assigneeFilter) list = list.filter((t) => t.assignee === assigneeFilter);
     return list;
   }, [sourceFilteredTasks, priorityFilter, labelFilter, assigneeFilter, statusFilter, statusesFilter, sourceFilter, viewMode]);
+
+  // Session-linkage filter, layered last. "Has session" must match exactly what
+  // the row shows a session pill for, so it mirrors the badge's union: a live
+  // agent (taskActiveSessions overlay), an originating/linked session
+  // (origin_session), or any linked conversation (session_count). session_count
+  // alone misses agent-run tasks — assignToAgent binds the conversation's
+  // active_task_id but historically didn't add it to conversation_ids, so those
+  // show a live pill while session_count stays 0. Kept as its own memo so the
+  // heartbeat-churned taskActiveSessions map only forces recompute when this
+  // filter is actually engaged (otherwise the base list passes through by
+  // reference and downstream groupings stay stable).
+  const taskHasSession = useCallback(
+    (t: TaskItem) => !!taskActiveSessions[t._id] || !!t.origin_session || (t.session_count ?? 0) > 0,
+    [taskActiveSessions]
+  );
+  const filteredTasks = useMemo(() => {
+    const base = (sessionFilter !== "has" && sessionFilter !== "none")
+      ? baseFilteredTasks
+      : baseFilteredTasks.filter(sessionFilter === "has" ? taskHasSession : (t) => !taskHasSession(t));
+    // Derive assignee_info from the live roster so an optimistic re-assignment
+    // (updateTask sets only the raw `assignee` id) shows the right person
+    // instantly. Keep the same task reference when nothing changed so the
+    // downstream sort/group memos stay referentially stable.
+    return base.map((t) => {
+      const info = resolveAssigneeInfo(t.assignee, t.assignee_info, teamMembers as any[], currentUser);
+      const cur = t.assignee_info as any;
+      const same = (!info && !cur) || (!!info && !!cur && info.name === cur.name && info.image === cur.image && info.github_username === cur.github_username);
+      return same ? t : ({ ...t, assignee_info: info } as TaskItem);
+    });
+  }, [baseFilteredTasks, sessionFilter, taskHasSession, teamMembers, currentUser]);
 
   const sortWithinGroup = useCallback((tasks: TaskItem[]) => {
     return [...tasks].sort((a, b) => {
@@ -950,7 +1022,7 @@ export function TaskListContent() {
       else if (sortBy === "updated") sorted.sort((a, b) => b.updated_at - a.updated_at);
       return sorted;
     }
-    if (statusFilter) return filteredTasks;
+    if (statusFilter && statusFilter !== "all") return filteredTasks;
     const grouped = filteredTasks.reduce((acc: Record<string, TaskItem[]>, t) => {
       const s = t.status as string;
       if (!acc[s]) acc[s] = [];
@@ -1009,7 +1081,7 @@ export function TaskListContent() {
         key: g.session.session_id || "__no_session",
         label: g.session.session_id
           ? (g.session.title || g.session.session_id.slice(0, 8))
-          : "No originating session",
+          : "No session",
         icon: <MessageSquare className={`w-3.5 h-3.5 ${g.session.session_id ? "text-sol-cyan" : "text-sol-text-dim"}`} />,
         extra: g.session.conversation_id ? (
           <Link href={`/sessions/${g.session.conversation_id}`} onClick={(e) => e.stopPropagation()} className="text-[10px] text-sol-cyan hover:underline flex-shrink-0">
@@ -1032,7 +1104,7 @@ export function TaskListContent() {
         items: g.tasks,
       }));
     }
-    if (statusFilter || sortBy !== "status") return null;
+    if ((statusFilter && statusFilter !== "all") || sortBy !== "status") return null;
     return STATUS_ORDER
       .filter((s) => kanbanGrouped[s]?.length)
       .map((s) => {
@@ -1043,9 +1115,10 @@ export function TaskListContent() {
   }, [sortBy, planGroups, assigneeGroups, sessionGroups, projectGroups, statusFilter, kanbanGrouped]);
 
   const taskCounts = useMemo(() => {
-    const counts: Record<string, number> = { active: 0 };
+    const counts: Record<string, number> = { active: 0, all: 0 };
     for (const t of sourceFilteredTasks) {
       counts[t.status] = (counts[t.status] || 0) + 1;
+      counts.all++;
       if (t.status !== "done" && t.status !== "dropped") counts.active++;
     }
     return counts;
@@ -1062,11 +1135,13 @@ export function TaskListContent() {
           paletteTargetType="task"
           title="Tasks"
           tabs={[
-            { key: "", label: "Active", count: taskCounts.active },
+            { key: "all", label: "All", count: taskCounts.all, icon: Layers },
+            { key: "", label: "Active", count: taskCounts.active, icon: Activity },
             ...((["backlog", "open", "in_progress", "done"] as const).map((s) => ({
               key: s,
               label: STATUS_CONFIG[s].label,
               count: taskCounts[s] || 0,
+              icon: STATUS_CONFIG[s].icon,
             }))),
           ]}
           activeTab={statusFilter}
@@ -1084,7 +1159,7 @@ export function TaskListContent() {
           ]}
           onSortChange={setSortBy}
           filters={{
-            hasActive: !!(statusesFilter || priorityFilter || labelFilter || assigneeFilter || sourceFilter),
+            hasActive: !!(statusesFilter || priorityFilter || labelFilter || assigneeFilter || sourceFilter || sessionFilter),
             defs: [
               {
                 key: "statuses", label: "Status", icon: <Circle className="w-3 h-3" />, value: statusesFilter, multi: true,
@@ -1119,8 +1194,17 @@ export function TaskListContent() {
                 ],
                 onChange: (v: string) => setParam({ assignee: v }),
               },
+              {
+                key: "session", label: "Session", icon: <MessageSquare className="w-3 h-3" />, value: sessionFilter,
+                options: [
+                  { key: "", label: "Any" },
+                  { key: "has", label: "Has session", icon: MessageSquare, color: "text-sol-cyan" },
+                  { key: "none", label: "No session", icon: Circle, color: "text-sol-text-dim" },
+                ],
+                onChange: (v: string) => setParam({ session: v }),
+              },
             ],
-            onClear: () => setParam({ statuses: "", priority: "", label: "", assignee: "", source: "" }),
+            onClear: () => setParam({ statuses: "", priority: "", label: "", assignee: "", source: "", session: "" }),
             onSaveView: handleSaveView,
           }}
           groups={listGroups}
@@ -1150,24 +1234,24 @@ export function TaskListContent() {
           syncScope="tasks"
           headerExtra={
             <>
-              <div className="flex items-center rounded-md border border-sol-border/40 overflow-hidden">
+              <div className="flex items-center h-7 rounded-md border border-sol-border/40 overflow-hidden">
                 <button
                   onClick={() => setParam({ source: "" })}
-                  className={`px-2 py-1.5 text-xs transition-colors ${!sourceFilter ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"}`}
+                  className={`h-full px-2.5 text-xs flex items-center transition-colors ${!sourceFilter ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"}`}
                   title="All tasks"
                 >
                   All
                 </button>
                 <button
                   onClick={() => setParam({ source: "human" })}
-                  className={`px-2 py-1.5 transition-colors border-l border-sol-border/40 ${sourceFilter === "human" ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"}`}
+                  className={`h-full px-2 flex items-center transition-colors border-l border-sol-border/40 ${sourceFilter === "human" ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"}`}
                   title="Created via web UI"
                 >
                   <User className="w-3.5 h-3.5" />
                 </button>
                 <button
                   onClick={() => setParam({ source: "agent" })}
-                  className={`px-2 py-1.5 transition-colors border-l border-sol-border/40 ${sourceFilter === "agent" ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"}`}
+                  className={`h-full px-2 flex items-center transition-colors border-l border-sol-border/40 ${sourceFilter === "agent" ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"}`}
                   title="Created via cast CLI in a session"
                 >
                   <Bot className="w-3.5 h-3.5" />
@@ -1176,30 +1260,33 @@ export function TaskListContent() {
               {suggestedCount > 0 && (
                 <button
                   onClick={() => setParam({ source: sourceFilter === "triage" ? "" : "triage" })}
-                  className={`flex items-center gap-1.5 px-2 py-1.5 text-xs rounded-md border transition-colors ${sourceFilter === "triage" ? "border-sol-yellow/40 bg-sol-yellow/10 text-sol-yellow" : "border-sol-border/40 text-sol-text-dim hover:text-sol-text"}`}
+                  className={`cq-header-collapse flex items-center gap-1.5 h-7 px-2 text-xs rounded-md border transition-colors ${sourceFilter === "triage" ? "border-sol-yellow/40 bg-sol-yellow/10 text-sol-yellow" : "border-sol-border/40 text-sol-text-dim hover:text-sol-text"}`}
                   title="Review suggested insights"
                 >
                   <Lightbulb className="w-3.5 h-3.5" />
                   <span>{suggestedCount}</span>
                 </button>
               )}
-              <div className="flex items-center rounded-md border border-sol-border/40 overflow-hidden">
+            </>
+          }
+          displayExtra={
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-sol-text-dim px-1 mb-1">View</div>
+              <div className="flex items-center h-7 rounded-md border border-sol-border/40 overflow-hidden">
                 <button
                   onClick={() => setViewMode("list")}
-                  className={`px-2 py-1.5 transition-colors ${viewMode === "list" ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"}`}
-                  title="List view"
+                  className={`flex-1 h-full flex items-center justify-center gap-1.5 text-xs transition-colors ${viewMode === "list" ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"}`}
                 >
-                  <List className="w-3.5 h-3.5" />
+                  <List className="w-3.5 h-3.5" /> List
                 </button>
                 <button
                   onClick={() => setViewMode("kanban")}
-                  className={`px-2 py-1.5 transition-colors border-l border-sol-border/40 ${viewMode === "kanban" ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"}`}
-                  title="Board view"
+                  className={`flex-1 h-full flex items-center justify-center gap-1.5 text-xs transition-colors border-l border-sol-border/40 ${viewMode === "kanban" ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"}`}
                 >
-                  <LayoutGrid className="w-3.5 h-3.5" />
+                  <LayoutGrid className="w-3.5 h-3.5" /> Board
                 </button>
               </div>
-            </>
+            </div>
           }
           customContent={viewMode === "kanban" ? ({ openPaletteForItems }) => (
             <KanbanView

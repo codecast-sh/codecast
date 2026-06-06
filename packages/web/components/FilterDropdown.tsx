@@ -49,15 +49,15 @@ export function FilterDropdown({
     <div ref={ref} className="relative">
       <button
         onClick={() => setOpen(!open)}
-        className={`flex items-center gap-1.5 text-xs px-2 py-1 rounded-md border transition-colors ${
+        className={`flex items-center gap-1 text-xs h-7 px-1.5 rounded-md border transition-colors ${
           hasValue
             ? "border-sol-cyan/30 text-sol-cyan bg-sol-cyan/5"
             : "border-sol-border/30 text-sol-text-dim hover:text-sol-text hover:border-sol-border/60"
         }`}
       >
         {icon}
-        <span>{buttonLabel}</span>
-        <ChevronDown className="w-3 h-3 opacity-60" />
+        <span className="whitespace-nowrap">{buttonLabel}</span>
+        <ChevronDown className="w-3 h-3 opacity-60 -ml-0.5 flex-shrink-0" />
       </button>
       {open && (
         <div className="absolute top-full left-0 mt-1 w-44 bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[60] py-1 max-h-64 overflow-y-auto">
