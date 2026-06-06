@@ -94,53 +94,6 @@ export function agentColor(agentType: string): string {
   }
 }
 
-// Session icon names mapped to Feather icon names
-const SESSION_ICONS = [
-  "rocket", "flame", "zap", "star", "diamond", "crown",
-  "shield", "sword", "anchor", "compass", "mountain", "tree",
-  "sun", "moon", "cloud", "bolt", "atom", "dna",
-  "hexagon", "triangle", "cube", "sphere", "infinity", "omega",
-] as const;
-
-const ICON_COLORS = ["cyan", "blue", "violet", "magenta", "green", "yellow", "orange"] as const;
-
-// Map web icon names to Feather equivalents
-const featherIconMap: Record<string, string> = {
-  rocket: "send", flame: "zap", zap: "zap", star: "star", diamond: "octagon",
-  crown: "award", shield: "shield", sword: "crosshair", anchor: "anchor",
-  compass: "compass", mountain: "triangle", tree: "git-branch",
-  sun: "sun", moon: "moon", cloud: "cloud", bolt: "zap",
-  atom: "aperture", dna: "activity", hexagon: "hexagon", triangle: "triangle",
-  cube: "box", sphere: "circle", infinity: "repeat", omega: "type",
-};
-
-const iconColorMap: Record<string, string> = {
-  cyan: Theme.cyan, blue: Theme.blue, violet: Theme.violet,
-  magenta: Theme.magenta, green: Theme.green, yellow: Theme.accent,
-  orange: Theme.orange,
-};
-
-function getSessionIconDefaults(id: string): { icon: string; color: string } {
-  let hash = 0;
-  for (let i = 0; i < id.length; i++) {
-    hash = ((hash << 5) - hash) + id.charCodeAt(i);
-    hash |= 0;
-  }
-  return {
-    icon: SESSION_ICONS[(hash >>> 0) % SESSION_ICONS.length],
-    color: ICON_COLORS[((hash >>> 8) & 0xFF) % ICON_COLORS.length],
-  };
-}
-
-export function SessionIcon({ icon, iconColor, id, size = 16 }: { icon?: string; iconColor?: string; id: string; size?: number }) {
-  const defaults = getSessionIconDefaults(id);
-  const effectiveIcon = icon || defaults.icon;
-  const effectiveColor = iconColor || defaults.color;
-  const featherName = featherIconMap[effectiveIcon] || "circle";
-  const color = iconColorMap[effectiveColor] || Theme.textMuted0;
-  return <Feather name={featherName as any} size={size} color={color} />;
-}
-
 export function statusColor(session: SessionData): string {
   if (session.session_error) return Theme.red;
   if (session.is_unresponsive) return Theme.orange;
@@ -204,7 +157,6 @@ export function SessionItem({ session, onPress, onPin, onLongPress }: { session:
       <RNView style={styles.conversationHeader}>
         <RNView style={styles.titleRow}>
           <RNView style={styles.iconWithStatus}>
-            <SessionIcon icon={session.icon} iconColor={session.icon_color} id={session._id} size={14} />
             <StatusDot session={session} />
           </RNView>
           {session.is_favorite && (
@@ -394,7 +346,6 @@ export const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     marginRight: Spacing.sm,
-    gap: 3,
   },
   statusDot: {
     width: 6,
@@ -445,7 +396,7 @@ export const styles = StyleSheet.create({
     fontSize: 13,
     color: Theme.blue,
     fontWeight: '600',
-    marginLeft: 31,
+    marginLeft: 14,
     marginBottom: 2,
     lineHeight: 18,
   },
@@ -456,14 +407,14 @@ export const styles = StyleSheet.create({
   summaryText: {
     fontSize: 12,
     color: Theme.textMuted,
-    marginLeft: 31,
+    marginLeft: 14,
     marginBottom: 2,
     lineHeight: 17,
   },
   conversationMeta: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginLeft: 31,
+    marginLeft: 14,
     marginTop: 2,
     gap: 6,
   },

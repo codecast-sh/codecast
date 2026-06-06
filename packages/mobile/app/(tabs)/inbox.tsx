@@ -76,8 +76,6 @@ function AgentLogo({ type, size = 20, bgColor }: { type: AgentType; size?: numbe
 function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: boolean; onClose: () => void; onSessionCreated: (conversationId: string) => void }) {
   const [agentType, setAgentType] = useState<AgentType>("claude");
   const [projectPath, setProjectPath] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  const startSession = useMutation(api.users.startSession);
   const recentProjects = useQuery(api.users.getRecentProjectPaths, { limit: 6 });
 
   useEffect(() => {
@@ -86,21 +84,30 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
     }
   }, [visible, recentProjects]);
 
-  const handleSubmit = async () => {
-    setSubmitting(true);
-    try {
-      const result = await startSession({
-        agent_type: agentType,
-        project_path: projectPath || undefined,
-      });
-      onClose();
-      setProjectPath("");
-      onSessionCreated(result.conversation_id);
-    } catch (err) {
-      Alert.alert("Error", err instanceof Error ? err.message : "Failed to start session");
-    } finally {
-      setSubmitting(false);
-    }
+  // Optimistic create — mirrors web ComposeView. Seeds a local stub session and
+  // navigates to it synchronously; the real server create rides the store outbox
+  // and rekeys stub → real id in the background. No await, no spinner: the modal
+  // dismisses and the session screen renders instantly. The session screen
+  // resolves the stub local-first (useConversationMessages gates on isConvexId).
+  const handleSubmit = () => {
+    const store = useInboxStore.getState();
+    const agent_type = agentType === "claude" ? "claude_code" : agentType;
+    const path = projectPath.trim() || undefined;
+    const { stubId } = store.beginOptimisticSession({
+      agentType: agent_type,
+      projectPath: path,
+      gitRoot: path,
+      create: (stubId) =>
+        store.createSession({
+          agent_type,
+          project_path: path,
+          git_root: path,
+          session_id: stubId,
+        }),
+    });
+    onClose();
+    setProjectPath("");
+    onSessionCreated(stubId);
   };
 
   const agents: { type: AgentType; label: string; color: string; bgColor: string }[] = [
@@ -170,12 +177,11 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
             <RNText style={modalStyles.cancelBtnText}>Cancel</RNText>
           </TouchableOpacity>
           <TouchableOpacity
-            style={[modalStyles.submitBtn, submitting && { opacity: 0.5 }]}
+            style={modalStyles.submitBtn}
             onPress={handleSubmit}
-            disabled={submitting}
             activeOpacity={0.7}
           >
-            <RNText style={modalStyles.submitBtnText}>{submitting ? "Starting..." : "Start Session"}</RNText>
+            <RNText style={modalStyles.submitBtnText}>Start Session</RNText>
           </TouchableOpacity>
         </RNView>
       </KeyboardAvoidingView>

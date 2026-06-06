@@ -10,7 +10,7 @@ try { ImagePicker = require('expo-image-picker'); } catch {}
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import Feather from '@expo/vector-icons/Feather';
 import Svg, { Path } from 'react-native-svg';
-import { useInboxStore } from '@codecast/web/store/inboxStore';
+import { useInboxStore, isConvexId } from '@codecast/web/store/inboxStore';
 import { useConversationMessages } from '@codecast/web/hooks/useConversationMessages';
 import { useEnsureDispatch } from '@codecast/web/hooks/useEnsureDispatch';
 import { PermissionCard } from '@/components/PermissionCard';
@@ -2765,7 +2765,10 @@ function MessageInput({ conversationId, isActive, draft }: { conversationId: Id<
   const [message, setMessage] = useState(draft || '');
   const [error, setError] = useState<string | null>(null);
   const [selectedImages, setSelectedImages] = useState<{ uri: string; storageId?: string; uploading: boolean }[]>([]);
-  const managedSession = useQuery(api.managedSessions.isSessionManaged, { conversation_id: conversationId });
+  const managedSession = useQuery(
+    api.managedSessions.isSessionManaged,
+    isConvexId(conversationId as string) ? { conversation_id: conversationId } : "skip"
+  );
 
   const patchConversation = useMutation(api.conversations.patchConversation);
   const generateUploadUrl = useMutation(api.images.generateUploadUrl);
@@ -3057,27 +3060,36 @@ export default function SessionDetailScreen() {
 
   const conversation = (storeConversation as ConversationData | null) ?? undefined;
 
+  // Gate every server query that takes a v.id("conversations") on isConvexId. A
+  // freshly created session navigates here under a local stub id (see
+  // beginOptimisticSession) BEFORE the real Convex id exists; firing these with
+  // the stub throws an ArgumentValidationError server-side and crashes the
+  // screen. The shared useConversationMessages hook already gates itself this
+  // way — these screen-local queries need the same guard. Once the create
+  // resolves and rekeys the URL to the real id, they activate automatically.
+  const isReal = typeof id === "string" && isConvexId(id);
+
   // git_diff blobs live off the conversation doc now; fetch them lazily (only
   // when the diff panel is open) via the dedicated side-table query.
   const gitDiffData = useQuery(
     api.conversations.getConversationGitDiff,
-    diffExpanded && id ? { conversation_id: id as Id<"conversations"> } : "skip"
+    diffExpanded && isReal ? { conversation_id: id as Id<"conversations"> } : "skip"
   );
 
   const pendingPermissions = useQuery(
     api.permissions.getPendingPermissions,
-    id ? { conversation_id: id as Id<"conversations"> } : "skip"
+    isReal ? { conversation_id: id as Id<"conversations"> } : "skip"
   );
 
   const bookmarkedMessageIds = useQuery(
     api.bookmarks.getConversationBookmarks,
-    id ? { conversation_id: id as Id<"conversations"> } : "skip"
+    isReal ? { conversation_id: id as Id<"conversations"> } : "skip"
   );
   const bookmarkedSet = useMemo(() => new Set(bookmarkedMessageIds?.map(id => id.toString()) || []), [bookmarkedMessageIds]);
 
   const commits = useQuery(
     api.commits.getCommitsForConversation,
-    id ? { conversation_id: id as Id<"conversations"> } : "skip"
+    isReal ? { conversation_id: id as Id<"conversations"> } : "skip"
   ) as Array<{
     _id: string; sha: string; message: string; timestamp: number;
     files_changed: number; insertions: number; deletions: number;
@@ -3085,7 +3097,7 @@ export default function SessionDetailScreen() {
 
   const pullRequests = useQuery(
     api.pull_requests.getPRsForConversation,
-    id ? { conversation_id: id as Id<"conversations"> } : "skip"
+    isReal ? { conversation_id: id as Id<"conversations"> } : "skip"
   ) as Array<{
     _id: string; number: number; title: string; state: string;
     repository: string; additions?: number; deletions?: number;
@@ -3094,7 +3106,7 @@ export default function SessionDetailScreen() {
 
   const treeResult = useQuery(
     api.conversations.getConversationTree,
-    id ? { conversation_id: id as string } : "skip"
+    isReal ? { conversation_id: id as string } : "skip"
   ) as { tree: TreeNode } | { error: string } | null | undefined;
 
   const hasMoreAbove = hookHasMoreAbove;
@@ -3139,6 +3151,23 @@ export default function SessionDetailScreen() {
 
   const forkFromMessage = useMutation(api.conversations.forkFromMessage);
   const router = useRouter();
+
+  // Self-heal a stub URL → real id. A freshly created session lands here under a
+  // local stub id (beginOptimisticSession) for instant render; once the server
+  // create resolves, the store rekeys the stub to the real Convex id and DELETES
+  // the stub key (rekeyId). getConvexId maps the stub → real via the session_id
+  // seed, flipping from null to the real id at that moment — swap the route so
+  // every v.id("conversations") query activates and the screen keeps live data
+  // instead of reading the now-deleted stub. replace() (not push) keeps back-nav
+  // landing on the inbox, not a dead stub route.
+  const resolvedRealId = useInboxStore((s) =>
+    isReal ? null : s.getConvexId(id as string) ?? null
+  );
+  useEffect(() => {
+    if (resolvedRealId && resolvedRealId !== id) {
+      router.replace(`/session/${resolvedRealId}`);
+    }
+  }, [resolvedRealId, id, router]);
 
   const forkPointMap = useMemo(() => {
     const map: Record<string, ForkChild[]> = {};
