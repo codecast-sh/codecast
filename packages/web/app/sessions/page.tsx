@@ -1,6 +1,7 @@
 import { useState, useMemo, useCallback, useEffect } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
+import { useInboxStore } from "../../store/inboxStore";
 import { AuthGuard } from "../../components/AuthGuard";
 import Link from "next/link";
 import type { FunctionReturnType } from "convex/server";
@@ -296,10 +297,13 @@ function SessionsView() {
   // conversation and is computed by listInboxSessions; we join it in by id
   // rather than recompute the (message-read-heavy) logic here.
   const inboxData = useQuery(api.conversations.listInboxSessions, { show_all: true });
-  const killSession = useMutation(api.conversations.killSession);
+  const convCommand = useInboxStore((s) => s.convCommand);
   const pruneSession = useMutation(api.managedSessions.unregisterManagedSession);
-  const dismissFromInbox = useMutation(api.conversations.dismissFromInbox);
-  const patchConversation = useMutation(api.conversations.patchConversation);
+  // Local-first: patchConversation mutates conversations[id] synchronously and
+  // rides applyPatches to Convex (inbox_pinned_at/inbox_dismissed_at aren't in
+  // the server's immutable set), so pin/dismiss reflect instantly here and in
+  // the inbox without a round-trip.
+  const patchConversation = useInboxStore((s) => s.patchConversation);
   const [busy, setBusy] = useState<Set<string>>(new Set());
   const [filter, setFilter] = useState<"all" | Bucket>("all");
   const [triageFilter, setTriageFilter] = useState<TriageFilter>("all");
@@ -406,16 +410,12 @@ function SessionsView() {
   }, []);
 
   const handleKill = useCallback(
-    async (s: ClassifiedSession) => {
+    (s: ClassifiedSession) => {
       if (!s.conversation_id) return;
       markBusy(s.session_id);
-      try {
-        await killSession({ conversation_id: s.conversation_id as any });
-      } catch (e) {
-        console.error("Failed to kill session:", e);
-      }
+      convCommand(s.conversation_id, "killSession");
     },
-    [killSession, markBusy]
+    [convCommand, markBusy]
   );
 
   // Prune removes the stale DB row for a dead session. It does not touch any
@@ -450,33 +450,21 @@ function SessionsView() {
   // Pin/unpin and dismiss/restore write straight to the conversation via the same
   // mutations the inbox uses, so state stays consistent across both surfaces.
   const handleTogglePin = useCallback(
-    async (s: ClassifiedSession) => {
+    (s: ClassifiedSession) => {
       if (!s.conversation_id) return;
       markBusy(s.session_id);
-      try {
-        await patchConversation({ id: s.conversation_id as any, fields: { inbox_pinned_at: s.pinned ? null : Date.now() } });
-      } catch (e) {
-        console.error("Failed to toggle pin:", e);
-      }
+      patchConversation(s.conversation_id, { inbox_pinned_at: s.pinned ? null : Date.now() });
     },
     [patchConversation, markBusy]
   );
 
   const handleToggleDismiss = useCallback(
-    async (s: ClassifiedSession) => {
+    (s: ClassifiedSession) => {
       if (!s.conversation_id) return;
       markBusy(s.session_id);
-      try {
-        if (s.dismissed) {
-          await patchConversation({ id: s.conversation_id as any, fields: { inbox_dismissed_at: null } });
-        } else {
-          await dismissFromInbox({ conversation_id: s.conversation_id as any });
-        }
-      } catch (e) {
-        console.error("Failed to toggle dismiss:", e);
-      }
+      patchConversation(s.conversation_id, { inbox_dismissed_at: s.dismissed ? null : Date.now() });
     },
-    [dismissFromInbox, patchConversation, markBusy]
+    [patchConversation, markBusy]
   );
 
   if (sessions === undefined) {
