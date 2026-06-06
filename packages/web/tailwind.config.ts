@@ -33,6 +33,8 @@ const config: Config = {
   				bg: 'var(--sol-bg)',
   				'bg-alt': 'var(--sol-bg-alt)',
   				'bg-highlight': 'var(--sol-bg-highlight)',
+  				card: 'var(--sol-card)',
+  				'card-hover': 'var(--sol-card-hover)',
   				border: 'var(--sol-border)',
   				text: 'var(--sol-text)',
   				'text-secondary': 'var(--sol-text-secondary)',

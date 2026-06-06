@@ -15,6 +15,38 @@
   .cq-hide-minimal { display: none !important; }
 }
 
+/* List header (GenericListView) progressive disclosure. The header is its own
+   container query container, so this fires off the header's width and works on
+   the full-width list page too — not just inside the squeezed detail panel. The
+   action cluster never wraps: the heavy grouping/view controls live in the
+   Display popover and the status tabs fold into a dropdown (see .cq-tabs-compact),
+   so as the panel narrows the toolbar only needs to shed its lowest-value bits —
+   text labels collapse to icons and the ⌘K launcher drops — to stay one row. */
+@container (max-width: 780px) {
+  .cq-header-collapse { display: none !important; }
+}
+
+/* Status tabs swap a multi-pill segmented control for a single compact dropdown
+   once the header is too tight to show every pill on one row alongside the
+   toolbar. Measured for the Tasks header (the widest consumer: ~52 title + ~452
+   pills + ~626 toolbar), the pills stop fitting one row just under ~1205px and
+   wrap to a second; below the threshold the dropdown instead keeps every status
+   one click away on a single tidy row, never wrapped or scrolled out of reach. */
+.cq-tabs-compact { display: none; }
+@container (max-width: 1210px) {
+  .cq-tabs-pills { display: none !important; }
+  .cq-tabs-compact { display: flex !important; }
+}
+/* Tightest widths: the status dropdown sheds its text label and count, leaving
+   just the active-status icon + caret so it reads as an icon-button alongside the
+   rest of the collapsed toolbar instead of a wide pill crowding the row. */
+@container (max-width: 620px) {
+  .cq-tab-label { display: none !important; }
+}
+
+.cq-no-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
+.cq-no-scrollbar::-webkit-scrollbar { display: none; }
+
 :root {
   --font-mono: "JetBrains Mono", monospace;
   --font-serif: "Fraunces", serif;
@@ -23,6 +55,10 @@
   --sol-bg: #FBF5E2;
   --sol-bg-alt: #eee8d5;
   --sol-bg-highlight: #e4ddc8;
+  /* Elevated card surface — pure white in light mode so pills lift off the
+     cream background; a touch-lighter teal in dark mode (see .dark below). */
+  --sol-card: #ffffff;
+  --sol-card-hover: #fffdf6;
   --sol-border: #93a1a1;
   --sol-text: #002b36;
   --sol-text-secondary: #073642;
@@ -58,6 +94,8 @@
   --sol-bg: #002b36;
   --sol-bg-alt: #073642;
   --sol-bg-highlight: #094959;
+  --sol-card: #08404e;
+  --sol-card-hover: #0a4c5d;
   --sol-border: #586e75;
   --sol-text: #fdf6e3;
   --sol-text-secondary: #eee8d5;
