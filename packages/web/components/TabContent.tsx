@@ -28,7 +28,8 @@ const ConversationDiff = lazy(() => import("@/app/conversation/[id]/diff/page"))
 const Inbox = lazy(() => import("@/app/inbox/page"));
 const Feed = lazy(() => import("@/app/feed/page"));
 const Dashboard = lazy(() => import("@/app/dashboard/page"));
-const Workflows = lazy(() => import("@/app/workflows/page"));
+const Workflows = lazy(() => import("@/app/workflows/dashboard"));
+const Routines = lazy(() => import("@/app/workflows/page"));
 const Sessions = lazy(() => import("@/app/sessions/page"));
 const Team = lazy(() => import("@/app/team/page"));
 const TeamActivity = lazy(() => import("@/app/team/activity/page"));
@@ -64,6 +65,7 @@ const ROUTES: RouteEntry[] = [
   { pattern: /^\/feed$/, paramNames: [], component: Feed },
   { pattern: /^\/dashboard$/, paramNames: [], component: Dashboard },
   { pattern: /^\/workflows$/, paramNames: [], component: Workflows },
+  { pattern: /^\/routines$/, paramNames: [], component: Routines },
   { pattern: /^\/sessions$/, paramNames: [], component: Sessions },
   { pattern: /^\/team$/, paramNames: [], component: Team },
   { pattern: /^\/search$/, paramNames: [], component: Search },

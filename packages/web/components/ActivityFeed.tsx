@@ -180,7 +180,7 @@ export function FeedCard({ conv, showActor, onNavigate, projectColor }: {
       className="group relative cursor-pointer rounded-lg border border-sol-border/25 bg-sol-card hover:bg-sol-card-hover hover:border-sol-border/50 shadow-sm hover:shadow transition-all overflow-hidden"
     >
       {isActive && <div className="absolute left-0 top-0 bottom-0 w-[2px] bg-sol-green/60" />}
-      <div className="px-3.5 py-2.5">
+      <div className="px-4 py-3">
         <div className="flex items-center gap-2 min-w-0">
           {showActor && <Avatar name={conv.author_name || "?"} image={conv.author_avatar} />}
           <span className="font-medium text-[13px] text-sol-text/90 truncate min-w-0 group-hover:text-sol-yellow transition-colors">
@@ -429,6 +429,15 @@ function FeedBody({ source, sourceConvs, hasMore, loadMore, isLoading, isLoading
   });
   const displayConvs = animate ? stableOrdered : visibleConvs;
 
+  // Render a growing window of the (possibly large) cached list, not all of it.
+  // Scrolling reveals more from cache INSTANTLY (renderLimit++), and only hits the
+  // server once the window reaches the end of what's cached — so scroll feels
+  // immediate even when the backend is slow, and the DOM stays light.
+  const [renderLimit, setRenderLimit] = useState(40);
+  useEffect(() => { setRenderLimit(40); }, [actorFilter, projectFilter]);
+  const windowed = useMemo(() => displayConvs.slice(0, renderLimit), [displayConvs, renderLimit]);
+  const canReveal = renderLimit < displayConvs.length;
+
   // People from the full window set (ignores actor filter) so the row stays
   // populated and a selection can always be cleared.
   const people = useMemo(() => {
@@ -448,7 +457,7 @@ function FeedBody({ source, sourceConvs, hasMore, loadMore, isLoading, isLoading
 
   const days = useMemo(() => {
     const map = new Map<string, Conversation[]>();
-    for (const c of displayConvs) {
+    for (const c of windowed) {
       const ts = c.updated_at || c.started_at || Date.now();
       const date = new Date(ts).toLocaleDateString("en-CA", { timeZone: tz });
       if (!map.has(date)) map.set(date, []);
@@ -457,7 +466,7 @@ function FeedBody({ source, sourceConvs, hasMore, loadMore, isLoading, isLoading
     return [...map.entries()]
       .sort((a, b) => b[0].localeCompare(a[0]))
       .map(([date, convs]) => ({ date, convs }));
-  }, [displayConvs, tz]);
+  }, [windowed, tz]);
 
   // --- Infinite scroll. DashboardLayout nests the feed inside a scroll container
   // that varies by route, so a viewport-rooted IntersectionObserver doesn't fire;
@@ -465,20 +474,22 @@ function FeedBody({ source, sourceConvs, hasMore, loadMore, isLoading, isLoading
   // listen on it. Scroll-driven (not fired on mount) so a short/filtered list
   // never rip-loads every page; the isLoadingMore guard keeps loads sequential. ---
   const sentinelRef = useRef<HTMLDivElement>(null);
-  const scrollState = useRef({ hasMore, isLoadingMore, loadMore });
-  scrollState.current = { hasMore, isLoadingMore, loadMore };
+  const scrollState = useRef({ canReveal, hasMore, isLoadingMore, loadMore });
+  scrollState.current = { canReveal, hasMore, isLoadingMore, loadMore };
   useEffect(() => {
     const el = sentinelRef.current;
-    if (!el || !hasMore) return;
-    // Trigger off the sentinel's viewport position, with a capture-phase scroll
-    // listener on the document so it fires no matter which nested container does
-    // the scrolling (the feed's scroll parent varies by route). Robust where a
-    // single-container observer is brittle.
+    if (!el) return;
+    // Capture-phase scroll listener on the document so it fires no matter which
+    // nested container scrolls (the feed's scroll parent varies by route), keyed
+    // off the sentinel's viewport position. When near the sentinel: reveal more
+    // cached rows first (instant), and only fetch older pages from the server once
+    // the cache is exhausted.
     const maybeLoad = () => {
       const s = scrollState.current;
-      if (!s.hasMore || s.isLoadingMore) return;
       const rect = el.getBoundingClientRect();
-      if (rect.top < window.innerHeight + 1200) s.loadMore();
+      if (rect.top >= window.innerHeight + 1200) return;
+      if (s.canReveal) { setRenderLimit((r) => r + 30); return; }
+      if (s.hasMore && !s.isLoadingMore) s.loadMore();
     };
     document.addEventListener("scroll", maybeLoad, { capture: true, passive: true });
     window.addEventListener("resize", maybeLoad, { passive: true });
@@ -487,7 +498,7 @@ function FeedBody({ source, sourceConvs, hasMore, loadMore, isLoading, isLoading
       document.removeEventListener("scroll", maybeLoad, { capture: true });
       window.removeEventListener("resize", maybeLoad);
     };
-  }, [hasMore, sourceConvs.length]);
+  }, [canReveal, hasMore, displayConvs.length]);
 
   if (isLoading && sourceConvs.length === 0) return <LoadingSkeleton />;
 
@@ -534,10 +545,10 @@ function FeedBody({ source, sourceConvs, hasMore, loadMore, isLoading, isLoading
               {actorFilter || projectFilter ? "No matches in the sessions loaded so far." : "No sessions yet."}
             </p>
           )}
-          {hasMore && (
+          {(canReveal || hasMore) && (
             <div
               ref={sentinelRef}
-              onClick={() => { if (!isLoadingMore) loadMore(); }}
+              onClick={() => { if (canReveal) setRenderLimit((r) => r + 30); else if (!isLoadingMore) loadMore(); }}
               className="flex justify-center py-4 cursor-pointer select-none"
               title="Loads automatically as you scroll — click to load now"
             >

@@ -73,6 +73,10 @@ export function parseSessionLine(line: string): ClaudeSessionEntry | null {
 
 export function extractMessages(entries: ClaudeSessionEntry[]): ParsedMessage[] {
   const messages: ParsedMessage[] = [];
+  // A slash command's expansion (the command's .md body) is flagged isMeta by Claude Code,
+  // so the generic meta-skip below drops it. Keep it when it directly follows the command
+  // invocation — the UI folds it into the command block as an expandable "Show command".
+  let prevWasCommandInvocation = false;
 
   for (const entry of entries) {
     const timestamp = entry.timestamp ? new Date(entry.timestamp).getTime() : Date.now();
@@ -92,7 +96,9 @@ export function extractMessages(entries: ClaudeSessionEntry[]): ParsedMessage[] 
 
     if (entry.type === "queue-operation") continue;
 
-    if (entry.isMeta || (entry.isVisibleInTranscriptOnly && !entry.isCompactSummary)) continue;
+    const isUserEntry = entry.type === "user" || entry.type === "human";
+    const isCommandExpansion = isUserEntry && entry.isMeta === true && prevWasCommandInvocation;
+    if (!isCommandExpansion && (entry.isMeta || (entry.isVisibleInTranscriptOnly && !entry.isCompactSummary))) continue;
 
     // Handle old format: type is "human" instead of "user"
     const normalizedType = entry.type === "human" ? "user" : entry.type;
@@ -177,6 +183,12 @@ export function extractMessages(entries: ClaudeSessionEntry[]): ParsedMessage[] 
         stopReason,
       });
     }
+
+    // Remember whether this was a slash-command invocation so the next entry (its isMeta
+    // .md expansion) is kept rather than skipped.
+    prevWasCommandInvocation =
+      normalizedType === "user" && entry.isMeta !== true &&
+      (textContent.trimStart().startsWith("<command-name>") || textContent.trimStart().startsWith("<command-message>"));
   }
 
   return messages;

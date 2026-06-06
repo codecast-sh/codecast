@@ -649,4 +649,58 @@ describe("parser - thinking content extraction", () => {
     expect(messages[0].toolCalls).toHaveLength(1);
     expect(messages[0].toolCalls?.[0].name).toBe("Read");
   });
+
+  test("keeps a slash command's isMeta expansion (the command's .md body)", () => {
+    const entries: ClaudeSessionEntry[] = [
+      {
+        type: "user",
+        uuid: "cmd-invocation",
+        timestamp: "2024-01-01T00:00:00Z",
+        message: {
+          role: "user",
+          content:
+            "<command-message>learn</command-message>\n<command-name>/learn</command-name>\n<command-args>just testing</command-args>",
+        },
+      },
+      {
+        type: "user",
+        uuid: "cmd-expansion",
+        isMeta: true,
+        timestamp: "2024-01-01T00:00:01Z",
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "# /learn\n\nPurpose: Deeply analyze a codebase." }],
+        },
+      },
+    ];
+
+    const messages = extractMessages(entries);
+
+    expect(messages).toHaveLength(2);
+    expect(messages[0].content).toContain("<command-name>/learn</command-name>");
+    expect(messages[1].content).toContain("Purpose: Deeply analyze a codebase.");
+  });
+
+  test("still skips an isMeta message that does not follow a command invocation", () => {
+    const entries: ClaudeSessionEntry[] = [
+      {
+        type: "assistant",
+        uuid: "a1",
+        timestamp: "2024-01-01T00:00:00Z",
+        message: { role: "assistant", content: [{ type: "text", text: "hi" }] },
+      },
+      {
+        type: "user",
+        uuid: "stray-meta",
+        isMeta: true,
+        timestamp: "2024-01-01T00:00:01Z",
+        message: { role: "user", content: [{ type: "text", text: "internal meta noise" }] },
+      },
+    ];
+
+    const messages = extractMessages(entries);
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0].content).toBe("hi");
+  });
 });

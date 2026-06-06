@@ -72,6 +72,7 @@ import { EntityIdPill, EntityAwareCode, EntityAwareLink, renderWithMentions } fr
 import { SUMMARY_LABELS, FormattedSummary } from "./FormattedSummary";
 import { entityRemarkPlugins } from "../lib/remarkEntityIds";
 import { parseInboundSessionMessage, isSessionMessage } from "./sessionMessage";
+import { parseCastCommandString, stripCdPrefix, unwrapShellCommand, type ParsedCastCommand } from "./castCommand";
 import { ConversationTree } from "./ConversationTree";
 import { useInboxStore, isConvexId, computeNewDividerIndex, type ForkChild, type InboxSession, type OptimisticImage } from "../store/inboxStore";
 import { useCurrentUser } from "../hooks/useCurrentUser";
@@ -1182,7 +1183,7 @@ function truncateStr(s: string, max: number): string {
 }
 
 function summarizeBashCommand(cmd: string): string {
-  let c = cmd.replace(/^cd\s+\S+\s*[;&]+\s*/, '');
+  let c = stripCdPrefix(cmd);
   c = c.replace(/\/Users\/\w+\//g, '~/');
   c = c.replace(/\/home\/\w+\//g, '~/');
   const rgMatch = c.match(/^(rg|grep|ripgrep)\s+([\s\S]*)$/);
@@ -1206,22 +1207,12 @@ function summarizeBashCommand(cmd: string): string {
   return c.length > 80 ? c.slice(0, 80) + '...' : c;
 }
 
-function unwrapShellCommand(cmd: string): string {
-  const m = cmd.match(/^(?:\/bin\/)?(?:ba)?sh\s+-\S+\s+'([^']*)'\s*$/) ||
-            cmd.match(/^(?:\/bin\/)?(?:ba)?sh\s+-\S+\s+"([^"]*)"\s*$/) ||
-            cmd.match(/^(?:\/bin\/)?(?:ba)?sh\s+-\S+\s+(\S+)\s*$/);
-  return m ? m[1] : cmd;
-}
-
-function parseCastCommand(tool: ToolCall): { category: string; subcommand: string; args: string; fullCmd: string } | null {
+function parseCastCommand(tool: ToolCall): ParsedCastCommand | null {
   const isBash = tool.name === "Bash" || tool.name === "shell_command" || tool.name === "shell" || tool.name === "exec_command" || tool.name === "container.exec" || tool.name === "commandExecution";
   if (!isBash) return null;
   try {
     const input = JSON.parse(tool.input);
-    const cmd = unwrapShellCommand(String(input.command || input.cmd || "").trim());
-    const match = cmd.match(/^cast\s+(\w[\w-]*)(?:\s+(\w[\w-]*))?(?:\s+([\s\S]*))?$/);
-    if (!match) return null;
-    return { category: match[1], subcommand: match[2] || "", args: (match[3] || "").trim(), fullCmd: cmd };
+    return parseCastCommandString(String(input.command || input.cmd || ""));
   } catch { return null; }
 }
 
@@ -1301,6 +1292,12 @@ const STICKY_NOISE_PREFIXES = ["[Request interrupted", "<task-notification>", "Y
 // chars can leak in, so we strip reminders + control chars and flatten all whitespace —
 // the multi-line stored pending content and the single-line echoed copy normalize equal.
 export function normalizePendingContent(s: string): string {
+  // Slash commands: the pending row holds what the user typed ("/cmd args") but the JSONL
+  // echo holds the expanded tag form ("<command-name>/cmd</command-name><command-args>args
+  // </command-args>"). Canonicalize both to "/cmd args" so they match and the pending bubble
+  // drops once the echo lands (otherwise the command renders twice).
+  const cmd = parseCommandInvocation(s || "");
+  if (cmd.cmdName) return `/${cmd.cmdName}${cmd.args ? " " + cmd.args.replace(/\s+/g, " ").trim() : ""}`;
   return (s || "")
     .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "")
     .replace(/[\u0000-\u001f]+/g, " ")
@@ -8806,9 +8803,17 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         if (m.role === 'user' && m.content) seenContent.add(normalizePendingContent(m.content));
       }
     }
-    const toAdd: any[] = pendingMsgs.filter((m: any) =>
-      !seen.has(m._id) && (!m._clientId || !seen.has(m._clientId))
-    );
+    const toAdd: any[] = pendingMsgs.filter((m: any) => {
+      if (seen.has(m._id) || (m._clientId && seen.has(m._clientId))) return false;
+      // Slash commands: the daemon can't always carry a client_id across the pending
+      // "/cmd args" → synced tag-form echo, so also drop a pending command whose canonical
+      // content already rendered as a synced message (prevents the command showing twice).
+      if (m.role === 'user' && m.content) {
+        const norm = normalizePendingContent(m.content);
+        if (norm.startsWith('/') && seenContent.has(norm)) return false;
+      }
+      return true;
+    });
     for (const m of toAdd) if (m.content) seenContent.add(normalizePendingContent(m.content));
     // Server-side pending row: a queued message (e.g. a CLI `cast send`) that no browser
     // optimistically rendered. Surface it as a pending bubble for every viewer — but only if
