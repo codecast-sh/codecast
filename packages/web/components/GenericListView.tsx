@@ -6,27 +6,166 @@ import { useWatchEffect } from "../hooks/useWatchEffect";
 import { FilterDropdown } from "./FilterDropdown";
 import { useInboxStore } from "../store/inboxStore";
 import { toast } from "sonner";
-import { KeyCap } from "./KeyboardShortcutsHelp";
 import { SyncProgressBadge } from "./SyncProgressBadge";
 import {
   Plus,
   SlidersHorizontal,
+  ListFilter,
   X,
   Command,
   Check,
   Search,
   Bookmark,
+  ChevronDown,
 } from "lucide-react";
 
 export interface ListTab {
   key: string;
   label: string;
   count?: number;
+  /** Optional leading icon (lucide component). When present, the compact
+   *  dropdown can shed its text label and collapse to icon-only at tight widths. */
+  icon?: any;
+}
+
+/** Compact stand-in for the status pill row, shown when the header is too narrow
+ *  to fit every pill (see .cq-tabs-compact). Surfaces the active tab + count and
+ *  drops the full list into a popover so no status is ever scrolled out of reach. */
+function TabDropdown({
+  tabs,
+  activeTab,
+  onChange,
+}: {
+  tabs: ListTab[];
+  activeTab: string;
+  onChange: (key: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const active = tabs.find((t) => t.key === activeTab) ?? tabs[0];
+
+  useWatchEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  const ActiveIcon = active?.icon;
+  // The label/count only collapse when there's an icon to stand in for them, so
+  // icon-less consumers (e.g. Docs) keep their text at every width.
+  const labelCollapse = ActiveIcon ? "cq-tab-label" : "";
+
+  return (
+    <div ref={ref} className="relative flex-shrink-0">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="flex items-center gap-1.5 h-7 px-2 rounded-md bg-sol-bg-alt border border-sol-border/40 text-xs text-sol-text hover:border-sol-border transition-colors"
+        title={active?.label}
+      >
+        {ActiveIcon && <ActiveIcon className="w-3.5 h-3.5 flex-shrink-0 text-sol-text-muted" />}
+        <span className={`font-medium whitespace-nowrap ${labelCollapse}`}>{active?.label}</span>
+        {active?.count != null && active.count > 0 && (
+          <span className={`text-[10px] tabular-nums text-sol-text-dim ${labelCollapse}`}>{active.count}</span>
+        )}
+        <ChevronDown className="w-3 h-3 opacity-60 flex-shrink-0" />
+      </button>
+      {open && (
+        <div className="absolute top-full left-0 mt-1 w-48 bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[60] py-1">
+          {tabs.map((t) => {
+            const TIcon = t.icon;
+            return (
+              <button
+                key={t.key}
+                onClick={() => { onChange(t.key); setOpen(false); }}
+                className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs transition-colors ${
+                  t.key === activeTab ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted hover:bg-sol-bg-alt"
+                }`}
+              >
+                {TIcon && <TIcon className="w-3.5 h-3.5 flex-shrink-0 text-sol-text-dim" />}
+                <span className="flex-1 text-left whitespace-nowrap">{t.label}</span>
+                {t.count != null && t.count > 0 && (
+                  <span className="text-[10px] tabular-nums text-sol-text-dim">{t.count}</span>
+                )}
+                {t.key === activeTab && <Check className="w-3 h-3 text-sol-cyan flex-shrink-0" />}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export interface ListSortOption {
   value: string;
   label: string;
+}
+
+/** Linear-style "Display" popover. Folds the grouping control — and any
+ *  page-specific display options (e.g. a List/Board switch passed as `extra`) —
+ *  behind one button, so the header toolbar stays a single compact row instead
+ *  of spilling a wide <select> across it. Same popover pattern as TabDropdown. */
+function DisplayMenu({
+  sortBy,
+  sortOptions,
+  onSortChange,
+  extra,
+}: {
+  sortBy: string;
+  sortOptions: ListSortOption[];
+  onSortChange: (v: string) => void;
+  extra?: ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useWatchEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  return (
+    <div ref={ref} className="relative flex-shrink-0">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="flex items-center gap-1.5 h-7 px-2.5 rounded-md border border-sol-border/40 text-xs text-sol-text-dim hover:text-sol-text hover:border-sol-border transition-colors"
+        title="Display options"
+      >
+        <SlidersHorizontal className="w-3 h-3 flex-shrink-0" />
+        <span className="cq-header-collapse">Display</span>
+        <ChevronDown className="w-3 h-3 opacity-60 flex-shrink-0" />
+      </button>
+      {open && (
+        <div className="absolute top-full right-0 mt-1 w-56 bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[60] p-2 space-y-3">
+          {extra && <div className="flex flex-col gap-2">{extra}</div>}
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-sol-text-dim px-1 mb-1">Grouping</div>
+            <div className="space-y-0.5">
+              {sortOptions.map((o) => (
+                <button
+                  key={o.value}
+                  onClick={() => { onSortChange(o.value); setOpen(false); }}
+                  className={`w-full flex items-center gap-2 px-2 py-1.5 rounded text-xs transition-colors ${
+                    o.value === sortBy ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted hover:bg-sol-bg-alt"
+                  }`}
+                >
+                  <span className="flex-1 text-left whitespace-nowrap">{o.label}</span>
+                  {o.value === sortBy && <Check className="w-3 h-3 text-sol-cyan flex-shrink-0" />}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 export interface ListFilterDef {
@@ -105,9 +244,11 @@ export interface GenericListViewProps<T> {
    *  reconcile crawl for this scope ("tasks" | "docs") is still streaming in. */
   syncScope?: string;
   headerExtra?: ReactNode;
+  /** Page-specific controls rendered inside the Display popover (e.g. a List/Board
+   *  view switch). Kept out of the always-visible toolbar to stay Linear-compact. */
+  displayExtra?: ReactNode;
   listFooter?: ReactNode;
   customContent?: (helpers: { openPaletteForItems: (items: T[], mode?: string) => void }) => ReactNode;
-  extraShortcuts?: { key: string; label: string }[];
   extraKeyHandler?: (e: KeyboardEvent, stop: () => void) => boolean;
   disableKeyboard?: boolean;
   activeItemId?: string;
@@ -142,9 +283,9 @@ export function GenericListView<T>({
   getSearchText,
   syncScope,
   headerExtra,
+  displayExtra,
   listFooter,
   customContent,
-  extraShortcuts,
   extraKeyHandler,
   disableKeyboard,
   activeItemId,
@@ -487,18 +628,25 @@ export function GenericListView<T>({
 
   return (
     <div className="h-full flex flex-col">
-      {/* Header */}
-      <div className="flex items-center justify-between px-6 py-4 border-b border-sol-border/30 min-h-0">
-        <div className="flex items-center gap-4 min-w-0 overflow-hidden">
-          <h1 className="text-lg font-semibold text-sol-text tracking-tight flex-shrink-0 cq-hide-compact">{title}</h1>
+      {/* Header. The outer wrapper is the container-query context; the inner
+          .cq-header row is what adapts (wraps the toolbar below the tabs) as the
+          panel narrows — a container can't query its own width, only a child's. */}
+      <div className="cq-container border-b border-sol-border/30">
+        <div className="cq-header flex items-center justify-between gap-x-3 gap-y-2 px-6 py-3">
+        <div className="flex items-center gap-3 min-w-0 flex-1">
+          <h1 className="text-lg font-semibold text-sol-text tracking-tight flex-shrink-0 cq-header-collapse">{title}</h1>
           {syncScope && <SyncProgressBadge scope={syncScope} />}
-          <div className="flex gap-1 flex-nowrap overflow-hidden">
+          {/* Wide header: segmented pill row. Once too tight for one row (≤1210px,
+              see .cq-tabs-compact in globals.css): a single compact dropdown. */}
+          <div className="cq-tabs-pills flex items-center gap-0.5 p-0.5 rounded-lg bg-sol-bg-alt/40 border border-sol-border/30 flex-wrap">
             {tabs.map((tab) => (
               <button
                 key={tab.key}
                 onClick={() => { onTabChange(tab.key); setFocusIndex(0); }}
-                className={`text-xs px-2.5 py-1 rounded-md transition-colors flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 ${
-                  activeTab === tab.key ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"
+                className={`text-xs px-2.5 h-6 rounded-md transition-colors flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 ${
+                  activeTab === tab.key
+                    ? "bg-sol-bg-highlight text-sol-text shadow-sm"
+                    : "text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt/60"
                 }`}
               >
                 {tab.label}
@@ -506,8 +654,15 @@ export function GenericListView<T>({
               </button>
             ))}
           </div>
+          <div className="cq-tabs-compact">
+            <TabDropdown
+              tabs={tabs}
+              activeTab={activeTab}
+              onChange={(key) => { onTabChange(key); setFocusIndex(0); }}
+            />
+          </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="cq-header-toolbar flex items-center gap-1.5">
           {headerExtra}
           {selectedIds.size > 0 && (
             <span className="text-xs text-sol-cyan">{selectedIds.size} selected</span>
@@ -521,7 +676,7 @@ export function GenericListView<T>({
               }}
               placeholder="Search..."
               autoFocus
-              className="text-xs w-40 px-2.5 py-1.5 rounded-md bg-sol-bg-alt border border-sol-cyan/40 text-sol-text placeholder:text-sol-text-dim focus:outline-none"
+              className="text-xs w-40 h-7 px-2.5 rounded-md bg-sol-bg-alt border border-sol-cyan/40 text-sol-text placeholder:text-sol-text-dim focus:outline-none"
             />
           )}
           {getSearchText && (
@@ -543,47 +698,45 @@ export function GenericListView<T>({
           {filters && (
             <button
               onClick={() => setShowFilters((f) => !f)}
-              className={`flex items-center gap-1.5 text-xs px-2 py-1.5 rounded-md border transition-colors ${
+              className={`flex items-center gap-1.5 text-xs h-7 px-2.5 rounded-md border transition-colors ${
                 showFilters || filters.hasActive
                   ? "border-sol-cyan/40 text-sol-cyan bg-sol-cyan/5"
                   : "border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-border"
               }`}
               title="Toggle filters"
             >
-              <SlidersHorizontal className="w-3 h-3" />
-              Filter
-              {filters.hasActive && <span className="w-1.5 h-1.5 rounded-full bg-sol-cyan" />}
+              <ListFilter className="w-3 h-3 flex-shrink-0" />
+              <span className="cq-header-collapse">Filter</span>
+              {filters.hasActive && <span className="w-1.5 h-1.5 rounded-full bg-sol-cyan flex-shrink-0" />}
             </button>
           )}
-          <select
-            value={sortBy}
-            onChange={(e) => { onSortChange(e.target.value); setFocusIndex(0); }}
-            className="text-xs px-2 py-1 rounded-md bg-sol-bg-alt border border-sol-border/40 text-sol-text-dim focus:outline-none focus:border-sol-cyan cursor-pointer"
-          >
-            {sortOptions.map((o) => (
-              <option key={o.value} value={o.value}>{o.label}</option>
-            ))}
-          </select>
+          <DisplayMenu
+            sortBy={sortBy}
+            sortOptions={sortOptions}
+            onSortChange={(v) => { onSortChange(v); setFocusIndex(0); }}
+            extra={displayExtra}
+          />
           <button
             onClick={() => openPalette("root")}
-            className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-border transition-colors"
+            className="cq-header-collapse flex items-center gap-1.5 text-xs h-7 px-2.5 rounded-md border border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-border transition-colors"
             title="Command palette (Cmd+K)"
           >
             <Command className="w-3 h-3" />K
           </button>
           <button
             onClick={onCreate}
-            className="flex items-center justify-center w-7 h-7 rounded-full border border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-border transition-colors"
+            className="flex items-center justify-center w-7 h-7 rounded-full border border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-border transition-colors flex-shrink-0"
             title="Create new"
           >
             <Plus className="w-4 h-4" />
           </button>
         </div>
+        </div>
       </div>
 
       {/* Filter bar */}
       {filters && showFilters && (
-        <div className="flex items-center gap-3 px-6 py-2.5 border-b border-sol-border/20 bg-sol-bg-alt/20">
+        <div className="flex items-center flex-wrap gap-x-1.5 gap-y-1.5 px-6 py-2 border-b border-sol-border/20 bg-sol-bg-alt/20">
           {filters.defs.map((f) => (
             <FilterDropdown
               key={f.key}
@@ -704,25 +857,6 @@ export function GenericListView<T>({
           )}
         </div>
       )}
-
-      {/* Shortcut footer */}
-      <div className="flex items-center gap-3 px-6 py-2 border-t border-sol-border/20 text-[10px] text-sol-text-dim overflow-hidden">
-        <span className="flex items-center gap-1 shrink-0"><span className="flex items-center gap-[2px]"><KeyCap size="xs">J</KeyCap><KeyCap size="xs">K</KeyCap></span> navigate</span>
-        <span className="flex items-center gap-1 shrink-0"><KeyCap size="xs">{"\u23CE"}</KeyCap> open</span>
-        <span className="flex items-center gap-1 shrink-0"><KeyCap size="xs">C</KeyCap> create</span>
-        <span className="flex items-center gap-1 shrink-0"><KeyCap size="xs">X</KeyCap> select</span>
-        {(paletteShortcuts || []).map(({ key, label }) => (
-          <span key={key} className="flex items-center gap-1 shrink-0"><KeyCap size="xs">{key}</KeyCap> {label}</span>
-        ))}
-        {renderPreview && (
-          <span className="flex items-center gap-1 shrink-0"><KeyCap size="xs">{"\u2423"}</KeyCap> peek</span>
-        )}
-        <span className="flex items-center gap-1 shrink-0"><span className="flex items-center gap-[2px]"><KeyCap size="xs">{"\u2318"}</KeyCap><KeyCap size="xs">K</KeyCap></span> cmd</span>
-        <span className="flex items-center gap-1 shrink-0"><KeyCap size="xs">?</KeyCap> help</span>
-        {(extraShortcuts || []).map(({ key, label }) => (
-          <span key={key} className="flex items-center gap-1 shrink-0"><KeyCap size="xs">{key}</KeyCap> {label}</span>
-        ))}
-      </div>
 
       {children}
     </div>

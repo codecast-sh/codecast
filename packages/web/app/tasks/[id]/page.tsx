@@ -5,7 +5,7 @@ import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { useParams, useRouter } from "next/navigation";
 import { useMutation, useQuery } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
-import { useInboxStore, TaskDetail, TaskItem } from "../../../store/inboxStore";
+import { useInboxStore, TaskDetail, TaskItem, resolveAssigneeInfo } from "../../../store/inboxStore";
 import { useSyncTasks, useSyncTaskDetail } from "../../../hooks/useSyncTasks";
 import { DetailSplitLayout } from "../../../components/DetailSplitLayout";
 import { TaskListContent } from "../page";
@@ -407,12 +407,13 @@ function TaskDetailContent() {
   const handleMentionQuery = useMentionQuery();
   const handleImageUpload = useImageUpload();
   const updateTask = useInboxStore((s) => s.updateTask);
-  const webAddComment = useMutation(api.tasks.webAddComment);
+  const addTaskComment = useInboxStore((s) => s.addTaskComment);
   const currentUser = useQuery(api.users.getCurrentUser);
   const teamMembers = useQuery(api.teams.getTeamMembers, taskTeamId ? { team_id: taskTeamId as any } : "skip");
   const teamInfo = useQuery(api.teams.getTeam, taskTeamId ? { team_id: taskTeamId as any } : "skip");
+  // Derived so an optimistic re-assignment shows instantly (see resolveAssigneeInfo).
+  const assigneeInfo = resolveAssigneeInfo((data as any)?.assignee, (data as any)?.assignee_info, teamMembers as any[], currentUser);
   const [comment, setComment] = useState("");
-  const [submittingComment, setSubmittingComment] = useState(false);
   const [commentImages, setCommentImages] = useState<Array<{ file: File; previewUrl: string; storageId?: string; uploading: boolean }>>([]);
   const [isDragging, setIsDragging] = useState(false);
   const dragCounterRef = useRef(0);
@@ -471,24 +472,19 @@ function TaskDetailContent() {
   const handleAddComment = useCallback(async () => {
     const hasText = comment.trim().length > 0;
     const hasImages = commentImages.some(i => i.storageId);
-    if ((!hasText && !hasImages) || !data?.short_id || submittingComment) return;
+    if ((!hasText && !hasImages) || !data?.short_id) return;
     const anyUploading = commentImages.some(i => i.uploading);
     if (anyUploading) { toast.error("Wait for images to finish uploading"); return; }
     const text = comment.trim() || "(image)";
     const imageIds = commentImages.filter(i => i.storageId).map(i => i.storageId!);
     setComment("");
     setCommentImages([]);
-    setSubmittingComment(true);
-    try {
-      await webAddComment({ short_id: data.short_id, text, comment_type: "note", image_storage_ids: imageIds.length > 0 ? imageIds : undefined });
-      setCommentOpen(false);
-    } catch {
-      setComment(text);
-      toast.error("Failed to add comment");
-    } finally {
-      setSubmittingComment(false);
-    }
-  }, [comment, commentImages, data?.short_id, submittingComment, webAddComment]);
+    // Local-first: the optimistic comment renders instantly and the dispatch
+    // (which delegates to tasks.webAddComment for notifications + images)
+    // retries on its own, so no submit spinner or error rollback is needed.
+    addTaskComment(data.short_id, text, "note", imageIds.length > 0 ? imageIds : undefined);
+    setCommentOpen(false);
+  }, [comment, commentImages, data?.short_id, addTaskComment]);
 
   const getTaskContextBody = useCallback(() => {
     if (!data) return "";
@@ -684,10 +680,10 @@ function TaskDetailContent() {
                 onClick={() => openCmd("assign")}
                 className="flex items-center gap-1.5 px-2 py-1 rounded-md text-xs hover:bg-sol-bg-alt transition-colors text-left"
               >
-                {(data as any).assignee_info ? (
+                {assigneeInfo ? (
                   <>
-                    <Avatar name={(data as any).assignee_info.name} image={(data as any).assignee_info.image} />
-                    <span className="text-sol-text-muted">{(data as any).assignee_info.name}</span>
+                    <Avatar name={assigneeInfo.name} image={assigneeInfo.image} />
+                    <span className="text-sol-text-muted">{assigneeInfo.name}</span>
                   </>
                 ) : (
                   <span className="text-sol-text-dim">Unassigned</span>
@@ -981,8 +977,8 @@ function TaskDetailContent() {
                   <div className="shrink-0">
                     <button
                       onClick={handleAddComment}
-                      disabled={(!comment.trim() && !commentImages.some(i => i.storageId)) || submittingComment}
-                      className={`w-7 h-7 rounded-full transition-colors flex items-center justify-center border ${(!comment.trim() && !commentImages.some(i => i.storageId)) || submittingComment ? "border-sol-border/30 text-sol-text-dim/25 cursor-not-allowed" : "border-sol-blue/50 bg-sol-blue/20 text-sol-blue hover:bg-sol-blue/30 hover:border-sol-blue"}`}
+                      disabled={!comment.trim() && !commentImages.some(i => i.storageId)}
+                      className={`w-7 h-7 rounded-full transition-colors flex items-center justify-center border ${(!comment.trim() && !commentImages.some(i => i.storageId)) ? "border-sol-border/30 text-sol-text-dim/25 cursor-not-allowed" : "border-sol-blue/50 bg-sol-blue/20 text-sol-blue hover:bg-sol-blue/30 hover:border-sol-blue"}`}
                     >
                       <ArrowUp className="w-3.5 h-3.5" />
                     </button>
