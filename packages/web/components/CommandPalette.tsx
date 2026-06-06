@@ -194,7 +194,7 @@ function ActionSubmenu({
   const [agentMessage, setAgentMessage] = useState(DEFAULT_AGENT_RUN_MESSAGE);
   const messageRef = useRef<HTMLTextAreaElement>(null);
 
-  const webUpdatePlan = useMutation(api.plans.webUpdate);
+  const updatePlan = useInboxStore((s) => s.updatePlan);
   const assignToAgent = useMutation(api.tasks.assignToAgent);
   const updateTask = useInboxStore((s) => s.updateTask);
   const updateDoc = useInboxStore((s) => s.updateDoc);
@@ -330,7 +330,7 @@ function ActionSubmenu({
     } else if (targetType === "plan") {
       if (mode === "plan_status") {
         const shortId = target.short_id || target._id;
-        webUpdatePlan({ short_id: shortId, status: item.key }).catch(() => {});
+        updatePlan(shortId, { status: item.key });
         toast.success(`Plan \u2192 ${item.label}`);
       }
     } else {
@@ -347,7 +347,7 @@ function ActionSubmenu({
       }
     }
     onClose();
-  }, [items, target, targets, targetType, mode, currentLabels, onClose, updateTask, webUpdatePlan, assignToAgent, updateDoc, teamMembers, router]);
+  }, [items, target, targets, targetType, mode, currentLabels, onClose, updateTask, updatePlan, assignToAgent, updateDoc, teamMembers, router]);
 
   // Launch a session per selected task with the chosen agent + initial message.
   const launchAgentRun = useCallback(() => {
@@ -579,6 +579,10 @@ function ActionSubmenu({
 }
 
 // ─── Unified Command Palette ────────────────────────────────────
+// Stable empty map handed to the sessions selector while the palette is closed, so a
+// closed palette stops subscribing to live session churn (see storeSessions below).
+const EMPTY_SESSIONS: Record<string, any> = {};
+
 export function CommandPalette({ standalone = false }: { standalone?: boolean }) {
   const [query, setQuery] = useState("");
   const [actionMode, setActionMode] = useState<ActionMode | null>(null);
@@ -597,12 +601,14 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
 
   const open = standalone || paletteOpen;
 
-  const killSessionMutation = useMutation(api.conversations.killSession);
-
   const favorites = useInboxStore((s) => s.favorites);
   const bookmarks = useInboxStore((s) => s.bookmarks);
   const recentConversations = useQuery(api.conversations.listRecentSessions, open ? {} : "skip") ?? [];
-  const storeSessions = useInboxStore((s) => s.sessions);
+  // Gate on `open`: while the palette is closed the selector returns a stable empty
+  // reference, so live session updates (every heartbeat / message / switch) no longer
+  // re-render this always-mounted component or re-run its command-list memos below.
+  // Measured: this was ~411ms — ~94% — of a session switch's render cost while CLOSED.
+  const storeSessions = useInboxStore((s) => open ? s.sessions : EMPTY_SESSIONS);
 
   // Merge locally-loaded inbox sessions (own, instant) with the server list
   // (own + team-visible) so the palette mirrors the inbox and stays responsive.
@@ -865,7 +871,7 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
       } else if (actionKey === "session_kill") {
         const convexId = useInboxStore.getState().getConvexId(session._id);
         if (convexId) {
-          killSessionMutation({ conversation_id: convexId as Id<"conversations">, mark_completed: true }).catch(() => {});
+          useInboxStore.getState().convCommand(convexId, "killSession", { mark_completed: true });
         }
         undoableStashSession(session._id, { verb: "Killed" });
         closePalette();
@@ -888,7 +894,7 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
       }
       return;
     }
-  }, [targets, targetType, closePalette, updateTask, pinDoc, router, killSessionMutation, navigate]);
+  }, [targets, targetType, closePalette, updateTask, pinDoc, router, navigate]);
 
   const hasTargets = targets.length > 0 && targetType;
   const target = targets[0] as any;
