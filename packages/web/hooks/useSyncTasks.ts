@@ -4,7 +4,7 @@ import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../store/inboxStore";
 import { useConvexSync } from "./useConvexSync";
 import { useWatchEffect } from "./useWatchEffect";
-import { runReconcileCrawl } from "./reconcileCrawl";
+import { runReconcileCrawl, syncMetaKey } from "./reconcileCrawl";
 import { useWorkspaceArgs, type WorkspaceArgs } from "./useWorkspaceArgs";
 
 const api = _api as any;
@@ -22,9 +22,15 @@ const CURSOR_REFRESH_MS = 30_000;
 // We request a large page; the WS transport may return fewer rows per response
 // (byte budget) and just hands back a continueCursor — pagination is driven by
 // the server's `isDone`, so the crawl always reaches the true end regardless.
-const RECONCILE_PAGE_SIZE = 500;
-const RECONCILE_PAGE_DELAY_MS = 50; // pace the crawl so it never bursts the backend
-const RECONCILE_THROTTLE_MS = 5 * 60 * 1000;
+const RECONCILE_PAGE_SIZE = 1000;
+const RECONCILE_PAGE_DELAY_MS = 5; // minimal pacing — cold backfill should be fast, not polite
+// Safety-net interval, NOT the freshness path. The live delta channel below keeps
+// the store current within ~30s; this crawl only re-verifies completeness. The
+// FIRST crawl per workspace is a full backfill (cold cache); every crawl after is
+// incremental (`since` the persisted watermark), so it pages a handful of changed
+// rows, not the whole table. Durable throttle (syncMeta.backfilledAt) means it
+// won't re-run on every launch — the old 5-min full sweep was the "syncing 4,529".
+const RECONCILE_THROTTLE_MS = 30 * 60 * 1000;
 
 /**
  * Core task sync — pulls tasks for the workspace into the store.
@@ -42,10 +48,21 @@ const RECONCILE_THROTTLE_MS = 5 * 60 * 1000;
 export function useSyncTasksWithArgs(wsArgs: WorkspaceArgs) {
   const syncTable = useInboxStore((s) => s.syncTable);
   const convex = useConvex();
+  // Gate the watermark reads on hydration so the cursor/backfill we resume from is
+  // the restored one, not an empty map mid-hydration (which would re-snapshot +
+  // re-crawl unnecessarily). syncMeta is on the critical hydration path.
+  const hydrated = useInboxStore((s) => s.clientStateInitialized);
 
-  // Reset the cursor whenever workspace args change — switching teams or
-  // toggling workspace=all needs a fresh full snapshot.
   const wsKey = wsArgs === "skip" ? "skip" : JSON.stringify(wsArgs);
+  const metaKey = syncMetaKey("tasks", wsKey); // shared key — live channel + crawl must match
+  // The live channel is the COMPLETENESS FLOOR, not a delta resume. Cold start
+  // and workspace switch ALWAYS do a full webList snapshot (300 most-recent + every
+  // assignee-rescued task). We deliberately do NOT seed `since` from the persisted
+  // watermark: a delta-on-cold-start silently misses any task the cache happens to
+  // lack ("3 of my 5 tasks" regression). The cursor only advances WITHIN a session
+  // (below) to trim the reactive payload; it resets to undefined on every load and
+  // on workspace switch, so the floor is re-established every time. The persisted
+  // watermark drives only the background reconcile crawl's incremental top-up.
   const [cursor, setCursor] = useState<number | undefined>(undefined);
   const lastSeenCursor = useRef<number | undefined>(undefined);
   const lastWsKey = useRef<string>(wsKey);
@@ -74,11 +91,11 @@ export function useSyncTasksWithArgs(wsArgs: WorkspaceArgs) {
     return { items, isDelta: !!tasksResult.isDelta, cursor: tasksResult.cursor };
   }, [tasksResult]);
 
-  // Live channel = pure DELTA OVERLAY (never prune), even on the first
-  // snapshot. The full reconcile crawl below owns completeness and is the sole
-  // authoritative snapshot; if this channel pruned (isDelta:false), its
-  // most-recent 300-row window would clobber the reconcile's full set. Mirrors
-  // the docs hook (live first page overlays, reconcile snapshots).
+  // Live channel = DELTA OVERLAY (never prune), even on the first page. EVERY
+  // write to `tasks` is delta — enforced by isDelta:true in SYNC_REGISTRY — so
+  // neither this most-recent 300-row live window nor the reconcile crawl below
+  // can wipe the cache; they only ADD/UPDATE. Deletions arrive as deltas
+  // (status="dropped") and are hidden by read-time filters. Mirrors docs/sessions.
   useConvexSync(taskData, useCallback((data: any) => {
     syncTable("tasks", data.items, { isDelta: true });
     if (typeof data.cursor === "number") lastSeenCursor.current = data.cursor;
@@ -98,9 +115,10 @@ export function useSyncTasksWithArgs(wsArgs: WorkspaceArgs) {
     return () => useInboxStore.getState().setLiveLoading("tasks", false);
   }, [tasksResult]);
 
-  // Periodically promote the latest seen cursor. Each promotion triggers a
-  // resubscription with the new `since`, which discards already-shipped rows
-  // and keeps the reactive payload trimmed.
+  // Periodically promote the latest seen cursor WITHIN this session only. Each
+  // promotion trims the reactive payload (discards already-shipped rows), but it
+  // is NOT persisted — it resets to undefined on the next load so the live channel
+  // re-establishes the full snapshot floor. The crawl owns the durable watermark.
   useEffect(() => {
     const id = setInterval(() => {
       const next = lastSeenCursor.current;
@@ -109,21 +127,27 @@ export function useSyncTasksWithArgs(wsArgs: WorkspaceArgs) {
     return () => clearInterval(id);
   }, [cursor]);
 
-  // FULL RECONCILE: crawl every page of webListPaginated once per workspace
-  // (throttled + paced), overlaying each page as it lands so tasks visibly
-  // stream in, then snapshot the full set to prune stale / cross-workspace /
-  // dropped rows. Shared with the docs crawl via runReconcileCrawl — see
-  // reconcileCrawl.ts. A nonce re-crawls every throttle window so long-lived
-  // sessions still pick up tasks created/dropped elsewhere.
-  // (Verified against live data: this WS path crawls all ~5.2k Union tasks to the
-  // true end — `isDone` is computed server-side, so the transport can't truncate
-  // pagination. Auth + deployment URL are handled by the client.)
+  // RECONCILE: page through webListPaginated to backfill everything beyond the
+  // live channel's most-recent window. The FIRST crawl per workspace is a full
+  // backfill (cold cache, no watermark); every crawl after passes `since` = the
+  // persisted watermark, so it pages only CHANGED rows — a handful, not all 4,529.
+  // Every page is an additive delta overlay (isDelta in SYNC_REGISTRY) — never
+  // prunes — so a short/truncated crawl can't gut the cache. Deletions arrive as
+  // status="dropped" deltas hidden by read-time filters. The durable throttle
+  // (syncMeta.backfilledAt, set on completion) means a fresh launch within the
+  // window skips the crawl entirely and serves from the hydrated IDB cache.
+  // Shared with the docs crawl via runReconcileCrawl — see reconcileCrawl.ts.
   const [reconcileNonce, setReconcileNonce] = useState(0);
   useEffect(() => {
     const id = setInterval(() => setReconcileNonce((n) => n + 1), RECONCILE_THROTTLE_MS);
     return () => clearInterval(id);
   }, []);
   useEffect(() => {
+    if (!hydrated) return; // resume from the restored watermark, not an empty one
+    // Incremental top-up only AFTER a full backfill exists for this workspace.
+    // Before that, `since` stays undefined so the first pass loads everything.
+    const meta = useInboxStore.getState().syncMeta[metaKey];
+    const crawlSince = meta?.backfilledAt ? meta.cursor : undefined;
     runReconcileCrawl({
       namespace: "tasks",
       wsKey,
@@ -134,16 +158,15 @@ export function useSyncTasksWithArgs(wsArgs: WorkspaceArgs) {
         const page = await convex.query(api.tasks.webListPaginated, {
           ...(wsArgs as object),
           include_derived: true,
+          ...(crawlSince !== undefined ? { since: crawlSince } : {}),
           paginationOpts: { numItems: RECONCILE_PAGE_SIZE, cursor },
         });
         return { rows: page.page ?? [], isDone: page.isDone, continueCursor: page.continueCursor };
       },
-      // Live channel = pure delta overlay; the crawl owns completeness, so each
-      // page overlays (never prunes) and only the final snapshot prunes.
       onPage: (rows) => syncTable("tasks", rows, { isDelta: true }),
-      onComplete: (all) => useInboxStore.getState().syncTable("tasks", all, {}),
+      onComplete: (all) => useInboxStore.getState().syncTable("tasks", all, { isDelta: true }),
     });
-  }, [convex, wsKey, reconcileNonce]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [convex, wsKey, reconcileNonce, hydrated]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return { hasMore: false, loadMore: () => {}, ready: tasksResult !== undefined };
 }

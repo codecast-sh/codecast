@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
+import { useInboxStore } from "../store/inboxStore";
 import {
   Dialog,
   DialogContent,
@@ -40,7 +41,7 @@ export function ShareDialog({
   const [tags, setTags] = useState("");
 
   const generateShareLink = useMutation(api.conversations.generateShareLink);
-  const publishToDirectory = useMutation(api.conversations.publishToDirectory);
+  const publishToDirectory = useInboxStore((s) => s.publishToDirectory);
 
   const shareUrl = shareToken
     ? `${shareOrigin()}/share/${shareToken}`

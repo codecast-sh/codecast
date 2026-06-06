@@ -1066,18 +1066,46 @@ async function enrichTasks(ctx: any, result: any[]): Promise<any[]> {
   // a multi-MB response every few seconds. Live-session overlay lives in
   // `webActiveSessions` (small, cheap to invalidate); the web client merges it.
 
+  // The session to attribute a task to: the one that created it
+  // (created_from_conversation) or, for tasks that were *started on* a session
+  // via `cast task start` (no created_from, but a linked conversation), its
+  // first linked conversation. Drives both the row's session badge and the
+  // "group by session" view. conversation_ids[0] === created_from for
+  // created-from tasks, so this only adds coverage, never changes it.
+  const sessionConvIdOf = (t: any): string | undefined =>
+    t.created_from_conversation?.toString()
+    ?? (t.conversation_ids && t.conversation_ids.length ? t.conversation_ids[0].toString() : undefined);
+
   const sourceConvIds = new Set<string>();
   for (const t of result) {
-    if (t.created_from_conversation) {
-      sourceConvIds.add(t.created_from_conversation.toString());
-    }
+    const cid = sessionConvIdOf(t);
+    if (cid) sourceConvIds.add(cid);
   }
-  const sourceConvMap = new Map<string, { agent_type?: string; session_id?: string; title?: string }>();
+  const sourceConvMap = new Map<string, { agent_type?: string; session_id?: string; title?: string; user_id?: string; updated_at?: number; message_count?: number }>();
   for (const cid of sourceConvIds) {
     try {
       const c = await ctx.db.get(cid as Id<"conversations">);
-      if (c) sourceConvMap.set(cid, { agent_type: c.agent_type, session_id: c.session_id, title: c.title || undefined });
+      if (c) sourceConvMap.set(cid, {
+        agent_type: c.agent_type,
+        session_id: c.session_id,
+        title: c.title || undefined,
+        user_id: c.user_id?.toString(),
+        updated_at: c.updated_at,
+        message_count: c.message_count,
+      });
     } catch {}
+  }
+  // Resolve display names for originating-session owners — often a teammate who
+  // started the work, not the task's own creator — so the task list can show
+  // "who started it" on the session badge. Reuses userMap; only fetches owners
+  // not already resolved from the task creator/assignee pass above.
+  for (const sc of sourceConvMap.values()) {
+    if (sc.user_id && !userMap.has(sc.user_id)) {
+      try {
+        const u = await ctx.db.get(sc.user_id as Id<"users">);
+        if (u) userMap.set(sc.user_id, { name: u.name || u.email || "Unknown", image: u.image || u.github_avatar_url, github_username: u.github_username });
+      } catch {}
+    }
   }
 
   for (const t of result) {
@@ -1087,14 +1115,18 @@ async function enrichTasks(ctx: any, result: any[]): Promise<any[]> {
     t.source_agent_type = t.created_from_conversation
       ? sourceConvMap.get(t.created_from_conversation.toString())?.agent_type || null
       : null;
-    if (t.created_from_conversation) {
-      const sc = sourceConvMap.get(t.created_from_conversation.toString());
-      t.origin_session = sc?.session_id
-        ? { conversation_id: t.created_from_conversation.toString(), session_id: sc.session_id, title: sc.title }
-        : null;
-    } else {
-      t.origin_session = null;
-    }
+    const sessId = sessionConvIdOf(t);
+    const sc = sessId ? sourceConvMap.get(sessId) : undefined;
+    t.origin_session = sc?.session_id
+      ? {
+          conversation_id: sessId!,
+          session_id: sc.session_id,
+          title: sc.title,
+          started_by: sc.user_id ? userMap.get(sc.user_id)?.name : undefined,
+          last_message_at: sc.updated_at,
+          message_count: sc.message_count,
+        }
+      : null;
     t.session_count = (t.conversation_ids || []).length;
   }
   return result;
@@ -1300,29 +1332,46 @@ export const webListPaginated = query({
     project_path: v.optional(v.string()),
     include_derived: v.optional(v.boolean()),
     paginationOpts: paginationOptsValidator,
+    // Incremental top-up: when set, only page rows with updated_at > since. The
+    // client passes its persisted watermark so a periodic reconcile re-crawls a
+    // handful of changed rows instead of the whole table (the "syncing 4,529"
+    // every few minutes). Omitted on the FIRST crawl for a workspace (cold cache)
+    // so that initial pass is a full backfill. Mirrors webList's `since` delta.
+    since: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return { page: [], isDone: true, continueCursor: "" };
 
     // Defensive clamp. Task docs are small (~2 KB avg, ~8 KB max observed), so
-    // 500/page is well under the 64 MB query memory cap — but cap it so a future
-    // task with a huge body can't blow the isolate mid-crawl.
+    // 1000/page is ~16 MB worst case — still well under the 64 MB query memory cap
+    // — but cap it so a future task with a huge body can't blow the isolate
+    // mid-crawl. Bigger pages = fewer round trips = a faster cold-cache backfill.
     const paginationOpts = {
       ...args.paginationOpts,
-      numItems: Math.min(args.paginationOpts.numItems, 500),
+      numItems: Math.min(args.paginationOpts.numItems, 1000),
     };
+
+    const since = args.since;
+    const isDelta = since !== undefined;
 
     // Primary stream: newest-updated first, scoped to the workspace. Team view
     // reads by_team_updated so EVERY team task (any assignee, any age) is
-    // reachable across pages — the whole point of the fix.
+    // reachable across pages — the whole point of the fix. In delta mode the
+    // index range is bounded to updated_at > since (only changed rows), so a
+    // top-up crawl is cheap regardless of how big the table is.
+    const range = (q: any) => (isDelta ? q.gt("updated_at", since!) : q);
     const base = (args.workspace === "team" && args.team_id)
-      ? ctx.db.query("tasks").withIndex("by_team_updated", (q: any) => q.eq("team_id", args.team_id)).order("desc")
-      : ctx.db.query("tasks").withIndex("by_user_updated", (q: any) => q.eq("user_id", userId)).order("desc");
+      ? ctx.db.query("tasks").withIndex("by_team_updated", (q: any) => range(q.eq("team_id", args.team_id))).order("desc")
+      : ctx.db.query("tasks").withIndex("by_user_updated", (q: any) => range(q.eq("user_id", userId))).order("desc");
 
     const result = await base.paginate(paginationOpts);
 
-    let rows = result.page.filter((t: any) => t.status !== "dropped");
+    // Full backfill skips the dropped graveyard (never load thousands of dead
+    // rows). A delta pass KEEPS dropped rows: a task dropped on another device
+    // must flow through as a status="dropped" overlay so this client's read-time
+    // filter hides it — otherwise it would linger in the cache forever.
+    let rows = isDelta ? result.page : result.page.filter((t: any) => t.status !== "dropped");
     if (args.project_path) rows = scopeByProject(rows, args.project_path);
     await enrichTasks(ctx, rows);
 
@@ -1334,7 +1383,7 @@ export const webListPaginated = query({
 // payload, but invalidates on every daemon heartbeat — keep it separate from
 // webList so the 13MB task payload doesn't re-ship on every heartbeat.
 //
-// Returns: { [taskId]: { _id, session_id, title?, agent_status?, agent_type? } }
+// Returns: { [taskId]: { _id, session_id, title?, agent_status?, agent_type?, started_by?, last_message_at? } }
 export const webActiveSessions = query({
   args: {},
   handler: async (ctx) => {
@@ -1348,7 +1397,22 @@ export const webActiveSessions = query({
       .withIndex("by_user_id", (q) => q.eq("user_id", userId))
       .collect();
 
-    const map: Record<string, { _id: string; session_id: string; title?: string; agent_status?: string; agent_type?: string }> = {};
+    // started_by = the session owner's display name, last_message_at =
+    // conv.updated_at (bumped on every message). Together the badge reads
+    // "who · when" ("ashot · now"), consistent with the dormant origin badge.
+    // Owner names are cached since this overlay is scoped to the viewer's own
+    // daemons — typically one or two distinct users.
+    const nameCache = new Map<string, string | undefined>();
+    const ownerName = async (uid: any): Promise<string | undefined> => {
+      const key = uid.toString();
+      if (nameCache.has(key)) return nameCache.get(key);
+      let name: string | undefined;
+      try { const u = await ctx.db.get(uid as Id<"users">); name = u ? (u.name || u.email || undefined) : undefined; } catch {}
+      nameCache.set(key, name);
+      return name;
+    };
+
+    const map: Record<string, { _id: string; session_id: string; title?: string; agent_status?: string; agent_type?: string; started_by?: string; last_message_at?: number }> = {};
     for (const s of managedSessions) {
       if (now - s.last_heartbeat >= HEARTBEAT_ALIVE_MS) continue;
       if (!s.conversation_id) continue;
@@ -1360,6 +1424,8 @@ export const webActiveSessions = query({
         title: conv.title || undefined,
         agent_status: s.agent_status || undefined,
         agent_type: conv.agent_type || undefined,
+        started_by: await ownerName(conv.user_id),
+        last_message_at: conv.updated_at,
       };
     }
     return map;
@@ -1702,8 +1768,21 @@ export const assignToAgent = mutation({
     } as any);
     await ctx.db.patch(conversationId, { short_id: conversationId.toString().slice(0, 7) } as any);
 
-    // Update task assignee
-    await ctx.db.patch(task._id, { assignee: "agent", updated_at: now } as any);
+    // Link the new session to the task so it counts as a linked conversation —
+    // drives session_count, origin_session, and the "Has session" filter.
+    // Mirrors dispatch.createSession, which links the conversation before
+    // binding active_task_id. Without this an agent-run task shows a live
+    // session pill (from active_task_id) while session_count stays 0, so it
+    // wrongly drops out of the "Has session" filter.
+    const existingConvIds = task.conversation_ids || [];
+    if (!existingConvIds.some((id: any) => id.toString() === conversationId.toString())) {
+      await ctx.db.patch(task._id, { conversation_ids: [...existingConvIds, conversationId] } as any);
+    }
+
+    // NB: intentionally do NOT reassign the task to "agent" — the launcher stays
+    // the owner. The active run is already conveyed by the task status and the
+    // session linked via active_task_id, so clobbering assignee only lost the
+    // human owner and dropped the task out of the launcher's "assigned to me" view.
 
     // Build minimal task prompt
     const lines = [`You have been assigned the following task:\n\n**${task.title}**`];

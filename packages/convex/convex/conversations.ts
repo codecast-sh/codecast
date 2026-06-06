@@ -11,7 +11,7 @@ import { internal } from "./_generated/api";
 import { resetConversationPendingMessages } from "./pendingMessages";
 import { advanceForkCopy, type ForkCopyCtx } from "./forkCopy";
 import { hasRecentPendingDaemonCommand } from "./daemonCommandUtils";
-import { shouldShowInInbox, isSessionIdle } from "./inboxFilters";
+import { shouldShowInInbox, isSessionIdle, deriveSessionActivity, classifyWorkState, normalizeWorkStateFilter, type WorkState } from "./inboxFilters";
 import { filterUserMessages } from "./userMessagesFilter";
 import {
   isTeamMember,
@@ -836,6 +836,13 @@ export const webGet = query({
       model: conv.model,
       agent_type: conv.agent_type,
       updated_at: conv.updated_at,
+      // Summary/context fields (already on the doc — no extra reads). The pill
+      // card coalesces these into a one-line summary + last-message preview so
+      // an expanded session reference shows what it's about, not just metadata.
+      idle_summary: conv.idle_summary,
+      subtitle: conv.subtitle,
+      last_message_preview: conv.last_message_preview,
+      last_message_role: conv.last_message_role,
     };
   },
 });
@@ -4380,11 +4387,18 @@ export const forkFromMessage = mutation({
     let cutoffTimestamp: number;
     let isPartial = false;
     if (args.message_uuid) {
+      // Scope the lookup to THIS conversation. Forks copy messages verbatim,
+      // preserving message_uuid (forkCopy.ts), so a given uuid exists in the
+      // original AND every fork of it — the global by_message_uuid index is
+      // non-unique and .first() can return another fork's copy, spuriously
+      // failing the conversation match. by_conversation_uuid resolves the
+      // message within `original` directly.
       const forkPointMsg = await ctx.db
         .query("messages")
-        .withIndex("by_message_uuid", (q) => q.eq("message_uuid", args.message_uuid!))
+        .withIndex("by_conversation_uuid", (q) =>
+          q.eq("conversation_id", original._id).eq("message_uuid", args.message_uuid!))
         .first();
-      if (!forkPointMsg || forkPointMsg.conversation_id !== original._id) {
+      if (!forkPointMsg) {
         throw new Error("Fork point message not found");
       }
       cutoffTimestamp = forkPointMsg.timestamp;
@@ -4895,6 +4909,7 @@ export const feedForCLI = query({
     member_name: v.optional(v.string()),
     mine_only: v.optional(v.boolean()),
     live_only: v.optional(v.boolean()),
+    state: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
@@ -5115,21 +5130,89 @@ export const feedForCLI = query({
     const MANAGED_STALE_MS = 60 * 1000;
     const now = Date.now();
     const liveStatusMap = new Map<string, string | undefined>();
+    const managedMap = new Map<string, any>();
     for (const conv of filteredConversations) {
       const managed = await ctx.db
         .query("managed_sessions")
         .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conv._id))
         .first();
+      if (managed) managedMap.set(conv._id.toString(), managed);
       if (managed && (now - managed.last_heartbeat) < MANAGED_STALE_MS) {
         liveStatusMap.set(conv._id.toString(), managed.agent_status);
       }
     }
 
+    // Derive a session's work_state by reusing the exact inbox classifier so the
+    // CLI never re-implements the rule. The managed row is already cached above;
+    // the only extra DB cost is the awaiting_input read, gated to a live, non-idle
+    // session (the sole case that can be parked on an open AskUserQuestion). We
+    // run this lazily — see below — so the daemon's stable-context feed (no state
+    // filter, limit ~10) never pays it for the whole candidate set.
+    const workStateMap = new Map<string, WorkState>();
+    const classifyConv = async (conv: typeof filteredConversations[number]): Promise<WorkState> => {
+      const cached = workStateMap.get(conv._id.toString());
+      if (cached) return cached;
+      const managed = managedMap.get(conv._id.toString());
+      const isLive = liveStatusMap.has(conv._id.toString());
+      const agentStatus = managed?.agent_status;
+      const daemonAlive = agentStatus === "stopped" ? false : isLive;
+      const hasPending = !!(conv as any).has_pending_messages;
+      const activity = deriveSessionActivity({
+        agentStatus,
+        agentStatusUpdatedAt: managed?.agent_status_updated_at,
+        lastMessageRole: (conv as any).last_message_role,
+        lastMessagePreview: (conv as any).last_message_preview,
+        hasPending,
+        status: conv.status,
+        updatedAt: conv.updated_at,
+        daemonAlive,
+        now,
+      });
+      let awaitingInput = false;
+      if (!activity.isIdle && (conv.message_count || 0) > 0 && isLive) {
+        const lastMsg = await ctx.db
+          .query("messages")
+          .withIndex("by_conversation_timestamp", (q: any) => q.eq("conversation_id", conv._id))
+          .order("desc")
+          .first();
+        if (lastMsg?.role === "assistant" && lastMsg.tool_calls?.some((tc: any) => tc.name === "AskUserQuestion")) {
+          awaitingInput = true;
+        }
+      }
+      const ws = classifyWorkState({
+        agentStatus,
+        isIdle: activity.isIdle,
+        awaitingInput,
+        hasPending,
+        isUnresponsive: activity.isUnresponsive,
+        isPinned: !!conv.inbox_pinned_at,
+        messageCount: conv.message_count || 0,
+      });
+      workStateMap.set(conv._id.toString(), ws);
+      return ws;
+    };
+
     if (args.live_only) {
       filteredConversations = filteredConversations.filter(c => liveStatusMap.has(c._id.toString()));
     }
 
+    const stateFilter = normalizeWorkStateFilter(args.state);
+    if (stateFilter === "pinned") {
+      filteredConversations = filteredConversations.filter(c => !!c.inbox_pinned_at);
+    } else if (stateFilter === "live") {
+      filteredConversations = filteredConversations.filter(c => liveStatusMap.has(c._id.toString()));
+    } else if (stateFilter) {
+      // A work_state filter needs every candidate classified before paginating.
+      for (const c of filteredConversations) await classifyConv(c);
+      filteredConversations = filteredConversations.filter(c => workStateMap.get(c._id.toString()) === stateFilter);
+    }
+
     const allConversations = filteredConversations.slice(offset, offset + Math.min(limit, 100));
+
+    // Classify only the rows we actually return (cached if a state filter above
+    // already classified the full set). Keeps the no-filter feed — including the
+    // daemon's stable-context build — bounded to ~limit awaiting_input reads.
+    for (const conv of allConversations) await classifyConv(conv);
 
     const results: Array<{
       id: string;
@@ -5142,6 +5225,8 @@ export const feedForCLI = query({
       agent_type?: string;
       is_live?: boolean;
       agent_status?: string;
+      work_state?: WorkState;
+      is_pinned?: boolean;
       user?: { name: string | null; email: string | null };
       preview: Array<{
         line: number;
@@ -5229,6 +5314,8 @@ export const feedForCLI = query({
         message_count: conv.message_count || 0,
         agent_type: conv.agent_type,
         ...(convIsLive ? { is_live: true, agent_status: liveStatusMap.get(conv._id.toString()) || undefined } : {}),
+        work_state: workStateMap.get(conv._id.toString()) || "idle",
+        is_pinned: !!conv.inbox_pinned_at,
         user: !isOwnConv && owner ? { name: owner.name || null, email: owner.email || null } : undefined,
         preview: preview.slice(0, 4),
       });
@@ -5854,9 +5941,464 @@ export const getConversationsBySessionIds = query({
   },
 });
 
+// ---- Shared inbox-session builders --------------------------------------
+// Used by BOTH listInboxSessions (the live, windowed subscription) and
+// listInboxSessionsPaginated (the additive completeness-floor crawl). Extracted
+// so the two queries emit BYTE-IDENTICAL enriched rows — schema drift between
+// the live channel and the crawl would clobber rich rows with thin ones when the
+// store overlays by id (sessions sync is isDelta). See inbox_no_authoritative_sessions_floor.
+const INBOX_HEARTBEAT_ALIVE_MS = 90 * 1000;
+const INBOX_DISMISSED_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+// How far back a session's last activity (updated_at) may be and still be
+// PROACTIVELY pulled into the inbox. This is a fetch bound only: both inbox
+// queries below stop sending older active/completed sessions, so a fresh client
+// loads lean. The client deliberately never prunes — its sessions cache is
+// isDelta (never-prune), so anything already cached, or opened on demand via
+// click/search (injectSession), stays. Pinned and recently-dismissed sessions
+// keep their own (separate) queries below and are unaffected by this window.
+const INBOX_SESSION_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+
+type InboxSessionMaps = {
+  agentStatusMap: Map<string, "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "stopped" | "starting" | "resuming">;
+  agentStatusUpdatedAtMap: Map<string, number>;
+  tmuxSessionMap: Map<string, string>;
+  permissionModeMap: Map<string, string>;
+  liveConvIds: Set<string>;
+  userDaemonAlive: boolean;
+};
+
+// Build the per-user managed-session maps once, then look up by conversation id.
+async function buildUserSessionMaps(
+  ctx: any,
+  userId: Id<"users">,
+  now: number,
+): Promise<InboxSessionMaps> {
+  const managedSessions = await ctx.db
+    .query("managed_sessions")
+    .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+    .collect();
+
+  const liveConvIds = new Set<string>(
+    managedSessions
+      .filter((s: any) => now - s.last_heartbeat < INBOX_HEARTBEAT_ALIVE_MS && s.conversation_id)
+      .map((s: any) => s.conversation_id!.toString())
+  );
+
+  const agentStatusMap = new Map<string, any>();
+  const agentStatusUpdatedAtMap = new Map<string, number>();
+  const tmuxSessionMap = new Map<string, string>();
+  const permissionModeMap = new Map<string, string>();
+  for (const s of managedSessions) {
+    if (!s.conversation_id) continue;
+    const cid = s.conversation_id.toString();
+    if (s.tmux_session) tmuxSessionMap.set(cid, s.tmux_session);
+    if (s.permission_mode) permissionModeMap.set(cid, s.permission_mode);
+    if (!s.agent_status) continue;
+    if (s.agent_status_updated_at !== undefined) agentStatusUpdatedAtMap.set(cid, s.agent_status_updated_at);
+    const heartbeatAlive = now - s.last_heartbeat < INBOX_HEARTBEAT_ALIVE_MS;
+    if (s.agent_status === "stopped" || s.agent_status === "idle") {
+      agentStatusMap.set(cid, s.agent_status);
+    } else if (heartbeatAlive) {
+      agentStatusMap.set(cid, s.agent_status);
+    } else {
+      agentStatusMap.set(cid, "stopped");
+    }
+  }
+
+  const userDaemonAlive = managedSessions.some(
+    (s: any) => now - s.last_heartbeat < 6 * 60 * 1000
+  );
+
+  return { agentStatusMap, agentStatusUpdatedAtMap, tmuxSessionMap, permissionModeMap, liveConvIds, userDaemonAlive };
+}
+
+// Empty maps for the liveness-excluded path: computeInboxSessions({includeLiveness:false})
+// skips the managed_sessions read entirely (that read is what makes the inbox query
+// re-run on every heartbeat). The per-row liveness then computes from nothing and is
+// stripped below — the live values ride the separate `sessionsLiveness` overlay instead.
+const EMPTY_INBOX_MAPS: InboxSessionMaps = {
+  agentStatusMap: new Map(),
+  agentStatusUpdatedAtMap: new Map(),
+  tmuxSessionMap: new Map(),
+  permissionModeMap: new Map(),
+  liveConvIds: new Set(),
+  userDaemonAlive: false,
+};
+
+// The heartbeat-derived fields that move to the sessionsLiveness overlay. Stripped from
+// the base rows when liveness is excluded so the client can't read a stale value before
+// the overlay merges (it overlays these back, keyed by id, via syncOverlay).
+const INBOX_LIVENESS_FIELDS = [
+  "agent_status", "is_idle", "is_unresponsive", "awaiting_input",
+  "is_connected", "tmux_session", "permission_mode",
+] as const;
+function stripInboxLiveness(row: any): void {
+  for (const f of INBOX_LIVENESS_FIELDS) row[f] = null;
+}
+
+// Enrich one conversation into the inbox session row, including the AskUserQuestion
+// scrape, idle/grace classification, and plan/task/workflow context. `clusterCutoff`
+// of 0 disables the stale-cluster hide (the crawl passes 0 — completeness wins).
+async function enrichInboxSessionRow(
+  ctx: any,
+  conv: any,
+  maps: InboxSessionMaps,
+  now: number,
+  clusterCutoff: number,
+): Promise<{ row: any; subagentChildren: any[]; dismissed: boolean; hidden: boolean }> {
+  let hasPending = !!conv.has_pending_messages;
+  let lastMsgRole = conv.last_message_role;
+  let lastUserMessage = conv.last_message_preview || null;
+
+  // Fallback for un-backfilled conversations: single query to get last message
+  if (!lastMsgRole && conv.message_count > 0) {
+    const lastMsg = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_timestamp", (q: any) =>
+        q.eq("conversation_id", conv._id)
+      )
+      .order("desc")
+      .first();
+    if (lastMsg) {
+      lastMsgRole = lastMsg.role;
+      if (lastMsg.role === "user" && lastMsg.content?.trim()) {
+        lastUserMessage = lastMsg.content
+          .replace(/\[Image[:\s][^\]]*\]/gi, "")
+          .replace(/<image\b[^>]*\/?>\s*(?:<\/image>)?/gi, "")
+          .trim()
+          .slice(0, 200);
+      }
+    }
+  }
+
+  const pinned = !!conv.inbox_pinned_at;
+  const dismissed = !!conv.inbox_dismissed_at;
+  const hidden = !dismissed && clusterCutoff > 0 && conv.updated_at < clusterCutoff && !hasPending && !pinned;
+
+  const agentStatus = maps.agentStatusMap.get(conv._id.toString());
+  // Don't let userDaemonAlive resurrect sessions we know are stopped
+  const daemonAlive = agentStatus === "stopped"
+    ? false
+    : maps.liveConvIds.has(conv._id.toString()) ||
+      (maps.userDaemonAlive && (now - conv.updated_at) < 10 * 60 * 1000);
+
+  // Even when the agent reports idle, recent activity (assistant just
+  // finished streaming), pending messages, or a trailing user message all
+  // mean work is in flight — don't flag as idle yet. The grace is measured
+  // from the agent's status-change time, not conv.updated_at, so a syncing
+  // message backlog can't hold a finished agent in "working". See
+  // deriveSessionActivity / isSessionIdle.
+  const activity = deriveSessionActivity({
+    agentStatus,
+    agentStatusUpdatedAt: maps.agentStatusUpdatedAtMap.get(conv._id.toString()),
+    lastMessageRole: lastMsgRole,
+    lastMessagePreview: lastUserMessage,
+    hasPending,
+    status: conv.status,
+    updatedAt: conv.updated_at,
+    daemonAlive,
+    now,
+  });
+  let isIdle = activity.isIdle;
+  const isUnresponsive = activity.isUnresponsive;
+
+  // An open AskUserQuestion poll is the agent blocking on the user — it
+  // belongs in "needs input", never "working". The daemon's agent_status is
+  // raced (it sends permission_blocked once, then a later "working" signal
+  // overwrites it while the poll is still open), so we derive the fact from
+  // the authoritative data: the chronologically-latest message is the
+  // assistant's AskUserQuestion tool_use (an answer would be a later-timestamped
+  // tool_result, so if the poll is still last, it's unanswered).
+  //
+  // Gate only on the working bucket (!isIdle) to keep this off the idle path.
+  // Do NOT pre-filter on conv.last_message_role — that field reflects sync
+  // batch order, which can disagree with timestamp order (Claude writes the
+  // poll's tool_use line out of order relative to surrounding entries), so it
+  // would miss exactly the blocked sessions we care about. The order("desc")
+  // read below is authoritative.
+  let awaitingInput = false;
+  if (!isIdle && conv.message_count > 0) {
+    const lastMsg = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_timestamp", (q: any) =>
+        q.eq("conversation_id", conv._id)
+      )
+      .order("desc")
+      .first();
+    if (lastMsg?.role === "assistant" && lastMsg.tool_calls?.some((tc: any) => tc.name === "AskUserQuestion")) {
+      awaitingInput = true;
+      isIdle = true; // blocked on the user, not actively working
+    }
+  }
+
+  const deferred = conv.inbox_deferred_at && conv.inbox_deferred_at >= conv.updated_at;
+
+  let implementationSession: { _id: string; title?: string } | undefined;
+  const subagentChildren: any[] = [];
+  if (conv.message_count > 0) {
+    const children = await ctx.db
+      .query("conversations")
+      .withIndex("by_parent_conversation_id", (q: any) =>
+        q.eq("parent_conversation_id", conv._id)
+      )
+      .take(20);
+    const implChild = children.find(
+      (c: any) => c.parent_message_uuid === "plan-handoff" && !c.is_subagent
+    );
+    if (implChild) {
+      implementationSession = { _id: implChild._id.toString(), title: implChild.title };
+    }
+    if (isIdle && children.some((c: any) => c.is_subagent && c.status === "active" &&
+        (maps.liveConvIds.has(c._id.toString()) || (now - c.updated_at) < 5 * 60 * 1000))) {
+      isIdle = false;
+    }
+    for (const c of children) {
+      if ((c.is_subagent || (c.parent_conversation_id && !c.parent_message_uuid)) && c.message_count > 0) {
+        subagentChildren.push(c);
+      }
+    }
+  }
+
+  let active_plan: { _id: string; short_id: string; title: string; status: string } | undefined;
+  if (conv.active_plan_id) {
+    const p = await ctx.db.get(conv.active_plan_id);
+    if (p) active_plan = { _id: p._id, short_id: p.short_id, title: p.title, status: p.status };
+  }
+
+  let active_task: { _id: string; short_id: string; title: string; status: string } | undefined;
+  if (conv.active_task_id) {
+    const t = await ctx.db.get(conv.active_task_id);
+    if (t) active_task = { _id: t._id, short_id: t.short_id, title: t.title, status: t.status };
+  }
+
+  let workflow_run_status: string | null = null;
+  if (conv.workflow_run_id) {
+    const run = await ctx.db.get(conv.workflow_run_id);
+    if (run) workflow_run_status = run.status;
+  }
+
+  const row = {
+    _id: conv._id,
+    session_id: conv.session_id,
+    title: conv.title,
+    subtitle: conv.subtitle,
+    updated_at: conv.updated_at,
+    started_at: conv.started_at,
+    project_path: conv.project_path,
+    git_root: conv.git_root,
+    git_branch: conv.git_branch,
+    agent_type: conv.agent_type,
+    message_count: conv.message_count,
+    idle_summary: conv.idle_summary,
+    is_idle: isIdle,
+    awaiting_input: awaitingInput,
+    is_unresponsive: isUnresponsive,
+    is_connected: !!daemonAlive,
+    has_pending: hasPending,
+    is_deferred: !!deferred,
+    is_pinned: pinned,
+    inbox_pinned_at: conv.inbox_pinned_at ?? null,
+    inbox_dismissed_at: conv.inbox_dismissed_at ?? null,
+    agent_status: agentStatus,
+    tmux_session: maps.tmuxSessionMap.get(conv._id.toString()) ?? null,
+    permission_mode: maps.permissionModeMap.get(conv._id.toString()) ?? null,
+    last_user_message: lastUserMessage,
+    session_error: conv.session_error,
+    implementation_session: implementationSession,
+    active_plan,
+    active_task,
+    worktree_name: conv.worktree_name,
+    worktree_branch: conv.worktree_branch,
+    workflow_run_id: conv.workflow_run_id || null,
+    is_workflow_primary: conv.is_workflow_primary || false,
+    workflow_run_status,
+    forked_from: conv.forked_from?.toString() || null,
+    parent_message_uuid: conv.parent_message_uuid || null,
+    icon: conv.icon,
+    icon_color: conv.icon_color,
+    team_id: conv.team_id ?? null,
+    is_private: conv.is_private ?? false,
+    owner_device_id: (conv as any).owner_device_id ?? null,
+  };
+
+  return { row, subagentChildren, dismissed, hidden };
+}
+
+// Build a subagent child row (lighter — children carry no AUQ/plan context).
+function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: number, parentId: Id<"conversations">) {
+  const childDaemon = maps.liveConvIds.has(child._id.toString());
+  const childAgentStatus = maps.agentStatusMap.get(child._id.toString());
+  const childRecentlyUpdated = (now - child.updated_at) < 45 * 1000;
+  const childHasPending = !!child.has_pending_messages;
+  const childAgentIdle = childAgentStatus
+    ? childAgentStatus !== "working" && childAgentStatus !== "compacting" && childAgentStatus !== "thinking" && childAgentStatus !== "connected" && childAgentStatus !== "starting" && childAgentStatus !== "resuming"
+    : false;
+  const childIsIdle = childAgentStatus
+    ? childAgentIdle && !childHasPending
+    : childDaemon
+      ? !childHasPending && !childRecentlyUpdated
+      : !childRecentlyUpdated;
+  return {
+    _id: child._id,
+    session_id: child.session_id,
+    title: child.title,
+    subtitle: child.subtitle,
+    updated_at: child.updated_at,
+    started_at: child.started_at,
+    project_path: child.project_path,
+    git_root: child.git_root,
+    git_branch: child.git_branch,
+    agent_type: child.agent_type,
+    message_count: child.message_count,
+    idle_summary: child.idle_summary,
+    is_idle: childIsIdle,
+    awaiting_input: false,
+    is_unresponsive: false,
+    is_connected: !!childDaemon,
+    has_pending: !!child.has_pending_messages,
+    is_deferred: false,
+    is_pinned: false,
+    inbox_pinned_at: null,
+    inbox_dismissed_at: child.inbox_dismissed_at ?? null,
+    agent_status: childAgentStatus,
+    tmux_session: maps.tmuxSessionMap.get(child._id.toString()) ?? null,
+    permission_mode: maps.permissionModeMap.get(child._id.toString()) ?? null,
+    last_user_message: null,
+    session_error: child.session_error,
+    is_subagent: true,
+    parent_conversation_id: parentId,
+    worktree_name: child.worktree_name,
+    worktree_branch: child.worktree_branch,
+    workflow_run_id: null,
+    is_workflow_primary: false,
+    workflow_run_status: null,
+    icon: child.icon,
+    icon_color: child.icon_color,
+    team_id: child.team_id ?? null,
+    is_private: child.is_private ?? false,
+  };
+}
+
+// Stable inbox ordering shared by the live query (the crawl leaves ordering to
+// the client, which re-sorts via sortSessions anyway).
+function sortInboxRows(results: any[]) {
+  results.sort((a, b) => {
+    if (a.is_pinned !== b.is_pinned) return a.is_pinned ? -1 : 1;
+    const aNew = a.message_count === 0;
+    const bNew = b.message_count === 0;
+    if (aNew !== bNew) return aNew ? -1 : 1;
+    if (a.is_idle !== b.is_idle) return a.is_idle ? -1 : 1;
+    if (a.is_deferred !== b.is_deferred) return a.is_deferred ? 1 : -1;
+    if (a.is_idle) return a.updated_at - b.updated_at;
+    return b.started_at - a.started_at;
+  });
+}
+
+// The live, windowed inbox computation. Extracted from the query handler so a
+// test harness can drive it with an explicit userId (the query is auth-gated and
+// can't be invoked via `npx convex run`).
+async function computeInboxSessions(
+  ctx: any,
+  userId: Id<"users">,
+  opts: { show_all?: boolean; includeLiveness?: boolean },
+): Promise<{ sessions: any[]; hidden_count: number }> {
+  // Liveness (agent_status/is_idle/...) is heartbeat-derived and is the reason this
+  // query re-runs ~every second. The live web subscription opts OUT (includeLiveness:
+  // false) and gets those fields from the lightweight `sessionsLiveness` overlay; all
+  // other callers (inboxForCLI, listInboxSessionsPaginated) default to true and are
+  // unchanged. Default MUST stay true — inboxForCLI classifies work-state from it.
+  const includeLiveness = opts.includeLiveness !== false;
+  const now = Date.now();
+  const dismissedCutoff = now - INBOX_DISMISSED_WINDOW_MS;
+  const sessionWindowCutoff = now - INBOX_SESSION_WINDOW_MS;
+
+  // Recent window is bounded by both the row cap AND the 30d activity window:
+  // the index range stops the scan at the cutoff so old sessions are never read.
+  // Pinned/dismissed have their own (separate) queries below and stay exempt.
+  const recentConversations = await ctx.db
+    .query("conversations")
+    .withIndex("by_user_updated", (q: any) =>
+      q.eq("user_id", userId).gte("updated_at", sessionWindowCutoff)
+    )
+    .order("desc")
+    .filter((q: any) => q.or(
+      q.eq(q.field("status"), "active"),
+      q.eq(q.field("status"), "completed")
+    ))
+    .take(200);
+
+  const pinnedConversations = await ctx.db
+    .query("conversations")
+    .withIndex("by_user_pinned", (q: any) =>
+      q.eq("user_id", userId).gt("inbox_pinned_at", 0)
+    )
+    .take(20);
+
+  const dismissedConversations = await ctx.db
+    .query("conversations")
+    .withIndex("by_user_dismissed", (q: any) =>
+      q.eq("user_id", userId).gte("inbox_dismissed_at", dismissedCutoff)
+    )
+    .order("desc")
+    .take(200);
+
+  const byId = new Map<string, any>();
+  for (const c of recentConversations) byId.set(c._id.toString(), c);
+  for (const c of pinnedConversations) byId.set(c._id.toString(), c);
+  for (const c of dismissedConversations) byId.set(c._id.toString(), c);
+  const conversations = Array.from(byId.values());
+
+  const maps = includeLiveness
+    ? await buildUserSessionMaps(ctx, userId, now)
+    : EMPTY_INBOX_MAPS;
+
+  // Cluster cutoff hides stale active sessions when there's a clean time gap.
+  // Dismissed sessions have their own 30d window, so exclude them from the gap analysis.
+  let clusterCutoff = 0;
+  const activeConvs = conversations.filter((c) => !c.inbox_dismissed_at);
+  if (activeConvs.length > 0) {
+    const sorted = [...activeConvs].sort((a, b) => b.updated_at - a.updated_at);
+    for (let i = 1; i < sorted.length; i++) {
+      const gap = sorted[i - 1].updated_at - sorted[i].updated_at;
+      if (gap > 12 * 60 * 60 * 1000) {
+        clusterCutoff = sorted[i].updated_at;
+        break;
+      }
+    }
+  }
+
+  let hiddenCount = 0;
+  const results: any[] = [];
+  for (const conv of conversations) {
+    if (!shouldShowInInbox(conv)) continue;
+    const { row, subagentChildren, dismissed, hidden } = await enrichInboxSessionRow(ctx, conv, maps, now, clusterCutoff);
+    if (hidden) {
+      hiddenCount++;
+      if (!opts.show_all) continue;
+    }
+    results.push(row);
+    // Don't surface subagents under a dismissed parent — they used to be
+    // invisible (parent was excluded from the idle query entirely) and
+    // exposing them now would make active buckets pick them up as orphans.
+    if (dismissed) continue;
+    for (const child of subagentChildren) {
+      results.push(buildSubagentChildRow(child, maps, now, conv._id));
+    }
+  }
+
+  sortInboxRows(results);
+  if (!includeLiveness) for (const row of results) stripInboxLiveness(row);
+  return { sessions: results, hidden_count: hiddenCount };
+}
+
 export const listInboxSessions = query({
   args: {
     show_all: v.optional(v.boolean()),
+    // Live subscription opts out of heartbeat-derived liveness (it rides the
+    // separate `sessionsLiveness` overlay) so heartbeats stop re-pushing the whole
+    // inbox. Defaults to true so older / un-redeployed clients that read liveness
+    // straight off this query keep working unchanged.
+    include_liveness: v.optional(v.boolean()),
     // Ignored cache-buster: lets the recovery poll force a real round-trip
     // instead of being served the live subscription's stalled cache. See the
     // matching `_probe` arg on users.getCurrentUser.
@@ -5865,357 +6407,246 @@ export const listInboxSessions = query({
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return { sessions: [], hidden_count: 0 };
+    return computeInboxSessions(ctx, userId, {
+      show_all: args.show_all,
+      includeLiveness: args.include_liveness,
+    });
+  },
+});
 
-    const now = Date.now();
-    const HEARTBEAT_ALIVE_MS = 90 * 1000;
-    const DISMISSED_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
-    const dismissedCutoff = now - DISMISSED_WINDOW_MS;
-
-    const recentConversations = await ctx.db
-      .query("conversations")
-      .withIndex("by_user_updated", (q) => q.eq("user_id", userId))
-      .order("desc")
-      .filter((q) => q.or(
-        q.eq(q.field("status"), "active"),
-        q.eq(q.field("status"), "completed")
-      ))
-      .take(200);
-
-    const pinnedConversations = await ctx.db
-      .query("conversations")
-      .withIndex("by_user_pinned", (q) =>
-        q.eq("user_id", userId).gt("inbox_pinned_at", 0)
-      )
-      .take(20);
-
-    const dismissedConversations = await ctx.db
-      .query("conversations")
-      .withIndex("by_user_dismissed", (q) =>
-        q.eq("user_id", userId).gte("inbox_dismissed_at", dismissedCutoff)
-      )
-      .order("desc")
-      .take(200);
-
-    const byId = new Map<string, typeof recentConversations[number]>();
-    for (const c of recentConversations) byId.set(c._id.toString(), c);
-    for (const c of pinnedConversations) byId.set(c._id.toString(), c);
-    for (const c of dismissedConversations) byId.set(c._id.toString(), c);
-    const conversations = Array.from(byId.values());
-
-    const managedSessions = await ctx.db
-      .query("managed_sessions")
-      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
-      .collect();
-
-    const liveConvIds = new Set(
-      managedSessions
-        .filter((s) => now - s.last_heartbeat < HEARTBEAT_ALIVE_MS && s.conversation_id)
-        .map((s) => s.conversation_id!.toString())
-    );
-
-    const agentStatusMap = new Map<string, "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "stopped" | "starting" | "resuming">();
-    const agentStatusUpdatedAtMap = new Map<string, number>();
-    const tmuxSessionMap = new Map<string, string>();
-    const permissionModeMap = new Map<string, string>();
-    for (const s of managedSessions) {
-      if (!s.conversation_id) continue;
-      const cid = s.conversation_id.toString();
-      if (s.tmux_session) tmuxSessionMap.set(cid, s.tmux_session);
-      if (s.permission_mode) permissionModeMap.set(cid, s.permission_mode);
-      if (!s.agent_status) continue;
-      if (s.agent_status_updated_at !== undefined) agentStatusUpdatedAtMap.set(cid, s.agent_status_updated_at);
-      const heartbeatAlive = now - s.last_heartbeat < HEARTBEAT_ALIVE_MS;
-      if (s.agent_status === "stopped" || s.agent_status === "idle") {
-        agentStatusMap.set(cid, s.agent_status);
-      } else if (heartbeatAlive) {
-        agentStatusMap.set(cid, s.agent_status);
-      } else {
-        agentStatusMap.set(cid, "stopped");
-      }
+// Heartbeat-derived liveness for the user's inbox sessions, keyed by conversation id —
+// the small, high-churn overlay that pairs with listInboxSessions({include_liveness:
+// false}). Reuses computeInboxSessions so the values are IDENTICAL to the bundled path
+// by construction, then projects to just the liveness fields. This is the only inbox
+// query that re-runs on every heartbeat, and it ships a tiny map instead of the full
+// session list (the client merges it via syncOverlay).
+export const sessionsLiveness = query({
+  args: {
+    show_all: v.optional(v.boolean()),
+    _probe: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return { liveness: {} };
+    // show_all:true so the overlay covers every row the client might hold; syncOverlay
+    // ignores ids it doesn't have, so a superset is harmless.
+    const { sessions } = await computeInboxSessions(ctx, userId, {
+      show_all: true,
+      includeLiveness: true,
+    });
+    const liveness: Record<string, any> = {};
+    for (const s of sessions) {
+      liveness[s._id.toString()] = {
+        agent_status: s.agent_status,
+        is_idle: s.is_idle,
+        is_unresponsive: s.is_unresponsive,
+        awaiting_input: s.awaiting_input,
+        is_connected: s.is_connected,
+        tmux_session: s.tmux_session,
+        permission_mode: s.permission_mode,
+      };
     }
+    return { liveness };
+  },
+});
 
-    const userDaemonAlive = managedSessions.some(
-      (s) => now - s.last_heartbeat < 6 * 60 * 1000
-    );
+// CLI-facing inbox: the same fully-enriched, per-user session set the web inbox
+// renders (computeInboxSessions), collapsed to a single `work_state` per row via
+// the shared classifier and sorted most-actionable-first. Powers `cast monitor`
+// and `cast feed`'s precise `--state` view. api_token authed (CLI has no cookie).
+export const inboxForCLI = query({
+  args: {
+    api_token: v.string(),
+    show_all: v.optional(v.boolean()),
+    state: v.optional(v.string()),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) return { error: "Unauthorized" };
 
-    // Cluster cutoff hides stale active sessions when there's a clean time gap.
-    // Dismissed sessions have their own 30d window, so exclude them from the gap analysis.
-    let clusterCutoff = 0;
-    const activeConvs = conversations.filter((c) => !c.inbox_dismissed_at);
-    if (activeConvs.length > 0) {
-      const sorted = [...activeConvs].sort((a, b) => b.updated_at - a.updated_at);
-      for (let i = 1; i < sorted.length; i++) {
-        const gap = sorted[i - 1].updated_at - sorted[i].updated_at;
-        if (gap > 12 * 60 * 60 * 1000) {
-          clusterCutoff = sorted[i].updated_at;
-          break;
-        }
-      }
-    }
+    const { sessions, hidden_count } = await computeInboxSessions(ctx, userId, { show_all: !!args.show_all });
+    const stateFilter = normalizeWorkStateFilter(args.state);
+    const ORDER: Record<WorkState, number> = { needs_input: 0, working: 1, idle: 2 };
 
-    let hiddenCount = 0;
-    const results = [];
-    for (const conv of conversations) {
-      if (!shouldShowInInbox(conv)) continue;
+    const counts = { working: 0, needs_input: 0, idle: 0, pinned: 0, live: 0, dismissed: 0, total: 0 };
+    const rows: Array<{
+      id: string;
+      session_id: string;
+      title: string;
+      project_path: string | null;
+      updated_at: string;
+      ts: number;
+      message_count: number;
+      agent_type?: string;
+      agent_status?: string;
+      work_state: WorkState;
+      is_pinned: boolean;
+      is_live: boolean;
+      is_unresponsive: boolean;
+      awaiting_input: boolean;
+      idle_summary: string | null;
+      last_user_message: string | null;
+      active_plan: { short_id: string; title: string } | null;
+      active_task: { short_id: string; title: string } | null;
+    }> = [];
 
-      let hasPending = !!conv.has_pending_messages;
-      let lastMsgRole = conv.last_message_role;
-      let lastUserMessage = conv.last_message_preview || null;
-
-      // Fallback for un-backfilled conversations: single query to get last message
-      if (!lastMsgRole && conv.message_count > 0) {
-        const lastMsg = await ctx.db
-          .query("messages")
-          .withIndex("by_conversation_timestamp", (q) =>
-            q.eq("conversation_id", conv._id)
-          )
-          .order("desc")
-          .first();
-        if (lastMsg) {
-          lastMsgRole = lastMsg.role;
-          if (lastMsg.role === "user" && lastMsg.content?.trim()) {
-            lastUserMessage = lastMsg.content
-              .replace(/\[Image[:\s][^\]]*\]/gi, "")
-              .replace(/<image\b[^>]*\/?>\s*(?:<\/image>)?/gi, "")
-              .trim()
-              .slice(0, 200);
-          }
-        }
-      }
-
-      const pinned = !!conv.inbox_pinned_at;
-      const dismissed = !!conv.inbox_dismissed_at;
-
-      if (!dismissed && clusterCutoff > 0 && conv.updated_at < clusterCutoff && !hasPending && !pinned) {
-        hiddenCount++;
-        if (!args.show_all) continue;
-      }
-
-      const agentStatus = agentStatusMap.get(conv._id.toString());
-      // Don't let userDaemonAlive resurrect sessions we know are stopped
-      const daemonAlive = agentStatus === "stopped"
-        ? false
-        : liveConvIds.has(conv._id.toString()) ||
-          (userDaemonAlive && (now - conv.updated_at) < 10 * 60 * 1000);
-
-      const isInterruptMsg = !!lastUserMessage && (
-        lastUserMessage.startsWith("[Request interrupted") || lastUserMessage.startsWith("[Request cancelled")
-      );
-      const lastRoleIsUser = lastMsgRole === "user" && !isInterruptMsg;
-      const recentlyUpdated = (now - conv.updated_at) < 45 * 1000;
-
-      const isUnresponsive = conv.status === "active" && !daemonAlive && (
-        (lastRoleIsUser && !recentlyUpdated) ||
-        (hasPending && !recentlyUpdated)
-      );
-
-      // Even when the agent reports idle, recent activity (assistant just
-      // finished streaming), pending messages, or a trailing user message all
-      // mean work is in flight — don't flag as idle yet. The grace is measured
-      // from the agent's status-change time, not conv.updated_at, so a syncing
-      // message backlog can't hold a finished agent in "working". See
-      // isSessionIdle.
-      let isIdle = isSessionIdle({
-        agentStatus,
-        agentStatusUpdatedAt: agentStatusUpdatedAtMap.get(conv._id.toString()),
-        hasPending,
-        lastRoleIsUser,
-        recentlyUpdated,
-        daemonAlive,
-        now,
+    for (const s of sessions) {
+      if (s.is_subagent) continue; // keep the monitor to top-level sessions
+      // Dismissed sessions are returned by computeInboxSessions but the web parks
+      // them in a separate collapsed group, out of the active buckets. Mirror that
+      // so cast monitor counts match the web inbox (don't inflate idle with
+      // already-triaged sessions). `cast monitor -a` includes them.
+      if (s.inbox_dismissed_at && !args.show_all) { counts.dismissed++; continue; }
+      const work_state = classifyWorkState({
+        agentStatus: s.agent_status,
+        isIdle: s.is_idle,
+        awaitingInput: s.awaiting_input,
+        hasPending: s.has_pending,
+        isUnresponsive: s.is_unresponsive,
+        isPinned: s.is_pinned,
+        messageCount: s.message_count || 0,
       });
+      const is_live = !!s.is_connected;
 
-      // An open AskUserQuestion poll is the agent blocking on the user — it
-      // belongs in "needs input", never "working". The daemon's agent_status is
-      // raced (it sends permission_blocked once, then a later "working" signal
-      // overwrites it while the poll is still open), so we derive the fact from
-      // the authoritative data: the chronologically-latest message is the
-      // assistant's AskUserQuestion tool_use (an answer would be a later-timestamped
-      // tool_result, so if the poll is still last, it's unanswered).
-      //
-      // Gate only on the working bucket (!isIdle) to keep this off the idle path.
-      // Do NOT pre-filter on conv.last_message_role — that field reflects sync
-      // batch order, which can disagree with timestamp order (Claude writes the
-      // poll's tool_use line out of order relative to surrounding entries), so it
-      // would miss exactly the blocked sessions we care about. The order("desc")
-      // read below is authoritative.
-      let awaitingInput = false;
-      if (!isIdle && conv.message_count > 0) {
-        const lastMsg = await ctx.db
-          .query("messages")
-          .withIndex("by_conversation_timestamp", (q) =>
-            q.eq("conversation_id", conv._id)
-          )
-          .order("desc")
-          .first();
-        if (lastMsg?.role === "assistant" && lastMsg.tool_calls?.some((tc) => tc.name === "AskUserQuestion")) {
-          awaitingInput = true;
-          isIdle = true; // blocked on the user, not actively working
-        }
-      }
+      counts.total++;
+      counts[work_state]++;
+      if (s.is_pinned) counts.pinned++;
+      if (is_live) counts.live++;
 
-      const deferred = conv.inbox_deferred_at && conv.inbox_deferred_at >= conv.updated_at;
+      if (stateFilter === "pinned" && !s.is_pinned) continue;
+      if (stateFilter === "live" && !is_live) continue;
+      if (stateFilter && stateFilter !== "pinned" && stateFilter !== "live" && work_state !== stateFilter) continue;
 
-      let implementationSession: { _id: string; title?: string } | undefined;
-      const subagentChildren: typeof conversations = [];
-      if (conv.message_count > 0) {
-        const children = await ctx.db
-          .query("conversations")
-          .withIndex("by_parent_conversation_id", (q) =>
-            q.eq("parent_conversation_id", conv._id)
-          )
-          .take(20);
-        const implChild = children.find(
-          (c) => c.parent_message_uuid === "plan-handoff" && !c.is_subagent
-        );
-        if (implChild) {
-          implementationSession = { _id: implChild._id.toString(), title: implChild.title };
-        }
-        if (isIdle && children.some((c) => c.is_subagent && c.status === "active" &&
-            (liveConvIds.has(c._id.toString()) || (now - c.updated_at) < 5 * 60 * 1000))) {
-          isIdle = false;
-        }
-        for (const c of children) {
-          if ((c.is_subagent || (c.parent_conversation_id && !c.parent_message_uuid)) && c.message_count > 0) {
-            subagentChildren.push(c);
-          }
-        }
-      }
-
-      let active_plan: { _id: string; short_id: string; title: string; status: string } | undefined;
-      if (conv.active_plan_id) {
-        const p = await ctx.db.get(conv.active_plan_id);
-        if (p) active_plan = { _id: p._id, short_id: p.short_id, title: p.title, status: p.status };
-      }
-
-      let active_task: { _id: string; short_id: string; title: string; status: string } | undefined;
-      if (conv.active_task_id) {
-        const t = await ctx.db.get(conv.active_task_id);
-        if (t) active_task = { _id: t._id, short_id: t.short_id, title: t.title, status: t.status };
-      }
-
-      let workflow_run_status: string | null = null;
-      if (conv.workflow_run_id) {
-        const run = await ctx.db.get(conv.workflow_run_id);
-        if (run) workflow_run_status = run.status;
-      }
-
-      results.push({
-        _id: conv._id,
-        session_id: conv.session_id,
-        title: conv.title,
-        subtitle: conv.subtitle,
-        updated_at: conv.updated_at,
-        started_at: conv.started_at,
-        project_path: conv.project_path,
-        git_root: conv.git_root,
-        git_branch: conv.git_branch,
-        agent_type: conv.agent_type,
-        message_count: conv.message_count,
-        idle_summary: conv.idle_summary,
-        is_idle: isIdle,
-        awaiting_input: awaitingInput,
-        is_unresponsive: isUnresponsive,
-        is_connected: !!daemonAlive,
-        has_pending: hasPending,
-        is_deferred: !!deferred,
-        is_pinned: pinned,
-        inbox_pinned_at: conv.inbox_pinned_at ?? null,
-        inbox_dismissed_at: conv.inbox_dismissed_at ?? null,
-        agent_status: agentStatus,
-        tmux_session: tmuxSessionMap.get(conv._id.toString()) ?? null,
-        permission_mode: permissionModeMap.get(conv._id.toString()) ?? null,
-        last_user_message: lastUserMessage,
-        session_error: conv.session_error,
-        implementation_session: implementationSession,
-        active_plan,
-        active_task,
-        worktree_name: conv.worktree_name,
-        worktree_branch: conv.worktree_branch,
-        workflow_run_id: conv.workflow_run_id || null,
-        is_workflow_primary: conv.is_workflow_primary || false,
-        workflow_run_status,
-        forked_from: conv.forked_from?.toString() || null,
-        parent_message_uuid: conv.parent_message_uuid || null,
-        icon: conv.icon,
-        icon_color: conv.icon_color,
-        team_id: conv.team_id ?? null,
-        is_private: conv.is_private ?? false,
-        owner_device_id: (conv as any).owner_device_id ?? null,
+      rows.push({
+        id: s._id,
+        session_id: s.session_id,
+        title: s.title || s.last_user_message || "New Session",
+        project_path: s.project_path || null,
+        updated_at: new Date(s.updated_at).toISOString(),
+        ts: s.updated_at,
+        message_count: s.message_count || 0,
+        agent_type: s.agent_type,
+        agent_status: s.agent_status,
+        work_state,
+        is_pinned: !!s.is_pinned,
+        is_live,
+        is_unresponsive: !!s.is_unresponsive,
+        awaiting_input: !!s.awaiting_input,
+        idle_summary: s.idle_summary || null,
+        last_user_message: s.last_user_message || null,
+        active_plan: s.active_plan ? { short_id: s.active_plan.short_id, title: s.active_plan.title } : null,
+        active_task: s.active_task ? { short_id: s.active_task.short_id, title: s.active_task.title } : null,
       });
-
-      // Don't surface subagents under a dismissed parent — they used to be
-      // invisible (parent was excluded from the idle query entirely) and
-      // exposing them now would make active buckets pick them up as orphans.
-      if (dismissed) continue;
-
-      for (const child of subagentChildren) {
-        const childDaemon = liveConvIds.has(child._id.toString());
-        const childAgentStatus = agentStatusMap.get(child._id.toString());
-        const childRecentlyUpdated = (now - child.updated_at) < 45 * 1000;
-        const childHasPending = !!child.has_pending_messages;
-        const childAgentIdle = childAgentStatus
-          ? childAgentStatus !== "working" && childAgentStatus !== "compacting" && childAgentStatus !== "thinking" && childAgentStatus !== "connected" && childAgentStatus !== "starting" && childAgentStatus !== "resuming"
-          : false;
-        const childIsIdle = childAgentStatus
-          ? childAgentIdle && !childHasPending
-          : childDaemon
-            ? !childHasPending && !childRecentlyUpdated
-            : !childRecentlyUpdated;
-        results.push({
-          _id: child._id,
-          session_id: child.session_id,
-          title: child.title,
-          subtitle: child.subtitle,
-          updated_at: child.updated_at,
-          started_at: child.started_at,
-          project_path: child.project_path,
-          git_root: child.git_root,
-          git_branch: child.git_branch,
-          agent_type: child.agent_type,
-          message_count: child.message_count,
-          idle_summary: child.idle_summary,
-          is_idle: childIsIdle,
-          awaiting_input: false,
-          is_unresponsive: false,
-          is_connected: !!childDaemon,
-          has_pending: !!child.has_pending_messages,
-          is_deferred: false,
-          is_pinned: false,
-          inbox_pinned_at: null,
-          inbox_dismissed_at: child.inbox_dismissed_at ?? null,
-          agent_status: childAgentStatus,
-          tmux_session: tmuxSessionMap.get(child._id.toString()) ?? null,
-          permission_mode: permissionModeMap.get(child._id.toString()) ?? null,
-          last_user_message: null,
-          session_error: child.session_error,
-          is_subagent: true,
-          parent_conversation_id: conv._id,
-          worktree_name: child.worktree_name,
-          worktree_branch: child.worktree_branch,
-          workflow_run_id: null,
-          is_workflow_primary: false,
-          workflow_run_status: null,
-          icon: child.icon,
-          icon_color: child.icon_color,
-          team_id: child.team_id ?? null,
-          is_private: child.is_private ?? false,
-        });
-      }
     }
 
-    results.sort((a, b) => {
+    // Most-actionable first: pinned, then needs_input → working → idle, recent first.
+    rows.sort((a, b) => {
       if (a.is_pinned !== b.is_pinned) return a.is_pinned ? -1 : 1;
-      const aNew = a.message_count === 0;
-      const bNew = b.message_count === 0;
-      if (aNew !== bNew) return aNew ? -1 : 1;
-      if (a.is_idle !== b.is_idle) return a.is_idle ? -1 : 1;
-      if (a.is_deferred !== b.is_deferred) return a.is_deferred ? 1 : -1;
-      if (a.is_idle) return a.updated_at - b.updated_at;
-      return b.started_at - a.started_at;
+      if (ORDER[a.work_state] !== ORDER[b.work_state]) return ORDER[a.work_state] - ORDER[b.work_state];
+      return b.ts - a.ts;
     });
 
-    return { sessions: results, hidden_count: hiddenCount };
+    const limit = args.limit ?? 200;
+    return { sessions: rows.slice(0, limit), counts, hidden_count, scope: "mine" };
+  },
+});
+
+// COMPLETENESS FLOOR: page through EVERY owned, non-dismissed active/completed
+// conversation that belongs in the inbox — not just the live channel's 200-row
+// recent window. Driven by the client's reconcile crawl (runReconcileCrawl,
+// additive/never-prune), this guarantees an idle, owned, non-dismissed session
+// is present even when it was never cached on this device AND the live
+// subscription was stale (the cross-device + saturation gap). One-shot paginated
+// query — bypasses the stalled live subscription. Returns the SAME enriched rows
+// as listInboxSessions so the store overlays them without schema drift.
+// `since` (optional) restricts to conversations updated at/after a watermark for
+// cheap incremental top-ups after the first full backfill.
+export const listInboxSessionsPaginated = query({
+  args: {
+    paginationOpts: paginationOptsValidator,
+    since: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return { page: [], isDone: true, continueCursor: "" };
+
+    const now = Date.now();
+    const maps = await buildUserSessionMaps(ctx, userId, now);
+
+    // Owned conversations, most-recent first. Active OR completed (matches the
+    // live recent window's status filter). `since` trims to changed rows for
+    // incremental crawls. Dismissed are filtered in the LOOP (not the query) via
+    // the canonical `!conv.inbox_dismissed_at` truthiness check — a query-level
+    // `eq(field, undefined)` would wrongly drop sessions whose dismissal was
+    // cleared to null/0 rather than removed. Dismissed are excluded because they
+    // accumulate locally via their own keepWhere path; re-surfacing them here
+    // would fight that design. Cluster-cutoff is disabled (clusterCutoff=0):
+    // completeness is the whole point of the floor.
+    // The lower bound is the caller's watermark ONLY — it must be STABLE across
+    // every page of one crawl, or each page's continuation cursor belongs to a
+    // different query and Convex throws InvalidCursor. The 30d activity window is
+    // therefore applied client-side (the client seeds `since = now - 30d` on the
+    // first backfill); never fold a wall-clock value into the index range here.
+    const q = ctx.db
+      .query("conversations")
+      .withIndex("by_user_updated", (qb: any) =>
+        args.since !== undefined
+          ? qb.eq("user_id", userId).gte("updated_at", args.since)
+          : qb.eq("user_id", userId)
+      )
+      .order("desc")
+      .filter((qb: any) =>
+        qb.or(qb.eq(qb.field("status"), "active"), qb.eq(qb.field("status"), "completed"))
+      );
+
+    const result = await q.paginate(args.paginationOpts);
+
+    const rows: any[] = [];
+    for (const conv of result.page) {
+      if (conv.inbox_dismissed_at) continue; // dismissed: own accumulation path
+      if (!shouldShowInInbox(conv)) continue;
+      const { row, subagentChildren } = await enrichInboxSessionRow(ctx, conv, maps, now, 0);
+      rows.push(row);
+      for (const child of subagentChildren) {
+        rows.push(buildSubagentChildRow(child, maps, now, conv._id));
+      }
+    }
+
+    return { page: rows, isDone: result.isDone, continueCursor: result.continueCursor };
+  },
+});
+
+// Durable cross-device dismiss reconcile. Returns ONLY {_id, inbox_dismissed_at}
+// for the caller's conversations dismissed within the live window — NO per-session
+// enrichment, so it's cheap to page even on a saturation-prone backend. This is the
+// backstop the live `listInboxSessions` subscription lacks: that channel only
+// reaches a CONNECTED client, and the session crawl (`listInboxSessionsPaginated`)
+// can't carry a dismiss at all — it's keyed on `updated_at` (a dismiss never moves
+// it) and skips dismissed rows outright. This query is keyed on the
+// `by_user_dismissed` index (inbox_dismissed_at — the field a dismiss DOES move),
+// so a device that was offline at dismiss time heals on its next reconcile.
+// The client overlays the result via applyDismissedReconcile (SET on reported,
+// CLEAR on no-longer-reported = un-dismissed elsewhere). Window mirrors the live
+// query's INBOX_DISMISSED_WINDOW_MS — keep them in sync.
+export const listDismissedSessionsLite = query({
+  args: { paginationOpts: paginationOptsValidator },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return { page: [], isDone: true, continueCursor: "" };
+    const cutoff = Date.now() - INBOX_DISMISSED_WINDOW_MS;
+    const result = await ctx.db
+      .query("conversations")
+      .withIndex("by_user_dismissed", (q: any) =>
+        q.eq("user_id", userId).gte("inbox_dismissed_at", cutoff)
+      )
+      .order("desc")
+      .paginate(args.paginationOpts);
+    const page = result.page.map((c: any) => ({
+      _id: c._id,
+      inbox_dismissed_at: c.inbox_dismissed_at ?? null,
+    }));
+    return { page, isDone: result.isDone, continueCursor: result.continueCursor };
   },
 });
 
@@ -6311,6 +6742,88 @@ export const dismissFromInbox = mutation({
     await ctx.db.patch(args.conversation_id, {
       inbox_dismissed_at: Date.now(),
     });
+  },
+});
+
+// Bulk-dismiss the caller's sessions whose last activity (updated_at) is older
+// than `older_than_days` (default 30). Clears the accumulated working set without
+// deleting anything — dismissed rows stay searchable and accessible. FIRE-ONCE:
+// the heavy work is handed to a self-draining background job, NOT looped from the
+// client. A client-side loop of dozens of write-mutations is fragile on a
+// saturation-prone deployment (one flaky call surfaced a scary error toast); a
+// single scheduled drainer can't fail the user's click and drains durably on the
+// server's own clock. The client has already dismissed locally (optimistic), so
+// this only needs to make it stick server-side / cross-device.
+export const dismissStaleInboxSessions = mutation({
+  args: {
+    older_than_days: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+    const cutoff = Date.now() - (args.older_than_days ?? 30) * 24 * 60 * 60 * 1000;
+    await ctx.scheduler.runAfter(0, internal.conversations.drainStaleDismiss, {
+      userId,
+      cutoff,
+      cursor: null,
+      attempt: 0,
+    });
+    return { scheduled: true };
+  },
+});
+
+// Self-draining background dismiss. Dismisses one bounded page of the caller's
+// >cutoff-old sessions (skipping pinned + already-dismissed) and reschedules
+// itself with the next cursor until the whole backlog is cleared. Range-scans
+// only the OLD region (by_user_updated, lt cutoff). EVERYTHING stale but pinned
+// is dismissed — including subagents/orphans, because a dismissed parent promotes
+// its old subagent children to the top level and they'd refill the inbox. A
+// thrown page (transient backend hiccup) rolls back untouched and retries the
+// SAME cursor with backoff up to a cap; work is idempotent (dismissed rows are
+// skipped), so retries never double-count and a give-up only loses cross-device
+// completeness, never the local clear the user already saw.
+export const drainStaleDismiss = internalMutation({
+  args: {
+    userId: v.id("users"),
+    cutoff: v.number(),
+    cursor: v.union(v.string(), v.null()),
+    attempt: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    try {
+      const result = await ctx.db
+        .query("conversations")
+        .withIndex("by_user_updated", (q) =>
+          q.eq("user_id", args.userId).lt("updated_at", args.cutoff)
+        )
+        .paginate({ cursor: args.cursor, numItems: 100 });
+
+      for (const conv of result.page) {
+        if (conv.inbox_dismissed_at) continue;
+        if (conv.inbox_pinned_at) continue;
+        await ctx.db.patch(conv._id, { inbox_dismissed_at: now });
+      }
+
+      if (!result.isDone) {
+        await ctx.scheduler.runAfter(150, internal.conversations.drainStaleDismiss, {
+          userId: args.userId,
+          cutoff: args.cutoff,
+          cursor: result.continueCursor,
+          attempt: 0,
+        });
+      }
+    } catch {
+      const attempt = args.attempt + 1;
+      if (attempt <= 6) {
+        await ctx.scheduler.runAfter(2000 * attempt, internal.conversations.drainStaleDismiss, {
+          userId: args.userId,
+          cutoff: args.cutoff,
+          cursor: args.cursor,
+          attempt,
+        });
+      }
+    }
   },
 });
 

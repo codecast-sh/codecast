@@ -261,6 +261,7 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
   const isDocs = pathname === "/docs" || pathname?.startsWith("/docs/");
   const isProjects = pathname === "/projects" || pathname?.startsWith("/projects/");
   const isWorkflows = pathname === "/workflows" || pathname?.startsWith("/workflows/");
+  const isRoutines = pathname === "/routines" || pathname?.startsWith("/routines/");
   const { user: currentUser } = useCurrentUser();
   const teamMembers = useInboxStore((s) => s.teamMembers);
   const [currentTime, setCurrentTime] = useState(Date.now());
@@ -273,8 +274,8 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
     activeTeamId ? { teamId: activeTeamId } : "skip"
   );
   const teamUnreadCount = teamUnreadCountQuery ?? useInboxStore.getState().teamUnreadCount;
-  const toggleFavorite = useMutation(api.conversations.toggleFavorite);
-  const createDoc = useMutation(api.docs.webCreate);
+  const toggleFavorite = useInboxStore((s) => s.toggleFavorite);
+  const createDoc = useInboxStore((s) => s.createDoc);
   const createModal = useInboxStore((s) => s.createModal);
   const closeCreateModal = useInboxStore((s) => s.closeCreateModal);
   const openCreateModal = useInboxStore((s) => s.openCreateModal);
@@ -300,7 +301,7 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
   const favorites = favoritesQuery ?? useInboxStore.getState().favorites;
   const [showAllFavorites, setShowAllFavorites] = useState(false);
   const bookmarks = bookmarksQuery ?? useInboxStore.getState().bookmarks;
-  const toggleBookmark = useMutation(api.bookmarks.toggleBookmark);
+  const toggleBookmark = useInboxStore((s) => s.toggleBookmark);
   const allSavedViews = useInboxStore((s) => s.clientState.ui?.saved_views);
   const savedViews = useMemo(
     () => allSavedViews?.filter((v: any) => !v.team_id || v.team_id === activeTeamId),
@@ -547,9 +548,23 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
             title="Workflows"
           >
             <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7.5 21L3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 5a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM14 5a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1V5zM4 15a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1v-4zM14 15a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z" />
             </svg>
             {!isNarrow && <span>Workflows</span>}
+          </Link>
+          <Link
+            href="/routines"
+            className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-4 py-2.5 transition-colors motion-reduce:transition-none ${
+              isRoutines
+                ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
+                : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60"
+            }`}
+            title="Routines"
+          >
+            <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7.5 21L3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5" />
+            </svg>
+            {!isNarrow && <span>Routines</span>}
           </Link>
           <Link
             href="/sessions"
@@ -673,7 +688,7 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
-                      toggleFavorite({ conversation_id: fav._id as Id<"conversations"> });
+                      toggleFavorite(fav._id);
                     }}
                     className="p-1 rounded opacity-0 group-hover:opacity-100 text-sol-text-dim hover:text-sol-text transition-opacity flex-shrink-0 mr-1"
                     title="Remove from favorites"
@@ -734,7 +749,7 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
-                      toggleBookmark({ conversation_id: bookmark.conversation_id, message_id: bookmark.message_id });
+                      toggleBookmark(bookmark.conversation_id, bookmark.message_id);
                     }}
                     className="opacity-40 group-hover:opacity-100 text-sol-text-dim hover:text-sol-red transition-all flex-shrink-0"
                     title="Remove bookmark"

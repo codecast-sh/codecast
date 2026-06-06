@@ -4,6 +4,7 @@ import type { ToolViewProps } from "@/lib/toolRegistry";
 interface QuestionOption {
   label: string;
   description?: string;
+  preview?: string;
 }
 
 interface Question {
@@ -11,6 +12,17 @@ interface Question {
   header?: string;
   options: QuestionOption[];
   multiSelect?: boolean;
+}
+
+// An AskUserQuestion option's `preview` is an ASCII/mockup string the terminal renders
+// in a side box. Shared so every surface that shows a question (the inline interactive
+// card in ConversationView and this registry view) renders the same monospace detail.
+export function OptionPreview({ preview }: { preview: string }) {
+  return (
+    <pre className="mt-1 w-full max-h-72 overflow-auto whitespace-pre rounded border border-sol-border/40 bg-sol-bg-alt/50 p-2 font-mono text-[10px] leading-[1.2] text-sol-text-secondary">
+      {preview}
+    </pre>
+  );
 }
 
 function parseAnswers(input: any, output: any): Record<string, string> {
@@ -64,7 +76,7 @@ function QuestionBlock({ question, answer }: { question: Question; answer?: stri
                   <CircleDot className="w-3.5 h-3.5 opacity-30" />
                 )}
               </div>
-              <div>
+              <div className="min-w-0">
                 <span className={isSelected ? "text-foreground font-medium" : ""}>
                   {opt.label}
                 </span>
@@ -73,6 +85,7 @@ function QuestionBlock({ question, answer }: { question: Question; answer?: stri
                     {opt.description}
                   </span>
                 )}
+                {opt.preview && (isSelected || !isAnswered) && <OptionPreview preview={opt.preview} />}
               </div>
             </div>
           );

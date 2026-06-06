@@ -110,6 +110,16 @@ const META_KEYS = new Set([
   "teams",
   "teamMembers",
   "teamUnreadCount",
+  // Accumulating team-feed cache (keyed by team+dir) + its per-key "older pages
+  // remain" flag. The team ActivityFeed reads from here and dumps every live +
+  // paginated page into it — the team-mode twin of the store.sessions cache the
+  // personal feed already has.
+  "feedConversations",
+  "feedHasMore",
+  // Per-workspace incremental-sync watermark (cursor + backfilledAt). Must
+  // survive reload so a cold start resumes delta sync from where it left off
+  // instead of re-snapshotting + re-crawling the whole task/doc table.
+  "syncMeta",
   "docProjectPaths",
   "favorites",
   "bookmarks",
@@ -156,7 +166,21 @@ export function writePatchesToIDB(patches: Patch[], state: any) {
     if (table) {
       const data = state[key];
       if (data && typeof data === "object") {
-        const { puts, deletes, next } = diffCollection(lastPersisted.get(key), data);
+        const prevShadow = lastPersisted.get(key);
+        const { puts, deletes: rawDeletes, next } = diffCollection(prevShadow, data);
+        // NEVER wipe the cache from a store-shrink. A row leaves IDB ONLY when it
+        // was explicitly removed — kill/archive plant a `${key}:${id}` exclude in
+        // `pending`. A diff-delete with NO exclude means the in-memory store is
+        // merely MISSING the row (a paused hydration, a windowed live payload, a
+        // bug), so keep it on disk AND in the shadow. Read-time filters hide stale
+        // rows; the durable cache is never destroyed. This makes a whole-collection
+        // wipe structurally impossible — only intentional per-row removals delete.
+        const pending = (state.pending || {}) as Record<string, { type?: string }>;
+        const deletes: string[] = [];
+        for (const id of rawDeletes) {
+          if (pending[`${key}:${id}`]?.type === "exclude") deletes.push(id);
+          else if (prevShadow?.has(id)) next.set(id, prevShadow.get(id));
+        }
         lastPersisted.set(key, next);
         if (puts.length || deletes.length) {
           // One transaction so a row is never momentarily absent: removed rows

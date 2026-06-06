@@ -2,8 +2,6 @@
 
 import { useState, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
-import { useMutation } from "convex/react";
-import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, ProjectItem } from "../../store/inboxStore";
 import { useSyncProjects } from "../../hooks/useSyncProjects";
 import { AuthGuard } from "../../components/AuthGuard";
@@ -20,8 +18,6 @@ import {
   ListChecks,
   Target,
 } from "lucide-react";
-
-const api = _api as any;
 
 type ProjectStatus = "active" | "planning" | "paused" | "done";
 
@@ -154,7 +150,7 @@ function CreateProjectInline({ onCreated }: { onCreated: () => void }) {
   const [description, setDescription] = useState("");
   const [color, setColor] = useState("cyan");
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const createProject = useMutation(api.projects.webCreate);
+  const createProject = useInboxStore((s) => s.createProject);
 
   const handleSubmit = useCallback(async () => {
     const trimmed = title.trim();

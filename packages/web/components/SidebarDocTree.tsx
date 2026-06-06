@@ -1,11 +1,7 @@
 import { useState, useCallback, useMemo, useRef } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useMutation } from "convex/react";
-import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, DocItem } from "../store/inboxStore";
-
-const api = _api as any;
 
 export type DocTreeNode = {
   doc: DocItem;
@@ -237,8 +233,8 @@ export function SidebarDocTree({
   const pathname = usePathname();
   const router = useRouter();
   const docs = useInboxStore((s) => s.docs);
-  const createDoc = useMutation(api.docs.webCreate);
-  const moveDoc = useMutation(api.docs.webMoveDoc);
+  const createDoc = useInboxStore((s) => s.createDoc);
+  const moveDoc = useInboxStore((s) => s.moveDoc);
 
   // Extract active doc ID from URL
   const activeDocId = pathname?.startsWith("/docs/")
@@ -294,18 +290,14 @@ export function SidebarDocTree({
     try {
       if (overPosition === "inside") {
         // Move as child of target
-        await moveDoc({ id: draggingId as any, parent_id: overId as any, sort_order: 0 });
+        await moveDoc(draggingId, overId, 0);
         setExpandedIds((prev) => new Set([...prev, overId]));
       } else {
         // Move as sibling (above/below target) — same parent as target
         const newParentId = targetDoc.parent_id || undefined;
         const siblingOrder = targetDoc.sort_order ?? 0;
         const newOrder = overPosition === "above" ? siblingOrder - 0.5 : siblingOrder + 0.5;
-        await moveDoc({
-          id: draggingId as any,
-          parent_id: newParentId as any,
-          sort_order: newOrder,
-        });
+        await moveDoc(draggingId, newParentId, newOrder);
       }
     } catch (err) {
       console.error("Failed to move doc:", err);
@@ -383,7 +375,7 @@ export function SidebarDocTree({
             // Drop on empty space = move to root
             if (dragState.draggingId && !dragState.overId) {
               e.preventDefault();
-              moveDoc({ id: dragState.draggingId as any, sort_order: roots.length });
+              moveDoc(dragState.draggingId, undefined, roots.length);
               onDragEnd();
             }
           }}

@@ -30,14 +30,13 @@ function VisibilityDropdown({
   teamVisibility?: string | null;
 }) {
   const [isOpen, setIsOpen] = useState(false);
-  const [optimisticState, setOptimisticState] = useState<{ isPrivate?: boolean; teamVisibility?: string | null } | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
-  const setPrivacy = useMutation(api.conversations.setPrivacy);
-  const setTeamVisibility = useMutation(api.conversations.setTeamVisibility);
+  // Local-first: store actions mutate conversations[id] synchronously, so the
+  // conv props re-render instantly — no manual optimistic shim needed.
+  const setPrivacy = useInboxStore((s) => s.setPrivacy);
+  const setTeamVisibility = useInboxStore((s) => s.setTeamVisibility);
 
-  const effectivePrivate = optimisticState?.isPrivate !== undefined ? optimisticState.isPrivate : isPrivate;
-  const effectiveTeamVisibility = optimisticState?.teamVisibility !== undefined ? optimisticState.teamVisibility : teamVisibility;
-  const effectiveMode = effectivePrivate ? "private" : (effectiveTeamVisibility || visibilityMode || "summary");
+  const effectiveMode = isPrivate ? "private" : (teamVisibility || visibilityMode || "summary");
 
   useWatchEffect(() => {
     if (!isOpen) return;
@@ -50,26 +49,14 @@ function VisibilityDropdown({
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [isOpen]);
 
-  const handleSetPrivate = async () => {
-    setOptimisticState({ isPrivate: true });
+  const handleSetPrivate = () => {
     setIsOpen(false);
-    try {
-      await setPrivacy({ conversation_id: conversationId as Id<"conversations">, is_private: true });
-    } catch {
-      setOptimisticState(null);
-      toast.error("Failed to update visibility");
-    }
+    setPrivacy(conversationId, true);
   };
 
-  const handleSetTeamVisibility = async (mode: "summary" | "full") => {
-    setOptimisticState({ isPrivate: false, teamVisibility: mode });
+  const handleSetTeamVisibility = (mode: "summary" | "full") => {
     setIsOpen(false);
-    try {
-      await setTeamVisibility({ conversation_id: conversationId as Id<"conversations">, team_visibility: mode });
-    } catch {
-      setOptimisticState(null);
-      toast.error("Failed to update visibility");
-    }
+    setTeamVisibility(conversationId, mode);
   };
 
   const getLabel = () => {
@@ -182,21 +169,14 @@ function FavoriteButton({
   conversationId: string;
   isFavorite: boolean;
 }) {
-  const [optimisticFavorite, setOptimisticFavorite] = useState<boolean | null>(null);
-  const toggleFavorite = useMutation(api.conversations.toggleFavorite);
+  const toggleFavorite = useInboxStore((s) => s.toggleFavorite);
 
-  const effectiveFavorite = optimisticFavorite !== null ? optimisticFavorite : isFavorite;
+  const effectiveFavorite = isFavorite;
 
-  const handleClick = async (e: React.MouseEvent) => {
+  const handleClick = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    setOptimisticFavorite(!effectiveFavorite);
-    try {
-      await toggleFavorite({ conversation_id: conversationId as Id<"conversations"> });
-    } catch {
-      setOptimisticFavorite(null);
-      toast.error("Failed to update favorite");
-    }
+    toggleFavorite(conversationId);
   };
 
   return (
@@ -766,7 +746,6 @@ export function NewSessionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
   const [selectedWorkflowId, setSelectedWorkflowId] = useState("");
   const [goalOverride, setGoalOverride] = useState("");
   const createQuickSession = useMutation(api.conversations.createQuickSession);
-  const sendMessage = useMutation(api.pendingMessages.sendMessageToSession);
   const createWorkflowRun = useMutation((api as any).workflow_runs.create);
   const workflows = useQuery((api as any).workflows.webList);
   const freshProjects = useQuery(api.users.getRecentProjectPaths, { limit: 15 });
@@ -859,29 +838,45 @@ export function NewSessionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
       } else {
         const convexAgentType = agentType === "claude" ? "claude_code" as const : agentType === "codex" ? "codex" as const : agentType === "cursor" ? "cursor" as const : "gemini" as const;
         const trimmedFirstMessage = firstMessage.trim();
-        const conversationId = await createQuickSession({
-          agent_type: convexAgentType,
-          project_path: projectPath || undefined,
-          git_root: projectPath || undefined,
-          isolated: isolated || undefined,
-          worktree_name: (isolated && worktreeName) ? worktreeName : undefined,
+        const store = useInboxStore.getState();
+        // Optimistic-first — funnel through the shared beginOptimisticSession so the
+        // user's first message renders as pending immediately, never blocked on the
+        // create round-trip (which, while the conversation doesn't yet exist locally,
+        // would leave the view empty and the message "gone"). createQuickSession is the
+        // backend here — rather than store.createSession — because the modal supports
+        // isolated worktrees.
+        const { stubId, ready } = store.beginOptimisticSession({
+          agentType: convexAgentType,
+          projectPath: projectPath || undefined,
+          gitRoot: projectPath || undefined,
+          // Pass the stub as session_id so the server conversation carries it: the
+          // conversation page resolves the (now-stale) stub URL → real id via the
+          // by_session_id resolver after rekey, instead of showing "Not Found".
+          create: (stubId) => createQuickSession({
+            agent_type: convexAgentType,
+            project_path: projectPath || undefined,
+            git_root: projectPath || undefined,
+            session_id: stubId,
+            isolated: isolated || undefined,
+            worktree_name: (isolated && worktreeName) ? worktreeName : undefined,
+          }),
         });
-        // Send the first message in the same step so the daemon's startedSessionTmux
-        // fallback delivers it via the tmux pane while discovery is still in flight.
-        // The 2-step flow (create then type) leaves orphaned 0-message sessions when
-        // the user gives up before discovery resolves.
-        if (trimmedFirstMessage) {
-          try {
-            await sendMessage({
-              conversation_id: conversationId as Id<"conversations">,
-              content: trimmedFirstMessage,
-              client_id: `first-${conversationId}-${Date.now()}`,
-            });
-          } catch (err) {
-            toast.error(err instanceof Error ? err.message : "Failed to send initial message");
-          }
-        }
-        router.push(`/conversation/${conversationId}?focus=1`);
+        const clientId = trimmedFirstMessage
+          ? store.addOptimisticMessage(stubId, trimmedFirstMessage)
+          : undefined;
+        // Deliver the first message once the real id resolves, on the same idempotent
+        // (client_id) rail the in-app composer uses — so the daemon's startedSessionTmux
+        // fallback still gets it promptly. On create failure, fail the bubble (keeps it
+        // visible + retryable) rather than dropping the user's message silently.
+        ready
+          .then((conversationId) => {
+            if (trimmedFirstMessage) store.sendMessage(conversationId, trimmedFirstMessage, undefined, clientId);
+          })
+          .catch((err) => {
+            if (clientId) store.markOptimisticAsFailed(stubId, clientId);
+            toast.error(err instanceof Error ? err.message : "Failed to create session");
+          });
+        router.push(`/conversation/${stubId}?focus=1`);
         onClose();
         setProjectPath("");
         setFirstMessage("");

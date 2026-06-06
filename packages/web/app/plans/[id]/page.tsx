@@ -4,6 +4,7 @@ import { useParams } from "next/navigation";
 import { useMutation, useQuery } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useMountEffect } from "../../../hooks/useMountEffect";
+import { useInboxStore } from "../../../store/inboxStore";
 import { shareOrigin, canonicalUrl } from "../../../lib/utils";
 import { AuthGuard } from "../../../components/AuthGuard";
 import { DashboardLayout } from "../../../components/DashboardLayout";
@@ -92,9 +93,9 @@ function PlanStatusSelector({
 }
 
 function EnsureDocTrigger({ planId }: { planId: any }) {
-  const ensureDoc = useMutation(api.plans.ensureDoc);
+  const ensureDoc = useInboxStore((s) => s.ensurePlanDoc);
   useMountEffect(() => {
-    ensureDoc({ plan_id: planId });
+    ensureDoc(planId);
   });
   return (
     <div className="flex items-center justify-center h-64 text-sol-text-dim text-sm">
@@ -109,7 +110,7 @@ export default function PlanDetailPage() {
 
   const queryArgs = id.startsWith("pl-") ? { short_id: id } : { id };
   const plan = useQuery(api.plans.webGet, queryArgs);
-  const webUpdate = useMutation(api.plans.webUpdate);
+  const webUpdate = useInboxStore((s) => s.updatePlan);
   const generateShareLink = useMutation(api.plans.generateShareLink);
 
   const [activeTab, setActiveTab] = useState<PlanTab>("overview");
@@ -117,7 +118,7 @@ export default function PlanDetailPage() {
   const handleTitleChange = useCallback(
     (title: string) => {
       if (!plan) return;
-      webUpdate({ short_id: plan.short_id, title });
+      webUpdate(plan.short_id, { title });
     },
     [plan, webUpdate]
   );
@@ -125,7 +126,7 @@ export default function PlanDetailPage() {
   const handleStatusChange = useCallback(
     (newStatus: string) => {
       if (!plan) return;
-      webUpdate({ short_id: plan.short_id, status: newStatus });
+      webUpdate(plan.short_id, { status: newStatus });
     },
     [plan, webUpdate]
   );

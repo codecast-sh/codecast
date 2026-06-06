@@ -15,6 +15,7 @@ export type ShortcutAction =
   | 'ui.toggleShortcutsHelp'
   | 'ui.undo'
   | 'ui.redo'
+  | 'inbox.toggleFlatView'
   | 'nav.inbox'
   | 'search.open'
   | 'palette.toggle'
@@ -84,6 +85,7 @@ export const SHORTCUTS: ShortcutDef[] = [
   { key: 'ctrl+tab', action: 'session.mruSwitch', skipInputCheck: true, description: 'Switch session (MRU)' },
 
   { key: 'ctrl+.', action: 'ui.zenToggle', skipInputCheck: true, description: 'Toggle zen mode' },
+  { key: 'ctrl+,', action: 'inbox.toggleFlatView', skipInputCheck: true, description: 'Toggle flat inbox (by creation time)' },
   { key: '?', action: 'ui.toggleShortcutsHelp', description: 'Toggle shortcuts help' },
   { key: 'ctrl+z', action: 'ui.undo', skipInputCheck: true, description: 'Undo' },
   { key: 'ctrl+shift+z', action: 'ui.redo', skipInputCheck: true, description: 'Redo' },

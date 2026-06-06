@@ -5,6 +5,17 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
 }
 
+// Compact relative age, e.g. "now", "3m", "2h", "5d" (no "ago" suffix — meant
+// for tight badges/chips). For full "3m ago" phrasing add the suffix at the
+// call site.
+export function relTimeShort(ms: number): string {
+  const diff = Date.now() - ms;
+  if (diff < 60_000) return "now";
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h`;
+  return `${Math.floor(diff / 86_400_000)}d`;
+}
+
 export function shareOrigin(): string {
   return "https://codecast.sh";
 }

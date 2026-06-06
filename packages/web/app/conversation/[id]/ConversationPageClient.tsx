@@ -34,7 +34,15 @@ function RedirectToInbox({
     // Seed is_own so the inbox picks the right UI before getConversationWithMeta resolves.
     store.syncRecord("conversations", id, { _id: id, is_own: isOwn });
     store.navigateToSession(id);
-    router.replace('/inbox');
+    // Hand the target id to the inbox via its durable `?s=` deep-link param rather
+    // than relying solely on the transient `pendingNavigateId` store flag. When this
+    // redirect lands inside the dashboard tab shell, the tab swaps its mounted route
+    // (conversation → inbox) and the flag can be consumed-and-cleared before the inbox
+    // settles, dropping us onto an auto-selected session or a "Not Found". The URL
+    // param survives that remount and is re-read on every render, so the inbox reliably
+    // injects and shows the right conversation. navigateToSession above still gives the
+    // instant path for sessions already in the queue.
+    router.replace(`/inbox?s=${id}`);
   });
   return <ConversationLoadingSkeleton />;
 }

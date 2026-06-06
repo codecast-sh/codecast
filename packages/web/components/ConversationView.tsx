@@ -1,12 +1,13 @@
 import Link from "next/link";
 import { LogoIcon } from "./Logo";
 import { useRouter } from "next/navigation";
-import { useEffect, useLayoutEffect, useRef, useState, useMemo, useImperativeHandle, forwardRef, useCallback, memo, createContext, useContext, ComponentProps } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, useMemo, useImperativeHandle, forwardRef, useCallback, memo, createContext, useContext, Fragment, ComponentProps } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useEventListener } from "../hooks/useEventListener";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useShortcutContext, useShortcutAction, formatShortcutLabel } from "../shortcuts";
 import { useConvexSync } from "../hooks/useConvexSync";
+import { useShallow } from "zustand/react/shallow";
 import { createPortal } from "react-dom";
 import ReactMarkdownBase from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
@@ -55,6 +56,7 @@ import {
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "./ui/tooltip";
 import { useMutation, useQuery, useConvex, useConvexAuth } from "convex/react";
 import { api as _typedApi } from "@codecast/convex/convex/_generated/api";
+import { DynamicRunView, wfStatusMeta, wfFmtTokens } from "./DynamicRunView";
 const api = _typedApi as any;
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { DeviceBadge, RunOnDeviceItems } from "./DeviceBadge";
@@ -62,10 +64,12 @@ import { CommentPanel } from "./CommentPanel";
 import { PermissionStack } from "./PermissionCard";
 import { copyToClipboard, shareOrigin, canonicalUrl } from "../lib/utils";
 import { MarkdownRenderer, isMarkdownFile, isPlanFile, CollapsibleImage } from "./tools/MarkdownRenderer";
+import { OptionPreview } from "./tools/AskUserQuestionToolView";
 import { useImageGallery, ImageGalleryProvider } from "./ImageGallery";
 import { MessageSharePopover } from "./MessageSharePopover";
 import { PlanBadge, TaskBadge } from "./PlanTaskHoverCard";
 import { EntityIdPill, EntityAwareCode, EntityAwareLink, renderWithMentions } from "./EntityIdPill";
+import { SUMMARY_LABELS, FormattedSummary } from "./FormattedSummary";
 import { entityRemarkPlugins } from "../lib/remarkEntityIds";
 import { parseInboundSessionMessage, isSessionMessage } from "./sessionMessage";
 import { ConversationTree } from "./ConversationTree";
@@ -82,7 +86,7 @@ import { parseFileChangeSummary, parseUnifiedDiffSections } from "../lib/unified
 import { setupDesktopDrag, desktopHeaderClass } from "../lib/desktop";
 import { MessageNavButton } from "./MessageBrowserPopover";
 import type { MentionItem } from "./editor/MentionList";
-import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, Clock, CornerDownRight, CornerUpRight, BookOpen, Check } from "lucide-react";
+import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split } from "lucide-react";
 import { ComposeEditor, type ComposeEditorHandle } from "./editor/ComposeEditor";
 import { useMentionQuery } from "../hooks/useMentionQuery";
 
@@ -161,6 +165,30 @@ function ReactMarkdown(props: ReactMarkdownProps) {
   }, [query, userPlugins]);
   return <ReactMarkdownBase {...props} rehypePlugins={plugins} />;
 }
+
+// Stable plugin/component identities for message-body markdown. Inline literals at
+// the call sites made react-markdown re-run its full parse + rehype-highlight pass on
+// EVERY block re-render — measured as the single largest cost during a session switch
+// (~4.2s self-time / 775 renders). None of these overrides close over props.
+const MESSAGE_MD_REHYPE = [rehypeHighlight];
+const MESSAGE_MD_COMPONENTS = {
+  code: EntityAwareCode,
+  a: EntityAwareLink,
+  img: ({ src, alt }: { src?: string | Blob; alt?: string }) => <CollapsibleImage src={src} alt={alt} />,
+  pre: ({ node, children, ...props }: any) => renderMarkdownPre(node, children, props),
+};
+
+// Memoized message-body renderer: skips the parse+highlight whenever the content value
+// is unchanged, even when the parent message block re-renders (blocks themselves are
+// cheap ~0.5ms; the markdown inside was the cost). The inner ReactMarkdown wrapper still
+// consumes HighlightContext, so active-search highlights update independently of this memo.
+const MessageMarkdown = memo(function MessageMarkdown({ content }: { content: string }) {
+  return (
+    <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE} components={MESSAGE_MD_COMPONENTS}>
+      {content}
+    </ReactMarkdown>
+  );
+});
 
 type ToolCall = {
   id: string;
@@ -499,12 +527,16 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
   const freshProjects = useQuery(api.users.getRecentProjectPaths, { limit: 15 });
   const cachedProjects = useInboxStore((s) => s.recentProjects);
   const setRecentProjects = useInboxStore((s) => s.setRecentProjects);
-  const storeSession = useInboxStore((s) =>
-    s.sessions[conversation._id]
-  );
+  // Narrowed: only _id/project_path/git_root are read here, none of which change on
+  // a heartbeat — so the always-rendered ProjectSwitcher no longer re-renders ~1×/s.
+  const storeSession = useInboxStore(useShallow((s) => {
+    const sess = s.sessions[conversation._id];
+    if (!sess) return undefined;
+    return { _id: sess._id, project_path: sess.project_path, git_root: sess.git_root };
+  }));
   const openNewSession = useInboxStore((s) => s.openNewSession);
   const isolated = useInboxStore((s) => s.isolatedWorktreeMode);
-  const reconfigureSession = useMutation(api.conversations.reconfigureSession);
+  const convCommand = useInboxStore((s) => s.convCommand);
 
   const recentProjects = freshProjects ?? cachedProjects;
 
@@ -587,8 +619,7 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
       if (pending) convexId = await pending.catch(() => undefined);
     }
     if (!convexId) return;
-    reconfigureSession({
-      conversation_id: convexId as Id<"conversations">,
+    convCommand(convexId, "reconfigureSession", {
       project_path: trimmed,
       git_root: trimmed,
       isolated: (forceIsolated ?? isolated) || undefined,
@@ -596,7 +627,7 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
       if (prevPath) useInboxStore.getState().updateSessionProject(convexId!, prevPath);
       toast.error(err instanceof Error ? err.message : "Failed to switch project");
     });
-  }, [storeSession, conversation._id, reconfigureSession, currentPath, isolated]);
+  }, [storeSession, conversation._id, convCommand, currentPath, isolated]);
 
   // Focus lives in a real <input> (below) so the global capture-phase shortcut
   // dispatcher treats us as "typing" and suppresses single-letter hotkeys
@@ -764,8 +795,13 @@ function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedW
   onSelectWorkflow: (id: string) => void;
   workflows: Array<{ _id: string; name: string }> | undefined;
 }) {
-  const reconfigureSession = useMutation(api.conversations.reconfigureSession);
-  const storeSession = useInboxStore((s) => s.sessions[conversation._id]);
+  const convCommand = useInboxStore((s) => s.convCommand);
+  // Narrowed: only _id/agent_type are read here — neither churns on a heartbeat.
+  const storeSession = useInboxStore(useShallow((s) => {
+    const sess = s.sessions[conversation._id];
+    if (!sess) return undefined;
+    return { _id: sess._id, agent_type: sess.agent_type };
+  }));
   const currentAgent = storeSession?.agent_type || conversation.agent_type || "claude_code";
 
   const handleAgentSwitch = useCallback(async (agentType: "claude_code" | "codex" | "cursor" | "gemini") => {
@@ -775,15 +811,14 @@ function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedW
       useInboxStore.getState().setConversationAgent(id, agentType);
 
       if (isConvexId(id)) {
-        reconfigureSession({
-          conversation_id: id as Id<"conversations">,
+        convCommand(id, "reconfigureSession", {
           agent_type: agentType,
         }).catch(() => {});
       }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to switch agent");
     }
-  }, [storeSession, conversation._id, reconfigureSession, currentAgent]);
+  }, [storeSession, conversation._id, convCommand, currentAgent]);
 
   const agents = [
     { type: "claude_code" as const, label: "Claude" },
@@ -1315,6 +1350,9 @@ function classifyUserMessage(
     if (cmdName || t === '/compact') return { kind: 'compaction_prompt' };
     return { kind: 'command' };
   }
+  // Legacy stored form: command tags were stripped at sync time, leaving "name\n/name\nargs".
+  // isCommandMessage misses it (no leading tag/slash), so catch it explicitly.
+  if (isStrippedCommand(tNoReminders)) return { kind: 'command' };
   if (agentType === "codex" && isCodexTurnAbortedMessage(t)) return { kind: 'interrupt', tone: 'amber' };
   if (isInterruptMessage(t)) return { kind: 'interrupt', tone: 'sky' };
   if (isSkillExpansion(t)) return { kind: 'skill_expansion' };
@@ -1589,6 +1627,36 @@ function TaskProgressRow({ taskStats }: { taskStats: { total: number; done: numb
     </div>
   );
 }
+
+// Tool/task stats live in their own leaves so getConversationToolStats — which
+// re-scans ALL messages and updates continuously as a live session streams — re-renders
+// only these tiny consumers instead of the 11k-line ConversationView. Both leaves share
+// one Convex subscription (identical query+args are deduped); the header menu item only
+// mounts (and subscribes) while the dropdown is open.
+function useConversationTaskStats(conversationId: string | undefined) {
+  const enabled = useDeferUntilSettled(conversationId);
+  const toolStats = useQuery(
+    api.conversations.getConversationToolStats,
+    enabled && conversationId && isConvexId(conversationId) ? { conversation_id: conversationId } : "skip"
+  );
+  return toolStats?.taskStats ?? null;
+}
+
+const ConversationTaskProgress = memo(function ConversationTaskProgress({ conversationId }: { conversationId: string }) {
+  const taskStats = useConversationTaskStats(conversationId);
+  if (!taskStats) return null;
+  return <TaskProgressRow taskStats={taskStats} />;
+});
+
+const ConversationTaskStatsMenuItem = memo(function ConversationTaskStatsMenuItem({ conversationId }: { conversationId: string }) {
+  const taskStats = useConversationTaskStats(conversationId);
+  if (!taskStats) return null;
+  return (
+    <DropdownMenuItem disabled>
+      Tasks: {taskStats.done}/{taskStats.total}
+    </DropdownMenuItem>
+  );
+});
 
 function truncateLines(text: string, maxLines: number): { text: string; truncated: boolean; totalLines: number } {
   const lines = text.split("\n");
@@ -3444,7 +3512,7 @@ function PlanModeBlock({ tool, result, onSendMessage }: { tool: ToolCall; result
 const _askUserSentState = new Map<string, Record<number, { key: string; label: string; text?: string }>>();
 
 function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall; result?: ToolResult; onSendMessage?: (content: string) => void }) {
-  let parsedInput: { questions?: Array<{ question: string; header?: string; options: Array<{ label: string; description?: string }>; multiSelect?: boolean; isConfirmation?: boolean }>; answers?: Record<string, string> } = {};
+  let parsedInput: { questions?: Array<{ question: string; header?: string; options: Array<{ label: string; description?: string; preview?: string }>; multiSelect?: boolean; isConfirmation?: boolean }>; answers?: Record<string, string> } = {};
   try { parsedInput = JSON.parse(tool.input); } catch {}
   const [sent, setSent] = useState(() => _askUserSentState.has(tool.id));
   const [selections, setSelections] = useState<Record<number, { key: string; label: string; text?: string }>>(() => _askUserSentState.get(tool.id) ?? {});
@@ -3525,14 +3593,13 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
               )}
             </div>
             <div className="text-xs text-sol-text-muted">{q.question}</div>
-            <div className={q.options.some(o => o.description) ? "flex flex-col gap-1" : "flex flex-wrap gap-1"}>
+            <div className={q.options.some(o => o.description || o.preview) ? "flex flex-col gap-1" : "flex flex-wrap gap-1"}>
               {q.options.map((opt, j) => {
                 const cleanLabel = opt.label.replace(" (Recommended)", "");
                 const isSelected = answer !== undefined && (opt.label === answer || cleanLabel === answer);
                 const isLocalSelected = !isOtherSelected && sel?.label === cleanLabel;
-                return isInteractive ? (
+                const chip = isInteractive ? (
                   <button
-                    key={j}
                     onClick={() => {
                       setOtherOpen(prev => ({ ...prev, [i]: false }));
                       const pollKey = isConfirmation ? (j === 0 ? "Enter" : "Escape") : String(j + 1);
@@ -3546,14 +3613,14 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
                         onSendMessage!(JSON.stringify({ __cc_poll: true, keys: [pollKey], display: cleanLabel }));
                       }
                     }}
-                    className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-lg border transition-colors cursor-pointer ${
+                    className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-lg border transition-colors cursor-pointer text-left ${
                       isLocalSelected
                         ? "bg-sol-violet/20 border-sol-violet/50 text-sol-violet"
                         : "border-sol-violet/30 text-sol-violet/80 hover:bg-sol-violet/15 hover:border-sol-violet/50 hover:text-sol-violet"
                     }`}
                   >
                     {isLocalSelected && (
-                      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                      <svg className="w-3 h-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
                         <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
                       </svg>
                     )}
@@ -3562,7 +3629,6 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
                   </button>
                 ) : (
                   <span
-                    key={j}
                     className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-lg border ${
                       isSelected || isLocalSelected
                         ? "bg-sol-green/15 border-sol-green/40 text-sol-green"
@@ -3570,13 +3636,26 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
                     }`}
                   >
                     {(isSelected || isLocalSelected) && (
-                      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                      <svg className="w-3 h-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
                         <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
                       </svg>
                     )}
                     {opt.label}
                     {opt.description && <span className="text-sol-text-dim ml-1">{opt.description}</span>}
                   </span>
+                );
+                // An option's `preview` is the ASCII/mockup the terminal shows in a side
+                // box — surface it so the web user sees the same detail. Show it while
+                // interactive (to read before clicking, since one click submits) and on
+                // the chosen option once answered.
+                const showPreview = !!opt.preview && (isInteractive || isSelected || isLocalSelected);
+                return showPreview ? (
+                  <div key={j} className="flex flex-col items-start gap-0.5">
+                    {chip}
+                    <OptionPreview preview={opt.preview!} />
+                  </div>
+                ) : (
+                  <Fragment key={j}>{chip}</Fragment>
                 );
               })}
               {isInteractive && !otherOpen[i] && (
@@ -3869,6 +3948,154 @@ function CommandStatusLine({ content: rawContent, timestamp }: { content: string
         {cmdType || "status"}
       </span>
       <span className="font-mono truncate">{displayText}</span>
+    </div>
+  );
+}
+
+// A slash command shows up in the transcript as two consecutive user messages: the
+// invocation (<command-name> + <command-args>) and its expansion (the body of the
+// command's .md file). parseCommandInvocation pulls the name + the args the user
+// actually typed out of the first; cleanCommandExpansion strips the wrapper tags and
+// skill preamble off the second so it renders as clean markdown.
+//
+// Three stored forms are handled:
+//   tagged    "<command-message>x</command-message>\n<command-name>/x</command-name>\n<command-args>a</command-args>"
+//   slash     "/x a"                                   (user-typed, single line)
+//   stripped  "x\n/x\na"                               (legacy: tags removed, values kept on lines)
+// The stripped form is what older sync versions persisted; isStrippedCommand below
+// recognizes it (line 2 is "/" + line 1) so it still classifies + renders as a command.
+function isStrippedCommand(content: string): { cmdName: string; rest: string } | null {
+  const lines = content.split("\n");
+  const first = lines[0]?.trim() ?? "";
+  if (lines.length >= 2 && /^[A-Za-z][\w-]*$/.test(first) && lines[1].trim() === "/" + first) {
+    return { cmdName: first, rest: lines.slice(2).join("\n") };
+  }
+  return null;
+}
+
+function parseCommandInvocation(raw: string): { cmdName: string; args: string } {
+  const stripImages = (s: string) =>
+    s.replace(/\[Image[:\s][^\]]*\]/gi, "").replace(/<image\b[^>]*\/?>\s*(?:<\/image>)?/gi, "").trim();
+  const content = raw
+    .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "")
+    .replace(/<task-reminder>[\s\S]*?<\/task-reminder>/g, "")
+    .trim();
+  const nameMatch =
+    content.match(/<command-name>([^<]*)<\/command-name>/) ||
+    content.match(/<command-message>([^<]*)<\/command-message>/);
+  if (nameMatch) {
+    const argsMatch = content.match(/<command-args>([\s\S]*?)<\/command-args>/);
+    return { cmdName: nameMatch[1].replace(/^\//, "").trim(), args: stripImages(argsMatch?.[1] ?? "") };
+  }
+  const stripped = isStrippedCommand(content);
+  if (stripped) return { cmdName: stripped.cmdName, args: stripImages(stripped.rest) };
+  const slash = content.match(/^\/([\w-]+)([\s\S]*)$/);
+  if (slash) return { cmdName: slash[1], args: stripImages(slash[2] ?? "") };
+  return { cmdName: "", args: stripImages(content) };
+}
+
+function cleanCommandExpansion(raw: string): string {
+  return raw
+    .replace(/<command-name>[^<]*<\/command-name>\s*/g, "")
+    .replace(/<command-message>[^<]*<\/command-message>\s*/g, "")
+    .replace(/<command-args>[\s\S]*?<\/command-args>\s*/g, "")
+    .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "")
+    .replace(/<task-reminder>[\s\S]*?<\/task-reminder>/g, "")
+    .replace(/^Base directory for this skill:[^\n]*\n?/, "")
+    .trim();
+}
+
+const CMD_MD_COMPONENTS = {
+  code: EntityAwareCode,
+  a: EntityAwareLink,
+  img: ({ src, alt }: { src?: string; alt?: string }) => <CollapsibleImage src={src} alt={alt} />,
+  pre: ({ node, children, ...props }: any) => renderMarkdownPre(node, children, props),
+};
+
+// Renders a slash command as a single user-message-styled block: the command chip +
+// the args the user typed (in full), with the command's .md body tucked behind a
+// disclosure. Replaces the old two-pill rendering (invocation status line + a separate
+// skill-expansion block). Falls back to the lightweight CommandStatusLine for command
+// *output* (local-command-stdout/stderr, caveats), which carries no command name.
+function CommandMessageBlock({
+  content, expansion, timestamp, userName, avatarUrl, agentType, messageId,
+}: {
+  content: string;
+  expansion?: string;
+  timestamp: number;
+  userName?: string;
+  avatarUrl?: string | null;
+  agentType?: string;
+  messageId?: string;
+}) {
+  const [showSource, setShowSource] = useState(false);
+  const { cmdName, args } = parseCommandInvocation(content);
+
+  if (!cmdName) return <CommandStatusLine content={content} timestamp={timestamp} />;
+
+  const source = expansion ? cleanCommandExpansion(expansion) : "";
+  const argsNorm = args.replace(/\s+/g, " ").trim();
+  const sourceNorm = source.replace(/\s+/g, " ").trim();
+  // Skip the disclosure when the expansion is empty or just re-echoes the args
+  // (some commands expand to "/cmd <args>" with no body of their own).
+  const hasSource =
+    sourceNorm.length > 0 &&
+    sourceNorm !== argsNorm &&
+    !(argsNorm.length > 0 && sourceNorm.endsWith(argsNorm) && sourceNorm.length <= argsNorm.length + cmdName.length + 4);
+
+  const builtinDesc = getBuiltinCommands(agentType).find(c => c.name === cmdName)?.description;
+  const argsIsMarkdown = hasRichMarkdown(args);
+
+  const handleCopy = () => {
+    const full = `/${cmdName}${args ? " " + args : ""}`;
+    setTimeout(() => { copyToClipboard(full).then(() => toast.success("Copied!")).catch(() => toast.error("Failed to copy")); });
+  };
+
+  return (
+    <div id={messageId ? `msg-${messageId}` : undefined} className="group relative scroll-mt-20 bg-sol-blue/10 -mx-4 px-4 py-4 rounded-lg border border-sol-blue/30 mb-6">
+      <div className="absolute -top-2 right-0 opacity-0 group-hover:opacity-100 transition-opacity bg-sol-bg rounded shadow-md px-0.5 z-10">
+        <button onClick={handleCopy} className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary" title="Copy command" aria-label="Copy command">
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
+        </button>
+      </div>
+
+      <div className="flex items-center gap-2 mb-2">
+        <UserIcon avatarUrl={avatarUrl} />
+        <span className="text-sol-blue text-xs font-medium">{userName || "You"}</span>
+        <span className="text-sol-text-dim text-xs" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
+      </div>
+
+      <div className="pl-8">
+        <div className="flex items-center gap-1.5 flex-wrap mb-1.5">
+          <span className="inline-flex items-center gap-1 font-mono text-xs text-sol-cyan bg-sol-cyan/10 border border-sol-cyan/25 rounded px-1.5 py-0.5">
+            <svg className="w-3 h-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z" /></svg>
+            /{cmdName}
+          </span>
+          {builtinDesc && <span className="text-[11px] text-sol-text-dim">{builtinDesc}</span>}
+        </div>
+
+        {args && (
+          <div className={`text-sol-text text-sm break-words ${argsIsMarkdown ? "prose prose-invert prose-sm max-w-none" : "whitespace-pre-wrap"}`}>
+            {argsIsMarkdown
+              ? <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={[rehypeHighlight]} components={CMD_MD_COMPONENTS}>{args}</ReactMarkdown>
+              : renderWithMentions(args)}
+          </div>
+        )}
+
+        {hasSource && (
+          <div className="mt-2">
+            <button onClick={() => setShowSource(s => !s)} className="flex items-center gap-1 text-[11px] text-sol-text-dim hover:text-sol-cyan transition-colors">
+              <svg className={`w-3 h-3 transition-transform ${showSource ? "rotate-90" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" /></svg>
+              {showSource ? "Hide command" : "Show command"}
+            </button>
+            {showSource && (
+              <div className="mt-1.5 rounded-md bg-sol-bg-alt/30 border border-sol-border/20 p-3 text-xs text-sol-text-muted leading-relaxed prose prose-invert prose-sm max-w-none overflow-x-auto">
+                <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={[rehypeHighlight]} components={CMD_MD_COMPONENTS}>{source}</ReactMarkdown>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -4220,23 +4447,8 @@ function SkillCard({ name, description, path }: { name?: string; description?: s
   );
 }
 
-export const SUMMARY_LABELS = /\b(Goal|Status|Next|Blocked|Plan|Result|Outcome|Context|Progress):/g;
-
-export function FormattedSummary({ text }: { text: string }) {
-  const parts = text.split(SUMMARY_LABELS);
-  if (parts.length <= 1) return <>{text}</>;
-  return (
-    <>
-      {parts.map((part, i) =>
-        i % 2 === 1 ? (
-          <span key={i} className="font-semibold text-sol-text-primary">{i > 1 ? '\n' : ''}{part}: </span>
-        ) : (
-          <span key={i}>{part}</span>
-        )
-      )}
-    </>
-  );
-}
+// SUMMARY_LABELS and FormattedSummary now live in ./FormattedSummary (imported
+// above) so EntityIdPill can reuse them without an import cycle.
 
 type TeammateMessagePart = { type: 'text'; content: string } | { type: 'teammate'; teammateId: string; color?: string; summary?: string; content: string; };
 
@@ -4647,9 +4859,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
                 {tmParts.map((part, i) => part.type === 'teammate' ? (
                   <TeammateMessageCard key={i} teammateId={part.teammateId} color={part.color} summary={part.summary} content={part.content} />
                 ) : hasRichMarkdown(part.content) ? (
-                  <ReactMarkdown key={i} remarkPlugins={entityRemarkPlugins} rehypePlugins={[rehypeHighlight]}
-                    components={{ code: EntityAwareCode, a: EntityAwareLink, img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} />, pre: ({ node, children, ...props }) => renderMarkdownPre(node, children, props) }}
-                  >{part.content}</ReactMarkdown>
+                  <MessageMarkdown key={i} content={part.content} />
                 ) : <span key={i} className="whitespace-pre-wrap">{renderWithMentions(part.content)}</span>)}
               </div>
             );
@@ -4662,24 +4872,13 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
                 {parts.map((part, i) => part.type === 'skill' ? (
                   <SkillCard key={i} name={part.skillName} description={part.skillDesc} path={part.skillPath} />
                 ) : isMarkdown || hasRichMarkdown(part.content) ? (
-                  <ReactMarkdown key={i} remarkPlugins={entityRemarkPlugins} rehypePlugins={[rehypeHighlight]}
-                    components={{ code: EntityAwareCode, a: EntityAwareLink, img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} />, pre: ({ node, children, ...props }) => renderMarkdownPre(node, children, props) }}
-                  >{part.content}</ReactMarkdown>
+                  <MessageMarkdown key={i} content={part.content} />
                 ) : <span key={i}>{renderWithMentions(part.content)}</span>)}
               </div>
             );
           }
           return isMarkdown ? (
-            <ReactMarkdown
-              remarkPlugins={entityRemarkPlugins}
-              rehypePlugins={[rehypeHighlight]}
-              components={{
-                code: EntityAwareCode,
-                a: EntityAwareLink,
-                img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} />,
-                pre: ({ node, children, ...props }) => renderMarkdownPre(node, children, props),
-              }}
-            >{displayContent}</ReactMarkdown>
+            <MessageMarkdown content={displayContent} />
           ) : <>{renderWithMentions(displayContent)}</>;
         })()}
         {!effectivelyCollapsed && !contentExpanded && isOverflowing && (
@@ -5167,32 +5366,11 @@ function AssistantBlockImpl({
                       {insightParts.map((part, i) => part.type === 'insight' ? (
                         <InsightCard key={i} label={part.label} content={part.content} />
                       ) : (
-                        <ReactMarkdown
-                          key={i}
-                          remarkPlugins={entityRemarkPlugins}
-                          rehypePlugins={[rehypeHighlight]}
-                          components={{
-                            code: EntityAwareCode,
-                            a: EntityAwareLink,
-                            img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} />,
-                            pre: ({ node, children, ...props }) => renderMarkdownPre(node, children, props),
-                          }}
-                        >{part.content}</ReactMarkdown>
+                        <MessageMarkdown key={i} content={part.content} />
                       ))}
                     </div>
                   ) : (
-                    <ReactMarkdown
-                      remarkPlugins={entityRemarkPlugins}
-                      rehypePlugins={[rehypeHighlight]}
-                      components={{
-                        code: EntityAwareCode,
-                        a: EntityAwareLink,
-                        img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} />,
-                        pre: ({ node, children, ...props }) => renderMarkdownPre(node, children, props),
-                      }}
-                    >
-                      {displayContent}
-                    </ReactMarkdown>
+                    <MessageMarkdown content={displayContent} />
                   )}
                   {!contentExpanded && isOverflowing && (
                     <div className="absolute bottom-0 left-0 right-0 h-8 pointer-events-none bg-gradient-to-b from-transparent to-[var(--sol-bg)]" />
@@ -5437,6 +5615,38 @@ function SystemBlockImpl({ content, subtype, timestamp, messageUuid, messageId, 
   );
 }
 
+// Inline conversation card for a dynamic-workflow run. Reads live run state by id
+// (posted once as an anchor message), so it updates as the run progresses.
+function DynamicRunCard({ runId, name }: { runId?: string; name?: string }) {
+  const run = useQuery(api.workflow_runs.get, runId ? { id: runId as any } : "skip");
+  const status = run?.status as string | undefined;
+  const sm = wfStatusMeta(status);
+  return (
+    <div className="my-2 rounded-lg border border-sol-cyan/25 bg-sol-cyan/[0.06] overflow-hidden">
+      <div className="flex items-center gap-2 px-3 py-2 border-b border-sol-cyan/15">
+        <svg className="w-3.5 h-3.5 text-sol-cyan flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M4 5a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM14 5a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1V5zM4 15a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1v-4zM14 15a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z" />
+        </svg>
+        <span className="text-[10px] text-sol-cyan uppercase tracking-wider font-semibold">Workflow</span>
+        <span className="text-xs text-sol-text-muted truncate">{run?.workflow_name || name || "workflow"}</span>
+        <div className="ml-auto flex items-center gap-2 flex-shrink-0">
+          {run?.agent_count != null && <span className="text-[10px] text-sol-text-dim">{run.agent_count} agents</span>}
+          {run?.total_tokens ? <span className="text-[10px] text-sol-text-dim/70">{wfFmtTokens(run.total_tokens)} tok</span> : null}
+          {status && (
+            <span className={`text-[10px] flex items-center gap-1 ${sm.cls}`}>
+              {sm.dot ? <span className={`w-1.5 h-1.5 rounded-full ${sm.dot}`} /> : sm.icon}
+              {status}
+            </span>
+          )}
+        </div>
+      </div>
+      <div className="px-3 py-2">
+        {run ? <DynamicRunView run={run} compact /> : <span className="text-[11px] text-sol-text-dim">loading run…</span>}
+      </div>
+    </div>
+  );
+}
+
 function WorkflowEventBlock({ content, workflowRun, onGateChoice, gateResponding }: {
   content: string;
   workflowRun?: { _id: string; status: string; gate_response?: string | null } | null;
@@ -5498,6 +5708,10 @@ function WorkflowEventBlock({ content, workflowRun, onGateChoice, gateResponding
         </div>
       </div>
     );
+  }
+
+  if (wf === "workflow_run") {
+    return <DynamicRunCard runId={event.run_id} name={event.name} />;
   }
 
   if (wf === "gate") {
@@ -6258,7 +6472,7 @@ const ForkReplyInput = memo(function ForkReplyInput({ userName, userAvatar, onFo
   );
 });
 
-export const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, onSendAndDismiss, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, isSessionStarting, isSessionReady, sessionId, agentType, agentStatus, deliveryStatus, pendingPermissionsCount, hasAskUserQuestion, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onSendEscape, onOpenNavigator, onPopulateInput, permissionMode, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch, onGateSend, skills, filePaths, mentionItemsRef, onMentionQuery, onSubmitWithIntent }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; onSendAndDismiss?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; isSessionStarting?: boolean; isSessionReady?: boolean; sessionId?: string; agentType?: string; agentStatus?: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "starting" | "resuming"; deliveryStatus?: string; pendingPermissionsCount?: number; hasAskUserQuestion?: boolean; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string) => void) | null>; permissionMode?: string; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void>; onGateSend?: (content: string) => Promise<void>; skills?: SkillItem[]; filePaths?: string[]; mentionItemsRef?: React.MutableRefObject<MentionItem[]>; onMentionQuery?: (q: string) => void; onSubmitWithIntent?: (navigate: boolean) => void }) {
+export const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, onSendAndDismiss, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, isSessionStarting, isSessionReady, sessionId, agentType, agentStatus, deliveryStatus, pendingPermissionsCount, hasAskUserQuestion, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onSendEscape, onOpenNavigator, onPopulateInput, permissionMode, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch, onGateSend, skills, filePaths, mentionItemsRef, onMentionQuery, onSubmitWithIntent, onDidSend }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; onSendAndDismiss?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; isSessionStarting?: boolean; isSessionReady?: boolean; sessionId?: string; agentType?: string; agentStatus?: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "starting" | "resuming"; deliveryStatus?: string; pendingPermissionsCount?: number; hasAskUserQuestion?: boolean; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string) => void) | null>; permissionMode?: string; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void>; onGateSend?: (content: string) => Promise<void>; skills?: SkillItem[]; filePaths?: string[]; mentionItemsRef?: React.MutableRefObject<MentionItem[]>; onMentionQuery?: (q: string) => void; onSubmitWithIntent?: (navigate: boolean) => void; onDidSend?: (info: { conversationId: string; content: string; clientId: string }) => void }) {
   const sacredKey = sessionId || conversationId;
   const sacredKeyRef = useRef(sacredKey);
   const convIdRef = useRef(conversationId);
@@ -6276,17 +6490,20 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   const [composeHasContent, setComposeHasContent] = useState(false);
   const composeRef = useRef<ComposeEditorHandle>(null);
   const { user: mentionUser } = useCurrentUser();
-  const composeSession = useInboxStore((s) => s.sessions[conversationId]);
+  // Narrowed: MessageInput only needs the session's team_id (for mention scope), which
+  // never changes on a heartbeat. Subscribing to the whole row re-rendered the input
+  // (and its draft textarea) ~1×/s for a live session.
+  const composeTeamId = useInboxStore((s) => s.sessions[conversationId]?.team_id);
   const memberTeams = useInboxStore((s) => s.teams);
   const mentionScope = useMemo(() => {
-    const teamId = composeSession?.team_id ? String(composeSession.team_id) : null;
+    const teamId = composeTeamId ? String(composeTeamId) : null;
     const isMember = teamId
       ? (memberTeams || []).some((t: any) => String(t._id) === teamId)
       : false;
     if (teamId && isMember) return { kind: "team" as const, teamId };
     const uid = mentionUser?._id ? String(mentionUser._id) : "";
     return uid ? { kind: "personal" as const, userId: uid } : { kind: "any" as const };
-  }, [composeSession?.team_id, memberTeams, mentionUser?._id]);
+  }, [composeTeamId, memberTeams, mentionUser?._id]);
   const composeMentionQuery = useMentionQuery(mentionScope);
   const [shortcutTooltip, setShortcutTooltip] = useState<{ x: number; y: number } | null>(null);
   const [pendingMessageId, setPendingMessageId] = useState<Id<"pending_messages"> | null>(null);
@@ -6305,7 +6522,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // sent message undeliverable (delivery genuinely failed over many minutes), reset per message.
   const autoRestartTriggeredRef = useRef(false);
   const resumeSessionMutation = useMutation(api.users.resumeSession);
-  const restartSessionMutation = useMutation(api.conversations.restartSession);
+  const convCommand = useInboxStore((s) => s.convCommand);
   const cancelMessageMutation = useMutation(api.pendingMessages.cancelPendingMessage);
   const addOptimistic = useInboxStore((s) => s.addOptimisticMessage);
   const markAsQueued = useInboxStore((s) => s.markOptimisticAsQueued);
@@ -6673,7 +6890,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     try {
       if (shouldRestart) {
         setIsRestarting(true);
-        await restartSessionMutation({ conversation_id: conversationId as Id<"conversations"> });
+        await convCommand(conversationId, "restartSession");
       } else {
         await resumeSessionMutation({ conversation_id: conversationId as Id<"conversations"> });
       }
@@ -6682,7 +6899,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       setIsResuming(false);
       setIsRestarting(false);
     }
-  }, [conversationId, resumeSessionMutation, restartSessionMutation, isResuming, isExistingMessageDead, messageStatus?.status]);
+  }, [conversationId, resumeSessionMutation, convCommand, isResuming, isExistingMessageDead, messageStatus?.status]);
 
   // Stop the (otherwise indefinite) retry loop for a message that genuinely can't land. Resolve
   // the id from either the precise tracker or the conversation-scoped pending row, since a reload
@@ -6747,10 +6964,10 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     autoRestartTriggeredRef.current = true;
     setIsRestarting(true);
     toast("Message couldn't be delivered — restarting session…");
-    restartSessionMutation({ conversation_id: conversationId as Id<"conversations"> })
+    convCommand(conversationId, "restartSession")
       .then(() => setIsResuming(true))
       .catch(() => { setIsRestarting(false); toast.error("Session restart failed"); });
-  }, [messageStatus?.status, isAgentActive, messageReachedSession, conversationId, restartSessionMutation]);
+  }, [messageStatus?.status, isAgentActive, messageReachedSession, conversationId, convCommand]);
 
   const updateDraft = useCallback((text: string, images?: Array<{ storageId?: string; previewUrl?: string; name?: string }> | null) => {
     if (!text && (!images || images.length === 0)) {
@@ -7121,6 +7338,10 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
         const expandedContent = await expandMentionsInMessage(trimmed);
         const resolvedId = targetCanQuery ? targetConvId : await useInboxStore.getState().awaitConvexId(targetConvId);
         sendMessage(resolvedId, expandedContent, ids.length > 0 ? ids : undefined, clientId);
+        // Hand the resolved id + the send's clientId to the popup so it can paint
+        // this same message optimistically in the MAIN window (send & open) without
+        // a second send — same clientId means it dedupes against the server echo.
+        onDidSend?.({ conversationId: resolvedId, content: expandedContent, clientId });
         setOptimisticSending(false);
         setSentAt(Date.now());
         sentContentRef.current = trimmed;
@@ -7411,7 +7632,12 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     if (onSubmitWithIntent && e.key === "Enter" && !e.shiftKey && !e.altKey) {
       e.preventDefault();
       const navigate = e.metaKey || e.ctrlKey;
-      handleSubmit(e).then(() => onSubmitWithIntent(navigate));
+      // Kick off the durable first-message send — the optimistic insert and the
+      // outbox enqueue run synchronously at the top of handleSubmit, so the send
+      // is already committed by the time this returns. DON'T await it: dismiss the
+      // popup on the same tick so it never lingers behind a slow create/send.
+      void handleSubmit(e);
+      onSubmitWithIntent(navigate);
       return;
     }
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
@@ -8140,15 +8366,14 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const convLink = useCallback((id: string) => `/conversation/${id}`, []);
 
   const generateShareLink = useMutation(api.messages.generateMessageShareLink);
-  const forkFromMessage = useMutation(api.conversations.forkFromMessage);
-  const sendEscape = useMutation(api.conversations.sendEscapeToSession);
-  const sendKeys = useMutation(api.conversations.sendKeysToSession);
-  const rewindSession = useMutation(api.conversations.rewindSession);
+  // Session-control commands (fork/restart/repair/rewind/sendKeys/sendEscape)
+  // route through the local-first convCommand action — optimistic + dispatch
+  // outbox — instead of direct useMutation. The command strings map to Convex
+  // mutations via SESSION_COMMANDS in convex/dispatch.ts.
+  const convCommand = useInboxStore((s) => s.convCommand);
   // Durable send via the dispatch outbox (survives reload mid-send).
   const sendInlineMessage = useInboxStore((s) => s.sendMessage);
-  const toggleFavoriteMutation = useMutation(api.conversations.toggleFavorite);
-  const restartSession = useMutation(api.conversations.restartSession);
-  const repairSession = useMutation(api.conversations.repairSession);
+  const toggleFavoriteMutation = useInboxStore((s) => s.toggleFavorite);
 
   const addOptimisticMsg = useInboxStore((s) => s.addOptimisticMessage);
   const moveDraft = useInboxStore((s) => s.moveDraft);
@@ -8167,7 +8392,24 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     requestAnimationFrame(() => scrollToBottomFnRef.current());
     sendInlineMessage(effectiveConversationId, content, undefined, clientId);
   }, [conversation, effectiveConversationId, sendInlineMessage, addOptimisticMsg, setUserScrolled]);
-  const managedSession = useInboxStore((s) => effectiveConversationId ? s.sessions[effectiveConversationId] : null);
+  // Narrow subscription: this monolith only reads agent_status, permission_mode,
+  // session_id, is_connected, tmux_session and team_id from the session row — but
+  // the row's identity churns every ~1s heartbeat (updated_at / last_heartbeat /
+  // is_idle overlay). Subscribing to the whole row re-rendered the entire
+  // ConversationView (~120ms) on every heartbeat for a LIVE session. useShallow
+  // re-renders only when one of these six fields actually changes.
+  const managedSession = useInboxStore(useShallow((s) => {
+    const sess = effectiveConversationId ? s.sessions[effectiveConversationId] : null;
+    if (!sess) return null;
+    return {
+      agent_status: sess.agent_status,
+      permission_mode: sess.permission_mode,
+      session_id: sess.session_id,
+      is_connected: sess.is_connected,
+      tmux_session: sess.tmux_session,
+      team_id: sess.team_id,
+    };
+  }));
   const isSessionLive = !!managedSession?.is_connected;
 
   const workflowRun = useQuery(
@@ -8210,13 +8452,13 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     // convexConvId is undefined until the session exists server-side; a not-yet-started
     // draft carries a stub id and has no live process to receive keystrokes.
     if (!conversation || !effectiveIsOwner || conversation.status !== "active" || !convexConvId) return;
-    sendKeys({ conversation_id: convexConvId, keys: "BTab" });
+    convCommand(convexConvId, "sendKeysToSession", { keys: "BTab" });
     const currentMode = optimisticMode || managedSession?.permission_mode || "default";
     const nextIdx = (CC_MODE_ORDER.indexOf(currentMode) + 1) % CC_MODE_ORDER.length;
     setOptimisticMode(CC_MODE_ORDER[nextIdx]);
     clearTimeout(optimisticTimerRef.current);
     optimisticTimerRef.current = setTimeout(() => setOptimisticMode(null), 8000);
-  }, [conversation, effectiveIsOwner, sendKeys, optimisticMode, managedSession?.permission_mode, convexConvId]);
+  }, [conversation, effectiveIsOwner, convCommand, optimisticMode, managedSession?.permission_mode, convexConvId]);
 
   const handleEnableBypass = useCallback(() => {
     if (!conversation || !effectiveIsOwner || conversation.status !== "active" || !convexConvId) return;
@@ -8227,11 +8469,11 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     const steps = (targetIdx - currentIdx + CC_MODE_ORDER.length) % CC_MODE_ORDER.length;
     if (steps === 0) return;
     const keys = Array(steps).fill("BTab").join(" ");
-    sendKeys({ conversation_id: convexConvId, keys });
+    convCommand(convexConvId, "sendKeysToSession", { keys });
     setOptimisticMode("bypassPermissions");
     clearTimeout(optimisticTimerRef.current);
     optimisticTimerRef.current = setTimeout(() => setOptimisticMode(null), 8000);
-  }, [conversation, effectiveIsOwner, sendKeys, optimisticMode, managedSession?.permission_mode, convexConvId]);
+  }, [conversation, effectiveIsOwner, convCommand, optimisticMode, managedSession?.permission_mode, convexConvId]);
   useWatchEffect(() => {
     if (optimisticMode && managedSession?.permission_mode === optimisticMode) {
       setOptimisticMode(null);
@@ -8463,8 +8705,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     });
     forkSetMessages(forkSessionId, []);
     try {
-      const result = await forkFromMessage({
-        conversation_id: conversation._id.toString(),
+      const result = await convCommand(conversation._id.toString(), "forkFromMessage", {
         message_uuid: messageUuid,
         session_id: forkSessionId,
       });
@@ -8481,7 +8722,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       toast.error(err instanceof Error ? err.message : "Failed to fork");
       return null;
     }
-  }, [conversation?._id, conversation?.title, forkFromMessage, forkSetMessages, addOptimisticFork, resolveForkSessionId, seedForkSession, currentUser?._id, conversation?.user]);
+  }, [conversation?._id, conversation?.title, convCommand, forkSetMessages, addOptimisticFork, resolveForkSessionId, seedForkSession, currentUser?._id, conversation?.user]);
 
   const handleForkFromMessage = useCallback(async (messageUuid: string) => {
     const tl = timelineRef.current;
@@ -8654,9 +8895,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
   const handleSendEscape = useCallback(() => {
     if (!conversation || !effectiveIsOwner || conversation.status !== "active" || !convexConvId) return;
-    sendEscape({ conversation_id: convexConvId });
+    convCommand(convexConvId, "sendEscapeToSession");
     toast.info("Escape sent to session");
-  }, [conversation, effectiveIsOwner, sendEscape, convexConvId]);
+  }, [conversation, effectiveIsOwner, convCommand, convexConvId]);
 
   const handleMessageSent = useCallback(() => {
     setUserScrolled(false);
@@ -8674,9 +8915,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     setNavigatorOpen(false);
     handleForkFromMessage(msg.message_uuid);
     if (effectiveIsOwner && conversation.status === "active" && convexConvId) {
-      rewindSession({ conversation_id: convexConvId, steps_back: indexFromEnd + 1 });
+      convCommand(convexConvId, "rewindSession", { steps_back: indexFromEnd + 1 });
     }
-  }, [handleForkFromMessage, conversation, effectiveIsOwner, rewindSession, convexConvId]);
+  }, [handleForkFromMessage, conversation, effectiveIsOwner, convCommand, convexConvId]);
 
   const handleNavigatorFork = useCallback((msg: NavUserMessage) => {
     if (!msg.message_uuid) return;
@@ -8716,6 +8957,30 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     }
     return map;
   }, [timeline, conversation?.agent_type]);
+
+  // Pair each slash-command invocation with its expansion (the body of the command's
+  // .md file, emitted by Claude Code as the next user message). They render as one
+  // command block, so the expansion message is suppressed. Applied only in the full
+  // (non-collapsed) view; collapsed keeps its compact one-pill behavior.
+  const commandExpansionMap = useMemo(() => {
+    const byCommand = new Map<string, string>(); // command msg _id -> expansion content
+    const consumed = new Set<string>();          // expansion msg _ids
+    for (let i = 0; i < timeline.length; i++) {
+      const item = timeline[i];
+      if (item.type !== 'message') continue;
+      const msg = item.data as Message;
+      if (msg.role !== 'user' || userMsgKindMap.get(msg._id)?.kind !== 'command') continue;
+      let next: Message | null = null;
+      for (let j = i + 1; j < timeline.length; j++) {
+        if (timeline[j].type === 'message') { next = timeline[j].data as Message; break; }
+      }
+      if (next && next.role === 'user' && next.content && userMsgKindMap.get(next._id)?.kind === 'skill_expansion') {
+        byCommand.set(msg._id, next.content);
+        consumed.add(next._id);
+      }
+    }
+    return { byCommand, consumed };
+  }, [timeline, userMsgKindMap]);
 
   // Set of assistant message _ids that are the FIRST text-bearing assistant message in
   // their turn (since the last user message). Used by estimateSize and renderItem to
@@ -9182,12 +9447,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     return state.latestUsage;
   }, [messages]);
 
-  // Fetch tool stats from backend (scans ALL messages, not just loaded window)
-  const toolStats = useQuery(
-    api.conversations.getConversationToolStats,
-    deferredQueriesEnabled && conversation?._id && isConvexId(conversation._id) ? { conversation_id: conversation._id } : "skip"
-  );
-  const taskStats = toolStats?.taskStats ?? null;
+  // Tool/task stats moved into the ConversationTaskProgress / ...MenuItem leaves so this
+  // monolith no longer re-renders every time getConversationToolStats re-scans a streaming
+  // conversation. (See useConversationTaskStats.)
 
   const getItemKey = useCallback((index: number) => {
     const item = timeline[index];
@@ -9227,10 +9489,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     if (msg.role === "user") {
       const kind = userMsgKindMap.get(msg._id);
       switch (kind?.kind) {
-        case 'command': return 30;
+        case 'command': return 120;
         case 'interrupt': return 30;
         case 'continuation': return 30;
-        case 'skill_expansion': return 44;
+        case 'skill_expansion': return commandExpansionMap.consumed.has(msg._id) ? 0 : 44;
         case 'task_notification': return 40;
         case 'scheduled_task': return 56;
         case 'teammate_events': return 80;
@@ -9252,7 +9514,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       return 200;
     }
     return 40;
-  }, [timeline, collapsed, userMsgKindMap, assistantFirstTextInTurnSet]);
+  }, [timeline, collapsed, userMsgKindMap, assistantFirstTextInTurnSet, commandExpansionMap]);
 
   const virtualizer = useVirtualizer({
     count: timeline.length,
@@ -9404,9 +9666,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
   useShortcutAction('conv.favorite', useCallback(() => {
     if (!conversation || !isOwner) return;
-    toggleFavoriteMutation({ conversation_id: conversation._id })
-      .then(() => toast.success(conversation.is_favorite ? "Removed from favorites" : "Added to favorites"))
-      .catch(() => toast.error("Failed to update favorite"));
+    toggleFavoriteMutation(conversation._id);
+    toast.success(conversation.is_favorite ? "Removed from favorites" : "Added to favorites");
   }, [conversation, isOwner, toggleFavoriteMutation]));
 
   useShortcutAction('conv.toggleDiff', useCallback(() => {
@@ -10244,7 +10505,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           return null;
         case 'command': {
           if (collapsed) return null;
-          return <CommandStatusLine key={msg._id} content={msg.content!} timestamp={msg.timestamp} />;
+          return <CommandMessageBlock key={msg._id} messageId={msg._id} content={msg.content!} expansion={commandExpansionMap.byCommand.get(msg._id)} timestamp={msg.timestamp} userName={conversation?.user?.name || conversation?.user?.email?.split("@")[0]} avatarUrl={conversation?.user?.avatar_url} agentType={conversation?.agent_type} />;
         }
         case 'interrupt':
           if (collapsed) return null;
@@ -10253,6 +10514,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           if (collapsed) return null;
           return <InterruptStatusLine key={msg._id} label="session continued" tone="sky" />;
         case 'skill_expansion':
+          if (!collapsed && commandExpansionMap.consumed.has(msg._id)) return null;
           return <SkillExpansionBlock key={msg._id} content={msg.content!} timestamp={msg.timestamp} cmdName={kind.cmdName} collapsed={collapsed} />;
         case 'task_notification':
           if (collapsed) return null;
@@ -10600,9 +10862,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                     }`}
                     title="Branch tree"
                   >
-                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M6 3v12M6 15a3 3 0 103 3V6a3 3 0 10-3-3m12 12a3 3 0 10-3-3V6" />
-                    </svg>
+                    <Split className="w-3 h-3" />
                     {(conversation.fork_children?.length ?? 0) > 0 && (
                       <span className="tabular-nums">{conversation.fork_children!.length}</span>
                     )}
@@ -10800,7 +11060,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                           if (!convexConvId) return;
                           setTimeout(async () => {
                             try {
-                              await restartSession({ conversation_id: convexConvId });
+                              await convCommand(convexConvId, "restartSession");
                               toast.success("Restarting session, retrying pending messages...");
                             } catch { toast.error("Failed to restart session"); }
                           });
@@ -10814,7 +11074,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                           if (!convexConvId) return;
                           setTimeout(async () => {
                             try {
-                              await repairSession({ conversation_id: convexConvId });
+                              await convCommand(convexConvId, "repairSession");
                               toast.success("Repairing session, retrying pending messages...");
                             } catch { toast.error("Failed to repair session"); }
                           });
@@ -10882,12 +11142,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                     )}
                     {isOwner && (
                       <DropdownMenuItem onSelect={() => {
-                        setTimeout(async () => {
-                          try {
-                            await toggleFavoriteMutation({ conversation_id: conversation._id });
-                            toast.success(conversation.is_favorite ? "Removed from favorites" : "Added to favorites");
-                          } catch { toast.error("Failed to update favorite"); }
-                        });
+                        toggleFavoriteMutation(conversation._id);
+                        toast.success(conversation.is_favorite ? "Removed from favorites" : "Added to favorites");
                       }}>
                         <svg className={`w-3 h-3 mr-1.5 ${conversation.is_favorite ? "text-amber-400" : ""}`} fill={conversation.is_favorite ? "currentColor" : "none"} viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                           <path strokeLinecap="round" strokeLinejoin="round" d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
@@ -10948,8 +11204,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                                 <DropdownMenuItem
                                   key={t}
                                   onClick={() => {
-                                    forkFromMessage({
-                                      conversation_id: conversation._id.toString(),
+                                    convCommand(conversation._id.toString(), "forkFromMessage", {
                                       target_agent_type: t,
                                     }).then((result) => {
                                       moveDraft(conversation._id.toString(), result.conversation_id);
@@ -11019,11 +11274,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                         ))}
                       </>
                     )}
-                    {taskStats && (
-                      <DropdownMenuItem disabled>
-                        Tasks: {taskStats.done}/{taskStats.total}
-                      </DropdownMenuItem>
-                    )}
+                    {conversation?._id && <ConversationTaskStatsMenuItem conversationId={conversation._id} />}
                     {latestUsage && (
                       <>
                         <DropdownMenuSeparator />
@@ -11040,7 +11291,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
             </div>
             {headerEnd && <div className="flex-shrink-0">{headerEnd}</div>}
           </div>
-          {taskStats && <TaskProgressRow taskStats={taskStats} />}
+          {conversation?._id && <ConversationTaskProgress conversationId={conversation._id} />}
         </div>
         {conversation && (
           <div className="absolute top-full right-3 mt-24 z-30">
@@ -11255,8 +11506,12 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
               );
             })}
             {/* Later messages indicator at bottom (chevron, or spinner while loading);
-                hide the idle state when near top to avoid confusing placement */}
-            {((hasMoreBelow && !isNearTop) || isLoadingNewer) && (
+                hide the idle state when near top to avoid confusing placement.
+                Gated on hasMoreBelow so it only appears in target mode (a deep-linked
+                window with content below). In normal mode hasMoreBelow is always
+                false, so the initial-page LoadingFirstPage that lights isLoadingNewer
+                no longer flashes a spurious "loading" pill on a fresh open. */}
+            {(hasMoreBelow && (!isNearTop || isLoadingNewer)) && (
               <EdgeMessagesIndicator dir="down" loading={!!isLoadingNewer}>
                 Scroll down to load more
               </EdgeMessagesIndicator>
@@ -11423,10 +11678,16 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                 aria-label={jumpPending === 'end' ? "Cancel jump to bottom" : "Scroll to bottom"}
                 title={jumpPending === 'end' ? "Cancel" : undefined}
               >
-                {(isLoadingNewer || jumpPending === 'end') ? (
+                {((isLoadingNewer && hasMoreBelow) || jumpPending === 'end') ? (
                   <>
-                    {/* Spinner by default; reveal a cancel (×) on hover so the
-                        in-flight jump can be aborted by clicking it. */}
+                    {/* Spinner ONLY for a genuine in-flight load of more content
+                        below (target mode: isLoadingNewer && hasMoreBelow) or an
+                        explicit jump-to-end. In normal mode hasMoreBelow is always
+                        false, so the initial-page LoadingFirstPage (which drives
+                        isLoadingNewer) can no longer surface a spurious spinner on
+                        a fresh open — the button shows the static down-chevron.
+                        Reveal a cancel (×) on hover so an in-flight jump can be
+                        aborted by clicking it. */}
                     <svg className="w-4 h-4 sm:w-5 sm:h-5 animate-spin group-hover:hidden" viewBox="0 0 24 24" fill="none">
                       <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                       <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />

@@ -87,11 +87,25 @@ export function writePatchesToIDB(patches: Patch[], state: any) {
     if (COLLECTION_TABLES.has(key)) {
       const data = state[key];
       if (data && typeof data === "object") {
-        const { puts, deletes, next } = diffCollection(lastPersisted.get(key), data);
+        const prevShadow = lastPersisted.get(key);
+        const { puts, deletes: rawDeletes, next } = diffCollection(prevShadow, data);
+        // NEVER wipe the cache from a store-shrink (same guarantee as the web
+        // engine). A row leaves storage ONLY when explicitly removed — kill/archive
+        // plant a `${key}:${id}` exclude in `pending`. A diff-delete with NO exclude
+        // means the store is merely missing the row, so keep it in the persisted
+        // blob AND the shadow. Makes a whole-collection wipe structurally impossible.
+        const pending = (state.pending || {}) as Record<string, { type?: string }>;
+        const kept: any[] = [];
+        for (const id of rawDeletes) {
+          if (pending[`${key}:${id}`]?.type === "exclude") continue; // intentional → drop
+          if (prevShadow?.has(id)) { next.set(id, prevShadow.get(id)); kept.push(prevShadow.get(id)); }
+        }
         lastPersisted.set(key, next);
-        // Whole-blob engine: rewrite only when something actually changed.
-        if (puts.length || deletes.length) {
-          Storage.setItem(COLLECTION_PREFIX + key, JSON.stringify(Object.values(data))).catch(() => {});
+        // Whole-blob engine: rewrite only when something actually changed, and
+        // include the rows we refused to drop so they survive on disk.
+        if (puts.length || rawDeletes.length) {
+          const rows = kept.length ? [...Object.values(data), ...kept] : Object.values(data);
+          Storage.setItem(COLLECTION_PREFIX + key, JSON.stringify(rows)).catch(() => {});
         }
       }
     } else if (META_KEYS.has(key)) {
