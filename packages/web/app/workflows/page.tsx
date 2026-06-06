@@ -487,9 +487,9 @@ function WorkflowsContent() {
       <div className="flex flex-col items-center justify-center h-full gap-3 text-center">
         <GitBranch className="w-8 h-8 text-sol-text-dim" />
         <div>
-          <p className="text-sm text-sol-text-muted">No workflows yet</p>
+          <p className="text-sm text-sol-text-muted">No routines yet</p>
           <p className="text-xs text-sol-text-dim mt-1">
-            Push a workflow with <code className="font-mono text-sol-text-muted">cast workflow push</code>
+            Push a routine with <code className="font-mono text-sol-text-muted">cast workflow push</code>
           </p>
         </div>
       </div>
@@ -501,7 +501,7 @@ function WorkflowsContent() {
       {sidebarOpen && (
         <div className="w-52 flex-shrink-0 border-r border-sol-border/20 flex flex-col bg-sol-bg-alt">
           <div className="px-3 py-2.5 border-b border-sol-border/20">
-            <span className="text-[10px] text-sol-text-dim uppercase tracking-widest">Workflows</span>
+            <span className="text-[10px] text-sol-text-dim uppercase tracking-widest">Routines</span>
           </div>
           <div className="flex-1 overflow-y-auto">
             {workflows.map(w => {
