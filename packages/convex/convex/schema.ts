@@ -1564,6 +1564,11 @@ export default defineSchema({
       session_id: v.optional(v.string()),
       started_at: v.optional(v.number()),
       completed_at: v.optional(v.number()),
+      // Dynamic-workflow agents carry their own label/phase/tokens (no stored graph to look them up in)
+      label: v.optional(v.string()),
+      phase: v.optional(v.string()),
+      tokens: v.optional(v.number()),
+      result_preview: v.optional(v.string()),
     })),
     goal_override: v.optional(v.string()),
     project_path: v.optional(v.string()),
@@ -1578,11 +1583,19 @@ export default defineSchema({
     }))),
     gate_response: v.optional(v.string()),
     fail_reason: v.optional(v.string()),
+    // "routine" = our DOT-graph runs (default/legacy); "workflow" = Anthropic dynamic workflows
+    run_kind: v.optional(v.union(v.literal("routine"), v.literal("workflow"))),
+    external_run_id: v.optional(v.string()), // the runtime's wf_<id>; idempotent upsert key for snapshot ingest
+    workflow_name: v.optional(v.string()),
+    phases: v.optional(v.array(v.object({ title: v.string(), detail: v.optional(v.string()) }))),
+    total_tokens: v.optional(v.number()),
+    agent_count: v.optional(v.number()),
     created_at: v.number(),
     updated_at: v.number(),
   })
     .index("by_user_id", ["user_id"])
     .index("by_workflow_id", ["workflow_id"])
+    .index("by_external_run", ["external_run_id"])
     .index("by_status", ["status"]),
 
   client_state: defineTable({

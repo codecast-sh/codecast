@@ -223,6 +223,37 @@ export const get = query({
   },
 });
 
+// Web: list the user's dynamic-workflow runs (run_kind=workflow) for the dashboard.
+export const listDynamicRuns = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+    const runs = await ctx.db
+      .query("workflow_runs")
+      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+      .order("desc")
+      .take(50);
+    return runs.filter((r) => r.run_kind === "workflow");
+  },
+});
+
+// Look up a run by the runtime's external id (wf_<id>). Used to confirm ingest
+// and by the dashboard to resolve a run referenced from a conversation event.
+export const getByExternalRun = query({
+  args: { api_token: v.string(), external_run_id: v.string() },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token, false);
+    if (!auth) return null;
+    const run = await ctx.db
+      .query("workflow_runs")
+      .withIndex("by_external_run", (q) => q.eq("external_run_id", args.external_run_id))
+      .first();
+    if (!run || run.user_id !== auth.userId) return null;
+    return run;
+  },
+});
+
 export const respondToGate = mutation({
   args: {
     id: v.id("workflow_runs"),
@@ -431,6 +462,126 @@ export const updateProgress = mutation({
     }
 
     return { ok: true };
+  },
+});
+
+// Ingest a dynamic-workflow (Anthropic) run from the runtime's on-disk snapshot
+// (<session>/workflows/wf_<id>.json). Upserts by external_run_id so the daemon can
+// re-post on every snapshot change. run_kind="workflow" distinguishes these from our
+// routine/DOT-graph runs, which share this table and the existing run UI.
+export const ingestSnapshot = mutation({
+  args: {
+    api_token: v.string(),
+    external_run_id: v.string(),
+    session_id: v.string(),
+    project_path: v.optional(v.string()),
+    workflow_name: v.string(),
+    status: v.string(),
+    phases: v.array(v.object({ title: v.string(), detail: v.optional(v.string()) })),
+    agents: v.array(v.object({
+      agent_id: v.string(),
+      label: v.optional(v.string()),
+      phase: v.optional(v.string()),
+      state: v.string(),
+      tokens: v.optional(v.number()),
+      duration_ms: v.optional(v.number()),
+      started_at: v.optional(v.number()),
+      result_preview: v.optional(v.string()),
+    })),
+    total_tokens: v.optional(v.number()),
+    agent_count: v.optional(v.number()),
+    started_at: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token, false);
+    if (!auth) return { error: "Unauthorized" };
+    const now = Date.now();
+
+    const allowed = ["pending", "running", "paused", "completed", "failed"];
+    const runStatus = (allowed.includes(args.status) ? args.status : "running") as
+      "pending" | "running" | "paused" | "completed" | "failed";
+    const agentStatus = (s: string) =>
+      s === "done" ? "completed"
+      : s === "error" || s === "failed" ? "failed"
+      : s === "running" ? "running"
+      : "pending";
+
+    const node_statuses = args.agents.map((a) => {
+      const st = agentStatus(a.state) as "pending" | "running" | "completed" | "failed";
+      return {
+        node_id: a.agent_id,
+        status: st,
+        label: a.label,
+        phase: a.phase,
+        tokens: a.tokens,
+        result_preview: a.result_preview,
+        started_at: a.started_at,
+        completed_at: st === "completed" || st === "failed"
+          ? (a.started_at && a.duration_ms ? a.started_at + a.duration_ms : now)
+          : undefined,
+      };
+    });
+
+    const existing = await ctx.db
+      .query("workflow_runs")
+      .withIndex("by_external_run", (q) => q.eq("external_run_id", args.external_run_id))
+      .first();
+    if (existing && existing.user_id !== auth.userId) return { error: "Forbidden" };
+
+    // Link the run to the host session's conversation so it shows inline + in the dash
+    let primaryConvId = existing?.primary_conversation_id;
+    if (!primaryConvId) {
+      const conv = await ctx.db
+        .query("conversations")
+        .withIndex("by_session_id", (q) => q.eq("session_id", args.session_id))
+        .first();
+      if (conv && conv.user_id === auth.userId) primaryConvId = conv._id;
+    }
+
+    const fields = {
+      run_kind: "workflow" as const,
+      external_run_id: args.external_run_id,
+      workflow_name: args.workflow_name,
+      status: runStatus,
+      node_statuses,
+      phases: args.phases,
+      total_tokens: args.total_tokens,
+      agent_count: args.agent_count ?? args.agents.length,
+      project_path: args.project_path,
+      primary_session_id: args.session_id,
+      primary_conversation_id: primaryConvId,
+      updated_at: now,
+    };
+
+    if (existing) {
+      await ctx.db.patch(existing._id, fields);
+      return { ok: true, run_id: existing._id };
+    }
+    const runId = await ctx.db.insert("workflow_runs", {
+      user_id: auth.userId,
+      ...fields,
+      created_at: now,
+    });
+    // Post one inline anchor message so the run shows in its host conversation.
+    // The card reads live run state by run_id, so we post once (on creation), not per update.
+    if (primaryConvId) {
+      const conv = await ctx.db.get(primaryConvId);
+      if (conv) {
+        await ctx.db.insert("messages", {
+          conversation_id: primaryConvId,
+          role: "assistant",
+          content: JSON.stringify({ __wf: "workflow_run", run_id: runId, external_run_id: args.external_run_id, name: args.workflow_name }),
+          subtype: "workflow_event",
+          timestamp: now,
+        });
+        await ctx.db.patch(primaryConvId, {
+          message_count: (conv.message_count || 0) + 1,
+          updated_at: now,
+          last_message_role: "assistant",
+        });
+      }
+    }
+    return { ok: true, run_id: runId };
   },
 });
 
