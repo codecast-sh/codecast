@@ -1,4 +1,5 @@
 import { useInboxStore } from "@/store/inboxStore";
+import { pathLabel } from "@/components/TabBar";
 
 // Routes that live OUTSIDE the dashboard tab shell. The tab system (DashboardLayout
 // / TabBar / TabContent) is only mounted for dashboard routes, but `tabs`/`activeTabId`
@@ -49,4 +50,27 @@ export function shouldUseTabRouting(
   if (isNonTabRoute(currentPath)) return false;
   const { tabs, activeTabId } = useInboxStore.getState();
   return tabs.length > 0 && !!activeTabId;
+}
+
+/**
+ * Navigate within the active tab: update the tab's stored path AND the browser URL.
+ *
+ * `"push"` grows the browser history stack so the navigation is traversable with
+ * back/forward; `"replace"` overwrites the current entry (URL canonicalization that
+ * should not add history, e.g. dropping a `?highlight=` param). A push whose target
+ * equals the current URL is downgraded to replace so we never stack duplicate
+ * entries. The history `state` is tagged so the global popstate handler can tell a
+ * tab navigation apart from an inbox session selection (`{ inboxId }`).
+ */
+export function tabNavigate(path: string, mode: "push" | "replace" = "push") {
+  const store = useInboxStore.getState();
+  const tabId = store.activeTabId;
+  if (tabId) store.updateTab(tabId, { path, title: pathLabel(path) });
+  const current = window.location.pathname + window.location.search;
+  const state = { tabNav: true, tabId };
+  if (mode === "push" && path !== current) {
+    window.history.pushState(state, "", path);
+  } else {
+    window.history.replaceState(state, "", path);
+  }
 }

@@ -6,6 +6,7 @@ import { Providers } from "./providers";
 import { MarketingLayout } from "./layouts/MarketingLayout";
 import { PaletteLayout } from "./layouts/PaletteLayout";
 import { SettingsLayout } from "./layouts/SettingsLayout";
+import DashboardShell from "./layouts/DashboardShell";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { useMentionLinkNavigation } from "@/hooks/useMentionLinkNavigation";
 
@@ -43,7 +44,6 @@ const PrView = lazy(() => import("@/app/pr/[owner]/[repo]/[number]/page"));
 const ReviewView = lazy(() => import("@/app/review/[id]/page"));
 const ReviewBatch = lazy(() => import("@/app/review/batch/page"));
 
-const DocsLayout = lazy(() => import("@/app/docs/layout"));
 const Docs = lazy(() => import("@/app/docs/page"));
 const DocDetail = lazy(() => import("@/app/docs/[id]/page"));
 const Plans = lazy(() => import("@/app/plans/page"));
@@ -52,7 +52,10 @@ const Tasks = lazy(() => import("@/app/tasks/page"));
 const TaskDetail = lazy(() => import("@/app/tasks/[id]/page"));
 const Projects = lazy(() => import("@/app/projects/page"));
 const ProjectDetail = lazy(() => import("@/app/projects/[id]/page"));
-const Workflows = lazy(() => import("@/app/workflows/page"));
+// Routines = our DOT-graph orchestration (was "Workflows"); the graph page lives at /routines.
+// Workflows = Anthropic dynamic-workflow runs dashboard at /workflows.
+const Routines = lazy(() => import("@/app/workflows/page"));
+const Workflows = lazy(() => import("@/app/workflows/dashboard"));
 
 const Team = lazy(() => import("@/app/team/page"));
 const TeamActivity = lazy(() => import("@/app/team/activity/page"));
@@ -123,18 +126,47 @@ export function App() {
             <Route path="auth/cli" element={<E name="AuthCli"><AuthCli /></E>} />
             <Route path="join/:code" element={<E name="JoinTeam"><JoinTeam /></E>} />
 
-            {/* App */}
+            {/* Dashboard tab shell — one stable layout route keeps the sidebar,
+                tab bar and mounted TabContent panes alive across navigations so
+                browser back/forward never remounts the shell. Only tab-routable
+                pages (those TabContent can render) belong here. */}
+            <Route element={<DashboardShell />}>
+              <Route path="inbox" element={<E name="Inbox"><Inbox /></E>} />
+              <Route path="feed" element={<E name="Feed"><Feed /></E>} />
+              <Route path="search" element={<E name="Search"><Search /></E>} />
+              <Route path="notifications" element={<E name="Notifications"><Notifications /></E>} />
+              <Route path="conversation/:id" element={<E name="Conversation"><Conversation /></E>} />
+              <Route path="conversation/:id/diff" element={<E name="ConversationDiff"><ConversationDiff /></E>} />
+              <Route path="docs" element={<E name="Docs"><Docs /></E>} />
+              <Route path="docs/:id" element={<E name="DocDetail"><DocDetail /></E>} />
+              <Route path="plans" element={<E name="Plans"><Plans /></E>} />
+              <Route path="plans/:id" element={<E name="PlanDetail"><PlanDetail /></E>} />
+              <Route path="tasks" element={<E name="Tasks"><Tasks /></E>} />
+              <Route path="tasks/:id" element={<E name="TaskDetail"><TaskDetail /></E>} />
+              <Route path="projects" element={<E name="Projects"><Projects /></E>} />
+              <Route path="projects/:id" element={<E name="ProjectDetail"><ProjectDetail /></E>} />
+              <Route path="workflows" element={<E name="Workflows"><Workflows /></E>} />
+              <Route path="routines" element={<E name="Routines"><Routines /></E>} />
+              <Route path="sessions" element={<E name="Sessions"><Sessions /></E>} />
+              <Route path="team" element={<E name="Team"><Team /></E>} />
+              <Route path="team/activity" element={<E name="TeamActivity"><TeamActivity /></E>} />
+              <Route path="team/:username" element={<E name="TeamMember"><TeamMember /></E>} />
+              <Route path="admin/daemon-logs" element={<E name="AdminDaemonLogs"><AdminDaemonLogs /></E>} />
+              <Route path="config" element={<E name="ConfigPage"><ConfigPage /></E>} />
+            </Route>
+
+            {/* Standalone dashboard pages — kept outside the shared shell because
+                they pass page-specific props to DashboardLayout (dashboard's
+                directory filter, windows' hideSidebar) or aren't tab-routable. */}
             <Route path="dashboard" element={<E name="Dashboard"><Dashboard /></E>} />
-            <Route path="inbox" element={<E name="Inbox"><Inbox /></E>} />
-            <Route path="feed" element={<E name="Feed"><Feed /></E>} />
-            <Route path="search" element={<E name="Search"><Search /></E>} />
             <Route path="explore" element={<E name="Explore"><Explore /></E>} />
             <Route path="timeline" element={<E name="Timeline"><Timeline /></E>} />
-            <Route path="notifications" element={<E name="Notifications"><Notifications /></E>} />
+            <Route path="windows" element={<E name="Windows"><Windows /></E>} />
+            <Route path="orchestration" element={<E name="Orchestration"><Orchestration /></E>} />
+            <Route path="roadmap" element={<E name="Roadmap"><Roadmap /></E>} />
+            <Route path="cli" element={<E name="Cli"><Cli /></E>} />
 
-            {/* Conversations & sharing */}
-            <Route path="conversation/:id" element={<E name="Conversation"><Conversation /></E>} />
-            <Route path="conversation/:id/diff" element={<E name="ConversationDiff"><ConversationDiff /></E>} />
+            {/* Sharing */}
             <Route path="share/:token" element={<E name="Share"><Share /></E>} />
             <Route path="share/message/:token" element={<E name="ShareMessage"><ShareMessage /></E>} />
 
@@ -143,33 +175,6 @@ export function App() {
             <Route path="pr/:owner/:repo/:number" element={<E name="PrView"><PrView /></E>} />
             <Route path="review/:id" element={<E name="ReviewView"><ReviewView /></E>} />
             <Route path="review/batch" element={<E name="ReviewBatch"><ReviewBatch /></E>} />
-
-            {/* Docs - shared layout with persistent list panel */}
-            <Route path="docs" element={<E name="DocsLayout"><DocsLayout /></E>}>
-              <Route index element={<E name="Docs"><Docs /></E>} />
-              <Route path=":id" element={<E name="DocDetail"><DocDetail /></E>} />
-            </Route>
-            <Route path="plans" element={<E name="Plans"><Plans /></E>} />
-            <Route path="plans/:id" element={<E name="PlanDetail"><PlanDetail /></E>} />
-            <Route path="tasks" element={<E name="Tasks"><Tasks /></E>} />
-            <Route path="tasks/:id" element={<E name="TaskDetail"><TaskDetail /></E>} />
-            <Route path="projects" element={<E name="Projects"><Projects /></E>} />
-            <Route path="projects/:id" element={<E name="ProjectDetail"><ProjectDetail /></E>} />
-            <Route path="workflows" element={<E name="Workflows"><Workflows /></E>} />
-
-            {/* Team */}
-            <Route path="team" element={<E name="Team"><Team /></E>} />
-            <Route path="team/activity" element={<E name="TeamActivity"><TeamActivity /></E>} />
-            <Route path="team/:username" element={<E name="TeamMember"><TeamMember /></E>} />
-
-            {/* Misc */}
-            <Route path="orchestration" element={<E name="Orchestration"><Orchestration /></E>} />
-            <Route path="roadmap" element={<E name="Roadmap"><Roadmap /></E>} />
-            <Route path="cli" element={<E name="Cli"><Cli /></E>} />
-            <Route path="sessions" element={<E name="Sessions"><Sessions /></E>} />
-            <Route path="windows" element={<E name="Windows"><Windows /></E>} />
-            <Route path="admin/daemon-logs" element={<E name="AdminDaemonLogs"><AdminDaemonLogs /></E>} />
-            <Route path="config" element={<E name="ConfigPage"><ConfigPage /></E>} />
 
             {/* Palette - transparent bg */}
             <Route element={<PaletteLayout />}>
