@@ -17,7 +17,7 @@ export function useSyncPlansWithArgs(wsArgs: WorkspaceArgs, statusFilter?: strin
   const syncTable = useInboxStore((s) => s.syncTable);
 
   useConvexSync(plans, useCallback((data: any) => {
-    syncTable("plans", data as any);
+    syncTable("plans", data as any, { isDelta: true });
   }, [syncTable]));
 
   return { ready: plans !== undefined };

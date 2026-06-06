@@ -55,7 +55,7 @@ export function applySyncTable<T extends { _id: string }>(
   incoming: T[],
   pending: Record<string, PendingEntry>,
   prev?: Record<string, T>,
-  opts?: { isDelta?: boolean; ignoreFields?: string[] },
+  opts?: { isDelta?: boolean; ignoreFields?: string[]; preserveFields?: string[] },
 ): { table: Record<string, T>; pending: Record<string, PendingEntry> } {
   const newPending = { ...pending };
   const table: Record<string, T> = {};
@@ -64,6 +64,7 @@ export function applySyncTable<T extends { _id: string }>(
   const prefix = `${tableName}:`;
   const isDelta = !!opts?.isDelta;
   const ignoreFields = opts?.ignoreFields ? new Set(opts.ignoreFields) : undefined;
+  const preserveFields = opts?.preserveFields;
 
   // Confirmed excludes — server no longer sends the record.
   // In delta mode the incoming set is partial by definition, so an absent
@@ -108,23 +109,39 @@ export function applySyncTable<T extends { _id: string }>(
       if (newPending[excludeKey]?.type === "exclude") continue;
       const incomingRecord = incomingMap.get(id);
       if (incomingRecord) {
-        const merged = applyFieldOverrides(incomingRecord);
+        let merged = applyFieldOverrides(incomingRecord);
         const prevRecord = prev[id];
-        // Preserve the previous object identity when nothing the UI renders has
-        // changed. Convex live queries resend the ENTIRE result set as fresh
-        // objects on any change, so without this one updated row churns the
-        // identity of every other row and defeats React.memo for all of them
-        // (e.g. every SessionCard re-rendering on every session's heartbeat).
-        // scalarFieldsEqual is the version key — it covers every scalar field,
-        // so a change the server derives independently of updated_at can't be
-        // swallowed. Skip the reuse when a pending field override produced a
-        // fresh object (merged !== incomingRecord) so local-first values stick.
-        table[id] =
-          merged === incomingRecord &&
-          prevRecord &&
-          scalarFieldsEqual(prevRecord, incomingRecord, ignoreFields)
-            ? prevRecord
-            : merged;
+        if (preserveFields && prevRecord) {
+          // Overlay-owned fields (e.g. heartbeat liveness) arrive on a separate
+          // channel (syncOverlay); the base payload carries null for them. Fill the
+          // gap from prev's (overlay-set) value so the base sync doesn't clobber the
+          // overlay between its ticks. A REAL incoming value still applies (the
+          // reconcile crawl runs liveness-on), so this only fills nulls. Then reuse
+          // prev's identity if only overlay fields would have differed.
+          for (const f of preserveFields) {
+            if ((merged as any)[f] == null && (prevRecord as any)[f] != null) {
+              if (merged === incomingRecord) merged = { ...incomingRecord };
+              (merged as any)[f] = (prevRecord as any)[f];
+            }
+          }
+          table[id] = scalarFieldsEqual(prevRecord, merged, ignoreFields) ? prevRecord : merged;
+        } else {
+          // Preserve the previous object identity when nothing the UI renders has
+          // changed. Convex live queries resend the ENTIRE result set as fresh
+          // objects on any change, so without this one updated row churns the
+          // identity of every other row and defeats React.memo for all of them
+          // (e.g. every SessionCard re-rendering on every session's heartbeat).
+          // scalarFieldsEqual is the version key — it covers every scalar field,
+          // so a change the server derives independently of updated_at can't be
+          // swallowed. Skip the reuse when a pending field override produced a
+          // fresh object (merged !== incomingRecord) so local-first values stick.
+          table[id] =
+            merged === incomingRecord &&
+            prevRecord &&
+            scalarFieldsEqual(prevRecord, incomingRecord, ignoreFields)
+              ? prevRecord
+              : merged;
+        }
       } else if (isDelta) {
         table[id] = prev[id];
       }

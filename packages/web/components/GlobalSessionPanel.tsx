@@ -5,11 +5,14 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useRouter } from "next/navigation";
 import { ConversationDiffLayout } from "./ConversationDiffLayout";
-import { ConversationData, FormattedSummary } from "./ConversationView";
+import { ConversationData } from "./ConversationView";
+import { FormattedSummary } from "./FormattedSummary";
+import { sessionCardSummary } from "../lib/sessionSummary";
 import { useConversationMessages } from "../hooks/useConversationMessages";
-import { useInboxStore, useTrackedStore, InboxSession, getSessionRenderKey, isConvexId, categorizeSessions, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, InboxSession, getSessionRenderKey, isConvexId, categorizeSessions, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend, isSessionDismissed } from "../store/inboxStore";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "./ui/tooltip";
 import { cleanTitle, msgCountColor } from "../lib/conversationProcessor";
+import { isSessionMessage } from "./sessionMessage";
 import { SharePopover } from "./SharePopover";
 import { shareOrigin } from "../lib/utils";
 import { PlanContextPanel } from "./PlanContextPanel";
@@ -34,6 +37,9 @@ const NOISE_PATTERNS = [
 
 export function cleanUserMessage(raw: string | null | undefined): string | null {
   if (!raw) return null;
+  // An inbound session→session message (cast send) isn't the user's own prompt —
+  // skip it so it never surfaces as the sticky fallback or the card preview.
+  if (isSessionMessage(raw)) return null;
   const cleaned = raw
     .replace(/<task-notification>[\s\S]*?<\/task-notification>/g, "")
     .replace(/\[Image[:\s][^\]]*\]/gi, "")
@@ -74,11 +80,9 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
     jumpToTimestamp,
   } = useConversationMessages(sessionId, targetMessageId);
 
-  const resumeSession = useMutation(api.users.resumeSession);
-  const restartSessionMutation = useMutation(api.conversations.restartSession);
-  const repairSessionMutation = useMutation(api.conversations.repairSession);
-  const setPrivacy = useMutation(api.conversations.setPrivacy);
-  const setTeamVisibility = useMutation(api.conversations.setTeamVisibility);
+  const convCommand = useInboxStore((s) => s.convCommand);
+  const setPrivacy = useInboxStore((s) => s.setPrivacy);
+  const setTeamVisibility = useInboxStore((s) => s.setTeamVisibility);
   const generateShareLink = useMutation(api.conversations.generateShareLink);
   const [resumeState, setResumeState] = useState<"idle" | "resuming" | "sent" | "reconstituting" | "failed">("idle");
   const forceRestartAttemptedRef = useRef(false);
@@ -103,7 +107,7 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
       if (!forceRestartAttemptedRef.current && isConvexId(sessionId)) {
         forceRestartAttemptedRef.current = true;
         try {
-          await restartSessionMutation({ conversation_id: sessionId as Id<"conversations"> });
+          await convCommand(sessionId, "restartSession");
           setResumeState("sent");
         } catch {
           setResumeState("failed");
@@ -112,7 +116,7 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
         reconstitutionAttemptedRef.current = true;
         setResumeState("reconstituting");
         try {
-          await repairSessionMutation({ conversation_id: sessionId as Id<"conversations"> });
+          await convCommand(sessionId, "repairSession");
           setResumeState("reconstituting");
         } catch {
           setResumeState("failed");
@@ -122,7 +126,7 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
       }
     }, 90_000);
     return () => clearTimeout(timeout);
-  }, [resumeState, sessionId, restartSessionMutation, repairSessionMutation]);
+  }, [resumeState, sessionId, convCommand]);
 
   useWatchEffect(() => {
     if (resumeState !== "reconstituting") return;
@@ -134,10 +138,10 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
 
   const handleManualResume = useCallback(() => {
     setResumeState("resuming");
-    resumeSession({ conversation_id: sessionId as Id<"conversations"> })
+    convCommand(sessionId, "resumeSession")
       .then(() => setResumeState("sent"))
       .catch(() => setResumeState("failed"));
-  }, [sessionId, resumeSession]);
+  }, [sessionId, convCommand]);
 
   if (!conversation) {
     return (
@@ -163,8 +167,8 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
       teamVisibility={(conversation as any).team_visibility || (conversation as any).effective_team_visibility}
       hasShareToken={!!conversation.share_token}
       hasTeam={!!(conversation as any).auto_shared}
-      onSetPrivate={async () => { await setPrivacy({ conversation_id: convId, is_private: true }); toast.success("Made private"); }}
-      onSetTeamVisibility={async (mode) => { await setTeamVisibility({ conversation_id: convId, team_visibility: mode }); toast.success(mode === "full" ? "Sharing full conversation with team" : "Sharing summary with team"); }}
+      onSetPrivate={() => { setPrivacy(convId, true); toast.success("Made private"); }}
+      onSetTeamVisibility={(mode) => { setTeamVisibility(convId, mode); toast.success(mode === "full" ? "Sharing full conversation with team" : "Sharing summary with team"); }}
       onGenerateShareLink={async () => { await generateShareLink({ conversation_id: convId }); return `${shareOrigin()}/conversation/${convId}`; }}
       shareUrl={shareUrl}
     />
@@ -329,12 +333,7 @@ export const SessionCard = memo(function SessionCard({
   const displayTitle = cleanTitle(session.title || "New Session");
   const isSlashCommand = displayTitle.startsWith("/");
   const cleanedUserMsg = cleanUserMessage(session.last_user_message);
-  // idle_summary is the purpose-built one-liner. When it's absent the card falls
-  // back to subtitle, which is a 2-4 bullet block (since titleGeneration commit
-  // 2b1db97d) — too long for a card, so show only its first bullet.
-  const cardSummary = session.idle_summary
-    || session.subtitle?.split("\n").find(l => l.trim())?.replace(/^[-*]\s*/, "").trim()
-    || "";
+  const cardSummary = sessionCardSummary(session);
 
 
   const [isDragOver, setIsDragOver] = useState(false);
@@ -840,6 +839,14 @@ function NeedsAttentionSection() {
   );
 }
 
+// Inbox-clearing prompt: when more than this many active sessions haven't been
+// touched in over a month, offer to bulk-dismiss them out of the working set.
+const STALE_SESSION_MS = 30 * 24 * 60 * 60 * 1000;
+const STALE_PROMPT_THRESHOLD = 10;
+// The Dismissed bucket only renders sessions dismissed within this window — a bulk
+// sweep can dismiss thousands, and an unbounded list is noise.
+const DISMISSED_VISIBLE_MS = 45 * 24 * 60 * 60 * 1000;
+
 export function SessionListPanel({
   onSessionSelect,
   activeSessionId,
@@ -859,11 +866,10 @@ export function SessionListPanel({
     s => s.activeProjectFilter,
     s => s.collapsedSections,
   ]);
-  const killSessionMutation = useMutation(api.conversations.killSession);
   const handleKillDismissed = useCallback((id: string) => {
     soundKill();
     if (isConvexId(id)) {
-      killSessionMutation({ conversation_id: id as Id<"conversations">, mark_completed: true }).catch(() => {});
+      useInboxStore.getState().convCommand(id, "killSession", { mark_completed: true });
     }
     // Route the local removal through markKilling (an action that deletes the row
     // inside a draft) rather than a raw setState. The middleware then plants a
@@ -872,7 +878,7 @@ export function SessionListPanel({
     // marked completed, until it ages out of the window). Raw setState skipped
     // the middleware → no exclude → the card came back.
     useInboxStore.getState().markKilling(id);
-  }, [killSessionMutation]);
+  }, []);
 
   const handleSelect = useCallback((session: InboxSession) => {
     if (onSessionSelect) {
@@ -921,14 +927,82 @@ export function SessionListPanel({
   const filteredNeedsInput = useMemo(() => filterByProject(needsInput), [filterByProject, needsInput]);
   const filteredWorking = useMemo(() => filterByProject(working), [filterByProject, working]);
   const filteredDismissed = useMemo(() => {
-    const filtered = filterByProject(dismissedList);
+    // Only surface dismissed sessions ACTIVE within the window — keyed on last
+    // activity (updated_at), NOT when they were dismissed. A bulk cleanup dismisses
+    // thousands of stale sessions all at once (dismissed_at = today), so filtering
+    // by dismissal time would still show them all; filtering by recency hides that
+    // old noise while keeping things you recently worked on but set aside. Hidden
+    // ones stay searchable and reachable by direct link.
+    const cutoff = Date.now() - DISMISSED_VISIBLE_MS;
+    const filtered = filterByProject(dismissedList).filter(
+      (sess) => (sess.updated_at ?? 0) >= cutoff,
+    );
     return filtered.sort((a, b) => (b.dismissed_at || b.updated_at || 0) - (a.dismissed_at || a.updated_at || 0));
   }, [filterByProject, dismissedList]);
   const filteredCount = filteredPinned.length + filteredNew.length + filteredNeedsInput.length + filteredWorking.length;
 
+  // Stale working set: EVERY non-dismissed session untouched for >30d, minus
+  // pinned (explicit keep) and the one you're viewing. Computed from the full
+  // session map — NOT the active buckets — on purpose: subagents nested under a
+  // parent are held out of those buckets, but dismissing their parent promotes
+  // them to top-level, so they must be in the dismiss set too or they refill the
+  // inbox after a sweep.
+  const staleSessions = useMemo(() => {
+    const cutoff = Date.now() - STALE_SESSION_MS;
+    return (Object.values(s.sessions) as InboxSession[]).filter(
+      (sess) =>
+        !isSessionDismissed(sess) &&
+        !sess.is_pinned &&
+        sess._id !== activeSessionId &&
+        (sess.updated_at ?? 0) < cutoff,
+    );
+  }, [s.sessions, activeSessionId]);
+  const [stalePromptSnoozed, setStalePromptSnoozed] = useState(false);
+  const [dismissingStale, setDismissingStale] = useState(false);
+  const dismissStaleMutation = useMutation(api.conversations.dismissStaleInboxSessions);
+  const showStalePrompt = staleSessions.length > STALE_PROMPT_THRESHOLD && !stalePromptSnoozed;
+
+  const handleDismissStale = useCallback(async () => {
+    const ids = staleSessions.map((sess) => sess._id);
+    const count = ids.length;
+    // Instant, optimistic local dismiss (sync — no per-row dispatch storm). This
+    // is the durable, user-visible clear; it persists to IDB on its own.
+    useInboxStore.getState().markSessionsDismissed(ids);
+    setStalePromptSnoozed(true);
+    setDismissingStale(true);
+    try {
+      // Fire-once: schedules a background drainer that persists the dismissal
+      // server-side / cross-device. Cheap and unlikely to fail — and even if it
+      // does, the local clear above already stands, so we never alarm the user.
+      await dismissStaleMutation({ older_than_days: 30 });
+    } catch {
+      // ignore — local clear persists; the server drain is best-effort.
+    } finally {
+      setDismissingStale(false);
+      toast.success(`Dismissed ${count} old session${count === 1 ? "" : "s"} — still searchable anytime`);
+    }
+  }, [staleSessions, dismissStaleMutation]);
+
   const [expandedSubSessions, setExpandedSubSessions] = useState<Record<string, boolean>>({});
   const showSubagents = s.clientState.ui?.show_subagents ?? true;
   const showAllSessions = s.clientState.ui?.show_old_sessions ?? true;
+  const flatView = s.clientState.ui?.inbox_flat_view ?? false;
+  // Flat "by creation time" view reuses the already-computed sortedSessions
+  // (every non-dismissed session) and only swaps the comparator to newest-first
+  // by started_at — the conversation's creation time. It still honors the
+  // show_subagents toggle: when subagents are hidden, the same sessions the
+  // grouped view nests away (subsByParent / globalSubByParent) are excluded here.
+  const flatByCreation = useMemo(() => {
+    const subIds = showSubagents
+      ? null
+      : new Set(Array.from(globalSubByParent.values()).flat().map((sess) => sess._id));
+    const list = subIds
+      ? sortedSessions.filter((sess) => !subIds.has(sess._id))
+      : [...sortedSessions];
+    list.sort((a, b) => (b.started_at ?? b.updated_at ?? 0) - (a.started_at ?? a.updated_at ?? 0));
+    return filterByProject(list);
+  }, [sortedSessions, filterByProject, showSubagents, globalSubByParent]);
+  const headerCount = flatView ? flatByCreation.length : (s.activeProjectFilter ? filteredCount : activeSessions.length);
   const totalSubagentCount = useMemo(() => {
     let count = 0;
     for (const subs of globalSubByParent.values()) count += subs.length;
@@ -974,7 +1048,7 @@ export function SessionListPanel({
     }
   }, [activeSessionId, sortedSessions, s.collapsedSections, s.clientState.show_dismissed]);
 
-  const renderSection = (label: string, items: InboxSession[], color: string, sectionVariant?: "working") => {
+  const renderSection = (label: string, items: InboxSession[], color: string, sectionVariant?: "working", flat?: boolean) => {
     if (items.length === 0) return null;
     const key = label.toLowerCase().replace(/\s+/g, "_");
     const collapsed = !!s.collapsedSections[key];
@@ -993,7 +1067,10 @@ export function SessionListPanel({
         </button>
         {!collapsed && <>
           {items.map((session) => {
-            const subs = globalSubByParent.get(session._id) || [];
+            // In flat view, subagents already appear as their own top-level
+            // rows (they're in sortedSessions), so suppress the nested rendering
+            // to avoid showing them twice.
+            const subs = flat ? [] : (globalSubByParent.get(session._id) || []);
             const subsExpanded = !!expandedSubSessions[session._id];
             const visibleSubs = subs.length <= 2 ? subs : subsExpanded ? subs : subs.slice(0, 2);
             const hiddenCount = subs.length - visibleSubs.length;
@@ -1050,7 +1127,7 @@ export function SessionListPanel({
     <div className="h-full w-full flex flex-col bg-sol-bg-alt overflow-hidden">
       <div className="px-3 py-0.5 sm:py-1 border-b border-sol-border/50 flex-shrink-0 flex items-center gap-2 min-h-[31px] min-w-0">
         <span className="text-xs font-medium text-sol-text-dim uppercase tracking-wide flex-shrink-0">
-          {s.activeProjectFilter ? filteredCount : activeSessions.length} Session{(s.activeProjectFilter ? filteredCount : activeSessions.length) !== 1 ? "s" : ""}
+          {headerCount} Session{headerCount !== 1 ? "s" : ""}
         </span>
         {projectCounts.length > 1 && (
           <div className="flex gap-1 overflow-x-auto min-w-0 pr-3" style={{ scrollbarWidth: 'none', maskImage: 'linear-gradient(to right, black calc(100% - 20px), transparent)', WebkitMaskImage: 'linear-gradient(to right, black calc(100% - 20px), transparent)' }}>
@@ -1074,6 +1151,13 @@ export function SessionListPanel({
           </div>
         )}
         <div className="flex items-center gap-2 flex-shrink-0 ml-auto">
+          <button
+            onClick={() => s.updateClientUI({ inbox_flat_view: !flatView })}
+            className="text-[10px] text-sol-text-dim hover:text-sol-cyan transition-colors whitespace-nowrap"
+            title="Sort all sessions by creation time (Ctrl+,)"
+          >
+            {flatView ? "grouped" : "by time"}
+          </button>
           {totalSubagentCount > 0 && (
             <button onClick={() => s.updateClientUI({ show_subagents: !showSubagents })} className="text-[10px] text-sol-text-dim hover:text-sol-cyan transition-colors whitespace-nowrap">
               {showSubagents ? `−${totalSubagentCount} sub` : `+${totalSubagentCount} sub`}
@@ -1087,6 +1171,47 @@ export function SessionListPanel({
         </div>
       </div>
       <div ref={scrollContainerRef} className="flex-1 overflow-y-auto scrollbar-auto">
+        {showStalePrompt && (
+          <div className="m-2 rounded-md border border-sol-yellow/30 bg-sol-yellow/[0.06] px-3 py-2.5">
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <div className="text-xs font-semibold text-sol-text">Clear out your working set?</div>
+                <div className="mt-0.5 text-[11px] leading-snug text-sol-text-muted">
+                  You have <span className="font-semibold text-sol-yellow">{staleSessions.length}</span> sessions
+                  with no activity in over a month. Dismiss them to focus your inbox — they stay searchable and
+                  accessible anytime.
+                </div>
+              </div>
+              <button
+                onClick={() => setStalePromptSnoozed(true)}
+                className="shrink-0 rounded p-0.5 text-sol-text-dim hover:bg-sol-bg-alt hover:text-sol-text"
+                title="Not now"
+                aria-label="Dismiss this prompt"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+            <div className="mt-2 flex items-center gap-2">
+              <button
+                onClick={handleDismissStale}
+                disabled={dismissingStale}
+                className="rounded bg-sol-yellow/15 px-2.5 py-1 text-[11px] font-semibold text-sol-yellow transition-colors hover:bg-sol-yellow/25 disabled:opacity-60"
+              >
+                {dismissingStale ? "Dismissing…" : `Dismiss ${staleSessions.length} old sessions`}
+              </button>
+              <button
+                onClick={() => setStalePromptSnoozed(true)}
+                className="text-[11px] text-sol-text-dim transition-colors hover:text-sol-text"
+              >
+                Not now
+              </button>
+            </div>
+          </div>
+        )}
+        {flatView ? (
+          renderSection("All", flatByCreation, "text-sol-cyan", undefined, true)
+        ) : (
+        <>
         {!s.activeProjectFilter && <NeedsAttentionSection />}
         {renderSection("Pinned", filteredPinned, "text-sol-magenta")}
         {renderSection("New", filteredNew, "text-sol-blue")}
@@ -1132,6 +1257,8 @@ export function SessionListPanel({
             </div>
           );
         })}
+        </>
+        )}
         {sortedSessions.length === 0 && (
           <div className="px-3 py-8 text-center text-sm text-sol-text-dim">
             No active sessions

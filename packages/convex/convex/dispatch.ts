@@ -8,7 +8,7 @@ import { resolveTeamForPath } from "./privacy";
 import { hasRecentPendingDaemonCommand } from "./daemonCommandUtils";
 import { nextShortId } from "./counters";
 import { resolveAssigneeStr, resolveAssigneeToUserId, recalcPlanProgress, notifySubscribers, subscribeUser, resolveWorkerParentConversation, resolveTaskGitContext } from "./tasks";
-import { internal } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 
 type TableConfig =
   | {
@@ -437,6 +437,36 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     });
   },
 
+  // Mirror of conversations.setPrivacy — these two fields are immutable in
+  // applyPatches because flipping them re-resolves team sharing, so the write
+  // happens here while the client optimistically updates local state.
+  setPrivacy: async (ctx, userId, [convId, isPrivate]: [string, boolean]) => {
+    const conv = await ctx.db.get(convId as Id<"conversations">);
+    if (!conv) throw new Error("Conversation not found");
+    if (conv.user_id.toString() !== userId.toString()) throw new Error("Unauthorized");
+    const updates: { is_private: boolean; team_id?: Id<"teams">; team_visibility?: "summary" | "full" | "private" } = {
+      is_private: isPrivate,
+    };
+    if (isPrivate) {
+      updates.team_visibility = "private";
+    } else {
+      const user = await ctx.db.get(userId);
+      if (user?.team_id && conv.team_id?.toString() !== user.team_id.toString()) {
+        updates.team_id = user.team_id;
+      }
+    }
+    await ctx.db.patch(convId as Id<"conversations">, updates);
+  },
+
+  setTeamVisibility: async (ctx, userId, [convId, visibility]: [string, "summary" | "full" | null]) => {
+    const conv = await ctx.db.get(convId as Id<"conversations">);
+    if (!conv || conv.user_id.toString() !== userId.toString()) throw new Error("Unauthorized");
+    await ctx.db.patch(convId as Id<"conversations">, {
+      team_visibility: visibility ?? undefined,
+      is_private: false,
+    });
+  },
+
   updateTaskStatus: async (ctx, userId, [shortId, newStatus]: [string, string]) => {
     const task = await ctx.db.query("tasks").withIndex("by_short_id", (q: any) => q.eq("short_id", shortId)).first();
     if (!task) throw new Error("Task not found");
@@ -622,19 +652,15 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     return { id, short_id: shortId };
   },
 
-  addTaskComment: async (ctx, userId, [shortId, text, commentType]: [string, string, string?]) => {
-    const task = await ctx.db.query("tasks").withIndex("by_short_id", (q: any) => q.eq("short_id", shortId)).first();
-    if (!task) throw new Error("Task not found");
-    const user = await ctx.db.get(userId);
-    const teamId = user?.active_team_id || user?.team_id;
-    if (task.user_id !== userId && task.team_id !== teamId) throw new Error("Not authorized");
-
-    await ctx.db.insert("task_comments", {
-      task_id: task._id,
-      author: user?.name || "unknown",
+  // Delegate to tasks.webAddComment so the local-first path keeps image
+  // attachments, the canAccessTask check, and subscriber notifications — none of
+  // which the old inline insert had. Same ctx.runMutation reuse as updatePlan.
+  addTaskComment: async (ctx, userId, [shortId, text, commentType, imageIds]: [string, string, string?, string[]?]) => {
+    await (ctx as any).runMutation(api.tasks.webAddComment, {
+      short_id: shortId,
       text,
-      comment_type: (commentType || "note") as any,
-      created_at: Date.now(),
+      comment_type: commentType || undefined,
+      image_storage_ids: imageIds && imageIds.length ? imageIds : undefined,
     });
   },
 
@@ -666,4 +692,86 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     if (fields.labels !== undefined) updates.labels = fields.labels;
     await ctx.db.patch(doc._id, updates);
   },
+
+  // Plans/projects carry server-side logic (plan progress recalc, doc-title
+  // sync, access checks) that already lives in their public mutations. Rather
+  // than duplicate it, the side-effect delegates via ctx.runMutation in the
+  // same transaction — same identity, atomic. The client mutates plans[]/
+  // projects[] optimistically; this performs the authoritative write.
+  updatePlan: async (ctx, userId, [shortId, fields]: [string, Record<string, any>]) => {
+    await (ctx as any).runMutation(api.plans.webUpdate, { short_id: shortId, ...fields });
+  },
+
+  updateProject: async (ctx, userId, [id, fields]: [string, Record<string, any>]) => {
+    await (ctx as any).runMutation(api.projects.webUpdate, { id, ...fields });
+  },
+
+  toggleBookmark: async (ctx, userId, [conversationId, messageId]: [string, string]) => {
+    return await (ctx as any).runMutation(api.bookmarks.toggleBookmark, {
+      conversation_id: conversationId,
+      message_id: messageId,
+    });
+  },
+
+  markNotificationRead: async (ctx, userId, [id]: [string]) => {
+    return await (ctx as any).runMutation(api.notifications.markAsRead, { notificationId: id });
+  },
+  markAllNotificationsRead: async (ctx, userId) => {
+    return await (ctx as any).runMutation(api.notifications.markAllAsRead, {});
+  },
+
+  // Creates delegate to the existing webCreate mutations (which own short-id
+  // allocation, team resolution, history, etc.) and return their {id,...} so
+  // the awaiting caller can navigate to the new record.
+  createDoc: async (ctx, userId, [opts]: [any]) => {
+    return await (ctx as any).runMutation(api.docs.webCreate, opts);
+  },
+  createPlan: async (ctx, userId, [opts]: [any]) => {
+    return await (ctx as any).runMutation(api.plans.webCreate, opts);
+  },
+  createProject: async (ctx, userId, [opts]: [any]) => {
+    return await (ctx as any).runMutation(api.projects.webCreate, opts);
+  },
+  promoteDocToPlan: async (ctx, userId, [docId]: [string]) => {
+    return await (ctx as any).runMutation(api.docs.webPromoteToPlan, { doc_id: docId });
+  },
+  ensurePlanDoc: async (ctx, userId, [planId]: [string]) => {
+    return await (ctx as any).runMutation(api.plans.ensureDoc, { plan_id: planId });
+  },
+  publishToDirectory: async (ctx, userId, [opts]: [any]) => {
+    return await (ctx as any).runMutation(api.conversations.publishToDirectory, opts);
+  },
+  moveDoc: async (ctx, userId, [id, parentId, sortOrder]: [string, string?, number?]) => {
+    return await (ctx as any).runMutation(api.docs.webMoveDoc, {
+      id,
+      parent_id: parentId ?? undefined,
+      sort_order: sortOrder ?? undefined,
+    });
+  },
+
+  // Generic session daemon-command dispatch: delegates to the existing mutation
+  // so all its dedup / pending-reset / multi-command logic is reused verbatim.
+  // The store's convCommand action routes every kill/restart/repair/reconfigure/
+  // rewind/fork/sendKeys/sendEscape/resume here. Every target takes
+  // conversation_id as its first arg; per-command extras ride extraArgs.
+  convCommand: async (ctx, userId, [convId, command, extraArgs]: [string, string, Record<string, any>?]) => {
+    const fn = (SESSION_COMMANDS as Record<string, any>)[command];
+    if (!fn) throw new Error(`convCommand: unknown command ${command}`);
+    return await (ctx as any).runMutation(fn, {
+      conversation_id: convId,
+      ...(extraArgs || {}),
+    });
+  },
+};
+
+const SESSION_COMMANDS = {
+  killSession: api.conversations.killSession,
+  restartSession: api.conversations.restartSession,
+  repairSession: api.conversations.repairSession,
+  reconfigureSession: api.conversations.reconfigureSession,
+  rewindSession: api.conversations.rewindSession,
+  forkFromMessage: api.conversations.forkFromMessage,
+  sendKeysToSession: api.conversations.sendKeysToSession,
+  sendEscapeToSession: api.conversations.sendEscapeToSession,
+  resumeSession: api.users.resumeSession,
 };

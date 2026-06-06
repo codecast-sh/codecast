@@ -8,6 +8,33 @@ import { useConvexSync } from "./useConvexSync";
 const EMPTY_MESSAGES: Message[] = [];
 const EMPTY_PENDING: Message[] = [];
 
+// Conversation fields that the daemon bumps on every ~1s heartbeat but that don't
+// change what the conversation view renders (idle duration is cosmetic and recomputed
+// from Date.now() on any render anyway). When two successive conversation objects
+// differ ONLY in these fields we hand back the previous object reference, so a bare
+// heartbeat no longer rebuilds `conversation` → re-renders the entire 11k-line
+// ConversationView monolith (~120ms each, ~4–5×/sec for a live session).
+const LIVENESS_ONLY_CONV_FIELDS = new Set([
+  "updated_at",
+  "last_heartbeat",
+  "last_metrics_at",
+  "last_active_at",
+  "last_message_at",
+]);
+function conversationRenderEqual(a: Record<string, any>, b: Record<string, any>): boolean {
+  if (a === b) return true;
+  // The message array is the primary render signal — a new/changed message must
+  // always re-render (mergedMessages keeps a stable ref when nothing changed).
+  if (a.messages !== b.messages) return false;
+  const aKeys = Object.keys(a);
+  if (aKeys.length !== Object.keys(b).length) return false;
+  for (const k of aKeys) {
+    if (LIVENESS_ONLY_CONV_FIELDS.has(k)) continue;
+    if (!Object.is(a[k], b[k])) return false;
+  }
+  return true;
+}
+
 type Message = {
   _id: string;
   message_uuid?: string;
@@ -516,7 +543,7 @@ export function useConversationMessages(
   // Build conversation object FROM STORE (never null if store has pending)
   // =============================================
   const hasPending = storePending.length > 0;
-  const conversation: Record<string, any> | null = useMemo(() => {
+  const rawConversation: Record<string, any> | null = useMemo(() => {
     if (!storeMeta && !hasPending) return null;
     if (!hasPending && targetMode && !targetAroundData && rawMessages.length === 0) return null;
     // Return the conversation immediately with whatever messages are available.
@@ -530,6 +557,19 @@ export function useConversationMessages(
       child_conversation_map: childConversationMap,
     };
   }, [storeMeta, rawMessages, loadedStartIndex, compactionCount, childConversationMap, targetMode, targetAroundData, hasPending, conversationId]);
+
+  // Identity-stabilize against liveness-only churn: hand back the prior object when a
+  // heartbeat changed nothing the view renders. This is what keeps a working session's
+  // ~1s heartbeat from re-rendering the whole ConversationView. (See conversationRenderEqual.)
+  const stableConversationRef = useRef<Record<string, any> | null>(null);
+  const conversation = useMemo(() => {
+    const prev = stableConversationRef.current;
+    if (prev && rawConversation && conversationRenderEqual(prev, rawConversation)) {
+      return prev;
+    }
+    stableConversationRef.current = rawConversation;
+    return rawConversation;
+  }, [rawConversation]);
 
   // =============================================
   // Target search (auto-load older to find target)

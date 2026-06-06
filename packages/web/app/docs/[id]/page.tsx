@@ -4,6 +4,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useInboxStore, DocDetail } from "../../../store/inboxStore";
 import { useSyncDocDetail } from "../../../hooks/useSyncDocs";
 import { DetailSplitLayout } from "../../../components/DetailSplitLayout";
+import { AuthGuard } from "../../../components/AuthGuard";
 import { DocListContent } from "../page";
 import { shareOrigin, canonicalUrl } from "../../../lib/utils";
 import { useMutation } from "convex/react";
@@ -119,11 +120,13 @@ function DocTypeSelector({
 
 export default function DocDetailPage() {
   return (
-    <DetailSplitLayout list={<DocListContent />}>
-      <ErrorBoundary name="DocDetail" level="panel">
-        <DocDetailContent />
-      </ErrorBoundary>
-    </DetailSplitLayout>
+    <AuthGuard>
+      <DetailSplitLayout list={<DocListContent />}>
+        <ErrorBoundary name="DocDetail" level="panel">
+          <DocDetailContent />
+        </ErrorBoundary>
+      </DetailSplitLayout>
+    </AuthGuard>
   );
 }
 
@@ -153,7 +156,7 @@ function DocDetailContent() {
   }, [allDocs, id]);
   const updateDoc = useInboxStore((s) => s.updateDoc);
   const pinDoc = useInboxStore((s) => s.pinDoc);
-  const promoteToPlan = useMutation(api.docs.webPromoteToPlan);
+  const promoteToPlan = useInboxStore((s) => s.promoteDocToPlan);
   const generateShareLink = useMutation(api.docs.generateShareLink);
 
   const handleTitleChange = useCallback(
@@ -179,7 +182,7 @@ function DocDetailContent() {
     async (newType: string) => {
       if (!data) return;
       if (newType === "plan" && !(data as any).plan_id) {
-        const result = await promoteToPlan({ doc_id: data._id as any });
+        const result = await promoteToPlan(data._id);
         if (result?.short_id) {
           toast.success("Promoted to plan");
           router.push(`/plans/${result.short_id}`);

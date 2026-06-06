@@ -1,14 +1,11 @@
 import { useState, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { useMutation } from "convex/react";
-import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useMentionQuery } from "../hooks/useMentionQuery";
 import { useImageUpload } from "../hooks/useImageUpload";
+import { useInboxStore } from "../store/inboxStore";
 import { toast } from "sonner";
 import { ChevronRight } from "lucide-react";
 import { DocEditor } from "./editor/DocEditor";
-
-const api = _api as any;
 
 const FIDELITY_OPTIONS = [
   { value: "", label: "Auto (default)" },
@@ -30,7 +27,7 @@ const JOIN_POLICY_OPTIONS = [
 
 export function CreatePlanForm({ onClose }: { onClose: () => void }) {
   const router = useRouter();
-  const createPlan = useMutation(api.plans.webCreate);
+  const createPlan = useInboxStore((s) => s.createPlan);
   const handleMentionQuery = useMentionQuery();
   const handleImageUpload = useImageUpload();
   const [title, setTitle] = useState("");

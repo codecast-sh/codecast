@@ -100,15 +100,32 @@ describe("idbCache.native", () => {
     expect(kv.has("col:sessions")).toBe(false);
   });
 
-  it("prunes rows that disappeared from the collection", async () => {
+  it("NEVER clears the cache from a store-shrink — a row missing without an exclude is kept", async () => {
     const a = { _id: "a", title: "Alpha" };
     const b = { _id: "b", title: "Beta" };
     writePatchesToIDB([{ op: "replace", path: ["sessions"], value: {} } as any], { sessions: { a, b } });
     await Promise.resolve();
     expect((await loadCache())!.sessions).toEqual({ a, b });
 
-    // b is gone (a snapshot prune). The persisted set must drop it, not keep it.
+    // b vanished from the store with NO exclude (an incomplete store / a bug, not
+    // a deletion) → it MUST survive on disk so the durable cache is never wiped.
     writePatchesToIDB([{ op: "replace", path: ["sessions"], value: {} } as any], { sessions: { a } });
+    await Promise.resolve();
+    expect((await loadCache())!.sessions).toEqual({ a, b });
+  });
+
+  it("removes a row ONLY when it was explicitly excluded (kill/archive)", async () => {
+    const a = { _id: "a", title: "Alpha" };
+    const b = { _id: "b", title: "Beta" };
+    writePatchesToIDB([{ op: "replace", path: ["sessions"], value: {} } as any], { sessions: { a, b } });
+    await Promise.resolve();
+
+    // b is intentionally removed: gone from the store AND carrying a pending
+    // exclude → drop it from disk too.
+    writePatchesToIDB([{ op: "replace", path: ["sessions"], value: {} } as any], {
+      sessions: { a },
+      pending: { "sessions:b": { type: "exclude" } },
+    });
     await Promise.resolve();
     expect((await loadCache())!.sessions).toEqual({ a });
   });

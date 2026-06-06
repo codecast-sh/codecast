@@ -38,10 +38,9 @@ const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, o
     effectiveTargetMessageId,
   } = useConversationMessages(sessionId, targetMessageId);
 
-  const resumeSession = useMutation(api.users.resumeSession);
-  const restartSessionMutation = useMutation(api.conversations.restartSession);
-  const setPrivacy = useMutation(api.conversations.setPrivacy);
-  const setTeamVisibility = useMutation(api.conversations.setTeamVisibility);
+  const convCommand = useInboxStore((s) => s.convCommand);
+  const setPrivacy = useInboxStore((s) => s.setPrivacy);
+  const setTeamVisibility = useInboxStore((s) => s.setTeamVisibility);
   const generateShareLink = useMutation(api.conversations.generateShareLink);
   const [resumeState, setResumeState] = useState<"idle" | "resuming" | "sent" | "failed">("idle");
   const forceRestartAttemptedRef = useRef(false);
@@ -70,7 +69,7 @@ const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, o
       if (!forceRestartAttemptedRef.current && isConvexId(sessionId)) {
         forceRestartAttemptedRef.current = true;
         try {
-          await restartSessionMutation({ conversation_id: sessionId as Id<"conversations"> });
+          await convCommand(sessionId, "restartSession");
           setResumeState("sent");
         } catch {
           setResumeState("failed");
@@ -80,14 +79,14 @@ const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, o
       }
     }, 45_000);
     return () => clearTimeout(timeout);
-  }, [resumeState, sessionId, restartSessionMutation]);
+  }, [resumeState, sessionId, convCommand]);
 
   const handleManualResume = useCallback(() => {
     setResumeState("resuming");
-    resumeSession({ conversation_id: sessionId as Id<"conversations"> })
+    convCommand(sessionId, "resumeSession")
       .then(() => setResumeState("sent"))
       .catch(() => setResumeState("failed"));
-  }, [sessionId, resumeSession]);
+  }, [sessionId, convCommand]);
 
   if (!conversation) {
     return (
@@ -114,8 +113,8 @@ const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, o
       teamVisibility={(conversation as any).team_visibility || (conversation as any).effective_team_visibility}
       hasShareToken={!!conversation.share_token}
       hasTeam={!!(conversation as any).auto_shared}
-      onSetPrivate={async () => { await setPrivacy({ conversation_id: convId, is_private: true }); toast.success("Made private"); }}
-      onSetTeamVisibility={async (mode) => { await setTeamVisibility({ conversation_id: convId, team_visibility: mode }); toast.success(mode === "full" ? "Sharing full conversation with team" : "Sharing summary with team"); }}
+      onSetPrivate={() => { setPrivacy(convId, true); toast.success("Made private"); }}
+      onSetTeamVisibility={(mode) => { setTeamVisibility(convId, mode); toast.success(mode === "full" ? "Sharing full conversation with team" : "Sharing summary with team"); }}
       onGenerateShareLink={async () => { await generateShareLink({ conversation_id: convId }); return `${shareOrigin()}/conversation/${convId}`; }}
       shareUrl={shareUrl}
     />
@@ -366,6 +365,25 @@ export function QueuePageClient() {
   const prevSessionRef = useRef(currentSessionId);
   prevSessionRef.current = currentSessionId;
 
+  // One-shot deep-link scroll target. A bookmark/link/search jump sets
+  // `scrollTarget`, which drives `targetMessageId` (load the window AROUND that
+  // message + scroll to it once). We keep it for the WHOLE visit so target mode
+  // stays stable — clearing it mid-visit would flip useConversationMessages back
+  // to normal mode and swap the message window out from under the user. Instead
+  // we drop it only once we've navigated AWAY from the targeted session, so
+  // returning later opens at the live tail instead of re-jumping to the message.
+  const scrollTargetArrivedRef = useRef(false);
+  useWatchEffect(() => {
+    if (!scrollTarget) { scrollTargetArrivedRef.current = false; return; }
+    const viewSessionId = viewingDismissedId ?? currentSessionId;
+    if (viewSessionId === scrollTarget.sessionId) {
+      scrollTargetArrivedRef.current = true;
+    } else if (scrollTargetArrivedRef.current && viewSessionId) {
+      setScrollTarget(null);
+      scrollTargetArrivedRef.current = false;
+    }
+  }, [currentSessionId, viewingDismissedId, scrollTarget]);
+
   const handleSendAndAdvance = useCallback(() => {
     advanceToNext();
   }, [advanceToNext]);
@@ -416,7 +434,13 @@ export function QueuePageClient() {
     if (!targetId) return;
     const targetPath = `/conversation/${targetId}`;
     if (window.location.pathname !== targetPath) {
-      window.history.replaceState({ inboxId: targetId }, "", targetPath);
+      // Switching from one session to another (URL already points at a session) is a
+      // real navigation — push so browser back/forward cycles through viewed sessions.
+      // The first resolution from the bare inbox (or a deep-link param) only
+      // canonicalizes the URL, so replace it to avoid a dead bare-inbox entry that
+      // would just auto-select again on back.
+      const switchingSessions = window.location.pathname.startsWith("/conversation/");
+      window.history[switchingSessions ? "pushState" : "replaceState"]({ inboxId: targetId }, "", targetPath);
     }
   }, [currentSession?._id, viewingDismissedId]);
 
@@ -485,8 +509,7 @@ export function QueuePageClient() {
             onBack={handleBack}
             targetMessageId={scrollTarget?.sessionId === viewingDismissedSession._id ? scrollTarget.messageId : undefined}
             highlightQuery={activeHighlight}
-            onClearHighlight={handleClearHighlight}
-          />
+            onClearHighlight={handleClearHighlight}          />
         </ErrorBoundary>
       ) : currentSession ? (
         <ErrorBoundary name="Conversation" level="inline">
@@ -500,8 +523,7 @@ export function QueuePageClient() {
             onBack={handleBack}
             targetMessageId={scrollTarget?.sessionId === currentSession._id ? scrollTarget.messageId : undefined}
             highlightQuery={activeHighlight}
-            onClearHighlight={handleClearHighlight}
-          />
+            onClearHighlight={handleClearHighlight}          />
         </ErrorBoundary>
       ) : pendingInjectId ? (
         <div className="h-full flex items-center justify-center text-sol-text-dim">

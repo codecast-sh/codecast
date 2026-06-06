@@ -137,6 +137,12 @@ export function useGlobalShortcutActions() {
     store.updateClientUI({ zen_mode: !zen });
   }, []));
 
+  useShortcutAction('inbox.toggleFlatView', useCallback(() => {
+    const store = useInboxStore.getState();
+    const flat = store.clientState.ui?.inbox_flat_view ?? false;
+    store.updateClientUI({ inbox_flat_view: !flat });
+  }, []));
+
   useShortcutAction('nav.inbox', useCallback(() => {
     router.push("/inbox");
   }, [router]));

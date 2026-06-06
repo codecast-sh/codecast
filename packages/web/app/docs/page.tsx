@@ -3,6 +3,7 @@ import { useCallback, useMemo, useRef, useEffect } from "react";
 import { useRouter, useSearchParams, useParams, usePathname } from "next/navigation";
 import Link from "next/link";
 import { useInboxStore, DocItem, DocViewPrefs, ProjectItem } from "../../store/inboxStore";
+import { AuthGuard } from "../../components/AuthGuard";
 
 import { useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
@@ -146,7 +147,7 @@ export function DocListContent() {
   const params = useParams();
   const { docType, sort: sortBy, project: projectFilter, label: labelFilter, source: sourceFilter, setParam } = useDocUrlState();
   const router = useRouter();
-  const createDoc = useMutation(api.docs.webCreate);
+  const createDoc = useInboxStore((s) => s.createDoc);
   const docs = useInboxStore((s) => s.docs);
   const projects = useInboxStore((s) => s.projects);
   const docProjectPaths = useInboxStore((s) => s.docProjectPaths);
@@ -392,5 +393,9 @@ export function DocListContent() {
 }
 
 export default function DocsPage() {
-  return <DocListContent />;
+  return (
+    <AuthGuard>
+      <DocListContent />
+    </AuthGuard>
+  );
 }

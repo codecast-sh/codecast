@@ -40,9 +40,11 @@ function dedupeProjectPaths(paths: string[]): string[] {
 // the dominant webListPaginated invalidation storm (~hundreds/s fleet-wide).
 const LIVE_PAGE_SIZE = 24;
 const RECONCILE_PAGE_SIZE = 24;
-// Full reconcile is a one-shot crawl, not a live subscription. Throttle it per
-// workspace so re-mounts lean on the cache instead of re-crawling every time.
-const RECONCILE_THROTTLE_MS = 5 * 60 * 1000;
+// Full reconcile is a one-shot crawl, not a live subscription. The durable
+// throttle (syncMeta.backfilledAt, written by runReconcileCrawl on completion)
+// makes a fresh launch within the window skip the crawl and serve from the
+// hydrated IDB cache — same as tasks. The live first page keeps recent docs fresh.
+const RECONCILE_THROTTLE_MS = 30 * 60 * 1000;
 const RECONCILE_PAGE_DELAY_MS = 60; // pace the crawl so it never bursts the backend
 
 type WorkspaceArgs =
@@ -94,12 +96,17 @@ export function useSyncDocsPaginated(wsArgs: WorkspaceArgs) {
   //    throttle window so long-lived sessions still pick up docs deleted
   //    elsewhere (the live first page already catches new/updated recent docs).
   const wsKey = wsArgs === "skip" ? "skip" : JSON.stringify(wsArgs);
+  // Gate on hydration so the durable watermark is restored before we decide
+  // whether to crawl — else a reload would full-crawl against an empty syncMeta
+  // before the persisted backfilledAt loads. Mirrors useSyncTasks.
+  const hydrated = useInboxStore((s) => s.clientStateInitialized);
   const [reconcileNonce, setReconcileNonce] = useState(0);
   useEffect(() => {
     const id = setInterval(() => setReconcileNonce((n) => n + 1), RECONCILE_THROTTLE_MS);
     return () => clearInterval(id);
   }, []);
   useEffect(() => {
+    if (!hydrated) return;
     runReconcileCrawl({
       namespace: "docs",
       wsKey,
@@ -129,10 +136,10 @@ export function useSyncDocsPaginated(wsArgs: WorkspaceArgs) {
           projectPaths.some((p, i) => prevPaths[i] !== p);
         useInboxStore
           .getState()
-          .syncTable("docs", all, pathsChanged ? { extra: { docProjectPaths: projectPaths } } : {});
+          .syncTable("docs", all, pathsChanged ? { isDelta: true, extra: { docProjectPaths: projectPaths } } : { isDelta: true });
       },
     });
-  }, [convex, wsKey, reconcileNonce]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [convex, wsKey, reconcileNonce, hydrated]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return { ready: status !== "LoadingFirstPage" };
 }

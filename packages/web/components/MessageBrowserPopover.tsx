@@ -6,6 +6,7 @@ import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { isCommandMessage, cleanContent } from "../lib/conversationProcessor";
+import { isSessionMessage } from "./sessionMessage";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { isConvexId, useInboxStore } from "../store/inboxStore";
 
@@ -467,6 +468,9 @@ export function MessageNavButton({
 
   const processed: PM[] = messages
     ? messages
+        // Drop inbound session→session messages (cast send): the navigator lists
+        // what the human typed, not machine-delivered cross-session messages.
+        .filter((m: { content?: string }) => !isSessionMessage(m.content ?? ""))
         .map((m: { _id: string; content?: string; timestamp: number }) => ({
           _id: m._id,
           ...processUserMessage(m.content ?? ""),

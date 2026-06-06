@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { createPortal } from "react-dom";
+import { Split } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
 
 type ForkChild = {
@@ -62,10 +63,10 @@ const Spinner = () => (
   </svg>
 );
 
+// Branch/fork glyph: lucide "Split" (diverging arrows). Replaces the old
+// git-branch icon (vertical stroke + node) per explicit request.
 const BranchIcon = ({ className }: { className?: string }) => (
-  <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-    <path strokeLinecap="round" strokeLinejoin="round" d="M6 3v12M6 15a3 3 0 103 3V6a3 3 0 10-3-3m12 12a3 3 0 10-3-3V6" />
-  </svg>
+  <Split className={className} />
 );
 
 export function BranchSelector({

@@ -19,13 +19,35 @@ export function isConvexId(id: string): boolean {
   return CONVEX_ID_RE.test(id);
 }
 
+// Resolve a task/doc assignee's display info (name/avatar) from the live team
+// roster keyed by the assignee user id. This is DERIVED at render time rather
+// than stored, so an optimistic `assignee` change (updateTask) shows the right
+// person instantly — the server-enriched `assignee_info` is only a fallback for
+// ids not in the local roster. (Storing assignee_info optimistically can't work:
+// it's a protected collection field compared by ===, so an object value would
+// never reconcile against the server's re-enriched object.)
+export function resolveAssigneeInfo(
+  assignee: string | null | undefined,
+  fallback: any,
+  teamMembers: any[] | undefined | null,
+  currentUser: any,
+): any {
+  if (!assignee) return null;
+  const m = teamMembers?.find((x: any) => x && x._id === assignee);
+  if (m) return { name: m.name, image: m.image || m.github_avatar_url, github_username: m.github_username };
+  if (currentUser && (assignee === currentUser._id || assignee === "me")) {
+    return { name: currentUser.name || currentUser.email || "Unknown", image: currentUser.image || currentUser.github_avatar_url, github_username: currentUser.github_username };
+  }
+  return fallback ?? { name: String(assignee) };
+}
+
 // Critical UI prefs mirrored to localStorage so they're available
 // synchronously at module load — avoids a layout flash between first paint
 // and IDB hydration. The IDB-backed clientState remains the source of truth
 // across tabs; localStorage is just a sync-readable cache for first-paint
 // values that affect layout. Keep this set TINY — every key here adds
 // localStorage churn on every change.
-const CRITICAL_UI_KEYS = ["sidebar_collapsed", "zen_mode", "inbox_shortcuts_hidden"] as const;
+const CRITICAL_UI_KEYS = ["sidebar_collapsed", "zen_mode", "inbox_shortcuts_hidden", "inbox_flat_view"] as const;
 const CRITICAL_PREFS_LS_KEY = "codecast-critical-ui";
 
 function readCriticalUiPrefs(): Record<string, any> {
@@ -332,7 +354,7 @@ export type TaskItem = {
   plan?: PlanRef;
   activeSession?: { session_id: string; title?: string; agent_status?: string; agent_type?: string } | null;
   source_agent_type?: string | null;
-  origin_session?: { conversation_id: string; session_id: string; title?: string } | null;
+  origin_session?: { conversation_id: string; session_id: string; title?: string; started_by?: string; last_message_at?: number; message_count?: number } | null;
   session_count?: number;
   steps?: TaskStep[];
   acceptance_criteria?: string[];
@@ -393,6 +415,7 @@ export type TaskViewPrefs = {
   priority?: string;
   label?: string;
   assignee?: string;
+  session?: string;
   hide_agent?: boolean;
   source?: string;
 };
@@ -436,6 +459,10 @@ export type ClientUI = {
   saved_views?: SavedView[];
   show_subagents?: boolean;
   show_old_sessions?: boolean;
+  // Inbox session panel view mode. When true, the panel drops the
+  // Pinned/New/Needs-Input/Working grouping and shows every session as one flat
+  // list sorted newest-first by creation time (started_at). Toggled by Ctrl+,.
+  inbox_flat_view?: boolean;
 };
 
 export type ClientLayouts = {
@@ -448,6 +475,9 @@ export type ClientLayouts = {
 export type ClientDismissed = {
   desktop_app?: boolean;
   has_used_desktop?: boolean;
+  // User chose "stay in browser" from the open-in-desktop hand-off; suppresses
+  // the auto-redirect from then on (synced per-user across browsers).
+  prefer_browser_links?: boolean;
   setup_prompt?: number;
   cli_offline?: number;
   tmux_missing?: number;
@@ -499,6 +529,14 @@ type Draft = InboxStoreState;
 export function isSessionDismissed(s: Pick<InboxSession, "inbox_dismissed_at">): boolean {
   return !!s.inbox_dismissed_at;
 }
+
+// Window the cross-device dismiss reconcile is authoritative over. Mirrors the
+// server's INBOX_DISMISSED_WINDOW_MS (the range listDismissedSessionsLite scans):
+// the server only reports dismisses within this window, so the client can only
+// infer an un-dismiss (CLEAR) for a locally-dismissed session whose timestamp
+// falls inside it — older ones may still be dismissed server-side, just out of
+// scan range. Keep in sync with packages/convex/convex/conversations.ts.
+export const DISMISS_RECONCILE_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 
 export function sortSessions(sessions: Record<string, InboxSession>): InboxSession[] {
   const list = Object.values(sessions).filter((s) => !isSessionDismissed(s));
@@ -945,20 +983,50 @@ interface InboxStoreState {
 
   // -- Wrapped actions (middleware creates aliases from do_* -> *) --
   stashSession: (id: string, opts?: { kill?: boolean }) => void;
+  markSessionsDismissed: (ids: string[]) => void;
+  applyDismissedReconcile: (entries: { _id: string; inbox_dismissed_at: number | null }[], final: boolean) => void;
   unstashSession: (id: string) => void;
   deferSession: (id: string) => void;
   pinSession: (id: string) => void;
   renameSession: (id: string, title: string) => void;
   switchProject: (convId: string, path: string) => void;
+  patchConversation: (id: string, fields: Record<string, any>) => void;
+  toggleFavorite: (id: string) => void;
+  setPrivacy: (id: string, isPrivate: boolean) => void;
+  setTeamVisibility: (id: string, visibility: "summary" | "full" | null) => void;
+  toggleBookmark: (conversationId: string, messageId: string) => void;
+  markNotificationRead: (id: string) => void;
+  markAllNotificationsRead: () => void;
   sendMessage: (convId: string, content: string, imageIds?: string[], clientId?: string) => void;
   resumeSession: (convId: string) => Promise<any>;
   sendEscape: (convId: string) => void;
+  convCommand: (convId: string, command: string, extraArgs?: Record<string, any>, optimistic?: Record<string, any>) => Promise<any>;
   createSession: (opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string }) => Promise<any>;
+  // The one true path for optimistically creating a session: stubs a local
+  // conversation synchronously and rekeys it to the real Convex id when `create`
+  // resolves. Every new-session entry point funnels through this so a first
+  // message can never be left non-optimistic. Returns the stub id (navigate to it
+  // immediately) and the in-flight create promise (await for the real id).
+  beginOptimisticSession: (opts: { agentType: string; projectPath?: string; gitRoot?: string; create: (stubId: string) => Promise<string> }) => { stubId: string; ready: Promise<string> };
 
   // -- Generic sync --
   syncTable: (field: string, incoming: any, opts?: SyncOpts) => void;
   syncRecord: (field: string, id: string, record: any) => void;
+  syncOverlay: (field: string, overlayById: Record<string, Record<string, any>>) => void;
   syncMentionIndex: (kind: "tasks" | "docs" | "plans", items: any[]) => void;
+  // -- Incremental-sync watermark (IDB-persisted, keyed by "<namespace>:<wsKey>") --
+  // The durable memory that makes sync local-first: `cursor` is the highest
+  // `updated_at` we've synced for a workspace (the delta channels resume from it
+  // instead of re-snapshotting), and `backfilledAt` records when the full
+  // reconcile crawl last completed (so it runs once, then incrementally — not a
+  // 4,529-row sweep on every launch). See useSyncTasks / reconcileCrawl.
+  syncMeta: Record<string, { cursor?: number; backfilledAt?: number }>;
+  recordSyncMeta: (key: string, patch: { cursor?: number; backfilledAt?: number }) => void;
+  // -- Team activity-feed cache (IDB-persisted, keyed by team+dir) --
+  feedConversations: Record<string, any[]>;
+  feedHasMore: Record<string, boolean>;
+  mergeFeedConversations: (key: string, convs: any[]) => void;
+  setFeedHasMore: (key: string, hasMore: boolean) => void;
   sortedSessions: () => InboxSession[];
   visualOrder: () => InboxSession[];
 
@@ -985,7 +1053,7 @@ interface InboxStoreState {
   setMessages: (convId: string, msgs: Message[], meta?: Partial<PaginationState>) => void;
   mergeMessages: (convId: string, msgs: Message[], direction: "prepend" | "append", meta?: Partial<PaginationState>) => void;
   setUserMessages: (convId: string, msgs: UserMessage[]) => void;
-  addOptimisticMessage: (convId: string, content: string, images?: Array<OptimisticImage>) => string;
+  addOptimisticMessage: (convId: string, content: string, images?: Array<OptimisticImage>, clientId?: string) => string;
   markOptimisticAsQueued: (convId: string, content: string) => void;
   markOptimisticAsFailed: (convId: string, clientId: string) => void;
   // Swap an optimistic message's still-uploading images for their resolved
@@ -1077,6 +1145,7 @@ interface InboxStoreState {
   docs: Record<string, DocItem>;
   plans: Record<string, PlanItem>;
   projects: Record<string, ProjectItem>;
+  notifications: Record<string, any>;
   docProjectPaths: string[];
   docDetails: Record<string, DocDetail>;
   // Cross-team mention index — lightweight per-record snapshots loaded once
@@ -1118,7 +1187,16 @@ interface InboxStoreState {
   updateTaskStatus: (shortId: string, status: string) => Promise<any>;
   updateTask: (shortId: string, fields: { status?: string; priority?: string; title?: string; description?: string; labels?: string[]; triage_status?: string; assignee?: string; execution_status?: string; project_id?: string; project_path?: string }) => Promise<any>;
   createTask: (opts: { title: string; description?: string; task_type?: string; priority?: string; status?: string; project_id?: string; labels?: string[]; assignee?: string; plan_id?: string; team_id?: string; workspace?: string; project_path?: string }) => Promise<any>;
-  addTaskComment: (shortId: string, text: string, commentType?: string) => Promise<any>;
+  createDoc: (opts: { title: string; content?: string; doc_type?: string; parent_id?: string; labels?: string[] }) => Promise<any>;
+  createPlan: (opts: { title: string; body?: string; goal?: string; acceptance_criteria?: string[]; status?: string; source?: string; project_id?: string; model_stylesheet?: string; fidelity?: string; join_policy?: string; join_k?: number; workspace?: "personal" | "team"; team_id?: string }) => Promise<any>;
+  createProject: (opts: { title: string; description?: string; status?: string; color?: string; icon?: string }) => Promise<any>;
+  promoteDocToPlan: (docId: string) => Promise<any>;
+  ensurePlanDoc: (planShortId: string) => Promise<any>;
+  publishToDirectory: (opts: { conversation_id: string; title: string; description?: string; tags?: string[] }) => Promise<any>;
+  moveDoc: (id: string, parentId?: string, sortOrder?: number) => Promise<any>;
+  updatePlan: (shortId: string, fields: { title?: string; goal?: string; acceptance_criteria?: string[]; status?: string; task_ids?: string[]; context_pointers?: Array<{ label: string; path_or_url: string }> }) => void;
+  updateProject: (id: string, fields: { title?: string; description?: string; status?: string; color?: string; icon?: string }) => void;
+  addTaskComment: (shortId: string, text: string, commentType?: string, imageIds?: string[]) => Promise<any>;
   updateDoc: (id: string, fields: { content?: string; title?: string; doc_type?: string; labels?: string[] }) => void;
   pinDoc: (id: string, pinned: boolean) => Promise<any>;
   archiveDoc: (id: string) => Promise<any>;
@@ -1286,6 +1364,11 @@ export type SyncOpts = {
   // every push. List such a field here to exclude it from the version key. Safe
   // to omit — a mistake here only costs an extra render, never a dropped update.
   ignoreFields?: string[];
+  // Fields owned by a separate overlay channel (syncOverlay), not the base
+  // payload. On a base sync these keep their previous (overlay-set) value rather
+  // than being clobbered by the base's null — so the base list and the liveness
+  // overlay can write the same rows without fighting. See sessions + syncOverlay.
+  preserveFields?: string[];
 };
 
 function applyMerge(local: any, server: any, spec: MergeSpec, initialized: boolean): any {
@@ -1331,6 +1414,14 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
     // snapshot prune mirrored the server's narrow recent-window and evicted older
     // (especially dismissed) sessions on every sync and every reload.
     isDelta: true,
+    // Heartbeat-derived liveness rides a separate overlay (useSessionLiveness →
+    // syncOverlay) so the base listInboxSessions stops re-pushing the whole list
+    // every ~1s. The base now carries null for these, so preserve the overlay's
+    // value here instead of clobbering it between overlay ticks.
+    preserveFields: [
+      "agent_status", "is_idle", "is_unresponsive", "awaiting_input",
+      "is_connected", "tmux_session", "permission_mode",
+    ],
     transform(draft, table, incoming) {
       for (const s of incoming as any[]) {
         if (!draft.conversations[s._id]) draft.conversations[s._id] = { _id: s._id };
@@ -1352,6 +1443,19 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
       }
     },
   },
+  // Liberal cache for the big id-keyed collections, same rule as sessions: every
+  // write is a DELTA overlay. The live window AND the reconcile crawl both only
+  // ADD/UPDATE — neither prunes. A row the server stops returning is never wiped
+  // locally; deletions arrive as deltas (status="dropped" etc.) and are hidden by
+  // read-time filters. This is the systemic guarantee that nothing can snapshot-
+  // gut the cache — the root of the "tasks vanish then stream back" collapses.
+  tasks: { isDelta: true },
+  docs: { isDelta: true },
+  plans: { isDelta: true },
+  // Like the others: a liberal delta cache. useSyncProjects' call site passes no
+  // opts, so without this projects synced as an authoritative snapshot — the one
+  // remaining collection that still pruned the cache by absence.
+  projects: { isDelta: true },
   clientState: {
     kind: "singleton",
     merge: {
@@ -1491,6 +1595,9 @@ export const useInboxStore = create<InboxStoreState>(
   pagination: {},
   conversations: {},
   userMessages: {},
+  feedConversations: {},
+  feedHasMore: {},
+  syncMeta: {},
   // Seed UI from localStorage so layout-affecting prefs (sidebar collapsed,
   // zen mode, inbox shortcut bar) are correct on first paint. IDB hydration
   // fills in everything else and is the source of truth across tabs.
@@ -1595,6 +1702,65 @@ export const useInboxStore = create<InboxStoreState>(
     }
     this.currentSessionId = newSessionId;
     this.clientState.current_conversation_id = newSessionId ?? undefined;
+  }),
+
+  // Bulk-dismiss a precomputed set of sessions locally (instant, optimistic). A
+  // sync() — NOT action() — on purpose: action() auto-dispatches one server patch
+  // per mutated conversation, so dismissing thousands would be a dispatch storm.
+  // The caller persists authoritatively with ONE paginated server mutation
+  // (conversations.dismissStaleInboxSessions) instead. Skips already-dismissed
+  // rows. Used by the "dismiss old sessions" inbox prompt.
+  markSessionsDismissed: sync(function (this: Draft, ids: string[]) {
+    const now = Date.now();
+    for (const id of ids) {
+      const sess = this.sessions[id];
+      if (sess && !sess.inbox_dismissed_at) sess.inbox_dismissed_at = now;
+      if (this.conversations[id] && !(this.conversations[id] as any).inbox_dismissed_at) {
+        (this.conversations[id] as any).inbox_dismissed_at = now;
+      }
+    }
+  }),
+
+  // Durable cross-device dismiss reconcile (the backstop the live subscription
+  // can't provide). `entries` is the server's CURRENT dismissed set within the
+  // window (conversations.listDismissedSessionsLite). Overlays it onto the
+  // never-prune cache:
+  //   SET   — a cached session the server reports dismissed (heals a dismiss made
+  //           while this device was offline; the updated_at-keyed session crawl
+  //           can never carry it).
+  //   CLEAR — (final pass only) a session we have flagged dismissed WITHIN the
+  //           window that the server no longer reports = un-dismissed elsewhere.
+  // Both passes skip ids with a pending inbox_dismissed_at override so an in-flight
+  // local dismiss/unstash on THIS device always wins (local-first). A sync() —
+  // applying server truth, never re-dispatched. Per-page calls pass final=false
+  // (SET only); the final whole-set call passes true (SET + CLEAR), because CLEAR
+  // needs the complete set or a row on a later page would be wrongly un-dismissed.
+  applyDismissedReconcile: sync(function (this: Draft, entries: { _id: string; inbox_dismissed_at: number | null }[], final: boolean) {
+    const server = new Map<string, number | null>();
+    for (const e of entries) server.set(e._id, e.inbox_dismissed_at ?? null);
+    const lockedLocal = (id: string) =>
+      !!this.pending[`sessions:${id}:inbox_dismissed_at`] ||
+      !!this.pending[`conversations:${id}:inbox_dismissed_at`];
+
+    for (const [id, ts] of server) {
+      if (!ts || lockedLocal(id)) continue;
+      const sess = this.sessions[id];
+      if (sess && sess.inbox_dismissed_at !== ts) sess.inbox_dismissed_at = ts;
+      const conv = this.conversations[id] as any;
+      if (conv && conv.inbox_dismissed_at !== ts) conv.inbox_dismissed_at = ts;
+    }
+
+    if (!final) return;
+
+    const cutoff = Date.now() - DISMISS_RECONCILE_WINDOW_MS;
+    for (const id of Object.keys(this.sessions)) {
+      const sess = this.sessions[id];
+      const at = sess.inbox_dismissed_at;
+      if (!at || at < cutoff || server.has(id) || lockedLocal(id)) continue;
+      sess.inbox_dismissed_at = null;
+      const conv = this.conversations[id] as any;
+      if (conv) conv.inbox_dismissed_at = null;
+    }
   }),
 
   switchAgent: action(function (this: Draft, currentId: string, targetAgentType: string) {
@@ -1703,6 +1869,86 @@ export const useInboxStore = create<InboxStoreState>(
     this.conversations[convId].git_root = path;
   }),
 
+  // Generic local-first conversation patch. `conversations` is wired into the
+  // server's applyPatches (every non-immutable field round-trips), so writing
+  // here updates the UI instantly AND persists to Convex with no dedicated
+  // side-effect — exactly how renameSession works. Mirrors onto sessions[] so
+  // inbox and conversation views both reflect the change immediately. Fields in
+  // the server's immutable set (is_private/team_visibility/status/agent_type)
+  // are silently ignored server-side — use setPrivacy/setTeamVisibility/etc.
+  patchConversation: action(function (this: Draft, id: string, fields: Record<string, any>) {
+    if (this.sessions[id]) Object.assign(this.sessions[id], fields);
+    if (!this.conversations[id]) this.conversations[id] = { _id: id } as any;
+    Object.assign(this.conversations[id], fields);
+  }),
+
+  // Favorite is a plain conversation flag (server derives the favorites query
+  // from is_favorite), so it rides applyPatches too. We also keep the synced
+  // favorites list in sync optimistically so the sidebar updates without a
+  // round-trip; the server re-derives it on the next sync.
+  toggleFavorite: action(function (this: Draft, id: string) {
+    const cur = this.conversations[id] ?? this.sessions[id];
+    const next = !(cur as any)?.is_favorite;
+    if (this.sessions[id]) (this.sessions[id] as any).is_favorite = next;
+    if (!this.conversations[id]) this.conversations[id] = { _id: id } as any;
+    (this.conversations[id] as any).is_favorite = next;
+    const list = this.favorites as any[];
+    const idx = list.findIndex((f) => f._id === id);
+    if (next && idx === -1) list.push({ ...(this.conversations[id] as any) });
+    else if (!next && idx !== -1) list.splice(idx, 1);
+  }),
+
+  // Privacy/visibility live in the server's immutable applyPatches set because
+  // flipping them re-resolves team sharing. So these actions optimistically
+  // update local state, and the matching dispatch.ts SIDE_EFFECTS do the
+  // authoritative write — same split as switchProject/resumeSession.
+  setPrivacy: action(function (this: Draft, id: string, isPrivate: boolean) {
+    const apply = (c: any) => {
+      if (!c) return;
+      c.is_private = isPrivate;
+      if (isPrivate) c.team_visibility = "private";
+    };
+    apply(this.sessions[id]);
+    if (!this.conversations[id]) this.conversations[id] = { _id: id } as any;
+    apply(this.conversations[id]);
+  }),
+
+  setTeamVisibility: action(function (this: Draft, id: string, visibility: "summary" | "full" | null) {
+    const apply = (c: any) => {
+      if (!c) return;
+      c.team_visibility = visibility ?? undefined;
+      c.is_private = false;
+    };
+    apply(this.sessions[id]);
+    if (!this.conversations[id]) this.conversations[id] = { _id: id } as any;
+    apply(this.conversations[id]);
+  }),
+
+  // Bookmarks are a wholesale-synced list (no field protection), so toggle the
+  // local list optimistically; the toggleBookmark side-effect performs the
+  // authoritative add/delete and the next sync replaces the list from server.
+  toggleBookmark: action(function (this: Draft, conversationId: string, messageId: string) {
+    const list = this.bookmarks as any[];
+    const idx = list.findIndex((b) => b.message_id === messageId);
+    if (idx !== -1) list.splice(idx, 1);
+    else list.push({ _id: `temp_${Date.now()}`, conversation_id: conversationId, message_id: messageId, created_at: Date.now() });
+  }),
+
+  // Notifications are a protected collection: the optimistic `read` flip is
+  // field-protected so the next list sync can't revert it (the badge + bold
+  // state clear instantly). The named side-effects delegate to the existing
+  // notifications mutations.
+  markNotificationRead: action(function (this: Draft, id: string) {
+    const n = this.notifications[id] as any;
+    if (n && !n.read) n.read = true;
+  }),
+
+  markAllNotificationsRead: action(function (this: Draft) {
+    for (const n of Object.values(this.notifications) as any[]) {
+      if (!n.read) n.read = true;
+    }
+  }),
+
   // Send a user message to Convex through the store's normal sync. As an
   // action() it rides the same persist + dispatch-outbox pipeline as every
   // other store mutation: the call is queued in the outbox before firing and
@@ -1723,6 +1969,18 @@ export const useInboxStore = create<InboxStoreState>(
 
   sendEscape: action(function (_convId: string) {}),
 
+  // Generic local-first session daemon-command. Routes any api.conversations.*
+  // command (kill/restart/repair/reconfigure/rewind/fork/sendKeys/sendEscape)
+  // through the single dispatch pipeline instead of a direct useMutation. The
+  // server side-effect delegates to the existing mutation, so all its dedup /
+  // pending-reset / multi-command logic is preserved (zero duplication). The
+  // optional `optimistic` patch updates sessions[convId] synchronously for an
+  // instant UI; asyncAction returns the server result (e.g. fork's new id), so
+  // callers that await the old mutation are a drop-in swap.
+  convCommand: asyncAction(function (this: Draft, convId: string, _command: string, _extraArgs?: Record<string, any>, optimistic?: Record<string, any>) {
+    if (optimistic && this.sessions[convId]) Object.assign(this.sessions[convId], optimistic);
+  }),
+
   createSession: asyncAction(function (this: Draft, opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string }) {
     const sessionId = opts.session_id || (Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2));
     if (!opts.session_id) opts.session_id = sessionId;
@@ -1742,6 +2000,48 @@ export const useInboxStore = create<InboxStoreState>(
       last_user_message: null,
     } as InboxSession;
   }),
+
+  // Optimistic session creation, shared by every new-session entry point (the
+  // in-app quick-create, the compose popup, and the New Session modal). Seeds a
+  // local conversation under a non-Convex stub id SYNCHRONOUSLY so the caller can
+  // navigate to it and render the user's first message as pending with zero
+  // network in the critical path, then rekeys stub → real id when `create`
+  // resolves. `create` is injected so callers pick the backend (store.createSession
+  // for normal sessions, the createQuickSession mutation when isolated/worktree
+  // options are needed). The stub uses the same Math.random id scheme as
+  // createSession — never 32 chars, so isConvexId() correctly treats it as local.
+  beginOptimisticSession: (opts: { agentType: string; projectPath?: string; gitRoot?: string; create: (stubId: string) => Promise<string> }) => {
+    const store = get();
+    const stubId = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+    const now = Date.now();
+    store.syncRecord("conversations", stubId, {
+      _id: stubId, _creationTime: now, user_id: "", agent_type: opts.agentType,
+      session_id: stubId, project_path: opts.projectPath, git_root: opts.gitRoot,
+      started_at: now, updated_at: now, message_count: 0, status: "active",
+      title: "New session", messages: [],
+    });
+    // Also seed the inbox session row. The conversation page resolves a stub from
+    // sessions[id] (local-first, before the server resolver loads), so without this
+    // a navigate-to-stub would flash a loading skeleton then "Not Found". This mirrors
+    // what store.createSession seeds — callers using the createQuickSession mutation
+    // (which doesn't touch the store) rely on it. session_id === stubId so the server
+    // resolver (by_session_id) also maps the stub once the create lands.
+    store.syncRecord("sessions", stubId, {
+      _id: stubId, session_id: stubId, title: "New session",
+      updated_at: now, started_at: now, project_path: opts.projectPath,
+      git_root: opts.gitRoot, agent_type: opts.agentType, message_count: 0,
+      is_idle: true, has_pending: false, last_user_message: null,
+    });
+    const ready = opts.create(stubId).then((convexId: string) => {
+      if (convexId) store.resolveSessionId(stubId, convexId);
+      return convexId;
+    });
+    store.trackSessionCreate(stubId, ready);
+    // Callers attach their own handling; swallow here so an unobserved create
+    // failure doesn't surface as an unhandled rejection.
+    ready.catch(() => {});
+    return { stubId, ready };
+  },
 
   _applyClientUI: sync(function (this: Draft, partial: Partial<ClientUI>) {
     if (!this.clientState.ui) this.clientState.ui = {} as ClientUI;
@@ -1846,6 +2146,38 @@ export const useInboxStore = create<InboxStoreState>(
     (this.mentionIndex as any)[kind] = next;
   }),
 
+  // Team activity feed = a liberal, accumulating cache (the read source for the
+  // feed, just like store.sessions backs the personal feed). Both the live query
+  // (newest page) and "Load more" (older pages) dump here; we overlay by _id so
+  // updates and paginated pages merge without ever losing a row, then keep it
+  // sorted newest-first. Bounded only to keep the persisted blob sane. sync() =
+  // local draft + IDB write, no server dispatch.
+  mergeFeedConversations: sync(function (this: Draft, key: string, convs: any[]) {
+    const byId = new Map((this.feedConversations[key] ?? []).map((c: any) => [c._id, c]));
+    for (const c of convs ?? []) byId.set(c._id, c);
+    this.feedConversations[key] = [...byId.values()]
+      .sort((a: any, b: any) => (b.updated_at ?? 0) - (a.updated_at ?? 0))
+      .slice(0, 1000);
+  }),
+
+  // Whether older pages remain for this feed key (persisted so the "Load more"
+  // affordance is correct on cold open without first probing the server).
+  setFeedHasMore: sync(function (this: Draft, key: string, hasMore: boolean) {
+    this.feedHasMore[key] = hasMore;
+  }),
+
+  // Advance the per-workspace incremental-sync watermark. sync() = local draft +
+  // IDB write, no server dispatch — this is purely local bookkeeping. `cursor`
+  // only ever moves FORWARD (max) so a late/out-of-order delta can't rewind it
+  // and cause already-synced rows to be re-fetched; `backfilledAt` is set wholesale.
+  recordSyncMeta: sync(function (this: Draft, key: string, patch: { cursor?: number; backfilledAt?: number }) {
+    const prev = this.syncMeta[key] ?? {};
+    const next = { ...prev };
+    if (typeof patch.cursor === "number" && patch.cursor > (prev.cursor ?? 0)) next.cursor = patch.cursor;
+    if (typeof patch.backfilledAt === "number") next.backfilledAt = patch.backfilledAt;
+    this.syncMeta[key] = next;
+  }),
+
   syncTable: sync(function (this: Draft, field: string, incoming: any, opts?: SyncOpts) {
     if (!incoming && incoming !== 0) return;
     const config = SYNC_REGISTRY[field] ? { ...SYNC_REGISTRY[field], ...opts } : (opts || {});
@@ -1876,8 +2208,8 @@ export const useInboxStore = create<InboxStoreState>(
     const prevCollection = (this as any)[field] || {};
     const { table, pending } = applySyncTable(
       field, incoming, this.pending, prevCollection,
-      (config.isDelta || config.ignoreFields)
-        ? { isDelta: config.isDelta, ignoreFields: config.ignoreFields }
+      (config.isDelta || config.ignoreFields || config.preserveFields)
+        ? { isDelta: config.isDelta, ignoreFields: config.ignoreFields, preserveFields: config.preserveFields }
         : undefined,
     );
 
@@ -1964,6 +2296,29 @@ export const useInboxStore = create<InboxStoreState>(
         if (!Object.is(existing[key], protectedRecord[key])) {
           existing[key] = protectedRecord[key];
         }
+      }
+    }
+  }),
+
+  // Merge a small high-churn map (e.g. heartbeat liveness keyed by id) onto a
+  // base collection's existing rows, touching only changed fields so unchanged
+  // rows keep object identity (React.memo holds). The base list owns the stable
+  // fields; the overlay carries only the churny ones (agent_status, is_idle,
+  // updated_at, …). This is the generic "split liveness out of the row" verb —
+  // sessions, tasks, and feedSessions all merge their activity overlay through
+  // this one path instead of bundling liveness into the heavyweight list
+  // payload (which forces a full O(N) re-push of the whole collection on every
+  // ~1s heartbeat). Rows the base doesn't have yet are skipped — an overlay
+  // never creates a row, it only annotates one.
+  syncOverlay: sync(function (this: Draft, field: string, overlayById: Record<string, Record<string, any>>) {
+    const collection = (this as any)[field];
+    if (!collection) return;
+    for (const id in overlayById) {
+      const row = collection[id];
+      if (!row) continue;
+      const fields = overlayById[id];
+      for (const key in fields) {
+        if (!Object.is(row[key], fields[key])) row[key] = fields[key];
       }
     }
   }),
@@ -2222,8 +2577,14 @@ export const useInboxStore = create<InboxStoreState>(
     this.userMessages[convId] = msgs;
   }),
 
-  addOptimisticMessage: sync(function (this: Draft, convId: string, content: string, images?: Array<OptimisticImage>) {
-    const id = `optimistic_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  addOptimisticMessage: sync(function (this: Draft, convId: string, content: string, images?: Array<OptimisticImage>, clientId?: string) {
+    // A caller-supplied clientId lets a DIFFERENT window (the compose popup) seed
+    // an optimistic bubble in this window that still dedupes against the server
+    // echo of the send the popup already dispatched — the echo's client_id matches
+    // this _clientId. Idempotent on that id so a re-delivered cross-window
+    // broadcast (or a racing server echo) can't double-insert.
+    const id = clientId ?? `optimistic_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    if (clientId && this.pendingMessages[convId]?.some((m) => m._clientId === clientId)) return id;
     const msg: Message = {
       _id: id,
       role: "user",
@@ -2484,6 +2845,7 @@ export const useInboxStore = create<InboxStoreState>(
   docs: {},
   plans: {},
   projects: {},
+  notifications: {},
   docDetails: {},
   taskFilter: { status: "" },
   docFilter: { type: "", query: "", project: "", scope: "" },
@@ -2527,6 +2889,20 @@ export const useInboxStore = create<InboxStoreState>(
     }
   }),
 
+  // Plans are a protected store collection with no serverTable, so the local
+  // mutation here is field-protected but only the updatePlan side-effect writes
+  // to Convex (it delegates to plans.webUpdate for progress recalc + doc sync).
+  // Keyed by short_id to match the server mutation and the picker call sites.
+  updatePlan: action(function (this: Draft, shortId: string, fields: Record<string, any>) {
+    const plan = Object.values(this.plans).find((p: any) => p.short_id === shortId || p._id === shortId) as any;
+    if (plan) Object.assign(plan, fields, { updated_at: Date.now() });
+  }),
+
+  updateProject: action(function (this: Draft, id: string, fields: Record<string, any>) {
+    const project = (this.projects as any)[id] ?? Object.values(this.projects).find((p: any) => p._id === id);
+    if (project) Object.assign(project, fields, { updated_at: Date.now() });
+  }),
+
   createTask: action(function (this: Draft, opts: any) {
     const tempId = `temp_${Date.now()}`;
     const tempShortId = `ct-new`;
@@ -2545,7 +2921,35 @@ export const useInboxStore = create<InboxStoreState>(
     } as TaskItem;
   }),
 
-  addTaskComment: action(function (this: Draft, shortId: string, text: string, commentType?: string) {
+  // Creates route through the single dispatch path (no direct useMutation) and
+  // delegate to the existing webCreate mutation, which returns the real id. We
+  // intentionally do NOT add an optimistic stub: every caller awaits the result
+  // and navigates to the new record's own page, and delta-synced lists don't
+  // prune, so a temp stub would linger as a duplicate. asyncAction surfaces the
+  // server result so `const r = await createDoc(...); router.push(r.id)` works.
+  createDoc: asyncAction(function (this: Draft, _opts: Record<string, any>) {}),
+  createPlan: asyncAction(function (this: Draft, _opts: Record<string, any>) {}),
+  createProject: asyncAction(function (this: Draft, _opts: Record<string, any>) {}),
+
+  // Low-frequency doc/plan/conversation ops: route through dispatch and delegate
+  // to the existing mutations. asyncAction surfaces the server result for the
+  // callers that navigate to / read the returned record.
+  promoteDocToPlan: asyncAction(function (this: Draft, _docId: string) {}),
+  ensurePlanDoc: asyncAction(function (this: Draft, _planShortId: string) {}),
+  publishToDirectory: asyncAction(function (this: Draft, _opts: Record<string, any>) {}),
+
+  // Doc drag-reparent: optimistically move the node in the local tree (docs is a
+  // protected collection, so parent_id/sort_order are field-protected) and
+  // delegate the authoritative write to docs.webMoveDoc.
+  moveDoc: asyncAction(function (this: Draft, id: string, parentId?: string, sortOrder?: number) {
+    const doc = this.docs[id] as any;
+    if (doc) {
+      doc.parent_id = parentId;
+      if (sortOrder !== undefined) doc.sort_order = sortOrder;
+    }
+  }),
+
+  addTaskComment: action(function (this: Draft, shortId: string, text: string, commentType?: string, imageIds?: string[]) {
     const task = Object.values(this.tasks).find((t: any) => t.short_id === shortId) as any;
     if (task?.comments) {
       task.comments.push({
@@ -2553,6 +2957,7 @@ export const useInboxStore = create<InboxStoreState>(
         author: "You",
         text,
         comment_type: commentType || "note",
+        image_storage_ids: imageIds && imageIds.length ? imageIds : undefined,
         created_at: Date.now(),
       });
     }
@@ -2934,10 +3339,12 @@ if (PERSISTENCE_AVAILABLE) {
       }
     }
 
-    // Critical path: sidebar + current conversation + tabs render immediately
+    // Critical path: sidebar + current conversation + tabs render immediately.
+    // feedConversations is here (not deferred) so the team activity feed paints
+    // from cache on first frame — no loading screen on open.
     apply(["sessions", "clientState", "_lastViewedAt", "_seenUpToAt", "_seenMessageCount",
            "conversations", "pending", "pendingMessages", "teams", "teamMembers", "teamUnreadCount", "drafts",
-           "tabs", "activeTabId",
+           "tabs", "activeTabId", "feedConversations", "feedHasMore", "syncMeta",
            "sidePanelOpen", "sidePanelSessionId", "sidePanelUserClosed"]);
 
     // Always mark initialized after IDB hydration completes — even if cached
@@ -2964,8 +3371,13 @@ if (PERSISTENCE_AVAILABLE) {
       ensureHydrated(id);
     }
 
-    // Deferred: list views + secondary data render next frame
-    requestAnimationFrame(() => {
+    // Deferred: list views + secondary data hydrate just after first paint.
+    // setTimeout, NOT requestAnimationFrame: rAF is paused in background tabs, so
+    // with the gate release below tied to it, a backgrounded tab would never
+    // finish hydrating and never re-enable IDB writes (stuck `_hydrating`). With
+    // the user running many session tabs, most are backgrounded — they must still
+    // hydrate and persist. setTimeout fires (throttled) even when hidden.
+    setTimeout(() => {
       apply(["tasks", "docs", "plans", "projects", "favorites", "bookmarks",
              "recentProjects", "docProjectPaths", "collapsedSections", "sidebarNavExpanded"]);
       // Re-enable IDB write-through only AFTER the deferred collections land.
@@ -2978,6 +3390,6 @@ if (PERSISTENCE_AVAILABLE) {
       // so delta overlays never drop rows; write-through then deletes only on a
       // real removal (dismiss/kill) or the crawl's authoritative snapshot.
       setHydrating(false);
-    });
+    }, 0);
   });
 }

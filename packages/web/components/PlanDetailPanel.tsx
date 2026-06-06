@@ -36,6 +36,8 @@ import {
   Play,
 } from "lucide-react";
 import Markdown from "react-markdown";
+import { entityRemarkPlugins } from "../lib/remarkEntityIds";
+import { EntityAwareCode, EntityAwareLink } from "./EntityIdPill";
 import { PlanBoardView } from "./PlanBoardView";
 import { PlanGraphView } from "./PlanGraphView";
 
@@ -222,7 +224,7 @@ function CollapsibleDoc({ content }: { content: string }) {
           prose-code:text-sol-cyan prose-code:bg-sol-bg-highlight prose-code:px-1 prose-code:rounded prose-code:text-xs
           prose-strong:text-sol-text prose-a:text-sol-cyan
           [&_pre]:overflow-x-auto [&_pre]:max-w-full">
-          <Markdown>{content}</Markdown>
+          <Markdown remarkPlugins={entityRemarkPlugins} components={{ a: EntityAwareLink, code: EntityAwareCode }}>{content}</Markdown>
         </div>
         {!expanded && (
           <div className="absolute bottom-0 left-0 right-0 h-16 bg-gradient-to-t from-sol-bg-alt/80 to-transparent" />
@@ -1004,7 +1006,43 @@ type PlanTab = "overview" | "orchestration" | "board" | "graph";
 export function PlanDetailPanel({ planId }: { planId: string }) {
   const queryArgs = planId.startsWith("pl-") ? { short_id: planId } : { id: planId };
   const plan = useQuery(api.plans.webGet, queryArgs);
+  const storeTasks = useInboxStore((s) => s.tasks);
   const [activeTab, setActiveTab] = useState<PlanTab>("overview");
+
+  // plan.tasks / plan.progress come from a server query, so an optimistic
+  // updateTask (status/priority/…) updates the store but wouldn't show here
+  // until the query re-runs. Overlay the live store task onto each enriched
+  // snapshot row (keeping server-only fields like assignee_info) and re-derive
+  // the progress counts, so status circles, active/done buckets and the
+  // progress bar all update instantly.
+  const liveTasks = useMemo(() => {
+    const snap = (plan as any)?.tasks;
+    if (!Array.isArray(snap)) return snap;
+    return snap.map((t: any) => {
+      const live = storeTasks[t._id];
+      if (!live) return t;
+      return {
+        ...t,
+        status: live.status, priority: live.priority, title: live.title,
+        assignee: live.assignee, labels: live.labels,
+        execution_status: (live as any).execution_status,
+        updated_at: live.updated_at,
+      };
+    });
+  }, [plan, storeTasks]);
+
+  const liveProgress = useMemo(() => {
+    if (!Array.isArray(liveTasks)) return (plan as any)?.progress;
+    let total = 0, done = 0, in_progress = 0, open = 0;
+    for (const t of liveTasks) {
+      if (t.status === "dropped") continue;
+      total++;
+      if (t.status === "done") done++;
+      else if (t.status === "in_progress" || t.status === "in_review") in_progress++;
+      else if (t.status === "open" || t.status === "backlog") open++;
+    }
+    return { ...((plan as any)?.progress || {}), total, done, in_progress, open };
+  }, [liveTasks, plan]);
 
   if (plan === undefined) {
     return (
@@ -1024,7 +1062,7 @@ export function PlanDetailPanel({ planId }: { planId: string }) {
   const status = STATUS_CONFIG[plan.status] || STATUS_CONFIG.draft;
   const StatusIcon = status.icon;
 
-  const hasTasks = (plan.tasks || []).length > 0;
+  const hasTasks = (liveTasks || []).length > 0;
   const hasActiveSessions = (plan.sessions || []).some((s: any) => s.is_active);
 
   return (
@@ -1069,8 +1107,8 @@ export function PlanDetailPanel({ planId }: { planId: string }) {
 
       {plan.doc_content && <CollapsibleDoc content={plan.doc_content} />}
 
-      {plan.progress && plan.progress.total > 0 && (
-        <PlanProgressBar progress={plan.progress} />
+      {liveProgress && liveProgress.total > 0 && (
+        <PlanProgressBar progress={liveProgress} />
       )}
 
       {(plan as any).workflow_id && !(plan as any).workflow_run_id && (
@@ -1136,14 +1174,14 @@ export function PlanDetailPanel({ planId }: { planId: string }) {
       )}
 
       {activeTab === "graph" ? (
-        <PlanGraphView tasks={plan.tasks || []} />
+        <PlanGraphView tasks={liveTasks || []} />
       ) : activeTab === "board" ? (
-        <PlanBoardView tasks={plan.tasks || []} planShortId={plan.short_id} />
+        <PlanBoardView tasks={liveTasks || []} planShortId={plan.short_id} />
       ) : activeTab === "overview" ? (
         <>
-          <OrchestrationHeader tasks={plan.tasks || []} sessions={plan.sessions || []} />
+          <OrchestrationHeader tasks={liveTasks || []} sessions={plan.sessions || []} />
 
-          <PlanTaskSection planShortId={plan.short_id} tasks={plan.tasks || []} sessions={plan.sessions || []} />
+          <PlanTaskSection planShortId={plan.short_id} tasks={liveTasks || []} sessions={plan.sessions || []} />
 
           {plan.comments?.length > 0 && (
             <div className="mb-6">
@@ -1194,7 +1232,7 @@ export function PlanDetailPanel({ planId }: { planId: string }) {
           )}
         </>
       ) : (
-        <OrchestrationTab tasks={plan.tasks || []} sessions={plan.sessions || []} />
+        <OrchestrationTab tasks={liveTasks || []} sessions={plan.sessions || []} />
       )}
     </div>
   );

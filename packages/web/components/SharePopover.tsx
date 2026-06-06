@@ -9,8 +9,8 @@ interface SharePopoverProps {
   teamVisibility?: string | null;
   hasShareToken: boolean;
   hasTeam: boolean;
-  onSetPrivate?: () => Promise<void>;
-  onSetTeamVisibility?: (mode: "summary" | "full") => Promise<void>;
+  onSetPrivate?: () => void | Promise<void>;
+  onSetTeamVisibility?: (mode: "summary" | "full") => void | Promise<void>;
   onGenerateShareLink: () => Promise<string>;
   shareUrl: string | null;
   /** Internal, auth-required page URL. When provided, a "Page link" row is shown above the public link. */
