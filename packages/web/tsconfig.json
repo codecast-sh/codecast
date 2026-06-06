@@ -59,6 +59,13 @@
   ],
   "exclude": [
     "node_modules",
+    // Test files run under `bun test` (which provides the `bun:test` module and
+    // its types); the app typecheck has no bun types, so a full tsc would flag
+    // every *.test.ts on its `bun:test` import. Tests aren't app code — keep them
+    // out of the app typecheck entirely (bun type-checks them on its own).
+    "**/*.test.ts",
+    "**/*.test.tsx",
+    "**/__tests__/**",
     // Platform-extension files (and their tests) target React Native / mobile-only
     // deps (expo-sqlite). Metro resolves them for the native bundle; the web build
     // and typecheck must never touch them.
