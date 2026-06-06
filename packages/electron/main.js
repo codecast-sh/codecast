@@ -322,6 +322,12 @@ function positionPaletteWindow() {
     Math.round(dy + sh * 0.18)
   );
   paletteWindow.show();
+  // When summoned over another app (Chrome, etc.), show()+focus() alone do NOT
+  // make this a background app's window the OS "key window" on macOS — so the
+  // web autofocus lands on a non-key window and keystrokes go nowhere. Steal
+  // app activation (Spotlight-style) so the palette becomes key and its input
+  // actually receives focus. Enter's fire-and-forget app.hide() steps back out.
+  if (process.platform === "darwin") app.focus({ steal: true });
   paletteWindow.focus();
 }
 
