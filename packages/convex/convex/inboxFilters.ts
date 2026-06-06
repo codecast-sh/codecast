@@ -55,7 +55,7 @@ export function isViableInboxParent(
 // header agree for the moment right after a turn ends.
 export const AGENT_IDLE_GRACE_MS = 45 * 1000;
 
-const ACTIVE_AGENT_STATUSES = new Set([
+export const ACTIVE_AGENT_STATUSES = new Set([
   "working",
   "compacting",
   "thinking",
@@ -63,6 +63,12 @@ const ACTIVE_AGENT_STATUSES = new Set([
   "starting",
   "resuming",
 ]);
+
+// A daemon-reported status that means the agent process is gone. A dead session
+// with content still needs a human (to read the result / restart it), so the
+// classifier routes it to needs-input rather than working. Mirrors the web
+// store's DEAD_AGENT_STATUSES.
+export const DEAD_AGENT_STATUSES = new Set(["stopped"]);
 
 // Decides whether a batch of freshly-synced messages should bump
 // managed_sessions.agent_status back to "working". Two cases, both meaning the
@@ -184,4 +190,146 @@ export function isSessionIdle(input: SessionIdleInput): boolean {
   return daemonAlive
     ? !hasPending && !lastRoleIsUser && !recentlyUpdated
     : !recentlyUpdated;
+}
+
+export interface SessionActivityInput {
+  agentStatus?: string;
+  agentStatusUpdatedAt?: number;
+  /** conv.last_message_role, as synced. */
+  lastMessageRole?: string;
+  /** conv.last_message_preview — used only to spot an interrupt marker. */
+  lastMessagePreview?: string | null;
+  hasPending: boolean;
+  /** conv.status ("active" | "completed"). */
+  status: string;
+  /** conv.updated_at. */
+  updatedAt: number;
+  /** Caller computes liveness from its own source (inbox maps vs a single managed row). */
+  daemonAlive: boolean;
+  now: number;
+}
+
+export interface SessionActivity {
+  isIdle: boolean;
+  isUnresponsive: boolean;
+  lastRoleIsUser: boolean;
+  recentlyUpdated: boolean;
+}
+
+// The composite "is this session waiting on the user / stuck" derivation shared
+// by the inbox enrichment and the CLI feed. Extracted verbatim from
+// enrichInboxSessionRow so the two callers can never drift on what "idle" or
+// "unresponsive" means; the only per-caller difference is how `daemonAlive` is
+// sourced, which is passed in.
+export function deriveSessionActivity(input: SessionActivityInput): SessionActivity {
+  const isInterruptMsg = !!input.lastMessagePreview && (
+    input.lastMessagePreview.startsWith("[Request interrupted") ||
+    input.lastMessagePreview.startsWith("[Request cancelled")
+  );
+  const lastRoleIsUser = input.lastMessageRole === "user" && !isInterruptMsg;
+  const recentlyUpdated = (input.now - input.updatedAt) < AGENT_IDLE_GRACE_MS;
+
+  const isUnresponsive = input.status === "active" && !input.daemonAlive && (
+    (lastRoleIsUser && !recentlyUpdated) ||
+    (input.hasPending && !recentlyUpdated)
+  );
+
+  const isIdle = isSessionIdle({
+    agentStatus: input.agentStatus,
+    agentStatusUpdatedAt: input.agentStatusUpdatedAt,
+    hasPending: input.hasPending,
+    lastRoleIsUser,
+    recentlyUpdated,
+    daemonAlive: input.daemonAlive,
+    now: input.now,
+  });
+
+  return { isIdle, isUnresponsive, lastRoleIsUser, recentlyUpdated };
+}
+
+// A single, coarse "what is this session doing" label for CLI discovery and the
+// `cast monitor` dashboard. Collapses the inbox's many derived flags into three
+// buckets:
+//   - "working":     the agent is actively producing, or has deliverable queued work.
+//   - "needs_input": the agent is blocked on the user (open question / permission
+//                    prompt), dead with output to read, OR a session the user
+//                    pinned that has gone idle (a deliberate inversion of the web
+//                    inbox, which hides pinned sessions from needs-input — here a
+//                    pin means "ping me when this is free").
+//   - "idle":        finished, ball in the user's court, not flagged.
+// This is the server-side mirror of the web store's isSessionWaitingForInput,
+// minus the client-only queued-message signal, and is the ONE place the rule
+// lives — the CLI only ever string-matches the resulting work_state.
+export type WorkState = "working" | "needs_input" | "idle";
+
+export interface WorkStateInput {
+  /** Heartbeat-fresh managed_sessions.agent_status, or undefined when stale/absent. */
+  agentStatus?: string;
+  isIdle: boolean;
+  awaitingInput: boolean;
+  hasPending: boolean;
+  isUnresponsive: boolean;
+  isPinned: boolean;
+  messageCount: number;
+}
+
+// Accepted `--state` filter values for CLI discovery, normalized to a canonical
+// token. "pinned" and "live" are orthogonal to work_state (they filter the
+// is_pinned / is_live flags), so callers handle them specially. Returns null for
+// "all"/unset/garbage so an unrecognized value transparently means "no filter".
+export type WorkStateFilter = WorkState | "pinned" | "live";
+
+export function normalizeWorkStateFilter(raw: string | undefined | null): WorkStateFilter | null {
+  const v = (raw || "").trim().toLowerCase().replace(/[\s_]+/g, "-");
+  switch (v) {
+    case "working":
+    case "active":
+    case "busy":
+      return "working";
+    case "needs-input":
+    case "needs":
+    case "needsinput":
+    case "blocked":
+    case "input":
+    case "attention":
+      return "needs_input";
+    case "idle":
+    case "done":
+    case "waiting":
+      return "idle";
+    case "pinned":
+    case "pin":
+      return "pinned";
+    case "live":
+    case "running":
+      return "live";
+    default:
+      return null;
+  }
+}
+
+export function classifyWorkState(input: WorkStateInput): WorkState {
+  const { agentStatus, isIdle, awaitingInput, hasPending, isUnresponsive, isPinned, messageCount } = input;
+  const dead = !!agentStatus && DEAD_AGENT_STATUSES.has(agentStatus);
+  const canDeliver = !isUnresponsive && !dead;
+  const hasMsgs = messageCount > 0;
+
+  // Blocked on the user right now (open AskUserQuestion poll, or a tool-use
+  // awaiting approve/deny) → needs input. A poll/permission on an empty session
+  // is just startup noise, so gate on having real content.
+  if (awaitingInput && hasMsgs) return "needs_input";
+  if (agentStatus === "permission_blocked" && hasMsgs) return "needs_input";
+
+  // Actively producing, or carrying deliverable queued work on a live daemon.
+  if (agentStatus && ACTIVE_AGENT_STATUSES.has(agentStatus)) return "working";
+  if (canDeliver && hasPending) return "working";
+
+  // Dead with output → a human needs to read/restart it.
+  if (dead) return hasMsgs ? "needs_input" : "idle";
+
+  // Settled idle: a pinned session the user flagged for follow-up surfaces in
+  // needs-input; an unpinned one is just quietly idle.
+  if (isIdle && hasMsgs) return isPinned ? "needs_input" : "idle";
+
+  return "idle";
 }

@@ -8,6 +8,8 @@ export interface SessionEvent {
   filePath: string;
   eventType: "add" | "change";
   projectPath: string;
+  // Set when filePath is a dynamic-workflow run snapshot; sessionId is then the HOST session.
+  workflowRunId?: string;
 }
 
 export interface SessionWatcherEvents {
@@ -39,6 +41,19 @@ export function isTestProjectDir(projectDirName: string): boolean {
   return TEST_PROJECT_MARKERS.some(m => projectDirName.includes(m));
 }
 
+// Dynamic-workflow run snapshot: <projectDir>/<session>/workflows/wf_<id>.json
+// (the runtime materializes the whole run here; the daemon ingests it for the dash).
+// NB: the per-agent transcripts live deeper under subagents/workflows/<runId>/ and
+// are intentionally NOT matched here — the snapshot already carries their state.
+export function isWorkflowSnapshot(relativePath: string): boolean {
+  const parts = relativePath.split(path.sep);
+  if (parts.length < 2) return false;
+  const base = parts[parts.length - 1];
+  return parts[parts.length - 2] === "workflows"
+    && parts[parts.length - 3] !== "subagents"
+    && /^wf_.*\.json$/.test(base);
+}
+
 export class SessionWatcher extends EventEmitter {
   private watcher: RecursiveWatcher | null = null;
   private projectsPath: string;
@@ -63,7 +78,7 @@ export class SessionWatcher extends EventEmitter {
 
     this.watcher = new RecursiveWatcher({
       path: this.projectsPath,
-      filter: (rel) => rel.endsWith(".jsonl"),
+      filter: (rel) => rel.endsWith(".jsonl") || isWorkflowSnapshot(rel),
       callback: (filePath, eventType) => this.handleFileEvent(filePath, eventType),
       maxDepth: 4,
       debounceMs: 100,
@@ -87,7 +102,7 @@ export class SessionWatcher extends EventEmitter {
           const fullPath = path.join(dir, entry.name);
           if (entry.isDirectory()) {
             scanDir(fullPath, depth + 1);
-          } else if (entry.name.endsWith(".jsonl")) {
+          } else if (entry.name.endsWith(".jsonl") || isWorkflowSnapshot(path.relative(this.projectsPath, fullPath))) {
             try {
               const fileStat = fs.statSync(fullPath);
               files.push({ path: fullPath, size: fileStat.size, mtimeMs: fileStat.mtimeMs });
@@ -140,6 +155,19 @@ export class SessionWatcher extends EventEmitter {
     const projectDirName = parts[0];
     if (isTestProjectDir(projectDirName)) return;
     const fileName = parts[parts.length - 1];
+
+    // Workflow run snapshot: attribute to the HOST session (parts[1]) and carry the runId.
+    if (isWorkflowSnapshot(relative)) {
+      this.emit("session", {
+        sessionId: parts[1],
+        filePath,
+        eventType,
+        projectPath: projectDirName,
+        workflowRunId: fileName.replace(".json", ""),
+      });
+      return;
+    }
+
     const sessionId = fileName.replace(".jsonl", "");
 
     this.emit("session", {

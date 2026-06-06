@@ -1924,7 +1924,19 @@ cast search "auth" -g -s 7d       # all teams, last 7 days
 cast feed                         # team feed
 cast feed --mine                  # only my sessions
 cast feed -m samvit               # specific member
+cast feed --state needs-input     # filter feed by work state
 cast read <id> 15:25              # read messages 15-25
+
+# Explore + monitor sessions by work state (working / needs input / idle / pinned)
+cast sessions                     # snapshot of my sessions, grouped most-actionable-first
+cast sessions -w                  # live auto-refreshing monitor (Ctrl-C to exit; flags new/changed)
+cast sessions --state needs-input # only sessions waiting on me
+cast sessions --team              # the whole team's sessions (-m <name> for one teammate)
+cast sessions --team -w           # watch the team live
+cast wait <id>                    # block until a session is free (idle/needs-input), then exit 0
+cast wait <id> && cast send <id> "next"   # wait-then-respond: park on a session, act when it's free
+# --state: working | needs-input | idle | pinned | live (also works on cast feed)
+# A PINNED session that goes idle counts as needs-input — pin = "ping me when it's free".
 
 # Analysis
 cast diff <id>                    # files changed, commits, tools used
@@ -4350,12 +4362,15 @@ program
     "  cast feed -m samvit          # specific member\n" +
     "  cast feed -g                 # all teams\n" +
     "  cast feed -s 7d              # last 7 days\n" +
-    "  cast feed -q auth            # filter by keyword"
+    "  cast feed -q auth            # filter by keyword\n" +
+    "  cast feed --state working    # only sessions the agent is working\n" +
+    "  cast feed --state needs-input # only sessions waiting on a human"
   )
   .option("-g, --global", "Show all sessions (not just current team)")
   .option("--mine", "Show only my sessions")
   .option("-q, --query <text>", "Filter by keyword (keeps recency order)")
   .option("-m, --member <name>", "Filter by team member name or email")
+  .option("--state <state>", "Filter by work state: working | needs-input | idle | pinned | live")
   .option("-n, --limit <n>", "Number of conversations per page", "10")
   .option("-p, --page <n>", "Page number (1-indexed)", "1")
   .option("-s, --start <date>", "Start date/time (e.g., 7d, 2w, yesterday, 2024-01-15)")
@@ -4406,6 +4421,7 @@ program
           project_path: projectPath,
           member_name: options.member,
           mine_only: options.mine || undefined,
+          state: options.state,
           ...(options.live ? { live_only: true } : {}),
         }),
       });
@@ -4422,6 +4438,264 @@ program
     } catch (error) {
       console.error("Feed failed:", error instanceof Error ? error.message : error);
       process.exit(1);
+    }
+  });
+
+program
+  .command("sessions")
+  .alias("monitor")
+  .description(
+    "Explore your sessions by work state — and watch them live\n\n" +
+    "Groups NEEDS INPUT → WORKING → IDLE, most-actionable first. A pinned\n" +
+    "session that has gone idle counts as NEEDS INPUT (a pin means\n" +
+    "\"ping me when this is free\"). Defaults to just your sessions; use\n" +
+    "--team for the whole team.\n\n" +
+    "Examples:\n" +
+    "  cast sessions                # snapshot of your sessions\n" +
+    "  cast sessions -w             # live, auto-refreshing (the monitor)\n" +
+    "  cast sessions --state needs-input   # only what's waiting on you\n" +
+    "  cast sessions --state working -w    # watch only active agents\n" +
+    "  cast sessions --team         # the whole team's sessions\n" +
+    "  cast sessions --team -m samvit -w   # watch one teammate\n" +
+    "  cast sessions -a             # include idle (and dismissed) sessions"
+  )
+  .option("-w, --watch", "Continuously refresh in place (the live monitor)")
+  .option("-i, --interval <sec>", "Refresh interval for --watch", "3")
+  .option("--state <state>", "Filter: needs-input | working | idle | pinned | live")
+  .option("-t, --team", "Show the team's sessions (default: just yours)")
+  .option("-g, --global", "All teams (implies --team)")
+  .option("-m, --member <name>", "Filter by team member (implies --team)")
+  .option("--mine", "Only my sessions within team scope")
+  .option("-a, --all", "Include idle / dismissed sessions")
+  .option("-n, --limit <n>", "Max sessions to show", "200")
+  .action(async (options) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: cast auth");
+      process.exit(1);
+    }
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+    const limit = parseInt(options.limit) || 200;
+    const intervalSec = Math.max(1, parseInt(options.interval) || 3);
+    const teamMode = !!(options.team || options.global || options.member);
+    const scopeLabel = teamMode
+      ? (options.member ? `team: ${options.member}` : options.global ? "all teams" : "team")
+      : "you";
+
+    // Reshape the team feed (feedForCLI) into the same {sessions, counts} shape
+    // the solo inbox returns, so one renderer/loop serves both scopes.
+    const feedToSessions = (feed: any) => {
+      const sessions = (feed.conversations || []).map((c: any) => ({
+        id: c.id, session_id: c.session_id, title: c.title, project_path: c.project_path,
+        updated_at: c.updated_at, message_count: c.message_count, agent_type: c.agent_type,
+        agent_status: c.agent_status, work_state: c.work_state || "idle", is_pinned: !!c.is_pinned,
+        is_live: !!c.is_live, is_unresponsive: false, awaiting_input: false,
+        idle_summary: null, last_user_message: null, active_plan: null, active_task: null,
+      }));
+      const counts: any = { working: 0, needs_input: 0, idle: 0, pinned: 0, live: 0, total: 0 };
+      for (const s of sessions) {
+        counts.total++; counts[s.work_state] = (counts[s.work_state] || 0) + 1;
+        if (s.is_pinned) counts.pinned++; if (s.is_live) counts.live++;
+      }
+      return { sessions, counts, scope: feed.scope };
+    };
+
+    const fetchSnapshot = async () => {
+      if (!teamMode) {
+        const response = await cliFetchRead(`${siteUrl}/cli/inbox`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ api_token: config.auth_token, show_all: options.all || undefined, state: options.state, limit }),
+        });
+        return response.json();
+      }
+      const projectPath = options.global ? undefined : getRealCwd();
+      const response = await cliFetchRead(`${siteUrl}/cli/feed`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          api_token: config.auth_token,
+          project_path: projectPath,
+          member_name: options.member,
+          mine_only: options.mine || undefined,
+          state: options.state,
+          limit,
+        }),
+      });
+      const feed = await response.json();
+      return feed?.error ? feed : feedToSessions(feed);
+    };
+
+    const { formatMonitor } = await import("./formatter.js");
+    const renderOpts = { state: options.state, interval: intervalSec, all: options.all, scopeLabel, command: "cast sessions" };
+
+    // One-shot mode (also the fallback when stdout isn't a TTY — clearing the
+    // screen only makes sense on an interactive terminal).
+    if (!options.watch || !process.stdout.isTTY) {
+      try {
+        const result = await fetchSnapshot();
+        if (result.error) {
+          console.error(`Error: ${result.error}`);
+          process.exit(1);
+        }
+        console.log(formatMonitor(result, renderOpts));
+      } catch (error) {
+        console.error("sessions failed:", error instanceof Error ? error.message : error);
+        process.exit(1);
+      }
+      return;
+    }
+
+    // Watch mode: redraw in place. Home the cursor + clear-to-end each frame so
+    // the view updates without the flicker of a full clear. Diff each frame's
+    // work_state against the previous one to surface "events" (new / moved).
+    let stopped = false;
+    const cleanup = () => {
+      if (stopped) return;
+      stopped = true;
+      process.stdout.write("\x1b[?25h\n"); // restore cursor
+    };
+    process.on("SIGINT", () => { cleanup(); process.exit(0); });
+    process.stdout.write("\x1b[2J\x1b[H\x1b[?25l"); // clear once + hide cursor
+
+    const clock = () => new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    let prevStates: Record<string, string> = {};
+    let firstFrame = true;
+    while (!stopped) {
+      let frame: string;
+      try {
+        const result = await fetchSnapshot();
+        if (result.error) {
+          frame = `cast sessions  ${clock()}\n\nError: ${result.error} (retrying)`;
+        } else {
+          const changes: Record<string, string> = {};
+          const cur: Record<string, string> = {};
+          for (const s of result.sessions) {
+            cur[s.id] = s.work_state;
+            if (!firstFrame) {
+              const prev = prevStates[s.id];
+              if (prev === undefined) changes[s.id] = "new";
+              else if (prev !== s.work_state) changes[s.id] = `${prev}→${s.work_state}`;
+            }
+          }
+          prevStates = cur;
+          firstFrame = false;
+          frame = formatMonitor(result, { ...renderOpts, watch: true, changes });
+        }
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        frame = `cast sessions  ${clock()}\n\nFetch failed: ${msg} (retrying)`;
+      }
+      process.stdout.write("\x1b[H" + frame + "\x1b[0J");
+      await new Promise((r) => setTimeout(r, intervalSec * 1000));
+    }
+  });
+
+program
+  .command("wait [session_id]")
+  .description(
+    "Block until a session stops working (goes idle / needs input), then exit.\n\n" +
+    "Built for \"wait then respond\" orchestration — Claude Code can park on another\n" +
+    "session and act the moment it's free:\n" +
+    "  cast wait jx7abc && cast send jx7abc \"continue with the next step\"\n\n" +
+    "Default condition is \"done working\" (idle OR needs-input). --state waits for an\n" +
+    "exact state. With no id, --state is required and it waits for ANY of your\n" +
+    "sessions to reach it. Exit 0 = matched, exit 1 = timed out.\n\n" +
+    "Examples:\n" +
+    "  cast wait jx7abc                 # until that session is free\n" +
+    "  cast wait jx7abc --state idle    # until it is specifically idle\n" +
+    "  cast wait --state needs-input    # until ANY session needs you\n" +
+    "  cast wait jx7abc --timeout 600   # give up after 10 min"
+  )
+  .option("--state <state>", "Wait for an exact state: idle | needs-input | working")
+  .option("-i, --interval <sec>", "Poll interval", "8")
+  .option("-t, --timeout <sec>", "Give up after N seconds (0 = wait forever)", "0")
+  .option("-q, --quiet", "Suppress the polling progress line")
+  .action(async (sessionId, options) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: cast auth");
+      process.exit(1);
+    }
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+    const intervalSec = Math.max(3, parseInt(options.interval) || 8);
+    const timeoutSec = Math.max(0, parseInt(options.timeout) || 0);
+
+    // Normalize the optional target state. Null target = "done working".
+    const normState = (raw?: string): string | null => {
+      const v = (raw || "").toLowerCase().replace(/[\s_]+/g, "-");
+      if (v === "idle" || v === "done") return "idle";
+      if (v === "needs-input" || v === "needs" || v === "blocked" || v === "input") return "needs_input";
+      if (v === "working" || v === "busy" || v === "active") return "working";
+      return null;
+    };
+    const targetState = options.state ? normState(options.state) : null;
+    if (options.state && !targetState) {
+      console.error(`Unknown --state "${options.state}" (use idle | needs-input | working)`);
+      process.exit(1);
+    }
+    if (!sessionId && !targetState) {
+      console.error("Give a session id (cast wait <id>) or --state to wait for any session reaching a state.");
+      process.exit(1);
+    }
+
+    const matches = (s: any) => (targetState ? s.work_state === targetState : s.work_state !== "working");
+    const findTarget = (sessions: any[]) =>
+      sessions.find((s) =>
+        s.id === sessionId || (s.id || "").startsWith(sessionId) || (s.id || "").slice(0, 7) === sessionId || s.session_id === sessionId
+      ) || null;
+    const fmtRow = (s: any) => `${(s.id || "").slice(0, 7)}  ${String(s.work_state).replace("_", " ")}  ${s.title || ""}`.trimEnd();
+
+    const startedMs = Date.now();
+    const showProgress = !options.quiet && process.stderr.isTTY;
+    let firstPoll = true;
+    while (true) {
+      let sessions: any[] = [];
+      try {
+        const response = await cliFetchRead(`${siteUrl}/cli/inbox`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ api_token: config.auth_token, show_all: true, limit: 500 }),
+        });
+        const j = await response.json();
+        if (j.error) { console.error(`Error: ${j.error}`); process.exit(1); }
+        sessions = j.sessions || [];
+      } catch (error) {
+        if (showProgress) process.stderr.write(`\rpoll failed: ${error instanceof Error ? error.message : error} (retrying)        `);
+      }
+
+      if (sessionId) {
+        const s = findTarget(sessions);
+        if (firstPoll && !s && !options.quiet) {
+          console.error(`(no session matching "${sessionId}" in your inbox yet — still polling)`);
+        }
+        if (s && matches(s)) {
+          if (showProgress) process.stderr.write("\r\x1b[K");
+          console.log(fmtRow(s));
+          process.exit(0);
+        }
+      } else {
+        const hits = sessions.filter(matches);
+        if (hits.length) {
+          if (showProgress) process.stderr.write("\r\x1b[K");
+          for (const s of hits.slice(0, 20)) console.log(fmtRow(s));
+          process.exit(0);
+        }
+      }
+
+      if (timeoutSec && (Date.now() - startedMs) / 1000 >= timeoutSec) {
+        if (showProgress) process.stderr.write("\r\x1b[K");
+        console.error(`timed out after ${timeoutSec}s waiting for ${sessionId || `any session --state ${options.state}`}`);
+        process.exit(1);
+      }
+
+      if (showProgress) {
+        const waited = Math.round((Date.now() - startedMs) / 1000);
+        const tgt = targetState ? String(targetState).replace("_", " ") : "idle / needs input";
+        process.stderr.write(`\r\x1b[Kwaiting for ${sessionId || "any session"} → ${tgt} … ${waited}s`);
+      }
+      firstPoll = false;
+      await new Promise((r) => setTimeout(r, intervalSec * 1000));
     }
   });
 

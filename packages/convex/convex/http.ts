@@ -661,7 +661,7 @@ http.route({
 
     try {
       const body = await request.json();
-      const { api_token, limit, offset, start_time, end_time, query, project_path, member_name, mine_only, live_only } = body;
+      const { api_token, limit, offset, start_time, end_time, query, project_path, member_name, mine_only, live_only, state } = body;
 
       if (!api_token) {
         return new Response(JSON.stringify({ error: "Missing api_token" }), {
@@ -690,6 +690,7 @@ http.route({
         member_name,
         mine_only,
         live_only,
+        state,
       });
 
       if (result.error) {
@@ -715,6 +716,70 @@ http.route({
 
 http.route({
   path: "/cli/feed",
+  method: "OPTIONS",
+  handler: httpAction(async () => {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+      },
+    });
+  }),
+});
+
+http.route({
+  path: "/cli/inbox",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const corsHeaders = {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type",
+    };
+
+    try {
+      const body = await request.json();
+      const { api_token, show_all, state, limit } = body;
+
+      if (!api_token) {
+        return new Response(JSON.stringify({ error: "Missing api_token" }), {
+          status: 400,
+          headers: { "Content-Type": "application/json", ...corsHeaders },
+        });
+      }
+
+      const result = await ctx.runQuery(api.conversations.inboxForCLI, {
+        api_token,
+        show_all,
+        state,
+        limit,
+      });
+
+      if (result.error) {
+        return new Response(JSON.stringify({ error: result.error }), {
+          status: result.error === "Unauthorized" ? 401 : 400,
+          headers: { "Content-Type": "application/json", ...corsHeaders },
+        });
+      }
+
+      return new Response(JSON.stringify(result), {
+        status: 200,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      });
+    } catch (error) {
+      console.error("Inbox error:", error);
+      return new Response(JSON.stringify({ error: "Internal error", details: error instanceof Error ? error.message : String(error) }), {
+        status: 500,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      });
+    }
+  }),
+});
+
+http.route({
+  path: "/cli/inbox",
   method: "OPTIONS",
   handler: httpAction(async () => {
     return new Response(null, {
@@ -3130,6 +3195,8 @@ cliRoute("/cli/workflow-runs/gate", async (ctx, body) => ctx.runMutation(api.wor
 cliRoute("/cli/workflow-runs/poll-gate", async (ctx, body) => ctx.runMutation(api.workflow_runs.pollGateResponse, body));
 cliRoute("/cli/workflow-runs/set-primary", async (ctx, body) => ctx.runMutation(api.workflow_runs.setPrimarySession, body));
 cliRoute("/cli/workflow-runs/respond-gate", async (ctx, body) => ctx.runMutation(api.workflow_runs.respondToGateFromCli, body));
+cliRoute("/cli/workflow-runs/ingest", async (ctx, body) => ctx.runMutation(api.workflow_runs.ingestSnapshot, body));
+cliRoute("/cli/workflow-runs/by-external", async (ctx, body) => ctx.runQuery(api.workflow_runs.getByExternalRun, body));
 
 // Session-to-session messaging
 cliRoute("/cli/messages/send", async (ctx, body) => ctx.runMutation(api.pendingMessages.sendSessionMessage, body));

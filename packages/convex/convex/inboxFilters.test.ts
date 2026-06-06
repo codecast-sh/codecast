@@ -8,9 +8,12 @@ import {
   nextAgentStatusOnAddMessages,
   isApiErrorBanner,
   apiErrorBatchAction,
+  classifyWorkState,
+  normalizeWorkStateFilter,
   AGENT_IDLE_GRACE_MS,
   type ConversationDoc,
   type SessionIdleInput,
+  type WorkStateInput,
 } from "./inboxFilters";
 
 function conv(partial: Partial<ConversationDoc> = {}): ConversationDoc {
@@ -339,5 +342,100 @@ describe("apiErrorBatchAction", () => {
 
   test("a still-erroring session (pending, banner-only) does not supersede", () => {
     expect(apiErrorBatchAction({ batchHasRealTurn: false, batchHasBanner: true, conversationPending: true })).toBe("mark_pending");
+  });
+});
+
+describe("classifyWorkState", () => {
+  function wsi(partial: Partial<WorkStateInput> = {}): WorkStateInput {
+    return {
+      agentStatus: undefined,
+      isIdle: false,
+      awaitingInput: false,
+      hasPending: false,
+      isUnresponsive: false,
+      isPinned: false,
+      messageCount: 5,
+      ...partial,
+    };
+  }
+
+  test("active agent statuses → working", () => {
+    for (const agentStatus of ["working", "thinking", "compacting", "connected", "starting", "resuming"]) {
+      expect(classifyWorkState(wsi({ agentStatus }))).toBe("working");
+    }
+  });
+
+  test("deliverable pending work on a live daemon → working", () => {
+    expect(classifyWorkState(wsi({ hasPending: true }))).toBe("working");
+  });
+
+  test("permission_blocked with content → needs_input", () => {
+    expect(classifyWorkState(wsi({ agentStatus: "permission_blocked" }))).toBe("needs_input");
+  });
+
+  test("open AskUserQuestion poll → needs_input (even if daemon raced back to working)", () => {
+    expect(classifyWorkState(wsi({ agentStatus: "working", awaitingInput: true }))).toBe("needs_input");
+  });
+
+  test("dead (stopped) session with output → needs_input", () => {
+    expect(classifyWorkState(wsi({ agentStatus: "stopped", isIdle: true }))).toBe("needs_input");
+  });
+
+  test("THE RULE: an UNPINNED idle session is just idle (NOT needs_input)", () => {
+    // This is the CLI's deliberate divergence from the web inbox: a finished,
+    // unflagged session sits in idle, so `cast monitor` / `--state needs-input`
+    // stays focused on what's actually blocked.
+    expect(classifyWorkState(wsi({ isIdle: true, isPinned: false }))).toBe("idle");
+  });
+
+  test("THE RULE: a PINNED idle session is promoted to needs_input (ping-me-when-free)", () => {
+    expect(classifyWorkState(wsi({ isIdle: true, isPinned: true }))).toBe("needs_input");
+  });
+
+  test("a pinned session that is actively working stays working (pin doesn't force needs_input)", () => {
+    expect(classifyWorkState(wsi({ agentStatus: "working", isPinned: true, isIdle: false }))).toBe("working");
+  });
+
+  test("empty sessions never demand input (no content to read / answer)", () => {
+    // permission_blocked / stopped / pinned-idle all require content to become
+    // needs_input; with zero messages they fall through to idle (startup noise).
+    expect(classifyWorkState(wsi({ messageCount: 0, agentStatus: "permission_blocked" }))).toBe("idle");
+    expect(classifyWorkState(wsi({ messageCount: 0, isIdle: true, isPinned: true }))).toBe("idle");
+    expect(classifyWorkState(wsi({ messageCount: 0, agentStatus: "stopped", isIdle: true }))).toBe("idle");
+    // ...but an actively-working empty session (just spawned) is still working.
+    expect(classifyWorkState(wsi({ messageCount: 0, agentStatus: "starting" }))).toBe("working");
+  });
+
+  test("an unresponsive (dead-daemon) session with queued work does NOT count as working", () => {
+    // canDeliver is false, so has_pending can't route it to working; with content
+    // and idle it falls to needs_input only when pinned, else idle.
+    expect(classifyWorkState(wsi({ hasPending: true, isUnresponsive: true, isIdle: true, isPinned: true }))).toBe("needs_input");
+    expect(classifyWorkState(wsi({ hasPending: true, isUnresponsive: true, isIdle: true, isPinned: false }))).toBe("idle");
+  });
+});
+
+describe("normalizeWorkStateFilter", () => {
+  test("canonical tokens pass through", () => {
+    expect(normalizeWorkStateFilter("working")).toBe("working");
+    expect(normalizeWorkStateFilter("needs_input")).toBe("needs_input");
+    expect(normalizeWorkStateFilter("idle")).toBe("idle");
+    expect(normalizeWorkStateFilter("pinned")).toBe("pinned");
+    expect(normalizeWorkStateFilter("live")).toBe("live");
+  });
+
+  test("friendly aliases + spacing/casing normalize", () => {
+    expect(normalizeWorkStateFilter("needs-input")).toBe("needs_input");
+    expect(normalizeWorkStateFilter("needs input")).toBe("needs_input");
+    expect(normalizeWorkStateFilter("Blocked")).toBe("needs_input");
+    expect(normalizeWorkStateFilter("attention")).toBe("needs_input");
+    expect(normalizeWorkStateFilter("BUSY")).toBe("working");
+    expect(normalizeWorkStateFilter("running")).toBe("live");
+  });
+
+  test("unset / unknown / all → null (no filter)", () => {
+    expect(normalizeWorkStateFilter(undefined)).toBeNull();
+    expect(normalizeWorkStateFilter("")).toBeNull();
+    expect(normalizeWorkStateFilter("all")).toBeNull();
+    expect(normalizeWorkStateFilter("garbage")).toBeNull();
   });
 });
