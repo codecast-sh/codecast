@@ -14,6 +14,7 @@ import {
   notifyNative,
   requestNotificationPermission,
   hasBrowserNotificationPermission,
+  parseDesktopDeepLinkPath,
 } from "../lib/desktop";
 import { cleanNotificationBody } from "../lib/notificationText";
 import { useInboxStore } from "../store/inboxStore";
@@ -79,19 +80,9 @@ export function DesktopProvider() {
 
     updateDismissed("has_used_desktop", true);
 
-    onDeepLink((urls) => {
-      for (const url of urls) {
-        try {
-          const parsed = new URL(url);
-          if (parsed.pathname) {
-            router.push(parsed.pathname + parsed.search);
-          }
-        } catch {}
-      }
-    });
-
-    const handleNavigate = (e: Event) => {
-      const path = (e as CustomEvent).detail;
+    // Single in-app navigation path, shared by codecast:// deep links (from the
+    // native layer) and the codecast-navigate event (tray/menus/notifications).
+    const goTo = (path: string | undefined) => {
       if (!path) return;
 
       const convMatch = path.match(/^\/conversation\/([^/?#]+)/);
@@ -108,6 +99,14 @@ export function DesktopProvider() {
 
       router.push(path);
     };
+
+    onDeepLink((urls) => {
+      for (const url of urls) {
+        goTo(parseDesktopDeepLinkPath(url) ?? undefined);
+      }
+    });
+
+    const handleNavigate = (e: Event) => goTo((e as CustomEvent).detail);
     window.addEventListener("codecast-navigate", handleNavigate);
 
     checkForUpdates().catch(() => {});
