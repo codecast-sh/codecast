@@ -1,4 +1,4 @@
-import { useRef, useCallback, useEffect } from "react";
+import { useRef, useCallback, useEffect, useState } from "react";
 import { useQuery, useMutation, useConvex } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
@@ -8,6 +8,22 @@ import { useConvexSync } from "./useConvexSync";
 import { useRecoveryPoll } from "./useRecoveryPoll";
 import { useEnsureDispatch } from "./useEnsureDispatch";
 import { useWatchEffect } from "./useWatchEffect";
+import { runReconcileCrawl, syncMetaKey } from "./reconcileCrawl";
+
+// Background reconcile for the inbox session list. The live listInboxSessions
+// subscription returns only the ~200 most-recently-updated sessions, so idle ones
+// sink below that window and are absent from a cold cache. This crawl pages EVERY
+// inbox session once and overlays them into the never-prune sessions cache, so the
+// completeness floor isn't the live window's recency cap. Per-session enrichment
+// (message read + children + plan/task gets) is heavy, so pages stay small — a big
+// page times out the UDF. Throttle/incremental semantics mirror the tasks crawl.
+// The completeness crawl only backfills the last 30 days of sessions; older ones
+// stay reachable via search/open. Mirrors the inbox window — see the server's
+// INBOX_SESSION_WINDOW_MS and inbox_30day_session_window.
+const SESSIONS_CRAWL_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+const SESSIONS_RECONCILE_PAGE_SIZE = 75;
+const SESSIONS_RECONCILE_PAGE_DELAY_MS = 60;
+const SESSIONS_RECONCILE_THROTTLE_MS = 30 * 60 * 1000;
 
 export function waitingSoundKey(session: InboxSession, queued: Set<string>): string | null {
   if (!isSessionWaitingForInput(session, queued)) return null;
@@ -57,7 +73,12 @@ export function useSyncInboxSessions() {
 
   const convex = useConvex();
   const showAll = useInboxStore((s) => s.clientState.ui?.show_old_sessions ?? true);
-  const inboxSessions = useQuery(api.conversations.listInboxSessions, { show_all: showAll });
+  // include_liveness:false — heartbeat-derived liveness rides the separate
+  // sessionsLiveness overlay below, so this heavy list re-runs only on real
+  // conversation changes instead of on every ~1s heartbeat. The overlay merges
+  // agent_status/is_idle/... back onto the cached rows per id via syncOverlay.
+  const inboxSessions = useQuery(api.conversations.listInboxSessions, { show_all: showAll, include_liveness: false });
+  const sessionLiveness = useQuery(api.conversations.sessionsLiveness, {});
   const clientState = useQuery(api.client_state.get, {});
   const currentUser = useQuery(api.users.getCurrentUser);
   const bgFetchingRef = useRef(new Set<string>());
@@ -70,6 +91,7 @@ export function useSyncInboxSessions() {
   const prevWaitingMapRef = useRef<Map<string, boolean> | null>(null);
   const notifiedWaitingKeysRef = useRef(new Map<string, string>());
   const lastSyncRef = useRef(Date.now());
+  const lastLivenessSyncRef = useRef(Date.now());
   const lastUserSyncRef = useRef(Date.now());
 
   // Background-sync messages for inbox sessions so clicks are instant.
@@ -106,15 +128,10 @@ export function useSyncInboxSessions() {
 
   useConvexSync(inboxSessions, useCallback((data: any) => {
     const sessions = data.sessions ?? data;
-    const queued = useInboxStore.getState().sessionsWithQueuedMessages;
-    const soundState = shouldPlayWaitingSound(
-      sessions as InboxSession[],
-      queued,
-      prevWaitingMapRef.current,
-      notifiedWaitingKeysRef.current,
-    );
-    if (soundState.play) soundIdle();
-    prevWaitingMapRef.current = soundState.nextWaiting;
+    // This payload carries null liveness (include_liveness:false); the
+    // idle/needs-input sound is driven off the sessionsLiveness overlay below,
+    // which is where liveness actually changes. preserveFields on the sessions
+    // config keeps the overlay's values from being clobbered by this null.
     syncTable("sessions", sessions as unknown as InboxSession[]);
     if (typeof data.hidden_count === "number") {
       useInboxStore.setState({ hiddenSessionCount: data.hidden_count });
@@ -122,6 +139,30 @@ export function useSyncInboxSessions() {
     bgSyncMessages(sessions);
     lastSyncRef.current = Date.now();
   }, [syncTable, bgSyncMessages]), { coalesceMs: 300 });
+
+  // Liveness overlay: a small {convId: {agent_status/is_idle/...}} map merged onto
+  // the cached rows (syncOverlay). The ONLY inbox channel that re-runs on heartbeats,
+  // and it ships a tiny map instead of the full session list. The idle/needs-input
+  // sound lives here because "went idle" IS a liveness change — it reads the post-merge
+  // store rows (bounded to the payload's ids) so it sees the overlaid values.
+  useConvexSync(sessionLiveness, useCallback((data: any) => {
+    const liveness = data?.liveness ?? data;
+    if (!liveness || typeof liveness !== "object") return;
+    useInboxStore.getState().syncOverlay("sessions", liveness as Record<string, Record<string, any>>);
+    const store = useInboxStore.getState();
+    const merged = Object.keys(liveness)
+      .map((id) => store.sessions[id])
+      .filter(Boolean) as InboxSession[];
+    const soundState = shouldPlayWaitingSound(
+      merged,
+      store.sessionsWithQueuedMessages,
+      prevWaitingMapRef.current,
+      notifiedWaitingKeysRef.current,
+    );
+    if (soundState.play) soundIdle();
+    prevWaitingMapRef.current = soundState.nextWaiting;
+    lastLivenessSyncRef.current = Date.now();
+  }, []), { coalesceMs: 300 });
 
   useConvexSync(clientState, useCallback((data: any) => {
     useInboxStore.getState().syncTable("clientState", data);
@@ -151,7 +192,7 @@ export function useSyncInboxSessions() {
     // `_probe` makes this a novel query token so Convex round-trips instead of
     // serving the (possibly stalled) cache of the live listInboxSessions
     // subscription — otherwise the "recovery" just re-reads the staleness.
-    const fresh: any = await convex.query(api.conversations.listInboxSessions, { show_all: showAll, _probe: Date.now() });
+    const fresh: any = await convex.query(api.conversations.listInboxSessions, { show_all: showAll, include_liveness: false, _probe: Date.now() });
     if (!fresh) return;
     const sessions = fresh.sessions ?? fresh;
     syncTable("sessions", sessions as unknown as InboxSession[]);
@@ -161,6 +202,17 @@ export function useSyncInboxSessions() {
     bgSyncMessages(sessions);
     lastSyncRef.current = Date.now();
   }, [convex, showAll, syncTable, bgSyncMessages]), 15_000);
+
+  // Liveness can stall independently of the base list — recover it on the same
+  // cadence so a frozen subscription doesn't leave every session reading a stale
+  // (or null) agent_status after a sleep/reconnect.
+  useRecoveryPoll(lastLivenessSyncRef, useCallback(async () => {
+    const fresh: any = await convex.query(api.conversations.sessionsLiveness, { _probe: Date.now() });
+    const liveness = fresh?.liveness;
+    if (!liveness) return;
+    useInboxStore.getState().syncOverlay("sessions", liveness as Record<string, Record<string, any>>);
+    lastLivenessSyncRef.current = Date.now();
+  }, [convex]), 15_000);
 
   // currentUser carries daemon_last_seen — the input to the CLI-offline banner.
   // Its subscription stalls independently of listInboxSessions (sessions can
@@ -213,6 +265,77 @@ export function useSyncInboxSessions() {
   useWatchEffect(() => {
     useInboxStore.getState().setLiveLoading("sessions", inboxSessions === undefined);
   }, [inboxSessions]);
+
+  // BACKGROUND RECONCILE — backfill every inbox session beyond the live window.
+  // CRAWL ONLY: we never seed the live listInboxSessions subscription from the
+  // watermark. The live channel is the completeness FLOOR; turning it into a
+  // since-delta would drop the very floor-only idle sessions this is meant to
+  // recover (the regression we hit on tasks). First pass = full backfill; later
+  // passes page only sessions changed since the persisted watermark. Gated on
+  // hydration so it resumes from the restored watermark, durably throttled so a
+  // relaunch within the window serves the hydrated cache. Reuses runReconcileCrawl.
+  const hydrated = useInboxStore((s) => s.clientStateInitialized);
+  const sessWsKey = `inbox:${showAll}`;
+  const [reconcileNonce, setReconcileNonce] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setReconcileNonce((n) => n + 1), SESSIONS_RECONCILE_THROTTLE_MS);
+    return () => clearInterval(id);
+  }, []);
+  useEffect(() => {
+    if (!hydrated) return;
+    // Incremental top-up after a full backfill; the FIRST pass seeds since=now-30d
+    // so the completeness floor only pulls the last 30 days (older sessions stay
+    // accessible via search/open). This MUST be a single stable value for the whole
+    // crawl — it becomes the paginated index lower bound, and a wall-clock value
+    // recomputed per page would make each page a different query (InvalidCursor).
+    const meta = useInboxStore.getState().syncMeta[syncMetaKey("sessions", sessWsKey)];
+    const crawlSince = meta?.backfilledAt ? meta.cursor : Date.now() - SESSIONS_CRAWL_WINDOW_MS;
+    runReconcileCrawl({
+      namespace: "sessions",
+      wsKey: sessWsKey,
+      throttleMs: SESSIONS_RECONCILE_THROTTLE_MS,
+      pageDelayMs: SESSIONS_RECONCILE_PAGE_DELAY_MS,
+      maxPages: 200,
+      fetchPage: async (cursor) => {
+        const page: any = await convex.query(api.conversations.listInboxSessionsPaginated, {
+          ...(crawlSince !== undefined ? { since: crawlSince } : {}),
+          paginationOpts: { numItems: SESSIONS_RECONCILE_PAGE_SIZE, cursor },
+        });
+        return { rows: page.page ?? [], isDone: page.isDone, continueCursor: page.continueCursor };
+      },
+      // syncTable("sessions") is isDelta/never-prune (SYNC_REGISTRY) — additive overlay.
+      onPage: (rows) => useInboxStore.getState().syncTable("sessions", rows as unknown as InboxSession[]),
+      onComplete: (all) => useInboxStore.getState().syncTable("sessions", all as unknown as InboxSession[]),
+    });
+  }, [convex, sessWsKey, reconcileNonce, hydrated]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // DISMISS RECONCILE — durable cross-device dismiss/un-dismiss propagation.
+  // The live listInboxSessions channel only reaches a CONNECTED client, and the
+  // session crawl above can't carry a dismiss (dismiss doesn't move updated_at,
+  // and the crawl skips dismissed rows). So a device asleep at dismiss time never
+  // learns, and the never-prune cache keeps the session active forever. This
+  // lightweight crawl pages the CURRENT dismissed set keyed on inbox_dismissed_at
+  // ({_id, ts} only — cheap) and overlays it via applyDismissedReconcile: SET on
+  // each page, SET + CLEAR on completion. Full scan (no `since`) — a dismiss-only
+  // write has no updated_at watermark to resume from, and the set is small.
+  useEffect(() => {
+    if (!hydrated) return;
+    runReconcileCrawl({
+      namespace: "dismissed",
+      wsKey: sessWsKey,
+      throttleMs: SESSIONS_RECONCILE_THROTTLE_MS,
+      pageDelayMs: SESSIONS_RECONCILE_PAGE_DELAY_MS,
+      maxPages: 50,
+      fetchPage: async (cursor) => {
+        const page: any = await convex.query(api.conversations.listDismissedSessionsLite, {
+          paginationOpts: { numItems: 500, cursor },
+        });
+        return { rows: page.page ?? [], isDone: page.isDone, continueCursor: page.continueCursor };
+      },
+      onPage: (rows) => useInboxStore.getState().applyDismissedReconcile(rows as any, false),
+      onComplete: (all) => useInboxStore.getState().applyDismissedReconcile(all as any, true),
+    });
+  }, [convex, sessWsKey, reconcileNonce, hydrated]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return { activeSessions: inboxSessions };
 }

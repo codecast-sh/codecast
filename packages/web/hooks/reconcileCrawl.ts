@@ -5,8 +5,10 @@ import { useInboxStore } from "../store/inboxStore";
 // Both hooks need the same thing: page through EVERY row in the workspace once
 // (one-shot `convex.query()` calls — NOT live subscriptions, so the crawl never
 // recreates the per-page subscription storm that saturated the backend),
-// overlaying each page as a delta so the list visibly streams in, then
-// snapshot-syncing the full set to prune stale / cross-workspace / deleted rows.
+// overlaying each page as a delta so the list visibly streams in, then a final
+// delta re-overlay of the full set. Both phases are ADDITIVE — the crawl never
+// prunes; deletions arrive as deltas (status changes) hidden by read-time
+// filters, so a short / truncated crawl can never gut the cache.
 //
 // Crawl lifecycle is managed at MODULE scope (not React effect cleanup): the
 // effects re-run frequently (WS reconnect / project-path flicker) and cancelling
@@ -43,7 +45,7 @@ export type CrawlOptions = {
   fetchPage: (cursor: string | null) => Promise<CrawlPage>;
   /** Overlay a freshly-fetched page (delta — never prunes). */
   onPage: (rows: any[]) => void;
-  /** The full set is in hand — snapshot it (authoritative — prunes deletions). */
+  /** Final additive overlay of the full set (delta — never prunes). */
   onComplete: (all: any[]) => void;
 };
 
@@ -52,12 +54,29 @@ export type CrawlOptions = {
  * this workspace. Fire-and-forget: returns immediately, runs in the background,
  * and publishes progress to `syncProgress[namespace]`.
  */
+// Single source of truth for the per-workspace watermark key. BOTH the crawl
+// (here) and the live channel (useSyncTasks) must read/write the SAME key or the
+// two would track divergent watermarks. The `:v2` segment forces a one-time full
+// re-backfill for every client: pre-fix crawls could persist a watermark on an
+// INCOMPLETE / pruned cache, after which only incremental top-ups ran and the gaps
+// never refilled. Bump this segment to abandon old watermarks and force one full
+// backfill — additive, since the never-clear guard FILLS the cache without wiping it.
+export function syncMetaKey(namespace: string, wsKey: string): string {
+  return `${namespace}:v2:${wsKey}`;
+}
+
 export function runReconcileCrawl(opts: CrawlOptions): void {
   const { namespace, wsKey, throttleMs, pageDelayMs, maxPages } = opts;
   if (wsKey === "skip") return;
   const st = stateFor(namespace);
+  const metaKey = syncMetaKey(namespace, wsKey);
   // Recently completed for this workspace → serve from the IDB-cached store.
-  if (Date.now() - (st.doneAt.get(wsKey) ?? 0) < throttleMs) return;
+  // The completion time is DURABLE (persisted in syncMeta), so a fresh page load
+  // honors a backfill that finished in a prior session instead of re-crawling the
+  // whole table on every launch. The module-scope doneAt covers the in-session case.
+  const persistedDoneAt = useInboxStore.getState().syncMeta[metaKey]?.backfilledAt ?? 0;
+  const lastDoneAt = Math.max(st.doneAt.get(wsKey) ?? 0, persistedDoneAt);
+  if (Date.now() - lastDoneAt < throttleMs) return;
   // A crawl for THIS workspace is already in flight → let it finish.
   if (st.runningKey === wsKey) return;
 
@@ -105,11 +124,24 @@ export function runReconcileCrawl(opts: CrawlOptions): void {
       await new Promise((r) => setTimeout(r, pageDelayMs));
     }
     if (superseded()) return;
-    // Authoritative snapshot: the FULL set is now in hand — prune anything not in
-    // it (old workspace after a team switch, deleted rows, etc.).
+    // Final completeness pass: re-overlay the full set. onComplete is a DELTA
+    // overlay (the big collections are isDelta in SYNC_REGISTRY) — additive, never
+    // prunes — so this only fills in rows onPage may have missed. Deletions arrive
+    // as deltas, never by snapshot, so a short/truncated crawl can't gut the cache.
     opts.onComplete(all);
+    // Persist the watermark: backfilledAt (durable throttle — skip the crawl on
+    // the next launch) and cursor = the highest updated_at we just saw (so the
+    // NEXT crawl resumes incrementally from here via `since`). cursor advances
+    // forward-only in recordSyncMeta, so an empty incremental pass can't rewind it.
+    const now = Date.now();
+    let maxUpdated = 0;
+    for (const r of all) {
+      const u = (r as any)?.updated_at;
+      if (typeof u === "number" && u > maxUpdated) maxUpdated = u;
+    }
+    useInboxStore.getState().recordSyncMeta(metaKey, { backfilledAt: now, cursor: maxUpdated || undefined });
     setProgress(namespace, false, all.length);
-    st.doneAt.set(wsKey, Date.now());
+    st.doneAt.set(wsKey, now);
     st.runningKey = null;
   })();
 }
