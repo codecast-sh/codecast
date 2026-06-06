@@ -6593,6 +6593,19 @@ export async function ensureTmuxReady(target: string): Promise<void> {
   }
 }
 
+// Read the question of any interactive menu currently on the pane (null if none).
+// Lets a numbered poll keystroke tell whether it submitted (menu gone, or advanced to
+// the next question) or merely moved the highlight (same question still up). See the
+// closed-loop in injectViaTmuxInner.
+async function paneInteractiveQuestion(target: string): Promise<string | null> {
+  try {
+    const { stdout } = await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", "-80"]);
+    return parseInteractivePrompt(stdout)?.question ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export async function injectViaTmux(target: string, content: string): Promise<void> {
   return withTmuxLock(target, () => injectViaTmuxInner(target, content));
 }
@@ -6610,8 +6623,21 @@ async function injectViaTmuxInner(target: string, content: string): Promise<void
         await tmuxExec(["send-keys", "-t", target, "Enter"]);
         await new Promise(resolve => setTimeout(resolve, 500));
       } else {
+        // A bare digit submits a plain AskUserQuestion menu, but an AUQ whose options
+        // carry `preview`s renders side-by-side and the digit ONLY navigates — its
+        // footer reads "Enter to select", so the answer never lands without a follow-up
+        // Enter (verified in tmux on Claude Code 2.1.166). Decide per keypress instead
+        // of guessing: note the on-screen question, send the digit, then look again. If
+        // the SAME question is still up the digit only highlighted, so confirm with
+        // Enter; if the menu is gone (auto-submitted) or advanced to the next question,
+        // a follow-up Enter would be spurious, so skip it.
+        const qBefore = /^\d+$/.test(step.key) ? await paneInteractiveQuestion(target) : null;
         await tmuxExec(["send-keys", "-t", target, step.key]);
         await new Promise(resolve => setTimeout(resolve, 500));
+        if (qBefore && (await paneInteractiveQuestion(target)) === qBefore) {
+          await tmuxExec(["send-keys", "-t", target, "Enter"]);
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
       }
     }
     if (poll.text) {
@@ -11800,6 +11826,68 @@ async function main(): Promise<void> {
 
   retryQueue.start();
 
+  // Ingest a dynamic-workflow run from its on-disk snapshot (<session>/workflows/wf_<id>.json).
+  // The snapshot is a complete materialized run model, so we map it straight into workflow_runs
+  // via the same /cli HTTP channel the routine/graph runner uses — no transcript parsing.
+  async function processWorkflowSnapshot(
+    filePath: string,
+    sessionId: string,
+    runId: string,
+    projectPath: string
+  ): Promise<void> {
+    try {
+      const raw = fs.readFileSync(filePath, "utf8");
+      if (!raw.trim()) return;
+      const snap = JSON.parse(raw) as {
+        workflowName?: string;
+        status?: string;
+        phases?: Array<{ title: string; detail?: string }>;
+        workflowProgress?: Array<{
+          type: string; agentId?: string; label?: string; phaseTitle?: string;
+          state?: string; tokens?: number; durationMs?: number; startedAt?: number; resultPreview?: string;
+        }>;
+        totalTokens?: number; agentCount?: number; startTime?: number;
+      };
+      const agents = (snap.workflowProgress || [])
+        .filter((e) => e.type === "workflow_agent" && e.agentId)
+        .map((e) => ({
+          agent_id: e.agentId!,
+          label: e.label,
+          phase: e.phaseTitle,
+          state: e.state || "pending",
+          tokens: e.tokens,
+          duration_ms: e.durationMs,
+          started_at: e.startedAt,
+          result_preview: e.resultPreview,
+        }));
+      const siteUrl = (config.convex_url || "").replace(".cloud", ".site");
+      const token = config.auth_token;
+      if (!siteUrl || !token) return;
+      const resp = await fetch(`${siteUrl}/cli/workflow-runs/ingest`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          api_token: token,
+          external_run_id: runId,
+          session_id: sessionId,
+          project_path: projectPath,
+          workflow_name: snap.workflowName || "workflow",
+          status: snap.status || "running",
+          phases: snap.phases || [],
+          agents,
+          total_tokens: snap.totalTokens,
+          agent_count: snap.agentCount ?? agents.length,
+          started_at: snap.startTime,
+        }),
+      });
+      const respText = await resp.text().catch(() => "");
+      const ok = resp.ok && !respText.includes('"error"');
+      log(`Workflow snapshot ${ok ? "synced" : `FAILED(${resp.status}) ${respText.slice(0, 120)}`}: ${runId} (${agents.length} agents, ${snap.status || "running"})`);
+    } catch (err) {
+      logError(`processWorkflowSnapshot failed for ${runId}`, err as Error);
+    }
+  }
+
   const watcher = new SessionWatcher();
   const fileSyncs = new Map<string, InvalidateSync>();
 
@@ -11837,6 +11925,11 @@ async function main(): Promise<void> {
       return;
     }
 
+    // Dynamic-workflow run snapshot (not a transcript) → ingest into workflow_runs.
+    if (event.workflowRunId) {
+      void processWorkflowSnapshot(filePath, event.sessionId, event.workflowRunId, projectPath);
+      return;
+    }
 
     let sync = fileSyncs.get(filePath);
     if (!sync) {
