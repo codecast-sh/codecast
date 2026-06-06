@@ -5,7 +5,7 @@ import { execSync } from "child_process";
 import pkg from "../package.json";
 
 const VERSION = pkg.version;
-const MEMORY_VERSION = "4";
+const MEMORY_VERSION = "7"; // bumped: cast sessions (rename) + cast wait (block-until-free)
 const TASK_VERSION = "1";
 const WORK_VERSION = "6"; // bumped: messaging docs split out into MESSAGING_SNIPPET
 const PLAN_VERSION = "2";
