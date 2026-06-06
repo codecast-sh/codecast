@@ -2148,3 +2148,35 @@ describe("applyDismissedReconcile — durable cross-device dismiss", () => {
     expect(isSessionDismissed(useInboxStore.getState().sessions["a"])).toBe(true);
   });
 });
+
+import { computePlanProgress, mergeLiveTasks, deriveDocDisplayTitle } from "../../lib/liveEntities";
+
+describe("liveEntities derivers (system-level local-first fix)", () => {
+  const members = [{ _id: "u1", name: "Jason", github_avatar_url: "j.png" }];
+
+  it("computePlanProgress mirrors server recalcProgress (dropped excluded; backlog→open)", () => {
+    const tasks = [{ status: "done" }, { status: "done" }, { status: "in_progress" }, { status: "open" }, { status: "backlog" }, { status: "dropped" }];
+    expect(computePlanProgress(tasks)).toEqual({ total: 5, done: 2, in_progress: 1, open: 2 });
+  });
+
+  it("mergeLiveTasks overlays live status + re-derives assignee, keeping snapshot-only fields", () => {
+    const snapshot = [{ _id: "t1", status: "open", assignee: "u0", assignee_info: { name: "Old" }, origin_session: { x: 1 } }];
+    const store = { t1: { _id: "t1", status: "done", assignee: "u1" } };
+    const [r] = mergeLiveTasks(snapshot, store as any, members, null);
+    expect(r.status).toBe("done");                 // live raw field overlaid
+    expect(r.assignee_info).toEqual({ name: "Jason", image: "j.png", github_username: undefined }); // re-derived from roster
+    expect(r.origin_session).toEqual({ x: 1 });    // server-only snapshot field preserved
+  });
+
+  it("mergeLiveTasks returns the same reference when nothing diverges (memo-stable)", () => {
+    const snapshot = [{ _id: "t1", status: "open", assignee: "u1", assignee_info: { name: "Jason", image: "j.png", github_username: undefined } }];
+    const store = { t1: { _id: "t1", status: "open", assignee: "u1" } };
+    expect(mergeLiveTasks(snapshot, store as any, members, null)[0]).toBe(snapshot[0]);
+  });
+
+  it("deriveDocDisplayTitle parses a plan-mode doc heading, else undefined", () => {
+    expect(deriveDocDisplayTitle({ source: "plan_mode", content: "# My Plan\nbody" })).toBe("My Plan");
+    expect(deriveDocDisplayTitle({ source: "note", content: "# X" })).toBeUndefined();
+    expect(deriveDocDisplayTitle({ source: "plan_mode", content: "no heading" })).toBeUndefined();
+  });
+});

@@ -3,7 +3,7 @@ import { ReactNode, useState, useCallback, useMemo, useEffect, useRef } from "re
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useRouter } from "next/navigation";
 import { useWatchEffect } from "../hooks/useWatchEffect";
-import { FilterDropdown } from "./FilterDropdown";
+import { FilterDropdown, FilterOptionList } from "./FilterDropdown";
 import { useInboxStore } from "../store/inboxStore";
 import { toast } from "sonner";
 import { SyncProgressBadge } from "./SyncProgressBadge";
@@ -17,6 +17,8 @@ import {
   Search,
   Bookmark,
   ChevronDown,
+  ChevronRight,
+  ChevronLeft,
 } from "lucide-react";
 
 export interface ListTab {
@@ -176,6 +178,77 @@ export interface ListFilterDef {
   options: { key: string; label: string; icon?: any; color?: string }[];
   onChange: (v: string) => void;
   multi?: boolean;
+}
+
+/** "+ Filter" add-menu: a two-level popover (category → that category's options)
+ *  for filters that aren't set yet. Active filters render as removable chips in
+ *  the filter bar instead, so this lists only the not-yet-applied categories. */
+function AddFilterMenu({ defs }: { defs: ListFilterDef[] }) {
+  const [open, setOpen] = useState(false);
+  const [catKey, setCatKey] = useState<string | null>(null);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useWatchEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) { setOpen(false); setCatKey(null); }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  const available = defs.filter((d) => !d.value);
+  const cat = defs.find((d) => d.key === catKey) || null;
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => { setOpen((o) => !o); setCatKey(null); }}
+        className="flex items-center gap-1 text-xs h-7 px-2 rounded-md border border-dashed border-sol-border/50 text-sol-text-dim hover:text-sol-text hover:border-sol-border transition-colors"
+        title="Add filter"
+      >
+        <Plus className="w-3 h-3" />
+        <span>Filter</span>
+      </button>
+      {open && (
+        <div className="absolute top-full left-0 mt-1 w-48 bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[60] py-1 max-h-72 overflow-y-auto">
+          {!cat ? (
+            available.length === 0 ? (
+              <div className="px-3 py-1.5 text-xs text-sol-text-dim">All filters added</div>
+            ) : (
+              available.map((d) => (
+                <button
+                  key={d.key}
+                  onClick={() => setCatKey(d.key)}
+                  className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-sol-text-muted hover:bg-sol-bg-alt transition-colors"
+                >
+                  <span className="flex-shrink-0 flex items-center">{d.icon}</span>
+                  <span className="flex-1 text-left">{d.label}</span>
+                  <ChevronRight className="w-3 h-3 opacity-50 flex-shrink-0" />
+                </button>
+              ))
+            )
+          ) : (
+            <>
+              <button
+                onClick={() => setCatKey(null)}
+                className="w-full flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-medium text-sol-text-dim hover:text-sol-text border-b border-sol-border/30 mb-1 transition-colors"
+              >
+                <ChevronLeft className="w-3 h-3" /> {cat.label}
+              </button>
+              <FilterOptionList
+                options={cat.options.filter((o) => o.key !== "")}
+                value={cat.value}
+                multi={cat.multi}
+                onChange={cat.onChange}
+                onPicked={() => { setOpen(false); setCatKey(null); }}
+              />
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export interface ListGroup<T> {
@@ -737,9 +810,11 @@ export function GenericListView<T>({
       {/* Filter bar */}
       {filters && showFilters && (
         <div className="flex items-center flex-wrap gap-x-1.5 gap-y-1.5 px-6 py-2 border-b border-sol-border/20 bg-sol-bg-alt/20">
-          {filters.defs.map((f) => (
+          {/* Active filters as removable chips; everything unset lives behind "+ Filter". */}
+          {filters.defs.filter((f) => f.value).map((f) => (
             <FilterDropdown
               key={f.key}
+              chip
               label={f.label}
               icon={f.icon}
               value={f.value}
@@ -748,6 +823,7 @@ export function GenericListView<T>({
               multi={f.multi}
             />
           ))}
+          <AddFilterMenu defs={filters.defs} />
           {filters.hasActive && (
             <button
               onClick={filters.onClear}

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useQuery, useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../store/inboxStore";
+import { mergeLiveTasks, computePlanProgress } from "../lib/liveEntities";
 import { Badge } from "./ui/badge";
 import { TaskStatusBadge, getExecStatusConfig } from "./TaskStatusBadge";
 import { LivenessDot, ActiveSessionBadge } from "./LivenessDot";
@@ -1007,41 +1008,21 @@ export function PlanDetailPanel({ planId }: { planId: string }) {
   const queryArgs = planId.startsWith("pl-") ? { short_id: planId } : { id: planId };
   const plan = useQuery(api.plans.webGet, queryArgs);
   const storeTasks = useInboxStore((s) => s.tasks);
+  const teamMembers = useInboxStore((s) => s.teamMembers);
+  const currentUser = useInboxStore((s) => s.currentUser);
   const [activeTab, setActiveTab] = useState<PlanTab>("overview");
 
-  // plan.tasks / plan.progress come from a server query, so an optimistic
-  // updateTask (status/priority/…) updates the store but wouldn't show here
-  // until the query re-runs. Overlay the live store task onto each enriched
-  // snapshot row (keeping server-only fields like assignee_info) and re-derive
-  // the progress counts, so status circles, active/done buckets and the
-  // progress bar all update instantly.
-  const liveTasks = useMemo(() => {
-    const snap = (plan as any)?.tasks;
-    if (!Array.isArray(snap)) return snap;
-    return snap.map((t: any) => {
-      const live = storeTasks[t._id];
-      if (!live) return t;
-      return {
-        ...t,
-        status: live.status, priority: live.priority, title: live.title,
-        assignee: live.assignee, labels: live.labels,
-        execution_status: (live as any).execution_status,
-        updated_at: live.updated_at,
-      };
-    });
-  }, [plan, storeTasks]);
-
+  // plan.tasks / plan.progress are a server-query snapshot, so optimistic edits
+  // (updateTask status/assignee/…) wouldn't show here until the query re-runs.
+  // Overlay the live store tasks (canonical helper) so status circles, active/
+  // done buckets, assignee avatars and the progress bar all update instantly.
+  const liveTasks = useMemo(
+    () => mergeLiveTasks((plan as any)?.tasks, storeTasks, teamMembers as any[], currentUser as any),
+    [plan, storeTasks, teamMembers, currentUser],
+  );
   const liveProgress = useMemo(() => {
     if (!Array.isArray(liveTasks)) return (plan as any)?.progress;
-    let total = 0, done = 0, in_progress = 0, open = 0;
-    for (const t of liveTasks) {
-      if (t.status === "dropped") continue;
-      total++;
-      if (t.status === "done") done++;
-      else if (t.status === "in_progress" || t.status === "in_review") in_progress++;
-      else if (t.status === "open" || t.status === "backlog") open++;
-    }
-    return { ...((plan as any)?.progress || {}), total, done, in_progress, open };
+    return { ...((plan as any)?.progress || {}), ...computePlanProgress(liveTasks) };
   }, [liveTasks, plan]);
 
   if (plan === undefined) {

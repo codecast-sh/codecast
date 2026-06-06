@@ -19,27 +19,10 @@ export function isConvexId(id: string): boolean {
   return CONVEX_ID_RE.test(id);
 }
 
-// Resolve a task/doc assignee's display info (name/avatar) from the live team
-// roster keyed by the assignee user id. This is DERIVED at render time rather
-// than stored, so an optimistic `assignee` change (updateTask) shows the right
-// person instantly — the server-enriched `assignee_info` is only a fallback for
-// ids not in the local roster. (Storing assignee_info optimistically can't work:
-// it's a protected collection field compared by ===, so an object value would
-// never reconcile against the server's re-enriched object.)
-export function resolveAssigneeInfo(
-  assignee: string | null | undefined,
-  fallback: any,
-  teamMembers: any[] | undefined | null,
-  currentUser: any,
-): any {
-  if (!assignee) return null;
-  const m = teamMembers?.find((x: any) => x && x._id === assignee);
-  if (m) return { name: m.name, image: m.image || m.github_avatar_url, github_username: m.github_username };
-  if (currentUser && (assignee === currentUser._id || assignee === "me")) {
-    return { name: currentUser.name || currentUser.email || "Unknown", image: currentUser.image || currentUser.github_avatar_url, github_username: currentUser.github_username };
-  }
-  return fallback ?? { name: String(assignee) };
-}
+// Canonical entity-derivation helpers live in lib/liveEntities. Re-exported here
+// so existing call sites that import from the store keep working.
+export { resolveAssigneeInfo, computePlanProgress, mergeLiveTasks } from "../lib/liveEntities";
+import { deriveDocDisplayTitle } from "../lib/liveEntities";
 
 // Critical UI prefs mirrored to localStorage so they're available
 // synchronously at module load — avoids a layout flash between first paint
@@ -2157,7 +2140,7 @@ export const useInboxStore = create<InboxStoreState>(
     for (const c of convs ?? []) byId.set(c._id, c);
     this.feedConversations[key] = [...byId.values()]
       .sort((a: any, b: any) => (b.updated_at ?? 0) - (a.updated_at ?? 0))
-      .slice(0, 1000);
+      .slice(0, 2000);
   }),
 
   // Whether older pages remain for this feed key (persisted so the "Load more"
