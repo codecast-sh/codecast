@@ -18,9 +18,9 @@ import { TeamAvatarBar } from "./TeamAvatarBar";
 import { TeamSwitcher } from "./TeamSwitcher";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { soundNewSession } from "../lib/sounds";
+import { subscribeComposeOptimistic } from "../lib/composeBridge";
 import { animateSessionEnter } from "../store/undoActions";
 import { Plus, PanelLeft, PanelRight } from "lucide-react";
-import { nanoid } from "nanoid";
 import { SetupPromptBanner } from "./SetupPromptBanner";
 import { DesktopAppBanner } from "./DesktopAppBanner";
 import { CliOfflineBanner } from "./CliOfflineBanner";
@@ -42,7 +42,7 @@ import { useSyncMentionTasks } from "../hooks/useSyncTasks";
 import { isInboxSessionView, resolveSessionSelectKind } from "../lib/inboxRouting";
 import { useSessionSwitcher } from "../hooks/useSessionSwitcher";
 import { SessionSwitcher } from "./SessionSwitcher";
-import { TabBar } from "./TabBar";
+import { TabBar, pathLabel } from "./TabBar";
 import { TabContent } from "./TabContent";
 import { useTipActions } from "../tips";
 
@@ -202,6 +202,7 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
   const isOnInboxPage = isInboxSessionView(pathname, s.currentConversation?.source);
   const isOnTasksPage = pathname === "/tasks" || (pathname?.startsWith("/tasks/") ?? false);
   const isOnWorkflowsPage = pathname === "/workflows" || (pathname?.startsWith("/workflows/") ?? false);
+  const isOnRoutinesPage = pathname === "/routines" || (pathname?.startsWith("/routines/") ?? false);
   const isOnPlansPage = pathname === "/plans" || (pathname?.startsWith("/plans/") ?? false);
   const isOnDocsPage = pathname === "/docs" || (pathname?.startsWith("/docs/") ?? false);
   const isOnProjectsPage = pathname === "/projects" || (pathname?.startsWith("/projects/") ?? false);
@@ -210,7 +211,7 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
   // there means "I'm done configuring, take me to it", not "peek beside". Keyed off
   // the real router URL because `pathname` lies here (returns the carried tab route).
   const isOnSettingsPage = routerLocation.pathname.startsWith("/settings");
-  const isFullWidthPage = isOnConversationPage || isOnCommitPage || isOnPRPage || isOnInboxPage || isOnTasksPage || isOnWorkflowsPage || isOnPlansPage || isOnDocsPage || isOnProjectsPage || isOnWindowsPage;
+  const isFullWidthPage = isOnConversationPage || isOnCommitPage || isOnPRPage || isOnInboxPage || isOnTasksPage || isOnWorkflowsPage || isOnRoutinesPage || isOnPlansPage || isOnDocsPage || isOnProjectsPage || isOnWindowsPage;
 
 
   const showCollapsedRail = !s.sidePanelOpen && !isMobile;
@@ -353,30 +354,22 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
     soundNewSession();
     const { path, gitRoot, agentType: rawAgent } = resolveNewSessionContext();
     const agentType = (rawAgent || "claude_code") as "claude_code" | "codex" | "cursor" | "gemini";
-    const sessionId = nanoid(10);
-    const now = Date.now();
 
+    // Shared optimistic-create path — see store.beginOptimisticSession. It tracks the
+    // in-flight create so a message send can await the rekey instead of polling (a slow
+    // roundtrip would otherwise blow waitForConvexId's budget → spurious "not yet created").
+    const { stubId: sessionId } = store.beginOptimisticSession({
+      agentType,
+      projectPath: path,
+      gitRoot: gitRoot || path,
+      create: (stubId) => store.createSession({
+        agent_type: agentType,
+        project_path: path,
+        git_root: gitRoot || path,
+        session_id: stubId,
+      }),
+    });
     animateSessionEnter(sessionId);
-    store.syncRecord("conversations", sessionId, {
-      _id: sessionId, _creationTime: now, user_id: "", agent_type: agentType,
-      session_id: sessionId, project_path: path, git_root: gitRoot || path,
-      started_at: now, updated_at: now, message_count: 0, status: "active",
-      title: "New session", messages: [],
-    });
-    const createPromise = store.createSession({
-      agent_type: agentType,
-      project_path: path,
-      git_root: gitRoot || path,
-      session_id: sessionId,
-    }).then((convexId: string) => {
-      if (convexId) useInboxStore.getState().resolveSessionId(sessionId, convexId);
-      return convexId;
-    });
-    // Track the in-flight create so message send can await rekey instead of
-    // polling — server roundtrip on slow networks can exceed waitForConvexId's
-    // poll budget, producing a spurious "not yet created" toast.
-    store.trackSessionCreate(sessionId, createPromise);
-    createPromise.catch((e) => { console.error("[handleQuickCreate] createSession failed", e); });
 
     if (isOnInboxPage || isOnConversationPage) {
       store.setCurrentSession(sessionId);
@@ -430,6 +423,36 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
       delete (window as any).__CODECAST_NEW_SESSION;
       window.removeEventListener('codecast-new-session', open);
     };
+  });
+
+  // Main-window receiver for the compose popup's "send & open". The popup is a
+  // separate window/store, so it broadcasts the {conversationId, content, clientId}
+  // of the send it already dispatched; we paint the same message optimistically
+  // here so it's visible the instant we navigate onto the new conversation. The
+  // shared clientId dedupes it against the server echo (no duplicate bubble), and
+  // there's no send here — the popup owns delivery, so a missed broadcast just
+  // falls back to the server pending_messages rail (never a lost message).
+  useMountEffect(() => subscribeComposeOptimistic(({ conversationId, content, clientId }) => {
+    useInboxStore.getState().addOptimisticMessage(conversationId, content, undefined, clientId);
+  }));
+
+  // Browser back/forward within the dashboard tab shell. Tab navigations push real
+  // history entries (see tabNavigate); on popstate we mirror the URL back into the
+  // active tab so TabContent renders the matching page. Inbox session selections
+  // carry their own `{ inboxId }` history state and are reconciled by
+  // QueuePageClient's popstate listener, so they're skipped here.
+  useMountEffect(() => {
+    const onPop = (e: PopStateEvent) => {
+      if ((e.state as { inboxId?: string } | null)?.inboxId) return;
+      if (isNonTabRoute(window.location.pathname)) return;
+      const store = useInboxStore.getState();
+      const id = store.activeTabId;
+      if (!id) return;
+      const full = window.location.pathname + window.location.search;
+      store.updateTab(id, { path: full, title: pathLabel(full) });
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
   });
 
   useGlobalShortcutActions();
@@ -728,7 +751,7 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
               }}
             >
               {!isMobile && (
-                <div className="h-full bg-sol-bg-alt overflow-auto">
+                <div className="h-full bg-sol-bg-alt overflow-auto border-r border-sol-border/30">
                   <ErrorBoundary name="Sidebar" level="panel">
                     <Sidebar
                       filter={filter}

@@ -7,8 +7,7 @@ import {
 } from "react-router";
 import { useTabContext } from "@/components/TabContent";
 import { useInboxStore } from "@/store/inboxStore";
-import { pathLabel } from "@/components/TabBar";
-import { shouldUseTabRouting } from "./tabRouting";
+import { shouldUseTabRouting, tabNavigate } from "./tabRouting";
 
 /**
  * Returns the current pathname. When tabs are active, reads from the active
@@ -37,16 +36,14 @@ export function useRouter() {
     () => ({
       push: (path: string) => {
         if (shouldUseTabRouting(path)) {
-          useInboxStore.getState().updateTab(useInboxStore.getState().activeTabId!, { path, title: pathLabel(path) });
-          window.history.replaceState(null, "", path);
+          tabNavigate(path, "push");
         } else {
           navigate(path);
         }
       },
       replace: (path: string) => {
         if (shouldUseTabRouting(path)) {
-          useInboxStore.getState().updateTab(useInboxStore.getState().activeTabId!, { path, title: pathLabel(path) });
-          window.history.replaceState(null, "", path);
+          tabNavigate(path, "replace");
         } else {
           navigate(path, { replace: true });
         }
