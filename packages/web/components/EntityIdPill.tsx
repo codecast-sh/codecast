@@ -18,9 +18,14 @@ import {
   ExternalLink,
   MessageSquare,
   FolderOpen,
+  FileText,
+  Folder,
 } from "lucide-react";
 import { Popover, PopoverContent, PopoverAnchor } from "./ui/popover";
 import { stripMarkdown } from "../lib/notificationText";
+import { parseEntityUrl, ENTITY_ROUTE, type EntityType } from "../lib/entityLinks";
+import { FormattedSummary } from "./FormattedSummary";
+import { sessionCardSummary } from "../lib/sessionSummary";
 
 const api = _api as any;
 
@@ -71,6 +76,39 @@ const PRIORITY_CONFIG: Record<string, { icon: any; color: string; label: string 
 
 export function isEntityId(text: string): boolean {
   return ENTITY_ID_RE.test(text.trim());
+}
+
+// Convex document ids are 32-char base32 strings; short ids are far shorter
+// (ct-…/pl-… or a 7-char jx…). This length threshold cleanly separates them.
+const CONVEX_ID_MIN_LEN = 20;
+
+const TYPE_LABEL: Record<EntityType, string> = {
+  task: "Task",
+  plan: "Plan",
+  session: "Session",
+  doc: "Doc",
+  project: "Project",
+};
+
+/** Infer an entity type from a bare id by its prefix (back-compat path). */
+function detectEntityType(id: string): EntityType | null {
+  const lower = id.toLowerCase();
+  if (lower.startsWith("ct-")) return "task";
+  if (lower.startsWith("pl-")) return "plan";
+  if (/^jx[a-z0-9]/i.test(id)) return "session";
+  return null;
+}
+
+/**
+ * Pick the right `webGet` argument for an id: a full Convex id resolves by
+ * `{ id }`, a short id by `{ short_id }`. Sessions store a 7-char short id, so
+ * we trim to that when the id is short. doc/project only ever carry Convex ids.
+ */
+function entityQueryArgs(type: EntityType, id: string): { short_id?: string; id?: string } {
+  if (id.length >= CONVEX_ID_MIN_LEN) return { id };
+  if (type === "session") return { short_id: id.slice(0, 7).toLowerCase() };
+  if (type === "task" || type === "plan") return { short_id: id.toLowerCase() };
+  return { id };
 }
 
 function TaskHoverContent({ task }: { task: any }) {
@@ -216,6 +254,33 @@ function relativeTime(ts?: number | null): string | null {
   return "just now";
 }
 
+// Summary + a bit of context for a session reference card: the coalesced
+// one-line summary (idle_summary/subtitle, with Goal:/Next: labels bolded) plus
+// the last message preview. Reused by the hover popover and the inline expand so
+// "opening" a session reference shows what it's about, not just its metadata.
+function SessionSummaryBlock({ session, className = "" }: { session: any; className?: string }) {
+  const summary = sessionCardSummary(session);
+  const preview = session.last_message_preview?.trim();
+  const showPreview = preview && preview !== summary;
+  const role = session.last_message_role;
+  if (!summary && !showPreview) return null;
+  return (
+    <div className={`space-y-1 ${className}`}>
+      {summary && (
+        <p className="text-[11px] text-sol-text-muted leading-relaxed line-clamp-3 whitespace-pre-line">
+          <FormattedSummary text={summary} />
+        </p>
+      )}
+      {showPreview && (
+        <div className="flex items-start gap-1 text-[10px] text-sol-text-dim leading-snug">
+          <span className="flex-shrink-0 font-mono text-sol-cyan/60">{role && role !== "user" ? `${role}:` : ">"}</span>
+          <span className="line-clamp-2 min-w-0">{preview}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SessionHoverContent({ session }: { session: any }) {
   const isActive = session.status === "active";
   const model = abbrevModel(session.model);
@@ -254,6 +319,8 @@ function SessionHoverContent({ session }: { session: any }) {
           </div>
         </div>
       </div>
+
+      <SessionSummaryBlock session={session} className="pl-[22px]" />
 
       {metaParts.length > 0 && (
         <div className="flex items-center gap-2 pl-[22px] text-[10px] text-gray-500 font-mono">
@@ -336,6 +403,12 @@ export function EntityAwareLink({ href, children, ...props }: any) {
   const text = typeof children === "string" ? children : Array.isArray(children) ? children.map(String).join("") : String(children ?? "");
   if (isEntityId(text)) {
     return <EntityIdPill shortId={text} />;
+  }
+  // A pasted/linked codecast object URL (e.g. https://codecast.sh/tasks/<id>)
+  // becomes a rich, in-app pill instead of an external link.
+  const entityRef = parseEntityUrl(href);
+  if (entityRef) {
+    return <EntityIdPill type={entityRef.type} id={entityRef.id} />;
   }
   return <a href={href} target="_blank" rel="noopener noreferrer" {...props}>{children}</a>;
 }
@@ -501,6 +574,7 @@ function InlineSessionExpand({ session }: { session: any }) {
             <span key={i} className="text-[10px] text-sol-text-dim font-mono">{p}</span>
           ))}
         </div>
+        <SessionSummaryBlock session={session} />
         {projectName && (
           <div className="flex items-center gap-1.5">
             <FolderOpen className="w-2.5 h-2.5 text-sol-text-dim flex-shrink-0" />
@@ -520,6 +594,67 @@ function InlineSessionExpand({ session }: { session: any }) {
   );
 }
 
+function genericTitle(entity: any): string {
+  return entity.display_title || entity.title || entity.name || entity.short_id || "Untitled";
+}
+
+function GenericHoverContent({ entity, type }: { entity: any; type: EntityType }) {
+  const Icon = type === "doc" ? FileText : Folder;
+  const summary = entity.description || entity.goal || entity.summary;
+  return (
+    <div className="space-y-2">
+      <div className="flex items-start gap-2">
+        <Icon className="w-3.5 h-3.5 flex-shrink-0 mt-0.5 text-sol-text-muted" />
+        <div className="min-w-0 flex-1">
+          <div className="text-xs font-medium text-sol-text leading-snug">{genericTitle(entity)}</div>
+          <span className="text-[10px] font-medium text-sol-text-dim">{TYPE_LABEL[type]}</span>
+        </div>
+      </div>
+      {summary && (
+        <p className="text-[11px] text-gray-400 line-clamp-2 leading-relaxed pl-[22px]">
+          {stripMarkdown(summary).slice(0, 200)}
+        </p>
+      )}
+      <div className="flex items-center justify-end pt-1 border-t border-white/5">
+        <span className="text-[10px] text-gray-500 inline-flex items-center gap-0.5">
+          Click to open <ArrowUpRight className="w-2.5 h-2.5" />
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function GenericInlineExpand({ entity, type }: { entity: any; type: EntityType }) {
+  const Icon = type === "doc" ? FileText : Folder;
+  const summary = entity.description || entity.goal || entity.summary;
+  return (
+    <div
+      className="mt-1 rounded-lg border border-sol-border/20 overflow-hidden"
+      style={{ background: CROSSHATCH_BG }}
+    >
+      <div className="px-3 py-2.5 space-y-2">
+        <div className="flex items-center gap-2">
+          <Icon className="w-3.5 h-3.5 text-sol-text-muted flex-shrink-0" />
+          <div className="text-xs font-medium text-sol-text leading-snug">{genericTitle(entity)}</div>
+        </div>
+        {summary && (
+          <p className="text-[11px] text-sol-text-muted line-clamp-2 leading-relaxed">
+            {stripMarkdown(summary).slice(0, 200)}
+          </p>
+        )}
+        <Link
+          href={`${ENTITY_ROUTE[type]}/${entity._id}`}
+          className="flex items-center gap-1 text-[10px] text-sol-cyan hover:text-sol-text transition-colors pt-1 border-t border-sol-border/10"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <ExternalLink className="w-2.5 h-2.5" />
+          Open {TYPE_LABEL[type].toLowerCase()}
+        </Link>
+      </div>
+    </div>
+  );
+}
+
 const TASK_STATUS_CONFIG: Record<string, { icon: any; label: string; color: string }> = {
   draft: { icon: CircleDotDashed, label: "Draft", color: "text-gray-400" },
   open: { icon: Circle, label: "Open", color: "text-sol-blue" },
@@ -529,41 +664,63 @@ const TASK_STATUS_CONFIG: Record<string, { icon: any; label: string; color: stri
   dropped: { icon: XCircle, label: "Dropped", color: "text-gray-500" },
 };
 
-export function EntityIdPill({ shortId }: { shortId: string }) {
-  const id = shortId.toLowerCase().trim();
-  const isTask = id.startsWith("ct-");
-  const isPlan = id.startsWith("pl-");
-  const isSession = id.startsWith("jx");
+export function EntityIdPill({ shortId, type: typeProp, id: idProp }: { shortId?: string; type?: EntityType; id?: string }) {
+  // `id` keeps its original case (Convex ids are case-sensitive); short-id and
+  // prefix matching lowercase internally.
+  const rawId = (idProp ?? shortId ?? "").trim();
+  const type: EntityType | null = typeProp ?? detectEntityType(rawId);
+  const looksConvex = rawId.length >= CONVEX_ID_MIN_LEN;
+  const isTask = type === "task";
+  const isPlan = type === "plan";
+  const isSession = type === "session";
 
   const [hoverOpen, setHoverOpen] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const hoverTimeout = { current: null as ReturnType<typeof setTimeout> | null };
 
-  const task = useQuery(api.tasks.webGet, isTask ? { short_id: id } : "skip");
-  const plan = useQuery(api.plans.webGet, isPlan ? { short_id: id } : "skip");
-  const session = useQuery(
-    api.conversations.webGet,
-    isSession ? { short_id: id.slice(0, 7) } : "skip"
-  );
+  const queryArgs = type ? entityQueryArgs(type, rawId) : null;
+  const task = useQuery(api.tasks.webGet, isTask && queryArgs ? queryArgs : "skip");
+  const plan = useQuery(api.plans.webGet, isPlan && queryArgs ? queryArgs : "skip");
+  const session = useQuery(api.conversations.webGet, isSession && queryArgs ? queryArgs : "skip");
+  // docs/projects are only ever addressed by a full Convex id.
+  const doc = useQuery(api.docs.webGet, type === "doc" && looksConvex ? { id: rawId } : "skip");
+  const project = useQuery(api.projects.webGet, type === "project" && looksConvex ? { id: rawId } : "skip");
 
-  const entity = isTask ? task : isPlan ? plan : session;
+  const entity = isTask ? task : isPlan ? plan : isSession ? session : type === "doc" ? doc : type === "project" ? project : undefined;
   const status = entity?.status;
 
   const Icon = isSession
     ? MessageSquare
     : isPlan
       ? Target
-      : STATUS_ICON[status || "open"] || Circle;
+      : type === "doc"
+        ? FileText
+        : type === "project"
+          ? Folder
+          : STATUS_ICON[status || "open"] || Circle;
 
   const colors = isSession
     ? "bg-sol-blue/10 text-sol-blue border-sol-blue/20 hover:bg-sol-blue/20"
     : isPlan
       ? "bg-sol-cyan/10 text-sol-cyan border-sol-cyan/20 hover:bg-sol-cyan/20"
-      : "bg-sol-yellow/10 text-sol-yellow border-sol-yellow/20 hover:bg-sol-yellow/20";
+      : type === "doc"
+        ? "bg-sol-green/10 text-sol-green border-sol-green/20 hover:bg-sol-green/20"
+        : type === "project"
+          ? "bg-sol-violet/10 text-sol-violet border-sol-violet/20 hover:bg-sol-violet/20"
+          : "bg-sol-yellow/10 text-sol-yellow border-sol-yellow/20 hover:bg-sol-yellow/20";
 
-  const pillLabel = isSession && entity?.title
-    ? entity.title.length > 30 ? entity.title.slice(0, 30) + "…" : entity.title
-    : id;
+  // Label rules, preserving existing inline behavior:
+  //  • full-Convex-id links (pasted URLs, docs, projects): show the resolved
+  //    title — never the 32-char id; fall back to short_id / type while loading.
+  //  • session short id (jx…): title once known, else the short id.
+  //  • ct-/pl- short ids: stay compact, always show the id.
+  const resolvedTitle: string | undefined = entity?.title || entity?.display_title || entity?.name;
+  const truncated = resolvedTitle && resolvedTitle.length > 30 ? resolvedTitle.slice(0, 30) + "…" : resolvedTitle;
+  const pillLabel = looksConvex
+    ? truncated || entity?.short_id || (type ? TYPE_LABEL[type] : rawId)
+    : isSession
+      ? truncated || rawId
+      : rawId;
 
   const handleMouseEnter = useCallback(() => {
     if (expanded) return;
@@ -580,6 +737,9 @@ export function EntityIdPill({ shortId }: { shortId: string }) {
     if (hoverTimeout.current) clearTimeout(hoverTimeout.current);
     setExpanded((v) => !v);
   }, []);
+
+  // Unknown id shape (no detectable type) — render the raw text, not a pill.
+  if (!type) return <span>{rawId}</span>;
 
   return (
     <span style={{ display: expanded ? "block" : "inline" }}>
@@ -614,16 +774,18 @@ export function EntityIdPill({ shortId }: { shortId: string }) {
           {entity ? (
             isTask ? <TaskHoverContent task={entity} />
             : isPlan ? <PlanHoverContent plan={entity} />
-            : <SessionHoverContent session={entity} />
+            : isSession ? <SessionHoverContent session={entity} />
+            : <GenericHoverContent entity={entity} type={type} />
           ) : (
-            <div className="text-[11px] text-gray-500">{id}</div>
+            <div className="text-[11px] text-gray-500">{pillLabel}</div>
           )}
         </PopoverContent>
       </Popover>
       {expanded && entity && (
         isTask ? <InlineTaskExpand task={entity} />
         : isPlan ? <InlinePlanExpand plan={entity} />
-        : <InlineSessionExpand session={entity} />
+        : isSession ? <InlineSessionExpand session={entity} />
+        : <GenericInlineExpand entity={entity} type={type} />
       )}
     </span>
   );

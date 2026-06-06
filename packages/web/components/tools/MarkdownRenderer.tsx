@@ -1,6 +1,7 @@
 import ReactMarkdown from "react-markdown";
+import type { Components } from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
-import { useState } from "react";
+import { useState, memo } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useImageGallery } from "../ImageGallery";
 import { CodeBlock } from "../CodeBlock";
@@ -99,13 +100,14 @@ export function CollapsibleImage({ src: rawSrc, alt }: { src?: string | Blob; al
   );
 }
 
-export function MarkdownRenderer({ content, filePath = '', className = '' }: MarkdownRendererProps) {
-  return (
-    <div className={`prose prose-invert prose-sm max-w-none ${className}`}>
-      <ReactMarkdown
-        remarkPlugins={entityRemarkPlugins}
-        rehypePlugins={[rehypeHighlight]}
-        components={{
+// Hoisted to module scope so ReactMarkdown receives stable plugin/component
+// identities on every render. Inline literals here meant react-markdown re-ran
+// the full parse + rehype-highlight syntax pass on EVERY parent re-render — the
+// single largest hot path during a session switch (measured: ~4.2s of self time,
+// 775 renders). None of these component overrides close over props, so they're
+// genuinely static.
+const MD_REHYPE_PLUGINS = [rehypeHighlight];
+const MD_COMPONENTS: Components = {
           code: EntityAwareCode,
           a: EntityAwareLink,
           pre: ({ node, children, ...props }) => {
@@ -183,10 +185,21 @@ export function MarkdownRenderer({ content, filePath = '', className = '' }: Mar
             <td className="border border-sol-border/50 px-2 py-1">{children}</td>
           ),
           img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} />,
-        }}
+};
+
+// memo: props are all primitives (content/filePath/className), so this skips the
+// expensive markdown parse + syntax-highlight whenever the content value is
+// unchanged — even if the parent message block re-renders.
+export const MarkdownRenderer = memo(function MarkdownRenderer({ content, filePath = '', className = '' }: MarkdownRendererProps) {
+  return (
+    <div className={`prose prose-invert prose-sm max-w-none ${className}`}>
+      <ReactMarkdown
+        remarkPlugins={entityRemarkPlugins}
+        rehypePlugins={MD_REHYPE_PLUGINS}
+        components={MD_COMPONENTS}
       >
         {content}
       </ReactMarkdown>
     </div>
   );
-}
+});
