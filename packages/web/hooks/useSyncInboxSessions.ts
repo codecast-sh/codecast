@@ -2,7 +2,7 @@ import { useRef, useCallback, useEffect, useState } from "react";
 import { useQuery, useMutation, useConvex } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
-import { useInboxStore, InboxSession, isSessionWaitingForInput, isSub, isConvexId } from "../store/inboxStore";
+import { useInboxStore, InboxSession, isSessionWaitingForInput, isSub, isConvexId, DISMISS_RECONCILE_WINDOW_MS } from "../store/inboxStore";
 import { soundIdle } from "../lib/sounds";
 import { useConvexSync } from "./useConvexSync";
 import { useRecoveryPoll } from "./useRecoveryPoll";
@@ -320,6 +320,14 @@ export function useSyncInboxSessions() {
   // write has no updated_at watermark to resume from, and the set is small.
   useEffect(() => {
     if (!hydrated) return;
+    // STABLE window bound for the WHOLE crawl — computed once here, never inside
+    // the server handler. listDismissedSessionsLite range-scans by_user_dismissed
+    // from this lower bound; a per-page Date.now() would shift the range so each
+    // continuation cursor is InvalidCursor, capping the crawl at its first page
+    // (~500 rows) and leaving a heavy account's older dismisses unreconciled —
+    // they then resurface on other tabs/devices. Mirrors the sessions crawl's
+    // `crawlSince`. Must equal the server's INBOX_DISMISSED_WINDOW_MS.
+    const dismissedSince = Date.now() - DISMISS_RECONCILE_WINDOW_MS;
     runReconcileCrawl({
       namespace: "dismissed",
       wsKey: sessWsKey,
@@ -328,12 +336,16 @@ export function useSyncInboxSessions() {
       maxPages: 50,
       fetchPage: async (cursor) => {
         const page: any = await convex.query(api.conversations.listDismissedSessionsLite, {
-          paginationOpts: { numItems: 500, cursor },
+          since: dismissedSince,
+          paginationOpts: { numItems: 1000, cursor },
         });
         return { rows: page.page ?? [], isDone: page.isDone, continueCursor: page.continueCursor };
       },
       onPage: (rows) => useInboxStore.getState().applyDismissedReconcile(rows as any, false),
-      onComplete: (all) => useInboxStore.getState().applyDismissedReconcile(all as any, true),
+      // CLEAR (un-dismiss propagation) runs ONLY on a provably-complete crawl:
+      // `complete` is false if the crawl stopped at maxPages, so a truncated set
+      // can never wrongly un-dismiss the un-fetched tail.
+      onComplete: (all, complete) => useInboxStore.getState().applyDismissedReconcile(all as any, complete),
     });
   }, [convex, sessWsKey, reconcileNonce, hydrated]); // eslint-disable-line react-hooks/exhaustive-deps
 

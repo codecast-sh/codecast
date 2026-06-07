@@ -82,3 +82,59 @@ describe("runReconcileCrawl — durable throttle + watermark", () => {
     expect(meta?.cursor).toBe(999);
   });
 });
+
+// Regression coverage for the dismiss reconcile (ct-35620). The dismiss CLEAR
+// pass PRUNES (un-dismisses) locally-dismissed sessions the server no longer
+// reports — so it must run ONLY on a provably-complete crawl. reconcileCrawl
+// reports completeness via onComplete's 2nd arg; a crawl truncated at maxPages
+// reports false so the tail (un-fetched dismissed rows) can never be wrongly
+// un-dismissed. (Root cause: listDismissedSessionsLite folded Date.now() into
+// its paginated index range → InvalidCursor on page 2 → the crawl only ever saw
+// its first page; the server now takes a stable client-supplied `since`.)
+describe("runReconcileCrawl — completeness flag (dismiss CLEAR guard)", () => {
+  beforeEach(() => {
+    useInboxStore.setState({ syncMeta: {}, syncProgress: {} });
+  });
+
+  it("reports complete=true when the crawl reaches the true end (isDone)", async () => {
+    let seen: boolean | undefined;
+    runReconcileCrawl({
+      namespace: "cDone",
+      wsKey: "wsA",
+      throttleMs: 60_000,
+      pageDelayMs: 0,
+      maxPages: 10,
+      fetchPage: async () => ({ rows: [{ _id: "d1" }], isDone: true, continueCursor: null }),
+      onPage: () => {},
+      onComplete: (_all, complete) => { seen = complete; },
+    });
+    await delay(40);
+    expect(seen).toBe(true);
+  });
+
+  it("reports complete=false when the crawl stops at maxPages with more rows pending", async () => {
+    // Every page advances the cursor and never returns isDone → the crawl is
+    // forced to stop at maxPages. A naive `onComplete => CLEAR` would treat this
+    // partial set as authoritative and un-dismiss every row it never fetched.
+    let pages = 0;
+    let seen: boolean | undefined;
+    let completeRows = -1;
+    runReconcileCrawl({
+      namespace: "cTrunc",
+      wsKey: "wsB",
+      throttleMs: 60_000,
+      pageDelayMs: 0,
+      maxPages: 3,
+      fetchPage: async () => {
+        pages++;
+        return { rows: [{ _id: `d${pages}` }], isDone: false, continueCursor: `cursor-${pages}` };
+      },
+      onPage: () => {},
+      onComplete: (all, complete) => { seen = complete; completeRows = all.length; },
+    });
+    await delay(60);
+    expect(pages).toBe(3);            // stopped exactly at maxPages
+    expect(seen).toBe(false);         // crawl is NOT complete → CLEAR must be skipped
+    expect(completeRows).toBe(3);     // onComplete still fires (SET-only path is safe)
+  });
+});
