@@ -181,6 +181,18 @@ export function UserMenu() {
           >
             Documents
           </button>
+          <button
+            onClick={() => { setOpen(false); router.push("/projects"); }}
+            className={menuBtnClass}
+          >
+            Projects
+          </button>
+          <button
+            onClick={() => { setOpen(false); router.push("/routines"); }}
+            className={menuBtnClass}
+          >
+            Routines
+          </button>
           <div className="border-t border-sol-border my-1" />
           <button
             onClick={() => { setOpen(false); toggleShortcutsPanel(); }}
@@ -193,6 +205,12 @@ export function UserMenu() {
             className={menuBtnClass}
           >
             Settings
+          </button>
+          <button
+            onClick={() => { setOpen(false); router.push("/config"); }}
+            className={menuBtnClass}
+          >
+            Agent Config
           </button>
           {isAdmin && (
             <>
