@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useRef, useEffect } from "react";
 import { useQuery } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import Link from "next/link";
@@ -14,8 +14,6 @@ import {
   ArrowUp,
   Minus,
   ArrowDown,
-  ChevronDown,
-  ExternalLink,
   MessageSquare,
   FolderOpen,
   FileText,
@@ -413,187 +411,6 @@ export function EntityAwareLink({ href, children, ...props }: any) {
   return <a href={href} target="_blank" rel="noopener noreferrer" {...props}>{children}</a>;
 }
 
-const CROSSHATCH_BG = [
-  "repeating-linear-gradient(45deg, transparent, transparent 4px, rgba(255,255,255,0.04) 4px, rgba(255,255,255,0.04) 5px)",
-  "repeating-linear-gradient(-45deg, transparent, transparent 4px, rgba(255,255,255,0.04) 4px, rgba(255,255,255,0.04) 5px)",
-].join(", ");
-
-function InlineTaskExpand({ task }: { task: any }) {
-  const sc = TASK_STATUS_CONFIG[task.status] || TASK_STATUS_CONFIG.open;
-  const StatusIcon = sc.icon;
-  const pc = PRIORITY_CONFIG[task.priority || "medium"];
-  const PriorityIcon = pc?.icon || Minus;
-
-  return (
-    <div
-      className="mt-1 rounded-lg border border-sol-border/20 overflow-hidden"
-      style={{ background: CROSSHATCH_BG }}
-    >
-      <div className="px-3 py-2.5 space-y-2">
-        <div className="text-xs font-medium text-sol-text leading-snug">
-          {task.title}
-        </div>
-        <div className="flex items-center gap-3">
-          <span className={`inline-flex items-center gap-1 text-[10px] font-medium ${sc.color}`}>
-            <StatusIcon className="w-2.5 h-2.5" />
-            {sc.label}
-          </span>
-          {pc && (
-            <span className={`inline-flex items-center gap-1 text-[10px] ${pc.color}`}>
-              <PriorityIcon className="w-2.5 h-2.5" />
-              {pc.label}
-            </span>
-          )}
-        </div>
-        {task.description && (
-          <p className="text-[11px] text-sol-text-muted line-clamp-3 leading-relaxed">
-            {stripMarkdown(task.description).slice(0, 200)}
-          </p>
-        )}
-        {task.plan && (
-          <div className="flex items-center gap-1.5">
-            <Target className="w-2.5 h-2.5 text-sol-cyan flex-shrink-0" />
-            <span className="text-[10px] text-sol-cyan truncate">{task.plan.title}</span>
-          </div>
-        )}
-        <Link
-          href={`/tasks/${task._id}`}
-          className="flex items-center gap-1 text-[10px] text-sol-cyan hover:text-sol-text transition-colors pt-1 border-t border-sol-border/10"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <ExternalLink className="w-2.5 h-2.5" />
-          Open full task
-        </Link>
-      </div>
-    </div>
-  );
-}
-
-function InlinePlanExpand({ plan }: { plan: any }) {
-  const statusColor = STATUS_COLOR[plan.status || "active"] || "text-gray-400";
-  const statusLabel = STATUS_LABEL[plan.status] || plan.status;
-  const tasks = plan.tasks || [];
-  const doneCount = tasks.filter((t: any) => t.status === "done").length;
-  const total = tasks.length;
-  const pct = total > 0 ? Math.round((doneCount / total) * 100) : 0;
-
-  return (
-    <div
-      className="mt-1 rounded-lg border border-sol-border/20 overflow-hidden"
-      style={{ background: CROSSHATCH_BG }}
-    >
-      <div className="px-3 py-2.5 space-y-2">
-        <div className="text-xs font-medium text-sol-text leading-snug">
-          {plan.title}
-        </div>
-        <span className={`text-[10px] font-medium ${statusColor}`}>{statusLabel}</span>
-        {plan.goal && (
-          <p className="text-[11px] text-sol-text-muted line-clamp-2 leading-relaxed">
-            {stripMarkdown(plan.goal).slice(0, 200)}
-          </p>
-        )}
-        {total > 0 && (
-          <div className="flex items-center gap-2">
-            <div className="flex-1 h-1.5 rounded-full bg-white/5 overflow-hidden">
-              <div
-                className="h-full rounded-full bg-sol-green transition-all"
-                style={{ width: `${pct}%` }}
-              />
-            </div>
-            <span className="text-[10px] text-sol-text-dim font-mono">
-              {doneCount}/{total}
-            </span>
-          </div>
-        )}
-        {tasks.length > 0 && (
-          <div className="space-y-0.5 max-h-[100px] overflow-y-auto">
-            {tasks.slice(0, 5).map((t: any) => {
-              const Icon = STATUS_ICON[t.status] || Circle;
-              const color = STATUS_COLOR[t.status] || "text-gray-400";
-              return (
-                <div key={t._id} className="flex items-center gap-1.5 py-0.5 text-[10px]">
-                  <Icon className={`w-2.5 h-2.5 flex-shrink-0 ${color}`} />
-                  <span className={`truncate ${t.status === "done" ? "line-through text-sol-text-dim" : "text-sol-text-muted"}`}>
-                    {t.title}
-                  </span>
-                </div>
-              );
-            })}
-            {tasks.length > 5 && (
-              <div className="text-[10px] text-sol-text-dim">+{tasks.length - 5} more</div>
-            )}
-          </div>
-        )}
-        <Link
-          href={`/plans/${plan._id}`}
-          className="flex items-center gap-1 text-[10px] text-sol-cyan hover:text-sol-text transition-colors pt-1 border-t border-sol-border/10"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <ExternalLink className="w-2.5 h-2.5" />
-          Open full plan
-        </Link>
-      </div>
-    </div>
-  );
-}
-
-function InlineSessionExpand({ session }: { session: any }) {
-  const isActive = session.status === "active";
-  const model = abbrevModel(session.model);
-  const projectName = session.project_path?.split("/").pop() ?? null;
-  const timeAgo = relativeTime(session.updated_at);
-
-  const metaParts = [
-    session.message_count != null ? `${session.message_count} msgs` : null,
-    model,
-    timeAgo,
-  ].filter(Boolean);
-
-  return (
-    <div
-      className="mt-1 rounded-lg border border-sol-border/20 overflow-hidden"
-      style={{ background: CROSSHATCH_BG }}
-    >
-      <div className="px-3 py-2.5 space-y-2">
-        <div className="flex items-center gap-2">
-          <div className="relative flex-shrink-0">
-            <MessageSquare className="w-3.5 h-3.5 text-sol-blue" />
-            {isActive && (
-              <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-sol-green border border-sol-bg" />
-            )}
-          </div>
-          <div className="text-xs font-medium text-sol-text leading-snug">
-            {session.title || session.short_id}
-          </div>
-        </div>
-        <div className="flex items-center gap-3">
-          <span className={`inline-flex items-center gap-1 text-[10px] font-medium ${isActive ? "text-sol-green" : "text-sol-text-dim"}`}>
-            {isActive ? "Active" : session.status || "Stopped"}
-          </span>
-          {metaParts.map((p, i) => (
-            <span key={i} className="text-[10px] text-sol-text-dim font-mono">{p}</span>
-          ))}
-        </div>
-        <SessionSummaryBlock session={session} />
-        {projectName && (
-          <div className="flex items-center gap-1.5">
-            <FolderOpen className="w-2.5 h-2.5 text-sol-text-dim flex-shrink-0" />
-            <span className="text-[10px] text-sol-text-muted font-mono truncate">{projectName}</span>
-          </div>
-        )}
-        <Link
-          href={`/conversation/${session._id}`}
-          className="flex items-center gap-1 text-[10px] text-sol-cyan hover:text-sol-text transition-colors pt-1 border-t border-sol-border/10"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <ExternalLink className="w-2.5 h-2.5" />
-          Open session
-        </Link>
-      </div>
-    </div>
-  );
-}
-
 function genericTitle(entity: any): string {
   return entity.display_title || entity.title || entity.name || entity.short_id || "Untitled";
 }
@@ -624,46 +441,6 @@ function GenericHoverContent({ entity, type }: { entity: any; type: EntityType }
   );
 }
 
-function GenericInlineExpand({ entity, type }: { entity: any; type: EntityType }) {
-  const Icon = type === "doc" ? FileText : Folder;
-  const summary = entity.description || entity.goal || entity.summary;
-  return (
-    <div
-      className="mt-1 rounded-lg border border-sol-border/20 overflow-hidden"
-      style={{ background: CROSSHATCH_BG }}
-    >
-      <div className="px-3 py-2.5 space-y-2">
-        <div className="flex items-center gap-2">
-          <Icon className="w-3.5 h-3.5 text-sol-text-muted flex-shrink-0" />
-          <div className="text-xs font-medium text-sol-text leading-snug">{genericTitle(entity)}</div>
-        </div>
-        {summary && (
-          <p className="text-[11px] text-sol-text-muted line-clamp-2 leading-relaxed">
-            {stripMarkdown(summary).slice(0, 200)}
-          </p>
-        )}
-        <Link
-          href={`${ENTITY_ROUTE[type]}/${entity._id}`}
-          className="flex items-center gap-1 text-[10px] text-sol-cyan hover:text-sol-text transition-colors pt-1 border-t border-sol-border/10"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <ExternalLink className="w-2.5 h-2.5" />
-          Open {TYPE_LABEL[type].toLowerCase()}
-        </Link>
-      </div>
-    </div>
-  );
-}
-
-const TASK_STATUS_CONFIG: Record<string, { icon: any; label: string; color: string }> = {
-  draft: { icon: CircleDotDashed, label: "Draft", color: "text-gray-400" },
-  open: { icon: Circle, label: "Open", color: "text-sol-blue" },
-  in_progress: { icon: CircleDot, label: "In Progress", color: "text-sol-yellow" },
-  in_review: { icon: CircleDot, label: "In Review", color: "text-sol-violet" },
-  done: { icon: CheckCircle2, label: "Done", color: "text-sol-green" },
-  dropped: { icon: XCircle, label: "Dropped", color: "text-gray-500" },
-};
-
 export function EntityIdPill({ shortId, type: typeProp, id: idProp }: { shortId?: string; type?: EntityType; id?: string }) {
   // `id` keeps its original case (Convex ids are case-sensitive); short-id and
   // prefix matching lowercase internally.
@@ -675,8 +452,7 @@ export function EntityIdPill({ shortId, type: typeProp, id: idProp }: { shortId?
   const isSession = type === "session";
 
   const [hoverOpen, setHoverOpen] = useState(false);
-  const [expanded, setExpanded] = useState(false);
-  const hoverTimeout = { current: null as ReturnType<typeof setTimeout> | null };
+  const hoverTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const queryArgs = type ? entityQueryArgs(type, rawId) : null;
   const task = useQuery(api.tasks.webGet, isTask && queryArgs ? queryArgs : "skip");
@@ -722,54 +498,80 @@ export function EntityIdPill({ shortId, type: typeProp, id: idProp }: { shortId?
       ? truncated || rawId
       : rawId;
 
-  const handleMouseEnter = useCallback(() => {
-    if (expanded) return;
-    hoverTimeout.current = setTimeout(() => setHoverOpen(true), 250);
-  }, [expanded]);
+  // Route that opens this entity. Prefer the resolved Convex id; fall back to
+  // the raw id so the link still works in the brief window before the query
+  // resolves. The pill IS the click target — one click navigates ("click
+  // through"), exactly like any other link.
+  const href = `${ENTITY_ROUTE[type ?? "session"]}/${entity?._id ?? rawId}`;
 
-  const handleMouseLeave = useCallback(() => {
-    if (hoverTimeout.current) clearTimeout(hoverTimeout.current);
+  const cancelHover = useCallback(() => {
+    if (hoverTimeout.current) {
+      clearTimeout(hoverTimeout.current);
+      hoverTimeout.current = null;
+    }
+  }, []);
+
+  // Always cancel any pending timer before scheduling the next one. The flicker
+  // ("disappears then comes back") was a stale close-timer surviving re-entry
+  // into the card: it fired and hid the popover even though the cursor was now
+  // inside it.
+  const openSoon = useCallback(() => {
+    cancelHover();
+    hoverTimeout.current = setTimeout(() => setHoverOpen(true), 200);
+  }, [cancelHover]);
+
+  const closeSoon = useCallback(() => {
+    cancelHover();
     hoverTimeout.current = setTimeout(() => setHoverOpen(false), 150);
-  }, []);
+  }, [cancelHover]);
 
-  const handleClick = useCallback(() => {
+  const closeNow = useCallback(() => {
+    cancelHover();
     setHoverOpen(false);
-    if (hoverTimeout.current) clearTimeout(hoverTimeout.current);
-    setExpanded((v) => !v);
-  }, []);
+  }, [cancelHover]);
+
+  // Clear any in-flight timer if the pill unmounts (e.g. on navigation).
+  useEffect(() => cancelHover, [cancelHover]);
 
   // Unknown id shape (no detectable type) — render the raw text, not a pill.
   if (!type) return <span>{rawId}</span>;
 
   return (
-    <span style={{ display: expanded ? "block" : "inline" }}>
-      <Popover open={hoverOpen && !expanded} onOpenChange={setHoverOpen}>
-        <PopoverAnchor asChild>
-          <button
-            onClick={handleClick}
-            onMouseEnter={handleMouseEnter}
-            onMouseLeave={handleMouseLeave}
-            className={`inline-flex items-center gap-1 px-1.5 py-0 rounded text-[11px] font-mono leading-[1.4] ${colors} border transition-colors cursor-pointer align-baseline`}
-          >
-            <span className="relative flex-shrink-0">
-              <Icon className="w-2.5 h-2.5" />
-              {isSession && status === "active" && (
-                <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-sol-green" />
-              )}
-            </span>
-            <span>{pillLabel}</span>
-            <ChevronDown className={`w-2 h-2 flex-shrink-0 transition-transform ${expanded ? "rotate-180" : ""}`} />
-          </button>
-        </PopoverAnchor>
-        <PopoverContent
-          className="w-64 bg-sol-bg border border-sol-border shadow-xl p-3 cursor-pointer"
-          side="top"
-          align="start"
-          sideOffset={6}
-          onClick={handleClick}
-          onMouseEnter={handleMouseEnter}
-          onMouseLeave={handleMouseLeave}
-          onOpenAutoFocus={(e) => e.preventDefault()}
+    <Popover open={hoverOpen} onOpenChange={setHoverOpen}>
+      <PopoverAnchor asChild>
+        <Link
+          href={href}
+          onClick={closeNow}
+          onMouseEnter={openSoon}
+          onMouseLeave={closeSoon}
+          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-mono leading-[1.4] no-underline ${colors} border transition-colors cursor-pointer align-baseline`}
+        >
+          <span className="relative flex-shrink-0">
+            <Icon className="w-3 h-3" />
+            {isSession && status === "active" && (
+              <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-sol-green" />
+            )}
+          </span>
+          <span>{pillLabel}</span>
+        </Link>
+      </PopoverAnchor>
+      <PopoverContent
+        className="w-64 bg-sol-bg border border-sol-border shadow-xl p-0 relative"
+        side="top"
+        align="start"
+        sideOffset={6}
+        onMouseEnter={openSoon}
+        onMouseLeave={closeSoon}
+        onOpenAutoFocus={(e) => e.preventDefault()}
+      >
+        {/* Invisible bridge over the offset gap to the pill: keeps the cursor
+            "inside" the card while crossing it, so moving up to click never
+            dismisses the popover. */}
+        <span aria-hidden className="absolute inset-x-0 top-full h-2" />
+        <Link
+          href={href}
+          onClick={closeNow}
+          className="block p-3 no-underline cursor-pointer"
         >
           {entity ? (
             isTask ? <TaskHoverContent task={entity} />
@@ -779,14 +581,8 @@ export function EntityIdPill({ shortId, type: typeProp, id: idProp }: { shortId?
           ) : (
             <div className="text-[11px] text-gray-500">{pillLabel}</div>
           )}
-        </PopoverContent>
-      </Popover>
-      {expanded && entity && (
-        isTask ? <InlineTaskExpand task={entity} />
-        : isPlan ? <InlinePlanExpand plan={entity} />
-        : isSession ? <InlineSessionExpand session={entity} />
-        : <GenericInlineExpand entity={entity} type={type} />
-      )}
-    </span>
+        </Link>
+      </PopoverContent>
+    </Popover>
   );
 }
