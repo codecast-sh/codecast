@@ -901,10 +901,13 @@ pre[class*="language-"] {
 }
 
 /* Content is a real flex column — full width until the rail opens (no overlay,
-   no leftover padding, so cancel/escape restores full width for free). */
+   no leftover padding, so cancel/escape restores full width for free).
+   z-index lifts it above the block-highlight overlay so the tint sits behind text. */
 .cc-content {
   flex: 1 1 auto;
   min-width: 0;
+  position: relative;
+  z-index: 1;
 }
 
 /* Right-hand comment rail: a real sibling column (can't overlap content), only
@@ -920,162 +923,158 @@ pre[class*="language-"] {
   right: 0;
   transition: top 140ms ease;
 }
-.cc-rail-empty {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  font-size: 0.7rem;
-  line-height: 1.4;
-  color: var(--sol-text-dim);
-  font-style: italic;
-  padding-left: 0.1rem;
-}
 
 /* Active-block highlight bar (keyboard-nav focus indicator) */
+/* Soft highlight of the block a comment points at — sits BEHIND the text (z-index
+   0 vs content's 1). Replaces the in-card quote as the "what does this refer to" cue. */
 .cc-active-overlay {
   position: absolute;
-  left: -0.6rem;
-  width: 3px;
-  border-radius: 2px;
-  background: var(--sol-cyan);
+  left: -0.5rem;
+  right: calc(var(--cc-rail-w) + var(--cc-rail-gap) - 0.5rem);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--sol-cyan) 10%, transparent);
+  box-shadow: inset 2px 0 0 var(--sol-cyan);
   pointer-events: none;
-  z-index: 1;
+  z-index: 0;
   transition: top 120ms ease, height 120ms ease;
 }
 
-/* Hover "+" affordance — in the rail's left gutter at the hovered block's row */
-.cc-block-add {
+/* Modeless per-block hover actions: [quote][comment] pill at the hovered block's
+   top-right. Sits at the content's right edge; slides left of the rail when the
+   rail is open. One container border, plain icon buttons inside. */
+.cc-block-actions {
   position: absolute;
-  left: -1.5rem;
+  right: 0;
+  display: flex;
+  gap: 1px;
+  padding: 1px;
+  margin-top: -2px;
+  border: 1px solid var(--sol-border);
+  border-radius: 7px;
+  background: var(--sol-card);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+  z-index: 6;
+  animation: ccPop 120ms ease-out;
+}
+.cc-rail-on .cc-block-actions {
+  right: calc(var(--cc-rail-w) + var(--cc-rail-gap));
+}
+.cc-block-act {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 1.4rem;
+  width: 1.5rem;
   height: 1.4rem;
-  margin-top: -2px;
-  border: 1px solid var(--sol-border);
-  border-radius: 6px;
-  background: var(--sol-card);
+  border: none;
+  border-radius: 5px;
+  background: transparent;
   color: var(--sol-text-muted);
   cursor: pointer;
-  z-index: 6;
-  animation: ccPop 120ms ease-out;
-  transition: color 120ms, border-color 120ms, background 120ms, transform 120ms;
+  transition: color 120ms, background 120ms;
 }
-.cc-block-add:hover {
+.cc-block-act:hover {
   color: var(--sol-cyan);
-  border-color: var(--sol-cyan);
-  background: color-mix(in srgb, var(--sol-cyan) 14%, var(--sol-card));
-  transform: scale(1.08);
+  background: color-mix(in srgb, var(--sol-cyan) 14%, transparent);
 }
 
-/* Rail cards: saved comment chip + editor */
+/* Rail cards: saved comment chip + editor. ONE border per card; nothing nested
+   gets its own frame (the textarea is borderless, buttons are plain text). */
 .cc-comment-chip,
 .cc-comment-editor {
   border-radius: 8px;
-  padding: 0.5rem 0.6rem;
   background: var(--sol-card);
   border: 1px solid var(--sol-border);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
   font-size: 0.8125rem;
 }
 .cc-comment-chip {
-  cursor: default;
-  transition: border-color 120ms, box-shadow 120ms;
+  padding: 0.45rem 0.55rem;
+  cursor: pointer;
+  transition: border-color 120ms;
+}
+.cc-comment-chip:hover {
+  border-color: color-mix(in srgb, var(--sol-cyan) 50%, var(--sol-border));
 }
 .cc-comment-chip-active {
   border-color: var(--sol-cyan);
-  box-shadow: 0 0 0 1px var(--sol-cyan), 0 1px 3px rgba(0, 0, 0, 0.1);
 }
 .cc-comment-editor {
+  padding: 0.3rem 0.4rem 0.35rem;
   border-color: var(--sol-cyan);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--sol-cyan) 40%, transparent), 0 2px 8px rgba(0, 0, 0, 0.12);
-}
-.cc-comment-quote {
-  font-size: 0.72rem;
-  line-height: 1.3;
-  color: var(--sol-text-muted);
-  font-style: italic;
-  border-left: 2px solid var(--sol-border);
-  padding-left: 0.45rem;
-  margin-bottom: 0.3rem;
-  overflow: hidden;
 }
 .cc-comment-body {
   color: var(--sol-text);
   white-space: pre-wrap;
   word-break: break-word;
+  line-height: 1.45;
 }
 .cc-comment-empty {
   color: var(--sol-text-dim);
-  font-style: italic;
 }
-.cc-comment-actions {
+
+/* Borderless textarea — sits flush in the card, no box-in-a-box */
+.cc-comment-textarea {
+  width: 100%;
+  background: transparent;
+  border: none;
+  padding: 0.15rem 0.2rem;
+  font: inherit;
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  color: var(--sol-text);
+  resize: none;
+  outline: none;
+  overflow: hidden;
+  min-height: 3.2em;
+}
+.cc-comment-textarea::placeholder {
+  color: var(--sol-text-dim);
+}
+
+/* Actions: plain text buttons, revealed on hover for the chip */
+.cc-comment-actions,
+.cc-comment-editor-footer {
   display: flex;
-  gap: 0.35rem;
-  margin-top: 0.4rem;
+  justify-content: flex-end;
+  gap: 0.25rem;
+}
+.cc-comment-editor-footer {
+  margin-top: 0.2rem;
+}
+.cc-comment-chip .cc-comment-actions {
+  margin-top: 0.3rem;
+  opacity: 0;
+  transition: opacity 120ms;
+}
+.cc-comment-chip:hover .cc-comment-actions,
+.cc-comment-chip-active .cc-comment-actions {
+  opacity: 1;
 }
 .cc-comment-btn {
-  padding: 0.12rem 0.55rem;
-  font-size: 0.7rem;
+  padding: 0.1rem 0.4rem;
+  font-size: 0.72rem;
   font-weight: 500;
-  border-radius: 5px;
-  border: 1px solid var(--sol-border);
-  color: var(--sol-text-muted);
+  border: none;
+  border-radius: 4px;
   background: transparent;
+  color: var(--sol-text-dim);
   cursor: pointer;
-  transition: background 120ms, color 120ms, border-color 120ms;
+  transition: background 120ms, color 120ms;
 }
 .cc-comment-btn:hover {
   background: var(--sol-bg-highlight);
   color: var(--sol-text);
 }
 .cc-comment-btn-primary {
-  border-color: var(--sol-cyan);
   color: var(--sol-cyan);
+  font-weight: 600;
 }
 .cc-comment-btn-primary:hover {
   background: color-mix(in srgb, var(--sol-cyan) 14%, transparent);
   color: var(--sol-cyan);
 }
 .cc-comment-btn-danger:hover {
-  border-color: var(--sol-red);
+  background: color-mix(in srgb, var(--sol-red) 12%, transparent);
   color: var(--sol-red);
-}
-.cc-comment-textarea {
-  width: 100%;
-  background: var(--sol-bg);
-  border: 1px solid var(--sol-border);
-  border-radius: 6px;
-  padding: 0.35rem 0.5rem;
-  font: inherit;
-  font-size: 0.8125rem;
-  color: var(--sol-text);
-  resize: none;
-  outline: none;
-  overflow: hidden;
-  min-height: 2.2em;
-}
-.cc-comment-textarea:focus {
-  border-color: var(--sol-cyan);
-}
-.cc-comment-editor-footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-top: 0.45rem;
-}
-.cc-hint {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.2rem;
-  font-size: 0.7rem;
-  color: var(--sol-text-dim);
-}
-.cc-hint-sep {
-  margin: 0 0.35rem;
-  opacity: 0.5;
 }
 
 /* Floating selection toolbar */

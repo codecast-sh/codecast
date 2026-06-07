@@ -94,7 +94,7 @@ import { parseFileChangeSummary, parseUnifiedDiffSections } from "../lib/unified
 import { setupDesktopDrag, desktopHeaderClass } from "../lib/desktop";
 import { MessageNavButton } from "./MessageBrowserPopover";
 import type { MentionItem } from "./editor/MentionList";
-import { CheckSquare, FileText, MessageSquare, MessageSquareQuote, MoreHorizontal, Map as MapIcon, User, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split } from "lucide-react";
+import { CheckSquare, FileText, MessageSquare, MoreHorizontal, Map as MapIcon, User, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split } from "lucide-react";
 import { ComposeEditor, type ComposeEditorHandle } from "./editor/ComposeEditor";
 import { useMentionQuery } from "../hooks/useMentionQuery";
 
@@ -5273,11 +5273,13 @@ function AssistantBlockImpl({
 
   const handleCopyLink = () => copyMessageLink(conversationId, messageId);
 
-  // When this message's comment rail is open (it's the active review target),
-  // slide the hover action toolbar left by the rail width so it sits over the
+  // When this message's comment rail is open (it has pending comments), slide
+  // the hover action toolbar left by the rail width so it sits over the
   // (shrunken) content column, not the rail.
-  const reviewTargeted = useInboxStore((s) => s.reviewMessageId === messageId);
-  const toolbarShift = reviewTargeted && !collapsed;
+  const railOpen = useInboxStore(
+    (s) => (s.reviewComments[conversationId ?? ""]?.some((c) => c.messageId === messageId)) ?? false,
+  );
+  const toolbarShift = railOpen && !collapsed;
 
   const handleToggleBookmark = async () => {
     if (!conversationId) return;
@@ -5314,17 +5316,7 @@ function AssistantBlockImpl({
     <div id={`msg-${messageId}`} className={`group relative scroll-mt-20 ${collapsed ? "mb-1" : onlyToolCalls ? "mb-1" : "mb-6"} transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg p-2 -m-2 message-highlight" : ""} ${shareSelectionMode ? "cursor-pointer" : ""} ${isSelectedForShare ? "bg-sol-cyan/10 rounded-lg p-2 -m-2 border-2 border-sol-cyan ring-2 ring-sol-cyan/30" : ""}`} onClick={shareSelectionMode ? (() => onToggleShareSelection?.(messageId)) : undefined} title={!shouldShowHeader ? formatRelativeTime(timestamp) : undefined}>
       {(hasContent || hasToolCalls) && (
         <div className={`absolute ${hasPlanWrite && onlyToolCalls ? "-top-6" : onlyToolCalls ? "top-1" : "-top-2"} right-0 transition-[opacity,right] duration-150 flex gap-0.5 z-10 bg-sol-bg rounded shadow-md px-0.5 ${shareSelectionMode ? "opacity-0 pointer-events-none" : "opacity-0 group-hover:opacity-100"}`} style={toolbarShift ? { right: "calc(var(--cc-rail-w) + var(--cc-rail-gap))" } : undefined}>
-          {/* Primary: quote/comment on this reply (opens the review rail) */}
-          {conversationId && (
-            <button
-              onClick={() => useInboxStore.getState().setReviewTarget(messageId, 0)}
-              className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary"
-              title="Quote & comment on this reply (R)"
-              aria-label="Quote & comment on this reply"
-            >
-              <MessageSquareQuote className="w-4 h-4" />
-            </button>
-          )}
+          {/* Quote/comment live on each block (hover the text) — not here. */}
           {/* Primary: comment thread */}
           <button
             onClick={() => onOpenComments?.(messageId)}
@@ -9019,10 +9011,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       submit: () => submitReview(conversation?._id ?? "", populate),
     };
   }, [conversation?._id]);
-  // While a comment rail is active in this conversation, slide the floating
-  // scroll buttons left so they clear the rail instead of sitting over a card.
+  // While a comment rail is open in this conversation (pending comments exist),
+  // slide the floating scroll buttons left so they clear the rail.
   const reviewRailActive = useInboxStore(
-    (s) => s.reviewMessageId !== null || (s.reviewComments[conversation?._id ?? ""]?.length ?? 0) > 0,
+    (s) => (s.reviewComments[conversation?._id ?? ""]?.length ?? 0) > 0,
   );
   const dropFilesRef = useRef<((files: File[]) => void) | null>(null);
   const [isDragging, setIsDragging] = useState(false);
