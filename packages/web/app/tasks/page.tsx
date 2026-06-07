@@ -9,6 +9,7 @@ import { useInboxStore, TaskItem, TaskViewPrefs, ProjectItem, resolveAssigneeInf
 import { useSyncTasks, useSyncTaskDetail } from "../../hooks/useSyncTasks";
 
 import { GenericListView, ListGroup, ItemRowState } from "../../components/GenericListView";
+import { SegmentedToggle } from "../../components/SegmentedToggle";
 import { LivenessDot, ActiveSessionBadge, taskLivenessState } from "../../components/LivenessDot";
 
 const api = _api as any;
@@ -1234,29 +1235,15 @@ export function TaskListContent() {
           syncScope="tasks"
           headerExtra={
             <>
-              <div className="flex items-center h-7 rounded-md border border-sol-border/40 overflow-hidden">
-                <button
-                  onClick={() => setParam({ source: "" })}
-                  className={`h-full px-2.5 text-xs flex items-center transition-colors ${!sourceFilter ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"}`}
-                  title="All tasks"
-                >
-                  All
-                </button>
-                <button
-                  onClick={() => setParam({ source: "human" })}
-                  className={`h-full px-2 flex items-center transition-colors border-l border-sol-border/40 ${sourceFilter === "human" ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"}`}
-                  title="Created via web UI"
-                >
-                  <User className="w-3.5 h-3.5" />
-                </button>
-                <button
-                  onClick={() => setParam({ source: "agent" })}
-                  className={`h-full px-2 flex items-center transition-colors border-l border-sol-border/40 ${sourceFilter === "agent" ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"}`}
-                  title="Created via cast CLI in a session"
-                >
-                  <Bot className="w-3.5 h-3.5" />
-                </button>
-              </div>
+              <SegmentedToggle
+                value={sourceFilter}
+                onChange={(v) => setParam({ source: v })}
+                items={[
+                  { key: "", label: "All", title: "All tasks" },
+                  { key: "human", icon: User, title: "Created via web UI" },
+                  { key: "agent", icon: Bot, title: "Created via cast CLI in a session" },
+                ]}
+              />
               {suggestedCount > 0 && (
                 <button
                   onClick={() => setParam({ source: sourceFilter === "triage" ? "" : "triage" })}
@@ -1272,20 +1259,15 @@ export function TaskListContent() {
           displayExtra={
             <div>
               <div className="text-[10px] uppercase tracking-wider text-sol-text-dim px-1 mb-1">View</div>
-              <div className="flex items-center h-7 rounded-md border border-sol-border/40 overflow-hidden">
-                <button
-                  onClick={() => setViewMode("list")}
-                  className={`flex-1 h-full flex items-center justify-center gap-1.5 text-xs transition-colors ${viewMode === "list" ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"}`}
-                >
-                  <List className="w-3.5 h-3.5" /> List
-                </button>
-                <button
-                  onClick={() => setViewMode("kanban")}
-                  className={`flex-1 h-full flex items-center justify-center gap-1.5 text-xs transition-colors border-l border-sol-border/40 ${viewMode === "kanban" ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"}`}
-                >
-                  <LayoutGrid className="w-3.5 h-3.5" /> Board
-                </button>
-              </div>
+              <SegmentedToggle
+                fullWidth
+                value={viewMode}
+                onChange={(v) => setViewMode(v as "list" | "kanban")}
+                items={[
+                  { key: "list", label: "List", icon: List },
+                  { key: "kanban", label: "Board", icon: LayoutGrid },
+                ]}
+              />
             </div>
           }
           customContent={viewMode === "kanban" ? ({ openPaletteForItems }) => (
