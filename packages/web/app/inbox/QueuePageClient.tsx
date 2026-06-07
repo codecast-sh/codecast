@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, memo, useMemo } from "react";
+import { useState, useCallback, useRef, memo, useMemo, useDeferredValue } from "react";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useEventListener } from "../../hooks/useEventListener";
@@ -23,7 +23,18 @@ import { toast } from "sonner";
 import { animatedStashSession } from "../../store/undoActions";
 import { cleanUserMessage } from "../../components/GlobalSessionPanel";
 
-const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, onSendAndAdvance, onSendAndDismiss, lastUserMessage, sessionError, onBack, targetMessageId, highlightQuery, onClearHighlight }: { sessionId: string; isIdle: boolean; onSendAndAdvance: () => void; onSendAndDismiss?: () => void; lastUserMessage?: string | null; sessionError?: string; onBack?: () => void; targetMessageId?: string; highlightQuery?: string; onClearHighlight?: () => void }) {
+const InboxConversation = memo(function InboxConversation({ sessionId: liveSessionId, isIdle, onSendAndAdvance, onSendAndDismiss, lastUserMessage, sessionError, onBack, targetMessageId, highlightQuery, onClearHighlight }: { sessionId: string; isIdle: boolean; onSendAndAdvance: () => void; onSendAndDismiss?: () => void; lastUserMessage?: string | null; sessionError?: string; onBack?: () => void; targetMessageId?: string; highlightQuery?: string; onClearHighlight?: () => void }) {
+  // Non-blocking switch: the heavy work of a session switch is mounting the new
+  // conversation's message tree (every block keyed by msg._id unmounts/remounts,
+  // re-parsing markdown). Defer the id the BODY renders from so a switch stays
+  // interruptible — React keeps the previous conversation painted and
+  // interactive while it mounts the next one at transition priority, instead of
+  // freezing the main thread on one synchronous render. The parent's sidebar
+  // highlight still moves instantly off the live id. Renaming the prop to
+  // liveSessionId means every existing reference below reads the deferred value,
+  // so the whole pane (body + banners + resume target) stays self-consistent and
+  // swaps atomically when the next conversation is ready.
+  const sessionId = useDeferredValue(liveSessionId);
   const {
     conversation,
     hasMoreAbove,
