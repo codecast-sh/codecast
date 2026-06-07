@@ -71,6 +71,11 @@ html, body {
   --font-mono: "JetBrains Mono", monospace;
   --font-serif: "Fraunces", serif;
 
+  /* Inline-review comment rail width + gap (single source of truth: the message
+     body splits content|rail by these, and the action toolbar offsets by them). */
+  --cc-rail-w: 15rem;
+  --cc-rail-gap: 1.25rem;
+
   /* Default to Light - Solarized Light */
   --sol-bg: #FBF5E2;
   --sol-bg-alt: #eee8d5;
@@ -880,10 +885,12 @@ pre[class*="language-"] {
    Quote / comment on assistant message blocks (review mode)
    ============================================================ */
 
+/* Rail width/gap live on :root so the message action toolbar (outside this
+   subtree) can offset itself by the same amount — single source of truth. */
 .cc-msg-review {
   position: relative;
-  --cc-rail-w: 15rem;
-  --cc-rail-gap: 1.25rem;
+  display: flex;
+  gap: var(--cc-rail-gap);
 }
 /* The region is programmatically focusable (tabIndex=-1) so it can capture
    block-navigation keys; the active-block highlight is the focus indicator, so
@@ -893,13 +900,36 @@ pre[class*="language-"] {
   outline: none;
 }
 
-/* Thin always-on right gutter hosts the hover "+"; the text column shrinks to
-   open the full comment rail once a message is engaged. */
+/* Content is a real flex column — full width until the rail opens (no overlay,
+   no leftover padding, so cancel/escape restores full width for free). */
 .cc-content {
-  padding-right: 1.75rem;
+  flex: 1 1 auto;
+  min-width: 0;
 }
-.cc-rail-on .cc-content {
-  padding-right: calc(var(--cc-rail-w) + var(--cc-rail-gap));
+
+/* Right-hand comment rail: a real sibling column (can't overlap content), only
+   rendered while engaged. Cards are absolutely placed within it at block offsets. */
+.cc-rail {
+  position: relative;
+  flex: 0 0 var(--cc-rail-w);
+  align-self: stretch;
+}
+.cc-rail-item {
+  position: absolute;
+  left: 0;
+  right: 0;
+  transition: top 140ms ease;
+}
+.cc-rail-empty {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  font-size: 0.7rem;
+  line-height: 1.4;
+  color: var(--sol-text-dim);
+  font-style: italic;
+  padding-left: 0.1rem;
 }
 
 /* Active-block highlight bar (keyboard-nav focus indicator) */
@@ -914,10 +944,10 @@ pre[class*="language-"] {
   transition: top 120ms ease, height 120ms ease;
 }
 
-/* Hover "+" affordance, pinned to the right gutter at the hovered block's top */
+/* Hover "+" affordance — in the rail's left gutter at the hovered block's row */
 .cc-block-add {
   position: absolute;
-  right: 0;
+  left: -1.5rem;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -933,32 +963,11 @@ pre[class*="language-"] {
   animation: ccPop 120ms ease-out;
   transition: color 120ms, border-color 120ms, background 120ms, transform 120ms;
 }
-/* When the rail is open, the "+" sits at the right edge of the (shrunken) text. */
-.cc-rail-on .cc-block-add {
-  right: calc(var(--cc-rail-w) + var(--cc-rail-gap) - 1.4rem);
-}
 .cc-block-add:hover {
   color: var(--sol-cyan);
   border-color: var(--sol-cyan);
   background: color-mix(in srgb, var(--sol-cyan) 14%, var(--sol-card));
   transform: scale(1.08);
-}
-
-/* The right-hand comment rail */
-.cc-rail {
-  position: absolute;
-  top: 0;
-  right: 0;
-  width: var(--cc-rail-w);
-  height: 100%;
-  pointer-events: none;
-}
-.cc-rail-item {
-  position: absolute;
-  right: 0;
-  width: var(--cc-rail-w);
-  pointer-events: auto;
-  transition: top 140ms ease;
 }
 
 /* Rail cards: saved comment chip + editor */

@@ -94,7 +94,7 @@ import { parseFileChangeSummary, parseUnifiedDiffSections } from "../lib/unified
 import { setupDesktopDrag, desktopHeaderClass } from "../lib/desktop";
 import { MessageNavButton } from "./MessageBrowserPopover";
 import type { MentionItem } from "./editor/MentionList";
-import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split } from "lucide-react";
+import { CheckSquare, FileText, MessageSquare, MessageSquareQuote, MoreHorizontal, Map as MapIcon, User, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split } from "lucide-react";
 import { ComposeEditor, type ComposeEditorHandle } from "./editor/ComposeEditor";
 import { useMentionQuery } from "../hooks/useMentionQuery";
 
@@ -5206,6 +5206,12 @@ function AssistantBlockImpl({
 
   const handleCopyLink = () => copyMessageLink(conversationId, messageId);
 
+  // When this message's comment rail is open (it's the active review target),
+  // slide the hover action toolbar left by the rail width so it sits over the
+  // (shrunken) content column, not the rail.
+  const reviewTargeted = useInboxStore((s) => s.reviewMessageId === messageId);
+  const toolbarShift = reviewTargeted && !collapsed;
+
   const handleToggleBookmark = async () => {
     if (!conversationId) return;
     try {
@@ -5240,44 +5246,24 @@ function AssistantBlockImpl({
   return (
     <div id={`msg-${messageId}`} className={`group relative scroll-mt-20 ${collapsed ? "mb-1" : onlyToolCalls ? "mb-1" : "mb-6"} transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg p-2 -m-2 message-highlight" : ""} ${shareSelectionMode ? "cursor-pointer" : ""} ${isSelectedForShare ? "bg-sol-cyan/10 rounded-lg p-2 -m-2 border-2 border-sol-cyan ring-2 ring-sol-cyan/30" : ""}`} onClick={shareSelectionMode ? (() => onToggleShareSelection?.(messageId)) : undefined} title={!shouldShowHeader ? formatRelativeTime(timestamp) : undefined}>
       {(hasContent || hasToolCalls) && (
-        <div className={`absolute ${hasPlanWrite && onlyToolCalls ? "-top-6" : onlyToolCalls ? "top-1" : "-top-2"} right-0 transition-opacity flex gap-0.5 z-10 bg-sol-bg rounded shadow-md px-0.5 ${shareSelectionMode ? "opacity-0 pointer-events-none" : "opacity-0 group-hover:opacity-100"}`}>
-          {onStartShareSelection && (
+        <div className={`absolute ${hasPlanWrite && onlyToolCalls ? "-top-6" : onlyToolCalls ? "top-1" : "-top-2"} right-0 transition-[opacity,right] duration-150 flex gap-0.5 z-10 bg-sol-bg rounded shadow-md px-0.5 ${shareSelectionMode ? "opacity-0 pointer-events-none" : "opacity-0 group-hover:opacity-100"}`} style={toolbarShift ? { right: "calc(var(--cc-rail-w) + var(--cc-rail-gap))" } : undefined}>
+          {/* Primary: quote/comment on this reply (opens the review rail) */}
+          {conversationId && (
             <button
-              onClick={() => onStartShareSelection(messageId)}
+              onClick={() => useInboxStore.getState().setReviewTarget(messageId, 0)}
               className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary"
-              title="Share message"
-              aria-label="Share message"
+              title="Quote & comment on this reply (R)"
+              aria-label="Quote & comment on this reply"
             >
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
-              </svg>
+              <MessageSquareQuote className="w-4 h-4" />
             </button>
           )}
-          <button
-            onClick={handleCopyLink}
-            className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary"
-            title="Copy link to message"
-            aria-label="Copy link to message"
-          >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-            </svg>
-          </button>
-          <button
-            onClick={handleToggleBookmark}
-            className={`p-1.5 rounded hover:bg-sol-bg-alt ${isBookmarked ? "text-amber-400" : "text-sol-text-dim hover:text-sol-text-secondary"}`}
-            title={isBookmarked ? "Remove bookmark" : "Bookmark message"}
-            aria-label={isBookmarked ? "Remove bookmark" : "Bookmark message"}
-          >
-            <svg className="w-4 h-4" fill={isBookmarked ? "currentColor" : "none"} viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
-            </svg>
-          </button>
+          {/* Primary: comment thread */}
           <button
             onClick={() => onOpenComments?.(messageId)}
             className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary flex items-center gap-1"
-            title="Comments"
-            aria-label="Comments"
+            title="Comment thread"
+            aria-label="Comment thread"
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
@@ -5286,16 +5272,7 @@ function AssistantBlockImpl({
               <span className="text-xs">{commentCount}</span>
             )}
           </button>
-          {onForkFromMessage && messageUuid && (
-            <button
-              onClick={() => onForkFromMessage(messageUuid)}
-              className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary"
-              title="Fork from this message"
-              aria-label="Fork from this message"
-            >
-              <Split className="w-4 h-4" />
-            </button>
-          )}
+          {/* Primary: copy message */}
           <button
             onClick={handleCopy}
             className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary"
@@ -5306,6 +5283,27 @@ function AssistantBlockImpl({
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
             </svg>
           </button>
+          {/* Overflow: less-used actions */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary"
+                title="More actions"
+                aria-label="More actions"
+              >
+                <MoreHorizontal className="w-4 h-4" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              {onStartShareSelection && (
+                <DropdownMenuItem onClick={() => onStartShareSelection(messageId)}>Share…</DropdownMenuItem>
+              )}
+              <DropdownMenuItem onClick={handleCopyLink}>Copy link</DropdownMenuItem>
+              <DropdownMenuItem onClick={handleToggleBookmark}>
+                {isBookmarked ? "Remove bookmark" : "Bookmark"}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       )}
 
