@@ -2113,7 +2113,7 @@ Some things are better seen than read. Emit a \`cast-canvas\` block of self-cont
 
 Reach for it when layout or magnitude is the point — reports, mockups, diagrams, tables, charts. The tell: if you're about to draw a layout in ASCII, render it instead; otherwise default to prose and markdown.
 
-Color with the \`--sol-*\` tokens (\`--sol-text\`, \`--sol-border\`, \`--sol-card\`, accents like \`--sol-blue\`) so it adapts to light/dark — don't hardcode colors. Static markup only; no scripts.
+Color with the \`--sol-*\` tokens (\`--sol-text\`, \`--sol-border\`, \`--sol-card\`, accents like \`--sol-blue\`) so it adapts to light/dark — don't hardcode colors. Static markup only; no scripts. Give it a title via a heading or \`data-canvas-title\` — it shows in the canvas header.
 
 For data charts, drop \`<div class="cast-chart" data-spec='{"marks":[{"type":"barY","data":[…],"x":"label","y":"value"}],"y":{"grid":true}}'></div>\` — codecast renders the spec with Observable Plot, themed to match. The spec mirrors Plot: \`marks\` (type = a Plot mark like \`lineY\`/\`areaY\`/\`barY\`/\`dot\`/\`cell\`, plus its channels) and \`x\`/\`y\`/\`color\` scale options. \`fill\`/\`stroke\` take a token name (\`"blue"\`) or a data field; pre-aggregate the data.
 ${VISUAL_SNIPPET_END}

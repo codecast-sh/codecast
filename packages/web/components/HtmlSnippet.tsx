@@ -71,10 +71,17 @@ const SHADOW_BASE =
 function extractTitle(html: string): string | null {
   try {
     const doc = new DOMParser().parseFromString(html, "text/html");
+    const clip = (s: string) => (s.length > 80 ? s.slice(0, 79) + "…" : s);
     const explicit = doc.querySelector("[data-canvas-title]")?.getAttribute("data-canvas-title")?.trim();
-    if (explicit) return explicit;
+    if (explicit) return clip(explicit);
     const heading = doc.querySelector("h1,h2,h3,h4,h5,h6")?.textContent?.trim();
-    if (heading) return heading.length > 80 ? heading.slice(0, 79) + "…" : heading;
+    if (heading) return clip(heading);
+    // Fall back to a short leading label (the uppercase eyebrow many canvases use).
+    const lead = doc.body.firstElementChild?.firstElementChild;
+    if (lead && lead.children.length === 0) {
+      const t = lead.textContent?.trim();
+      if (t && t.length <= 64) return clip(t);
+    }
     return null;
   } catch {
     return null;
@@ -201,7 +208,7 @@ export function HtmlSnippet({ code }: { code: string }) {
 
       {fullscreen &&
         createPortal(
-          <div className="fixed inset-0 z-[100] overflow-auto bg-sol-bg/95 backdrop-blur-xl">
+          <div className="canvas-scroll fixed inset-0 z-[100] overflow-auto bg-sol-bg/95 backdrop-blur-xl">
             {title && (
               <div className="absolute left-4 top-4 z-10 max-w-[55%] truncate rounded-lg border border-sol-border/40 bg-sol-bg-alt/80 px-3 py-1.5 text-xs font-medium text-sol-text-muted backdrop-blur">
                 {title}
