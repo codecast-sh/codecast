@@ -10,6 +10,8 @@ import {
   apiErrorBatchAction,
   classifyWorkState,
   normalizeWorkStateFilter,
+  trustedAgentStatus,
+  STATUS_TRUST_TTL_MS,
   AGENT_IDLE_GRACE_MS,
   type ConversationDoc,
   type SessionIdleInput,
@@ -437,5 +439,69 @@ describe("normalizeWorkStateFilter", () => {
     expect(normalizeWorkStateFilter("")).toBeNull();
     expect(normalizeWorkStateFilter("all")).toBeNull();
     expect(normalizeWorkStateFilter("garbage")).toBeNull();
+  });
+});
+
+describe("trustedAgentStatus (stale 'working' trust TTL)", () => {
+  const NOW = 10_000_000;
+
+  test("fresh active status is trusted unchanged", () => {
+    expect(trustedAgentStatus("working", NOW - 60_000, NOW)).toBe("working");
+    expect(trustedAgentStatus("thinking", NOW - (STATUS_TRUST_TTL_MS - 1), NOW)).toBe("thinking");
+  });
+
+  test("an active status with no synced activity past the TTL collapses to idle", () => {
+    expect(trustedAgentStatus("working", NOW - STATUS_TRUST_TTL_MS, NOW)).toBe("idle");
+    expect(trustedAgentStatus("working", NOW - 24 * 60 * 60 * 1000, NOW)).toBe("idle");
+    // applies to every active status, not just "working"
+    for (const s of ["compacting", "thinking", "connected", "starting", "resuming"]) {
+      expect(trustedAgentStatus(s, NOW - STATUS_TRUST_TTL_MS, NOW)).toBe("idle");
+    }
+  });
+
+  test("non-active statuses are never coerced, however stale", () => {
+    for (const s of ["idle", "stopped", "permission_blocked"]) {
+      expect(trustedAgentStatus(s, NOW - 24 * 60 * 60 * 1000, NOW)).toBe(s);
+    }
+  });
+
+  test("undefined status / unknown updatedAt are left alone", () => {
+    expect(trustedAgentStatus(undefined, NOW - 24 * 60 * 60 * 1000, NOW)).toBeUndefined();
+    expect(trustedAgentStatus("working", undefined, NOW)).toBe("working");
+  });
+
+  // End-to-end: the exact composition enrichInboxSessionRow uses — coerce the
+  // status, recompute idle from it, then classify. This is the regression: a
+  // frozen "working" on a long-quiet conversation must NOT land in working.
+  function workStateFor(rawStatus: string, ageMs: number): string {
+    const now = NOW;
+    const updatedAt = now - ageMs;
+    const agentStatus = trustedAgentStatus(rawStatus, updatedAt, now);
+    const isIdle = isSessionIdle({
+      agentStatus,
+      agentStatusUpdatedAt: updatedAt, // status last changed at turn start
+      hasPending: false,
+      lastRoleIsUser: false,
+      recentlyUpdated: now - updatedAt < AGENT_IDLE_GRACE_MS,
+      daemonAlive: true,
+      now,
+    });
+    return classifyWorkState({
+      agentStatus,
+      isIdle,
+      awaitingInput: false,
+      hasPending: false,
+      isUnresponsive: false,
+      isPinned: false,
+      messageCount: 5,
+    });
+  }
+
+  test("a genuinely active session (recent activity) still reads working", () => {
+    expect(workStateFor("working", 30_000)).toBe("working");
+  });
+
+  test("a session frozen in 'working' for hours reads idle, not working", () => {
+    expect(workStateFor("working", 18 * 60 * 60 * 1000)).toBe("idle");
   });
 });
