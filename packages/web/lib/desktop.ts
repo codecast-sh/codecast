@@ -212,3 +212,26 @@ export async function getAppVersion(): Promise<string | null> {
   }
   return null;
 }
+
+// Pause CSS animations while the desktop window is in the background.
+//
+// The desktop app runs with backgroundThrottling disabled (electron/main.js) so
+// the Convex live-query socket keeps delivering while the window is hidden. The
+// side effect: Chromium also keeps compositing every infinite CSS animation (the
+// per-session pulse/ping/spin status dots) at the full display refresh rate even
+// when Codecast is sitting unfocused behind another app — pinning the GPU process
+// for nothing visible. Toggling one attribute on <html> on focus/visibility
+// changes lets a single CSS rule park those animations; JS and the socket keep
+// running, so live data still flows and everything resumes instantly on focus.
+export function installIdleAnimationPause(): void {
+  if (typeof window === "undefined" || !isElectron()) return;
+  const root = document.documentElement;
+  const update = () => {
+    const idle = !document.hasFocus() || document.visibilityState === "hidden";
+    root.toggleAttribute("data-idle", idle);
+  };
+  window.addEventListener("focus", update);
+  window.addEventListener("blur", update);
+  document.addEventListener("visibilitychange", update);
+  update();
+}
