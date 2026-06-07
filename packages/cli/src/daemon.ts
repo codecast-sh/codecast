@@ -8034,6 +8034,135 @@ async function runHeartbeatFlush(): Promise<void> {
     try { reconcileStatusFromTranscript(sessionId, syncServiceRef); } catch {}
   }
   await runBounded(due, 5, (sessionId) => heartbeatHealthCheck(sessionId).catch(() => {}));
+
+  // Conservative reap of long-idle orphan terminals — gentle (capped per pass)
+  // and logged to a dedicated reaper.log. See reapIdleOrphanTerminals.
+  if (flushTick % REAP_EVERY_N_FLUSHES === 0) {
+    await reapIdleOrphanTerminals().catch((e) => log(`[REAPER] pass error: ${(e as Error)?.message ?? e}`));
+  }
+}
+
+// ─── Orphan terminal reaper ────────────────────────────────────────────────
+// The daemon keeps a warm tmux terminal per managed session and (deliberately)
+// never auto-kills idle ones, so every conversation ever resumed leaves a
+// cc-resume-* / cx-resume-* terminal behind. They accumulate without bound and,
+// once re-adopted on a restart, re-float a stale "working" into the inbox.
+//
+// This reaps a terminal ONLY when multiple independent ground-truth signals agree
+// it is finished, and writes every kill to a dedicated reaper.log so the action is
+// auditable. The signals (all must pass):
+//   - no transcript activity for REAP_IDLE_MS (file mtime) — long-quiet, which a
+//     genuine long-running tool never is (real tools finish in minutes)
+//   - the LIVE pane reads "idle" (classifyTmuxLiveState is a positive whitelist;
+//     a spinner / "esc to interrupt" / any modal reads non-idle and is skipped)
+//   - the transcript tail shows a COMPLETED turn (classifyTranscriptTail === idle;
+//     a pending tool_use or an open AskUserQuestion reads "active" and is skipped)
+//   - the pane is RE-checked in the instant before the kill (TOCTOU guard)
+// A reaped session loses only its warm process — the full transcript is on disk,
+// so it cold-resumes on click. The kill first removes the session from the
+// heartbeat / pane-tracking sets so heartbeatHealthCheck can't reconstitute it.
+const REAPER_LOG_FILE = path.join(CONFIG_DIR, "reaper.log");
+const REAP_IDLE_MS = 24 * 60 * 60 * 1000;   // 24h of no transcript activity
+const REAP_MAX_PER_PASS = 3;                 // gentle drain; first kills stay observable
+const REAP_EVERY_N_FLUSHES = 10;             // ~5 min between passes (flush = 30s)
+const REAP_TMUX_PREFIXES = ["cc-resume-", "cx-resume-"];
+
+function reaperLog(message: string): void {
+  const line = `[${new Date().toISOString()}] ${message}\n`;
+  try { fs.appendFileSync(REAPER_LOG_FILE, line); } catch {}
+  // Mirror to daemon.log (and the server log feed) at warn — a kill is notable.
+  log(`[REAPER] ${message}`, "warn");
+}
+
+// Resolve the full session id for a cc-resume-* terminal. The tmux name carries
+// only an 8-char prefix, so prefer the authoritative @codecast_session_id option,
+// then fall back to globbing the transcript by that prefix. Returns null when the
+// session can't be identified — in which case it is NEVER killed.
+async function resolveReapSessionId(tmux: string): Promise<string | null> {
+  const opt = await getTmuxSessionOption(tmux, "@codecast_session_id");
+  if (opt && opt.trim()) return opt.trim();
+  const prefix = REAP_TMUX_PREFIXES.reduce((s, p) => s.startsWith(p) ? s.slice(p.length) : s, tmux);
+  if (!prefix || prefix.length < 8) return null;
+  const claudeDir = path.join(process.env.HOME || "", ".claude", "projects");
+  try {
+    for (const dir of fs.readdirSync(claudeDir, { withFileTypes: true })) {
+      if (!dir.isDirectory()) continue;
+      const found = fs.readdirSync(path.join(claudeDir, dir.name))
+        .find((f) => f.startsWith(prefix) && f.endsWith(".jsonl"));
+      if (found) return found.replace(/\.jsonl$/, "");
+    }
+  } catch {}
+  return null;
+}
+
+// The reason a terminal is NOT safe to reap, or null if it passed every gate.
+// On success returns the resolved transcript path + idle age so the caller need
+// not re-scan. Cheapest gates first (idle-age before the pane/tail reads).
+async function reapBlockReason(
+  sessionId: string, tmux: string, now: number,
+): Promise<{ reason: string } | { reason: null; idleHours: number }> {
+  const file = findSessionFile(sessionId);
+  if (!file) return { reason: "no-transcript" };
+  if (file.agentType !== "claude" && file.agentType !== "codex") return { reason: `agent=${file.agentType}` };
+  let idleMs: number;
+  try { idleMs = now - fs.statSync(file.path).mtimeMs; } catch { return { reason: "stat-failed" }; }
+  if (idleMs < REAP_IDLE_MS) return { reason: `active-${Math.round(idleMs / 60000)}min` };
+  let pane: string;
+  try { ({ stdout: pane } = await tmuxExec(["capture-pane", "-p", "-J", "-t", tmux + ":0.0", "-S", "-25"], { timeout: 4000 })); }
+  catch { return { reason: "pane-capture-failed" }; }
+  const live = classifyTmuxLiveState(pane);
+  if (live !== "idle") return { reason: `pane=${live}` };
+  let tail: string;
+  try { tail = readFileTailSync(file.path); } catch { return { reason: "tail-read-failed" }; }
+  const turn = file.agentType === "codex" ? classifyCodexTranscriptTail(tail) : classifyTranscriptTail(tail);
+  if (turn !== "idle") return { reason: `transcript=${turn}` };
+  return { reason: null, idleHours: Math.round(idleMs / 3600000) };
+}
+
+async function reapOneTerminal(sessionId: string, tmux: string, convId: string | undefined, idleHours: number): Promise<void> {
+  // TOCTOU guard: re-confirm the pane is still idle in the instant before the kill.
+  try {
+    const { stdout: pane } = await tmuxExec(["capture-pane", "-p", "-J", "-t", tmux + ":0.0", "-S", "-25"], { timeout: 4000 });
+    const live = classifyTmuxLiveState(pane);
+    if (live !== "idle") { reaperLog(`SKIP ${tmux} (${sessionId.slice(0, 8)}): pane became "${live}" at kill time`); return; }
+  } catch { reaperLog(`SKIP ${tmux} (${sessionId.slice(0, 8)}): recheck capture failed`); return; }
+
+  // Stop tracking BEFORE the kill so heartbeatHealthCheck can't see the vanished
+  // tmux and reconstitute it.
+  stopManagedSessionHeartbeat(sessionId);
+  resumeSessionCache.delete(sessionId);
+  stopCodexPermissionPoller(sessionId);
+  // Leave a clean "finished" status rather than letting the heartbeat-staleness
+  // path decay a frozen "working" into "stopped"/needs-attention. No session_error
+  // (this is a tidy reap, not a crash).
+  if (convId && syncServiceRef) {
+    await syncServiceRef.updateSessionAgentStatus(convId, "idle").catch(() => {});
+  }
+  await killTmuxSessionAndTree(tmux);
+  reaperLog(`REAPED ${tmux} session=${sessionId.slice(0, 8)} conv=${(convId || "?").slice(0, 12)} idle=${idleHours}h`);
+}
+
+async function reapIdleOrphanTerminals(): Promise<void> {
+  const now = Date.now();
+  let names: string[];
+  try {
+    const { stdout } = await tmuxExec(["list-sessions", "-F", "#{session_name}"], { timeout: 5000 });
+    names = stdout.split("\n").map((s) => s.trim()).filter((s) => REAP_TMUX_PREFIXES.some((p) => s.startsWith(p)));
+  } catch { return; }
+  if (names.length === 0) return;
+
+  const convCache = readConversationCache();
+  let reaped = 0;
+  for (const tmux of names) {
+    if (reaped >= REAP_MAX_PER_PASS) break;
+    const sessionId = await resolveReapSessionId(tmux);
+    if (!sessionId) continue; // unidentifiable → never kill
+    const verdict = await reapBlockReason(sessionId, tmux, now);
+    if (verdict.reason !== null) continue; // ineligible (don't spam the log with skips)
+    await reapOneTerminal(sessionId, tmux, convCache[sessionId], verdict.idleHours);
+    reaped++;
+  }
+  if (reaped > 0) reaperLog(`pass complete: reaped ${reaped} terminal(s) (cap ${REAP_MAX_PER_PASS}, idle≥${REAP_IDLE_MS / 3600000}h)`);
 }
 
 // Reads the last ~64KB of a file as UTF-8 without loading the whole thing --
