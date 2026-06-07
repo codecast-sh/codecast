@@ -181,6 +181,11 @@ export default function PlanDetailPage() {
           linkedObjectId={plan._id}
           placeholder="Write plan details, notes, or documentation..."
           contextType="plan"
+          leadContent={
+            plan.goal ? (
+              <p className="text-base text-sol-text-muted leading-relaxed">{plan.goal}</p>
+            ) : null
+          }
           topBarLeft={
             <>
               <PlanStatusSelector value={plan.status} onChange={handleStatusChange} />
@@ -223,9 +228,6 @@ export default function PlanDetailPage() {
                   <span>Updated {formatDate(plan.updated_at)}</span>
                 )}
               </div>
-              {plan.goal && (
-                <p className="mt-2 text-sm text-sol-text-muted leading-relaxed">{plan.goal}</p>
-              )}
               {plan.acceptance_criteria?.length > 0 && (
                 <div className="mt-3">
                   <h3 className="text-xs font-medium text-sol-text-dim uppercase tracking-wider mb-1">
