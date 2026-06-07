@@ -6,6 +6,15 @@
   .cq-container {
     container-type: inline-size;
   }
+
+  /* Single source of truth for the conversation column width — messages, header,
+     composer, jump banners, and expanded panels all read this one token. Tune the
+     width here and it applies everywhere; it never needs a file-wide sweep again.
+     56rem == Tailwind's max-w-4xl. (It was widened to max-w-7xl/80rem, which made
+     lines too long to read comfortably — capped back here.) */
+  .conv-col {
+    max-width: var(--conv-col-w, 56rem);
+  }
 }
 
 @container (max-width: 600px) {
