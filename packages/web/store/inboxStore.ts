@@ -186,6 +186,13 @@ export type InboxSession = {
   inbox_dismissed_at?: number | null;
   last_user_message?: string | null;
   session_error?: string;
+  // True when the session's latest turn is an unresolved Claude Code auth/API
+  // error banner ("Please run /login · API Error: 401 …") — the CLI was signed
+  // out / rate-limited mid-turn and is parked waiting on the user to
+  // re-authenticate or retry. Surfaced by the server; routes the row to
+  // needs-input and shows a distinct "login" badge. Self-clears when a real
+  // turn supersedes the banner.
+  pending_api_error?: boolean;
   implementation_session?: { _id: string; title?: string };
   is_subagent?: boolean;
   parent_conversation_id?: string;
@@ -688,7 +695,7 @@ export function isSessionEffectivelyIdle(
 }
 
 export function isSessionWaitingForInput(
-  session: Pick<InboxSession, "_id" | "is_idle" | "agent_status" | "message_count" | "is_pinned" | "has_pending" | "awaiting_input" | "is_unresponsive">,
+  session: Pick<InboxSession, "_id" | "is_idle" | "agent_status" | "message_count" | "is_pinned" | "has_pending" | "awaiting_input" | "is_unresponsive" | "pending_api_error">,
   sessionsWithQueuedMessages?: Set<string>,
 ): boolean {
   const dead = !!session.agent_status && DEAD_AGENT_STATUSES.has(session.agent_status);
@@ -710,6 +717,12 @@ export function isSessionWaitingForInput(
   // flips back to "working" while the poll is still open). A poll → NEEDS INPUT
   // (except pinned, which lives in its own group).
   if (session.awaiting_input && !session.is_pinned) return true;
+  // The latest turn is an unresolved auth/API-error banner — the CLI got signed
+  // out or rate-limited mid-turn and is parked until the user re-authenticates
+  // or retries. That's the user's ball just like an open poll, so route it to
+  // needs-input (where the distinct "login" badge surfaces it) instead of
+  // letting it sit buried as a plain idle session.
+  if (session.pending_api_error && session.message_count > 0 && !session.is_pinned) return true;
   // A permission-blocked agent (a tool-use awaiting your approve/deny) is
   // blocking on the user just like an open poll. Unlike a poll this isn't
   // reflected in awaiting_input (that derives from an AskUserQuestion tool_use),

@@ -287,6 +287,25 @@ function ForkCorner({ colorKey }: { colorKey: string }) {
   );
 }
 
+// Badge for a session parked on an unresolved Claude Code auth/API-error banner
+// (signed out / rate-limited mid-turn). A distinct amber "login" pill with a key
+// glyph — set apart from the plain status dots so a stuck-needs-reauth session
+// reads at a glance. Shared by both SessionCard variants.
+function AuthErrorBadge() {
+  return (
+    <span
+      className="inline-flex items-center gap-0.5 px-1 py-0 rounded text-[9px] font-semibold bg-amber-500/10 text-amber-500 border border-amber-500/30"
+      title="Signed out — run /login in the terminal to re-authenticate"
+    >
+      <svg className="w-2 h-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+        <circle cx="7.5" cy="15.5" r="3.5" />
+        <path d="M10 13L20 3M17 6l2 2M14 9l2 2" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+      login
+    </span>
+  );
+}
+
 // -- SessionCard (shared) --
 
 export const SessionCard = memo(function SessionCard({
@@ -436,6 +455,7 @@ export const SessionCard = memo(function SessionCard({
               {isSlashCommand ? <span className="font-mono text-violet-400/80">{displayTitle}</span> : displayTitle}
             </span>
             <div className="flex items-center gap-1 flex-shrink-0">
+              {session.pending_api_error && <AuthErrorBadge />}
               {session.session_error && (
                 <span className="w-1.5 h-1.5 rounded-full bg-sol-red" title={session.session_error} />
               )}
@@ -445,13 +465,13 @@ export const SessionCard = memo(function SessionCard({
               {session.has_pending && !session.is_unresponsive && (
                 <span className="w-1.5 h-1.5 rounded-full bg-sol-yellow animate-pulse" title="Message pending" />
               )}
-              {!session.is_idle && !session.session_error && !session.is_unresponsive && !session.has_pending && (
+              {!session.is_idle && !session.pending_api_error && !session.session_error && !session.is_unresponsive && !session.has_pending && (
                 <span className="relative flex h-1.5 w-1.5" title="Live">
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-sol-green opacity-75" />
                   <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-sol-green" />
                 </span>
               )}
-              {session.is_idle && !session.session_error && !session.is_unresponsive && !session.has_pending && session.message_count > 0 && (
+              {session.is_idle && !session.pending_api_error && !session.session_error && !session.is_unresponsive && !session.has_pending && session.message_count > 0 && (
                 <span className="w-1.5 h-1.5 rounded-full bg-gray-500/40 ring-1 ring-gray-500/20" title="Session idle" />
               )}
               {session.message_count > 0 && (
@@ -636,6 +656,7 @@ export const SessionCard = memo(function SessionCard({
                 Gate
               </span>
             )}
+            {session.pending_api_error && <AuthErrorBadge />}
             {session.session_error && (
               <span className="w-1.5 h-1.5 rounded-full bg-sol-red" title={session.session_error} />
             )}
@@ -645,7 +666,7 @@ export const SessionCard = memo(function SessionCard({
             {session.has_pending && !session.is_unresponsive && !isPendingWorking && (
               <span className="w-1.5 h-1.5 rounded-full bg-sol-yellow animate-pulse" title="Message pending" />
             )}
-            {!isWorking && !isLive && !isDismissed && session.is_idle && !session.session_error && !session.is_unresponsive && !session.has_pending && !isPendingWorking && session.message_count > 0 && (
+            {!isWorking && !isLive && !isDismissed && session.is_idle && !session.pending_api_error && !session.session_error && !session.is_unresponsive && !session.has_pending && !isPendingWorking && session.message_count > 0 && (
               <span className="w-1.5 h-1.5 rounded-full bg-sol-text-dim/40 ring-1 ring-sol-text-dim/20" title="Session idle" />
             )}
             {isPendingWorking && (
@@ -654,7 +675,7 @@ export const SessionCard = memo(function SessionCard({
                 pending
               </span>
             )}
-            {(isWorking || isLive) && !isPendingWorking && (
+            {(isWorking || isLive) && !isPendingWorking && !session.pending_api_error && (
               <span className="relative flex h-2 w-2" title="Working">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-sol-green opacity-75" />
                 <span className="relative inline-flex rounded-full h-2 w-2 bg-sol-green" />

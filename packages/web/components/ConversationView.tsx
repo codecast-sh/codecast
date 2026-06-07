@@ -1128,20 +1128,41 @@ function cleanStickyContent(content: string): string {
 }
 
 type ParsedApiError = {
-  statusCode: number;
+  statusCode?: number;
   message: string;
   errorType?: string;
   requestId?: string;
+  // True for the auth subset (expired login / bad key / no credit / OAuth) — the
+  // part the user can act on by re-running /login. Rendered as a distinct
+  // "re-authenticate" card instead of the generic provider-error card.
+  isAuth?: boolean;
 };
+
+// Auth/login banners Claude Code emits when its credentials fail. Mirrors the
+// backend's API_ERROR_BANNER_RE (convex/inboxFilters.ts) — keep the two in sync.
+// Anchored at the start so a real assistant message that merely *discusses* an
+// auth error isn't mistaken for a banner.
+const AUTH_BANNER_RE =
+  /^(?:please run \/login|not logged in|invalid api key|credit balance is too low|oauth (?:token|authentication))/i;
 
 function parseApiErrorContent(content?: string | null): ParsedApiError | null {
   if (!content) return null;
   const trimmed = content.trim();
-  const match = trimmed.match(/^API Error:\s*(\d{3})\s*([\s\S]*)$/i);
-  if (!match) return null;
+  if (!trimmed) return null;
 
-  const statusCode = Number(match[1]);
-  const payloadText = (match[2] || "").trim();
+  // Auth banners are short one-liners; the length cap keeps a long prose reply
+  // that merely opens with "Please run /login" from rendering as a card. The
+  // generic "API Error:"-prefixed form keeps its original anchored match (no
+  // cap) so a long JSON error payload still renders as the error card.
+  const isAuth = trimmed.length <= 400 && AUTH_BANNER_RE.test(trimmed);
+  const match = trimmed.match(/^API Error:\s*(\d{3})\s*([\s\S]*)$/i);
+  if (!isAuth && !match) return null;
+
+  // The status code may be the leading "API Error: NNN" (generic form) or
+  // embedded in an auth banner ("Please run /login · API Error: 401 …").
+  const statusStr = match?.[1] ?? trimmed.match(/API Error:\s*(\d{3})/i)?.[1];
+  const statusCode = statusStr ? Number(statusStr) : undefined;
+  const payloadText = (match?.[2] || "").trim();
   let message = "";
   let errorType: string | undefined;
   let requestId: string | undefined;
@@ -1172,14 +1193,58 @@ function parseApiErrorContent(content?: string | null): ParsedApiError | null {
     requestId = trimmed.match(/\b(req_[A-Za-z0-9]+)\b/)?.[1];
   }
   if (!message) {
-    message = statusCode === 500 ? "Internal server error" : "API request failed";
+    if (isAuth) {
+      // The card states the /login remedy itself, so drop the leading
+      // "Please run /login" instruction and the status prefix and keep just the
+      // descriptive detail (e.g. "The socket connection was closed unexpectedly").
+      message =
+        trimmed
+          .replace(/^please run \/login\s*[·.\-:]*\s*/i, "")
+          .replace(/^api error:\s*\d{3}\s*/i, "")
+          .trim() || "This session was signed out.";
+    } else {
+      message = statusCode === 500 ? "Internal server error" : "API request failed";
+    }
   }
 
-  return { statusCode, message, errorType, requestId };
+  return { statusCode, message, errorType, requestId, isAuth };
 }
 
 function ApiErrorCard({ error, compact = false }: { error: ParsedApiError; compact?: boolean }) {
-  const isServerError = error.statusCode >= 500;
+  // Auth/login banner → a distinct "re-authenticate" card. The remedy (/login)
+  // is in the user's hands, so the card leads with that instead of a request ID.
+  if (error.isAuth) {
+    return (
+      <div className={`rounded-lg border border-amber-500/40 bg-amber-500/10 ${compact ? "px-2.5 py-2" : "px-3 py-2.5"}`}>
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-amber-500/20 text-amber-500">
+            <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+              <circle cx="7.5" cy="15.5" r="3.5" />
+              <path d="M10 13L20 3M17 6l2 2M14 9l2 2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </span>
+          <span className="text-xs font-semibold uppercase tracking-wide text-amber-500">
+            Authentication required
+          </span>
+          {error.statusCode && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded border font-mono border-amber-500/40 bg-amber-500/10 text-amber-500">
+              {error.statusCode}
+            </span>
+          )}
+        </div>
+        <p className="mt-1 text-sm text-amber-500">{error.message}</p>
+        {!compact && (
+          <p className="mt-1.5 text-xs text-sol-text-dim">
+            This session was signed out. Run{" "}
+            <code className="px-1 py-0.5 rounded bg-sol-bg-alt/60 text-sol-text-secondary font-mono">/login</code>{" "}
+            in its terminal to re-authenticate, then retry.
+          </p>
+        )}
+      </div>
+    );
+  }
+
+  const isServerError = (error.statusCode ?? 0) >= 500;
 
   return (
     <div className={`rounded-lg border ${isServerError ? "border-sol-red/40 bg-sol-red/10" : "border-amber-500/30 bg-amber-500/10"} ${compact ? "px-2.5 py-2" : "px-3 py-2.5"}`}>
@@ -1190,9 +1255,11 @@ function ApiErrorCard({ error, compact = false }: { error: ParsedApiError; compa
         <span className={`text-xs font-semibold uppercase tracking-wide ${isServerError ? "text-sol-red" : "text-amber-500"}`}>
           API Error
         </span>
-        <span className={`text-[10px] px-1.5 py-0.5 rounded border font-mono ${isServerError ? "border-sol-red/40 bg-sol-red/10 text-sol-red" : "border-amber-500/40 bg-amber-500/10 text-amber-500"}`}>
-          {error.statusCode}
-        </span>
+        {error.statusCode && (
+          <span className={`text-[10px] px-1.5 py-0.5 rounded border font-mono ${isServerError ? "border-sol-red/40 bg-sol-red/10 text-sol-red" : "border-amber-500/40 bg-amber-500/10 text-amber-500"}`}>
+            {error.statusCode}
+          </span>
+        )}
         {error.errorType && (
           <span className="text-[10px] px-1.5 py-0.5 rounded border border-sol-border/40 bg-sol-bg-alt/50 text-sol-text-dim font-mono">
             {error.errorType}
