@@ -38,7 +38,11 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
     useShallow((s) => (s.reviewComments[conversationId] ?? []).filter((c) => c.messageId === messageId)),
   );
 
-  const engaged = isReviewTarget || myComments.length > 0;
+  // The rail (and the content-shrinking it causes) is shown only WHILE actively
+  // reviewing this message. Esc/Cancel clears reviewMessageId → rail collapses →
+  // content returns to full width. Pending comments persist in the store and stay
+  // visible in the ReviewBar; re-opening review on the message shows them again.
+  const engaged = isReviewTarget;
 
   const containerRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -48,6 +52,7 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
 
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
   const [hoverTop, setHoverTop] = useState(0);
+  const [peekBlock, setPeekBlock] = useState<number | null>(null);
   const [rects, setRects] = useState<Rect[]>([]);
   const [stackTops, setStackTops] = useState<Record<string, number>>({});
 
@@ -206,8 +211,8 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
       data-review-region={isReviewTarget ? "active" : undefined}
       tabIndex={isReviewTarget ? -1 : undefined}
       onKeyDown={isReviewTarget ? handleKeyDown : undefined}
-      onMouseMove={handleMouseMove}
-      onMouseLeave={handleMouseLeave}
+      onMouseMove={engaged ? handleMouseMove : undefined}
+      onMouseLeave={engaged ? handleMouseLeave : undefined}
     >
       {isReviewTarget && rects[activeBlock] && (
         <div className="cc-active-overlay" style={{ top: rects[activeBlock].top, height: rects[activeBlock].height }} />
@@ -217,26 +222,28 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
         {renderBlock(content)}
       </div>
 
-      {hoverIndex !== null && editingId === null && (
-        <button
-          type="button"
-          data-cc-gutter
-          className="cc-block-add"
-          style={{ top: hoverTop }}
-          title="Comment on this block"
-          aria-label="Comment on this block"
-          onMouseEnter={cancelClear}
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={() => startComment(hoverIndex)}
-        >
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-          </svg>
-        </button>
-      )}
-
       {engaged && (
         <div ref={railRef} className="cc-rail">
+          {sortedComments.length === 0 && (
+            <div className="cc-rail-empty">Hover a block and click +, or press c, to comment</div>
+          )}
+          {hoverIndex !== null && editingId === null && (
+            <button
+              type="button"
+              data-cc-gutter
+              className="cc-block-add"
+              style={{ top: hoverTop }}
+              title="Comment on this block"
+              aria-label="Comment on this block"
+              onMouseEnter={cancelClear}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => startComment(hoverIndex)}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                <path d="M12 5v14M5 12h14" />
+              </svg>
+            </button>
+          )}
           {sortedComments.map((c) => (
             <div
               key={c.id}
@@ -270,19 +277,27 @@ const CommentChip = memo(function CommentChip({
   active,
   onEdit,
   onRemove,
+  onPeek,
+  onPeekEnd,
 }: {
   comment: PendingComment;
   active: boolean;
   onEdit: () => void;
   onRemove: () => void;
+  onPeek: () => void;
+  onPeekEnd: () => void;
 }) {
   return (
-    <div className={"cc-comment-chip" + (active ? " cc-comment-chip-active" : "")}>
-      <div className="cc-comment-quote">{truncate(comment.quote, 120)}</div>
-      <div className="cc-comment-body">{comment.body || <span className="cc-comment-empty">(no comment)</span>}</div>
+    <div
+      className={"cc-comment-chip" + (active ? " cc-comment-chip-active" : "")}
+      onClick={onEdit}
+      onMouseEnter={onPeek}
+      onMouseLeave={onPeekEnd}
+    >
+      <div className="cc-comment-body">{comment.body || <span className="cc-comment-empty">Add a comment…</span>}</div>
       <div className="cc-comment-actions">
-        <button type="button" onClick={onEdit} className="cc-comment-btn">Edit</button>
-        <button type="button" onClick={onRemove} className="cc-comment-btn cc-comment-btn-danger">Remove</button>
+        <button type="button" onClick={(e) => { e.stopPropagation(); onEdit(); }} className="cc-comment-btn">Edit</button>
+        <button type="button" onClick={(e) => { e.stopPropagation(); onRemove(); }} className="cc-comment-btn cc-comment-btn-danger">Remove</button>
       </div>
     </div>
   );
@@ -330,7 +345,6 @@ function CommentEditor({
 
   return (
     <div className="cc-comment-editor">
-      <div className="cc-comment-quote">{truncate(comment.quote, 120)}</div>
       <textarea
         ref={ref}
         value={value}
@@ -356,16 +370,8 @@ function CommentEditor({
         }}
       />
       <div className="cc-comment-editor-footer">
-        <span className="cc-hint">
-          <KeyCap size="xs">⌘</KeyCap>
-          <KeyCap size="xs">↵</KeyCap> save
-          <span className="cc-hint-sep">·</span>
-          <KeyCap size="xs">Esc</KeyCap>
-        </span>
-        <div className="cc-comment-actions">
-          <button type="button" className="cc-comment-btn" onMouseDown={(e) => e.preventDefault()} onClick={cancel}>Cancel</button>
-          <button type="button" className="cc-comment-btn cc-comment-btn-primary" onMouseDown={(e) => e.preventDefault()} onClick={save}>Save</button>
-        </div>
+        <button type="button" className="cc-comment-btn" onMouseDown={(e) => e.preventDefault()} onClick={cancel}>Cancel</button>
+        <button type="button" className="cc-comment-btn cc-comment-btn-primary" onMouseDown={(e) => e.preventDefault()} onClick={save}>Save</button>
       </div>
     </div>
   );
