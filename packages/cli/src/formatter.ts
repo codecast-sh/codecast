@@ -383,6 +383,37 @@ export function formatReadResult(result: ReadResult, options: FormatOptions = {}
   return lines.join("\n");
 }
 
+// One message rendered for the `cast sessions <id> -w` live follow: a timestamped
+// role header + content, with tool calls summarized. Distinct from formatReadResult
+// (which is line-numbered for reading ranges) — a follow reads as a chat stream.
+export function formatStreamedMessage(msg: {
+  role: string;
+  content?: string | null;
+  timestamp?: string;
+  label?: string | null;
+  tool_calls?: Array<{ name?: string; input?: unknown }>;
+  tool_results?: Array<{ content?: string; isError?: boolean }>;
+}): string {
+  const time = msg.timestamp
+    ? new Date(msg.timestamp).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", second: "2-digit" })
+    : "";
+  const roleColor = msg.role === "assistant" ? c.green : msg.role === "user" ? c.cyan : c.gray;
+  // In multi-session mode each line is prefixed with its session so the merged
+  // stream stays legible; single-session follow omits it.
+  const label = msg.label ? `${c.magenta}${msg.label}${c.reset}  ` : "";
+  const out: string[] = [`${c.dim}${time}${c.reset}  ${label}${roleColor}${msg.role}${c.reset}`];
+  const content = (msg.content || "").trim();
+  if (content) out.push(content.split("\n").map((l) => "       " + l).join("\n"));
+  if (msg.tool_calls && msg.tool_calls.length > 0) {
+    const first = summarizeToolCall(msg.tool_calls[0]);
+    const more = msg.tool_calls.length > 1 ? ` …(${msg.tool_calls.length - 1} more)` : "";
+    out.push(`       ${fmt.muted(`${first}${more}`)}`);
+  } else if (!content && msg.tool_results && msg.tool_results.length > 0) {
+    out.push(`       ${fmt.muted(`(${msg.tool_results.length} tool result${msg.tool_results.length > 1 ? "s" : ""})`)}`);
+  }
+  return out.join("\n");
+}
+
 interface FeedPreviewMessage {
   line: number;
   role: string;
@@ -807,10 +838,26 @@ function changeLabel(change: string): string {
   return `${c.cyan}${arrow}${c.reset}`;
 }
 
-// The `cast monitor` dashboard: a per-user, most-actionable-first view of every
+// One colored, natural-language line for a single work-state change — the unit
+// of the `cast sessions -w` change stream (append-only, never the full set).
+export function formatSessionChangeLine(ch: {
+  id: string; title?: string | null; from?: string | null; to: string;
+  is_pinned?: boolean; is_live?: boolean;
+}): string {
+  const time = new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", second: "2-digit" });
+  const toLabel = WORK_STATE_LABEL[ch.to] ?? ch.to;
+  const dot = ch.is_live ? `${c.green}●${c.reset}` : `${c.gray}○${c.reset}`;
+  const pin = ch.is_pinned ? ` ${c.magenta}pinned${c.reset}` : "";
+  const delta = ch.from
+    ? `${c.dim}(${String(ch.from).replace("_", " ")} → ${toLabel})${c.reset}`
+    : `${c.cyan}(new)${c.reset}`;
+  return `${c.dim}${time}${c.reset}  ${dot} ${colorForState(ch.to)}${toLabel}${c.reset}${pin}  ${c.magenta}${truncateId(ch.id)}${c.reset}  ${ch.title || "New Session"}  ${delta}`;
+}
+
+// The `cast sessions` snapshot: a per-user, most-actionable-first view of every
 // session's work state. Renders flat when a --state filter is set, otherwise
-// grouped NEEDS INPUT → WORKING → IDLE. Designed to be redrawn in place under
-// --watch (see the monitor command's render loop).
+// grouped NEEDS INPUT → WORKING → IDLE. This is the STATIC view (no -w); watch
+// mode is a change stream rendered line-by-line via formatSessionChangeLine.
 export function formatMonitor(result: MonitorResult, options: MonitorOptions = {}): string {
   const lines: string[] = [];
   const counts = result.counts || { working: 0, needs_input: 0, idle: 0, pinned: 0, live: 0, total: 0 };
