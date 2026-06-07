@@ -54,14 +54,23 @@ A first body line that is plenty long.`;
 
 describe("inlineDocSourceKey", () => {
   test("is stable for the same message (no wall-clock)", () => {
-    const a = inlineDocSourceKey("conv1", 1780722790076);
-    const b = inlineDocSourceKey("conv1", 1780722790076);
+    const a = inlineDocSourceKey("user1", 1780722790076);
+    const b = inlineDocSourceKey("user1", 1780722790076);
     expect(a).toBe(b);
-    expect(a).toBe("inline://conv1/1780722790076");
+    expect(a).toBe("inline://user1/1780722790076");
+  });
+
+  test("is user-scoped, not conversation-scoped — forks of the same transcript share keys", () => {
+    // The same message re-synced into two forked conversations must produce
+    // the same key; conversation identity must not appear in it.
+    const inForkA = inlineDocSourceKey("user1", 1780722790076);
+    const inForkB = inlineDocSourceKey("user1", 1780722790076);
+    expect(inForkA).toBe(inForkB);
+    expect(inForkA.includes("conv")).toBe(false);
   });
 
   test("missing timestamp degrades to a stable 0 key", () => {
-    expect(inlineDocSourceKey("conv1", undefined)).toBe("inline://conv1/0");
+    expect(inlineDocSourceKey("user1", undefined)).toBe("inline://user1/0");
   });
 });
 
