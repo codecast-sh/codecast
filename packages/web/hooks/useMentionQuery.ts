@@ -17,7 +17,7 @@ function inScope(item: { team_id?: string | null; user_id?: string | null }, sco
   return !itemTeam && (item.user_id ? String(item.user_id) === scope.userId : true);
 }
 
-function score(label: string, q: string): number {
+export function score(label: string, q: string): number {
   const l = label.toLowerCase();
   if (l === q) return 0;
   if (l.startsWith(q)) return 1;
