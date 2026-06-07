@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as _diag from "../_diag.js";
 import type * as admin_mergeUser from "../admin_mergeUser.js";
 import type * as agentTasks from "../agentTasks.js";
 import type * as apiTokens from "../apiTokens.js";
@@ -24,10 +25,12 @@ import type * as crons from "../crons.js";
 import type * as daemonCommandUtils from "../daemonCommandUtils.js";
 import type * as daemonLogs from "../daemonLogs.js";
 import type * as data from "../data.js";
+import type * as debugTmp from "../debugTmp.js";
 import type * as decisions from "../decisions.js";
 import type * as deviceRouting from "../deviceRouting.js";
 import type * as devices from "../devices.js";
 import type * as dispatch from "../dispatch.js";
+import type * as docExtraction from "../docExtraction.js";
 import type * as docSync from "../docSync.js";
 import type * as docs from "../docs.js";
 import type * as embeddings from "../embeddings.js";
@@ -80,6 +83,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  _diag: typeof _diag;
   admin_mergeUser: typeof admin_mergeUser;
   agentTasks: typeof agentTasks;
   apiTokens: typeof apiTokens;
@@ -96,10 +100,12 @@ declare const fullApi: ApiFromModules<{
   daemonCommandUtils: typeof daemonCommandUtils;
   daemonLogs: typeof daemonLogs;
   data: typeof data;
+  debugTmp: typeof debugTmp;
   decisions: typeof decisions;
   deviceRouting: typeof deviceRouting;
   devices: typeof devices;
   dispatch: typeof dispatch;
+  docExtraction: typeof docExtraction;
   docSync: typeof docSync;
   docs: typeof docs;
   embeddings: typeof embeddings;

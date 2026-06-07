@@ -9,26 +9,7 @@ import { canTeamMemberAccess } from "./privacy";
 import { redactSecrets } from "./redact";
 import { markPendingDelivered } from "./pendingMessages";
 import { nextAgentStatusOnAddMessages, isApiErrorBanner, apiErrorBatchAction } from "./inboxFilters";
-
-function classifyDocContent(content: string): "plan" | "design" | "spec" | "investigation" | "handoff" | "note" {
-  const first2k = content.slice(0, 2000).toLowerCase();
-  if (/implementation\s+plan|## phases?\b|## milestones?\b|## timeline/i.test(first2k)) return "plan";
-  if (/design\s+doc|architecture|## design|## approach|system\s+design/i.test(first2k)) return "design";
-  if (/## spec|specification|## requirements|## api\b|## endpoints/i.test(first2k)) return "spec";
-  if (/investigation|root\s+cause|## findings|## analysis|debugging/i.test(first2k)) return "investigation";
-  if (/handoff|## status|## context|## next\s+steps/i.test(first2k)) return "handoff";
-  return "note";
-}
-
-function extractTitleFromContent(content: string): string {
-  const h1 = content.match(/^#\s+(.+)/m);
-  if (h1) return h1[1].slice(0, 200);
-  const h2 = content.match(/^##\s+(.+)/m);
-  if (h2) return h2[1].slice(0, 200);
-  const firstLine = content.split("\n").find((l) => l.trim().length > 10);
-  if (firstLine) return firstLine.replace(/^[#*\->\s]+/, "").slice(0, 200);
-  return "Untitled Document";
-}
+import { classifyDocContent, extractTitleFromContent, inlineDocSourceKey } from "./docExtraction";
 
 type DocExtractionMessage = {
   role?: string;
@@ -98,16 +79,33 @@ async function extractDocsFromMessages(
   conversation: DocExtractionConversation,
   conversation_id: Id<"conversations">,
 ) {
+  // Existing docs for this conversation, fetched lazily on the first inline
+  // candidate. Dedup must be by stable key AND content: legacy inline docs were
+  // keyed by wall-clock (`inline://<conv>/<Date.now()>`), so a re-synced message
+  // never matches its old key — content equality is what stops re-inserts.
+  let convDocs: Array<{ source_file?: string; content: string }> | null = null;
   for (const msg of messages) {
     if (msg.role === "assistant" && msg.content && msg.content.length > 5000) {
       const headingCount = (msg.content.match(/^#{1,3}\s/gm) || []).length;
       if (headingCount >= 3) {
-        const syntheticPath = `inline://${conversation_id}/${Date.now()}`;
-        const existing = await ctx.db
-          .query("docs")
-          .withIndex("by_source_file", (q: any) => q.eq("source_file", syntheticPath))
-          .first();
+        const syntheticPath = inlineDocSourceKey(conversation.user_id, msg.timestamp);
+        if (convDocs === null) {
+          convDocs = (await ctx.db
+            .query("docs")
+            .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conversation_id))
+            .collect()) as Array<{ source_file?: string; content: string }>;
+        }
+        // Same-conversation guard first (covers legacy wall-clock-keyed docs by
+        // content); then the user+message key via the global index, which is what
+        // dedups across forks/resumes of the same transcript.
+        const existing =
+          convDocs.some((d) => d.source_file === syntheticPath || d.content === msg.content) ||
+          !!(await ctx.db
+            .query("docs")
+            .withIndex("by_source_file", (q: any) => q.eq("source_file", syntheticPath))
+            .first());
         if (!existing) {
+          convDocs.push({ source_file: syntheticPath, content: msg.content });
           await ctx.db.insert("docs", {
             user_id: conversation.user_id,
             team_id: conversation.team_id,

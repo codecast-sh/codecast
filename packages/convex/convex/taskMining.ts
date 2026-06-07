@@ -5,6 +5,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id, Doc } from "./_generated/dataModel";
 import { createDataContext } from "./data";
 import { nextShortId } from "./counters";
+import { classifyDocContent, extractTitleFromContent, inlineDocSourceKey } from "./docExtraction";
 
 // Called after generateSessionInsight saves a new insight — mines tasks + docs for that conversation
 export const mineConversationAfterInsight = internalAction({
@@ -760,27 +761,6 @@ export const mineAllForUser = internalAction({
 });
 
 // Find Write tool calls to .md files in a batch of messages
-function classifyDocContent(content: string): string {
-  const lower = content.toLowerCase();
-  const first2k = lower.slice(0, 2000);
-  if (/implementation\s+plan|## phases?\b|## milestones?\b|## timeline/i.test(first2k)) return "plan";
-  if (/design\s+doc|architecture|## design|## approach|system\s+design/i.test(first2k)) return "design";
-  if (/## spec|specification|## requirements|## api\b|## endpoints/i.test(first2k)) return "spec";
-  if (/investigation|root\s+cause|## findings|## analysis|debugging|what.s happening/i.test(first2k)) return "investigation";
-  if (/handoff|## status|## context|## next\s+steps|picking\s+up/i.test(first2k)) return "handoff";
-  return "note";
-}
-
-function extractTitleFromContent(content: string): string {
-  const h1 = content.match(/^#\s+(.+)/m);
-  if (h1) return h1[1].slice(0, 200);
-  const h2 = content.match(/^##\s+(.+)/m);
-  if (h2) return h2[1].slice(0, 200);
-  const firstLine = content.split("\n").find((l) => l.trim().length > 10);
-  if (firstLine) return firstLine.replace(/^[#*\->\s]+/, "").slice(0, 200);
-  return "Untitled Document";
-}
-
 export const findMarkdownWrites = internalQuery({
   args: {
     conversation_id: v.id("conversations"),
@@ -805,8 +785,9 @@ export const findMarkdownWrites = internalQuery({
         const text = msg.content;
         const headingCount = (text.match(/^#{1,3}\s/gm) || []).length;
         if (headingCount >= 3) {
-          const syntheticPath = `inline://${args.conversation_id}/${msg._id}`;
-          results.push({ file_path: syntheticPath, content: text, timestamp: msg.timestamp });
+          // Bare sentinel — insertExtractedDocs finalizes the user+message key
+          // (it has user_id; this query does not).
+          results.push({ file_path: "inline://", content: text, timestamp: msg.timestamp });
         }
       }
 
@@ -849,14 +830,29 @@ export const insertExtractedDocs = internalMutation({
       .withIndex("by_conversation_id", (q) => q.eq("conversation_id", args.conversation_id))
       .collect();
     const existingFiles = new Set(existing.map((d) => d.source_file).filter(Boolean));
+    // Content guard: legacy inline docs were keyed by wall-clock, so the same
+    // message re-extracted under the new stable key wouldn't match by path alone.
+    const existingContents = new Set(existing.map((d) => d.content));
 
     let docsCreated = 0;
     for (const doc of args.docs) {
-      if (existingFiles.has(doc.file_path)) continue;
-      existingFiles.add(doc.file_path);
-
       const isInline = doc.file_path.startsWith("inline://");
-      const fileName = isInline ? "" : (doc.file_path.split("/").pop() || doc.file_path);
+      // Inline keys are user+message scoped (fork-stable); finalized here where user_id is known.
+      const filePath = isInline ? inlineDocSourceKey(args.user_id, doc.timestamp) : doc.file_path;
+      if (existingFiles.has(filePath) || existingContents.has(doc.content)) continue;
+      if (isInline) {
+        // Cross-conversation guard: forks/resumes re-sync the same transcript into
+        // new conversations; the user+message key catches copies via the global index.
+        const keyed = await ctx.db
+          .query("docs")
+          .withIndex("by_source_file", (q) => q.eq("source_file", filePath))
+          .first();
+        if (keyed) continue;
+      }
+      existingFiles.add(filePath);
+      existingContents.add(doc.content);
+
+      const fileName = isInline ? "" : (filePath.split("/").pop() || filePath);
 
       let docType: string;
       if (isInline) {
@@ -878,7 +874,7 @@ export const insertExtractedDocs = internalMutation({
         content: doc.content,
         doc_type: docType as any,
         source: source as any,
-        source_file: doc.file_path,
+        source_file: filePath,
         conversation_id: args.conversation_id,
         project_path: conv.project_path,
         is_private: conv.is_private,
