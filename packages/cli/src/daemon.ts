@@ -8,7 +8,6 @@ import { execSync, execFileSync, exec, execFile, spawn, spawnSync } from "child_
 import { watch as chokidarWatch } from "chokidar";
 import { SessionWatcher, type SessionEvent } from "./sessionWatcher.js";
 import { deviceId, deviceLabel } from "./remote/device.js";
-import { loadRemoteHost, performMoveToRemote } from "./remote/session-move.js";
 import { CursorWatcher, type CursorSessionEvent } from "./cursorWatcher.js";
 import { CursorTranscriptWatcher, type CursorTranscriptEvent } from "./cursorTranscriptWatcher.js";
 import { CodexWatcher, type CodexSessionEvent } from "./codexWatcher.js";
@@ -1399,6 +1398,87 @@ async function sendHeartbeat(): Promise<void> {
   }
 }
 
+/**
+ * Resolve how to invoke this CLI's own `cast` entrypoint as a child process,
+ * coping with the three ways the daemon itself can be running:
+ *   - from source   (`bun .../daemon.ts`)  -> bun + .../index.ts
+ *   - compiled bin   (`cast _daemon`)       -> the cast binary itself
+ *   - on PATH        (fallback)             -> `cast`
+ * Returns argv parts so callers can spawn without shell-quoting hazards.
+ */
+function resolveCastInvocation(): { cmd: string; prefixArgs: string[] } {
+  const argv1 = process.argv[1] || "";
+  if (argv1.endsWith("daemon.ts") || argv1.endsWith("daemon.js")) {
+    const ext = argv1.endsWith(".ts") ? ".ts" : ".js";
+    const indexPath = path.join(path.dirname(argv1), `index${ext}`);
+    return { cmd: process.argv[0], prefixArgs: [indexPath] };
+  }
+  if (argv1 === "_daemon" || !argv1.includes("/")) {
+    return { cmd: process.execPath, prefixArgs: [] };
+  }
+  return { cmd: "cast", prefixArgs: [] };
+}
+
+/**
+ * Run a `cast <args...>` subcommand in a child process WITHOUT blocking the
+ * daemon's event loop. Critical for long, I/O-heavy subcommands (e.g. a remote
+ * move that scp's a multi-GB git bundle): a synchronous execFileSync would
+ * freeze the single-threaded event loop, the `startEventLoopMonitor` tick would
+ * stop, lastHeartbeatTick would go stale, and the watchdog would SIGKILL the
+ * daemon mid-operation. Awaiting the child's 'exit' event yields to the loop so
+ * heartbeats keep flowing. A hard timeout guards against a truly hung child.
+ */
+function runCastCommand(
+  args: string[],
+  opts: { timeoutMs?: number } = {},
+): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  const timeoutMs = opts.timeoutMs ?? 30 * 60 * 1000;
+  const { cmd, prefixArgs } = resolveCastInvocation();
+  return new Promise((resolve) => {
+    let stdout = "";
+    let stderr = "";
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(cmd, [...prefixArgs, ...args], {
+        env: { ...process.env },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    } catch (err) {
+      resolve({ code: -1, stdout, stderr: String(err) });
+      return;
+    }
+    const timer = setTimeout(() => {
+      try { child.kill("SIGKILL"); } catch { /* already gone */ }
+    }, timeoutMs);
+    child.stdout?.on("data", (d) => { stdout += d.toString(); });
+    child.stderr?.on("data", (d) => { stderr += d.toString(); });
+    child.on("error", (err) => {
+      clearTimeout(timer);
+      resolve({ code: -1, stdout, stderr: `${stderr}${String(err)}` });
+    });
+    child.on("exit", (code) => {
+      clearTimeout(timer);
+      resolve({ code, stdout, stderr });
+    });
+  });
+}
+
+/**
+ * True when a conversation is owned by a DIFFERENT device that is currently
+ * online — so THIS daemon must NOT run/deliver/resume the session and should
+ * leave it to the owner. Covers both a live local peer AND a remote Mac a
+ * session was explicitly moved to: auto-routing never assigns a remote owner
+ * (pickOwnerDevice excludes remotes), so an ONLINE remote owner is always a
+ * deliberate server that genuinely runs the session — letting the local daemon
+ * also resume/answer is the move's split-brain. An OFFLINE owner returns false
+ * so this daemon can reclaim and serve as a fallback.
+ */
+function ownedByAnotherLiveDevice(
+  info: { ownerDeviceId?: string | null; ownerOnline?: boolean } | null | undefined,
+): boolean {
+  return !!info?.ownerDeviceId && info.ownerDeviceId !== deviceId() && !!info.ownerOnline;
+}
+
 async function executeRemoteCommand(
   commandId: string,
   command: string,
@@ -1412,21 +1492,20 @@ async function executeRemoteCommand(
   let error: string | undefined;
 
   // Single-owner guard: skip session-targeted commands for conversations owned
-  // by ANOTHER LIVE LOCAL device. Both daemons poll the same user-scoped command
-  // queue, so without this a non-owner daemon would race the owner.
-  //
-  // A REMOTE owner does NOT cause a skip: it can only serve a session that was
-  // explicitly moved to it, so if THIS (local) daemon received the command it has
-  // the checkout and should run it — reclaiming a session the remote auto-owned
-  // but can't serve. (registerManagedSession then stamps ownership back here.)
+  // by ANOTHER LIVE device (local peer OR a remote Mac the session was moved to).
+  // Both daemons poll the same user-scoped command queue and moveSessionToDevice
+  // enqueues an UNtargeted resume_session, so without this the non-owner daemon
+  // races the owner — e.g. after a move-to-remote the local daemon would resume a
+  // local copy and answer in parallel with the remote (split-brain). An OFFLINE
+  // owner does NOT skip, so this daemon can reclaim a session whose owner died.
   const SESSION_COMMANDS = new Set(["resume_session", "kill_session", "send_keys", "escape", "rewind"]);
   if (SESSION_COMMANDS.has(command) && commandArgs && syncServiceRef) {
     try {
       const convId = JSON.parse(commandArgs)?.conversation_id;
       if (convId) {
         const info = await syncServiceRef.getConversationOwnerInfo(convId);
-        if (info && info.ownerDeviceId !== deviceId() && info.ownerOnline && !info.ownerIsRemote) {
-          log(`[OWNER] skipping ${command} for ${String(convId).slice(0, 12)} — owned by live local device ${info.ownerDeviceId.slice(0, 8)} (not ${deviceId().slice(0, 8)})`);
+        if (ownedByAnotherLiveDevice(info)) {
+          log(`[OWNER] skipping ${command} for ${String(convId).slice(0, 12)} — owned by live device ${info.ownerDeviceId.slice(0, 8)}${info.ownerIsRemote ? " (remote)" : ""} (not ${deviceId().slice(0, 8)})`);
           return; // leave the command for the owner device
         }
       }
@@ -1582,17 +1661,8 @@ async function executeRemoteCommand(
           break;
         }
 
-        const argv1 = process.argv[1] || "";
-        let castBin: string;
-        if (argv1.endsWith("daemon.ts") || argv1.endsWith("daemon.js")) {
-          const ext = argv1.endsWith(".ts") ? ".ts" : ".js";
-          const indexPath = path.join(path.dirname(argv1), `index${ext}`);
-          castBin = `${process.argv[0]} ${indexPath}`;
-        } else if (argv1 === "_daemon" || !argv1.includes("/")) {
-          castBin = process.execPath;
-        } else {
-          castBin = "cast";
-        }
+        const { cmd: castCmd, prefixArgs: castPrefix } = resolveCastInvocation();
+        const castBin = [castCmd, ...castPrefix].join(" ");
         const cmdText = `${castBin} workflow run-daemon ${workflowRunId}`;
 
         try {
@@ -2667,9 +2737,17 @@ async function executeRemoteCommand(
         break;
       }
       case "move_to_device": {
-        // Web-triggered move: THIS (source) daemon performs the local-only
-        // transfer to the destination device, then flips ownership + resumes
-        // there. Only reaches us because the command was target_device_id'd to us.
+        // Web-triggered move: THIS (source) daemon transfers the worktree to the
+        // destination device, flips ownership, and resumes there. Only reaches us
+        // because the command was target_device_id'd to us.
+        //
+        // The transfer (git push / scp of the worktree) can be multi-GB and take
+        // minutes. Running it inline (synchronous execFileSync) froze the event
+        // loop past the watchdog's 180s stale-heartbeat threshold, so the daemon
+        // was force-restarted mid-move and the handoff silently never completed.
+        // Delegate to `cast remote move` in a child process (which does transfer
+        // + ownership flip + resume) and await it WITHOUT blocking the loop, so
+        // heartbeats keep flowing and the watchdog leaves us alone.
         const parsed = commandArgs ? JSON.parse(commandArgs) : {};
         const sessionId: string | undefined = parsed.session_id;
         const conversationId: string | undefined = parsed.conversation_id;
@@ -2678,21 +2756,23 @@ async function executeRemoteCommand(
           error = "move_to_device: missing session_id/conversation_id/to_device_id";
           break;
         }
-        log(`[MOVE] moving ${sessionId.slice(0, 8)} -> device ${toDeviceId.slice(0, 8)}`);
-        const host = loadRemoteHost();
-        const move = performMoveToRemote(host, sessionId);
-        log(`[MOVE] transferred to ${host.user}@${host.address}:${move.remoteCwd}; flipping ownership + resuming`);
-        await syncServiceRef!.getClient().mutation("devices:moveSessionToDevice" as any, {
-          api_token: config.auth_token,
-          conversation_id: conversationId,
-          owner_device_id: toDeviceId,
-          project_path: move.remoteCwd,
-          resume: true,
-        });
-        // Stop the local copy of this session so only the destination runs it.
-        await clearConversationDeliveryAndResumeState(conversationId, sessionId, "move_to_device").catch(() => {});
-        result = JSON.stringify({ moved: true, to: toDeviceId, remoteCwd: move.remoteCwd });
-        log(`[MOVE] done — ${sessionId.slice(0, 8)} now owned by ${toDeviceId.slice(0, 8)}`);
+        log(`[MOVE] moving ${sessionId.slice(0, 8)} -> device ${toDeviceId.slice(0, 8)} (async child)`);
+        const moveRes = await runCastCommand(["remote", "move", sessionId, "--to-device", toDeviceId]);
+        if (moveRes.code === 0) {
+          // Stop the local copy so ONLY the destination runs it. Ownership now
+          // points at the remote, but a still-live local tmux/process (started OR
+          // auto-resumed) would keep answering delivered messages in parallel
+          // (split-brain) — reap every local backend, then clear the in-memory
+          // delivery/resume bookkeeping.
+          await stopLocalSessionBackends(conversationId, sessionId).catch(() => {});
+          await clearConversationDeliveryAndResumeState(conversationId, sessionId, "move_to_device").catch(() => {});
+          result = JSON.stringify({ moved: true, to: toDeviceId });
+          log(`[MOVE] done — ${sessionId.slice(0, 8)} now owned by ${toDeviceId.slice(0, 8)}`);
+        } else {
+          const detail = (moveRes.stderr || moveRes.stdout || "").trim().slice(-500);
+          error = `move failed (exit ${moveRes.code})${detail ? `: ${detail}` : ""}`;
+          log(`[MOVE] FAILED ${sessionId.slice(0, 8)} -> ${toDeviceId.slice(0, 8)}: ${error}`);
+        }
         break;
       }
       default:
@@ -7360,6 +7440,49 @@ function teardownConversationBackendsLive(
   });
 }
 
+/**
+ * Stop EVERY local backend for a session so nothing keeps running on this
+ * machine: the started tmux + app-server thread (teardownConversationBackendsLive),
+ * the live process tree, the auto-resume tmux (resumeSessionCache), any zombie
+ * cc-resume tmux still matching the session id, and the per-session heartbeat +
+ * caches. Best-effort and idempotent. Shared by kill_session and move_to_device:
+ * an auto-resumed copy lives in resumeSessionCache (a `cc-resume-*` tmux), which
+ * teardownConversationBackendsLive alone does NOT reap — leaving it alive after a
+ * move is exactly the split-brain where the local machine keeps answering.
+ */
+async function stopLocalSessionBackends(conversationId: string, sessionId: string | undefined): Promise<void> {
+  await teardownConversationBackendsLive(conversationId, { interruptActiveTurn: true }).catch(() => {});
+  if (!sessionId) return;
+  try {
+    const proc = await findSessionProcess(sessionId, detectSessionAgentType(sessionId));
+    if (proc) {
+      const tmuxTarget = await findTmuxPaneForTty(proc.tty);
+      if (tmuxTarget && validateTmuxTarget(tmuxTarget)) {
+        await killTmuxSessionAndTree(tmuxTarget.split(":")[0]).catch(() => {});
+      }
+      await reapPidTree(proc.pid).catch(() => 0);
+    }
+  } catch { /* best-effort */ }
+  const cachedTmux = resumeSessionCache.get(sessionId);
+  if (cachedTmux && validateTmuxTarget(cachedTmux)) {
+    await killTmuxSessionAndTree(cachedTmux).catch(() => {});
+    resumeSessionCache.delete(sessionId);
+  }
+  stopManagedSessionHeartbeat(sessionId);
+  stopCodexPermissionPoller(sessionId);
+  sessionProcessCache.delete(sessionId);
+  resumeInFlight.delete(sessionId);
+  resumeInFlightStarted.delete(sessionId);
+  try {
+    const { stdout: tmuxList } = await tmuxExec(["list-sessions", "-F", "#{session_name}"]);
+    for (const tmuxName of tmuxList.trim().split("\n")) {
+      if (!tmuxName || !(await tmuxSessionMatchesFullSessionId(tmuxName, sessionId))) continue;
+      if (!validateTmuxTarget(tmuxName)) continue;
+      await killTmuxSessionAndTree(tmuxName).catch(() => {});
+    }
+  } catch { /* best-effort */ }
+}
+
 function clearLiveAppServerThreadRegistrations(): void {
   appServerThreads.clear();
   appServerConversations.clear();
@@ -9537,6 +9660,22 @@ async function deliverMessage(
     return deliverMessage(childConvId, content, conversationCache, syncService, messageId, titleCache);
   }
 
+  // Single-owner delivery guard (split-brain prevention). If a DIFFERENT live
+  // device owns this conversation — a local peer, or a remote Mac it was moved
+  // to — that owner delivers; THIS daemon must not resume a local copy and answer
+  // in parallel. Checked unconditionally up front: sessionId is resolved from the
+  // conversation record below, so a known-but-stale local session id would sail
+  // past a `!sessionId`-only guard (the original split-brain after move-to-remote).
+  // An OFFLINE owner does NOT skip, so a dead owner's session can be reclaimed.
+  // Fail-open on any lookup error so a transient query failure never blocks sends.
+  try {
+    const ownerInfo = await syncService.getConversationOwnerInfo(conversationId);
+    if (ownedByAnotherLiveDevice(ownerInfo)) {
+      logDelivery(`[OWNER] skipping delivery for ${conversationId.slice(0, 12)} — owned by live device ${ownerInfo.ownerDeviceId.slice(0, 8)}${ownerInfo.ownerIsRemote ? " (remote)" : ""} (not ${deviceId().slice(0, 8)})`);
+      return false;
+    }
+  } catch { /* fail-open: proceed to deliver */ }
+
   if (codexAppServerInstance?.running) {
     const appServerThreadId = appServerConversations.get(conversationId);
     if (appServerThreadId) {
@@ -9687,25 +9826,8 @@ async function deliverMessage(
     const freshReverse = buildReverseConversationCache(freshCache);
     sessionId = freshReverse[conversationId];
 
-    // OWNER GATE (split-brain guard). We have no started tmux and no cached
-    // session for this conversation, so the only ways forward below are to
-    // materialize from the server or spawn a brand-new session in $HOME. Neither
-    // is ours to do if a *different* live, non-remote device owns this
-    // conversation — that owner will deliver. A non-owner fabricating a fallback
-    // session is exactly how m1 hijacked an owned conversation and answered with
-    // an expired-auth 401 (see [OWNER] guard on session commands above; this is
-    // the un-gated delivery twin). Fail-open on any lookup error.
-    if (!sessionId) {
-      try {
-        const info = await syncService.getConversationOwnerInfo(conversationId);
-        if (info && info.ownerDeviceId !== deviceId() && info.ownerOnline && !info.ownerIsRemote) {
-          // Don't write agent status here — the owner is authoritative and may
-          // already have set "working"; a non-owner "idle" write would clobber it.
-          logDelivery(`[OWNER] skipping delivery for ${conversationId.slice(0, 12)} — owned by live local device ${info.ownerDeviceId.slice(0, 8)} (not ${deviceId().slice(0, 8)}), no local session to serve it`);
-          return false;
-        }
-      } catch { /* on any error, fall through and try to deliver (fail-open) */ }
-    }
+    // (Cross-device ownership is enforced unconditionally at the top of
+    // deliverMessage — by here we've already established this daemon may serve.)
 
     if (sessionId) {
       conversationCache[sessionId] = conversationId;
