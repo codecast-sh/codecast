@@ -51,35 +51,50 @@ type SessionAuthor = { name: string; avatar?: string | null } | null;
 
 /**
  * Resolve the author of an inbox session FOR DISPLAY — or null when the session
- * is the current user's own (or the author can't be named). The inbox cache is
- * user-scoped, so a synced row is always "mine"; a teammate's session only enters
- * it by injection (deep-link / search / command-palette), carrying either a
- * `user_id` (deep-link) or a source-provided `author_name`/`author_avatar` (search/
- * recent, which null those out for own sessions). Name/avatar derive from the live
- * roster by `user_id` when present (so a teammate's rename/avatar update shows
- * instantly), falling back to the source-provided fields.
+ * is the current user's own (or the author can't be named). The inbox session
+ * cache is user-scoped, so a teammate's session only enters it by being OPENED
+ * (deep-link / search / command-palette). Author identity therefore lives in two
+ * places, and either may be missing:
+ *   - the session row: `user_id` (server rows + fresh injections) and the
+ *     source-provided `author_name`/`author_avatar` (search/recent results, which
+ *     null those out for own sessions);
+ *   - the conversation meta (`conversations[id]`, written on every view by the
+ *     access resolver + getConversationWithMeta): `is_own` (definitive ownership),
+ *     `user_id`, and `user.{name,avatar_url}`. This is what rescues rows injected
+ *     BEFORE author enrichment existed — injection is skipped for already-cached
+ *     rows, so the never-prune session row alone can stay author-less forever.
  *
- * Safe before `currentUser` loads: a synced own row (user_id === me, but `me`
- * unknown yet) carries no author_name, so it resolves to null instead of briefly
- * mislabeling your own session.
+ * Ownership precedence: conv.is_own (resolver verdict) → user_id vs currentUser →
+ * source-provided author_name (team sources exclude own sessions) → assume mine.
+ * Display precedence: live roster by user_id (instant rename/avatar) → session
+ * author fields → conversation meta user. Returns null over a raw id when the
+ * author can't be named, and never labels your own row before `currentUser`
+ * loads (an own synced row carries no author_name/is_own:false to mislead it).
  */
 export function resolveSessionAuthor(
   session: { user_id?: string; author_name?: string | null; author_avatar?: string | null },
+  conv: { user_id?: string; is_own?: boolean; user?: { name?: string | null; email?: string | null; avatar_url?: string | null } | null } | null | undefined,
   currentUser: Member | null | undefined,
   teamMembers: Member[] | null | undefined,
 ): SessionAuthor {
-  const uid = session.user_id;
+  const uid = session.user_id ?? conv?.user_id;
   const myId = currentUser?._id;
-  if (uid && myId && uid === myId) return null;            // definitely mine
-  if (uid && !myId) {
-    // user_id present but "me" not yet known: trust only an explicit author_name
-    // (team sources already excluded own sessions) to avoid mislabeling my own row.
-    return session.author_name ? { name: session.author_name, avatar: session.author_avatar } : null;
+
+  // Ownership: is_own is the access resolver's verdict — trust it outright.
+  if (conv?.is_own === true) return null;
+  let notMine = conv?.is_own === false;
+  if (!notMine) {
+    if (uid && myId) notMine = uid !== myId;
+    else if (session.author_name) notMine = true; // team sources null author for own sessions
+    else return null; // no ownership signal (or "me" unknown) → assume mine
   }
-  if (!uid && !session.author_name) return null;           // no author identity → mine
+  if (!notMine) return null;
+
+  // Display: live roster first (instant rename/avatar), then source fields, then meta.
   const m = uid ? teamMembers?.find((x) => x && x._id === uid) : null;
   if (m) return { name: m.name || m.email || "Unknown", avatar: m.image || m.github_avatar_url };
-  if (session.author_name) return { name: session.author_name, avatar: session.author_avatar };
+  const name = session.author_name ?? conv?.user?.name ?? conv?.user?.email ?? null;
+  if (name) return { name, avatar: session.author_avatar ?? conv?.user?.avatar_url ?? null };
   return null;
 }
 
