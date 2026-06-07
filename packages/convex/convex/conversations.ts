@@ -113,6 +113,30 @@ async function mapForkDetails(ctx: { db: any }, forks: any[]) {
   );
 }
 
+// Forks of `parentId` the viewer may actually open, shaped for the branch UI.
+// Filtering by access is load-bearing, not cosmetic: the client preloads every
+// returned branch into its local store for instant switching, so an unfiltered
+// list would both leak teammates' private forks into the inbox AND surface chips
+// that deny on click (the "branch spins forever" bug). Owner forks short-circuit
+// the access check, so the common all-mine case stays cheap.
+async function getAccessibleForkChildren(
+  ctx: QueryCtx,
+  authUserId: Id<"users"> | null,
+  parentId: Id<"conversations">,
+) {
+  const forks = await ctx.db
+    .query("conversations")
+    .withIndex("by_forked_from", (q) => q.eq("forked_from", parentId))
+    .collect();
+  const visible = [];
+  for (const fork of forks) {
+    if ((await checkConversationAccess(ctx, authUserId, fork)) !== "denied") {
+      visible.push(fork);
+    }
+  }
+  return mapForkDetails(ctx, visible);
+}
+
 async function getAuthenticatedUserId(
   ctx: { db: any },
   apiToken?: string
@@ -941,15 +965,7 @@ export const getAllMessages = query({
       return null;
     }
 
-    const isOwner = authUserId && conversation.user_id.toString() === authUserId.toString();
-    const isShared = !!conversation.share_token;
-    let hasTeamAccess = false;
-
-    if (authUserId && !isOwner) {
-      hasTeamAccess = await canTeamMemberAccess(ctx, authUserId, conversation);
-    }
-
-    if (!isOwner && !hasTeamAccess && !isShared) {
+    if ((await checkConversationAccess(ctx, authUserId, conversation)) === "denied") {
       return null;
     }
 
@@ -1009,6 +1025,7 @@ export const getAllMessages = query({
         const originalUser = await ctx.db.get(originalConv.user_id);
         forkedFromDetails = {
           conversation_id: originalConv._id,
+          title: originalConv.title,
           share_token: originalConv.share_token,
           username: originalUser?.name || originalUser?.email?.split("@")[0] || "Unknown",
         };
@@ -1028,24 +1045,15 @@ export const getAllMessages = query({
       }
     }
 
-    const forkChildren = await ctx.db
-      .query("conversations")
-      .withIndex("by_forked_from", (q) => q.eq("forked_from", args.conversation_id))
-      .collect();
-
-    const forkChildrenDetails = await mapForkDetails(ctx, forkChildren);
+    const forkChildrenDetails = await getAccessibleForkChildren(ctx, authUserId, args.conversation_id);
 
     let forkSiblings: typeof forkChildrenDetails = [];
     if (conversation.forked_from) {
-      const siblings = await ctx.db
-        .query("conversations")
-        .withIndex("by_forked_from", (q: any) => q.eq("forked_from", conversation.forked_from))
-        .collect();
-      forkSiblings = await mapForkDetails(ctx, siblings);
+      forkSiblings = await getAccessibleForkChildren(ctx, authUserId, conversation.forked_from);
     }
 
     const mainMsgCountsByFork: Record<string, number> = {};
-    const forkPointUuids = new Set(forkChildren.map(f => f.parent_message_uuid).filter(Boolean));
+    const forkPointUuids = new Set(forkChildrenDetails.map(f => f.parent_message_uuid).filter(Boolean));
     if (forkPointUuids.size > 0) {
       for (const uuid of forkPointUuids) {
         const forkPointMsg = messages.find(m => m.message_uuid === uuid);
@@ -1395,15 +1403,11 @@ export const getConversationWithMeta = query({
       return null;
     }
 
-    const isOwner = authUserId && conversation.user_id.toString() === authUserId.toString();
-    const isShared = !!conversation.share_token;
-    let hasTeamAccess = false;
-    if (authUserId && !isOwner) {
-      hasTeamAccess = await canTeamMemberAccess(ctx, authUserId, conversation);
-    }
-    if (!isOwner && !hasTeamAccess && !isShared) {
+    const access = await checkConversationAccess(ctx, authUserId, conversation);
+    if (access === "denied") {
       return null;
     }
+    const isOwner = access === "owner";
 
     const user = await ctx.db.get(conversation.user_id);
 
@@ -1421,6 +1425,7 @@ export const getConversationWithMeta = query({
         const originalUser = await ctx.db.get(originalConv.user_id);
         forkedFromDetails = {
           conversation_id: originalConv._id,
+          title: originalConv.title,
           share_token: originalConv.share_token,
           username: originalUser?.name || originalUser?.email?.split("@")[0] || "Unknown",
         };
@@ -1438,20 +1443,11 @@ export const getConversationWithMeta = query({
       }
     }
 
-    const forkChildren = await ctx.db
-      .query("conversations")
-      .withIndex("by_forked_from", (q) => q.eq("forked_from", args.conversation_id))
-      .collect();
-
-    const forkChildrenDetails = await mapForkDetails(ctx, forkChildren);
+    const forkChildrenDetails = await getAccessibleForkChildren(ctx, authUserId, args.conversation_id);
 
     let forkSiblings: typeof forkChildrenDetails = [];
     if (conversation.forked_from) {
-      const siblings = await ctx.db
-        .query("conversations")
-        .withIndex("by_forked_from", (q: any) => q.eq("forked_from", conversation.forked_from))
-        .collect();
-      forkSiblings = await mapForkDetails(ctx, siblings);
+      forkSiblings = await getAccessibleForkChildren(ctx, authUserId, conversation.forked_from);
     }
 
     let effective_team_visibility = conversation.team_visibility;
