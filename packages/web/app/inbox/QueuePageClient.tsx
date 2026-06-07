@@ -323,6 +323,9 @@ export function QueuePageClient() {
       has_pending: false,
       forked_from: directConv.forked_from || null,
       parent_message_uuid: directConv.parent_message_uuid || null,
+      // Carry the author so a deep-linked teammate session shows whose it is.
+      user_id: directConv.user_id,
+      author_name: directConv.user?.name ?? null,
     });
     setPendingInjectId(null);
     paramProcessedRef.current = true;

@@ -9,7 +9,7 @@ import { ConversationData } from "./ConversationView";
 import { FormattedSummary } from "./FormattedSummary";
 import { sessionCardSummary } from "../lib/sessionSummary";
 import { useConversationMessages } from "../hooks/useConversationMessages";
-import { useInboxStore, useTrackedStore, InboxSession, getSessionRenderKey, isConvexId, categorizeSessions, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend, isSessionDismissed } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, InboxSession, getSessionRenderKey, isConvexId, categorizeSessions, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend, isSessionDismissed, resolveSessionAuthor } from "../store/inboxStore";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "./ui/tooltip";
 import { cleanTitle, msgCountColor } from "../lib/conversationProcessor";
 import { isSessionMessage } from "./sessionMessage";
@@ -341,6 +341,16 @@ export const SessionCard = memo(function SessionCard({
   // from idle instead of showing nothing for a busy pinned session.
   const isLive = !session.is_idle && session.message_count > 0;
 
+  // Author of THIS session — shown only when it isn't the current user's own. The
+  // inbox cache is user-scoped, so a teammate's session is here only via injection
+  // (deep-link / search / palette). Derived from the live roster (instant on a
+  // teammate rename/avatar) with the source-provided author fields as fallback.
+  const currentUser = useInboxStore((s) => s.currentUser);
+  const teamMembers = useInboxStore((s) => s.teamMembers);
+  const author = useMemo(
+    () => resolveSessionAuthor(session, currentUser, teamMembers),
+    [session.user_id, session.author_name, session.author_avatar, currentUser, teamMembers],
+  );
 
   const [isDragOver, setIsDragOver] = useState(false);
   const dragCounter = useRef(0);
@@ -570,6 +580,18 @@ export const SessionCard = memo(function SessionCard({
           )
         )}
         <div className="flex items-center gap-1.5 mt-1">
+          {author && (
+            <span className="flex items-center gap-1 flex-shrink-0 max-w-[130px]" title={`${author.name}'s session`}>
+              {author.avatar ? (
+                <img src={author.avatar} alt={author.name} className="w-3.5 h-3.5 rounded-full object-cover" />
+              ) : (
+                <span className="w-3.5 h-3.5 rounded-full bg-sol-violet/20 text-sol-violet flex items-center justify-center text-[8px] font-semibold leading-none">
+                  {author.name.charAt(0).toUpperCase()}
+                </span>
+              )}
+              <span className="text-[10px] font-medium text-sol-violet/80 truncate">{author.name.split(" ")[0]}</span>
+            </span>
+          )}
           {project !== "unknown" && (
             <span className={`text-[10px] truncate ${
               isWorking ? "font-medium text-sol-green/70" : "font-medium text-sol-cyan/70"

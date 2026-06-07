@@ -6279,6 +6279,7 @@ async function enrichInboxSessionRow(
     team_id: conv.team_id ?? null,
     is_private: conv.is_private ?? false,
     owner_device_id: (conv as any).owner_device_id ?? null,
+    user_id: conv.user_id,
   };
 
   return { row, subagentChildren, dismissed, hidden };
@@ -6336,6 +6337,7 @@ function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: number, 
     icon_color: child.icon_color,
     team_id: child.team_id ?? null,
     is_private: child.is_private ?? false,
+    user_id: child.user_id,
   };
 }
 
