@@ -615,6 +615,7 @@ type MentionRecord = {
   short_id?: string;
   goal?: string;
   doc_type?: string;
+  status?: string;
   updated_at?: number;
   team_id?: string | null;
 };
@@ -642,7 +643,21 @@ function matchEntities(
     ranked.push({ rec, rank });
   }
   ranked.sort((a, b) => a.rank - b.rank || (b.rec.updated_at || 0) - (a.rec.updated_at || 0));
-  return ranked.slice(0, cap).map((x) => x.rec);
+  // Collapse same-title records to one row. Workflow-generated tasks/plans often
+  // share an identical title across many distinct ids/statuses (e.g. a "Verify
+  // task list covers entire plan" task minted every run), which floods the
+  // palette with apparent dupes. Sorted best-first, so the first occurrence per
+  // title is the highest-ranked, most-recent representative.
+  const seen = new Set<string>();
+  const out: MentionRecord[] = [];
+  for (const { rec } of ranked) {
+    const key = (rec.title || "").trim().toLowerCase();
+    if (key && seen.has(key)) continue;
+    seen.add(key);
+    out.push(rec);
+    if (out.length >= cap) break;
+  }
+  return out;
 }
 
 export function CommandPalette({ standalone = false }: { standalone?: boolean }) {
@@ -713,7 +728,7 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
   // query — the empty palette stays session-focused. Plan-type docs are excluded
   // from Documents so they don't double up with the Plans group.
   const taskMatches = useMemo(
-    () => matchEntities(mentionIndex.tasks as any, query, effectiveTeamId, ENTITY_RENDER_CAP),
+    () => matchEntities(mentionIndex.tasks as any, query, effectiveTeamId, ENTITY_RENDER_CAP, (t) => t.status === "dropped"),
     [mentionIndex, query, effectiveTeamId],
   );
   const docMatches = useMemo(
@@ -721,7 +736,7 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
     [mentionIndex, query, effectiveTeamId],
   );
   const planMatches = useMemo(
-    () => matchEntities(mentionIndex.plans as any, query, effectiveTeamId, ENTITY_RENDER_CAP),
+    () => matchEntities(mentionIndex.plans as any, query, effectiveTeamId, ENTITY_RENDER_CAP, (p) => p.status === "abandoned"),
     [mentionIndex, query, effectiveTeamId],
   );
 
