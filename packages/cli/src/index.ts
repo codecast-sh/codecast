@@ -1927,16 +1927,14 @@ cast feed -m samvit               # specific member
 cast feed --state needs-input     # filter feed by work state
 cast read <id> 15:25              # read messages 15-25
 
-# Explore + monitor sessions by work state (working / needs input / idle / pinned)
-cast sessions                     # snapshot of my sessions, grouped most-actionable-first
-cast sessions -w                  # live auto-refreshing monitor (Ctrl-C to exit; flags new/changed)
-cast sessions --state needs-input # only sessions waiting on me
-cast sessions --team              # the whole team's sessions (-m <name> for one teammate)
-cast sessions --json              # machine-readable snapshot
-cast sessions -w --json           # event stream: NDJSON, one line per change (new / state transition)
-# Monitor + wait-for-idle: run in the BACKGROUND; it exits when a session stops working,
-# which wakes you to act. Add --state to narrow what you wait on.
-#   cast sessions -w --json | jq -rc 'select(.to!="working").id' | head -1   # -> id; then cast send <id> "<next>"
+# Explore sessions — 3 axes: QUERY (which) × CONTENT (state | --messages) × LIVENESS (snapshot | -w)
+cast sessions                     # state snapshot, grouped most-actionable-first
+cast sessions -w                  # stream state changes live (one line per transition)
+cast sessions --state needs-input # narrow the query (also --team, -m <name>, or a session id)
+cast sessions --messages -w       # follow MESSAGES across my live sessions (multi-session)
+cast sessions <id> --messages -w  # …focused on one session
+cast sessions --json   |   -w --json   # any view as JSON / NDJSON
+# Monitor + wait-for-idle: background a -w stream (narrow with --state), get woken on a transition (e.g. → idle), then act.
 # --state: working | needs-input | idle | pinned | live (also works on cast feed)
 # A PINNED session that goes idle counts as needs-input — pin = "ping me when it's free".
 
@@ -4444,25 +4442,25 @@ program
   });
 
 program
-  .command("sessions")
+  .command("sessions [session_id]")
   .alias("monitor")
   .description(
-    "Explore your sessions by work state — and watch them live\n\n" +
-    "Groups NEEDS INPUT → WORKING → IDLE, most-actionable first. A pinned\n" +
-    "session that has gone idle counts as NEEDS INPUT (a pin means\n" +
-    "\"ping me when this is free\"). Defaults to just your sessions; use\n" +
-    "--team for the whole team.\n\n" +
+    "Explore sessions — three independent axes:\n\n" +
+    "  QUERY (which sessions): a session id, --state, --team / -m … narrow the set\n" +
+    "  CONTENT: work state by default (grouped NEEDS INPUT → WORKING → IDLE), or\n" +
+    "           --messages for conversation messages\n" +
+    "  LIVENESS: a one-shot snapshot, or -w to stream live\n\n" +
+    "A pinned session gone idle counts as NEEDS INPUT. --json swaps any view to JSON.\n\n" +
     "Examples:\n" +
-    "  cast sessions                # snapshot of your sessions\n" +
-    "  cast sessions -w             # live, auto-refreshing (the monitor)\n" +
+    "  cast sessions                  # state snapshot of your sessions\n" +
+    "  cast sessions -w               # stream state changes live\n" +
     "  cast sessions --state needs-input   # only what's waiting on you\n" +
-    "  cast sessions --state working -w    # watch only active agents\n" +
-    "  cast sessions --team         # the whole team's sessions\n" +
-    "  cast sessions --team -m samvit -w   # watch one teammate\n" +
-    "  cast sessions -a             # include idle (and dismissed) sessions"
+    "  cast sessions --team -w        # stream the whole team's state changes\n" +
+    "  cast sessions --messages -w    # follow messages across your live sessions\n" +
+    "  cast sessions jx7abc --messages -w  # …focused on one session\n" +
+    "  cast sessions jx7abc --messages     # one session's recent messages"
   )
-  .option("-w, --watch", "Continuously refresh in place (the live monitor)")
-  .option("-i, --interval <sec>", "Refresh interval for --watch", "3")
+  .option("-w, --watch", "Stream live instead of a one-shot snapshot (state changes, or messages with -M)")
   .option("--state <state>", "Filter: needs-input | working | idle | pinned | live")
   .option("-t, --team", "Show the team's sessions (default: just yours)")
   .option("-g, --global", "All teams (implies --team)")
@@ -4470,16 +4468,148 @@ program
   .option("--mine", "Only my sessions within team scope")
   .option("-a, --all", "Include idle / dismissed sessions")
   .option("-n, --limit <n>", "Max sessions to show", "200")
-  .option("--json", "Machine output: a JSON snapshot, or (with -w) an NDJSON event stream")
-  .action(async (options) => {
+  .option("-M, --messages", "Show conversation messages instead of work state (live with -w)")
+  .option("--json", "Output as JSON instead of the colored view")
+  .action(async (sessionId, options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
       console.error("Not authenticated. Run: cast auth");
       process.exit(1);
     }
     const siteUrl = config.convex_url.replace(".cloud", ".site");
+
+    // MESSAGE MODE (--messages): show conversation MESSAGES, not work state. The query
+    // picks the sessions — a session id narrows to one, else the live sessions in the
+    // (--state/--team-filtered) inbox. -w follows live. Reuses /cli/read with a
+    // per-session message_count high-water mark (CLI-only; no cross-session backend yet).
+    if (options.messages) {
+      const fullContent = options.all || undefined;
+      const { formatStreamedMessage, formatReadResult } = await import("./formatter.js");
+      const single = !!sessionId;
+      // Reactive subscriptions are cheap (server pushes only on change), so follow
+      // ALL active sessions — the ceiling is just a sanity backstop, not a real limit.
+      const MAX_FOLLOW = 60;
+
+      const readMessages = async (id: string, start?: number, end?: number) => {
+        const r = await cliFetchRead(`${siteUrl}/cli/read`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ api_token: config.auth_token, conversation_id: id, start_line: start, end_line: end, full_content: fullContent }),
+        });
+        return r.json();
+      };
+
+      // Resolve which sessions to read from the query: one explicit id, else the live
+      // sessions in the inbox (only live ones produce messages), capped.
+      const resolveSet = async (): Promise<Array<{ id: string; title: string }>> => {
+        if (sessionId) {
+          const head = await readMessages(sessionId, 1, 1);
+          if (head.error) { console.error(`Error: ${head.error}`); process.exit(1); }
+          return [{ id: head.conversation?.id || sessionId, title: head.conversation?.title || sessionId }];
+        }
+        const r = await cliFetchRead(`${siteUrl}/cli/inbox`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ api_token: config.auth_token, state: options.state, show_all: options.all || undefined, limit: 200 }),
+        });
+        const inbox = await r.json();
+        if (inbox.error) { console.error(`Error: ${inbox.error}`); process.exit(1); }
+        // Messages come from sessions that are actively WORKING (or at least live),
+        // so prioritize those — the inbox's own order leads with pinned/needs-input,
+        // which are idle and won't produce. Working first, then other live, capped.
+        return (inbox.sessions || [])
+          .filter((s: any) => s.work_state === "working" || s.is_live)
+          .sort((a: any, b: any) => (b.work_state === "working" ? 1 : 0) - (a.work_state === "working" ? 1 : 0))
+          .slice(0, MAX_FOLLOW)
+          .map((s: any) => ({ id: s.id, title: s.title || "Session" }));
+      };
+
+      if (!options.watch) {
+        // Snapshot. Single: that session's recent tail. Multi: a merged, time-sorted
+        // recent slice across the queried live sessions, labeled by session.
+        const set = await resolveSet();
+        if (single) {
+          const id = set[0].id;
+          const head = await readMessages(id, 1, 1);
+          const count = head.conversation?.message_count ?? 0;
+          const tail = count > 1 ? await readMessages(id, Math.max(1, count - 19), count) : head;
+          if (tail.error) { console.error(`Error: ${tail.error}`); process.exit(1); }
+          console.log(options.json ? JSON.stringify(tail) : formatReadResult(tail));
+          return;
+        }
+        const collected: any[] = [];
+        for (const s of set) {
+          const head = await readMessages(s.id, 1, 1);
+          const count = head.conversation?.message_count ?? 0;
+          if (count === 0) continue;
+          const tail = await readMessages(s.id, Math.max(1, count - 3), count);
+          for (const m of (tail.messages || [])) collected.push({ ...m, _sid: s.id, _title: s.title });
+        }
+        collected.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+        const shown = collected.slice(-30);
+        if (options.json) console.log(JSON.stringify({ sessions: set, messages: shown }));
+        else for (const m of shown) console.log(formatStreamedMessage({ ...m, label: `${(m._sid || "").slice(0, 7)} ${m._title}`.trim() }));
+        return;
+      }
+
+      // Follow (-w) via Convex LIVE QUERIES: subscribe per session to the reactive
+      // message tail (conversationMessagesForCLI). The server PUSHES on each new
+      // message over the WebSocket — no polling. The first push per session is the
+      // baseline (its messages are marked seen, not printed, so no history dump);
+      // later pushes print only the messages we haven't seen (deduped by uuid).
+      const { ConvexClient } = await import("convex/browser");
+      const client = new ConvexClient(config.convex_url!);
+      const TAIL = 40;
+      const subscribed = new Set<string>();
+      const baselined = new Set<string>();
+      const seen = new Map<string, Set<string>>();
+      const titles = new Map<string, string>();
+      const keyOf = (m: any) => m.message_uuid || `${m.timestamp}:${m.role}:${(m.content || "").length}`;
+
+      const subscribe = (s: { id: string; title: string }) => {
+        if (subscribed.has(s.id)) return;
+        subscribed.add(s.id);
+        titles.set(s.id, s.title);
+        seen.set(s.id, new Set());
+        client.onUpdate(
+          "conversations:conversationMessagesForCLI" as any,
+          { api_token: config.auth_token, conversation_id: s.id, limit: TAIL, full_content: fullContent },
+          (res: any) => {
+            if (!res || res.error) return;
+            const seenSet = seen.get(s.id)!;
+            const msgs: any[] = res.messages || [];
+            if (!baselined.has(s.id)) {
+              for (const m of msgs) seenSet.add(keyOf(m));
+              baselined.add(s.id);
+              return;
+            }
+            for (const m of msgs) {
+              const k = keyOf(m);
+              if (seenSet.has(k)) continue;
+              seenSet.add(k);
+              if (options.json) console.log(JSON.stringify({ ts: new Date().toISOString(), session_id: s.id, title: titles.get(s.id), ...m }));
+              else console.log(formatStreamedMessage({ ...m, label: single ? undefined : `${s.id.slice(0, 7)} ${titles.get(s.id) || ""}`.trim() }));
+            }
+          },
+        );
+      };
+
+      const initial = await resolveSet();
+      for (const s of initial) subscribe(s);
+      const what = single
+        ? `${(initial[0]?.id || sessionId).slice(0, 7)} ${titles.get(initial[0]?.id) || ""}`.trim()
+        : `${initial.length} live session${initial.length === 1 ? "" : "s"}`;
+      const header = `cast sessions: following ${what} — live messages stream below… Ctrl-C to stop`;
+      if (options.json) { if (process.stderr.isTTY) process.stderr.write(header + "\n"); }
+      else console.log(`${header}\n`);
+
+      process.on("SIGINT", () => { try { client.close(); } catch {} process.exit(0); });
+      // Multi mode: pick up newly-active sessions over time (subscribe to them too).
+      if (!single) setInterval(async () => { try { for (const s of await resolveSet()) subscribe(s); } catch {} }, 15000);
+      await new Promise(() => {}); // stay alive; WebSocket pushes drive all output
+      return;
+    }
+
     const limit = parseInt(options.limit) || 200;
-    const intervalSec = Math.max(1, parseInt(options.interval) || 3);
     const teamMode = !!(options.team || options.global || options.member);
     const scopeLabel = teamMode
       ? (options.member ? `team: ${options.member}` : options.global ? "all teams" : "team")
@@ -4504,50 +4634,56 @@ program
     };
 
     const fetchSnapshot = async () => {
+      let result: any;
       if (!teamMode) {
         const response = await cliFetchRead(`${siteUrl}/cli/inbox`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ api_token: config.auth_token, show_all: options.all || undefined, state: options.state, limit }),
         });
-        return response.json();
+        result = await response.json();
+      } else {
+        const projectPath = options.global ? undefined : getRealCwd();
+        const response = await cliFetchRead(`${siteUrl}/cli/feed`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            api_token: config.auth_token,
+            project_path: projectPath,
+            member_name: options.member,
+            mine_only: options.mine || undefined,
+            state: options.state,
+            limit,
+          }),
+        });
+        const feed = await response.json();
+        result = feed?.error ? feed : feedToSessions(feed);
       }
-      const projectPath = options.global ? undefined : getRealCwd();
-      const response = await cliFetchRead(`${siteUrl}/cli/feed`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          api_token: config.auth_token,
-          project_path: projectPath,
-          member_name: options.member,
-          mine_only: options.mine || undefined,
-          state: options.state,
-          limit,
-        }),
-      });
-      const feed = await response.json();
-      return feed?.error ? feed : feedToSessions(feed);
+      // A session id is a query filter — narrow the state view to that one session.
+      if (sessionId && result && !result.error && Array.isArray(result.sessions)) {
+        const match = (s: any) =>
+          s.id === sessionId || (s.id || "").startsWith(sessionId) || (s.id || "").slice(0, 7) === sessionId || s.session_id === sessionId;
+        result = { ...result, sessions: result.sessions.filter(match) };
+      }
+      return result;
     };
 
-    const { formatMonitor } = await import("./formatter.js");
-    const renderOpts = { state: options.state, interval: intervalSec, all: options.all, scopeLabel, command: "cast sessions" };
+    const { formatMonitor, formatSessionChangeLine } = await import("./formatter.js");
 
-    // Two watch modes: a human dashboard (redraw in place, needs a TTY) and a
-    // machine event STREAM (--json → NDJSON, one line per change). The stream is
-    // what an agent sets up to be "woken" when a session changes — e.g. goes
-    // idle — and act: cast sessions -w --json | while read evt; do …; done
-    const wantsStream = !!(options.watch && options.json);
-    const wantsDashboard = !!(options.watch && !options.json && process.stdout.isTTY);
-
-    // One-shot (also the non-TTY fallback for the dashboard): print once and exit.
-    if (!wantsStream && !wantsDashboard) {
+    // Snapshot vs change stream are the two BEHAVIORS; --json is only the format.
+    //   no -w : one snapshot of the current state (grouped colored, or full JSON)
+    //   -w    : a live stream of CHANGES — one line per transition, colored or
+    //           NDJSON. Never re-emits the unchanged set.
+    if (!options.watch) {
       try {
         const result = await fetchSnapshot();
         if (result.error) {
           console.error(`Error: ${result.error}`);
           process.exit(1);
         }
-        console.log(options.json ? JSON.stringify(result) : formatMonitor(result, renderOpts));
+        console.log(options.json
+          ? JSON.stringify(result)
+          : formatMonitor(result, { state: options.state, all: options.all, scopeLabel, command: "cast sessions" }));
       } catch (error) {
         console.error("sessions failed:", error instanceof Error ? error.message : error);
         process.exit(1);
@@ -4555,82 +4691,54 @@ program
       return;
     }
 
-    // Shared per-frame change detection. The first poll sets the baseline
-    // silently (no events); after that each new / transitioned session is an event.
+    // -w change stream via Convex LIVE QUERY: subscribe to the reactive inbox (solo)
+    // or feed (team); the server PUSHES on any change. Diff each push for state
+    // transitions and emit one line per change — no polling. First push is the silent
+    // baseline; a "watching…" header (stderr under --json) gives proof-of-life.
+    const { ConvexClient } = await import("convex/browser");
+    const stateClient = new ConvexClient(config.convex_url!);
+    process.on("SIGINT", () => { try { stateClient.close(); } catch {} process.exit(0); });
+
+    const header = `cast sessions: watching ${scopeLabel}${options.state ? ` (${options.state})` : ""} for changes… Ctrl-C to stop`;
+    if (options.json) { if (process.stderr.isTTY) process.stderr.write(header + "\n"); }
+    else console.log(`${header}\n`);
+
     let prevStates: Record<string, string> = {};
     let firstFrame = true;
-    const diffFrame = (sessions: any[]): Record<string, string> => {
-      const changes: Record<string, string> = {};
+    const matchesId = (s: any) =>
+      !sessionId || s.id === sessionId || (s.id || "").startsWith(sessionId) || (s.id || "").slice(0, 7) === sessionId || s.session_id === sessionId;
+    const onSessions = (sessions: any[]) => {
+      if (process.env.CAST_DEBUG) process.stderr.write(`[push: ${sessions.length} sessions]\n`);
       const cur: Record<string, string> = {};
       for (const s of sessions) {
+        if (!matchesId(s)) continue;
         cur[s.id] = s.work_state;
-        if (!firstFrame) {
-          const prev = prevStates[s.id];
-          if (prev === undefined) changes[s.id] = "new";
-          else if (prev !== s.work_state) changes[s.id] = `${prev}→${s.work_state}`;
+        if (firstFrame) continue;
+        const prev = prevStates[s.id];
+        const isNew = prev === undefined;
+        if (!isNew && prev === s.work_state) continue; // unchanged — skip
+        const from = isNew ? null : prev;
+        if (options.json) {
+          console.log(JSON.stringify({ ts: new Date().toISOString(), event: isNew ? "new" : "transition", id: s.id, session_id: s.session_id ?? null, title: s.title ?? null, from, to: s.work_state, is_pinned: !!s.is_pinned, is_live: !!s.is_live }));
+        } else {
+          console.log(formatSessionChangeLine({ id: s.id, title: s.title, from, to: s.work_state, is_pinned: !!s.is_pinned, is_live: !!s.is_live }));
         }
       }
       prevStates = cur;
       firstFrame = false;
-      return changes;
     };
 
-    let stopped = false;
-    const clock = () => new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-
-    // Agent event stream: emit NDJSON per change, no screen control. An agent
-    // reads each line as a wake-up and acts (e.g. on a `to:"idle"` transition).
-    if (wantsStream) {
-      process.on("SIGINT", () => process.exit(0));
-      while (!stopped) {
-        try {
-          const result = await fetchSnapshot();
-          if (!result.error) {
-            const sessions: any[] = result.sessions || [];
-            const byId = new Map<string, any>();
-            for (const s of sessions) byId.set(s.id, s);
-            const changes = diffFrame(sessions);
-            for (const [id, change] of Object.entries(changes)) {
-              const s: any = byId.get(id) || { id };
-              const [from, to] = change === "new" ? [null, s.work_state] : change.split("→");
-              console.log(JSON.stringify({
-                ts: new Date().toISOString(),
-                event: change === "new" ? "new" : "transition",
-                id, session_id: s.session_id ?? null, title: s.title ?? null,
-                from, to: to ?? s.work_state, is_pinned: !!s.is_pinned, is_live: !!s.is_live,
-              }));
-            }
-          }
-        } catch { /* transient fetch error — keep streaming */ }
-        await new Promise((r) => setTimeout(r, intervalSec * 1000));
-      }
-      return;
+    if (!teamMode) {
+      stateClient.onUpdate("conversations:inboxForCLI" as any,
+        { api_token: config.auth_token, state: options.state, show_all: options.all || undefined },
+        (result: any) => { if (result && !result.error) onSessions(result.sessions || []); });
+    } else {
+      const projectPath = options.global ? undefined : getRealCwd();
+      stateClient.onUpdate("conversations:feedForCLI" as any,
+        { api_token: config.auth_token, project_path: projectPath, member_name: options.member, mine_only: options.mine || undefined, state: options.state, limit },
+        (feed: any) => { if (feed && !feed.error) onSessions(feedToSessions(feed).sessions); });
     }
-
-    // Human dashboard: redraw in place. Home the cursor + clear-to-end each frame
-    // so the view updates without the flicker of a full clear.
-    const cleanup = () => {
-      if (stopped) return;
-      stopped = true;
-      process.stdout.write("\x1b[?25h\n"); // restore cursor
-    };
-    process.on("SIGINT", () => { cleanup(); process.exit(0); });
-    process.stdout.write("\x1b[2J\x1b[H\x1b[?25l"); // clear once + hide cursor
-
-    while (!stopped) {
-      let frame: string;
-      try {
-        const result = await fetchSnapshot();
-        frame = result.error
-          ? `cast sessions  ${clock()}\n\nError: ${result.error} (retrying)`
-          : formatMonitor(result, { ...renderOpts, watch: true, changes: diffFrame(result.sessions || []) });
-      } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
-        frame = `cast sessions  ${clock()}\n\nFetch failed: ${msg} (retrying)`;
-      }
-      process.stdout.write("\x1b[H" + frame + "\x1b[0J");
-      await new Promise((r) => setTimeout(r, intervalSec * 1000));
-    }
+    await new Promise(() => {}); // stay alive; WebSocket pushes drive all output
   });
 
 program
