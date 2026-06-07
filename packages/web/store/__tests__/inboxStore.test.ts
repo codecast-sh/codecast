@@ -2227,45 +2227,79 @@ describe("resolveSessionAuthor", () => {
   ];
 
   it("returns null for the current user's own session (user_id === me)", () => {
-    expect(resolveSessionAuthor({ user_id: "me" }, me, roster)).toBeNull();
+    expect(resolveSessionAuthor({ user_id: "me" }, null, me, roster)).toBeNull();
   });
 
   it("returns null when there is no author identity at all (user-scoped default = mine)", () => {
-    expect(resolveSessionAuthor({}, me, roster)).toBeNull();
+    expect(resolveSessionAuthor({}, null, me, roster)).toBeNull();
   });
 
   it("resolves a teammate from the live roster by user_id (name + avatar)", () => {
-    expect(resolveSessionAuthor({ user_id: "u2" }, me, roster)).toEqual({ name: "Jason Park", avatar: "jason.png" });
+    expect(resolveSessionAuthor({ user_id: "u2" }, null, me, roster)).toEqual({ name: "Jason Park", avatar: "jason.png" });
   });
 
   it("falls back to email when the roster member has no name", () => {
-    expect(resolveSessionAuthor({ user_id: "u3" }, me, roster)).toEqual({ name: "kim@x.com", avatar: undefined });
+    expect(resolveSessionAuthor({ user_id: "u3" }, null, me, roster)).toEqual({ name: "kim@x.com", avatar: undefined });
   });
 
   it("prefers the live roster over the source-provided author fields (instant rename)", () => {
-    const r = resolveSessionAuthor({ user_id: "u2", author_name: "Stale Name", author_avatar: "stale.png" }, me, roster);
+    const r = resolveSessionAuthor({ user_id: "u2", author_name: "Stale Name", author_avatar: "stale.png" }, null, me, roster);
     expect(r).toEqual({ name: "Jason Park", avatar: "jason.png" });
   });
 
   it("uses source author fields when the author isn't on the roster (cross-team)", () => {
-    const r = resolveSessionAuthor({ user_id: "ghost", author_name: "Outsider", author_avatar: "out.png" }, me, roster);
+    const r = resolveSessionAuthor({ user_id: "ghost", author_name: "Outsider", author_avatar: "out.png" }, null, me, roster);
     expect(r).toEqual({ name: "Outsider", avatar: "out.png" });
   });
 
   it("shows the palette author (no user_id, only author_name) — team source already excluded own sessions", () => {
-    expect(resolveSessionAuthor({ author_name: "Sam", author_avatar: "sam.png" }, me, roster)).toEqual({ name: "Sam", avatar: "sam.png" });
+    expect(resolveSessionAuthor({ author_name: "Sam", author_avatar: "sam.png" }, null, me, roster)).toEqual({ name: "Sam", avatar: "sam.png" });
   });
 
   it("returns null for an unnamed non-roster author (better blank than a raw id)", () => {
-    expect(resolveSessionAuthor({ user_id: "ghost" }, me, roster)).toBeNull();
+    expect(resolveSessionAuthor({ user_id: "ghost" }, null, me, roster)).toBeNull();
   });
 
   it("before currentUser loads: own synced row (user_id, no author_name) stays unlabeled — no self-flash", () => {
-    expect(resolveSessionAuthor({ user_id: "me" }, null, roster)).toBeNull();
-    expect(resolveSessionAuthor({ user_id: "u2" }, undefined, roster)).toBeNull();
+    expect(resolveSessionAuthor({ user_id: "me" }, null, null, roster)).toBeNull();
+    expect(resolveSessionAuthor({ user_id: "u2" }, null, undefined, roster)).toBeNull();
   });
 
-  it("before currentUser loads: an explicit author_name is still trusted", () => {
-    expect(resolveSessionAuthor({ user_id: "u2", author_name: "Jason Park", author_avatar: "j.png" }, null, roster)).toEqual({ name: "Jason Park", avatar: "j.png" });
+  it("before currentUser loads: an explicit author_name still marks not-mine (display stays roster-first)", () => {
+    expect(resolveSessionAuthor({ user_id: "u2", author_name: "Stale Name", author_avatar: "stale.png" }, null, null, roster)).toEqual({ name: "Jason Park", avatar: "jason.png" });
+    // off-roster author: source fields carry the display
+    expect(resolveSessionAuthor({ user_id: "ghost", author_name: "Outsider", author_avatar: "out.png" }, null, null, roster)).toEqual({ name: "Outsider", avatar: "out.png" });
+  });
+
+  // -- conversation-meta source: rescues rows cached before injection carried author --
+
+  it("author-less cached row + conv meta (is_own:false, user_id): resolves via roster — the stale-cache fix", () => {
+    const conv = { user_id: "u2", is_own: false, user: { name: "Jason Park", avatar_url: "meta.png" } };
+    expect(resolveSessionAuthor({}, conv, me, roster)).toEqual({ name: "Jason Park", avatar: "jason.png" });
+  });
+
+  it("conv meta user display when author isn't on the roster", () => {
+    const conv = { user_id: "ghost", is_own: false, user: { name: "Old Member", avatar_url: "old.png" } };
+    expect(resolveSessionAuthor({}, conv, me, roster)).toEqual({ name: "Old Member", avatar: "old.png" });
+  });
+
+  it("conv.is_own:true is definitive — never labels my own viewed session, even with a user object", () => {
+    const conv = { user_id: "me", is_own: true, user: { name: "Me", avatar_url: "me.png" } };
+    expect(resolveSessionAuthor({}, conv, me, roster)).toBeNull();
+  });
+
+  it("redirect seed only ({is_own:false}, no user yet): not-mine but unnameable → null until meta lands", () => {
+    expect(resolveSessionAuthor({}, { is_own: false }, me, roster)).toBeNull();
+  });
+
+  it("conv meta works before currentUser loads (is_own verdict needs no 'me')", () => {
+    const conv = { user_id: "u2", is_own: false, user: { name: "Jason Park", avatar_url: "meta.png" } };
+    expect(resolveSessionAuthor({}, conv, null, roster)).toEqual({ name: "Jason Park", avatar: "jason.png" });
+  });
+
+  it("conv meta without is_own still resolves ownership by user_id comparison", () => {
+    const conv = { user_id: "u2", user: { name: "Jason Park", avatar_url: "meta.png" } };
+    expect(resolveSessionAuthor({}, conv, me, roster)).toEqual({ name: "Jason Park", avatar: "jason.png" });
+    expect(resolveSessionAuthor({}, { user_id: "me", user: { name: "Me" } }, me, roster)).toBeNull();
   });
 });

@@ -361,14 +361,16 @@ export const SessionCard = memo(function SessionCard({
   const isLive = !session.is_idle && session.message_count > 0;
 
   // Author of THIS session — shown only when it isn't the current user's own. The
-  // inbox cache is user-scoped, so a teammate's session is here only via injection
-  // (deep-link / search / palette). Derived from the live roster (instant on a
-  // teammate rename/avatar) with the source-provided author fields as fallback.
+  // inbox cache is user-scoped, so a teammate's session is here only because it was
+  // opened (deep-link / search / palette). The conversation meta (written on every
+  // view: is_own + user) covers rows cached before injection carried author fields;
+  // the roster keys display off user_id so a teammate rename/avatar shows instantly.
   const currentUser = useInboxStore((s) => s.currentUser);
   const teamMembers = useInboxStore((s) => s.teamMembers);
+  const convMeta = useInboxStore((s) => s.conversations[session._id]);
   const author = useMemo(
-    () => resolveSessionAuthor(session, currentUser, teamMembers),
-    [session.user_id, session.author_name, session.author_avatar, currentUser, teamMembers],
+    () => resolveSessionAuthor(session, convMeta, currentUser, teamMembers),
+    [session.user_id, session.author_name, session.author_avatar, convMeta, currentUser, teamMembers],
   );
 
   const [isDragOver, setIsDragOver] = useState(false);
