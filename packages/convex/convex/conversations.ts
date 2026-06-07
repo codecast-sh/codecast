@@ -11,7 +11,7 @@ import { internal } from "./_generated/api";
 import { resetConversationPendingMessages } from "./pendingMessages";
 import { advanceForkCopy, type ForkCopyCtx } from "./forkCopy";
 import { hasRecentPendingDaemonCommand } from "./daemonCommandUtils";
-import { shouldShowInInbox, isSessionIdle, deriveSessionActivity, classifyWorkState, normalizeWorkStateFilter, type WorkState } from "./inboxFilters";
+import { shouldShowInInbox, isSessionIdle, deriveSessionActivity, classifyWorkState, normalizeWorkStateFilter, trustedAgentStatus, type WorkState } from "./inboxFilters";
 import { filterUserMessages } from "./userMessagesFilter";
 import {
   isTeamMember,
@@ -6126,7 +6126,16 @@ async function enrichInboxSessionRow(
   const dismissed = !!conv.inbox_dismissed_at;
   const hidden = !dismissed && clusterCutoff > 0 && conv.updated_at < clusterCutoff && !hasPending && !pinned;
 
-  const agentStatus = maps.agentStatusMap.get(conv._id.toString());
+  // Stop trusting a frozen "active" status once the conversation has gone quiet
+  // past the trust TTL — otherwise a daemon re-asserting a stale "working" over
+  // content-free heartbeats pins the session in WORKING forever. Coerced here, at
+  // the single enrichment boundary, so is_idle / the row's agent_status / the CLI
+  // classifier all see the same trustworthy value.
+  const agentStatus = trustedAgentStatus(
+    maps.agentStatusMap.get(conv._id.toString()),
+    conv.updated_at,
+    now,
+  );
   // Don't let userDaemonAlive resurrect sessions we know are stopped
   const daemonAlive = agentStatus === "stopped"
     ? false

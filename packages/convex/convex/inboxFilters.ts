@@ -70,6 +70,40 @@ export const ACTIVE_AGENT_STATUSES = new Set([
 // store's DEAD_AGENT_STATUSES.
 export const DEAD_AGENT_STATUSES = new Set(["stopped"]);
 
+// How long a daemon-reported "active" status is trusted with no new synced
+// activity on the conversation. When the daemon loses a turn's idle transition
+// (a dropped Stop hook, Codex's sleep-killed idle timer) it re-asserts the last
+// "working" on every heartbeat, and because that heartbeat keeps the managed row
+// "live" the 90s heartbeat-staleness coercion never fires — so the session is
+// pinned in the inbox's WORKING bucket indefinitely. If the conversation has
+// synced NOTHING for this long, the active status is stale and we stop trusting
+// it (see trustedAgentStatus). One hour is ~30x the p99 real tool-execution time
+// (~2 min) — a genuinely working agent emits tool calls far more often, so it
+// never goes this quiet — and AskUserQuestion / permission blocks never reach
+// here as "active" (the caller routes them to needs-input first).
+export const STATUS_TRUST_TTL_MS = 60 * 60 * 1000;
+
+// Collapse a stale "active" status to "idle" so every consumer agrees the agent
+// has finished. The agent_status field is read in three independent places — the
+// web row's isAgentActive short-circuit, the server-computed is_idle
+// (deriveSessionActivity), and classifyWorkState — so coercing once at the
+// enrichment boundary fixes all of them with no downstream duplication.
+//
+// Non-destructive and self-correcting by construction: this is a read-time
+// transform (the stored managed_sessions.agent_status is untouched), and any
+// later message bumps conv.updated_at, so a genuinely long-running turn
+// re-promotes itself to "working" on its next output. "idle" (not "stopped")
+// because a fresh heartbeat means the process is alive — it's finished, not dead.
+export function trustedAgentStatus(
+  agentStatus: string | undefined,
+  updatedAt: number | undefined,
+  now: number,
+): string | undefined {
+  if (!agentStatus || !ACTIVE_AGENT_STATUSES.has(agentStatus)) return agentStatus;
+  if (updatedAt !== undefined && now - updatedAt >= STATUS_TRUST_TTL_MS) return "idle";
+  return agentStatus;
+}
+
 // Decides whether a batch of freshly-synced messages should bump
 // managed_sessions.agent_status back to "working". Two cases, both meaning the
 // agent is actively producing again:
