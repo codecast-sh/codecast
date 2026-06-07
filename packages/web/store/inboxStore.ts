@@ -3348,6 +3348,21 @@ export function unionHydrate<T extends Record<string, unknown>>(
   return { ...(idbVal ?? {}), ...(liveVal ?? {}) } as T;
 }
 
+// Drop persisted feedHasMore=false entries (in place) so they hydrate as
+// "unknown" instead of as a dead latch. False used to stick durably off one
+// bad page — the server could return an empty page mid-history (a window of
+// filtered-out rows), the client persisted false, and the seed effect (which
+// only writes when the key is absent) could never undo it: feed pagination
+// stayed dead on that device forever. A true end-of-history loses nothing:
+// feedCursors[key] === null short-circuits loadMore before any network.
+export function dropLatchedFeedHasMore(feedHasMore: unknown): void {
+  if (!feedHasMore || typeof feedHasMore !== "object") return;
+  const map = feedHasMore as Record<string, unknown>;
+  for (const key of Object.keys(map)) {
+    if (map[key] === false) delete map[key];
+  }
+}
+
 // -- IndexedDB cache: wire patch-driven writes + hydrate on load --
 
 if (PERSISTENCE_AVAILABLE) {
@@ -3464,12 +3479,20 @@ if (PERSISTENCE_AVAILABLE) {
       }
     }
 
+    // A persisted feedHasMore=false is dropped at hydration (treated as
+    // unknown) — it used to latch durably off one bad page and nothing could
+    // ever undo it (the seed effect only writes when the key is absent), which
+    // killed feed pagination on that device for good. A true end-of-history is
+    // re-confirmed for free: feedCursors[key] === null short-circuits loadMore
+    // before any network.
+    dropLatchedFeedHasMore(cached.feedHasMore);
+
     // Critical path: sidebar + current conversation + tabs render immediately.
     // feedConversations is here (not deferred) so the team activity feed paints
     // from cache on first frame — no loading screen on open.
     apply(["sessions", "clientState", "_lastViewedAt", "_seenUpToAt", "_seenMessageCount",
            "conversations", "pending", "pendingMessages", "teams", "teamMembers", "teamUnreadCount", "drafts",
-           "tabs", "activeTabId", "feedConversations", "feedHasMore", "syncMeta",
+           "tabs", "activeTabId", "feedConversations", "feedHasMore", "feedCursors", "syncMeta",
            "sidePanelOpen", "sidePanelSessionId", "sidePanelUserClosed"]);
 
     // Always mark initialized after IDB hydration completes — even if cached

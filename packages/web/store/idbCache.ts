@@ -116,6 +116,7 @@ const META_KEYS = new Set([
   // personal feed already has.
   "feedConversations",
   "feedHasMore",
+  "feedCursors",
   // Per-workspace incremental-sync watermark (cursor + backfilledAt). Must
   // survive reload so a cold start resumes delta sync from where it left off
   // instead of re-snapshotting + re-crawling the whole task/doc table.
