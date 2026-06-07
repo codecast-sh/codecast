@@ -17,7 +17,6 @@ import { useInboxStore } from "../store/inboxStore";
 import type { PendingComment } from "../lib/quoteFormat";
 import { createReviewComment, discardIfEmpty, exitReviewMode } from "../lib/reviewActions";
 import { useReviewComposer } from "./reviewContext";
-import { KeyCap } from "./KeyboardShortcutsHelp";
 
 type Rect = { top: number; height: number };
 
@@ -38,11 +37,13 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
     useShallow((s) => (s.reviewComments[conversationId] ?? []).filter((c) => c.messageId === messageId)),
   );
 
-  // The rail (and the content-shrinking it causes) is shown only WHILE actively
-  // reviewing this message. Esc/Cancel clears reviewMessageId → rail collapses →
-  // content returns to full width. Pending comments persist in the store and stay
-  // visible in the ReviewBar; re-opening review on the message shows them again.
-  const engaged = isReviewTarget;
+  // MODELESS: there is no review mode to enter or exit. Hovering any block always
+  // offers Quote/Comment; the rail (and the content-shrink it causes) exists
+  // exactly while this message has pending comments — submit/cancel/removing the
+  // last comment collapses it back to full width automatically. The keyboard
+  // layer (r/arrows/c/q) still uses reviewMessageId, but it's optional sugar.
+  const engaged = myComments.length > 0;
+  const measureActive = engaged || isReviewTarget;
 
   const containerRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -68,21 +69,22 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
     );
   }, []);
 
-  // Only measure block offsets while engaged — that's the only time rects feed
-  // the rail/overlay. Idle messages (the common case) do no measurement work.
+  // Only measure block offsets while the rail or keyboard nav needs them. Idle
+  // messages (the common case) do no measurement work — the hover affordance
+  // positions itself from the hovered element directly.
   useLayoutEffect(() => {
-    if (engaged) measure();
-  }, [content, engaged, measure]);
+    if (measureActive) measure();
+  }, [content, measureActive, measure]);
 
   useEffect(() => {
-    if (!engaged) return;
+    if (!measureActive) return;
     const el = contentRef.current;
     if (!el) return;
     const ro = new ResizeObserver(() => measure());
     ro.observe(el);
     Array.from(el.children).forEach((c) => ro.observe(c));
     return () => ro.disconnect();
-  }, [content, engaged, measure]);
+  }, [content, measureActive, measure]);
 
   const blockCount = rects.length || 1;
 
@@ -211,39 +213,56 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
       data-review-region={isReviewTarget ? "active" : undefined}
       tabIndex={isReviewTarget ? -1 : undefined}
       onKeyDown={isReviewTarget ? handleKeyDown : undefined}
-      onMouseMove={engaged ? handleMouseMove : undefined}
-      onMouseLeave={engaged ? handleMouseLeave : undefined}
+      onMouseMove={handleMouseMove}
+      onMouseLeave={handleMouseLeave}
     >
-      {isReviewTarget && rects[activeBlock] && (
-        <div className="cc-active-overlay" style={{ top: rects[activeBlock].top, height: rects[activeBlock].height }} />
-      )}
+      {(() => {
+        // Highlight the block a card refers to: the peeked (hovered) card wins,
+        // else the keyboard-active block. Replaces the in-card quote as the
+        // "what does this comment point at" cue.
+        const hi = peekBlock != null ? peekBlock : isReviewTarget ? activeBlock : -1;
+        return hi >= 0 && rects[hi] ? (
+          <div className="cc-active-overlay" style={{ top: rects[hi].top, height: rects[hi].height }} />
+        ) : null;
+      })()}
 
       <div ref={contentRef} className="cc-content">
         {renderBlock(content)}
       </div>
 
+      {/* Modeless per-block actions: hover any block → quote/comment, always. */}
+      {hoverIndex !== null && editingId === null && (
+        <div className="cc-block-actions" style={{ top: hoverTop }} onMouseEnter={cancelClear} data-cc-gutter>
+          <button
+            type="button"
+            className="cc-block-act"
+            title="Quote in reply"
+            aria-label="Quote this block in your reply"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => composer?.quote(blockText(hoverIndex))}
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M9.6 6C7 7.5 5.2 9.9 5.2 13.1c0 2.4 1.5 4 3.5 4 1.8 0 3.1-1.3 3.1-3 0-1.6-1.1-2.8-2.7-2.8-.3 0-.6 0-.7.1.3-1.6 1.6-3.2 3-4.1L9.6 6zm8 0c-2.6 1.5-4.4 3.9-4.4 7.1 0 2.4 1.5 4 3.5 4 1.8 0 3.1-1.3 3.1-3 0-1.6-1.1-2.8-2.7-2.8-.3 0-.6 0-.7.1.3-1.6 1.6-3.2 3-4.1L17.6 6z" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            className="cc-block-act"
+            title="Comment on this block"
+            aria-label="Comment on this block"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => startComment(hoverIndex)}
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+              <path d="M12 8v6M9 11h6" />
+            </svg>
+          </button>
+        </div>
+      )}
+
       {engaged && (
         <div ref={railRef} className="cc-rail">
-          {sortedComments.length === 0 && (
-            <div className="cc-rail-empty">Hover a block and click +, or press c, to comment</div>
-          )}
-          {hoverIndex !== null && editingId === null && (
-            <button
-              type="button"
-              data-cc-gutter
-              className="cc-block-add"
-              style={{ top: hoverTop }}
-              title="Comment on this block"
-              aria-label="Comment on this block"
-              onMouseEnter={cancelClear}
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => startComment(hoverIndex)}
-            >
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-                <path d="M12 5v14M5 12h14" />
-              </svg>
-            </button>
-          )}
           {sortedComments.map((c) => (
             <div
               key={c.id}
@@ -262,6 +281,8 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
                   active={isReviewTarget && activeBlock === c.blockIndex}
                   onEdit={() => useInboxStore.getState().setReviewEditingId(c.id)}
                   onRemove={() => useInboxStore.getState().removeReviewComment(conversationId, c.id)}
+                  onPeek={() => setPeekBlock(c.blockIndex)}
+                  onPeekEnd={() => setPeekBlock(null)}
                 />
               )}
             </div>
@@ -375,11 +396,6 @@ function CommentEditor({
       </div>
     </div>
   );
-}
-
-function truncate(s: string, n: number): string {
-  const flat = (s || "").replace(/\s+/g, " ").trim();
-  return flat.length > n ? flat.slice(0, n - 1) + "…" : flat;
 }
 
 export const MessageReview = memo(MessageReviewImpl);

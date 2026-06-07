@@ -30,13 +30,13 @@ function resolveSelection(): Anchor | null {
   const messageId = msgEl?.id?.slice(4);
   if (!messageId) return null;
 
-  // Which top-level block does the selection start in?
+  // Which top-level block does the selection start in? Blocks are the direct
+  // children of the .cc-content column (the region is a flex row of content|rail).
+  const contentEl = region.querySelector(":scope > .cc-content") as HTMLElement | null;
+  if (!contentEl) return null;
   let blockEl: HTMLElement | null = anchorEl;
-  while (blockEl && blockEl.parentElement !== region) blockEl = blockEl.parentElement;
-  const children = Array.from(region.children).filter(
-    (c) => !(c as HTMLElement).hasAttribute("data-cc-gutter"),
-  ) as HTMLElement[];
-  const blockIndex = blockEl ? Math.max(0, children.indexOf(blockEl)) : 0;
+  while (blockEl && blockEl.parentElement !== contentEl) blockEl = blockEl.parentElement;
+  const blockIndex = blockEl ? Math.max(0, Array.from(contentEl.children).indexOf(blockEl)) : 0;
 
   const rect = range.getBoundingClientRect();
   if (!rect || (rect.width === 0 && rect.height === 0)) return null;
