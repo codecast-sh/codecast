@@ -7,6 +7,7 @@ import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { Command as CommandPrimitive } from "cmdk";
 import { cleanTitle } from "../lib/conversationProcessor";
 import { useInboxStore, InboxSession, TaskItem, DocItem } from "../store/inboxStore";
+import { score } from "../hooks/useMentionQuery";
 import { isElectron } from "../lib/desktop";
 import { isInboxRoute } from "../lib/inboxRouting";
 import { useCurrentUser } from "../hooks/useCurrentUser";
@@ -80,6 +81,13 @@ const PRIORITY_OPTIONS = [
   { key: "low", icon: ArrowDown, label: "Low", color: "text-neutral-500", shortcut: "4" },
   { key: "none", icon: Minus, label: "None", color: "text-neutral-600", shortcut: "5" },
 ];
+
+// Status key → {label,color}, derived from the option arrays above so the
+// palette's entity rows reuse the same labels/colors as the action submenus.
+const TASK_STATUS_META: Record<string, { label: string; color: string }> =
+  Object.fromEntries(STATUS_OPTIONS.map((o) => [o.key, { label: o.label, color: o.color }]));
+const PLAN_STATUS_META: Record<string, { label: string; color: string }> =
+  Object.fromEntries(PLAN_STATUS_OPTIONS.map((o) => [o.key, { label: o.label, color: o.color }]));
 
 const DOC_TYPE_OPTIONS = [
   { key: "note", label: "Note", shortcut: "1" },
@@ -583,6 +591,60 @@ function ActionSubmenu({
 // closed palette stops subscribing to live session churn (see storeSessions below).
 const EMPTY_SESSIONS: Record<string, any> = {};
 
+// We substring-match the local session cache OURSELVES and hand cmdk only the
+// matches — because cmdk mounts and re-scores every Item it's given on each
+// keystroke, so feeding it the whole cache (thousands of sessions) janks typing.
+// RECENT_SEARCH_CAP bounds how deep into the (updated_at-desc) cache we scan;
+// RECENT_RENDER_CAP bounds how many matches we actually mount. The long tail
+// beyond the scan is covered by the async server search ("Search Results") below.
+const RECENT_SEARCH_CAP = 750;
+const RECENT_RENDER_CAP = 25;
+
+// Stable empty index handed to the mention-index selector while the palette is
+// closed, so a closed palette doesn't re-render on task/doc/plan sync churn.
+const EMPTY_MENTION_INDEX = { tasks: {}, docs: {}, plans: {} } as const;
+const ENTITY_RENDER_CAP = 8;
+
+// One matcher for tasks/docs/plans over the globally-synced mention index.
+// Reuses score() (exact > prefix > substring) with a short_id fallback, and
+// mirrors the Tasks/Docs pages' team scoping: in a team view keep this team's
+// items plus teamless orphans; in the personal view keep only teamless items.
+type MentionRecord = {
+  _id: string;
+  title: string;
+  short_id?: string;
+  goal?: string;
+  doc_type?: string;
+  updated_at?: number;
+  team_id?: string | null;
+};
+function matchEntities(
+  records: Record<string, MentionRecord>,
+  query: string,
+  teamId: string | undefined,
+  cap: number,
+  exclude?: (r: MentionRecord) => boolean,
+): MentionRecord[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return [];
+  const ranked: Array<{ rec: MentionRecord; rank: number }> = [];
+  for (const rec of Object.values(records)) {
+    if (exclude?.(rec)) continue;
+    const team = rec.team_id ? String(rec.team_id) : null;
+    if (teamId ? team && team !== teamId : team) continue;
+    const titleRank = score(rec.title || "", q);
+    const goalRank = rec.goal ? score(rec.goal, q) : Infinity;
+    let rank = Math.min(titleRank, goalRank);
+    if (rank === Infinity) {
+      if (!rec.short_id?.toLowerCase().includes(q)) continue;
+      rank = 50; // short_id-only hit ranks below any title/goal hit
+    }
+    ranked.push({ rec, rank });
+  }
+  ranked.sort((a, b) => a.rank - b.rank || (b.rec.updated_at || 0) - (a.rec.updated_at || 0));
+  return ranked.slice(0, cap).map((x) => x.rec);
+}
+
 export function CommandPalette({ standalone = false }: { standalone?: boolean }) {
   const [query, setQuery] = useState("");
   const [actionMode, setActionMode] = useState<ActionMode | null>(null);
@@ -610,6 +672,13 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
   // Measured: this was ~411ms — ~94% — of a session switch's render cost while CLOSED.
   const storeSessions = useInboxStore((s) => open ? s.sessions : EMPTY_SESSIONS);
 
+  // Globally-synced lightweight index of tasks/docs/plans (title + short_id +
+  // status), populated by DashboardLayout's useSyncMention* hooks. Gated on
+  // `open` like sessions so a closed palette ignores entity-sync churn.
+  const mentionIndex = useInboxStore((s) => open ? s.mentionIndex : EMPTY_MENTION_INDEX);
+  const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id);
+  const effectiveTeamId = (activeTeamId || (currentUser as any)?.team_id) as string | undefined;
+
   // Merge locally-loaded inbox sessions (own, instant) with the server list
   // (own + team-visible) so the palette mirrors the inbox and stays responsive.
   const recentSessions = useMemo(() => {
@@ -621,6 +690,40 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
     }
     return Array.from(byId.values()).sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
   }, [recentConversations, storeSessions]);
+
+  // Pre-filter the local cache ourselves so cmdk only ever mounts the matches
+  // (RECENT_RENDER_CAP), never the whole cache. With no query we show the most
+  // recent few; with a query we scan up to RECENT_SEARCH_CAP and collect matches.
+  const recentMatches = useMemo(() => {
+    if (!query.trim()) return recentSessions.slice(0, 8);
+    const q = query.toLowerCase();
+    const scan = recentSessions.length > RECENT_SEARCH_CAP
+      ? recentSessions.slice(0, RECENT_SEARCH_CAP)
+      : recentSessions;
+    const out: any[] = [];
+    for (let i = 0; i < scan.length && out.length < RECENT_RENDER_CAP; i++) {
+      const conv = scan[i];
+      const hay = `${cleanTitle(conv.title || "")} ${conv.project_path || ""} ${conv.authorName || ""}`.toLowerCase();
+      if (hay.includes(q)) out.push(conv);
+    }
+    return out;
+  }, [recentSessions, query]);
+
+  // Search tasks / docs / plans over the mention index. Only when there's a
+  // query — the empty palette stays session-focused. Plan-type docs are excluded
+  // from Documents so they don't double up with the Plans group.
+  const taskMatches = useMemo(
+    () => matchEntities(mentionIndex.tasks as any, query, effectiveTeamId, ENTITY_RENDER_CAP),
+    [mentionIndex, query, effectiveTeamId],
+  );
+  const docMatches = useMemo(
+    () => matchEntities(mentionIndex.docs as any, query, effectiveTeamId, ENTITY_RENDER_CAP, (d) => d.doc_type === "plan"),
+    [mentionIndex, query, effectiveTeamId],
+  );
+  const planMatches = useMemo(
+    () => matchEntities(mentionIndex.plans as any, query, effectiveTeamId, ENTITY_RENDER_CAP),
+    [mentionIndex, query, effectiveTeamId],
+  );
 
   // Debounced search for async conversation results
   const [debouncedQuery, setDebouncedQuery] = useState("");
@@ -961,7 +1064,6 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
   const showFavorites = favorites && favorites.length > 0;
   const showBookmarks = bookmarks && bookmarks.length > 0;
   const showWorkspaces = projects.length > 0;
-  const showRecent = recentSessions.length > 0;
 
   const groupClass = "px-1.5 [&_[cmdk-group-heading]]:px-2.5 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-widest [&_[cmdk-group-heading]]:text-sol-text-dim/70";
   const itemClass = "flex items-center gap-3 px-2.5 py-2 mx-1 rounded-lg text-sm text-sol-text-muted cursor-pointer transition-colors data-[selected=true]:bg-sol-cyan/10 data-[selected=true]:text-sol-text";
@@ -1005,7 +1107,7 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
       className="w-[580px] rounded-xl border border-sol-border/80 bg-sol-bg shadow-2xl shadow-black/40 overflow-hidden flex flex-col animate-in fade-in-0 zoom-in-95 slide-in-from-top-2 duration-150"
       filter={(value, search) => {
         // Async search results and compose are always relevant — bypass cmdk filter
-        if (value.startsWith("__search__") || value.startsWith("__compose__")) return 1;
+        if (value.startsWith("__search__") || value.startsWith("__compose__") || value.startsWith("__recent__") || value.startsWith("__entity__")) return 1;
         const idx = value.indexOf("|||");
         const searchable = idx >= 0 ? value.slice(0, idx) : value;
         return searchable.toLowerCase().includes(search.toLowerCase()) ? 1 : 0;
@@ -1106,14 +1208,14 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
           </CommandPrimitive.Group>
         )}
 
-        {showRecent && (
+        {recentMatches.length > 0 && (
           <CommandPrimitive.Group heading="Recent Sessions" className={groupClass}>
-            {(query ? recentSessions : recentSessions.slice(0, 8)).map((conv: any) => {
+            {recentMatches.map((conv: any) => {
               const isTeam = conv.isOwn === false;
               return (
               <CommandPrimitive.Item
                 key={`recent-${conv._id}`}
-                value={`session ${cleanTitle(conv.title || "")} ${conv.project_path || ""} ${conv.authorName || ""}|||${conv._id}`}
+                value={`__recent__ ${cleanTitle(conv.title || "")} ${conv.project_path || ""} ${conv.authorName || ""}|||${conv._id}`}
                 onSelect={() => navigateToSession(conv)}
                 className={`${itemClass} group`}
               >
@@ -1134,6 +1236,68 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
                 )}
                 <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{timeAgo(conv.updated_at)}</span>
               </CommandPrimitive.Item>
+              );
+            })}
+          </CommandPrimitive.Group>
+        )}
+
+        {taskMatches.length > 0 && (
+          <CommandPrimitive.Group heading="Tasks" className={groupClass}>
+            {taskMatches.map((t: any) => {
+              const st = TASK_STATUS_META[t.status];
+              return (
+                <CommandPrimitive.Item
+                  key={`task-${t._id}`}
+                  value={`__entity__ ${t.title} ${t.short_id}|||${t._id}`}
+                  onSelect={() => navigate(`/tasks/${t._id}`)}
+                  className={itemClass}
+                >
+                  <ListTodo className="w-4 h-4 flex-shrink-0 text-sol-cyan" />
+                  <span className="truncate flex-1">{t.title || "Untitled"}</span>
+                  {st && <span className={`text-[10px] flex-shrink-0 ${st.color}`}>{st.label}</span>}
+                  <span className="text-[10px] text-sol-text-dim font-mono tabular-nums flex-shrink-0">{t.short_id}</span>
+                  <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{timeAgo(t.updated_at)}</span>
+                </CommandPrimitive.Item>
+              );
+            })}
+          </CommandPrimitive.Group>
+        )}
+
+        {docMatches.length > 0 && (
+          <CommandPrimitive.Group heading="Documents" className={groupClass}>
+            {docMatches.map((d: any) => (
+              <CommandPrimitive.Item
+                key={`doc-${d._id}`}
+                value={`__entity__ ${d.title} ${d.doc_type || ""}|||${d._id}`}
+                onSelect={() => navigate(`/docs/${d._id}`)}
+                className={itemClass}
+              >
+                <FileText className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
+                <span className="truncate flex-1">{d.title || "Untitled"}</span>
+                <span className="text-[10px] text-sol-text-dim flex-shrink-0 capitalize">{d.doc_type || "note"}</span>
+                <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{timeAgo(d.updated_at)}</span>
+              </CommandPrimitive.Item>
+            ))}
+          </CommandPrimitive.Group>
+        )}
+
+        {planMatches.length > 0 && (
+          <CommandPrimitive.Group heading="Plans" className={groupClass}>
+            {planMatches.map((p: any) => {
+              const st = PLAN_STATUS_META[p.status];
+              return (
+                <CommandPrimitive.Item
+                  key={`plan-${p._id}`}
+                  value={`__entity__ ${p.title} ${p.short_id}|||${p._id}`}
+                  onSelect={() => navigate(`/plans/${p.short_id || p._id}`)}
+                  className={itemClass}
+                >
+                  <MapIcon className="w-4 h-4 flex-shrink-0 text-sol-yellow" />
+                  <span className="truncate flex-1">{p.title || "Untitled"}</span>
+                  {st && <span className={`text-[10px] flex-shrink-0 ${st.color}`}>{st.label}</span>}
+                  <span className="text-[10px] text-sol-text-dim font-mono tabular-nums flex-shrink-0">{p.short_id}</span>
+                  <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{timeAgo(p.updated_at)}</span>
+                </CommandPrimitive.Item>
               );
             })}
           </CommandPrimitive.Group>
