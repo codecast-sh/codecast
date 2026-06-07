@@ -6690,11 +6690,24 @@ export const listInboxSessionsPaginated = query({
 // CLEAR on no-longer-reported = un-dismissed elsewhere). Window mirrors the live
 // query's INBOX_DISMISSED_WINDOW_MS — keep them in sync.
 export const listDismissedSessionsLite = query({
-  args: { paginationOpts: paginationOptsValidator },
+  args: {
+    paginationOpts: paginationOptsValidator,
+    // The window lower bound MUST be a STABLE value supplied by the caller — it
+    // becomes the `by_user_dismissed` index range bound, and a wall-clock value
+    // recomputed per page (Date.now() in the handler) shifts the range between
+    // pages, so each continuation cursor belongs to a different query and Convex
+    // throws InvalidCursor on page 2. That capped this crawl at its FIRST page
+    // (~500 rows) — a heavy account's older dismisses then never reconciled, so
+    // dismissed sessions resurfaced on other tabs/devices. The client seeds
+    // `since = now - 30d` once per crawl (mirrors listInboxSessionsPaginated).
+    // Never fold Date.now() into the range here. The fallback is only for a
+    // single un-paginated probe call.
+    since: v.optional(v.number()),
+  },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return { page: [], isDone: true, continueCursor: "" };
-    const cutoff = Date.now() - INBOX_DISMISSED_WINDOW_MS;
+    const cutoff = args.since ?? Date.now() - INBOX_DISMISSED_WINDOW_MS;
     const result = await ctx.db
       .query("conversations")
       .withIndex("by_user_dismissed", (q: any) =>

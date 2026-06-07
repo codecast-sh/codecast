@@ -45,8 +45,14 @@ export type CrawlOptions = {
   fetchPage: (cursor: string | null) => Promise<CrawlPage>;
   /** Overlay a freshly-fetched page (delta — never prunes). */
   onPage: (rows: any[]) => void;
-  /** Final additive overlay of the full set (delta — never prunes). */
-  onComplete: (all: any[]) => void;
+  /**
+   * Final overlay of the full set. `complete` is true only when the crawl
+   * reached the true end (isDone / no next cursor), false when it stopped at
+   * `maxPages` with more rows unfetched. Additive overlays (tasks/docs/sessions)
+   * ignore it; a consumer that PRUNES on this pass (the dismiss reconcile's
+   * CLEAR) must gate on `complete` so a truncated crawl can't drop real rows.
+   */
+  onComplete: (all: any[], complete: boolean) => void;
 };
 
 /**
@@ -89,6 +95,7 @@ export function runReconcileCrawl(opts: CrawlOptions): void {
     setProgress(namespace, true, 0);
     const all: any[] = [];
     let cursor: string | null = null;
+    let completed = false; // reached the true end vs stopped at maxPages
     const seenCursors = new Set<string>();
     for (let i = 0; i < maxPages; i++) {
       // Retry transient page failures with backoff — one hiccup must not abandon
@@ -118,7 +125,7 @@ export function runReconcileCrawl(opts: CrawlOptions): void {
       const next = page.continueCursor || null;
       const more = !page.isDone && !!next && !seenCursors.has(next);
       setProgress(namespace, more, all.length);
-      if (!more) break;
+      if (!more) { completed = true; break; }
       seenCursors.add(next!);
       cursor = next;
       await new Promise((r) => setTimeout(r, pageDelayMs));
@@ -128,7 +135,8 @@ export function runReconcileCrawl(opts: CrawlOptions): void {
     // overlay (the big collections are isDelta in SYNC_REGISTRY) — additive, never
     // prunes — so this only fills in rows onPage may have missed. Deletions arrive
     // as deltas, never by snapshot, so a short/truncated crawl can't gut the cache.
-    opts.onComplete(all);
+    // `completed` lets a pruning consumer (the dismiss CLEAR) know the set is whole.
+    opts.onComplete(all, completed);
     // Persist the watermark: backfilledAt (durable throttle — skip the crawl on
     // the next launch) and cursor = the highest updated_at we just saw (so the
     // NEXT crawl resumes incrementally from here via `since`). cursor advances
