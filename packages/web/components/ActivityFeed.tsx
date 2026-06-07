@@ -576,8 +576,10 @@ function TeamFeed({ compact, directoryFilter, onNavigate, initialActorId, hidePe
   const key = `${activeTeamId ?? ""}|${directoryFilter ?? ""}`;
   const cached = useInboxStore((s) => s.feedConversations[key]) as Conversation[] | undefined;
   const knownHasMore = useInboxStore((s) => s.feedHasMore[key]);
+  const knownCursor = useInboxStore((s) => s.feedCursors[key]);
   const mergeFeed = useInboxStore((s) => s.mergeFeedConversations);
   const setFeedHasMore = useInboxStore((s) => s.setFeedHasMore);
+  const setFeedCursor = useInboxStore((s) => s.setFeedCursor);
 
   const queryArgs = useMemo(() => ({
     filter: "team" as const,
@@ -600,31 +602,36 @@ function TeamFeed({ compact, directoryFilter, onNavigate, initialActorId, hidePe
     if (live && knownHasMore === undefined) setFeedHasMore(key, liveHasMore);
   }, [live, key, knownHasMore, liveHasMore, setFeedHasMore]);
 
-  // Load older pages imperatively, paginating from the oldest cached row's
-  // timestamp (the server pages by updated_at < cursor). Merges into the same
-  // accumulating store, so a reload never forces a re-walk of cached pages.
+  // Load older pages imperatively. Merges into the same accumulating store, so
+  // a reload never forces a re-walk of cached pages.
   const [loadingMore, setLoadingMore] = useState(false);
   const loadMore = useCallback(async () => {
     if (loadingMore || !cached?.length) return;
+    if (knownCursor === null) return; // server confirmed true end-of-history
+    // Resume from the server's continuation cursor; fall back to the oldest
+    // cached row for caches that predate it (the server re-covers any gap and
+    // mergeFeed dedups by _id).
     const oldest = cached[cached.length - 1]?.updated_at;
-    if (oldest == null) return;
+    const cursor = knownCursor ?? (oldest != null ? String(oldest) : null);
+    if (cursor == null) return;
     setLoadingMore(true);
     try {
-      const page = await convex.query(api.conversations.listConversations, { ...queryArgs, cursor: String(oldest) });
-      const rows = (page.conversations ?? []) as Conversation[];
-      const existing = new Set((cached ?? []).map((c) => c._id));
-      const fresh = rows.filter((c) => !existing.has(c._id));
-      mergeFeed(key, rows);
-      // Trust "did we get genuinely older rows", NOT the server's nextCursor — the
-      // team per-member merge nulls nextCursor on small pages even when older
-      // sessions remain, which otherwise stops pagination after a single page.
-      setFeedHasMore(key, fresh.length > 0);
+      const page = await convex.query(api.conversations.listConversations, { ...queryArgs, cursor });
+      mergeFeed(key, (page.conversations ?? []) as Conversation[]);
+      // The cursor protocol is honest now: a filtered-out band comes back as a
+      // short/empty page WITH a continuation cursor, and null only when every
+      // contributing scan truly ran its index dry — so trust it directly. (The
+      // old "did we get fresh rows" heuristic latched hasMore=false on those
+      // mid-history empty pages, and the persisted false killed pagination on
+      // that device for good.)
+      setFeedCursor(key, page.nextCursor ?? null);
+      setFeedHasMore(key, page.nextCursor != null);
     } catch {
       // Leave the cache + affordance intact; a transient failure can be retried.
     } finally {
       setLoadingMore(false);
     }
-  }, [loadingMore, cached, convex, queryArgs, key, mergeFeed, setFeedHasMore]);
+  }, [loadingMore, cached, knownCursor, convex, queryArgs, key, mergeFeed, setFeedCursor, setFeedHasMore]);
 
   const sourceConvs = useMemo(() => (cached ?? []).filter((c) => {
     if (c.visibility_mode === "summary" || c.visibility_mode === "minimal") return !isWarmupSession(c);
@@ -635,7 +642,7 @@ function TeamFeed({ compact, directoryFilter, onNavigate, initialActorId, hidePe
     <FeedBody
       source="team"
       sourceConvs={sourceConvs}
-      hasMore={knownHasMore ?? liveHasMore}
+      hasMore={knownCursor === null ? false : (knownHasMore ?? liveHasMore)}
       loadMore={loadMore}
       isLoadingMore={loadingMore}
       isLoading={!cached?.length && live === undefined}
