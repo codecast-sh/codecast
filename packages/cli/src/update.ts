@@ -5,12 +5,13 @@ import { execSync } from "child_process";
 import pkg from "../package.json";
 
 const VERSION = pkg.version;
-const MEMORY_VERSION = "7"; // bumped: cast sessions (rename) + --json event stream (agent monitor)
+const MEMORY_VERSION = "9"; // bumped: --messages content flag (multi-session message stream) + id as filter
 const TASK_VERSION = "1";
 const WORK_VERSION = "6"; // bumped: messaging docs split out into MESSAGING_SNIPPET
 const PLAN_VERSION = "2";
 const WORKFLOW_VERSION = "1";
 const MESSAGING_VERSION = "4"; // bumped: messaging snippet tightened (teammate / peer-or-boss)
+const VISUAL_VERSION = "1"; // cast-canvas: inline HTML visual rendering
 const LATEST_URL = "https://dl.codecast.sh/latest.json";
 const UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours
 
@@ -113,6 +114,10 @@ export function getWorkflowVersion(): string {
 
 export function getMessagingVersion(): string {
   return MESSAGING_VERSION;
+}
+
+export function getVisualVersion(): string {
+  return VISUAL_VERSION;
 }
 
 export async function checkForUpdates(force = false): Promise<string | null> {

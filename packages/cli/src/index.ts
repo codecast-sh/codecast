@@ -14,7 +14,7 @@ import { CODECAST_STATUS_HOOK } from "./statusHook.js";
 import { AuthServer } from "./authServer.js";
 import { c, fmt, icons } from "./colors.js";
 import { ensureTmux, tryInstallTmux } from "./tmux.js";
-import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, ensureCastAlias } from "./update.js";
+import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, getVisualVersion, ensureCastAlias } from "./update.js";
 import { type SnippetTarget, getSnippetTargets, MESSAGING_SNIPPET_END, installMessagingSnippet, ensureMessagingForMemory } from "./snippets.js";
 import { checkForDesktopUpdate } from "./desktopUpdate.js";
 import { glob } from "glob";
@@ -368,6 +368,8 @@ interface Config {
   workflow_version?: string;
   messaging_enabled?: boolean;
   messaging_version?: string;
+  visual_enabled?: boolean;
+  visual_version?: string;
   orch_enabled?: boolean;
   orch_version?: string;
   claude_args?: string;
@@ -2099,6 +2101,24 @@ digraph my_flow {
 ${WORKFLOW_SNIPPET_END}
 `;
 
+const VISUAL_SNIPPET_END = "<!-- /codecast-visual -->";
+const VISUAL_SNIPPET = `
+## Visual Canvas
+
+Some things are better seen than read. Emit a \`cast-canvas\` block of self-contained HTML/CSS/SVG; it renders inline, expandable to fullscreen, and inherits codecast's font and theme automatically.
+
+\`\`\`cast-canvas
+<div> … </div>
+\`\`\`
+
+Reach for it when layout or magnitude is the point — reports, mockups, diagrams, tables, charts. The tell: if you're about to draw a layout in ASCII, render it instead; otherwise default to prose and markdown.
+
+Color with the \`--sol-*\` tokens (\`--sol-text\`, \`--sol-border\`, \`--sol-card\`, accents like \`--sol-blue\`) so it adapts to light/dark — don't hardcode colors. Static markup only; no scripts.
+
+For data charts, drop \`<div class="cast-chart" data-spec='{"marks":[{"type":"barY","data":[…],"x":"label","y":"value"}],"y":{"grid":true}}'></div>\` — codecast renders the spec with Observable Plot, themed to match. The spec mirrors Plot: \`marks\` (type = a Plot mark like \`lineY\`/\`areaY\`/\`barY\`/\`dot\`/\`cell\`, plus its channels) and \`x\`/\`y\`/\`color\` scale options. \`fill\`/\`stroke\` take a token name (\`"blue"\`) or a data field; pre-aggregate the data.
+${VISUAL_SNIPPET_END}
+`;
+
 // MESSAGING_SNIPPET + MESSAGING_SNIPPET_END live in ./snippets.ts (shared with the daemon).
 
 // SnippetTarget + getSnippetTargets live in ./snippets.ts (shared with the daemon).
@@ -2310,6 +2330,56 @@ function installWorkflowSnippet(update = false): { installed: boolean; updated: 
 
   for (const target of targets) {
     const result = installWorkflowSnippetToFile(target.filePath, target.dirPath, update);
+    if (result.installed) anyInstalled = true;
+    if (result.updated) anyUpdated = true;
+  }
+
+  return { installed: anyInstalled, updated: anyUpdated };
+}
+
+function installVisualSnippetToFile(filePath: string, dirPath: string, update: boolean): { installed: boolean; updated: boolean } {
+  if (!fs.existsSync(dirPath)) {
+    fs.mkdirSync(dirPath, { recursive: true });
+  }
+
+  let existing = "";
+  if (fs.existsSync(filePath)) {
+    existing = fs.readFileSync(filePath, "utf-8");
+  }
+
+  const hasVisual = existing.includes("## Visual Canvas") && existing.includes(VISUAL_SNIPPET_END);
+  if (hasVisual && !update) {
+    return { installed: false, updated: false };
+  }
+
+  if (hasVisual && update) {
+    const visualStart = existing.indexOf("## Visual Canvas");
+    let visualEnd = existing.length;
+
+    const endMarkerIdx = existing.indexOf(VISUAL_SNIPPET_END, visualStart);
+    if (endMarkerIdx !== -1) {
+      visualEnd = endMarkerIdx + VISUAL_SNIPPET_END.length;
+      if (existing[visualEnd] === "\n") visualEnd++;
+    }
+
+    const before = existing.slice(0, visualStart);
+    const after = existing.slice(visualEnd);
+    existing = before + after;
+    fs.writeFileSync(filePath, existing.trimEnd() + "\n" + VISUAL_SNIPPET, { mode: 0o600 });
+    return { installed: true, updated: true };
+  }
+
+  fs.writeFileSync(filePath, existing + VISUAL_SNIPPET, { mode: 0o600 });
+  return { installed: true, updated: false };
+}
+
+function installVisualSnippet(update = false): { installed: boolean; updated: boolean } {
+  const targets = getSnippetTargets();
+  let anyInstalled = false;
+  let anyUpdated = false;
+
+  for (const target of targets) {
+    const result = installVisualSnippetToFile(target.filePath, target.dirPath, update);
     if (result.installed) anyInstalled = true;
     if (result.updated) anyUpdated = true;
   }
@@ -2889,6 +2959,7 @@ program
         if (config.task_enabled) installTaskSnippet(true);
         if (config.work_enabled) installWorkSnippet(true);
         if (config.workflow_enabled) installWorkflowSnippet(true);
+        if (config.visual_enabled) installVisualSnippet(true);
         // Messaging is on by default for memory installs — backfill/refresh + persist.
         const msgPatch = ensureMessagingForMemory(config);
         if (msgPatch) { Object.assign(config, msgPatch); writeConfig(config); }
@@ -7213,6 +7284,21 @@ program
         reEnable: "cast workflow install",
       },
       {
+        name: "Visual Canvas",
+        desc: "Inline HTML visuals from agents",
+        detail:
+          "Teaches agents to render rich visuals inline with a `cast-canvas` HTML block.\n" +
+          "  Charts, reports, mockups, diagrams, and small interactive widgets render\n" +
+          "  sandboxed in the conversation, expandable to fullscreen — instead of ASCII art.\n" +
+          "  Agents only reach for it when a visual beats prose (the default stays markdown).\n" +
+          "  Writes to: CLAUDE.md (adds a ## Visual Canvas section with the format)",
+        enabledKey: "visual_enabled" as const,
+        versionKey: "visual_version" as const,
+        getVersion: getVisualVersion,
+        install: installVisualSnippet,
+        reEnable: "cast install",
+      },
+      {
         name: "Orchestration",
         desc: "Multi-agent plan execution",
         detail:
@@ -8212,6 +8298,7 @@ program
       if (config.task_enabled) installTaskSnippet(true);
       if (config.work_enabled) installWorkSnippet(true);
       if (config.workflow_enabled) installWorkflowSnippet(true);
+      if (config.visual_enabled) installVisualSnippet(true);
       // Messaging is on by default for memory installs — backfill/refresh + persist.
       const msgPatch = ensureMessagingForMemory(config);
       if (msgPatch) { Object.assign(config, msgPatch); writeConfig(config); }
