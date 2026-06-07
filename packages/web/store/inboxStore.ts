@@ -522,30 +522,39 @@ export function isSessionDismissed(s: Pick<InboxSession, "inbox_dismissed_at">):
 // scan range. Keep in sync with packages/convex/convex/conversations.ts.
 export const DISMISS_RECONCILE_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 
+// Ordering precedence for a session, lowest-rank-first. Computed ONCE per
+// session so the comparator is a cheap tuple compare instead of re-deriving the
+// classification on every comparison. Each entry mirrors a tier of the old
+// short-circuit comparator exactly (pinned → not-deferred → stub-id →
+// new → waiting-for-input → idle), so the resulting order is identical.
+function sessionSortRank(s: InboxSession): [number, number, number, number, number, number] {
+  return [
+    s.is_pinned ? 0 : 1,                              // pinned first
+    s.is_deferred ? 1 : 0,                            // deferred last
+    isConvexId(s._id) ? 1 : 0,                        // optimistic stub ids first
+    (s.message_count ?? 0) === 0 ? 0 : 1,            // brand-new (no messages) first
+    isSessionWaitingForInput(s) ? 0 : 1,             // needs-input first
+    isSessionEffectivelyIdle(s) ? 0 : 1,             // idle before active
+  ];
+}
+
 export function sortSessions(sessions: Record<string, InboxSession>): InboxSession[] {
-  const list = Object.values(sessions).filter((s) => !isSessionDismissed(s));
-  list.sort((a, b) => {
-    const aPinned = !!a.is_pinned;
-    const bPinned = !!b.is_pinned;
-    if (aPinned !== bPinned) return aPinned ? -1 : 1;
-    const aDeferred = !!a.is_deferred;
-    const bDeferred = !!b.is_deferred;
-    if (aDeferred !== bDeferred) return aDeferred ? 1 : -1;
-    if (!isConvexId(a._id) !== !isConvexId(b._id)) return !isConvexId(a._id) ? -1 : 1;
-    const aNew = (a.message_count ?? 0) === 0;
-    const bNew = (b.message_count ?? 0) === 0;
-    if (aNew !== bNew) return aNew ? -1 : 1;
-    const aWaitingForInput = isSessionWaitingForInput(a);
-    const bWaitingForInput = isSessionWaitingForInput(b);
-    if (aWaitingForInput !== bWaitingForInput) return aWaitingForInput ? -1 : 1;
-    const aIdle = isSessionEffectivelyIdle(a);
-    const bIdle = isSessionEffectivelyIdle(b);
-    if (aIdle !== bIdle) return aIdle ? -1 : 1;
-    if (a._id < b._id) return -1;
-    if (a._id > b._id) return 1;
-    return 0;
+  // One O(N) classification pass, then an O(N log N) sort over cheap precomputed
+  // keys. The previous version called isSessionWaitingForInput /
+  // isSessionEffectivelyIdle / isConvexId inside the comparator — i.e. thousands
+  // of times per sort — which dominated the constant re-categorize cost the
+  // inbox pays on every liveness sync (see Chrome trace: sortSessions hot on
+  // every status flip). Output order is byte-identical to the old comparator.
+  const keyed = Object.values(sessions)
+    .filter((s) => !isSessionDismissed(s))
+    .map((s) => ({ s, rank: sessionSortRank(s) }));
+  keyed.sort((a, b) => {
+    for (let i = 0; i < a.rank.length; i++) {
+      if (a.rank[i] !== b.rank[i]) return a.rank[i] - b.rank[i];
+    }
+    return a.s._id < b.s._id ? -1 : a.s._id > b.s._id ? 1 : 0;
   });
-  return list;
+  return keyed.map((x) => x.s);
 }
 
 export function isInterruptControlMessage(raw: string | null | undefined): boolean {
@@ -840,6 +849,10 @@ export function categorizeSessions(
     ? sessionsWithQueuedMessages
     : new Set<string>([...sessionsWithQueuedMessages, ...pendingSendIds]);
   const hasPendingSend = (s: InboxSession) => pendingSendIds.has(s._id);
+  // Classify waiting-for-input ONCE per session (it's the costliest predicate and
+  // was evaluated twice below — in the needsInput and working filters).
+  const waitingForInput = new Map<string, boolean>();
+  for (const s of sorted) waitingForInput.set(s._id, isSessionWaitingForInput(s, inFlight));
 
   // Pinning is a manual curation gesture, so the Pinned group gets its own
   // stable order by pin time (oldest pin first, new pins append to the bottom)
@@ -857,13 +870,13 @@ export function categorizeSessions(
     });
   const newSessions = sorted.filter((s) => s.message_count === 0 && !s.is_pinned && !hasPendingSend(s) && isFlat(s))
     .sort((a, b) => (a.is_connected ? 1 : 0) - (b.is_connected ? 1 : 0));
-  const needsInput = sorted.filter((s) => isSessionWaitingForInput(s, inFlight) && isFlat(s))
+  const needsInput = sorted.filter((s) => waitingForInput.get(s._id) && isFlat(s))
     .sort((a, b) => {
       // Deferred sessions sink to the bottom of the group; otherwise earliest-updated first.
       if (!!a.is_deferred !== !!b.is_deferred) return a.is_deferred ? 1 : -1;
       return (a.updated_at || 0) - (b.updated_at || 0);
     });
-  const working = sorted.filter((s) => (!isSessionWaitingForInput(s, inFlight) && (s.message_count > 0 || hasPendingSend(s)) && !s.is_pinned) && isFlat(s));
+  const working = sorted.filter((s) => (!waitingForInput.get(s._id) && (s.message_count > 0 || hasPendingSend(s)) && !s.is_pinned) && isFlat(s));
 
   return { sorted, pinned, newSessions, needsInput, working, dismissed, subsByParent, forksByParent, orchestrationGroups };
 }
