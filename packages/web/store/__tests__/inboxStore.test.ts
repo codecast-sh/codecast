@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { categorizeSessions, computeNewDividerIndex, getSessionRenderKey, isConvexId, isSessionDismissed, orchestrationGroupLabelOf, pendingSendConsumed, resolveAssigneeInfo, sessionsWithPendingSend, unionHydrate, useInboxStore, worktreeKeyOf, type InboxSession } from "../inboxStore";
+import { categorizeSessions, computeNewDividerIndex, getSessionRenderKey, isConvexId, isSessionDismissed, orchestrationGroupLabelOf, pendingSendConsumed, resolveAssigneeInfo, resolveSessionAuthor, sessionsWithPendingSend, unionHydrate, useInboxStore, worktreeKeyOf, type InboxSession } from "../inboxStore";
 import { isPersistedStoreKey } from "../idbCache";
 
 const baseSession: InboxSession = {
@@ -2178,5 +2178,57 @@ describe("liveEntities derivers (system-level local-first fix)", () => {
     expect(deriveDocDisplayTitle({ source: "plan_mode", content: "# My Plan\nbody" })).toBe("My Plan");
     expect(deriveDocDisplayTitle({ source: "note", content: "# X" })).toBeUndefined();
     expect(deriveDocDisplayTitle({ source: "plan_mode", content: "no heading" })).toBeUndefined();
+  });
+});
+
+describe("resolveSessionAuthor", () => {
+  const me = { _id: "me", name: "Me", image: "me.png" };
+  const roster = [
+    me,
+    { _id: "u2", name: "Jason Park", image: "jason.png" },
+    { _id: "u3", email: "kim@x.com" },
+  ];
+
+  it("returns null for the current user's own session (user_id === me)", () => {
+    expect(resolveSessionAuthor({ user_id: "me" }, me, roster)).toBeNull();
+  });
+
+  it("returns null when there is no author identity at all (user-scoped default = mine)", () => {
+    expect(resolveSessionAuthor({}, me, roster)).toBeNull();
+  });
+
+  it("resolves a teammate from the live roster by user_id (name + avatar)", () => {
+    expect(resolveSessionAuthor({ user_id: "u2" }, me, roster)).toEqual({ name: "Jason Park", avatar: "jason.png" });
+  });
+
+  it("falls back to email when the roster member has no name", () => {
+    expect(resolveSessionAuthor({ user_id: "u3" }, me, roster)).toEqual({ name: "kim@x.com", avatar: undefined });
+  });
+
+  it("prefers the live roster over the source-provided author fields (instant rename)", () => {
+    const r = resolveSessionAuthor({ user_id: "u2", author_name: "Stale Name", author_avatar: "stale.png" }, me, roster);
+    expect(r).toEqual({ name: "Jason Park", avatar: "jason.png" });
+  });
+
+  it("uses source author fields when the author isn't on the roster (cross-team)", () => {
+    const r = resolveSessionAuthor({ user_id: "ghost", author_name: "Outsider", author_avatar: "out.png" }, me, roster);
+    expect(r).toEqual({ name: "Outsider", avatar: "out.png" });
+  });
+
+  it("shows the palette author (no user_id, only author_name) — team source already excluded own sessions", () => {
+    expect(resolveSessionAuthor({ author_name: "Sam", author_avatar: "sam.png" }, me, roster)).toEqual({ name: "Sam", avatar: "sam.png" });
+  });
+
+  it("returns null for an unnamed non-roster author (better blank than a raw id)", () => {
+    expect(resolveSessionAuthor({ user_id: "ghost" }, me, roster)).toBeNull();
+  });
+
+  it("before currentUser loads: own synced row (user_id, no author_name) stays unlabeled — no self-flash", () => {
+    expect(resolveSessionAuthor({ user_id: "me" }, null, roster)).toBeNull();
+    expect(resolveSessionAuthor({ user_id: "u2" }, undefined, roster)).toBeNull();
+  });
+
+  it("before currentUser loads: an explicit author_name is still trusted", () => {
+    expect(resolveSessionAuthor({ user_id: "u2", author_name: "Jason Park", author_avatar: "j.png" }, null, roster)).toEqual({ name: "Jason Park", avatar: "j.png" });
   });
 });

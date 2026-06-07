@@ -875,7 +875,7 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
 
   const navigateToSession = useCallback(
     (
-      conv: { _id: string; session_id?: string; title?: string; updated_at?: number; project_path?: string; git_root?: string; agent_type?: string; message_count?: number; is_idle?: boolean },
+      conv: { _id: string; session_id?: string; title?: string; updated_at?: number; project_path?: string; git_root?: string; agent_type?: string; message_count?: number; is_idle?: boolean; user_id?: string; authorName?: string | null; authorAvatar?: string | null },
       opts?: { messageId?: string; highlight?: string }
     ) => {
       const hash = opts?.messageId ? `#msg-${opts.messageId}` : "";
@@ -901,6 +901,11 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
           message_count: conv.message_count || 0,
           is_idle: conv.is_idle ?? true,
           has_pending: false,
+          // Search/recent results null out author for own sessions, so a present
+          // authorName means "not mine" — carry it so the card labels whose it is.
+          user_id: conv.user_id,
+          author_name: conv.authorName ?? null,
+          author_avatar: conv.authorAvatar ?? null,
         } as InboxSession);
       } else {
         store.navigateToSession(conv._id);

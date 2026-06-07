@@ -47,6 +47,42 @@ export function resolveAssigneeInfo(
   return fallback ?? { name: String(assignee) };
 }
 
+type SessionAuthor = { name: string; avatar?: string | null } | null;
+
+/**
+ * Resolve the author of an inbox session FOR DISPLAY — or null when the session
+ * is the current user's own (or the author can't be named). The inbox cache is
+ * user-scoped, so a synced row is always "mine"; a teammate's session only enters
+ * it by injection (deep-link / search / command-palette), carrying either a
+ * `user_id` (deep-link) or a source-provided `author_name`/`author_avatar` (search/
+ * recent, which null those out for own sessions). Name/avatar derive from the live
+ * roster by `user_id` when present (so a teammate's rename/avatar update shows
+ * instantly), falling back to the source-provided fields.
+ *
+ * Safe before `currentUser` loads: a synced own row (user_id === me, but `me`
+ * unknown yet) carries no author_name, so it resolves to null instead of briefly
+ * mislabeling your own session.
+ */
+export function resolveSessionAuthor(
+  session: { user_id?: string; author_name?: string | null; author_avatar?: string | null },
+  currentUser: Member | null | undefined,
+  teamMembers: Member[] | null | undefined,
+): SessionAuthor {
+  const uid = session.user_id;
+  const myId = currentUser?._id;
+  if (uid && myId && uid === myId) return null;            // definitely mine
+  if (uid && !myId) {
+    // user_id present but "me" not yet known: trust only an explicit author_name
+    // (team sources already excluded own sessions) to avoid mislabeling my own row.
+    return session.author_name ? { name: session.author_name, avatar: session.author_avatar } : null;
+  }
+  if (!uid && !session.author_name) return null;           // no author identity → mine
+  const m = uid ? teamMembers?.find((x) => x && x._id === uid) : null;
+  if (m) return { name: m.name || m.email || "Unknown", avatar: m.image || m.github_avatar_url };
+  if (session.author_name) return { name: session.author_name, avatar: session.author_avatar };
+  return null;
+}
+
 /**
  * Aggregate a plan's progress counts from a task list, mirroring the server's
  * recalcProgress so an optimistic status change moves the bar instantly.

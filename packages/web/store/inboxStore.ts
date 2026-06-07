@@ -21,7 +21,7 @@ export function isConvexId(id: string): boolean {
 
 // Canonical entity-derivation helpers live in lib/liveEntities. Re-exported here
 // so existing call sites that import from the store keep working.
-export { resolveAssigneeInfo, computePlanProgress, mergeLiveTasks } from "../lib/liveEntities";
+export { resolveAssigneeInfo, resolveSessionAuthor, computePlanProgress, mergeLiveTasks } from "../lib/liveEntities";
 import { deriveDocDisplayTitle } from "../lib/liveEntities";
 import type { PendingComment } from "../lib/quoteFormat";
 
@@ -206,6 +206,15 @@ export type InboxSession = {
   // Which device currently runs this session (null = unassigned; auto-routing
   // picks the most-recently-active local machine on next send).
   owner_device_id?: string | null;
+  // The session's author (conversation.user_id). The inbox is user-scoped, so a
+  // synced row is always the current user's own — but a teammate's session can be
+  // INJECTED into this same cache (deep-link / search / command-palette open). The
+  // card shows the author only when this isn't the current user. author_name/avatar
+  // are the source-provided display fallback for injected rows whose author isn't on
+  // the live team roster; otherwise the name/avatar derive from the roster by user_id.
+  user_id?: string;
+  author_name?: string | null;
+  author_avatar?: string | null;
 };
 
 // An image attached to an outbound (optimistic) message. While its upload is in
@@ -3489,3 +3498,6 @@ if (PERSISTENCE_AVAILABLE) {
   // gate so the app renders against a fresh empty store instead of hanging.
   useInboxStore.setState({ clientStateInitialized: true });
 }
+
+// TEMP-DEBUG: expose the store for manual verification. Remove before commit.
+if (typeof window !== "undefined") (window as any).__inboxStore = useInboxStore;
