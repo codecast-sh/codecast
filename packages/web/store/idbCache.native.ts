@@ -3,9 +3,26 @@
 // app restart — the RN replacement for the web Dexie engine. Metro resolves this
 // .native file (and its mobile-only expo-sqlite dep) for the native bundle; the web
 // bundler and tsconfig never touch it.
-import Storage from "expo-sqlite/kv-store";
+//
+// CRITICAL — acquire it through a guarded require(), NOT a static import. expo-sqlite
+// resolves its native module at module-eval time (`requireNativeModule('ExpoSQLite')`
+// THROWS when the installed binary doesn't contain it). An OTA update ships JS only,
+// so this code can land on an app binary built BEFORE expo-sqlite was added as a
+// native dependency. With a static import the throw propagates up the import chain
+// (inboxStore imports this eagerly at startup) and crashes the app on every launch —
+// before expo-updates can mark the update "launched", so it auto-rolls-back and the
+// update never takes. A guarded require degrades to an in-memory (non-persistent)
+// session on those older binaries instead of bricking them; native persistence
+// resumes automatically once users get a build that includes the ExpoSQLite module.
 import type { Patch } from "mutative";
 import { diffCollection } from "./idbCollectionDiff";
+
+let Storage: any = null;
+try {
+  Storage = require("expo-sqlite/kv-store").default;
+} catch {
+  Storage = null;
+}
 
 export type OutboxEntry = {
   id: string;
@@ -65,7 +82,11 @@ export function _resetPersistedShadow() {
   lastPersisted.clear();
 }
 
-export const PERSISTENCE_AVAILABLE = true;
+// False when the ExpoSQLite native module is absent (OTA shipped to an older
+// binary). inboxStore gates its hydrate/persist wiring on this, so the app runs
+// in-memory instead of crashing. Every Storage access below is also individually
+// null-guarded as defense in depth.
+export const PERSISTENCE_AVAILABLE = Storage != null;
 
 // A top-level store key is durable iff it maps to a dedicated collection or is
 // whitelisted as a meta blob. Keys that satisfy neither are silently dropped on
@@ -75,7 +96,7 @@ export function isPersistedStoreKey(key: string): boolean {
 }
 
 export function writePatchesToIDB(patches: Patch[], state: any) {
-  if (_hydrating) return;
+  if (!Storage || _hydrating) return;
 
   const affectedKeys = new Set<string>();
   for (const patch of patches) {
@@ -115,6 +136,7 @@ export function writePatchesToIDB(patches: Patch[], state: any) {
 }
 
 export async function loadCache(): Promise<Record<string, any> | null> {
+  if (!Storage) return null;
   try {
     const result: Record<string, any> = {};
     let hasData = false;
@@ -163,6 +185,7 @@ export function setHydrating(v: boolean) {
 // -- Per-conversation message cache --
 
 export async function loadConversationMessages(convId: string): Promise<{ messages: any[]; pagination: any; latestTimestamp: number } | null> {
+  if (!Storage) return null;
   try {
     const raw = await Storage.getItem(CONVMSG_PREFIX + convId);
     if (raw == null) return null;
@@ -174,7 +197,7 @@ export async function loadConversationMessages(convId: string): Promise<{ messag
 }
 
 export function writeConversationMessages(convId: string, messages: any[], pagination: any) {
-  if (_hydrating) return;
+  if (!Storage || _hydrating) return;
   const latestTimestamp = messages.length > 0
     ? Math.max(...messages.map((m: any) => m.timestamp || 0))
     : 0;
@@ -188,6 +211,7 @@ export function writeConversationMessages(convId: string, messages: any[], pagin
 // We chain every mutation onto a single tail promise to enforce ordering.
 
 async function readOutbox(): Promise<OutboxEntry[]> {
+  if (!Storage) return [];
   const raw = await Storage.getItem(OUTBOX_KEY);
   if (raw == null) return [];
   return JSON.parse(raw) as OutboxEntry[];
@@ -196,6 +220,7 @@ async function readOutbox(): Promise<OutboxEntry[]> {
 let _outboxQueue: Promise<unknown> = Promise.resolve();
 
 function mutateOutbox(transform: (entries: OutboxEntry[]) => OutboxEntry[]) {
+  if (!Storage) return;
   _outboxQueue = _outboxQueue
     .then(() => readOutbox())
     .then((entries) => Storage.setItem(OUTBOX_KEY, JSON.stringify(transform(entries))))

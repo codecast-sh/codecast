@@ -3482,4 +3482,10 @@ if (PERSISTENCE_AVAILABLE) {
       setHydrating(false);
     }, 0);
   });
+} else {
+  // No native persistence (ExpoSQLite module absent on this binary — e.g. an OTA
+  // landed on an app built before expo-sqlite was added). Skip hydration and
+  // write-through wiring entirely and run in-memory, but still release the init
+  // gate so the app renders against a fresh empty store instead of hanging.
+  useInboxStore.setState({ clientStateInitialized: true });
 }
