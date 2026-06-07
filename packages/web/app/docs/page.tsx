@@ -8,6 +8,7 @@ import { AuthGuard } from "../../components/AuthGuard";
 import { useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { GenericListView, ListGroup, ItemRowState } from "../../components/GenericListView";
+import { SegmentedToggle } from "../../components/SegmentedToggle";
 import { getLabelColor, DEFAULT_LABELS } from "../../lib/labelColors";
 import { docMatchesProjectFilter } from "../../lib/docFilters";
 import {
@@ -328,29 +329,15 @@ export function DocListContent() {
       ) : undefined}
       syncScope="docs"
       headerExtra={
-        <div className="flex items-center rounded-md border border-sol-border/40 overflow-hidden">
-          <button
-            onClick={() => setParam({ source: "" })}
-            className={`px-2 py-1.5 text-xs transition-colors ${!sourceFilter ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"}`}
-            title="All docs"
-          >
-            All
-          </button>
-          <button
-            onClick={() => setParam({ source: "human" })}
-            className={`px-2 py-1.5 transition-colors border-l border-sol-border/40 ${sourceFilter === "human" ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"}`}
-            title="Human-created docs"
-          >
-            <User className="w-3.5 h-3.5" />
-          </button>
-          <button
-            onClick={() => setParam({ source: "bot" })}
-            className={`px-2 py-1.5 transition-colors border-l border-sol-border/40 ${sourceFilter === "bot" ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"}`}
-            title="Bot-created docs"
-          >
-            <Bot className="w-3.5 h-3.5" />
-          </button>
-        </div>
+        <SegmentedToggle
+          value={sourceFilter}
+          onChange={(v) => setParam({ source: v })}
+          items={[
+            { key: "", label: "All", title: "All docs" },
+            { key: "human", icon: User, title: "Human-created docs" },
+            { key: "bot", icon: Bot, title: "Bot-created docs" },
+          ]}
+        />
       }
       filters={{
         hasActive: !!(projectFilter || labelFilter || sourceFilter || docType),
