@@ -180,10 +180,20 @@ export interface ListFilterDef {
   multi?: boolean;
 }
 
-/** "+ Filter" add-menu: a two-level popover (category → that category's options)
- *  for filters that aren't set yet. Active filters render as removable chips in
- *  the filter bar instead, so this lists only the not-yet-applied categories. */
-function AddFilterMenu({ defs }: { defs: ListFilterDef[] }) {
+/** Add-filter menu: a two-level popover (category → that category's options) for
+ *  filters that aren't set yet. Active filters render as removable chips, so this
+ *  lists only the not-yet-applied categories. Two triggers: the header "Filter"
+ *  button (variant="header", the entry point when the filter bar is hidden) and
+ *  the dashed "+ Filter" inside the bar (variant="add", for adding more). */
+function AddFilterMenu({
+  defs,
+  variant = "add",
+  active = false,
+}: {
+  defs: ListFilterDef[];
+  variant?: "add" | "header";
+  active?: boolean;
+}) {
   const [open, setOpen] = useState(false);
   const [catKey, setCatKey] = useState<string | null>(null);
   const ref = useRef<HTMLDivElement>(null);
@@ -199,19 +209,36 @@ function AddFilterMenu({ defs }: { defs: ListFilterDef[] }) {
 
   const available = defs.filter((d) => !d.value);
   const cat = defs.find((d) => d.key === catKey) || null;
+  const toggle = () => { setOpen((o) => !o); setCatKey(null); };
 
   return (
     <div ref={ref} className="relative">
-      <button
-        onClick={() => { setOpen((o) => !o); setCatKey(null); }}
-        className="flex items-center gap-1 text-xs h-7 px-2 rounded-md border border-dashed border-sol-border/50 text-sol-text-dim hover:text-sol-text hover:border-sol-border transition-colors"
-        title="Add filter"
-      >
-        <Plus className="w-3 h-3" />
-        <span>Filter</span>
-      </button>
+      {variant === "header" ? (
+        <button
+          onClick={toggle}
+          className={`flex items-center gap-1.5 text-xs h-7 px-2.5 rounded-md border transition-colors ${
+            open || active
+              ? "border-sol-cyan/40 text-sol-cyan bg-sol-cyan/5"
+              : "border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-border"
+          }`}
+          title="Filter"
+        >
+          <ListFilter className="w-3 h-3 flex-shrink-0" />
+          <span className="cq-header-collapse">Filter</span>
+          {active && <span className="w-1.5 h-1.5 rounded-full bg-sol-cyan flex-shrink-0" />}
+        </button>
+      ) : (
+        <button
+          onClick={toggle}
+          className="flex items-center gap-1 text-xs h-7 px-2 rounded-md border border-dashed border-sol-border/50 text-sol-text-dim hover:text-sol-text hover:border-sol-border transition-colors"
+          title="Add filter"
+        >
+          <Plus className="w-3 h-3" />
+          <span>Filter</span>
+        </button>
+      )}
       {open && (
-        <div className="absolute top-full left-0 mt-1 w-48 bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[60] py-1 max-h-72 overflow-y-auto">
+        <div className={`absolute top-full ${variant === "header" ? "right-0" : "left-0"} mt-1 w-48 bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[60] py-1 max-h-72 overflow-y-auto`}>
           {!cat ? (
             available.length === 0 ? (
               <div className="px-3 py-1.5 text-xs text-sol-text-dim">All filters added</div>
@@ -369,7 +396,6 @@ export function GenericListView<T>({
   const [focusIndex, setFocusIndex] = useState(0);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
-  const [showFilters, setShowFilters] = useState(() => !!filters?.hasActive);
   const storeOpenPalette = useInboxStore((s) => s.openPalette);
   const paletteIsOpen = useInboxStore((s) => s.palette.open);
   const [previewId, setPreviewId] = useState<string | null>(null);
@@ -768,21 +794,7 @@ export function GenericListView<T>({
               <Search className="w-3.5 h-3.5" />
             </button>
           )}
-          {filters && (
-            <button
-              onClick={() => setShowFilters((f) => !f)}
-              className={`flex items-center gap-1.5 text-xs h-7 px-2.5 rounded-md border transition-colors ${
-                showFilters || filters.hasActive
-                  ? "border-sol-cyan/40 text-sol-cyan bg-sol-cyan/5"
-                  : "border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-border"
-              }`}
-              title="Toggle filters"
-            >
-              <ListFilter className="w-3 h-3 flex-shrink-0" />
-              <span className="cq-header-collapse">Filter</span>
-              {filters.hasActive && <span className="w-1.5 h-1.5 rounded-full bg-sol-cyan flex-shrink-0" />}
-            </button>
-          )}
+          {filters && <AddFilterMenu defs={filters.defs} variant="header" active={filters.defs.some((d) => d.value)} />}
           <DisplayMenu
             sortBy={sortBy}
             sortOptions={sortOptions}
@@ -807,8 +819,10 @@ export function GenericListView<T>({
         </div>
       </div>
 
-      {/* Filter bar */}
-      {filters && showFilters && (
+      {/* Filter bar — only present once at least one chip-able filter is set (NOT
+          filters.hasActive, which also counts the source toggle and would leave an
+          empty chipless row). The header "Filter" button adds the first one. */}
+      {filters && filters.defs.some((d) => d.value) && (
         <div className="flex items-center flex-wrap gap-x-1.5 gap-y-1.5 px-6 py-2 border-b border-sol-border/20 bg-sol-bg-alt/20">
           {/* Active filters as removable chips; everything unset lives behind "+ Filter". */}
           {filters.defs.filter((f) => f.value).map((f) => (
