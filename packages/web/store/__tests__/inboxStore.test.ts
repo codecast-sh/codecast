@@ -243,6 +243,43 @@ describe("categorizeSessions", () => {
     expect(working.map((s) => s._id)).not.toContain("conv-stopped");
   });
 
+  it("routes auth-error (pending_api_error) sessions to Needs Input even when the daemon still claims working", () => {
+    // A signed-out session whose Stop hook was lost: the daemon re-asserts
+    // "working" so is_idle stays false. Without the auth routing it would hide
+    // in Working; the pending_api_error flag must surface it for re-login.
+    const signedOut: InboxSession = {
+      ...baseSession,
+      _id: "conv-auth-error",
+      session_id: "session-auth-error",
+      message_count: 6,
+      is_idle: false,
+      agent_status: "working",
+      pending_api_error: true,
+    };
+    // Control: same shape, no banner → genuinely working, stays out of Needs Input.
+    const working: InboxSession = {
+      ...baseSession,
+      _id: "conv-working",
+      session_id: "session-working",
+      message_count: 6,
+      is_idle: false,
+      agent_status: "working",
+    };
+
+    const { needsInput, working: workingBucket } = categorizeSessions(
+      {
+        [signedOut._id]: signedOut,
+        [working._id]: working,
+      },
+      new Set(),
+    );
+
+    expect(needsInput.map((s) => s._id)).toContain("conv-auth-error");
+    expect(needsInput.map((s) => s._id)).not.toContain("conv-working");
+    expect(workingBucket.map((s) => s._id)).toContain("conv-working");
+    expect(workingBucket.map((s) => s._id)).not.toContain("conv-auth-error");
+  });
+
   it("puts idle sessions with pending messages in Working (not Needs Input)", () => {
     const idleWithPending: InboxSession = {
       ...baseSession,
