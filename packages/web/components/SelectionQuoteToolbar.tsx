@@ -1,0 +1,123 @@
+// Floating toolbar that appears when the user selects text inside an assistant
+// message body (anything inside a .cc-msg-review region). Offers "Quote" (drop a
+// blockquote of the selection into the composer immediately) and "Comment"
+// (start a pending inline comment anchored to that block, with the selection as
+// the quote). Positioned at the selection rect via a portal.
+
+import React, { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { useReviewComposer } from "./reviewContext";
+import { createReviewComment } from "../lib/reviewActions";
+import { useInboxStore } from "../store/inboxStore";
+import { KeyCap } from "./KeyboardShortcutsHelp";
+
+type Anchor = { x: number; y: number; messageId: string; blockIndex: number; quote: string };
+
+function resolveSelection(): Anchor | null {
+  const sel = window.getSelection();
+  if (!sel || sel.isCollapsed || sel.rangeCount === 0) return null;
+  const text = sel.toString().trim();
+  if (!text) return null;
+
+  const range = sel.getRangeAt(0);
+  const anchorEl = (range.startContainer.nodeType === 1
+    ? (range.startContainer as Element)
+    : range.startContainer.parentElement) as HTMLElement | null;
+  const region = anchorEl?.closest(".cc-msg-review") as HTMLElement | null;
+  if (!region) return null; // selection isn't in a reviewable assistant body
+
+  const msgEl = region.closest('[id^="msg-"]') as HTMLElement | null;
+  const messageId = msgEl?.id?.slice(4);
+  if (!messageId) return null;
+
+  // Which top-level block does the selection start in?
+  let blockEl: HTMLElement | null = anchorEl;
+  while (blockEl && blockEl.parentElement !== region) blockEl = blockEl.parentElement;
+  const children = Array.from(region.children).filter(
+    (c) => !(c as HTMLElement).hasAttribute("data-cc-gutter"),
+  ) as HTMLElement[];
+  const blockIndex = blockEl ? Math.max(0, children.indexOf(blockEl)) : 0;
+
+  const rect = range.getBoundingClientRect();
+  if (!rect || (rect.width === 0 && rect.height === 0)) return null;
+  return { x: rect.left + rect.width / 2, y: rect.top, messageId, blockIndex, quote: text };
+}
+
+export function SelectionQuoteToolbar({ conversationId }: { conversationId: string }) {
+  const composer = useReviewComposer();
+  const [anchor, setAnchor] = useState<Anchor | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    const schedule = () => {
+      if (timer.current) clearTimeout(timer.current);
+      timer.current = setTimeout(() => setAnchor(resolveSelection()), 120);
+    };
+    const onSelChange = () => {
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed) {
+        if (timer.current) clearTimeout(timer.current);
+        setAnchor(null);
+      } else {
+        schedule();
+      }
+    };
+    const onMouseUp = () => schedule();
+    const onScroll = () => setAnchor(null);
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setAnchor(null);
+    };
+
+    document.addEventListener("selectionchange", onSelChange);
+    document.addEventListener("mouseup", onMouseUp);
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      if (timer.current) clearTimeout(timer.current);
+      document.removeEventListener("selectionchange", onSelChange);
+      document.removeEventListener("mouseup", onMouseUp);
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("keydown", onKeyDown, true);
+    };
+  }, []);
+
+  if (!anchor) return null;
+
+  const clear = () => {
+    window.getSelection()?.removeAllRanges();
+    setAnchor(null);
+  };
+  const doQuote = () => {
+    composer?.quote(anchor.quote);
+    clear();
+  };
+  const doComment = () => {
+    createReviewComment(conversationId, anchor.messageId, anchor.blockIndex, anchor.quote);
+    // Engage the message and scroll the (now-split) target into view.
+    useInboxStore.getState().setReviewTarget(anchor.messageId, anchor.blockIndex);
+    clear();
+  };
+
+  // Place above the selection; flip below if too close to the top.
+  const flipBelow = anchor.y < 56;
+  return createPortal(
+    <div
+      className="cc-sel-toolbar"
+      style={{
+        left: anchor.x,
+        top: flipBelow ? anchor.y + 22 : anchor.y - 8,
+        transform: flipBelow ? "translate(-50%, 0)" : "translate(-50%, -100%)",
+      }}
+      onMouseDown={(e) => e.preventDefault()}
+    >
+      <button type="button" className="cc-sel-btn" onClick={doQuote}>
+        Quote
+      </button>
+      <span className="cc-sel-div" />
+      <button type="button" className="cc-sel-btn" onClick={doComment}>
+        Comment
+      </button>
+    </div>,
+    document.body,
+  );
+}

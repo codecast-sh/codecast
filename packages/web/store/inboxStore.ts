@@ -23,6 +23,7 @@ export function isConvexId(id: string): boolean {
 // so existing call sites that import from the store keep working.
 export { resolveAssigneeInfo, computePlanProgress, mergeLiveTasks } from "../lib/liveEntities";
 import { deriveDocDisplayTitle } from "../lib/liveEntities";
+import type { PendingComment } from "../lib/quoteFormat";
 
 // Critical UI prefs mirrored to localStorage so they're available
 // synchronously at module load — avoids a layout flash between first paint
@@ -934,6 +935,24 @@ interface InboxStoreState {
 
   drafts: Record<string, Record<string, any>>;
 
+  // -- Inline review (quote / comment on assistant message blocks) --
+  // Ephemeral UI state: which message is in keyboard/inline-review mode, the
+  // highlighted block within it, and the batch of pending comments per
+  // conversation. Never synced or persisted — survives session switches in
+  // memory, resets on reload (the right lifetime for an in-progress batch).
+  reviewMessageId: string | null;
+  reviewActiveBlock: number;
+  reviewEditingId: string | null;
+  reviewComments: Record<string, PendingComment[]>;
+  setReviewTarget: (messageId: string | null, blockIndex?: number) => void;
+  setReviewActiveBlock: (blockIndex: number) => void;
+  setReviewEditingId: (id: string | null) => void;
+  addReviewComment: (conversationId: string, comment: PendingComment) => void;
+  updateReviewComment: (conversationId: string, id: string, body: string) => void;
+  removeReviewComment: (conversationId: string, id: string) => void;
+  clearReviewComments: (conversationId: string) => void;
+  getReviewComments: (conversationId: string) => PendingComment[];
+
   currentConversation: CurrentConversationContext;
   isolatedWorktreeMode: boolean;
   setIsolatedWorktreeMode: (val: boolean) => void;
@@ -1025,6 +1044,7 @@ interface InboxStoreState {
   setViewingDismissedId: (id: string | null) => void;
   getCurrentSession: () => InboxSession | null;
   injectSession: (session: InboxSession) => void;
+  preloadForkSessions: (forks: ForkChild[], forkedFrom?: string) => void;
   updateSessionProject: (id: string, projectPath: string) => void;
   patchSession: (id: string, fields: Partial<InboxSession>) => void;
   setConversationAgent: (id: string, agentType: string) => void;
@@ -1588,6 +1608,48 @@ export const useInboxStore = create<InboxStoreState>(
   clientStateInitialized: false,
 
   drafts: {},
+
+  reviewMessageId: null,
+  reviewActiveBlock: 0,
+  reviewEditingId: null,
+  reviewComments: {},
+
+  setReviewTarget: (messageId: string | null, blockIndex = 0) =>
+    set({ reviewMessageId: messageId, reviewActiveBlock: messageId ? blockIndex : 0 }),
+  setReviewActiveBlock: (blockIndex: number) => set({ reviewActiveBlock: blockIndex }),
+  setReviewEditingId: (id: string | null) => set({ reviewEditingId: id }),
+  addReviewComment: (conversationId: string, comment: PendingComment) =>
+    set((s: any) => ({
+      reviewComments: {
+        ...s.reviewComments,
+        [conversationId]: [...(s.reviewComments[conversationId] ?? []), comment],
+      },
+    })),
+  updateReviewComment: (conversationId: string, id: string, body: string) =>
+    set((s: any) => ({
+      reviewComments: {
+        ...s.reviewComments,
+        [conversationId]: (s.reviewComments[conversationId] ?? []).map((c: PendingComment) =>
+          c.id === id ? { ...c, body } : c,
+        ),
+      },
+    })),
+  removeReviewComment: (conversationId: string, id: string) =>
+    set((s: any) => {
+      const next = (s.reviewComments[conversationId] ?? []).filter((c: PendingComment) => c.id !== id);
+      const map = { ...s.reviewComments };
+      if (next.length) map[conversationId] = next;
+      else delete map[conversationId];
+      return { reviewComments: map };
+    }),
+  clearReviewComments: (conversationId: string) =>
+    set((s: any) => {
+      if (!s.reviewComments[conversationId]) return {};
+      const map = { ...s.reviewComments };
+      delete map[conversationId];
+      return { reviewComments: map };
+    }),
+  getReviewComments: (conversationId: string) => get().reviewComments[conversationId] ?? [],
 
   pendingSessionCreates: {},
 
@@ -2393,6 +2455,38 @@ export const useInboxStore = create<InboxStoreState>(
       this.currentSessionId = session._id;
       this.viewingDismissedId = null;
       this.clientState.current_conversation_id = session._id;
+    }
+  }),
+
+  // Seed branch (fork) sessions into the local cache WITHOUT navigating, so a
+  // later branch-chip click switches instantly instead of routing through the
+  // pendingNavigate → getConversation fetch → injectSession path (the source of
+  // the "branch spins forever" hang on a cold cache). Gap-fill only: an existing
+  // live row is never downgraded by a thin stub. Authoritative metadata + the
+  // message list reconcile via the normal getConversationWithMeta + listMessages
+  // subscriptions the moment the branch is actually viewed. sync() (not action())
+  // because this is incoming-data seeding, not a user edit — it persists to IDB
+  // (branches stay preloaded across reloads) but dispatches nothing to the server.
+  preloadForkSessions: sync(function (this: Draft, forks: ForkChild[], forkedFrom?: string) {
+    for (const f of forks) {
+      const id = f?._id;
+      if (!id || !isConvexId(id)) continue;               // skip optimistic/stub ids
+      if (this.sessions[id]) continue;                    // don't clobber live data
+      if (this.pending[`sessions:${id}`]?.type === "exclude") continue; // killed locally
+      if (!this.conversations[id]) this.conversations[id] = { _id: id } as any;
+      this.sessions[id] = {
+        _id: id,
+        session_id: id,
+        title: f.title,
+        updated_at: f.updated_at ?? f.started_at ?? Date.now(),
+        started_at: f.started_at,
+        agent_type: f.agent_type || "claude_code",
+        message_count: f.message_count ?? 0,
+        is_idle: true,
+        has_pending: false,
+        forked_from: forkedFrom ?? null,
+        parent_message_uuid: f.parent_message_uuid ?? null,
+      } as InboxSession;
     }
   }),
 

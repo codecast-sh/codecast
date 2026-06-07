@@ -21,6 +21,10 @@ function isInputTarget(e: KeyboardEvent): boolean {
   if (!el) return false;
   if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') return true;
   if (el.isContentEditable) return true;
+  // The inline-review region owns its own single-letter keys (navigate blocks,
+  // comment, quote, remove). Treat it like an input so those don't leak to
+  // global shortcuts; the region's own keydown handler still receives them.
+  if (typeof el.closest === 'function' && el.closest('[data-review-region="active"]')) return true;
   return false;
 }
 

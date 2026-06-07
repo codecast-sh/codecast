@@ -29,6 +29,7 @@ export type ShortcutAction =
   | 'conv.collapseAll'
   | 'conv.toggleThinking'
   | 'conv.favorite'
+  | 'conv.review'
   | 'msg.next'
   | 'msg.prev'
   | 'msg.fork'
@@ -106,6 +107,7 @@ export const SHORTCUTS: ShortcutDef[] = [
   { key: 't', action: 'conv.toggleTree', when: 'conversation', description: 'Toggle tree panel' },
   { key: 'h', action: 'conv.toggleThinking', when: 'conversation', description: 'Toggle thinking blocks' },
   { key: 'f', action: 'conv.favorite', when: 'conversation', description: 'Toggle favorite' },
+  { key: 'r', action: 'conv.review', when: 'conversation', description: 'Review / comment on a reply' },
   { key: 'meta+shift+l', action: 'conv.copyLink', when: 'conversation', skipInputCheck: true, description: 'Copy conversation link' },
   { key: 'ctrl+shift+c', mac: 'meta+shift+c', action: 'conv.collapseAll', when: 'conversation', skipInputCheck: true, description: 'Collapse/expand all' },
 
