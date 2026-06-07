@@ -47,6 +47,17 @@
 .cq-no-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
 .cq-no-scrollbar::-webkit-scrollbar { display: none; }
 
+/* Kill Chromium's two-finger / overscroll "swipe to go back/forward" gesture.
+   We push a history entry per viewed conversation (QueuePageClient session
+   switch), so in the desktop shell an accidental horizontal swipe — or
+   overscrolling past the edge of a wide code block, which chains up to the root
+   scroller — was firing popstate and jumping to a previously-viewed conversation.
+   Intentional back/forward (Cmd+[ / Cmd+], app menu) routes through
+   webContents.goBack() and is unaffected by overscroll-behavior. */
+html, body {
+  overscroll-behavior-x: none;
+}
+
 :root {
   --font-mono: "JetBrains Mono", monospace;
   --font-serif: "Fraunces", serif;

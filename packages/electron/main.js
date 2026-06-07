@@ -5,6 +5,14 @@ const fs = require("fs");
 
 app.name = "Codecast";
 
+// Disable Chromium's trackpad/overscroll swipe-to-navigate (back/forward).
+// We push a history entry per viewed conversation, so an accidental two-finger
+// horizontal swipe would walk backward through that stack and "randomly" jump
+// conversations. Deliberate back/forward (Cmd+[ / Cmd+], app menu) uses
+// webContents.goBack()/goForward() and is unaffected. The CSS overscroll-behavior
+// rule covers this too; this is the belt-and-suspenders native guard.
+app.commandLine.appendSwitch("disable-features", "OverscrollHistoryNavigation");
+
 // Squirrel.Mac registers its install helper as a launchd job named
 // "<build.appId>.ShipIt". Keep this in sync with electron-builder's appId.
 const SHIPIT_LABEL = "sh.codecast.desktop.ShipIt";
