@@ -334,6 +334,12 @@ export const SessionCard = memo(function SessionCard({
   const isSlashCommand = displayTitle.startsWith("/");
   const cleanedUserMsg = cleanUserMessage(session.last_user_message);
   const cardSummary = sessionCardSummary(session);
+  // "Working" = the agent is actively running right now (mirrors
+  // sessionLivenessState's "active"). The green pulse keys off this ACTUAL state
+  // rather than the section the card lives in, so pinned and flat-view cards —
+  // which always render with the "default" variant — still distinguish working
+  // from idle instead of showing nothing for a busy pinned session.
+  const isLive = !session.is_idle && session.message_count > 0;
 
 
   const [isDragOver, setIsDragOver] = useState(false);
@@ -617,7 +623,7 @@ export const SessionCard = memo(function SessionCard({
             {session.has_pending && !session.is_unresponsive && !isPendingWorking && (
               <span className="w-1.5 h-1.5 rounded-full bg-sol-yellow animate-pulse" title="Message pending" />
             )}
-            {!isWorking && !isDismissed && session.is_idle && !session.is_connected && !session.session_error && !session.is_unresponsive && !session.has_pending && !isPendingWorking && session.message_count > 0 && (
+            {!isWorking && !isLive && !isDismissed && session.is_idle && !session.session_error && !session.is_unresponsive && !session.has_pending && !isPendingWorking && session.message_count > 0 && (
               <span className="w-1.5 h-1.5 rounded-full bg-sol-text-dim/40 ring-1 ring-sol-text-dim/20" title="Session idle" />
             )}
             {isPendingWorking && (
@@ -626,7 +632,7 @@ export const SessionCard = memo(function SessionCard({
                 pending
               </span>
             )}
-            {isWorking && !isPendingWorking && (
+            {(isWorking || isLive) && !isPendingWorking && (
               <span className="relative flex h-2 w-2" title="Working">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-sol-green opacity-75" />
                 <span className="relative inline-flex rounded-full h-2 w-2 bg-sol-green" />
