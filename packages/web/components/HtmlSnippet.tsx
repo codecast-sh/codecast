@@ -135,6 +135,7 @@ export function tryRenderCanvas(language: string | undefined, code: string): Rea
 export function HtmlSnippet({ code }: { code: string }) {
   const debounced = useDebounced(code, 150);
   const clean = useMemo(() => sanitize(debounced), [debounced]);
+  const title = useMemo(() => extractTitle(clean), [clean]);
   const [fullscreen, setFullscreen] = useState(false);
   const [showSource, setShowSource] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -166,9 +167,12 @@ export function HtmlSnippet({ code }: { code: string }) {
 
   return (
     <div className="my-3 overflow-hidden rounded border border-sol-border/40 bg-sol-bg-alt">
-      <div className="flex items-center justify-between border-b border-sol-border/40 px-3 py-1.5">
-        <span className="select-none text-[11px] font-medium uppercase tracking-wide text-sol-text-dim/70">
-          Canvas
+      <div className="flex items-center justify-between gap-2 border-b border-sol-border/40 px-3 py-1.5">
+        <span
+          className={`truncate text-xs font-medium ${title ? "text-sol-text-muted" : "uppercase tracking-wide text-sol-text-dim/70 text-[11px]"}`}
+          title={title ?? undefined}
+        >
+          {title ?? "Canvas"}
         </span>
         <div className="flex items-center gap-0.5">
           <button
@@ -198,6 +202,11 @@ export function HtmlSnippet({ code }: { code: string }) {
       {fullscreen &&
         createPortal(
           <div className="fixed inset-0 z-[100] overflow-auto bg-sol-bg/95 backdrop-blur-xl">
+            {title && (
+              <div className="absolute left-4 top-4 z-10 max-w-[55%] truncate rounded-lg border border-sol-border/40 bg-sol-bg-alt/80 px-3 py-1.5 text-xs font-medium text-sol-text-muted backdrop-blur">
+                {title}
+              </div>
+            )}
             <div className="absolute right-4 top-4 z-10 flex items-center gap-0.5 rounded-lg border border-sol-border/40 bg-sol-bg-alt/80 px-1 py-0.5 backdrop-blur">
               <button onClick={handleCopy} className={headerBtn} title="Copy HTML">
                 {copied ? <Check size={16} className="text-sol-cyan" /> : <Copy size={16} />}
