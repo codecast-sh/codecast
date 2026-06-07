@@ -357,6 +357,30 @@ html, body {
     background: var(--sol-border);
   }
 
+  /* Always-visible solarized scrollbar — used by the fullscreen canvas so a long
+     report visibly reads as scrollable. Deliberately NOT setting scrollbar-width:
+     the standard property renders as a 0-width auto-hiding overlay on macOS and
+     suppresses the legacy ::-webkit-scrollbar below. Omitting it makes Chrome use
+     the classic scrollbar, which reserves space and stays visible. */
+  .canvas-scroll::-webkit-scrollbar {
+    width: 12px;
+    height: 12px;
+  }
+  .canvas-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .canvas-scroll::-webkit-scrollbar-thumb {
+    background: var(--sol-border);
+    border-radius: 8px;
+    border: 3px solid transparent;
+    background-clip: padding-box;
+  }
+  .canvas-scroll::-webkit-scrollbar-thumb:hover {
+    background: var(--sol-text-dim);
+    border: 3px solid transparent;
+    background-clip: padding-box;
+  }
+
 }
 
 /* Code block horizontal scrollbar - solarized */
