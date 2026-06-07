@@ -6,6 +6,7 @@ import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useImageGallery } from "../ImageGallery";
 import { CodeBlock } from "../CodeBlock";
 import { MermaidDiagram } from "../MermaidDiagram";
+import { tryRenderCanvas } from "../HtmlSnippet";
 import { entityRemarkPlugins } from "../../lib/remarkEntityIds";
 import { EntityAwareCode, EntityAwareLink } from "../EntityIdPill";
 
@@ -118,6 +119,8 @@ const MD_COMPONENTS: Components = {
               const code = extractTextFromHast(codeElement);
               if (code) {
                 if (language === 'mermaid') return <MermaidDiagram code={code} />;
+                const canvas = tryRenderCanvas(language, code);
+                if (canvas) return canvas;
                 return <CodeBlock code={code} language={language} />;
               }
             }
