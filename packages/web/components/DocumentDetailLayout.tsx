@@ -20,6 +20,8 @@ interface DocumentDetailLayoutProps {
   backHref: string;
   topBarLeft?: React.ReactNode;
   topBarRight?: React.ReactNode;
+  /** Always-visible content shown between the title and the body editor (e.g. a plan's goal). */
+  leadContent?: React.ReactNode;
   metaContent?: React.ReactNode;
   children?: React.ReactNode;
   footerContent?: React.ReactNode;
@@ -38,6 +40,7 @@ export function DocumentDetailLayout({
   backHref,
   topBarLeft,
   topBarRight,
+  leadContent,
   metaContent,
   children,
   footerContent,
@@ -140,6 +143,8 @@ export function DocumentDetailLayout({
           >
             {title || "Untitled"}
           </h1>
+
+          {leadContent && <div className="mt-2">{leadContent}</div>}
 
           <div className="mt-4">
             <ErrorBoundary name="DocEditor" level="panel">
