@@ -1062,8 +1062,13 @@ interface InboxStoreState {
   // -- Team activity-feed cache (IDB-persisted, keyed by team+dir) --
   feedConversations: Record<string, any[]>;
   feedHasMore: Record<string, boolean>;
+  // Server-issued continuation cursor per feed key: string = resume point for
+  // the next older page, null = the server confirmed true end-of-history,
+  // absent = unknown (fall back to the oldest cached row).
+  feedCursors: Record<string, string | null>;
   mergeFeedConversations: (key: string, convs: any[]) => void;
   setFeedHasMore: (key: string, hasMore: boolean) => void;
+  setFeedCursor: (key: string, cursor: string | null) => void;
   sortedSessions: () => InboxSession[];
   visualOrder: () => InboxSession[];
 
@@ -1635,6 +1640,7 @@ export const useInboxStore = create<InboxStoreState>(
   userMessages: {},
   feedConversations: {},
   feedHasMore: {},
+  feedCursors: {},
   syncMeta: {},
   // Seed UI from localStorage so layout-affecting prefs (sidebar collapsed,
   // zen mode, inbox shortcut bar) are correct on first paint. IDB hydration
@@ -2244,6 +2250,13 @@ export const useInboxStore = create<InboxStoreState>(
   // affordance is correct on cold open without first probing the server).
   setFeedHasMore: sync(function (this: Draft, key: string, hasMore: boolean) {
     this.feedHasMore[key] = hasMore;
+  }),
+
+  // Server-issued continuation cursor for the next older page (null = the
+  // server confirmed true end-of-history). Persisted so pagination resumes
+  // exactly where it stopped instead of re-deriving from the oldest cached row.
+  setFeedCursor: sync(function (this: Draft, key: string, cursor: string | null) {
+    this.feedCursors[key] = cursor;
   }),
 
   // Advance the per-workspace incremental-sync watermark. sync() = local draft +
@@ -3511,6 +3524,3 @@ if (PERSISTENCE_AVAILABLE) {
   // gate so the app renders against a fresh empty store instead of hanging.
   useInboxStore.setState({ clientStateInitialized: true });
 }
-
-// TEMP-DEBUG: expose the store for manual verification. Remove before commit.
-if (typeof window !== "undefined") (window as any).__inboxStore = useInboxStore;
