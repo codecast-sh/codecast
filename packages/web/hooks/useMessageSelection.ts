@@ -1,6 +1,7 @@
 import { useCallback } from "react";
 import { useForkNavigationStore } from "../store/forkNavigationStore";
 import { useShortcutAction } from "../shortcuts";
+import { useInboxStore } from "../store/inboxStore";
 
 type TimelineItem = {
   type: string;
@@ -64,6 +65,17 @@ export function useMessageSelection({
   }, [timeline, virtualizer, setSelectedIndex, onSelectMessage]);
 
   useShortcutAction('msg.clearSelection', useCallback((): boolean | void => {
+    // Escape priority: an open inline-comment editor handles its own Esc (cancel),
+    // so defer to it; otherwise leave inline-review mode before clearing a message
+    // selection. The global dispatcher runs before any in-region handler, so this
+    // is where review-exit on Escape has to live.
+    const store = useInboxStore.getState();
+    if (store.reviewEditingId) return false;
+    if (store.reviewMessageId) {
+      store.setReviewTarget(null);
+      store.setReviewEditingId(null);
+      return true;
+    }
     if (!enabled || selectedIndex === null) return false;
     selectAndNotify(null);
   }, [enabled, selectedIndex, selectAndNotify]));

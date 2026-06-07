@@ -22,9 +22,16 @@ import { ErrorBoundary } from "./ErrorBoundary";
 import { KeyCap, MenuKeyCaps } from "./KeyboardShortcutsHelp";
 import { toast } from "sonner";
 import { CodeBlock } from "./CodeBlock";
+import { tryRenderCanvas } from "./HtmlSnippet";
 import { useDiffViewerStore } from "../store/diffViewerStore";
 import { isJumpReadyToScroll, shouldLoadOlder } from "./conversationScroll";
 import { parseInsightBlocks } from "./insightBlocks";
+import { appendToDraft } from "../lib/quoteFormat";
+import { quoteToComposer, submitReview } from "../lib/reviewActions";
+import { MessageReview } from "./MessageReview";
+import { SelectionQuoteToolbar } from "./SelectionQuoteToolbar";
+import { ReviewBar } from "./ReviewBar";
+import { ReviewComposerContext } from "./reviewContext";
 import { parseScheduleCadence } from "./scheduleCadence";
 
 function copyMessageLink(conversationId: string | undefined, messageId: string) {
@@ -127,7 +134,11 @@ function renderMarkdownPre(node: any, children: any, props: any) {
     const className = codeElement.properties?.className as string[] | undefined;
     const language = className?.find((cls) => cls.startsWith("language-"))?.replace("language-", "");
     const code = extractTextFromHast(codeElement);
-    if (code) return <CodeBlock code={code} language={language} />;
+    if (code) {
+      const canvas = tryRenderCanvas(language, code);
+      if (canvas) return canvas;
+      return <CodeBlock code={code} language={language} />;
+    }
   }
   return <pre {...(props as any)}>{children as any}</pre>;
 }
@@ -190,6 +201,32 @@ const MessageMarkdown = memo(function MessageMarkdown({ content }: { content: st
     </ReactMarkdown>
   );
 });
+
+// Stable identity so MessageReview's memo holds (a fresh inline arrow at the call
+// site would defeat it). Reuses the memoized MessageMarkdown for each block.
+const renderMessageBlock = (content: string) => <MessageMarkdown content={content} />;
+
+// Persistent measured-height cache for the message virtualizer, keyed by the
+// stable per-item key (message _id) + collapse mode. It SURVIVES unmount, so
+// switching back to a conversation — or a row the virtualizer recycled while
+// scrolling — feeds estimateSize an accurate height instead of the flat ~200px
+// guess. That guess was the root of a cold switch's cost: every text row
+// estimated at 200, then corrected to its real height on measure, cascading
+// into ~120ms of @tanstack/react-virtual layout work (the dominant script in
+// the post-deferral switch trace). FIFO-capped so a long-lived tab stays bounded.
+const VIRT_HEIGHT_CACHE = new Map<string, number>();
+const VIRT_HEIGHT_CACHE_MAX = 8000;
+function virtHeightKey(itemKey: string | number, collapsed: boolean): string {
+  return `${itemKey}|${collapsed ? "c" : "e"}`;
+}
+function recordVirtHeight(key: string, size: number) {
+  if (size <= 0) return; // 0-height rows are already exact via the heuristic; don't cache
+  if (VIRT_HEIGHT_CACHE.size >= VIRT_HEIGHT_CACHE_MAX && !VIRT_HEIGHT_CACHE.has(key)) {
+    const oldest = VIRT_HEIGHT_CACHE.keys().next().value;
+    if (oldest !== undefined) VIRT_HEIGHT_CACHE.delete(oldest);
+  }
+  VIRT_HEIGHT_CACHE.set(key, size);
+}
 
 type ToolCall = {
   id: string;
@@ -292,6 +329,7 @@ export type ConversationData = {
   fork_copy_total?: number;
   forked_from_details?: {
     conversation_id: string;
+    title?: string;
     share_token?: string;
     username: string;
   } | null;
@@ -937,7 +975,7 @@ export function NewSessionView({ conversation, agentControls }: { conversation: 
 
 function ConversationSkeleton() {
   return (
-    <div className="max-w-7xl mx-auto px-4 py-4 space-y-6 animate-pulse motion-reduce:animate-none">
+    <div className="conv-col mx-auto px-4 py-4 space-y-6 animate-pulse motion-reduce:animate-none">
       <div className="bg-sol-blue/10 border border-sol-blue/30 rounded-lg p-4">
         <div className="flex items-center gap-2 mb-2">
           <div className="w-6 h-6 rounded bg-sol-blue/30" />
@@ -2552,7 +2590,7 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
                 </div>
                 {mdFullscreen && createPortal(
                   <div className="fixed inset-0 z-[10001] bg-sol-bg overflow-auto" onClick={() => setMdFullscreen(false)}>
-                    <div className="max-w-7xl mx-auto px-8 py-12" onClick={e => e.stopPropagation()}>
+                    <div className="conv-col mx-auto px-8 py-12" onClick={e => e.stopPropagation()}>
                       <div className="flex items-center justify-between mb-6">
                         <span className="text-sol-text-secondary text-sm font-medium">{filePath.split('/').pop()}</span>
                         <button
@@ -4048,6 +4086,15 @@ function CommandMessageBlock({
     setTimeout(() => { copyToClipboard(full).then(() => toast.success("Copied!")).catch(() => toast.error("Failed to copy")); });
   };
 
+  // Chip contents: sparkle + /name, plus a disclosure chevron when an instruction body exists.
+  const chipInner = (
+    <>
+      <svg className="w-3 h-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z" /></svg>
+      /{cmdName}
+      {hasSource && <svg className={`w-3 h-3 shrink-0 text-sol-cyan/60 transition-transform ${showSource ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" /></svg>}
+    </>
+  );
+
   return (
     <div id={messageId ? `msg-${messageId}` : undefined} className="group relative scroll-mt-20 bg-sol-blue/10 -mx-4 px-4 py-4 rounded-lg border border-sol-blue/30 mb-6">
       <div className="absolute -top-2 right-0 opacity-0 group-hover:opacity-100 transition-opacity bg-sol-bg rounded shadow-md px-0.5 z-10">
@@ -4064,10 +4111,19 @@ function CommandMessageBlock({
 
       <div className="pl-8">
         <div className="flex items-center gap-1.5 flex-wrap mb-1.5">
-          <span className="inline-flex items-center gap-1 font-mono text-xs text-sol-cyan bg-sol-cyan/10 border border-sol-cyan/25 rounded px-1.5 py-0.5">
-            <svg className="w-3 h-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z" /></svg>
-            /{cmdName}
-          </span>
+          {hasSource ? (
+            <button
+              onClick={() => setShowSource(s => !s)}
+              className="inline-flex items-center gap-1 font-mono text-xs text-sol-cyan bg-sol-cyan/10 border border-sol-cyan/25 rounded px-1.5 py-0.5 hover:bg-sol-cyan/20 hover:border-sol-cyan/40 transition-colors cursor-pointer"
+              title={showSource ? "Hide command instructions" : "Show command instructions"}
+            >
+              {chipInner}
+            </button>
+          ) : (
+            <span className="inline-flex items-center gap-1 font-mono text-xs text-sol-cyan bg-sol-cyan/10 border border-sol-cyan/25 rounded px-1.5 py-0.5">
+              {chipInner}
+            </span>
+          )}
           {builtinDesc && <span className="text-[11px] text-sol-text-dim">{builtinDesc}</span>}
         </div>
 
@@ -4079,17 +4135,9 @@ function CommandMessageBlock({
           </div>
         )}
 
-        {hasSource && (
-          <div className="mt-2">
-            <button onClick={() => setShowSource(s => !s)} className="flex items-center gap-1 text-[11px] text-sol-text-dim hover:text-sol-cyan transition-colors">
-              <svg className={`w-3 h-3 transition-transform ${showSource ? "rotate-90" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" /></svg>
-              {showSource ? "Hide command" : "Show command"}
-            </button>
-            {showSource && (
-              <div className="mt-1.5 rounded-md bg-sol-bg-alt/30 border border-sol-border/20 p-3 text-xs text-sol-text-muted leading-relaxed prose prose-invert prose-sm max-w-none overflow-x-auto">
-                <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={[rehypeHighlight]} components={CMD_MD_COMPONENTS}>{source}</ReactMarkdown>
-              </div>
-            )}
+        {hasSource && showSource && (
+          <div className="mt-2 rounded-md bg-sol-bg-alt/30 border border-sol-border/20 p-3 text-xs text-sol-text-muted leading-relaxed prose prose-invert prose-sm max-w-none overflow-x-auto">
+            <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={[rehypeHighlight]} components={CMD_MD_COMPONENTS}>{source}</ReactMarkdown>
           </div>
         )}
       </div>
@@ -4791,9 +4839,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
             title="Fork from this message"
             aria-label="Fork from this message"
           >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
-            </svg>
+            <Split className="w-4 h-4" />
           </button>
         )}
         <button
@@ -4927,12 +4973,13 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
           onSwitchBranch={(convId) => onBranchSwitch(messageUuid, convId)}
           loadingBranchId={loadingBranchId}
           mainMessageCount={mainMessageCount}
+          onFork={onForkFromMessage ? () => onForkFromMessage(messageUuid) : undefined}
         />
       )}
 
       {fullscreen && createPortal(
         <div className="fixed inset-0 z-[10001] bg-sol-bg overflow-auto" onClick={() => setFullscreen(false)}>
-          <div className="max-w-7xl mx-auto px-8 py-12" onClick={e => e.stopPropagation()}>
+          <div className="conv-col mx-auto px-8 py-12" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-6">
               <span className="text-sol-text-secondary text-sm font-medium">{userName || "You"}</span>
               <button
@@ -5246,9 +5293,7 @@ function AssistantBlockImpl({
               title="Fork from this message"
               aria-label="Fork from this message"
             >
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
-              </svg>
+              <Split className="w-4 h-4" />
             </button>
           )}
           <button
@@ -5366,6 +5411,13 @@ function AssistantBlockImpl({
                         <MessageMarkdown key={i} content={part.content} />
                       ))}
                     </div>
+                  ) : conversationId ? (
+                    <MessageReview
+                      conversationId={conversationId}
+                      messageId={messageId}
+                      content={displayContent}
+                      renderBlock={renderMessageBlock}
+                    />
                   ) : (
                     <MessageMarkdown content={displayContent} />
                   )}
@@ -5407,7 +5459,7 @@ function AssistantBlockImpl({
 
         {fullscreen && createPortal(
           <div className="fixed inset-0 z-[10001] bg-sol-bg overflow-auto" onClick={() => setFullscreen(false)}>
-            <div className="max-w-7xl mx-auto px-8 py-12" onClick={e => e.stopPropagation()}>
+            <div className="conv-col mx-auto px-8 py-12" onClick={e => e.stopPropagation()}>
               <div className="flex items-center justify-between mb-6">
                 <span className="text-sol-text-secondary text-sm font-medium">Message</span>
                 <button
@@ -5472,6 +5524,18 @@ function AssistantBlockImpl({
         )}
       </div>
 
+      {onForkFromMessage && messageUuid && !collapsed && !onlyToolCalls && !shareSelectionMode && !(forkChildren && forkChildren.length) && (
+        <button
+          onClick={() => onForkFromMessage(messageUuid)}
+          className="absolute right-2 -bottom-3 z-10 inline-flex items-center gap-1.5 text-[11px] font-medium pl-1.5 pr-2.5 py-1 rounded-md border border-sol-border/60 bg-sol-bg text-sol-text-dim shadow-sm opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto hover:text-sol-cyan hover:border-sol-cyan/50 hover:bg-sol-cyan/10 transition-all duration-150"
+          title="Fork the conversation from this message"
+          aria-label="Fork from this message"
+        >
+          <Split className="w-3.5 h-3.5" />
+          <span>Fork here</span>
+        </button>
+      )}
+
       {forkChildren && forkChildren.length > 0 && onBranchSwitch && messageUuid && (
         <BranchSelector
           forkChildren={forkChildren}
@@ -5479,6 +5543,7 @@ function AssistantBlockImpl({
           onSwitchBranch={(convId) => onBranchSwitch(messageUuid, convId)}
           loadingBranchId={loadingBranchId}
           mainMessageCount={mainMessageCount}
+          onFork={onForkFromMessage ? () => onForkFromMessage(messageUuid) : undefined}
         />
       )}
     </div>
@@ -5944,7 +6009,7 @@ function PlanBlockImpl({ content, timestamp, collapsed, messageId, conversationI
 
       {fullscreen && createPortal(
         <div className="fixed inset-0 z-[10001] bg-sol-bg overflow-auto" onClick={() => setFullscreen(false)}>
-          <div className="max-w-7xl mx-auto px-8 py-12" onClick={e => e.stopPropagation()}>
+          <div className="conv-col mx-auto px-8 py-12" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-6">
               <div className="flex items-center gap-2">
                 <svg className="w-4 h-4 text-sol-cyan" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -6047,7 +6112,7 @@ function GitDiffPanel({
 }) {
   return (
     <div className="border-t border-sol-border bg-sol-bg-alt/30">
-      <div className="max-w-7xl mx-auto px-4 py-2 max-h-96 overflow-y-auto">
+      <div className="conv-col mx-auto px-4 py-2 max-h-96 overflow-y-auto">
         {gitDiffStaged && gitDiffStaged.trim().length > 0 && (
           <div className="mb-2">
             <div className="text-sol-green text-[10px] font-semibold mb-1">Staged</div>
@@ -6270,7 +6335,7 @@ function MessageNavigator({ userMessages, onRewind, onFork, onClose, forkPointMa
 
   return (
     <div className="absolute bottom-full left-0 right-0 mb-2 z-50" style={{ maxHeight: "calc(100vh - 200px)" }}>
-      <div className="mx-auto max-w-7xl px-4 h-full flex flex-col">
+      <div className="mx-auto conv-col px-4 h-full flex flex-col">
         <div className="bg-sol-bg-alt border border-sol-blue/30 rounded-lg shadow-2xl overflow-hidden flex flex-col" style={{ maxHeight: "calc(100vh - 220px)" }}>
           <div ref={listRef} className="flex-1 overflow-y-auto py-2 relative" style={{ maxHeight: "calc(100vh - 280px)" }}>
             {userMessages.map((msg, idx) => {
@@ -6356,7 +6421,7 @@ function MessageNavigator({ userMessages, onRewind, onFork, onClose, forkPointMa
 function GuestJoinCTA() {
   return (
     <div className="bg-sol-bg border-t border-sol-border/30">
-      <div className="mx-auto max-w-7xl px-2 sm:px-4 py-3 flex items-center justify-between gap-4">
+      <div className="mx-auto conv-col px-2 sm:px-4 py-3 flex items-center justify-between gap-4">
         <a href="/" className="flex items-center gap-2 text-sol-text-dim text-xs hover:text-sol-text transition-colors">
           <LogoIcon size={20} />
           <span className="font-mono font-bold text-sol-text-muted tracking-tight">codecast</span>
@@ -6429,7 +6494,7 @@ const ForkReplyInput = memo(function ForkReplyInput({ userName, userAvatar, onFo
           <span className="text-sol-text-dim ml-1">-- reply to fork as your own</span>
         </span>
       </div>
-      <form onSubmit={handleSubmit} className="mx-auto max-w-7xl px-2 sm:px-4 pb-3 pt-1.5">
+      <form onSubmit={handleSubmit} className="mx-auto conv-col px-2 sm:px-4 pb-3 pt-1.5">
         <div className="flex items-end gap-2 border px-4 py-2 rounded-2xl bg-sol-bg-alt border-sol-violet/30 shadow-lg">
           <textarea
             ref={textareaRef}
@@ -6469,7 +6534,7 @@ const ForkReplyInput = memo(function ForkReplyInput({ userName, userAvatar, onFo
   );
 });
 
-export const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, onSendAndDismiss, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, isSessionStarting, isSessionReady, sessionId, agentType, agentStatus, deliveryStatus, pendingPermissionsCount, hasAskUserQuestion, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onSendEscape, onOpenNavigator, onPopulateInput, permissionMode, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch, onGateSend, skills, filePaths, mentionItemsRef, onMentionQuery, onSubmitWithIntent, onDidSend }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; onSendAndDismiss?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; isSessionStarting?: boolean; isSessionReady?: boolean; sessionId?: string; agentType?: string; agentStatus?: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "starting" | "resuming"; deliveryStatus?: string; pendingPermissionsCount?: number; hasAskUserQuestion?: boolean; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string) => void) | null>; permissionMode?: string; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void>; onGateSend?: (content: string) => Promise<void>; skills?: SkillItem[]; filePaths?: string[]; mentionItemsRef?: React.MutableRefObject<MentionItem[]>; onMentionQuery?: (q: string) => void; onSubmitWithIntent?: (navigate: boolean) => void; onDidSend?: (info: { conversationId: string; content: string; clientId: string }) => void }) {
+export const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, onSendAndDismiss, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, isSessionStarting, isSessionReady, sessionId, agentType, agentStatus, deliveryStatus, pendingPermissionsCount, hasAskUserQuestion, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onSendEscape, onOpenNavigator, onPopulateInput, permissionMode, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch, onGateSend, skills, filePaths, mentionItemsRef, onMentionQuery, onSubmitWithIntent, onDidSend }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; onSendAndDismiss?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; isSessionStarting?: boolean; isSessionReady?: boolean; sessionId?: string; agentType?: string; agentStatus?: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "starting" | "resuming"; deliveryStatus?: string; pendingPermissionsCount?: number; hasAskUserQuestion?: boolean; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string, opts?: { append?: boolean }) => void) | null>; permissionMode?: string; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void>; onGateSend?: (content: string) => Promise<void>; skills?: SkillItem[]; filePaths?: string[]; mentionItemsRef?: React.MutableRefObject<MentionItem[]>; onMentionQuery?: (q: string) => void; onSubmitWithIntent?: (navigate: boolean) => void; onDidSend?: (info: { conversationId: string; content: string; clientId: string }) => void }) {
   const sacredKey = sessionId || conversationId;
   const sacredKeyRef = useRef(sacredKey);
   const convIdRef = useRef(conversationId);
@@ -6869,9 +6934,18 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
 
   useWatchEffect(() => {
     if (onPopulateInput) {
-      onPopulateInput.current = (text: string) => {
-        setMessage(text);
-        setTimeout(() => textareaRef.current?.select(), 0);
+      onPopulateInput.current = (text: string, opts?: { append?: boolean }) => {
+        if (opts?.append) {
+          const current = textareaRef.current?.value ?? messageRef.current ?? "";
+          setMessage(appendToDraft(current, text));
+          setTimeout(() => {
+            const el = textareaRef.current;
+            if (el) { el.focus(); const end = el.value.length; el.setSelectionRange(end, end); }
+          }, 0);
+        } else {
+          setMessage(text);
+          setTimeout(() => textareaRef.current?.select(), 0);
+        }
       };
       return () => { if (onPopulateInput) onPopulateInput.current = null; };
     }
@@ -7676,7 +7750,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       <div className={`pb-4 pointer-events-auto ${lightboxImageIndex === null ? "bg-sol-bg" : ""}`}>
         <div className="relative">
           {(isFocused || shortcutTooltip || showStuckBanner || isSessionStarting || isSessionReady || isInactive || optimisticSending || isSessionDisconnected || (pendingMessageId || existingPending) || (agentStatus && agentStatus !== "idle") || (!agentStatus && (isWaitingForResponse || isThinking || isConversationLive))) && (
-            <div className={`mx-auto px-4 mb-1 flex justify-between items-center ${isExpanded ? "max-w-7xl" : "max-w-md"} ${lightboxImageIndex !== null ? "hidden" : ""}`}>
+            <div className={`mx-auto px-4 mb-1 flex justify-between items-center ${isExpanded ? "conv-col" : "max-w-md"} ${lightboxImageIndex !== null ? "hidden" : ""}`}>
               <p className="text-[11px] text-sol-text-dim/70 pl-1">
                 {((isSessionStarting && !agentStatus) || isAgentStarting) && !showStuckBanner ? (
                   <span className="flex items-center gap-1.5">
@@ -7900,7 +7974,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
               idx++;
             }
             return (
-              <div ref={acRef} className={`mx-auto px-2 sm:px-4 mb-1 ${isExpanded ? "max-w-7xl" : "max-w-md"}`}>
+              <div ref={acRef} className={`mx-auto px-2 sm:px-4 mb-1 ${isExpanded ? "conv-col" : "max-w-md"}`}>
                 <div className="bg-sol-bg border border-sol-border/50 rounded-lg shadow-xl py-1.5 max-h-[320px] overflow-y-auto">
                   {grouped.map(group => {
                     const config = typeConfig[group.type] || typeConfig.doc;
@@ -7947,7 +8021,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
               </div>
             );
           })()}
-          <form onSubmit={handleSubmit} className={`mx-auto px-2 sm:px-4 transition-all duration-200 ease-out ${isExpanded ? "max-w-7xl" : "max-w-md"}`}>
+          <form onSubmit={handleSubmit} className={`mx-auto px-2 sm:px-4 transition-all duration-200 ease-out ${isExpanded ? "conv-col" : "max-w-md"}`}>
             <div className={`flex flex-col border px-4 py-2 shadow-lg transition-all duration-300 ${isExpanded ? "rounded-2xl" : "rounded-full"} ${composeMode ? "min-h-[40vh]" : ""} bg-sol-bg-alt ${isSelectionActive ? "border-sol-cyan/40 ring-1 ring-sol-cyan/20" : composeMode ? "border-sol-cyan/20" : "border-sol-border"}`}>
               {isSelectionActive && (
                 <div className="flex items-center gap-2 pb-1.5 mb-1.5 border-b border-sol-cyan/20 text-[10px] text-sol-cyan">
@@ -8534,6 +8608,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
   const addOptimisticFork = useInboxStore((s) => s.addOptimisticFork);
   const pruneOptimisticForks = useInboxStore((s) => s.pruneOptimisticForks);
+  const preloadForkSessions = useInboxStore((s) => s.preloadForkSessions);
 
   const forkPointMap = useMemo(() => {
     const map: Record<string, Array<ForkChild>> = {};
@@ -8555,6 +8630,25 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     const serverIds = new Set(conversation.fork_children.map(f => f._id));
     pruneOptimisticForks(serverIds);
   }, [conversation?.fork_children, pruneOptimisticForks]);
+
+  // Branch chips are listed straight from the server fork metadata, independent of
+  // the local cache. Seed every accessible branch (children, siblings, and the
+  // parent) into the store the moment we have that metadata, so clicking any chip
+  // is an instant local switch instead of a getConversation fetch-and-spin. The
+  // server already filtered these to forks the viewer can open, so preloading can't
+  // surface a private session. Gap-fill only — live rows are never downgraded.
+  useWatchEffect(() => {
+    if (conversation?.fork_children?.length) {
+      preloadForkSessions(conversation.fork_children as ForkChild[], conversation._id?.toString());
+    }
+    if (conversation?.fork_siblings?.length) {
+      preloadForkSessions(conversation.fork_siblings as ForkChild[], conversation.forked_from?.toString());
+    }
+    const ffd = conversation?.forked_from_details;
+    if (ffd?.conversation_id) {
+      preloadForkSessions([{ _id: ffd.conversation_id.toString(), title: ffd.title || "Parent session" }]);
+    }
+  }, [conversation?.fork_children, conversation?.fork_siblings, conversation?.forked_from_details, conversation?._id, conversation?.forked_from, preloadForkSessions]);
 
   const activeBranchId = conversation?.forked_from ? conversation._id.toString() : null;
 
@@ -8850,7 +8944,21 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
 
   const [navigatorOpen, setNavigatorOpen] = useState(false);
-  const populateInputRef = useRef<((text: string) => void) | null>(null);
+  const populateInputRef = useRef<((text: string, opts?: { append?: boolean }) => void) | null>(null);
+  // Bridge for the quote/comment review UI: lets MessageReview, the selection
+  // toolbar, and the review bar push text into the composer without prop-drilling.
+  const reviewComposer = useMemo(() => {
+    const populate = (t: string, o?: { append?: boolean }) => populateInputRef.current?.(t, o);
+    return {
+      quote: (text: string) => quoteToComposer(text, populate),
+      submit: () => submitReview(conversation?._id ?? "", populate),
+    };
+  }, [conversation?._id]);
+  // While a comment rail is active in this conversation, slide the floating
+  // scroll buttons left so they clear the rail instead of sitting over a card.
+  const reviewRailActive = useInboxStore(
+    (s) => s.reviewMessageId !== null || (s.reviewComments[conversation?._id ?? ""]?.length ?? 0) > 0,
+  );
   const dropFilesRef = useRef<((files: File[]) => void) | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const dragCounterRef = useRef(0);
@@ -9468,6 +9576,13 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     const item = timeline[index];
     if (!item) return 100;
 
+    // A real measured height from this or a prior mount beats every heuristic
+    // below — accurate estimates are what stop the measure-driven reflow cascade
+    // on a switch. measureElement keeps this fresh; streaming/visible rows are
+    // measured live so a stale entry only ever affects an off-screen row briefly.
+    const cachedHeight = VIRT_HEIGHT_CACHE.get(virtHeightKey(getItemKey(index), collapsed));
+    if (cachedHeight !== undefined) return cachedHeight;
+
     if (item.type === 'commit') return 80;
 
     const msg = item.data as Message;
@@ -9519,13 +9634,35 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       return 200;
     }
     return 40;
-  }, [timeline, collapsed, userMsgKindMap, assistantFirstTextInTurnSet, commandExpansionMap]);
+  }, [timeline, collapsed, userMsgKindMap, assistantFirstTextInTurnSet, commandExpansionMap, getItemKey]);
+
+  // Mirror @tanstack/virtual-core's default measureElement, but persist every
+  // measured height into VIRT_HEIGHT_CACHE keyed by the stable item key so a
+  // future mount (conversation switch, recycled scroll row) gets an accurate
+  // estimateSize and skips the reflow cascade. Keyed by collapse mode because a
+  // collapsed row renders different content (and height) than an expanded one.
+  const measureElement = useCallback((element: Element, entry: ResizeObserverEntry | undefined, instance: any) => {
+    const horizontal = instance.options.horizontal;
+    const box = entry?.borderBoxSize?.[0];
+    let size: number;
+    if (box) {
+      size = Math.round(horizontal ? box.inlineSize : box.blockSize);
+    } else {
+      const idx = instance.indexFromElement(element);
+      const cached = instance.itemSizeCache.get(instance.options.getItemKey(idx));
+      size = cached !== undefined ? cached : (element as HTMLElement)[horizontal ? "offsetWidth" : "offsetHeight"];
+    }
+    const index = instance.indexFromElement(element);
+    if (index >= 0) recordVirtHeight(virtHeightKey(instance.options.getItemKey(index), collapsed), size);
+    return size;
+  }, [collapsed]);
 
   const virtualizer = useVirtualizer({
     count: timeline.length,
     getScrollElement: () => containerRef.current,
     getItemKey,
     estimateSize,
+    measureElement,
     overscan: 10,
     paddingStart: 16,
     paddingEnd: 100,
@@ -9619,14 +9756,26 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     }
     if (!targetId) return;
     if (targetId === conversation?._id?.toString()) return;
-    // Show a spinner on the clicked chip immediately. A fork that isn't already
-    // in the inbox store has to be fetched + injected before the view switches
-    // (QueuePageClient's pendingNavigate → directConv path), and without this
-    // the click looked like a no-op. Cleared when the conversation actually
-    // changes (effect below) or by a safety timeout if the switch never lands.
+    // Branches are normally preloaded into the store by the effect above, so this
+    // is an instant local switch. Belt-and-suspenders: if the target somehow isn't
+    // cached yet (a click landing before the seed flushed), seed it from the chip's
+    // own metadata so we still avoid the getConversation fetch-and-spin.
+    if (!useInboxStore.getState().sessions[targetId]) {
+      if (convId === null) {
+        const ffd = conversation?.forked_from_details;
+        if (ffd?.conversation_id) preloadForkSessions([{ _id: ffd.conversation_id.toString(), title: ffd.title || "Parent session" }]);
+      } else {
+        const child = (conversation?.fork_children || []).find(f => f._id === targetId);
+        const sibling = child ? undefined : (conversation?.fork_siblings || []).find(f => f._id === targetId);
+        if (child) preloadForkSessions([child as ForkChild], conversation?._id?.toString());
+        else if (sibling) preloadForkSessions([sibling as ForkChild], conversation?.forked_from?.toString());
+      }
+    }
+    // The spinner is now a rare fallback (only if the switch can't resolve locally);
+    // it clears when the conversation changes, or via the safety timeout below.
     setLoadingBranchId(convId === null ? "main" : targetId);
     navigateToSession(targetId);
-  }, [conversation?.forked_from, conversation?._id, navigateToSession]);
+  }, [conversation?.forked_from, conversation?._id, conversation?.fork_children, conversation?.fork_siblings, conversation?.forked_from_details, navigateToSession, preloadForkSessions]);
 
   // Clear the branch-switch spinner once we've landed on a new conversation, and
   // guard against a switch that never resolves (e.g. a teammate's private fork
@@ -9674,6 +9823,24 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     toggleFavoriteMutation(conversation._id);
     toast.success(conversation.is_favorite ? "Removed from favorites" : "Added to favorites");
   }, [conversation, isOwner, toggleFavoriteMutation]));
+
+  // Enter inline review on the assistant reply nearest the viewport center, so a
+  // keyboard-only user can start quoting/commenting without a mouse.
+  useShortcutAction('conv.review', useCallback(() => {
+    if (!conversation) return;
+    const regions = Array.from(document.querySelectorAll<HTMLElement>('.cc-msg-review'));
+    const center = window.innerHeight / 2;
+    let best: { id: string; dist: number } | null = null;
+    for (const region of regions) {
+      const id = (region.closest('[id^="msg-"]') as HTMLElement | null)?.id?.slice(4);
+      if (!id) continue;
+      const rect = region.getBoundingClientRect();
+      if (rect.bottom < 0 || rect.top > window.innerHeight) continue;
+      const dist = Math.abs(rect.top + rect.height / 2 - center);
+      if (!best || dist < best.dist) best = { id, dist };
+    }
+    if (best) useInboxStore.getState().setReviewTarget(best.id, 0);
+  }, [conversation]));
 
   useShortcutAction('conv.toggleDiff', useCallback(() => {
     if (!conversation?.git_branch) return;
@@ -10709,6 +10876,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   return (
     <HighlightContext.Provider value={highlightQuery}>
     <ImageGalleryProvider>
+    <ReviewComposerContext.Provider value={reviewComposer}>
     <main className="relative flex flex-col bg-sol-bg h-full" onDragEnter={handleDragEnter} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
       {isDragging && (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-sol-bg/80 backdrop-blur-sm" style={{ animation: "fadeIn 150ms ease-out" }}>
@@ -11238,9 +11406,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                       <>
                         <DropdownMenuSeparator />
                         <DropdownMenuItem onClick={() => toggleTreePanel()}>
-                          <svg className="w-3 h-3 mr-1.5 text-sol-cyan" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
-                          </svg>
+                          <Split className="w-3 h-3 mr-1.5 text-sol-cyan" />
                           Fork tree
                           <MenuKeyCaps action="conv.toggleTree" />
                         </DropdownMenuItem>
@@ -11248,9 +11414,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                     )}
                     {((conversation.fork_count ?? 0) > 0 || (conversation.fork_children?.length ?? 0) > 0) && (
                       <DropdownMenuItem disabled>
-                        <svg className="w-3 h-3 mr-1.5 text-sol-cyan" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
-                        </svg>
+                        <Split className="w-3 h-3 mr-1.5 text-sol-cyan" />
                         {conversation.fork_count || conversation.fork_children?.length || 0} fork{(conversation.fork_count || conversation.fork_children?.length || 0) === 1 ? '' : 's'}
                       </DropdownMenuItem>
                     )}
@@ -11346,7 +11510,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
             }
           }}
         >
-          <div className="max-w-7xl mx-auto">
+          <div className="conv-col mx-auto">
             <div className="bg-sol-blue/10 px-4 py-3 rounded-b-lg border border-sol-blue/30 backdrop-blur-md shadow-lg relative group">
               <button
                 className="absolute top-1.5 right-1.5 p-0.5 rounded hover:bg-sol-blue/20 text-sol-text-dim hover:text-sol-text opacity-0 group-hover:opacity-100 transition-opacity"
@@ -11423,7 +11587,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         ) : (
           <>
           {conversation?.parent_conversation_id && !hasMoreAbove && (
-            <div className="max-w-7xl mx-auto px-2 sm:px-3 md:px-4 pt-2 pb-1">
+            <div className="conv-col mx-auto px-2 sm:px-3 md:px-4 pt-2 pb-1">
               <Link
                 href={convLink(conversation.parent_conversation_id)}
                 className="inline-flex items-center gap-1.5 text-xs text-sol-cyan/70 hover:text-sol-cyan transition-colors"
@@ -11436,7 +11600,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
             </div>
           )}
           {conversation?.fork_status === "copying" && (
-            <div className="max-w-7xl mx-auto px-2 sm:px-3 md:px-4 pt-2 pb-1">
+            <div className="conv-col mx-auto px-2 sm:px-3 md:px-4 pt-2 pb-1">
               <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-md bg-sol-cyan/10 border border-sol-cyan/30 text-sol-cyan text-[11px]">
                 <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
@@ -11489,7 +11653,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   }}
                 >
                   {content && (
-                    <div className={`max-w-7xl mx-auto px-4 sm:px-5 md:px-6 ${collapsed ? "py-0.5" : "py-0.5 sm:py-1"} ${isNew ? "animate-message-in" : ""} ${isForkSelected ? "ring-2 ring-sol-cyan/60 bg-sol-cyan/5 rounded-lg" : ""} ${isBelowForkSelection ? "opacity-30 pointer-events-none" : ""} transition-opacity`}>
+                    <div className={`conv-col mx-auto px-4 sm:px-5 md:px-6 ${collapsed ? "py-0.5" : "py-0.5 sm:py-1"} ${isNew ? "animate-message-in" : ""} ${isForkSelected ? "ring-2 ring-sol-cyan/60 bg-sol-cyan/5 rounded-lg" : ""} ${isBelowForkSelection ? "opacity-30 pointer-events-none" : ""} transition-opacity`}>
                       {virtualItem.index === firstUnseenIndex && (
                         <div className="flex items-center gap-3 mt-1 mb-3 select-none" aria-label="New messages">
                           <div className="flex-1 h-px" style={{ background: 'linear-gradient(to right, transparent, var(--sol-orange))' }} />
@@ -11533,7 +11697,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
             const continuationChildren = conversation.child_conversations.filter(c => !renderedInlineIds.has(c._id) && !c.is_subagent && c._id !== conversation._id);
             if (continuationChildren.length === 0) return null;
             return (
-              <div className="max-w-7xl mx-auto px-2 sm:px-3 md:px-4 pt-3 pb-8">
+              <div className="conv-col mx-auto px-2 sm:px-3 md:px-4 pt-3 pb-8">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-[11px] text-sol-text-secondary uppercase tracking-wider font-medium">Continued in</span>
                   {continuationChildren.map((child) => (
@@ -11593,6 +11757,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
             />
           ) : (
             <>
+              <ReviewBar conversationId={conversation._id} />
               {workflowRun?.status === "paused" && workflowRun.gate_prompt ? (
                 <div className="absolute left-0 right-0 bottom-full flex items-center gap-2 px-4 py-1.5 bg-sol-bg border-t border-sol-magenta/20 text-xs">
                   <span className="text-sol-magenta font-semibold shrink-0">Gate</span>
@@ -11627,7 +11792,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       )}
 
       {timeline.length > 0 && (
-        <div className="absolute right-3 sm:right-8 z-30 flex items-stretch gap-2.5" style={{ bottom: Math.max(messageInputHeight + 16, 115) }}>
+        <div className="absolute right-3 sm:right-8 z-30 flex items-stretch gap-2.5 transition-[right] duration-150" style={{ bottom: Math.max(messageInputHeight + 16, 115), ...(reviewRailActive ? { right: "17.5rem" } : {}) }}>
           <div className="flex flex-col gap-2">
               <button
                 onClick={() => {
@@ -11722,7 +11887,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
       {pendingPermissions && pendingPermissions.length > 0 && (
         <div className={`border-t border-sol-border/40 shrink-0 ${embedded ? "-mx-[9999px] px-[9999px]" : ""}`}>
-          <div className="max-w-7xl mx-auto px-2 sm:px-3 md:px-4 py-1.5">
+          <div className="conv-col mx-auto px-2 sm:px-3 md:px-4 py-1.5">
             <PermissionStack
               permissions={pendingPermissions as any}
               onAllowAll={
@@ -11766,7 +11931,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           </button>
         </div>
       )}
+      <SelectionQuoteToolbar conversationId={conversation?._id ?? ""} />
     </main>
+    </ReviewComposerContext.Provider>
     </ImageGalleryProvider>
     </HighlightContext.Provider>
   );
