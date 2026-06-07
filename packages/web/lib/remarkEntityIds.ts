@@ -2,7 +2,7 @@ import { findAndReplace } from "mdast-util-find-and-replace";
 import remarkGfm from "remark-gfm";
 import type { Options as ReactMarkdownOptions } from "react-markdown";
 
-const ENTITY_ID_RE = /\b(?:(?:ct|pl)-[a-z0-9]+|jx[a-z0-9]{5,})\b/gi;
+const ENTITY_ID_RE = /\b(?:(?:ct|pl)-[a-z0-9]+|jx[a-z0-9]{5,}|doc:[a-z0-9]{20,})\b/gi;
 const MENTION_RE = /@\[([^\]]*?)(?:\s+(ct-\w+|pl-\w+|jx\w+|doc:\w+))?\](?:\s*\([^)]*\))?/g;
 
 export function remarkEntityIds() {
@@ -19,10 +19,14 @@ export function remarkEntityIds() {
             };
           }
           if (entityId && entityId.startsWith("doc:")) {
+            // Docs have no short id, so the doc's convex id rides in the link
+            // *text* — react-markdown drops the `entity://` href via its url
+            // sanitizer, so the text node is the real carrier. EntityAwareLink
+            // reads "doc:<id>" and renders a doc pill, same path as ct-/jx ids.
             return {
               type: "link",
-              url: `mention://${name.trim()}`,
-              children: [{ type: "text", value: `@${name.trim()}` }],
+              url: `entity://${entityId}`,
+              children: [{ type: "text", value: entityId }],
             };
           }
           return {

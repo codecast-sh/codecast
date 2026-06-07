@@ -20,7 +20,7 @@ import {
   Folder,
 } from "lucide-react";
 import { Popover, PopoverContent, PopoverAnchor } from "./ui/popover";
-import { stripMarkdown } from "../lib/notificationText";
+import { stripMarkdown, docContentPreview } from "../lib/notificationText";
 import { parseEntityUrl, ENTITY_ROUTE, type EntityType } from "../lib/entityLinks";
 import { FormattedSummary } from "./FormattedSummary";
 import { sessionCardSummary } from "../lib/sessionSummary";
@@ -348,6 +348,9 @@ function SessionHoverContent({ session }: { session: any }) {
 const MENTION_RE = /@\[([^\]]*?)(?:\s+(ct-\w+|pl-\w+|jx\w+|doc:\w+))?\](?:\s*\([^)]*\))?/g;
 
 function MentionPill({ name, entityId }: { name: string; entityId?: string }) {
+  if (entityId?.startsWith("doc:") && entityId.length > 4) {
+    return <EntityIdPill type="doc" id={entityId.slice(4)} />;
+  }
   if (entityId && isEntityId(entityId)) {
     return <EntityIdPill shortId={entityId} />;
   }
@@ -388,7 +391,9 @@ export function EntityAwareCode({ children, className, ...props }: any) {
 
 export function EntityAwareLink({ href, children, ...props }: any) {
   if (href?.startsWith("entity://")) {
-    return <EntityIdPill shortId={href.slice(9)} />;
+    const ref = href.slice(9);
+    if (ref.startsWith("doc:")) return <EntityIdPill type="doc" id={ref.slice(4)} />;
+    return <EntityIdPill shortId={ref} />;
   }
   if (href?.startsWith("mention://")) {
     const name = decodeURIComponent(href.slice(10));
@@ -399,6 +404,12 @@ export function EntityAwareLink({ href, children, ...props }: any) {
     );
   }
   const text = typeof children === "string" ? children : Array.isArray(children) ? children.map(String).join("") : String(children ?? "");
+  // Docs have no short id, so a doc reference carries "doc:<convexId>" in the
+  // link text (the entity:// href is stripped by react-markdown's url
+  // sanitizer). This is the markdown twin of the entity:// branch above.
+  if (text.startsWith("doc:") && text.length > 4) {
+    return <EntityIdPill type="doc" id={text.slice(4)} />;
+  }
   if (isEntityId(text)) {
     return <EntityIdPill shortId={text} />;
   }
@@ -413,6 +424,47 @@ export function EntityAwareLink({ href, children, ...props }: any) {
 
 function genericTitle(entity: any): string {
   return entity.display_title || entity.title || entity.name || entity.short_id || "Untitled";
+}
+
+// Doc hover shows a real peek at the document body, not just metadata — a
+// multi-line plain-text preview with paragraph shape, faded out at the bottom.
+function DocHoverContent({ doc }: { doc: any }) {
+  const preview = docContentPreview(doc.content);
+  const typeLabel = doc.doc_type ? doc.doc_type.charAt(0).toUpperCase() + doc.doc_type.slice(1) : "Doc";
+  const timeAgo = relativeTime(doc.updated_at);
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-start gap-2">
+        <FileText className="w-3.5 h-3.5 flex-shrink-0 mt-0.5 text-sol-green" />
+        <div className="min-w-0 flex-1">
+          <div className="text-xs font-medium text-sol-text leading-snug">{genericTitle(doc)}</div>
+          <div className="flex items-center gap-2 mt-1">
+            <span className="text-[10px] font-medium text-sol-green">{typeLabel}</span>
+            {timeAgo && (
+              <>
+                <span className="text-gray-600">·</span>
+                <span className="text-[10px] text-gray-400">{timeAgo}</span>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {preview && (
+        <div className="relative pl-[22px] max-h-44 overflow-hidden">
+          <p className="text-[11px] text-gray-400 leading-relaxed whitespace-pre-line">{preview}</p>
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t from-sol-bg to-transparent" />
+        </div>
+      )}
+
+      <div className="flex items-center justify-end pt-1 border-t border-white/5">
+        <span className="text-[10px] text-gray-500 inline-flex items-center gap-0.5">
+          Click to open <ArrowUpRight className="w-2.5 h-2.5" />
+        </span>
+      </div>
+    </div>
+  );
 }
 
 function GenericHoverContent({ entity, type }: { entity: any; type: EntityType }) {
@@ -556,7 +608,7 @@ export function EntityIdPill({ shortId, type: typeProp, id: idProp }: { shortId?
         </Link>
       </PopoverAnchor>
       <PopoverContent
-        className="w-64 bg-sol-bg border border-sol-border shadow-xl p-0 relative"
+        className={`${type === "doc" ? "w-80" : "w-64"} bg-sol-bg border border-sol-border shadow-xl p-0 relative`}
         side="top"
         align="start"
         sideOffset={6}
@@ -577,6 +629,7 @@ export function EntityIdPill({ shortId, type: typeProp, id: idProp }: { shortId?
             isTask ? <TaskHoverContent task={entity} />
             : isPlan ? <PlanHoverContent plan={entity} />
             : isSession ? <SessionHoverContent session={entity} />
+            : type === "doc" ? <DocHoverContent doc={entity} />
             : <GenericHoverContent entity={entity} type={type} />
           ) : (
             <div className="text-[11px] text-gray-500">{pillLabel}</div>

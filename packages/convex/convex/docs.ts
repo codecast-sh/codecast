@@ -5,7 +5,7 @@ import { paginationOptsValidator } from "convex/server";
 import { verifyApiToken } from "./apiTokens";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { createDataContext, scopedFetch, resolveEffectiveTeam } from "./data";
-import { resolveTeamForPath } from "./privacy";
+import { resolveTeamForPath, isTeamMember } from "./privacy";
 
 function generatePlanShortId(): string {
   const chars = "0123456789abcdefghijklmnopqrstuvwxyz";
@@ -912,7 +912,13 @@ export const webGet = query({
     if (!userId) return null;
 
     const doc = await ctx.db.get(args.id);
-    if (!doc || doc.user_id !== userId) return null;
+    if (!doc) return null;
+    // Creator OR any member of the doc's team — same access rule as
+    // tasks.webGet. Creator-only made a teammate's embedded doc reference
+    // (inline pill / hover preview) resolve to nothing.
+    const hasAccess = doc.user_id === userId
+      || (doc.team_id ? await isTeamMember(ctx, userId, doc.team_id) : false);
+    if (!hasAccess) return null;
 
     const result: any = { ...doc };
 
