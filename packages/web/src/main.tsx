@@ -3,11 +3,14 @@ import ReactDOM from "react-dom/client";
 import { BrowserRouter } from "react-router";
 import { initAnalytics, setupErrorToasts } from "../lib/analytics";
 import { armChunkReloadGuardReset } from "../components/ErrorBoundary";
+import { installIdleAnimationPause } from "../lib/desktop";
 import { App } from "./App";
 import "../store/inboxStore";
 import "../app/globals.css";
 
 setupErrorToasts();
+// Stop compositing infinite animations while the desktop window is backgrounded.
+installIdleAnimationPause();
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

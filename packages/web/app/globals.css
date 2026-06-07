@@ -404,6 +404,16 @@ html, body {
   transform: rotate(3deg) translate(0px, -4px);
 }
 
+/* When the desktop window is backgrounded (see installIdleAnimationPause), freeze
+   every running animation so the GPU compositor can idle instead of repainting
+   the per-session pulse/ping/spin dots at the display refresh rate. JS and the
+   live-query socket keep running, so data stays fresh; animations resume on focus. */
+html[data-idle] *,
+html[data-idle] *::before,
+html[data-idle] *::after {
+  animation-play-state: paused !important;
+}
+
 @keyframes messageSlideIn {
   from {
     opacity: 0;
