@@ -3570,6 +3570,61 @@ export const searchForCLI = query({
   },
 });
 
+// Reactive tail of a conversation's recent messages, for `cast sessions -w
+// --messages` via ConvexClient.onUpdate (live push, no polling). Bounded take on
+// by_conversation_timestamp so a new message re-runs cheaply and pushes the
+// updated tail; the CLI dedupes by message_uuid. api_token authed; resolves a
+// short or full conversation id; same team-access check as readConversationMessages.
+export const conversationMessagesForCLI = query({
+  args: {
+    api_token: v.string(),
+    conversation_id: v.string(),
+    limit: v.optional(v.number()),
+    full_content: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthenticatedUserIdReadOnly(ctx, args.api_token);
+    if (!authUserId) return { error: "Unauthorized" };
+
+    let conv = null;
+    try { conv = await ctx.db.get(args.conversation_id as Id<"conversations">); } catch {}
+    if (!conv) {
+      conv = await ctx.db
+        .query("conversations")
+        .withIndex("by_short_id", (q) => q.eq("short_id", args.conversation_id))
+        .first();
+    }
+    if (!conv) return { error: "Conversation not found" };
+
+    const isOwn = conv.user_id.toString() === authUserId.toString();
+    if (!isOwn && !(await canTeamMemberAccess(ctx, authUserId, conv))) {
+      return { error: "Access denied" };
+    }
+
+    const limit = Math.min(Math.max(args.limit ?? 30, 1), 100);
+    const recent = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_timestamp", (q: any) => q.eq("conversation_id", conv._id))
+      .order("desc")
+      .take(limit * 2 + 20);
+    const tail = recent.filter(isNonEmptyMessage).slice(0, limit).reverse();
+    const inputCap = args.full_content ? 100000 : 500;
+    const resultCap = args.full_content ? 100000 : 1000;
+
+    return {
+      conversation: { id: conv._id, title: conv.title || "New Session", message_count: conv.message_count || 0 },
+      messages: tail.map((m: any) => ({
+        role: m.role,
+        content: m.content || "",
+        timestamp: new Date(m.timestamp).toISOString(),
+        message_uuid: m.message_uuid || undefined,
+        tool_calls: m.tool_calls?.map((tc: any) => ({ id: tc.id, name: tc.name, input: (tc.input || "").slice(0, inputCap) })),
+        tool_results: m.tool_results?.map((tr: any) => ({ tool_use_id: tr.tool_use_id, content: (tr.content || "").slice(0, resultCap), is_error: tr.is_error })),
+      })),
+    };
+  },
+});
+
 export const readConversationMessages = query({
   args: {
     api_token: v.string(),
