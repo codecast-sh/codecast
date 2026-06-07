@@ -33,3 +33,34 @@ describe("entityRemarkPlugins strikethrough handling", () => {
     expect(html).toContain("<del>deleted</del>");
   });
 });
+
+describe("entityRemarkPlugins doc references", () => {
+  // Docs have no short id, so the convex id must survive in the link *text*
+  // (react-markdown strips the entity:// href). EntityAwareLink reads that
+  // carrier and renders a doc pill — the previous code dropped the id and
+  // rendered a dead "@title" mention.
+  const DOC_ID = "jh7d8k2m9n4p6q1r3s5t7v9w0";
+
+  test("@[Title doc:<id>] keeps the doc id as the link carrier", () => {
+    const html = render(`see @[My Design doc:${DOC_ID}] for details`);
+    expect(html).toContain(`>doc:${DOC_ID}</a>`);
+    // The id must not be lost in favor of a plain, link-less mention.
+    expect(html).not.toContain("@My Design");
+  });
+
+  test("a bare doc:<id> in prose is linkified, like ct-/jx ids", () => {
+    const html = render(`the spec is in doc:${DOC_ID} now`);
+    expect(html).toContain(`>doc:${DOC_ID}</a>`);
+  });
+
+  test("a too-short doc:<word> is left as plain text (not a convex id)", () => {
+    const html = render("see doc:short now");
+    expect(html).not.toContain("<a");
+    expect(html).toContain("doc:short");
+  });
+
+  test("existing ct-/jx carriers are unaffected", () => {
+    expect(render("see ct-abc123 now")).toContain(">ct-abc123</a>");
+    expect(render("see @[Sess jx7abc12] now")).toContain(">jx7abc12</a>");
+  });
+});
