@@ -1367,8 +1367,13 @@ export const listMessages = query({
   handler: async (ctx, args) => {
     const authUserId = await getAuthUserId(ctx);
     const conversation = await ctx.db.get(args.conversation_id);
+    // Missing conversation must return the empty-page shape, not throw — a
+    // client can hold a stale conversation_id (deleted row, lost access) in
+    // local state, and throwing crashes the React tree via usePaginatedQuery.
+    // Sibling queries (getConversationWithMeta, copyAllMessages) already
+    // degrade gracefully on this; align with them.
     if (!conversation) {
-      throw new Error("Conversation not found");
+      return { page: [], isDone: true, continueCursor: "" };
     }
 
     const isOwner = authUserId && conversation.user_id.toString() === authUserId.toString();

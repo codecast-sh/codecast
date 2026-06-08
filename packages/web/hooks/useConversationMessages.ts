@@ -172,6 +172,12 @@ export function useConversationMessages(
   );
 
   useConvexSync(remoteMeta, useCallback((meta: any) => {
+    // getConversationWithMeta returns null for missing or access-denied — feeding
+    // that into syncRecord trips Object.keys(null) when an existing cache entry
+    // is present (inboxStore.ts merge branch). Skip the sync; the cached entry
+    // stays put through transient auth blips, and a truly-deleted conversation
+    // just stops receiving updates.
+    if (!meta) return;
     useInboxStore.getState().syncRecord("conversations", conversationId, meta);
   }, [conversationId]));
 
