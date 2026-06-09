@@ -24,6 +24,12 @@ const SESSIONS_CRAWL_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 const SESSIONS_RECONCILE_PAGE_SIZE = 75;
 const SESSIONS_RECONCILE_PAGE_DELAY_MS = 60;
 const SESSIONS_RECONCILE_THROTTLE_MS = 30 * 60 * 1000;
+// Blank rows younger than this are still inside the server GC's 24h grace —
+// don't even ask about them. Must stay > cleanup.EMPTY_CONVERSATION_GRACE_MS.
+const GHOST_SWEEP_MIN_AGE_MS = 26 * 60 * 60 * 1000;
+// Orphaned stubs only need to outlive the create/outbox-replay handoff (seconds
+// in practice); past this they can never become sessions — pure local cruft.
+const STUB_SWEEP_MIN_AGE_MS = 2 * 60 * 60 * 1000;
 
 export function waitingSoundKey(session: InboxSession, queued: Set<string>): string | null {
   if (!isSessionWaitingForInput(session, queued)) return null;
@@ -308,6 +314,50 @@ export function useSyncInboxSessions() {
       onComplete: (all) => useInboxStore.getState().syncTable("sessions", all as unknown as InboxSession[]),
     });
   }, [convex, sessWsKey, reconcileNonce, hydrated]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // GHOST SWEEP — the sessions cache is never-prune, so a conversation
+  // hard-deleted server-side (cleanup.gcEmptyConversations sweeps abandoned
+  // blank "New Session" rows after 24h) would leave a permanent ghost card.
+  // Collect cached blank rows old enough for the GC (empty, our own, no local
+  // pending state) and VERIFY against the server which still exist; only
+  // confirmed-gone ids are pruned (the planted excludes are sticky, so a wrong
+  // local delete would blind this client to a live session — verify-then-prune
+  // makes that impossible). Runs post-hydration and on the reconcile tick;
+  // normally finds zero candidates and costs nothing.
+  useEffect(() => {
+    if (!hydrated) return;
+    const store = useInboxStore.getState();
+    const me = store.currentUser?._id?.toString?.();
+    const blankAndIdle = (s: InboxSession, cutoff: number) =>
+      (s.message_count ?? 0) === 0
+      && !s.has_pending
+      && !s.is_pinned
+      && !store.pendingMessages[s._id]?.length
+      && !store.pendingSessionCreates[s._id]
+      && s._id !== store.currentSessionId
+      && (!s.user_id || (me && s.user_id.toString() === me))
+      && (s.started_at ?? s.updated_at ?? 0) < cutoff;
+    const all = Object.values(store.sessions);
+    // Orphaned stubs (optimistic creates that never landed server-side) exist
+    // only in this client's cache — there's nothing to verify; old + blank +
+    // no in-flight create IS the whole truth. Prune directly.
+    const stubs = all
+      .filter((s) => !isConvexId(s._id) && blankAndIdle(s, Date.now() - STUB_SWEEP_MIN_AGE_MS))
+      .map((s) => s._id);
+    if (stubs.length) store.pruneGhostSessions(stubs);
+    const candidates = all
+      .filter((s) => isConvexId(s._id) && blankAndIdle(s, Date.now() - GHOST_SWEEP_MIN_AGE_MS))
+      .map((s) => s._id)
+      .slice(0, 200);
+    if (!candidates.length) return;
+    convex.query(api.conversations.existingConversationIds, { ids: candidates })
+      .then((existing: string[]) => {
+        const exists = new Set(existing);
+        const gone = candidates.filter((id) => !exists.has(id));
+        if (gone.length) useInboxStore.getState().pruneGhostSessions(gone);
+      })
+      .catch(() => {});
+  }, [convex, reconcileNonce, hydrated]);
 
   // DISMISS RECONCILE — durable cross-device dismiss/un-dismiss propagation.
   // The live listInboxSessions channel only reaches a CONNECTED client, and the
