@@ -6778,6 +6778,28 @@ export const listDismissedSessionsLite = query({
   },
 });
 
+// Which of these conversation ids still exist as the caller's own? Powers the
+// inbox ghost sweep: the client's never-prune sessions cache verifies before
+// dropping blank rows the empty-conversation GC (cleanup.gcEmptyConversations)
+// may have hard-deleted server-side. Verify-then-prune keeps the sweep safe —
+// a blank row the GC skipped (live terminal, parked draft) reports back as
+// existing and stays cached.
+export const existingConversationIds = query({
+  args: { ids: v.array(v.string()) },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+    const out: string[] = [];
+    for (const raw of args.ids.slice(0, 200)) {
+      const id = ctx.db.normalizeId("conversations", raw);
+      if (!id) continue;
+      const conv = await ctx.db.get(id);
+      if (conv && conv.user_id.toString() === userId.toString()) out.push(raw);
+    }
+    return out;
+  },
+});
+
 export const setSessionError = mutation({
   args: {
     conversation_id: v.string(),

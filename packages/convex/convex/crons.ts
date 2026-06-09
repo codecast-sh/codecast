@@ -53,4 +53,14 @@ crons.interval(
   {}
 );
 
+crons.interval(
+  // Sweeps abandoned "New Session" rows (quick-create pre-warms a conversation
+  // per summon; abandoning it strands an empty row). Rolling 2h band just past
+  // the 24h grace cutoff — see cleanup.gcEmptyConversations.
+  "gc abandoned empty conversations",
+  { hours: 1 },
+  internal.cleanup.gcEmptyConversations,
+  {}
+);
+
 export default crons;
