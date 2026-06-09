@@ -2,6 +2,7 @@ import { mutation, query, action, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 import { api, internal } from "./_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
+import { createTeamFeedFilter } from "./privacy";
 
 function generateInviteCode(): string {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -230,15 +231,23 @@ export const getTeamMembers = query({
       .query("team_memberships")
       .withIndex("by_team_id", (q) => q.eq("team_id", args.team_id))
       .collect();
+    // Visibility gate for the avatar-bar session preview: the most recent
+    // conversation may be private (team_id is routing, not visibility), so we
+    // must not expose its title/last-message. Pick the most recent *team-visible*
+    // session in this team instead.
+    const feedFilter = await createTeamFeedFilter(ctx, args.team_id);
     const members = await Promise.all(
       memberships.map(async (m) => {
         const user = await ctx.db.get(m.user_id);
         if (!user) return null;
-        const recentConvo = await ctx.db
+        const recentConvos = await ctx.db
           .query("conversations")
-          .withIndex("by_user_updated", (q) => q.eq("user_id", user._id))
+          .withIndex("by_team_user_updated", (q) =>
+            q.eq("team_id", args.team_id).eq("user_id", user._id)
+          )
           .order("desc")
-          .first();
+          .take(10);
+        const recentConvo = recentConvos.find((c) => feedFilter.isVisible(c));
         return {
           _id: user._id,
           name: user.name,

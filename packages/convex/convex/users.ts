@@ -5,7 +5,7 @@ import { enqueueStartSession, getOnlineLocalRoots } from "./devices";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { hasRecentPendingDaemonCommand } from "./daemonCommandUtils";
-import { resolveTeamForPath } from "./privacy";
+import { resolveTeamForPath, getProfileVisibilityPredicate } from "./privacy";
 import { resetConversationPendingMessages } from "./pendingMessages";
 import { normalizeProjectPath } from "./projectPaths";
 
@@ -802,6 +802,8 @@ export const getUserAbstractActivity = query({
     team_id: v.optional(v.id("teams")),
   },
   handler: async (ctx, args) => {
+    const viewerId = await getAuthUserId(ctx);
+    if (!viewerId) return null;
     const user = await ctx.db.get(args.user_id);
     if (!user) return null;
 
@@ -809,7 +811,7 @@ export const getUserAbstractActivity = query({
     const oneWeekAgo = now - 7 * 24 * 60 * 60 * 1000;
     const oneMonthAgo = now - 30 * 24 * 60 * 60 * 1000;
 
-    const recentConversations = args.team_id
+    const recentConversationsRaw = args.team_id
       ? await ctx.db
           .query("conversations")
           .withIndex("by_team_user_updated", (q: any) =>
@@ -822,6 +824,11 @@ export const getUserAbstractActivity = query({
           .withIndex("by_user_id", (q) => q.eq("user_id", args.user_id))
           .order("desc")
           .take(10);
+
+    // Privacy gate: exclude private conversations from a teammate's profile so
+    // their titles/subtitles/projects and counts don't leak (owner sees all).
+    const isVisible = await getProfileVisibilityPredicate(ctx, viewerId, args.user_id, args.team_id);
+    const recentConversations = recentConversationsRaw.filter(isVisible);
 
     const weekConversations = recentConversations.filter(c => c.started_at > oneWeekAgo);
     const monthConversations = recentConversations.filter(c => c.started_at > oneMonthAgo);
@@ -1000,6 +1007,10 @@ export const getUserActivityHeatmap = query({
     // start-day bucketing would hide today's work on multi-day sessions.
     // Subagent/child sessions are included (no parent filter) to match the
     // pre-existing query semantics and the 5422-session header total.
+    // Privacy gate: don't count a teammate's private conversations toward their
+    // public heatmap (owner sees all). Private convs are still marked `seen` so
+    // the events/insights fallback branches below can't re-introduce them.
+    const isVisible = await getProfileVisibilityPredicate(ctx, userId, args.user_id, args.team_id);
     const recentConvos = args.team_id
       ? ctx.db.query("conversations").withIndex("by_team_user_updated", (q: any) =>
           q.eq("team_id", args.team_id).eq("user_id", args.user_id).gte("updated_at", recentCutoff))
@@ -1009,6 +1020,7 @@ export const getUserActivityHeatmap = query({
       const upd = c.updated_at ?? c.started_at;
       if (!upd) continue;
       seen.add(String(c._id));
+      if (!isVisible(c)) continue;
       const date = new Date(upd).toISOString().split("T")[0];
       if (!buckets[date]) buckets[date] = { hours: 0, sessions: 0 };
       buckets[date].sessions++;
@@ -1154,7 +1166,7 @@ export const getUserProfileFeed = query({
     };
     const items: FeedItem[] = [];
 
-    const recentConvos = args.team_id
+    const recentConvosRaw = args.team_id
       ? await ctx.db
           .query("conversations")
           .withIndex("by_team_user_updated", (q: any) =>
@@ -1167,6 +1179,11 @@ export const getUserProfileFeed = query({
           .withIndex("by_user_id", (q) => q.eq("user_id", args.user_id))
           .order("desc")
           .take(30);
+
+    // Privacy gate: (team_id, user_id) is routing, not visibility. Drop private
+    // conversations so a teammate's profile never exposes their message text.
+    const isVisible = await getProfileVisibilityPredicate(ctx, userId, args.user_id, args.team_id);
+    const recentConvos = recentConvosRaw.filter(isVisible);
 
     const NOISE_PREFIXES = ["[Request interrupted", "This session is being continued", "Your task is to create a detailed summary", "Full transcript available at:", "Read the output file to retrieve the result:"];
     const COMMAND_RE = /^(<command-name>|<command-message>|<local-command-stdout>|<local-command-stderr>|Caveat:|\/[a-z][\w-]*)/i;
