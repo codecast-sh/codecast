@@ -166,7 +166,7 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
       isPrivate={conversation.is_private !== false}
       teamVisibility={(conversation as any).team_visibility || (conversation as any).effective_team_visibility}
       hasShareToken={!!conversation.share_token}
-      hasTeam={!!(conversation as any).auto_shared}
+      hasTeam={!!(conversation as any).team_id}
       onSetPrivate={() => { setPrivacy(convId, true); toast.success("Made private"); }}
       onSetTeamVisibility={(mode) => { setTeamVisibility(convId, mode); toast.success(mode === "full" ? "Sharing full conversation with team" : "Sharing summary with team"); }}
       onGenerateShareLink={async () => { await generateShareLink({ conversation_id: convId }); return `${shareOrigin()}/conversation/${convId}`; }}
