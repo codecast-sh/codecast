@@ -55,7 +55,12 @@ export function applySyncTable<T extends { _id: string }>(
   incoming: T[],
   pending: Record<string, PendingEntry>,
   prev?: Record<string, T>,
-  opts?: { isDelta?: boolean; ignoreFields?: string[]; preserveFields?: string[] },
+  opts?: {
+    isDelta?: boolean;
+    ignoreFields?: string[];
+    preserveFields?: string[];
+    pruneAbsentScope?: (record: T) => boolean;
+  },
 ): { table: Record<string, T>; pending: Record<string, PendingEntry> } {
   const newPending = { ...pending };
   const table: Record<string, T> = {};
@@ -65,6 +70,19 @@ export function applySyncTable<T extends { _id: string }>(
   const isDelta = !!opts?.isDelta;
   const ignoreFields = opts?.ignoreFields ? new Set(opts.ignoreFields) : undefined;
   const preserveFields = opts?.preserveFields;
+  const pruneAbsentScope = opts?.pruneAbsentScope;
+  // Ids with ANY local pending state — never prune these (an optimistic write
+  // must not be discarded because a crawl raced it).
+  let pendingIds: Set<string> | null = null;
+  if (pruneAbsentScope) {
+    pendingIds = new Set();
+    for (const key of Object.keys(newPending)) {
+      if (!key.startsWith(prefix)) continue;
+      const rest = key.slice(prefix.length);
+      const colon = rest.indexOf(":");
+      pendingIds.add(colon === -1 ? rest : rest.slice(0, colon));
+    }
+  }
 
   // Confirmed excludes — server no longer sends the record.
   // In delta mode the incoming set is partial by definition, so an absent
@@ -143,6 +161,17 @@ export function applySyncTable<T extends { _id: string }>(
               : merged;
         }
       } else if (isDelta) {
+        // Scoped authoritative prune: when the caller certifies `incoming` is the
+        // COMPLETE server set for a scope (e.g. a full reconcile crawl of one
+        // workspace), an in-scope record absent from it is a server-side deletion.
+        // Plant an exclude — the store's deletion contract, and what authorizes
+        // the IDB diff to remove the row durably (a bare store-shrink is ignored
+        // there, and hydration would resurrect the row). Out-of-scope records and
+        // records with pending local state keep the normal delta behavior.
+        if (pruneAbsentScope && pruneAbsentScope(prev[id]) && !pendingIds!.has(id)) {
+          newPending[excludeKey] = { type: "exclude" };
+          continue;
+        }
         table[id] = prev[id];
       }
     }

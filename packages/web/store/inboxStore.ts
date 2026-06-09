@@ -925,6 +925,54 @@ export function visualOrderSessions(
   return result;
 }
 
+// Quick-create pre-warms a server conversation (and a daemon agent) per summon;
+// without reuse, every abandoned summon strands an empty "New Session" row in
+// the inbox forever. Reusing the existing blank session for the same
+// project+agent makes repeated open/abandon cycles converge on ONE pre-warmed
+// session — and resurfaces its draft. The server GC
+// (cleanup.gcEmptyConversations) sweeps what reuse misses. The window stays
+// well inside the GC's 24h grace so a reused id can never be a row the sweep
+// is about to delete.
+export const BLANK_SESSION_REUSE_WINDOW_MS = 12 * 60 * 60 * 1000;
+
+export function findReusableBlankSession(
+  state: {
+    sessions: Record<string, InboxSession>;
+    pendingMessages: Record<string, any[]>;
+    pendingSessionCreates: Record<string, Promise<string>>;
+    currentUser?: any;
+  },
+  opts: { agentType: string; projectPath?: string; gitRoot?: string },
+  now: number = Date.now(),
+): string | null {
+  const me = state.currentUser?._id?.toString?.();
+  const wantPath = opts.projectPath || opts.gitRoot;
+  if (!wantPath) return null;
+  let best: InboxSession | null = null;
+  let bestBorn = 0;
+  for (const s of Object.values(state.sessions)) {
+    if ((s.message_count ?? 0) !== 0 || s.has_pending) continue;
+    // A local stub is ours by construction but only trustworthy while its
+    // create is in flight; an orphaned stub (create failed) must not be reused.
+    if (!isConvexId(s._id) && !state.pendingSessionCreates[s._id]) continue;
+    if (state.pendingMessages[s._id]?.length) continue;
+    if (s.inbox_dismissed_at || s.is_pinned) continue;
+    if (s.is_subagent || s.parent_conversation_id || s.worktree_name || s.workflow_run_id) continue;
+    if (s.active_task || s.active_plan) continue;
+    if (s.agent_type !== opts.agentType) continue;
+    if ((s.project_path || s.git_root) !== wantPath) continue;
+    // Teammate sessions can be injected into this cache — only reuse our own.
+    if (s.user_id && (!me || s.user_id.toString() !== me)) continue;
+    const born = s.started_at ?? s.updated_at ?? 0;
+    if (!born || now - born > BLANK_SESSION_REUSE_WINDOW_MS) continue;
+    if (born > bestBorn) {
+      best = s;
+      bestBorn = born;
+    }
+  }
+  return best?._id ?? null;
+}
+
 // -- Store interface --
 
 interface InboxStoreState {
@@ -1044,7 +1092,14 @@ interface InboxStoreState {
   // resolves. Every new-session entry point funnels through this so a first
   // message can never be left non-optimistic. Returns the stub id (navigate to it
   // immediately) and the in-flight create promise (await for the real id).
-  beginOptimisticSession: (opts: { agentType: string; projectPath?: string; gitRoot?: string; create: (stubId: string) => Promise<string> }) => { stubId: string; ready: Promise<string> };
+  // `reuse` makes repeated summons converge on the existing blank session for the
+  // same project+agent instead of minting (and pre-warming) a new conversation
+  // per summon — see findReusableBlankSession.
+  beginOptimisticSession: (opts: { agentType: string; projectPath?: string; gitRoot?: string; reuse?: boolean; create: (stubId: string) => Promise<string> }) => { stubId: string; ready: Promise<string> };
+  // Verified ghost removal: hard-drop cached session rows the server confirmed
+  // deleted (the empty-conversation GC). Plants the exclude pending entries that
+  // authorize the IDB row delete and block crawl re-adds.
+  pruneGhostSessions: (ids: string[]) => void;
 
   // -- Generic sync --
   syncTable: (field: string, incoming: any, opts?: SyncOpts) => void;
@@ -1412,6 +1467,13 @@ export type SyncOpts = {
   // than being clobbered by the base's null — so the base list and the liveness
   // overlay can write the same rows without fighting. See sessions + syncOverlay.
   preserveFields?: string[];
+  // Delta mode normally treats absence as "unchanged", so hard deletes never
+  // propagate. When the payload is the COMPLETE server set for some scope (a
+  // full reconcile crawl of one workspace), pass a predicate for that scope:
+  // in-scope records absent from the payload are removed via an exclude-pending
+  // entry (the deletion contract the IDB diff honors). Per-call only — not for
+  // SYNC_REGISTRY, since scope depends on what was crawled.
+  pruneAbsentScope?: (record: any) => boolean;
 };
 
 function applyMerge(local: any, server: any, spec: MergeSpec, initialized: boolean): any {
@@ -1772,6 +1834,19 @@ export const useInboxStore = create<InboxStoreState>(
       newSessionId = next?._id ?? null;
     }
     for (const sid of allIds) {
+      // A local-only stub (optimistic create that never landed server-side)
+      // can't be dismissed durably: the server never knew it, so the dismissed
+      // reconcile's CLEAR pass would un-dismiss it on every crawl once the
+      // pending lock is lost (it's clobbered wholesale by other windows sharing
+      // the IDB). Dismissing it honestly means deleting it — store + IDB (the
+      // auto-generated exclude pending persists the row delete, as with kills).
+      if (!isConvexId(sid)) {
+        delete this.sessions[sid];
+        delete this.conversations[sid];
+        delete this.messages[sid];
+        delete this.pendingMessages[sid];
+        continue;
+      }
       const sess = this.sessions[sid];
       const wasPinned = sess?.is_pinned;
       if (sess) {
@@ -1840,12 +1915,49 @@ export const useInboxStore = create<InboxStoreState>(
 
     const cutoff = Date.now() - DISMISS_RECONCILE_WINDOW_MS;
     for (const id of Object.keys(this.sessions)) {
+      // Local-only stub ids can never be in the server's dismissed set, so its
+      // silence about them carries no signal — clearing here would resurrect a
+      // dismissed orphaned stub on every crawl, forever.
+      if (!isConvexId(id)) continue;
       const sess = this.sessions[id];
       const at = sess.inbox_dismissed_at;
       if (!at || at < cutoff || server.has(id) || lockedLocal(id)) continue;
+      // A BLANK row leaving the server's dismissed set usually means the
+      // empty-conversation GC hard-deleted it — un-dismissing would resurrect
+      // a ghost "New Session" card into the active inbox. Leave it dismissed;
+      // the verified ghost sweep (pruneGhostSessions) removes it, and a real
+      // remote un-dismiss re-arrives via the live channel.
+      if ((sess.message_count ?? 0) === 0 && !sess.has_pending) continue;
       sess.inbox_dismissed_at = null;
       const conv = this.conversations[id] as any;
       if (conv) conv.inbox_dismissed_at = null;
+    }
+  }),
+
+  // Verified ghost removal — the sessions cache is never-prune, so a
+  // conversation hard-deleted server-side (cleanup.gcEmptyConversations) leaves
+  // a permanent "New Session" ghost card. Callers verify Convex ids against the
+  // server (conversations.existingConversationIds) BEFORE calling: the planted
+  // excludes are sticky in delta mode, so a wrong delete would blind this
+  // client to a live session. Stub ids (orphaned optimistic creates that never
+  // landed server-side) are passed unverified — the server can't vouch for ids
+  // it never had; the caller's age/idleness guards are the safety there. The
+  // excludes are what authorize the IDB row delete (a bare store-shrink is
+  // ignored by the diff). A sync() — never re-dispatched; excludes are planted
+  // manually (only action() auto-plants).
+  pruneGhostSessions: sync(function (this: Draft, ids: string[]) {
+    const now = Date.now();
+    for (const id of ids) {
+      if (this.currentSessionId === id) continue;
+      if (this.pendingMessages[id]?.length) continue;
+      if (id in this.pendingSessionCreates) continue;
+      delete this.sessions[id];
+      delete this.conversations[id];
+      delete this.messages[id];
+      delete this.pendingMessages[id];
+      delete this.pagination[id];
+      this.pending[`sessions:${id}`] = { type: "exclude", ts: now };
+      this.pending[`conversations:${id}`] = { type: "exclude", ts: now };
     }
   }),
 
@@ -2096,8 +2208,18 @@ export const useInboxStore = create<InboxStoreState>(
   // for normal sessions, the createQuickSession mutation when isolated/worktree
   // options are needed). The stub uses the same Math.random id scheme as
   // createSession — never 32 chars, so isConvexId() correctly treats it as local.
-  beginOptimisticSession: (opts: { agentType: string; projectPath?: string; gitRoot?: string; create: (stubId: string) => Promise<string> }) => {
+  beginOptimisticSession: (opts: { agentType: string; projectPath?: string; gitRoot?: string; reuse?: boolean; create: (stubId: string) => Promise<string> }) => {
     const store = get();
+    // Converge on the existing blank session for this project+agent instead of
+    // minting another one — repeated summon/abandon cycles otherwise strand an
+    // empty "New Session" row (and a pre-warmed daemon process) per summon.
+    if (opts.reuse) {
+      const existing = findReusableBlankSession(store as any, opts);
+      if (existing) {
+        const pendingCreate = store.pendingSessionCreates[existing];
+        return { stubId: existing, ready: pendingCreate ?? Promise.resolve(existing) };
+      }
+    }
     const stubId = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
     const now = Date.now();
     store.syncRecord("conversations", stubId, {
@@ -2301,8 +2423,13 @@ export const useInboxStore = create<InboxStoreState>(
     const prevCollection = (this as any)[field] || {};
     const { table, pending } = applySyncTable(
       field, incoming, this.pending, prevCollection,
-      (config.isDelta || config.ignoreFields || config.preserveFields)
-        ? { isDelta: config.isDelta, ignoreFields: config.ignoreFields, preserveFields: config.preserveFields }
+      (config.isDelta || config.ignoreFields || config.preserveFields || config.pruneAbsentScope)
+        ? {
+            isDelta: config.isDelta,
+            ignoreFields: config.ignoreFields,
+            preserveFields: config.preserveFields,
+            pruneAbsentScope: config.pruneAbsentScope,
+          }
         : undefined,
     );
 

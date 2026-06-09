@@ -36,12 +36,14 @@ export function ComposeView({ initialQuery }: { initialQuery?: string }) {
     const agentType = (ctx.agentType || "claude_code") as "claude_code" | "codex" | "cursor" | "gemini";
 
     soundNewSession();
-    // Shared optimistic-create path — see store.beginOptimisticSession. One fresh
-    // blank session per popup instance; the user types into it after it mounts.
+    // Shared optimistic-create path — see store.beginOptimisticSession. reuse:
+    // summon→Escape→summon converges on the SAME blank session (resurfacing its
+    // draft) instead of stranding an empty conversation per summon.
     const { stubId: sid } = store.beginOptimisticSession({
       agentType,
       projectPath: path,
       gitRoot: path || undefined,
+      reuse: true,
       create: (stubId) => store.createSession({
         agent_type: agentType,
         project_path: path,

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { categorizeSessions, computeNewDividerIndex, getSessionRenderKey, isConvexId, isSessionDismissed, orchestrationGroupLabelOf, pendingSendConsumed, resolveAssigneeInfo, resolveSessionAuthor, sessionsWithPendingSend, unionHydrate, useInboxStore, worktreeKeyOf, type InboxSession } from "../inboxStore";
+import { categorizeSessions, computeNewDividerIndex, dropLatchedFeedHasMore, getSessionRenderKey, isConvexId, isSessionDismissed, orchestrationGroupLabelOf, pendingSendConsumed, resolveAssigneeInfo, resolveSessionAuthor, sessionsWithPendingSend, unionHydrate, useInboxStore, worktreeKeyOf, type InboxSession } from "../inboxStore";
 import { isPersistedStoreKey } from "../idbCache";
 
 const baseSession: InboxSession = {
@@ -1044,6 +1044,67 @@ describe("archiveDoc stays gone under delta (docs now protected)", () => {
   });
 });
 
+describe("pruneAbsentScope — a full workspace crawl propagates server deletions", () => {
+  // Delta mode treats absence as "unchanged", so server-side hard deletes never
+  // reached clients (deleted docs ghosted in the cache forever). The reconcile
+  // crawl is the COMPLETE set for its workspace, so it may pass pruneAbsentScope:
+  // in-scope rows absent from the payload are removed via an exclude-pending
+  // entry (the same deletion contract kill/archive use — which is also what
+  // authorizes the IDB diff to delete the row durably instead of resurrecting
+  // it on the next hydration).
+  beforeEach(() => {
+    useInboxStore.setState({ docs: {}, pending: {} } as any);
+  });
+
+  const doc = (id: string, team_id?: string) =>
+    ({ _id: id, title: id, team_id, updated_at: 1 }) as any;
+  const inTeam1 = (d: any) => d.team_id === "team1";
+
+  it("prunes an in-scope doc absent from the crawl, plants an exclude, and stays gone", () => {
+    const store = useInboxStore.getState();
+    const a = doc("d000000000000000000000000000000a", "team1");
+    const b = doc("d000000000000000000000000000000b", "team1");
+    store.syncTable("docs", [a, b], { isDelta: true });
+
+    // Full crawl of team1 returns only a → b was deleted server-side.
+    store.syncTable("docs", [a], { isDelta: true, pruneAbsentScope: inTeam1 });
+    const s = useInboxStore.getState();
+    expect(s.docs[a._id]).toBeDefined();
+    expect(s.docs[b._id]).toBeUndefined();
+    expect((s.pending as any)[`docs:${b._id}`]?.type).toBe("exclude");
+
+    // A later (stale) delta overlay returning b must NOT resurrect it.
+    store.syncTable("docs", [b], { isDelta: true });
+    expect(useInboxStore.getState().docs[b._id]).toBeUndefined();
+  });
+
+  it("keeps out-of-scope docs — the other workspace's cache is untouched", () => {
+    const store = useInboxStore.getState();
+    const mine = doc("d0000000000000000000000000000010", "team1");
+    const other = doc("d0000000000000000000000000000011", "team2");
+    const personal = doc("d0000000000000000000000000000012", undefined);
+    store.syncTable("docs", [mine, other, personal], { isDelta: true });
+
+    store.syncTable("docs", [mine], { isDelta: true, pruneAbsentScope: inTeam1 });
+    const s = useInboxStore.getState();
+    expect(s.docs[mine._id]).toBeDefined();
+    expect(s.docs[other._id]).toBeDefined();
+    expect(s.docs[personal._id]).toBeDefined();
+  });
+
+  it("never prunes a doc with pending local state", () => {
+    const store = useInboxStore.getState();
+    const edited = doc("d0000000000000000000000000000020", "team1");
+    store.syncTable("docs", [edited], { isDelta: true });
+    useInboxStore.setState({
+      pending: { [`docs:${edited._id}:title`]: { type: "field", value: "local edit" } },
+    } as any);
+
+    useInboxStore.getState().syncTable("docs", [], { isDelta: true, pruneAbsentScope: inTeam1 });
+    expect(useInboxStore.getState().docs[edited._id]).toBeDefined();
+  });
+});
+
 describe("big id-keyed collections are delta-by-default — a bare sync never wipes the cache", () => {
   // The systemic guarantee behind the "tasks/sessions vanish then stream back"
   // collapses: tasks/docs/plans carry isDelta:true in SYNC_REGISTRY, so EVERY
@@ -1242,27 +1303,30 @@ describe("dismiss is absolute — navigation/injection must not resurrect", () =
   });
 
   it("stash then navigate then unstash — dismiss survives the round trip", () => {
+    // A Convex-shaped id: stashSession flags real server sessions but deletes
+    // local-only stubs, and this test pins the flag semantics.
+    const realId = "c".repeat(32);
     useInboxStore.setState({
       sessions: {
-        [alive._id]: { ...alive },
+        [realId]: { ...alive, _id: realId },
       },
       conversations: {
-        [alive._id]: { _id: alive._id } as any,
+        [realId]: { _id: realId } as any,
       },
-      currentSessionId: alive._id,
+      currentSessionId: realId,
       viewingDismissedId: null,
       clientState: {},
       pending: {},
     });
 
-    useInboxStore.getState().stashSession(alive._id);
-    expect(isSessionDismissed(useInboxStore.getState().sessions[alive._id])).toBe(true);
+    useInboxStore.getState().stashSession(realId);
+    expect(isSessionDismissed(useInboxStore.getState().sessions[realId])).toBe(true);
 
-    useInboxStore.getState().navigateToSession(alive._id);
-    expect(isSessionDismissed(useInboxStore.getState().sessions[alive._id])).toBe(true);
+    useInboxStore.getState().navigateToSession(realId);
+    expect(isSessionDismissed(useInboxStore.getState().sessions[realId])).toBe(true);
 
-    useInboxStore.getState().unstashSession(alive._id);
-    expect(isSessionDismissed(useInboxStore.getState().sessions[alive._id])).toBe(false);
+    useInboxStore.getState().unstashSession(realId);
+    expect(isSessionDismissed(useInboxStore.getState().sessions[realId])).toBe(false);
   });
 });
 
@@ -1913,6 +1977,140 @@ describe("inboxStore.beginOptimisticSession", () => {
     });
     expect(await ready).toBe(REAL_ID);
   });
+
+  // reuse: true — quick-create entry points (Ctrl+N, the compose palette)
+  // converge on the existing blank session for the project+agent instead of
+  // stranding an empty "New Session" conversation per summon.
+  describe("reuse", () => {
+    const blank = (extra: Partial<InboxSession> = {}): InboxSession => ({
+      ...baseSession,
+      _id: REAL_ID,
+      session_id: REAL_ID,
+      message_count: 0,
+      project_path: "/repo",
+      agent_type: "claude_code",
+      started_at: Date.now() - 60_000,
+      ...extra,
+    });
+
+    it("reuses a matching blank session — no create fired", async () => {
+      useInboxStore.setState({ sessions: { [REAL_ID]: blank() } });
+      let created = false;
+      const { stubId, ready } = useInboxStore.getState().beginOptimisticSession({
+        agentType: "claude_code",
+        projectPath: "/repo",
+        reuse: true,
+        create: async () => { created = true; return "x".repeat(32); },
+      });
+      expect(stubId).toBe(REAL_ID);
+      expect(await ready).toBe(REAL_ID);
+      expect(created).toBe(false);
+    });
+
+    it("reuses an in-flight stub (double Ctrl+N converges) and returns its create promise", async () => {
+      const first = useInboxStore.getState().beginOptimisticSession({
+        agentType: "claude_code",
+        projectPath: "/repo",
+        create: async () => REAL_ID,
+      });
+      const second = useInboxStore.getState().beginOptimisticSession({
+        agentType: "claude_code",
+        projectPath: "/repo",
+        reuse: true,
+        create: async () => { throw new Error("must not create"); },
+      });
+      expect(second.stubId).toBe(first.stubId);
+      expect(await second.ready).toBe(REAL_ID);
+    });
+
+    it.each([
+      ["different project", { project_path: "/other" }],
+      ["different agent", { agent_type: "codex" }],
+      ["has messages", { message_count: 4 }],
+      ["dismissed", { inbox_dismissed_at: Date.now() }],
+      ["pinned", { is_pinned: true }],
+      ["worktree", { worktree_name: "wt" }],
+      ["subagent", { is_subagent: true }],
+      ["a teammate's", { user_id: "u".repeat(32) }],
+      ["stale (outside the reuse window)", { started_at: Date.now() - 13 * 60 * 60 * 1000 }],
+    ])("creates fresh when the only blank candidate is %s", async (_label, extra) => {
+      useInboxStore.setState({ sessions: { [REAL_ID]: blank(extra as Partial<InboxSession>) } });
+      const { stubId, ready } = useInboxStore.getState().beginOptimisticSession({
+        agentType: "claude_code",
+        projectPath: "/repo",
+        reuse: true,
+        create: async () => "x".repeat(32),
+      });
+      expect(stubId).not.toBe(REAL_ID);
+      await ready;
+    });
+
+    it("without reuse, a matching blank session is ignored (modal/isolated path unchanged)", async () => {
+      useInboxStore.setState({ sessions: { [REAL_ID]: blank() } });
+      const { stubId, ready } = useInboxStore.getState().beginOptimisticSession({
+        agentType: "claude_code",
+        projectPath: "/repo",
+        create: async () => "x".repeat(32),
+      });
+      expect(stubId).not.toBe(REAL_ID);
+      await ready;
+    });
+  });
+});
+
+// Verified ghost removal — the never-prune sessions cache asks the server which
+// blank rows still exist (existingConversationIds) and hard-drops the
+// confirmed-gone ones. These pin the store half: rows removed everywhere +
+// exclude pendings planted (the durable delete contract), with the local-state
+// guards that keep an in-use row safe.
+describe("pruneGhostSessions — verified removal of GC'd blanks", () => {
+  const GONE = "g".repeat(32);
+  const CURRENT = "c".repeat(32);
+  const SENDING = "d".repeat(32);
+  const STUB = "k2hf8s0dq1xand83hr0e6";
+  const CREATING = "p9hf8s0dq1xand83hr0e7";
+
+  beforeEach(() => {
+    const mk = (id: string): InboxSession => ({ ...baseSession, _id: id, session_id: id });
+    useInboxStore.setState({
+      sessions: { [GONE]: mk(GONE), [CURRENT]: mk(CURRENT), [SENDING]: mk(SENDING), [STUB]: mk(STUB), [CREATING]: mk(CREATING) },
+      conversations: { [GONE]: { _id: GONE } as any, [CURRENT]: { _id: CURRENT } as any },
+      messages: { [GONE]: [] },
+      pendingMessages: { [SENDING]: [{ _id: "m1", content: "hi" }] as any },
+      pendingSessionCreates: { [CREATING]: Promise.resolve("x") },
+      pagination: { [GONE]: {} as any },
+      currentSessionId: CURRENT,
+      pending: {},
+    } as any);
+  });
+
+  it("drops the row everywhere and plants the exclude pendings", () => {
+    useInboxStore.getState().pruneGhostSessions([GONE]);
+    const s = useInboxStore.getState();
+    expect(s.sessions[GONE]).toBeUndefined();
+    expect(s.conversations[GONE]).toBeUndefined();
+    expect(s.messages[GONE]).toBeUndefined();
+    expect(s.pagination[GONE]).toBeUndefined();
+    expect(s.pending[`sessions:${GONE}`]?.type).toBe("exclude");
+    expect(s.pending[`conversations:${GONE}`]?.type).toBe("exclude");
+  });
+
+  it("drops an orphaned stub (never landed server-side) — local-only cruft", () => {
+    useInboxStore.getState().pruneGhostSessions([STUB]);
+    const s = useInboxStore.getState();
+    expect(s.sessions[STUB]).toBeUndefined();
+    // The exclude is what authorizes the durable IDB row delete.
+    expect(s.pending[`sessions:${STUB}`]?.type).toBe("exclude");
+  });
+
+  it("never touches the current session, queued sends, or an in-flight create", () => {
+    useInboxStore.getState().pruneGhostSessions([CURRENT, SENDING, CREATING]);
+    const s = useInboxStore.getState();
+    expect(s.sessions[CURRENT]).toBeDefined();
+    expect(s.sessions[SENDING]).toBeDefined();
+    expect(s.sessions[CREATING]).toBeDefined();
+    expect(s.pending[`sessions:${CURRENT}`]).toBeUndefined();
+  });
 });
 
 // Local-first mutation actions: each must (1) mutate the store synchronously so
@@ -2129,6 +2327,9 @@ describe("resolveAssigneeInfo", () => {
 // applyDismissedReconcile, the client half of that backstop. Regression for
 // "I dismiss on one device but it's still there on another."
 describe("applyDismissedReconcile — durable cross-device dismiss", () => {
+  // Real server sessions have 32-char Convex ids; the reconcile's CLEAR pass
+  // deliberately ignores anything shorter (local-only stubs).
+  const A = "a".repeat(32);
   beforeEach(() => {
     useInboxStore.setState({ sessions: {}, conversations: {}, pending: {} } as any);
   });
@@ -2136,53 +2337,130 @@ describe("applyDismissedReconcile — durable cross-device dismiss", () => {
     useInboxStore.getState().syncTable("sessions", [{ ...baseSession, _id: id, session_id: id, ...extra }]);
 
   it("SETS dismiss on a cached active session the server reports dismissed", () => {
-    seed("a"); // active in cache (the stale state on the offline device)
-    expect(isSessionDismissed(useInboxStore.getState().sessions["a"])).toBe(false);
-    useInboxStore.getState().applyDismissedReconcile([{ _id: "a", inbox_dismissed_at: 5000 }], true);
+    seed(A); // active in cache (the stale state on the offline device)
+    expect(isSessionDismissed(useInboxStore.getState().sessions[A])).toBe(false);
+    useInboxStore.getState().applyDismissedReconcile([{ _id: A, inbox_dismissed_at: 5000 }], true);
     const s = useInboxStore.getState();
-    expect(s.sessions["a"].inbox_dismissed_at).toBe(5000);
-    expect((s.conversations["a"] as any).inbox_dismissed_at).toBe(5000);
+    expect(s.sessions[A].inbox_dismissed_at).toBe(5000);
+    expect((s.conversations[A] as any).inbox_dismissed_at).toBe(5000);
   });
 
   it("CLEARS dismiss (final pass) on a cached dismissed session the server no longer reports — un-dismissed elsewhere", () => {
-    seed("a", { inbox_dismissed_at: Date.now() - 1000 });
-    expect(isSessionDismissed(useInboxStore.getState().sessions["a"])).toBe(true);
+    seed(A, { inbox_dismissed_at: Date.now() - 1000, message_count: 3 });
+    expect(isSessionDismissed(useInboxStore.getState().sessions[A])).toBe(true);
     useInboxStore.getState().applyDismissedReconcile([], true); // server's dismissed set is empty
-    expect(useInboxStore.getState().sessions["a"].inbox_dismissed_at).toBeNull();
+    expect(useInboxStore.getState().sessions[A].inbox_dismissed_at).toBeNull();
+  });
+
+  it("never CLEARs a dismissed BLANK session — its absence usually means the empty-conversation GC deleted it", () => {
+    // A dismissed 0-message row leaving the server's dismissed set is (almost
+    // always) cleanup.gcEmptyConversations hard-deleting it. Un-dismissing
+    // would resurrect a ghost "New Session" card into the active inbox — the
+    // exact "cruft keeps coming back" loop. It stays dismissed; the verified
+    // ghost sweep removes it for real.
+    seed(A, { inbox_dismissed_at: Date.now() - 1000, message_count: 0 });
+    useInboxStore.getState().applyDismissedReconcile([], true);
+    expect(isSessionDismissed(useInboxStore.getState().sessions[A])).toBe(true);
   });
 
   it("does NOT clear a dismissed session older than the reconcile window (out of server scan range)", () => {
     const old = Date.now() - 40 * 24 * 60 * 60 * 1000;
-    seed("a", { inbox_dismissed_at: old });
+    seed(A, { inbox_dismissed_at: old });
     useInboxStore.getState().applyDismissedReconcile([], true);
-    expect(useInboxStore.getState().sessions["a"].inbox_dismissed_at).toBe(old);
+    expect(useInboxStore.getState().sessions[A].inbox_dismissed_at).toBe(old);
   });
 
   it("a per-page (non-final) pass SETs but never CLEARs — CLEAR needs the whole set", () => {
-    seed("a", { inbox_dismissed_at: Date.now() - 1000 });
+    seed(A, { inbox_dismissed_at: Date.now() - 1000 });
     useInboxStore.getState().applyDismissedReconcile([], false);
-    expect(isSessionDismissed(useInboxStore.getState().sessions["a"])).toBe(true);
+    expect(isSessionDismissed(useInboxStore.getState().sessions[A])).toBe(true);
   });
 
   it("respects a pending local override — an in-flight local unstash is NOT re-dismissed", () => {
-    seed("a"); // locally active (just un-dismissed, dispatch in flight)
+    seed(A); // locally active (just un-dismissed, dispatch in flight)
     useInboxStore.setState((s: any) => ({
-      pending: { ...s.pending, "sessions:a:inbox_dismissed_at": { type: "field", value: null } },
+      pending: { ...s.pending, [`sessions:${A}:inbox_dismissed_at`]: { type: "field", value: null } },
     }));
     // Server still reports it dismissed (hasn't caught up) — local-first must win.
-    useInboxStore.getState().applyDismissedReconcile([{ _id: "a", inbox_dismissed_at: 5000 }], true);
-    expect(isSessionDismissed(useInboxStore.getState().sessions["a"])).toBe(false);
+    useInboxStore.getState().applyDismissedReconcile([{ _id: A, inbox_dismissed_at: 5000 }], true);
+    expect(isSessionDismissed(useInboxStore.getState().sessions[A])).toBe(false);
   });
 
   it("respects a pending local override when clearing — an in-flight local dismiss is NOT un-dismissed", () => {
     const now = Date.now();
-    seed("a", { inbox_dismissed_at: now }); // locally dismissed, dispatch in flight
+    seed(A, { inbox_dismissed_at: now }); // locally dismissed, dispatch in flight
     useInboxStore.setState((s: any) => ({
-      pending: { ...s.pending, "sessions:a:inbox_dismissed_at": { type: "field", value: now } },
+      pending: { ...s.pending, [`sessions:${A}:inbox_dismissed_at`]: { type: "field", value: now } },
     }));
     // Server hasn't caught up (empty set) — must not clear the optimistic dismiss.
     useInboxStore.getState().applyDismissedReconcile([], true);
-    expect(isSessionDismissed(useInboxStore.getState().sessions["a"])).toBe(true);
+    expect(isSessionDismissed(useInboxStore.getState().sessions[A])).toBe(true);
+  });
+
+  it("never CLEARs a dismissed local-only stub — the server can't vouch for ids it never had", () => {
+    // Regression: an orphaned optimistic stub (create failed) was dismissed, the
+    // pending lock was later clobbered by another window sharing the IDB, and
+    // every final reconcile pass resurrected it ("I keep dismissing this convo
+    // and it reappears"). Stub ids must be invisible to the CLEAR pass.
+    const stub = "s7fhu67z04khex0okvujt"; // Math.random().toString(36) shape, never 32 chars
+    seed(stub, { inbox_dismissed_at: Date.now() - 1000 });
+    // No pending lock — the clobbered-lock worst case.
+    useInboxStore.setState({ pending: {} } as any);
+    useInboxStore.getState().applyDismissedReconcile([], true);
+    expect(isSessionDismissed(useInboxStore.getState().sessions[stub])).toBe(true);
+  });
+});
+
+describe("stashSession on a local-only stub — dismiss means delete", () => {
+  // A stub from beginOptimisticSession whose server create failed can never be
+  // dismissed server-side (the dispatch layer skips non-Convex ids), so flagging
+  // it locally just feeds the resurrection loop above. Dismissing it must remove
+  // it outright — store rows gone, exclude pending planted so the IDB row delete
+  // persists (same mechanics as a kill).
+  const stub = "k2hf8s0dq1xand83hr0e6";
+  const real = "b".repeat(32);
+
+  beforeEach(() => {
+    useInboxStore.setState({
+      sessions: {
+        [stub]: { ...baseSession, _id: stub, session_id: stub },
+        [real]: { ...baseSession, _id: real, session_id: real },
+      },
+      conversations: {
+        [stub]: { _id: stub } as any,
+        [real]: { _id: real } as any,
+      },
+      messages: { [stub]: [] },
+      pendingMessages: { [stub]: [] },
+      currentSessionId: stub,
+      viewingDismissedId: null,
+      clientState: {},
+      pending: {},
+    } as any);
+  });
+
+  it("deletes the stub's rows instead of flagging them dismissed", () => {
+    useInboxStore.getState().stashSession(stub);
+    const s = useInboxStore.getState();
+    expect(s.sessions[stub]).toBeUndefined();
+    expect(s.conversations[stub]).toBeUndefined();
+    expect(s.messages[stub]).toBeUndefined();
+    expect(s.pendingMessages[stub]).toBeUndefined();
+    // Exclude pending = the durable "row was removed on purpose" marker that
+    // lets the IDB diff actually delete it (and blocks any resurrection).
+    expect(s.pending[`sessions:${stub}`]?.type).toBe("exclude");
+  });
+
+  it("navigates off the deleted stub to the next session", () => {
+    useInboxStore.getState().stashSession(stub);
+    expect(useInboxStore.getState().currentSessionId).toBe(real);
+  });
+
+  it("still flags (not deletes) a real server-backed session", () => {
+    useInboxStore.getState().stashSession(real);
+    const s = useInboxStore.getState();
+    expect(s.sessions[real]).toBeDefined();
+    expect(isSessionDismissed(s.sessions[real])).toBe(true);
   });
 });
 
@@ -2301,5 +2579,46 @@ describe("resolveSessionAuthor", () => {
     const conv = { user_id: "u2", user: { name: "Jason Park", avatar_url: "meta.png" } };
     expect(resolveSessionAuthor({}, conv, me, roster)).toEqual({ name: "Jason Park", avatar: "jason.png" });
     expect(resolveSessionAuthor({}, { user_id: "me", user: { name: "Me" } }, me, roster)).toBeNull();
+  });
+});
+
+// The team feed's "older pages remain" flag is persisted, and false used to be
+// a dead latch: one mid-history empty page (a window of filtered-out rows)
+// persisted false, the seed effect (which only writes when the key is absent)
+// could never undo it, and feed pagination stayed dead on that device forever.
+// Hydration now drops false entries (re-derived as unknown); the trustworthy
+// end-of-history marker is feedCursors[key] === null, which loadMore checks
+// before any network. Regression for ct-35795.
+describe("feed pagination latch — dropLatchedFeedHasMore + feedCursors", () => {
+  beforeEach(() => {
+    useInboxStore.setState({ feedConversations: {}, feedHasMore: {}, feedCursors: {} });
+  });
+
+  it("drops false entries in place and keeps true ones", () => {
+    const persisted = { "team1|": false, "team1|dir": true, "team2|": false };
+    dropLatchedFeedHasMore(persisted);
+    expect(persisted).toEqual({ "team1|dir": true });
+  });
+
+  it("tolerates missing or malformed persisted values", () => {
+    expect(() => dropLatchedFeedHasMore(undefined)).not.toThrow();
+    expect(() => dropLatchedFeedHasMore(null)).not.toThrow();
+    expect(() => dropLatchedFeedHasMore("junk")).not.toThrow();
+  });
+
+  it("setFeedCursor records the server continuation, including the null end-of-history marker", () => {
+    useInboxStore.getState().setFeedCursor("team1|", "12345");
+    expect(useInboxStore.getState().feedCursors["team1|"]).toBe("12345");
+    useInboxStore.getState().setFeedCursor("team1|", null);
+    expect(useInboxStore.getState().feedCursors["team1|"]).toBeNull();
+    // Distinguishable from "unknown" (absent key) — the loadMore fallback path.
+    expect("team2|" in useInboxStore.getState().feedCursors).toBe(false);
+  });
+
+  it("feedCursors is wired for persistence (write side)", () => {
+    // Hydrate side is the apply() pick list in inboxStore; a key persisted but
+    // never hydrated is a silent cache no-op, so guard the write side here.
+    expect(isPersistedStoreKey("feedCursors")).toBe(true);
+    expect(isPersistedStoreKey("feedHasMore")).toBe(true);
   });
 });

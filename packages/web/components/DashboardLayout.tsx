@@ -358,10 +358,13 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
     // Shared optimistic-create path — see store.beginOptimisticSession. It tracks the
     // in-flight create so a message send can await the rekey instead of polling (a slow
     // roundtrip would otherwise blow waitForConvexId's budget → spurious "not yet created").
+    // reuse: a repeated Ctrl+N lands back on the existing blank session for this
+    // project+agent instead of stranding another empty conversation per press.
     const { stubId: sessionId } = store.beginOptimisticSession({
       agentType,
       projectPath: path,
       gitRoot: gitRoot || path,
+      reuse: true,
       create: (stubId) => store.createSession({
         agent_type: agentType,
         project_path: path,
