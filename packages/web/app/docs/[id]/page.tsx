@@ -224,6 +224,7 @@ function DocDetailContent() {
           linkedObjectId={doc._id}
           placeholder="Start typing or insert using /"
           cliEditedAt={(doc as any).cli_edited_at}
+          contentReady={!!detail}
           topBarLeft={
             <>
               <DocTypeSelector value={doc.doc_type} onChange={handleTypeChange} />

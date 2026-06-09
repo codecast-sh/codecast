@@ -15,6 +15,28 @@ async function requireAuth(ctx: any): Promise<Id<"users">> {
   return userId;
 }
 
+/**
+ * The web editor seeds the collaborative snapshot from the doc's markdown the
+ * first time a doc is opened. If that markdown prop hadn't loaded yet (the
+ * snapshot query resolves before the heavier doc-detail query), it seeds an
+ * EMPTY doc — and submitSnapshot would then overwrite the real markdown in
+ * `doc.content` with "". This predicate detects that racy initial empty seed so
+ * the mutation can reject it wholesale: no empty snapshot is written and the
+ * markdown is preserved, so the doc re-seeds correctly on the next open.
+ *
+ * Scoped to the initial snapshot (version <= 1) only — a genuine full clear of
+ * an existing doc arrives at version > 1 and must be allowed through.
+ */
+export function isRacyEmptySeed(args: {
+  version: number;
+  derivedMarkdown: string;
+  existingContent: string | undefined | null;
+}): boolean {
+  if (args.version > 1) return false;
+  if (args.derivedMarkdown.trim() !== "") return false;
+  return (args.existingContent ?? "").trim() !== "";
+}
+
 export const getSnapshot = query({
   args: { id: v.string(), version: v.optional(v.number()) },
   returns: v.union(
@@ -51,6 +73,28 @@ export const submitSnapshot = mutation({
       )
       .first();
     if (existing) return;
+
+    // Parse once and guard against the racy empty seed BEFORE writing anything.
+    // Otherwise a v1 empty snapshot from a not-yet-loaded editor would clobber
+    // the doc's real markdown (see isRacyEmptySeed).
+    let parsed: any;
+    try {
+      parsed = JSON.parse(args.content);
+    } catch {
+      parsed = null;
+    }
+    const md = parsed ? toMarkdown(parsed).trim() : "";
+    const docForGuard = await ctx.db.get(args.id as Id<"docs">);
+    if (
+      isRacyEmptySeed({
+        version: args.version,
+        derivedMarkdown: md,
+        existingContent: (docForGuard as any)?.content,
+      })
+    ) {
+      return;
+    }
+
     try {
       await ctx.db.insert("doc_snapshots", {
         id: args.id,
@@ -71,10 +115,8 @@ export const submitSnapshot = mutation({
       await Promise.all(oldSnapshots.map((doc: any) => ctx.db.delete(doc._id)));
     }
     try {
-      const doc = await ctx.db.get(args.id as Id<"docs">);
-      if (doc) {
-        const parsed = JSON.parse(args.content);
-        const md = toMarkdown(parsed).trim();
+      const doc = docForGuard;
+      if (doc && parsed) {
         await ctx.db.patch(doc._id, { content: md, updated_at: Date.now() });
 
         const newMentions = extractPersonMentionIds(parsed);

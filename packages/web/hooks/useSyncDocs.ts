@@ -57,9 +57,11 @@ type WorkspaceArgs =
  *
  * Lazy + heavily cached: a single LIVE subscription keeps the most-recent page
  * fresh (synced as a delta so it never prunes the cache), and a throttled,
- * paced background crawl loads the full set once and syncs it as a snapshot
- * (authoritative → prunes server-side deletes). Everything else is served from
- * the persisted store cache, so re-mounts and older docs cost nothing.
+ * paced background crawl loads the full set once and syncs it as a delta with
+ * a workspace-scoped absent-prune (authoritative for this workspace → removes
+ * server-side deletes without touching other workspaces' cached docs).
+ * Everything else is served from the persisted store cache, so re-mounts and
+ * older docs cost nothing.
  */
 export function useSyncDocsPaginated(wsArgs: WorkspaceArgs) {
   const convex = useConvex();
@@ -91,10 +93,11 @@ export function useSyncDocsPaginated(wsArgs: WorkspaceArgs) {
   }, [status]);
 
   // 2) BACKGROUND RECONCILE: crawl every page once (one-shot queries, NOT live
-  //    subscriptions), then snapshot-sync the full set to prune deletions and
-  //    fill the cache. Throttled per workspace + paced. A nonce ticks every
-  //    throttle window so long-lived sessions still pick up docs deleted
-  //    elsewhere (the live first page already catches new/updated recent docs).
+  //    subscriptions), then sync the full set with a workspace-scoped
+  //    absent-prune to drop deletions and fill the cache. Throttled per
+  //    workspace + paced. A nonce ticks every throttle window so long-lived
+  //    sessions still pick up docs deleted elsewhere (the live first page
+  //    already catches new/updated recent docs).
   const wsKey = wsArgs === "skip" ? "skip" : JSON.stringify(wsArgs);
   // Gate on hydration so the durable watermark is restored before we decide
   // whether to crawl — else a reload would full-crawl against an empty syncMeta
@@ -128,15 +131,26 @@ export function useSyncDocsPaginated(wsArgs: WorkspaceArgs) {
         // Only attach `extra` when the derived paths actually changed. `extra`
         // forces syncTable past its no-op guard, so passing it every crawl would
         // rewrite `docs` (and re-persist it) every 5 minutes even when nothing
-        // changed. When paths are stable, a plain snapshot lets the guard short-
+        // changed. When paths are stable, a plain sync lets the guard short-
         // circuit an unchanged crawl entirely.
         const prevPaths = useInboxStore.getState().docProjectPaths;
         const pathsChanged =
           prevPaths.length !== projectPaths.length ||
           projectPaths.some((p, i) => prevPaths[i] !== p);
-        useInboxStore
-          .getState()
-          .syncTable("docs", all, pathsChanged ? { isDelta: true, extra: { docProjectPaths: projectPaths } } : { isDelta: true });
+        // The crawl is the COMPLETE set for this workspace, so docs of this
+        // workspace absent from it are server-side deletions — prune them
+        // (scoped, so the other workspace's cached docs are untouched). This is
+        // the only channel by which a doc deletion reaches a client's cache.
+        const pruneAbsentScope =
+          wsArgs === "skip"
+            ? undefined
+            : (wsArgs as any).workspace === "team"
+              ? (d: any) => d.team_id === (wsArgs as any).team_id
+              : (d: any) => !d.team_id;
+        const opts = pathsChanged
+          ? { isDelta: true, pruneAbsentScope, extra: { docProjectPaths: projectPaths } }
+          : { isDelta: true, pruneAbsentScope };
+        useInboxStore.getState().syncTable("docs", all, opts);
       },
     });
   }, [convex, wsKey, reconcileNonce, hydrated]); // eslint-disable-line react-hooks/exhaustive-deps

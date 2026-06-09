@@ -28,6 +28,8 @@ interface DocumentDetailLayoutProps {
   contextType?: string;
   linkedObjectId?: string;
   cliEditedAt?: number;
+  /** Forwarded to CollabDocEditor — see its `contentReady` doc. */
+  contentReady?: boolean;
 }
 
 export function DocumentDetailLayout({
@@ -47,6 +49,7 @@ export function DocumentDetailLayout({
   contextType = "doc",
   linkedObjectId,
   cliEditedAt,
+  contentReady = true,
 }: DocumentDetailLayoutProps) {
   const [isEditing, setIsEditing] = useState(initialEditable);
   const [showMeta, setShowMeta] = useState(false);
@@ -158,6 +161,7 @@ export function DocumentDetailLayout({
                 placeholder={placeholder}
                 getMarkdownRef={getMarkdownRef}
                 cliEditedAt={cliEditedAt}
+                contentReady={contentReady}
               />
             </ErrorBoundary>
           </div>
