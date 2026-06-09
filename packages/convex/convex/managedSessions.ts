@@ -784,6 +784,20 @@ export const listActiveSessions = query({
         }
       }
 
+      // The current_* copies on the registry doc are throttled to a ~5min write
+      // (SNAPSHOT_THROTTLE_MS in reportMetrics) to keep listInboxSessions' read
+      // set stable. That staleness is fine for the inbox but wrong for this
+      // monitoring view, which sorts and sums these numbers. Read the freshest
+      // time-series sample instead (≤30s old for active sessions, ≤3min for
+      // idle) and prefer it. This page is the ONLY consumer of
+      // listActiveSessions, so the extra per-session read never touches the hot
+      // inbox subscription the throttle exists to protect.
+      const latestMetric = await ctx.db
+        .query("session_metrics")
+        .withIndex("by_session_collected", (q: any) => q.eq("session_id", session.session_id))
+        .order("desc")
+        .first();
+
       results.push({
         _id: session._id,
         session_id: session.session_id,
@@ -795,12 +809,16 @@ export const listActiveSessions = query({
         agent_status: session.agent_status,
         agent_status_updated_at: session.agent_status_updated_at,
         permission_mode: session.permission_mode,
-        current_cpu: session.current_cpu,
-        current_memory: session.current_memory,
-        current_pid_count: session.current_pid_count,
+        // Prefer the freshest sample; fall back to the throttled snapshot only
+        // when no time-series row survives the 2h retention (e.g. long-idle).
+        current_cpu: latestMetric?.cpu ?? session.current_cpu,
+        current_memory: latestMetric?.memory ?? session.current_memory,
+        current_pid_count: latestMetric?.pid_count ?? session.current_pid_count,
         agent_pid: session.agent_pid,
         awake_idle_ms: session.awake_idle_ms,
-        last_metrics_at: session.last_metrics_at,
+        // Honest "as of" for the displayed metrics: the sample time, not the
+        // throttled snapshot time.
+        last_metrics_at: latestMetric?.collected_at ?? session.last_metrics_at,
         conversation_title: conversationTitle,
         project_path: projectPath,
         agent_type: agentType,
