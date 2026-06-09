@@ -7267,7 +7267,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       const len = textareaRef.current.value.length;
       if (len > 0) {
         textareaRef.current.focus();
-        textareaRef.current.select();
+        textareaRef.current.setSelectionRange(len, len);
       } else if (autoFocusInput) {
         textareaRef.current.focus();
       }
