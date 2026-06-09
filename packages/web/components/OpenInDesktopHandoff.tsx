@@ -4,6 +4,7 @@ import { useWatchEffect } from "../hooks/useWatchEffect";
 import {
   buildDesktopDeepLink,
   isDesktop,
+  isForegroundTab,
   shouldAttemptHandoff,
   type HandoffContext,
 } from "../lib/desktop";
@@ -23,10 +24,13 @@ function isFreshNavigation(): boolean {
 }
 
 /**
- * When a codecast.sh page is opened in a browser and the user owns the desktop
- * app, hand the page off to the app (codecast://open/<path>) and show a small
- * "Opening in Codecast…" toast with a remembered "stay in browser" escape hatch.
- * Pure gating lives in `shouldAttemptHandoff`; this just collects the context.
+ * When a codecast.sh page is opened in a foreground browser tab and the user
+ * owns the desktop app, hand the page off to the app (codecast://open/<path>)
+ * — the Figma/Slack flavor: open immediately, then show an "Opened in Codecast
+ * desktop" screen with an escape hatch (use the browser for this page, or a
+ * sticky "always open in browser"). Pure gating lives in `shouldAttemptHandoff`;
+ * this collects the context, re-checks on focus for background-opened tabs, and
+ * renders the screen.
  */
 export function OpenInDesktopHandoff() {
   const s = useTrackedStore([
@@ -37,7 +41,6 @@ export function OpenInDesktopHandoff() {
 
   const [visible, setVisible] = useState(false);
   const attemptedRef = useRef(false);
-  const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const openInDesktop = () => {
     window.location.href = buildDesktopDeepLink(
@@ -45,34 +48,60 @@ export function OpenInDesktopHandoff() {
     );
   };
 
-  const stayInBrowser = () => {
+  // Use the browser for THIS page only — does not change the sticky preference,
+  // so the next fresh visit still hands off to the app.
+  const stayHereOnce = () => setVisible(false);
+
+  // Permanent opt-out: never hand off again (synced per-user). One click both
+  // persists and dismisses, so it's never a two-step choice.
+  const alwaysBrowser = () => {
     s.updateClientDismissed("prefer_browser_links", true);
-    if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
     setVisible(false);
   };
 
   useWatchEffect(() => {
     if (attemptedRef.current || typeof window === "undefined") return;
 
-    const ctx: HandoffContext = {
+    const buildCtx = (): HandoffContext => ({
       isDesktop: isDesktop(),
       initialized: s.clientStateInitialized,
       hasUsedDesktop: s.clientState.dismissed?.has_used_desktop ?? false,
       preferBrowser: s.clientState.dismissed?.prefer_browser_links ?? false,
       isTopWindow: window.top === window.self,
+      foreground: isForegroundTab(),
       host: window.location.host,
       freshNavigation: isFreshNavigation(),
       path: window.location.pathname,
       search: window.location.search,
-    };
-    // TEMP DIAGNOSTIC
-    console.log("[handoff]", JSON.stringify(ctx), "=>", shouldAttemptHandoff(ctx));
-    if (!shouldAttemptHandoff(ctx)) return;
+    });
 
-    attemptedRef.current = true;
-    openInDesktop();
-    setVisible(true);
-    hideTimerRef.current = setTimeout(() => setVisible(false), 7000);
+    const tryHandoff = (): boolean => {
+      if (attemptedRef.current) return true;
+      if (!shouldAttemptHandoff(buildCtx())) return false;
+      attemptedRef.current = true;
+      openInDesktop();
+      setVisible(true);
+      return true;
+    };
+
+    if (tryHandoff()) return;
+
+    // Not eligible right now. If the only blocker is that the tab isn't in the
+    // foreground (cmd-clicked into the background, or not yet focused), wait and
+    // retry the moment the user actually looks at it. Any other blocker
+    // (preferBrowser, ineligible path, not our host, …) is permanent — bail.
+    if (!shouldAttemptHandoff({ ...buildCtx(), foreground: true })) return;
+
+    const onActive = () => {
+      if (tryHandoff()) teardown();
+    };
+    const teardown = () => {
+      window.removeEventListener("focus", onActive);
+      document.removeEventListener("visibilitychange", onActive);
+    };
+    window.addEventListener("focus", onActive);
+    document.addEventListener("visibilitychange", onActive);
+    return teardown;
   }, [
     s.clientStateInitialized,
     s.clientState.dismissed?.has_used_desktop,
@@ -82,35 +111,45 @@ export function OpenInDesktopHandoff() {
   if (!visible) return null;
 
   return (
-    <div className="fixed top-12 left-1/2 -translate-x-1/2 z-[9999] pointer-events-none animate-in fade-in slide-in-from-top-2 duration-300">
-      <div className="pointer-events-auto flex items-center gap-3 rounded-lg border border-sol-cyan/30 bg-sol-bg-alt px-4 py-2.5 shadow-lg shadow-sol-cyan/10 backdrop-blur-md">
-        <span className="relative flex h-2 w-2 flex-shrink-0">
-          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-sol-cyan/60" />
-          <span className="relative inline-flex h-2 w-2 rounded-full bg-sol-cyan" />
-        </span>
-        <Monitor className="h-4 w-4 flex-shrink-0 text-sol-cyan" />
-        <div className="flex flex-col leading-tight">
-          <span className="text-xs text-sol-text">Opening in Codecast…</span>
-          <button
-            onClick={stayInBrowser}
-            className="text-left text-[11px] text-sol-text-dim transition-colors hover:text-sol-text"
-          >
-            Stay in browser instead
-          </button>
-        </div>
+    <div className="fixed inset-0 z-[9999] grid place-items-center bg-sol-bg/70 backdrop-blur-sm animate-in fade-in duration-200">
+      <div className="relative mx-4 w-full max-w-sm rounded-xl border border-sol-cyan/30 bg-sol-bg-alt p-6 shadow-2xl shadow-sol-cyan/10 animate-in zoom-in-95 duration-200">
         <button
-          onClick={openInDesktop}
-          className="ml-1 rounded-md bg-sol-cyan px-3 py-1 text-[11px] font-medium text-sol-bg transition-opacity hover:opacity-90"
-        >
-          Open
-        </button>
-        <button
-          onClick={stayInBrowser}
-          aria-label="Stay in browser"
-          className="text-sol-text-dim transition-colors hover:text-sol-text"
+          onClick={stayHereOnce}
+          aria-label="Dismiss"
+          className="absolute right-3 top-3 text-sol-text-dim transition-colors hover:text-sol-text"
         >
           <X className="h-4 w-4" />
         </button>
+
+        <div className="flex items-center gap-3">
+          <span className="grid h-10 w-10 flex-shrink-0 place-items-center rounded-lg bg-sol-cyan/10 text-sol-cyan">
+            <Monitor className="h-5 w-5" />
+          </span>
+          <div className="leading-tight">
+            <div className="text-sm font-medium text-sol-text">Opened in Codecast desktop</div>
+            <div className="text-xs text-sol-text-dim">This page was sent to the app.</div>
+          </div>
+        </div>
+
+        <div className="mt-5 flex flex-col gap-2">
+          <button
+            onClick={stayHereOnce}
+            className="w-full rounded-md bg-sol-cyan px-3 py-2 text-xs font-medium text-sol-bg transition-opacity hover:opacity-90"
+          >
+            Open in browser
+          </button>
+          <button
+            onClick={openInDesktop}
+            className="w-full rounded-md border border-sol-border px-3 py-2 text-xs text-sol-text-dim transition-colors hover:border-sol-cyan/40 hover:text-sol-text"
+          >
+            Didn’t open? Reopen desktop app
+          </button>
+        </div>
+
+        <label className="mt-4 flex cursor-pointer select-none items-center gap-2 text-[11px] text-sol-text-dim">
+          <input type="checkbox" onChange={alwaysBrowser} className="accent-sol-cyan" />
+          Always open Codecast links in browser
+        </label>
       </div>
     </div>
   );
