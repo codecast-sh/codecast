@@ -66,12 +66,13 @@ const HEARTBEAT_ALIVE_MS = 90 * 1000;
 // Awake-idle time (sleep excluded) after which a live session is safe to kill.
 const KILLABLE_IDLE_MS = 2 * 60 * 60 * 1000;
 
-type SortKey = "lastActive" | "uptime" | "messages" | "memory" | "name";
+type SortKey = "lastActive" | "uptime" | "messages" | "memory" | "cpu" | "name";
 const SORT_OPTIONS: { value: SortKey; label: string }[] = [
   { value: "lastActive", label: "Last active" },
   { value: "uptime",     label: "Uptime" },
   { value: "messages",   label: "Messages" },
   { value: "memory",     label: "Memory" },
+  { value: "cpu",        label: "CPU" },
   { value: "name",       label: "Name" },
 ];
 
@@ -79,7 +80,10 @@ function sortValue(s: ClassifiedSession, key: SortKey): number | string {
   switch (key) {
     case "uptime":   return s.uptime;
     case "messages": return s.message_count ?? 0;
+    // Resource sorts only rank live processes — a dead row's last value is a
+    // stale pre-death reading, so sink it to 0 (same gate as the row display).
     case "memory":   return s.isAlive ? s.current_memory ?? 0 : 0;
+    case "cpu":      return s.isAlive ? s.current_cpu ?? 0 : 0;
     case "name":     return (s.conversation_title || s.tmux_session || s.session_id).toLowerCase();
     case "lastActive":
     default:         return s.lastActiveAt;
@@ -225,7 +229,10 @@ function AggregateOverview({ sessions }: { sessions: ClassifiedSession[] }) {
           </span>
         )}
         {totals.cpu > 0 && (
-          <span className="text-zinc-500">
+          <span
+            className="text-zinc-500"
+            title="Sum of each live session's process-tree CPU%. 100% = one full core, so the total can exceed 100% across cores."
+          >
             <span className="text-amber-400 text-sm">{totals.cpu.toFixed(1)}%</span> cpu
           </span>
         )}
