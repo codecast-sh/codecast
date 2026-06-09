@@ -8,7 +8,6 @@
  * @module
  */
 
-import type * as _diag from "../_diag.js";
 import type * as admin_mergeUser from "../admin_mergeUser.js";
 import type * as agentTasks from "../agentTasks.js";
 import type * as apiTokens from "../apiTokens.js";
@@ -83,7 +82,6 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
-  _diag: typeof _diag;
   admin_mergeUser: typeof admin_mergeUser;
   agentTasks: typeof agentTasks;
   apiTokens: typeof apiTokens;
