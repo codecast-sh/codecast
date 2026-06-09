@@ -102,12 +102,23 @@ function isOAuthCallback(search: string): boolean {
   return sp.has("code") && sp.has("state");
 }
 
+// A genuine foreground tab: visible AND the window holds OS focus. The handoff
+// gate requires this so it stays inert in background or automated tabs — e.g.
+// agent/headless browser tabs that load app pages with no human looking. Those
+// must never yank the desktop app to the front (the "Codecast keeps jumping to
+// random sessions" bug: every background page-load was firing a deep link).
+export function isForegroundTab(): boolean {
+  if (typeof document === "undefined") return false;
+  return document.visibilityState === "visible" && document.hasFocus();
+}
+
 export type HandoffContext = {
   isDesktop: boolean;
   initialized: boolean;
   hasUsedDesktop: boolean;
   preferBrowser: boolean;
   isTopWindow: boolean;
+  foreground: boolean;
   host: string;
   freshNavigation: boolean;
   path: string;
@@ -119,15 +130,18 @@ export type HandoffContext = {
 //
 // Fires only when: not already in the app, synced prefs have loaded, the user
 // owns the app, they haven't opted to stay in the browser, we're the top-level
-// window on one of our own hosts (prod or local dev — they share the backend),
-// this is a fresh navigation (a clicked/typed link, not a reload or
-// back/forward), and the path isn't an auth/share/etc. route.
+// foreground window on one of our own hosts (prod or local dev — they share the
+// backend), this is a fresh navigation (a clicked/typed link, not a reload or
+// back/forward), and the path isn't an auth/share/etc. route. `foreground` is
+// split out because the component re-checks the gate on focus/visibility: a tab
+// opened in the background (cmd-click) hands off only once the user looks at it.
 export function shouldAttemptHandoff(c: HandoffContext): boolean {
   if (c.isDesktop) return false;
   if (!c.initialized) return false;
   if (!c.hasUsedDesktop) return false;
   if (c.preferBrowser) return false;
   if (!c.isTopWindow) return false;
+  if (!c.foreground) return false;
   if (!isAppHost(c.host)) return false;
   if (!c.freshNavigation) return false;
   if (!isHandoffEligiblePath(c.path)) return false;

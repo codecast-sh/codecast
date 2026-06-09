@@ -15,6 +15,7 @@ const PASSING: HandoffContext = {
   hasUsedDesktop: true,
   preferBrowser: false,
   isTopWindow: true,
+  foreground: true,
   host: "codecast.sh",
   freshNavigation: true,
   path: "/conversation/jx7c89",
@@ -107,6 +108,10 @@ describe("shouldAttemptHandoff", () => {
 
   test("ignores non-top-level (iframe) windows", () => {
     expect(shouldAttemptHandoff({ ...PASSING, isTopWindow: false })).toBe(false);
+  });
+
+  test("stays inert in background / unfocused tabs (the agent-tab jump fix)", () => {
+    expect(shouldAttemptHandoff({ ...PASSING, foreground: false })).toBe(false);
   });
 
   test("fires on our own hosts (prod + local dev share the backend), not foreign ones", () => {
