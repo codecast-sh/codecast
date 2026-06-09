@@ -604,9 +604,9 @@ function groupItemsBySessions(items: any[]): (SessionGroupData | EventItem)[] {
   return result;
 }
 
-function TimeGutter({ ts }: { ts?: number }) {
+function TimeGutter({ ts, top }: { ts?: number; top?: boolean }) {
   return (
-    <span className="text-[9px] text-sol-base01/20 tabular-nums w-10 text-right flex-shrink-0 select-none pr-2 self-center">
+    <span className={`text-[9px] text-sol-base01/20 tabular-nums w-10 text-right flex-shrink-0 select-none pr-2 ${top ? "self-start mt-[3px]" : "self-center"}`}>
       {ts ? fmtTime(ts) : ""}
     </span>
   );
@@ -648,14 +648,14 @@ function SessionGroup({ group, router }: { group: SessionGroupData; router: Retu
     const line = oneLineOf(group.messages[0].preview);
     const titleEchoesMsg = line && displayTitle.toLowerCase().startsWith(line.slice(0, 18).toLowerCase());
     return (
-      <div className="flex items-baseline pr-2 rounded hover:bg-sol-blue/[0.045] transition-colors cursor-pointer group" onClick={() => router.push(href)}>
-        <TimeGutter ts={lastTs} />
-        <div className="flex items-baseline gap-1.5 min-w-0 flex-1">
-          <MessageSquare className={`w-3 h-3 flex-shrink-0 self-center ${iconColor}`} />
+      <div className="flex items-start pr-2 rounded hover:bg-sol-blue/[0.045] transition-colors cursor-pointer group" onClick={() => router.push(href)}>
+        <TimeGutter ts={lastTs} top />
+        <div className="flex items-start gap-1.5 min-w-0 flex-1">
+          <MessageSquare className={`w-3 h-3 flex-shrink-0 self-start mt-[2px] ${iconColor}`} />
           {line
-            ? <span className="text-[11.5px] text-sol-text/65 truncate group-hover:text-sol-text/90 transition-colors">{line}</span>
-            : <span className="text-[12px] font-medium text-sol-text/70 truncate">{displayTitle}</span>}
-          {line && !titleEchoesMsg && <span className="text-[9px] text-sol-base01/30 truncate max-w-[160px] flex-shrink-0">in {displayTitle}</span>}
+            ? <span className="text-[11.5px] text-sol-text/65 min-w-0 whitespace-normal break-words group-hover:text-sol-text/90 transition-colors">{line}</span>
+            : <span className="text-[12px] font-medium text-sol-text/70 min-w-0 whitespace-normal break-words">{displayTitle}</span>}
+          {line && !titleEchoesMsg && <span className="text-[9px] text-sol-base01/30 truncate max-w-[160px] flex-shrink-0 mt-[2px]">in {displayTitle}</span>}
           <Meta showCount={false} />
         </div>
       </div>
@@ -687,11 +687,11 @@ function MessageRow({ item, router }: { item: any; router: ReturnType<typeof use
   if (!oneLine) return null;
 
   return (
-    <div className="flex items-baseline pr-2 rounded hover:bg-sol-blue/[0.05] transition-colors cursor-pointer" onClick={() => router.push(href)}>
-      <TimeGutter ts={item.timestamp} />
-      <div className="flex items-baseline gap-1.5 min-w-0 flex-1 pl-[18px]">
-        <span className="text-sol-blue/25 flex-shrink-0 text-[11px] leading-none select-none translate-y-[1px]">›</span>
-        <span className="text-[11.5px] text-sol-text/55 truncate flex-1 leading-snug">{oneLine}</span>
+    <div className="flex items-start pr-2 rounded hover:bg-sol-blue/[0.05] transition-colors cursor-pointer" onClick={() => router.push(href)}>
+      <TimeGutter ts={item.timestamp} top />
+      <div className="flex items-start gap-1.5 min-w-0 flex-1 pl-[18px]">
+        <span className="text-sol-blue/25 flex-shrink-0 text-[11px] leading-none select-none mt-[3px]">›</span>
+        <span className="text-[11.5px] text-sol-text/55 min-w-0 whitespace-normal break-words flex-1 leading-snug">{oneLine}</span>
       </div>
     </div>
   );
