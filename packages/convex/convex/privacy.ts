@@ -153,6 +153,45 @@ export async function createTeamFeedFilter(
   return { isVisible, getVisibility, memberships };
 }
 
+// ── Profile activity visibility ──
+// A user's profile page (team/[username]) surfaces their conversations, message
+// previews, and activity counts. Selecting by (team_id, user_id) alone is NOT a
+// privacy gate — team_id is routing, set even on is_private conversations. These
+// helpers re-apply the real gate so a teammate's profile shows only *shared*
+// activity, while the owner viewing their own profile sees everything.
+
+// Pure per-conversation decision. Unit-tested in privacy.test.ts.
+export function profileConversationVisible(
+  isOwner: boolean,
+  isViewerTeamMember: boolean,
+  ownerMembershipVisibility: string,
+  conversation: ConversationForFeed
+): boolean {
+  if (isOwner) return true; // viewing your own profile → see all your activity
+  if (!isViewerTeamMember) return false; // not a member of the scoping team → nothing
+  return isConversationTeamVisibleSync(conversation as any, ownerMembershipVisibility);
+}
+
+// Builds the predicate used to filter a target user's conversations on their
+// profile, loading membership data once via createTeamFeedFilter. Owner sees
+// all; a teammate sees only team-visible (non-private) conversations; anyone
+// else (or a missing team scope) sees nothing.
+export async function getProfileVisibilityPredicate(
+  ctx: DbCtx,
+  viewerId: Id<"users"> | null,
+  targetUserId: Id<"users">,
+  teamId: Id<"teams"> | undefined
+): Promise<(conversation: ConversationForFeed) => boolean> {
+  if (viewerId && viewerId.toString() === targetUserId.toString()) return () => true;
+  if (!viewerId || !teamId) return () => false;
+  const filter = await createTeamFeedFilter(ctx, teamId);
+  const isMember = filter.memberships.some(
+    (m) => m.user_id.toString() === viewerId.toString()
+  );
+  const ownerVis = filter.getVisibility(targetUserId.toString());
+  return (conversation) => profileConversationVisible(false, isMember, ownerVis, conversation);
+}
+
 // ── Team resolution for session creation ──
 // Single source of truth for resolving which team a conversation belongs to.
 // Used by dispatch.ts and conversations.ts session creation.
