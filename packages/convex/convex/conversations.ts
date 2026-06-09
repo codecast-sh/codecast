@@ -4503,9 +4503,24 @@ export const forkFromMessage = mutation({
     // gets inserted by advanceForkCopy when fork_status flips to "complete".
     const daemonAgentType = agentType === "codex" ? "codex" : agentType === "gemini" ? "gemini" : "claude";
 
+    // A fork defaults to the same visibility a fresh session in this directory
+    // would get: re-resolve from the forker's directory mappings rather than
+    // hardcoding private. This keeps a fork consistent with its project's
+    // sharing policy (same git_root → same policy), so forking a team-shared
+    // session stays team-visible — and forking someone else's session follows
+    // YOUR mappings, never inadvertently broadcasting under their settings.
+    // Agent-switch forks are pure continuations and inherit the source's exact
+    // visibility instead.
+    const forkMappings = await ctx.db
+      .query("directory_team_mappings")
+      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+      .collect();
+    const { teamId: forkTeamId, isPrivate: forkIsPrivate, autoShared: forkAutoShared } =
+      resolveTeamForPath(forkMappings, original.git_root || original.project_path, original.team_id);
+
     const newConversationId = await ctx.db.insert("conversations", {
       user_id: userId,
-      team_id: original.team_id,
+      team_id: isAgentSwitch ? original.team_id : forkTeamId,
       agent_type: agentType,
       session_id: forkSessionId,
       slug: original.slug,
@@ -4517,8 +4532,8 @@ export const forkFromMessage = mutation({
       started_at: now,
       updated_at: now,
       message_count: 0,
-      is_private: isAgentSwitch ? original.is_private : true,
-      auto_shared: isAgentSwitch ? original.auto_shared : undefined,
+      is_private: isAgentSwitch ? original.is_private : forkIsPrivate,
+      auto_shared: isAgentSwitch ? original.auto_shared : (forkAutoShared || undefined),
       status: "active",
       forked_from: isAgentSwitch ? undefined : original._id,
       parent_message_uuid: isAgentSwitch ? "agent-switch" : args.message_uuid,
