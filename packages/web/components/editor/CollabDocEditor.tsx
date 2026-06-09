@@ -21,6 +21,8 @@ import { TableHeader } from "@tiptap/extension-table-header";
 import { Markdown } from "tiptap-markdown";
 import { common, createLowlight } from "lowlight";
 import { Editor as HeadlessEditor } from "@tiptap/core";
+import { getVersion, sendableSteps } from "prosemirror-collab";
+import { Loader2 } from "lucide-react";
 import tippy, { type Instance as TippyInstance } from "tippy.js";
 import { useTiptapSync } from "@convex-dev/prosemirror-sync/tiptap";
 import { useQuery, useMutation } from "convex/react";
@@ -52,6 +54,14 @@ interface CollabDocEditorProps {
   placeholder?: string;
   getMarkdownRef?: React.MutableRefObject<(() => string) | null>;
   cliEditedAt?: number;
+  /**
+   * Whether `markdownContent` reflects the loaded doc (vs. a lite list row whose
+   * content hasn't arrived yet). When false and there's no content, the editor
+   * waits instead of seeding an empty collab snapshot — seeding empty over a
+   * still-loading doc would wipe its markdown server-side. Defaults to true for
+   * callers that pass authoritative content synchronously.
+   */
+  contentReady?: boolean;
 }
 
 const MENTION_ROUTE_MAP: Record<string, string> = {
@@ -362,6 +372,22 @@ function EditorInner({
 
   useMountEffect(() => {
     if (!editor) return;
+    let cacheTimer: ReturnType<typeof setTimeout> | null = null;
+    const scheduleCacheWrite = () => {
+      if (cacheTimer) clearTimeout(cacheTimer);
+      cacheTimer = setTimeout(() => writeSyncCache(docId, editor), 1000);
+    };
+    editor.on("update", scheduleCacheWrite);
+    writeSyncCache(docId, editor); // cache on open so revisits skip the loading round-trip
+    return () => {
+      if (cacheTimer) clearTimeout(cacheTimer);
+      editor.off("update", scheduleCacheWrite);
+      writeSyncCache(docId, editor);
+    };
+  });
+
+  useMountEffect(() => {
+    if (!editor) return;
     const sendPresence = () => {
       if (!editor || editor.isDestroyed) return;
       const { from, to } = editor.state.selection;
@@ -388,6 +414,24 @@ function EditorInner({
   );
 }
 
+// useTiptapSync reads a sessionStorage cache (`convex-sync-<id>`) to skip the
+// snapshot round-trip on mount, but never writes it — we write it here so
+// reopening a doc renders the editor instantly and catches up via getSteps.
+function writeSyncCache(docId: string, editor: HeadlessEditor) {
+  if (editor.isDestroyed) return;
+  // Only cache confirmed state: content holding unconfirmed local steps would
+  // get those steps re-applied by the catch-up fetch on restore.
+  if (sendableSteps(editor.state)) return;
+  try {
+    sessionStorage.setItem(
+      `convex-sync-${docId}`,
+      JSON.stringify({ content: editor.state.doc.toJSON(), version: getVersion(editor.state) }),
+    );
+  } catch {
+    // best-effort — without the cache, loading falls back to the server path
+  }
+}
+
 function markdownToJson(markdown: string, extensions: any[]): any {
   const editor = new HeadlessEditor({
     extensions,
@@ -409,6 +453,7 @@ export function CollabDocEditor({
   placeholder = "Start writing, use / for commands, @ to mention, # for dates...",
   getMarkdownRef,
   cliEditedAt,
+  contentReady = true,
 }: CollabDocEditorProps) {
   const onImageUploadRef = useRef(onImageUpload);
   onImageUploadRef.current = onImageUpload;
@@ -423,15 +468,39 @@ export function CollabDocEditor({
   }
 
   if (sync.isLoading) {
+    // Paint the content we already have (store-cached markdown) as a read-only
+    // editor while the snapshot loads; the live editor swaps in when ready.
+    if (markdownContent) {
+      return (
+        <div className={`doc-editor ${className}`} style={{ position: "relative" }}>
+          <EditorProvider
+            key={`preview-${markdownContent.length}`}
+            content={markdownContent}
+            extensions={extensionsRef.current}
+            editable={false}
+            editorProps={{
+              attributes: { class: "doc-editor-content focus:outline-none" },
+            }}
+          />
+        </div>
+      );
+    }
     return (
       <div className={`doc-editor ${className}`}>
-        <div className="text-sol-text-dim text-sm py-8">Loading editor...</div>
+        <div className="flex justify-center py-8">
+          <Loader2 className="w-4 h-4 animate-spin text-sol-text-dim/60" />
+        </div>
       </div>
     );
   }
 
   if (!sync.initialContent) {
-    if (!createdRef.current) {
+    // No snapshot exists yet — we must seed one from the doc's markdown. Only do
+    // so once we actually have the content: either markdownContent is non-empty,
+    // or the doc detail has loaded and confirms it's genuinely empty. Seeding an
+    // empty snapshot while the markdown is still loading wipes it server-side.
+    const canSeed = !!markdownContent || contentReady;
+    if (canSeed && !createdRef.current) {
       createdRef.current = true;
       const json = markdownContent
         ? markdownToJson(markdownContent, extensionsRef.current)
@@ -440,7 +509,9 @@ export function CollabDocEditor({
     }
     return (
       <div className={`doc-editor ${className}`}>
-        <div className="text-sol-text-dim text-sm py-8">Initializing collaborative editing...</div>
+        <div className="flex justify-center py-8">
+          <Loader2 className="w-4 h-4 animate-spin text-sol-text-dim/60" />
+        </div>
       </div>
     );
   }
@@ -450,6 +521,7 @@ export function CollabDocEditor({
   return (
     <div className={`doc-editor ${className}`} style={{ position: "relative" }}>
       <EditorProvider
+        key="live"
         content={sync.initialContent}
         extensions={allExtensions}
         editable={editable}
