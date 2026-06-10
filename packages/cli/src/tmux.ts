@@ -8,7 +8,7 @@ let _hasTmux: boolean | null = null;
 // ignores SIGTERM, so a Node `execSync` without a timeout leaves a zombie that
 // outlives the parent process (and a default-SIGTERM timeout never reaps it).
 // Always go through this wrapper for shell-form tmux calls.
-const DEFAULT_TMUX_TIMEOUT_MS = 5000;
+export const DEFAULT_TMUX_TIMEOUT_MS = 5000;
 export function tmuxExecSync(args: string[], opts?: { timeout?: number; encoding?: "utf-8"; stdio?: "ignore" | ["ignore", "pipe", "ignore"] }): string {
   const stdio = opts?.stdio ?? (opts?.encoding ? ["ignore", "pipe", "ignore"] as const : "ignore");
   const result = execFileSync("tmux", args, {
@@ -19,6 +19,28 @@ export function tmuxExecSync(args: string[], opts?: { timeout?: number; encoding
     env: { ...process.env, PATH: ENRICHED_PATH },
   });
   return typeof result === "string" ? result : "";
+}
+
+// Like tmuxExecSync but NEVER throws on a non-zero exit and hands back the exit
+// status, so callers can probe state (has-session) or read a pane without a
+// try/catch. Same wedge-proofing: a hard timeout + SIGKILL guarantees that a
+// tmux client which busy-loops after its server dies is reaped instead of
+// spinning at 100% CPU forever. On a timeout, spawnSync returns status:null —
+// which every caller here already treats as "dead / not-ready / empty", the
+// safe fallback. Route ALL raw spawnSync("tmux", …) reads through this.
+export function tmuxRun(args: string[], opts?: { timeout?: number; env?: Record<string, string | undefined> }): { status: number | null; stdout: string; stderr: string } {
+  const r = spawnSync("tmux", args, {
+    timeout: opts?.timeout ?? DEFAULT_TMUX_TIMEOUT_MS,
+    killSignal: "SIGKILL",
+    encoding: "utf-8",
+    stdio: ["pipe", "pipe", "pipe"],
+    env: { ...process.env, PATH: ENRICHED_PATH, ...opts?.env },
+  });
+  return {
+    status: r.status,
+    stdout: typeof r.stdout === "string" ? r.stdout : "",
+    stderr: typeof r.stderr === "string" ? r.stderr : "",
+  };
 }
 
 export function hasTmux(): boolean {

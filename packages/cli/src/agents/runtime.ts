@@ -1,6 +1,7 @@
 import { spawn, spawnSync, type ChildProcess } from "child_process";
 import { existsSync, writeFileSync, unlinkSync, openSync, readFileSync, readdirSync, statSync, mkdirSync, copyFileSync, renameSync, rmSync } from "fs";
 import { join, dirname } from "path";
+import { tmuxRun } from "../tmux.js";
 
 export interface AgentHandle {
   id: string;
@@ -403,30 +404,19 @@ export class TmuxRuntime implements AgentRuntime {
     const promptFile = `/tmp/agent-prompt-${opts.sessionName}.md`;
     writeFileSync(promptFile, opts.prompt);
 
-    spawnSync("tmux", ["new-session", "-d", "-s", opts.sessionName, "-c", opts.workingDir,
-      `claude --model ${opts.model} --dangerously-skip-permissions`], {
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "pipe"],
-    });
+    tmuxRun(["new-session", "-d", "-s", opts.sessionName, "-c", opts.workingDir,
+      `claude --model ${opts.model} --dangerously-skip-permissions`]);
 
     this.waitForReady(opts.sessionName);
 
     const bufName = `agent-spawn-${opts.sessionName}`;
-    spawnSync("tmux", ["load-buffer", "-b", bufName, promptFile], {
-      encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"],
-    });
-    spawnSync("tmux", ["paste-buffer", "-t", opts.sessionName, "-b", bufName, "-d"], {
-      encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"],
-    });
+    tmuxRun(["load-buffer", "-b", bufName, promptFile]);
+    tmuxRun(["paste-buffer", "-t", opts.sessionName, "-b", bufName, "-d"]);
 
     spawnSync("sleep", ["1"]);
-    spawnSync("tmux", ["send-keys", "-t", opts.sessionName, "Enter"], {
-      encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"],
-    });
+    tmuxRun(["send-keys", "-t", opts.sessionName, "Enter"]);
     spawnSync("sleep", ["0.2"]);
-    spawnSync("tmux", ["send-keys", "-t", opts.sessionName, "Enter"], {
-      encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"],
-    });
+    tmuxRun(["send-keys", "-t", opts.sessionName, "Enter"]);
     try { unlinkSync(promptFile); } catch {}
 
     return {
@@ -440,33 +430,24 @@ export class TmuxRuntime implements AgentRuntime {
   private waitForReady(sessionName: string, maxWaitMs = 30000): void {
     const start = Date.now();
     while (Date.now() - start < maxWaitMs) {
-      const pane = spawnSync("tmux", ["capture-pane", "-p", "-J", "-t", `${sessionName}:0.0`, "-S", "-50"], {
-        encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"],
-      });
-      if (pane.status === 0 && pane.stdout?.includes("❯")) return;
+      const pane = tmuxRun(["capture-pane", "-p", "-J", "-t", `${sessionName}:0.0`, "-S", "-50"]);
+      if (pane.status === 0 && pane.stdout.includes("❯")) return;
       spawnSync("sleep", ["0.5"]);
     }
   }
 
   isAlive(handle: AgentHandle): boolean {
-    const r = spawnSync("tmux", ["has-session", "-t", handle.id], {
-      encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"],
-    });
-    return r.status === 0;
+    return tmuxRun(["has-session", "-t", handle.id]).status === 0;
   }
 
   getOutput(handle: AgentHandle, lines = 500): AgentOutput {
-    const r = spawnSync("tmux", ["capture-pane", "-p", "-J", "-t", `${handle.id}:0.0`, "-S", `-${lines}`], {
-      encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"],
-    });
-    const text = r.status === 0 ? (r.stdout || "") : "";
+    const r = tmuxRun(["capture-pane", "-p", "-J", "-t", `${handle.id}:0.0`, "-S", `-${lines}`]);
+    const text = r.status === 0 ? r.stdout : "";
     return { text, markers: parseAgentMarkers(text) };
   }
 
   kill(handle: AgentHandle): void {
-    spawnSync("tmux", ["kill-session", "-t", handle.id], {
-      encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"],
-    });
+    tmuxRun(["kill-session", "-t", handle.id]);
   }
 }
 

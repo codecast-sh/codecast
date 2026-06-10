@@ -14,7 +14,7 @@ import { CODECAST_STATUS_HOOK } from "./statusHook.js";
 import { AuthServer } from "./authServer.js";
 import { startRelayPoller } from "./authRelay.js";
 import { c, fmt, icons } from "./colors.js";
-import { ensureTmux, tryInstallTmux } from "./tmux.js";
+import { ensureTmux, tryInstallTmux, tmuxRun } from "./tmux.js";
 import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, getVisualVersion, ensureCastAlias } from "./update.js";
 import { type SnippetTarget, getSnippetTargets, MESSAGING_SNIPPET_END, installMessagingSnippet, ensureMessagingForMemory } from "./snippets.js";
 import { checkForDesktopUpdate } from "./desktopUpdate.js";
@@ -4967,7 +4967,7 @@ function discoverLiveProcesses(options: LiveProcessDiscoveryOptions = {}): LiveP
 
   const tmuxPanes: Record<string, string> = {};
   try {
-    const out = execSync("tmux list-panes -a -F '#{pane_tty} #{session_name}' 2>/dev/null", { encoding: "utf-8", timeout: 10_000 });
+    const out = tmuxRun(["list-panes", "-a", "-F", "#{pane_tty} #{session_name}"], { timeout: 10_000 }).stdout;
     for (const line of out.trim().split("\n").filter(Boolean)) {
       const i = line.indexOf(" ");
       if (i > 0) tmuxPanes[line.slice(0, i)] = line.slice(i + 1);
@@ -10912,11 +10912,8 @@ const activeHandles = new Map<string, AgentHandle>();
 function captureAgentOutput(sessionName: string, lines = 500): string {
   const handle = activeHandles.get(sessionName);
   if (handle) return getAgentRuntime().getOutput(handle, lines).text;
-  const sr = spawnSync("tmux", ["capture-pane", "-p", "-J", "-t", `${sessionName}:0.0`, "-S", `-${lines}`], {
-    encoding: "utf-8",
-    stdio: ["pipe", "pipe", "pipe"],
-  });
-  return sr.status === 0 ? (sr.stdout || "") : "";
+  const sr = tmuxRun(["capture-pane", "-p", "-J", "-t", `${sessionName}:0.0`, "-S", `-${lines}`]);
+  return sr.status === 0 ? sr.stdout : "";
 }
 
 function parseAgentMarkers(output: string) {
@@ -11024,7 +11021,7 @@ plan
         for (const task of toSpawn) {
           const sn = `impl-${task.short_id}`;
           const h = activeHandles.get(sn);
-          const alive = h ? getAgentRuntime().isAlive(h) : spawnSync("tmux", ["has-session", "-t", sn], { stdio: ["pipe", "pipe", "pipe"] }).status === 0;
+          const alive = h ? getAgentRuntime().isAlive(h) : tmuxRun(["has-session", "-t", sn]).status === 0;
           if (!alive) {
             const lastOutput = captureAgentOutput(sn);
             const markers = parseAgentMarkers(lastOutput);
@@ -11345,7 +11342,7 @@ plan
         const sn = `impl-${shortId}`;
         const task = allTasks.find((t: any) => t.short_id === shortId);
         const handle = activeHandles.get(sn);
-        const agentAlive = handle ? runtime.isAlive(handle) : spawnSync("tmux", ["has-session", "-t", sn], { stdio: ["pipe", "pipe", "pipe"] }).status === 0;
+        const agentAlive = handle ? runtime.isAlive(handle) : tmuxRun(["has-session", "-t", sn]).status === 0;
 
         if (task?.status === "done") {
           console.log(`  ${c.green}done${c.reset}  ${c.cyan}${shortId}${c.reset} ${info.task.title}`);
@@ -11958,10 +11955,10 @@ plan
     for (const t of inProgress) {
       const sessionName = `impl-${t.short_id}`;
       const handle = activeHandles.get(sessionName);
-      const isAlive = handle ? killRuntime.isAlive(handle) : spawnSync("tmux", ["has-session", "-t", sessionName], { stdio: ["pipe", "pipe", "pipe"] }).status === 0;
+      const isAlive = handle ? killRuntime.isAlive(handle) : tmuxRun(["has-session", "-t", sessionName]).status === 0;
       if (isAlive) {
         if (handle) killRuntime.kill(handle);
-        else spawnSync("tmux", ["kill-session", "-t", sessionName], { stdio: ["pipe", "pipe", "pipe"] });
+        else tmuxRun(["kill-session", "-t", sessionName]);
         activeHandles.delete(sessionName);
         console.log(`  ${c.red}killed${c.reset} ${c.cyan}${t.short_id}${c.reset} ${t.title}`);
         killed++;

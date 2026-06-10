@@ -4,6 +4,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { injectViaTmux } from "./daemon.js";
+import { tmuxRun } from "./tmux.js";
 
 // Regression test for "clicking an AskUserQuestion option in the web card doesn't go
 // through" (root-caused 2026-06-05 against Claude Code 2.1.166).
@@ -83,20 +84,18 @@ finally:
     termios.tcsetattr(fd, termios.TCSADRAIN, old)
 `;
 
+// All tmux goes through the hardened wrapper (timeout + SIGKILL): a capture-pane
+// whose client wedges after its tmux server dies busy-loops at 100% CPU and
+// ignores SIGTERM, so a raw execFileSync without a timeout leaves a zombie that
+// outlives `bun test` and spins for hours.
 function tmux(args: string[]): string {
-  return execFileSync("tmux", args, { encoding: "utf8" }).toString();
+  return tmuxRun(args).stdout;
 }
 function killSessionQuiet(session: string): void {
-  try {
-    execFileSync("tmux", ["kill-session", "-t", session], { stdio: "ignore" });
-  } catch {}
+  tmuxRun(["kill-session", "-t", session]);
 }
 function capture(target: string): string {
-  try {
-    return execFileSync("tmux", ["capture-pane", "-p", "-J", "-t", target, "-S", "-80"], { encoding: "utf8" }).toString();
-  } catch {
-    return "";
-  }
+  return tmuxRun(["capture-pane", "-p", "-J", "-t", target, "-S", "-80"]).stdout;
 }
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
