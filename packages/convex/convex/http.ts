@@ -1729,10 +1729,10 @@ http.route({
 
     try {
       const body = await request.json();
-      const { api_token, shas, file_path, uncommitted_lines } = body;
+      const { api_token, shas, commits, file_path, uncommitted_lines, content_lines } = body;
 
-      if (!api_token || !Array.isArray(shas)) {
-        return new Response(JSON.stringify({ error: "Missing api_token or shas" }), {
+      if (!api_token || (!Array.isArray(shas) && !Array.isArray(commits))) {
+        return new Response(JSON.stringify({ error: "Missing api_token or shas/commits" }), {
           status: 400,
           headers: { "Content-Type": "application/json", ...corsHeaders },
         });
@@ -1741,8 +1741,10 @@ http.route({
       const result = await ctx.runQuery(api.blame.resolveBlame, {
         api_token,
         shas,
+        commits,
         file_path,
         uncommitted_lines,
+        content_lines,
       });
 
       if ("error" in result && result.error) {

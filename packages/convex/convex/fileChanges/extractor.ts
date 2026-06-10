@@ -243,13 +243,19 @@ function extractCommitHash(
     return undefined;
   }
 
+  return extractCommitHashFromContent(result.content);
+}
+
+/**
+ * Parse the short hash out of `git commit` output. Exported because the hash
+ * usually can't be extracted at materialization time: the Bash RESULT lands on
+ * the next (user) message, after the commit row was inserted hash-less — the
+ * ingest path runs this against late-arriving tool_results to patch it in.
+ */
+export function extractCommitHashFromContent(content: string): string | undefined {
   // git commit prints `[<branch> <short-hash>] <subject>` (with an optional
   // `(root-commit)` marker), so the hash is the last hex token before the `]`,
   // preceded by the `[` itself, whitespace, or the marker's closing paren.
-  const hashMatch = result.content.match(/\[(?:[^\]\n]*[\s()])?([a-f0-9]{7,40})\]/);
-  if (hashMatch) {
-    return hashMatch[1];
-  }
-
-  return undefined;
+  const hashMatch = content.match(/\[(?:[^\]\n]*[\s()])?([a-f0-9]{7,40})\]/);
+  return hashMatch ? hashMatch[1] : undefined;
 }

@@ -46,13 +46,18 @@ export interface SessionRef {
 }
 
 export interface BlameResolution {
+  // sha → the session that COMMITTED it (hash or subject+time match).
   bySha: Map<string, SessionRef>;
-  byUncommittedLine: Map<string, SessionRef>;
+  // trimmed line text → the session whose edit WROTE it (content match).
+  // Preferred over bySha: in /commit-style workflows the committing session
+  // is a bot organizing other sessions' work — the authoring session is the
+  // one whose reasoning you want to read.
+  byLine: Map<string, SessionRef>;
 }
 
 export const EMPTY_RESOLUTION: BlameResolution = {
   bySha: new Map(),
-  byUncommittedLine: new Map(),
+  byLine: new Map(),
 };
 
 const HEADER_RE = /^([0-9a-f]{40}) (\d+) (\d+)(?: (\d+))?$/;
@@ -132,11 +137,9 @@ export function sessionLabel(ref: SessionRef): string {
 }
 
 function whoFor(line: BlameLine, meta: BlameCommitMeta, resolution: BlameResolution): string {
-  if (line.sha === ZERO_SHA) {
-    const ref = resolution.byUncommittedLine.get(line.content.trim());
-    return ref ? sessionLabel(ref) : meta.author;
-  }
-  const ref = resolution.bySha.get(line.sha);
+  // Authoring session (content match) beats committing session (sha match)
+  // beats the git author.
+  const ref = resolution.byLine.get(line.content.trim()) ?? resolution.bySha.get(line.sha);
   return ref ? sessionLabel(ref) : meta.author;
 }
 
@@ -205,7 +208,7 @@ export function augmentPorcelain(raw: string, resolution: BlameResolution): stri
     if (currentSha === ZERO_SHA) {
       for (let j = i + 1; j < lines.length; j++) {
         if (lines[j].startsWith("\t")) {
-          ref = resolution.byUncommittedLine.get(lines[j].slice(1).trim());
+          ref = resolution.byLine.get(lines[j].slice(1).trim());
           break;
         }
         if (HEADER_RE.test(lines[j])) break;
@@ -224,15 +227,41 @@ export function augmentPorcelain(raw: string, resolution: BlameResolution): stri
   return out.join("\n");
 }
 
-export function uncommittedLinesToMatch(parsed: ParsedBlame): string[] {
-  const wanted = new Set<string>();
+export interface ContentLine {
+  t: string;
+  // Deadline (ms): newest edit timestamp allowed to claim the line. Committed
+  // lines pass commit-time + slack so the authoring edit (which precedes its
+  // commit) matches but later rewrites can't steal the line.
+  d?: number;
+}
+
+// Only commits this recent get content-matched to an authoring session — the
+// server matches against a window of the file's newest edit rows, so older
+// lines can't match anyway and would just bloat the request.
+const CONTENT_MATCH_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+const COMMIT_DEADLINE_SLACK_MS = 10 * 60 * 1000;
+
+export function contentLinesToMatch(parsed: ParsedBlame, nowMs: number): ContentLine[] {
+  const byText = new Map<string, ContentLine>();
   for (const line of parsed.lines) {
-    if (line.sha !== ZERO_SHA) continue;
     const trimmed = line.content.trim();
-    if (trimmed.length >= MIN_LINE_MATCH_LEN) wanted.add(trimmed);
-    if (wanted.size >= MAX_UNCOMMITTED_LINES) break;
+    if (trimmed.length < MIN_LINE_MATCH_LEN) continue;
+    let deadline: number | undefined;
+    if (line.sha !== ZERO_SHA) {
+      const meta = parsed.commits.get(line.sha);
+      if (!meta?.authorTime) continue;
+      const authorMs = meta.authorTime * 1000;
+      if (nowMs - authorMs > CONTENT_MATCH_MAX_AGE_MS) continue;
+      deadline = authorMs + COMMIT_DEADLINE_SLACK_MS;
+    }
+    // Duplicate text across lines: keep the most permissive deadline.
+    const existing = byText.get(trimmed);
+    if (!existing || (existing.d !== undefined && (deadline === undefined || deadline > existing.d))) {
+      byText.set(trimmed, { t: trimmed, d: deadline });
+    }
+    if (byText.size >= MAX_UNCOMMITTED_LINES) break;
   }
-  return [...wanted];
+  return [...byText.values()];
 }
 
 function execGit(args: string[], cwd: string): Promise<{ stdout: string; stderr: string }> {
@@ -244,14 +273,23 @@ function execGit(args: string[], cwd: string): Promise<{ stdout: string; stderr:
   });
 }
 
+export interface CommitDescriptor {
+  sha: string;
+  // Blame porcelain's summary + author-time (ms): lets the server fall back to
+  // subject/timestamp matching when the session's commit output carried no
+  // parseable hash (compound commands, -q, custom helpers).
+  summary?: string;
+  author_time?: number;
+}
+
 async function resolveSessions(
   siteUrl: string,
   apiToken: string,
-  shas: string[],
+  commits: CommitDescriptor[],
   filePath: string,
-  uncommittedLines: string[],
+  contentLines: ContentLine[],
 ): Promise<BlameResolution> {
-  if (shas.length === 0 && uncommittedLines.length === 0) return EMPTY_RESOLUTION;
+  if (commits.length === 0 && contentLines.length === 0) return EMPTY_RESOLUTION;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), RESOLVE_TIMEOUT_MS);
   try {
@@ -260,21 +298,22 @@ async function resolveSessions(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         api_token: apiToken,
-        shas,
+        commits,
         file_path: filePath,
-        uncommitted_lines: uncommittedLines,
+        content_lines: contentLines,
       }),
       signal: controller.signal,
     });
     const result = (await response.json()) as {
       error?: string;
       resolved?: Record<string, SessionRef>;
-      uncommitted?: Record<string, SessionRef>;
+      // Array of {line, ...} pairs — line text can't be a Convex field name.
+      line_matches?: Array<SessionRef & { line: string }>;
     };
     if (result.error) throw new Error(result.error);
     return {
       bySha: new Map(Object.entries(result.resolved ?? {})),
-      byUncommittedLine: new Map(Object.entries(result.uncommitted ?? {})),
+      byLine: new Map((result.line_matches ?? []).map((u) => [u.line, u])),
     };
   } finally {
     clearTimeout(timer);
@@ -317,11 +356,20 @@ export async function runBlameCommand(
   let resolution = EMPTY_RESOLUTION;
   const wantSessions = options.sessions !== false && config.auth_token && config.convex_url;
   if (wantSessions) {
-    const shas = [...new Set(parsed.lines.map((l) => l.sha))].filter((s) => s !== ZERO_SHA);
-    const uncommitted = uncommittedLinesToMatch(parsed);
+    const commits: CommitDescriptor[] = [...new Set(parsed.lines.map((l) => l.sha))]
+      .filter((s) => s !== ZERO_SHA)
+      .map((sha) => {
+        const meta = parsed.commits.get(sha);
+        return {
+          sha,
+          summary: meta?.summary || undefined,
+          author_time: meta?.authorTime ? meta.authorTime * 1000 : undefined,
+        };
+      });
+    const contentLines = contentLinesToMatch(parsed, Date.now());
     const siteUrl = config.convex_url!.replace(".cloud", ".site");
     try {
-      resolution = await resolveSessions(siteUrl, config.auth_token!, shas, absPath, uncommitted);
+      resolution = await resolveSessions(siteUrl, config.auth_token!, commits, absPath, contentLines);
     } catch (error) {
       // Stay a faithful git blame on any resolution failure — editor
       // integrations must never see a broken pipe because the network blinked.
