@@ -16,9 +16,10 @@ import { fileURLToPath } from "node:url";
 // row stuck as "injected", and the 120s retry cron resets it to "pending" and the
 // daemon re-delivers the same message -- producing two identical assistant replies.
 //
-// The fix: mark "injected" BEFORE every delivery-path inject, so the ack always
-// finds a row to flip regardless of which side of the race wins. On inject failure
-// the same 120s retry cron recovers -- identical to today's worst case.
+// The current fix: direct local paste paths must not block on Convex before the
+// paste. They record a best-effort injected mark immediately after the paste, while
+// addMessages' content-matched ack promotes the row to delivered when the agent
+// echoes the user message to JSONL.
 //
 // This test is a static invariant check against daemon.ts -- it does not execute
 // the daemon. It guards against a regression where someone re-inserts the mark
@@ -113,7 +114,7 @@ describe("deliverMessage: mark-injected-before-send invariant", () => {
     expect(matches.length).toBe(0);
   });
 
-  test("every delivery-path injection is preceded by a mark-injected within a small window", () => {
+  test("every direct local delivery injection records mark-injected best-effort immediately after paste", () => {
     // Delivery-path inject calls are the ones that take `content` and a specific target.
     // Permission responses (e.g. injectViaTerminal(tty, "\r", ...)) are NOT delivery calls.
     //
@@ -121,34 +122,35 @@ describe("deliverMessage: mark-injected-before-send invariant", () => {
     // tmux target or tty AND whose content arg is `content` (the pending message body).
     // The cached-tmux and live-process-pane injects were unified behind resolveLiveTmuxTarget,
     // so both now flow through a single `injectViaTmux(injectTarget, content)` call site.
-    const callSites = [
+    const directPasteCallSites = [
       /await\s+injectViaTmux\(\s*startedTmuxTarget\s*,\s*content\s*\)/g,
       /await\s+injectViaTmux\(\s*injectTarget\s*,\s*content\s*\)/g,
       /await\s+injectViaTerminal\(\s*live\.proc\.tty\s*,\s*content\s*,\s*live\.proc\.termProgram\s*\)/g,
-      /await\s+autoResumeSession\(\s*sessionId\s*,\s*content\s*,/g,
-      /await\s+repairAndResumeSession\(\s*sessionId\s*,\s*content\s*,/g,
     ];
 
     let totalSitesChecked = 0;
-    for (const rx of callSites) {
+    for (const rx of directPasteCallSites) {
       for (const match of deliverBody.matchAll(rx)) {
         totalSitesChecked++;
-        const idx = match.index ?? 0;
-        // Look backwards ~20 lines for a mark-injected call.
-        const windowStart = Math.max(0, idx - 1500);
-        const window = deliverBody.slice(windowStart, idx);
-        const hasPrecedingMark = /status:\s*["']injected["']/.test(window);
-        if (!hasPrecedingMark) {
-          const lineNo = lineNumberOf(deliverBody, idx);
+        const endIdx = (match.index ?? 0) + match[0].length;
+        const window = deliverBody.slice(endIdx, endIdx + 500);
+        const hasBestEffortMark = /markInjectedBestEffort\(\s*syncService\s*,\s*messageId\s*\)/.test(window);
+        if (!hasBestEffortMark) {
+          const lineNo = lineNumberOf(deliverBody, match.index ?? 0);
           throw new Error(
-            `Delivery injection at line ${lineNo} of deliverMessage has no preceding mark-injected within 1500 chars. Call: ${match[0]}`,
+            `Direct delivery injection at line ${lineNo} of deliverMessage has no immediate markInjectedBestEffort call. Call: ${match[0]}`,
           );
         }
       }
     }
 
-    // We must actually find the 5 known sites -- otherwise the test is silently vacuous.
-    // (started-tmux, unified live-target tmux, terminal/AppleScript, auto-resume, repair+resume.)
-    expect(totalSitesChecked).toBeGreaterThanOrEqual(5);
+    expect(totalSitesChecked).toBeGreaterThanOrEqual(3);
+  });
+
+  test("auto-resume delivery marks injected before launching the resume path", () => {
+    const resumeIdx = deliverBody.search(/await\s+autoResumeSession\(\s*sessionId\s*,\s*content\s*,/);
+    expect(resumeIdx).toBeGreaterThanOrEqual(0);
+    const window = deliverBody.slice(Math.max(0, resumeIdx - 700), resumeIdx);
+    expect(window).toMatch(/markInjectedBestEffort\(\s*syncService\s*,\s*messageId\s*\)/);
   });
 });
