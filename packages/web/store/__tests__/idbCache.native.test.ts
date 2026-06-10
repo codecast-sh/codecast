@@ -1,25 +1,28 @@
-import { beforeEach, describe, expect, it, mock } from "bun:test";
+import { beforeEach, describe, expect, it } from "bun:test";
 
 // jsdom/node has no native expo-sqlite, so back the kv-store with an in-memory
 // AsyncStorage-compatible shim that mirrors the methods idbCache.native uses.
+// NOT via mock.module: the module acquires the store through a guarded
+// require() (deliberate — see the OTA-skew comment in idbCache.native.ts), and
+// bun's mock.module intercepts only the ESM import path, so the mock never
+// attached — the require threw, the guard nulled Storage, and every test read
+// empty. The module's catch-path instead picks up this global, set BEFORE the
+// import below so the eval-time PERSISTENCE_AVAILABLE const sees it.
 const kv = new Map<string, string>();
-mock.module("expo-sqlite/kv-store", () => {
-  const Storage = {
-    async getItem(key: string): Promise<string | null> {
-      return kv.has(key) ? (kv.get(key) as string) : null;
-    },
-    async setItem(key: string, value: string): Promise<void> {
-      kv.set(key, value);
-    },
-    async removeItem(key: string): Promise<void> {
-      kv.delete(key);
-    },
-    async multiGet(keys: string[]): Promise<[string, string | null][]> {
-      return keys.map((k) => [k, kv.has(k) ? (kv.get(k) as string) : null]);
-    },
-  };
-  return { __esModule: true, default: Storage, Storage, AsyncStorage: Storage };
-});
+(globalThis as any).__CODECAST_TEST_KV_STORAGE__ = {
+  async getItem(key: string): Promise<string | null> {
+    return kv.has(key) ? (kv.get(key) as string) : null;
+  },
+  async setItem(key: string, value: string): Promise<void> {
+    kv.set(key, value);
+  },
+  async removeItem(key: string): Promise<void> {
+    kv.delete(key);
+  },
+  async multiGet(keys: string[]): Promise<[string, string | null][]> {
+    return keys.map((k) => [k, kv.has(k) ? (kv.get(k) as string) : null]);
+  },
+};
 
 const {
   writePatchesToIDB,
