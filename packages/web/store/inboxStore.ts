@@ -3408,10 +3408,23 @@ export const useInboxStore = create<InboxStoreState>(
   closeTab: action(function (this: Draft, id: string) {
     const idx = this.tabs.findIndex((t: AppTab) => t.id === id);
     if (idx === -1) return;
-    const newTabs = this.tabs.filter((t: AppTab) => t.id !== id);
+    let newTabs = this.tabs.filter((t: AppTab) => t.id !== id);
     if (this.activeTabId === id) {
       const nextTab = newTabs[Math.min(idx, newTabs.length - 1)];
       this.activeTabId = nextTab?.id ?? null;
+      // A background tab often holds the canonicalized /conversation/<id> path
+      // (stamped from window.location by switchTab), whose pane is a spent
+      // RedirectToInbox — a loading skeleton that already fired its one-shot
+      // redirect while hidden. Every transition onto a tab heals this via a
+      // freshly-mounted redirect targeting the active tab, EXCEPT close, which
+      // just promotes the survivor. Rewrite to the inbox deep-link form the
+      // redirect would have produced so the pane remounts with real content.
+      const conv = nextTab?.path.match(/^\/conversation\/([^/?#]+)$/);
+      if (conv) {
+        newTabs = newTabs.map((t: AppTab) =>
+          t.id === nextTab.id ? { ...t, path: `/inbox?s=${conv[1]}` } : t,
+        );
+      }
     }
     this.tabs = newTabs;
   }),

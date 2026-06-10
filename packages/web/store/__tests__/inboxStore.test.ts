@@ -2723,3 +2723,51 @@ describe("feedPagePersistence — null cursor is only durable with evidence", ()
     expect(feedPagePersistence({ rowCount: 0, nextCursor: null })).toEqual({ cursor: undefined, hasMore: false });
   });
 });
+
+// Closing the active tab promotes a background tab. A background tab's stored
+// path is typically the canonicalized /conversation/<id> URL (stamped by
+// switchTab from window.location), whose pane is a spent RedirectToInbox
+// skeleton — every other transition heals that with a freshly-mounted redirect
+// targeting the active tab, but close has none, so the survivor showed a
+// permanent loader. closeTab must promote it in the inbox deep-link form.
+describe("closeTab — promoted tab must not be a redirect-page route", () => {
+  const convId = "jx70p2wf110d36kd6y3cdw339x8858c0";
+  const tabA = { id: "tab_a", title: "inbox", path: `/conversation/${convId}`, createdAt: 1 };
+  const tabB = { id: "tab_b", title: "inbox", path: `/inbox?s=${convId}`, createdAt: 2 };
+  const tabC = { id: "tab_c", title: "ashot", path: "/team/ashot", createdAt: 3 };
+
+  beforeEach(() => {
+    useInboxStore.setState({ tabs: [tabA, tabB], activeTabId: "tab_b" });
+  });
+
+  it("rewrites a promoted /conversation/<id> path to /inbox?s=<id>", () => {
+    useInboxStore.getState().closeTab("tab_b");
+    const s = useInboxStore.getState();
+    expect(s.activeTabId).toBe("tab_a");
+    expect(s.tabs).toHaveLength(1);
+    expect(s.tabs[0].path).toBe(`/inbox?s=${convId}`);
+  });
+
+  it("leaves the promoted tab alone when its path renders real content", () => {
+    useInboxStore.setState({ tabs: [tabC, tabB], activeTabId: "tab_b" });
+    useInboxStore.getState().closeTab("tab_b");
+    const s = useInboxStore.getState();
+    expect(s.activeTabId).toBe("tab_c");
+    expect(s.tabs[0].path).toBe("/team/ashot");
+  });
+
+  it("closing a background tab touches neither the active tab nor any path", () => {
+    useInboxStore.getState().closeTab("tab_a");
+    const s = useInboxStore.getState();
+    expect(s.activeTabId).toBe("tab_b");
+    expect(s.tabs).toHaveLength(1);
+    expect(s.tabs[0].path).toBe(`/inbox?s=${convId}`);
+  });
+
+  it("does not rewrite the diff route — that pane is a real page, not a redirect", () => {
+    const diffTab = { id: "tab_d", title: "diff", path: `/conversation/${convId}/diff`, createdAt: 1 };
+    useInboxStore.setState({ tabs: [diffTab, tabB], activeTabId: "tab_b" });
+    useInboxStore.getState().closeTab("tab_b");
+    expect(useInboxStore.getState().tabs[0].path).toBe(`/conversation/${convId}/diff`);
+  });
+});
