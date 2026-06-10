@@ -3528,6 +3528,22 @@ function prepMessageForSync(msg: RawMessage): { messageUuid?: string; role: "hum
   };
 }
 
+// Codex's app-server streams only the AGENT's output items back to us; the prompt we send
+// via turn/start is never replayed (unlike Claude, whose JSONL echoes the user turn, so
+// parseSessionFile captures it). Left to the live stream alone a Codex conversation persists
+// as agent-only output — every user turn lost (ct-36429). So the daemon records the user turn
+// itself at delivery time. Routed through the same addMessages path as Claude, the server
+// content-matches it to the pending_messages row — adopting that row's client_id so the web's
+// optimistic bubble reconciles, and marking the row delivered. The stable `codex-user-<id>`
+// message_uuid keeps re-delivery idempotent.
+export function buildCodexUserTurnMessage(
+  content: string,
+  pendingMessageId: string,
+  timestamp: number,
+): RawMessage {
+  return { uuid: `codex-user-${pendingMessageId}`, role: "user", content, timestamp };
+}
+
 async function syncMessagesBatch(
   messages: RawMessage[],
   conversationId: string,
@@ -9914,6 +9930,18 @@ async function deliverMessage(
       try {
         const input: Array<{ type: "text"; text: string }> = [{ type: "text", text: content }];
         await codexAppServerInstance.turnStart({ threadId: appServerThreadId, input });
+        // Persist the user turn ourselves: the app-server replays only the agent's output,
+        // so without this the prompt is never stored and the conversation reads as agent-only
+        // (ct-36429). syncMessagesBatch routes it through the same addMessages path as Claude,
+        // which content-matches the pending row (client_id adoption + delivered ack + dedupe).
+        if (retryQueueRef) {
+          await syncMessagesBatch(
+            [buildCodexUserTurnMessage(content, messageId, Date.now())],
+            conversationId,
+            syncService,
+            retryQueueRef,
+          );
+        }
         await syncService.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
         logDelivery(`[codex-app-server] delivered via app-server to thread ${appServerThreadId.slice(0, 8)}`);
         return true;
