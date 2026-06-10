@@ -24,6 +24,30 @@ import {
   buildShareUpdate,
 } from "./privacy";
 import { batchScanConversations, paginateTeamFeed } from "./feedPagination";
+import {
+  parseSearchTerms,
+  contentMatchesAnyTerm,
+  conversationMatchesAllTerms,
+  calculateProximityScore,
+  rankConversationsByCoverage,
+  type ParsedTerms,
+} from "./searchCore";
+
+// Single relevance-ranked search-index lookup shared by every message-search
+// surface (web searchMessages, searchForCLI, feedForCLI). One combined lookup
+// instead of a per-term fan-out: per-lookup overhead dominates on long queries
+// (a 7-term query = 7 index scans) and timed out the whole Convex query. BM25
+// already ranks docs matching more/rarer terms first, so a single pool is also
+// the better candidate set for coverage ranking. The take() is the recall/speed
+// knob: message docs can be large (tool results), so a bigger pool costs bytes.
+async function fetchMessageSearchPool(ctx: QueryCtx, terms: ParsedTerms) {
+  if (terms.all.length === 0) return [];
+  const searchQuery = terms.all.join(" ");
+  return await ctx.db
+    .query("messages")
+    .withSearchIndex("search_content_v2", (q) => q.search("content", searchQuery))
+    .take(512);
+}
 
 const NOISE_TITLE_PREFIXES = ["[Using:", "[Request", "[SUGGESTION MODE:"];
 
@@ -341,106 +365,6 @@ async function findChildConversations(
 
 function generateShareToken(): string {
   return crypto.randomUUID();
-}
-
-function parseSearchTerms(query: string): { phrases: string[]; words: string[]; all: string[] } {
-  const phrases: string[] = [];
-  const words: string[] = [];
-  const regex = /"([^"]+)"|(\S+)/g;
-  let match;
-  while ((match = regex.exec(query)) !== null) {
-    if (match[1]) {
-      phrases.push(match[1].toLowerCase());
-    } else if (match[2]) {
-      words.push(match[2].toLowerCase());
-    }
-  }
-  return { phrases, words, all: [...phrases, ...words] };
-}
-
-function contentMatchesSearch(content: string, terms: { phrases: string[]; words: string[] }): boolean {
-  const lowerContent = content.toLowerCase();
-  for (const phrase of terms.phrases) {
-    if (!lowerContent.includes(phrase)) return false;
-  }
-  for (const word of terms.words) {
-    if (!lowerContent.includes(word)) return false;
-  }
-  return true;
-}
-
-function contentMatchesAnyTerm(content: string, terms: { phrases: string[]; words: string[]; all: string[] }): boolean {
-  const lowerContent = content.toLowerCase();
-  return terms.all.some(t => lowerContent.includes(t));
-}
-
-function conversationMatchesAllTerms(
-  messages: Array<{ content?: string | null }>,
-  terms: { phrases: string[]; words: string[] }
-): boolean {
-  const allContent = messages.map(m => (m.content || "").toLowerCase()).join(" ");
-  return contentMatchesSearch(allContent, terms);
-}
-
-function calculateProximityScore(
-  messages: Array<{ content?: string | null; _id: { toString(): string } }>,
-  terms: { all: string[] }
-): number {
-  if (terms.all.length <= 1) return 0;
-
-  const termPositions: Map<string, number[]> = new Map();
-  for (const term of terms.all) {
-    termPositions.set(term, []);
-  }
-
-  for (let msgIdx = 0; msgIdx < messages.length; msgIdx++) {
-    const content = (messages[msgIdx].content || "").toLowerCase();
-    for (const term of terms.all) {
-      if (content.includes(term)) {
-        termPositions.get(term)!.push(msgIdx);
-      }
-    }
-  }
-
-  // Check if all terms appear in same message (best case)
-  const messageIndicesWithAllTerms = new Set<number>();
-  for (let i = 0; i < messages.length; i++) {
-    const content = (messages[i].content || "").toLowerCase();
-    if (terms.all.every(t => content.includes(t))) {
-      return 0; // Best score - all terms in one message
-    }
-  }
-
-  // Calculate minimum span across messages
-  let minSpan = Infinity;
-  const firstTermPositions = termPositions.get(terms.all[0]) || [];
-
-  for (const startPos of firstTermPositions) {
-    let maxEnd = startPos;
-    let valid = true;
-
-    for (const term of terms.all.slice(1)) {
-      const positions = termPositions.get(term) || [];
-      if (positions.length === 0) {
-        valid = false;
-        break;
-      }
-      // Find closest position to current range
-      let closest = positions[0];
-      for (const pos of positions) {
-        if (Math.abs(pos - startPos) < Math.abs(closest - startPos)) {
-          closest = pos;
-        }
-      }
-      maxEnd = Math.max(maxEnd, closest);
-    }
-
-    if (valid) {
-      minSpan = Math.min(minSpan, maxEnd - startPos + 1);
-    }
-  }
-
-  return minSpan === Infinity ? 1000 : minSpan;
 }
 
 function formatSlugAsTitle(slug: string): string {
@@ -2637,15 +2561,7 @@ export const searchConversations = query({
     const userOnly = args.userOnly ?? false;
     const terms = parseSearchTerms(searchTerm);
     const searchQuery = terms.all.join(" ");
-
-    // Use full-text search on messages. The index returns by relevance, and
-    // message docs can be large (tool results, long turns), so this take is the
-    // recall/speed knob: a bigger pool catches more recency-ranked matches at the
-    // cost of pulling more bytes per query.
-    const searchResults = await ctx.db
-      .query("messages")
-      .withSearchIndex("search_content_v2", (q) => q.search("content", searchQuery))
-      .take(512);
+    const searchResults = await fetchMessageSearchPool(ctx, terms);
 
     // Group messages by conversation (keep messages matching ANY term for context)
     const conversationMessages = new Map<string, typeof searchResults>();
@@ -3356,22 +3272,7 @@ export const searchForCLI = query({
     const userOnly = args.user_only ?? false;
     const terms = parseSearchTerms(searchTerm);
 
-    // Search for each term separately to ensure we get results for all terms
-    // Then combine and deduplicate by message ID
-    const allSearchResults = new Map<string, any>();
-    for (const term of terms.all) {
-      const results = await ctx.db
-        .query("messages")
-        .withSearchIndex("search_content_v2", (q) => q.search("content", term))
-        .take(200);
-      for (const msg of results) {
-        const msgId = msg._id.toString();
-        if (!allSearchResults.has(msgId)) {
-          allSearchResults.set(msgId, msg);
-        }
-      }
-    }
-    const searchResults = Array.from(allSearchResults.values());
+    const searchResults = await fetchMessageSearchPool(ctx, terms);
 
     // Group messages by conversation (keep messages matching ANY term for context)
     const conversationMessages = new Map<string, typeof searchResults>();
@@ -3387,13 +3288,10 @@ export const searchForCLI = query({
       conversationMessages.get(convId)!.push(msg);
     }
 
-    // Filter to conversations where ALL terms appear (across any messages)
-    const conversationMatches = new Map<string, typeof searchResults>();
-    for (const [convId, messages] of conversationMessages) {
-      if (conversationMatchesAllTerms(messages, terms)) {
-        conversationMatches.set(convId, messages);
-      }
-    }
+    // Best-coverage selection: full-coverage conversations first, then partial
+    // matches for longer queries, so a natural-language task description degrades
+    // to best-match instead of no-match. Quoted phrases stay required.
+    const rankedMatches = rankConversationsByCoverage(conversationMessages, terms);
 
     const results: Array<{
       id: string;
@@ -3402,6 +3300,7 @@ export const searchForCLI = query({
       updated_at: string;
       message_count: number;
       proximityScore: number;
+      coverage: number;
       user?: { name: string | null; email: string | null };
       matches: Array<{
         line: number;
@@ -3417,44 +3316,57 @@ export const searchForCLI = query({
     }> = [];
 
     let totalMatches = 0;
-    let conversationsSkipped = 0;
 
-    for (const [, messages] of conversationMatches) {
-      if (results.length >= limit) break;
-
-      const conv = await ctx.db.get(messages[0].conversation_id) as any;
-      if (!conv) continue;
+    // Hydrate candidate conversations in parallel (a serial await per candidate
+    // was a major latency source), then apply the sync filters before any
+    // further reads. Bounded to the best candidates — coverage order means the
+    // tail is the weakest matches anyway.
+    const candidates = rankedMatches.slice(0, Math.max(50, offset + limit * 3));
+    const hydratedConvs = await Promise.all(
+      candidates.map(({ messages }) => ctx.db.get(messages[0].conversation_id))
+    );
+    const eligible: Array<{ conv: any; messages: typeof searchResults; coverage: number }> = [];
+    candidates.forEach(({ messages, coverage }, i) => {
+      const conv = hydratedConvs[i] as any;
+      if (!conv) return;
 
       const isOwn = conv.user_id.toString() === authUserId.toString();
       if (!isOwn) {
-        if (!conv.team_id || !effectiveTeamIdSet.has(conv.team_id.toString())) continue;
+        if (!conv.team_id || !effectiveTeamIdSet.has(conv.team_id.toString())) return;
         const cliFilter = cliFeedFilters.get(conv.team_id.toString());
-        if (!cliFilter || !cliFilter.isVisible(conv)) continue;
-        if (!teamUserIds.has(conv.user_id.toString())) continue;
+        if (!cliFilter || !cliFilter.isVisible(conv)) return;
+        if (!teamUserIds.has(conv.user_id.toString())) return;
       } else if (resolvedTeamId) {
         // Own sessions: filter by team when team is resolved from directory
         const convTeamId = (conv.team_id ?? conv.active_team_id)?.toString();
-        if (!convTeamId || !effectiveTeamIdSet.has(convTeamId)) continue;
+        if (!convTeamId || !effectiveTeamIdSet.has(convTeamId)) return;
       }
 
       // Filter by specific member (or self via --mine)
-      if (filterUserId && conv.user_id.toString() !== filterUserId) {
-        continue;
-      }
+      if (filterUserId && conv.user_id.toString() !== filterUserId) return;
 
-      if (startTime && conv.updated_at < startTime) continue;
-      if (endTime && conv.updated_at > endTime) continue;
+      if (startTime && conv.updated_at < startTime) return;
+      if (endTime && conv.updated_at > endTime) return;
 
-      if (conversationsSkipped < offset) {
-        conversationsSkipped++;
-        continue;
-      }
+      eligible.push({ conv, messages, coverage });
+    });
 
-      const firstMessages = await ctx.db
-        .query("messages")
-        .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
-        .order("asc")
-        .take(20);
+    const page = eligible.slice(offset, offset + limit);
+
+    // Title-fallback first messages only for the returned page, in parallel.
+    const pageFirstMessages = await Promise.all(
+      page.map(({ conv }) =>
+        ctx.db
+          .query("messages")
+          .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
+          .order("asc")
+          .take(20)
+      )
+    );
+
+    for (let pageIdx = 0; pageIdx < page.length; pageIdx++) {
+      const { conv, messages, coverage } = page[pageIdx];
+      const firstMessages = pageFirstMessages[pageIdx];
 
       let firstUserMessage = "";
       for (const msg of firstMessages) {
@@ -3532,14 +3444,19 @@ export const searchForCLI = query({
         updated_at: new Date(conv.updated_at).toISOString(),
         message_count: conv.message_count || 0,
         proximityScore,
+        coverage,
         user: !isOwnConv && owner ? { name: owner.name || null, email: owner.email || null } : undefined,
         matches: formattedMatches,
         context: [],
       });
     }
 
-    // Sort by proximity first (lower = better), then by recency
+    // Sort by term coverage (full matches first), then proximity (lower =
+    // better), then recency.
     results.sort((a, b) => {
+      if (a.coverage !== b.coverage) {
+        return b.coverage - a.coverage;
+      }
       if (a.proximityScore !== b.proximityScore) {
         return a.proximityScore - b.proximityScore;
       }
@@ -5043,24 +4960,12 @@ export const feedForCLI = query({
     let queryMatchedOwnConversations: typeof ownConversations = [];
     let queryMatchedTeamConversations: typeof ownConversations = [];
     if (query && query.length >= 2) {
-      // Search for each term separately to ensure we get results for all terms
+      // Single combined lookup (see fetchMessageSearchPool), then best-coverage
+      // selection instead of a strict all-terms AND.
       const terms = parseSearchTerms(query);
-      const allSearchResults = new Map<string, any>();
-      for (const term of terms.all) {
-        const results = await ctx.db
-          .query("messages")
-          .withSearchIndex("search_content_v2", (q) => q.search("content", term))
-          .take(200);
-        for (const msg of results) {
-          const msgId = msg._id.toString();
-          if (!allSearchResults.has(msgId)) {
-            allSearchResults.set(msgId, msg);
-          }
-        }
-      }
-      const searchResults = Array.from(allSearchResults.values());
+      const searchResults = await fetchMessageSearchPool(ctx, terms);
 
-      // Group messages by conversation and filter to those matching ALL terms
+      // Group messages by conversation, then keep the best-coverage matches
       const conversationMessages = new Map<string, typeof searchResults>();
       for (const msg of searchResults) {
         const convId = msg.conversation_id.toString();
@@ -5070,14 +4975,8 @@ export const feedForCLI = query({
         conversationMessages.get(convId)!.push(msg);
       }
 
-      // Only include conversations where ALL terms appear across messages
-      for (const [convId, messages] of conversationMessages) {
-        if (!conversationMatchesAllTerms(messages, terms)) {
-          conversationMessages.delete(convId);
-        }
-      }
-
-      matchingConvIds = new Set(conversationMessages.keys());
+      const rankedMatches = rankConversationsByCoverage(conversationMessages, terms);
+      matchingConvIds = new Set(rankedMatches.map((r) => r.convId));
 
       const matchedConvs = await Promise.all(
         Array.from(matchingConvIds).slice(0, 25).map(async (convId) => {
@@ -6299,11 +6198,14 @@ async function enrichInboxSessionRow(
     last_user_message: lastUserMessage,
     session_error: conv.session_error,
     // True when the latest turn is an unresolved Claude Code auth/API-error
-    // banner ("Please run /login · API Error: 401 …"). The CLI got signed out
-    // or rejected mid-turn and the session is parked waiting on the user to
-    // re-authenticate. Cleared automatically once a real turn supersedes the
-    // banner (see messages.ts / apiErrorBatchAction).
+    // banner ("Please run /login · API Error: 401 …", "You've hit your session
+    // limit · resets 11:30pm"). The CLI got signed out, rejected, or
+    // rate-limited mid-turn and the session is parked waiting on the user (or
+    // the limit reset). Cleared automatically once a real turn supersedes the
+    // banner (see messages.ts / apiErrorBatchAction). The kind ("auth" |
+    // "limit" | "error") picks the session-pill label.
     pending_api_error: conv.pending_api_error === true,
+    pending_api_error_kind: conv.pending_api_error_kind ?? null,
     implementation_session: implementationSession,
     active_plan,
     active_task,
@@ -6367,6 +6269,7 @@ function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: number, 
     last_user_message: null,
     session_error: child.session_error,
     pending_api_error: child.pending_api_error === true,
+    pending_api_error_kind: child.pending_api_error_kind ?? null,
     is_subagent: true,
     parent_conversation_id: parentId,
     worktree_name: child.worktree_name,
