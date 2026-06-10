@@ -1,4 +1,4 @@
-import type { Root, Element, Text, RootContent, ElementContent } from "hast";
+import type { Root, Element, Text, RootContent, ElementContent } from "./hastTypes";
 
 type Options = {
   terms: string[];

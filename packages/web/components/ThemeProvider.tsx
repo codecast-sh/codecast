@@ -61,10 +61,13 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   );
 }
 
-export function useTheme() {
+export function useTheme(): ThemeContextType {
   const context = useContext(ThemeContext);
   if (!context) {
-    return { theme: "light" as const, setTheme: () => {} };
+    // No provider mounted (e.g. SSR/boot fallback): default to light with a
+    // no-op toggle so the shape matches ThemeContextType and callers like
+    // ThemeToggle can read `toggleTheme` unconditionally.
+    return { theme: "light", toggleTheme: () => {} };
   }
   return context;
 }

@@ -34,14 +34,17 @@ export function useRouter() {
   const navigate = useNavigate();
   return useMemo(
     () => ({
-      push: (path: string) => {
+      // The second arg mirrors Next.js's `NavigateOptions` (e.g. `{ scroll }`).
+      // We don't act on it, but accepting it keeps `router.push/replace(path,
+      // { scroll: false })` call sites type-checking against this shim.
+      push: (path: string, _options?: { scroll?: boolean }) => {
         if (shouldUseTabRouting(path)) {
           tabNavigate(path, "push");
         } else {
           navigate(path);
         }
       },
-      replace: (path: string) => {
+      replace: (path: string, _options?: { scroll?: boolean }) => {
         if (shouldUseTabRouting(path)) {
           tabNavigate(path, "replace");
         } else {
