@@ -44,6 +44,33 @@ export function rewriteSubagentJsonlToUuid(
 }
 
 /**
+ * True for session ids minted by the server-side fork/handoff flow
+ * (`forked-<originalSessionId>-<uuid>`, see convex conversations.ts). A JSONL
+ * under such an id only ever exists locally as a daemon-written reconstitution
+ * artifact — the live transcript is the UUID copy made for `claude --resume`.
+ */
+export function isForkArtifactSessionId(sessionId: string): boolean {
+  return sessionId.startsWith("forked-");
+}
+
+/**
+ * Delete the source JSONL left behind after copying a fork artifact to its
+ * resumable UUID. Left on disk, the sync watcher rediscovers it as an unknown
+ * session (its conversation mapping just moved to the UUID copy) and mints a
+ * frozen doppelgänger conversation that receives input but never output.
+ * Subagent (`agent-*`) sources are real transcripts and are left alone.
+ */
+export function removeForkArtifactJsonl(sessionId: string, sourceJsonlPath: string): boolean {
+  if (!isForkArtifactSessionId(sessionId)) return false;
+  try {
+    fs.unlinkSync(sourceJsonlPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * True when `flags` already specifies a Claude permission mode flag. Used to
  * avoid stacking conflicting permission settings.
  */

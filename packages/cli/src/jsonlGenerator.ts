@@ -338,6 +338,61 @@ function truncate(text: string, max = 2000): string {
 
 // ── Claude Code JSONL ──────────────────────────────────────
 
+// Claude Code resolves the bare aliases opus/sonnet/haiku to the current model
+// of that line, so they never go stale. A pinned snapshot recorded in a
+// transcript dies once that snapshot is retired: `claude --resume` adopts it
+// and crashes with "the selected model ... may not exist". When reconstructing
+// a transcript for a conversation with no usable Claude model (never recorded,
+// or a non-Claude model from a codex conversation being converted), stamp the
+// alias so the transcript resolves to a live model forever.
+export function claudeTranscriptModel(conversationModel: string | null | undefined): string {
+  if (conversationModel && /^claude-/.test(conversationModel)) return conversationModel;
+  return "opus";
+}
+
+// A session's JSONL records the model it ran on — often a pinned snapshot like
+// claude-opus-4-6-20260205, which gets retired when a newer model ships. Return
+// the live short alias matching the recorded model so a resume lands on a live
+// model instead of a dead snapshot (if the recorded model is still current the
+// alias resolves to it anyway). Also matches a bare recorded alias.
+export function claudeModelAlias(jsonlContent: string): string | null {
+  const m = jsonlContent.match(/"model"\s*:\s*"(?:claude-)?(opus|sonnet|haiku)\b/);
+  return m ? m[1] : null;
+}
+
+// Pick the `--model` flag for a resume. We override the model on EVERY resume,
+// not just forks: the JSONL records whatever model the session last ran on,
+// which may be a now-retired pinned snapshot. An explicit --model in extraFlags
+// always wins.
+export function resumeModelFlag(jsonlContent: string, extraFlags: string): string {
+  if (/(^|\s)--model(\s|=)/.test(extraFlags)) return "";
+  const alias = claudeModelAlias(jsonlContent);
+  return alias ? ` --model ${alias}` : "";
+}
+
+// File variant of resumeModelFlag. The model field first appears on the first
+// ASSISTANT line, which can sit far past any small head window — a transcript
+// can open with several long user messages (a 5KB head read missed the field at
+// byte ~17K and let a resume crash on a dead snapshot). Scan a generous bounded
+// window so the first assistant line is always inside it.
+const MODEL_SCAN_WINDOW_BYTES = 8 * 1024 * 1024;
+export function resumeModelFlagFromFile(jsonlPath: string, extraFlags: string): string {
+  if (/(^|\s)--model(\s|=)/.test(extraFlags)) return "";
+  try {
+    const fd = fs.openSync(jsonlPath, "r");
+    try {
+      const size = Math.min(fs.fstatSync(fd).size, MODEL_SCAN_WINDOW_BYTES);
+      const buf = Buffer.alloc(size);
+      const bytesRead = fs.readSync(fd, buf, 0, size, 0);
+      return resumeModelFlag(buf.toString("utf-8", 0, bytesRead), extraFlags);
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return "";
+  }
+}
+
 export interface GenerateClaudeCodeJsonlOptions {
   tailMessages?: number;
   sessionId?: string;
@@ -466,7 +521,7 @@ export function generateClaudeCodeJsonl(
         parentUuid, isSidechain: false, userType: "external", cwd, sessionId,
         version: "2.1.29", gitBranch: "main",
         message: {
-          model: data.conversation.model || "claude-opus-4-6-20260205",
+          model: claudeTranscriptModel(data.conversation.model),
           id: msgId, type: "message", role: "assistant", content: contentBlocks,
           stop_reason: "end_turn", stop_sequence: null,
           usage: { input_tokens: 1000, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens: 500, service_tier: "standard" },
