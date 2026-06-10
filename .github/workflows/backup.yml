@@ -12,7 +12,10 @@ env:
 jobs:
   backup:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Raised from 30: a full `convex export` of the ~128GB self-hosted DB outgrew
+    # the 30m budget, so every run was cancelled at the timeout — a silent backup
+    # outage that went unnoticed for ~6 weeks. See the failure-alert step below.
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
 
@@ -27,6 +30,11 @@ jobs:
         env:
           CONVEX_SELF_HOSTED_URL: ${{ secrets.CONVEX_URL }}
           CONVEX_SELF_HOSTED_ADMIN_KEY: ${{ secrets.CONVEX_ADMIN_KEY }}
+        # `convex export` dumps the ENTIRE deployment; it has no table filter. The bulk
+        # of the ~128GB is the disposable high-churn tables (managed_sessions, daemon_logs)
+        # which are reconstructable and not worth backing up. If the 180m budget is ever
+        # exceeded again, move to a table-level pg_dump excluding those two rather than
+        # raising the timeout further.
         run: npx convex export --path /tmp/convex-backup.zip
 
       - name: Upload to R2
@@ -59,3 +67,23 @@ jobs:
           done
           echo "Current backups:"
           aws s3 ls "s3://$R2_BUCKET/backups/" --endpoint-url "$R2_ENDPOINT"
+
+      # A dead backup must never be silent again. A job timeout is a *cancellation*,
+      # not a *failure*, so `if: failure()` alone would miss exactly the case that
+      # broke us — hence failure() || cancelled(). Drops a loud ALERT marker into the
+      # same bucket (detectable by listing backups/) and fails the job red.
+      - name: Alert on backup failure or timeout
+        if: ${{ failure() || cancelled() }}
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+        run: |
+          NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          printf 'Convex daily backup FAILED or TIMED OUT at %s\nRun: %s\n' "$NOW" "$RUN_URL" > /tmp/backup-alert.txt
+          aws s3 cp /tmp/backup-alert.txt \
+            "s3://$R2_BUCKET/backups/ALERT-FAILED-$(date -u +%Y-%m-%d).txt" \
+            --endpoint-url "$R2_ENDPOINT" --quiet || true
+          echo "::error::Convex daily backup failed or timed out. See $RUN_URL"
+          exit 1
