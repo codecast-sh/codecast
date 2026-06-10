@@ -1,4 +1,4 @@
-import { mutation } from "./_generated/server";
+import { internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 
 // (table, field, indexName | null) — when indexName is present, use the
@@ -76,7 +76,7 @@ const FILTER_SCAN_LIMIT = 200;
 // before the row-rewrite step so the surviving user inherits everything
 // unique to the duplicate (daemon state, role, sync_projects, skills, etc.)
 // without overwriting fresher values already on the survivor.
-export const claimUniqueFields = mutation({
+export const claimUniqueFields = internalMutation({
   args: {
     from_user_id: v.id("users"),
     to_user_id: v.id("users"),
@@ -118,7 +118,7 @@ export const claimUniqueFields = mutation({
 // Delete a merged-away user record AFTER all foreign refs have been
 // migrated. Uses only indexed lookups (no full-table scans) so it doesn't
 // race with concurrent daemonHeartbeat writes on the users table.
-export const deleteMergedUser = mutation({
+export const deleteMergedUser = internalMutation({
   args: { user_id: v.id("users") },
   handler: async (ctx, args) => {
     const u = await ctx.db.get(args.user_id);
@@ -142,7 +142,7 @@ export const deleteMergedUser = mutation({
   },
 });
 
-export const mergeDuplicateUser = mutation({
+export const mergeDuplicateUser = internalMutation({
   args: {
     from_user_id: v.id("users"),
     to_user_id: v.id("users"),

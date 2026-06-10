@@ -306,7 +306,9 @@ export const deleteOrphanTables = internalMutation({
   },
 });
 
-export const clearUserConversations = mutation({
+// Destructive admin/migration op — run from the dashboard/CLI with the admin key,
+// never reachable as a public mutation (it took an arbitrary user_id with no auth).
+export const clearUserConversations = internalMutation({
   args: { user_id: v.id("users") },
   handler: async (ctx, args) => {
     // Just get conversation IDs without loading full docs
@@ -338,7 +340,7 @@ export const clearUserConversations = mutation({
   },
 });
 
-export const clearUserMessages = mutation({
+export const clearUserMessages = internalMutation({
   args: { user_id: v.id("users") },
   handler: async (ctx, args) => {
     // Get one conversation
@@ -364,7 +366,7 @@ export const clearUserMessages = mutation({
 });
 
 // Force delete conversations without checking for messages - deletes 50 at a time
-export const forceDeleteConversations = mutation({
+export const forceDeleteConversations = internalMutation({
   args: { user_id: v.id("users") },
   handler: async (ctx, args) => {
     const convos = await ctx.db
@@ -386,7 +388,7 @@ export const forceDeleteConversations = mutation({
 });
 
 // Delete conversations by agent type
-export const deleteConversationsByType = mutation({
+export const deleteConversationsByType = internalMutation({
   args: {
     user_id: v.id("users"),
     agent_type: v.union(v.literal("claude_code"), v.literal("codex"), v.literal("cursor")),
@@ -406,7 +408,7 @@ export const deleteConversationsByType = mutation({
   },
 });
 
-export const deleteConversationBySessionId = mutation({
+export const deleteConversationBySessionId = internalMutation({
   args: { session_id: v.string() },
   handler: async (ctx, args) => {
     const conv = await ctx.db
