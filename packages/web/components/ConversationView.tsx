@@ -7906,7 +7906,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                     <span className="w-2 h-2 rounded-full bg-sol-cyan/50 animate-pulse" />
                     Sending queued ({queuedMessages.length})...
                   </span>
-                ) : agentStatus === "idle" || agentStatus === "connected" ? (
+                ) : agentStatus === "idle" ? (
                   "\u00A0"
                 ) : isThinking ? (
                   <span className="flex items-center gap-1.5">
