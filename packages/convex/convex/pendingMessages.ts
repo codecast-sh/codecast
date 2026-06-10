@@ -38,6 +38,120 @@ export function isControlMessage(content: string): boolean {
   }
 }
 
+type PendingStatus = "pending" | "injected" | "delivered" | "failed" | "undeliverable" | "cancelled";
+const TERMINAL_STATUSES = new Set<PendingStatus>(["delivered", "cancelled"]);
+
+export function isTerminalPendingStatus(status: string): boolean {
+  return TERMINAL_STATUSES.has(status as PendingStatus);
+}
+
+async function rependPendingMessage(
+  ctx: { db: any },
+  message: { _id: Id<"pending_messages">; status: string; retry_count: number },
+  retryCount: number
+): Promise<boolean> {
+  if (isTerminalPendingStatus(message.status)) return false;
+  await ctx.db.patch(message._id, {
+    status: "pending" as const,
+    retry_count: retryCount,
+    delivered_at: undefined,
+  });
+  return true;
+}
+
+async function patchPendingMessageStatus(
+  ctx: { db: any },
+  message: { _id: Id<"pending_messages">; conversation_id: Id<"conversations">; status: string },
+  patch: { status: PendingStatus; delivered_at?: number }
+): Promise<boolean> {
+  if (isTerminalPendingStatus(message.status)) return false;
+  await ctx.db.patch(message._id, patch);
+  if (patch.status === "delivered" || patch.status === "cancelled") {
+    await clearHasPendingIfQuiet(ctx, message.conversation_id);
+  }
+  return true;
+}
+
+export function canDaemonSeePendingMessage(
+  message: { from_user_id: Id<"users">; status: string },
+  conversation: { user_id: Id<"users">; owner_device_id?: string },
+  userId: Id<"users">,
+  deviceId: string
+): boolean {
+  if (message.from_user_id.toString() !== userId.toString()) return false;
+  if (conversation.user_id.toString() !== userId.toString()) return false;
+  if (message.status !== "pending") return false;
+  return !conversation.owner_device_id || conversation.owner_device_id === deviceId;
+}
+
+export async function claimPendingMessageForDaemon(
+  ctx: { db: any },
+  messageId: Id<"pending_messages">,
+  userId: Id<"users">,
+  deviceId: string
+): Promise<any | null> {
+  const message = await ctx.db.get(messageId);
+  if (!message) return null;
+  const conversation = await ctx.db.get(message.conversation_id);
+  if (!conversation || !canDaemonSeePendingMessage(message, conversation, userId, deviceId)) return null;
+  if (!conversation.owner_device_id) {
+    await ctx.db.patch(message.conversation_id, { owner_device_id: deviceId });
+  }
+  return message;
+}
+
+async function daemonCanMutatePendingMessage(
+  ctx: { db: any },
+  message: { conversation_id: Id<"conversations">; from_user_id: Id<"users"> },
+  userId: Id<"users">,
+  deviceId?: string
+): Promise<boolean> {
+  if (!deviceId) return true;
+  if (message.from_user_id.toString() !== userId.toString()) return false;
+  const conversation = await ctx.db.get(message.conversation_id);
+  if (!conversation || conversation.user_id.toString() !== userId.toString()) return false;
+  const owner = conversation.owner_device_id as string | undefined;
+  if (owner && owner !== deviceId) return false;
+  if (!owner) {
+    await ctx.db.patch(message.conversation_id, { owner_device_id: deviceId });
+  }
+  return true;
+}
+
+async function daemonCanMutateConversation(
+  ctx: { db: any },
+  conversationId: Id<"conversations">,
+  userId: Id<"users">,
+  deviceId?: string
+): Promise<boolean> {
+  if (!deviceId) return true;
+  const conversation = await ctx.db.get(conversationId);
+  if (!conversation || conversation.user_id.toString() !== userId.toString()) return false;
+  const owner = conversation.owner_device_id as string | undefined;
+  if (owner && owner !== deviceId) return false;
+  if (!owner) {
+    await ctx.db.patch(conversationId, { owner_device_id: deviceId });
+  }
+  return true;
+}
+
+export async function updatePendingMessageStatusForDaemon(
+  ctx: { db: any },
+  messageId: Id<"pending_messages">,
+  userId: Id<"users">,
+  deviceId: string,
+  patch: { status: PendingStatus; delivered_at?: number }
+): Promise<{ updated: boolean; skipped?: boolean }> {
+  const message = await ctx.db.get(messageId);
+  if (!message) return { updated: false, skipped: true };
+  if (isTerminalPendingStatus(message.status)) return { updated: false, skipped: true };
+  if (!(await daemonCanMutatePendingMessage(ctx, message, userId, deviceId))) {
+    return { updated: false, skipped: true };
+  }
+  const updated = await patchPendingMessageStatus(ctx, message, patch);
+  return { updated, skipped: !updated };
+}
+
 // Shared insert path for queueing a message to a conversation's daemon: dedups on
 // client_id, inserts the pending row, and wakes the conversation (un-dismisses,
 // flips completed→active). Both human sends (sendMessageToSession) and session→
@@ -189,6 +303,7 @@ export const updateMessageStatus = mutation({
     ),
     delivered_at: v.optional(v.number()),
     api_token: v.optional(v.string()),
+    device_id: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
@@ -205,25 +320,18 @@ export const updateMessageStatus = mutation({
       throw new Error("Unauthorized: can only update your own messages");
     }
 
-    // "delivered" is terminal: the agent echoed the message to its JSONL, so it was received.
-    // A stale retry timer or the daemon's post-inject DEDUP re-mark must NOT downgrade it back
-    // to injected/pending — that re-arms the 120s stuck-message reset and re-injects a duplicate.
-    // "cancelled" is likewise terminal: the user stopped this message, so an in-flight daemon
-    // mark (injected/failed) must not revive it.
-    if (message.status === "delivered" || message.status === "cancelled") {
-      return { success: true };
+    if (args.device_id) {
+      const result = await updatePendingMessageStatusForDaemon(ctx, args.message_id, authUserId, args.device_id, {
+        status: args.status,
+        delivered_at: args.delivered_at,
+      });
+      return { success: true, skipped: result.skipped };
     }
 
-    await ctx.db.patch(args.message_id, {
+    await patchPendingMessageStatus(ctx, message, {
       status: args.status,
       delivered_at: args.delivered_at,
     });
-
-    // Only clear has_pending_messages when moving to a terminal state (delivered)
-    // and no other in-flight messages remain.
-    if (args.status === "delivered") {
-      await clearHasPendingIfQuiet(ctx, message.conversation_id);
-    }
 
     return { success: true };
   },
@@ -233,6 +341,7 @@ export const retryMessage = mutation({
   args: {
     message_id: v.id("pending_messages"),
     api_token: v.optional(v.string()),
+    device_id: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
@@ -249,19 +358,15 @@ export const retryMessage = mutation({
       throw new Error("Unauthorized: can only retry your own messages");
     }
 
-    // Never re-queue a message that's already reached a terminal state. Retry timers are
-    // scheduled before delivery confirms; if the ack lands first, the timer firing here would
-    // otherwise re-pend a delivered message and cause a duplicate injection. "cancelled" is
-    // likewise terminal — a daemon retry timer for an in-flight message that the user (or the
-    // stale-backlog cleanup) cancelled must not resurrect it to pending.
-    if (message.status === "delivered" || message.status === "cancelled") {
+    if (isTerminalPendingStatus(message.status)) {
       return { success: true };
     }
 
-    await ctx.db.patch(args.message_id, {
-      status: "pending" as const,
-      retry_count: message.retry_count + 1,
-    });
+    if (!(await daemonCanMutatePendingMessage(ctx, message, authUserId, args.device_id))) {
+      return { success: true, skipped: true };
+    }
+
+    await rependPendingMessage(ctx, message, message.retry_count + 1);
 
     return { success: true };
   },
@@ -289,15 +394,7 @@ export const cancelPendingMessage = mutation({
       throw new Error("Unauthorized: can only cancel your own messages");
     }
 
-    // Already terminal — nothing to stop.
-    if (message.status === "delivered" || message.status === "cancelled") {
-      return { success: true };
-    }
-
-    await ctx.db.patch(args.message_id, { status: "cancelled" as const });
-
-    // Clear the conversation flag if nothing else is still in flight.
-    await clearHasPendingIfQuiet(ctx, message.conversation_id);
+    await patchPendingMessageStatus(ctx, message, { status: "cancelled" as const });
 
     return { success: true };
   },
@@ -315,8 +412,7 @@ export async function resetConversationPendingMessages(
   let resetCount = 0;
   for (const msg of messages) {
     if (msg.status === "failed" || msg.status === "undeliverable" || msg.status === "injected") {
-      await ctx.db.patch(msg._id, { status: "pending", retry_count: 0, delivered_at: undefined });
-      resetCount++;
+      if (await rependPendingMessage(ctx, msg, 0)) resetCount++;
     }
   }
 
@@ -361,11 +457,7 @@ export async function markPendingDelivered(
   ctx: { db: any },
   message: { _id: Id<"pending_messages">; conversation_id: Id<"conversations">; status: string }
 ): Promise<void> {
-  // Both are terminal: delivered can't be re-delivered, and a user-cancelled message must not be
-  // resurrected by a late content-match ack (the ack scans all rows for the conversation).
-  if (message.status === "delivered" || message.status === "cancelled") return;
-  await ctx.db.patch(message._id, { status: "delivered" as const, delivered_at: Date.now() });
-  await clearHasPendingIfQuiet(ctx, message.conversation_id);
+  await patchPendingMessageStatus(ctx, message, { status: "delivered" as const, delivered_at: Date.now() });
 }
 
 export const getPendingMessages = query({
@@ -393,6 +485,50 @@ export const getPendingMessages = query({
       .collect();
 
     return messages;
+  },
+});
+
+export const getPendingMessagesForDaemon = query({
+  args: {
+    api_token: v.optional(v.string()),
+    device_id: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!authUserId) {
+      throw new Error("Authentication failed: invalid token or session");
+    }
+
+    const messages = await ctx.db
+      .query("pending_messages")
+      .withIndex("by_user_status", (q) =>
+        q.eq("from_user_id", authUserId).eq("status", "pending")
+      )
+      .collect();
+
+    const owned = [];
+    for (const message of messages) {
+      const conversation = await ctx.db.get(message.conversation_id);
+      if (conversation && canDaemonSeePendingMessage(message, conversation, authUserId, args.device_id)) {
+        owned.push(message);
+      }
+    }
+    return owned;
+  },
+});
+
+export const claimPendingMessageForDelivery = mutation({
+  args: {
+    message_id: v.id("pending_messages"),
+    api_token: v.optional(v.string()),
+    device_id: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!authUserId) {
+      throw new Error("Authentication failed: invalid token or session");
+    }
+    return await claimPendingMessageForDaemon(ctx, args.message_id, authUserId, args.device_id);
   },
 });
 
@@ -582,13 +718,10 @@ export const retryStuckMessages = internalMutation({
         controlsAcked++;
         continue;
       }
-      await ctx.db.patch(msg._id, {
-        status: "pending" as const,
-        retry_count: 0,
-        delivered_at: undefined,
-      });
-      reflag.add(msg.conversation_id);
-      revived++;
+      if (await rependPendingMessage(ctx, msg, 0)) {
+        reflag.add(msg.conversation_id);
+        revived++;
+      }
     }
     for (const convId of reflag) {
       await ctx.db.patch(convId, { has_pending_messages: true });
@@ -635,6 +768,7 @@ export const auditStrandedMessages = internalQuery({
     return { total, byStatus, buckets, oldestAgeHours: Math.round((oldestAgeMs / HOUR) * 10) / 10 };
   },
 });
+
 
 // Per-message diagnostic for "the cron keeps logging revived N / M waiting but nothing clears".
 // Read-only. For every non-terminal message it reproduces the cron's readiness gate verdict and
@@ -696,36 +830,11 @@ export const diagnoseStuckMessages = internalQuery({
   },
 });
 
-// Restore messages that were cancelled by automated cleanup back to a deliverable state.
-// CARDINAL RULE: a user-typed message is never dropped. An earlier maintenance pass wrongly
-// cancelled a backlog of stranded messages; this returns them to "undeliverable" (non-terminal),
-// so the readiness-gated cron will deliver each one the moment its session is idle again — never
-// storming, never thrashing, but never lost. `min_age_ms` scopes the restore to the
-// machine-cancelled backlog (older than the window) so genuine recent user cancellations are left
-// alone. There is intentionally NO function that cancels user messages automatically.
+// Kept for old operator tooling, but cancelled is now terminal and must not be revived.
 export const restoreCancelledMessages = internalMutation({
   args: { min_age_ms: v.number(), dry_run: v.optional(v.boolean()) },
   handler: async (ctx, args) => {
-    const cutoff = Date.now() - args.min_age_ms;
-    const affectedConvs = new Set<Id<"conversations">>();
-    let restored = 0;
-    const cancelled = await ctx.db
-      .query("pending_messages")
-      .filter((q) => q.and(q.eq(q.field("status"), "cancelled"), q.lt(q.field("created_at"), cutoff)))
-      .collect();
-    for (const r of cancelled) {
-      affectedConvs.add(r.conversation_id);
-      if (!args.dry_run) {
-        await ctx.db.patch(r._id, { status: "undeliverable" as const, retry_count: 0, delivered_at: undefined });
-      }
-      restored++;
-    }
-    if (!args.dry_run) {
-      for (const convId of affectedConvs) {
-        await ctx.db.patch(convId, { has_pending_messages: true });
-      }
-    }
-    return { restored, conversations: affectedConvs.size, dry_run: !!args.dry_run };
+    return { restored: 0, conversations: 0, dry_run: !!args.dry_run };
   },
 });
 
@@ -769,11 +878,16 @@ export const ackInjectedMessages = mutation({
   args: {
     conversation_id: v.id("conversations"),
     api_token: v.optional(v.string()),
+    device_id: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!authUserId) {
       throw new Error("Authentication failed");
+    }
+
+    if (!(await daemonCanMutateConversation(ctx, args.conversation_id, authUserId, args.device_id))) {
+      return { acked: 0, skipped: true };
     }
 
     const injected = await ctx.db
@@ -783,22 +897,8 @@ export const ackInjectedMessages = mutation({
       )
       .collect();
 
-    const now = Date.now();
     for (const msg of injected) {
-      await ctx.db.patch(msg._id, { status: "delivered" as const, delivered_at: now });
-    }
-
-    if (injected.length > 0) {
-      // Check if any pending remain before clearing flag
-      const remainingPending = await ctx.db
-        .query("pending_messages")
-        .withIndex("by_conversation_status", (q) =>
-          q.eq("conversation_id", args.conversation_id).eq("status", "pending")
-        )
-        .first();
-      if (!remainingPending) {
-        await ctx.db.patch(args.conversation_id, { has_pending_messages: false });
-      }
+      await markPendingDelivered(ctx, msg);
     }
 
     return { acked: injected.length };
@@ -810,11 +910,16 @@ export const resetInjectedMessages = mutation({
   args: {
     conversation_id: v.id("conversations"),
     api_token: v.optional(v.string()),
+    device_id: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!authUserId) {
       throw new Error("Authentication failed");
+    }
+
+    if (!(await daemonCanMutateConversation(ctx, args.conversation_id, authUserId, args.device_id))) {
+      return { reset: 0, skipped: true };
     }
 
     const injected = await ctx.db
@@ -824,18 +929,15 @@ export const resetInjectedMessages = mutation({
       )
       .collect();
 
+    let reset = 0;
     for (const msg of injected) {
-      await ctx.db.patch(msg._id, {
-        status: "pending" as const,
-        retry_count: msg.retry_count + 1,
-        delivered_at: undefined,
-      });
+      if (await rependPendingMessage(ctx, msg, msg.retry_count + 1)) reset++;
     }
 
-    if (injected.length > 0) {
+    if (reset > 0) {
       await ctx.db.patch(args.conversation_id, { has_pending_messages: true });
     }
 
-    return { reset: injected.length };
+    return { reset };
   },
 });
