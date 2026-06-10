@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { categorizeSessions, computeNewDividerIndex, dropLatchedFeedHasMore, getSessionRenderKey, isConvexId, isSessionDismissed, orchestrationGroupLabelOf, pendingSendConsumed, resolveAssigneeInfo, resolveSessionAuthor, sessionsWithPendingSend, unionHydrate, useInboxStore, worktreeKeyOf, type InboxSession } from "../inboxStore";
+import { categorizeSessions, computeNewDividerIndex, dropLatchedFeedHasMore, feedPagePersistence, getSessionRenderKey, isConvexId, isSessionDismissed, orchestrationGroupLabelOf, pendingSendConsumed, resolveAssigneeInfo, resolveSessionAuthor, sessionsWithPendingSend, unionHydrate, useInboxStore, worktreeKeyOf, type InboxSession } from "../inboxStore";
 import { isPersistedStoreKey } from "../idbCache";
 
 const baseSession: InboxSession = {
@@ -2620,5 +2620,25 @@ describe("feed pagination latch — dropLatchedFeedHasMore + feedCursors", () =>
     // never hydrated is a silent cache no-op, so guard the write side here.
     expect(isPersistedStoreKey("feedCursors")).toBe(true);
     expect(isPersistedStoreKey("feedHasMore")).toBe(true);
+  });
+});
+
+// What pagination state may be persisted off an older-page response. The
+// poison case: an unauthenticated/blipped query returns the same empty+null
+// shape as a true end of history; persisting that null latched loadMore off
+// on the device for good (the cursor twin of the feedHasMore latch above).
+// Regression for ct-36577.
+describe("feedPagePersistence — null cursor is only durable with evidence", () => {
+  it("trusts a continuation cursor unconditionally", () => {
+    expect(feedPagePersistence({ rowCount: 0, nextCursor: "abc" })).toEqual({ cursor: "abc", hasMore: true });
+    expect(feedPagePersistence({ rowCount: 20, nextCursor: '{"v":2,"m":{}}' })).toEqual({ cursor: '{"v":2,"m":{}}', hasMore: true });
+  });
+
+  it("trusts end-of-history only when the final page carried rows", () => {
+    expect(feedPagePersistence({ rowCount: 3, nextCursor: null })).toEqual({ cursor: null, hasMore: false });
+  });
+
+  it("an empty page with a null cursor keeps the existing resume point", () => {
+    expect(feedPagePersistence({ rowCount: 0, nextCursor: null })).toEqual({ cursor: undefined, hasMore: false });
   });
 });

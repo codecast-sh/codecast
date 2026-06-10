@@ -3490,6 +3490,22 @@ export function dropLatchedFeedHasMore(feedHasMore: unknown): void {
   }
 }
 
+// Decide what feed pagination state to persist after an older-page fetch.
+// A non-null nextCursor is always trusted (the server promises continuation).
+// A null cursor is only trusted as END OF HISTORY when the page carried rows:
+// an unauthenticated/blipped query returns the identical empty+null shape, and
+// persisting that null used to kill pagination on the device for good — the
+// cursor twin of the feedHasMore latch above. `cursor: undefined` = keep the
+// existing resume point.
+export function feedPagePersistence(page: { rowCount: number; nextCursor: string | null }): {
+  cursor: string | null | undefined;
+  hasMore: boolean;
+} {
+  if (page.nextCursor != null) return { cursor: page.nextCursor, hasMore: true };
+  if (page.rowCount > 0) return { cursor: null, hasMore: false };
+  return { cursor: undefined, hasMore: false };
+}
+
 // -- IndexedDB cache: wire patch-driven writes + hydrate on load --
 
 if (PERSISTENCE_AVAILABLE) {
