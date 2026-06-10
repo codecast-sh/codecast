@@ -360,3 +360,96 @@ describe("jsonlHasPendingAskUserQuestion", () => {
     expect(jsonlHasPendingAskUserQuestion("")).toBe(false);
   });
 });
+
+// Regression: a prose ANSWER whose numbered section headings look like menu options
+// must not parse as an interactive prompt. The old gate searched the entire pane tail
+// below the first "option" for footer-ish hints (including a loose ↑.*↓), so a normal
+// numbered answer — with the idle composer, hint bar, and a session-limit banner far
+// below it — was minted as a fake AskUserQuestion poll card (conv jx795ez, msg 160).
+// A real menu's footer sits inside the dialog, adjacent to the options.
+describe("parseInteractivePrompt rejects prose answers with numbered sections", () => {
+  const proseAnswer = (bottomChrome: string[]) =>
+    [
+      "❯ before this runs - some questions: 1) i thought we are running the ai experiment at 10%?",
+      "",
+      "⏺ Implementation is in flight. Here are the answers to your three questions, all verified against production:",
+      "",
+      "  1. ai_identity — you're right about 10%, and here's what reconciles the numbers",
+      "",
+      "  The flag (outreach-email-ai-identity) is variant-weighted 1000/9000 — exactly 10%, with 3,351 ai_identity vs 29,871",
+      "  control assignments all-time. The ~116 exposures you're seeing (live count: 17 + 105 = 122) are from the flag_exposures table.",
+      "",
+      "  2. The \"coach prompt\" experiment",
+      "",
+      "  It's tip-prompt — the system prompt for live coaching tips streamed to callers during calls (generateCallTip.ts:815).",
+      "  The experiment ran 2026-04-14 → 2026-04-20 and is marked completed, but the flag still splits contacts 50/50.",
+      "",
+      "  3. What \"51% real\" means",
+      "",
+      "  Of 122 exposures, 62 (51%) are from real production sends; the rest are previews. Replies trend ↑ while bookings trend ↓",
+      "  on the disclosure arm, which is the tension to resolve.",
+      "",
+      "⏺ Waiting on the tranche-1 workflow to land; implementers are mid-flight.",
+      "",
+      ...bottomChrome,
+    ].join("\n");
+
+  test("idle composer with a draft + hint bar + session-limit banner → null", () => {
+    const pane = proseAnswer([
+      "─".repeat(80),
+      "❯ 1 [Pasted text #1][Pasted text #2]",
+      "─".repeat(80),
+      "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents     You've used 94% of your session limit · resets 3:30am (America/New_York) · /upgrade to keep using Claude Code",
+    ]);
+    expect(parseInteractivePrompt(pane)).toBeNull();
+  });
+
+  test("bare composer + git-style ahead/behind statusline (↑3 ↓2) → null", () => {
+    const pane = proseAnswer([
+      "─".repeat(80),
+      "❯ ",
+      "─".repeat(80),
+      "main ↑3 ↓2 · union-mobile · 94% used",
+    ]);
+    expect(parseInteractivePrompt(pane)).toBeNull();
+  });
+
+  test("a REAL menu directly below the same prose still parses", () => {
+    const pane = proseAnswer([
+      "─".repeat(80),
+      "□ Next step",
+      "",
+      "Which fix should land first?",
+      "",
+      "❯ 1. Doom loop",
+      "  2. Pre-enrich dam",
+      "",
+      "Enter to select · ↑/↓ to navigate · Esc to cancel",
+    ]);
+    const prompt = parseInteractivePrompt(pane);
+    expect(prompt).not.toBeNull();
+    expect(prompt!.question).toBe("Which fix should land first?");
+    expect(prompt!.options.map(o => o.label)).toEqual(["Doom loop", "Pre-enrich dam"]);
+  });
+});
+
+// capture-pane -J fuses a full-width dialog rule onto the text row that follows it,
+// so the usage-limit dialog's question scraped as "▔▔▔…▔ What do you want to do?".
+describe("parseInteractivePrompt strips fused dialog rules from the question", () => {
+  test("▔-run glued onto the question row is dropped", () => {
+    const pane = [
+      "⏺ You've reached your usage limit.",
+      "",
+      "▔".repeat(80) + " What do you want to do?",
+      "",
+      "❯ 1. Switch to usage credits",
+      "  2. Wait for the reset",
+      "  3. Upgrade your plan",
+      "",
+      "Enter to select · ↑/↓ to navigate · Esc to cancel",
+    ].join("\n");
+    const prompt = parseInteractivePrompt(pane);
+    expect(prompt).not.toBeNull();
+    expect(prompt!.question).toBe("What do you want to do?");
+  });
+});
