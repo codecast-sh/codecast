@@ -7,7 +7,8 @@ import { Database } from "bun:sqlite";
 import { execSync, execFileSync, exec, execFile, spawn, spawnSync } from "child_process";
 import { watch as chokidarWatch } from "chokidar";
 import { SessionWatcher, type SessionEvent } from "./sessionWatcher.js";
-import { deviceId, deviceLabel } from "./remote/device.js";
+import { deviceId, deviceLabel, isRemoteDevice } from "./remote/device.js";
+import { copyCredentialToRemoteAsync, loadRemoteHost, remoteHostsRegistered } from "./remote/session-move.js";
 import { CursorWatcher, type CursorSessionEvent } from "./cursorWatcher.js";
 import { CursorTranscriptWatcher, type CursorTranscriptEvent } from "./cursorTranscriptWatcher.js";
 import { CodexWatcher, type CodexSessionEvent } from "./codexWatcher.js";
@@ -1295,6 +1296,32 @@ function syncHealthFields(): { pending_sync_count: number; oldest_pending_ms: nu
   };
 }
 
+// Remote credential refresh: the remote Mac's claude runs on a COPY of this
+// machine's credential and cannot /login itself. The copy is pushed at move
+// time, but between moves it expires and every session on the remote starts
+// answering 401. This machine's credential stays fresh (CC self-refreshes
+// locally), so push it on a slow loop whenever a remote host is registered.
+// One-way by design: the laptop is canonical — the remote must never refresh
+// itself, or its rotated refresh token would invalidate the local one.
+const REMOTE_CRED_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
+let remoteCredPushInFlight = false;
+
+async function pushCredentialToRemoteHosts(reason: string): Promise<void> {
+  if (isRemoteDevice() || remoteCredPushInFlight || !remoteHostsRegistered()) return;
+  remoteCredPushInFlight = true;
+  try {
+    const host = loadRemoteHost();
+    const ok = await copyCredentialToRemoteAsync(host);
+    log(ok
+      ? `[REMOTE-AUTH] pushed fresh credential to ${host.user}@${host.address} (${reason})`
+      : `[REMOTE-AUTH] no local credential to push (${reason})`);
+  } catch (err) {
+    log(`[REMOTE-AUTH] credential push failed (${reason}): ${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    remoteCredPushInFlight = false;
+  }
+}
+
 async function sendHeartbeat(): Promise<void> {
   const config = readConfig();
   if (!config?.auth_token || !config?.convex_url) {
@@ -1319,7 +1346,7 @@ async function sendHeartbeat(): Promise<void> {
         local_project_roots: computeLocalProjectRoots(),
         device_id: deviceId(),
         device_label: deviceLabel(),
-        is_remote_device: process.env.CODECAST_REMOTE_DEVICE === "1",
+        is_remote_device: isRemoteDevice(),
         ...syncHealthFields(),
       }),
     });
@@ -1686,6 +1713,15 @@ async function executeRemoteCommand(
         const expectedSessionId: string | undefined = parsed.session_id;
         const isolated: boolean = parsed.isolated === true;
         const worktreeName: string | undefined = parsed.worktree_name;
+
+        // A blank-project start (quick-create) defaults to $HOME — fine on the
+        // user's own Mac, wrong on a remote box (the session would mislabel as
+        // /Users/<remote-user> and run outside any checkout). The local fleet
+        // serves these; a remote only runs starts that name a real project.
+        if (!parsed.project_path && isRemoteDevice()) {
+          log(`[REMOTE] start_session: blank project on a remote device — staying silent`);
+          break;
+        }
 
         const shortId = Math.random().toString(36).slice(2, 8);
         // Deterministic name keyed by conversation_id so kill/restart is a single
@@ -8964,7 +9000,7 @@ async function autoResumeSession(sessionId: string, content: string, titleCache:
   // NOT adopt/reconstitute/resume unowned sessions — doing so reconstitutes the
   // user's real sessions from Convex and double-manages them (cross-device
   // stomp). The local primary daemon keeps its legacy adopt-unowned behavior.
-  if (process.env.CODECAST_REMOTE_DEVICE === "1") {
+  if (isRemoteDevice()) {
     if (!conversationId) {
       log(`[OWNER] remote daemon skipping resume of ${sessionId.slice(0, 8)} — no conversation id to verify ownership`);
       return false;
@@ -9678,7 +9714,7 @@ async function startFreshSessionForDelivery(
   }
 
   const config = readConfig();
-  let projectPath = process.env.HOME || "/tmp";
+  let projectPath: string | null = null;
 
   if (config?.convex_url && config?.auth_token) {
     try {
@@ -9688,6 +9724,18 @@ async function startFreshSessionForDelivery(
         projectPath = exportData.conversation.project_path;
       }
     } catch {}
+  }
+
+  if (!projectPath) {
+    // $HOME is an acceptable last resort only on the LOCAL primary daemon (a
+    // blank quick-create lands in the user's home). On a remote box it would
+    // run the session under /Users/<remote-user> with the wrong identity and
+    // context — refuse and leave the message pending for the local fleet.
+    if (isRemoteDevice()) {
+      logDelivery(`Refusing fresh session for conv=${conversationId.slice(0, 12)} — remote device with no real project path`);
+      return null;
+    }
+    projectPath = process.env.HOME || "/tmp";
   }
 
   const shortId = Math.random().toString(36).slice(2, 8);
@@ -9839,7 +9887,23 @@ async function deliverMessage(
       logDelivery(`[OWNER] skipping delivery for ${conversationId.slice(0, 12)} — owned by live device ${ownerInfo.ownerDeviceId.slice(0, 8)}${ownerInfo.ownerIsRemote ? " (remote)" : ""} (not ${deviceId().slice(0, 8)})`);
       return false;
     }
-  } catch { /* fail-open: proceed to deliver */ }
+    // A remote daemon serves ONLY conversations explicitly moved to it. An
+    // unowned conversation — or one owned by a currently-offline local Mac — is
+    // the local fleet's to pick up when it wakes; adopting it here spawns a
+    // $HOME session on the cloud box (how blank iOS sessions landed on m1).
+    // ownerInfo is null on lookup failure too, so a remote fails CLOSED.
+    if (isRemoteDevice() && ownerInfo?.ownerDeviceId !== deviceId()) {
+      logDelivery(`[OWNER] remote daemon skipping delivery for ${conversationId.slice(0, 12)} — owner=${ownerInfo?.ownerDeviceId?.slice(0, 8) ?? "unowned"} (this device ${deviceId().slice(0, 8)})`);
+      return false;
+    }
+  } catch {
+    // Fail-open for a local primary daemon (a transient query failure must not
+    // block sends); a remote must not act on a conversation it can't verify.
+    if (isRemoteDevice()) {
+      logDelivery(`[OWNER] remote daemon skipping delivery for ${conversationId.slice(0, 12)} — ownership lookup failed (fail-closed)`);
+      return false;
+    }
+  }
 
   if (codexAppServerInstance?.running) {
     const appServerThreadId = appServerConversations.get(conversationId);
@@ -11820,6 +11884,10 @@ async function main(): Promise<void> {
   setInterval(() => {
     pollDaemonCommands().catch(() => {});
   }, 10_000);
+
+  // Keep the remote Mac's copied credential fresh (it can't /login itself).
+  setTimeout(() => { pushCredentialToRemoteHosts("daemon start").catch(() => {}); }, 60_000);
+  setInterval(() => { pushCredentialToRemoteHosts("periodic").catch(() => {}); }, REMOTE_CRED_REFRESH_INTERVAL_MS);
 
   // Auto-dispatch: detect active plans with bound workflows that haven't started
   const notifiedPlanWorkflows = new Set<string>();

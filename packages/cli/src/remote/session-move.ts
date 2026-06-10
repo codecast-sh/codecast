@@ -19,7 +19,7 @@
  *     refreshToken, but copy a FRESH credential at move time.
  */
 
-import { execFileSync, execSync } from "node:child_process";
+import { execFileSync, execSync, spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -298,30 +298,65 @@ export function gitPullWorktree(host: RemoteHost, localCwd: string, remotePath: 
 // --------------------------------------------------------------------------
 
 /**
- * Copy the current CC credential to the remote. On macOS the local cred lives
- * in the Keychain (service "Claude Code-credentials"); we read it and write the
- * FILE form on the remote (CC reads the file). Returns true on success.
+ * Read the current CC credential. On macOS it lives in the Keychain (service
+ * "Claude Code-credentials"); falls back to the file form (Linux / older CC).
  */
-export function copyCredentialToRemote(host: RemoteHost): boolean {
-  let cred: string;
+export function readLocalCredential(): string | null {
   try {
-    cred = execFileSync(
+    return execFileSync(
       "security",
       ["find-generic-password", "-s", "Claude Code-credentials", "-w"],
       { encoding: "utf-8" },
     ).trim();
   } catch {
-    // Linux / file-based local cred fallback.
     const f = path.join(os.homedir(), ".claude", ".credentials.json");
-    if (!fs.existsSync(f)) return false;
-    cred = fs.readFileSync(f, "utf-8");
+    if (!fs.existsSync(f)) return null;
+    return fs.readFileSync(f, "utf-8");
   }
-  // Pipe via ssh stdin so the secret never lands on disk locally or in argv.
-  execFileSync(
-    "ssh",
-    [...sshBase(host), `${host.user}@${host.address}`, "umask 077; mkdir -p ~/.claude; cat > ~/.claude/.credentials.json"],
-    { input: cred },
-  );
+}
+
+/** ssh argv that writes stdin to the remote's credential file (0600 via umask). */
+function credentialPushArgs(host: RemoteHost): string[] {
+  return [...sshBase(host), `${host.user}@${host.address}`, "umask 077; mkdir -p ~/.claude; cat > ~/.claude/.credentials.json"];
+}
+
+/**
+ * Copy the current CC credential to the remote (the remote's claude reads the
+ * FILE form). Piped via ssh stdin so the secret never lands on disk locally or
+ * in argv. Returns true on success, false when no local credential exists.
+ */
+export function copyCredentialToRemote(host: RemoteHost): boolean {
+  const cred = readLocalCredential();
+  if (!cred) return false;
+  execFileSync("ssh", credentialPushArgs(host), { input: cred });
+  return true;
+}
+
+/**
+ * Async variant for the daemon's periodic refresh: a sync ssh would block the
+ * event loop (heartbeats, delivery) for the round-trip. Hard 60s kill so a
+ * wedged ssh can't leak.
+ */
+export async function copyCredentialToRemoteAsync(host: RemoteHost): Promise<boolean> {
+  const cred = readLocalCredential();
+  if (!cred) return false;
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn("ssh", credentialPushArgs(host), { stdio: ["pipe", "ignore", "pipe"] });
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(new Error("credential push timed out"));
+    }, 60_000);
+    let stderr = "";
+    child.stderr?.on("data", (d) => { stderr += d; });
+    child.on("error", (err) => { clearTimeout(timer); reject(err); });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (code === 0) resolve();
+      else reject(new Error(`ssh exited ${code}: ${stderr.slice(0, 200)}`));
+    });
+    child.stdin.write(cred);
+    child.stdin.end();
+  });
   return true;
 }
 
@@ -424,6 +459,11 @@ export function refreshRemoteCredential(host: RemoteHost): boolean {
 }
 
 const SCALEWAY_DIR = path.join(os.homedir(), ".codecast", "scaleway");
+
+/** Cheap check for the daemon's periodic refresh: is any remote Mac registered? */
+export function remoteHostsRegistered(): boolean {
+  return fs.existsSync(path.join(SCALEWAY_DIR, "hosts.json"));
+}
 
 /** Load a usable remote Mac host from the Scaleway registry (shared by CLI + daemon). */
 export function loadRemoteHost(hostId?: string): RemoteHost {

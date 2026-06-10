@@ -87,7 +87,7 @@ describe("double-start fix invariants", () => {
   test("startFreshSessionForDelivery consults tmux before spawning fresh", () => {
     const start = daemonSource.indexOf("async function startFreshSessionForDelivery");
     expect(start).toBeGreaterThan(-1);
-    const body = daemonSource.slice(start, start + 2000);
+    const body = daemonSource.slice(start, start + 3500);
     const reuseIdx = body.indexOf("findLiveTmuxForConversation");
     const spawnIdx = body.indexOf("new-session");
     expect(reuseIdx).toBeGreaterThan(-1);

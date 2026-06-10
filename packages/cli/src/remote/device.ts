@@ -42,6 +42,16 @@ export function deviceId(): string {
   return cachedDeviceId;
 }
 
+/**
+ * True when this process runs on a remote box (the cloud Mac). A remote device
+ * only serves conversations explicitly moved to it (owner == this device) — it
+ * must never adopt, resume, or spawn sessions on its own. Set in the remote's
+ * cron/launch environment by `cast remote` setup.
+ */
+export function isRemoteDevice(): boolean {
+  return process.env.CODECAST_REMOTE_DEVICE === "1";
+}
+
 /** Human-readable label, e.g. "macOS - Ashots-MacBook". */
 export function deviceLabel(): string {
   const platform = process.platform;

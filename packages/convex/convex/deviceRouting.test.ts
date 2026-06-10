@@ -20,18 +20,22 @@ const remote = (id: string, over: Partial<RoutableDevice> = {}): RoutableDevice 
   ...over,
 });
 
-describe("pickOwnerDevice — the remote box is never auto-owned", () => {
-  test("a lone online REMOTE device is not selected (returns null)", () => {
-    // The exact bug: laptop asleep, only the remote Mac online. It must NOT be
-    // stamped as owner — it has no checkout and would strand the message.
-    expect(pickOwnerDevice([remote("r1")], { projectPath: "/Users/ashot/src/app" }, NOW)).toBeNull();
+describe("pickOwnerDevice — the remote box is never auto-owned over a local", () => {
+  test("laptop asleep, only the remote Mac online → the OFFLINE laptop, not the remote", () => {
+    // The exact bug: a blank iOS session while the laptop sleeps must queue for
+    // the laptop (it wakes and serves), never land on the remote's $HOME.
+    const devices = [local("L1", { last_seen: stale }), remote("r1")];
+    expect(pickOwnerDevice(devices, { projectPath: "/Users/ashot/src/app" }, NOW)).toBe("L1");
   });
 
-  test("a remote is skipped even when it reports a matching project root", () => {
+  test("a remote with a matching project root still loses to an offline local", () => {
     // A remote whose roots happen to contain the path still must not auto-own;
     // only an explicit move (sticky owner) puts a session on the remote.
-    const devices = [remote("r1", { local_project_roots: ["/Users/ashot/src/app"] })];
-    expect(pickOwnerDevice(devices, { projectPath: "/Users/ashot/src/app" }, NOW)).toBeNull();
+    const devices = [
+      local("L1", { last_seen: stale }),
+      remote("r1", { local_project_roots: ["/Users/ashot/src/app"] }),
+    ];
+    expect(pickOwnerDevice(devices, { projectPath: "/Users/ashot/src/app" }, NOW)).toBe("L1");
   });
 
   test("with a local + a remote online, the LOCAL device wins", () => {
@@ -96,13 +100,37 @@ describe("pickOwnerDevice — most-recently-active local (the mobile rule)", () 
     expect(pickOwnerDevice(devices, {}, NOW)).toBe("L2");
   });
 
-  test("no devices online → null (broadcast / no target)", () => {
-    const devices = [local("L1", { last_seen: stale }), remote("r1", { last_seen: stale })];
-    expect(pickOwnerDevice(devices, { projectPath: "/x" }, NOW)).toBeNull();
+  test("no devices online → the most-recently-seen local (queue until it wakes)", () => {
+    const devices = [
+      local("L1", { last_seen: stale }),
+      local("L2", { last_seen: stale - 60_000 }),
+      remote("r1", { last_seen: stale }),
+    ];
+    expect(pickOwnerDevice(devices, { projectPath: "/x" }, NOW)).toBe("L1");
   });
 
-  test("no online LOCAL device (only remote online) → null, never the remote", () => {
-    const devices = [local("L1", { last_seen: stale }), remote("r1", { last_seen: fresh })];
-    expect(pickOwnerDevice(devices, { projectPath: "/x" }, NOW)).toBeNull();
+  test("no local online but conversation has a sticky LOCAL owner → keep the owner", () => {
+    // Don't ping-pong an existing conversation between sleeping Macs: the one it
+    // already lives on serves it when it wakes.
+    const devices = [
+      local("L1", { last_seen: stale - 60_000 }),
+      local("L2", { last_seen: stale }), // seen more recently, but not the owner
+      remote("r1", { last_seen: fresh }),
+    ];
+    expect(pickOwnerDevice(devices, { projectPath: "/x", ownerDeviceId: "L1" }, NOW)).toBe("L1");
+  });
+});
+
+describe("pickOwnerDevice — cloud-only fallback (no local device exists)", () => {
+  test("no local devices at all → an online remote serves", () => {
+    expect(pickOwnerDevice([remote("r1")], { projectPath: "/x" }, NOW)).toBe("r1");
+  });
+
+  test("no local devices and the remote is offline too → null (broadcast)", () => {
+    expect(pickOwnerDevice([remote("r1", { last_seen: stale })], { projectPath: "/x" }, NOW)).toBeNull();
+  });
+
+  test("no devices at all → null", () => {
+    expect(pickOwnerDevice([], {}, NOW)).toBeNull();
   });
 });
