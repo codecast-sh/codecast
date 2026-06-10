@@ -58,3 +58,34 @@ describe("attachReviewToMessage", () => {
     expect(attachReviewToMessage(CONV, "just text")).toBe("just text");
   });
 });
+
+describe("removeReviewComment clears the review target (no lingering highlight)", () => {
+  const remove = (id: string) => useInboxStore.getState().removeReviewComment(CONV, id);
+
+  test("removing the last quote drops reviewMessageId so the overlay stops painting", () => {
+    seed([mk("1", 0, "q1", "")]);
+    remove("1");
+    const s = useInboxStore.getState();
+    expect(s.reviewComments[CONV]).toBeUndefined();
+    expect(s.reviewMessageId).toBeNull();
+    expect(s.reviewActiveBlock).toBe(0);
+    expect(s.reviewEditingId).toBeNull();
+  });
+
+  test("removing the last quote ON the target message clears the target even if other messages keep quotes", () => {
+    // m1 = target (one quote), m2 = another message with its own quote.
+    seed([mk("1", 0, "q1", ""), { id: "2", messageId: "m2", blockIndex: 0, quote: "q2", body: "", createdAt: 2 }]);
+    remove("1");
+    const s = useInboxStore.getState();
+    expect(s.reviewComments[CONV]?.map((c) => c.id)).toEqual(["2"]); // m2's quote survives
+    expect(s.reviewMessageId).toBeNull(); // target m1 had its last quote removed
+  });
+
+  test("removing a non-target quote keeps the target intact", () => {
+    seed([mk("1", 0, "q1", ""), mk("2", 1, "q2", "")]); // both on m1
+    remove("2");
+    const s = useInboxStore.getState();
+    expect(s.reviewComments[CONV]?.map((c) => c.id)).toEqual(["1"]);
+    expect(s.reviewMessageId).toBe("m1"); // m1 still has quote "1"
+  });
+});

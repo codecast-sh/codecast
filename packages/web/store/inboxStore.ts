@@ -4,6 +4,9 @@ import { mutativeMiddleware, action, asyncAction, sync } from "./mutativeMiddlew
 import { applySyncTable, applySyncRecord, type PendingEntry } from "./syncProtocol";
 import { soundDismiss, soundKill } from "../lib/sounds";
 import { loadCache, writePatchesToIDB, setHydrating, loadConversationMessages, writeConversationMessages, enqueueDispatch, removeDispatch, loadOutbox, PERSISTENCE_AVAILABLE } from "./idbCache";
+// Single source of truth for the agent-status contract, shared with the Convex
+// backend and the CLI daemon. See packages/shared/contracts/agentStatus.ts.
+import { type AgentStatus, ACTIVE_AGENT_STATUSES } from "@codecast/shared/contracts";
 
 export type { PendingEntry } from "./syncProtocol";
 
@@ -175,7 +178,7 @@ export type InboxSession = {
   is_unresponsive?: boolean;
   is_connected?: boolean;
   has_pending: boolean;
-  agent_status?: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "stopped" | "starting" | "resuming";
+  agent_status?: AgentStatus;
   tmux_session?: string | null;
   permission_mode?: string | null;
   is_deferred?: boolean;
@@ -193,6 +196,9 @@ export type InboxSession = {
   // needs-input and shows a distinct "login" badge. Self-clears when a real
   // turn supersedes the banner.
   pending_api_error?: boolean;
+  // "auth" | "limit" | "error" — which banner family parked the session;
+  // picks the badge label ("login" vs "limit").
+  pending_api_error_kind?: string | null;
   implementation_session?: { _id: string; title?: string };
   is_subagent?: boolean;
   parent_conversation_id?: string;
@@ -579,7 +585,7 @@ export function isInterruptControlMessage(raw: string | null | undefined): boole
   return trimmed.startsWith("[Request interrupted") || trimmed.startsWith("[Request cancelled");
 }
 
-const ACTIVE_AGENT_STATUSES: Set<string> = new Set(["working", "compacting", "thinking", "connected", "starting", "resuming"]);
+// ACTIVE_AGENT_STATUSES is imported from @codecast/shared/contracts (canonical).
 const DEAD_AGENT_STATUSES: Set<string> = new Set(["stopped"]);
 
 // Stable empty set so callers that omit pendingSendIds don't allocate and
@@ -1615,7 +1621,18 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
             }
           }
         }
-        if (incoming.current_conversation_id && !draft.currentSessionId) {
+        // Adopt the server's "continue where you left off" pointer only when
+        // this client booted with no position of its own: the app root, no
+        // explicit ?s= target. The pointer is per-user and races every other
+        // client (other devices, agent-driven tabs), so navigating an
+        // already-placed client on boot teleports the user mid-work — a
+        // dev-server reload on /tasks or /conversation/<x> must stay put.
+        // Native has no URL: every boot is a root boot, restore as before.
+        const loc = typeof window !== "undefined" ? window.location : undefined;
+        const bootedAtRoot = !loc?.pathname
+          || ((loc.pathname === "/" || loc.pathname === "/inbox")
+            && !new URLSearchParams(loc.search || "").has("s"));
+        if (bootedAtRoot && incoming.current_conversation_id && !draft.currentSessionId) {
           if (draft.sessions[incoming.current_conversation_id]) {
             draft.currentSessionId = incoming.current_conversation_id;
           } else {
@@ -1677,6 +1694,10 @@ function rekeyId(draft: any, oldId: string, newId: string) {
   }
   if (draft.currentSessionId === oldId) {
     draft.currentSessionId = newId;
+  }
+  // Pure id correction (stub → real), not a position move: bypasses the
+  // foreground gate but only ever rewrites a pointer already at oldId.
+  if (draft.clientState.current_conversation_id === oldId) {
     draft.clientState.current_conversation_id = newId;
   }
   if (draft.currentConversation?.conversationId === oldId) {
@@ -1685,6 +1706,28 @@ function rekeyId(draft: any, oldId: string, newId: string) {
   if (draft.sidePanelSessionId === oldId) {
     draft.sidePanelSessionId = newId;
   }
+}
+
+// Move the cross-device "continue where you left off" pointer
+// (clientState.current_conversation_id — one per-user value synced to every
+// client). Only a client the user is actually looking at may move it. Restore
+// and navigation funnel through the same actions, so an unfocused client
+// (vite-reloaded background tab, agent/automation-driven tab) would otherwise
+// echo whatever it restored back to the server; with N background tabs that
+// outvotes the user's real position after every dev-server reload and every
+// client converges on one stray conversation. The palette popup is its own
+// always-focused window, so it is excluded explicitly — summoning it must not
+// repoint the user's other clients at the pre-warmed blank session. On native
+// (no `document`) the running app is by definition what the user is looking at.
+function recordCurrentConversationPointer(
+  draft: { clientState: { current_conversation_id?: string } },
+  id: string | undefined,
+) {
+  if (typeof document !== "undefined") {
+    if (!document.hasFocus()) return;
+    if (typeof window !== "undefined" && window.location?.pathname?.startsWith("/palette")) return;
+  }
+  draft.clientState.current_conversation_id = id;
 }
 
 export const useInboxStore = create<InboxStoreState>(
@@ -1754,11 +1797,25 @@ export const useInboxStore = create<InboxStoreState>(
     })),
   removeReviewComment: (conversationId: string, id: string) =>
     set((s: any) => {
-      const next = (s.reviewComments[conversationId] ?? []).filter((c: PendingComment) => c.id !== id);
+      const list: PendingComment[] = s.reviewComments[conversationId] ?? [];
+      const removed = list.find((c) => c.id === id);
+      const next = list.filter((c: PendingComment) => c.id !== id);
       const map = { ...s.reviewComments };
       if (next.length) map[conversationId] = next;
       else delete map[conversationId];
-      return { reviewComments: map };
+      const patch: any = { reviewComments: map };
+      // If the removed comment's editor was open, close it.
+      if (s.reviewEditingId === id) patch.reviewEditingId = null;
+      // When the review-target message has no quotes left, drop the target so its
+      // active-block highlight overlay stops painting (handles both the last quote
+      // overall and the last quote on the target message of a multi-message batch).
+      const targetMsg = s.reviewMessageId;
+      if (targetMsg && removed?.messageId === targetMsg && !next.some((c) => c.messageId === targetMsg)) {
+        patch.reviewMessageId = null;
+        patch.reviewActiveBlock = 0;
+        patch.reviewEditingId = null;
+      }
+      return patch;
     }),
   clearReviewComments: (conversationId: string) =>
     set((s: any) => {
@@ -1877,7 +1934,7 @@ export const useInboxStore = create<InboxStoreState>(
       }
     }
     this.currentSessionId = newSessionId;
-    this.clientState.current_conversation_id = newSessionId ?? undefined;
+    recordCurrentConversationPointer(this, newSessionId ?? undefined);
   }),
 
   // Bulk-dismiss a precomputed set of sessions locally (instant, optimistic). A
@@ -2012,7 +2069,7 @@ export const useInboxStore = create<InboxStoreState>(
 
     this.currentSessionId = sessionId;
     this.viewingDismissedId = null;
-    this.clientState.current_conversation_id = sessionId;
+    recordCurrentConversationPointer(this, sessionId);
 
     const draft = this.drafts[currentId]
       ?? (this.clientState.drafts?.[currentId] && typeof this.clientState.drafts[currentId] === "object"
@@ -2041,7 +2098,7 @@ export const useInboxStore = create<InboxStoreState>(
     }
     this.currentSessionId = id;
     this.viewingDismissedId = null;
-    this.clientState.current_conversation_id = id;
+    recordCurrentConversationPointer(this, id);
   }),
 
   deferSession: action(function (this: Draft, id: string) {
@@ -2613,7 +2670,7 @@ export const useInboxStore = create<InboxStoreState>(
     recordSessionView(this, id, this.currentSessionId);
     this.currentSessionId = id;
     this.viewingDismissedId = null;
-    this.clientState.current_conversation_id = id;
+    recordCurrentConversationPointer(this, id);
   }),
 
   clearSelection: action(function (this: Draft) {
@@ -2653,7 +2710,7 @@ export const useInboxStore = create<InboxStoreState>(
       recordSessionView(this, session._id, this.currentSessionId);
       this.currentSessionId = session._id;
       this.viewingDismissedId = null;
-      this.clientState.current_conversation_id = session._id;
+      recordCurrentConversationPointer(this, session._id);
     }
   }),
 
@@ -2734,7 +2791,7 @@ export const useInboxStore = create<InboxStoreState>(
         recordSessionView(this, id, this.currentSessionId);
         this.currentSessionId = id;
         this.viewingDismissedId = null;
-        this.clientState.current_conversation_id = id;
+        recordCurrentConversationPointer(this, id);
       }
     } else {
       this.pendingNavigateId = id;
@@ -2761,7 +2818,7 @@ export const useInboxStore = create<InboxStoreState>(
     }
     delete this.sessions[id];
     this.currentSessionId = newSessionId;
-    this.clientState.current_conversation_id = newSessionId ?? undefined;
+    recordCurrentConversationPointer(this, newSessionId ?? undefined);
   }),
 
 
