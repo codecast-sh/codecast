@@ -523,6 +523,7 @@ export class SyncService {
     toolResults?: Array<{ toolUseId: string; content: string; isError?: boolean }>;
     images?: Array<{ mediaType: string; data: string; toolUseId?: string }>;
     subtype?: string;
+    model?: string;
   }): Promise<string> {
     await this.throttle();
     const redactedContent = truncate(redactSecrets(params.content), MAX_CONTENT_SIZE);
@@ -576,6 +577,7 @@ export class SyncService {
           tool_results: toolResults,
           images: images.length > 0 ? images : undefined,
           subtype: params.subtype,
+          model: params.model,
           timestamp: params.timestamp,
           api_token: this.apiToken,
         }
@@ -601,6 +603,7 @@ export class SyncService {
       toolResults?: Array<{ toolUseId: string; content: string; isError?: boolean }>;
       images?: Array<{ mediaType: string; data?: string; storageId?: string; toolUseId?: string }>;
       subtype?: string;
+      model?: string;
     }>;
     reconcileRemoteExisting?: boolean;
   }): Promise<{ inserted: number; ids: string[] }> {
@@ -664,6 +667,7 @@ export class SyncService {
         tool_results: toolResults,
         images: images.length > 0 ? images : undefined,
         subtype: msg.subtype,
+        model: msg.model,
         timestamp: msg.timestamp,
       });
     }

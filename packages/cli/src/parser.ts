@@ -57,6 +57,7 @@ export interface ParsedMessage {
   images?: ImageBlock[];
   subtype?: string;
   stopReason?: string;
+  model?: string;
 }
 
 export function parseSessionLine(line: string): ClaudeSessionEntry | null {
@@ -171,6 +172,10 @@ export function extractMessages(entries: ClaudeSessionEntry[]): ParsedMessage[] 
       const stopReason = typeof entry.message === "object" && entry.message.stop_reason
         ? entry.message.stop_reason
         : undefined;
+      // "<synthetic>" marks system-generated assistant entries (error banners,
+      // interrupts) — not a real generation, so don't report a model for it.
+      const rawModel = typeof entry.message === "object" ? entry.message.model : undefined;
+      const model = rawModel && !rawModel.startsWith("<") ? rawModel : undefined;
       messages.push({
         uuid: entry.uuid,
         role,
@@ -181,6 +186,7 @@ export function extractMessages(entries: ClaudeSessionEntry[]): ParsedMessage[] 
         toolResults: toolResults.length > 0 ? toolResults : undefined,
         images: images.length > 0 ? images : undefined,
         stopReason,
+        model,
       });
     }
 

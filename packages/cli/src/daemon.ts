@@ -66,6 +66,7 @@ import {
   rewriteSubagentJsonlToUuid,
 } from "./resumeCommand.js";
 import { resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, pickProjectPath } from "./projectPathResolver.js";
+import type { AgentStatus } from "@codecast/shared/contracts";
 
 const ENRICHED_PATH = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
 const EXEC_TIMEOUT_MS = 10_000;
@@ -451,6 +452,7 @@ interface PendingMessages {
     toolResults?: Array<{ toolUseId: string; content: string; isError?: boolean }>;
     images?: Array<{ mediaType: string; data: string }>;
     subtype?: string;
+    model?: string;
   }>;
 }
 
@@ -600,7 +602,10 @@ const MIN_WORKING_DURATION_FOR_NOTIF_MS = 10_000;
 const lastHeartbeatLogged = new Map<string, { status: string; ts: number; since: number }>();
 const HEARTBEAT_LOG_THROTTLE_MS = 5 * 60 * 1000;
 
-type AgentStatus = "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "stopped" | "resuming";
+// AgentStatus is imported from @codecast/shared/contracts (the single source of
+// truth). The old local union here was missing "starting", which would have made
+// a CLI-first status addition throw on every heartbeatBatch validation and mark
+// live sessions dead fleet-wide.
 type PermissionMode = "default" | "plan" | "acceptEdits" | "bypassPermissions" | "dontAsk" | "auto";
 type HookStatusData = { status: AgentStatus; ts: number; permission_mode?: PermissionMode; message?: string; transcript_path?: string };
 type AppServerThreadStatus = { type?: string; activeFlags?: string[] };
@@ -3467,7 +3472,7 @@ function resolveTranscriptProjectPath(filePath: string, dirName: string): string
 }
 
 async function flushPendingMessagesBatch(
-  pendingMsgs: Array<{ uuid?: string; role: "human" | "assistant" | "system"; content: string; timestamp: number; thinking?: string; toolCalls?: any; toolResults?: any; images?: any; subtype?: string }>,
+  pendingMsgs: Array<{ uuid?: string; role: "human" | "assistant" | "system"; content: string; timestamp: number; thinking?: string; toolCalls?: any; toolResults?: any; images?: any; subtype?: string; model?: string }>,
   conversationId: string,
   syncService: SyncService,
   retryQueue: RetryQueue,
@@ -3485,6 +3490,7 @@ async function flushPendingMessagesBatch(
         toolResults: msg.toolResults,
         images: msg.images,
         subtype: msg.subtype,
+        model: msg.model,
       })),
     });
   } catch (err) {
@@ -3506,12 +3512,13 @@ async function flushPendingMessagesBatch(
         toolResults: msg.toolResults,
         images: msg.images,
         subtype: msg.subtype,
+        model: msg.model,
       }, errMsg);
     }
   }
 }
 
-type RawMessage = { uuid?: string; role: string; content: string; timestamp: number; thinking?: string; toolCalls?: any; toolResults?: any; images?: any; subtype?: string };
+type RawMessage = { uuid?: string; role: string; content: string; timestamp: number; thinking?: string; toolCalls?: any; toolResults?: any; images?: any; subtype?: string; model?: string };
 
 // A cached conversation_id can become invalid against the current api_token in two ways:
 // the conversation was deleted (Convex returns "Conversation not found") or the auth token
@@ -3527,7 +3534,7 @@ function mapRole(role: string): "human" | "assistant" | "system" {
   return role === "user" ? "human" : role === "system" ? "system" : "assistant";
 }
 
-function prepMessageForSync(msg: RawMessage): { messageUuid?: string; role: "human" | "assistant" | "system"; content: string; timestamp: number; thinking?: string; toolCalls?: any; toolResults?: any; images?: any; subtype?: string } {
+function prepMessageForSync(msg: RawMessage): { messageUuid?: string; role: "human" | "assistant" | "system"; content: string; timestamp: number; thinking?: string; toolCalls?: any; toolResults?: any; images?: any; subtype?: string; model?: string } {
   return {
     messageUuid: msg.uuid,
     role: mapRole(msg.role),
@@ -3538,6 +3545,7 @@ function prepMessageForSync(msg: RawMessage): { messageUuid?: string; role: "hum
     toolResults: msg.toolResults,
     images: msg.images,
     subtype: msg.subtype,
+    model: msg.model,
   };
 }
 
@@ -4239,6 +4247,7 @@ async function processSessionFile(
           toolResults: msg.toolResults,
           images: msg.images,
           subtype: msg.subtype,
+          model: msg.model,
         });
       }
 
@@ -4747,6 +4756,7 @@ async function processCursorSession(
           toolResults: msg.toolResults,
           images: msg.images,
           subtype: msg.subtype,
+          model: msg.model,
         });
       }
 
@@ -4930,6 +4940,7 @@ async function processCursorTranscriptFile(
             toolResults: msg.toolResults,
             images: msg.images,
             subtype: msg.subtype,
+            model: msg.model,
           });
         }
 
@@ -5223,6 +5234,7 @@ async function processCodexSession(
             toolResults: msg.toolResults,
             images: msg.images,
             subtype: msg.subtype,
+            model: msg.model,
           });
         }
 
@@ -5399,6 +5411,7 @@ async function processGeminiSession(
             toolResults: msg.toolResults,
             images: msg.images,
             subtype: msg.subtype,
+            model: msg.model,
           });
         }
 
