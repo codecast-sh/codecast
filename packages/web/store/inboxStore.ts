@@ -2458,6 +2458,12 @@ export const useInboxStore = create<InboxStoreState>(
         if (match) {
           rekeyId(this, oldId, match._id);
           rekeyPending(pending, oldId, match._id);
+          if (oldId !== match._id && table[oldId]) {
+            if (!table[match._id]) {
+              table[match._id] = { ...(table[oldId] as any), _id: match._id };
+            }
+            delete table[oldId];
+          }
           // Reapply field overrides that applySyncTable missed (it ran
           // before the pending entries were rekeyed to the new ID).
           const fp = `${field}:${match._id}:`;
@@ -3431,6 +3437,14 @@ export const store = new Proxy({} as StoreProxy, {
     return val;
   },
 });
+
+// Dev console access (e.g. drive deep-link navigation by setting
+// pendingNavigateId/pendingScrollToMessageId by hand). NODE_ENV (not
+// import.meta.env.DEV): this module is shared with the Expo app, and Hermes
+// can't parse `import.meta`; both Vite and Metro statically replace NODE_ENV.
+// The ambient declare stands in for node types (not in the web tsconfig).
+declare const process: { env: { NODE_ENV?: string } };
+if (process.env.NODE_ENV !== "production" && typeof window !== "undefined") (window as any).__inboxStore = useInboxStore;
 
 // =====================
 // TRACKED STORE HOOK
