@@ -82,6 +82,7 @@ function GuestConversationView({
     jumpToEnd,
     jumpToTimestamp,
     effectiveTargetMessageId,
+    isJumpingToTarget,
   } = useConversationMessages(id, targetMessageId, highlightQuery);
 
   if (!conversation) return <ConversationLoadingSkeleton />;
@@ -105,6 +106,7 @@ function GuestConversationView({
             isOwner={false}
             showMessageInput={false}
             targetMessageId={effectiveTargetMessageId}
+            isJumpingToTarget={isJumpingToTarget}
             highlightQuery={highlightQuery}
             onClearHighlight={() => {
               const url = new URL(window.location.href);

@@ -39,6 +39,7 @@ interface ConversationDiffLayoutProps {
   highlightQuery?: string;
   onClearHighlight?: () => void;
   targetMessageId?: string;
+  isJumpingToTarget?: boolean;
   isOwner?: boolean;
   showMessageInput?: boolean;
   onSendAndAdvance?: () => void;
@@ -69,6 +70,7 @@ export function ConversationDiffLayout({
   onJumpToTimestamp,
   highlightQuery,
   targetMessageId,
+  isJumpingToTarget,
   onClearHighlight,
   isOwner,
   showMessageInput,
@@ -189,6 +191,7 @@ export function ConversationDiffLayout({
     onClearHighlight,
     embedded,
     targetMessageId,
+    isJumpingToTarget,
     isOwner,
     showMessageInput,
     onSendAndAdvance,
