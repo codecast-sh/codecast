@@ -1,6 +1,6 @@
 import { v } from "convex/values";
 import { mutation, query, internalMutation, internalQuery } from "./_generated/server";
-import { Id } from "./_generated/dataModel";
+import { Id, type Doc } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
 import { verifyApiToken } from "./apiTokens";
 import { getAuthUserId } from "@convex-dev/auth/server";
@@ -76,6 +76,61 @@ function extractPlanTitleForWeb(d: any) {
     if (match) return { ...d, display_title: match[1].trim(), plan_name: d.title };
   }
   return d;
+}
+
+export type WebDocRelatedConversation = {
+  _id: Id<"conversations">;
+  session_id: string;
+  title?: string;
+  project_path?: string;
+  started_at: number;
+  updated_at: number;
+  message_count: number;
+  short_id?: string;
+};
+
+export type WebDocActivePlan = {
+  _id: Id<"plans">;
+  short_id: string;
+  title: string;
+  status: string;
+};
+
+export type WebDocDetail = Doc<"docs"> & {
+  display_title?: string;
+  plan_name?: string;
+  related_conversations?: WebDocRelatedConversation[];
+  active_plan?: WebDocActivePlan;
+};
+
+export function isWebDocOwner(doc: Doc<"docs"> | null | undefined, userId: Id<"users">): doc is Doc<"docs"> {
+  return !!doc && doc.user_id === userId;
+}
+
+export function mapWebDocDetail(input: {
+  doc: Doc<"docs">;
+  relatedConversations?: WebDocRelatedConversation[];
+  activePlan?: WebDocActivePlan;
+}): WebDocDetail {
+  const result: WebDocDetail = { ...input.doc };
+
+  if (input.doc.source === "plan_mode" && input.doc.content) {
+    const match = input.doc.content.match(/^#\s+(.+)/m);
+    if (match) {
+      result.display_title = match[1].trim();
+      result.plan_name = input.doc.title;
+    }
+  }
+
+  if (input.relatedConversations && input.relatedConversations.length > 0) {
+    result.related_conversations = input.relatedConversations;
+  }
+
+  if (input.activePlan) {
+    result.active_plan = input.activePlan;
+  }
+
+  return result;
 }
 
 async function buildWebDocList(
@@ -920,23 +975,12 @@ export const webGet = query({
       || (doc.team_id ? await isTeamMember(ctx, userId, doc.team_id) : false);
     if (!hasAccess) return null;
 
-    const result: any = { ...doc };
-
-    if (doc.source === "plan_mode" && doc.content) {
-      const match = doc.content.match(/^#\s+(.+)/m);
-      if (match) {
-        result.display_title = match[1].trim();
-        result.plan_name = doc.title;
-      }
-    }
-
-    // Load related conversations
     const convIds = doc.related_conversation_ids || (doc.conversation_id ? [doc.conversation_id] : []);
+    const relatedConversations: WebDocRelatedConversation[] = [];
     if (convIds.length > 0) {
-      const convs = [];
       for (const cid of convIds) {
         const conv = await ctx.db.get(cid);
-        if (conv) convs.push({
+        if (conv) relatedConversations.push({
           _id: conv._id,
           session_id: conv.session_id,
           title: conv.title,
@@ -947,19 +991,20 @@ export const webGet = query({
           short_id: conv.short_id,
         });
       }
-      result.related_conversations = convs;
     }
 
-    // Resolve plan from conversation's active_plan_id
+    let activePlan: WebDocActivePlan | undefined;
     if (doc.conversation_id) {
       const conv = await ctx.db.get(doc.conversation_id);
       if (conv?.active_plan_id) {
         const plan = await ctx.db.get(conv.active_plan_id);
-        if (plan) result.active_plan = { _id: plan._id, short_id: plan.short_id, title: plan.title, status: plan.status };
+        if (plan) {
+          activePlan = { _id: plan._id, short_id: plan.short_id, title: plan.title, status: plan.status };
+        }
       }
     }
 
-    return result;
+    return mapWebDocDetail({ doc, relatedConversations, activePlan });
   },
 });
 

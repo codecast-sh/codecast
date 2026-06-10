@@ -117,6 +117,20 @@ export interface SyncConfig {
   userId?: string;
 }
 
+export interface PendingMessageForDelivery {
+  _id: string;
+  conversation_id: string;
+  from_user_id: string;
+  content: string;
+  image_storage_id?: string;
+  image_storage_ids?: string[];
+  client_id?: string;
+  status: string;
+  created_at: number;
+  delivered_at?: number;
+  retry_count: number;
+}
+
 export interface GitInfo {
   commitHash?: string;
   branch?: string;
@@ -983,6 +997,7 @@ export class SyncService {
       await this.client.mutation("pendingMessages:ackInjectedMessages" as any, {
         conversation_id: conversationId,
         api_token: this.apiToken,
+        device_id: deviceId(),
       });
     } catch (error) {
       if (isAuthError(error)) {
@@ -997,6 +1012,7 @@ export class SyncService {
       await this.client.mutation("pendingMessages:resetInjectedMessages" as any, {
         conversation_id: conversationId,
         api_token: this.apiToken,
+        device_id: deviceId(),
       });
     } catch (error) {
       if (isAuthError(error)) {
@@ -1007,7 +1023,7 @@ export class SyncService {
 
   async updateMessageStatus(params: {
     messageId: string;
-    status: "pending" | "injected" | "delivered" | "failed";
+    status: "pending" | "injected" | "delivered" | "failed" | "undeliverable";
     deliveredAt?: number;
   }): Promise<void> {
     try {
@@ -1016,6 +1032,7 @@ export class SyncService {
         status: params.status,
         delivered_at: params.deliveredAt,
         api_token: this.apiToken,
+        device_id: deviceId(),
       });
     } catch (error) {
       if (isAuthError(error)) {
@@ -1030,7 +1047,24 @@ export class SyncService {
       await this.client.mutation("pendingMessages:retryMessage" as any, {
         message_id: messageId,
         api_token: this.apiToken,
+        device_id: deviceId(),
       });
+    } catch (error) {
+      if (isAuthError(error)) {
+        throw new AuthExpiredError();
+      }
+      throw error;
+    }
+  }
+
+  async claimPendingMessageForDelivery(messageId: string): Promise<PendingMessageForDelivery | null> {
+    try {
+      const result = await this.client.mutation("pendingMessages:claimPendingMessageForDelivery" as any, {
+        message_id: messageId,
+        api_token: this.apiToken,
+        device_id: deviceId(),
+      });
+      return (result ?? null) as PendingMessageForDelivery | null;
     } catch (error) {
       if (isAuthError(error)) {
         throw new AuthExpiredError();
