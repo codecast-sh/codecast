@@ -1,12 +1,14 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useMountEffect } from "../hooks/useMountEffect";
+import { useCurrentUser } from "../hooks/useCurrentUser";
 import { useInboxStore, isConvexId } from "../store/inboxStore";
 import { NewSessionView, MessageInput, ConversationData } from "./ConversationView";
 import { KeyCap } from "./KeyboardShortcutsHelp";
 import { formatShortcutParts } from "../shortcuts";
 import { soundNewSession } from "../lib/sounds";
 import { isElectron, bridge } from "../lib/desktop";
+import { resolveSessionSkills } from "../lib/sessionSkills";
 import { broadcastComposeOptimistic } from "../lib/composeBridge";
 
 /**
@@ -22,7 +24,11 @@ import { broadcastComposeOptimistic } from "../lib/composeBridge";
  */
 export function ComposeView({ initialQuery }: { initialQuery?: string }) {
   const router = useRouter();
+  const { user: currentUser } = useCurrentUser();
   const [sessionId, setSessionId] = useState<string | null>(null);
+  // Project + agent captured when the blank session is created, so the popup's
+  // slash menu resolves the SAME skills the in-app input would for this project.
+  const [skillCtx, setSkillCtx] = useState<{ projectPath?: string; agentType?: string }>({});
   // The last submit's intent. For "send & open" (true) we broadcast the send so
   // the MAIN window paints the first message optimistically; fire-and-forget
   // (false) needs no cross-window bubble (the app isn't showing the conversation).
@@ -54,7 +60,17 @@ export function ComposeView({ initialQuery }: { initialQuery?: string }) {
 
     if (initialQuery) store.setDraft(sid, { draft_message: initialQuery });
     setSessionId(sid);
+    setSkillCtx({ projectPath: path || undefined, agentType });
   });
+
+  // Same resolver the in-conversation input uses. available_skills rides on
+  // currentUser, which the palette window now hydrates from IDB (see META_KEYS),
+  // so project skills like mac-remote surface here too — not just built-ins.
+  const skills = useMemo(() => resolveSessionSkills({
+    availableSkills: (currentUser as any)?.available_skills,
+    projectPath: skillCtx.projectPath,
+    agentType: skillCtx.agentType,
+  }), [currentUser, skillCtx.projectPath, skillCtx.agentType]);
 
   // Robust autofocus for the popup. The message box's own mount-focus can lose
   // the race against the window becoming the OS "key window" when the popup is
@@ -148,6 +164,8 @@ export function ComposeView({ initialQuery }: { initialQuery?: string }) {
           status="active"
           embedded
           autoFocusInput
+          skills={skills}
+          agentType={skillCtx.agentType}
           onSubmitWithIntent={handleSubmit}
           onDidSend={(info) => { if (navIntentRef.current) broadcastComposeOptimistic(info); }}
         />

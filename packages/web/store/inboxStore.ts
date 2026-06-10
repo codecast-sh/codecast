@@ -3592,6 +3592,12 @@ if (PERSISTENCE_AVAILABLE) {
           updates[key] = { ...val, ...cur };
         } else if (key === "teamUnreadCount") {
           if (state.teamUnreadCount == null) updates[key] = val;
+        } else if (key === "currentUser") {
+          // Singleton user record, not a collection — assign wholesale instead of
+          // running it through the per-id union below. Only fill from cache when
+          // live sync hasn't already set it (the palette window / cold start);
+          // never clobber a freshly-synced user with the stale cached copy.
+          if (state.currentUser == null) updates[key] = val;
         } else if (Array.isArray(val)) {
           if (cur?.length === 0) updates[key] = val;
         } else if (typeof val === "object") {
@@ -3652,7 +3658,7 @@ if (PERSISTENCE_AVAILABLE) {
     apply(["sessions", "clientState", "_lastViewedAt", "_seenUpToAt", "_seenMessageCount",
            "conversations", "pending", "pendingMessages", "teams", "teamMembers", "teamUnreadCount", "drafts",
            "tabs", "activeTabId", "feedConversations", "feedHasMore", "feedCursors", "syncMeta",
-           "sidePanelOpen", "sidePanelSessionId", "sidePanelUserClosed"]);
+           "sidePanelOpen", "sidePanelSessionId", "sidePanelUserClosed", "currentUser"]);
 
     // Always mark initialized after IDB hydration completes — even if cached
     // clientState was missing — so app gates don't hang on fresh users.
