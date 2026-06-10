@@ -87,7 +87,10 @@ mv "${TEMP_FILE}" "${INSTALL_DIR}/codecast"
 chmod +x "${INSTALL_DIR}/codecast"
 ln -sf "${INSTALL_DIR}/codecast" "${INSTALL_DIR}/cast"
 
-# Append a PATH line to a shell profile, idempotently. Sets CONFIGURED_PROFILE on success.
+# Append a PATH line to a shell profile, idempotently. Sets CONFIGURED_PROFILE on
+# success. An unwritable profile (e.g. root-owned ~/.zshrc on EC2 Mac hosts) must
+# not abort the install under set -e — record it in PROFILE_SKIPPED instead so the
+# wrap-up prints manual instructions.
 add_to_path() {
   profile="$1"
   line="$2"
@@ -97,12 +100,21 @@ add_to_path() {
   if [ -f "${profile}" ] && grep -qs '\.local/bin' "${profile}"; then
     return 0
   fi
-  printf '\n# Added by codecast installer\n%s\n' "${line}" >> "${profile}"
-  echo "  Added ${INSTALL_DIR} to PATH in ${profile}"
-  CONFIGURED_PROFILE="${profile}"
+  # 2>/dev/null before >> : redirections apply left to right, so the shell's own
+  # "Permission denied" message for a failed append lands in /dev/null, not the terminal
+  if printf '\n# Added by codecast installer\n%s\n' "${line}" 2>/dev/null >> "${profile}"; then
+    echo "  Added ${INSTALL_DIR} to PATH in ${profile}"
+    CONFIGURED_PROFILE="${profile}"
+  else
+    echo "  Skipped ${profile} (not writable)"
+    PROFILE_SKIPPED="${profile}"
+    PROFILE_SKIPPED_LINE="${line}"
+  fi
 }
 
 CONFIGURED_PROFILE=""
+PROFILE_SKIPPED=""
+PROFILE_SKIPPED_LINE=""
 case ":${PATH}:" in
   *":${INSTALL_DIR}:"*)
     : # already on PATH, nothing to do
@@ -159,6 +171,12 @@ if [ -n "${CONFIGURED_PROFILE}" ]; then
   echo "To use 'cast' in this shell right now, run:"
   echo "  source \"${CONFIGURED_PROFILE}\""
   echo "Otherwise just open a new terminal."
+  echo ""
+elif [ -n "${PROFILE_SKIPPED}" ]; then
+  echo "PATH not updated: ${PROFILE_SKIPPED} is not writable by you."
+  echo "Fix its ownership (sudo chown \"\$(whoami)\" \"${PROFILE_SKIPPED}\") or add this"
+  echo "line to your shell profile yourself:"
+  echo "  ${PROFILE_SKIPPED_LINE}"
   echo ""
 fi
 
