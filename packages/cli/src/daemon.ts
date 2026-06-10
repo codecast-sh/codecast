@@ -5910,7 +5910,11 @@ const BOX_DRAWING_CHARS = /[─-╿]/;
 // (NOT in the Box Drawing block, so BOX_DRAWING_CHARS won't catch it). The web card
 // renders this as `header`; the scrape used to drop it so scraped cards had no chip.
 const HEADER_CHIP = /^[□☐☑☒▢▣◻◼◽◾■]\s*(.+)$/;
-const SEPARATOR_LINE = /^[─━═\-_]{5,}$/;
+// ▔/▁ are the top/bottom edges of newer dialog frames (Block Elements, outside the
+// Box Drawing range). capture-pane -J can also glue a full-width rule onto the text
+// row that follows it, so RULE_RUN strips leading/trailing runs off heading lines.
+const SEPARATOR_LINE = /^[─━═▔▁\-_]{5,}$/;
+const RULE_RUN_EDGE = /^[─━═▔▁\-_]{3,}\s*|\s*[─━═▔▁\-_]{3,}$/g;
 
 // A multiSelect AskUserQuestion renders a checkbox between the number and the
 // label — "1. [ ] Restart" / "2. [x] Redeploy" (or a unicode ballot box). It's a
@@ -5923,6 +5927,36 @@ const CHECKBOX_PREFIX = /^\s*(?:\[[ xX*✓✔·]?\]|[□☐☑☒▢▣◻◼◽
 // no real description — and the free-text row renders a "Submit" button beneath it
 // that must not be scraped as its description.
 const SYNTHETIC_OPTION = /^(?:type something\.?|chat about this)$/i;
+
+// Key-hint footer of a real interactive dialog ("Enter to select · ↑/↓ to navigate ·
+// Esc to cancel"). Arrow hints must be the paired ↑/↓ (or ←/→) form: a loose ↑.*↓
+// scan matches anything from prose to a git ahead/behind statusline, and is how a
+// plain numbered answer once shipped as a poll card.
+const MENU_FOOTER_HINTS = /enter to (confirm|select)|esc(ape)? to (exit|cancel)|↑\s*\/?\s*↓|←\s*\/?\s*→|arrow keys|(?:press\s+)?n\s+to\s+add\s+notes/i;
+// Markers of the idle composer's hint bar — by the time one of these is on screen
+// below the "options", we're looking at the prompt area, not a blocking dialog.
+const COMPOSER_BAR = /\?\s+for shortcuts|shift\+tab to cycle|bypass permissions|accept edits on|plan mode on/i;
+
+// A real menu's footer renders inside the dialog, below the options, separated only
+// by dialog chrome: blank rows, rules, the right-hand preview's box art, indented
+// continuation/description rows, or the synthetic free-text rows. Hunting for hints
+// in the whole tail below the options is how a prose answer with numbered section
+// headings became a poll: its "options" sat mid-pane and the scan picked up
+// hint-like text from the composer/status region dozens of rows further down. Walk
+// down only while rows stay dialog-shaped; anything else (an assistant ⏺ bullet,
+// the ❯ composer, a shell prompt) means we left the dialog without meeting a footer.
+export function menuFooterBelowOptions(lines: string[], lastOptionIdx: number): boolean {
+  for (let i = lastOptionIdx + 1, cap = Math.min(lines.length, lastOptionIdx + 41); i < cap; i++) {
+    if (COMPOSER_BAR.test(lines[i])) return false;
+    if (MENU_FOOTER_HINTS.test(lines[i])) return true;
+    const trimmed = lines[i].trim();
+    if (!trimmed) continue;
+    const dialogish = SEPARATOR_LINE.test(trimmed) || BOX_DRAWING_CHARS.test(lines[i])
+      || /^\s{2,}/.test(lines[i]) || SYNTHETIC_OPTION.test(trimmed);
+    if (!dialogish) return false;
+  }
+  return false;
+}
 
 // Pull the header chip and the (possibly multi-line) question out of the lines above
 // the first option. The question can wrap across several rows; the menu renderer
@@ -5943,7 +5977,12 @@ function extractPromptHeading(lines: string[], firstOptionIdx: number): { header
     if (HEADER_CHIP.test(trimmed)) break;
     if (!trimmed) { if (qLines.length) break; else continue; }
     if (/^[❯>]/.test(trimmed) || SEPARATOR_LINE.test(trimmed)) break;
-    qLines.unshift(trimmed);
+    // -J join can fuse a full-width dialog rule onto the question's own row
+    // ("▔▔▔… What do you want to do?") — strip edge runs; a row that was ONLY
+    // a short rule is chrome and bounds the question like a separator.
+    const deRuled = trimmed.replace(RULE_RUN_EDGE, "").trim();
+    if (!deRuled) { if (qLines.length) break; else continue; }
+    qLines.unshift(deRuled);
   }
   const question = qLines.join(" ") || header || "Select an option";
   return { header, question };
@@ -6013,8 +6052,7 @@ export function parseInteractivePrompt(text: string): InteractivePrompt | null {
   }
 
   if (options.length >= 2 && firstOptionIdx >= 0) {
-    const tail = lines.slice(firstOptionIdx).join("\n");
-    const hasFooter = /enter to (confirm|select)|esc(ape)? to (exit|cancel)|↑.*↓|←.*→|arrow keys|(?:press\s+)?n\s+to\s+add\s+notes/i.test(tail);
+    const hasFooter = menuFooterBelowOptions(lines, lastOptionIdx);
     if (hasCursorIndicator || hasFooter) {
       const { header, question } = extractPromptHeading(lines, firstOptionIdx);
       return { question, options, firstOptionIdx, ...(header ? { header } : {}) };
