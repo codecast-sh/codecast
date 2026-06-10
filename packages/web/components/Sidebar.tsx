@@ -15,7 +15,6 @@ import { TeamIcon } from "./TeamIcon";
 import { isDesktop } from "../lib/desktop";
 import { CreateTaskModal } from "./CreateTaskModal";
 import { CreateDocModal } from "./CreateDocModal";
-import { SidebarDocTree } from "./SidebarDocTree";
 
 const api = _api as any;
 
@@ -481,43 +480,38 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
               </svg>
             }
           />
-          {/* Docs section with expandable tree */}
-          <div>
-            <div className={`flex items-center transition-colors motion-reduce:transition-none ${
-              isDocs || isPlans
-                ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
-                : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60"
-            }`}>
-              <Link
-                href="/docs"
-                onClick={onMobileClose}
-                className={`flex-1 flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-4 py-2.5 min-w-0`}
-                title="Docs"
+          {/* Docs */}
+          <div className={`flex items-center transition-colors motion-reduce:transition-none ${
+            isDocs || isPlans
+              ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
+              : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60"
+          }`}>
+            <Link
+              href="/docs"
+              onClick={onMobileClose}
+              className={`flex-1 flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-4 py-2.5 min-w-0`}
+              title="Docs"
+            >
+              <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+              {!isNarrow && <span>Docs</span>}
+            </Link>
+            {!isNarrow && (
+              <button
+                onClick={async (e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  const result = await createDoc({ title: "", doc_type: "note" });
+                  if (result?.id) router.push(`/docs/${result.id}`);
+                }}
+                className="p-1 mr-2 opacity-60 hover:opacity-100 text-sol-text-dim hover:text-sol-text transition-all"
+                title="New page"
               >
-                <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                  <path strokeLinecap="round" d="M12 5v14m-7-7h14" />
                 </svg>
-                {!isNarrow && <span>Docs</span>}
-              </Link>
-              {!isNarrow && (
-                <button
-                  onClick={async (e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    const result = await createDoc({ title: "", doc_type: "note" });
-                    if (result?.id) router.push(`/docs/${result.id}`);
-                  }}
-                  className="p-1 mr-2 opacity-60 hover:opacity-100 text-sol-text-dim hover:text-sol-text transition-all"
-                  title="New page"
-                >
-                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-                    <path strokeLinecap="round" d="M12 5v14m-7-7h14" />
-                  </svg>
-                </button>
-              )}
-            </div>
-            {!isNarrow && (isDocs || isPlans) && (
-              <SidebarDocTree onMobileClose={onMobileClose} />
+              </button>
             )}
           </div>
           <Link
