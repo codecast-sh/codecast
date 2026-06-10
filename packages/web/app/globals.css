@@ -26,11 +26,13 @@
 
 /* List header (GenericListView) progressive disclosure. The header is its own
    container query container, so this fires off the header's width and works on
-   the full-width list page too — not just inside the squeezed detail panel. The
-   action cluster never wraps: the heavy grouping/view controls live in the
-   Display popover and the status tabs fold into a dropdown (see .cq-tabs-compact),
-   so as the panel narrows the toolbar only needs to shed its lowest-value bits —
-   text labels collapse to icons and the ⌘K launcher drops — to stay one row. */
+   the full-width list page too — not just inside the squeezed detail panel. As
+   the panel narrows the toolbar sheds its lowest-value bits in order: text labels
+   collapse to icons, the ⌘K launcher drops, the sync badge keeps only its spinner,
+   and the status tabs fold into a dropdown (see .cq-tabs-compact). Past that the
+   row simply wraps — the action cluster (ml-auto) drops below the title/tabs row
+   instead of overflowing and painting over them, which is why the left section
+   keeps its min-content floor (no min-w-0) so flex can decide when to break. */
 @container (max-width: 780px) {
   .cq-header-collapse { display: none !important; }
 }
@@ -48,9 +50,15 @@
 }
 /* Tightest widths: the status dropdown sheds its text label and count, leaving
    just the active-status icon + caret so it reads as an icon-button alongside the
-   rest of the collapsed toolbar instead of a wide pill crowding the row. */
+   rest of the collapsed toolbar instead of a wide pill crowding the row. The
+   source/scope segmented toggle (All / 👤 / 🤖, a headerExtra) likewise folds its
+   segments into one dropdown (.cq-seg-compact) here — three buttons collapse to a
+   single active-option button so the toolbar keeps to one row instead of wrapping. */
+.cq-seg-compact { display: none; }
 @container (max-width: 620px) {
   .cq-tab-label { display: none !important; }
+  .cq-seg-full { display: none !important; }
+  .cq-seg-compact { display: flex !important; }
 }
 
 .cq-no-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }

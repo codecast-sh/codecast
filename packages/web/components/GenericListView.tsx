@@ -731,8 +731,8 @@ export function GenericListView<T>({
           .cq-header row is what adapts (wraps the toolbar below the tabs) as the
           panel narrows — a container can't query its own width, only a child's. */}
       <div className="cq-container border-b border-sol-border/30">
-        <div className="cq-header flex items-center justify-between gap-x-3 gap-y-2 px-6 py-3">
-        <div className="flex items-center gap-3 min-w-0 flex-1">
+        <div className="cq-header flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-6 py-3">
+        <div className="flex items-center gap-3 flex-1">
           <h1 className="text-lg font-semibold text-sol-text tracking-tight flex-shrink-0 cq-header-collapse">{title}</h1>
           {syncScope && <SyncProgressBadge scope={syncScope} />}
           {/* Wide header: segmented pill row. Once too tight for one row (≤1210px,
@@ -761,7 +761,7 @@ export function GenericListView<T>({
             />
           </div>
         </div>
-        <div className="cq-header-toolbar flex items-center gap-1.5">
+        <div className="cq-header-toolbar flex items-center gap-1.5 ml-auto">
           {headerExtra}
           {selectedIds.size > 0 && (
             <span className="text-xs text-sol-cyan">{selectedIds.size} selected</span>
