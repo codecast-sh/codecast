@@ -61,7 +61,9 @@ describe("webUpdate authorization", () => {
     const { ctx, patches, rows } = createWebUpdateCtx("other_user", [doc]);
 
     expect(isWebDocOwner(doc as any, "other_user" as any)).toBe(false);
-    await expect(runWebUpdate(ctx, { id: "doc_owner", title: "Patched" })).rejects.toThrow("Doc not found");
+    // webUpdate now gates on canAccessDoc (owner-or-team). A cross-user with no
+    // shared team is still denied — now via "Unauthorized" rather than owner-only.
+    await expect(runWebUpdate(ctx, { id: "doc_owner", title: "Patched" })).rejects.toThrow("Unauthorized");
 
     expect(patches).toHaveLength(0);
     expect(rows.get("doc_owner")?.title).toBe("Original");
