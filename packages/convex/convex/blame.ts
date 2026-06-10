@@ -1,4 +1,4 @@
-import { query, internalMutation } from "./_generated/server";
+import { query, internalMutation, internalQuery } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
@@ -167,6 +167,25 @@ export const resolveBlame = query({
     }
 
     return { resolved, uncommitted };
+  },
+});
+
+// Operational visibility for the blame join: how many commit rows carry a
+// resolvable hash. Run: npx convex run blame:commitRowStats
+export const commitRowStats = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const withHash = await ctx.db
+      .query("file_changes")
+      .withIndex("by_commit_hash", (q: any) => q.gt("commit_hash", ""))
+      .order("desc")
+      .take(1000);
+    const sample = withHash.slice(0, 5).map((r) => ({
+      hash: r.commit_hash,
+      conversation_id: r.conversation_id,
+      timestamp: r.timestamp,
+    }));
+    return { rows_with_hash: withHash.length, capped: withHash.length === 1000, sample };
   },
 });
 

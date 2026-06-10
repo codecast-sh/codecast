@@ -7972,13 +7972,27 @@ program
 program
   .command("blame")
   .description(
-    "Find sessions that touched a specific file\n\n" +
+    "git blame with session attribution — a drop-in replacement whose author\n" +
+    "column shows the codecast session that wrote each line. Output matches\n" +
+    "git blame's default and porcelain formats, so editor integrations that\n" +
+    "shell out to `git blame` can call `cast blame` instead.\n\n" +
     "Examples:\n" +
-    "  cast blame src/auth.ts             # sessions that touched this file\n" +
-    "  cast blame src/auth.ts:42          # sessions that touched line 42"
+    "  cast blame src/auth.ts             # line-level blame with sessions\n" +
+    "  cast blame src/auth.ts:42          # just line 42\n" +
+    "  cast blame -L 10,30 src/auth.ts    # a range\n" +
+    "  cast blame --porcelain src/auth.ts # machine format (+codecast-* keys)\n" +
+    "  cast blame --touches src/auth.ts   # legacy: sessions that touched the file"
   )
   .argument("<file>", "File path, optionally with line number (e.g., src/auth.ts:42)")
-  .option("-n, --limit <n>", "Number of results", "20")
+  .option("-L, --range <start,end>", "Blame only the given line range (repeatable)", (v: string, acc: string[]) => [...acc, v], [] as string[])
+  .option("--rev <rev>", "Blame at a revision instead of the working tree")
+  .option("-w, --ignore-whitespace", "Ignore whitespace when attributing lines")
+  .option("--porcelain", "Machine-readable porcelain format with codecast-* keys")
+  .option("--line-porcelain", "Porcelain with full headers for every line")
+  .option("--abbrev <n>", "Use n hex digits for commit shas")
+  .option("--no-sessions", "Skip session resolution (pure git blame output)")
+  .option("--touches", "Legacy view: sessions that touched the file (no line attribution)")
+  .option("-n, --limit <n>", "Number of results (--touches mode)", "20")
   .action(async (file, options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
@@ -7997,6 +8011,29 @@ program
 
     if (!path.isAbsolute(filePath)) {
       filePath = path.resolve(process.cwd(), filePath);
+    }
+
+    if (!options.touches) {
+      try {
+        const { runBlameCommand } = await import("./blame.js");
+        await runBlameCommand(
+          filePath,
+          {
+            ranges: lineNumber ? [...options.range, `${lineNumber},${lineNumber}`] : options.range,
+            rev: options.rev,
+            ignoreWhitespace: options.ignoreWhitespace,
+            porcelain: options.porcelain,
+            linePorcelain: options.linePorcelain,
+            abbrev: options.abbrev ? parseInt(options.abbrev) : undefined,
+            sessions: options.sessions,
+          },
+          config,
+        );
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exit(1);
+      }
+      return;
     }
 
     const siteUrl = config.convex_url.replace(".cloud", ".site");
