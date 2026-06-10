@@ -4,10 +4,17 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
 import { useMountEffect } from "../../../hooks/useMountEffect";
 import { DashboardLayout } from "../../../components/DashboardLayout";
+import { ConversationDiffLayout } from "../../../components/ConversationDiffLayout";
+import { ConversationData } from "../../../components/ConversationView";
+import { ErrorBoundary } from "../../../components/ErrorBoundary";
+import { useConversationMessages } from "../../../hooks/useConversationMessages";
 import { useInboxStore } from "../../../store/inboxStore";
 
 /**
- * Every accessible conversation renders through the inbox — single codepath.
+ * Every accessible conversation renders through the inbox — single codepath —
+ * EXCEPT unauthenticated visitors: /inbox sits behind AuthGuard (which bounces
+ * guests to the marketing root), so public share links render the standalone
+ * read-only GuestConversationView below instead.
  * Pre-populates `conversations[id].is_own` so the inbox picks the right UI
  * (owner-only controls hidden for teammate sessions) before
  * getConversationWithMeta resolves. Sets deep-link state (scroll target,
@@ -45,6 +52,70 @@ function RedirectToInbox({
     router.replace(`/inbox?s=${id}`);
   });
   return <ConversationLoadingSkeleton />;
+}
+
+/**
+ * Read-only viewer for unauthenticated visitors on a shared link. Renders the
+ * same conversation surface as the inbox (ConversationDiffLayout fed by
+ * useConversationMessages) inside DashboardLayout's chrome-less guest branch —
+ * no send input, no owner controls.
+ */
+function GuestConversationView({
+  id,
+  targetMessageId,
+  highlightQuery,
+}: {
+  id: string;
+  targetMessageId?: string;
+  highlightQuery?: string;
+}) {
+  const router = useRouter();
+  const {
+    conversation,
+    hasMoreAbove,
+    hasMoreBelow,
+    isLoadingOlder,
+    isLoadingNewer,
+    loadOlder,
+    loadNewer,
+    jumpToStart,
+    jumpToEnd,
+    jumpToTimestamp,
+    effectiveTargetMessageId,
+  } = useConversationMessages(id, targetMessageId, highlightQuery);
+
+  if (!conversation) return <ConversationLoadingSkeleton />;
+
+  return (
+    <DashboardLayout>
+      <ErrorBoundary name="GuestConversation" level="panel">
+        <div className="h-full">
+          <ConversationDiffLayout
+            conversation={conversation as ConversationData}
+            embedded
+            hasMoreAbove={hasMoreAbove}
+            hasMoreBelow={hasMoreBelow}
+            isLoadingOlder={isLoadingOlder}
+            isLoadingNewer={isLoadingNewer}
+            onLoadOlder={loadOlder}
+            onLoadNewer={loadNewer}
+            onJumpToStart={jumpToStart}
+            onJumpToEnd={jumpToEnd}
+            onJumpToTimestamp={jumpToTimestamp}
+            isOwner={false}
+            showMessageInput={false}
+            targetMessageId={effectiveTargetMessageId}
+            highlightQuery={highlightQuery}
+            onClearHighlight={() => {
+              const url = new URL(window.location.href);
+              url.searchParams.delete("highlight");
+              router.replace(url.pathname + url.search);
+            }}
+          />
+        </div>
+      </ErrorBoundary>
+    </DashboardLayout>
+  );
 }
 
 function ConversationLoadingSkeleton() {
@@ -174,6 +245,23 @@ export default function ConversationPage() {
     return <DeniedView />;
   }
   if (effective.access_level === "not_found" || !effective.conversation_id) return <NotFoundView />;
+
+  // Wait for auth to settle before committing to a render path: while loading,
+  // resolveConversation may have answered with the anonymous identity, and we
+  // don't want to flash the guest view at a signed-in owner (or vice versa).
+  if (isAuthLoading) return <ConversationLoadingSkeleton />;
+
+  // Unauthenticated visitor on a shared link: the inbox is behind AuthGuard
+  // (it would bounce them to the marketing root), so render read-only in place.
+  if (!isAuthenticated) {
+    return (
+      <GuestConversationView
+        id={effective.conversation_id}
+        targetMessageId={targetMessageId}
+        highlightQuery={highlightQuery}
+      />
+    );
+  }
 
   // Every accessible session (owner, team, shared) renders through the inbox — single codepath.
   return (
