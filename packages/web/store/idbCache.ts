@@ -1,5 +1,10 @@
 import Dexie from "dexie";
 import type { Patch } from "mutative";
+import {
+  COLLECTION_STORE_KEYS,
+  META_STORE_KEYS,
+  isPersistedClientStoreKey,
+} from "./clientSyncRegistry";
 import { diffCollection } from "./idbCollectionDiff";
 
 export type OutboxEntry = {
@@ -80,56 +85,12 @@ class CacheDB extends Dexie {
 
 const db = new CacheDB();
 
-const COLLECTION_TABLES: Record<string, Dexie.Table<any, string>> = {
-  sessions: db.sessions,
-  tasks: db.tasks,
-  docs: db.docs,
-  plans: db.plans,
-  projects: db.projects,
-};
+const COLLECTION_TABLES: Record<string, Dexie.Table<any, string>> = Object.fromEntries(
+  COLLECTION_STORE_KEYS.map((key) => [key, db[key]])
+);
 
-const META_KEYS = new Set([
-  "clientState",
-  // Per-session view tracking — must survive refresh so the Tab switcher still
-  // opens the genuinely last-viewed session, and the "New" divider still shows
-  // what arrived while the app was closed.
-  "_lastViewedAt",
-  "_seenUpToAt",
-  "_seenMessageCount",
-  // "messages" and "pagination" are now per-conversation in the conversationMessages table
-  "conversations",
-  "drafts",
-  // The user's outbound optimistic/queued/failed messages. Must persist so a
-  // reload mid-send can never drop a user message — they only leave this map
-  // once the server confirms them (pruned by client_id in setMessages).
-  "pendingMessages",
-  "pending",
-  "recentProjects",
-  "collapsedSections",
-  "sidebarNavExpanded",
-  "teams",
-  "teamMembers",
-  "teamUnreadCount",
-  // Accumulating team-feed cache (keyed by team+dir) + its per-key "older pages
-  // remain" flag. The team ActivityFeed reads from here and dumps every live +
-  // paginated page into it — the team-mode twin of the store.sessions cache the
-  // personal feed already has.
-  "feedConversations",
-  "feedHasMore",
-  "feedCursors",
-  // Per-workspace incremental-sync watermark (cursor + backfilledAt). Must
-  // survive reload so a cold start resumes delta sync from where it left off
-  // instead of re-snapshotting + re-crawling the whole task/doc table.
-  "syncMeta",
-  "docProjectPaths",
-  "favorites",
-  "bookmarks",
-  "tabs",
-  "activeTabId",
-  "sidePanelOpen",
-  "sidePanelSessionId",
-  "sidePanelUserClosed",
-]);
+const META_KEYS = new Set<string>(META_STORE_KEYS);
+
 
 let _hydrating = false;
 
@@ -150,7 +111,7 @@ export function _resetPersistedShadow() {
 // or is whitelisted as a meta blob. Keys that satisfy neither are silently
 // dropped on write — the class of bug that lost pending user messages.
 export function isPersistedStoreKey(key: string): boolean {
-  return key in COLLECTION_TABLES || META_KEYS.has(key);
+  return isPersistedClientStoreKey(key);
 }
 
 export function writePatchesToIDB(patches: Patch[], state: any) {

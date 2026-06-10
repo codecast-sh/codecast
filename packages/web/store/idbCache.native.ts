@@ -15,6 +15,11 @@
 // session on those older binaries instead of bricking them; native persistence
 // resumes automatically once users get a build that includes the ExpoSQLite module.
 import type { Patch } from "mutative";
+import {
+  COLLECTION_STORE_KEYS,
+  META_STORE_KEYS,
+  isPersistedClientStoreKey,
+} from "./clientSyncRegistry";
 import { diffCollection } from "./idbCollectionDiff";
 
 let Storage: any = null;
@@ -33,34 +38,8 @@ export type OutboxEntry = {
   ts: number;
 };
 
-// Mirrors COLLECTION_TABLES in idbCache.ts — collections keyed by _id.
-const COLLECTION_TABLES = new Set(["sessions", "tasks", "docs", "plans", "projects"]);
-
-// Mirrors META_KEYS in idbCache.ts — single-blob meta values.
-const META_KEYS = new Set([
-  "clientState",
-  // "messages" and "pagination" are now per-conversation in the conversationMessages store
-  "conversations",
-  "drafts",
-  // The user's outbound optimistic/queued/failed messages. Must persist so a
-  // reload mid-send can never drop a user message — they only leave this map
-  // once the server confirms them (pruned by client_id in setMessages).
-  "pendingMessages",
-  "pending",
-  "recentProjects",
-  "collapsedSections",
-  "sidebarNavExpanded",
-  "teams",
-  "teamMembers",
-  "teamUnreadCount",
-  "favorites",
-  "bookmarks",
-  "tabs",
-  "activeTabId",
-  "sidePanelOpen",
-  "sidePanelSessionId",
-  "sidePanelUserClosed",
-]);
+const COLLECTION_TABLES = new Set<string>(COLLECTION_STORE_KEYS);
+const META_KEYS = new Set<string>(META_STORE_KEYS);
 
 // KV key prefixes namespace the flat store so reads can reconstruct the same
 // shape Dexie's per-table layout produces.
@@ -92,7 +71,7 @@ export const PERSISTENCE_AVAILABLE = Storage != null;
 // whitelisted as a meta blob. Keys that satisfy neither are silently dropped on
 // write — the class of bug that lost pending user messages.
 export function isPersistedStoreKey(key: string): boolean {
-  return COLLECTION_TABLES.has(key) || META_KEYS.has(key);
+  return isPersistedClientStoreKey(key);
 }
 
 export function writePatchesToIDB(patches: Patch[], state: any) {
