@@ -1,15 +1,12 @@
 // Floating toolbar that appears when the user selects text inside an assistant
-// message body (anything inside a .cc-msg-review region). Offers "Quote" (drop a
-// blockquote of the selection into the composer immediately) and "Comment"
-// (start a pending inline comment anchored to that block, with the selection as
-// the quote). Positioned at the selection rect via a portal.
+// message body (anything inside a .cc-msg-review region). One action — "Quote
+// into reply" — which adds the selection to your reply as a rail card with an
+// optional note (same single verb as the per-block hover handle). Positioned at
+// the selection rect via a portal.
 
 import React, { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { useReviewComposer } from "./reviewContext";
 import { createReviewComment } from "../lib/reviewActions";
-import { useInboxStore } from "../store/inboxStore";
-import { KeyCap } from "./KeyboardShortcutsHelp";
 
 type Anchor = { x: number; y: number; messageId: string; blockIndex: number; quote: string };
 
@@ -44,7 +41,6 @@ function resolveSelection(): Anchor | null {
 }
 
 export function SelectionQuoteToolbar({ conversationId }: { conversationId: string }) {
-  const composer = useReviewComposer();
   const [anchor, setAnchor] = useState<Anchor | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -87,14 +83,10 @@ export function SelectionQuoteToolbar({ conversationId }: { conversationId: stri
     window.getSelection()?.removeAllRanges();
     setAnchor(null);
   };
+  // Same single verb as the per-block handle: quote the selection into your
+  // reply (a rail card) and open an optional note.
   const doQuote = () => {
-    composer?.quote(anchor.quote);
-    clear();
-  };
-  const doComment = () => {
     createReviewComment(conversationId, anchor.messageId, anchor.blockIndex, anchor.quote);
-    // Engage the message and scroll the (now-split) target into view.
-    useInboxStore.getState().setReviewTarget(anchor.messageId, anchor.blockIndex);
     clear();
   };
 
@@ -111,11 +103,7 @@ export function SelectionQuoteToolbar({ conversationId }: { conversationId: stri
       onMouseDown={(e) => e.preventDefault()}
     >
       <button type="button" className="cc-sel-btn" onClick={doQuote}>
-        Quote
-      </button>
-      <span className="cc-sel-div" />
-      <button type="button" className="cc-sel-btn" onClick={doComment}>
-        Comment
+        ❝ Quote into reply
       </button>
     </div>,
     document.body,

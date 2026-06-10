@@ -1044,7 +1044,7 @@ interface InboxStoreState {
   setReviewActiveBlock: (blockIndex: number) => void;
   setReviewEditingId: (id: string | null) => void;
   addReviewComment: (conversationId: string, comment: PendingComment) => void;
-  updateReviewComment: (conversationId: string, id: string, body: string) => void;
+  commitReviewComment: (conversationId: string, id: string, body: string) => void;
   removeReviewComment: (conversationId: string, id: string) => void;
   clearReviewComments: (conversationId: string) => void;
   getReviewComments: (conversationId: string) => PendingComment[];
@@ -1741,7 +1741,9 @@ export const useInboxStore = create<InboxStoreState>(
         [conversationId]: [...(s.reviewComments[conversationId] ?? []), comment],
       },
     })),
-  updateReviewComment: (conversationId: string, id: string, body: string) =>
+  // Set a comment's note (may be empty → stays a bare quote). This is what the
+  // note editor's "Save" does.
+  commitReviewComment: (conversationId: string, id: string, body: string) =>
     set((s: any) => ({
       reviewComments: {
         ...s.reviewComments,

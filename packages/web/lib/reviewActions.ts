@@ -27,9 +27,11 @@ export function createReviewComment(
 ): string {
   const s = useInboxStore.getState();
   const id = genCommentId();
+  // First click commits a bare quote immediately (no editor) — it shows up as a
+  // chip in the rail and a row in the batch tray. The note is optional, added
+  // later via "Add note". setReviewTarget keeps keyboard nav anchored to it.
   s.addReviewComment(conversationId, { id, messageId, blockIndex, quote, body: "", createdAt: Date.now() });
   s.setReviewTarget(messageId, blockIndex);
-  s.setReviewEditingId(id);
   return id;
 }
 
@@ -39,8 +41,35 @@ export function quoteToComposer(text: string, populate: PopulateFn): void {
   if (q) populate(q, { append: true });
 }
 
-// Compile the whole batch into the composer and clear review state. Comments with
-// neither a body nor a quote are dropped. Returns false if nothing to submit.
+// Compile the pending batch into markdown without touching the composer, and
+// clear the batch. The composer's send path calls this to AUTO-ATTACH the quotes
+// to the outgoing message — so the user never has to remember a separate "add to
+// message" step; a plain send carries the quotes. Returns "" when nothing pending.
+export function takeReviewBatch(conversationId: string): string {
+  const s = useInboxStore.getState();
+  const comments = s.getReviewComments(conversationId).filter((c) => c.body.trim() || c.quote.trim());
+  const text = formatPendingComments(sortPendingComments(comments));
+  if (text) {
+    s.clearReviewComments(conversationId);
+    s.setReviewTarget(null);
+    s.setReviewEditingId(null);
+  }
+  return text;
+}
+
+// Build the outgoing message: the pending batch (if any) prepended to the typed
+// reply, clearing the batch. The composer's send path calls this so a plain send
+// carries the quotes. With nothing pending it returns `typed` untouched.
+export function attachReviewToMessage(conversationId: string, typed: string): string {
+  const batch = takeReviewBatch(conversationId);
+  if (!batch) return typed;
+  const reply = (typed || "").trim();
+  return reply ? `${batch}\n\n${reply}` : batch;
+}
+
+// Compile the whole batch into the composer (so it can be edited inline) and clear
+// review state. The OPTIONAL "edit in input" action — sending already attaches the
+// batch via takeReviewBatch, this just materializes it as editable text first.
 export function submitReview(conversationId: string, populate: PopulateFn): boolean {
   const s = useInboxStore.getState();
   const comments = s.getReviewComments(conversationId).filter((c) => c.body.trim() || c.quote.trim());
@@ -67,16 +96,4 @@ export function exitReviewMode(): void {
   const s = useInboxStore.getState();
   s.setReviewTarget(null);
   s.setReviewEditingId(null);
-}
-
-// Drop an editor that was opened but left empty (so abandoned "new" comments
-// don't linger). Returns true if it removed the comment.
-export function discardIfEmpty(conversationId: string, id: string): boolean {
-  const s = useInboxStore.getState();
-  const c = s.getReviewComments(conversationId).find((x) => x.id === id);
-  if (c && !c.body.trim()) {
-    s.removeReviewComment(conversationId, id);
-    return true;
-  }
-  return false;
 }
