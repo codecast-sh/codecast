@@ -243,7 +243,10 @@ function extractCommitHash(
     return undefined;
   }
 
-  const hashMatch = result.content.match(/\[([a-f0-9]{7,40})\]/);
+  // git commit prints `[<branch> <short-hash>] <subject>` (with an optional
+  // `(root-commit)` marker), so the hash is the last hex token before the `]`,
+  // preceded by the `[` itself, whitespace, or the marker's closing paren.
+  const hashMatch = result.content.match(/\[(?:[^\]\n]*[\s()])?([a-f0-9]{7,40})\]/);
   if (hashMatch) {
     return hashMatch[1];
   }
