@@ -19,12 +19,13 @@
 // vanilla `bun test` runs without the integration dependency.
 
 import { describe, expect, test, beforeAll, afterAll } from "bun:test";
-import { execSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import { injectViaTmux, TEST_SCRATCH_DIRNAME } from "./daemon.js";
+import { tmuxRun } from "./tmux.js";
 
 function hasBin(name: string): boolean {
   const r = spawnSync("which", [name], { encoding: "utf8" });
@@ -38,7 +39,8 @@ function sleep(ms: number): Promise<void> {
 }
 
 function tmux(args: string[]): void {
-  const r = spawnSync("tmux", args, { encoding: "utf8" });
+  // Hardened wrapper: timeout + SIGKILL so a wedged tmux client can't spin forever.
+  const r = tmuxRun(args);
   if (r.status !== 0) {
     throw new Error(`tmux ${args.join(" ")} failed: ${r.stderr || r.stdout}`);
   }
@@ -82,7 +84,7 @@ describe.skipIf(!CAN_RUN)("injectViaTmux clears stale draft before pasting", () 
   let jsonlPath = "";
 
   beforeAll(async () => {
-    try { execSync(`tmux kill-session -t ${tmuxSession} 2>/dev/null`); } catch {}
+    tmuxRun(["kill-session", "-t", tmuxSession]);
     if (fs.existsSync(projectDir)) fs.rmSync(projectDir, { recursive: true });
     fs.mkdirSync(projectDir, { recursive: true });
     jsonlPath = jsonlPathFor(projectDir, sessionUuid);
@@ -94,7 +96,7 @@ describe.skipIf(!CAN_RUN)("injectViaTmux clears stale draft before pasting", () 
       `cd ${projectDir} && ANTHROPIC_API_KEY=sk-invalid-injection-test ` +
       `claude --bare --permission-mode=bypassPermissions --dangerously-skip-permissions ` +
       `--session-id=${sessionUuid}`;
-    execSync(`tmux new -d -s ${tmuxSession} -x 200 -y 50 '${cmd}'`);
+    tmux(["new", "-d", "-s", tmuxSession, "-x", "200", "-y", "50", cmd]);
 
     // Workspace trust dialog appears first; press Enter to accept it.
     await sleep(3500);
@@ -103,7 +105,7 @@ describe.skipIf(!CAN_RUN)("injectViaTmux clears stale draft before pasting", () 
   }, 30_000);
 
   afterAll(() => {
-    try { execSync(`tmux kill-session -t ${tmuxSession} 2>/dev/null`); } catch {}
+    tmuxRun(["kill-session", "-t", tmuxSession]);
     // Keep the project dir + JSONL when the test fails so the artifact is
     // available for debugging. Only clean it up on success path.
     if (process.env.KEEP_INJECT_TEST_ARTIFACTS !== "1") {
