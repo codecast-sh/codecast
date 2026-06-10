@@ -16,14 +16,18 @@ import { fileURLToPath } from "node:url";
 // row stuck as "injected", and the 120s retry cron resets it to "pending" and the
 // daemon re-delivers the same message -- producing two identical assistant replies.
 //
-// The current fix: direct local paste paths must not block on Convex before the
-// paste. They record a best-effort injected mark immediately after the paste, while
-// addMessages' content-matched ack promotes the row to delivered when the agent
-// echoes the user message to JSONL.
+// The fix: mark "injected" BEFORE every delivery-path inject, so the ack always
+// finds a row to flip regardless of which side of the race wins. The mark is done via
+// markInjectedBestEffort(), which is fire-and-forget with an 8s timeout -- so marking
+// before the paste is NOT the old 180s wedge (that was a raw, un-timed, awaited
+// updateMessageStatus). On inject failure the 120s retryStuckMessages cron re-pends the
+// row (planStuckMessageHeal repends both "pending" and "injected"), so mark-before is
+// loss-safe; and because the row is already "injected" when Claude echoes to JSONL,
+// addMessages' content-matched ack promotes it straight to terminal "delivered".
 //
 // This test is a static invariant check against daemon.ts -- it does not execute
-// the daemon. It guards against a regression where someone re-inserts the mark
-// after an inject call in deliverMessage.
+// the daemon. It guards against a regression where someone moves the mark AFTER an
+// inject call in deliverMessage (the exact mistake that reintroduces the race).
 
 const daemonPath = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -114,7 +118,7 @@ describe("deliverMessage: mark-injected-before-send invariant", () => {
     expect(matches.length).toBe(0);
   });
 
-  test("every direct local delivery injection records mark-injected best-effort immediately after paste", () => {
+  test("every direct local delivery injection is preceded by a mark-injected best-effort", () => {
     // Delivery-path inject calls are the ones that take `content` and a specific target.
     // Permission responses (e.g. injectViaTerminal(tty, "\r", ...)) are NOT delivery calls.
     //
@@ -122,6 +126,10 @@ describe("deliverMessage: mark-injected-before-send invariant", () => {
     // tmux target or tty AND whose content arg is `content` (the pending message body).
     // The cached-tmux and live-process-pane injects were unified behind resolveLiveTmuxTarget,
     // so both now flow through a single `injectViaTmux(injectTarget, content)` call site.
+    //
+    // The mark MUST come BEFORE the inject: that is the whole anti-redelivery guarantee. We look
+    // back a small window for a markInjectedBestEffort(syncService, messageId) call. A site with
+    // no preceding mark means the mark is after the paste (or missing) -- the doubled-message race.
     const directPasteCallSites = [
       /await\s+injectViaTmux\(\s*startedTmuxTarget\s*,\s*content\s*\)/g,
       /await\s+injectViaTmux\(\s*injectTarget\s*,\s*content\s*\)/g,
@@ -132,13 +140,15 @@ describe("deliverMessage: mark-injected-before-send invariant", () => {
     for (const rx of directPasteCallSites) {
       for (const match of deliverBody.matchAll(rx)) {
         totalSitesChecked++;
-        const endIdx = (match.index ?? 0) + match[0].length;
-        const window = deliverBody.slice(endIdx, endIdx + 500);
-        const hasBestEffortMark = /markInjectedBestEffort\(\s*syncService\s*,\s*messageId\s*\)/.test(window);
-        if (!hasBestEffortMark) {
-          const lineNo = lineNumberOf(deliverBody, match.index ?? 0);
+        const idx = match.index ?? 0;
+        // Look backwards ~600 chars for the best-effort mark. It sits on the line(s) just above
+        // the inject in each delivery branch.
+        const window = deliverBody.slice(Math.max(0, idx - 600), idx);
+        const hasPrecedingMark = /markInjectedBestEffort\(\s*syncService\s*,\s*messageId\s*\)/.test(window);
+        if (!hasPrecedingMark) {
+          const lineNo = lineNumberOf(deliverBody, idx);
           throw new Error(
-            `Direct delivery injection at line ${lineNo} of deliverMessage has no immediate markInjectedBestEffort call. Call: ${match[0]}`,
+            `Direct delivery injection at line ${lineNo} of deliverMessage has no preceding markInjectedBestEffort call (the mark must come BEFORE the paste). Call: ${match[0]}`,
           );
         }
       }
