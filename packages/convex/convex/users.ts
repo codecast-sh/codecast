@@ -1,6 +1,7 @@
 import { mutation, query, internalMutation } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
+import { paginationOptsValidator } from "convex/server";
 import { enqueueStartSession, getOnlineLocalRoots } from "./devices";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
@@ -724,7 +725,7 @@ export const getUserByUsername = query({
       const byUsername = await ctx.db
         .query("users")
         .withIndex("by_github_username", (q) => q.eq("github_username", args.username))
-        .unique();
+        .first();
       if (byUsername) return byUsername;
       const asId = ctx.db.normalizeId("users", args.username);
       if (asId) return ctx.db.get(asId);
@@ -1143,14 +1144,14 @@ export const getUserProfileFeed = query({
   args: {
     user_id: v.id("users"),
     team_id: v.optional(v.id("teams")),
-    limit: v.optional(v.number()),
+    paginationOpts: paginationOptsValidator,
   },
   handler: async (ctx, args) => {
+    const empty = { page: [], isDone: true, continueCursor: "" };
     const userId = await getAuthUserId(ctx);
-    if (!userId) return [];
+    if (!userId) return empty;
     const user = await ctx.db.get(args.user_id);
-    if (!user) return [];
-    const limit = Math.min(args.limit ?? 30, 200);
+    if (!user) return empty;
 
     type FeedItem = {
       type: string;
@@ -1166,24 +1167,28 @@ export const getUserProfileFeed = query({
     };
     const items: FeedItem[] = [];
 
-    const recentConvosRaw = args.team_id
-      ? await ctx.db
+    // Messages are the spine of the feed, so we paginate over the user's
+    // conversations (newest first) and pull each page's user-authored messages.
+    // The activity overlay (tasks/docs/commits) is appended only on the first
+    // page so it sits at the top without re-fetching on every "load more".
+    const isFirstPage = !args.paginationOpts.cursor;
+    const convoQuery = args.team_id
+      ? ctx.db
           .query("conversations")
           .withIndex("by_team_user_updated", (q: any) =>
             q.eq("team_id", args.team_id).eq("user_id", args.user_id)
           )
           .order("desc")
-          .take(30)
-      : await ctx.db
+      : ctx.db
           .query("conversations")
           .withIndex("by_user_id", (q) => q.eq("user_id", args.user_id))
-          .order("desc")
-          .take(30);
+          .order("desc");
+    const convoPage = await convoQuery.paginate(args.paginationOpts);
 
     // Privacy gate: (team_id, user_id) is routing, not visibility. Drop private
     // conversations so a teammate's profile never exposes their message text.
     const isVisible = await getProfileVisibilityPredicate(ctx, userId, args.user_id, args.team_id);
-    const recentConvos = recentConvosRaw.filter(isVisible);
+    const recentConvos = convoPage.page.filter(isVisible);
 
     const NOISE_PREFIXES = ["[Request interrupted", "This session is being continued", "Your task is to create a detailed summary", "Full transcript available at:", "Read the output file to retrieve the result:"];
     const COMMAND_RE = /^(<command-name>|<command-message>|<local-command-stdout>|<local-command-stderr>|Caveat:|\/[a-z][\w-]*)/i;
@@ -1203,6 +1208,10 @@ export const getUserProfileFeed = query({
       if (!content) return true;
       const t = content.trim();
       if (!t) return true;
+      // Session→session messages (cast send) land as user-role turns wrapped in
+      // <session-message from="..">. They're agent coordination, not something the
+      // human typed into this session — drop them from "what I wrote".
+      if (t.startsWith("<session-message")) return true;
       if (COMMAND_RE.test(t)) return true;
       if (SKILL_RE.test(t)) return true;
       if (t.startsWith("<task-notification>") && !t.replace(/<task-notification>[\s\S]*?<\/task-notification>/g, "").trim()) return true;
@@ -1247,6 +1256,7 @@ export const getUserProfileFeed = query({
       }
     }
 
+    if (isFirstPage) {
     const tasks = await ctx.db
       .query("tasks")
       .withIndex("by_user_id", (q: any) => q.eq("user_id", args.user_id))
@@ -1314,9 +1324,10 @@ export const getUserProfileFeed = query({
         },
       });
     }
+    }
 
     items.sort((a, b) => b.timestamp - a.timestamp);
-    return items.slice(0, limit);
+    return { page: items, isDone: convoPage.isDone, continueCursor: convoPage.continueCursor };
   },
 });
 

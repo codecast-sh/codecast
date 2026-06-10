@@ -1,6 +1,6 @@
 "use client";
 import { useMemo, useState, useRef, useEffect } from "react";
-import { useQuery } from "convex/react";
+import { useQuery, usePaginatedQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { ErrorBoundary } from "../../../components/ErrorBoundary";
 import { DashboardLayout } from "../../../components/DashboardLayout";
@@ -8,7 +8,8 @@ import { useParams, useRouter } from "next/navigation";
 import { useInboxStore } from "../../../store/inboxStore";
 import { useTheme } from "../../../components/ThemeProvider";
 import Link from "next/link";
-import { FileText, CheckCircle2, Circle, CircleDot, CircleDotDashed, XCircle, MessageSquare } from "lucide-react";
+import { FileText, CheckCircle2, Circle, CircleDot, CircleDotDashed, XCircle, User, Activity, CornerUpRight } from "lucide-react";
+import { SegmentedToggle } from "../../../components/SegmentedToggle";
 import { getLabelColor } from "../../../lib/labelColors";
 import { cleanContent } from "../../../lib/conversationProcessor";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
@@ -63,6 +64,9 @@ function UserProfileContent() {
   const username = params.username as string;
   const router = useRouter();
   const [view, setView] = useState<"feed" | "timeline" | "work">("feed");
+  // Default feed shows only what the user explicitly typed (their messages).
+  // The "All" segment re-adds automated activity: tasks, docs, commits, PRs.
+  const [showAll, setShowAll] = useState(false);
 
   const profileUser = useQuery(api.users.getUserByUsername, { username });
   const currentUser = useQuery(api.users.getCurrentUser);
@@ -79,9 +83,16 @@ function UserProfileContent() {
     profileUser?._id ? { user_id: profileUser._id, team_id: scopeTeamId } : "skip"
   );
 
-  const feed = useQuery(
+  // Stable args identity so usePaginatedQuery doesn't reset to page 1 on every
+  // re-render (incl. unrelated HMR churn) and lose accumulated "load more" pages.
+  const feedArgs = useMemo(
+    () => (profileUser?._id ? { user_id: profileUser._id, team_id: scopeTeamId } : "skip"),
+    [profileUser?._id, scopeTeamId]
+  );
+  const { results: feed, status: feedStatus, loadMore } = usePaginatedQuery(
     api.users.getUserProfileFeed,
-    profileUser?._id ? { user_id: profileUser._id, team_id: scopeTeamId, limit: 200 } : "skip"
+    feedArgs,
+    { initialNumItems: 15 }
   );
 
   const userTasks = useQuery(
@@ -93,8 +104,16 @@ function UserProfileContent() {
     profileUser?._id ? { user_id: profileUser._id, limit: 20 } : "skip"
   );
 
-  const filtered = useMemo(() => feed?.filter((i: any) => !NOISE_VERBS.has(i.verb)) ?? null, [feed]);
-  const days = useMemo(() => filtered ? groupByDay(filtered) : [], [filtered]);
+  const filtered = useMemo(() => {
+    return feed
+      .filter((i: any) => {
+        if (NOISE_VERBS.has(i.verb)) return false;
+        if (!showAll && i.type !== "message") return false; // default: only user-typed messages
+        return true;
+      })
+      .sort((a: any, b: any) => b.timestamp - a.timestamp); // keep newest-first across loaded pages
+  }, [feed, showAll]);
+  const days = useMemo(() => groupByDay(filtered), [filtered]);
   const groupedDays = useMemo(() => days.map(([date, items]) => [date, groupItemsBySessions(items)] as const), [days]);
 
   const heatmap = useQuery(
@@ -106,7 +125,18 @@ function UserProfileContent() {
   const timelineData = useMemo(() => heatmapData || [], [heatmapData]);
 
   if (!currentUser || profileUser === undefined) return <ProfileSkeleton />;
-  if (profileUser === null) return <div className="flex items-center justify-center min-h-[40vh]"><p className="text-sol-base01">User not found.</p></div>;
+  if (profileUser === null) return (
+    <div className="flex flex-col items-center justify-center gap-2 min-h-[40vh] text-center px-4">
+      <p className="text-sol-base01 text-sm">User not found.</p>
+      <p className="text-sol-base01/45 text-xs max-w-xs">This profile link may be out of date — the account was likely renamed or removed.</p>
+      <div className="flex items-center gap-3 mt-1 text-xs">
+        {currentUser?.github_username || currentUser?._id ? (
+          <Link href={`/team/${currentUser.github_username || currentUser._id}`} className="text-sol-cyan/70 hover:text-sol-cyan underline underline-offset-2">Your profile</Link>
+        ) : null}
+        <Link href="/inbox" className="text-sol-base01/60 hover:text-sol-text underline underline-offset-2">Back to inbox</Link>
+      </div>
+    </div>
+  );
 
   const dd = profileUser.daemon_last_seen ? Date.now() - profileUser.daemon_last_seen : Infinity;
   const online = dd < 60000;
@@ -163,6 +193,18 @@ function UserProfileContent() {
         <button onClick={() => setView("feed")} className={`px-3 py-1.5 text-[10px] font-semibold tracking-wide transition-colors border-b-2 ${view === "feed" ? "text-sol-text border-sol-yellow/60" : "text-sol-base01/35 border-transparent hover:text-sol-base01/60"}`}>Feed</button>
         <button onClick={() => setView("work")} className={`px-3 py-1.5 text-[10px] font-semibold tracking-wide transition-colors border-b-2 ${view === "work" ? "text-sol-text border-sol-violet/60" : "text-sol-base01/35 border-transparent hover:text-sol-base01/60"}`}>Work</button>
         <button onClick={() => setView("timeline")} className={`px-3 py-1.5 text-[10px] font-semibold tracking-wide transition-colors border-b-2 ${view === "timeline" ? "text-sol-text border-sol-cyan/60" : "text-sol-base01/35 border-transparent hover:text-sol-base01/60"}`}>Timeline</button>
+        {view === "feed" && (
+          <div className="ml-auto pb-1 scale-[0.82] origin-bottom-right">
+            <SegmentedToggle
+              value={showAll ? "all" : "mine"}
+              onChange={(k) => setShowAll(k === "all")}
+              items={[
+                { key: "mine", icon: User, label: "Typed", title: "Only messages you typed" },
+                { key: "all", icon: Activity, label: "All", title: "All activity — tasks, docs, commits, PRs" },
+              ]}
+            />
+          </div>
+        )}
       </div>
 
       {/* Feed view */}
@@ -171,10 +213,10 @@ function UserProfileContent() {
           {groupedDays.map(([date, groups]) => (
             <div key={date}>
               <DayHeader date={date} count={groups.reduce((n: number, g: SessionGroupData | EventItem) => n + (g.type === "session" ? g.messages.length : 1), 0)} items={groups.flatMap((g: SessionGroupData | EventItem) => g.type === "session" ? g.messages : [g.item])} />
-              <div className="space-y-1">
+              <div className="space-y-2">
                 {groups.map((group: SessionGroupData | EventItem, gi: number) =>
                   group.type === "session" ? (
-                    <SessionGroup key={`sg-${group.sessionId}-${gi}`} group={group} router={router} />
+                    <SessionGroup key={`sg-${group.sessionId}-${gi}`} group={group} router={router} avatarUrl={profileUser.github_avatar_url} displayName={profileUser.name} />
                   ) : (
                     <EventRow key={`ev-${group.item.timestamp}-${gi}`} item={group.item} router={router} />
                   )
@@ -182,8 +224,25 @@ function UserProfileContent() {
               </div>
             </div>
           ))}
-          {filtered && filtered.length === 0 && <div className="text-[11px] text-sol-base01/30 text-center py-16">{isOwn ? "No recent activity" : "No recent activity in this workspace"}</div>}
-          {!filtered && <div className="text-[11px] text-sol-base01/20 text-center py-16 animate-pulse">Loading...</div>}
+          {feedStatus !== "LoadingFirstPage" && filtered.length === 0 && (
+            <div className="text-[11px] text-sol-base01/30 text-center py-16">
+              {!showAll
+                ? <>No messages typed yet. <button onClick={() => setShowAll(true)} className="text-sol-cyan/50 hover:text-sol-cyan underline underline-offset-2 transition-colors">Show all activity</button></>
+                : (isOwn ? "No recent activity" : "No recent activity in this workspace")}
+            </div>
+          )}
+          {feedStatus === "LoadingFirstPage" && <div className="text-[11px] text-sol-base01/20 text-center py-16 animate-pulse">Loading...</div>}
+          {(feedStatus === "CanLoadMore" || feedStatus === "LoadingMore") && (
+            <div className="flex justify-center py-5">
+              <button
+                onClick={() => loadMore(20)}
+                disabled={feedStatus === "LoadingMore"}
+                className="text-[10.5px] font-medium tracking-wide text-sol-base01/50 hover:text-sol-text border border-sol-border/30 hover:border-sol-border/60 rounded-full px-4 py-1.5 transition-colors disabled:opacity-50"
+              >
+                {feedStatus === "LoadingMore" ? "Loading…" : "Load more"}
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -619,80 +678,62 @@ function oneLineOf(preview?: string): string | null {
   return c.replace(/\s+/g, " ").trim() || null;
 }
 
-function SessionGroup({ group, router }: { group: SessionGroupData; router: ReturnType<typeof useRouter> }) {
+// A small round avatar for the feed — the profile owner, making it explicit that
+// the messages below are theirs (i.e. "you sent this").
+function FeedAvatar({ url, name }: { url?: string; name?: string }) {
+  return url ? (
+    <img src={url} alt="" className="w-[18px] h-[18px] rounded-full flex-shrink-0 mt-px ring-1 ring-sol-border/25 object-cover" />
+  ) : (
+    <div className="w-[18px] h-[18px] rounded-full flex-shrink-0 mt-px bg-sol-base02 ring-1 ring-sol-border/25 flex items-center justify-center text-[9px] font-semibold text-sol-text/80">
+      {(name || "?")[0]?.toUpperCase()}
+    </div>
+  );
+}
+
+// One conversation's worth of messages YOU sent, framed as "[you] ↱ to <session>"
+// so authorship (the avatar) and destination (the session) are both unmistakable.
+function SessionGroup({ group, router, avatarUrl, displayName }: { group: SessionGroupData; router: ReturnType<typeof useRouter>; avatarUrl?: string; displayName?: string }) {
   const href = `/conversation/${group.sessionId}`;
   const meta = group.meta;
   const project = meta.project && meta.project !== "unknown" ? meta.project : null;
-  const duration = meta.duration_ms ? fmtDuration(meta.duration_ms) : null;
-  const msgCount = meta.message_count;
   const isLive = meta.status === "active" && group.messages.length > 0 && (Date.now() - group.messages[0].timestamp < 3600000);
-  const lastTs = group.messages[0]?.timestamp;
   const displayTitle = group.title === "Untitled" && project ? project : group.title;
-  const iconColor = isLive ? "text-sol-green" : meta.status === "idle" ? "text-sol-yellow/50" : "text-sol-blue/40";
-
-  // duration_ms is wall-clock across the session's whole lifetime; cap absurd values
-  const saneDuration = meta.duration_ms && meta.duration_ms < 24 * 3600000 ? duration : null;
-
-  const Meta = ({ showCount = true }: { showCount?: boolean }) => (
-    <>
-      {isLive && <span className="text-[8px] font-bold text-sol-green uppercase tracking-widest flex-shrink-0">live</span>}
-      <span className="flex-1" />
-      {project && project !== displayTitle && <span className="text-[9px] font-mono text-sol-cyan/40 flex-shrink-0">{project}</span>}
-      {showCount && msgCount > 0 && <span className="text-[9px] text-sol-base01/25 tabular-nums flex-shrink-0">{msgCount} msg</span>}
-      {saneDuration && <span className="text-[9px] text-sol-green/30 tabular-nums flex-shrink-0">{saneDuration}</span>}
-    </>
-  );
-
-  // Single message → collapse to one inline row: the message is primary, title is a dim trailing chip
-  if (group.messages.length === 1) {
-    const line = oneLineOf(group.messages[0].preview);
-    const titleEchoesMsg = line && displayTitle.toLowerCase().startsWith(line.slice(0, 18).toLowerCase());
-    return (
-      <div className="flex items-start pr-2 rounded hover:bg-sol-blue/[0.045] transition-colors cursor-pointer group" onClick={() => router.push(href)}>
-        <TimeGutter ts={lastTs} top />
-        <div className="flex items-start gap-1.5 min-w-0 flex-1">
-          <MessageSquare className={`w-3 h-3 flex-shrink-0 self-start mt-[2px] ${iconColor}`} />
-          {line
-            ? <span className="text-[11.5px] text-sol-text/65 min-w-0 whitespace-normal break-words group-hover:text-sol-text/90 transition-colors">{line}</span>
-            : <span className="text-[12px] font-medium text-sol-text/70 min-w-0 whitespace-normal break-words">{displayTitle}</span>}
-          {line && !titleEchoesMsg && <span className="text-[9px] text-sol-base01/30 truncate max-w-[160px] flex-shrink-0 mt-[2px]">in {displayTitle}</span>}
-          <Meta showCount={false} />
-        </div>
-      </div>
-    );
-  }
+  const accent = getLabelColor(group.sessionId);
+  const lastTs = group.messages[0]?.timestamp;
 
   return (
-    <div className={`rounded-md ${isLive ? "bg-sol-green/[0.02]" : ""}`}>
-      <div className="flex items-baseline pr-2 rounded hover:bg-sol-bg-alt/25 transition-colors cursor-pointer group" onClick={() => router.push(href)}>
-        <TimeGutter ts={lastTs} />
-        <div className="flex items-baseline gap-1.5 min-w-0 flex-1">
-          <MessageSquare className={`w-3 h-3 flex-shrink-0 self-center ${iconColor}`} />
-          <span className="text-[12px] font-semibold text-sol-text/75 truncate group-hover:text-sol-text transition-colors">{displayTitle}</span>
-          <Meta />
+    <div className="flex gap-2.5">
+      <FeedAvatar url={avatarUrl} name={displayName} />
+      <div className="min-w-0 flex-1">
+        {/* destination header: "↱ to <session>" */}
+        <div className="flex items-center gap-1.5 pr-2 cursor-pointer group/h" onClick={() => router.push(href)}>
+          <CornerUpRight className="w-3 h-3 flex-shrink-0 text-sol-base01/35" />
+          <span className="text-[9px] font-semibold uppercase tracking-wider text-sol-base01/35 flex-shrink-0">to</span>
+          <span className={`text-[11px] font-semibold truncate ${accent.text} opacity-90 group-hover/h:opacity-100 transition-opacity`}>{displayTitle}</span>
+          {isLive && <span className="text-[8px] font-bold text-sol-green uppercase tracking-widest flex-shrink-0">live</span>}
+          <span className="flex-1" />
+          {project && project !== displayTitle && <span className="text-[9px] font-mono text-sol-base01/30 flex-shrink-0">{project}</span>}
+          {lastTs && <span className="text-[9px] text-sol-base01/30 tabular-nums flex-shrink-0">{fmtTime(lastTs)}</span>}
         </div>
-      </div>
-      <div className="pb-0.5">
-        {group.messages.map((msg, i) => (
-          <MessageRow key={`${msg.timestamp}-${i}`} item={msg} router={router} />
-        ))}
+        {/* the message(s) you sent — accent spine ties them to the conversation */}
+        <div className={`mt-1 space-y-1.5 border-l-2 pl-3 ${accent.border}`}>
+          {group.messages.map((msg, i) => (
+            <MessageRow key={`${msg.timestamp}-${i}`} item={msg} router={router} />
+          ))}
+        </div>
       </div>
     </div>
   );
 }
 
+// One message you sent, rendered in full.
 function MessageRow({ item, router }: { item: any; router: ReturnType<typeof useRouter> }) {
-  const href = `/conversation/${item.entity_id}`;
   const oneLine = useMemo(() => oneLineOf(item.preview), [item.preview]);
   if (!oneLine) return null;
 
   return (
-    <div className="flex items-start pr-2 rounded hover:bg-sol-blue/[0.05] transition-colors cursor-pointer" onClick={() => router.push(href)}>
-      <TimeGutter ts={item.timestamp} top />
-      <div className="flex items-start gap-1.5 min-w-0 flex-1 pl-[18px]">
-        <span className="text-sol-blue/25 flex-shrink-0 text-[11px] leading-none select-none mt-[3px]">›</span>
-        <span className="text-[11.5px] text-sol-text/55 min-w-0 whitespace-normal break-words flex-1 leading-snug">{oneLine}</span>
-      </div>
+    <div className="rounded hover:bg-sol-blue/[0.05] -mx-1.5 px-1.5 py-[2px] cursor-pointer transition-colors" onClick={() => router.push(`/conversation/${item.entity_id}`)}>
+      <span className="text-[13px] text-sol-text/95 whitespace-normal break-words leading-relaxed">{oneLine}</span>
     </div>
   );
 }
