@@ -129,6 +129,11 @@ const META_KEYS = new Set([
   "sidePanelOpen",
   "sidePanelSessionId",
   "sidePanelUserClosed",
+  // The signed-in user record. Persisted so the separate palette window — which
+  // hydrates from IDB and runs no live query of its own — can read
+  // currentUser.available_skills and show project/personal skills in the compose
+  // popup's slash menu (otherwise it would have only built-in commands).
+  "currentUser",
 ]);
 
 let _hydrating = false;

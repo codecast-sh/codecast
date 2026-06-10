@@ -730,7 +730,7 @@ export function mapCodexAppServerThreadStatusToAgentStatus(status: AppServerThre
   }
 }
 
-function readAvailableSkills(projectPath?: string): Array<{ name: string; description: string }> {
+export function readAvailableSkills(projectPath?: string): Array<{ name: string; description: string }> {
   const skills: Array<{ name: string; description: string }> = [];
   const seen = new Set<string>();
   const home = process.env.HOME || "";
@@ -762,19 +762,32 @@ function readAvailableSkills(projectPath?: string): Array<{ name: string; descri
     try {
       if (!fs.existsSync(dir)) continue;
       for (const entry of fs.readdirSync(dir)) {
-        const skillMd = path.join(dir, entry, "SKILL.md");
-        const standalone = path.join(dir, entry);
+        const entryPath = path.join(dir, entry);
         let content = "";
-        if (fs.existsSync(skillMd)) {
-          content = fs.readFileSync(skillMd, "utf-8");
-        } else if (entry.endsWith(".md")) {
-          content = fs.readFileSync(standalone, "utf-8");
-        } else continue;
+        try {
+          if (fs.statSync(entryPath).isDirectory()) {
+            // CC's convention is an uppercase SKILL.md, but a case-insensitive
+            // macOS FS lets a lowercase skill.md work locally and then vanish on
+            // a case-sensitive volume (e.g. the remote Mac). Match either casing
+            // so a skill surfaces regardless of how its manifest file is cased.
+            const manifest = fs.readdirSync(entryPath).find((f) => /^skill\.md$/i.test(f));
+            if (!manifest) continue;
+            content = fs.readFileSync(path.join(entryPath, manifest), "utf-8");
+          } else if (entry.endsWith(".md")) {
+            content = fs.readFileSync(entryPath, "utf-8");
+          } else continue;
+        } catch { continue; }
         const nameMatch = content.match(/^---[\s\S]*?name:\s*(.+?)[\r\n]/m);
         const descMatch = content.match(/^---[\s\S]*?description:\s*(.+?)[\r\n]/m);
-        const invocable = /user_invocable:\s*true/i.test(content);
+        // Claude Code shows skills in the `/` menu BY DEFAULT; a skill opts out
+        // only by setting `user-invocable: false` in frontmatter (CC's real field
+        // is hyphenated — tolerate the underscore spelling too). Mirror that
+        // default rather than requiring an opt-in flag, so a normal project skill
+        // like mac-remote (name + description only) surfaces just as it does in
+        // the CLI instead of being silently filtered out of the compose box.
+        const hiddenFromMenu = /^---[\s\S]*?user[-_]invocable:\s*false\b/im.test(content);
         const name = nameMatch?.[1]?.trim() || entry.replace(/\.md$/, "");
-        if (!invocable || seen.has(name)) continue;
+        if (hiddenFromMenu || seen.has(name)) continue;
         seen.add(name);
         skills.push({ name, description: descMatch?.[1]?.trim() || "" });
       }
