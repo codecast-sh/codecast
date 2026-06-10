@@ -4,11 +4,12 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { enqueueStartSession } from "./devices";
 import { Id } from "./_generated/dataModel";
 import { checkRateLimit } from "./rateLimit";
-import { resolveTeamForPath } from "./privacy";
+import { resolveTeamForPath, buildShareUpdate } from "./privacy";
 import { hasRecentPendingDaemonCommand } from "./daemonCommandUtils";
 import { nextShortId } from "./counters";
 import { resolveAssigneeStr, resolveAssigneeToUserId, recalcPlanProgress, notifySubscribers, subscribeUser, resolveWorkerParentConversation, resolveTaskGitContext } from "./tasks";
 import { api, internal } from "./_generated/api";
+import { conversationHasNoWork, reapEmptyConversation } from "./cleanup";
 
 type TableConfig =
   | {
@@ -107,6 +108,19 @@ async function applyPatches(
         if (!doc || (doc as any)[config.ownerField] !== userId) continue;
         const finalSafe = config.beforePatch ? config.beforePatch(doc, { ...safe }) : safe;
         await ctx.db.patch(docKey as Id<any>, finalSafe);
+        // Reap a never-prompted EMPTY pre-warm the moment it's dismissed. Hooked on
+        // the DATA transition (a conversation patch setting inbox_dismissed_at), not
+        // any one action, so every dismiss path funnels through here — the inbox X
+        // (stashSession), the /sessions toggle (patchConversation), and any future
+        // one. Quick-create eagerly boots a real agent per summon; the daemon keeps a
+        // dismissed WORKER alive on purpose (you may resume it), but a 0-message
+        // pre-warm has nothing to preserve — leaving it running leaks a zombie tmux
+        // that keeps the conversation is_connected and re-surfaces it as a phantom
+        // "New session" card. reapEmptyConversation kills the agent (kill_session) and,
+        // once it's gone, deletes the row. Only fires when authoritatively empty.
+        if (table === "conversations" && (finalSafe as any).inbox_dismissed_at && await conversationHasNoWork(ctx, doc)) {
+          await reapEmptyConversation(ctx, doc as any);
+        }
       } else {
         const existing = await ctx.db
           .query(table as any)

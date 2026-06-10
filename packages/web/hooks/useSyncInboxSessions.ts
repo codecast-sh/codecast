@@ -9,6 +9,7 @@ import { useRecoveryPoll } from "./useRecoveryPoll";
 import { useEnsureDispatch } from "./useEnsureDispatch";
 import { useWatchEffect } from "./useWatchEffect";
 import { runReconcileCrawl, syncMetaKey } from "./reconcileCrawl";
+import { collectGhostSweepCandidates } from "./ghostSweep";
 
 // Background reconcile for the inbox session list. The live listInboxSessions
 // subscription returns only the ~200 most-recently-updated sessions, so idle ones
@@ -24,12 +25,8 @@ const SESSIONS_CRAWL_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 const SESSIONS_RECONCILE_PAGE_SIZE = 75;
 const SESSIONS_RECONCILE_PAGE_DELAY_MS = 60;
 const SESSIONS_RECONCILE_THROTTLE_MS = 30 * 60 * 1000;
-// Blank rows younger than this are still inside the server GC's 24h grace —
-// don't even ask about them. Must stay > cleanup.EMPTY_CONVERSATION_GRACE_MS.
-const GHOST_SWEEP_MIN_AGE_MS = 26 * 60 * 60 * 1000;
-// Orphaned stubs only need to outlive the create/outbox-replay handoff (seconds
-// in practice); past this they can never become sessions — pure local cruft.
-const STUB_SWEEP_MIN_AGE_MS = 2 * 60 * 60 * 1000;
+// Ghost-sweep policy (age floors + candidate selection) lives in ./ghostSweep
+// so the selection is unit-testable without this hook's React/Convex imports.
 
 export function waitingSoundKey(session: InboxSession, queued: Set<string>): string | null {
   if (!isSessionWaitingForInput(session, queued)) return null;
@@ -285,7 +282,24 @@ export function useSyncInboxSessions() {
   const [reconcileNonce, setReconcileNonce] = useState(0);
   useEffect(() => {
     const id = setInterval(() => setReconcileNonce((n) => n + 1), SESSIONS_RECONCILE_THROTTLE_MS);
-    return () => clearInterval(id);
+    // Timers freeze while a tab/window is backgrounded, so a sleeping client
+    // misses its ticks exactly while it accumulates staleness — the "ghost
+    // cards after wake" vector. Re-tick on wake: the crawls behind this nonce
+    // are durably throttled per wsKey (a bump inside the window is a no-op)
+    // and the ghost sweep costs nothing when it finds no candidates.
+    // `document` is web-only — this hook also runs in the Expo app (no DOM),
+    // where backgrounding/wake is handled by the native AppState lifecycle.
+    if (typeof document === "undefined") return () => clearInterval(id);
+    const onWake = () => {
+      if (document.visibilityState === "visible") setReconcileNonce((n) => n + 1);
+    };
+    document.addEventListener("visibilitychange", onWake);
+    window.addEventListener("focus", onWake);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", onWake);
+      window.removeEventListener("focus", onWake);
+    };
   }, []);
   useEffect(() => {
     if (!hydrated) return;
@@ -324,31 +338,17 @@ export function useSyncInboxSessions() {
   // local delete would blind this client to a live session — verify-then-prune
   // makes that impossible). Runs post-hydration and on the reconcile tick;
   // normally finds zero candidates and costs nothing.
+  const lastGhostSweepRef = useRef(0);
   useEffect(() => {
     if (!hydrated) return;
+    // Wake events can bump the nonce in bursts (cmd-tab flurries); one
+    // existence probe a minute is plenty for a sweep that exists to catch
+    // hard-deleted rows.
+    if (Date.now() - lastGhostSweepRef.current < 60 * 1000) return;
+    lastGhostSweepRef.current = Date.now();
     const store = useInboxStore.getState();
-    const me = store.currentUser?._id?.toString?.();
-    const blankAndIdle = (s: InboxSession, cutoff: number) =>
-      (s.message_count ?? 0) === 0
-      && !s.has_pending
-      && !s.is_pinned
-      && !store.pendingMessages[s._id]?.length
-      && !store.pendingSessionCreates[s._id]
-      && s._id !== store.currentSessionId
-      && (!s.user_id || (me && s.user_id.toString() === me))
-      && (s.started_at ?? s.updated_at ?? 0) < cutoff;
-    const all = Object.values(store.sessions);
-    // Orphaned stubs (optimistic creates that never landed server-side) exist
-    // only in this client's cache — there's nothing to verify; old + blank +
-    // no in-flight create IS the whole truth. Prune directly.
-    const stubs = all
-      .filter((s) => !isConvexId(s._id) && blankAndIdle(s, Date.now() - STUB_SWEEP_MIN_AGE_MS))
-      .map((s) => s._id);
+    const { stubs, candidates } = collectGhostSweepCandidates(store);
     if (stubs.length) store.pruneGhostSessions(stubs);
-    const candidates = all
-      .filter((s) => isConvexId(s._id) && blankAndIdle(s, Date.now() - GHOST_SWEEP_MIN_AGE_MS))
-      .map((s) => s._id)
-      .slice(0, 200);
     if (!candidates.length) return;
     convex.query(api.conversations.existingConversationIds, { ids: candidates })
       .then((existing: string[]) => {

@@ -1,5 +1,6 @@
 import { internalMutation, mutation } from "./_generated/server";
 import { v } from "convex/values";
+import { hasRecentPendingDaemonCommand } from "./daemonCommandUtils";
 
 // ---------------------------------------------------------------------------
 // Abandoned empty-conversation GC.
@@ -71,6 +72,109 @@ export function hasLiveDraft(entry: unknown): boolean {
   );
 }
 
+// Authoritative "nothing worth keeping" check for ONE conversation — the
+// denormalized flags isGcableEmptyConversation reads can lag, so confirm against
+// the source tables (messages / pending_messages) and the per-user draft. Used at
+// dismiss time (single conv); the batched GC sweep inlines the equivalent checks
+// with a per-batch draft cache. Read-only.
+export async function conversationHasNoWork(
+  ctx: { db: any },
+  conv: any,
+): Promise<boolean> {
+  if (!isGcableEmptyConversation(conv)) return false;
+  const hasMsg = await ctx.db
+    .query("messages")
+    .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conv._id))
+    .first();
+  if (hasMsg) return false;
+  const hasPending = await ctx.db
+    .query("pending_messages")
+    .withIndex("by_conversation_status", (q: any) => q.eq("conversation_id", conv._id))
+    .first();
+  if (hasPending) return false;
+  const cs = await ctx.db
+    .query("client_state")
+    .withIndex("by_user_id", (q: any) => q.eq("user_id", conv.user_id))
+    .first();
+  const drafts = cs?.drafts && typeof cs.drafts === "object" ? (cs.drafts as Record<string, unknown>) : null;
+  if (drafts && hasLiveDraft(drafts[conv._id.toString()])) return false;
+  return true;
+}
+
+// Reap-vs-protect decision for a GC-eligible empty conversation, given whether a
+// managed session is still heartbeating. A live heartbeat (terminal / pre-warmed
+// agent) protects the row ONLY while it's still active in the inbox; a DISMISSED
+// empty pre-warm's idle agent is cruft and gets reaped (its tmux torn down via the
+// kill_session reapEmptyConversation enqueues). Pure, so it's unit-testable.
+export function shouldReapEmpty(
+  conv: { inbox_dismissed_at?: number },
+  hasLiveHeartbeat: boolean,
+): boolean {
+  return !(hasLiveHeartbeat && !conv.inbox_dismissed_at);
+}
+
+// Reap a contentless pre-warm. Two-phase, because the live agent must die BEFORE
+// the conversation does:
+//
+//  • If an agent is still heartbeating, enqueue a kill_session command for the
+//    owning daemon and STOP — do NOT delete the conversation or its
+//    managed_sessions row. The daemon resolves conversation_id -> tmux from those
+//    records (its startedSessionTmux map / local conversation cache), so deleting
+//    them first orphans the tmux process — the exact leak that left idle `claude`
+//    agents running for weeks. The daemon unregisters the managed_session when it
+//    kills; the next reap pass (now seeing no live agent) deletes the row. Deduped
+//    against an already-queued kill so repeated sweeps don't pile up commands.
+//    (Broadcast like switchProject's kill_session: whichever daemon owns it acts.)
+//
+//  • Once no agent is live, delete the conversation + any stale managed rows + the
+//    creation-time git-diff blob.
+//
+// Caller must have confirmed the conversation has no work (conversationHasNoWork,
+// or the GC sweep's inline checks).
+export async function reapEmptyConversation(
+  ctx: { db: any },
+  conv: { _id: any; user_id: any },
+  managed?: any[],
+): Promise<"kill_enqueued" | "deleted"> {
+  const now = Date.now();
+  const sessions = managed ?? await ctx.db
+    .query("managed_sessions")
+    .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conv._id))
+    .collect();
+  const hasLiveAgent = sessions.some((m: any) => (m.last_heartbeat ?? 0) > now - LIVE_HEARTBEAT_MS);
+
+  if (hasLiveAgent) {
+    const pending = await ctx.db
+      .query("daemon_commands")
+      .withIndex("by_user_pending", (q: any) => q.eq("user_id", conv.user_id).eq("executed_at", undefined))
+      .collect();
+    const alreadyQueued = hasRecentPendingDaemonCommand(pending, {
+      conversationId: conv._id.toString(),
+      command: "kill_session",
+      now,
+      dedupeWindowMs: 60 * 60 * 1000,
+    });
+    if (!alreadyQueued) {
+      await ctx.db.insert("daemon_commands", {
+        user_id: conv.user_id,
+        command: "kill_session" as const,
+        args: JSON.stringify({ conversation_id: conv._id }),
+        created_at: now,
+      });
+    }
+    return "kill_enqueued";
+  }
+
+  for (const m of sessions) await ctx.db.delete(m._id);
+  const diffs = await ctx.db
+    .query("conversation_git_diffs")
+    .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conv._id))
+    .collect();
+  for (const d of diffs) await ctx.db.delete(d._id);
+  await ctx.db.delete(conv._id);
+  return "deleted";
+}
+
 export const gcEmptyConversations = internalMutation({
   args: {
     since: v.optional(v.number()),
@@ -91,6 +195,7 @@ export const gcEmptyConversations = internalMutation({
     // Per-user client_state drafts, fetched once per user seen in this batch.
     const draftsByUser = new Map<string, Record<string, unknown> | null>();
     let deleted = 0;
+    let killed = 0;
 
     for (const c of rows) {
       if (!isGcableEmptyConversation(c)) continue;
@@ -111,7 +216,15 @@ export const gcEmptyConversations = internalMutation({
         .query("managed_sessions")
         .withIndex("by_conversation_id", (q) => q.eq("conversation_id", c._id))
         .collect();
-      if (managed.some((m) => m.last_heartbeat > now - LIVE_HEARTBEAT_MS)) continue;
+      // A live heartbeat means a process (terminal / pre-warmed agent) is still
+      // attached. Keep protecting it WHILE the conversation is still active in the
+      // inbox — but once the user has DISMISSED an empty pre-warm, that idle agent
+      // is cruft, not a worker: reap it. reapEmptyConversation enqueues the
+      // kill_session that tears the tmux down (deleting the managed row alone would
+      // orphan it). Undismissed live empties (a fresh pre-warm, an open terminal)
+      // stay protected.
+      const live = managed.some((m) => m.last_heartbeat > now - LIVE_HEARTBEAT_MS);
+      if (!shouldReapEmpty(c, live)) continue;
 
       const userKey = c.user_id.toString();
       let drafts = draftsByUser.get(userKey);
@@ -125,23 +238,20 @@ export const gcEmptyConversations = internalMutation({
       }
       if (drafts && hasLiveDraft(drafts[c._id.toString()])) continue;
 
-      // Dead managed rows and the creation-time git-diff blob go with the row.
-      for (const m of managed) await ctx.db.delete(m._id);
-      const diffs = await ctx.db
-        .query("conversation_git_diffs")
-        .withIndex("by_conversation_id", (q) => q.eq("conversation_id", c._id))
-        .collect();
-      for (const d of diffs) await ctx.db.delete(d._id);
-      await ctx.db.delete(c._id);
-      deleted++;
+      // A live agent → enqueue kill_session and defer deletion to a later pass
+      // (deleting now would orphan its tmux). No live agent → delete the
+      // conversation + managed rows + the creation-time git-diff blob now.
+      const outcome = await reapEmptyConversation(ctx, c, managed);
+      if (outcome === "deleted") deleted++; else killed++;
     }
 
-    if (deleted > 0) {
-      console.log(`gcEmptyConversations: deleted ${deleted}/${rows.length} scanned (window ${new Date(since).toISOString()} → ${new Date(until).toISOString()})`);
+    if (deleted > 0 || killed > 0) {
+      console.log(`gcEmptyConversations: deleted ${deleted}, killed ${killed} of ${rows.length} scanned (window ${new Date(since).toISOString()} → ${new Date(until).toISOString()})`);
     }
     return {
       scanned: rows.length,
       deleted,
+      killed,
       exhausted: rows.length < limit,
       last_creation_time: rows.length ? rows[rows.length - 1]._creationTime : null,
     };
@@ -303,14 +413,17 @@ export const deleteConversationBySessionId = mutation({
       .query("conversations")
       .withIndex("by_session_id", (q) => q.eq("session_id", args.session_id))
       .first();
-    if (!conv) return { found: false, deleted: 0 };
+    if (!conv) return { found: false, deleted: 0, done: true };
     const msgs = await ctx.db
       .query("messages")
       .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
       .take(500);
     for (const m of msgs) await ctx.db.delete(m._id);
-    await ctx.db.delete(conv._id);
-    return { found: true, deleted: msgs.length };
+    // Drop the conversation only once its messages are drained, so a caller
+    // can loop until done without orphaning rows past the per-call batch.
+    const done = msgs.length < 500;
+    if (done) await ctx.db.delete(conv._id);
+    return { found: true, deleted: msgs.length, done };
   },
 });
 

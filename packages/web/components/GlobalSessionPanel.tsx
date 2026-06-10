@@ -916,6 +916,8 @@ export function SessionListPanel({
     s => s.pendingMessages,
     s => s.activeProjectFilter,
     s => s.collapsedSections,
+    s => s.currentSessionId,
+    s => s.pendingSessionCreates,
   ]);
   const handleKillDismissed = useCallback((id: string) => {
     soundKill();
@@ -938,9 +940,15 @@ export function SessionListPanel({
   }, [onSessionSelect]);
 
   const pendingSendIds = useMemo(() => sessionsWithPendingSend(s.pendingMessages), [s.pendingMessages]);
+  // The blank you're viewing (or one mid-create) stays visible in NEW; all
+  // other never-engaged pre-warm blanks are hidden by categorizeSessions.
+  const blankOpts = useMemo(
+    () => ({ currentSessionId: activeSessionId ?? s.currentSessionId, pendingCreateIds: new Set(Object.keys(s.pendingSessionCreates)) }),
+    [activeSessionId, s.currentSessionId, s.pendingSessionCreates],
+  );
   const { sorted: sortedSessions, pinned, newSessions, needsInput, working, dismissed: dismissedList, subsByParent: globalSubByParent, forksByParent: globalForksByParent, orchestrationGroups: globalOrchestrationGroups } = useMemo(
-    () => categorizeSessions(s.sessions, s.sessionsWithQueuedMessages, pendingSendIds),
-    [s.sessions, s.sessionsWithQueuedMessages, pendingSendIds],
+    () => categorizeSessions(s.sessions, s.sessionsWithQueuedMessages, pendingSendIds, blankOpts),
+    [s.sessions, s.sessionsWithQueuedMessages, pendingSendIds, blankOpts],
   );
 
   const orchestrationGroupMembers = useMemo(() => Array.from(globalOrchestrationGroups.values()).flat(), [globalOrchestrationGroups]);
@@ -1399,6 +1407,8 @@ export function CollapsedSessionRail({ onSelect }: { onSelect?: (sessionId: stri
     s => s.sessions,
     s => s.sessionsWithQueuedMessages,
     s => s.pendingMessages,
+    s => s.currentSessionId,
+    s => s.pendingSessionCreates,
   ]);
   // Clicking a dot should switch to the session the same way clicking a row in
   // the expanded list does. The caller passes the page-aware select handler
@@ -1407,8 +1417,8 @@ export function CollapsedSessionRail({ onSelect }: { onSelect?: (sessionId: stri
 
   const pendingSendIds = useMemo(() => sessionsWithPendingSend(s.pendingMessages), [s.pendingMessages]);
   const { pinned, needsInput, working, newSessions } = useMemo(
-    () => categorizeSessions(s.sessions, s.sessionsWithQueuedMessages, pendingSendIds),
-    [s.sessions, s.sessionsWithQueuedMessages, pendingSendIds],
+    () => categorizeSessions(s.sessions, s.sessionsWithQueuedMessages, pendingSendIds, { currentSessionId: s.currentSessionId, pendingCreateIds: new Set(Object.keys(s.pendingSessionCreates)) }),
+    [s.sessions, s.sessionsWithQueuedMessages, pendingSendIds, s.currentSessionId, s.pendingSessionCreates],
   );
 
   const getStatusStyle = (sess: InboxSession): { bg: string; pulse: boolean } => {

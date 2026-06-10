@@ -2322,6 +2322,39 @@ async function executeRemoteCommand(
           } catch {}
         }
 
+        // Deterministic last-resort kill. The tmux session name is keyed by
+        // conversation_id (cc-<agent>-<convId.slice(-12)>, see start_session), so a
+        // session is killable from the id ALONE — no lookup tables. This catches an
+        // idle pre-warmed agent that outlived the daemon's in-memory startedSessionTmux
+        // map (e.g. across a daemon restart) and has no live process for findSessionProcess
+        // to match: the lookups above all miss it, yet its tmux is right there under the
+        // derived name. Without this, reaping a dismissed empty pre-warm can't reach such
+        // an agent and it leaks forever (idle, still heartbeating). agentType isn't in the
+        // kill args, so try every prefix; has-session guards each (cheap, idempotent).
+        const convSuffix = conversationId.slice(-12);
+        for (const derivedName of ["claude", "codex", "cursor", "gemini"].map((a) => `cc-${a}-${convSuffix}`)) {
+          if (!validateTmuxTarget(derivedName)) continue;
+          try {
+            await tmuxExec(["has-session", "-t", derivedName], { timeout: 3000 });
+          } catch {
+            continue; // no such session
+          }
+          // CRITICAL: stop tracking the session BEFORE the kill, or heartbeatHealthCheck
+          // sees the vanished tmux and RECONSTITUTES the agent (the daemon keeps managed
+          // sessions warm). The session id lives on the tmux itself (@codecast_session_id),
+          // so we can stop the right heartbeat even when no lookup table maps this
+          // conversation. Mirrors reapOneTerminal's stop-then-kill ordering.
+          const derivedSessionId = (await getTmuxSessionOption(derivedName, "@codecast_session_id"))?.trim() || null;
+          if (derivedSessionId) {
+            stopManagedSessionHeartbeat(derivedSessionId);
+            stopCodexPermissionPoller(derivedSessionId);
+            resumeSessionCache.delete(derivedSessionId);
+          }
+          await killTmuxSessionAndTree(derivedName);
+          log(`[REMOTE] Killed tmux ${derivedName} by derived name (session ${derivedSessionId?.slice(0, 8) ?? "?"}) for conversation ${conversationId.slice(0, 12)}`);
+          if (!result) result = "killed_tmux";
+        }
+
         // A kill is a clean slate. Wipe per-session/per-conversation caches that
         // would otherwise block a subsequent resume or silently suppress the next
         // injected message.
