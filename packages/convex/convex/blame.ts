@@ -185,7 +185,31 @@ export const commitRowStats = internalQuery({
       conversation_id: r.conversation_id,
       timestamp: r.timestamp,
     }));
-    return { rows_with_hash: withHash.length, capped: withHash.length === 1000, sample };
+
+    // Recent commit-type rows regardless of hash, plus what their source
+    // message's tool result actually contains — shows why extraction hits or
+    // misses.
+    const recent = await ctx.db.query("file_changes").order("desc").take(3000);
+    const commitRows = recent.filter((r) => r.change_type === "commit");
+    const probes: Array<Record<string, unknown>> = [];
+    for (const row of commitRows.slice(0, 3)) {
+      const message = await ctx.db.get(row.message_id);
+      const result = message?.tool_results?.find(
+        (tr: any) => tr.tool_use_id === row.tool_call_id,
+      );
+      probes.push({
+        hash: row.commit_hash ?? null,
+        commit_message: row.commit_message?.slice(0, 60),
+        tool_result_snippet: result?.content?.slice(0, 200) ?? null,
+      });
+    }
+    return {
+      rows_with_hash: withHash.length,
+      capped: withHash.length === 1000,
+      sample,
+      commit_rows_in_recent_3000: commitRows.length,
+      probes,
+    };
   },
 });
 
