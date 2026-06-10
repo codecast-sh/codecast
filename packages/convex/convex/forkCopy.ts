@@ -28,6 +28,7 @@ export type ForkMessage = {
   tool_results?: unknown;
   images?: unknown;
   subtype?: string;
+  model?: string;
   timestamp: number;
   tokens_used?: unknown;
   usage?: unknown;
@@ -152,6 +153,7 @@ export async function advanceForkCopy(
       tool_results: msg.tool_results,
       images: msg.images,
       subtype: msg.subtype,
+      model: msg.model,
       timestamp: msg.timestamp,
       tokens_used: msg.tokens_used,
       usage: msg.usage,

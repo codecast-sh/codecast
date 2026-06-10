@@ -8,7 +8,7 @@ import { shouldGenerateTitle } from "./titleGeneration";
 import { canTeamMemberAccess } from "./privacy";
 import { redactSecrets } from "./redact";
 import { markPendingDelivered } from "./pendingMessages";
-import { nextAgentStatusOnAddMessages, isApiErrorBanner, apiErrorBatchAction } from "./inboxFilters";
+import { nextAgentStatusOnAddMessages, isApiErrorBanner, classifyApiErrorBanner, apiErrorBatchAction } from "./inboxFilters";
 import { classifyDocContent, extractTitleFromContent, inlineDocSourceKey } from "./docExtraction";
 import { extractFileChanges, hasFileChangeToolCall, type FileChange } from "./fileChanges/extractor";
 
@@ -27,7 +27,7 @@ type DocExtractionConversation = {
   team_visibility?: string;
 };
 
-function buildExistingMessagePatch(
+export function buildExistingMessagePatch(
   existing: {
     role: string;
     content?: string;
@@ -36,6 +36,7 @@ function buildExistingMessagePatch(
     tool_results?: unknown;
     images?: unknown;
     subtype?: string;
+    model?: string;
   },
   incoming: {
     role: string;
@@ -45,6 +46,7 @@ function buildExistingMessagePatch(
     tool_results?: unknown;
     images?: unknown;
     subtype?: string;
+    model?: string;
   },
 ): Record<string, unknown> | null {
   const patch: Record<string, unknown> = {};
@@ -58,6 +60,10 @@ function buildExistingMessagePatch(
     }
     if (incoming.subtype !== undefined && incoming.subtype !== existing.subtype) {
       patch.subtype = incoming.subtype;
+    }
+    // Backfills older rows when a transcript re-syncs (resume, fork, new device).
+    if (incoming.model !== undefined && incoming.model !== existing.model) {
+      patch.model = incoming.model;
     }
     if (incoming.tool_calls !== undefined && JSON.stringify(incoming.tool_calls) !== JSON.stringify(existing.tool_calls ?? null)) {
       patch.tool_calls = incoming.tool_calls;
@@ -330,6 +336,36 @@ export const getConversationFileChanges = query({
   },
 });
 
+// Storage ids embedded in an injected-image echo. The daemon delivers an image
+// as `[Image /tmp/codecast/images/<storageId>.png]` (downloadImage names the
+// file by its Convex storage id), so the agent's echoed user turn carries the
+// pending row's storage id verbatim.
+export function injectedImageStorageIds(content: string): string[] {
+  const ids: string[] = [];
+  const re = /\/codecast\/images\/([^/\s.\]]+)\.png/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(content)) !== null) ids.push(m[1]);
+  return ids;
+}
+
+// Does this echoed user turn ack the given pending image row? Both contents are
+// empty once `[Image …]` is stripped (an image-only send), so text can't match.
+// Prefer the storage id carried in the echo path — a deterministic signal that
+// holds no matter how long the session was busy before the inject. Fall back to
+// the ±120s window only for echoes with no parseable path (older/non-daemon).
+export function imageEchoMatchesPending(
+  pm: { image_storage_ids?: string[]; image_storage_id?: string; created_at?: number },
+  echoContent: string,
+  msgTimestamp: number,
+): boolean {
+  const echoed = injectedImageStorageIds(echoContent);
+  if (echoed.length > 0) {
+    const pendingIds = pm.image_storage_ids ?? (pm.image_storage_id ? [pm.image_storage_id] : []);
+    return pendingIds.some((id) => echoed.includes(id));
+  }
+  return Math.abs(msgTimestamp - (pm.created_at || 0)) < 120_000;
+}
+
 export const addMessage = mutation({
   args: {
     conversation_id: v.id("conversations"),
@@ -359,6 +395,7 @@ export const addMessage = mutation({
       tool_use_id: v.optional(v.string()),
     }))),
     subtype: v.optional(v.string()),
+    model: v.optional(v.string()),
     timestamp: v.optional(v.number()),
     api_token: v.optional(v.string()),
   },
@@ -409,6 +446,7 @@ export const addMessage = mutation({
           tool_results: safeToolResults,
           images: args.images,
           subtype: args.subtype,
+          model: args.model,
         });
         if (patch) {
           await ctx.db.patch(existing._id, patch);
@@ -457,7 +495,7 @@ export const addMessage = mutation({
         const contentMatch = cFlat === pcFlat || c === pc;
         if (!contentMatch) return false;
         if (!cFlat && !pcFlat) {
-          return Math.abs(msgTimestamp - (pm.created_at || 0)) < 120_000;
+          return imageEchoMatchesPending(pm, safeContent || "", msgTimestamp);
         }
         return true;
       });
@@ -485,6 +523,7 @@ export const addMessage = mutation({
       tool_results: safeToolResults,
       images,
       subtype: args.subtype,
+      model: args.model,
       client_id: clientIdToStore,
       timestamp: msgTimestamp,
     });
@@ -494,7 +533,8 @@ export const addMessage = mutation({
 
     // Mirror addMessages' API-error banner supersession on the single-message
     // retry path so a banner inserted here is cleared once a real turn lands.
-    const msgIsBanner = args.role === "assistant" && isApiErrorBanner(contentToStore);
+    const msgBannerKind = args.role === "assistant" ? classifyApiErrorBanner(contentToStore) : null;
+    const msgIsBanner = msgBannerKind !== null;
     const msgIsRealTurn =
       !msgIsBanner &&
       ((args.role === "assistant" && (!!contentToStore?.trim() || (safeToolCalls?.length ?? 0) > 0)) ||
@@ -519,6 +559,10 @@ export const addMessage = mutation({
     };
     if (msgIsBanner !== wasPendingApiError) {
       convPatch.pending_api_error = msgIsBanner;
+    }
+    const nextBannerKind = msgIsBanner ? msgBannerKind : undefined;
+    if ((conversation.pending_api_error_kind ?? undefined) !== nextBannerKind) {
+      convPatch.pending_api_error_kind = nextBannerKind;
     }
     if (args.role === "user" && contentToStore?.trim()) {
       convPatch.last_message_preview = redactSecrets(contentToStore).replace(/\[Image[:\s][^\]]*\]/gi, "").trim().slice(0, 200);
@@ -663,6 +707,7 @@ const messageValidator = v.object({
     tool_use_id: v.optional(v.string()),
   }))),
   subtype: v.optional(v.string()),
+  model: v.optional(v.string()),
   timestamp: v.optional(v.number()),
 });
 
@@ -747,6 +792,7 @@ export const addMessages = mutation({
             tool_results: safeToolResults,
             images: msg.images,
             subtype: msg.subtype,
+            model: msg.model,
           });
           if (patch) {
             await ctx.db.patch(existing._id, patch);
@@ -806,7 +852,7 @@ export const addMessages = mutation({
           const contentMatch = cFlat === pcFlat || c === pc;
           if (!contentMatch) return false;
           if (!cFlat && !pcFlat) {
-            return Math.abs(msgTimestamp - (pm.created_at || 0)) < 120_000;
+            return imageEchoMatchesPending(pm, safeContent || "", msgTimestamp);
           }
           return true;
         });
@@ -838,6 +884,7 @@ export const addMessages = mutation({
         tool_results: safeToolResults,
         images,
         subtype: msg.subtype,
+        model: msg.model,
         client_id: clientIdToStore,
         timestamp: msgTimestamp,
       });
@@ -900,6 +947,12 @@ export const addMessages = mutation({
       const nextPendingApiError = isBannerMsg(newestMsg);
       if (nextPendingApiError !== wasPendingApiError) {
         convPatch.pending_api_error = nextPendingApiError;
+      }
+      const nextBannerKind = nextPendingApiError
+        ? classifyApiErrorBanner(newestMsg.content) ?? undefined
+        : undefined;
+      if ((conversation.pending_api_error_kind ?? undefined) !== nextBannerKind) {
+        convPatch.pending_api_error_kind = nextBannerKind;
       }
       const userMsgs = args.messages.filter((m) => m.role === "user");
       if (userMsgs.length > 0) {
