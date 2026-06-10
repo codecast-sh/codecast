@@ -64,7 +64,10 @@ describe("heartbeat carries agent_status", () => {
   test("managed started sessions stamp the real session id onto tmux", () => {
     const idx = daemonSource.indexOf("function registerManagedStartedSession");
     expect(idx).toBeGreaterThanOrEqual(0);
-    const body = daemonSource.slice(idx, idx + 900);
+    // Slice the whole function body (up to its column-0 closing brace) rather
+    // than a fixed byte window — a fixed window silently overflows when a
+    // comment is added inside the function, failing on behavior that is intact.
+    const body = daemonSource.slice(idx, daemonSource.indexOf("\n}", idx));
     expect(body).toContain('"@codecast_conversation_id"');
     expect(body).toContain('"@codecast_session_id"');
     expect(body).toContain("registerManagedSession(sessionId");
