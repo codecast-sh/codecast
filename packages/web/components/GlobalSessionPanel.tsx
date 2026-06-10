@@ -12,6 +12,7 @@ import { useConversationMessages } from "../hooks/useConversationMessages";
 import { useInboxStore, useTrackedStore, InboxSession, getSessionRenderKey, isConvexId, categorizeSessions, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend, isSessionDismissed, resolveSessionAuthor } from "../store/inboxStore";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "./ui/tooltip";
 import { cleanTitle, msgCountColor } from "../lib/conversationProcessor";
+import { getLabelColor } from "../lib/labelColors";
 import { fmtDuration } from "./scheduleCadence";
 import { isSessionMessage } from "./sessionMessage";
 import { SharePopover } from "./SharePopover";
@@ -355,8 +356,9 @@ function useUpcomingSchedule(conversationId: string): UpcomingSchedule | undefin
 
 // Badge for a session with a `cast schedule` follow-up armed: a future timed
 // run ("2h 30m"), a due-but-unclaimed run ("due"), or an event-trigger task
-// ("event"). Blue pill so upcoming work reads distinct from the amber error
-// pills and the live status dots. Shared by both SessionCard variants.
+// ("event"). sol-orange to match the schedule identity color used by the cast
+// schedule command cards and cadence chips; still distinct from the amber-500
+// login pills. Shared by both SessionCard variants.
 function ScheduleBadge({ upcoming }: { upcoming: UpcomingSchedule }) {
   const msUntil = upcoming.run_at !== undefined ? upcoming.run_at - Date.now() : undefined;
   const label = msUntil === undefined ? "event" : msUntil > 0 ? fmtDuration(msUntil) : "due";
@@ -364,7 +366,7 @@ function ScheduleBadge({ upcoming }: { upcoming: UpcomingSchedule }) {
   const more = upcoming.extra > 0 ? ` (+${upcoming.extra} more)` : "";
   return (
     <span
-      className="inline-flex items-center gap-0.5 px-1 py-0 rounded text-[9px] font-semibold tabular-nums bg-sol-blue/10 text-sol-blue border border-sol-blue/30"
+      className="inline-flex items-center gap-0.5 px-1 py-0 rounded text-[9px] font-semibold tabular-nums bg-sol-orange/10 text-sol-orange border border-sol-orange/30"
       title={`Scheduled: "${upcoming.title}" — ${when}${more}`}
     >
       <svg className="w-2 h-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
@@ -687,9 +689,10 @@ export const SessionCard = memo(function SessionCard({
             </span>
           )}
           {project !== "unknown" && (
-            <span className={`text-[10px] truncate ${
-              isWorking ? "font-medium text-sol-green/70" : "font-medium text-sol-cyan/70"
-            }`}>{project}</span>
+            <span className={`flex items-center gap-1 min-w-0 text-[10px] font-medium ${getLabelColor(project).text}`}>
+              <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${getLabelColor(project).dot}`} />
+              <span className="truncate">{project}</span>
+            </span>
           )}
           {session.worktree_name && (
             <span className="text-[9px] text-sol-cyan font-mono truncate max-w-[80px]" title={session.worktree_branch || session.worktree_name}>
@@ -1263,23 +1266,28 @@ export function SessionListPanel({
         </span>
         {projectCounts.length > 1 && (
           <div className="flex gap-1 overflow-x-auto min-w-0 pr-3" style={{ scrollbarWidth: 'none', maskImage: 'linear-gradient(to right, black calc(100% - 20px), transparent)', WebkitMaskImage: 'linear-gradient(to right, black calc(100% - 20px), transparent)' }}>
-            {projectCounts.map(([name, count]) => (
-              <button
-                key={name}
-                onClick={() => {
-                  const next = s.activeProjectFilter === name ? null : name;
-                  s.setActiveProjectFilter(next, next ? (projectPathByName[next] || null) : null);
-                }}
-                className={`flex-shrink-0 px-2 py-0.5 rounded-full text-[10px] transition-all ${
-                  s.activeProjectFilter === name
-                    ? "bg-sol-cyan/20 text-sol-cyan"
-                    : "bg-gray-400/10 text-gray-400 hover:bg-gray-400/20 hover:text-gray-500"
-                }`}
-              >
-                {name}
-                <span className="ml-0.5 opacity-50">{count}</span>
-              </button>
-            ))}
+            {projectCounts.map(([name, count]) => {
+              const pc = getLabelColor(name);
+              const active = s.activeProjectFilter === name;
+              return (
+                <button
+                  key={name}
+                  onClick={() => {
+                    const next = active ? null : name;
+                    s.setActiveProjectFilter(next, next ? (projectPathByName[next] || null) : null);
+                  }}
+                  className={`flex-shrink-0 px-2 py-0.5 rounded-full text-[10px] transition-all flex items-center gap-1 ${
+                    active
+                      ? `${pc.bg} ${pc.text} font-medium`
+                      : "bg-gray-400/10 text-gray-400 hover:bg-gray-400/20 hover:text-gray-500"
+                  }`}
+                >
+                  <span className={`w-1.5 h-1.5 rounded-full ${pc.dot} ${active ? "" : "opacity-50"}`} />
+                  {name}
+                  <span className="ml-0.5 opacity-50">{count}</span>
+                </button>
+              );
+            })}
           </div>
         )}
         <div className="flex items-center gap-2 flex-shrink-0 ml-auto">

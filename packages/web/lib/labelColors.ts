@@ -20,6 +20,8 @@ const HASH_PALETTE = [
   { bg: "bg-teal-500/10", text: "text-teal-400", border: "border-teal-500/30", dot: "bg-teal-400" },
   { bg: "bg-lime-500/10", text: "text-lime-400", border: "border-lime-500/30", dot: "bg-lime-400" },
   { bg: "bg-sky-500/10", text: "text-sky-400", border: "border-sky-500/30", dot: "bg-sky-400" },
+  { bg: "bg-amber-500/10", text: "text-amber-400", border: "border-amber-500/30", dot: "bg-amber-400" },
+  { bg: "bg-rose-500/10", text: "text-rose-400", border: "border-rose-500/30", dot: "bg-rose-400" },
 ];
 
 export function getLabelColor(name: string) {
