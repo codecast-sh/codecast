@@ -1236,6 +1236,7 @@ export function TaskListContent() {
           headerExtra={
             <>
               <SegmentedToggle
+                collapse
                 value={sourceFilter}
                 onChange={(v) => setParam({ source: v })}
                 items={[

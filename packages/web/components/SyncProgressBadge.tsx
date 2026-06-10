@@ -17,7 +17,12 @@ export function SyncProgressBadge({ scope }: { scope: string }) {
       title="Syncing the full list for this team — older items are still streaming in"
     >
       <Loader2 className="w-3 h-3 animate-spin opacity-60" />
-      syncing{progress.loaded > 0 ? ` ${progress.loaded.toLocaleString()}` : ""}
+      {/* The label drops at the list header's collapse width (≤780px, same as the
+          page title); the spinner alone carries the "still streaming" cue so the
+          badge never crowds — or overflows — a narrow toolbar row. */}
+      <span className="cq-header-collapse">
+        syncing{progress.loaded > 0 ? ` ${progress.loaded.toLocaleString()}` : ""}
+      </span>
     </span>
   );
 }

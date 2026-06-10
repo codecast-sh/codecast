@@ -76,7 +76,10 @@ export function DocumentDetailLayout({
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center justify-between px-6 py-2 border-b border-sol-border/10 flex-shrink-0">
+      {/* Wraps the action cluster to a second row rather than letting it overflow
+          (and clip its trailing icons) once the back/type/watch cluster and the
+          icons can no longer share one line — e.g. a narrow split-pane doc view. */}
+      <div className="flex flex-wrap items-center justify-between gap-y-2 px-6 py-2 border-b border-sol-border/10 flex-shrink-0">
         <div className="flex items-center gap-3">
           <Link
             href={backHref}
@@ -86,7 +89,7 @@ export function DocumentDetailLayout({
           </Link>
           {topBarLeft}
         </div>
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1 ml-auto">
           <button
             onClick={handleCopyMarkdown}
             className="p-1.5 rounded-md text-xs flex items-center gap-1 text-sol-text-dim hover:text-sol-text transition-colors"

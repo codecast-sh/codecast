@@ -330,6 +330,7 @@ export function DocListContent() {
       syncScope="docs"
       headerExtra={
         <SegmentedToggle
+          collapse
           value={sourceFilter}
           onChange={(v) => setParam({ source: v })}
           items={[
