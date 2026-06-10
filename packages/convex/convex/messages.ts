@@ -10,7 +10,7 @@ import { redactSecrets } from "./redact";
 import { markPendingDelivered } from "./pendingMessages";
 import { nextAgentStatusOnAddMessages, isApiErrorBanner, classifyApiErrorBanner, apiErrorBatchAction } from "./inboxFilters";
 import { classifyDocContent, extractTitleFromContent, inlineDocSourceKey } from "./docExtraction";
-import { extractFileChanges, hasFileChangeToolCall, type FileChange } from "./fileChanges/extractor";
+import { extractFileChanges, extractCommitHashFromContent, hasFileChangeToolCall, type FileChange } from "./fileChanges/extractor";
 
 type DocExtractionMessage = {
   role?: string;
@@ -279,6 +279,27 @@ async function materializeFileChanges(
   toolCalls: Array<{ id: string; name: string; input: string }> | undefined,
   toolResults: Array<{ tool_use_id: string; content: string; is_error?: boolean }> | undefined,
 ): Promise<void> {
+  // Late-arriving commit hashes: a `git commit` Bash RESULT lands on the next
+  // (user) message, after the commit row materialized hash-less. The string
+  // test gates the lookup, so only genuine commit outputs cost a point-read
+  // (change_key = the Bash call's toolCallId).
+  if (toolResults) {
+    for (const tr of toolResults) {
+      if (tr.is_error || !tr.tool_use_id) continue;
+      const hash = extractCommitHashFromContent(tr.content ?? "");
+      if (!hash) continue;
+      const row = await ctx.db
+        .query("file_changes")
+        .withIndex("by_conversation_change_key", (q) =>
+          q.eq("conversation_id", conversationId).eq("change_key", tr.tool_use_id),
+        )
+        .first();
+      if (row && row.change_type === "commit" && !row.commit_hash) {
+        await ctx.db.patch(row._id, { commit_hash: hash });
+      }
+    }
+  }
+
   const msg = { _id: messageId, timestamp, tool_calls: toolCalls, tool_results: toolResults };
   if (!hasFileChangeToolCall(msg)) return;
   for (const fc of extractFileChanges([msg])) {

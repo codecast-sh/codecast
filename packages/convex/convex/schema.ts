@@ -675,7 +675,13 @@ export default defineSchema({
     // cast blame: resolve a git SHA to the session that committed it. Stored
     // hashes are short (parsed from `[branch abc1234]` output), so lookups
     // range-scan [sha7, fullSha] and prefix-verify.
-    .index("by_commit_hash", ["commit_hash"]),
+    .index("by_commit_hash", ["commit_hash"])
+    // cast blame fallback: sessions often commit via compound commands whose
+    // output carries no `[branch hash]` line, so the row has a message but no
+    // hash. Blame then matches commit rows by subject + timestamp proximity.
+    .index("by_type_timestamp", ["change_type", "timestamp"])
+    // cast blame: attribute uncommitted lines to the newest edit of the file.
+    .index("by_file_path", ["file_path"]),
 
   pull_requests: defineTable({
     team_id: v.id("teams"),

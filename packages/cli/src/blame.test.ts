@@ -3,11 +3,11 @@ import {
   EMPTY_RESOLUTION,
   ZERO_SHA,
   augmentPorcelain,
+  contentLinesToMatch,
   formatDefaultBlame,
   formatGitDate,
   parseBlamePorcelain,
   sessionLabel,
-  uncommittedLinesToMatch,
   type BlameResolution,
 } from "./blame";
 
@@ -101,7 +101,7 @@ describe("formatDefaultBlame", () => {
           { conversation_id: "jx7bcdsm572w8abpms5vanx0ms88dvxv", title: "Organize commits" },
         ],
       ]),
-      byUncommittedLine: new Map([
+      byLine: new Map([
         [
           "four-uncommitted",
           { conversation_id: "jx794j1m572w8abpms5vanx0ms88dvxv", title: "Model tooltip" },
@@ -135,10 +135,33 @@ describe("sessionLabel", () => {
   });
 });
 
-describe("uncommittedLinesToMatch", () => {
-  test("collects unique trimmed uncommitted lines, skipping short ones", () => {
+describe("contentLinesToMatch", () => {
+  // The fixture's commits are authored at 1781076368s; "now" shortly after.
+  const NOW = 1781076368_000 + 60_000;
+
+  test("uncommitted lines carry no deadline; committed lines get commit-time + slack", () => {
+    const longLine = "const sessionToken = await refreshSession(user);";
+    const porcelain =
+      `0734898927ee6bfd79c0619b2b6cea59d2ba235f 1 1 1\n` +
+      `author Al\nauthor-time 1781076368\nauthor-tz -0400\nsummary x\nfilename f.ts\n` +
+      `\t${longLine}\n` +
+      PORCELAIN;
+    const lines = contentLinesToMatch(parseBlamePorcelain(porcelain), NOW);
+    const committed = lines.find((l) => l.t === longLine);
+    expect(committed?.d).toBe(1781076368_000 + 10 * 60 * 1000);
+    const uncommitted = lines.find((l) => l.t === "four-uncommitted");
+    expect(uncommitted).toBeDefined();
+    expect(uncommitted!.d).toBeUndefined();
+    // "three" is only 5 chars (below the match threshold) — excluded entirely.
+    expect(lines.find((l) => l.t === "three")).toBeUndefined();
+  });
+
+  test("lines from commits older than the window are not sent", () => {
     const parsed = parseBlamePorcelain(PORCELAIN);
-    expect(uncommittedLinesToMatch(parsed)).toEqual(["four-uncommitted"]);
+    const muchLater = NOW + 90 * 24 * 60 * 60 * 1000;
+    const lines = contentLinesToMatch(parsed, muchLater);
+    // Committed lines age out; the uncommitted line (no author-time gate) stays.
+    expect(lines).toEqual([{ t: "four-uncommitted", d: undefined }]);
   });
 });
 
@@ -154,7 +177,7 @@ describe("augmentPorcelain", () => {
         },
       ],
     ]),
-    byUncommittedLine: new Map([
+    byLine: new Map([
       ["four-uncommitted", { conversation_id: "jx794j1m572w8abpms5vanx0ms88dvxv", title: "Model tooltip" }],
     ]),
   };

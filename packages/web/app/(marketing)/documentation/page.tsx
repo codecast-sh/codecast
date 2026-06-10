@@ -381,7 +381,7 @@ cast ask "why did we use Convex?"  # natural language query
 # Recall
 cast handoff                       # context transfer doc
 cast decisions list                # architectural decisions
-cast blame src/auth.ts             # sessions that touched a file`}</Code>
+cast blame src/auth.ts             # git blame, lines resolve to sessions`}</Code>
           <Callout type="info">
             The <InlineCode>cast ask</InlineCode> command uses RAG with your session history and requires an <InlineCode>ANTHROPIC_API_KEY</InlineCode> environment variable.
           </Callout>
@@ -393,7 +393,7 @@ cast blame src/auth.ts             # sessions that touched a file`}</Code>
             <CmdRow cmd='cast context "query"' desc="Pre-work intelligence: find relevant context before starting" />
             <CmdRow cmd="cast search ..." desc="Full-text search across sessions (see Search)" />
             <CmdRow cmd="cast decisions list" desc="Recall architectural decisions" />
-            <CmdRow cmd="cast blame <file>" desc="Which sessions touched a file" />
+            <CmdRow cmd="cast blame <file>" desc="Drop-in git blame; author column shows the session that wrote each line" />
           </CmdTable>
 
           <Heading id="memory-how-it-works" level={3}>How It Works</Heading>

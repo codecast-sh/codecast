@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import {
+  SUMMARY_MATCH_WINDOW_MS,
   isValidBlameSha,
+  matchLinesToEdits,
   matchUncommittedLines,
+  pickRowBySummary,
   pickRowForSha,
   type CommitRowLite,
   type EditRowLite,
@@ -53,6 +56,33 @@ describe("pickRowForSha", () => {
   });
 });
 
+// The fallback for session commits whose output carried no `[branch hash]`
+// line (compound commands, -q): match subject + timestamp proximity.
+describe("pickRowBySummary", () => {
+  const T = 1_781_000_000_000;
+  const row = (overrides: Partial<CommitRowLite>): CommitRowLite =>
+    commitRow({ commit_hash: undefined, commit_message: "fix: thing\n\nbody", timestamp: T, ...overrides });
+
+  test("matches on the exact subject line within the window", () => {
+    expect(pickRowBySummary("fix: thing", T + 30_000, [row({})])).not.toBeNull();
+  });
+
+  test("prefers the closest row in time", () => {
+    const near = row({ timestamp: T + 10_000, conversation_id: "near" });
+    const far = row({ timestamp: T + 300_000, conversation_id: "far" });
+    expect(pickRowBySummary("fix: thing", T, [far, near])?.conversation_id).toBe("near");
+  });
+
+  test("rejects different subjects and out-of-window rows", () => {
+    expect(pickRowBySummary("fix: other", T, [row({})])).toBeNull();
+    expect(
+      pickRowBySummary("fix: thing", T + SUMMARY_MATCH_WINDOW_MS + 1000, [row({})]),
+    ).toBeNull();
+    expect(pickRowBySummary("", T, [row({})])).toBeNull();
+    expect(pickRowBySummary("fix: thing", T, [row({ commit_message: undefined })])).toBeNull();
+  });
+});
+
 const editRow = (overrides: Partial<EditRowLite>): EditRowLite => ({
   conversation_id: "conv1",
   message_id: "msg1",
@@ -86,6 +116,36 @@ describe("matchUncommittedLines", () => {
   test("leaves unmatched lines out", () => {
     const row = editRow({ new_content: "something else entirely" });
     expect(matchUncommittedLines(["const missing = lineNotInAnyEdit();"], [row]).size).toBe(0);
+  });
+});
+
+describe("matchLinesToEdits deadlines", () => {
+  const line = "const sessionToken = await refreshSession(user);";
+
+  test("an edit after the deadline cannot claim a committed line", () => {
+    // A later rewrite (e.g. a review session moving the block) contains the
+    // text but postdates the commit — the original authoring edit wins.
+    const authoring = editRow({ new_content: line, timestamp: 100, conversation_id: "author" });
+    const rewrite = editRow({ new_content: line, timestamp: 900, conversation_id: "mover" });
+    const matches = matchLinesToEdits([{ text: line, deadline: 200 }], [authoring, rewrite]);
+    expect(matches.get(line)?.conversation_id).toBe("author");
+  });
+
+  test("no eligible edit means no match", () => {
+    const rewrite = editRow({ new_content: line, timestamp: 900 });
+    expect(matchLinesToEdits([{ text: line, deadline: 200 }], [rewrite]).size).toBe(0);
+  });
+
+  test("duplicate text keeps the most permissive deadline", () => {
+    const row = editRow({ new_content: line, timestamp: 500 });
+    const matches = matchLinesToEdits(
+      [
+        { text: line, deadline: 200 },
+        { text: line }, // also present uncommitted — no deadline
+      ],
+      [row],
+    );
+    expect(matches.get(line)).toBe(row);
   });
 });
 
