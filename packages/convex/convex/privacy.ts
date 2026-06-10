@@ -235,6 +235,46 @@ export function resolveTeamForPath(
   return { teamId: resolvedTeamId, isPrivate, autoShared };
 }
 
+// Sharing a conversation (is_private → false) MUST guarantee a team_id, or the
+// conversation becomes "shared with nobody": every team-visibility check
+// short-circuits on `!team_id` (see isConversationTeamVisible), so no teammate
+// can see it even though it reads as non-private. This builds the patch that
+// flips a conversation shared while ensuring it carries a team:
+//   1. keep an already-assigned team_id,
+//   2. else re-resolve from the owner's directory mappings (the creation rule),
+//   3. else fall back to the owner's active/default team.
+// team_id is only omitted if the owner belongs to no team at all.
+export async function buildShareUpdate(
+  ctx: DbCtx,
+  conversation: { team_id?: Id<"teams">; git_root?: string; project_path?: string },
+  ownerId: Id<"users">
+): Promise<{ is_private: false; team_id?: Id<"teams"> }> {
+  const updates: { is_private: false; team_id?: Id<"teams"> } = { is_private: false };
+  if (conversation.team_id) {
+    updates.team_id = conversation.team_id;
+    return updates;
+  }
+
+  const mappings = await ctx.db
+    .query("directory_team_mappings")
+    .withIndex("by_user_id", (q: any) => q.eq("user_id", ownerId))
+    .collect();
+  const { teamId } = resolveTeamForPath(
+    mappings as DirectoryMapping[],
+    conversation.git_root || conversation.project_path,
+    undefined
+  );
+  if (teamId) {
+    updates.team_id = teamId;
+    return updates;
+  }
+
+  const owner = await ctx.db.get(ownerId);
+  const fallback = owner?.active_team_id ?? owner?.team_id;
+  if (fallback) updates.team_id = fallback;
+  return updates;
+}
+
 // ── Visibility modes ──
 
 export type VisibilityMode = "full" | "detailed" | "summary" | "minimal";
