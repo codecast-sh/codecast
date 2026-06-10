@@ -13142,7 +13142,7 @@ async function main(): Promise<void> {
     if (messageRetryTimers.has(messageId)) return;
     if (retryCount >= 10) {
       logDelivery(`msg=${messageId.slice(0, 8)} exceeded max retries (10), marking undeliverable`);
-      syncService.updateMessageStatus({ messageId, status: "undeliverable" as any }).catch(logConvexFailure);
+      syncService.updateMessageStatus({ messageId, status: "undeliverable" }).catch(logConvexFailure);
       return;
     }
     const delays = [1000, 5000, 15000, 30000, 60000];
@@ -13172,8 +13172,8 @@ async function main(): Promise<void> {
     try {
       logDelivery("Setting up pending messages subscription");
       unsubscribe = subscriptionClient.onUpdate(
-        "pendingMessages:getPendingMessages" as any,
-        { user_id: config.user_id, api_token: config.auth_token },
+        "pendingMessages:getPendingMessagesForDaemon" as any,
+        { api_token: config.auth_token, device_id: deviceId() },
         async (messages: any) => {
           selfHealIfTimersStalled("convex");
           if (!messages) {
@@ -13184,10 +13184,16 @@ async function main(): Promise<void> {
             if (messages.length > 0) {
               logDelivery(`Subscription: ${messages.length} pending message(s) received`);
             }
-            for (const msg of messages) {
+            for (const pendingMsg of messages) {
+              const claimed = await syncService.claimPendingMessageForDelivery(pendingMsg._id);
+              if (!claimed) {
+                logDelivery(`Skipping msg=${pendingMsg._id.slice(0, 8)} - not owned by this daemon`);
+                continue;
+              }
+              const msg = { ...pendingMsg, ...claimed };
               if ((msg.retry_count ?? 0) >= 12) {
                 logDelivery(`msg=${msg._id.slice(0, 8)} retry_count=${msg.retry_count} exceeds cap, marking undeliverable`);
-                syncService.updateMessageStatus({ messageId: msg._id, status: "undeliverable" as any }).catch(logConvexFailure);
+                syncService.updateMessageStatus({ messageId: msg._id, status: "undeliverable" }).catch(logConvexFailure);
                 continue;
               }
               const inFlight = messagesInFlight.get(msg._id);

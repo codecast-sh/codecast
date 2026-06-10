@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { markPendingDelivered, isControlMessage, resetConversationPendingMessages, planStuckMessageHeal } from "./pendingMessages";
+import {
+  canDaemonSeePendingMessage,
+  claimPendingMessageForDaemon,
+  isControlMessage,
+  markPendingDelivered,
+  planStuckMessageHeal,
+  resetConversationPendingMessages,
+  updatePendingMessageStatusForDaemon,
+} from "./pendingMessages";
 
 // Fake ctx.db that records patches and answers by_conversation_status lookups from a
 // configurable set of "other" rows still in flight for the conversation.
@@ -65,6 +73,16 @@ describe("markPendingDelivered", () => {
     expect(patches).toHaveLength(0);
   });
 
+  test("is a no-op for a cancelled message (cancelled is terminal)", async () => {
+    const { ctx, patches } = createCtx({ remainingByStatus: {} });
+    await markPendingDelivered(ctx as any, {
+      _id: "m1" as any,
+      conversation_id: "c1" as any,
+      status: "cancelled",
+    });
+    expect(patches).toHaveLength(0);
+  });
+
   test("does NOT clear the conversation flag while another pending message remains", async () => {
     const { ctx, patches } = createCtx({
       remainingByStatus: { pending: { _id: "m2" } },
@@ -91,6 +109,93 @@ describe("markPendingDelivered", () => {
 
     expect(patches.find((p) => p.id === "m1")?.patch.status).toBe("delivered");
     expect(patches.find((p) => p.id === "c1")).toBeUndefined();
+  });
+});
+
+const createOwnerCtx = (records: Record<string, any>) => {
+  const patches: Array<{ id: string; patch: Record<string, unknown> }> = [];
+  const ctx = {
+    db: {
+      async get(id: string) {
+        return records[id] ?? null;
+      },
+      async patch(id: string, patch: Record<string, unknown>) {
+        patches.push({ id, patch });
+        records[id] = { ...records[id], ...patch };
+      },
+      query(_table: string) {
+        return {
+          withIndex(_index: string, builder: (q: any) => unknown) {
+            builder({ eq: () => ({ eq: () => {} }) });
+            return {
+              async first() {
+                return null;
+              },
+            };
+          },
+        };
+      },
+    },
+  };
+  return { ctx, patches, records };
+};
+
+describe("daemon pending-message ownership", () => {
+  test("only the owner daemon can see, claim, and mark a pending row", async () => {
+    const records: Record<string, any> = {
+      c1: { _id: "c1", user_id: "u1", owner_device_id: "dev-owner" },
+      m1: { _id: "m1", conversation_id: "c1", from_user_id: "u1", status: "pending", retry_count: 0 },
+    };
+    const { ctx, patches } = createOwnerCtx(records);
+
+    expect(canDaemonSeePendingMessage(records.m1 as any, records.c1 as any, "u1" as any, "dev-owner")).toBe(true);
+    expect(canDaemonSeePendingMessage(records.m1 as any, records.c1 as any, "u1" as any, "dev-other")).toBe(false);
+
+    await expect(claimPendingMessageForDaemon(ctx as any, "m1" as any, "u1" as any, "dev-other")).resolves.toBeNull();
+    expect(patches).toHaveLength(0);
+
+    const skipped = await updatePendingMessageStatusForDaemon(ctx as any, "m1" as any, "u1" as any, "dev-other", { status: "injected" });
+    expect(skipped).toEqual({ updated: false, skipped: true });
+    expect(patches).toHaveLength(0);
+
+    const claimed = await claimPendingMessageForDaemon(ctx as any, "m1" as any, "u1" as any, "dev-owner");
+    expect(claimed?._id).toBe("m1");
+
+    const updated = await updatePendingMessageStatusForDaemon(ctx as any, "m1" as any, "u1" as any, "dev-owner", { status: "injected" });
+    expect(updated).toEqual({ updated: true, skipped: false });
+    expect(patches).toEqual([{ id: "m1", patch: { status: "injected" } }]);
+  });
+
+  test("legacy unowned conversations are atomically claimed before daemon delivery", async () => {
+    const records: Record<string, any> = {
+      c1: { _id: "c1", user_id: "u1" },
+      m1: { _id: "m1", conversation_id: "c1", from_user_id: "u1", status: "pending", retry_count: 0 },
+    };
+    const { ctx, patches } = createOwnerCtx(records);
+
+    const claimed = await claimPendingMessageForDaemon(ctx as any, "m1" as any, "u1" as any, "dev-a");
+    expect(claimed?._id).toBe("m1");
+    expect(records.c1.owner_device_id).toBe("dev-a");
+    expect(patches).toEqual([{ id: "c1", patch: { owner_device_id: "dev-a" } }]);
+
+    await expect(claimPendingMessageForDaemon(ctx as any, "m1" as any, "u1" as any, "dev-b")).resolves.toBeNull();
+    expect(patches).toHaveLength(1);
+  });
+
+  test("terminal delivered and cancelled rows cannot be revived by daemon status updates", async () => {
+    for (const status of ["delivered", "cancelled"]) {
+      const records: Record<string, any> = {
+        c1: { _id: "c1", user_id: "u1" },
+        m1: { _id: "m1", conversation_id: "c1", from_user_id: "u1", status, retry_count: 4 },
+      };
+      const { ctx, patches } = createOwnerCtx(records);
+
+      const result = await updatePendingMessageStatusForDaemon(ctx as any, "m1" as any, "u1" as any, "dev-owner", { status: "pending" });
+      expect(result).toEqual({ updated: false, skipped: true });
+      expect(patches).toHaveLength(0);
+      expect(records.m1.status).toBe(status);
+      expect(records.c1.owner_device_id).toBeUndefined();
+    }
   });
 });
 
@@ -140,6 +245,7 @@ describe("resetConversationPendingMessages", () => {
       { _id: "m_undeliverable", status: "undeliverable", retry_count: 12 },
       { _id: "m_pending", status: "pending", retry_count: 0 },
       { _id: "m_delivered", status: "delivered", retry_count: 1, delivered_at: 456 },
+      { _id: "m_cancelled", status: "cancelled", retry_count: 1 },
     ];
     const { ctx, patches } = createCollectCtx(messages);
 
@@ -156,6 +262,7 @@ describe("resetConversationPendingMessages", () => {
     // Already-pending and terminal-delivered rows must not be touched.
     expect(patches.find((x) => x.id === "m_pending")).toBeUndefined();
     expect(patches.find((x) => x.id === "m_delivered")).toBeUndefined();
+    expect(patches.find((x) => x.id === "m_cancelled")).toBeUndefined();
     // Conversation is re-flagged as having pending work so the inbox/daemon notice it.
     expect(patches.find((x) => x.id === "c1")?.patch).toEqual({ has_pending_messages: true });
   });
