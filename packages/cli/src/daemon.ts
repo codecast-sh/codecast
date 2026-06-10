@@ -10119,13 +10119,16 @@ async function deliverMessage(
         // intermittently for fresh sessions, raise this back up first.
         await new Promise(resolve => setTimeout(resolve, 500));
         const startedTmuxTarget = entry.tmuxSession + ":0.0";
-        // Paste first — the local send-keys IS the delivery and must not wait on Convex. Mark
-        // "injected" best-effort after: the content-matched ack in addMessages flips the row to
-        // "delivered" when Claude echoes the message to JSONL, so a blocking mark before the
-        // paste is both unnecessary and a hang risk (an un-timed mark wedged the live-tmux path
-        // for the full 180s timeout under Convex load).
-        await injectViaTmux(startedTmuxTarget, content);
+        // Mark "injected" best-effort (non-blocking) BEFORE the paste. The mark is fire-and-forget
+        // with an 8s timeout (markInjectedBestEffort), so it can never wedge delivery the way the
+        // old un-timed `await updateMessageStatus` did. Marking before the inject closes the
+        // doubled-message race: the inject makes Claude echo the message to JSONL within ms, and
+        // addMessages' content-matched ack only promotes an EXISTING "injected"/"pending" row to
+        // "delivered". If we marked after and the ack won the race it would find no row and the
+        // daemon's later mark would strand the row "injected", which the 120s retry cron re-pends
+        // → duplicate reply. Marking first guarantees the ack always has a row to promote.
         markInjectedBestEffort(syncService, messageId);
+        await injectViaTmux(startedTmuxTarget, content);
         syncService.updateSessionAgentStatus(conversationId, "connected").catch(logConvexFailure);
         log(`Injected message to started session tmux ${entry.tmuxSession} for conversation ${conversationId.slice(0, 12)}`);
         const isPollResponse = !!parsePollMessage(content);
@@ -10232,14 +10235,15 @@ async function deliverMessage(
     const injectTarget = live.tmuxTarget.includes(":") ? live.tmuxTarget : live.tmuxTarget + ":0.0";
     const tmuxSessionName = injectTarget.split(":")[0];
     try {
-      // Paste first — the local send-keys IS the delivery and must not wait on Convex. Mark
-      // "injected" best-effort after (never a blocking await before): an un-timed mark here was
-      // wedging the whole delivery for the 180s timeout under Convex load, so the paste never
-      // ran. Correctness is preserved by the content-matched ack in addMessages, which flips the
-      // pending row to "delivered" when Claude echoes the message to its JSONL regardless of the
-      // intermediate "injected" status.
-      await injectViaTmux(injectTarget, content);
+      // Mark "injected" best-effort (non-blocking) BEFORE the paste. markInjectedBestEffort is
+      // fire-and-forget with an 8s timeout, so it can't wedge the paste the way the old un-timed
+      // `await updateMessageStatus` did. Marking first closes the doubled-message race: the paste
+      // makes Claude echo the message to JSONL within ms; addMessages' content-matched ack only
+      // promotes an EXISTING row to "delivered". If we marked after and the ack ran first it would
+      // find no row, the daemon's later mark would strand the row "injected", and the 120s retry
+      // cron would re-pend it → duplicate reply. Marking first guarantees the ack has a row.
       markInjectedBestEffort(syncService, messageId);
+      await injectViaTmux(injectTarget, content);
       // A process-discovered pane can go stale between scan and inject — verify the agent
       // survived and fall through to auto-resume if it crashed (the original optimistic path).
       if (live.source === "process" && !(await isTmuxAgentAlive(tmuxSessionName))) {
@@ -10267,8 +10271,10 @@ async function deliverMessage(
     const termLabel = getTerminalLabel(live.proc.termProgram);
     logDelivery(`Trying ${termLabel} injection for tty=${live.proc.tty}`);
     try {
-      await injectViaTerminal(live.proc.tty, content, live.proc.termProgram);
+      // Mark "injected" best-effort (non-blocking) BEFORE the terminal paste — same ack-race
+      // reasoning and same wedge-safety (fire-and-forget 8s timeout) as the tmux paths above.
       markInjectedBestEffort(syncService, messageId);
+      await injectViaTerminal(live.proc.tty, content, live.proc.termProgram);
       logDelivery(`Injected via ${termLabel} tty=${live.proc.tty}`);
       return true;
     } catch (err) {
