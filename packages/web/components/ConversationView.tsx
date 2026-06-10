@@ -93,10 +93,12 @@ import { getApplyPatchInput, parseApplyPatchSections } from "../lib/applyPatchPa
 import { parseFileChangeSummary, parseUnifiedDiffSections } from "../lib/unifiedDiffParser";
 import { setupDesktopDrag, desktopHeaderClass } from "../lib/desktop";
 import { MessageNavButton } from "./MessageBrowserPopover";
+import { MessageActionToolbar } from "./MessageActionToolbar";
 import type { MentionItem } from "./editor/MentionList";
 import { CheckSquare, FileText, MessageSquare, MoreHorizontal, Map as MapIcon, User, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split } from "lucide-react";
 import { ComposeEditor, type ComposeEditorHandle } from "./editor/ComposeEditor";
 import { useMentionQuery } from "../hooks/useMentionQuery";
+import { useConversationMessageMetadata, type MessageMetadata } from "../hooks/useConversationMessageMetadata";
 
 const sacredInputs = new Map<string, { text: string; images?: any[] }>();
 const EMPTY_PENDING: any[] = [];
@@ -2108,7 +2110,7 @@ interface ToolCallChangeSelection {
   range: ToolChangeRange;
 }
 
-function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode, messageId, conversationId, onStartShareSelection, onOpenComments, collapsed, timestamp, images, globalImageMap }: { tool: ToolCall; result?: ToolResult; changeIndex?: number; changeRange?: ToolChangeRange; shareSelectionMode?: boolean; messageId?: string; conversationId?: Id<"conversations">; onStartShareSelection?: (messageId: string) => void; onOpenComments?: () => void; collapsed?: boolean; timestamp?: number; images?: ImageData[]; globalImageMap?: Record<string, ImageData> }) {
+function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode, messageId, conversationId, onStartShareSelection, onOpenComments, collapsed, timestamp, images, globalImageMap, metadata }: { tool: ToolCall; result?: ToolResult; changeIndex?: number; changeRange?: ToolChangeRange; shareSelectionMode?: boolean; messageId?: string; conversationId?: Id<"conversations">; onStartShareSelection?: (messageId: string) => void; onOpenComments?: () => void; collapsed?: boolean; timestamp?: number; images?: ImageData[]; globalImageMap?: Record<string, ImageData>; metadata?: MessageMetadata }) {
   const isApplyPatch = tool.name === "apply_patch";
   const isStandardEdit = tool.name === "Edit" || tool.name === "Write" || tool.name === "file_edit" || tool.name === "file_write";
   const isFileChange = tool.name === "fileChange";
@@ -2508,7 +2510,7 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
   };
 
   if (isPlanWrite && content) {
-    return <PlanBlock content={content} timestamp={timestamp || Date.now()} collapsed={collapsed} messageId={messageId} conversationId={conversationId} onOpenComments={onOpenComments} onStartShareSelection={onStartShareSelection} />;
+    return <PlanBlock content={content} timestamp={timestamp || Date.now()} collapsed={collapsed} messageId={messageId} conversationId={conversationId} onOpenComments={onOpenComments} onStartShareSelection={onStartShareSelection} metadata={metadata} />;
   }
 
   const isCodecastImageRead = isRead && /codecast\/images\//.test(filePath);
@@ -4776,7 +4778,7 @@ function TeammateMessageCard({ teammateId, color, summary, content }: { teammate
   );
 }
 
-function UserPromptImpl({ content, timestamp, messageId, conversationId, collapsed, userName, avatarUrl, onOpenComments, isHighlighted, shareSelectionMode, isSelectedForShare, onToggleShareSelection, onStartShareSelection, onForkFromMessage, forkChildren, messageUuid, images, onBranchSwitch, activeBranchId, loadingBranchId, isPending, isQueued, mainMessageCount }: { content: string; timestamp: number; messageId: string; conversationId?: Id<"conversations">; collapsed?: boolean; userName?: string; avatarUrl?: string | null; onOpenComments?: (messageId: string) => void; isHighlighted?: boolean; shareSelectionMode?: boolean; isSelectedForShare?: boolean; onToggleShareSelection?: (messageId: string) => void; onStartShareSelection?: (messageId: string) => void; onForkFromMessage?: (messageUuid: string) => void; forkChildren?: ForkChild[]; messageUuid?: string; images?: ImageData[]; onBranchSwitch?: (messageUuid: string, convId: string | null) => void; activeBranchId?: string | null; loadingBranchId?: string | null; isPending?: boolean; isQueued?: boolean; mainMessageCount?: number }) {
+function UserPromptImpl({ content, timestamp, messageId, conversationId, collapsed, userName, avatarUrl, onOpenComments, isHighlighted, shareSelectionMode, isSelectedForShare, onToggleShareSelection, onStartShareSelection, onForkFromMessage, forkChildren, messageUuid, images, onBranchSwitch, activeBranchId, loadingBranchId, isPending, isQueued, mainMessageCount, metadata }: { content: string; timestamp: number; messageId: string; conversationId?: Id<"conversations">; collapsed?: boolean; userName?: string; avatarUrl?: string | null; onOpenComments?: (messageId: string) => void; isHighlighted?: boolean; shareSelectionMode?: boolean; isSelectedForShare?: boolean; onToggleShareSelection?: (messageId: string) => void; onStartShareSelection?: (messageId: string) => void; onForkFromMessage?: (messageUuid: string) => void; forkChildren?: ForkChild[]; messageUuid?: string; images?: ImageData[]; onBranchSwitch?: (messageUuid: string, convId: string | null) => void; activeBranchId?: string | null; loadingBranchId?: string | null; isPending?: boolean; isQueued?: boolean; mainMessageCount?: number; metadata?: MessageMetadata }) {
   const [isExpanded, setIsExpanded] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
   const [isTruncated, setIsTruncated] = useState(false);
@@ -4817,15 +4819,8 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
     return () => { document.removeEventListener('keydown', handleKey); document.body.style.overflow = ''; };
   }, [fullscreen]);
 
-  const isRealMessageId = !!messageId && isConvexId(messageId);
-  const commentCount = useQuery(api.comments.getCommentCount,
-    isRealMessageId ? { message_id: messageId as Id<"messages"> } : "skip"
-  );
-
-  const isBookmarked = useQuery(
-    api.bookmarks.isBookmarked,
-    isRealMessageId ? { message_id: messageId as Id<"messages"> } : "skip"
-  );
+  const commentCount = metadata?.commentCount;
+  const isBookmarked = metadata?.isBookmarked;
   const toggleBookmark = useMutation(api.bookmarks.toggleBookmark);
 
   const handleCopy = () => {
@@ -4853,73 +4848,21 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
 
   return (
     <div id={`msg-${messageId}`} className={`group relative scroll-mt-20 bg-sol-blue/10 -mx-4 px-4 py-4 rounded-lg border border-sol-blue/30 ${effectivelyCollapsed ? "mb-2" : "mb-6"} transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg message-highlight" : ""} ${shareSelectionMode ? "cursor-pointer" : ""} ${isSelectedForShare ? "bg-sol-cyan/10 border-2 border-sol-cyan ring-2 ring-sol-cyan/30" : ""} ${isPending ? "opacity-80 pending-stripes" : isQueued ? "opacity-90 queued-pulse" : ""}`} style={{ '--image-fade-bg': 'color-mix(in srgb, var(--sol-blue) 10%, var(--sol-bg))' } as React.CSSProperties} onClick={shareSelectionMode ? (() => onToggleShareSelection?.(messageId)) : undefined}>
-      <div className={`absolute -top-2 right-0 transition-opacity flex gap-0.5 z-10 bg-sol-bg rounded shadow-md px-0.5 ${shareSelectionMode ? "opacity-0 pointer-events-none" : "opacity-100"}`}>
-        {onStartShareSelection && (
-          <button
-            onClick={() => onStartShareSelection(messageId)}
-            className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary"
-            title="Share message"
-            aria-label="Share message"
-          >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
-            </svg>
-          </button>
-        )}
-        <button
-          onClick={handleCopyLink}
-          className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary"
-          title="Copy link to message"
-          aria-label="Copy link to message"
-        >
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-          </svg>
-        </button>
-        <button
-          onClick={handleToggleBookmark}
-          className={`p-1.5 rounded hover:bg-sol-bg-alt ${isBookmarked ? "text-amber-400" : "text-sol-text-dim hover:text-sol-text-secondary"}`}
-          title={isBookmarked ? "Remove bookmark" : "Bookmark message"}
-          aria-label={isBookmarked ? "Remove bookmark" : "Bookmark message"}
-        >
-          <svg className="w-4 h-4" fill={isBookmarked ? "currentColor" : "none"} viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
-          </svg>
-        </button>
-        <button
-          onClick={() => onOpenComments?.(messageId)}
-          className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary flex items-center gap-1"
-          title="Comments"
-          aria-label="Comments"
-        >
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
-          </svg>
-          {commentCount !== undefined && commentCount > 0 && (
-            <span className="text-xs">{commentCount}</span>
-          )}
-        </button>
-        {onForkFromMessage && messageUuid && (
-          <button
-            onClick={() => onForkFromMessage(messageUuid)}
-            className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary"
-            title="Fork from this message"
-            aria-label="Fork from this message"
-          >
-            <Split className="w-4 h-4" />
-          </button>
-        )}
-        <button
-          onClick={handleCopy}
-          className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary"
-          title="Copy message"
-          aria-label="Copy message"
-        >
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-          </svg>
-        </button>
-      </div>
+      <MessageActionToolbar
+        messageId={messageId}
+        className={`absolute -top-2 right-0 transition-opacity flex gap-0.5 z-10 bg-sol-bg rounded shadow-md px-0.5 ${shareSelectionMode ? "opacity-0 pointer-events-none" : "opacity-100"}`}
+        buttonClassName="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary"
+        iconClassName="w-4 h-4"
+        commentCountClassName="text-xs"
+        commentCount={commentCount}
+        isBookmarked={isBookmarked}
+        onStartShareSelection={onStartShareSelection}
+        onCopyLink={handleCopyLink}
+        onToggleBookmark={handleToggleBookmark}
+        onOpenComments={() => onOpenComments?.(messageId)}
+        onFork={onForkFromMessage && messageUuid ? () => onForkFromMessage(messageUuid) : undefined}
+        onCopy={handleCopy}
+      />
       <div className="flex items-center gap-2 mb-2">
         <UserIcon avatarUrl={avatarUrl} />
         <span className="text-sol-blue text-xs font-medium">{userName || "You"}</span>
@@ -5148,6 +5091,7 @@ function AssistantBlockImpl({
   onSendInlineMessage,
   isConversationActive,
   globalImageMap,
+  metadata,
 }: {
   content?: string;
   timestamp: number;
@@ -5188,6 +5132,7 @@ function AssistantBlockImpl({
   onSendInlineMessage?: (content: string) => void;
   isConversationActive?: boolean;
   globalImageMap?: Record<string, ImageData>;
+  metadata?: MessageMetadata;
 }) {
   const COLLAPSED_LINES = 2;
   const CONTENT_MAX_HEIGHT = 800;
@@ -5214,15 +5159,8 @@ function AssistantBlockImpl({
   const hasToolCalls = toolCalls && toolCalls.length > 0;
   const hasImages = images?.some(img => !img.tool_use_id) ?? false;
 
-  const isRealMessageId = !!messageId && isConvexId(messageId);
-  const commentCount = useQuery(api.comments.getCommentCount,
-    isRealMessageId ? { message_id: messageId as Id<"messages"> } : "skip"
-  );
-
-  const isBookmarked = useQuery(
-    api.bookmarks.isBookmarked,
-    isRealMessageId ? { message_id: messageId as Id<"messages"> } : "skip"
-  );
+  const commentCount = metadata?.commentCount;
+  const isBookmarked = metadata?.isBookmarked;
   const toggleBookmark = useMutation(api.bookmarks.toggleBookmark);
 
   const toolResultMap = useMemo(() => {
@@ -5438,6 +5376,7 @@ function AssistantBlockImpl({
               timestamp={timestamp}
               images={images}
               globalImageMap={globalImageMap}
+              metadata={metadata}
             />
           );
         })}
@@ -5614,7 +5553,7 @@ function ToolResultMessage({ toolResults, toolName }: { toolResults: ToolResult[
   return null;
 }
 
-function SystemBlockImpl({ content, subtype, timestamp, messageUuid, messageId, conversationId, onOpenComments, onStartShareSelection }: { content: string; subtype?: string; timestamp?: number; messageUuid?: string; messageId?: string; conversationId?: Id<"conversations">; onOpenComments?: (messageId: string) => void; onStartShareSelection?: (messageId: string) => void }) {
+function SystemBlockImpl({ content, subtype, timestamp, messageUuid, messageId, conversationId, onOpenComments, onStartShareSelection, metadata }: { content: string; subtype?: string; timestamp?: number; messageUuid?: string; messageId?: string; conversationId?: Id<"conversations">; onOpenComments?: (messageId: string) => void; onStartShareSelection?: (messageId: string) => void; metadata?: MessageMetadata }) {
   if (subtype === "compact_boundary") {
     return (
       <div className="my-6 flex items-center gap-3">
@@ -5639,7 +5578,7 @@ function SystemBlockImpl({ content, subtype, timestamp, messageUuid, messageId, 
   }
 
   if (subtype === "plan" && content) {
-    return <PlanBlock content={content} timestamp={timestamp || Date.now()} messageId={messageId} conversationId={conversationId} onOpenComments={onOpenComments} onStartShareSelection={onStartShareSelection} />;
+    return <PlanBlock content={content} timestamp={timestamp || Date.now()} messageId={messageId} conversationId={conversationId} onOpenComments={onOpenComments} onStartShareSelection={onStartShareSelection} metadata={metadata} />;
   }
 
   if (subtype === "pull_request" && content) {
@@ -5906,20 +5845,15 @@ const CompactionSummaryBlock = memo(function CompactionSummaryBlock({ content }:
 
 const PLAN_MAX_HEIGHT = 1800;
 
-function PlanBlockImpl({ content, timestamp, collapsed, messageId, conversationId, onOpenComments, onStartShareSelection }: { content: string; timestamp: number; collapsed?: boolean; messageId?: string; conversationId?: Id<"conversations">; onOpenComments?: (messageId: string) => void; onStartShareSelection?: (messageId: string) => void }) {
+function PlanBlockImpl({ content, timestamp, collapsed, messageId, conversationId, onOpenComments, onStartShareSelection, metadata }: { content: string; timestamp: number; collapsed?: boolean; messageId?: string; conversationId?: Id<"conversations">; onOpenComments?: (messageId: string) => void; onStartShareSelection?: (messageId: string) => void; metadata?: MessageMetadata }) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
   const [isOverflowing, setIsOverflowing] = useState(false);
 
   const isRealMessageId = !!messageId && isConvexId(messageId);
-  const commentCount = useQuery(api.comments.getCommentCount,
-    isRealMessageId ? { message_id: messageId as Id<"messages"> } : "skip"
-  );
-  const isBookmarked = useQuery(
-    api.bookmarks.isBookmarked,
-    isRealMessageId ? { message_id: messageId as Id<"messages"> } : "skip"
-  );
+  const commentCount = metadata?.commentCount;
+  const isBookmarked = metadata?.isBookmarked;
   const toggleBookmark = useMutation(api.bookmarks.toggleBookmark);
 
   useWatchEffect(() => {
@@ -5980,49 +5914,26 @@ function PlanBlockImpl({ content, timestamp, collapsed, messageId, conversationI
           <span className="text-xs font-medium text-sol-text-muted">Plan</span>
           <span className="text-xs text-sol-text-dim">{formatRelativeTime(timestamp)}</span>
         </div>
-        <div className="flex items-center gap-0.5">
-          {onStartShareSelection && messageId && (
-            <button onClick={() => onStartShareSelection(messageId)} className="p-1 rounded hover:bg-sol-bg-highlight text-sol-text-dim hover:text-sol-text-muted transition-colors" title="Share">
-              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
-              </svg>
-            </button>
-          )}
-          {messageId && (
-            <button onClick={handleCopyLink} className="p-1 rounded hover:bg-sol-bg-highlight text-sol-text-dim hover:text-sol-text-muted transition-colors" title="Copy link">
-              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-              </svg>
-            </button>
-          )}
-          {isRealMessageId && conversationId && (
-            <button onClick={handleToggleBookmark} className={`p-1 rounded hover:bg-sol-bg-highlight ${isBookmarked ? "text-amber-400" : "text-sol-text-dim hover:text-sol-text-muted"} transition-colors`} title={isBookmarked ? "Remove bookmark" : "Bookmark"}>
-              <svg className="w-3.5 h-3.5" fill={isBookmarked ? "currentColor" : "none"} viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
-              </svg>
-            </button>
-          )}
-          {onOpenComments && messageId && (
-            <button onClick={() => onOpenComments(messageId)} className="p-1 rounded hover:bg-sol-bg-highlight text-sol-text-dim hover:text-sol-text-muted transition-colors flex items-center gap-0.5" title="Comments">
-              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
-              </svg>
-              {commentCount !== undefined && commentCount > 0 && (
-                <span className="text-[10px]">{commentCount}</span>
-              )}
-            </button>
-          )}
-          <button onClick={handleCopy} className="p-1 rounded hover:bg-sol-bg-highlight text-sol-text-dim hover:text-sol-text-muted transition-colors" title="Copy">
-            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-            </svg>
-          </button>
-          <button onClick={() => setFullscreen(true)} className="p-1 rounded hover:bg-sol-bg-highlight text-sol-text-dim hover:text-sol-text-muted transition-colors" title="Fullscreen">
-            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
-            </svg>
-          </button>
-        </div>
+        <MessageActionToolbar
+          messageId={messageId}
+          className="flex items-center gap-0.5"
+          buttonClassName="p-1 rounded hover:bg-sol-bg-highlight text-sol-text-dim hover:text-sol-text-muted transition-colors"
+          iconClassName="w-3.5 h-3.5"
+          commentCountClassName="text-[10px]"
+          commentCount={commentCount}
+          isBookmarked={isBookmarked}
+          canBookmark={!!(isRealMessageId && conversationId)}
+          onStartShareSelection={onStartShareSelection}
+          onCopyLink={messageId ? handleCopyLink : undefined}
+          onToggleBookmark={handleToggleBookmark}
+          onOpenComments={onOpenComments && messageId ? () => onOpenComments(messageId) : undefined}
+          onCopy={handleCopy}
+          onFullscreen={() => setFullscreen(true)}
+          bookmarkTitle="Bookmark"
+          copyTitle="Copy"
+          copyLinkTitle="Copy link"
+          shareTitle="Share"
+        />
       </div>
       <div className="px-4 py-3">
         <div
@@ -7895,7 +7806,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                     <span className="w-2 h-2 rounded-full bg-sol-cyan/50 animate-pulse" />
                     Sending queued ({queuedMessages.length})...
                   </span>
-                ) : agentStatus === "idle" || agentStatus === "connected" ? (
+                ) : agentStatus === "idle" ? (
                   "\u00A0"
                 ) : isThinking ? (
                   <span className="flex items-center gap-1.5">
@@ -8512,6 +8423,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const { user: currentUser } = useCurrentUser();
   const effectiveIsOwner = isOwner;
   const effectiveConversationId = conversation?._id;
+  const getMessageMetadata = useConversationMessageMetadata(effectiveConversationId);
 
   const handleSendInlineMessage = useCallback(async (content: string) => {
     if (!conversation || !effectiveConversationId) return;
@@ -10720,7 +10632,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     const msg = item.data as Message;
     if (msg.role === "system") {
       if (collapsed) return null;
-      return <SystemBlock key={msg._id} content={msg.content || ""} subtype={msg.subtype} timestamp={msg.timestamp} messageUuid={msg.message_uuid} messageId={msg._id} conversationId={conversation?._id} onOpenComments={handleOpenComments} onStartShareSelection={handleStartShareSelection} />;
+      return <SystemBlock key={msg._id} content={msg.content || ""} subtype={msg.subtype} timestamp={msg.timestamp} messageUuid={msg.message_uuid} messageId={msg._id} conversationId={conversation?._id} onOpenComments={handleOpenComments} onStartShareSelection={handleStartShareSelection} metadata={getMessageMetadata(msg._id)} />;
     }
 
     if (msg.role === "user") {
@@ -10759,13 +10671,13 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         case 'compaction_summary':
           return <CompactionSummaryBlock key={msg._id} content={msg.content!} />;
         case 'plan':
-          return <PlanBlock key={msg._id} content={kind.planContent} timestamp={msg.timestamp} collapsed={collapsed} messageId={msg._id} conversationId={conversation?._id} onOpenComments={handleOpenComments} onStartShareSelection={handleStartShareSelection} />;
+          return <PlanBlock key={msg._id} content={kind.planContent} timestamp={msg.timestamp} collapsed={collapsed} messageId={msg._id} conversationId={conversation?._id} onOpenComments={handleOpenComments} onStartShareSelection={handleStartShareSelection} metadata={getMessageMetadata(msg._id)} />;
         case 'teammate_events':
           return <TeammateEventsBlock key={msg._id} content={msg.content || ""} timestamp={msg.timestamp} />;
         case 'normal': {
           if (!msg.content?.trim() && !msg.images?.some(img => !img.tool_use_id)) return null;
           const userName = conversation?.user?.name || conversation?.user?.email?.split("@")[0];
-          return <UserPrompt key={msg._id} content={msg.content || ""} images={msg.images} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={collapsed} userName={userName} avatarUrl={conversation?.user?.avatar_url} onOpenComments={handleOpenComments} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={handleToggleMessageSelection} onStartShareSelection={handleStartShareSelection} onForkFromMessage={handleForkFromMessage} forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined} onBranchSwitch={handleBranchSwitch} activeBranchId={activeBranchId} loadingBranchId={loadingBranchId} isPending={!!msg._isOptimistic} isQueued={!!msg._isQueued} mainMessageCount={msg.message_uuid ? conversation?.main_message_counts_by_fork?.[msg.message_uuid] : undefined} />;
+          return <UserPrompt key={msg._id} content={msg.content || ""} images={msg.images} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={collapsed} userName={userName} avatarUrl={conversation?.user?.avatar_url} onOpenComments={handleOpenComments} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={handleToggleMessageSelection} onStartShareSelection={handleStartShareSelection} onForkFromMessage={handleForkFromMessage} forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined} onBranchSwitch={handleBranchSwitch} activeBranchId={activeBranchId} loadingBranchId={loadingBranchId} isPending={!!msg._isOptimistic} isQueued={!!msg._isQueued} mainMessageCount={msg.message_uuid ? conversation?.main_message_counts_by_fork?.[msg.message_uuid] : undefined} metadata={getMessageMetadata(msg._id)} />;
         }
       }
     }
@@ -10923,6 +10835,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           onSendInlineMessage={handleSendInlineMessage}
           isConversationActive={conversation?.status === "active"}
           globalImageMap={globalImageMap}
+          metadata={getMessageMetadata(msg._id)}
         />
       );
     }
