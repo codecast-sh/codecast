@@ -12,6 +12,7 @@ import { useConversationMessages } from "../hooks/useConversationMessages";
 import { useInboxStore, useTrackedStore, InboxSession, getSessionRenderKey, isConvexId, categorizeSessions, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend, isSessionDismissed, resolveSessionAuthor } from "../store/inboxStore";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "./ui/tooltip";
 import { cleanTitle, msgCountColor } from "../lib/conversationProcessor";
+import { fmtDuration } from "./scheduleCadence";
 import { isSessionMessage } from "./sessionMessage";
 import { SharePopover } from "./SharePopover";
 import { shareOrigin } from "../lib/utils";
@@ -290,10 +291,24 @@ function ForkCorner({ colorKey }: { colorKey: string }) {
 }
 
 // Badge for a session parked on an unresolved Claude Code auth/API-error banner
-// (signed out / rate-limited mid-turn). A distinct amber "login" pill with a key
-// glyph — set apart from the plain status dots so a stuck-needs-reauth session
-// reads at a glance. Shared by both SessionCard variants.
-function AuthErrorBadge() {
+// (signed out / rate-limited mid-turn). A distinct amber pill — "login" with a
+// key glyph for auth banners, "limit" with an hourglass for usage-limit banners
+// — set apart from the plain status dots so a stuck session reads at a glance.
+// Shared by both SessionCard variants.
+function AuthErrorBadge({ kind }: { kind?: string | null }) {
+  if (kind === "limit") {
+    return (
+      <span
+        className="inline-flex items-center gap-0.5 px-1 py-0 rounded text-[9px] font-semibold bg-amber-500/10 text-amber-500 border border-amber-500/30"
+        title="Usage limit reached — the session can resume once the limit resets"
+      >
+        <svg className="w-2 h-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+          <path d="M6 3h12M6 21h12M8 3v3.5c0 2 4 4 4 5.5s-4 3.5-4 5.5V21M16 3v3.5c0 2-4 4-4 5.5s4 3.5 4 5.5V21" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+        limit
+      </span>
+    );
+  }
   return (
     <span
       className="inline-flex items-center gap-0.5 px-1 py-0 rounded text-[9px] font-semibold bg-amber-500/10 text-amber-500 border border-amber-500/30"
@@ -304,6 +319,59 @@ function AuthErrorBadge() {
         <path d="M10 13L20 3M17 6l2 2M14 9l2 2" strokeLinecap="round" strokeLinejoin="round" />
       </svg>
       login
+    </span>
+  );
+}
+
+type UpcomingSchedule = { run_at?: number; title: string; extra: number };
+
+// Upcoming `cast schedule` follow-ups keyed by conversation, joined client-side
+// from the same per-user webList the /schedules page reads (Convex dedupes the
+// subscription across cards) so the hot inbox row query stays untouched. A task
+// badges both the conversation that scheduled it and the one it will continue;
+// the soonest timed run wins the label, extra armed tasks are counted.
+function useUpcomingSchedule(conversationId: string): UpcomingSchedule | undefined {
+  const tasks = useQuery(api.agentTasks.webList, {});
+  const byConversation = useMemo(() => {
+    const map = new Map<string, UpcomingSchedule>();
+    for (const task of tasks ?? []) {
+      if (task.status !== "scheduled") continue;
+      for (const convId of new Set([task.originating_conversation_id, task.target_conversation_id])) {
+        if (!convId) continue;
+        const prev = map.get(convId);
+        if (!prev) {
+          map.set(convId, { run_at: task.run_at, title: task.title, extra: 0 });
+        } else if (task.run_at !== undefined && (prev.run_at === undefined || task.run_at < prev.run_at)) {
+          map.set(convId, { run_at: task.run_at, title: task.title, extra: prev.extra + 1 });
+        } else {
+          prev.extra += 1;
+        }
+      }
+    }
+    return map;
+  }, [tasks]);
+  return byConversation.get(conversationId);
+}
+
+// Badge for a session with a `cast schedule` follow-up armed: a future timed
+// run ("2h 30m"), a due-but-unclaimed run ("due"), or an event-trigger task
+// ("event"). Blue pill so upcoming work reads distinct from the amber error
+// pills and the live status dots. Shared by both SessionCard variants.
+function ScheduleBadge({ upcoming }: { upcoming: UpcomingSchedule }) {
+  const msUntil = upcoming.run_at !== undefined ? upcoming.run_at - Date.now() : undefined;
+  const label = msUntil === undefined ? "event" : msUntil > 0 ? fmtDuration(msUntil) : "due";
+  const when = msUntil === undefined ? "runs on its event trigger" : msUntil > 0 ? `next run in ${fmtDuration(msUntil)}` : "run due now";
+  const more = upcoming.extra > 0 ? ` (+${upcoming.extra} more)` : "";
+  return (
+    <span
+      className="inline-flex items-center gap-0.5 px-1 py-0 rounded text-[9px] font-semibold tabular-nums bg-sol-blue/10 text-sol-blue border border-sol-blue/30"
+      title={`Scheduled: "${upcoming.title}" — ${when}${more}`}
+    >
+      <svg className="w-2 h-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+        <circle cx="12" cy="12" r="9" />
+        <path d="M12 7.5V12l3 2" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+      {label}
     </span>
   );
 }
@@ -374,6 +442,7 @@ export const SessionCard = memo(function SessionCard({
     () => resolveSessionAuthor(session, convMeta, currentUser, teamMembers),
     [session.user_id, session.author_name, session.author_avatar, convMeta, currentUser, teamMembers],
   );
+  const upcomingSchedule = useUpcomingSchedule(session._id);
 
   const [isDragOver, setIsDragOver] = useState(false);
   const dragCounter = useRef(0);
@@ -459,7 +528,8 @@ export const SessionCard = memo(function SessionCard({
               {isSlashCommand ? <span className="font-mono text-violet-400/80">{displayTitle}</span> : displayTitle}
             </span>
             <div className="flex items-center gap-1 flex-shrink-0">
-              {session.pending_api_error && <AuthErrorBadge />}
+              {upcomingSchedule && <ScheduleBadge upcoming={upcomingSchedule} />}
+              {session.pending_api_error && <AuthErrorBadge kind={session.pending_api_error_kind} />}
               {session.session_error && (
                 <span className="w-1.5 h-1.5 rounded-full bg-sol-red" title={session.session_error} />
               )}
@@ -660,7 +730,8 @@ export const SessionCard = memo(function SessionCard({
                 Gate
               </span>
             )}
-            {session.pending_api_error && <AuthErrorBadge />}
+            {upcomingSchedule && <ScheduleBadge upcoming={upcomingSchedule} />}
+            {session.pending_api_error && <AuthErrorBadge kind={session.pending_api_error_kind} />}
             {session.session_error && (
               <span className="w-1.5 h-1.5 rounded-full bg-sol-red" title={session.session_error} />
             )}
