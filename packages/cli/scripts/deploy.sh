@@ -6,6 +6,7 @@ cd "$(dirname "$0")/.."
 FORCE_UPDATE=false
 BUMP_TYPE="patch"
 NO_BUMP=false
+SKIP_CHECKS=false
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -17,19 +18,43 @@ while [[ $# -gt 0 ]]; do
       NO_BUMP=true
       shift
       ;;
+    --skip-checks)
+      SKIP_CHECKS=true
+      shift
+      ;;
     patch|minor|major)
       BUMP_TYPE="$1"
       shift
       ;;
     *)
-      echo "Usage: ./scripts/deploy.sh [patch|minor|major] [--force] [--no-bump]"
+      echo "Usage: ./scripts/deploy.sh [patch|minor|major] [--force] [--no-bump] [--skip-checks]"
       echo "  patch|minor|major  Version bump type (default: patch)"
       echo "  --force            Force all remote clients to update immediately"
       echo "  --no-bump          Redeploy current version (recovery after partial failure)"
+      echo "  --skip-checks      Skip the pre-deploy typecheck + test gate (NOT recommended)"
       exit 1
       ;;
   esac
 done
+
+# Pre-deploy gate: never ship binaries that don't typecheck or pass tests.
+# Hard-gates by default; `--skip-checks` is an explicit, discouraged override.
+if [[ "$SKIP_CHECKS" == "true" ]]; then
+  echo "WARNING: skipping pre-deploy typecheck + test gate (--skip-checks)"
+else
+  echo "Running pre-deploy checks (typecheck + tests)..."
+  echo "  tsc --noEmit"
+  if ! bun run typecheck; then
+    echo "ABORT: typecheck failed — fix the type errors or pass --skip-checks to override." >&2
+    exit 1
+  fi
+  echo "  bun test src/"
+  if ! bun test src/; then
+    echo "ABORT: cli tests failed — fix the failures or pass --skip-checks to override." >&2
+    exit 1
+  fi
+  echo "Pre-deploy checks passed."
+fi
 
 if [ -f .env.deploy ]; then
   export $(cat .env.deploy | xargs)

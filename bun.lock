@@ -18,7 +18,7 @@
     },
     "packages/cli": {
       "name": "@codecast/cli",
-      "version": "1.1.55",
+      "version": "1.1.56",
       "bin": {
         "codecast": "./dist/index.js",
         "cast": "./dist/index.js",
