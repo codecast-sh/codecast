@@ -64,6 +64,10 @@ export async function getOnlineLocalRoots(
     .collect();
   const roots = new Set<string>();
   for (const d of devices) {
+    // A remote box's roots are its own $HOME work dirs — surfacing them as
+    // project suggestions invites blank/new sessions onto the remote. New
+    // sessions belong to local checkouts; the remote is reached by explicit move.
+    if (d.is_remote) continue;
     if (now - d.last_seen >= DEVICE_ONLINE_MS) continue;
     for (const r of d.local_project_roots ?? []) roots.add(r);
   }

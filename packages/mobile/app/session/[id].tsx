@@ -14,7 +14,7 @@ import { useInboxStore, isConvexId } from '@codecast/web/store/inboxStore';
 import { useConversationMessages } from '@codecast/web/hooks/useConversationMessages';
 import { useEnsureDispatch } from '@codecast/web/hooks/useEnsureDispatch';
 import { PermissionCard } from '@/components/PermissionCard';
-import { DeviceChip } from '@/components/DevicesSection';
+import { DeviceChip, useRunOnDevice } from '@/components/DevicesSection';
 import { renderInlineMarkdown, MarkdownContent, MarkdownTextBlock, CodeBlockWithCopy, CodeBlockFullscreen, HighlightedCodeText } from '@/components/MarkdownRenderer';
 import { Theme, Spacing } from '@/constants/Theme';
 const LinearGradient = ({ colors, style, children, pointerEvents }: { colors: string[]; style?: any; children?: any; pointerEvents?: string }) => {
@@ -3513,6 +3513,12 @@ export default function SessionDetailScreen() {
     router.back();
   }, [id, stashSession, router]);
 
+  const showRunOnDevice = useRunOnDevice(
+    conversation && isConvexId(conversation._id) ? conversation._id : null,
+    (conversation as any)?.owner_device_id,
+    { notify: showToast },
+  );
+
   const handleMoreActions = useCallback(() => {
     const options: string[] = [];
     options.push(conversation?.is_favorite ? 'Unfavorite' : 'Favorite');
@@ -3520,6 +3526,7 @@ export default function SessionDetailScreen() {
     options.push('Search');
     options.push('Copy');
     if (conversation?.session_id) options.push('Copy Resume Command');
+    options.push('Run on Device…');
     options.push(collapsed ? 'Expand Messages' : 'Collapse Messages');
     // git_diff lives off the conversation doc now and is fetched lazily on
     // expand; surface "View Diff" whenever there's a branch (panel stays empty
@@ -3547,6 +3554,7 @@ export default function SessionDetailScreen() {
           else if (label === 'Search') setSearchVisible(v => !v);
           else if (label === 'Copy') handleCopyMenu();
           else if (label === 'Copy Resume Command') handleCopyResume();
+          else if (label === 'Run on Device…') showRunOnDevice();
           else if (label === 'Expand Messages' || label === 'Collapse Messages') setCollapsed(c => !c);
           else if (label === 'View Diff' || label === 'Hide Diff') setDiffExpanded(d => !d);
           else if (label === 'Fork Tree') setTreeModalVisible(true);
@@ -3566,6 +3574,7 @@ export default function SessionDetailScreen() {
           else if (label === 'Search') setSearchVisible(v => !v);
           else if (label === 'Copy') handleCopyMenu();
           else if (label === 'Copy Resume Command') handleCopyResume();
+          else if (label === 'Run on Device…') showRunOnDevice();
           else if (label === 'Expand Messages' || label === 'Collapse Messages') setCollapsed(c => !c);
           else if (label === 'View Diff' || label === 'Hide Diff') setDiffExpanded(d => !d);
           else if (label === 'Fork Tree') setTreeModalVisible(true);
@@ -3574,7 +3583,7 @@ export default function SessionDetailScreen() {
       })),
       { text: 'Cancel', style: 'cancel' },
     ]);
-  }, [conversation, collapsed, diffExpanded, treeResult, handleToggleFavorite, handleShareConversation, handleCopyMenu, handleCopyResume, handleDismiss]);
+  }, [conversation, collapsed, diffExpanded, treeResult, handleToggleFavorite, handleShareConversation, handleCopyMenu, handleCopyResume, handleDismiss, showRunOnDevice]);
 
   const handleConfirmShareSelection = useCallback(async () => {
     if (selectedMessageIds.size === 0) return;
@@ -3904,7 +3913,7 @@ export default function SessionDetailScreen() {
                     <RNText style={styles.gitBranchText} numberOfLines={1}>{conversation.git_branch}</RNText>
                   </Pressable>
                 )}
-                <DeviceChip ownerDeviceId={(conversation as any).owner_device_id} />
+                <DeviceChip ownerDeviceId={(conversation as any).owner_device_id} onPress={showRunOnDevice} />
                 {latestUsage && (
                   <RNView style={styles.usageBadge}>
                     <FontAwesome name="bar-chart" size={9} color={Theme.textDim} />
