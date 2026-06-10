@@ -68,6 +68,68 @@ http.route({
   }),
 });
 
+// Polled by `cast auth` while it waits on its localhost listener, so auth
+// also completes for CLIs the browser can't reach (SSH / remote machines).
+// The nonce is the CLI's one-time 256-bit secret; a claim is single-use.
+http.route({
+  path: "/cli/claim-auth",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const corsHeaders = {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type",
+    };
+
+    try {
+      const body = await request.json();
+      const nonce = body.nonce;
+
+      if (!nonce || typeof nonce !== "string") {
+        return new Response(JSON.stringify({ error: "Missing nonce" }), {
+          status: 400,
+          headers: { "Content-Type": "application/json", ...corsHeaders },
+        });
+      }
+
+      const result = await ctx.runMutation(internal.cliAuth.claim, { nonce });
+
+      // "Not deposited yet" is the normal polling answer, not an error.
+      if (!result) {
+        return new Response(JSON.stringify({ pending: true }), {
+          status: 200,
+          headers: { "Content-Type": "application/json", ...corsHeaders },
+        });
+      }
+
+      return new Response(JSON.stringify(result), {
+        status: 200,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      });
+    } catch (error) {
+      return new Response(JSON.stringify({ error: "Internal error" }), {
+        status: 500,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      });
+    }
+  }),
+});
+
+http.route({
+  path: "/cli/claim-auth",
+  method: "OPTIONS",
+  handler: httpAction(async () => {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+      },
+    });
+  }),
+});
+
 http.route({
   path: "/api/github-app/callback",
   method: "GET",

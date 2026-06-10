@@ -14,6 +14,7 @@ import type * as apiTokens from "../apiTokens.js";
 import type * as auth from "../auth.js";
 import type * as bookmarks from "../bookmarks.js";
 import type * as cleanup from "../cleanup.js";
+import type * as cliAuth from "../cliAuth.js";
 import type * as client_state from "../client_state.js";
 import type * as comments from "../comments.js";
 import type * as commits from "../commits.js";
@@ -88,6 +89,7 @@ declare const fullApi: ApiFromModules<{
   auth: typeof auth;
   bookmarks: typeof bookmarks;
   cleanup: typeof cleanup;
+  cliAuth: typeof cliAuth;
   client_state: typeof client_state;
   comments: typeof comments;
   commits: typeof commits;

@@ -11,9 +11,11 @@ function CliAuthContent() {
     isAuthenticated ? {} : "skip"
   );
   const createToken = useMutation(api.apiTokens.createToken);
+  const depositCliAuth = useMutation(api.cliAuth.deposit);
   const searchParams = useSearchParams();
   const router = useRouter();
   const [status, setStatus] = useState<"waiting" | "sending" | "success" | "error">("waiting");
+  const [viaRelay, setViaRelay] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string>("");
   const hasStartedAuth = useRef(false);
 
@@ -86,14 +88,26 @@ function CliAuthContent() {
         });
       } catch (err) {
         // fetch() only throws on a transport failure: nothing is listening on
-        // that port (cast auth not running, or it already timed out), or the
-        // browser blocked the loopback call. Name the cause — a bare "Failed to
-        // fetch" tells the user nothing.
-        console.error("Auth callback connection error:", err);
-        setStatus("error");
-        setErrorMessage(
-          `Couldn't reach the cast CLI on 127.0.0.1:${port}. It may have stopped waiting.`
-        );
+        // that port — most often because the CLI runs on a DIFFERENT machine
+        // (cast auth over SSH; 127.0.0.1 here is the browser's machine). Hand
+        // the token off through the server instead: the CLI polls for it by
+        // nonce while it waits, so a remote auth still completes hands-free.
+        console.error("Auth callback connection error, relaying via server:", err);
+        try {
+          await depositCliAuth({
+            nonce,
+            token: tokenResult.token,
+            device_name: decodeURIComponent(device),
+          });
+          setViaRelay(true);
+          setStatus("success");
+        } catch (relayErr) {
+          console.error("Auth relay deposit error:", relayErr);
+          setStatus("error");
+          setErrorMessage(
+            `Couldn't reach the cast CLI on 127.0.0.1:${port}. It may have stopped waiting.`
+          );
+        }
         return;
       }
 
@@ -112,7 +126,7 @@ function CliAuthContent() {
     };
 
     sendAuth();
-  }, [isAuthenticated, isLoading, currentUser, nonce, port, device, router, createToken]);
+  }, [isAuthenticated, isLoading, currentUser, nonce, port, device, router, createToken, depositCliAuth]);
 
   if (isLoading || !isAuthenticated) {
     return (
@@ -218,13 +232,17 @@ function CliAuthContent() {
             CLI Authenticated
           </h1>
           <p className="text-sol-text-muted mb-2">
-            Your terminal is now connected to codecast.
+            {viaRelay
+              ? "Signed in — your terminal will finish connecting in a few seconds."
+              : "Your terminal is now connected to codecast."}
           </p>
           <p className="text-sol-text-dim text-sm mb-6">
             Device: {decodeURIComponent(device)}
           </p>
           <p className="text-sol-text-muted text-sm">
-            You can close this window and return to your terminal.
+            {viaRelay
+              ? "You can close this window. If cast auth already stopped waiting, re-run it and sign in again."
+              : "You can close this window and return to your terminal."}
           </p>
         </div>
       </div>

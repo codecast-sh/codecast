@@ -12,6 +12,7 @@ import { maskToken } from "./redact.js";
 import { cliFetch, cliFetchRead } from "./cliHttp.js";
 import { CODECAST_STATUS_HOOK } from "./statusHook.js";
 import { AuthServer } from "./authServer.js";
+import { startRelayPoller } from "./authRelay.js";
 import { c, fmt, icons } from "./colors.js";
 import { ensureTmux, tryInstallTmux } from "./tmux.js";
 import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, getVisualVersion, ensureCastAlias } from "./update.js";
@@ -1640,18 +1641,32 @@ async function runAuth(): Promise<void> {
 
   const cliUrl = `${WEB_URL}/auth/cli?nonce=${nonce}&port=${port}&device=${deviceName}`;
 
-  console.log(`${fmt.muted("Opening browser for authentication...")}\n`);
-  console.log(`${fmt.muted("If the browser doesn't open, visit:")}\n  ${fmt.accent(cliUrl)}\n`);
+  // Over SSH there is no browser to open here — the user signs in on another
+  // machine, and the server relay (below) carries the token back to us.
+  const isRemoteShell = Boolean(process.env.SSH_CONNECTION || process.env.SSH_TTY);
+  if (isRemoteShell) {
+    console.log(`${fmt.muted("Remote session detected — open this URL in a browser on your computer:")}\n  ${fmt.accent(cliUrl)}\n`);
+  } else {
+    console.log(`${fmt.muted("Opening browser for authentication...")}\n`);
+    console.log(`${fmt.muted("If the browser doesn't open, visit:")}\n  ${fmt.accent(cliUrl)}\n`);
 
-  try {
-    await open(cliUrl);
-  } catch {
-    console.log(fmt.muted("Could not open browser automatically."));
+    try {
+      await open(cliUrl);
+    } catch {
+      console.log(fmt.muted("Could not open browser automatically."));
+    }
   }
 
   console.log(`${fmt.muted("Waiting for authentication (up to 5 minutes)...")}\n`);
 
-  const authResult = await authServer.waitForCallback();
+  // Two delivery paths race: the browser POSTs to our localhost listener
+  // (same-machine fast path), or — when it can't reach us — it deposits the
+  // token server-side and our relay poll claims it. waitForCallback owns the
+  // 5-minute timeout for both.
+  const relay = startRelayPoller(CONVEX_URL.replace(".cloud", ".site"), nonce);
+  const authResult = await Promise.race([authServer.waitForCallback(), relay.promise]);
+  relay.stop();
+  authServer.stop();
 
   if (!authResult || !authResult.apiToken) {
     console.error("\nAuthentication failed or timed out.");
