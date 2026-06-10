@@ -78,6 +78,7 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
     jumpToStart,
     jumpToEnd,
     jumpToTimestamp,
+    isJumpingToTarget,
   } = useConversationMessages(sessionId, targetMessageId);
 
   const convCommand = useInboxStore((s) => s.convCommand);
@@ -253,6 +254,7 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
           onBack={onBack}
           fallbackStickyContent={cleanUserMessage(lastUserMessage)}
           targetMessageId={targetMessageId}
+          isJumpingToTarget={isJumpingToTarget}
           subHeaderContent={<>
             {activePlanId && <PlanContextPanel planId={activePlanId} />}
             {workflowRunId && <WorkflowContextPanel workflowRunId={workflowRunId} />}

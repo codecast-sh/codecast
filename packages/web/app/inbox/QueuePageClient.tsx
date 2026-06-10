@@ -47,6 +47,7 @@ const InboxConversation = memo(function InboxConversation({ sessionId: liveSessi
     jumpToEnd,
     jumpToTimestamp,
     effectiveTargetMessageId,
+    isJumpingToTarget,
   } = useConversationMessages(sessionId, targetMessageId);
 
   const convCommand = useInboxStore((s) => s.convCommand);
@@ -192,6 +193,7 @@ const InboxConversation = memo(function InboxConversation({ sessionId: liveSessi
           backHref="/inbox"
           onBack={onBack}
           targetMessageId={effectiveTargetMessageId}
+          isJumpingToTarget={isJumpingToTarget}
           highlightQuery={highlightQuery}
           onClearHighlight={onClearHighlight}
           fallbackStickyContent={isOwnSession ? cleanUserMessage(lastUserMessage) : undefined}
