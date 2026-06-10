@@ -529,6 +529,21 @@ export default defineSchema({
     .index("by_user_id", ["user_id"])
     .index("by_token_hash", ["token_hash"]),
 
+  // Server-relayed `cast auth` handoffs for CLIs the browser can't reach over
+  // 127.0.0.1 (SSH / remote machines). The web page deposits the minted token
+  // keyed by a hash of the CLI's one-time nonce; the CLI polls /cli/claim-auth
+  // and the row is deleted on first claim. Rows are transient: claimed within
+  // minutes or swept (token revoked) by the cleanup cron.
+  cli_auth_requests: defineTable({
+    nonce_hash: v.string(),
+    user_id: v.id("users"),
+    token: v.string(),
+    device_name: v.string(),
+    created_at: v.number(),
+  })
+    .index("by_nonce_hash", ["nonce_hash"])
+    .index("by_created_at", ["created_at"]),
+
   pending_messages: defineTable({
     conversation_id: v.id("conversations"),
     from_user_id: v.id("users"),

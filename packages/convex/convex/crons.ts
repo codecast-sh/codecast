@@ -63,4 +63,13 @@ crons.interval(
   {}
 );
 
+crons.interval(
+  // Expired `cast auth` relay deposits (browser couldn't reach the CLI and the
+  // CLI never claimed). Revokes the orphaned token along with the row.
+  "sweep expired cli auth relays",
+  { minutes: 15 },
+  internal.cliAuth.sweepExpired,
+  {}
+);
+
 export default crons;
