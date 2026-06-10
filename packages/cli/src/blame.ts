@@ -350,5 +350,7 @@ export async function runBlameCommand(
     }
   }
 
-  console.log(formatDefaultBlame(parsed, resolution, displayLen));
+  if (parsed.lines.length > 0) {
+    console.log(formatDefaultBlame(parsed, resolution, displayLen));
+  }
 }
