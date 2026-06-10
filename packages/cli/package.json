@@ -12,7 +12,8 @@
     "dev": "bun run src/index.ts",
     "build": "bun build src/index.ts src/daemon.ts --outdir dist --target node",
     "build:binary": "bash scripts/guard-no-src-shadow.sh && bun build src/index.ts --compile --outfile codecast",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "bun test src/"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.71.2",

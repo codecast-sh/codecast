@@ -10,7 +10,9 @@
     "start": "bun run server/index.ts",
     "preview": "vite preview",
     "lint": "eslint .",
-    "typecheck": "tsc --noEmit"
+    "lint:prune-suppressions": "eslint . --prune-suppressions",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
   },
   "dependencies": {
     "@codecast/convex": "workspace:*",
@@ -94,17 +96,20 @@
     "zustand": "^5.0.9"
   },
   "devDependencies": {
+    "@eslint/js": "^9.19.0",
     "@sentry/vite-plugin": "^5.1.1",
     "@tailwindcss/typography": "^0.5.19",
     "@types/node": "^22.10.1",
     "@types/nprogress": "^0.2.3",
     "@types/react": "^19.0.1",
     "@types/react-dom": "^19.0.1",
+    "@typescript-eslint/parser": "^8.55.0",
     "@vitejs/plugin-react": "^4.5.2",
     "autoprefixer": "^10.4.20",
     "eslint": "^9.19.0",
     "eslint-plugin-react": "^7.37.5",
     "eslint-plugin-react-hooks": "^7.0.1",
+    "globals": "^15.14.0",
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.16",
     "tsx": "^4.21.0",

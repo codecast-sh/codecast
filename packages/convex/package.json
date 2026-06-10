@@ -5,7 +5,9 @@
   "license": "MIT",
   "scripts": {
     "dev": "convex dev",
-    "deploy": "convex deploy"
+    "deploy": "convex deploy",
+    "typecheck": "tsc --noEmit -p convex/tsconfig.json",
+    "test": "bun test convex/"
   },
   "dependencies": {
     "@auth/core": "^0.37.2",
