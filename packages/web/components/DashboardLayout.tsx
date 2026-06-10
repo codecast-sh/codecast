@@ -203,6 +203,7 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
   const isOnTasksPage = pathname === "/tasks" || (pathname?.startsWith("/tasks/") ?? false);
   const isOnWorkflowsPage = pathname === "/workflows" || (pathname?.startsWith("/workflows/") ?? false);
   const isOnRoutinesPage = pathname === "/routines" || (pathname?.startsWith("/routines/") ?? false);
+  const isOnSchedulesPage = pathname === "/schedules" || (pathname?.startsWith("/schedules/") ?? false);
   const isOnPlansPage = pathname === "/plans" || (pathname?.startsWith("/plans/") ?? false);
   const isOnDocsPage = pathname === "/docs" || (pathname?.startsWith("/docs/") ?? false);
   const isOnProjectsPage = pathname === "/projects" || (pathname?.startsWith("/projects/") ?? false);
@@ -211,7 +212,7 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
   // there means "I'm done configuring, take me to it", not "peek beside". Keyed off
   // the real router URL because `pathname` lies here (returns the carried tab route).
   const isOnSettingsPage = routerLocation.pathname.startsWith("/settings");
-  const isFullWidthPage = isOnConversationPage || isOnCommitPage || isOnPRPage || isOnInboxPage || isOnTasksPage || isOnWorkflowsPage || isOnRoutinesPage || isOnPlansPage || isOnDocsPage || isOnProjectsPage || isOnWindowsPage;
+  const isFullWidthPage = isOnConversationPage || isOnCommitPage || isOnPRPage || isOnInboxPage || isOnTasksPage || isOnWorkflowsPage || isOnRoutinesPage || isOnSchedulesPage || isOnPlansPage || isOnDocsPage || isOnProjectsPage || isOnWindowsPage;
 
 
   const showCollapsedRail = !s.sidePanelOpen && !isMobile;
