@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { LogoIcon } from "./Logo";
 import { useRouter } from "next/navigation";
-import { useEffect, useLayoutEffect, useRef, useState, useMemo, useImperativeHandle, forwardRef, useCallback, memo, createContext, useContext, Fragment, ComponentProps } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, useMemo, useImperativeHandle, forwardRef, useCallback, memo, createContext, useContext, Fragment, ComponentProps, type ReactElement } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useEventListener } from "../hooks/useEventListener";
 import { useWatchEffect } from "../hooks/useWatchEffect";
@@ -13,8 +13,11 @@ import ReactMarkdownBase from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import { rehypeSearchHighlight } from "../lib/rehypeSearchHighlight";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { isCommandMessage, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractSkillsFromMessages, extractFilePaths, isSystemMessage } from "../lib/conversationProcessor";
+import { isCommandMessage, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractFilePaths, isSystemMessage } from "../lib/conversationProcessor";
+import { classifyApiErrorBanner } from "@codecast/shared/contracts";
 import { getBuiltinCommands } from "../lib/builtinCommands";
+import { resolveSessionSkills } from "../lib/sessionSkills";
+import { pendingImageUploads, persistDraftImages, restoreDraftImages, settleDraftImageUpload } from "../lib/draftImages";
 import type { SkillItem } from "../lib/conversationProcessor";
 import { createReducer, reducer } from "../lib/messageReducer";
 import { UsageDisplay } from "./UsageDisplay";
@@ -27,7 +30,7 @@ import { useDiffViewerStore } from "../store/diffViewerStore";
 import { isJumpReadyToScroll, shouldLoadOlder } from "./conversationScroll";
 import { parseInsightBlocks } from "./insightBlocks";
 import { appendToDraft } from "../lib/quoteFormat";
-import { quoteToComposer, submitReview } from "../lib/reviewActions";
+import { quoteToComposer, submitReview, attachReviewToMessage } from "../lib/reviewActions";
 import { MessageReview } from "./MessageReview";
 import { SelectionQuoteToolbar } from "./SelectionQuoteToolbar";
 import { ReviewBar } from "./ReviewBar";
@@ -67,7 +70,6 @@ import { DynamicRunView, wfStatusMeta, wfFmtTokens } from "./DynamicRunView";
 const api = _typedApi as any;
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { DeviceBadge, RunOnDeviceItems } from "./DeviceBadge";
-import { CommentPanel } from "./CommentPanel";
 import { PermissionStack } from "./PermissionCard";
 import { copyToClipboard, shareOrigin, canonicalUrl } from "../lib/utils";
 import { MarkdownRenderer, isMarkdownFile, isPlanFile, CollapsibleImage } from "./tools/MarkdownRenderer";
@@ -94,7 +96,7 @@ import { parseFileChangeSummary, parseUnifiedDiffSections } from "../lib/unified
 import { setupDesktopDrag, desktopHeaderClass } from "../lib/desktop";
 import { MessageNavButton } from "./MessageBrowserPopover";
 import type { MentionItem } from "./editor/MentionList";
-import { CheckSquare, FileText, MessageSquare, MoreHorizontal, Map as MapIcon, User, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split } from "lucide-react";
+import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split } from "lucide-react";
 import { ComposeEditor, type ComposeEditorHandle } from "./editor/ComposeEditor";
 import { useMentionQuery } from "../hooks/useMentionQuery";
 
@@ -163,8 +165,14 @@ type ReactMarkdownProps = ComponentProps<typeof ReactMarkdownBase>;
  * whenever a `highlightQuery` is active in the HighlightContext. Because the plugin
  * transforms the HAST before React renders, highlights are part of the VDOM and
  * survive re-renders — avoiding the MutationObserver/TreeWalker race we used before.
+ *
+ * memo: react-markdown re-runs its full parse pipeline on every render, so a
+ * parent re-render (streaming tick, heartbeat) must bail out here whenever the
+ * props are unchanged. Only works when call sites pass module-stable plugin
+ * arrays and component maps — never inline literals. Context updates (search
+ * query) bypass memo, so highlights still repaint.
  */
-function ReactMarkdown(props: ReactMarkdownProps) {
+const ReactMarkdown = memo(function ReactMarkdown(props: ReactMarkdownProps) {
   const query = useContext(HighlightContext);
   const userPlugins = props.rehypePlugins;
   const plugins = useMemo(() => {
@@ -176,7 +184,7 @@ function ReactMarkdown(props: ReactMarkdownProps) {
     return base;
   }, [query, userPlugins]);
   return <ReactMarkdownBase {...props} rehypePlugins={plugins} />;
-}
+});
 
 // Stable plugin/component identities for message-body markdown. Inline literals at
 // the call sites made react-markdown re-run its full parse + rehype-highlight pass on
@@ -190,21 +198,81 @@ const MESSAGE_MD_COMPONENTS = {
   pre: ({ node, children, ...props }: any) => renderMarkdownPre(node, children, props),
 };
 
-// Memoized message-body renderer: skips the parse+highlight whenever the content value
-// is unchanged, even when the parent message block re-renders (blocks themselves are
-// cheap ~0.5ms; the markdown inside was the cost). The inner ReactMarkdown wrapper still
-// consumes HighlightContext, so active-search highlights update independently of this memo.
+// Stable variants for non-message-body call sites (tool results, sent-message
+// cards, command markdown, summaries). Same identity rule as above: the memo'd
+// ReactMarkdown wrapper only bails out of a re-parse when these are module consts.
+const MD_COMPONENTS_CODE_LINK = { code: MESSAGE_MD_COMPONENTS.code, a: MESSAGE_MD_COMPONENTS.a };
+const MD_COMPONENTS_NO_IMG = { ...MD_COMPONENTS_CODE_LINK, pre: MESSAGE_MD_COMPONENTS.pre };
+const MD_COMPONENTS_NO_PRE = { ...MD_COMPONENTS_CODE_LINK, img: MESSAGE_MD_COMPONENTS.img };
+
+// Cross-mount markdown render cache. React.memo only helps while a component
+// stays MOUNTED — but the message virtualizer constantly unmounts and remounts
+// rows (conversation switch, bottom-anchor correction walk, scroll-back), and
+// each remount re-ran the full remark/rehype parse: 70-300ms per block for
+// table/code-dense messages, ~350 block mounts in one switch = multi-second
+// main-thread freeze (ct-36614). react-markdown's default export is a plain
+// hook-free function (parse → hast → toJsxRuntime), so its element output is
+// pure data keyed entirely by content — cache it module-wide and a remount
+// costs only element instantiation. Map insertion order doubles as LRU.
+const MD_RENDER_CACHE = new Map<string, ReactElement>();
+const MD_RENDER_CACHE_MAX = 500;
+function renderMessageMarkdownCached(content: string): ReactElement {
+  const hit = MD_RENDER_CACHE.get(content);
+  if (hit) {
+    MD_RENDER_CACHE.delete(content);
+    MD_RENDER_CACHE.set(content, hit);
+    return hit;
+  }
+  const el = ReactMarkdownBase({
+    children: content,
+    remarkPlugins: entityRemarkPlugins,
+    rehypePlugins: MESSAGE_MD_REHYPE,
+    components: MESSAGE_MD_COMPONENTS,
+  });
+  MD_RENDER_CACHE.set(content, el);
+  if (MD_RENDER_CACHE.size > MD_RENDER_CACHE_MAX) {
+    MD_RENDER_CACHE.delete(MD_RENDER_CACHE.keys().next().value!);
+  }
+  return el;
+}
+
+// Memoized message-body renderer. With no active search, render through the
+// cross-mount cache above. An active search query changes the rendered output
+// (rehypeSearchHighlight), so that rare path bypasses the cache and goes
+// through the context-aware ReactMarkdown wrapper instead.
 const MessageMarkdown = memo(function MessageMarkdown({ content }: { content: string }) {
-  return (
-    <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE} components={MESSAGE_MD_COMPONENTS}>
-      {content}
-    </ReactMarkdown>
-  );
+  const query = useContext(HighlightContext);
+  if (query) {
+    return (
+      <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE} components={MESSAGE_MD_COMPONENTS}>
+        {content}
+      </ReactMarkdown>
+    );
+  }
+  return renderMessageMarkdownCached(content);
 });
 
-// Stable identity so MessageReview's memo holds (a fresh inline arrow at the call
-// site would defeat it). Reuses the memoized MessageMarkdown for each block.
-const renderMessageBlock = (content: string) => <MessageMarkdown content={content} />;
+// Renders an assistant message body as a flat run of block elements: ★ Insight
+// fences become InsightCards, everything else is markdown, emitted as a FRAGMENT
+// (no wrapper) so each block stays a DIRECT child of MessageReview's .cc-content
+// and remains independently hover-quotable — a wrapper div would collapse the
+// whole message into one un-quotable block. Module-level const so MessageReview's
+// memo holds (a fresh inline arrow at the call site would defeat it).
+const renderAssistantBody = (content: string) => {
+  const parts = parseInsightBlocks(content);
+  if (!parts.some((p) => p.type === "insight")) return <MessageMarkdown content={content} />;
+  return (
+    <>
+      {parts.map((part, i) =>
+        part.type === "insight" ? (
+          <InsightCard key={i} label={part.label} content={part.content} />
+        ) : (
+          <MessageMarkdown key={i} content={part.content} />
+        ),
+      )}
+    </>
+  );
+};
 
 // Persistent measured-height cache for the message virtualizer, keyed by the
 // stable per-item key (message _id) + collapse mode. It SURVIVES unmount, so
@@ -288,6 +356,7 @@ type Message = {
   tool_results?: ToolResult[];
   images?: ImageData[];
   subtype?: string;
+  model?: string;
   _isOptimistic?: true;
   _isQueued?: true;
   usage?: {
@@ -438,6 +507,10 @@ type ConversationViewProps = {
   embedded?: boolean;
   showMessageInput?: boolean;
   targetMessageId?: string;
+  /** True while a targetMessageId jump is still fetching its message window
+   * (from useConversationMessages.isJumpingToTarget). Drives the
+   * "Jumping to message..." indicator so mid-conversation jumps aren't silent. */
+  isJumpingToTarget?: boolean;
   isOwner?: boolean;
   onSendAndAdvance?: () => void;
   onSendAndDismiss?: () => void;
@@ -1136,27 +1209,27 @@ type ParsedApiError = {
   // part the user can act on by re-running /login. Rendered as a distinct
   // "re-authenticate" card instead of the generic provider-error card.
   isAuth?: boolean;
+  // True for usage/session-limit banners ("You've hit your session limit ·
+  // resets 11:30pm (America/New_York)") — the session is parked until the
+  // limit resets. Rendered as a distinct "usage limit" card.
+  isLimit?: boolean;
 };
-
-// Auth/login banners Claude Code emits when its credentials fail. Mirrors the
-// backend's API_ERROR_BANNER_RE (convex/inboxFilters.ts) — keep the two in sync.
-// Anchored at the start so a real assistant message that merely *discusses* an
-// auth error isn't mistaken for a banner.
-const AUTH_BANNER_RE =
-  /^(?:please run \/login|not logged in|invalid api key|credit balance is too low|oauth (?:token|authentication))/i;
 
 function parseApiErrorContent(content?: string | null): ParsedApiError | null {
   if (!content) return null;
   const trimmed = content.trim();
   if (!trimmed) return null;
 
-  // Auth banners are short one-liners; the length cap keeps a long prose reply
-  // that merely opens with "Please run /login" from rendering as a card. The
+  // Banner detection (auth / limit) shares the backend's classifier in
+  // @codecast/shared/contracts: anchored prefixes + a length cap keep a long
+  // prose reply that merely opens like a banner from rendering as a card. The
   // generic "API Error:"-prefixed form keeps its original anchored match (no
   // cap) so a long JSON error payload still renders as the error card.
-  const isAuth = trimmed.length <= 400 && AUTH_BANNER_RE.test(trimmed);
+  const bannerKind = classifyApiErrorBanner(trimmed);
+  const isAuth = bannerKind === "auth";
+  const isLimit = bannerKind === "limit";
   const match = trimmed.match(/^API Error:\s*(\d{3})\s*([\s\S]*)$/i);
-  if (!isAuth && !match) return null;
+  if (!isAuth && !isLimit && !match) return null;
 
   // The status code may be the leading "API Error: NNN" (generic form) or
   // embedded in an auth banner ("Please run /login · API Error: 401 …").
@@ -1202,12 +1275,18 @@ function parseApiErrorContent(content?: string | null): ParsedApiError | null {
           .replace(/^please run \/login\s*[·.\-:]*\s*/i, "")
           .replace(/^api error:\s*\d{3}\s*/i, "")
           .trim() || "This session was signed out.";
+    } else if (isLimit) {
+      // The card heading already says "limit", so drop the redundant
+      // "You've hit your" lead-in and keep the informative tail
+      // ("Session limit · resets 11:30pm (America/New_York)").
+      const detail = trimmed.replace(/^you['’]ve hit your\s*/i, "");
+      message = detail.charAt(0).toUpperCase() + detail.slice(1);
     } else {
       message = statusCode === 500 ? "Internal server error" : "API request failed";
     }
   }
 
-  return { statusCode, message, errorType, requestId, isAuth };
+  return { statusCode, message, errorType, requestId, isAuth, isLimit };
 }
 
 function ApiErrorCard({ error, compact = false }: { error: ParsedApiError; compact?: boolean }) {
@@ -1238,6 +1317,32 @@ function ApiErrorCard({ error, compact = false }: { error: ParsedApiError; compa
             This session was signed out. Run{" "}
             <code className="px-1 py-0.5 rounded bg-sol-bg-alt/60 text-sol-text-secondary font-mono">/login</code>{" "}
             in its terminal to re-authenticate, then retry.
+          </p>
+        )}
+      </div>
+    );
+  }
+
+  // Usage/session-limit banner → a "usage limit" card. Nothing is broken; the
+  // session is just parked until the limit resets, so the card leads with the
+  // reset detail instead of an error tone.
+  if (error.isLimit) {
+    return (
+      <div className={`rounded-lg border border-amber-500/40 bg-amber-500/10 ${compact ? "px-2.5 py-2" : "px-3 py-2.5"}`}>
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-amber-500/20 text-amber-500">
+            <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+              <path d="M6 3h12M6 21h12M8 3v3.5c0 2 4 4 4 5.5s-4 3.5-4 5.5V21M16 3v3.5c0 2-4 4-4 5.5s4 3.5 4 5.5V21" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </span>
+          <span className="text-xs font-semibold uppercase tracking-wide text-amber-500">
+            Usage limit reached
+          </span>
+        </div>
+        <p className="mt-1 text-sm text-amber-500">{error.message}</p>
+        {!compact && (
+          <p className="mt-1.5 text-xs text-sol-text-dim">
+            The session is paused until the limit resets — send a message after that to pick up where it left off.
           </p>
         )}
       </div>
@@ -1908,7 +2013,7 @@ function TaskToolBlock({ tool, result, childConversationId, childConversations }
                   result.is_error ? "text-sol-red font-mono whitespace-pre-wrap" : "text-sol-text-secondary prose prose-sm prose-invert max-w-none [&_pre]:bg-sol-bg/50 [&_pre]:border [&_pre]:border-sol-border/30 [&_pre]:rounded [&_pre]:text-[11px] [&_code]:text-[11px] [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0 [&_h1]:text-sm [&_h2]:text-xs [&_h3]:text-xs [&_h1]:mt-2 [&_h2]:mt-2 [&_h3]:mt-1"
                 }`}>
                   {result.is_error ? safeString(result.content) : (
-                    <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={[rehypeHighlight]} components={{ code: EntityAwareCode, a: EntityAwareLink }}>
+                    <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE} components={MD_COMPONENTS_CODE_LINK}>
                       {safeString(result.content)}
                     </ReactMarkdown>
                   )}
@@ -2790,7 +2895,7 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
                 </div>
               ) : isMarkdownResult ? (
                 <div className="p-2 prose prose-invert prose-sm max-w-none text-xs">
-                  <ReactMarkdown remarkPlugins={entityRemarkPlugins} components={{ code: EntityAwareCode, a: EntityAwareLink, img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} /> }}>{processedContent}</ReactMarkdown>
+                  <ReactMarkdown remarkPlugins={entityRemarkPlugins} components={MD_COMPONENTS_NO_PRE}>{processedContent}</ReactMarkdown>
                 </div>
               ) : (
                 <>
@@ -3205,12 +3310,8 @@ function CastSessionRefBlock({ cat, target, args, fullCmd, output, isError }: {
           )}
         </div>
         <div className="px-3 pb-2 text-sm text-sol-text prose prose-invert prose-sm max-w-none">
-          <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={[rehypeHighlight]}
-            components={{
-              code: EntityAwareCode,
-              a: EntityAwareLink,
-              pre: ({ node, children, ...props }) => renderMarkdownPre(node, children, props),
-            }}
+          <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE}
+            components={MD_COMPONENTS_NO_IMG}
           >{body}</ReactMarkdown>
         </div>
       </div>
@@ -4197,14 +4298,14 @@ function CommandMessageBlock({
         {args && (
           <div className={`text-sol-text text-sm break-words ${argsIsMarkdown ? "prose prose-invert prose-sm max-w-none" : "whitespace-pre-wrap"}`}>
             {argsIsMarkdown
-              ? <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={[rehypeHighlight]} components={CMD_MD_COMPONENTS}>{args}</ReactMarkdown>
+              ? <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE} components={CMD_MD_COMPONENTS}>{args}</ReactMarkdown>
               : renderWithMentions(args)}
           </div>
         )}
 
         {hasSource && showSource && (
           <div className="mt-2 rounded-md bg-sol-bg-alt/30 border border-sol-border/20 p-3 text-xs text-sol-text-muted leading-relaxed prose prose-invert prose-sm max-w-none overflow-x-auto">
-            <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={[rehypeHighlight]} components={CMD_MD_COMPONENTS}>{source}</ReactMarkdown>
+            <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE} components={CMD_MD_COMPONENTS}>{source}</ReactMarkdown>
           </div>
         )}
       </div>
@@ -4251,13 +4352,8 @@ function SkillExpansionBlock({ content, timestamp, cmdName, collapsed }: { conte
         <div className="mt-1 rounded-md bg-sol-bg-alt/25 border border-sol-border/20 p-3 text-xs text-sol-text-muted overflow-y-auto leading-relaxed prose prose-invert prose-sm max-w-none">
           <ReactMarkdown
             remarkPlugins={entityRemarkPlugins}
-            rehypePlugins={[rehypeHighlight]}
-            components={{
-              code: EntityAwareCode,
-              a: EntityAwareLink,
-              img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} />,
-              pre: ({ node, children, ...props }) => renderMarkdownPre(node, children, props),
-            }}
+            rehypePlugins={MESSAGE_MD_REHYPE}
+            components={MESSAGE_MD_COMPONENTS}
           >{content
             .replace(/<command-name>[^<]*<\/command-name>\s*/g, "")
             .replace(/<command-message>[^<]*<\/command-message>\s*/g, "")
@@ -4419,12 +4515,8 @@ function SessionMessageBlock({ from, body, timestamp, pendingStatus, recipientAc
         <span className="text-[10px] text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
       </div>
       <div className={`px-3 pb-2 text-sm text-sol-text prose prose-invert prose-sm max-w-none ${isPending ? "opacity-70" : ""}`}>
-        <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={[rehypeHighlight]}
-          components={{
-            code: EntityAwareCode,
-            a: EntityAwareLink,
-            pre: ({ node, children, ...props }) => renderMarkdownPre(node, children, props),
-          }}
+        <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE}
+          components={MD_COMPONENTS_NO_IMG}
         >{body}</ReactMarkdown>
       </div>
     </div>
@@ -4536,12 +4628,8 @@ function InsightCard({ label, content }: { label: string; content: string }) {
         <span className="text-xs font-semibold tracking-wide uppercase text-sol-violet">{label}</span>
       </div>
       <div className="px-4 py-3 text-sm text-sol-text-secondary leading-relaxed prose prose-invert prose-sm max-w-none">
-        <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={[rehypeHighlight]}
-          components={{
-            code: EntityAwareCode,
-            a: EntityAwareLink,
-            pre: ({ node, children, ...props }) => renderMarkdownPre(node, children, props),
-          }}
+        <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE}
+          components={MD_COMPONENTS_NO_IMG}
         >{content}</ReactMarkdown>
       </div>
     </div>
@@ -4886,19 +4974,6 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
             <path strokeLinecap="round" strokeLinejoin="round" d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
           </svg>
         </button>
-        <button
-          onClick={() => onOpenComments?.(messageId)}
-          className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary flex items-center gap-1"
-          title="Comments"
-          aria-label="Comments"
-        >
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
-          </svg>
-          {commentCount !== undefined && commentCount > 0 && (
-            <span className="text-xs">{commentCount}</span>
-          )}
-        </button>
         {onForkFromMessage && messageUuid && (
           <button
             onClick={() => onForkFromMessage(messageUuid)}
@@ -5063,24 +5138,8 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
               {isMarkdown ? (
                 <ReactMarkdown
                   remarkPlugins={entityRemarkPlugins}
-                  rehypePlugins={[rehypeHighlight]}
-                  components={{
-                    code: EntityAwareCode,
-                    a: EntityAwareLink,
-                    img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} />,
-                    pre: ({ node, children, ...props }) => {
-                      const codeElement = node?.children?.[0];
-                      if (codeElement && codeElement.type === 'element' && codeElement.tagName === 'code') {
-                        const className = codeElement.properties?.className as string[] | undefined;
-                        const language = className?.find((cls) => cls.startsWith('language-'))?.replace('language-', '');
-                        const code = extractTextFromHast(codeElement);
-                        if (code) {
-                          return <CodeBlock code={code} language={language} />;
-                        }
-                      }
-                      return <pre {...(props as any)}>{children as any}</pre>;
-                    },
-                  }}
+                  rehypePlugins={MESSAGE_MD_REHYPE}
+                  components={MESSAGE_MD_COMPONENTS}
                 >
                   {content}
                 </ReactMarkdown>
@@ -5203,11 +5262,6 @@ function AssistantBlockImpl({
     ? linkifyMentions(strippedContent, agentNameToChildMap)
     : strippedContent;
   const parsedApiError = useMemo(() => parseApiErrorContent(displayContent), [displayContent]);
-  const insightParts = useMemo(() => {
-    if (!displayContent) return null;
-    const parts = parseInsightBlocks(displayContent);
-    return parts.some(p => p.type === 'insight') ? parts : null;
-  }, [displayContent]);
   const onlyAskUser = toolCalls && toolCalls.length > 0 && toolCalls.every(tc => tc.name === "AskUserQuestion");
   const hasContent = displayContent && displayContent.trim().length > 0 && !onlyAskUser;
   const hasThinking = thinking && thinking.trim().length > 0;
@@ -5273,13 +5327,6 @@ function AssistantBlockImpl({
 
   const handleCopyLink = () => copyMessageLink(conversationId, messageId);
 
-  // When this message's comment rail is open (it has pending comments), slide
-  // the hover action toolbar left by the rail width so it sits over the
-  // (shrunken) content column, not the rail.
-  const railOpen = useInboxStore(
-    (s) => (s.reviewComments[conversationId ?? ""]?.some((c) => c.messageId === messageId)) ?? false,
-  );
-  const toolbarShift = railOpen && !collapsed;
 
   const handleToggleBookmark = async () => {
     if (!conversationId) return;
@@ -5315,23 +5362,10 @@ function AssistantBlockImpl({
   return (
     <div id={`msg-${messageId}`} className={`group relative scroll-mt-20 ${collapsed ? "mb-1" : onlyToolCalls ? "mb-1" : "mb-6"} transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg p-2 -m-2 message-highlight" : ""} ${shareSelectionMode ? "cursor-pointer" : ""} ${isSelectedForShare ? "bg-sol-cyan/10 rounded-lg p-2 -m-2 border-2 border-sol-cyan ring-2 ring-sol-cyan/30" : ""}`} onClick={shareSelectionMode ? (() => onToggleShareSelection?.(messageId)) : undefined} title={!shouldShowHeader ? formatRelativeTime(timestamp) : undefined}>
       {(hasContent || hasToolCalls) && (
-        <div className={`absolute ${hasPlanWrite && onlyToolCalls ? "-top-6" : onlyToolCalls ? "top-1" : "-top-2"} right-0 transition-[opacity,right] duration-150 flex gap-0.5 z-10 bg-sol-bg rounded shadow-md px-0.5 ${shareSelectionMode ? "opacity-0 pointer-events-none" : "opacity-0 group-hover:opacity-100"}`} style={toolbarShift ? { right: "calc(var(--cc-rail-w) + var(--cc-rail-gap))" } : undefined}>
-          {/* Quote/comment live on each block (hover the text) — not here. */}
-          {/* Primary: comment thread */}
-          <button
-            onClick={() => onOpenComments?.(messageId)}
-            className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary flex items-center gap-1"
-            title="Comment thread"
-            aria-label="Comment thread"
-          >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
-            </svg>
-            {commentCount !== undefined && commentCount > 0 && (
-              <span className="text-xs">{commentCount}</span>
-            )}
-          </button>
-          {/* Primary: copy message */}
+        <div className={`absolute ${hasPlanWrite && onlyToolCalls ? "-top-6" : onlyToolCalls ? "top-1" : "-top-2"} right-0 transition-opacity duration-150 flex gap-0.5 z-10 bg-sol-bg rounded shadow-md px-0.5 ${shareSelectionMode ? "opacity-0 pointer-events-none" : "opacity-0 group-hover:opacity-100"}`}>
+          {/* Respond actions (quote into your reply) live on each block's left
+              gutter — see MessageReview. This corner is META only: a plain row
+              of icon buttons, distinct icons + tooltips so link vs share read clearly. */}
           <button
             onClick={handleCopy}
             className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary"
@@ -5342,37 +5376,49 @@ function AssistantBlockImpl({
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
             </svg>
           </button>
-          {/* Overflow: less-used actions */}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button
-                className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary"
-                title="More actions"
-                aria-label="More actions"
-              >
-                <MoreHorizontal className="w-4 h-4" />
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              {onStartShareSelection && (
-                <DropdownMenuItem onClick={() => onStartShareSelection(messageId)}>Share…</DropdownMenuItem>
-              )}
-              <DropdownMenuItem onClick={handleCopyLink}>Copy link</DropdownMenuItem>
-              <DropdownMenuItem onClick={handleToggleBookmark}>
-                {isBookmarked ? "Remove bookmark" : "Bookmark"}
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <button
+            onClick={handleCopyLink}
+            className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary"
+            title="Copy link to this message"
+            aria-label="Copy link to this message"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+            </svg>
+          </button>
+          {onStartShareSelection && (
+            <button
+              onClick={() => onStartShareSelection(messageId)}
+              className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary"
+              title="Share selected messages…"
+              aria-label="Share selected messages"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
+              </svg>
+            </button>
+          )}
+          <button
+            onClick={handleToggleBookmark}
+            className={`p-1.5 rounded hover:bg-sol-bg-alt ${isBookmarked ? "text-amber-400" : "text-sol-text-dim hover:text-sol-text-secondary"}`}
+            title={isBookmarked ? "Remove bookmark" : "Bookmark message"}
+            aria-label={isBookmarked ? "Remove bookmark" : "Bookmark message"}
+          >
+            <svg className="w-4 h-4" fill={isBookmarked ? "currentColor" : "none"} viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
+            </svg>
+          </button>
         </div>
       )}
 
       {shouldShowHeader && (
         <div className="flex items-center gap-2 mb-2 mt-4">
-          <AssistantIcon agentType={agentType} />
-          <span className="text-sol-text-secondary text-xs font-medium">{assistantLabel(agentType)}</span>
-          {model && (
-            <span className="text-sol-text-dim text-[10px] font-mono">{formatModel(model)}</span>
-          )}
+          {/* Model rides as a hover tooltip on the agent identity — per-message
+              when the transcript carried it, conversation-level otherwise. */}
+          <span className="flex items-center gap-2 cursor-default" title={model ? `Model: ${model}` : undefined}>
+            <AssistantIcon agentType={agentType} />
+            <span className="text-sol-text-secondary text-xs font-medium">{assistantLabel(agentType)}</span>
+          </span>
           <a
             href={`#msg-${messageId}`}
             className="text-sol-text-dim hover:text-sol-text-muted text-xs transition-colors"
@@ -5460,23 +5506,15 @@ function AssistantBlockImpl({
                   className="relative"
                   style={!contentExpanded && isOverflowing ? { maxHeight: CONTENT_MAX_HEIGHT, overflowY: 'hidden' } : undefined}
                 >
-                  {insightParts ? (
-                    <div className="space-y-2">
-                      {insightParts.map((part, i) => part.type === 'insight' ? (
-                        <InsightCard key={i} label={part.label} content={part.content} />
-                      ) : (
-                        <MessageMarkdown key={i} content={part.content} />
-                      ))}
-                    </div>
-                  ) : conversationId ? (
+                  {conversationId ? (
                     <MessageReview
                       conversationId={conversationId}
                       messageId={messageId}
                       content={displayContent}
-                      renderBlock={renderMessageBlock}
+                      renderBlock={renderAssistantBody}
                     />
                   ) : (
-                    <MessageMarkdown content={displayContent} />
+                    renderAssistantBody(displayContent)
                   )}
                   {!contentExpanded && isOverflowing && (
                     <div className="absolute bottom-0 left-0 right-0 h-8 pointer-events-none bg-gradient-to-b from-transparent to-[var(--sol-bg)]" />
@@ -5535,24 +5573,8 @@ function AssistantBlockImpl({
                 ) : (
                   <ReactMarkdown
                     remarkPlugins={entityRemarkPlugins}
-                    rehypePlugins={[rehypeHighlight]}
-                    components={{
-                      code: EntityAwareCode,
-                      a: EntityAwareLink,
-                      img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} />,
-                      pre: ({ node, children, ...props }) => {
-                        const codeElement = node?.children?.[0];
-                        if (codeElement && codeElement.type === 'element' && codeElement.tagName === 'code') {
-                          const className = codeElement.properties?.className as string[] | undefined;
-                          const language = className?.find((cls) => cls.startsWith('language-'))?.replace('language-', '');
-                          const code = extractTextFromHast(codeElement);
-                          if (code) {
-                            return <CodeBlock code={code} language={language} />;
-                          }
-                        }
-                        return <pre {...(props as any)}>{children as any}</pre>;
-                      },
-                    }}
+                    rehypePlugins={MESSAGE_MD_REHYPE}
+                    components={MESSAGE_MD_COMPONENTS}
                   >
                     {displayContent}
                   </ReactMarkdown>
@@ -5895,7 +5917,7 @@ const CompactionSummaryBlock = memo(function CompactionSummaryBlock({ content }:
       </button>
       {isExpanded && (
         <div className="mt-2 px-3 py-2 bg-sol-bg-alt/20 border-l-2 border-amber-500/30 text-xs prose prose-invert prose-sm max-w-none">
-          <ReactMarkdown remarkPlugins={entityRemarkPlugins} components={{ code: EntityAwareCode, a: EntityAwareLink, img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} /> }}>
+          <ReactMarkdown remarkPlugins={entityRemarkPlugins} components={MD_COMPONENTS_NO_PRE}>
             {content}
           </ReactMarkdown>
         </div>
@@ -6002,16 +6024,6 @@ function PlanBlockImpl({ content, timestamp, collapsed, messageId, conversationI
               </svg>
             </button>
           )}
-          {onOpenComments && messageId && (
-            <button onClick={() => onOpenComments(messageId)} className="p-1 rounded hover:bg-sol-bg-highlight text-sol-text-dim hover:text-sol-text-muted transition-colors flex items-center gap-0.5" title="Comments">
-              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
-              </svg>
-              {commentCount !== undefined && commentCount > 0 && (
-                <span className="text-[10px]">{commentCount}</span>
-              )}
-            </button>
-          )}
           <button onClick={handleCopy} className="p-1 rounded hover:bg-sol-bg-highlight text-sol-text-dim hover:text-sol-text-muted transition-colors" title="Copy">
             <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
@@ -6032,13 +6044,8 @@ function PlanBlockImpl({ content, timestamp, collapsed, messageId, conversationI
         >
           <ReactMarkdown
             remarkPlugins={entityRemarkPlugins}
-            rehypePlugins={[rehypeHighlight]}
-            components={{
-              code: EntityAwareCode,
-              a: EntityAwareLink,
-              img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} />,
-              pre: ({ node, children, ...props }) => renderMarkdownPre(node, children, props),
-            }}
+            rehypePlugins={MESSAGE_MD_REHYPE}
+            components={MESSAGE_MD_COMPONENTS}
           >
             {content}
           </ReactMarkdown>
@@ -6087,13 +6094,8 @@ function PlanBlockImpl({ content, timestamp, collapsed, messageId, conversationI
             <div className="prose prose-invert prose-sm max-w-none text-sol-text">
               <ReactMarkdown
                 remarkPlugins={entityRemarkPlugins}
-                rehypePlugins={[rehypeHighlight]}
-                components={{
-                  code: EntityAwareCode,
-                  a: EntityAwareLink,
-                  img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} />,
-                  pre: ({ node, children, ...props }) => renderMarkdownPre(node, children, props),
-                }}
+                rehypePlugins={MESSAGE_MD_REHYPE}
+                components={MESSAGE_MD_COMPONENTS}
               >
                 {content}
               </ReactMarkdown>
@@ -6596,9 +6598,14 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   const sacredKeyRef = useRef(sacredKey);
   const convIdRef = useRef(conversationId);
   const cached = useInboxStore.getState().getDraft(conversationId);
-  const [message, _setMessage] = useState(() => sacredInputs.get(sacredKey)?.text ?? cached?.draft_message ?? initialDraft ?? "");
+  // Fallback to the conversation-keyed entry: when a new session gets its
+  // session_id stamped the key flips (conv id → session id) and this component
+  // remounts — the freshest text lives under the conversation id.
+  const [message, _setMessage] = useState(() => sacredInputs.get(sacredKey)?.text ?? sacredInputs.get(conversationId)?.text ?? cached?.draft_message ?? initialDraft ?? "");
   const setMessage = useCallback((val: string) => {
     sacredInputs.set(sacredKeyRef.current, { text: val });
+    // Mirror under the conversation id so the text survives the key flip above.
+    if (convIdRef.current !== sacredKeyRef.current) sacredInputs.set(convIdRef.current, { text: val });
     _setMessage(val);
   }, []);
   const messageRef = useRef(message);
@@ -6880,20 +6887,9 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
 
   const sendRef = useRef<HTMLDivElement>(null);
   const pastedImagesRef = useRef<Array<{ file: File; previewUrl: string; storageId?: Id<"_storage">; uploading: boolean }>>([]);
-  const [pastedImages, setPastedImages] = useState<Array<{ file: File; previewUrl: string; storageId?: Id<"_storage">; uploading: boolean }>>(() => {
-    if (cached?.draft_image_storage_ids) {
-      return (cached.draft_image_storage_ids as Array<{ storageId: string; previewUrl: string; name: string }>).map(img => ({
-        file: new File([], img.name || "image"),
-        previewUrl: img.previewUrl || "",
-        storageId: img.storageId as Id<"_storage">,
-        uploading: false,
-      }));
-    }
-    if (cached?.draft_image_storage_id) {
-      return [{ file: new File([], cached.draft_image_name || "image"), previewUrl: cached.draft_image_preview || "", storageId: cached.draft_image_storage_id, uploading: false }];
-    }
-    return [];
-  });
+  const [pastedImages, setPastedImages] = useState<Array<{ file: File; previewUrl: string; storageId?: Id<"_storage">; uploading: boolean }>>(
+    () => restoreDraftImages(cached) as Array<{ file: File; previewUrl: string; storageId?: Id<"_storage">; uploading: boolean }>
+  );
   const staleImageIds = useMemo(() => {
     const ids = pastedImages
       .filter(img => img.storageId && (!img.previewUrl || img.previewUrl.startsWith("blob:")))
@@ -6913,14 +6909,8 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
         }
         return img;
       });
-      const draftImages = updated.filter(i => i.storageId).map(i => ({
-        storageId: i.storageId as string, previewUrl: i.previewUrl, name: i.file.name,
-      }));
-      const existing = useInboxStore.getState().getDraft(conversationId);
-      if (draftImages.length > 0) {
-        useInboxStore.getState().setDraft(conversationId, {
-          ...existing, draft_image_storage_ids: draftImages,
-        });
+      if (updated.length > 0) {
+        persistDraftImages(conversationId, messageRef.current, updated);
       }
       return updated;
     });
@@ -6980,6 +6970,29 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     }
   }, [convex]);
   pastedImagesRef.current = pastedImages;
+
+  // Re-attach to uploads a previous composer instance started: this component
+  // remounts whenever its key flips (a new session gets its session_id stamped,
+  // a stub conversation rekeys to its real id), and any image still uploading
+  // at that moment must not be lost — adopt its pending promise from the
+  // module-level registry. If the promise is gone (a reload killed the upload),
+  // drop the orphan row from state and draft.
+  useMountEffect(() => {
+    pastedImagesRef.current.forEach(img => {
+      if (!img.uploading || img.storageId) return;
+      const pending = pendingImageUploads.get(img.previewUrl);
+      if (pending) {
+        void pending.then(storageId => {
+          setPastedImages(prev => storageId
+            ? prev.map(i => i.previewUrl === img.previewUrl ? { ...i, storageId: storageId as Id<"_storage">, uploading: false } : i)
+            : prev.filter(i => i.previewUrl !== img.previewUrl));
+        });
+      } else {
+        settleDraftImageUpload(img.previewUrl, null);
+        setPastedImages(prev => prev.filter(i => i.previewUrl !== img.previewUrl));
+      }
+    });
+  });
 
   const waitForConvexId = useCallback((id: string): Promise<string> => {
     return useInboxStore.getState().awaitConvexId(id);
@@ -7097,31 +7110,16 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       .catch(() => { setIsRestarting(false); toast.error("Session restart failed"); });
   }, [messageStatus?.status, isAgentActive, messageReachedSession, conversationId, convCommand]);
 
-  const updateDraft = useCallback((text: string, images?: Array<{ storageId?: string; previewUrl?: string; name?: string }> | null) => {
-    if (!text && (!images || images.length === 0)) {
-      useInboxStore.getState().clearDraft(conversationId);
-    } else {
-      useInboxStore.getState().setDraft(conversationId, {
-        draft_message: text || null,
-        draft_image_storage_ids: images && images.length > 0 ? images : null,
-      });
-    }
-  }, [conversationId]);
-
   const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const saveDraftSnapshot = useCallback((targetId: string) => {
     if (sendingRef.current) return;
     const msg = messageRef.current;
-    const imgs = pastedImagesRef.current;
-    const draftImages = imgs
-      .filter(i => i.storageId && !i.uploading)
-      .map(i => ({ storageId: i.storageId as string, previewUrl: i.previewUrl, name: i.file.name }));
-    if (!msg && draftImages.length === 0) return;
-    useInboxStore.getState().setDraft(targetId, {
-      draft_message: msg || null,
-      draft_image_storage_ids: draftImages.length > 0 ? draftImages : null,
-    });
+    // Uploading rows are kept: their pending upload lives in the module-level
+    // registry, so a successor composer instance can restore and re-attach.
+    const imgs = pastedImagesRef.current.filter(i => i.storageId || i.uploading);
+    if (!msg && imgs.length === 0) return;
+    persistDraftImages(targetId, msg, imgs);
   }, []);
 
   useWatchEffect(() => {
@@ -7277,30 +7275,38 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   const clearImage = useCallback((index: number) => {
     setPastedImages(prev => {
       const img = prev[index];
-      if (img) URL.revokeObjectURL(img.previewUrl);
+      if (img) {
+        pendingImageUploads.delete(img.previewUrl);
+        URL.revokeObjectURL(img.previewUrl);
+      }
       const next = prev.filter((_, i) => i !== index);
-      updateDraft(message, next.length > 0 ? next.map(i => ({ storageId: i.storageId as string, previewUrl: i.previewUrl, name: i.file.name })) : null);
+      persistDraftImages(conversationId, messageRef.current, next);
       return next;
     });
-  }, [updateDraft, message]);
+  }, [conversationId]);
 
   // revoke=false transfers blob ownership to the pending bubble (so its
   // thumbnail keeps rendering after the composer clears on send).
   const clearAllImages = useCallback((revoke = true) => {
-    if (revoke) pastedImages.forEach(img => URL.revokeObjectURL(img.previewUrl));
+    if (revoke) pastedImages.forEach(img => {
+      pendingImageUploads.delete(img.previewUrl);
+      URL.revokeObjectURL(img.previewUrl);
+    });
     setPastedImages([]);
     setSelectedImageIndex(null);
     setLightboxImageIndex(null);
   }, [pastedImages]);
 
-  // In-flight uploads keyed by previewUrl, each resolving to the server storage
-  // id (or null on failure). Held in a ref so a backgrounded send can await the
-  // real result after this component unmounts (e.g. the user switched sessions).
-  const uploadPromisesRef = useRef<Map<string, Promise<string | null>>>(new Map());
-
   const uploadImage = useCallback((file: File) => {
     const previewUrl = URL.createObjectURL(file);
-    setPastedImages(prev => [...prev, { file, previewUrl, uploading: true }]);
+    setPastedImages(prev => {
+      const next = [...prev, { file, previewUrl, uploading: true }];
+      // Sacred from the moment of paste: the draft row (uploading, blob
+      // preview) is what survives the composer remount that follows session
+      // registration, before the upload has produced a storageId.
+      persistDraftImages(conversationId, messageRef.current, next);
+      return next;
+    });
     const promise = (async (): Promise<string | null> => {
       try {
         const uploadUrl = await generateUploadUrl({});
@@ -7311,22 +7317,22 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
         });
         if (!result.ok) throw new Error(`Upload failed: ${result.status} ${result.statusText}`);
         const { storageId } = await result.json();
-        setPastedImages(prev => {
-          const next = prev.map(img => img.previewUrl === previewUrl ? { ...img, storageId, uploading: false } : img);
-          updateDraft(message, next.map(i => ({ storageId: i.storageId as string, previewUrl: i.previewUrl, name: i.file.name })));
-          return next;
-        });
+        // Draft first — it lands even if this composer instance has unmounted
+        // (a state updater on a dead instance is a silent no-op).
+        settleDraftImageUpload(previewUrl, storageId as string);
+        setPastedImages(prev => prev.map(img => img.previewUrl === previewUrl ? { ...img, storageId, uploading: false } : img));
         return storageId as string;
       } catch (err: any) {
         console.error("[uploadImage] failed:", err);
         toast.error(err?.message?.includes("Authentication") ? "Upload failed: not authenticated" : `Failed to upload image: ${err?.message || "unknown error"}`);
+        settleDraftImageUpload(previewUrl, null);
         setPastedImages(prev => prev.filter(img => img.previewUrl !== previewUrl));
         return null;
       }
     })();
-    uploadPromisesRef.current.set(previewUrl, promise);
+    pendingImageUploads.set(previewUrl, promise);
     return previewUrl;
-  }, [generateUploadUrl, updateDraft, message]);
+  }, [generateUploadUrl, conversationId]);
 
   useWatchEffect(() => {
     if (onDropFiles) {
@@ -7354,7 +7360,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     e.preventDefault();
     setAcTrigger(null);
     // In compose mode, read content from the TipTap editor
-    const message = composeMode && composeRef.current
+    let message = composeMode && composeRef.current
       ? composeRef.current.getMarkdown()
       : messageRef.current;
     if (onGateSend) {
@@ -7380,6 +7386,10 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       await onWorkflowLaunch(goal);
       return;
     }
+    // Auto-attach any pending review quotes/comments so a plain send carries them —
+    // no separate "add to message" step. They prepend the typed reply and the batch
+    // is cleared. (Gate/workflow above return early, so they're unaffected.)
+    message = attachReviewToMessage(conversationId, message);
     // Snapshot the composer's images. Ready ones already carry a storageId;
     // still-uploading ones are handed to the pending bubble (preview + spinner)
     // and finished in the background — either way the input unblocks instantly.
@@ -7484,15 +7494,16 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     if (hasUploadingImages) {
       // Detached: finish the in-flight uploads, swap the bubble's previews for
       // real storage records (drops the spinner), then send. Awaits the upload
-      // promises captured in the ref, not component state, so it survives a
-      // session switch. The user can already type/send the next message.
+      // promises from the module-level registry, not component state, so it
+      // survives a session switch or composer remount. The user can already
+      // type/send the next message.
       void (async () => {
         const tasks = submitImages.map(img => ({
           previewUrl: img.previewUrl,
           mediaType: img.file.type,
           promise: img.storageId
             ? Promise.resolve<string | null>(img.storageId as string)
-            : (uploadPromisesRef.current.get(img.previewUrl) ?? Promise.resolve<string | null>(null)),
+            : (pendingImageUploads.get(img.previewUrl) ?? Promise.resolve<string | null>(null)),
         }));
         const settled = await Promise.all(tasks.map(t => t.promise.then(storageId => ({ ...t, storageId }))));
         const resolvedImages: OptimisticImage[] = settled
@@ -7502,7 +7513,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
         // uploadImage already toasted each failure; just fail the bubble.
         if (resolvedImages.length === 0 && !message.trim()) {
           useInboxStore.getState().markOptimisticAsFailed(targetConvId, clientId);
-          tasks.forEach(t => uploadPromisesRef.current.delete(t.previewUrl));
+          tasks.forEach(t => pendingImageUploads.delete(t.previewUrl));
           return;
         }
         useInboxStore.getState().resolvePendingUploads(targetConvId, clientId, resolvedImages);
@@ -7510,7 +7521,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
         // its preview_url (resolvePendingUploads stripped it), so a still-
         // mounted ImageBlock never loads a revoked URL and gets stuck errored.
         tasks.forEach(t => {
-          uploadPromisesRef.current.delete(t.previewUrl);
+          pendingImageUploads.delete(t.previewUrl);
           setTimeout(() => URL.revokeObjectURL(t.previewUrl), 1000);
         });
         await finishSend(resolvedImages.map(i => i.storage_id as string));
@@ -8324,12 +8335,16 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
 const CC_MODE_ORDER = ["default", "plan", "acceptEdits", "bypassPermissions", "dontAsk"];
 
 export const ConversationView = forwardRef<ConversationViewHandle, ConversationViewProps>(
-  function ConversationView({ conversation, commits = [], pullRequests = [], backHref, backLabel = "Back", headerExtra, headerLeft, headerEnd, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, onLoadOlder, onLoadNewer, onJumpToStart, onJumpToEnd, onJumpToTimestamp, highlightQuery: propHighlightQuery, onClearHighlight: propClearHighlight, embedded, showMessageInput = true, targetMessageId, isOwner = true, onSendAndAdvance, onSendAndDismiss, autoFocusInput, fallbackStickyContent, onBack, subHeaderContent, hideHeader, onSubmitWithIntent }, ref) {
+  function ConversationView({ conversation, commits = [], pullRequests = [], backHref, backLabel = "Back", headerExtra, headerLeft, headerEnd, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, onLoadOlder, onLoadNewer, onJumpToStart, onJumpToEnd, onJumpToTimestamp, highlightQuery: propHighlightQuery, onClearHighlight: propClearHighlight, embedded, showMessageInput = true, targetMessageId, isJumpingToTarget, isOwner = true, onSendAndAdvance, onSendAndDismiss, autoFocusInput, fallbackStickyContent, onBack, subHeaderContent, hideHeader, onSubmitWithIntent }, ref) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [userScrolled, _setUserScrolled] = useState(false);
   const userScrolledRef = useRef(false);
   const setUserScrolled = useCallback((v: boolean) => { userScrolledRef.current = v; _setUserScrolled(v); }, []);
   const [isNearTop, setIsNearTop] = useState(true);
+  // Position twin of isNearTop for the bottom edge (200px band). The jump
+  // buttons hide inside these bands — the userScrolled gesture latch alone
+  // showed the down arrow on a 2px nudge while still parked at the bottom.
+  const [isNearBottom, setIsNearBottom] = useState(true);
   const [isScrollable, setIsScrollable] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const [showThinking, setShowThinking] = useState(false);
@@ -8354,7 +8369,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       setTimeout(() => renameInputRef.current?.select(), 0);
     }
   }, [isRenaming]);
-  const [commentMessageId, setCommentMessageId] = useState<Id<"messages"> | null>(null);
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const [allMatchingMessageIds, setAllMatchingMessageIds] = useState<string[]>([]);
   const [matchInstances, setMatchInstances] = useState<{ messageId: string; localIndex: number; timestamp: number }[]>([]);
@@ -8445,6 +8459,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     _setUserScrolled(false);
     userScrolledRef.current = false;
     setIsNearTop(true);
+    setIsNearBottom(true);
     setCollapsed(false);
     setShowThinking(false);
     setExpandedSequences(new Set());
@@ -8456,7 +8471,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     setIsLocalSearchOpen(false);
     setLocalSearchQuery("");
     setDebouncedSearchQuery("");
-    setCommentMessageId(null);
     setShareSelectionMode(false);
     setSelectedMessageIds(new Set());
     setIsImageLightboxActive(false);
@@ -8712,10 +8726,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const handleStartShareSelection = useCallback((messageId: string) => {
     setShareSelectionMode(true);
     setSelectedMessageIds(new Set([messageId]));
-  }, []);
-
-  const handleOpenComments = useCallback((messageId: string) => {
-    setCommentMessageId(messageId as Id<"messages">);
   }, []);
 
   const handleToggleMessageSelection = useCallback((messageId: string) => {
@@ -9011,11 +9021,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       submit: () => submitReview(conversation?._id ?? "", populate),
     };
   }, [conversation?._id]);
-  // While a comment rail is open in this conversation (pending comments exist),
-  // slide the floating scroll buttons left so they clear the rail.
-  const reviewRailActive = useInboxStore(
-    (s) => (s.reviewComments[conversation?._id ?? ""]?.length ?? 0) > 0,
-  );
   const dropFilesRef = useRef<((files: File[]) => void) | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const dragCounterRef = useRef(0);
@@ -9178,32 +9183,12 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     return set;
   }, [timeline]);
 
-  const sessionSkills = useMemo(() => {
-    let extracted: Array<{ name: string; description: string }> = [];
-    // Resolve skills from user-level data + project path (avoids storing per-conversation)
-    const rawSkills = (currentUser as any)?.available_skills;
-    if (rawSkills) {
-      try {
-        const parsed = JSON.parse(rawSkills);
-        if (Array.isArray(parsed)) {
-          extracted = parsed;
-        } else {
-          const global: Array<{ name: string; description: string }> = parsed["global"] || [];
-          const project: Array<{ name: string; description: string }> = conversation?.project_path ? (parsed[conversation.project_path] || []) : [];
-          const seen = new Set<string>();
-          for (const s of [...global, ...project]) {
-            if (!seen.has(s.name)) { seen.add(s.name); extracted.push(s); }
-          }
-        }
-      } catch {}
-    }
-    if (!extracted.length && conversation?.messages) {
-      extracted = extractSkillsFromMessages(conversation.messages);
-    }
-    const builtins = getBuiltinCommands(conversation?.agent_type);
-    const names = new Set(extracted.map(s => s.name.toLowerCase()));
-    return [...extracted, ...builtins.filter(b => !names.has(b.name.toLowerCase()))];
-  }, [currentUser, conversation?.project_path, conversation?.messages, conversation?.agent_type]);
+  const sessionSkills = useMemo(() => resolveSessionSkills({
+    availableSkills: (currentUser as any)?.available_skills,
+    projectPath: conversation?.project_path,
+    agentType: conversation?.agent_type,
+    messages: conversation?.messages,
+  }), [currentUser, conversation?.project_path, conversation?.messages, conversation?.agent_type]);
 
   const sessionFilePaths = useMemo(() => {
     if (!conversation?.messages) return [];
@@ -10091,11 +10076,14 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
     const handleScroll = () => {
       const { scrollTop, scrollHeight, clientHeight } = scrollContainer;
-      const isNearBottom = scrollHeight - scrollTop - clientHeight < 100;
-      isNearBottomRef.current = isNearBottom;
+      const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
+      const isAtBottom = distanceFromBottom < 100;
+      isNearBottomRef.current = isAtBottom;
 
       setIsScrollable(scrollHeight > clientHeight + 10);
-      setIsNearTop(scrollTop < 300);
+      // 200px edge bands hiding the jump buttons; wider than the 100px pin band.
+      setIsNearTop(scrollTop < 200);
+      setIsNearBottom(distanceFromBottom < 200);
 
       const scrolledDown = scrollTop > lastScrollTopRef.current + 2;
       const scrolledUp = scrollTop < lastScrollTopRef.current - 2;
@@ -10110,7 +10098,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         setUserScrolled(true);
       }
 
-      if (isNearBottom && scrolledDown) {
+      if (isAtBottom && scrolledDown) {
         setUserScrolled(false);
       }
 
@@ -10141,7 +10129,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       // middle); normal mode stays anchored to the live tail, so hasMoreBelow is
       // always false there and this stays dormant.
       const pp = paginationPropsRef.current;
-      const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
       if (distanceFromBottom < 300 && pp.hasMoreBelow && !pp.isLoadingNewer && !pp.isLoadingOlder && Date.now() >= paginationCooldownRef.current && pp.onLoadNewer) {
         isPaginatingRef.current = true;
         pp.onLoadNewer();
@@ -10358,13 +10345,16 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     if (scrollProgressRef.current) scrollProgressRef.current.style.height = `${edgeProgress * 100}%`;
     setNavScrollProgress(edgeProgress);
 
-    // Release the freeze one frame later — after the scroll has landed — so the
-    // spinner and the frozen indicators all clear together, never mid-motion.
-    const raf = requestAnimationFrame(() => {
-      paginationCooldownRef.current = 0;
-      setJumpPending(null);
-    });
-    return () => cancelAnimationFrame(raf);
+    // Release the freeze NOW, in this same commit. The scroll above is
+    // synchronous, so the paint that shows the edge also shows the spinner
+    // gone and the indicators snapped — truly atomic. Do NOT defer this to a
+    // requestAnimationFrame: a hidden/occluded tab never fires one (macOS
+    // occlusion tracking), so the jump would land but jumpPending stayed set
+    // — stuck spinner, frozen indicators — until the tab was next visible;
+    // and under timeline churn a canceled rAF left it stuck forever. The
+    // pagination cooldown set above self-expires, which also keeps the
+    // scrollToEdge retry tail (100-600ms) from triggering an auto-load.
+    setJumpPending(null);
   }, [timeline, virtualizer]);
 
   // Cancel an in-flight jump (clicking the spinner) — leave the user exactly
@@ -10720,7 +10710,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     const msg = item.data as Message;
     if (msg.role === "system") {
       if (collapsed) return null;
-      return <SystemBlock key={msg._id} content={msg.content || ""} subtype={msg.subtype} timestamp={msg.timestamp} messageUuid={msg.message_uuid} messageId={msg._id} conversationId={conversation?._id} onOpenComments={handleOpenComments} onStartShareSelection={handleStartShareSelection} />;
+      return <SystemBlock key={msg._id} content={msg.content || ""} subtype={msg.subtype} timestamp={msg.timestamp} messageUuid={msg.message_uuid} messageId={msg._id} conversationId={conversation?._id} onStartShareSelection={handleStartShareSelection} />;
     }
 
     if (msg.role === "user") {
@@ -10759,13 +10749,13 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         case 'compaction_summary':
           return <CompactionSummaryBlock key={msg._id} content={msg.content!} />;
         case 'plan':
-          return <PlanBlock key={msg._id} content={kind.planContent} timestamp={msg.timestamp} collapsed={collapsed} messageId={msg._id} conversationId={conversation?._id} onOpenComments={handleOpenComments} onStartShareSelection={handleStartShareSelection} />;
+          return <PlanBlock key={msg._id} content={kind.planContent} timestamp={msg.timestamp} collapsed={collapsed} messageId={msg._id} conversationId={conversation?._id} onStartShareSelection={handleStartShareSelection} />;
         case 'teammate_events':
           return <TeammateEventsBlock key={msg._id} content={msg.content || ""} timestamp={msg.timestamp} />;
         case 'normal': {
           if (!msg.content?.trim() && !msg.images?.some(img => !img.tool_use_id)) return null;
           const userName = conversation?.user?.name || conversation?.user?.email?.split("@")[0];
-          return <UserPrompt key={msg._id} content={msg.content || ""} images={msg.images} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={collapsed} userName={userName} avatarUrl={conversation?.user?.avatar_url} onOpenComments={handleOpenComments} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={handleToggleMessageSelection} onStartShareSelection={handleStartShareSelection} onForkFromMessage={handleForkFromMessage} forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined} onBranchSwitch={handleBranchSwitch} activeBranchId={activeBranchId} loadingBranchId={loadingBranchId} isPending={!!msg._isOptimistic} isQueued={!!msg._isQueued} mainMessageCount={msg.message_uuid ? conversation?.main_message_counts_by_fork?.[msg.message_uuid] : undefined} />;
+          return <UserPrompt key={msg._id} content={msg.content || ""} images={msg.images} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={collapsed} userName={userName} avatarUrl={conversation?.user?.avatar_url} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={handleToggleMessageSelection} onStartShareSelection={handleStartShareSelection} onForkFromMessage={handleForkFromMessage} forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined} onBranchSwitch={handleBranchSwitch} activeBranchId={activeBranchId} loadingBranchId={loadingBranchId} isPending={!!msg._isOptimistic} isQueued={!!msg._isQueued} mainMessageCount={msg.message_uuid ? conversation?.main_message_counts_by_fork?.[msg.message_uuid] : undefined} />;
         }
       }
     }
@@ -10889,8 +10879,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           childConversations={conversation?.child_conversations}
           agentNameToChildMap={agentNameToChildMap}
           showHeader={effectiveCollapsed ? true : (isFirstInSequence || (collapsed && msg._id === sequenceStartId))}
-          onOpenComments={handleOpenComments}
-          toolCallChangeSelectionMap={toolCallChangeSelectionMap}
+                   toolCallChangeSelectionMap={toolCallChangeSelectionMap}
           isHighlighted={highlightedMessageId === msg._id}
           isSequenceExpanded={isSequenceExpanded}
           runMessageIds={runMessageIds}
@@ -10919,7 +10908,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           activeBranchId={activeBranchId}
           loadingBranchId={loadingBranchId}
           mainMessageCount={msg.message_uuid ? conversation?.main_message_counts_by_fork?.[msg.message_uuid] : undefined}
-          model={conversation?.model}
+          model={msg.model ?? conversation?.model}
           onSendInlineMessage={handleSendInlineMessage}
           isConversationActive={conversation?.status === "active"}
           globalImageMap={globalImageMap}
@@ -11600,9 +11589,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       )}
 
       <div className={`flex-1 min-h-0 relative flex ${isImageLightboxActive ? "invisible" : ""}`}>
-      {targetMessageId && timeline.length === 0 && (
-        <div className="absolute inset-0 z-20 flex items-center justify-center pointer-events-none">
-          <div className="flex items-center gap-2 px-4 py-2 rounded-full bg-sol-bg-alt/90 border border-sol-border text-sol-text-muted text-xs shadow-sm">
+      {(isJumpingToTarget || (targetMessageId && timeline.length === 0)) && (
+        <div className="absolute inset-x-0 top-0 z-20 flex justify-center pt-3 sm:pt-4 pointer-events-none">
+          <div className="flex items-center gap-2 px-4 py-2 rounded-full bg-sol-bg-alt border border-sol-border text-sol-text-muted text-xs shadow-md">
             <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
               <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
               <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
@@ -11849,7 +11838,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       )}
 
       {timeline.length > 0 && (
-        <div className="absolute right-3 sm:right-8 z-30 flex items-stretch gap-2.5 transition-[right] duration-150" style={{ bottom: Math.max(messageInputHeight + 16, 115), ...(reviewRailActive ? { right: "17.5rem" } : {}) }}>
+        <div className="absolute right-3 sm:right-8 z-30 flex items-stretch gap-2.5" style={{ bottom: Math.max(messageInputHeight + 16, 115) }}>
           <div className="flex flex-col gap-2">
               <button
                 onClick={() => {
@@ -11901,7 +11890,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                     scrollToEdgeRef.current('bottom');
                   }
                 }}
-                className={`group p-1.5 sm:p-2 rounded-full bg-sol-bg-alt border border-sol-border shadow-lg hover:bg-sol-cyan hover:text-white transition-all ${((userScrolled && isScrollable) || hasMoreBelow || jumpPending === 'end') ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
+                className={`group p-1.5 sm:p-2 rounded-full bg-sol-bg-alt border border-sol-border shadow-lg hover:bg-sol-cyan hover:text-white transition-all ${((userScrolled && !isNearBottom && isScrollable) || hasMoreBelow || jumpPending === 'end') ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
                 aria-label={jumpPending === 'end' ? "Cancel jump to bottom" : "Scroll to bottom"}
                 title={jumpPending === 'end' ? "Cancel" : undefined}
               >
@@ -11958,14 +11947,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
             />
           </div>
         </div>
-      )}
-
-      {commentMessageId && isConvexId(commentMessageId) && conversation && (
-        <CommentPanel
-          conversationId={conversation._id as Id<"conversations">}
-          messageId={commentMessageId}
-          onClose={() => setCommentMessageId(null)}
-        />
       )}
 
       {shareSelectionMode && (
