@@ -9,7 +9,7 @@ function RedirectToHome() {
   return null;
 }
 
-function AuthGuardInner({ children }: { children: React.ReactNode }) {
+function AuthGuardInner({ children, guestOk }: { children: React.ReactNode; guestOk?: boolean }) {
   return (
     <>
       <AuthLoading>
@@ -18,7 +18,7 @@ function AuthGuardInner({ children }: { children: React.ReactNode }) {
         </div>
       </AuthLoading>
       <Unauthenticated>
-        <RedirectToHome />
+        {guestOk ? children : <RedirectToHome />}
       </Unauthenticated>
       <Authenticated>
         {children}
@@ -29,7 +29,12 @@ function AuthGuardInner({ children }: { children: React.ReactNode }) {
 
 let hasHydrated = false;
 
-export function AuthGuard({ children }: { children: React.ReactNode }) {
+/**
+ * guestOk: render children for unauthenticated visitors instead of redirecting
+ * home — for routes that do their own access resolution (public share links).
+ * The auth-loading holding screen still applies either way.
+ */
+export function AuthGuard({ children, guestOk }: { children: React.ReactNode; guestOk?: boolean }) {
   const [mounted, setMounted] = useState(hasHydrated);
 
   useMountEffect(() => {
@@ -45,5 +50,5 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
     );
   }
 
-  return <AuthGuardInner>{children}</AuthGuardInner>;
+  return <AuthGuardInner guestOk={guestOk}>{children}</AuthGuardInner>;
 }

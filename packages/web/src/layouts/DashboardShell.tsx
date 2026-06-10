@@ -1,4 +1,4 @@
-import { Outlet } from "react-router";
+import { Outlet, useLocation } from "react-router";
 import { AuthGuard } from "@/components/AuthGuard";
 import { DashboardLayout } from "@/components/DashboardLayout";
 
@@ -17,8 +17,13 @@ import { DashboardLayout } from "@/components/DashboardLayout";
  * no-op here via DashboardNestCtx.
  */
 export default function DashboardShell() {
+  const location = useLocation();
+  // Public share links land on conversation routes; that page resolves access
+  // itself (guest read-only view / login redirect / denied). Everything else
+  // in the shell is an authed surface and keeps the redirect-home guard.
+  const guestOk = /^\/conversation\//.test(location.pathname);
   return (
-    <AuthGuard>
+    <AuthGuard guestOk={guestOk}>
       <DashboardLayout>
         <Outlet />
       </DashboardLayout>
