@@ -7,7 +7,9 @@
 // keep parsing it; porcelain mode carries the attribution as extra
 // `codecast-*` header keys, which porcelain consumers ignore.
 
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
+import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { cliFetchRead } from "./cliHttp.js";
 
@@ -320,6 +322,39 @@ async function resolveSessions(
   }
 }
 
+// Turn parsed blame porcelain into a session resolution. Builds the commit
+// descriptors (sha + summary + author-time, for the 3-tier server match) and
+// the content-line list (for authoring-session attribution), then calls the
+// resolve endpoint. Degrades to no attribution on any failure — a blame must
+// stay a faithful git blame even when the network blinks.
+async function resolveFromParsed(
+  parsed: ParsedBlame,
+  absFilePath: string,
+  config: { auth_token?: string; convex_url?: string },
+): Promise<BlameResolution> {
+  if (!config.auth_token || !config.convex_url) return EMPTY_RESOLUTION;
+  const commits: CommitDescriptor[] = [...new Set(parsed.lines.map((l) => l.sha))]
+    .filter((s) => s !== ZERO_SHA)
+    .map((sha) => {
+      const meta = parsed.commits.get(sha);
+      return {
+        sha,
+        summary: meta?.summary || undefined,
+        author_time: meta?.authorTime ? meta.authorTime * 1000 : undefined,
+      };
+    });
+  const contentLines = contentLinesToMatch(parsed, Date.now());
+  const siteUrl = config.convex_url.replace(".cloud", ".site");
+  try {
+    return await resolveSessions(siteUrl, config.auth_token, commits, absFilePath, contentLines);
+  } catch (error) {
+    console.error(
+      `cast blame: session resolution unavailable (${error instanceof Error ? error.message : error})`,
+    );
+    return EMPTY_RESOLUTION;
+  }
+}
+
 export interface BlameCommandOptions {
   ranges: string[];
   rev?: string;
@@ -353,31 +388,10 @@ export async function runBlameCommand(
   const { stdout: rawPorcelain } = await execGit(gitArgs, cwd);
   const parsed = parseBlamePorcelain(rawPorcelain);
 
-  let resolution = EMPTY_RESOLUTION;
   const wantSessions = options.sessions !== false && config.auth_token && config.convex_url;
-  if (wantSessions) {
-    const commits: CommitDescriptor[] = [...new Set(parsed.lines.map((l) => l.sha))]
-      .filter((s) => s !== ZERO_SHA)
-      .map((sha) => {
-        const meta = parsed.commits.get(sha);
-        return {
-          sha,
-          summary: meta?.summary || undefined,
-          author_time: meta?.authorTime ? meta.authorTime * 1000 : undefined,
-        };
-      });
-    const contentLines = contentLinesToMatch(parsed, Date.now());
-    const siteUrl = config.convex_url!.replace(".cloud", ".site");
-    try {
-      resolution = await resolveSessions(siteUrl, config.auth_token!, commits, absPath, contentLines);
-    } catch (error) {
-      // Stay a faithful git blame on any resolution failure — editor
-      // integrations must never see a broken pipe because the network blinked.
-      console.error(
-        `cast blame: session resolution unavailable (${error instanceof Error ? error.message : error})`,
-      );
-    }
-  }
+  const resolution = wantSessions
+    ? await resolveFromParsed(parsed, absPath, config)
+    : EMPTY_RESOLUTION;
 
   if (options.porcelain || options.linePorcelain) {
     process.stdout.write(augmentPorcelain(rawPorcelain, resolution));
@@ -400,5 +414,181 @@ export async function runBlameCommand(
 
   if (parsed.lines.length > 0) {
     console.log(formatDefaultBlame(parsed, resolution, displayLen));
+  }
+}
+
+// ── vim-fugitive integration ────────────────────────────────────────────────
+// Fugitive renders its blame window from the text of plain `git blame
+// --show-number` and parses each line only by the leading SHA and the
+// `( … lineno)` columns (autoload/fugitive.vim s:BlameCommitFileLnum) — never
+// the author text. So we keep every column byte-identical and swap ONLY the
+// author for a session label. The git executable fugitive shells out to is
+// g:fugitive_git_executable; pointing it at the shim (scripts/fugitive-git in
+// this package, installed to ~/.codecast) routes blame through here.
+
+// Unambiguous boundary between the author field and the rest of a standard
+// blame line — git's fixed `YYYY-MM-DD HH:MM:SS ±ZZZZ` stamp, always present
+// before the code and never inside the author.
+const BLAME_DATE_RE = /\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [-+]\d{4}/;
+
+// Rewrite standard `git blame` output, replacing the author column with the
+// session label and re-padding it, while leaving sha / line-number / code
+// columns exactly as git produced them. `standardOut` and `parsed.lines`
+// describe the SAME lines in the same order (same blame invocation), so we zip
+// by index to recover each line's full sha + code text for lookup.
+export function rewriteFugitiveBlame(
+  standardOut: string,
+  parsed: ParsedBlame,
+  resolution: BlameResolution,
+): string {
+  const hadTrailingNewline = standardOut.endsWith("\n");
+  const rawLines = standardOut.split("\n");
+  if (hadTrailingNewline) rawLines.pop();
+  // If the two views disagree on line count, a zip would mis-attribute — hand
+  // back real git's bytes untouched rather than risk it.
+  if (rawLines.length !== parsed.lines.length) return standardOut;
+
+  type Row = { prefix: string; who: string; dateOnward: string } | { raw: string };
+  const rows: Row[] = rawLines.map((line, i) => {
+    const date = line.match(BLAME_DATE_RE);
+    const open = line.indexOf("(");
+    if (!date || date.index === undefined || open === -1 || open > date.index) {
+      return { raw: line };
+    }
+    const originalAuthor = line.slice(open + 1, date.index).replace(/\s+$/, "");
+    const ref =
+      resolution.byLine.get(parsed.lines[i].content.trim()) ??
+      resolution.bySha.get(parsed.lines[i].sha);
+    return {
+      prefix: line.slice(0, open + 1),
+      who: ref ? sessionLabel(ref) : originalAuthor,
+      dateOnward: line.slice(date.index),
+    };
+  });
+
+  const width = Math.max(0, ...rows.map((r) => ("who" in r ? r.who.length : 0)));
+  const out = rows
+    .map((r) => ("raw" in r ? r.raw : `${r.prefix}${r.who.padEnd(width)} ${r.dateOnward}`))
+    .join("\n");
+  return hadTrailingNewline ? out + "\n" : out;
+}
+
+function buildPorcelainArgv(argv: string[], blameIdx: number): string[] {
+  const copy = [...argv];
+  copy.splice(blameIdx + 1, 0, "--porcelain");
+  return copy;
+}
+
+function fugitiveFilePath(argv: string[]): string | null {
+  const ddIdx = argv.lastIndexOf("--");
+  const file = ddIdx !== -1 ? argv[ddIdx + 1] : undefined;
+  if (!file) return null;
+  return path.isAbsolute(file) ? file : path.resolve(process.cwd(), file);
+}
+
+function execGitRaw(args: string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile("git", args, { cwd: process.cwd(), maxBuffer: 256 * 1024 * 1024 }, (err, stdout) => {
+      if (err) reject(err);
+      else resolve(stdout);
+    });
+  });
+}
+
+function resolveOnPath(cmd: string, fallback: string): string {
+  try {
+    return execFileSync("command", ["-v", cmd], { shell: "/bin/bash" }).toString().trim() || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+// Write the fugitive git shim to ~/.codecast/fugitive-git with the real git and
+// cast paths baked in (fugitive's job env may not share your shell PATH), then
+// tell the user the one line to add to their vimrc.
+export function installFugitiveShim(): void {
+  const realGit = resolveOnPath("git", "/usr/bin/git");
+  const castBin = resolveOnPath("cast", process.argv[1] ?? "cast");
+  const dir = path.join(os.homedir(), ".codecast");
+  const shimPath = path.join(dir, "fugitive-git");
+  const shim = `#!/usr/bin/env bash
+# vim-fugitive git shim for \`cast blame\` — generated by \`cast blame --install-fugitive\`.
+# Passes every git call through to real git, except \`blame\`, which cast rewrites
+# to show codecast session names in the author column (falling back to real git
+# on any failure). Set in your vimrc:
+#     let g:fugitive_git_executable = expand('~/.codecast/fugitive-git')
+CAST_BIN="${castBin}"
+REAL_GIT="${realGit}"
+
+sub=""
+skip=0
+for a in "$@"; do
+  if [ "$skip" = 1 ]; then skip=0; continue; fi
+  case "$a" in
+    -c|-C|--git-dir|--work-tree|--namespace|--exec-path|--super-prefix) skip=1 ;;
+    -*) ;;
+    *) sub="$a"; break ;;
+  esac
+done
+
+if [ "$sub" = "blame" ]; then
+  exec "$CAST_BIN" __fugitive_blame@@ "$@"
+fi
+exec "$REAL_GIT" "$@"
+`;
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(shimPath, shim, { mode: 0o755 });
+
+  const vimLine = `let g:fugitive_git_executable = expand('~/.codecast/fugitive-git')`;
+  console.log(`Installed fugitive shim: ${shimPath}`);
+  console.log(`  git  → ${realGit}`);
+  console.log(`  cast → ${castBin}`);
+  console.log(`\nAdd this to your vimrc (or init.vim), then restart vim:\n\n    ${vimLine}\n`);
+  console.log(`Then :Git blame (or :Gblame) shows codecast sessions in the author column.`);
+}
+
+/**
+ * Filter mode invoked by the fugitive git shim. `argv` is the exact argument
+ * vector fugitive passed to git (no leading "git"). We run real git verbatim
+ * for the bytes fugitive expects, then — only for a human display blame —
+ * overlay session labels onto the author column.
+ */
+export async function runFugitiveBlame(
+  argv: string[],
+  config: { auth_token?: string; convex_url?: string },
+): Promise<void> {
+  const blameIdx = argv.indexOf("blame");
+  // Fugitive also runs blame for navigation with -s (no author column) or
+  // machine formats — nothing to rewrite there, pass straight through.
+  const navOnly = argv.some(
+    (a) => a === "-s" || a === "--porcelain" || a === "--line-porcelain" || a === "--incremental",
+  );
+  if (blameIdx === -1 || navOnly) {
+    process.stdout.write(await execGitRaw(argv));
+    return;
+  }
+
+  // Real annotation first; everything after is best-effort and falls back to
+  // these exact bytes so fugitive's blame can never break on our account.
+  let standardOut: string;
+  try {
+    standardOut = await execGitRaw(argv);
+  } catch (err: any) {
+    // Real git failed (bad range, unknown rev): surface its own error.
+    if (err?.stderr) process.stderr.write(err.stderr);
+    process.exitCode = typeof err?.code === "number" ? err.code : 1;
+    return;
+  }
+
+  try {
+    const porcelain = await execGitRaw(buildPorcelainArgv(argv, blameIdx));
+    const parsed = parseBlamePorcelain(porcelain);
+    const filePath = fugitiveFilePath(argv);
+    const resolution = filePath
+      ? await resolveFromParsed(parsed, filePath, config)
+      : EMPTY_RESOLUTION;
+    process.stdout.write(rewriteFugitiveBlame(standardOut, parsed, resolution));
+  } catch {
+    process.stdout.write(standardOut);
   }
 }
