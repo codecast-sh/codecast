@@ -56,6 +56,7 @@ const ProjectDetail = lazy(() => import("@/app/projects/[id]/page"));
 // Workflows = Anthropic dynamic-workflow runs dashboard at /workflows.
 const Routines = lazy(() => import("@/app/workflows/page"));
 const Workflows = lazy(() => import("@/app/workflows/dashboard"));
+const Schedules = lazy(() => import("@/app/schedules/page"));
 
 const Team = lazy(() => import("@/app/team/page"));
 const TeamActivity = lazy(() => import("@/app/team/activity/page"));
@@ -147,6 +148,7 @@ export function App() {
               <Route path="projects/:id" element={<E name="ProjectDetail"><ProjectDetail /></E>} />
               <Route path="workflows" element={<E name="Workflows"><Workflows /></E>} />
               <Route path="routines" element={<E name="Routines"><Routines /></E>} />
+              <Route path="schedules" element={<E name="Schedules"><Schedules /></E>} />
               <Route path="sessions" element={<E name="Sessions"><Sessions /></E>} />
               <Route path="team" element={<E name="Team"><Team /></E>} />
               <Route path="team/activity" element={<E name="TeamActivity"><TeamActivity /></E>} />
