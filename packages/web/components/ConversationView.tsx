@@ -96,7 +96,7 @@ import { parseFileChangeSummary, parseUnifiedDiffSections } from "../lib/unified
 import { setupDesktopDrag, desktopHeaderClass } from "../lib/desktop";
 import { MessageNavButton } from "./MessageBrowserPopover";
 import type { MentionItem } from "./editor/MentionList";
-import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split } from "lucide-react";
+import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow } from "lucide-react";
 import { ComposeEditor, type ComposeEditorHandle } from "./editor/ComposeEditor";
 import { useMentionQuery } from "../hooks/useMentionQuery";
 
@@ -2104,6 +2104,164 @@ function TaskToolBlock({ tool, result, childConversationId, childConversations }
             </svg>
           </span>
         </div>
+      )}
+    </div>
+  );
+}
+
+// ── Workflow tool (dynamic-workflow launcher) ───────────────────────────────
+// The Workflow tool's result is a plain-text launch receipt ("Workflow launched in
+// background. Task ID: … Run ID: wf_…"). Parse it plus the script's meta literal into
+// the same card language as DynamicRunCard, and resolve the live run by its wf_ id so
+// the card shows real status/progress instead of the raw blob.
+
+export function parseWorkflowScriptMeta(script: string): { name?: string; description?: string } {
+  const head = script.slice(0, 2000);
+  return {
+    name: head.match(/\bname:\s*['"`]([^'"`\n]+)['"`]/)?.[1],
+    description: head.match(/\bdescription:\s*['"`]([^'"`\n]+)['"`]/)?.[1],
+  };
+}
+
+export function parseWorkflowLaunch(content: string): { taskId?: string; summary?: string; scriptFile?: string; runId?: string } {
+  return {
+    taskId: content.match(/\bTask ID:\s*(\S+)/)?.[1],
+    summary: content.match(/\bSummary:\s*([^\n]+)/)?.[1],
+    scriptFile: content.match(/\bScript file:\s*([^\n]+)/)?.[1],
+    runId: content.match(/\bRun ID:\s*(wf_[\w-]+)/)?.[1],
+  };
+}
+
+function WorkflowToolBlock({ tool, result }: { tool: ToolCall; result?: ToolResult }) {
+  const [expanded, setExpanded] = useState(false);
+
+  let parsedInput: Record<string, unknown> = {};
+  try {
+    parsedInput = JSON.parse(tool.input);
+  } catch {}
+
+  const script = typeof parsedInput.script === "string" ? parsedInput.script : "";
+  const scriptPath = typeof parsedInput.scriptPath === "string" ? parsedInput.scriptPath : "";
+  const resumeFromRunId = typeof parsedInput.resumeFromRunId === "string" ? parsedInput.resumeFromRunId : "";
+  const namedWorkflow = typeof parsedInput.name === "string" ? parsedInput.name : "";
+
+  const meta = script ? parseWorkflowScriptMeta(script) : {};
+  const isError = !!result?.is_error;
+  const launch = result && !isError ? parseWorkflowLaunch(safeString(result.content)) : {};
+
+  const scriptBase = (launch.scriptFile || scriptPath).split("/").pop() || "";
+  const name = meta.name || namedWorkflow || scriptBase.replace(/(-wf_[\w-]+)?\.[cm]?js$/, "") || "workflow";
+  const summary = meta.description || launch.summary || "";
+  const externalRunId = launch.runId || resumeFromRunId;
+
+  const run = useQuery(
+    api.workflow_runs.getByExternalRunForUser,
+    externalRunId ? { external_run_id: externalRunId } : "skip"
+  );
+  const sm = wfStatusMeta(run?.status);
+
+  const frame = isError
+    ? { border: "border-sol-red/30", bg: "bg-sol-red/10", divider: "border-sol-red/20" }
+    : { border: "border-sol-cyan/25", bg: "bg-sol-cyan/[0.06]", divider: "border-sol-cyan/15" };
+
+  return (
+    <div className={`my-2 rounded-lg border ${frame.border} ${frame.bg} overflow-hidden`}>
+      <div
+        className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-sol-bg-highlight/40 transition-colors"
+        onClick={() => setExpanded(!expanded)}
+      >
+        <Workflow className={`w-3.5 h-3.5 flex-shrink-0 ${isError ? "text-sol-red" : "text-sol-cyan"}`} />
+        <span className={`text-[10px] uppercase tracking-wider font-semibold ${isError ? "text-sol-red" : "text-sol-cyan"}`}>
+          Workflow
+        </span>
+        <span className="text-xs text-sol-text-muted truncate">{name}</span>
+        {resumeFromRunId && (
+          <span className="px-1 py-0.5 rounded text-[10px] font-medium bg-sol-cyan/15 border border-sol-cyan/25 text-sol-cyan flex-shrink-0">
+            resume
+          </span>
+        )}
+        <div className="ml-auto flex items-center gap-2 flex-shrink-0">
+          {run?.agent_count != null && <span className="text-[10px] text-sol-text-dim">{run.agent_count} agents</span>}
+          {run?.total_tokens ? <span className="text-[10px] text-sol-text-dim/70">{wfFmtTokens(run.total_tokens)} tok</span> : null}
+          {launch.taskId && <span className="text-[10px] text-sol-text-dim/70 font-mono">{launch.taskId}</span>}
+          {isError ? (
+            <span className="text-[10px] flex items-center gap-1 text-sol-red">{"✗"} failed</span>
+          ) : run ? (
+            <span className={`text-[10px] flex items-center gap-1 ${sm.cls}`}>
+              {sm.dot ? <span className={`w-1.5 h-1.5 rounded-full ${sm.dot}`} /> : sm.icon}
+              {run.status}
+            </span>
+          ) : result ? (
+            <span className="text-[10px] flex items-center gap-1 text-sol-cyan/80">
+              <span className="w-1.5 h-1.5 rounded-full bg-sol-cyan/60" />
+              launched
+            </span>
+          ) : (
+            <span className="text-[10px] flex items-center gap-1 text-sol-text-dim">
+              <span className="w-2.5 h-2.5 rounded-full border border-current border-t-transparent animate-spin text-sol-cyan opacity-60" />
+              launching
+            </span>
+          )}
+          <span className="text-sol-text-dim text-[10px]">{expanded ? "collapse" : "expand"}</span>
+        </div>
+      </div>
+
+      {summary && (
+        <div className="px-3 pb-2 -mt-0.5">
+          <div className={`text-xs text-sol-text-dim ${expanded ? "" : "line-clamp-2"}`}>{summary}</div>
+        </div>
+      )}
+
+      {/* Live agent tree only on expand — the daemon's anchor message (DynamicRunCard)
+          already carries it inline, so the default state stays a compact receipt. */}
+      {run && expanded && (
+        <div className={`border-t ${frame.divider} px-3 py-2`}>
+          <DynamicRunView run={run} compact />
+        </div>
+      )}
+
+      {expanded && (
+        <>
+          {script && (
+            <div className={`border-t ${frame.divider} px-3 py-2`}>
+              <div className="text-[10px] text-sol-text-dim mb-1">Script</div>
+              <div className="text-sol-text-secondary text-[11px] font-mono whitespace-pre-wrap break-words leading-relaxed max-h-80 overflow-y-auto">
+                {script}
+              </div>
+            </div>
+          )}
+          {(launch.scriptFile || scriptPath) && (
+            <div className={`border-t ${frame.divider} px-3 py-2`}>
+              <div className="text-[10px] text-sol-text-dim mb-1">Script file</div>
+              <div className="text-sol-text-dim text-[11px] font-mono break-all">{launch.scriptFile || scriptPath}</div>
+            </div>
+          )}
+          {parsedInput.args !== undefined && (
+            <div className={`border-t ${frame.divider} px-3 py-2`}>
+              <div className="text-[10px] text-sol-text-dim mb-1">Args</div>
+              <div className="text-sol-text-dim text-[11px] font-mono whitespace-pre-wrap break-words max-h-40 overflow-y-auto">
+                {JSON.stringify(parsedInput.args, null, 2)}
+              </div>
+            </div>
+          )}
+          {result && (
+            <div className={`border-t ${frame.divider} px-3 py-2`}>
+              <div className="text-[10px] text-sol-text-dim mb-1">{isError ? "Error" : "Result"}</div>
+              <div className={`text-[11px] font-mono whitespace-pre-wrap break-words leading-relaxed max-h-60 overflow-y-auto ${isError ? "text-sol-red" : "text-sol-text-dim"}`}>
+                {safeString(result.content)}
+              </div>
+            </div>
+          )}
+          <div className={`border-t ${frame.divider} px-3 py-1.5 flex justify-end`}>
+            <Link
+              href="/workflows"
+              onClick={(e) => e.stopPropagation()}
+              className="text-[10px] text-sol-cyan hover:underline underline-offset-2"
+            >
+              all workflows {"→"}
+            </Link>
+          </div>
+        </>
       )}
     </div>
   );
@@ -5462,6 +5620,8 @@ function AssistantBlockImpl({
             <SendMessageBlock key={tc.id} tool={tc} agentNameToChildMap={agentNameToChildMap} />
           ) : tc.name === "TeamCreate" || tc.name === "TeamDelete" ? (
             <TeamCreateBlock key={tc.id} tool={tc} />
+          ) : tc.name === "Workflow" ? (
+            <WorkflowToolBlock key={tc.id} tool={tc} result={toolResultMap[tc.id]} />
           ) : tc.name === "Skill" ? (
             <SkillBlock key={tc.id} tool={tc} />
           ) : tc.name === "EnterPlanMode" || tc.name === "ExitPlanMode" ? (
@@ -5765,9 +5925,7 @@ function DynamicRunCard({ runId, name }: { runId?: string; name?: string }) {
   return (
     <div className="my-2 rounded-lg border border-sol-cyan/25 bg-sol-cyan/[0.06] overflow-hidden">
       <div className="flex items-center gap-2 px-3 py-2 border-b border-sol-cyan/15">
-        <svg className="w-3.5 h-3.5 text-sol-cyan flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M4 5a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM14 5a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1V5zM4 15a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1v-4zM14 15a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z" />
-        </svg>
+        <Workflow className="w-3.5 h-3.5 text-sol-cyan flex-shrink-0" />
         <span className="text-[10px] text-sol-cyan uppercase tracking-wider font-semibold">Workflow</span>
         <span className="text-xs text-sol-text-muted truncate">{run?.workflow_name || name || "workflow"}</span>
         <div className="ml-auto flex items-center gap-2 flex-shrink-0">
