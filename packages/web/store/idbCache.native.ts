@@ -21,7 +21,12 @@ let Storage: any = null;
 try {
   Storage = require("expo-sqlite/kv-store").default;
 } catch {
-  Storage = null;
+  // Tests can't reach this require with bun's mock.module (it intercepts the
+  // ESM path only), so the suite injects an AsyncStorage-compatible shim via
+  // this global BEFORE importing the module — that also lets the eval-time
+  // PERSISTENCE_AVAILABLE const come out true. Absent the global (production
+  // on an older binary), degrade to in-memory exactly as before.
+  Storage = (globalThis as any).__CODECAST_TEST_KV_STORAGE__ ?? null;
 }
 
 export type OutboxEntry = {
