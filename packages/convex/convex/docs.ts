@@ -1028,6 +1028,18 @@ export const webSearch = query({
   },
 });
 
+// Owner-or-team access check for a doc, mirroring tasks.canAccessTask. Exported so
+// the web mutation and the dispatch side-effect enforce one rule, not two.
+export async function canAccessDoc(
+  ctx: any,
+  userId: Id<"users">,
+  doc: { user_id: Id<"users">; team_id?: Id<"teams"> },
+): Promise<boolean> {
+  if (doc.user_id === userId) return true;
+  if (!doc.team_id) return false;
+  return await isTeamMember(ctx, userId, doc.team_id);
+}
+
 export const webUpdate = mutation({
   args: {
     id: v.id("docs"),
@@ -1044,6 +1056,7 @@ export const webUpdate = mutation({
 
     const doc = await ctx.db.get(args.id);
     if (!doc) throw new Error("Doc not found");
+    if (!(await canAccessDoc(ctx, userId, doc))) throw new Error("Unauthorized");
 
     const updates: any = { updated_at: Date.now() };
     if (args.title !== undefined) updates.title = args.title;

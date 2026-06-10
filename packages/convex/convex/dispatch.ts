@@ -10,6 +10,7 @@ import { nextShortId } from "./counters";
 import { resolveAssigneeStr, resolveAssigneeToUserId, recalcPlanProgress, notifySubscribers, subscribeUser, resolveWorkerParentConversation, resolveTaskGitContext } from "./tasks";
 import { api, internal } from "./_generated/api";
 import { conversationHasNoWork, reapEmptyConversation } from "./cleanup";
+import { canAccessDoc } from "./docs";
 
 type TableConfig =
   | {
@@ -696,6 +697,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   updateDoc: async (ctx, userId, [docId, fields]: [string, { content?: string; title?: string; doc_type?: string; labels?: string[] }]) => {
     const doc = await ctx.db.get(docId as Id<"docs">);
     if (!doc) throw new Error("Doc not found");
+    if (!(await canAccessDoc(ctx, userId, doc))) throw new Error("Unauthorized");
     const updates: any = { updated_at: Date.now() };
     if (fields.content !== undefined) updates.content = fields.content;
     if (fields.title !== undefined) updates.title = fields.title;
