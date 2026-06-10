@@ -6,7 +6,7 @@ import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { AuthGuard } from "../../components/AuthGuard";
 import { DashboardLayout } from "../../components/DashboardLayout";
 import { DynamicRunView, wfStatusMeta, wfFmtTokens } from "../../components/DynamicRunView";
-import { ExternalLink } from "lucide-react";
+import { ExternalLink, Workflow } from "lucide-react";
 
 const api = _api as any;
 
@@ -20,19 +20,13 @@ function timeAgo(ts?: number): string {
   return `${Math.floor(hours / 24)}d`;
 }
 
-const GridIcon = ({ className }: { className?: string }) => (
-  <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M4 5a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM14 5a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1V5zM4 15a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1v-4zM14 15a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z" />
-  </svg>
-);
-
 function RunCard({ run }: { run: any }) {
   const sm = wfStatusMeta(run.status);
   const agentCount = run.agent_count ?? (run.node_statuses || []).length;
   return (
     <div className="rounded-xl border border-sol-cyan/20 bg-sol-cyan/[0.04] overflow-hidden">
       <div className="flex items-center gap-2.5 px-4 py-2.5 border-b border-sol-cyan/15">
-        <GridIcon className="w-4 h-4 text-sol-cyan flex-shrink-0" />
+        <Workflow className="w-4 h-4 text-sol-cyan flex-shrink-0" />
         <span className="text-sm font-semibold text-sol-text truncate">{run.workflow_name || "workflow"}</span>
         <div className="ml-auto flex items-center gap-3 text-[11px] text-sol-text-dim flex-shrink-0">
           <span>{agentCount} agents</span>
@@ -65,7 +59,7 @@ function WorkflowsDashboardContent() {
     <div className="h-full overflow-y-auto bg-sol-bg">
       <div className="max-w-3xl mx-auto px-6 py-6">
         <div className="flex items-baseline gap-2 mb-5">
-          <GridIcon className="w-4 h-4 text-sol-cyan self-center" />
+          <Workflow className="w-4 h-4 text-sol-cyan self-center" />
           <h1 className="text-lg font-semibold text-sol-text">Workflows</h1>
           <span className="text-xs text-sol-text-dim">dynamic agent runs</span>
           {runs && <span className="ml-auto text-xs text-sol-text-dim font-mono">{runs.length}</span>}
@@ -74,7 +68,7 @@ function WorkflowsDashboardContent() {
           <div className="text-sm text-sol-text-dim">Loading…</div>
         ) : runs.length === 0 ? (
           <div className="flex flex-col items-center justify-center gap-2 py-24 text-center">
-            <GridIcon className="w-8 h-8 text-sol-text-dim" />
+            <Workflow className="w-8 h-8 text-sol-text-dim" />
             <p className="text-sm text-sol-text-muted">No workflow runs yet</p>
             <p className="text-xs text-sol-text-dim max-w-xs">
               Run a dynamic workflow in any session (e.g. <code className="font-mono text-sol-text-muted">ultracode</code>) and it appears here.

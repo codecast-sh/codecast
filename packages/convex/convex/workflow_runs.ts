@@ -254,6 +254,22 @@ export const getByExternalRun = query({
   },
 });
 
+// Web: same lookup with session auth. The inline Workflow tool card only knows the
+// runtime's wf_<id> (parsed from the tool result), not the convex document id.
+export const getByExternalRunForUser = query({
+  args: { external_run_id: v.string() },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return null;
+    const run = await ctx.db
+      .query("workflow_runs")
+      .withIndex("by_external_run", (q) => q.eq("external_run_id", args.external_run_id))
+      .first();
+    if (!run || run.user_id !== userId) return null;
+    return run;
+  },
+});
+
 export const respondToGate = mutation({
   args: {
     id: v.id("workflow_runs"),
