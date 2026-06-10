@@ -444,26 +444,23 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     const conv = await ctx.db.get(convId as Id<"conversations">);
     if (!conv) throw new Error("Conversation not found");
     if (conv.user_id.toString() !== userId.toString()) throw new Error("Unauthorized");
-    const updates: { is_private: boolean; team_id?: Id<"teams">; team_visibility?: "summary" | "full" | "private" } = {
-      is_private: isPrivate,
-    };
-    if (isPrivate) {
-      updates.team_visibility = "private";
-    } else {
-      const user = await ctx.db.get(userId);
-      if (user?.team_id && conv.team_id?.toString() !== user.team_id.toString()) {
-        updates.team_id = user.team_id;
-      }
-    }
+    // Sharing must guarantee a team_id (buildShareUpdate); locking forces the
+    // private visibility marker. Never let is_private:false and team_id diverge.
+    const updates = isPrivate
+      ? { is_private: true as const, team_visibility: "private" as const }
+      : await buildShareUpdate(ctx, conv, userId);
     await ctx.db.patch(convId as Id<"conversations">, updates);
   },
 
   setTeamVisibility: async (ctx, userId, [convId, visibility]: [string, "summary" | "full" | null]) => {
     const conv = await ctx.db.get(convId as Id<"conversations">);
     if (!conv || conv.user_id.toString() !== userId.toString()) throw new Error("Unauthorized");
+    // Setting any team visibility shares the conversation, so guarantee a
+    // team_id alongside it (else it's shared-with-nobody).
+    const updates = await buildShareUpdate(ctx, conv, userId);
     await ctx.db.patch(convId as Id<"conversations">, {
+      ...updates,
       team_visibility: visibility ?? undefined,
-      is_private: false,
     });
   },
 

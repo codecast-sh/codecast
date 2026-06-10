@@ -2906,21 +2906,11 @@ export const setPrivacy = mutation({
       throw new Error("Unauthorized: can only change privacy of your own conversations");
     }
 
-    const updates: { is_private: boolean; team_id?: Id<"teams">; team_visibility?: "summary" | "full" | "private" } = {
-      is_private: args.is_private,
-    };
-
-    if (args.is_private) {
-      updates.team_visibility = "private";
-    }
-
-    // When unlocking, ensure team_id is synced to user's current team
-    if (!args.is_private) {
-      const user = await ctx.db.get(authUserId);
-      if (user?.team_id && conversation.team_id?.toString() !== user.team_id.toString()) {
-        updates.team_id = user.team_id;
-      }
-    }
+    // Sharing must guarantee a team_id (buildShareUpdate); locking forces the
+    // private visibility marker. Never let is_private:false and team_id diverge.
+    const updates = args.is_private
+      ? { is_private: true as const, team_visibility: "private" as const }
+      : await buildShareUpdate(ctx, conversation, authUserId);
 
     await ctx.db.patch(args.conversation_id, updates);
   },
@@ -2945,9 +2935,12 @@ export const setTeamVisibility = mutation({
       throw new Error("Unauthorized: can only change visibility of your own conversations");
     }
 
+    // Setting any team visibility shares the conversation, so guarantee a
+    // team_id alongside it (else it's shared-with-nobody).
+    const updates = await buildShareUpdate(ctx, conversation, authUserId);
     await ctx.db.patch(args.conversation_id, {
+      ...updates,
       team_visibility: args.team_visibility ?? undefined,
-      is_private: false,
     });
   },
 });
@@ -5869,6 +5862,37 @@ export const backfillAutoSharedConversations = internalMutation({
 
     const nextCursor = !result.isDone ? result.continueCursor : null;
     return { scanned: result.page.length, fixed, nextCursor, dry_run: !!args.dry_run };
+  },
+});
+
+// One-shot repair for conversations stuck "shared with nobody": is_private is
+// false but team_id is missing, so every teammate fails the !team_id gate and
+// the conversation reads as private. Re-resolves the team via buildShareUpdate
+// (directory mapping → owner's active/default team). User-scoped via the
+// by_user_private index so it never full-scans. unresolved = owner has no team.
+export const backfillSharedTeamlessTeamId = internalMutation({
+  args: { user_id: v.id("users"), dry_run: v.optional(v.boolean()) },
+  handler: async (ctx, args) => {
+    const shared = await ctx.db
+      .query("conversations")
+      .withIndex("by_user_private", (q) =>
+        q.eq("user_id", args.user_id).eq("is_private", false)
+      )
+      .collect();
+    const broken = shared.filter((c) => !c.team_id);
+
+    let fixed = 0;
+    const unresolved: Array<{ _id: string; title?: string; project_path?: string }> = [];
+    for (const c of broken) {
+      const { team_id } = await buildShareUpdate(ctx, c, args.user_id);
+      if (!team_id) {
+        unresolved.push({ _id: c._id, title: c.title, project_path: c.project_path });
+        continue;
+      }
+      if (!args.dry_run) await ctx.db.patch(c._id, { team_id });
+      fixed++;
+    }
+    return { broken: broken.length, fixed, unresolved, dry_run: !!args.dry_run };
   },
 });
 
