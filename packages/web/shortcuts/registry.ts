@@ -77,9 +77,15 @@ export const SHORTCUTS: ShortcutDef[] = [
   { key: 'ctrl+i', action: 'session.jumpIdle', skipInputCheck: true, description: 'Jump to idle session' },
   { key: 'alt+p', mac: 'ctrl+p', action: 'session.jumpPinned', skipInputCheck: true, description: 'Jump to pinned session' },
   { key: 'ctrl+shift+p', action: 'session.pin', skipInputCheck: true, description: 'Pin/unpin session' },
-  { key: 'ctrl+backspace', action: 'session.stash', skipInputCheck: true, description: 'Stash session' },
-  { key: 'ctrl+shift+backspace', action: 'session.kill', skipInputCheck: true, description: 'Kill session agent' },
-  { key: 'shift+backspace', action: 'session.deferAdvance', skipInputCheck: true, description: 'Defer and advance' },
+  // Destructive backspace chords intentionally OMIT skipInputCheck: ctrl+backspace
+  // is the OS "delete previous word" key, so with skipInputCheck these fired mid-
+  // compose — preventDefault swallowed the keystroke (no visible change) while the
+  // selected session got stashed/killed/deferred. The dispatcher's in-input guard
+  // now suppresses them while a composer/input is focused; they still work from
+  // list/panel focus. Kill is an irreversible SIGKILL — keep it guarded.
+  { key: 'ctrl+backspace', action: 'session.stash', description: 'Stash session' },
+  { key: 'ctrl+shift+backspace', action: 'session.kill', description: 'Kill session agent' },
+  { key: 'shift+backspace', action: 'session.deferAdvance', description: 'Defer and advance' },
   { key: 'ctrl+n', action: 'session.create', skipInputCheck: true, description: 'New session' },
   { key: 'ctrl+shift+n', action: 'session.createIsolated', skipInputCheck: true, description: 'New isolated session' },
   { key: 'ctrl+shift+e', action: 'session.rename', skipInputCheck: true, description: 'Rename session' },
