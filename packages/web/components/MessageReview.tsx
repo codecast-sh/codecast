@@ -1,12 +1,13 @@
 // Per-message quote/comment review UI. Replaces the plain <MessageMarkdown> for
 // assistant message bodies.
 //
-// Comments live in a RIGHT-HAND MARGIN RAIL (Google-Docs style), each card
-// vertically aligned to the block it annotates — not pushed inline into the text
-// flow. To do that the message renders as ONE MessageMarkdown (no splitting), we
-// measure each top-level block's offset with a ResizeObserver, and float the rail
-// cards + the hover "+" at those offsets. When the rail is active the text column
-// shrinks to make room (there's no spare horizontal space beside it).
+// Comments live in a LEFT-HAND rail, each card vertically aligned to the block it
+// annotates. When the centered conversation column has empty margin to its left
+// (wide screens), the rail FLOATS in that margin so the text column keeps its
+// full width; when the margin is too tight it falls back to an in-flow left
+// column that shrinks the text. The message renders as ONE MessageMarkdown (no
+// splitting); we measure each top-level block's offset with a ResizeObserver and
+// place the cards + the hover handle at those offsets.
 //
 // Cross-component state is in inboxStore's ephemeral review fields; the store
 // choreography is in lib/reviewActions.
@@ -15,8 +16,16 @@ import React, { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, 
 import { useShallow } from "zustand/react/shallow";
 import { useInboxStore } from "../store/inboxStore";
 import type { PendingComment } from "../lib/quoteFormat";
-import { createReviewComment, discardIfEmpty, exitReviewMode } from "../lib/reviewActions";
-import { useReviewComposer } from "./reviewContext";
+import { createReviewComment, exitReviewMode } from "../lib/reviewActions";
+import { useCurrentUser } from "../hooks/useCurrentUser";
+import { KeyCap } from "./KeyboardShortcutsHelp";
+
+// Comment-rail sizing (px). When the empty left margin is at least MIN, float the
+// rail there at whatever width fits (up to MAX) so the text column keeps its full
+// width; below MIN there isn't room for a readable rail, so shrink inline instead.
+const RAIL_MAX_PX = 240; // 15rem
+const RAIL_MIN_PX = 168; // ~10.5rem — narrowest still-readable margin rail
+const RAIL_GAP_PX = 40; // gap between rail and text + clearance from the viewport edge
 
 type Rect = { top: number; height: number };
 
@@ -28,7 +37,7 @@ type Props = {
 };
 
 function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: Props) {
-  const composer = useReviewComposer();
+  const { user: author } = useCurrentUser();
 
   const isReviewTarget = useInboxStore((s) => s.reviewMessageId === messageId);
   const activeBlock = useInboxStore((s) => (s.reviewMessageId === messageId ? s.reviewActiveBlock : -1));
@@ -56,8 +65,13 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
   const [peekBlock, setPeekBlock] = useState<number | null>(null);
   const [rects, setRects] = useState<Rect[]>([]);
   const [stackTops, setStackTops] = useState<Record<string, number>>({});
+  // Float the rail in the left margin (content keeps full width) when there's
+  // room; otherwise shrink the text column with an in-flow left rail. railPx is
+  // the rail width to use in margin mode (clamped to the available margin).
+  const [railInMargin, setRailInMargin] = useState(false);
+  const [railPx, setRailPx] = useState(RAIL_MAX_PX);
 
-  // ----- measure each top-level block's vertical position -----
+  // ----- measure each top-level block's vertical position + available left margin -----
   const measure = useCallback(() => {
     const el = contentRef.current;
     if (!el) return;
@@ -67,6 +81,19 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
         ? prev
         : next,
     );
+    // Empty space to the left of the content, inside the scroll viewport. Use it
+    // for the rail (at whatever width fits) so the text column keeps full width;
+    // fall back to shrinking inline only when the margin is too small to be useful.
+    const region = containerRef.current;
+    if (region) {
+      let scroller: HTMLElement | null = region;
+      while (scroller && getComputedStyle(scroller).overflowY === "visible") scroller = scroller.parentElement;
+      const left = scroller ? scroller.getBoundingClientRect().left : 0;
+      const avail = region.getBoundingClientRect().left - left - RAIL_GAP_PX;
+      const inMargin = avail >= RAIL_MIN_PX;
+      setRailInMargin(inMargin);
+      if (inMargin) setRailPx(Math.min(RAIL_MAX_PX, Math.round(avail)));
+    }
   }, []);
 
   // Only measure block offsets while the rail or keyboard nav needs them. Idle
@@ -82,8 +109,13 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
     if (!el) return;
     const ro = new ResizeObserver(() => measure());
     ro.observe(el);
+    if (containerRef.current) ro.observe(containerRef.current); // catches margin changes (panel toggles, resize)
     Array.from(el.children).forEach((c) => ro.observe(c));
-    return () => ro.disconnect();
+    window.addEventListener("resize", measure);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", measure);
+    };
   }, [content, measureActive, measure]);
 
   const blockCount = rects.length || 1;
@@ -154,6 +186,9 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
   }, [cancelClear]);
 
   // ----- keyboard nav (only while this message is the review target) -----
+  // ↑/↓ (or j/k) move between blocks; c/Enter quotes the active block (like
+  // clicking ❝); n/e adds or opens its note; x/⌫ removes it; Esc leaves. The
+  // outgoing message auto-attaches the batch on send, so there's no submit key.
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if (!isReviewTarget) return;
@@ -169,19 +204,16 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
       } else if (key === "ArrowUp" || key === "k") {
         e.preventDefault();
         setActiveBlock(Math.max(0, cur - 1));
-      } else if ((key === "c" || key === "Enter") && (e.metaKey || e.ctrlKey)) {
-        e.preventDefault();
-        composer?.submit();
       } else if (key === "c" || key === "Enter") {
-        e.preventDefault();
-        startComment(cur);
-      } else if (key === "q") {
-        e.preventDefault();
-        composer?.quote(blockText(cur));
-      } else if (key === "e") {
+        // Quote the active block, or open its note if it's already quoted.
         e.preventDefault();
         if (blockComments.length) useInboxStore.getState().setReviewEditingId(blockComments[0].id);
         else startComment(cur);
+      } else if (key === "n" || key === "e") {
+        // Add note: open the active block's note editor (quoting it first if needed).
+        e.preventDefault();
+        const id = blockComments.length ? blockComments[0].id : startComment(cur);
+        useInboxStore.getState().setReviewEditingId(id);
       } else if (key === "x" || key === "Delete" || key === "Backspace") {
         if (blockComments.length) {
           e.preventDefault();
@@ -192,7 +224,7 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
         exitReviewMode();
       }
     },
-    [isReviewTarget, blockCount, myComments, conversationId, composer, setActiveBlock, startComment, blockText],
+    [isReviewTarget, blockCount, myComments, conversationId, setActiveBlock, startComment],
   );
 
   // keep active block in view + hold focus so single-letter keys are captured here
@@ -209,7 +241,8 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
   return (
     <div
       ref={containerRef}
-      className={"cc-msg-review" + (engaged ? " cc-rail-on" : "")}
+      className={"cc-msg-review" + (engaged ? (railInMargin ? " cc-rail-margin" : " cc-rail-inline") : "")}
+      style={engaged && railInMargin ? ({ "--cc-rail-w": railPx + "px" } as React.CSSProperties) : undefined}
       data-review-region={isReviewTarget ? "active" : undefined}
       tabIndex={isReviewTarget ? -1 : undefined}
       onKeyDown={isReviewTarget ? handleKeyDown : undefined}
@@ -230,35 +263,26 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
         {renderBlock(content)}
       </div>
 
-      {/* Modeless per-block actions: hover any block → quote/comment, always. */}
+      {/* Modeless single verb: hover any block → one Quote handle in the LEFT
+          gutter (separated from the meta actions in the top-right corner). Click
+          quotes the block into your reply and opens an optional note; leave the
+          note blank for a bare quote. */}
       {hoverIndex !== null && editingId === null && (
-        <div className="cc-block-actions" style={{ top: hoverTop }} onMouseEnter={cancelClear} data-cc-gutter>
-          <button
-            type="button"
-            className="cc-block-act"
-            title="Quote in reply"
-            aria-label="Quote this block in your reply"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => composer?.quote(blockText(hoverIndex))}
-          >
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M9.6 6C7 7.5 5.2 9.9 5.2 13.1c0 2.4 1.5 4 3.5 4 1.8 0 3.1-1.3 3.1-3 0-1.6-1.1-2.8-2.7-2.8-.3 0-.6 0-.7.1.3-1.6 1.6-3.2 3-4.1L9.6 6zm8 0c-2.6 1.5-4.4 3.9-4.4 7.1 0 2.4 1.5 4 3.5 4 1.8 0 3.1-1.3 3.1-3 0-1.6-1.1-2.8-2.7-2.8-.3 0-.6 0-.7.1.3-1.6 1.6-3.2 3-4.1L17.6 6z" />
-            </svg>
-          </button>
-          <button
-            type="button"
-            className="cc-block-act"
-            title="Comment on this block"
-            aria-label="Comment on this block"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => startComment(hoverIndex)}
-          >
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-              <path d="M12 8v6M9 11h6" />
-            </svg>
-          </button>
-        </div>
+        <button
+          type="button"
+          data-cc-gutter
+          className="cc-block-quote"
+          style={{ top: hoverTop }}
+          title="Quote into your reply"
+          aria-label="Quote this block into your reply"
+          onMouseEnter={cancelClear}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => startComment(hoverIndex)}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M9.6 6C7 7.5 5.2 9.9 5.2 13.1c0 2.4 1.5 4 3.5 4 1.8 0 3.1-1.3 3.1-3 0-1.6-1.1-2.8-2.7-2.8-.3 0-.6 0-.7.1.3-1.6 1.6-3.2 3-4.1L9.6 6zm8 0c-2.6 1.5-4.4 3.9-4.4 7.1 0 2.4 1.5 4 3.5 4 1.8 0 3.1-1.3 3.1-3 0-1.6-1.1-2.8-2.7-2.8-.3 0-.6 0-.7.1.3-1.6 1.6-3.2 3-4.1L17.6 6z" />
+          </svg>
+        </button>
       )}
 
       {engaged && (
@@ -274,10 +298,11 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
               style={{ top: stackTops[c.id] ?? rects[c.blockIndex]?.top ?? 0 }}
             >
               {c.id === editingId ? (
-                <CommentEditor conversationId={conversationId} comment={c} onDone={focusRegion} />
+                <CommentEditor conversationId={conversationId} comment={c} author={author} onDone={focusRegion} />
               ) : (
                 <CommentChip
                   comment={c}
+                  author={author}
                   active={isReviewTarget && activeBlock === c.blockIndex}
                   onEdit={() => useInboxStore.getState().setReviewEditingId(c.id)}
                   onRemove={() => useInboxStore.getState().removeReviewComment(conversationId, c.id)}
@@ -293,8 +318,20 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
   );
 }
 
+function CommentAvatar({ author }: { author: any }) {
+  const name: string = author?.name || author?.email?.split("@")[0] || "You";
+  const src: string | undefined = author?.avatar_url || author?.image || undefined;
+  if (src) return <img className="cc-comment-avatar" src={src} alt={name} title={name} />;
+  return (
+    <span className="cc-comment-avatar cc-comment-avatar-fallback" title={name}>
+      {name.slice(0, 1).toUpperCase()}
+    </span>
+  );
+}
+
 const CommentChip = memo(function CommentChip({
   comment,
+  author,
   active,
   onEdit,
   onRemove,
@@ -302,6 +339,7 @@ const CommentChip = memo(function CommentChip({
   onPeekEnd,
 }: {
   comment: PendingComment;
+  author: any;
   active: boolean;
   onEdit: () => void;
   onRemove: () => void;
@@ -315,10 +353,28 @@ const CommentChip = memo(function CommentChip({
       onMouseEnter={onPeek}
       onMouseLeave={onPeekEnd}
     >
-      <div className="cc-comment-body">{comment.body || <span className="cc-comment-empty">Add a comment…</span>}</div>
-      <div className="cc-comment-actions">
-        <button type="button" onClick={(e) => { e.stopPropagation(); onEdit(); }} className="cc-comment-btn">Edit</button>
-        <button type="button" onClick={(e) => { e.stopPropagation(); onRemove(); }} className="cc-comment-btn cc-comment-btn-danger">Remove</button>
+      <CommentAvatar author={author} />
+      <div className="cc-comment-main">
+        {comment.body ? (
+          <div className="cc-comment-body">{comment.body}</div>
+        ) : (
+          // Committed bare quote (no note): mark it as a quote of the block so it
+          // doesn't read as if the quoted text were the note.
+          <div className="cc-comment-quote">
+            <span className="cc-comment-quote-mark">❝</span>
+            {(comment.quote || "").replace(/\s+/g, " ").trim().slice(0, 90)}
+          </div>
+        )}
+        <div className="cc-comment-actions">
+          <button type="button" onClick={(e) => { e.stopPropagation(); onEdit(); }} className="cc-comment-btn">
+            {comment.body ? "Edit" : "Add note"}
+            {active && <KeyCap size="xs">N</KeyCap>}
+          </button>
+          <button type="button" onClick={(e) => { e.stopPropagation(); onRemove(); }} className="cc-comment-btn cc-comment-btn-danger">
+            Remove
+            {active && <KeyCap size="xs">⌫</KeyCap>}
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -327,10 +383,12 @@ const CommentChip = memo(function CommentChip({
 function CommentEditor({
   conversationId,
   comment,
+  author,
   onDone,
 }: {
   conversationId: string;
   comment: PendingComment;
+  author: any;
   onDone: () => void;
 }) {
   const [value, setValue] = useState(comment.body);
@@ -352,47 +410,52 @@ function CommentEditor({
     onDone();
   }, [onDone]);
 
+  // The quote is committed on first click, so the note editor only edits the
+  // optional note: Save stores it (empty keeps it a bare quote), Cancel just
+  // closes and leaves the quote untouched. Removing is the chip's explicit Remove.
   const save = useCallback(() => {
-    const body = value.trim();
-    if (!body) useInboxStore.getState().removeReviewComment(conversationId, comment.id);
-    else useInboxStore.getState().updateReviewComment(conversationId, comment.id, body);
+    useInboxStore.getState().commitReviewComment(conversationId, comment.id, value.trim());
     close();
   }, [value, conversationId, comment.id, close]);
 
-  const cancel = useCallback(() => {
-    discardIfEmpty(conversationId, comment.id);
-    close();
-  }, [conversationId, comment.id, close]);
+  const cancel = close;
 
   return (
     <div className="cc-comment-editor">
-      <textarea
-        ref={ref}
-        value={value}
-        placeholder="Add a comment…"
-        className="cc-comment-textarea"
-        onChange={(e) => {
-          setValue(e.target.value);
-          e.target.style.height = "auto";
-          e.target.style.height = e.target.scrollHeight + "px";
-        }}
-        onKeyDown={(e) => {
-          e.stopPropagation();
-          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-            e.preventDefault();
-            save();
-          } else if (e.key === "Escape") {
-            e.preventDefault();
-            cancel();
-          }
-        }}
-        onBlur={() => {
-          if (!value.trim()) discardIfEmpty(conversationId, comment.id);
-        }}
-      />
-      <div className="cc-comment-editor-footer">
-        <button type="button" className="cc-comment-btn" onMouseDown={(e) => e.preventDefault()} onClick={cancel}>Cancel</button>
-        <button type="button" className="cc-comment-btn cc-comment-btn-primary" onMouseDown={(e) => e.preventDefault()} onClick={save}>Save</button>
+      <CommentAvatar author={author} />
+      <div className="cc-comment-main">
+        <textarea
+          ref={ref}
+          value={value}
+          placeholder="Add a note… (optional)"
+          className="cc-comment-textarea"
+          onChange={(e) => {
+            setValue(e.target.value);
+            e.target.style.height = "auto";
+            e.target.style.height = e.target.scrollHeight + "px";
+          }}
+          onKeyDown={(e) => {
+            e.stopPropagation();
+            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+              e.preventDefault();
+              save();
+            } else if (e.key === "Escape") {
+              e.preventDefault();
+              cancel();
+            }
+          }}
+          onBlur={save}
+        />
+        <div className="cc-comment-editor-footer">
+          <button type="button" className="cc-comment-btn" onMouseDown={(e) => e.preventDefault()} onClick={cancel}>
+            Cancel
+            <KeyCap size="xs">Esc</KeyCap>
+          </button>
+          <button type="button" className="cc-comment-btn cc-comment-btn-primary" onMouseDown={(e) => e.preventDefault()} onClick={save}>
+            Save
+            <span className="cc-bar-keys"><KeyCap size="xs">⌘</KeyCap><KeyCap size="xs">↵</KeyCap></span>
+          </button>
+        </div>
       </div>
     </div>
   );

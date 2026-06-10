@@ -889,8 +889,6 @@ pre[class*="language-"] {
    subtree) can offset itself by the same amount — single source of truth. */
 .cc-msg-review {
   position: relative;
-  display: flex;
-  gap: var(--cc-rail-gap);
 }
 /* The region is programmatically focusable (tabIndex=-1) so it can capture
    block-navigation keys; the active-block highlight is the focus indicator, so
@@ -900,22 +898,35 @@ pre[class*="language-"] {
   outline: none;
 }
 
-/* Content is a real flex column — full width until the rail opens (no overlay,
-   no leftover padding, so cancel/escape restores full width for free).
-   z-index lifts it above the block-highlight overlay so the tint sits behind text. */
+/* z-index lifts content above the block-highlight overlay so the tint sits behind text. */
 .cc-content {
-  flex: 1 1 auto;
-  min-width: 0;
   position: relative;
   z-index: 1;
+  min-width: 0;
 }
 
-/* Right-hand comment rail: a real sibling column (can't overlap content), only
-   rendered while engaged. Cards are absolutely placed within it at block offsets. */
-.cc-rail {
-  position: relative;
+/* The comment rail lives on the LEFT.
+   - cc-rail-margin (wide screens): float it in the empty page margin to the LEFT
+     of the centered column so the text keeps its full width.
+   - cc-rail-inline (tight screens): a real in-flow left column that shrinks text. */
+.cc-rail-inline {
+  display: flex;
+  gap: var(--cc-rail-gap);
+}
+.cc-rail-inline .cc-content {
+  flex: 1 1 auto;
+}
+.cc-rail-inline .cc-rail {
+  order: -1; /* rail before content */
   flex: 0 0 var(--cc-rail-w);
-  align-self: stretch;
+  position: relative;
+}
+.cc-rail-margin .cc-rail {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: var(--cc-rail-w);
+  right: calc(100% + 2.25rem); /* just left of the hover handle, into the margin */
 }
 .cc-rail-item {
   position: absolute;
@@ -924,13 +935,12 @@ pre[class*="language-"] {
   transition: top 140ms ease;
 }
 
-/* Active-block highlight bar (keyboard-nav focus indicator) */
-/* Soft highlight of the block a comment points at — sits BEHIND the text (z-index
-   0 vs content's 1). Replaces the in-card quote as the "what does this refer to" cue. */
+/* Soft highlight of the block a comment points at — sits BEHIND the text. In inline
+   mode the content is offset right by the rail, so shift the overlay to match. */
 .cc-active-overlay {
   position: absolute;
   left: -0.5rem;
-  right: calc(var(--cc-rail-w) + var(--cc-rail-gap) - 0.5rem);
+  right: -0.5rem;
   border-radius: 6px;
   background: color-mix(in srgb, var(--sol-cyan) 10%, transparent);
   box-shadow: inset 2px 0 0 var(--sol-cyan);
@@ -938,74 +948,107 @@ pre[class*="language-"] {
   z-index: 0;
   transition: top 120ms ease, height 120ms ease;
 }
+.cc-rail-inline .cc-active-overlay {
+  left: calc(var(--cc-rail-w) + var(--cc-rail-gap) - 0.5rem);
+}
 
 /* Modeless per-block hover actions: [quote][comment] pill at the hovered block's
    top-right. Sits at the content's right edge; slides left of the rail when the
    rail is open. One container border, plain icon buttons inside. */
-.cc-block-actions {
+/* Single Quote handle in the LEFT gutter at the hovered block's top — kept on
+   the opposite side from the top-right meta toolbar so the two never collide. */
+.cc-block-quote {
   position: absolute;
-  right: 0;
-  display: flex;
-  gap: 1px;
-  padding: 1px;
-  margin-top: -2px;
-  border: 1px solid var(--sol-border);
-  border-radius: 7px;
-  background: var(--sol-card);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
-  z-index: 6;
-  animation: ccPop 120ms ease-out;
-}
-.cc-rail-on .cc-block-actions {
-  right: calc(var(--cc-rail-w) + var(--cc-rail-gap));
-}
-.cc-block-act {
+  left: -1.95rem;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 1.5rem;
-  height: 1.4rem;
-  border: none;
-  border-radius: 5px;
-  background: transparent;
+  width: 1.55rem;
+  height: 1.45rem;
+  margin-top: -1px;
+  border: 1px solid var(--sol-border);
+  border-radius: 7px;
+  background: var(--sol-card);
   color: var(--sol-text-muted);
   cursor: pointer;
-  transition: color 120ms, background 120ms;
+  z-index: 6;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  animation: ccPop 120ms ease-out;
+  transition: color 120ms, border-color 120ms, background 120ms, transform 120ms;
 }
-.cc-block-act:hover {
+.cc-block-quote:hover {
   color: var(--sol-cyan);
-  background: color-mix(in srgb, var(--sol-cyan) 14%, transparent);
+  border-color: var(--sol-cyan);
+  background: color-mix(in srgb, var(--sol-cyan) 14%, var(--sol-card));
+  transform: scale(1.06);
 }
 
-/* Rail cards: saved comment chip + editor. ONE border per card; nothing nested
-   gets its own frame (the textarea is borderless, buttons are plain text). */
+/* Rail cards: minimal inline notes — author avatar + a single LEFT accent bar,
+   no boxed border, no card background. The textarea/buttons carry no frame. */
 .cc-comment-chip,
 .cc-comment-editor {
-  border-radius: 8px;
-  background: var(--sol-card);
-  border: 1px solid var(--sol-border);
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-start;
+  padding: 0.1rem 0 0.1rem 0.55rem;
+  border-left: 2px solid var(--sol-border);
   font-size: 0.8125rem;
 }
 .cc-comment-chip {
-  padding: 0.45rem 0.55rem;
   cursor: pointer;
   transition: border-color 120ms;
 }
-.cc-comment-chip:hover {
-  border-color: color-mix(in srgb, var(--sol-cyan) 50%, var(--sol-border));
-}
+.cc-comment-chip:hover,
 .cc-comment-chip-active {
-  border-color: var(--sol-cyan);
+  border-left-color: var(--sol-cyan);
 }
 .cc-comment-editor {
-  padding: 0.3rem 0.4rem 0.35rem;
-  border-color: var(--sol-cyan);
+  border-left-color: var(--sol-cyan);
+}
+.cc-comment-avatar {
+  flex: none;
+  width: 1.3rem;
+  height: 1.3rem;
+  border-radius: 50%;
+  object-fit: cover;
+  margin-top: 0.1rem;
+}
+.cc-comment-avatar-fallback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--sol-bg-highlight);
+  color: var(--sol-text-muted);
+  font-size: 0.62rem;
+  font-weight: 700;
+}
+.cc-comment-main {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 .cc-comment-body {
   color: var(--sol-text);
   white-space: pre-wrap;
   word-break: break-word;
   line-height: 1.45;
+}
+/* Bare-quote chip: a muted snippet of the quoted text (no note yet). */
+.cc-comment-quote {
+  color: var(--sol-text-muted);
+  font-style: italic;
+  font-size: 0.78rem;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+/* Quote glyph so the snippet reads as "quoted from the block", not as a note. */
+.cc-comment-quote-mark {
+  font-style: normal;
+  font-weight: 700;
+  margin-right: 0.25rem;
+  color: color-mix(in srgb, var(--sol-cyan) 70%, var(--sol-text-muted));
 }
 .cc-comment-empty {
   color: var(--sol-text-dim);
@@ -1050,6 +1093,9 @@ pre[class*="language-"] {
   opacity: 1;
 }
 .cc-comment-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
   padding: 0.1rem 0.4rem;
   font-size: 0.72rem;
   font-weight: 500;
@@ -1119,24 +1165,46 @@ pre[class*="language-"] {
   margin: 0.28rem 1px;
 }
 
-/* Review batch bar above the composer */
-.cc-review-bar {
+/* Review batch tray above the composer: a structured preview of what
+   "Add to message" (⌘↵) inserts, one removable row per quote. */
+.cc-review-tray {
+  /* The composer renders a 64px upward fade (z-10) that reaches over this tray.
+     Sit above that fade and lift just clear of it so it stays crisp. */
+  position: relative;
+  z-index: 20;
+  margin-bottom: 0.4rem;
+  border: 1px solid color-mix(in srgb, var(--sol-cyan) 35%, var(--sol-border));
+  border-radius: 0.6rem;
+  background: color-mix(in srgb, var(--sol-cyan) 6%, var(--sol-bg));
+  overflow: hidden;
+  font-size: 0.78rem;
+  box-shadow: 0 4px 16px -10px color-mix(in srgb, var(--sol-cyan) 50%, transparent);
+}
+.cc-review-tray-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
-  padding: 0.4rem 0.85rem;
-  border-top: 1px solid color-mix(in srgb, var(--sol-cyan) 45%, var(--sol-border));
-  background: color-mix(in srgb, var(--sol-cyan) 7%, var(--sol-bg));
-  font-size: 0.75rem;
+  padding: 0.4rem 0.5rem 0.4rem 0.7rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--sol-cyan) 18%, var(--sol-border));
 }
-.cc-review-count {
+.cc-review-tray-title {
   display: inline-flex;
   align-items: center;
-  gap: 0.4rem;
+  gap: 0.45rem;
   color: var(--sol-text);
   font-weight: 600;
   min-width: 0;
+}
+.cc-review-tray-sub {
+  color: var(--sol-text-dim);
+  font-weight: 400;
+}
+.cc-review-tray-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex: none;
 }
 .cc-review-dot {
   width: 7px;
@@ -1147,15 +1215,55 @@ pre[class*="language-"] {
   animation: ccPulse 1.8s ease-out infinite;
   flex: none;
 }
-.cc-review-hint {
-  color: var(--sol-text-dim);
-  font-weight: 400;
+.cc-review-tray-list {
+  max-height: 9.5rem;
+  overflow-y: auto;
+  padding: 0.2rem 0;
 }
-.cc-review-actions {
+.cc-review-tray-item {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 0.4rem;
+  margin: 0.1rem 0.55rem;
+  padding: 0.2rem 0 0.2rem 0.55rem;
+  border-left: 2px solid color-mix(in srgb, var(--sol-cyan) 40%, var(--sol-border));
+}
+.cc-review-tray-item-main {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.cc-review-tray-quote {
+  color: var(--sol-text-muted);
+  font-style: italic;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.cc-review-tray-note {
+  color: var(--sol-text);
+  margin-top: 0.15rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.4;
+}
+.cc-review-tray-x {
   flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.3rem;
+  height: 1.3rem;
+  border-radius: 0.3rem;
+  color: var(--sol-text-dim);
+  opacity: 0.65;
+  transition: opacity 120ms, color 120ms, background 120ms;
+}
+.cc-review-tray-x:hover {
+  opacity: 1;
+  color: var(--sol-red);
+  background: color-mix(in srgb, var(--sol-red) 12%, transparent);
 }
 .cc-bar-keys {
   display: inline-flex;
