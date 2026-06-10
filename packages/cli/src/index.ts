@@ -7983,7 +7983,7 @@ program
     "  cast blame --porcelain src/auth.ts # machine format (+codecast-* keys)\n" +
     "  cast blame --touches src/auth.ts   # legacy: sessions that touched the file"
   )
-  .argument("<file>", "File path, optionally with line number (e.g., src/auth.ts:42)")
+  .argument("[file]", "File path, optionally with line number (e.g., src/auth.ts:42)")
   .option("-L, --range <start,end>", "Blame only the given line range (repeatable)", (v: string, acc: string[]) => [...acc, v], [] as string[])
   .option("--rev <rev>", "Blame at a revision instead of the working tree")
   .option("-w, --ignore-whitespace", "Ignore whitespace when attributing lines")
@@ -7992,11 +7992,23 @@ program
   .option("--abbrev <n>", "Use n hex digits for commit shas")
   .option("--no-sessions", "Skip session resolution (pure git blame output)")
   .option("--touches", "Legacy view: sessions that touched the file (no line attribution)")
+  .option("--install-fugitive", "Install the vim-fugitive git shim so :Gblame shows sessions")
   .option("-n, --limit <n>", "Number of results (--touches mode)", "20")
   .action(async (file, options) => {
+    if (options.installFugitive) {
+      const { installFugitiveShim } = await import("./blame.js");
+      installFugitiveShim();
+      return;
+    }
+
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
       console.error("Not authenticated. Run: cast auth");
+      process.exit(1);
+    }
+
+    if (!file) {
+      console.error("Missing file argument. Usage: cast blame <file>");
       process.exit(1);
     }
 
@@ -13329,6 +13341,19 @@ program.hook('preAction', (thisCommand, actionCommand) => {
   }
 });
 
-ensureCastAlias();
-autoBindFromEnv();
-program.parse();
+// Fast path for the vim-fugitive git shim: it invokes `cast __fugitive_blame@@
+// <git args…>`. The git argv carries flags commander would mis-parse, and this
+// runs on every :Gblame, so bypass commander (and its daemon/alias side
+// effects) entirely and stream the rewritten blame straight out.
+if (process.argv[2] === "__fugitive_blame@@") {
+  import("./blame.js")
+    .then(({ runFugitiveBlame }) => runFugitiveBlame(process.argv.slice(3), readConfig() ?? {}))
+    .catch((err) => {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exitCode = 1;
+    });
+} else {
+  ensureCastAlias();
+  autoBindFromEnv();
+  program.parse();
+}

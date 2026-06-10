@@ -7,6 +7,7 @@ import {
   formatDefaultBlame,
   formatGitDate,
   parseBlamePorcelain,
+  rewriteFugitiveBlame,
   sessionLabel,
   type BlameResolution,
 } from "./blame";
@@ -118,6 +119,61 @@ describe("formatDefaultBlame", () => {
     for (const line of lines) {
       expect(line).toMatch(/^[\^0-9a-f]+ \(.+ \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-]\d{4} +\d+\) /);
     }
+  });
+});
+
+describe("rewriteFugitiveBlame", () => {
+  // Real `git blame --show-number` shape (the format fugitive renders): the
+  // original-line column sits between sha and `(`, and must survive untouched.
+  const PORCELAIN_TWO =
+    `bcc05bee702a2ae1a58c6dc535b3fd6901a45759 1 1 1\n` +
+    `author Ashot Petrosian\nauthor-time 1766628673\nauthor-tz -0800\nsummary init\nfilename p.json\n` +
+    `\t{\n` +
+    `cd2bb1509c85ca18c85f54c6358aface4f3398dd 5 2 1\n` +
+    `author Ashot Petrosian\nauthor-time 1774318626\nauthor-tz -0500\nsummary license\nfilename p.json\n` +
+    `\t  "license": "MIT",\n`;
+  const STANDARD_TWO =
+    `bcc05bee7  1 (Ashot Petrosian 2025-12-24 18:11:13 -0800  1) {\n` +
+    `cd2bb1509  5 (Ashot Petrosian 2026-03-23 21:17:06 -0500  2)   "license": "MIT",\n`;
+
+  const resolution: BlameResolution = {
+    bySha: new Map([
+      ["cd2bb1509c85ca18c85f54c6358aface4f3398dd", { conversation_id: "jx7lic9", title: "License prep" }],
+    ]),
+    byLine: new Map(),
+  };
+
+  test("swaps the author for the session label, preserving sha/lineno/code columns", () => {
+    const out = rewriteFugitiveBlame(STANDARD_TWO, parseBlamePorcelain(PORCELAIN_TWO), resolution);
+    const lines = out.split("\n");
+    // Resolved line: author → session label; everything else byte-identical.
+    expect(lines[1]).toBe("cd2bb1509  5 (jx7lic9 License prep 2026-03-23 21:17:06 -0500  2)   \"license\": \"MIT\",");
+    // Unresolved line keeps its git author, re-padded to the new column width.
+    expect(lines[0]).toBe("bcc05bee7  1 (Ashot Petrosian      2025-12-24 18:11:13 -0800  1) {");
+    // Author columns align (both whos padded to the same width).
+    expect(lines[0].indexOf("2025")).toBe(lines[1].indexOf("2026"));
+  });
+
+  test("byLine (authoring session) wins over bySha (committing session)", () => {
+    const withLine: BlameResolution = {
+      bySha: resolution.bySha,
+      byLine: new Map([['"license": "MIT",', { conversation_id: "jx7auth", title: "Wrote it" }]]),
+    };
+    const out = rewriteFugitiveBlame(STANDARD_TWO, parseBlamePorcelain(PORCELAIN_TWO), withLine);
+    expect(out.split("\n")[1]).toContain("jx7auth Wrote it");
+  });
+
+  test("with no resolutions the output is git-identical", () => {
+    expect(rewriteFugitiveBlame(STANDARD_TWO, parseBlamePorcelain(PORCELAIN_TWO), EMPTY_RESOLUTION)).toBe(
+      STANDARD_TWO,
+    );
+  });
+
+  test("a line-count mismatch returns real git's bytes untouched", () => {
+    const oneLine = parseBlamePorcelain(
+      `bcc05bee702a2ae1a58c6dc535b3fd6901a45759 1 1 1\nauthor X\nauthor-time 1\nauthor-tz +0000\nsummary s\nfilename p\n\t{\n`,
+    );
+    expect(rewriteFugitiveBlame(STANDARD_TWO, oneLine, resolution)).toBe(STANDARD_TWO);
   });
 });
 

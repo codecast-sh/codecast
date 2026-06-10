@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# vim-fugitive git shim for `cast blame`.
+#
+# Point fugitive at this script:
+#     let g:fugitive_git_executable = expand('~/.codecast/fugitive-git')
+#
+# Fugitive routes ALL its git calls through here. We pass every call straight to
+# real git unchanged, EXCEPT the `blame` subcommand, which we hand to cast's
+# fugitive filter — it re-runs real git for the exact bytes fugitive expects,
+# then overlays codecast session names onto the author column. On any failure
+# the filter falls back to real git's output, so fugitive can never break.
+#
+# CAST_BIN and REAL_GIT are baked in by `cast blame --install-fugitive` so the
+# shim doesn't depend on fugitive's PATH.
+CAST_BIN="${CAST_BIN:-cast}"
+REAL_GIT="${REAL_GIT:-git}"
+
+# Find the git subcommand: the first bare argument that isn't a global flag or
+# the value of one (-c key, -C dir, --git-dir path, …).
+sub=""
+skip=0
+for a in "$@"; do
+  if [ "$skip" = 1 ]; then skip=0; continue; fi
+  case "$a" in
+    -c|-C|--git-dir|--work-tree|--namespace|--exec-path|--super-prefix) skip=1 ;;
+    -*) ;;            # any other global flag (incl. --git-dir=…, --no-pager)
+    *) sub="$a"; break ;;
+  esac
+done
+
+if [ "$sub" = "blame" ]; then
+  exec "$CAST_BIN" __fugitive_blame@@ "$@"
+fi
+exec "$REAL_GIT" "$@"
