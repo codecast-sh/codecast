@@ -7,6 +7,7 @@ import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
 import { AuthGuard } from "../../components/AuthGuard";
 import { DashboardLayout } from "../../components/DashboardLayout";
+import { fmtDuration } from "../../components/scheduleCadence";
 import { useInboxStore } from "../../store/inboxStore";
 import {
   Clock,
@@ -39,18 +40,6 @@ function parseDuration(input: string): number | undefined {
   if (unit === "h") return num * 60 * 60 * 1000;
   if (unit === "d") return num * 24 * 60 * 60 * 1000;
   return undefined;
-}
-
-function fmtDuration(ms: number): string {
-  if (ms < 60_000) return `${Math.round(ms / 1000)}s`;
-  const mins = Math.round(ms / 60_000);
-  if (mins < 60) return `${mins}m`;
-  const hours = Math.floor(mins / 60);
-  const remMins = mins % 60;
-  if (hours < 24) return remMins ? `${hours}h ${remMins}m` : `${hours}h`;
-  const days = Math.floor(hours / 24);
-  const remHours = hours % 24;
-  return remHours ? `${days}d ${remHours}h` : `${days}d`;
 }
 
 function fmtCountdown(msUntil: number): string {

@@ -10,6 +10,19 @@ export const SCHEDULE_EVENT_LABELS: Record<string, string> = {
   push: "push",
 };
 
+// Compact duration for countdowns and intervals: "45s", "12m", "2h 30m", "3d 4h".
+export function fmtDuration(ms: number): string {
+  if (ms < 60_000) return `${Math.round(ms / 1000)}s`;
+  const mins = Math.round(ms / 60_000);
+  if (mins < 60) return `${mins}m`;
+  const hours = Math.floor(mins / 60);
+  const remMins = mins % 60;
+  if (hours < 24) return remMins ? `${hours}h ${remMins}m` : `${hours}h`;
+  const days = Math.floor(hours / 24);
+  const remHours = hours % 24;
+  return remHours ? `${days}d ${remHours}h` : `${days}d`;
+}
+
 const DURATION_RE = /^(\d+)\s*(s|sec|m|min|h|hr|hour|d|day)s?$/i;
 const DURATION_UNIT_NAMES: Record<string, string> = { s: "second", m: "minute", h: "hour", d: "day" };
 
