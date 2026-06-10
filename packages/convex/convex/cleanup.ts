@@ -22,6 +22,36 @@ import { hasRecentPendingDaemonCommand } from "./daemonCommandUtils";
 // ---------------------------------------------------------------------------
 
 export const EMPTY_CONVERSATION_GRACE_MS = 24 * 60 * 60 * 1000;
+
+// Remove daemon-minted synthetic prompt cards (message_uuid "interactive-prompt-*")
+// from a conversation — the recovery tool for pane-scrape misparses that shipped a
+// fake AskUserQuestion poll (a prose answer with numbered sections used to qualify;
+// see menuFooterBelowOptions in the CLI daemon). Only synthetic rows are eligible no
+// matter what prefix is passed, so real JSONL-synced messages can never be touched.
+export const deleteSyntheticPromptMessages = internalMutation({
+  args: {
+    conversation_id: v.id("conversations"),
+    uuid_prefix: v.optional(v.string()),
+    dry_run: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const prefix = args.uuid_prefix ?? "interactive-prompt-";
+    const rows = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_uuid", (q) =>
+        q.eq("conversation_id", args.conversation_id).gte("message_uuid", prefix).lt("message_uuid", prefix + "￿"),
+      )
+      .take(50);
+    const synthetic = rows.filter((m) => m.message_uuid?.startsWith("interactive-prompt-"));
+    if (!args.dry_run) {
+      for (const m of synthetic) await ctx.db.delete(m._id);
+    }
+    return {
+      matched: synthetic.map((m) => ({ uuid: m.message_uuid, role: m.role, ts: m.timestamp })),
+      deleted: args.dry_run ? 0 : synthetic.length,
+    };
+  },
+});
 const EMPTY_GC_BAND_MS = 2 * 60 * 60 * 1000;
 // A managed session beating within this window means a real process (terminal,
 // pre-warmed agent) is still attached — never sweep those.
