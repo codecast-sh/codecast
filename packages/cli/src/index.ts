@@ -4424,7 +4424,7 @@ program
       const result = await response.json();
 
       if (result.error) {
-        console.error(`Error: ${result.error}`);
+        console.error(`Error: ${result.details ? `${result.error}: ${result.details}` : result.error}`);
         process.exit(1);
       }
 
@@ -8841,7 +8841,19 @@ program
 
         const searchResult = await searchResponse.json();
 
-        if (!searchResult.error && searchResult.conversations) {
+        if (searchResult.error) {
+          // A failed search must not read as "no relevant sessions" — agents
+          // treat that as ground truth and skip prior work.
+          const detail = searchResult.details
+            ? `${searchResult.error}: ${searchResult.details}`
+            : searchResult.error;
+          if (filePaths.length === 0) {
+            console.error(`Search failed: ${detail}`);
+            console.error("Try fewer or more distinctive keywords, or --file/--auto.");
+            process.exit(1);
+          }
+          console.error(`Warning: text search failed (${detail}); continuing with file matches.`);
+        } else if (searchResult.conversations) {
           for (const conv of searchResult.conversations) {
             const preview = conv.matches?.[0]?.content?.slice(0, 100) + "..." || "";
             sessions.set(conv.id, {
