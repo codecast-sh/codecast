@@ -41,6 +41,8 @@ import {
   writeCodexSession,
   estimateClaudeImportTokens,
   chooseClaudeTailMessagesForTokenBudget,
+  resumeModelFlag,
+  resumeModelFlagFromFile,
 } from "./jsonlGenerator.js";
 import {
   CLAUDE_UUID_RE,
@@ -48,6 +50,7 @@ import {
   CLAUDE_AUTO_TRIM_TARGET_TOKENS,
   CLAUDE_CONTEXT_LIMIT_TOKENS,
   combineClaudeResumeFlags,
+  removeForkArtifactJsonl,
   rewriteSubagentJsonlToUuid,
 } from "./resumeCommand.js";
 import Anthropic from "@anthropic-ai/sdk";
@@ -3561,7 +3564,7 @@ program
           console.log("No agent default params configured.");
           console.log("\nUsage: cast config agent <agent> --<flag> <value> [--<flag> <value> ...]");
           console.log("  cast config agent claude --effort max");
-          console.log("  cast config agent claude --effort max --model claude-opus-4-6");
+          console.log("  cast config agent claude --effort max --model opus");
           return;
         }
         for (const [agent, params] of Object.entries(allParams)) {
@@ -5969,6 +5972,9 @@ function launchClaude(sessionId: string, extraArgs?: string, showArgsHint?: bool
     if (rewrite.rewrote) {
       console.log(`Converted subagent session ${sessionId} -> ${rewrite.resumeId}`);
       resumeId = rewrite.resumeId;
+      // Fork artifacts must not linger once unmapped — the daemon's watcher
+      // would mint a doppelgänger conversation for the leftover file.
+      removeForkArtifactJsonl(sessionId, oldPath);
     } else {
       console.error(`Session file not found: ${oldPath}`);
       console.error(`Non-UUID session IDs (subagent sessions) require a local JSONL file to resume.`);
@@ -5984,6 +5990,13 @@ function launchClaude(sessionId: string, extraArgs?: string, showArgsHint?: bool
   const combined = combineClaudeResumeFlags(extraArgs, cliDefaultPermFlag);
   if (combined) {
     args.push(...combined.split(/\s+/).filter((a) => a.length > 0));
+  }
+
+  // Override the recorded model with its live short alias so the resume never
+  // lands on a retired pinned snapshot (see resumeModelFlagFromFile).
+  const modelFlag = resumeModelFlagFromFile(claudeSessionPath(resumeId, projectPath), combined || "");
+  if (modelFlag) {
+    args.push(...modelFlag.trim().split(/\s+/));
   }
 
   if (extraArgs) {
@@ -8212,7 +8225,7 @@ program
           const { jsonl, sessionId } = generateClaudeCodeJsonl(data, { tailMessages });
           writeClaudeCodeSession(jsonl, sessionId, launchCwd.path);
           const resolvedArgs = options.claudeArgs ?? config.claude_args ?? "";
-          const launchCmd = `claude --resume ${sessionId}${resolvedArgs ? " " + resolvedArgs : ""}`;
+          const launchCmd = `claude --resume ${sessionId}${resumeModelFlag(jsonl, resolvedArgs)}${resolvedArgs ? " " + resolvedArgs : ""}`;
           console.log(`\nResume command:\n  cast resume ${sessionId}`);
           openInNewTab(launchCmd, launchCwd.path);
         }

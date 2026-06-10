@@ -54,12 +54,15 @@ import {
   writeClaudeCodeSession,
   writeCodexSession,
   chooseClaudeTailMessagesForTokenBudget,
+  resumeModelFlagFromFile,
 } from "./jsonlGenerator.js";
 import {
   CLAUDE_UUID_RE,
   chooseClaudeAutoTrim,
   combineClaudeResumeFlags,
   extractJsonlPermissionMode,
+  isForkArtifactSessionId,
+  removeForkArtifactJsonl,
   rewriteSubagentJsonlToUuid,
 } from "./resumeCommand.js";
 import { resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, pickProjectPath } from "./projectPathResolver.js";
@@ -4063,6 +4066,17 @@ async function processSessionFile(
             log(`Failed to link started conversation to parent: ${err}`);
           });
         }
+      } else if (isForkArtifactSessionId(sessionId)) {
+        // A forked-* JSONL with no conversation mapping is a reconstitution
+        // artifact whose binding moved to its UUID copy (see
+        // removeForkArtifactJsonl). Minting a conversation here creates a
+        // frozen doppelgänger that receives input but never output. Skip it,
+        // and advance position + ledger so the stale-file scan doesn't
+        // re-detect the file forever.
+        setPosition(filePath, stats.size);
+        markSynced(filePath, stats.size, 0);
+        log(`Skipped conversation creation for fork artifact ${sessionId.slice(0, 28)} (${filePath})`);
+        return;
       } else {
         const cliFlags = detectCliFlags(headContent + "\n" + newContent);
         let subagentDescription: string | undefined;
@@ -7997,29 +8011,6 @@ export function shouldStartBlankSessionAfterResumeFailure(reason: ResumeFatalRea
   return !shouldMaterializeFreshClaudeSession(reason);
 }
 
-// A reconstituted session's JSONL records the model it was made with — often a
-// pinned snapshot like claude-opus-4-6-20260205. Snapshots get retired when a
-// newer model ships, and `claude --resume` then dies with "the selected model
-// ... may not exist". Claude also accepts the short names opus/sonnet/haiku, which
-// always resolve to the current model of that line. Return the short name matching
-// the recorded model so a resume lands on a live model instead of a dead snapshot.
-export function claudeModelAlias(jsonlContent: string): string | null {
-  const m = jsonlContent.match(/"model"\s*:\s*"claude-(opus|sonnet|haiku)\b/);
-  return m ? m[1] : null;
-}
-
-// Pick the `--model` flag for a resume. We override the model on EVERY resume,
-// not just forks: the reconstructed JSONL records whatever model the session last
-// ran on, which may be a now-retired pinned snapshot. Resolving to the line's
-// short alias (opus/sonnet/haiku) always lands on a live model and never goes
-// stale — if the recorded model is still current the alias resolves to it anyway.
-// An explicit --model in extraFlags always wins.
-export function resumeModelFlag(jsonlContent: string, extraFlags: string): string {
-  if (/(^|\s)--model(\s|=)/.test(extraFlags)) return "";
-  const alias = claudeModelAlias(jsonlContent);
-  return alias ? ` --model ${alias}` : "";
-}
-
 function stopManagedSessionHeartbeat(sessionId: string | undefined): void {
   if (!sessionId) return;
   managedHeartbeatSessions.delete(sessionId);
@@ -9165,17 +9156,26 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
       jsonlBypass,
     );
     let resumeId = sessionId;
+    let resumeJsonlPath = jsonlPath;
     try {
       const rewrite = rewriteSubagentJsonlToUuid(sessionId, jsonlPath);
       if (rewrite.rewrote) {
         log(`Copied non-UUID session ${sessionId} to resumable UUID ${rewrite.resumeId}`);
         resumeId = rewrite.resumeId;
+        if (rewrite.newJsonlPath) resumeJsonlPath = rewrite.newJsonlPath;
         // Remap all caches so subsequent lookups use the new UUID
         if (conversationId) {
           remapConversationSession(sessionId, rewrite.resumeId, conversationId);
           if (syncServiceRef) {
             syncServiceRef.updateSessionId(conversationId, rewrite.resumeId).catch(logConvexFailure);
           }
+        }
+        // A fork-artifact source must go immediately: the remap above just
+        // unmapped it, and the sync watcher processes new files within
+        // ~500ms — left behind, it gets rediscovered as an unknown session
+        // and minted a frozen doppelgänger conversation.
+        if (removeForkArtifactJsonl(sessionId, jsonlPath)) {
+          log(`Removed fork artifact JSONL for ${sessionId.slice(0, 28)} after UUID copy`);
         }
       }
     } catch (err) {
@@ -9203,8 +9203,11 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
       log(`Failed to relocate session JSONL for ${resumeId.slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`);
     }
     // Override the recorded model with its short alias so the resume never lands
-    // on a retired pinned snapshot. See resumeModelFlag.
-    const modelFlag = resumeModelFlag(jsonlContent, extraFlags);
+    // on a retired pinned snapshot. Scans the file itself, not the small head
+    // window read above — the first assistant line (where the model field first
+    // appears) can sit well past it. Reads the UUID copy when one was made:
+    // the fork-artifact source is deleted above.
+    const modelFlag = resumeModelFlagFromFile(resumeJsonlPath, extraFlags);
     resumeCmd = `claude --resume ${resumeId}${modelFlag}${extraFlags ? " " + extraFlags : ""}`;
   }
 
