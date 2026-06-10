@@ -202,6 +202,15 @@ http.route({
   }),
 });
 
+// Constant-time hex-string compare so webhook signature verification can't be
+// timing-probed (a plain `!==` short-circuits on the first differing byte).
+function timingSafeEqualHex(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let mismatch = 0;
+  for (let i = 0; i < a.length; i++) mismatch |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return mismatch === 0;
+}
+
 http.route({
   path: "/api/webhooks/github-app",
   method: "POST",
@@ -220,30 +229,41 @@ http.route({
     const body = await request.text();
     const webhookSecret = process.env.GITHUB_APP_WEBHOOK_SECRET;
 
-    if (webhookSecret && signature) {
-      const encoder = new TextEncoder();
-      const keyData = encoder.encode(webhookSecret);
-      const messageData = encoder.encode(body);
+    // Fail CLOSED. The old `if (webhookSecret && signature)` skipped verification
+    // entirely when the secret was unconfigured or the signature header absent —
+    // i.e. it processed unsigned payloads. A missing secret or signature must reject.
+    if (!webhookSecret) {
+      console.error("[github-app webhook] GITHUB_APP_WEBHOOK_SECRET not configured; refusing webhook");
+      return new Response(JSON.stringify({ error: "Webhook not configured" }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    if (!signature) {
+      return new Response(JSON.stringify({ error: "Missing signature" }), {
+        status: 401,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
 
-      const key = await crypto.subtle.importKey(
-        "raw",
-        keyData,
-        { name: "HMAC", hash: "SHA-256" },
-        false,
-        ["sign"]
-      );
+    const encoder = new TextEncoder();
+    const key = await crypto.subtle.importKey(
+      "raw",
+      encoder.encode(webhookSecret),
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["sign"]
+    );
+    const signatureBuffer = await crypto.subtle.sign("HMAC", key, encoder.encode(body));
+    const hashArray = Array.from(new Uint8Array(signatureBuffer));
+    const hashHex = hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+    const expectedSignature = "sha256=" + hashHex;
 
-      const signatureBuffer = await crypto.subtle.sign("HMAC", key, messageData);
-      const hashArray = Array.from(new Uint8Array(signatureBuffer));
-      const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-      const expectedSignature = "sha256=" + hashHex;
-
-      if (signature !== expectedSignature) {
-        return new Response(JSON.stringify({ error: "Invalid signature" }), {
-          status: 401,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
+    if (!timingSafeEqualHex(signature, expectedSignature)) {
+      return new Response(JSON.stringify({ error: "Invalid signature" }), {
+        status: 401,
+        headers: { "Content-Type": "application/json" },
+      });
     }
 
     const payload = JSON.parse(body);
@@ -1694,6 +1714,73 @@ http.route({
   }),
 });
 
+// Line-level blame resolution: maps git blame SHAs (and uncommitted line
+// texts) to the sessions that produced them. The file-level /cli/blame above
+// stays as-is — `cast context` also consumes it.
+http.route({
+  path: "/cli/blame/resolve",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const corsHeaders = {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type",
+    };
+
+    try {
+      const body = await request.json();
+      const { api_token, shas, file_path, uncommitted_lines } = body;
+
+      if (!api_token || !Array.isArray(shas)) {
+        return new Response(JSON.stringify({ error: "Missing api_token or shas" }), {
+          status: 400,
+          headers: { "Content-Type": "application/json", ...corsHeaders },
+        });
+      }
+
+      const result = await ctx.runQuery(api.blame.resolveBlame, {
+        api_token,
+        shas,
+        file_path,
+        uncommitted_lines,
+      });
+
+      if ("error" in result && result.error) {
+        return new Response(JSON.stringify({ error: result.error }), {
+          status: result.error === "Unauthorized" ? 401 : 400,
+          headers: { "Content-Type": "application/json", ...corsHeaders },
+        });
+      }
+
+      return new Response(JSON.stringify(result), {
+        status: 200,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      });
+    } catch (error) {
+      console.error("Blame resolve error:", error);
+      return new Response(JSON.stringify({ error: "Internal error", details: error instanceof Error ? error.message : String(error) }), {
+        status: 500,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      });
+    }
+  }),
+});
+
+http.route({
+  path: "/cli/blame/resolve",
+  method: "OPTIONS",
+  handler: httpAction(async () => {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+      },
+    });
+  }),
+});
+
 http.route({
   path: "/cli/sync-settings",
   method: "POST",
@@ -3092,7 +3179,7 @@ cliRoute("/cli/work/snippet", async (ctx, body) => {
   return await ctx.runQuery(api.tasks.snippet, body);
 });
 cliRoute("/cli/work/backfill", async (ctx, body) => {
-  return await ctx.runMutation(api.tasks.backfillTeamScope, body);
+  return await ctx.runMutation(internal.tasks.backfillTeamScope, body);
 });
 cliRoute("/cli/work/heartbeat", async (ctx, body) => {
   return await ctx.runMutation(api.tasks.heartbeat, body);

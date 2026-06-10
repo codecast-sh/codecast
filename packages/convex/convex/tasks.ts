@@ -2079,7 +2079,7 @@ export const updateExecutionStatus = mutation({
 
 
 // Backfill: set team_id on tasks/docs missing it, and promoted on human/agent tasks
-export const backfillTeamScope = mutation({
+export const backfillTeamScope = internalMutation({
   args: {
     api_token: v.string(),
   },
@@ -2210,7 +2210,7 @@ export const backfillTaskTeamIds = internalMutation({
   },
 });
 
-export const backfillTriageStatus = mutation({
+export const backfillTriageStatus = internalMutation({
   args: {
     api_token: v.string(),
     cursor: v.optional(v.string()),
