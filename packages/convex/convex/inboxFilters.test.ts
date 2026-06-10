@@ -7,6 +7,7 @@ import {
   isSessionIdle,
   nextAgentStatusOnAddMessages,
   isApiErrorBanner,
+  classifyApiErrorBanner,
   apiErrorBatchAction,
   classifyWorkState,
   normalizeWorkStateFilter,
@@ -321,6 +322,30 @@ describe("isApiErrorBanner", () => {
     expect(isApiErrorBanner("Let me check why the login flow returns a 401.")).toBe(false);
     // Long content is never a banner even if it opens with the phrase.
     expect(isApiErrorBanner("API Error: 500 ".concat("x".repeat(500)))).toBe(false);
+  });
+
+  test("matches real-world usage/session-limit banners", () => {
+    expect(isApiErrorBanner("You've hit your session limit · resets 11:30pm (America/New_York)")).toBe(true);
+    expect(isApiErrorBanner("You've hit your session limit")).toBe(true);
+    expect(isApiErrorBanner("You've hit your monthly spend limit · raise it at claude.ai/settings/usage")).toBe(true);
+    expect(isApiErrorBanner("You’ve hit your weekly limit · resets 3am (America/New_York)")).toBe(true); // curly apostrophe
+    expect(isApiErrorBanner("Claude usage limit reached. Your limit will reset at 3am (America/New_York).")).toBe(true);
+  });
+
+  test("does not flag prose that merely opens like a limit banner", () => {
+    // Real assistant sentences seen in transcripts — same prefix, but they
+    // continue as prose instead of the single-line `· detail` banner shape.
+    expect(isApiErrorBanner("You've hit your usage limit on the free plan, so video generation is paused right here.")).toBe(false);
+    expect(isApiErrorBanner("You've hit your trial usage limit. I can activate your full Pro subscription right now.")).toBe(false);
+    expect(isApiErrorBanner("You've hit your usage limit — the ad is fully planned, cast, and ready to generate.")).toBe(false);
+    expect(isApiErrorBanner("You've hit your session limit · resets 11:30pm\nWait, actually let me reconsider the approach here.")).toBe(false);
+  });
+
+  test("classifies banner kinds for the badge label", () => {
+    expect(classifyApiErrorBanner("Please run /login · API Error: 401 Invalid authentication credentials")).toBe("auth");
+    expect(classifyApiErrorBanner("You've hit your session limit · resets 11:30pm (America/New_York)")).toBe("limit");
+    expect(classifyApiErrorBanner("API Error: 529 Overloaded")).toBe("error");
+    expect(classifyApiErrorBanner("All good, deploy finished.")).toBe(null);
   });
 });
 

@@ -1,4 +1,9 @@
 import type { Doc } from "./_generated/dataModel";
+// Single source of truth for the "agent is actively producing" set. Re-exported
+// so existing `from "./inboxFilters"` importers keep working unchanged.
+import { ACTIVE_AGENT_STATUSES } from "@codecast/shared/contracts";
+
+export { ACTIVE_AGENT_STATUSES };
 
 export type ConversationDoc = Doc<"conversations">;
 
@@ -54,15 +59,6 @@ export function isViableInboxParent(
 // "working" pill in ConversationView so the inbox bucket and the per-conversation
 // header agree for the moment right after a turn ends.
 export const AGENT_IDLE_GRACE_MS = 45 * 1000;
-
-export const ACTIVE_AGENT_STATUSES = new Set([
-  "working",
-  "compacting",
-  "thinking",
-  "connected",
-  "starting",
-  "resuming",
-]);
 
 // A daemon-reported status that means the agent process is gone. A dead session
 // with content still needs a human (to read the result / restart it), so the
@@ -127,25 +123,18 @@ export function nextAgentStatusOnAddMessages(
   return null;
 }
 
-// Recognizes a Claude Code API/auth-error *banner* turn — the one-liner the CLI
-// emits when an Anthropic request fails (expired OAuth token, overload, bad key).
-// These are transient TUI state, not real conversation turns: when the CLI's
-// next attempt succeeds it rewinds the banner out of its transcript and replays
-// the turn for real. The daemon's file-watcher, however, has usually already
-// synced the banner to a durable message — and append-only sync never un-syncs
-// it, leaving a stale "Please run /login" card on a session that actually
-// recovered. We detect these so the server can supersede them once a genuine
-// turn follows. Anchored prefixes + a length cap keep a real assistant message
-// that merely *discusses* an API error from being mistaken for a banner.
-const API_ERROR_BANNER_RE =
-  /^(?:please run \/login|not logged in|invalid api key|credit balance is too low|api error\b|oauth (?:token|authentication))/i;
-
-export function isApiErrorBanner(content: string | null | undefined): boolean {
-  if (!content) return false;
-  const trimmed = content.trim();
-  if (trimmed.length === 0 || trimmed.length > 400) return false;
-  return API_ERROR_BANNER_RE.test(trimmed);
-}
+// Claude Code API/auth/limit-error *banner* detection — the one-liner the CLI
+// emits when an Anthropic request fails (expired OAuth token, overload, bad
+// key, usage/session limit). These are transient TUI state, not real
+// conversation turns: when the CLI's next attempt succeeds it rewinds the
+// banner out of its transcript and replays the turn for real. The daemon's
+// file-watcher, however, has usually already synced the banner to a durable
+// message — and append-only sync never un-syncs it, leaving a stale "Please
+// run /login" card on a session that actually recovered. We detect these so
+// the server can supersede them once a genuine turn follows. The classifier
+// lives in @codecast/shared/contracts as the single source of truth shared
+// with the web client's ApiErrorCard rendering.
+export { isApiErrorBanner, classifyApiErrorBanner } from "@codecast/shared/contracts";
 
 // Decides what an addMessages batch should do about stale API-error banners.
 //   - "supersede": a real turn arrived; delete banner(s) that precede it and
