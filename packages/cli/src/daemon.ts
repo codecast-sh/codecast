@@ -8205,7 +8205,7 @@ async function runHeartbeatFlush(): Promise<void> {
 // so it cold-resumes on click. The kill first removes the session from the
 // heartbeat / pane-tracking sets so heartbeatHealthCheck can't reconstitute it.
 const REAPER_LOG_FILE = path.join(CONFIG_DIR, "reaper.log");
-const REAP_IDLE_MS = 24 * 60 * 60 * 1000;   // 24h of no transcript activity
+const REAP_IDLE_MS = 5 * 60 * 60 * 1000;    // 5h of no transcript activity
 const REAP_MAX_PER_PASS = 3;                 // gentle drain; first kills stay observable
 const REAP_EVERY_N_FLUSHES = 10;             // ~5 min between passes (flush = 30s)
 const REAP_TMUX_PREFIXES = ["cc-resume-", "cx-resume-"];
