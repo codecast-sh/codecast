@@ -1009,7 +1009,9 @@ pre[class*="language-"] {
   margin-top: -1px;
   border: 1px solid var(--sol-border);
   border-radius: 7px;
-  background: var(--sol-card);
+  /* Same surface as .cc-sel-toolbar / the corner toolbars — NOT --sol-card,
+     which is pure white in light mode and reads off-theme over the cream. */
+  background: var(--sol-bg);
   color: var(--sol-text-muted);
   cursor: pointer;
   z-index: 6;
@@ -1020,7 +1022,7 @@ pre[class*="language-"] {
 .cc-block-quote:hover {
   color: var(--sol-cyan);
   border-color: var(--sol-cyan);
-  background: color-mix(in srgb, var(--sol-cyan) 14%, var(--sol-card));
+  background: color-mix(in srgb, var(--sol-cyan) 14%, var(--sol-bg));
   transform: scale(1.06);
 }
 
