@@ -592,6 +592,32 @@ const messageValidator = v.object({
   timestamp: v.optional(v.number()),
 });
 
+export type AddMessagesAgentStatusProjection = {
+  has_assistant_message: boolean;
+  has_tool_result_reply: boolean;
+};
+
+export function getAddMessagesAgentStatusProjection(
+  messages: Array<{ role: string; tool_results?: unknown[] }>,
+): AddMessagesAgentStatusProjection | null {
+  const hasAssistantMsg = messages.some((m) => m.role === "assistant");
+  const hasToolResultReply = messages.some(
+    (m) => m.role === "user" && !!m.tool_results && m.tool_results.length > 0,
+  );
+  if (!hasAssistantMsg && !hasToolResultReply) return null;
+  return {
+    has_assistant_message: hasAssistantMsg,
+    has_tool_result_reply: hasToolResultReply,
+  };
+}
+
+export function shouldApplyAddMessagesAgentStatusProjection(
+  agentStatusUpdatedAt: number | undefined,
+  scheduledAt: number,
+): boolean {
+  return agentStatusUpdatedAt === undefined || agentStatusUpdatedAt <= scheduledAt;
+}
+
 export const addMessages = mutation({
   args: {
     conversation_id: v.id("conversations"),
@@ -841,24 +867,13 @@ export const addMessages = mutation({
       }
       await ctx.db.patch(args.conversation_id, convPatch);
 
-      const hasAssistantMsg = args.messages.some((m) => m.role === "assistant");
-      const hasToolResultReply = args.messages.some(
-        (m) => m.role === "user" && !!m.tool_results && m.tool_results.length > 0,
-      );
-      if (hasAssistantMsg || hasToolResultReply) {
-        const session = await ctx.db
-          .query("managed_sessions")
-          .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", args.conversation_id))
-          .first();
-        const nextStatus = session
-          ? nextAgentStatusOnAddMessages(session.agent_status, hasAssistantMsg, hasToolResultReply)
-          : null;
-        if (session && nextStatus) {
-          await ctx.db.patch(session._id, {
-            agent_status: nextStatus,
-            agent_status_updated_at: Date.now(),
-          });
-        }
+      const agentStatusProjection = getAddMessagesAgentStatusProjection(args.messages);
+      if (agentStatusProjection) {
+        await ctx.scheduler.runAfter(0, internal.messages.projectAgentStatusOnAddMessages, {
+          conversation_id: args.conversation_id,
+          scheduled_at: Date.now(),
+          ...agentStatusProjection,
+        });
       }
 
       const lastUserTs = userMsgs.length > 0
@@ -905,6 +920,37 @@ export const addMessages = mutation({
     }
 
     return { inserted: insertedCount, ids };
+  },
+});
+
+export const projectAgentStatusOnAddMessages = internalMutation({
+  args: {
+    conversation_id: v.id("conversations"),
+    scheduled_at: v.number(),
+    has_assistant_message: v.boolean(),
+    has_tool_result_reply: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    const session = await ctx.db
+      .query("managed_sessions")
+      .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", args.conversation_id))
+      .first();
+    if (!session) return;
+    if (!shouldApplyAddMessagesAgentStatusProjection(session.agent_status_updated_at, args.scheduled_at)) {
+      return;
+    }
+
+    const nextStatus = nextAgentStatusOnAddMessages(
+      session.agent_status,
+      args.has_assistant_message,
+      args.has_tool_result_reply,
+    );
+    if (!nextStatus) return;
+
+    await ctx.db.patch(session._id, {
+      agent_status: nextStatus,
+      agent_status_updated_at: Date.now(),
+    });
   },
 });
 
