@@ -437,13 +437,53 @@ describe("categorizeSessions", () => {
     expect(withPending.working.map((s) => s._id)).toContain("conv-new-pending");
     expect(withPending.newSessions.map((s) => s._id)).not.toContain("conv-new-pending");
 
-    // Without a pending send the same session stays in New.
+    // Without a pending send the same session stays in New while engaged
+    // (here: it's the session being viewed).
     const withoutPending = categorizeSessions(
       { [newSession._id]: newSession },
       new Set(),
+      undefined,
+      { currentSessionId: "conv-new-pending" },
     );
     expect(withoutPending.newSessions.map((s) => s._id)).toContain("conv-new-pending");
     expect(withoutPending.working.map((s) => s._id)).not.toContain("conv-new-pending");
+  });
+
+  it("hides a never-engaged blank (quick-create pre-warm) from every bucket", () => {
+    // Regression for the "ghost New Session" stream: every palette summon
+    // pre-warms a blank conversation; rendering those as NEW cards trained
+    // users to dismiss them, and each dismiss+summon minted another. A blank
+    // that is not the current session, has no in-flight create, and no pending
+    // send is infrastructure — it must not render anywhere (it stays in the
+    // cache for reuse).
+    const blank: InboxSession = {
+      ...baseSession,
+      _id: "conv-prewarm",
+      session_id: "session-prewarm",
+      message_count: 0,
+    };
+    const buckets = categorizeSessions({ [blank._id]: blank }, new Set());
+    expect(buckets.newSessions).toHaveLength(0);
+    expect(buckets.working).toHaveLength(0);
+    expect(buckets.needsInput).toHaveLength(0);
+    expect(buckets.pinned).toHaveLength(0);
+  });
+
+  it("keeps a blank visible in New while its create is in flight", () => {
+    const stub = "k2hf8s0dq1xand83hr0e7";
+    const blank: InboxSession = {
+      ...baseSession,
+      _id: stub,
+      session_id: stub,
+      message_count: 0,
+    };
+    const buckets = categorizeSessions(
+      { [blank._id]: blank },
+      new Set(),
+      undefined,
+      { pendingCreateIds: new Set([stub]) },
+    );
+    expect(buckets.newSessions.map((s) => s._id)).toContain(stub);
   });
 
   it("keeps a working session out of Needs Input even when the previous turn was interrupted", () => {
@@ -1968,6 +2008,45 @@ describe("inboxStore.beginOptimisticSession", () => {
     expect(migrated?.length).toBe(1);
     expect(migrated?.[0]?.content).toBe("hello world");
     expect(migrated?.[0]?._clientId).toBe(clientId);
+  });
+
+  it("does not leave the stub in New when live sync resolves the real id first", async () => {
+    const store = useInboxStore.getState();
+    let resolveCreate!: (id: string) => void;
+    const { stubId, ready } = store.beginOptimisticSession({
+      agentType: "claude_code",
+      projectPath: "/repo",
+      create: () => new Promise<string>((resolve) => { resolveCreate = resolve; }),
+    });
+    store.addOptimisticMessage(stubId, "hello world");
+
+    store.syncTable("sessions", [{
+      ...baseSession,
+      _id: REAL_ID,
+      session_id: stubId,
+      title: "New session",
+      project_path: "/repo",
+      message_count: 0,
+      is_idle: true,
+      has_pending: false,
+    }]);
+
+    const state = useInboxStore.getState();
+    expect(state.sessions[stubId]).toBeUndefined();
+    expect(state.pendingMessages[stubId]).toBeUndefined();
+    expect(state.pendingMessages[REAL_ID]?.[0]?.content).toBe("hello world");
+
+    const cat = categorizeSessions(
+      state.sessions,
+      new Set(),
+      sessionsWithPendingSend(state.pendingMessages),
+    );
+    expect(cat.working.map((s) => s._id)).toEqual([REAL_ID]);
+    expect(cat.newSessions.map((s) => s._id)).not.toContain(stubId);
+    expect(cat.newSessions.map((s) => s._id)).not.toContain(REAL_ID);
+
+    resolveCreate(REAL_ID);
+    await ready;
   });
 
   it("resolves `ready` to the real id so a queued send can target it", async () => {

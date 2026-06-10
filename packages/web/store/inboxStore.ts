@@ -807,6 +807,7 @@ export function categorizeSessions(
   sessions: Record<string, InboxSession>,
   sessionsWithQueuedMessages: Set<string>,
   pendingSendIds: ReadonlySet<string> = EMPTY_PENDING_SEND_IDS,
+  opts: { currentSessionId?: string | null; pendingCreateIds?: ReadonlySet<string> } = {},
 ): CategorizedSessions {
   const sorted = sortSessions(sessions);
   const dismissed = Object.values(sessions)
@@ -890,7 +891,14 @@ export function categorizeSessions(
       if (at !== bt) return at - bt;
       return a._id < b._id ? -1 : a._id > b._id ? 1 : 0;
     });
-  const newSessions = sorted.filter((s) => s.message_count === 0 && !s.is_pinned && !hasPendingSend(s) && isFlat(s))
+  // A never-engaged blank (0 messages, not the session you're on, no in-flight
+  // create) is quick-create pre-warm infrastructure, not work — rendering it as
+  // an inbox card is the "ghost New Session" cruft users kept dismissing. The
+  // row stays in the cache for palette reuse; it just doesn't render until
+  // engaged (current / mid-create here, or its first send moves it to Working).
+  const isEngagedBlank = (s: InboxSession) =>
+    s._id === opts.currentSessionId || !!opts.pendingCreateIds?.has(s._id);
+  const newSessions = sorted.filter((s) => s.message_count === 0 && !s.is_pinned && !hasPendingSend(s) && isFlat(s) && isEngagedBlank(s))
     .sort((a, b) => (a.is_connected ? 1 : 0) - (b.is_connected ? 1 : 0));
   const needsInput = sorted.filter((s) => waitingForInput.get(s._id) && isFlat(s))
     .sort((a, b) => {
@@ -908,9 +916,10 @@ export function visualOrderSessions(
   sessionsWithQueuedMessages: Set<string>,
   projectFilter?: string | null,
   pendingSendIds: ReadonlySet<string> = EMPTY_PENDING_SEND_IDS,
+  opts: { currentSessionId?: string | null; pendingCreateIds?: ReadonlySet<string> } = {},
 ): InboxSession[] {
   const { pinned, newSessions, needsInput, working, orchestrationGroups } =
-    categorizeSessions(sessions, sessionsWithQueuedMessages, pendingSendIds);
+    categorizeSessions(sessions, sessionsWithQueuedMessages, pendingSendIds, opts);
   const result: InboxSession[] = [];
   // Orchestration-grouped workers are held out of the flat buckets for the
   // grouped inbox view; append them here so flat-list consumers (keyboard nav,
@@ -956,6 +965,10 @@ export function findReusableBlankSession(
     // create is in flight; an orphaned stub (create failed) must not be reused.
     if (!isConvexId(s._id) && !state.pendingSessionCreates[s._id]) continue;
     if (state.pendingMessages[s._id]?.length) continue;
+    // Dismissing a blank REAPS it server-side (dispatch.applyPatches tears down
+    // the pre-warm agent on the inbox_dismissed_at transition, then the conv is
+    // deleted) — so a dismissed row here is a corpse awaiting the ghost sweep,
+    // never a reuse candidate. The next summon mints a fresh pre-warm instead.
     if (s.inbox_dismissed_at || s.is_pinned) continue;
     if (s.is_subagent || s.parent_conversation_id || s.worktree_name || s.workflow_run_id) continue;
     if (s.active_task || s.active_plan) continue;
@@ -2549,7 +2562,10 @@ export const useInboxStore = create<InboxStoreState>(
   },
 
   visualOrder: () => {
-    return visualOrderSessions(get().sessions, get().sessionsWithQueuedMessages, get().activeProjectFilter, sessionsWithPendingSend(get().pendingMessages));
+    // currentSessionId keeps the blank you're sitting on navigable (j/k from a
+    // fresh session); all other never-engaged blanks are hidden from the panel
+    // and so excluded from keyboard order too.
+    return visualOrderSessions(get().sessions, get().sessionsWithQueuedMessages, get().activeProjectFilter, sessionsWithPendingSend(get().pendingMessages), { currentSessionId: get().currentSessionId, pendingCreateIds: new Set(Object.keys(get().pendingSessionCreates)) });
   },
 
   // =====================
