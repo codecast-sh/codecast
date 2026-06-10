@@ -704,3 +704,68 @@ describe("parser - thinking content extraction", () => {
     expect(messages[0].content).toBe("hi");
   });
 });
+
+describe("per-message model extraction", () => {
+  test("carries the model from an assistant entry", () => {
+    const entries: ClaudeSessionEntry[] = [
+      {
+        type: "assistant",
+        uuid: "m1",
+        timestamp: "2024-01-01T00:00:00Z",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Generated reply." }],
+          model: "claude-opus-4-8",
+        },
+      },
+    ];
+
+    const messages = extractMessages(entries);
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0].model).toBe("claude-opus-4-8");
+  });
+
+  test("drops the <synthetic> marker used by system-generated banners", () => {
+    const entries: ClaudeSessionEntry[] = [
+      {
+        type: "assistant",
+        uuid: "m2",
+        timestamp: "2024-01-01T00:00:00Z",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "API Error: Request timed out." }],
+          model: "<synthetic>",
+        },
+      },
+    ];
+
+    const messages = extractMessages(entries);
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0].model).toBeUndefined();
+  });
+
+  test("leaves model unset on user entries and old string-format messages", () => {
+    const entries: ClaudeSessionEntry[] = [
+      {
+        type: "user",
+        uuid: "m3",
+        timestamp: "2024-01-01T00:00:00Z",
+        message: { role: "user", content: [{ type: "text", text: "hello" }] },
+      },
+      {
+        type: "human",
+        uuid: "m4",
+        timestamp: "2024-01-01T00:00:01Z",
+        message: "old format text",
+      },
+    ];
+
+    const messages = extractMessages(entries);
+
+    expect(messages).toHaveLength(2);
+    expect(messages[0].model).toBeUndefined();
+    expect(messages[1].model).toBeUndefined();
+  });
+});
