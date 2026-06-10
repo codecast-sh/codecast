@@ -71,6 +71,13 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
   const [railInMargin, setRailInMargin] = useState(false);
   const [railPx, setRailPx] = useState(RAIL_MAX_PX);
 
+  // Drop a stuck peek highlight: removing a chip via its Remove button unmounts it
+  // before onMouseLeave fires, so clear the peek when its block no longer has any
+  // comment (or all comments are gone) — otherwise the overlay lingers.
+  useEffect(() => {
+    if (peekBlock !== null && !myComments.some((c) => c.blockIndex === peekBlock)) setPeekBlock(null);
+  }, [myComments, peekBlock]);
+
   // ----- measure each top-level block's vertical position + available left margin -----
   const measure = useCallback(() => {
     const el = contentRef.current;
@@ -305,7 +312,7 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
                   author={author}
                   active={isReviewTarget && activeBlock === c.blockIndex}
                   onEdit={() => useInboxStore.getState().setReviewEditingId(c.id)}
-                  onRemove={() => useInboxStore.getState().removeReviewComment(conversationId, c.id)}
+                  onRemove={() => { setPeekBlock(null); useInboxStore.getState().removeReviewComment(conversationId, c.id); }}
                   onPeek={() => setPeekBlock(c.blockIndex)}
                   onPeekEnd={() => setPeekBlock(null)}
                 />

@@ -2503,7 +2503,9 @@ describe("stashSession on a local-only stub — dismiss means delete", () => {
     useInboxStore.setState({
       sessions: {
         [stub]: { ...baseSession, _id: stub, session_id: stub },
-        [real]: { ...baseSession, _id: real, session_id: real },
+        // message_count > 0: a blank `real` would be a hidden pre-warm,
+        // invisible to the post-dismiss next-pick by design.
+        [real]: { ...baseSession, _id: real, session_id: real, message_count: 3 },
       },
       conversations: {
         [stub]: { _id: stub } as any,
