@@ -279,12 +279,10 @@ export default defineSchema({
     .index("by_user_git_root", ["user_id", "git_root"])
     .index("by_user_git_remote_url", ["user_id", "git_remote_url"])
     .index("by_user_project_path", ["user_id", "project_path"])
-    .index("by_user_subagent_updated", ["user_id", "is_subagent", "updated_at"])
     .index("by_user_favorite", ["user_id", "is_favorite"])
     .index("by_user_private", ["user_id", "is_private"])
     .index("by_team_id", ["team_id"])
     .index("by_team_user_updated", ["team_id", "user_id", "updated_at"])
-    .index("by_agent_type", ["agent_type"])
     .vectorIndex("by_title_embedding_v2", {
       vectorField: "title_embedding",
       dimensions: 1024,
@@ -295,11 +293,9 @@ export default defineSchema({
     .index("by_short_id", ["short_id"])
     .index("by_forked_from", ["forked_from"])
     .index("by_git_branch", ["git_branch"])
-    .index("by_parent_message_uuid", ["parent_message_uuid"])
     .index("by_parent_conversation_id", ["parent_conversation_id"])
     .index("by_user_pinned", ["user_id", "inbox_pinned_at"])
     .index("by_user_dismissed", ["user_id", "inbox_dismissed_at"])
-    .index("by_workflow_run", ["workflow_run_id"])
     .index("by_owner_device", ["user_id", "owner_device_id"])
     .searchIndex("search_title_v2", {
       searchField: "title",
@@ -330,8 +326,7 @@ export default defineSchema({
     created_at: v.number(),
     view_count: v.number(),
   })
-    .index("by_created_at", ["created_at"])
-    .index("by_view_count", ["view_count"]),
+    .index("by_created_at", ["created_at"]),
 
   messages: defineTable({
     conversation_id: v.id("conversations"),
@@ -470,7 +465,6 @@ export default defineSchema({
   })
     .index("by_conversation", ["conversation_id"])
     .index("by_user_file", ["user_id", "file_path"])
-    .index("by_file_path", ["file_path"])
     .index("by_timestamp", ["timestamp"]),
 
   comments: defineTable({
@@ -720,7 +714,6 @@ export default defineSchema({
     .index("by_team_id", ["team_id"])
     .index("by_github_pr_id", ["github_pr_id"])
     .index("by_repository", ["repository"])
-    .index("by_head_ref", ["head_ref"])
     .index("by_updated_at", ["updated_at"]),
 
   reviews: defineTable({
@@ -941,8 +934,7 @@ export default defineSchema({
     created_at: v.number(),
   })
     .index("by_delivery_id", ["delivery_id"])
-    .index("by_processed", ["processed"])
-    .index("by_event_type", ["event_type"]),
+    .index("by_processed", ["processed"]),
 
   github_app_installations: defineTable({
     team_id: v.id("teams"),
