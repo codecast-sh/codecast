@@ -1,4 +1,9 @@
 import { create as mutativeCreate, type Patch } from "mutative";
+import {
+  DISPATCH_FIELD_TABLE_MAP,
+  DISPATCH_TABLE_MAP,
+  isProtectedSyncCollection,
+} from "./clientSyncRegistry";
 
 type DispatchFn = (action: string, args: any, patches?: any, result?: any) => Promise<any>;
 type IDBWriteFn = (patches: Patch[], state: any) => void;
@@ -39,65 +44,10 @@ function isSync(fn: any): boolean {
   return typeof fn === "function" && fn[SYNC_FLAG] === true;
 }
 
-type TableKind = "collection" | "singleton";
+const TABLE_MAP = DISPATCH_TABLE_MAP;
+const FIELD_TO_TABLE = DISPATCH_FIELD_TABLE_MAP;
 
-interface TableMapping {
-  table: string;
-  kind: TableKind;
-}
 
-// ── Single source of truth for synced store collections ────────────────────
-// One spec per store key drives every server-facing mechanism, so a collection
-// is declared ONCE instead of in three drifting lists:
-//   • protected   → on a local action() edit the middleware auto-generates a
-//                   pending entry (field-protect on edit, exclude on delete) so
-//                   the liberal delta cache can't clobber a local-first write or
-//                   resurrect a locally-deleted row. Every delta-cached
-//                   collection MUST be protected. Edits round-trip via the
-//                   named-action dispatch (dispatch.ts), so field protections
-//                   clear normally on the server echo.
-//   • serverTable → store key dispatches table patches to this Convex table.
-//   • fieldOf     → store key is a single field within a singleton table; the
-//                   full current value is sent on patch (not granular subpaths).
-// PROTECTED_COLLECTIONS / TABLE_MAP / FIELD_TO_TABLE are DERIVED below.
-type CollectionSpec = {
-  protected?: boolean;
-  serverTable?: string;
-  dispatchKind?: TableKind;
-  fieldOf?: string;
-};
-
-const COLLECTION_SPECS: Record<string, CollectionSpec> = {
-  // Liberal delta caches — protected so local edits/deletes survive overlays.
-  sessions:      { protected: true },
-  conversations: { protected: true, serverTable: "conversations", dispatchKind: "collection" },
-  tasks:         { protected: true },
-  docs:          { protected: true },
-  plans:         { protected: true },
-  projects:      { protected: true },
-  notifications: { protected: true },
-  // Singleton dispatched as a table; tabs/activeTabId are fields within it.
-  clientState:   { serverTable: "client_state", dispatchKind: "singleton" },
-  tabs:          { fieldOf: "client_state" },
-  activeTabId:   { fieldOf: "client_state" },
-};
-
-const PROTECTED_COLLECTIONS = new Set(
-  Object.entries(COLLECTION_SPECS).filter(([, s]) => s.protected).map(([k]) => k)
-);
-
-const TABLE_MAP: Record<string, TableMapping> = Object.fromEntries(
-  Object.entries(COLLECTION_SPECS)
-    .filter(([, s]) => s.serverTable)
-    .map(([k, s]) => [k, { table: s.serverTable!, kind: s.dispatchKind ?? "collection" }])
-);
-
-// Top-level store keys that dispatch as fields within a singleton table.
-const FIELD_TO_TABLE: Record<string, { table: string }> = Object.fromEntries(
-  Object.entries(COLLECTION_SPECS)
-    .filter(([, s]) => s.fieldOf)
-    .map(([k, s]) => [k, { table: s.fieldOf! }])
-);
 
 const SINGLETON_KEY = "_";
 
@@ -129,7 +79,7 @@ function generateAutoPending(
     if (path.length < 2) continue;
 
     const storeKey = String(path[0]);
-    if (storeKey === "pending" || !PROTECTED_COLLECTIONS.has(storeKey)) continue;
+    if (storeKey === "pending" || !isProtectedSyncCollection(storeKey)) continue;
 
     const recordId = String(path[1]);
 
