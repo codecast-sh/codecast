@@ -197,8 +197,30 @@ export default function ProfilePage() {
             </div>
             <SoundsToggle />
           </div>
+          <DesktopLinksRow />
         </div>
       </Card>
+    </div>
+  );
+}
+
+// Inverse of the sticky "Always open Codecast links in browser" opt-out from
+// OpenInDesktopHandoff — this is the only place to turn the handoff back on.
+function DesktopLinksRow() {
+  const hasUsedDesktop = useInboxStore((s) => s.clientState?.dismissed?.has_used_desktop === true);
+  const preferBrowser = useInboxStore((s) => s.clientState?.dismissed?.prefer_browser_links === true);
+  const updateDismissed = useInboxStore((s) => s.updateClientDismissed);
+  if (!hasUsedDesktop) return null;
+  return (
+    <div className="flex items-center justify-between">
+      <div>
+        <span className="text-sol-base1">Open links in desktop app</span>
+        <p className="text-xs text-sol-base01 mt-0.5">Hand off codecast.sh pages from the browser to the desktop app</p>
+      </div>
+      <Switch
+        checked={!preferBrowser}
+        onCheckedChange={(v) => updateDismissed("prefer_browser_links", !v)}
+      />
     </div>
   );
 }
