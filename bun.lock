@@ -18,13 +18,14 @@
     },
     "packages/cli": {
       "name": "@codecast/cli",
-      "version": "1.1.53",
+      "version": "1.1.55",
       "bin": {
         "codecast": "./dist/index.js",
         "cast": "./dist/index.js",
       },
       "dependencies": {
         "@anthropic-ai/sdk": "^0.71.2",
+        "@codecast/shared": "workspace:*",
         "@inquirer/prompts": "^8.2.0",
         "chokidar": "^4.0.3",
         "commander": "^12.1.0",
@@ -46,6 +47,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@auth/core": "^0.37.2",
+        "@codecast/shared": "workspace:*",
         "@convex-dev/auth": "^0.0.79",
         "@convex-dev/prosemirror-sync": "^0.2.3",
         "convex": "^1.31.6",

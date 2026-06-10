@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.71.2",
+    "@codecast/shared": "workspace:*",
     "@inquirer/prompts": "^8.2.0",
     "chokidar": "^4.0.3",
     "commander": "^12.1.0",
