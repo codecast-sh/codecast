@@ -1,5 +1,11 @@
 import { Check, CircleDot, MessageSquare } from "lucide-react";
-import type { ToolViewProps } from "@/lib/toolRegistry";
+
+interface ToolViewProps {
+  name: string;
+  input?: any;
+  output?: any;
+  timestamp: number;
+}
 
 interface QuestionOption {
   label: string;
