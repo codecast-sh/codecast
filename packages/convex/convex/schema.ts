@@ -1,6 +1,17 @@
 import { defineSchema, defineTable } from "convex/server";
 import { authTables } from "@convex-dev/auth/server";
 import { v } from "convex/values";
+import { AGENT_STATUSES, DAEMON_COMMANDS } from "@codecast/shared/contracts";
+
+// Derived from the single source of truth in @codecast/shared/contracts so the
+// schema, validators, the CLI daemon, and the browser store can never drift.
+// Each accepts exactly the same set as the old hand-written unions.
+const agentStatusFieldValidator = v.union(
+  ...AGENT_STATUSES.map((s) => v.literal(s)),
+);
+const daemonCommandValidator = v.union(
+  ...DAEMON_COMMANDS.map((c) => v.literal(c)),
+);
 
 export default defineSchema({
   ...authTables,
@@ -94,26 +105,7 @@ export default defineSchema({
 
   daemon_commands: defineTable({
     user_id: v.id("users"),
-    command: v.union(
-      v.literal("status"),
-      v.literal("restart"),
-      v.literal("force_update"),
-      v.literal("version"),
-      v.literal("start_session"),
-      v.literal("escape"),
-      v.literal("resume_session"),
-      v.literal("kill_session"),
-      v.literal("send_keys"),
-      v.literal("rewind"),
-      v.literal("config_list"),
-      v.literal("config_read"),
-      v.literal("config_write"),
-      v.literal("config_create"),
-      v.literal("config_delete"),
-      v.literal("run_workflow"),
-      v.literal("reinstall"),
-      v.literal("move_to_device")
-    ),
+    command: daemonCommandValidator,
     args: v.optional(v.string()),
     created_at: v.number(),
     executed_at: v.optional(v.number()),
@@ -253,6 +245,10 @@ export default defineSchema({
     // supersedes it. Gates the banner-cleanup scan in addMessages so the common
     // (no-error) write path never pays for the extra read.
     pending_api_error: v.optional(v.boolean()),
+    // Which banner family parked the session ("auth" | "limit" | "error", see
+    // classifyApiErrorBanner) — drives the session-card pill label (login vs
+    // limit). Set/cleared in lockstep with pending_api_error.
+    pending_api_error_kind: v.optional(v.string()),
     session_error: v.optional(v.string()),
     active_plan_id: v.optional(v.id("plans")),
     active_task_id: v.optional(v.id("tasks")),
@@ -369,6 +365,10 @@ export default defineSchema({
     }))),
     subtype: v.optional(v.string()),
     client_id: v.optional(v.string()),
+    // Model that generated this assistant turn (from the agent transcript),
+    // e.g. "claude-opus-4-8". Conversations can switch models mid-stream, so
+    // this is per-message; conversations.model is only the last-known value.
+    model: v.optional(v.string()),
     timestamp: v.number(),
     tokens_used: v.optional(v.number()),
     usage: v.optional(v.object({
@@ -598,7 +598,7 @@ export default defineSchema({
     tmux_session: v.optional(v.string()),
     started_at: v.number(),
     last_heartbeat: v.number(),
-    agent_status: v.optional(v.union(v.literal("working"), v.literal("idle"), v.literal("permission_blocked"), v.literal("compacting"), v.literal("thinking"), v.literal("connected"), v.literal("stopped"), v.literal("starting"), v.literal("resuming"))),
+    agent_status: v.optional(agentStatusFieldValidator),
     agent_status_updated_at: v.optional(v.number()),
     permission_mode: v.optional(v.union(v.literal("default"), v.literal("plan"), v.literal("acceptEdits"), v.literal("bypassPermissions"), v.literal("dontAsk"), v.literal("auto"))),
     current_cpu: v.optional(v.number()),
@@ -677,7 +677,11 @@ export default defineSchema({
     timestamp: v.number(),
   })
     .index("by_conversation_id", ["conversation_id"])
-    .index("by_conversation_change_key", ["conversation_id", "change_key"]),
+    .index("by_conversation_change_key", ["conversation_id", "change_key"])
+    // cast blame: resolve a git SHA to the session that committed it. Stored
+    // hashes are short (parsed from `[branch abc1234]` output), so lookups
+    // range-scan [sha7, fullSha] and prefix-verify.
+    .index("by_commit_hash", ["commit_hash"]),
 
   pull_requests: defineTable({
     team_id: v.id("teams"),
