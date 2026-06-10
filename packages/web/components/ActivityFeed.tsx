@@ -4,12 +4,13 @@ import { useQuery, useConvex } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { LoadingSkeleton } from "./LoadingSkeleton";
 import { EmptyState } from "./EmptyState";
+import { Spinner } from "./ui/spinner";
 import { useStableOrder } from "../hooks/useStableOrder";
 import { useFlipAnimation } from "../hooks/useFlipAnimation";
 import { AgentIcon, type Conversation } from "./ConversationList";
 import { cleanTitle } from "../lib/conversationProcessor";
 import { shouldShowSession, isWarmupSession } from "../lib/sessionFilters";
-import { useInboxStore, isAgentActive, sortSessions, type InboxSession } from "../store/inboxStore";
+import { useInboxStore, isAgentActive, sortSessions, feedPagePersistence, type InboxSession } from "../store/inboxStore";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 
 // Activity feed. Two sources, one rendering (FeedBody):
@@ -383,7 +384,7 @@ function FeedBody({ source, sourceConvs, hasMore, loadMore, isLoading, isLoading
   source: "team" | "personal";
   sourceConvs: Conversation[];
   hasMore: boolean;
-  loadMore: () => void;
+  loadMore: (opts?: { reconfirm?: boolean }) => void;
   isLoading: boolean;
   isLoadingMore?: boolean;
   onNavigate?: (id: string) => void;
@@ -474,6 +475,7 @@ function FeedBody({ source, sourceConvs, hasMore, loadMore, isLoading, isLoading
   // listen on it. Scroll-driven (not fired on mount) so a short/filtered list
   // never rip-loads every page; the isLoadingMore guard keeps loads sequential. ---
   const sentinelRef = useRef<HTMLDivElement>(null);
+  const lastReconfirmAt = useRef(0);
   const scrollState = useRef({ canReveal, hasMore, isLoadingMore, loadMore });
   scrollState.current = { canReveal, hasMore, isLoadingMore, loadMore };
   useEffect(() => {
@@ -489,7 +491,16 @@ function FeedBody({ source, sourceConvs, hasMore, loadMore, isLoading, isLoading
       const rect = el.getBoundingClientRect();
       if (rect.top >= window.innerHeight + 1200) return;
       if (s.canReveal) { setRenderLimit((r) => r + 30); return; }
-      if (s.hasMore && !s.isLoadingMore) s.loadMore();
+      if (s.isLoadingMore) return;
+      if (s.hasMore) { s.loadMore(); return; }
+      // Believed end-of-history: a bottom-scroll still re-verifies it
+      // (throttled), so a stale or poisoned persisted "end" can never strand
+      // the feed — reaching the bottom always attempts to load more.
+      const now = Date.now();
+      if (now - lastReconfirmAt.current > 30_000) {
+        lastReconfirmAt.current = now;
+        s.loadMore({ reconfirm: true });
+      }
     };
     document.addEventListener("scroll", maybeLoad, { capture: true, passive: true });
     window.addEventListener("resize", maybeLoad, { passive: true });
@@ -545,19 +556,25 @@ function FeedBody({ source, sourceConvs, hasMore, loadMore, isLoading, isLoading
               {actorFilter || projectFilter ? "No matches in the sessions loaded so far." : "No sessions yet."}
             </p>
           )}
-          {(canReveal || hasMore) && (
-            <div
-              ref={sentinelRef}
-              onClick={() => { if (canReveal) setRenderLimit((r) => r + 30); else if (!isLoadingMore) loadMore(); }}
-              className="flex justify-center py-4 cursor-pointer select-none"
-              title="Loads automatically as you scroll — click to load now"
-            >
+          {/* Always mounted — even at the believed end of history — so the
+              scroll listener keyed off this node stays alive; that's what lets
+              a bottom-scroll re-verify a persisted "end" instead of stranding
+              the feed. The label only shows while there's known work to do. */}
+          <div
+            ref={sentinelRef}
+            onClick={() => { if (canReveal) setRenderLimit((r) => r + 30); else if (!isLoadingMore) loadMore(hasMore ? undefined : { reconfirm: true }); }}
+            className={`flex justify-center py-4 select-none ${canReveal || hasMore ? "cursor-pointer" : ""}`}
+            title={canReveal || hasMore ? "Loads automatically as you scroll — click to load now" : undefined}
+          >
+            {isLoadingMore ? (
+              <Spinner className="text-sol-text-dim/70" />
+            ) : (canReveal || hasMore) && (
               <span className="flex items-center gap-1.5 text-[10px] font-mono text-sol-text-dim/40">
-                <span className={`w-1 h-1 rounded-full bg-sol-text-dim/50 ${isLoadingMore ? "animate-pulse" : ""}`} />
-                {isLoadingMore ? "loading more…" : "more"}
+                <span className="w-1 h-1 rounded-full bg-sol-text-dim/50" />
+                more
               </span>
-            </div>
-          )}
+            )}
+          </div>
         </div>
       )}
     </div>
@@ -603,35 +620,50 @@ function TeamFeed({ compact, directoryFilter, onNavigate, initialActorId, hidePe
   }, [live, key, knownHasMore, liveHasMore, setFeedHasMore]);
 
   // Load older pages imperatively. Merges into the same accumulating store, so
-  // a reload never forces a re-walk of cached pages.
+  // a reload never forces a re-walk of cached pages. Two guarantees keep the
+  // bottom of the feed alive:
+  //   • Drain: a page can overlap rows the client already has (legacy-cursor
+  //     resume, gap re-covers) — zero NEW rows renders zero new pixels, and a
+  //     user parked at the bottom gets no further scroll events, so one dupe
+  //     page used to read as "load more does nothing". Keep pulling (bounded)
+  //     until something fresh lands or the continuation runs out.
+  //   • Reconfirm: bypasses the persisted end-of-history and retries from the
+  //     oldest cached row, so a latched null (auth-blip empty page, pre-fix
+  //     poison) heals on the next bottom-scroll instead of stranding the feed.
   const [loadingMore, setLoadingMore] = useState(false);
-  const loadMore = useCallback(async () => {
-    if (loadingMore || !cached?.length) return;
-    if (knownCursor === null) return; // server confirmed true end-of-history
-    // Resume from the server's continuation cursor; fall back to the oldest
-    // cached row for caches that predate it (the server re-covers any gap and
-    // mergeFeed dedups by _id).
-    const oldest = cached[cached.length - 1]?.updated_at;
-    const cursor = knownCursor ?? (oldest != null ? String(oldest) : null);
-    if (cursor == null) return;
+  const loadMore = useCallback(async (opts?: { reconfirm?: boolean }) => {
+    if (loadingMore) return;
+    if (knownCursor === null && !opts?.reconfirm) return; // believed end-of-history
+    const liveRows = (useInboxStore.getState().feedConversations[key] ?? []) as Conversation[];
+    if (!liveRows.length) return;
+    const oldest = liveRows[liveRows.length - 1]?.updated_at;
+    const fallback = oldest != null ? String(oldest) : null;
+    const start = opts?.reconfirm ? fallback : knownCursor ?? fallback;
+    if (start == null) return;
+    let cursor: string = start;
     setLoadingMore(true);
     try {
-      const page = await convex.query(api.conversations.listConversations, { ...queryArgs, cursor });
-      mergeFeed(key, (page.conversations ?? []) as Conversation[]);
-      // The cursor protocol is honest now: a filtered-out band comes back as a
-      // short/empty page WITH a continuation cursor, and null only when every
-      // contributing scan truly ran its index dry — so trust it directly. (The
-      // old "did we get fresh rows" heuristic latched hasMore=false on those
-      // mid-history empty pages, and the persisted false killed pagination on
-      // that device for good.)
-      setFeedCursor(key, page.nextCursor ?? null);
-      setFeedHasMore(key, page.nextCursor != null);
+      const seen = new Set(liveRows.map((c) => c._id));
+      for (let hop = 0; hop < 5; hop++) {
+        const page: { conversations?: unknown[]; nextCursor?: string | null } =
+          await convex.query(api.conversations.listConversations, { ...queryArgs, cursor });
+        const rows = (page.conversations ?? []) as Conversation[];
+        mergeFeed(key, rows);
+        const next = page.nextCursor ?? null;
+        const persist = feedPagePersistence({ rowCount: rows.length, nextCursor: next });
+        if (persist.cursor !== undefined) setFeedCursor(key, persist.cursor);
+        setFeedHasMore(key, persist.hasMore);
+        const fresh = rows.some((c) => !seen.has(c._id));
+        rows.forEach((c) => seen.add(c._id));
+        if (fresh || next == null) break;
+        cursor = next;
+      }
     } catch {
       // Leave the cache + affordance intact; a transient failure can be retried.
     } finally {
       setLoadingMore(false);
     }
-  }, [loadingMore, cached, knownCursor, convex, queryArgs, key, mergeFeed, setFeedCursor, setFeedHasMore]);
+  }, [loadingMore, knownCursor, convex, queryArgs, key, mergeFeed, setFeedCursor, setFeedHasMore]);
 
   const sourceConvs = useMemo(() => (cached ?? []).filter((c) => {
     if (c.visibility_mode === "summary" || c.visibility_mode === "minimal") return !isWarmupSession(c);

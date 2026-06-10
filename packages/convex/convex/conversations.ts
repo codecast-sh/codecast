@@ -21,7 +21,9 @@ import {
   createTeamFeedFilter,
   resolveTeamForPath,
   resolveVisibilityMode,
+  buildShareUpdate,
 } from "./privacy";
+import { batchScanConversations, paginateTeamFeed } from "./feedPagination";
 
 const NOISE_TITLE_PREFIXES = ["[Using:", "[Request", "[SUGGESTION MODE:"];
 
@@ -1751,49 +1753,8 @@ export const getOlderMessages = query({
   },
 });
 
-// Walk an updated_at-desc conversations index in batches, skipping rows the
-// caller filters out, until `want` rows are accepted, the read budget runs out,
-// or the index is exhausted. Reports the continuation point honestly so a short
-// page is never mistaken for end-of-history: `oldestSeen` is the oldest RAW row
-// examined (resume with lt(oldestSeen)); `exhausted` is true only when the
-// index truly ran dry. Shared by every listConversations scan path — the
-// per-member team merge included, which previously had no loop and returned an
-// empty page with a null cursor whenever one window was all filtered rows
-// (e.g. a burst of subagent sessions), killing pagination mid-history.
-async function batchScanConversations(opts: {
-  fetchPage: (cursor: number | null, take: number) => Promise<any[]>;
-  startCursor: number | null;
-  want: number;
-  accept: (c: any) => boolean;
-  batchSize: number;
-  maxBatches?: number;
-}): Promise<{ rows: any[]; oldestSeen: number | null; exhausted: boolean }> {
-  const { fetchPage, startCursor, want, accept, batchSize, maxBatches = 5 } = opts;
-  const rows: any[] = [];
-  let cursor = startCursor;
-  let oldestSeen: number | null = null;
-  let exhausted = false;
-  for (let i = 0; i < maxBatches && rows.length < want; i++) {
-    const batch = await fetchPage(cursor, batchSize);
-    if (batch.length === 0) {
-      exhausted = true;
-      break;
-    }
-    for (const c of batch) {
-      if (accept(c)) {
-        rows.push(c);
-        if (rows.length >= want) break;
-      }
-    }
-    cursor = batch[batch.length - 1].updated_at;
-    oldestSeen = cursor;
-    if (batch.length < batchSize) {
-      exhausted = true;
-      break;
-    }
-  }
-  return { rows, oldestSeen, exhausted };
-}
+// The scan loop + the team-merge cursor protocol live in feedPagination.ts
+// (pure TS) so their no-skip / always-progress invariants are unit-testable.
 
 export const listConversations = query({
   args: {
@@ -1896,6 +1857,8 @@ export const listConversations = query({
     };
 
     let conversations;
+    // Set only by the team-merge path, which owns its own cursor protocol.
+    let teamMergeNextCursor: string | null | undefined;
     // Examination floors of scans that stopped before exhausting their index
     // (read budget / per-member quota). The page cursor must never dip below an
     // unfinished scan's floor — rows in the unexamined gap would be skipped
@@ -1966,8 +1929,11 @@ export const listConversations = query({
       conversations = scan.rows;
       if (!scan.exhausted && scan.oldestSeen != null) scanFloors.push(scan.oldestSeen);
     } else {
-      // Query recent conversations from each visible team member and merge
-      // This ensures all team members' conversations appear regardless of activity level
+      // Query recent conversations from each visible team member and merge.
+      // Pagination uses a composite per-member cursor (see feedPagination.ts):
+      // each member resumes below what THEY already returned, so pages never
+      // re-serve rows the client has, and one member's filtered-out band
+      // (e.g. a swarm of subagent sessions) can't stall everyone else.
       const visibleMembers = (feedFilter?.memberships ?? []).filter(m => {
         const visibility = (m as any).visibility || "summary";
         return visibility !== "hidden";
@@ -1980,46 +1946,44 @@ export const listConversations = query({
       ));
       const perMemberLimit = Math.max(3, Math.ceil((limit + 1) / Math.max(visibleMembers.length, 1)));
 
-      const memberScans = await Promise.all(
-        visibleMembers.map((member) =>
-          batchScanConversations({
-            fetchPage: (cursor, take) =>
-              ctx.db
-                .query("conversations")
-                .withIndex("by_team_user_updated", (q) =>
-                  cursor
-                    ? q.eq("team_id", effectiveTeamId!).eq("user_id", member.user_id).lt("updated_at", cursor)
-                    : q.eq("team_id", effectiveTeamId!).eq("user_id", member.user_id)
-                )
-                .order("desc")
-                .take(take),
-            startCursor: cursorTimestamp,
-            want: perMemberLimit,
-            accept: (c) => feedFilter!.isVisible(c) && matchesFilters(c),
-            batchSize: perMemberFetch,
-            maxBatches: 4,
-          })
-        )
-      );
-      for (const s of memberScans) {
-        if (!s.exhausted && s.oldestSeen != null) scanFloors.push(s.oldestSeen);
-      }
-
-      // Merge and sort by updated_at descending
-      const allFiltered = memberScans.flatMap((s) => s.rows);
-      allFiltered.sort((a, b) => b.updated_at - a.updated_at);
-      conversations = allFiltered.slice(0, limit + 1);
+      const page = await paginateTeamFeed({
+        memberIds: visibleMembers.map((m) => m.user_id.toString()),
+        cursor: args.cursor ?? null,
+        limit,
+        fetchPage: (memberId, cursor, take) =>
+          ctx.db
+            .query("conversations")
+            .withIndex("by_team_user_updated", (q) =>
+              cursor
+                ? q.eq("team_id", effectiveTeamId!).eq("user_id", memberId as Id<"users">).lt("updated_at", cursor)
+                : q.eq("team_id", effectiveTeamId!).eq("user_id", memberId as Id<"users">)
+            )
+            .order("desc")
+            .take(take),
+        accept: (c) => feedFilter!.isVisible(c) && matchesFilters(c),
+        perMemberFetch,
+        perMemberWant: perMemberLimit,
+        maxBatches: 4,
+      });
+      conversations = page.rows;
+      teamMergeNextCursor = page.nextCursor;
     }
 
-    const hasMore = conversations.length > limit;
-    const resultConversations = hasMore ? conversations.slice(0, limit) : conversations;
-    // Honest continuation: a full page continues from its own last row, but
-    // never below an unfinished scan's floor (those rows were never examined),
-    // and a short page with a remaining floor is NOT end-of-history — null
-    // means every contributing scan truly ran its index dry.
-    const pageCursor = hasMore ? resultConversations[resultConversations.length - 1].updated_at : null;
-    const continuation = pageCursor != null ? [...scanFloors, pageCursor] : scanFloors;
-    const nextCursor = continuation.length > 0 ? String(Math.max(...continuation)) : null;
+    // The team merge computes its own composite continuation; the single-scan
+    // paths ("my", memberId) continue from the page's last row, but never below
+    // an unfinished scan's floor (those rows were never examined), and a short
+    // page with a remaining floor is NOT end-of-history — null means the scan
+    // truly ran its index dry.
+    const hasMore = teamMergeNextCursor !== undefined ? teamMergeNextCursor != null : conversations.length > limit;
+    const resultConversations = teamMergeNextCursor === undefined && hasMore ? conversations.slice(0, limit) : conversations;
+    let nextCursor: string | null;
+    if (teamMergeNextCursor !== undefined) {
+      nextCursor = teamMergeNextCursor;
+    } else {
+      const pageCursor = hasMore ? resultConversations[resultConversations.length - 1].updated_at : null;
+      const continuation = pageCursor != null ? [...scanFloors, pageCursor] : scanFloors;
+      nextCursor = continuation.length > 0 ? String(Math.max(...continuation)) : null;
+    }
 
     const conversationsWithUsers = await Promise.all(
       resultConversations.map(async (c) => {
