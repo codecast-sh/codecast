@@ -92,7 +92,17 @@ export function OpenInDesktopHandoff() {
     // (preferBrowser, ineligible path, not our host, …) is permanent — bail.
     if (!shouldAttemptHandoff({ ...buildCtx(), foreground: true })) return;
 
+    // Armed only briefly: a cmd-clicked background tab the user looks at soon
+    // should hand off; a forgotten or automation-driven tab focused much later
+    // must not detonate a stale handoff (agent tabs park on app pages for hours,
+    // and any focus of that window would yank the desktop app).
+    const ARM_WINDOW_MS = 120_000;
+    const armedAt = Date.now();
     const onActive = () => {
+      if (Date.now() - armedAt > ARM_WINDOW_MS) {
+        teardown();
+        return;
+      }
       if (tryHandoff()) teardown();
     };
     const teardown = () => {
