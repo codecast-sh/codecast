@@ -2,6 +2,8 @@ import { mutation, query, internalMutation } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
+import type { PaginationOptions, PaginationResult, RegisteredQuery } from "convex/server";
+import type { Id } from "./_generated/dataModel";
 import { enqueueStartSession, getOnlineLocalRoots } from "./devices";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
@@ -1140,38 +1142,47 @@ export const getUserDocs = query({
   },
 });
 
+type ProfileFeedItem = {
+  type: string;
+  timestamp: number;
+  verb: string;
+  preview?: string;
+  entity_id?: string;
+  entity_type?: string;
+  entity_title?: string;
+  entity_short_id?: string;
+  count?: number;
+  meta?: Record<string, any>;
+};
+
 export const getUserProfileFeed = query({
   args: {
     user_id: v.id("users"),
     team_id: v.optional(v.id("teams")),
-    paginationOpts: paginationOptsValidator,
+    // Deployed web bundles (and the remote-URL Electron shell) outlive convex
+    // deploys by days — accept the pre-pagination {limit} shape and answer it
+    // with the pre-pagination array return. The export is cast below so the
+    // generated types only advertise the paginated signature.
+    paginationOpts: v.optional(paginationOptsValidator),
+    limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const empty = { page: [], isDone: true, continueCursor: "" };
+    const legacy = !args.paginationOpts;
+    const legacyLimit = Math.min(args.limit ?? 30, 200);
+    const paginationOpts = args.paginationOpts ?? { numItems: 30, cursor: null };
+    const empty = legacy ? [] : { page: [], isDone: true, continueCursor: "" };
     const userId = await getAuthUserId(ctx);
     if (!userId) return empty;
     const user = await ctx.db.get(args.user_id);
     if (!user) return empty;
 
-    type FeedItem = {
-      type: string;
-      timestamp: number;
-      verb: string;
-      preview?: string;
-      entity_id?: string;
-      entity_type?: string;
-      entity_title?: string;
-      entity_short_id?: string;
-      count?: number;
-      meta?: Record<string, any>;
-    };
-    const items: FeedItem[] = [];
+    const items: ProfileFeedItem[] = [];
 
     // Messages are the spine of the feed, so we paginate over the user's
     // conversations (newest first) and pull each page's user-authored messages.
     // The activity overlay (tasks/docs/commits) is appended only on the first
     // page so it sits at the top without re-fetching on every "load more".
-    const isFirstPage = !args.paginationOpts.cursor;
+    const isFirstPage = !paginationOpts.cursor;
     const convoQuery = args.team_id
       ? ctx.db
           .query("conversations")
@@ -1183,7 +1194,7 @@ export const getUserProfileFeed = query({
           .query("conversations")
           .withIndex("by_user_id", (q) => q.eq("user_id", args.user_id))
           .order("desc");
-    const convoPage = await convoQuery.paginate(args.paginationOpts);
+    const convoPage = await convoQuery.paginate(paginationOpts);
 
     // Privacy gate: (team_id, user_id) is routing, not visibility. Drop private
     // conversations so a teammate's profile never exposes their message text.
@@ -1327,9 +1338,17 @@ export const getUserProfileFeed = query({
     }
 
     items.sort((a, b) => b.timestamp - a.timestamp);
+    if (legacy) return items.slice(0, legacyLimit);
     return { page: items, isDone: convoPage.isDone, continueCursor: convoPage.continueCursor };
   },
-});
+  // The runtime validator above also tolerates legacy {limit} callers, but the
+  // advertised type is paginated-only so usePaginatedQuery accepts it and new
+  // callers are steered to paginationOpts.
+}) as unknown as RegisteredQuery<
+  "public",
+  { user_id: Id<"users">; team_id?: Id<"teams">; paginationOpts: PaginationOptions },
+  Promise<PaginationResult<ProfileFeedItem>>
+>;
 
 export const getTeamMembers = query({
   args: {
