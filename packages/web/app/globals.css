@@ -510,6 +510,39 @@ html[data-idle] *::after {
   opacity: 0;
 }
 
+/* Indeterminate hairline shimmer used by AppLoader. Colored by currentColor;
+   mirrored by the pre-React #boot-shell in index.html — keep the two in sync. */
+.app-loader-bar {
+  position: relative;
+  width: 120px;
+  height: 2px;
+  border-radius: 999px;
+  overflow: hidden;
+}
+.app-loader-bar::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: currentColor;
+  opacity: 0.14;
+}
+.app-loader-bar::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 36px;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0.55;
+  animation: app-loader-slide 1.5s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+@keyframes app-loader-slide {
+  0% { transform: translateX(-40px); }
+  100% { transform: translateX(124px); }
+}
+
 /* Highlight.js Solarized theme overrides */
 .hljs {
   color: var(--sol-text-secondary);

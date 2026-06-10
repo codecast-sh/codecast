@@ -2,6 +2,7 @@ import { Authenticated, Unauthenticated, AuthLoading } from "convex/react";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
+import { AppLoader } from "./AppLoader";
 
 function RedirectToHome() {
   const router = useRouter();
@@ -13,9 +14,7 @@ function AuthGuardInner({ children, guestOk }: { children: React.ReactNode; gues
   return (
     <>
       <AuthLoading>
-        <div className="min-h-screen flex items-center justify-center bg-sol-base02">
-          <div className="text-sol-base0">Loading...</div>
-        </div>
+        <AppLoader />
       </AuthLoading>
       <Unauthenticated>
         {guestOk ? children : <RedirectToHome />}
@@ -43,11 +42,7 @@ export function AuthGuard({ children, guestOk }: { children: React.ReactNode; gu
   });
 
   if (!mounted) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-sol-base02">
-        <div className="text-sol-base0">Loading...</div>
-      </div>
-    );
+    return <AppLoader />;
   }
 
   return <AuthGuardInner guestOk={guestOk}>{children}</AuthGuardInner>;
