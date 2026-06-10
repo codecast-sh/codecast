@@ -10,6 +10,7 @@ import { redactSecrets } from "./redact";
 import { markPendingDelivered } from "./pendingMessages";
 import { nextAgentStatusOnAddMessages, isApiErrorBanner, apiErrorBatchAction } from "./inboxFilters";
 import { classifyDocContent, extractTitleFromContent, inlineDocSourceKey } from "./docExtraction";
+import { extractFileChanges, hasFileChangeToolCall, type FileChange } from "./fileChanges/extractor";
 
 type DocExtractionMessage = {
   role?: string;
@@ -257,6 +258,78 @@ async function getAuthenticatedUserId(
   return null;
 }
 
+/**
+ * Materialize per-edit file changes for a freshly-inserted message into the
+ * file_changes table. Called only on genuine inserts (never the uuid/content
+ * dedup branches) so re-synced messages don't duplicate rows. Runs the shared
+ * extractor on the already-redacted tool calls, and is pre-filtered so an
+ * ordinary message (no edit tool calls) costs nothing.
+ */
+async function materializeFileChanges(
+  ctx: MutationCtx,
+  conversationId: Id<"conversations">,
+  messageId: Id<"messages">,
+  timestamp: number,
+  toolCalls: Array<{ id: string; name: string; input: string }> | undefined,
+  toolResults: Array<{ tool_use_id: string; content: string; is_error?: boolean }> | undefined,
+): Promise<void> {
+  const msg = { _id: messageId, timestamp, tool_calls: toolCalls, tool_results: toolResults };
+  if (!hasFileChangeToolCall(msg)) return;
+  for (const fc of extractFileChanges([msg])) {
+    await ctx.db.insert("file_changes", {
+      conversation_id: conversationId,
+      change_key: fc.id,
+      message_id: messageId,
+      tool_call_id: fc.toolCallId,
+      seq: fc.sequenceIndex,
+      file_path: fc.filePath,
+      change_type: fc.changeType,
+      old_content: fc.oldContent,
+      new_content: fc.newContent,
+      commit_message: fc.commitMessage,
+      commit_hash: fc.commitHash,
+      timestamp: fc.timestamp,
+    });
+  }
+}
+
+/**
+ * Complete, pagination-independent list of file changes for a conversation,
+ * materialized at message ingest. The diff viewer merges this with its
+ * client-side window extraction, which backfills conversations whose edits
+ * predate materialization (no backfill was run).
+ */
+export const getConversationFileChanges = query({
+  args: { conversation_id: v.id("conversations") },
+  handler: async (ctx, args): Promise<FileChange[]> => {
+    const rows = await ctx.db
+      .query("file_changes")
+      .withIndex("by_conversation_id", (q) => q.eq("conversation_id", args.conversation_id))
+      .collect();
+    // Re-synced messages can leave duplicate rows; dedupe by the stable change_key,
+    // then order by (timestamp, in-message seq) to match the client extractor.
+    const byKey = new Map<string, (typeof rows)[number]>();
+    for (const r of rows) byKey.set(r.change_key, r);
+    return Array.from(byKey.values())
+      .sort((a, b) => a.timestamp - b.timestamp || a.seq - b.seq)
+      .map((r, i) => ({
+        id: r.change_key,
+        toolCallId: r.tool_call_id,
+        // Globally-ordered position so the result is correct on its own; the
+        // client merge re-derives this anyway when folding in window changes.
+        sequenceIndex: i,
+        messageId: r.message_id,
+        filePath: r.file_path,
+        changeType: r.change_type,
+        oldContent: r.old_content,
+        newContent: r.new_content,
+        commitMessage: r.commit_message,
+        commitHash: r.commit_hash,
+        timestamp: r.timestamp,
+      }));
+  },
+});
+
 export const addMessage = mutation({
   args: {
     conversation_id: v.id("conversations"),
@@ -415,6 +488,7 @@ export const addMessage = mutation({
       client_id: clientIdToStore,
       timestamp: msgTimestamp,
     });
+    await materializeFileChanges(ctx, args.conversation_id, messageId, msgTimestamp, safeToolCalls, safeToolResults);
     const newMessageCount = conversation.message_count + 1;
     const now = Date.now();
 
@@ -769,6 +843,7 @@ export const addMessages = mutation({
       });
       ids.push(messageId);
       insertedCount++;
+      await materializeFileChanges(ctx, args.conversation_id, messageId, msgTimestamp, safeToolCalls, safeToolResults);
       if (msg.role === "user") lastUserContentStored = contentToStore;
     }
 

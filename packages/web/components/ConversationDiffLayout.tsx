@@ -5,12 +5,14 @@ import { useEventListener } from "../hooks/useEventListener";
 import { Panel, Group, Separator } from "react-resizable-panels";
 import { ConversationView, ConversationData, ConversationViewHandle } from "./ConversationView";
 import { useDiffViewerStore } from "../store/diffViewerStore";
-import { extractFileChanges } from "../lib/fileChangeExtractor";
+import { extractFileChanges, mergeFileChanges } from "../lib/fileChangeExtractor";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 import { FileDiffLayout, DiffFile } from "./FileDiffLayout";
 import type { FileChange } from "../store/diffViewerStore";
-import { useInboxStore } from "../store/inboxStore";
+import { useInboxStore, isConvexId } from "../store/inboxStore";
+import { useQuery } from "convex/react";
+import { api } from "@codecast/convex/convex/_generated/api";
 
 const MOBILE_BREAKPOINT = 768;
 const DEFAULT_DIFF_LAYOUT = { content: 40, diff: 60 };
@@ -96,12 +98,21 @@ export function ConversationDiffLayout({
     diffPanelOpen,
   } = useDiffViewerStore();
 
+  // Complete set of changes, materialized server-side at ingest — independent of
+  // how many message pages are currently loaded. Undefined while loading; empty
+  // for conversations whose edits predate materialization (no backfill was run).
+  const serverFileChanges = useQuery(
+    api.messages.getConversationFileChanges,
+    conversation?._id && isConvexId(conversation._id) ? { conversation_id: conversation._id } : "skip",
+  );
+
   useWatchEffect(() => {
-    if (conversation?.messages) {
-      const extractedChanges = extractFileChanges(conversation.messages as any);
-      setChanges(extractedChanges);
-    }
-  }, [conversation?.messages, setChanges]);
+    // Merge the authoritative server set with the client window extraction: server
+    // gives completeness without scrolling; the client backfills un-materialized
+    // (pre-feature) conversations so nothing regresses to "scroll up to see it".
+    const clientChanges = conversation?.messages ? extractFileChanges(conversation.messages as any) : [];
+    setChanges(mergeFileChanges(serverFileChanges ?? [], clientChanges));
+  }, [conversation?.messages, serverFileChanges, setChanges]);
 
   useMountEffect(() => {
     setIsMobile(window.innerWidth < MOBILE_BREAKPOINT);

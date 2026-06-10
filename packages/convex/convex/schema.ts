@@ -657,6 +657,28 @@ export default defineSchema({
     .index("by_sha", ["sha"])
     .index("by_repository", ["repository"]),
 
+  // Per-edit file changes materialized at message ingest (materializeFileChanges
+  // in messages.ts). Lets the diff viewer show the full session diff without
+  // paginating the whole conversation to the top. change_key = the extractor's
+  // stable per-edit id (toolCallId, or `${toolCallId}:${section}`) so re-synced
+  // messages upsert idempotently instead of duplicating rows.
+  file_changes: defineTable({
+    conversation_id: v.id("conversations"),
+    change_key: v.string(),
+    message_id: v.id("messages"),
+    tool_call_id: v.optional(v.string()),
+    seq: v.number(),
+    file_path: v.string(),
+    change_type: v.union(v.literal("write"), v.literal("edit"), v.literal("commit")),
+    old_content: v.optional(v.string()),
+    new_content: v.string(),
+    commit_message: v.optional(v.string()),
+    commit_hash: v.optional(v.string()),
+    timestamp: v.number(),
+  })
+    .index("by_conversation_id", ["conversation_id"])
+    .index("by_conversation_change_key", ["conversation_id", "change_key"]),
+
   pull_requests: defineTable({
     team_id: v.id("teams"),
     github_pr_id: v.number(),
