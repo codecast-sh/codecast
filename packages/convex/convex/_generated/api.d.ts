@@ -51,6 +51,8 @@ import type * as http from "../http.js";
 import type * as idleSummary from "../idleSummary.js";
 import type * as images from "../images.js";
 import type * as inboxFilters from "../inboxFilters.js";
+import type * as lib_access from "../lib/access.js";
+import type * as lib_auth from "../lib/auth.js";
 import type * as managedSessions from "../managedSessions.js";
 import type * as messages from "../messages.js";
 import type * as migrations from "../migrations.js";
@@ -134,6 +136,8 @@ declare const fullApi: ApiFromModules<{
   idleSummary: typeof idleSummary;
   images: typeof images;
   inboxFilters: typeof inboxFilters;
+  "lib/access": typeof lib_access;
+  "lib/auth": typeof lib_auth;
   managedSessions: typeof managedSessions;
   messages: typeof messages;
   migrations: typeof migrations;

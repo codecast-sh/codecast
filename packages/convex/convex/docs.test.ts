@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { Doc, Id } from "./_generated/dataModel";
-import { isWebDocOwner, mapWebDocDetail, webUpdate } from "./docs";
+import { isWebDocOwner, mapWebDocDetail, webGet, webUpdate } from "./docs";
+import { webGetDocDetail } from "./taskMining";
 
 type Patch = { id: string; patch: Record<string, unknown> };
 
@@ -133,5 +134,75 @@ describe("mapWebDocDetail", () => {
 
     expect(result.related_conversations).toEqual([conversation]);
     expect(result.active_plan).toEqual(activePlan);
+  });
+});
+
+// Regression: clicking a malformed /docs/<id> link (e.g. a conversation id pasted
+// into a doc-typed link or pill) routed a non-docs id into webGet / webGetDocDetail.
+// With a v.id("docs") arg validator the server threw ArgumentValidationError, which
+// the ErrorBoundary surfaced as a full-page crash of the dashboard shell. The guard
+// is ctx.db.normalizeId("docs", id): a cross-table id must resolve to null, never throw.
+describe("doc-by-id queries tolerate a cross-table id", () => {
+  // Mirrors Convex: ids only normalize for the table they belong to. We model docs
+  // ids with a "doc_" prefix; anything else (a conversation id like jx781mx…) → null.
+  function createDocReadCtx(opts: { userId: string; docs?: Record<string, any> }) {
+    const docs = opts.docs ?? {};
+    const getCalls: string[] = [];
+    const ctx = {
+      auth: {
+        async getUserIdentity() {
+          return { subject: `${opts.userId}|session` };
+        },
+      },
+      db: {
+        async get(id: string) {
+          getCalls.push(id);
+          if (id === opts.userId) return { _id: opts.userId, active_team_id: "team1" };
+          return docs[id] ?? null;
+        },
+        normalizeId(table: string, id: string) {
+          return table === "docs" && id.startsWith("doc_") ? id : null;
+        },
+        query() {
+          throw new Error("query() should not run on the cross-table-id early return");
+        },
+      },
+    };
+    return { ctx, getCalls };
+  }
+
+  const CONVERSATION_ID = "jx781mxkm0wpasx3ck4pbeecq5881mzc";
+
+  test("webGet returns null (no throw) for a conversation id, without fetching it", async () => {
+    const { ctx, getCalls } = createDocReadCtx({ userId: "u1" });
+    const res = await (webGet as any)._handler(ctx, { id: CONVERSATION_ID });
+    expect(res).toBeNull();
+    // Never reaches ctx.db.get with the cross-table id (would have returned the
+    // conversation document typed as a doc — Convex ids are globally unique).
+    expect(getCalls).not.toContain(CONVERSATION_ID);
+  });
+
+  test("webGetDocDetail returns null (no throw) for a conversation id", async () => {
+    const { ctx, getCalls } = createDocReadCtx({ userId: "u1" });
+    const res = await (webGetDocDetail as any)._handler(ctx, { id: CONVERSATION_ID });
+    expect(res).toBeNull();
+    expect(getCalls).not.toContain(CONVERSATION_ID);
+  });
+
+  test("webGet still resolves a valid docs-table id owned by the user", async () => {
+    const ownedDoc = {
+      _id: "doc_1",
+      user_id: "u1",
+      title: "Unified Value Scoring",
+      content: "body",
+      doc_type: "design",
+      source: "human",
+      created_at: 10,
+      updated_at: 20,
+    };
+    const { ctx } = createDocReadCtx({ userId: "u1", docs: { doc_1: ownedDoc } });
+    const res = await (webGet as any)._handler(ctx, { id: "doc_1" });
+    expect(res?._id).toBe("doc_1");
+    expect(res?.title).toBe("Unified Value Scoring");
   });
 });
