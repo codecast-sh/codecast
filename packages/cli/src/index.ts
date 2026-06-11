@@ -26,6 +26,7 @@ import { getLastReconciliation, performReconciliation, repairDiscrepancies } fro
 import { parseSessionFile, extractSlug } from "./parser.js";
 import { SyncService } from "./syncService.js";
 import { resolveLocalProjectPath } from "./projectPathResolver.js";
+import { deviceId } from "./remote/device.js";
 import {
   buildDaemonPlistXml,
   buildWatchdogPlistXml,
@@ -57,6 +58,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { detectRuntime, parseAgentMarkers as _parseAgentMarkers, type AgentRuntime, type AgentHandle } from "./agents/index.js";
 import { buildImplementerPrompt as _buildImplementerPrompt, buildReviewerPrompt, buildCriticPrompt, resolveTaskModel, resolveTaskModelFull, resolveFidelity, buildRetroPrompt, type FidelityLevel, type TypedRetro } from "./agents/index.js";
 import { checkbox, confirm, input, select } from "@inquirer/prompts";
+import type { Config } from "./config/types.js";
 
 const program = new Command();
 
@@ -352,51 +354,9 @@ const __dirname = path.dirname(__filename);
 const WEB_URL = process.env.CODE_CHAT_SYNC_WEB_URL || "https://codecast.sh";
 const CONVEX_URL = process.env.CONVEX_URL || "https://convex.codecast.sh";
 
-interface Config {
-  auth_token?: string;
-  user_id?: string;
-  convex_url?: string;
-  web_url?: string;
-  team_id?: string;
-  excluded_paths?: string;
-  auto_update?: boolean;
-  memory_enabled?: boolean;
-  memory_version?: string;
-  task_enabled?: boolean;
-  task_version?: string;
-  work_enabled?: boolean;
-  work_version?: string;
-  plan_enabled?: boolean;
-  plan_version?: string;
-  workflow_enabled?: boolean;
-  workflow_version?: string;
-  messaging_enabled?: boolean;
-  messaging_version?: string;
-  visual_enabled?: boolean;
-  visual_version?: string;
-  orch_enabled?: boolean;
-  orch_version?: string;
-  claude_args?: string;
-  codex_args?: string;
-  sync_mode?: "all" | "selected";
-  sync_projects?: string[];
-  stable_mode?: "solo" | "team";
-  stable_global?: boolean;
-  team_share_mode?: "full" | "summary";
-  agent_permission_modes?: {
-    claude?: "default" | "bypass";
-    codex?: "default" | "full_auto" | "bypass";
-    gemini?: "default" | "bypass";
-  };
-  agent_default_params?: {
-    claude?: Record<string, string>;
-    codex?: Record<string, string>;
-    gemini?: Record<string, string>;
-    cursor?: Record<string, string>;
-  };
-  created_at?: string;
-  updated_at?: string;
-}
+// `Config` (the ~/.codecast/config.json shape) is unified in ./config/types.ts —
+// the faithful union of every field the CLI, the daemon, and the claude wrapper
+// read/write into the same file. Imported above.
 
 interface DetectedAgent {
   name: string;
@@ -9130,6 +9090,9 @@ schedule
           target_conversation_id,
           project_path: options.project || getRealCwd(),
           agent_type: options.agent,
+          // Bind the task to this machine: only the creating device's
+          // scheduler claims it (see TaskScheduler.canServeTask).
+          created_device_id: deviceId(),
           schedule_type,
           run_at,
           interval_ms,
