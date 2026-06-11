@@ -5,6 +5,11 @@ import { Id } from "./_generated/dataModel";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { createDataContext, scopeByProject, scopedFetch } from "./data";
 import { nextShortId } from "./counters";
+// Owner-or-team access check for a plan. Moved to lib/access.ts (Wave-1
+// auth/access seam). Imported for local use here and re-exported so existing
+// callers keep working unchanged.
+import { canAccessPlan } from "./lib/access";
+export { canAccessPlan };
 
 async function recalcProgress(ctx: any, taskIds: Id<"tasks">[]) {
   let total = 0, done = 0, in_progress = 0, open = 0;
@@ -36,16 +41,6 @@ async function recalcProgress(ctx: any, taskIds: Id<"tasks">[]) {
   };
 }
 
-
-async function canAccessPlan(ctx: any, userId: Id<"users">, plan: any): Promise<boolean> {
-  if (plan.user_id === userId) return true;
-  if (!plan.team_id) return false;
-  const membership = await ctx.db
-    .query("team_memberships")
-    .withIndex("by_user_team", (q: any) => q.eq("user_id", userId).eq("team_id", plan.team_id))
-    .first();
-  return !!membership;
-}
 
 // Merge legacy per-type arrays with new unified entries into a single sorted timeline.
 // Deduplicates by timestamp+content to avoid showing entries written to both old and new.

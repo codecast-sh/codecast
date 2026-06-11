@@ -5,7 +5,12 @@ import { paginationOptsValidator } from "convex/server";
 import { verifyApiToken } from "./apiTokens";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { createDataContext, scopedFetch, resolveEffectiveTeam } from "./data";
-import { resolveTeamForPath, isTeamMember } from "./privacy";
+import { resolveTeamForPath, isTeamMember, createTeamFeedFilter } from "./privacy";
+// Owner-or-team access check for a doc. Moved to lib/access.ts (Wave-1 auth/access
+// seam). Imported for local use here and re-exported below so the web mutation
+// and the dispatch side-effect still enforce one rule, not two.
+import { canAccessDoc } from "./lib/access";
+export { canAccessDoc };
 
 function generatePlanShortId(): string {
   const chars = "0123456789abcdefghijklmnopqrstuvwxyz";
@@ -959,14 +964,23 @@ export const webListPaginated = query({
 });
 
 export const webGet = query({
+  // Accept a raw string rather than v.id("docs"). These ids arrive from clickable
+  // pills/links embedded in untrusted message and doc content, where a stale or
+  // mistyped id (e.g. a conversation id in a malformed /docs/<id> link) would make
+  // the v.id("docs") validator throw ArgumentValidationError and crash the page.
+  // normalizeId returns null for anything that isn't a docs-table id, so we degrade
+  // to "not found" instead. (It also avoids ctx.db.get silently returning a
+  // cross-table document, since Convex ids are globally unique.)
   args: {
-    id: v.id("docs"),
+    id: v.string(),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return null;
 
-    const doc = await ctx.db.get(args.id);
+    const docId = ctx.db.normalizeId("docs", args.id);
+    if (!docId) return null;
+    const doc = await ctx.db.get(docId);
     if (!doc) return null;
     // Creator OR any member of the doc's team — same access rule as
     // tasks.webGet. Creator-only made a teammate's embedded doc reference
@@ -1073,17 +1087,6 @@ export const webSearch = query({
   },
 });
 
-// Owner-or-team access check for a doc, mirroring tasks.canAccessTask. Exported so
-// the web mutation and the dispatch side-effect enforce one rule, not two.
-export async function canAccessDoc(
-  ctx: any,
-  userId: Id<"users">,
-  doc: { user_id: Id<"users">; team_id?: Id<"teams"> },
-): Promise<boolean> {
-  if (doc.user_id === userId) return true;
-  if (!doc.team_id) return false;
-  return await isTeamMember(ctx, userId, doc.team_id);
-}
 
 export const webUpdate = mutation({
   args: {
@@ -1537,11 +1540,42 @@ export const mentionSearch = query({
           .order("desc")
           .take(perType * 5);
       }
-      const filtered = q
+      let filtered = q
         ? sessions.filter((s: any) =>
             s.title?.toLowerCase().includes(q) ||
             s.idle_summary?.toLowerCase().includes(q))
         : sessions;
+      if (q) {
+        // The recency window above only sees the most recent rows; a full-text
+        // title lookup reaches sessions far older than any client cache window.
+        // Recency matches stay first (most likely target), older hits fill in.
+        let titleHits;
+        if (teamId) {
+          const teamStr = String(teamId);
+          titleHits = (await ctx.db
+            .query("conversations")
+            .withSearchIndex("search_title_v2", (s: any) => s.search("title", args.query))
+            .take(perType * 20))
+            .filter((c: any) => String(c.team_id || "") === teamStr);
+        } else {
+          titleHits = await ctx.db
+            .query("conversations")
+            .withSearchIndex("search_title_v2", (s: any) =>
+              s.search("title", args.query).eq("user_id", userId))
+            .take(perType * 5);
+        }
+        const seen = new Set(filtered.map((c: any) => String(c._id)));
+        for (const hit of titleHits) {
+          if (!seen.has(String(hit._id))) filtered.push(hit);
+        }
+      }
+      if (teamId) {
+        // team_id is routing, not visibility — without this gate teammates'
+        // private session titles would surface in mention results.
+        const feedFilter = await createTeamFeedFilter(ctx, teamId as any);
+        filtered = filtered.filter((c: any) =>
+          String(c.user_id) === String(userId) || feedFilter.isVisible(c));
+      }
       for (const sess of filtered.slice(0, perType)) {
         results.push({
           id: String(sess._id),

@@ -10,6 +10,11 @@ import { nextShortId } from "./counters";
 import { internal } from "./_generated/api";
 import { isViableInboxParent } from "./inboxFilters";
 import { pickInheritedGitMeta, type GitMetaSource } from "./projectPaths";
+// Owner-or-team access check for a task. Moved to lib/access.ts (Wave-1
+// auth/access seam). Imported for local use here and re-exported so existing
+// callers keep working unchanged.
+import { canAccessTask } from "./lib/access";
+export { canAccessTask };
 
 const VALID_TASK_STATUSES = ["backlog", "open", "in_progress", "in_review", "done", "dropped"] as const;
 
@@ -209,16 +214,6 @@ export async function recalcPlanProgress(ctx: any, planId: Id<"plans">, updatedT
   await ctx.db.patch(plan._id, updates);
 }
 
-
-async function canAccessTask(ctx: any, userId: Id<"users">, task: any): Promise<boolean> {
-  if (task.user_id === userId) return true;
-  if (!task.team_id) return false;
-  const membership = await ctx.db
-    .query("team_memberships")
-    .withIndex("by_user_team", (q: any) => q.eq("user_id", userId).eq("team_id", task.team_id))
-    .first();
-  return !!membership;
-}
 
 export const create = mutation({
   args: {
