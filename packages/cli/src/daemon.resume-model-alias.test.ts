@@ -48,6 +48,57 @@ describe("claudeModelAlias", () => {
     expect(claudeModelAlias(asst("sonnet"))).toBe("sonnet");
   });
 
+  test("recognizes fable", () => {
+    expect(claudeModelAlias(asst("claude-fable-5"))).toBe("fable");
+    expect(claudeModelAlias(asst("fable"))).toBe("fable");
+  });
+
+  test("takes the LAST recorded model, so a mid-session /model switch survives resume", () => {
+    // Third incident (2026-06-11): a session started on opus, the user switched
+    // to fable via /model, and every subsequent resume re-pinned `--model opus`
+    // because the alias scan matched the FIRST model in the transcript.
+    const transcript = [asst("claude-opus-4-6"), asst("claude-fable-5")].join("\n");
+    expect(claudeModelAlias(transcript)).toBe("fable");
+    // And back: a fable session switched to opus resumes on opus.
+    const reverse = [asst("claude-fable-5"), asst("claude-opus-4-8")].join("\n");
+    expect(claudeModelAlias(reverse)).toBe("opus");
+  });
+
+  // A /model switch emits only a local-command-stdout user line — no assistant
+  // line until the next turn. Both resumes of the original transcript and fork
+  // reconstructions (which stamp the conversation-level model on every
+  // assistant line but preserve the stdout line) must honor it.
+  // Real ESC chars in the content: JSON.stringify renders them as `\u001b`
+  // text, byte-for-byte what Claude Code writes to the transcript.
+  const setModel = (name: string) =>
+    user(`<local-command-stdout>Set model to \u001b[1m${name}\u001b[22m and saved as your default for new sessions</local-command-stdout>`);
+
+  test("a /model switch with no turn since wins over earlier assistant lines", () => {
+    const transcript = [asst("claude-opus-4-8"), setModel("Fable 5")].join("\n");
+    expect(claudeModelAlias(transcript)).toBe("fable");
+  });
+
+  test("a turn after the /model switch wins over the switch line", () => {
+    // The assistant line records what actually ran — it is the newer signal.
+    const transcript = [setModel("Fable 5"), asst("claude-opus-4-8")].join("\n");
+    expect(claudeModelAlias(transcript)).toBe("opus");
+  });
+
+  test("matches the switch line without ANSI escapes", () => {
+    const transcript = [asst("claude-opus-4-8"), user("<local-command-stdout>Set model to Fable 5</local-command-stdout>")].join("\n");
+    expect(claudeModelAlias(transcript)).toBe("fable");
+  });
+
+  test("ignores a message merely quoting 'Set model to ...'", () => {
+    const transcript = [asst("claude-fable-5"), user("the log said: Set model to Opus 4.8")].join("\n");
+    expect(claudeModelAlias(transcript)).toBe("fable");
+  });
+
+  test("switching to Default yields no override", () => {
+    const transcript = [asst("claude-opus-4-8"), setModel("Default")].join("\n");
+    expect(claudeModelAlias(transcript)).toBeNull();
+  });
+
   test("returns null when no claude model line is present", () => {
     expect(claudeModelAlias(asst("gpt-4o"))).toBeNull();
     expect(claudeModelAlias("")).toBeNull();
@@ -95,6 +146,15 @@ describe("resumeModelFlagFromFile", () => {
   test("an explicit --model flag always wins", () => {
     const file = writeTmpJsonl([asst("claude-opus-4-6-20260205")]);
     expect(resumeModelFlagFromFile(file, "--model haiku")).toBe("");
+  });
+
+  test("a mid-session model switch survives resume (last model wins)", () => {
+    const file = writeTmpJsonl([
+      asst("claude-opus-4-6"),
+      user("switch to fable please"),
+      asst("claude-fable-5"),
+    ]);
+    expect(resumeModelFlagFromFile(file, "")).toBe(" --model fable");
   });
 
   test("missing file yields no flag", () => {

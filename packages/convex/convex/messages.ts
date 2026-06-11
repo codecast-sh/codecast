@@ -80,6 +80,22 @@ export function buildExistingMessagePatch(
   return Object.keys(patch).length > 0 ? patch : null;
 }
 
+// Newest assistant model in a batch — rolled up to conversations.model so list
+// surfaces (inbox badge, session pickers) can read it without scanning messages.
+// "<synthetic>" marks system-generated assistant entries (error banners), never
+// a real model.
+export function lastKnownModelFromBatch(
+  messages: Array<{ role: string; model?: string; timestamp?: number }>,
+): string | null {
+  let best: { ts: number; model: string } | null = null;
+  for (const m of messages) {
+    if (m.role !== "assistant" || !m.model || m.model === "<synthetic>") continue;
+    const ts = m.timestamp || 0;
+    if (!best || ts >= best.ts) best = { ts, model: m.model };
+  }
+  return best?.model ?? null;
+}
+
 async function extractDocsFromMessages(
   ctx: any,
   messages: DocExtractionMessage[],
@@ -578,6 +594,10 @@ export const addMessage = mutation({
       updated_at: now,
       last_message_role: args.role,
     };
+    const msgModel = lastKnownModelFromBatch([{ role: args.role, model: args.model, timestamp: msgTimestamp }]);
+    if (msgModel && msgModel !== conversation.model) {
+      convPatch.model = msgModel;
+    }
     if (msgIsBanner !== wasPendingApiError) {
       convPatch.pending_api_error = msgIsBanner;
     }
@@ -990,6 +1010,10 @@ export const addMessages = mutation({
         updated_at: Math.max(conversation.updated_at, maxMsgTs || Date.now()),
         last_message_role: lastMsg.role,
       };
+      const batchModel = lastKnownModelFromBatch(args.messages);
+      if (batchModel && batchModel !== conversation.model) {
+        convPatch.model = batchModel;
+      }
       // Keep the gate flag in lockstep with "newest message is a banner".
       const nextPendingApiError = isBannerMsg(newestMsg);
       if (nextPendingApiError !== wasPendingApiError) {

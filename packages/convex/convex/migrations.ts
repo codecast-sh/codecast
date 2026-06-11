@@ -1,5 +1,58 @@
 import { internalMutation, query } from "./_generated/server";
+import { internal } from "./_generated/api";
 import { v } from "convex/values";
+
+// One-time backfill: stamp conversations.model from each conversation's newest
+// assistant message carrying a real model id ("<synthetic>" = error banner, not
+// a model). addMessages/addMessage roll the field forward on every new batch;
+// this covers rows written before that rollup existed. Only conversations
+// updated after `since` are stamped — older ones pick it up organically if they
+// wake. Pass auto:true to self-drain page by page via the scheduler.
+//   npx convex run migrations:backfillConversationModels '{"dryRun":false,"auto":true}'
+export const backfillConversationModels = internalMutation({
+  args: {
+    dryRun: v.optional(v.boolean()),
+    cursor: v.optional(v.string()),
+    numItems: v.optional(v.number()),
+    since: v.optional(v.number()),
+    auto: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const dryRun = args.dryRun ?? true;
+    const numItems = args.numItems ?? 50;
+    // Stable across continuations — computed once on the first page.
+    const since = args.since ?? Date.now() - 60 * 24 * 60 * 60 * 1000;
+    const page = await ctx.db
+      .query("conversations")
+      .order("desc")
+      .paginate({ cursor: args.cursor ?? null, numItems });
+
+    let stamped = 0;
+    for (const conv of page.page) {
+      if (conv.model || conv.updated_at < since) continue;
+      const recent = await ctx.db
+        .query("messages")
+        .withIndex("by_conversation_timestamp", (q) => q.eq("conversation_id", conv._id))
+        .order("desc")
+        .take(12);
+      const src = recent.find((m) => m.role === "assistant" && m.model && m.model !== "<synthetic>");
+      if (!src?.model) continue;
+      if (!dryRun) await ctx.db.patch(conv._id, { model: src.model });
+      stamped++;
+    }
+
+    if (args.auto && !page.isDone) {
+      await ctx.scheduler.runAfter(0, internal.migrations.backfillConversationModels, {
+        dryRun,
+        cursor: page.continueCursor,
+        numItems,
+        since,
+        auto: true,
+      });
+    }
+    return { dryRun, stamped, scanned: page.page.length, done: page.isDone, cursor: page.continueCursor };
+  },
+});
 
 function looksLikeUserMessage(content: string | undefined): boolean {
   if (!content) return false;

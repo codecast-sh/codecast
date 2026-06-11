@@ -168,6 +168,9 @@ export type InboxSession = {
   git_root?: string;
   git_branch?: string;
   agent_type: string;
+  // Last-known model id (e.g. "claude-opus-4-8"); conversations can switch
+  // models mid-stream. Shown as an inbox badge when ui.show_model_badge is on.
+  model?: string | null;
   message_count: number;
   idle_summary?: string;
   is_idle: boolean;
@@ -465,6 +468,8 @@ export type ClientUI = {
   saved_views?: SavedView[];
   show_subagents?: boolean;
   show_old_sessions?: boolean;
+  // Show each session's model as a badge in the inbox list. Off by default.
+  show_model_badge?: boolean;
   // Inbox session panel view mode. When true, the panel drops the
   // Pinned/New/Needs-Input/Working grouping and shows every session as one flat
   // list sorted newest-first by creation time (started_at). Toggled by Ctrl+,.

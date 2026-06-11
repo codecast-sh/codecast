@@ -267,6 +267,10 @@ describe("generateClaudeCodeJsonl", () => {
 
     expect(chat[0].type).toBe("user");
     expect(chat[0].message?.content).toContain("[Codecast import]");
+    // Context-only: isMeta hides the notice from Claude Code's transcript and
+    // from codecast's watcher sync (extractMessages skips isMeta entries).
+    expect(chat[0].isMeta).toBe(true);
+    expect(chat.filter((l) => l.isMeta).length).toBe(1);
     expect(chat.some((l) => l.type === "user" && l.message?.content === "u1")).toBe(true);
 
     // Tail is the last 2 messages: a2, u3
