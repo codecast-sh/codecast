@@ -108,6 +108,12 @@ function isCommandMessage(content: string): boolean {
   return COMMAND_PATTERNS.some(pattern => pattern.test(trimmed));
 }
 
+// Synthetic truncation notice the CLI injects into imported sessions for the
+// model's context only — never user-facing.
+function isImportNotice(content?: string | null): boolean {
+  return !!content && content.trimStart().startsWith('[Codecast import]');
+}
+
 function getCommandType(content: string): string {
   const trimmed = content.trim();
   if (/^<command-name>/.test(trimmed)) return 'cmd';
@@ -3115,7 +3121,11 @@ export default function SessionDetailScreen() {
 
   const allMessages = useMemo(() => {
     // Store-backed, pending-merged message list from useConversationMessages.
-    const msgs = conversation?.messages || [];
+    // Drop context-only import notices synced by older CLIs.
+    const raw = conversation?.messages || [];
+    const msgs = raw.some(m => m.role === 'user' && isImportNotice(m.content))
+      ? raw.filter(m => !(m.role === 'user' && isImportNotice(m.content)))
+      : raw;
     const synthetic: Message[] = [];
     if (commits && commits.length > 0) {
       for (const c of commits) {

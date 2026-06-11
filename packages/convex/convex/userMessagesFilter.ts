@@ -28,12 +28,22 @@ export type FilteredUserMessage = {
   timestamp: number;
 };
 
+// Synthetic truncation notice the CLI injects into imported sessions for the
+// model's context only. New CLIs never sync it; this hides rows older daemons
+// already wrote (cleanup:deleteImportNoticeMessages drains them).
+export const IMPORT_NOTICE_PREFIX = "[Codecast import]";
+
+export function isImportNotice(content: string | null | undefined): boolean {
+  return !!content && content.trimStart().startsWith(IMPORT_NOTICE_PREFIX);
+}
+
 const USER_NOISE_PREFIXES = [
   "<local-command-stdout>",
   "<local-command-stderr>",
   "<local-command-caveat>",
   "[Request interrupted",
   "[Request cancelled",
+  IMPORT_NOTICE_PREFIX,
   "This session is being continued",
   "Your task is to create a detailed summary",
   "Please continue the conversation",

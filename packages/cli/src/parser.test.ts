@@ -703,6 +703,39 @@ describe("parser - thinking content extraction", () => {
     expect(messages).toHaveLength(1);
     expect(messages[0].content).toBe("hi");
   });
+
+  test("skips the [Codecast import] truncation notice even without isMeta (older imports)", () => {
+    const entries: ClaudeSessionEntry[] = [
+      {
+        type: "user",
+        uuid: "import-notice",
+        timestamp: "2024-01-01T00:00:00Z",
+        message: {
+          role: "user",
+          content:
+            "[Codecast import] This Claude session was truncated to avoid overly-long context (which can break Claude Code /compact).\nOriginal: 434 messages. Included: last 393 messages + first user message.",
+        },
+      },
+      {
+        type: "user",
+        uuid: "real-first",
+        timestamp: "2024-01-01T00:00:01Z",
+        message: { role: "user", content: "fix the auth bug" },
+      },
+      {
+        type: "assistant",
+        uuid: "a1",
+        timestamp: "2024-01-01T00:00:02Z",
+        message: { role: "assistant", content: [{ type: "text", text: "on it" }] },
+      },
+    ];
+
+    const messages = extractMessages(entries);
+
+    expect(messages).toHaveLength(2);
+    expect(messages[0].content).toBe("fix the auth bug");
+    expect(messages[1].content).toBe("on it");
+  });
 });
 
 describe("per-message model extraction", () => {

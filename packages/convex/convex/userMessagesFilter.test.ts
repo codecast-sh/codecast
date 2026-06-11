@@ -49,6 +49,20 @@ describe("filterUserMessages", () => {
     expect(out).toEqual([]);
   });
 
+  test("drops the [Codecast import] truncation notice", () => {
+    const out = filterUserMessages([
+      msg({
+        _id: "u1",
+        role: "user",
+        content:
+          "[Codecast import] This Claude session was truncated to avoid overly-long context (which can break Claude Code /compact).\nOriginal: 434 messages. Included: last 393 messages + first user message.",
+        timestamp: 1,
+      }),
+      msg({ _id: "u2", role: "user", content: "real question", timestamp: 2 }),
+    ]);
+    expect(out.map((m) => m._id)).toEqual(["u2"]);
+  });
+
   test("strips context tags from user content before noise checks", () => {
     const out = filterUserMessages([
       msg({
