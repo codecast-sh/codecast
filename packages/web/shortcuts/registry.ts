@@ -63,8 +63,28 @@ export interface ShortcutDef {
   action: ShortcutAction;
   when?: string;
   mac?: string;
-  skipInputCheck?: boolean;
+  // true = fire even while an input is focused; 'whenEmpty' = fire in a focused
+  // input only when it has no content (see inputGuardBypass); absent = never
+  // fire while an input is focused.
+  skipInputCheck?: boolean | 'whenEmpty';
   description: string;
+}
+
+// Decides whether a binding bypasses the in-input guard for the focused element.
+// 'whenEmpty' exists for the destructive backspace chords: while the user has
+// text in the composer, backspace+modifier is almost certainly delete-word
+// muscle memory and must reach the editor; with an empty input delete-word is
+// meaningless, so the chord is unambiguous triage intent. Pseudo-inputs (e.g.
+// the review region) have no value/content notion — keep them suppressed.
+export function inputGuardBypass(
+  def: ShortcutDef,
+  el: { tagName?: string; isContentEditable?: boolean; value?: string; textContent?: string | null } | null,
+): boolean {
+  if (def.skipInputCheck === true) return true;
+  if (def.skipInputCheck !== 'whenEmpty' || !el) return false;
+  if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') return (el.value ?? '') === '';
+  if (el.isContentEditable) return !(el.textContent ?? '').trim();
+  return false;
 }
 
 const isMac = typeof navigator !== 'undefined' && /mac/i.test(navigator.userAgent);
@@ -77,15 +97,15 @@ export const SHORTCUTS: ShortcutDef[] = [
   { key: 'ctrl+i', action: 'session.jumpIdle', skipInputCheck: true, description: 'Jump to idle session' },
   { key: 'alt+p', mac: 'ctrl+p', action: 'session.jumpPinned', skipInputCheck: true, description: 'Jump to pinned session' },
   { key: 'ctrl+shift+p', action: 'session.pin', skipInputCheck: true, description: 'Pin/unpin session' },
-  // Destructive backspace chords intentionally OMIT skipInputCheck: ctrl+backspace
-  // is the OS "delete previous word" key, so with skipInputCheck these fired mid-
-  // compose — preventDefault swallowed the keystroke (no visible change) while the
-  // selected session got stashed/killed/deferred. The dispatcher's in-input guard
-  // now suppresses them while a composer/input is focused; they still work from
-  // list/panel focus. Kill is an irreversible SIGKILL — keep it guarded.
-  { key: 'ctrl+backspace', action: 'session.stash', description: 'Stash session' },
-  { key: 'ctrl+shift+backspace', action: 'session.kill', description: 'Kill session agent' },
-  { key: 'shift+backspace', action: 'session.deferAdvance', description: 'Defer and advance' },
+  // Destructive backspace chords use 'whenEmpty', never true: ctrl+backspace is
+  // the OS "delete previous word" key, so an unconditional bypass fired these
+  // mid-compose — preventDefault swallowed the keystroke (no visible change)
+  // while the selected session got stashed/killed/deferred. With 'whenEmpty'
+  // they fire from an empty composer (the keyboard triage flow) but defer to
+  // the editor whenever there is text to delete. Kill is an irreversible SIGKILL.
+  { key: 'ctrl+backspace', action: 'session.stash', skipInputCheck: 'whenEmpty', description: 'Stash session' },
+  { key: 'ctrl+shift+backspace', action: 'session.kill', skipInputCheck: 'whenEmpty', description: 'Kill session agent' },
+  { key: 'shift+backspace', action: 'session.deferAdvance', skipInputCheck: 'whenEmpty', description: 'Defer and advance' },
   { key: 'ctrl+n', action: 'session.create', skipInputCheck: true, description: 'New session' },
   { key: 'ctrl+shift+n', action: 'session.createIsolated', skipInputCheck: true, description: 'New isolated session' },
   { key: 'ctrl+shift+e', action: 'session.rename', skipInputCheck: true, description: 'Rename session' },

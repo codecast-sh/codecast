@@ -3,7 +3,7 @@
 import { createContext, useContext, useCallback, useRef, ReactNode } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useWatchEffect } from "../hooks/useWatchEffect";
-import { ShortcutAction, SHORTCUTS, matchShortcut } from "./registry";
+import { ShortcutAction, SHORTCUTS, matchShortcut, inputGuardBypass } from "./registry";
 import { onShortcutUsed } from "../tips/useTips";
 import { setShortcutHandler } from "./listener";
 
@@ -60,7 +60,7 @@ export function ShortcutProvider({ children }: { children: ReactNode }) {
       for (const def of SHORTCUTS) {
         if (!matchShortcut(e, def)) continue;
         if (def.when && !contextsRef.current.has(def.when)) continue;
-        if (inInput && !def.skipInputCheck) continue;
+        if (inInput && !inputGuardBypass(def, e.target as HTMLElement | null)) continue;
 
         const actionHandlers = handlersRef.current.get(def.action);
         if (!actionHandlers || actionHandlers.size === 0) continue;
