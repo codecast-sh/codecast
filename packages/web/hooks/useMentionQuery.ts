@@ -1,6 +1,9 @@
 import { useCallback } from "react";
+import { useQuery } from "convex/react";
+import { api } from "@codecast/convex/convex/_generated/api";
 import type { MentionItem } from "../components/editor/MentionList";
 import { useInboxStore } from "../store/inboxStore";
+import { useDebounce } from "./useDebounce";
 
 export type MentionScope =
   | { kind: "team"; teamId: string }
@@ -15,6 +18,43 @@ function inScope(item: { team_id?: string | null; user_id?: string | null }, sco
   const itemTeam = item.team_id ? String(item.team_id) : null;
   if (scope.kind === "team") return itemTeam === scope.teamId;
   return !itemTeam && (item.user_id ? String(item.user_id) === scope.userId : true);
+}
+
+const EMPTY_SERVER_ITEMS: MentionItem[] = [];
+
+// People are fully covered by the local roster cache; these are the types whose
+// cache is windowed and therefore worth re-querying server-side on @-mention.
+export const SERVER_MENTION_TYPES = ["session", "task", "doc", "plan"];
+
+/**
+ * Debounced server-side mention lookup that reaches past the local cache —
+ * sessions older than the inbox sync window, entities never pulled down.
+ * Pass `null` while the dropdown is closed to fully disable it. `loading`
+ * covers both the debounce settling and the in-flight query, so callers can
+ * show a "searching" affordance from the first keystroke.
+ */
+export function useMentionServerSearch(
+  rawQuery: string | null,
+  opts?: { teamId?: string | null; types?: string[] },
+): { items: MentionItem[]; loading: boolean } {
+  const current = (rawQuery ?? "").trim();
+  const debounced = useDebounce(current, 250);
+  const wantNow = rawQuery != null && current.length >= 2;
+  const settled = debounced === current;
+  const results = useQuery(
+    api.docs.mentionSearch,
+    wantNow && settled
+      ? {
+          query: current,
+          ...(opts?.teamId ? { teamId: opts.teamId } : {}),
+          ...(opts?.types ? { types: opts.types } : {}),
+        }
+      : "skip",
+  ) as MentionItem[] | undefined;
+  return {
+    items: wantNow && settled && results ? results : EMPTY_SERVER_ITEMS,
+    loading: wantNow && (!settled || results === undefined),
+  };
 }
 
 export function score(label: string, q: string): number {
