@@ -1,4 +1,5 @@
-import { forwardRef, useImperativeHandle, useState, useCallback, useRef } from "react";
+import { forwardRef, useImperativeHandle, useState, useCallback, useRef, useMemo } from "react";
+import { useMentionServerSearch, SERVER_MENTION_TYPES } from "../../hooks/useMentionQuery";
 import {
   User,
   FileText,
@@ -89,6 +90,8 @@ const DOC_TYPE_COLORS: Record<string, string> = {
 interface MentionListProps {
   items: MentionItem[];
   command: (item: MentionItem) => void;
+  /** The active @-mention text — provided by the tiptap suggestion plugin. */
+  query?: string;
 }
 
 function abbrevModel(model?: string | null): string | null {
@@ -175,47 +178,77 @@ function ItemMeta({ item }: { item: MentionItem }) {
 }
 
 export const MentionList = forwardRef<any, MentionListProps>(
-  ({ items, command }, ref) => {
+  ({ items, command, query }, ref) => {
     const [selectedIndex, setSelectedIndex] = useState(0);
     const containerRef = useRef<HTMLDivElement>(null);
 
+    // Reach past the local cache while the user types — older sessions and
+    // never-synced entities come back from the server and are appended below
+    // the cache hits, regrouped so each type stays one contiguous run (the
+    // selection index math below depends on that).
+    const { items: serverItems, loading: serverLoading } = useMentionServerSearch(
+      query ?? null,
+      { types: SERVER_MENTION_TYPES },
+    );
+    const allItems = useMemo(() => {
+      if (!serverItems.length) return items;
+      const seen = new Set(items.map((i) => i.id));
+      const merged = [...items];
+      for (const s of serverItems) {
+        if (s.id && !seen.has(s.id)) merged.push(s);
+      }
+      const typeOrder: string[] = [];
+      for (const it of merged) if (!typeOrder.includes(it.type)) typeOrder.push(it.type);
+      return typeOrder.flatMap((t) => merged.filter((it) => it.type === t));
+    }, [items, serverItems]);
+
     const selectItem = useCallback(
       (index: number) => {
-        const item = items[index];
+        const item = allItems[index];
         if (item) command(item);
       },
-      [items, command]
+      [allItems, command]
     );
 
     useImperativeHandle(ref, () => ({
       onKeyDown: ({ event }: { event: KeyboardEvent }) => {
         if (event.key === "ArrowUp") {
-          setSelectedIndex((i) => (i + items.length - 1) % items.length);
+          setSelectedIndex((i) => (i + allItems.length - 1) % allItems.length);
           return true;
         }
         if (event.key === "ArrowDown") {
-          setSelectedIndex((i) => (i + 1) % items.length);
+          setSelectedIndex((i) => (i + 1) % allItems.length);
           return true;
         }
         if (event.key === "Enter") {
-          selectItem(selectedIndex);
+          selectItem(Math.min(selectedIndex, allItems.length - 1));
           return true;
         }
         return false;
       },
     }));
 
-    if (!items.length) {
+    if (!allItems.length) {
       return (
         <div className="bg-sol-bg border border-sol-border/50 rounded-lg shadow-xl p-3 min-w-[240px]">
-          <p className="text-xs text-sol-text-dim text-center">No results</p>
+          {serverLoading ? (
+            <p className="text-xs text-sol-text-dim text-center flex items-center justify-center gap-2">
+              <svg className="w-3 h-3 animate-spin" viewBox="0 0 24 24" fill="none">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v3a5 5 0 00-5 5H4z" />
+              </svg>
+              Searching everything&hellip;
+            </p>
+          ) : (
+            <p className="text-xs text-sol-text-dim text-center">No results</p>
+          )}
         </div>
       );
     }
 
     const grouped: Array<{ type: string; items: MentionItem[]; startIdx: number }> = [];
     let idx = 0;
-    for (const item of items) {
+    for (const item of allItems) {
       let group = grouped.find((g) => g.type === item.type);
       if (!group) {
         group = { type: item.type, items: [], startIdx: idx };
@@ -280,6 +313,15 @@ export const MentionList = forwardRef<any, MentionListProps>(
             </div>
           );
         })}
+        {serverLoading && (
+          <div className="px-3 py-2 flex items-center gap-2 text-[11px] text-sol-text-dim border-t border-sol-border/30">
+            <svg className="w-3 h-3 animate-spin" viewBox="0 0 24 24" fill="none">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v3a5 5 0 00-5 5H4z" />
+            </svg>
+            <span>Searching everything&hellip;</span>
+          </div>
+        )}
       </div>
     );
   }
