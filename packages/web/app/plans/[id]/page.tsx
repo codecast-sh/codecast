@@ -7,6 +7,7 @@ import { useMountEffect } from "../../../hooks/useMountEffect";
 import { useInboxStore } from "../../../store/inboxStore";
 import { shareOrigin, canonicalUrl } from "../../../lib/utils";
 import { AuthGuard } from "../../../components/AuthGuard";
+import { AppLoader } from "../../../components/AppLoader";
 import { DashboardLayout } from "../../../components/DashboardLayout";
 import { DocumentDetailLayout } from "../../../components/DocumentDetailLayout";
 import { SharePopover } from "../../../components/SharePopover";
@@ -135,9 +136,7 @@ export default function PlanDetailPage() {
     return (
       <AuthGuard>
         <DashboardLayout>
-          <div className="flex items-center justify-center h-64 text-sol-text-dim text-sm">
-            Loading...
-          </div>
+          <AppLoader className="min-h-[16rem] h-full" />
         </DashboardLayout>
       </AuthGuard>
     );

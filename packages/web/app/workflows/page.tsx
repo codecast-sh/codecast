@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useQuery, useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { AuthGuard } from "../../components/AuthGuard";
+import { AppLoader } from "../../components/AppLoader";
 import { DashboardLayout } from "../../components/DashboardLayout";
 import { ContextChatInput } from "../../components/ContextChatInput";
 import { WorkflowGraphView, type WFNode, type WFEdge } from "../../components/WorkflowGraphView";
@@ -475,11 +476,7 @@ function WorkflowsContent() {
   const currentNodeId = activeRun?.current_node_id;
 
   if (workflows === undefined) {
-    return (
-      <div className="flex items-center justify-center h-full text-sol-text-dim text-sm">
-        Loading...
-      </div>
-    );
+    return <AppLoader className="min-h-[16rem] h-full" />;
   }
 
   if (workflows.length === 0) {

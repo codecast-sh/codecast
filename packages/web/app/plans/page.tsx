@@ -10,6 +10,7 @@ import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useWorkspaceArgs } from "../../hooks/useWorkspaceArgs";
 import { useInboxStore } from "../../store/inboxStore";
 import { AuthGuard } from "../../components/AuthGuard";
+import { AppLoader } from "../../components/AppLoader";
 import { DashboardLayout } from "../../components/DashboardLayout";
 import { PlanDetailPanel } from "../../components/PlanDetailPanel";
 import { CreateDocModal } from "../../components/CreateDocModal";
@@ -293,9 +294,7 @@ export default function PlansPage() {
 
             <div className="flex-1 overflow-y-auto">
               {!activePlans ? (
-                <div className="flex items-center justify-center h-32 text-sol-text-dim">
-                  <span className="text-xs">Loading...</span>
-                </div>
+                <AppLoader className="min-h-[16rem] h-full" />
               ) : allPlans.length === 0 ? (
                 <div className="flex flex-col items-center justify-center h-32 text-sol-text-dim px-4">
                   <Target className="w-6 h-6 mb-2 opacity-30" />
@@ -424,9 +423,7 @@ function MobileList({
       </div>
       <div className="flex-1 overflow-y-auto">
         {loading ? (
-          <div className="flex items-center justify-center h-32 text-sol-text-dim">
-            <span className="text-sm">Loading...</span>
-          </div>
+          <AppLoader className="min-h-[16rem] h-full" />
         ) : empty ? (
           <div className="flex flex-col items-center justify-center h-32 text-sol-text-dim">
             <Target className="w-6 h-6 mb-2 opacity-30" />
