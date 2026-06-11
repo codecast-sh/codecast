@@ -177,6 +177,11 @@ export function useSyncMentionDocs() {
   }, [syncMentionIndex]));
 }
 
+// Returns the raw query result so callers can tell the three states apart:
+//   undefined → still loading
+//   null      → resolved, but no accessible doc for this id (e.g. a stale or
+//               cross-table id from a malformed /docs/<id> link)
+//   object    → the doc detail
 export function useSyncDocDetail(id?: string) {
   const data = useQuery(
     api.taskMining.webGetDocDetail,
@@ -185,6 +190,10 @@ export function useSyncDocDetail(id?: string) {
   const syncRecord = useInboxStore((s) => s.syncRecord);
 
   useConvexSync(data, useCallback((d: any) => {
-    if (id) syncRecord("docDetails", id, d as unknown as DocDetail);
+    // Don't write a null result into the store — it would clobber a doc that the
+    // list query may have already provided, and the null is surfaced via the return.
+    if (id && d) syncRecord("docDetails", id, d as unknown as DocDetail);
   }, [id, syncRecord]));
+
+  return data as DocDetail | null | undefined;
 }

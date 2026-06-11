@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useConvex } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../store/inboxStore";
+import { collectionRowValidator } from "../store/clientSyncRegistry";
 import { useConvexSync } from "./useConvexSync";
 import { useWatchEffect } from "./useWatchEffect";
 import { runReconcileCrawl, syncMetaKey } from "./reconcileCrawl";
@@ -201,7 +202,10 @@ export function useSyncTaskDetail(id?: string) {
   const syncRecord = useInboxStore((s) => s.syncRecord);
 
   useConvexSync(data, useCallback((d: any) => {
-    if (id && d) syncRecord("tasks", id, d);
+    // Only persist genuine tasks. The detail route can be loaded with a foreign
+    // id (/tasks/<conversationId>); storing whatever comes back plants a phantom
+    // task in the never-pruned cache (see validRow in clientSyncRegistry).
+    if (id && d && collectionRowValidator("tasks")!(d)) syncRecord("tasks", id, d);
   }, [id, syncRecord]));
 
   return data;

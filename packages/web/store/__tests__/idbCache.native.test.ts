@@ -87,6 +87,28 @@ describe("idbCache.native", () => {
     expect(await loadCache()).toBeNull();
   });
 
+  it("drops conversation-as-task poison rows at hydration", async () => {
+    // Legacy bug: a conversation stored under tasks by the table-blind
+    // webGetTaskDetail. It must not hydrate into the store (it renders as a
+    // phantom task that 404s when opened) and must not re-enter the shadow.
+    const real = { _id: "mh7real", short_id: "ct-100", title: "Real task" };
+    const poison = { _id: "jx7conv", short_id: "jx7conv", title: "Some session", message_count: 744 };
+    kv.set("col:tasks", JSON.stringify([real, poison]));
+
+    const cached = await loadCache();
+    expect(cached!.tasks).toEqual({ mh7real: real });
+
+    // The healed shadow means the next write rewrites the blob without the
+    // poison row — disk heals too.
+    writePatchesToIDB(
+      [{ op: "replace", path: ["tasks", "mh7real"], value: {} } as any],
+      { tasks: { mh7real: { ...real, title: "Renamed" } } },
+    );
+    await Promise.resolve();
+    const onDisk = JSON.parse(kv.get("col:tasks")!) as any[];
+    expect(onDisk.map((r) => r._id)).toEqual(["mh7real"]);
+  });
+
   it("skips the rewrite when a sync changed nothing", async () => {
     const a = { _id: "a", title: "Alpha" };
     const state = { sessions: { a } };

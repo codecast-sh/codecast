@@ -37,6 +37,19 @@ const SEGMENT_TYPE: Record<string, EntityType> = {
 };
 
 /**
+ * Build the in-app route for an entity, or null when the type isn't one we know.
+ * Callers MUST treat null as "not navigable" rather than defaulting to /tasks/ —
+ * a session id sent to /tasks/<id> renders the conversation as a fake task
+ * (db.get is table-blind). `type` accepts both canonical types and url-segment
+ * aliases (e.g. "conversation" -> session).
+ */
+export function entityRoute(type: string, id: string): string | null {
+  const norm = SEGMENT_TYPE[type] ?? (type as EntityType);
+  const prefix = ENTITY_ROUTE[norm];
+  return prefix ? `${prefix}/${id}` : null;
+}
+
+/**
  * True for hosts we treat as "ours" — production, the dev origins, and
  * localhost. Only links on these hosts (or path-only links) are eligible to
  * become pills; everything else stays an ordinary external link.

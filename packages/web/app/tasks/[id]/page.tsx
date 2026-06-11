@@ -8,6 +8,7 @@ import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, TaskDetail, TaskItem, resolveAssigneeInfo } from "../../../store/inboxStore";
 import { useSyncTasks, useSyncTaskDetail } from "../../../hooks/useSyncTasks";
 import { DetailSplitLayout } from "../../../components/DetailSplitLayout";
+import { AppLoader } from "../../../components/AppLoader";
 import { TaskListContent } from "../page";
 import { useMentionQuery } from "../../../hooks/useMentionQuery";
 import { useImageUpload } from "../../../hooks/useImageUpload";
@@ -393,10 +394,11 @@ export default function TaskDetailPage() {
   );
 }
 
-function TaskDetailContent() {
+export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }: { taskId?: string; variant?: "page" | "inline"; onClose?: () => void; onOpen?: () => void } = {}) {
   const params = useParams();
   const router = useRouter();
-  const id = params.id as string;
+  const id = taskId ?? (params?.id as string);
+  const isInline = variant === "inline";
 
   const directData = useSyncTaskDetail(id);
   useSyncTasks();
@@ -404,6 +406,15 @@ function TaskDetailContent() {
   const allTasks = useInboxStore((s) => s.tasks);
   const data = (allTasks[id] || Object.values(allTasks).find((t: any) => t.short_id === id) || directData) as TaskDetail | undefined;
   const taskTeamId = data?.team_id as string | undefined;
+  // The id may be a conversation's (legacy phantom-task cache rows, malformed
+  // /tasks/<conversationId> links). When the server says "not a task" and the
+  // id is a session we know, land in the conversation instead of a dead-end.
+  const sessionForBadId = useInboxStore((s) => (directData === null ? s.sessions[id] : undefined));
+  useWatchEffect(() => {
+    if (!isInline && directData === null && sessionForBadId) {
+      router.replace(`/conversation/${id}`);
+    }
+  }, [isInline, directData, sessionForBadId, id, router]);
   const handleMentionQuery = useMentionQuery();
   const handleImageUpload = useImageUpload();
   const updateTask = useInboxStore((s) => s.updateTask);
@@ -554,7 +565,32 @@ function TaskDetailContent() {
   }, [paletteOpen, shortcutsPanelOpen, data, openCmd, startEditTitle, router]);
 
   if (!data) {
-    return <div className="flex items-center justify-center h-64 text-sol-text-dim text-sm">Loading...</div>;
+    // directData === null: webGetTaskDetail resolved but the id is not a task
+    // (e.g. a /tasks/<conversationId> link). undefined: query still in flight.
+    if (directData === null) {
+      // Full page redirects to the conversation (effect above); render the
+      // loader during the swap. Inline keeps the list visible and offers a link.
+      if (sessionForBadId && !isInline) {
+        return <AppLoader className="min-h-[16rem] h-full" />;
+      }
+      return (
+        <div className={`flex flex-col items-center justify-center h-full gap-3 text-center px-6 ${isInline ? "w-[480px] flex-shrink-0 border-l border-sol-border/30 bg-sol-bg" : ""}`}>
+          <div className="text-sol-text-muted text-sm">This task doesn&apos;t exist.</div>
+          <div className="text-sol-text-dim text-xs font-mono break-all">{id}</div>
+          {sessionForBadId && (
+            <Link href={`/conversation/${id}`} className="text-xs text-sol-cyan hover:underline">
+              It&apos;s a session — open it →
+            </Link>
+          )}
+          {isInline && onClose ? (
+            <button onClick={onClose} className="text-xs text-sol-cyan hover:underline">← Close</button>
+          ) : (
+            <Link href="/tasks" className="text-xs text-sol-cyan hover:underline">← Back to tasks</Link>
+          )}
+        </div>
+      );
+    }
+    return <AppLoader className={isInline ? "w-[480px] flex-shrink-0 border-l border-sol-border/30 min-h-[16rem] h-full" : "min-h-[16rem] h-full"} />;
   }
 
   const status = STATUS_MAP[data.status] || STATUS_MAP.open;
@@ -562,7 +598,7 @@ function TaskDetailContent() {
 
   return (
         <div
-          className="flex-1 h-full flex flex-col relative min-w-0"
+          className={isInline ? "w-[480px] flex-shrink-0 h-full flex flex-col relative min-w-0 border-l border-sol-border/30 bg-sol-bg" : "flex-1 h-full flex flex-col relative min-w-0"}
           onDragEnter={(e) => { e.preventDefault(); dragCounterRef.current++; setIsDragging(true); }}
           onDragOver={(e) => { e.preventDefault(); }}
           onDragLeave={(e) => { e.preventDefault(); dragCounterRef.current--; if (dragCounterRef.current <= 0) { dragCounterRef.current = 0; setIsDragging(false); } }}
@@ -575,15 +611,32 @@ function TaskDetailContent() {
         )}
         <div className="flex-1 overflow-y-auto">
         <div className="flex flex-col min-h-full">
-        <div className="flex-1 max-w-4xl mx-auto px-6 py-6 w-full">
-          <div className="flex items-center justify-between mb-5">
-            <Link
-              href="/tasks"
-              className="inline-flex items-center gap-1.5 text-xs text-sol-text-dim hover:text-sol-cyan transition-colors"
-            >
-              Tasks
-            </Link>
-            <div className="flex items-center gap-1">
+        <div className={isInline ? "flex-1 px-4 py-4 w-full" : "flex-1 max-w-4xl mx-auto px-6 py-6 w-full"}>
+          {/* Card header: id + badges + watch, with actions */}
+          <div className="flex items-center justify-between mb-3 gap-2">
+            <div className="flex items-center gap-2 min-w-0 text-xs text-sol-text-dim">
+              <button
+                onClick={() => { copyToClipboard(data.short_id); toast.success("Task ID copied"); }}
+                className="font-mono px-1.5 py-0.5 rounded bg-sol-bg-alt border border-sol-border/30 hover:border-sol-cyan/40 hover:text-sol-cyan transition-colors cursor-copy"
+                title="Click to copy ID"
+              >
+                {data.short_id}
+              </button>
+              {teamInfo && (
+                <span className="px-1.5 py-0.5 rounded bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20 text-[10px]">{teamInfo.name}</span>
+              )}
+              {!taskTeamId && (
+                <span className="px-1.5 py-0.5 rounded bg-sol-text-dim/10 text-sol-text-dim border border-sol-text-dim/20 text-[10px]">Personal</span>
+              )}
+              {data.source === "insight" && (
+                <span className="px-1.5 py-0.5 rounded bg-sol-violet/10 text-sol-violet border border-sol-violet/20 text-[10px]">mined</span>
+              )}
+              <WatchButton entityType="task" entityId={data._id} />
+            </div>
+            <div className="flex items-center gap-1 flex-shrink-0">
+              {isInline && onOpen && (
+                <button onClick={onOpen} className="text-xs px-2 py-1 rounded-md text-sol-text-dim hover:text-sol-cyan hover:bg-sol-bg-alt transition-colors" title="Open full page">Open</button>
+              )}
               <button
                 onClick={() => { copyToClipboard(canonicalUrl()).then(() => toast.success("Link copied")).catch(() => toast.error("Failed to copy")); }}
                 className="p-1 rounded-md text-sol-text-dim hover:text-sol-cyan hover:bg-sol-bg-alt transition-colors"
@@ -594,7 +647,7 @@ function TaskDetailContent() {
                 </svg>
               </button>
               <button
-                onClick={() => router.push("/tasks")}
+                onClick={() => { if (isInline && onClose) onClose(); else router.push("/tasks"); }}
                 className="p-1 rounded-md text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt transition-colors"
                 title="Close (Esc)"
               >
@@ -603,38 +656,10 @@ function TaskDetailContent() {
             </div>
           </div>
 
-          {/* Title row */}
-          <div className="flex items-start gap-3 mb-4">
-            <StatusIcon className={`w-5 h-5 mt-2 flex-shrink-0 ${status.color}`} />
+          {/* Title */}
+          <div className="flex items-start gap-2.5 mb-3">
+            <StatusIcon className={`w-5 h-5 mt-0.5 flex-shrink-0 ${status.color}`} />
             <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2 text-xs text-sol-text-dim mb-1.5">
-                <button
-                  onClick={() => {
-                    copyToClipboard(data.short_id);
-                    toast.success("Task ID copied");
-                  }}
-                  className="font-mono px-1.5 py-0.5 rounded bg-sol-bg-alt border border-sol-border/30 hover:border-sol-cyan/40 hover:text-sol-cyan transition-colors cursor-copy"
-                  title="Click to copy ID"
-                >
-                  {data.short_id}
-                </button>
-                {teamInfo && (
-                  <span className="px-1.5 py-0.5 rounded bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20 text-[10px]">
-                    {teamInfo.name}
-                  </span>
-                )}
-                {!taskTeamId && (
-                  <span className="px-1.5 py-0.5 rounded bg-sol-text-dim/10 text-sol-text-dim border border-sol-text-dim/20 text-[10px]">
-                    Personal
-                  </span>
-                )}
-                {data.source === "insight" && (
-                  <span className="px-1.5 py-0.5 rounded bg-sol-violet/10 text-sol-violet border border-sol-violet/20 text-[10px]">
-                    mined
-                  </span>
-                )}
-                <WatchButton entityType="task" entityId={data._id} />
-              </div>
               {editingTitle ? (
                 <input
                   ref={titleRef}
@@ -659,38 +684,27 @@ function TaskDetailContent() {
             </div>
           </div>
 
-          {/* Properties grid */}
-          <div className="mb-6 rounded-lg border border-sol-border/20 bg-sol-bg-alt/10 overflow-hidden">
-            {/* Status */}
-            <div className="grid grid-cols-[7rem_1fr] items-center px-4 py-1.5 hover:bg-sol-bg-alt/30 transition-colors">
-              <span className="text-xs text-sol-text-dim">Status</span>
-              <Dropdown value={data.status} options={STATUS_OPTIONS} onChange={(v) => handleUpdate({ status: v })} shortcutHint="s to cycle" />
-            </div>
+          {/* Primary properties — inline, editable (the card look) */}
+          <div className="flex items-center gap-1 flex-wrap mb-4 -ml-1">
+            <Dropdown value={data.status} options={STATUS_OPTIONS} onChange={(v) => handleUpdate({ status: v })} shortcutHint="s to cycle" />
+            <Dropdown value={data.priority} options={PRIORITY_OPTIONS} onChange={(v) => handleUpdate({ priority: v })} shortcutHint="p to cycle" />
+            <button
+              onClick={() => openCmd("assign")}
+              className="flex items-center gap-1.5 px-2 py-1 rounded-md text-xs hover:bg-sol-bg-alt transition-colors text-left"
+            >
+              {assigneeInfo ? (
+                <>
+                  <Avatar name={assigneeInfo.name} image={assigneeInfo.image} />
+                  <span className="text-sol-text-muted">{assigneeInfo.name}</span>
+                </>
+              ) : (
+                <span className="text-sol-text-dim">Unassigned</span>
+              )}
+            </button>
+          </div>
 
-            {/* Priority */}
-            <div className="grid grid-cols-[7rem_1fr] items-center px-4 py-1.5 hover:bg-sol-bg-alt/30 transition-colors">
-              <span className="text-xs text-sol-text-dim">Priority</span>
-              <Dropdown value={data.priority} options={PRIORITY_OPTIONS} onChange={(v) => handleUpdate({ priority: v })} shortcutHint="p to cycle" />
-            </div>
-
-            {/* Assignee */}
-            <div className="grid grid-cols-[7rem_1fr] items-center px-4 py-1.5 hover:bg-sol-bg-alt/30 transition-colors">
-              <span className="text-xs text-sol-text-dim">Assignee</span>
-              <button
-                onClick={() => openCmd("assign")}
-                className="flex items-center gap-1.5 px-2 py-1 rounded-md text-xs hover:bg-sol-bg-alt transition-colors text-left"
-              >
-                {assigneeInfo ? (
-                  <>
-                    <Avatar name={assigneeInfo.name} image={assigneeInfo.image} />
-                    <span className="text-sol-text-muted">{assigneeInfo.name}</span>
-                  </>
-                ) : (
-                  <span className="text-sol-text-dim">Unassigned</span>
-                )}
-              </button>
-            </div>
-
+          {/* Secondary properties */}
+          <div className="mb-6 rounded-lg border border-sol-border/15 overflow-hidden">
             {/* Created */}
             <div className="grid grid-cols-[7rem_1fr] items-center px-4 py-1.5 hover:bg-sol-bg-alt/30 transition-colors">
               <span className="text-xs text-sol-text-dim">Created</span>
@@ -989,7 +1003,7 @@ function TaskDetailContent() {
           </div>
 
         </div>
-        {data.linked_conversations && data.linked_conversations.length > 0 && (
+        {!isInline && data.linked_conversations && data.linked_conversations.length > 0 && (
           <div className="max-w-4xl mx-auto px-6 pb-4 w-full">
             <h2 className="text-xs font-medium text-sol-text-dim uppercase tracking-wide mb-2 flex items-center gap-1.5">
               <Radio className="w-3.5 h-3.5" />
@@ -1039,13 +1053,15 @@ function TaskDetailContent() {
             </div>
           </div>
         )}
-        <ContextChatInput
-          contextType="task"
-          contextTitle={data.title}
-          getContextBody={getTaskContextBody}
-          linkedObjectId={data._id}
-          projectPath={data.project_path}
-        />
+        {!isInline && (
+          <ContextChatInput
+            contextType="task"
+            contextTitle={data.title}
+            getContextBody={getTaskContextBody}
+            linkedObjectId={data._id}
+            projectPath={data.project_path}
+          />
+        )}
         </div>
         </div>
 

@@ -12,6 +12,13 @@ export type ClientSyncRegistryEntry = {
     kind: DispatchTableKind;
   };
   dispatchFieldTable?: string;
+  // Per-row validity for a persisted collection. Rows failing this are dropped
+  // (and removed from disk) at cache hydration and refused by detail-record
+  // writes. Guards against foreign documents persisted under the wrong
+  // collection — e.g. a conversation once stored as a task by a table-blind
+  // webGetTaskDetail lingers in the never-pruned cache forever as a phantom
+  // task that 404s when opened.
+  validRow?: (row: any) => boolean;
 };
 
 export const CLIENT_SYNC_REGISTRY = {
@@ -27,6 +34,10 @@ export const CLIENT_SYNC_REGISTRY = {
   tasks: {
     persistence: { kind: "collection", key: "tasks" },
     localFirst: true,
+    // Real tasks always carry a ct- short_id (required by schema, asserted by
+    // webGetTaskDetail's lookup guard). Conversations masquerading as tasks
+    // carry a session short id (jx…) or none.
+    validRow: (row: any) => typeof row?.short_id === "string" && row.short_id.startsWith("ct-"),
   },
   docs: {
     persistence: { kind: "collection", key: "docs" },
@@ -174,4 +185,9 @@ export function isPersistedClientStoreKey(key: string): boolean {
 export function isProtectedSyncCollection(key: string): boolean {
   const entry = CLIENT_SYNC_REGISTRY[key as ClientSyncStoreKey] as ClientSyncRegistryEntry | undefined;
   return !!entry?.localFirst;
+}
+
+export function collectionRowValidator(key: string): ((row: any) => boolean) | undefined {
+  const entry = CLIENT_SYNC_REGISTRY[key as ClientSyncStoreKey] as ClientSyncRegistryEntry | undefined;
+  return entry?.validRow;
 }

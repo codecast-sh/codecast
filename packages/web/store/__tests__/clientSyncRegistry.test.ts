@@ -5,6 +5,7 @@ import {
   DISPATCH_FIELD_TABLE_MAP,
   DISPATCH_TABLE_MAP,
   META_STORE_KEYS,
+  collectionRowValidator,
   isPersistedClientStoreKey,
   isProtectedSyncCollection,
 } from "../clientSyncRegistry";
@@ -49,5 +50,18 @@ describe("client sync registry", () => {
     expect(DISPATCH_TABLE_MAP.clientState).toEqual({ table: "client_state", kind: "singleton" });
     expect(DISPATCH_FIELD_TABLE_MAP.tabs).toEqual({ table: "client_state" });
     expect(DISPATCH_FIELD_TABLE_MAP.activeTabId).toEqual({ table: "client_state" });
+  });
+
+  it("rejects foreign documents persisted under tasks (conversation-as-task poisoning)", () => {
+    const validTask = collectionRowValidator("tasks")!;
+    expect(validTask({ _id: "mh7abc", short_id: "ct-123", title: "Real task" })).toBe(true);
+    // A conversation once stored by the table-blind webGetTaskDetail: session
+    // short id, message_count, agent_type — not a task.
+    expect(validTask({ _id: "jx781mx…", short_id: "jx781mx", title: "Budget distribution code", message_count: 744 })).toBe(false);
+    expect(validTask({ _id: "jx74rqa…", title: "Session bucketing system" })).toBe(false);
+    expect(validTask({})).toBe(false);
+    // Collections without an invariant accept anything (no validator).
+    expect(collectionRowValidator("sessions")).toBeUndefined();
+    expect(collectionRowValidator("docs")).toBeUndefined();
   });
 });

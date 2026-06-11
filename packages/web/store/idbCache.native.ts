@@ -18,6 +18,7 @@ import type { Patch } from "mutative";
 import {
   COLLECTION_STORE_KEYS,
   META_STORE_KEYS,
+  collectionRowValidator,
   isPersistedClientStoreKey,
 } from "./clientSyncRegistry";
 import { diffCollection } from "./idbCollectionDiff";
@@ -140,11 +141,20 @@ export async function loadCache(): Promise<Record<string, any> | null> {
       // Seed the persistence shadow with what's on disk so the first write after
       // hydrate diffs against reality (see idbCache.ts).
       const shadow = new Map<string, any>();
+      const validRow = collectionRowValidator(key);
       if (rows.length > 0) {
         const map: Record<string, any> = {};
-        for (const row of rows) { map[row._id] = row; shadow.set(row._id, row); }
-        result[key] = map;
-        hasData = true;
+        for (const row of rows) {
+          // Foreign documents persisted under the wrong collection (see validRow
+          // in the registry) never enter the store or the shadow; the next blob
+          // rewrite drops them from disk.
+          if (validRow && !validRow(row)) continue;
+          map[row._id] = row; shadow.set(row._id, row);
+        }
+        if (Object.keys(map).length > 0) {
+          result[key] = map;
+          hasData = true;
+        }
       }
       lastPersisted.set(key, shadow);
     }
