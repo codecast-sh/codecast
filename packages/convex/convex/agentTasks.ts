@@ -57,6 +57,7 @@ interface NewTaskArgs {
   target_conversation_id?: string;
   project_path?: string;
   agent_type?: string;
+  created_device_id?: string;
   schedule_type: "once" | "recurring" | "event";
   run_at?: number;
   interval_ms?: number;
@@ -90,6 +91,7 @@ async function insertTask(ctx: TaskCtx, userId: Id<"users">, args: NewTaskArgs) 
       : undefined,
     project_path: args.project_path,
     agent_type: args.agent_type || "claude",
+    created_device_id: args.created_device_id,
     schedule_type: args.schedule_type,
     run_at,
     interval_ms: args.interval_ms,
@@ -139,6 +141,7 @@ export const createTask = mutation({
     target_conversation_id: v.optional(v.string()),
     project_path: v.optional(v.string()),
     agent_type: v.optional(v.string()),
+    created_device_id: v.optional(v.string()),
     schedule_type: v.union(v.literal("once"), v.literal("recurring"), v.literal("event")),
     run_at: v.optional(v.number()),
     interval_ms: v.optional(v.number()),
