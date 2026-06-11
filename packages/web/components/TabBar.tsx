@@ -23,7 +23,7 @@ export function pathLabel(path: string): string {
     "/inbox": "Inbox",
     "/feed": "Feed",
     "/settings": "Settings",
-    "/dashboard": "Dashboard",
+    "/team/activity": "Activity",
   };
   return segments[path] || path.split("/").pop() || "Tab";
 }

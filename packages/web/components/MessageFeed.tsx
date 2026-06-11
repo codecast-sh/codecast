@@ -309,7 +309,7 @@ export function MessageFeed({ filter }: MessageFeedProps) {
       <EmptyState
         title="No messages yet"
         description="Your conversation messages will appear here as they happen."
-        action={{ label: "View Dashboard", href: "/dashboard" }}
+        action={{ label: "View Dashboard", href: "/team/activity" }}
       />
     );
   }

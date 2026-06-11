@@ -172,7 +172,7 @@ export function ConversationDiffLayout({
   const conversationViewProps = {
     ref: conversationRef,
     conversation,
-    backHref: backHrefProp || "/dashboard",
+    backHref: backHrefProp || "/team/activity",
     headerExtra: combinedHeaderExtra,
     headerLeft,
     headerEnd,

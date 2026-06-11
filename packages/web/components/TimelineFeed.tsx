@@ -475,7 +475,7 @@ export function TimelineFeed({ filter, dateRange }: TimelineFeedProps) {
         description="Your sessions and commits will appear here as they happen."
         action={{
           label: "View Dashboard",
-          href: "/dashboard",
+          href: "/team/activity",
         }}
       />
     );

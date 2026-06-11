@@ -67,16 +67,16 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
       // Toggle off if already selected
       const params = new URLSearchParams(searchParams.toString());
       params.delete("member");
-      router.push(`/dashboard?${params.toString()}`);
+      router.push(`/team/activity?${params.toString()}`);
     } else {
-      router.push(`/dashboard?filter=team&member=${memberId}`);
+      router.push(`/team/activity?filter=team&member=${memberId}`);
     }
   };
 
   const handleClearFilter = () => {
     const params = new URLSearchParams(searchParams.toString());
     params.delete("member");
-    router.push(`/dashboard?${params.toString()}`);
+    router.push(`/team/activity?${params.toString()}`);
   };
 
   const selectedMember = memberFilter ? sortedMembers.find(m => m._id === memberFilter) : null;
@@ -146,7 +146,7 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
       })}
       {teamMembers.length > 6 && (
         <button
-          onClick={() => router.push("/dashboard?filter=team")}
+          onClick={() => router.push("/team/activity?filter=team")}
           className="w-8 h-8 rounded-full bg-sol-base02 border-2 border-sol-border/50 flex items-center justify-center text-xs text-sol-text-muted hover:border-sol-border transition-colors"
           title={`${teamMembers.length - 6} more team members`}
         >

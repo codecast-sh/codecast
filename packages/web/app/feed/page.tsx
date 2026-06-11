@@ -8,10 +8,7 @@ export default function FeedPage() {
 
   return (
     <AuthGuard>
-      <DashboardLayout
-        filter={filter}
-        onFilterChange={setFilter}
-      >
+      <DashboardLayout>
         <div className="space-y-4">
           <div className="flex items-center justify-between">
             <h1 className="text-2xl font-bold text-sol-text">Message Feed</h1>
