@@ -12,7 +12,7 @@ import { resetConversationPendingMessages } from "./pendingMessages";
 import { advanceForkCopy, type ForkCopyCtx } from "./forkCopy";
 import { hasRecentPendingDaemonCommand } from "./daemonCommandUtils";
 import { shouldShowInInbox, isSessionIdle, deriveSessionActivity, classifyWorkState, normalizeWorkStateFilter, trustedAgentStatus, type WorkState } from "./inboxFilters";
-import { filterUserMessages } from "./userMessagesFilter";
+import { filterUserMessages, isImportNotice } from "./userMessagesFilter";
 import {
   isTeamMember,
   canTeamMemberAccess,
@@ -22,6 +22,7 @@ import {
   resolveTeamForPath,
   resolveVisibilityMode,
   buildShareUpdate,
+  buildPathRestampUpdate,
 } from "./privacy";
 import { batchScanConversations, paginateTeamFeed } from "./feedPagination";
 import {
@@ -2013,6 +2014,7 @@ export const listConversations = query({
             git_branch: c.git_branch || null,
             git_remote_url: c.git_remote_url || null,
             is_favorite: c.is_favorite || false,
+            profile_pinned_at: c.profile_pinned_at,
             fork_count: c.fork_count || 0,
             forked_from: c.forked_from || null,
             is_private: c.is_private,
@@ -2073,7 +2075,9 @@ export const listConversations = query({
           }
           if (msg.role === "user") {
             const text = msg.content?.trim();
-            if (text) {
+            // isImportNotice: context-only import banner must not become the
+            // preview / first_user_message / fallback title.
+            if (text && !isImportNotice(text)) {
               const truncated = text.length > 120 ? text.slice(0, 120) + "..." : text;
               messageAlternates.push({ role: "user", content: truncated });
             }
@@ -2154,6 +2158,7 @@ export const listConversations = query({
           git_branch: c.git_branch || null,
           git_remote_url: c.git_remote_url || null,
           is_favorite: c.is_favorite || false,
+          profile_pinned_at: c.profile_pinned_at,
           fork_count: c.fork_count || 0,
           forked_from: c.forked_from || null,
           is_private: c.is_private,
@@ -2216,6 +2221,47 @@ export const generateShareLink = mutation({
       share_token: shareToken,
     });
     return shareToken;
+  },
+});
+
+// Pin a session to the owner's PUBLIC profile. This is the consent act that
+// makes a session world-visible, so it also guarantees a share_token — the
+// profile card and the /share guest viewer both key off that token. Pinning a
+// session that was private/team-only does NOT change is_private; it grants
+// anonymous read of *this one session* via its share link, nothing more.
+export const pinToProfile = mutation({
+  args: { conversation_id: v.id("conversations") },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthUserId(ctx);
+    if (!authUserId) throw new Error("Unauthorized: must be logged in");
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation) throw new Error("Conversation not found");
+    if (conversation.user_id.toString() !== authUserId.toString())
+      throw new Error("Unauthorized: can only pin your own conversations");
+
+    const patch: { profile_pinned_at: number; share_token?: string } = {
+      profile_pinned_at: Date.now(),
+    };
+    if (!conversation.share_token) patch.share_token = generateShareToken();
+    await ctx.db.patch(args.conversation_id, patch);
+    return { pinned: true, share_token: conversation.share_token ?? patch.share_token };
+  },
+});
+
+// Remove a session from the public profile. Leaves the share_token intact — the
+// owner may have circulated that link elsewhere; un-pinning only delists it from
+// the profile (profilePublicSessionVisible then drops it).
+export const unpinFromProfile = mutation({
+  args: { conversation_id: v.id("conversations") },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthUserId(ctx);
+    if (!authUserId) throw new Error("Unauthorized: must be logged in");
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation) throw new Error("Conversation not found");
+    if (conversation.user_id.toString() !== authUserId.toString())
+      throw new Error("Unauthorized: can only unpin your own conversations");
+    await ctx.db.patch(args.conversation_id, { profile_pinned_at: undefined });
+    return { pinned: false };
   },
 });
 
@@ -2512,6 +2558,9 @@ export const searchConversations = query({
     limit: v.optional(v.number()),
     userOnly: v.optional(v.boolean()),
     activeTeamId: v.optional(v.id("teams")),
+    mineOnly: v.optional(v.boolean()),
+    since: v.optional(v.number()),
+    sort: v.optional(v.union(v.literal("recent"), v.literal("relevance"))),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -2529,7 +2578,12 @@ export const searchConversations = query({
       .collect();
     const userTeamIds = userMemberships.map(m => m.team_id);
 
-    const effectiveTeamIds = args.activeTeamId ? [args.activeTeamId] : userTeamIds;
+    // mineOnly never surfaces teammates' sessions, so skip the team roster +
+    // feed-filter loads entirely — the visibility filter below then only
+    // passes own conversations.
+    const effectiveTeamIds = args.mineOnly
+      ? []
+      : args.activeTeamId ? [args.activeTeamId] : userTeamIds;
 
     type UserDoc = NonNullable<Awaited<ReturnType<typeof ctx.db.get<"users">>>>;
     const allTeamUsers: UserDoc[] = [];
@@ -2621,6 +2675,8 @@ export const searchConversations = query({
       messageCount: number;
       proximityScore: number;
       titleMatch: boolean;
+      projectPath: string | null;
+      agentType: string | null;
     }> = [];
 
     // Hydrate conversation docs for message matches in parallel (was a serial
@@ -2654,12 +2710,28 @@ export const searchConversations = query({
       return true;
     });
 
-    // Recency order, then keep only the page we'll return. Totals reflect the full
-    // visible set, not just the slice.
-    visible.sort((a, b) => b.conv.updated_at - a.conv.updated_at);
-    const totalMatches = visible.reduce((sum, c) => sum + c.messages.length, 0);
-    const totalSessions = visible.length;
-    const top = visible.slice(0, limit);
+    // Time-range filter applies before totals so the counts reflect what's
+    // actually browsable under the current filters.
+    const scoped = args.since
+      ? visible.filter((c) => c.conv.updated_at >= args.since!)
+      : visible;
+
+    // Score once up front — the relevance sort and the per-result payload share it.
+    const scored = scoped.map((c) => ({
+      ...c,
+      proximityScore: calculateProximityScore(c.messages, terms),
+    }));
+    if (args.sort === "relevance") {
+      scored.sort((a, b) =>
+        b.proximityScore - a.proximityScore ||
+        b.messages.length - a.messages.length ||
+        b.conv.updated_at - a.conv.updated_at);
+    } else {
+      scored.sort((a, b) => b.conv.updated_at - a.conv.updated_at);
+    }
+    const totalMatches = scored.reduce((sum, c) => sum + c.messages.length, 0);
+    const totalSessions = scored.length;
+    const top = scored.slice(0, limit);
 
     // First-message fetch only feeds a title fallback, so it's only needed for the
     // title-less conversations that actually made the displayed slice — fetch those
@@ -2688,7 +2760,7 @@ export const searchConversations = query({
       })
     );
 
-    for (const { conv, messages } of top) {
+    for (const { conv, messages, proximityScore } of top) {
       const isOwn = conv.user_id.toString() === userId.toString();
       const conversationUser = userById.get(conv.user_id.toString());
       const firstUserMessage = firstMsgByConv.get(conv._id.toString()) || "";
@@ -2697,8 +2769,6 @@ export const searchConversations = query({
         || firstUserMessage
         || (conv.slug ? formatSlugAsTitle(conv.slug) : null)
         || "New Session";
-
-      const proximityScore = calculateProximityScore(messages, terms);
 
       results.push({
         conversationId: conv._id,
@@ -2733,6 +2803,8 @@ export const searchConversations = query({
         messageCount: conv.message_count || 0,
         proximityScore,
         titleMatch: messages.length === 0,
+        projectPath: conv.project_path || null,
+        agentType: conv.agent_type || null,
       });
     }
 
@@ -3912,10 +3984,25 @@ export const updateProjectPath = mutation({
       return { updated: false };
     }
 
-    const patch: Record<string, string> = { project_path: args.project_path };
+    const patch: Record<string, any> = { project_path: args.project_path };
     if (args.git_root) {
       patch.git_root = args.git_root;
     }
+
+    // The path is being stamped after creation (pre-warmed/stub conversations
+    // are born pathless → private+teamless), so re-resolve team/privacy the
+    // way creation would have. Explicit user choices win inside the helper.
+    const mappings = await ctx.db
+      .query("directory_team_mappings")
+      .withIndex("by_user_id", (q) => q.eq("user_id", authUserId))
+      .collect();
+    const restamp = buildPathRestampUpdate(
+      conversation,
+      mappings,
+      args.git_root || args.project_path
+    );
+    if (restamp) Object.assign(patch, restamp);
+
     await ctx.db.patch(conversation._id, patch);
 
     return { updated: true, id: conversation._id };
@@ -5451,6 +5538,18 @@ export const getTeamUnreadCount = query({
   },
 });
 
+// Admin repair primitive: server-side patches that don't bump updated_at are
+// invisible to connected clients holding a cached row (the live inbox window
+// and the reconcile crawl are both updated_at-keyed). Touching re-enters the
+// row into both channels so the change propagates.
+export const touchConversation = internalMutation({
+  args: { conversation_id: v.id("conversations") },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.conversation_id, { updated_at: Date.now() });
+    return { touched: args.conversation_id };
+  },
+});
+
 export const markTeamConversationsSeen = mutation({
   args: {},
   handler: async (ctx) => {
@@ -5476,47 +5575,42 @@ export const backfillConversationTeamIds = internalMutation({
     const limit = args.limit ?? 500;
     let updated = 0;
 
-    const users = args.userId
-      ? [await ctx.db.get(args.userId)].filter(Boolean)
-      : await ctx.db.query("users").take(100);
+    // Only the id is needed (mappings index). Reading the full user doc made
+    // long scans OCC-fail: users rows are hot (scheduled jobs patch them), so
+    // any mutation slow enough to overlap a heartbeat could never commit.
+    const userIds = args.userId
+      ? [args.userId]
+      : (await ctx.db.query("users").take(100)).map((u) => u._id);
 
-    for (const user of users) {
-      if (!user) continue;
-
+    for (const userId of userIds) {
       const mappings = await ctx.db
         .query("directory_team_mappings")
-        .withIndex("by_user_id", (q) => q.eq("user_id", user._id))
+        .withIndex("by_user_id", (q) => q.eq("user_id", userId))
         .collect();
 
       if (mappings.length === 0) continue;
 
+      // Newest first: born-blank strays come from the (recent) pre-warm/stub
+      // flows, so a bounded repair should reach them before old history.
       const conversations = await ctx.db
         .query("conversations")
-        .withIndex("by_user_id", (q) => q.eq("user_id", user._id))
+        .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+        .order("desc")
         .take(limit);
 
       for (const conv of conversations) {
-        const projectPath = conv.git_root || conv.project_path;
-        if (!projectPath) continue;
-
-        const { teamId, isPrivate, autoShared } = resolveTeamForPath(
+        // Same guarded semantics as the live restamp paths: positive mapping
+        // matches only, explicit user choices (locked private / manual share)
+        // untouched. The old inline version cleared team_id on unmatched paths
+        // (breaking "shared must have a team") and could re-share a conv the
+        // user had locked private.
+        const patch = buildPathRestampUpdate(
+          conv,
           mappings,
-          projectPath,
-          (user as any).active_team_id || (user as any).team_id
+          conv.git_root || conv.project_path
         );
-
-        const patches: Record<string, any> = {};
-        if (teamId && conv.team_id?.toString() !== teamId.toString()) {
-          patches.team_id = teamId;
-        } else if (!teamId && conv.team_id) {
-          patches.team_id = undefined;
-        }
-        if (autoShared && conv.is_private !== false) {
-          patches.is_private = false;
-          patches.auto_shared = true;
-        }
-        if (Object.keys(patches).length > 0) {
-          await ctx.db.patch(conv._id, patches);
+        if (patch) {
+          await ctx.db.patch(conv._id, patch);
           updated++;
         }
       }
@@ -6181,6 +6275,7 @@ async function enrichInboxSessionRow(
     git_root: conv.git_root,
     git_branch: conv.git_branch,
     agent_type: conv.agent_type,
+    model: conv.model ?? null,
     message_count: conv.message_count,
     idle_summary: conv.idle_summary,
     is_idle: isIdle,
@@ -6252,6 +6347,7 @@ function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: number, 
     git_root: child.git_root,
     git_branch: child.git_branch,
     agent_type: child.agent_type,
+    model: child.model ?? null,
     message_count: child.message_count,
     idle_summary: child.idle_summary,
     is_idle: childIsIdle,
@@ -7248,9 +7344,23 @@ export const updateSessionId = mutation({
       throw new Error("Not found");
     }
 
-    const patch: Record<string, string> = { session_id: args.session_id };
+    const patch: Record<string, any> = { session_id: args.session_id };
     if (args.project_path) patch.project_path = args.project_path;
     if (args.git_root) patch.git_root = args.git_root;
+
+    // Stubs are created before their real path exists, so their team/privacy
+    // resolved against nothing (→ private, teamless). Re-resolve against the
+    // reconciled path; explicit user choices win inside the helper.
+    const stampedPath = args.git_root || args.project_path;
+    if (stampedPath) {
+      const mappings = await ctx.db
+        .query("directory_team_mappings")
+        .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+        .collect();
+      const restamp = buildPathRestampUpdate(conv, mappings, stampedPath);
+      if (restamp) Object.assign(patch, restamp);
+    }
+
     await ctx.db.patch(args.conversation_id, patch);
     return { updated: true };
   },

@@ -25,10 +25,32 @@ const NON_TAB_EXACT = new Set([
 ]);
 const NON_TAB_PREFIXES = ["/settings", "/auth", "/join", "/share"];
 
+// Every single-segment top-level route that lives INSIDE the dashboard (a tab
+// page or a standalone shell page). Public profiles live at the root as a bare
+// single segment (/:username), so the only way to tell `/ashot` (a handle, full-
+// page, outside the shell) from `/inbox` (a tab) is to know the real routes: any
+// bare single segment NOT in this set is a profile handle. KEEP IN SYNC with the
+// single-segment <Route>s in src/App.tsx — the routes.manifest parity test asserts
+// this set equals the manifest's in-shell single-segment routes, so drift fails loudly.
+const IN_SHELL_ROOT_SEGMENTS = new Set([
+  // Tab pages (TabContent patterns)
+  "inbox", "feed", "search", "notifications", "docs", "plans", "tasks",
+  "projects", "workflows", "routines", "schedules", "sessions", "team", "config",
+  // Standalone shell pages (own <Route>, not in TabContent)
+  "explore", "timeline", "windows", "orchestration", "roadmap", "cli",
+]);
+
 export function isNonTabRoute(path: string): boolean {
   const clean = path.split("?")[0].split("#")[0];
   if (NON_TAB_EXACT.has(clean)) return true;
-  return NON_TAB_PREFIXES.some((p) => clean === p || clean.startsWith(p + "/"));
+  if (NON_TAB_PREFIXES.some((p) => clean === p || clean.startsWith(p + "/"))) return true;
+  // A bare single segment that isn't a known in-shell route is a public-profile
+  // handle (App.tsx serves PublicProfile at root-level ":username", outside the
+  // shell). Without this, a signed-in user's in-app click to /<handle> would be
+  // intercepted by the tab navigator into a blank TabContent pane.
+  const single = clean.match(/^\/([^/]+)$/);
+  if (single && !IN_SHELL_ROOT_SEGMENTS.has(single[1])) return true;
+  return false;
 }
 
 function isExternal(path: string): boolean {

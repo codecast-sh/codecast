@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { profileConversationVisible, buildShareUpdate } from "./privacy";
+import { profileConversationVisible, buildShareUpdate, buildPathRestampUpdate } from "./privacy";
 
 // Regression for the profile-feed privacy leak: a teammate's profile page
 // (team/[username]) selected their conversations by (team_id, user_id) and
@@ -123,5 +123,84 @@ describe("buildShareUpdate — sharing always yields a team_id", () => {
     const updates = await share(mockCtx([], {}), { project_path: "/x" });
     expect(updates.team_id).toBeUndefined();
     expect(updates.is_private).toBe(false);
+  });
+});
+
+// Regression for the born-blank visibility gap: quick-create pre-warm and
+// web-started stubs mint the conversation BEFORE the real path exists, so
+// creation resolved team/privacy against nothing → private, teamless. When the
+// daemon later stamped project_path/git_root (updateProjectPath /
+// updateSessionId), nothing re-resolved — the conversation stayed private
+// forever despite an auto_share mapping covering its directory. Observable
+// symptom: two sessions in the same repo showed disjoint @ mention session
+// lists, because mention scope keys off the conversation's team_id.
+describe("buildPathRestampUpdate — late path stamp re-resolves born-blank visibility", () => {
+  const mappings = [
+    { team_id: "t_union", path_prefix: "/Users/a/src/union-mobile", auto_share: true },
+    { team_id: "t_other", path_prefix: "/Users/a/src/other", auto_share: true },
+    { team_id: "t_quiet", path_prefix: "/Users/a/src/quiet", auto_share: false },
+  ] as any;
+
+  // The pre-warm signature: private, no team, no explicit visibility marker.
+  const bornBlank = { is_private: true } as any;
+
+  test("THE BUG: born-blank conv stamped with a mapped git_root gets team + auto-share", () => {
+    expect(buildPathRestampUpdate(bornBlank, mappings, "/Users/a/src/union-mobile")).toEqual({
+      team_id: "t_union",
+      is_private: false,
+      auto_shared: true,
+    } as any);
+  });
+
+  test("subdirectory of a mapped prefix matches (creation-equivalent prefix rule)", () => {
+    expect(
+      buildPathRestampUpdate(bornBlank, mappings, "/Users/a/src/union-mobile/outreach")
+    ).toEqual({ team_id: "t_union", is_private: false, auto_shared: true } as any);
+  });
+
+  test("user-locked private (team_visibility 'private') is never touched", () => {
+    const locked = { is_private: true, team_visibility: "private" } as any;
+    expect(buildPathRestampUpdate(locked, mappings, "/Users/a/src/union-mobile")).toBeNull();
+  });
+
+  test("manually shared conv (is_private false without auto_shared) is never touched", () => {
+    const manual = { is_private: false, team_id: "t_other" } as any;
+    expect(buildPathRestampUpdate(manual, mappings, "/Users/a/src/union-mobile")).toBeNull();
+  });
+
+  test("no mapping match → no change (restamp never revokes)", () => {
+    const autoShared = { is_private: false, auto_shared: true, team_id: "t_union" } as any;
+    expect(buildPathRestampUpdate(autoShared, mappings, "/Users/a/src/unmapped")).toBeNull();
+    expect(buildPathRestampUpdate(bornBlank, mappings, undefined)).toBeNull();
+  });
+
+  test("near-miss sibling dir does not match (union-mobile2 is not under union-mobile)", () => {
+    expect(buildPathRestampUpdate(bornBlank, mappings, "/Users/a/src/union-mobile2")).toBeNull();
+  });
+
+  test("auto-shared conv restamped into a different mapped dir switches teams", () => {
+    const autoShared = { is_private: false, auto_shared: true, team_id: "t_union" } as any;
+    expect(buildPathRestampUpdate(autoShared, mappings, "/Users/a/src/other")).toEqual({
+      team_id: "t_other",
+    } as any);
+  });
+
+  test("mapping without auto_share stamps the team for routing but stays private", () => {
+    expect(buildPathRestampUpdate(bornBlank, mappings, "/Users/a/src/quiet")).toEqual({
+      team_id: "t_quiet",
+    } as any);
+  });
+
+  test("already-correct conv → null (no churn writes)", () => {
+    const correct = { is_private: false, auto_shared: true, team_id: "t_union" } as any;
+    expect(buildPathRestampUpdate(correct, mappings, "/Users/a/src/union-mobile")).toBeNull();
+  });
+
+  test("legacy conv with undefined is_private is treated as default-private and repaired", () => {
+    expect(buildPathRestampUpdate({} as any, mappings, "/Users/a/src/union-mobile")).toEqual({
+      team_id: "t_union",
+      is_private: false,
+      auto_shared: true,
+    } as any);
   });
 });

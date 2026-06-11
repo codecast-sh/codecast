@@ -167,6 +167,8 @@ export default function ProfilePage() {
         </div>
       </Card>
 
+      <PublicProfileSection user={user} />
+
       <Card className="p-6 bg-sol-bg border-sol-border">
         <h2 className="text-lg font-semibold text-sol-text mb-4">Daemon</h2>
         <div className="space-y-3">
@@ -196,6 +198,13 @@ export default function ProfilePage() {
               <p className="text-xs text-sol-base01 mt-0.5">Play sounds for session events</p>
             </div>
             <SoundsToggle />
+          </div>
+          <div className="flex items-center justify-between">
+            <div>
+              <span className="text-sol-base1">Model badge</span>
+              <p className="text-xs text-sol-base01 mt-0.5">Show each session's model in the inbox session list</p>
+            </div>
+            <ModelBadgeToggle />
           </div>
           <DesktopLinksRow />
         </div>
@@ -233,6 +242,124 @@ function SoundsToggle() {
       checked={soundsEnabled}
       onCheckedChange={(v) => updateUI({ sounds_enabled: v })}
     />
+  );
+}
+
+function ModelBadgeToggle() {
+  const enabled = useInboxStore((s) => s.clientState?.ui?.show_model_badge === true);
+  const updateUI = useInboxStore((s) => s.updateClientUI);
+  return (
+    <Switch
+      checked={enabled}
+      onCheckedChange={(v) => updateUI({ show_model_badge: v })}
+    />
+  );
+}
+
+// Claim a handle + flip the master public-profile switch. The handle is the
+// public URL, so enabling is gated on having claimed one (the mutation enforces
+// this too). Availability is checked live as you type via isUsernameAvailable.
+function PublicProfileSection({ user }: { user: any }) {
+  const claimUsername = useMutation(api.users.claimUsername);
+  const setEnabled = useMutation(api.users.setPublicProfileEnabled);
+
+  const [handle, setHandle] = useState<string>(user.username || "");
+  const [claiming, setClaiming] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const trimmed = handle.trim().toLowerCase();
+  const dirty = trimmed !== (user.username || "");
+  // Only probe availability for a changed, non-trivial candidate.
+  const check = useQuery(
+    api.users.isUsernameAvailable,
+    dirty && trimmed.length >= 3 ? { username: trimmed } : "skip"
+  );
+  const suggestion = user.github_username && !user.username ? user.github_username.toLowerCase() : null;
+
+  const handleClaim = async () => {
+    setClaiming(true);
+    setError(null);
+    try {
+      await claimUsername({ username: trimmed });
+    } catch (e: any) {
+      setError(e?.message?.replace(/^.*Error:\s*/, "") || "Could not claim username");
+    } finally {
+      setClaiming(false);
+    }
+  };
+
+  const origin = typeof window !== "undefined" ? window.location.origin : "";
+  const canEnable = !!user.username;
+
+  return (
+    <Card className="p-6 bg-sol-bg border-sol-border">
+      <div className="flex items-start justify-between mb-1">
+        <h2 className="text-lg font-semibold text-sol-text">Public profile</h2>
+        <Switch
+          checked={!!user.public_profile_enabled}
+          disabled={!canEnable}
+          onCheckedChange={(v) => setEnabled({ enabled: v }).catch(() => {})}
+        />
+      </div>
+      <p className="text-xs text-sol-base01 mb-4 max-w-prose">
+        When on, anyone can view <span className="font-mono">{origin}/{user.username || "your-handle"}</span> —
+        your identity, an anonymized activity graph, and the sessions you’ve pinned. Off by default; nothing is
+        public until you turn this on.
+      </p>
+
+      <div className="space-y-2">
+        <Label htmlFor="handle" className="text-sol-base1">Username</Label>
+        <div className="flex items-center gap-2">
+          <div className="flex items-center flex-1 rounded-md border border-sol-border bg-sol-bg-alt px-2">
+            <span className="text-sol-base01 text-sm select-none">/</span>
+            <Input
+              id="handle"
+              value={handle}
+              onChange={(e) => setHandle(e.target.value)}
+              placeholder={suggestion || "your-handle"}
+              className="border-0 bg-transparent px-1 focus-visible:ring-0"
+              autoCapitalize="none"
+              spellCheck={false}
+            />
+          </div>
+          <Button
+            onClick={handleClaim}
+            disabled={!dirty || claiming || trimmed.length < 3 || (check && !check.available)}
+            className="bg-sol-cyan hover:bg-sol-cyan/80 text-sol-base03"
+          >
+            {claiming ? "Saving..." : user.username ? "Update" : "Claim"}
+          </Button>
+        </div>
+
+        {/* Live status line */}
+        <div className="text-xs min-h-[1rem]">
+          {error ? (
+            <span className="text-sol-red">{error}</span>
+          ) : suggestion && !user.username && !dirty ? (
+            <button onClick={() => setHandle(suggestion)} className="text-sol-cyan hover:underline">
+              Use @{suggestion} from GitHub
+            </button>
+          ) : dirty && trimmed.length >= 3 && check ? (
+            check.available ? (
+              <span className="text-sol-green">@{trimmed} is available</span>
+            ) : (
+              <span className="text-sol-orange">{check.reason}</span>
+            )
+          ) : user.username ? (
+            <span className="text-sol-base01">
+              Your profile lives at{" "}
+              <a href={`/${user.username}`} target="_blank" rel="noreferrer" className="text-sol-cyan hover:underline">
+                /{user.username}
+              </a>
+            </span>
+          ) : null}
+        </div>
+      </div>
+
+      {!canEnable && (
+        <p className="text-xs text-sol-base01 mt-3">Claim a username to enable your public profile.</p>
+      )}
+    </Card>
   );
 }
 

@@ -494,6 +494,15 @@ html[data-idle] *::after {
   animation: fadeSlideIn 0.3s ease-out !important;
 }
 
+/* Staggered page-load reveal (public profile). Reuses fadeSlideIn; the
+   .reveal-N modifiers offset each band for a cascading entrance. */
+.reveal {
+  animation: fadeSlideIn 0.5s ease-out both;
+}
+.reveal-1 { animation-delay: 0.08s; }
+.reveal-2 { animation-delay: 0.16s; }
+.reveal-3 { animation-delay: 0.24s; }
+
 @keyframes fadeIn {
   from {
     opacity: 0;

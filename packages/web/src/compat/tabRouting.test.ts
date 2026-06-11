@@ -25,6 +25,16 @@ describe("isNonTabRoute", () => {
       expect(isNonTabRoute(p)).toBe(false);
     }
   });
+
+  // Public profiles live at the ROOT as a bare handle (/:username), rendered
+  // full-page outside the shell. A bare single segment that isn't a known
+  // in-shell route must be treated as non-tab, or a signed-in user's in-app
+  // click to /<handle> gets intercepted into a blank TabContent pane.
+  it("treats root-level profile handles as outside the tab shell", () => {
+    for (const p of ["/ashot", "/jane-doe", "/some_user", "/ashot?ref=x"]) {
+      expect(isNonTabRoute(p)).toBe(true);
+    }
+  });
 });
 
 describe("shouldUseTabRouting", () => {

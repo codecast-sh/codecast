@@ -192,6 +192,20 @@ export async function getProfileVisibilityPredicate(
   return (conversation) => profileConversationVisible(false, isMember, ownerVis, conversation);
 }
 
+// ── Public profile visibility (the third, anonymous tier) ──
+// is_private=false only means "team-visible" — NOT world-visible. A session is
+// PUBLIC only because its owner explicitly pinned it to their public profile,
+// which the pin mutation backs with a share_token. We require BOTH here as
+// defense in depth: an un-pin or a revoked token immediately drops the session
+// from the anonymous profile even if the other field lingers. No auth context
+// is consulted — this is the rule for an anonymous visitor.
+export function profilePublicSessionVisible(conversation: {
+  profile_pinned_at?: number;
+  share_token?: string;
+}): boolean {
+  return !!conversation.profile_pinned_at && !!conversation.share_token;
+}
+
 // ── Team resolution for session creation ──
 // Single source of truth for resolving which team a conversation belongs to.
 // Used by dispatch.ts and conversations.ts session creation.
@@ -273,6 +287,46 @@ export async function buildShareUpdate(
   const fallback = owner?.active_team_id ?? owner?.team_id;
   if (fallback) updates.team_id = fallback;
   return updates;
+}
+
+// Team/privacy is resolved once at creation from whatever path exists at that
+// instant — but several flows mint the conversation before the real path is
+// known (quick-create pre-warm, web-started stubs) and stamp project_path /
+// git_root later. Without re-resolving, those conversations keep their
+// born-blank visibility (private, teamless) forever, even when the directory
+// has an auto_share mapping covering it.
+//
+// Builds the creation-equivalent team/privacy patch for a late path stamp.
+// Explicit user choices always win, and a restamp only ever applies a positive
+// mapping match — revoking access stays a user action:
+//  - team_visibility "private" (user locked it private) → no change
+//  - is_private false without auto_shared (user shared it manually) → no change
+//  - no mapping match for the path → no change
+export function buildPathRestampUpdate(
+  conversation: {
+    team_id?: Id<"teams">;
+    is_private?: boolean;
+    auto_shared?: boolean;
+    team_visibility?: string;
+  },
+  mappings: DirectoryMapping[],
+  conversationPath: string | undefined
+): { team_id?: Id<"teams">; is_private?: boolean; auto_shared?: boolean } | null {
+  if (conversation.team_visibility === "private") return null;
+  if (conversation.is_private === false && !conversation.auto_shared) return null;
+
+  const { teamId, autoShared } = resolveTeamForPath(mappings, conversationPath, undefined);
+  if (!teamId) return null;
+
+  const patch: { team_id?: Id<"teams">; is_private?: boolean; auto_shared?: boolean } = {};
+  if (conversation.team_id?.toString() !== teamId.toString()) {
+    patch.team_id = teamId;
+  }
+  if (autoShared && conversation.is_private !== false) {
+    patch.is_private = false;
+    patch.auto_shared = true;
+  }
+  return Object.keys(patch).length > 0 ? patch : null;
 }
 
 // ── Visibility modes ──
