@@ -67,6 +67,7 @@ import {
 } from "./resumeCommand.js";
 import { resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, pickProjectPath } from "./projectPathResolver.js";
 import type { AgentStatus } from "@codecast/shared/contracts";
+import type { Config } from "./config/types.js";
 
 const ENRICHED_PATH = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
 const EXEC_TIMEOUT_MS = 10_000;
@@ -355,43 +356,9 @@ const PROJECT_MAP_FILE = path.join(CONFIG_DIR, "project-paths.json");
 const APP_SERVER_THREADS_FILE = path.join(CONFIG_DIR, "app-server-threads.json");
 const PID_FILE_STALE_GRACE_MS = 2_000;
 
-interface Config {
-  user_id?: string;
-  team_id?: string;
-  convex_url?: string;
-  auth_token?: string;
-  stable_mode?: "solo" | "team";
-  stable_global?: boolean;
-  excluded_paths?: string;
-  claude_args?: string;
-  codex_args?: string;
-  sync_mode?: "all" | "selected";
-  sync_projects?: string[];
-  agent_permission_modes?: {
-    claude?: "default" | "bypass";
-    codex?: "default" | "full_auto" | "bypass";
-    gemini?: "default" | "bypass";
-  };
-  agent_default_params?: {
-    claude?: Record<string, string>;
-    codex?: Record<string, string>;
-    gemini?: Record<string, string>;
-    cursor?: Record<string, string>;
-  };
-  // Opt out of the daemon updating the desktop app out-of-band (default: on).
-  desktop_auto_update?: boolean;
-  // Explicit project-path overrides for resuming sessions/forks recorded on another
-  // machine. Keys are the recorded (remote) project path OR its basename; values are
-  // the local directory to resume in. Authoritative — checked before the learned map
-  // and the convention search in resolveLocalRepo, and never auto-clobbered.
-  project_mappings?: Record<string, string>;
-  // Tier 3 "warm pool": proactively re-resume up to N most-recently-active sessions
-  // whose agent died unexpectedly (terminal closed / crash) while the conversation was
-  // still hot, so the next message lands on a live agent instead of a cold boot. 0 (the
-  // default) disables it — re-warming is speculative (it can resurrect a session the
-  // user deliberately closed and costs a claude process per slot), so it's opt-in.
-  warm_pool_size?: number;
-}
+// `Config` (the ~/.codecast/config.json shape) is unified in ./config/types.ts —
+// the faithful union of every field the daemon, the CLI (index.ts), and the claude
+// wrapper read/write into the same file. Imported above.
 
 function getPermissionFlags(agentType: "claude" | "codex" | "cursor" | "gemini", config?: Config | null): string | null {
   const modes = config?.agent_permission_modes;
