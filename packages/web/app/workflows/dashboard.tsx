@@ -6,6 +6,7 @@ import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { AuthGuard } from "../../components/AuthGuard";
 import { DashboardLayout } from "../../components/DashboardLayout";
 import { DynamicRunView, wfStatusMeta, wfFmtTokens } from "../../components/DynamicRunView";
+import { AppLoader } from "../../components/AppLoader";
 import { ExternalLink, Workflow } from "lucide-react";
 
 const api = _api as any;
@@ -55,6 +56,7 @@ function RunCard({ run }: { run: any }) {
 
 function WorkflowsDashboardContent() {
   const runs = useQuery(api.workflow_runs.listDynamicRuns, {});
+  if (runs === undefined) return <AppLoader className="min-h-[16rem] h-full" />;
   return (
     <div className="h-full overflow-y-auto bg-sol-bg">
       <div className="max-w-3xl mx-auto px-6 py-6">
@@ -62,11 +64,9 @@ function WorkflowsDashboardContent() {
           <Workflow className="w-4 h-4 text-sol-cyan self-center" />
           <h1 className="text-lg font-semibold text-sol-text">Workflows</h1>
           <span className="text-xs text-sol-text-dim">dynamic agent runs</span>
-          {runs && <span className="ml-auto text-xs text-sol-text-dim font-mono">{runs.length}</span>}
+          <span className="ml-auto text-xs text-sol-text-dim font-mono">{runs.length}</span>
         </div>
-        {runs === undefined ? (
-          <div className="text-sm text-sol-text-dim">Loading…</div>
-        ) : runs.length === 0 ? (
+        {runs.length === 0 ? (
           <div className="flex flex-col items-center justify-center gap-2 py-24 text-center">
             <Workflow className="w-8 h-8 text-sol-text-dim" />
             <p className="text-sm text-sol-text-muted">No workflow runs yet</p>

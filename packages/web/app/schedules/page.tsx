@@ -6,6 +6,7 @@ import { useQuery, useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
 import { AuthGuard } from "../../components/AuthGuard";
+import { AppLoader } from "../../components/AppLoader";
 import { DashboardLayout } from "../../components/DashboardLayout";
 import { fmtDuration } from "../../components/scheduleCadence";
 import { useInboxStore } from "../../store/inboxStore";
@@ -637,7 +638,7 @@ function SchedulesContent() {
         {showForm && <NewScheduleForm onClose={() => setShowForm(false)} />}
 
         {tasks === undefined ? (
-          <div className="text-sm text-sol-text-dim">Loading…</div>
+          <AppLoader className="min-h-[16rem] h-full" />
         ) : tasks.length === 0 && !showForm ? (
           <div className="flex flex-col items-center justify-center gap-3 py-24 text-center">
             <Clock className="w-8 h-8 text-sol-text-dim" />

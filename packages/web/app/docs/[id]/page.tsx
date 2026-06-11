@@ -1,10 +1,11 @@
 "use client";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useInboxStore, DocDetail } from "../../../store/inboxStore";
 import { useSyncDocDetail } from "../../../hooks/useSyncDocs";
 import { DetailSplitLayout } from "../../../components/DetailSplitLayout";
 import { AuthGuard } from "../../../components/AuthGuard";
+import { AppLoader } from "../../../components/AppLoader";
 import { DocListContent } from "../page";
 import { shareOrigin, canonicalUrl } from "../../../lib/utils";
 import { useMutation } from "convex/react";
@@ -135,12 +136,21 @@ function DocDetailContent() {
   const router = useRouter();
   const id = params.id as string;
 
-  useSyncDocDetail(id);
+  const detailResult = useSyncDocDetail(id);
 
   const detail = useInboxStore((s) => s.docDetails[id]) as DocDetail | undefined;
   const listItem = useInboxStore((s) => s.docs[id]) as DocDetail | undefined;
   const allDocs = useInboxStore((s) => s.docs);
   const data = detail || listItem;
+
+  // The id may be a conversation's (malformed /docs/<conversationId> link).
+  // When the server says "not a doc" and the id is a session we know, land in
+  // the conversation instead of a dead-end. Mirrors /tasks/[id].
+  const notADoc = detailResult === null && !listItem;
+  const sessionForBadId = useInboxStore((s) => (notADoc ? s.sessions[id] : undefined));
+  useEffect(() => {
+    if (notADoc && sessionForBadId) router.replace(`/conversation/${id}`);
+  }, [notADoc, sessionForBadId, id, router]);
 
   // Compute backlinks: docs that link to this doc via linked_doc_ids
   const backlinks = useMemo(() => {
@@ -195,11 +205,22 @@ function DocDetailContent() {
   );
 
   if (!data) {
-    return (
-      <div className="flex items-center justify-center h-64 text-sol-text-dim text-sm">
-        Loading...
-      </div>
-    );
+    // The query resolved to null and nothing is cached for this id → it doesn't
+    // address an accessible doc (e.g. a conversation id from a malformed
+    // /docs/<id> link). Show a graceful empty state rather than spinning forever.
+    if (notADoc) {
+      // Redirecting to the conversation (effect above) — show the loader.
+      if (sessionForBadId) return <AppLoader className="min-h-[16rem] h-full" />;
+      return (
+        <div className="flex flex-col items-center justify-center h-full gap-2 text-sol-text-dim text-sm">
+          <span>Document not found</span>
+          <Link href="/docs" className="text-sol-blue hover:underline text-xs">
+            Back to docs
+          </Link>
+        </div>
+      );
+    }
+    return <AppLoader className="min-h-[16rem] h-full" />;
   }
 
   const doc = data;
