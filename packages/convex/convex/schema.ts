@@ -52,6 +52,12 @@ export default defineSchema({
     status: v.optional(v.union(v.literal("available"), v.literal("busy"), v.literal("away"))),
     timezone: v.optional(v.string()),
     hide_activity: v.optional(v.boolean()),
+    // Public-profile opt-in. A claimed, unique handle (lowercase alnum+dash) that
+    // forms the anonymous URL /u/<username>; github_username only pre-fills the
+    // suggestion. `public_profile_enabled` is the master switch — until it's true
+    // the public page 404s for everyone. See privacy.ts (public visibility tier).
+    username: v.optional(v.string()),
+    public_profile_enabled: v.optional(v.boolean()),
     share_session_metadata: v.optional(v.boolean()),
     activity_visibility: v.optional(v.union(
       v.literal("detailed"),
@@ -101,6 +107,7 @@ export default defineSchema({
     .index("email", ["email"])
     .index("by_github_username", ["github_username"])
     .index("by_github_id", ["github_id"])
+    .index("by_username", ["username"])
     .index("by_team_id", ["team_id"]),
 
   daemon_commands: defineTable({
@@ -228,6 +235,11 @@ export default defineSchema({
     inbox_killed_at: v.optional(v.number()),
     inbox_deferred_at: v.optional(v.number()),
     inbox_pinned_at: v.optional(v.number()),
+    // Distinct from inbox_pinned_at: this is the PUBLIC-profile pin. Setting it
+    // is the consent act that makes a session world-visible (the mutation also
+    // guarantees a share_token, so the card deep-links to the existing /share
+    // guest viewer). Timestamp = curation order, GitHub-pinned-repos style.
+    profile_pinned_at: v.optional(v.number()),
     draft_message: v.optional(v.string()),
     last_user_message_at: v.optional(v.number()),
     is_subagent: v.optional(v.boolean()),
@@ -295,6 +307,7 @@ export default defineSchema({
     .index("by_git_branch", ["git_branch"])
     .index("by_parent_conversation_id", ["parent_conversation_id"])
     .index("by_user_pinned", ["user_id", "inbox_pinned_at"])
+    .index("by_user_profile_pinned", ["user_id", "profile_pinned_at"])
     .index("by_user_dismissed", ["user_id", "inbox_dismissed_at"])
     .index("by_owner_device", ["user_id", "owner_device_id"])
     .searchIndex("search_title_v2", {
@@ -999,6 +1012,10 @@ export default defineSchema({
     target_conversation_id: v.optional(v.id("conversations")),
     project_path: v.optional(v.string()),
     agent_type: v.optional(v.string()),
+    // Device that created the task (CLI `cast schedule add`). When set, only
+    // that device's scheduler may claim it. Absent on web-created/legacy tasks,
+    // which fall back to checkout-existence eligibility.
+    created_device_id: v.optional(v.string()),
 
     schedule_type: v.union(
       v.literal("once"),

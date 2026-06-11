@@ -8,7 +8,7 @@ import { enqueueStartSession, getOnlineLocalRoots } from "./devices";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { hasRecentPendingDaemonCommand } from "./daemonCommandUtils";
-import { resolveTeamForPath, getProfileVisibilityPredicate } from "./privacy";
+import { resolveTeamForPath, getProfileVisibilityPredicate, profilePublicSessionVisible } from "./privacy";
 import { resetConversationPendingMessages } from "./pendingMessages";
 import { normalizeProjectPath } from "./projectPaths";
 
@@ -749,7 +749,9 @@ export const getUserActivity = query({
   },
   handler: async (ctx, args) => {
     const user = await ctx.db.get(args.user_id);
-    if (!user || user.hide_activity) {
+    // Public, unauthed query. is_private=false means TEAM-visible, not world-
+    // visible, so it must stay gated behind the explicit public-profile opt-in.
+    if (!user || user.hide_activity || !user.public_profile_enabled) {
       return [];
     }
     const limit = Math.min(args.limit ?? 3, 5);
@@ -779,7 +781,7 @@ export const getUserStats = query({
   },
   handler: async (ctx, args) => {
     const user = await ctx.db.get(args.user_id);
-    if (!user || user.hide_activity) {
+    if (!user || user.hide_activity || !user.public_profile_enabled) {
       return null;
     }
     const conversations = await ctx.db
@@ -796,6 +798,223 @@ export const getUserStats = query({
       total_messages: totalMessages,
       active_conversations: activeCount,
     };
+  },
+});
+
+// ── Public profiles ──────────────────────────────────────────────────────────
+// Anonymous, opt-in profile pages at /u/<username>. Three rules govern them:
+//   1. Nothing is anonymously readable until public_profile_enabled is true.
+//   2. The handle is a claimed, unique `username` (github_username only pre-fills).
+//   3. Sessions appear only because they were explicitly pinned (profile_pinned_at),
+//      which guarantees a share_token — so cards deep-link to the /share viewer.
+// Counts/heatmap are anonymized aggregates (no titles/ids cross the boundary).
+
+// Handles live at the ROOT (/<handle>), sharing the URL namespace with every
+// top-level route. React Router still serves real routes (static beats dynamic),
+// but a handle matching one would be an unreachable, confusing profile — so block
+// them. KEEP IN SYNC with the top-level <Route> paths in web/src/App.tsx; add any
+// new first-segment route here. Plus product nouns we don't want impersonated.
+const RESERVED_USERNAMES = new Set([
+  // Top-level route segments (web/src/App.tsx)
+  "about", "features", "documentation", "privacy", "security", "support", "terms",
+  "login", "signup", "signin", "logout", "forgot-password", "reset-password", "auth",
+  "join", "inbox", "feed", "search", "notifications", "conversation", "docs", "plans",
+  "tasks", "projects", "workflows", "routines", "schedules", "sessions", "team",
+  "admin", "config", "dashboard", "explore", "timeline", "windows", "orchestration",
+  "roadmap", "cli", "share", "commit", "pr", "review", "palette", "settings",
+  // Product nouns / safety
+  "u", "api", "teams", "codecast", "help", "status", "me", "you", "new", "null", "undefined",
+]);
+
+// Lowercase, 3–30 chars, alnum + single internal dashes, must start/end alnum.
+// Returns the normalized handle or an error string.
+export function normalizeUsername(raw: string): { username?: string; error?: string } {
+  const username = raw.trim().toLowerCase();
+  if (username.length < 3) return { error: "Username must be at least 3 characters" };
+  if (username.length > 30) return { error: "Username must be at most 30 characters" };
+  if (!/^[a-z0-9](?:[a-z0-9]|-(?=[a-z0-9]))*$/.test(username))
+    return { error: "Use lowercase letters, numbers, and single dashes (no leading/trailing dash)" };
+  if (RESERVED_USERNAMES.has(username)) return { error: "That username is reserved" };
+  return { username };
+}
+
+// Last path segment only — the public profile shows "codecast", never the
+// owner's full "/Users/ashot/src/codecast" home-dir layout.
+function basenameOf(path?: string): string | null {
+  if (!path) return null;
+  const parts = path.replace(/\/+$/, "").split("/");
+  return parts[parts.length - 1] || null;
+}
+
+// Whitelisted, never-leaks-internal-fields view of a user for anonymous pages.
+function publicUserCard(user: any) {
+  return {
+    _id: user._id,
+    username: user.username,
+    name: user.name,
+    avatar_url: user.github_avatar_url ?? user.image ?? null,
+    github_username: user.github_username ?? null,
+    bio: user.bio ?? null,
+    title: user.title ?? null,
+    timezone: user.timezone ?? null,
+  };
+}
+
+// Is the requested handle available for this user to claim?
+export const isUsernameAvailable = query({
+  args: { username: v.string() },
+  handler: async (ctx, args) => {
+    const { username, error } = normalizeUsername(args.username);
+    if (error) return { available: false, reason: error };
+    const existing = await ctx.db
+      .query("users")
+      .withIndex("by_username", (q) => q.eq("username", username))
+      .first();
+    const me = await getAuthUserId(ctx);
+    if (existing && (!me || existing._id.toString() !== me.toString())) {
+      return { available: false, reason: "That username is taken" };
+    }
+    return { available: true, username };
+  },
+});
+
+// Claim (or change) the caller's public handle. Uniqueness-checked.
+export const claimUsername = mutation({
+  args: { username: v.string() },
+  handler: async (ctx, args) => {
+    const me = await getAuthUserId(ctx);
+    if (!me) throw new Error("Unauthorized");
+    const { username, error } = normalizeUsername(args.username);
+    if (error) throw new Error(error);
+    const existing = await ctx.db
+      .query("users")
+      .withIndex("by_username", (q) => q.eq("username", username))
+      .first();
+    if (existing && existing._id.toString() !== me.toString()) {
+      throw new Error("That username is taken");
+    }
+    await ctx.db.patch(me, { username });
+    return { username };
+  },
+});
+
+// The master opt-in switch. Refuses to enable without a claimed handle, since
+// the public URL is the handle — there'd be nothing to route to.
+export const setPublicProfileEnabled = mutation({
+  args: { enabled: v.boolean() },
+  handler: async (ctx, args) => {
+    const me = await getAuthUserId(ctx);
+    if (!me) throw new Error("Unauthorized");
+    if (args.enabled) {
+      const user = await ctx.db.get(me);
+      if (!user?.username) throw new Error("Claim a username before enabling your public profile");
+    }
+    await ctx.db.patch(me, { public_profile_enabled: args.enabled });
+    return { enabled: args.enabled };
+  },
+});
+
+// PUBLIC. The 404 gate lives here: returns null unless the handle resolves AND
+// the owner has the profile switched on. Only whitelisted fields ever escape.
+export const getPublicProfile = query({
+  args: { username: v.string() },
+  handler: async (ctx, args) => {
+    const handle = args.username.trim().toLowerCase();
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_username", (q) => q.eq("username", handle))
+      .first();
+    if (!user || !user.public_profile_enabled) return null;
+
+    // Aggregate, anonymized stats from the public (pinned) tier only.
+    const pinned = await ctx.db
+      .query("conversations")
+      .withIndex("by_user_profile_pinned", (q) =>
+        q.eq("user_id", user._id).gt("profile_pinned_at", 0)
+      )
+      .collect();
+    const publicPins = pinned.filter((c) => profilePublicSessionVisible(c));
+
+    return {
+      ...publicUserCard(user),
+      show_activity_graph: !user.hide_activity,
+      stats: {
+        pinned_sessions: publicPins.length,
+        pinned_messages: publicPins.reduce((s, c) => s + (c.message_count ?? 0), 0),
+      },
+    };
+  },
+});
+
+// PUBLIC. The pinned sessions, newest pin first. Defense-in-depth filtered to
+// those still backed by a share_token; each row carries that token so the card
+// links straight to the existing guest /share viewer. Never leaks the full
+// local path — only the repo/folder basename.
+export const getPublicPinnedSessions = query({
+  args: { username: v.string() },
+  handler: async (ctx, args) => {
+    const handle = args.username.trim().toLowerCase();
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_username", (q) => q.eq("username", handle))
+      .first();
+    if (!user || !user.public_profile_enabled) return [];
+
+    const pinned = await ctx.db
+      .query("conversations")
+      .withIndex("by_user_profile_pinned", (q) =>
+        q.eq("user_id", user._id).gt("profile_pinned_at", 0)
+      )
+      .order("desc")
+      .collect();
+
+    return pinned
+      .filter((c) => profilePublicSessionVisible(c))
+      .map((c) => ({
+        _id: c._id,
+        share_token: c.share_token!,
+        title: c.title,
+        subtitle: c.subtitle,
+        repo: basenameOf(c.git_root || c.project_path),
+        agent: c.agent_type ?? null,
+        message_count: c.message_count ?? 0,
+        updated_at: c.updated_at ?? c.started_at ?? c._creationTime,
+        profile_pinned_at: c.profile_pinned_at,
+      }));
+  },
+});
+
+// PUBLIC. The anonymized GitHub-style contribution graph: per-day activity
+// tally across ALL the user's sessions (private ones count as anonymous squares,
+// exactly like GitHub), returning only {date, hours, sessions} — no identities.
+// Honors hide_activity, and only runs once the profile is enabled.
+export const getPublicActivityHeatmap = query({
+  args: { username: v.string(), days: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const handle = args.username.trim().toLowerCase();
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_username", (q) => q.eq("username", handle))
+      .first();
+    if (!user || !user.public_profile_enabled || user.hide_activity) return [];
+
+    const intervals = await collectUserActivityIntervals(
+      ctx,
+      null,
+      { user_id: user._id, days: args.days },
+      { countAll: true }
+    );
+
+    const buckets: Record<string, { hours: number; sessions: number }> = {};
+    for (const iv of intervals) {
+      const date = new Date(iv.end).toISOString().split("T")[0];
+      if (!buckets[date]) buckets[date] = { hours: 0, sessions: 0 };
+      buckets[date].sessions++;
+      buckets[date].hours += iv.hours;
+    }
+    return Object.entries(buckets)
+      .map(([date, d]) => ({ date, hours: Math.round(d.hours * 100) / 100, sessions: d.sessions }))
+      .sort((a, b) => a.date.localeCompare(b.date));
   },
 });
 
@@ -992,9 +1211,9 @@ type ActivityInterval = { start: number; end: number; hours: number; msgs: numbe
 // historical buckets stay stable.
 async function collectUserActivityIntervals(
   ctx: any,
-  viewerId: Id<"users">,
+  viewerId: Id<"users"> | null,
   args: { user_id: Id<"users">; team_id?: Id<"teams">; days?: number },
-  opts?: { preferCompleted?: boolean }
+  opts?: { preferCompleted?: boolean; countAll?: boolean }
 ): Promise<ActivityInterval[]> {
   const numDays = args.days ?? 365;
   const now = Date.now();
@@ -1016,7 +1235,12 @@ async function collectUserActivityIntervals(
   // Privacy gate: don't count a teammate's private conversations toward their
   // public heatmap (owner sees all). Private convs are still marked `seen` so
   // the events/insights fallback branches below can't re-introduce them.
-  const isVisible = await getProfileVisibilityPredicate(ctx, viewerId, args.user_id, args.team_id);
+  // countAll = the anonymized public contribution graph: every session counts
+  // (GitHub-style "private contributions" squares), but only as a per-day tally
+  // — the caller returns no titles/ids, so nothing about content leaks.
+  const isVisible = opts?.countAll
+    ? () => true
+    : await getProfileVisibilityPredicate(ctx, viewerId!, args.user_id, args.team_id);
   const recentConvos = args.team_id
     ? ctx.db.query("conversations").withIndex("by_team_user_updated", (q: any) =>
         q.eq("team_id", args.team_id).eq("user_id", args.user_id).gte("updated_at", recentCutoff))
@@ -1311,7 +1535,7 @@ export const getUserProfileFeed = query({
     const isVisible = await getProfileVisibilityPredicate(ctx, userId, args.user_id, args.team_id);
     const recentConvos = convoPage.page.filter(isVisible);
 
-    const NOISE_PREFIXES = ["[Request interrupted", "This session is being continued", "Your task is to create a detailed summary", "Full transcript available at:", "Read the output file to retrieve the result:"];
+    const NOISE_PREFIXES = ["[Request interrupted", "This session is being continued", "Your task is to create a detailed summary", "Full transcript available at:", "Read the output file to retrieve the result:", "[Codecast import]"];
     const COMMAND_RE = /^(<command-name>|<command-message>|<local-command-stdout>|<local-command-stderr>|Caveat:|\/[a-z][\w-]*)/i;
     const SKILL_RE = /Base directory for this skill:\s/;
     function stripTags(s: string): string {
