@@ -8,6 +8,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
+import { CODECAST_IMPORT_NOTICE_PREFIX } from "./parser";
 
 const uuidv4 = () => crypto.randomUUID();
 
@@ -19,6 +20,9 @@ export interface ExportedMessage {
   message_uuid?: string;
   tool_calls?: Array<{ id: string; name: string; input: string }>;
   tool_results?: Array<{ tool_use_id: string; content: string; is_error?: boolean }>;
+  /** Synthetic context-only message (e.g. import truncation notice): emitted with
+   * isMeta so Claude Code keeps it in context but no transcript/UI displays it. */
+  isMeta?: boolean;
 }
 
 export interface ExportedConversation {
@@ -80,7 +84,7 @@ export function chooseClaudeTailMessagesForTokenBudget(data: ExportResult, budge
   if (messages.length === 0) return 0;
 
   // Reserve a little space for the truncation notice + first user message.
-  const reserved = estimateTokensFromText("[Codecast import]") + 512;
+  const reserved = estimateTokensFromText(CODECAST_IMPORT_NOTICE_PREFIX) + 512;
   const budget = Math.max(0, budgetTokens - reserved);
 
   let used = 0;
@@ -355,9 +359,30 @@ export function claudeTranscriptModel(conversationModel: string | null | undefin
 // the live short alias matching the recorded model so a resume lands on a live
 // model instead of a dead snapshot (if the recorded model is still current the
 // alias resolves to it anyway). Also matches a bare recorded alias.
+//
+// Two signals mark the model a session is on, and the LAST one of either kind
+// wins:
+//  - assistant lines record the model each turn actually ran on;
+//  - a /model switch emits a `<local-command-stdout>Set model to <Name>` user
+//    line with NO assistant line until the next turn, so it's the only trace of
+//    a switch-then-resume/fork-before-any-turn. Fork reconstructions stamp the
+//    conversation-level model uniformly on assistant lines but preserve this
+//    stdout line, so it's also what keeps forks on the switched model.
+// First-match scanning is what caused the original bug: it returned the model
+// the session STARTED on and reverted mid-session /model switches on every
+// resume. The ANSI escapes around the name arrive JSON-escaped (literal
+// `\u001b[1m` text) in raw transcript bytes; match the raw ESC byte too for
+// pre-parsed content. "Default" means the user's saved default — no override.
+const MODEL_ALIAS_RE =
+  /"model"\s*:\s*"(?:claude-)?(opus|sonnet|haiku|fable)\b|<local-command-stdout>Set model to (?:(?:\\u001b|\x1b)\[\d+m)*(opus|sonnet|haiku|fable|default)/gi;
 export function claudeModelAlias(jsonlContent: string): string | null {
-  const m = jsonlContent.match(/"model"\s*:\s*"(?:claude-)?(opus|sonnet|haiku)\b/);
-  return m ? m[1] : null;
+  let last: string | null = null;
+  MODEL_ALIAS_RE.lastIndex = 0;
+  for (let m = MODEL_ALIAS_RE.exec(jsonlContent); m; m = MODEL_ALIAS_RE.exec(jsonlContent)) {
+    const name = (m[1] ?? m[2]).toLowerCase();
+    last = name === "default" ? null : name;
+  }
+  return last;
 }
 
 // Pick the `--model` flag for a resume. We override the model on EVERY resume,
@@ -370,21 +395,29 @@ export function resumeModelFlag(jsonlContent: string, extraFlags: string): strin
   return alias ? ` --model ${alias}` : "";
 }
 
-// File variant of resumeModelFlag. The model field first appears on the first
-// ASSISTANT line, which can sit far past any small head window — a transcript
-// can open with several long user messages (a 5KB head read missed the field at
-// byte ~17K and let a resume crash on a dead snapshot). Scan a generous bounded
-// window so the first assistant line is always inside it.
+// File variant of resumeModelFlag. We want the LAST recorded model, so scan a
+// bounded window from the END of the file (small transcripts fit entirely, so
+// the head-of-file case is covered too). If a huge transcript's tail window
+// somehow contains no model field (e.g. a giant trailing user message), fall
+// back to a head window rather than dropping the override — resuming with no
+// flag can land on a retired pinned snapshot and crash.
 const MODEL_SCAN_WINDOW_BYTES = 8 * 1024 * 1024;
+function readWindow(fd: number, position: number, length: number): string {
+  const buf = Buffer.alloc(length);
+  const bytesRead = fs.readSync(fd, buf, 0, length, position);
+  return buf.toString("utf-8", 0, bytesRead);
+}
 export function resumeModelFlagFromFile(jsonlPath: string, extraFlags: string): string {
   if (/(^|\s)--model(\s|=)/.test(extraFlags)) return "";
   try {
     const fd = fs.openSync(jsonlPath, "r");
     try {
-      const size = Math.min(fs.fstatSync(fd).size, MODEL_SCAN_WINDOW_BYTES);
-      const buf = Buffer.alloc(size);
-      const bytesRead = fs.readSync(fd, buf, 0, size, 0);
-      return resumeModelFlag(buf.toString("utf-8", 0, bytesRead), extraFlags);
+      const size = fs.fstatSync(fd).size;
+      const windowSize = Math.min(size, MODEL_SCAN_WINDOW_BYTES);
+      const tail = readWindow(fd, size - windowSize, windowSize);
+      const flag = resumeModelFlag(tail, extraFlags);
+      if (flag || size <= windowSize) return flag;
+      return resumeModelFlag(readWindow(fd, 0, windowSize), extraFlags);
     } finally {
       fs.closeSync(fd);
     }
@@ -445,8 +478,9 @@ export function generateClaudeCodeJsonl(
     const notice: ExportedMessage = {
       role: "user",
       timestamp: data.conversation.started_at,
+      isMeta: true,
       content:
-        `[Codecast import] This Claude session was truncated to avoid overly-long context (which can break Claude Code /compact).\n` +
+        `${CODECAST_IMPORT_NOTICE_PREFIX} This Claude session was truncated to avoid overly-long context (which can break Claude Code /compact).\n` +
         `Original: ${messages.length} messages. Included: last ${tailMessages} messages` +
         (firstUser && firstUserIndex < cutoffIndex ? " + first user message." : "."),
     };
@@ -497,6 +531,7 @@ export function generateClaudeCodeJsonl(
           version: "2.1.29", gitBranch: "main", type: "user",
           message: { role: "user", content: msg.content },
           uuid, timestamp: msg.timestamp,
+          ...(msg.isMeta ? { isMeta: true } : {}),
           thinkingMetadata: { maxThinkingTokens: 31999 }, todos: [], permissionMode: "bypassPermissions",
         }));
         parentUuid = uuid;

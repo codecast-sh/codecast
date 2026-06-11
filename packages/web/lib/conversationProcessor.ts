@@ -46,6 +46,14 @@ export function isSystemMessage(content: string): boolean {
   return SYSTEM_MESSAGE_PREFIXES.some(prefix => content.startsWith(prefix));
 }
 
+/** Synthetic truncation notice the CLI injects into imported sessions for the
+ * model's context. Context-only — hide it from every user-facing surface. */
+export const IMPORT_NOTICE_PREFIX = "[Codecast import]";
+
+export function isImportNotice(content: string | null | undefined): boolean {
+  return !!content && content.trimStart().startsWith(IMPORT_NOTICE_PREFIX);
+}
+
 export function isCommandMessage(content: string): boolean {
   const trimmed = content.trim();
   return COMMAND_PATTERNS.some(pattern => pattern.test(trimmed));
@@ -109,6 +117,7 @@ export function getConversationPreview(
   return processed
     .filter(m => {
       if (isSystemMessage(m.cleanContent)) return false;
+      if (isImportNotice(m.cleanContent)) return false;
       if (m.role === "user") {
         const msgNorm = m.cleanContent.toLowerCase().trim().slice(0, 80);
         if (msgNorm === titleNorm) return false;
@@ -134,6 +143,16 @@ export function cleanTitle(title: string): string {
   if (title.includes("<local-command-stdout>")) return "Command output";
 
   return title.replace(/<[^>]+>/g, "").replace(/<[^>]*$/, "").trim().slice(0, 50) || "Untitled";
+}
+
+/** Compact display name for a model id: "claude-opus-4-8" → "opus-4-8",
+ * "claude-sonnet-4-5-20250929" → "sonnet-4-5-'250929". Non-claude ids pass through. */
+export function formatModel(model?: string): string {
+  if (!model) return "";
+  if (model.startsWith("claude-")) {
+    return model.slice("claude-".length).replace("-20", "-'");
+  }
+  return model;
 }
 
 /** Tailwind color class for message-count badges — warmer as count grows. */

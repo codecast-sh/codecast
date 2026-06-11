@@ -11,7 +11,7 @@ import { sessionCardSummary } from "../lib/sessionSummary";
 import { useConversationMessages } from "../hooks/useConversationMessages";
 import { useInboxStore, useTrackedStore, InboxSession, getSessionRenderKey, isConvexId, categorizeSessions, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend, isSessionDismissed, resolveSessionAuthor } from "../store/inboxStore";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "./ui/tooltip";
-import { cleanTitle, msgCountColor } from "../lib/conversationProcessor";
+import { cleanTitle, msgCountColor, formatModel } from "../lib/conversationProcessor";
 import { getLabelColor } from "../lib/labelColors";
 import { fmtDuration } from "./scheduleCadence";
 import { isSessionMessage } from "./sessionMessage";
@@ -421,6 +421,7 @@ export const SessionCard = memo(function SessionCard({
   // the moment status goes active or the server echoes the message.
   const isPendingSend = useInboxStore((st) => convHasPendingSend(st.pendingMessages[session._id]));
   const isPendingWorking = isPendingSend && !isAgentActive(session);
+  const showModelBadge = useInboxStore((st) => st.clientState?.ui?.show_model_badge === true);
   const displayTitle = cleanTitle(session.title || "New Session");
   const isSlashCommand = displayTitle.startsWith("/");
   const cleanedUserMsg = cleanUserMessage(session.last_user_message);
@@ -697,6 +698,11 @@ export const SessionCard = memo(function SessionCard({
           {session.worktree_name && (
             <span className="text-[9px] text-sol-cyan font-mono truncate max-w-[80px]" title={session.worktree_branch || session.worktree_name}>
               {session.worktree_name}
+            </span>
+          )}
+          {showModelBadge && session.model && (
+            <span className="text-[9px] text-sol-text-dim/70 font-mono truncate max-w-[90px] flex-shrink-0" title={session.model}>
+              {formatModel(session.model)}
             </span>
           )}
           {session.message_count > 0 && (
