@@ -79,6 +79,11 @@ export default defineConfig({
       "@radix-ui/react-accordion",
       "@radix-ui/react-avatar",
       "dexie",
+      // Reached only through lazy routes (doc editor, workflow graph, plan
+      // detail) — without pre-bundling, first visit mid-session triggers a
+      // re-optimize that 504s their stale module URLs until restart.
+      "prosemirror-collab",
+      "@xyflow/react",
     ],
   },
   build: {
