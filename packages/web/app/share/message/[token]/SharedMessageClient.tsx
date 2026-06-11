@@ -8,6 +8,8 @@ import { CodeBlock } from "@/components/CodeBlock";
 import { CollapsibleImage } from "@/components/tools/MarkdownRenderer";
 import { entityRemarkPlugins } from "@/lib/remarkEntityIds";
 import { EntityAwareCode, EntityAwareLink } from "@/components/EntityIdPill";
+import { formatToolName } from "@codecast/shared/render";
+import { AppLoader } from "@/components/AppLoader";
 
 function formatRelativeTime(ts: number): string {
   const now = Date.now();
@@ -45,19 +47,6 @@ function ClaudeIcon() {
       </svg>
     </div>
   );
-}
-
-function formatToolName(name: string): string {
-  if (name.startsWith("mcp__claude-in-chrome__")) {
-    const method = name.replace("mcp__claude-in-chrome__", "");
-    return method.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase()).slice(0, 12);
-  }
-  if (name.startsWith("mcp__")) {
-    const parts = name.split("__");
-    const method = parts[2] || parts[1] || name;
-    return method.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase()).slice(0, 12);
-  }
-  return name;
 }
 
 function getToolSummary(tool: any): string | null {
@@ -360,9 +349,7 @@ export default function SharedMessageClient() {
 
   if (data === undefined) {
     return (
-      <main className="min-h-screen bg-sol-bg flex items-center justify-center">
-        <div className="text-sol-text-muted">Loading...</div>
-      </main>
+<AppLoader />
     );
   }
 

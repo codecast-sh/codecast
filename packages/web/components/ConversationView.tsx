@@ -13,10 +13,12 @@ import ReactMarkdownBase from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import { rehypeSearchHighlight } from "../lib/rehypeSearchHighlight";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { isCommandMessage, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractFilePaths, isSystemMessage } from "../lib/conversationProcessor";
+import { isCommandMessage, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractFilePaths, isSystemMessage, isImportNotice, formatModel } from "../lib/conversationProcessor";
 import { classifyApiErrorBanner } from "@codecast/shared/contracts";
+import { formatToolName, isPlanWriteToolCall, truncateStr, shortenUrl, getRelativePath, stripLineNumbers } from "@codecast/shared/render";
 import { getBuiltinCommands } from "../lib/builtinCommands";
 import { resolveSessionSkills } from "../lib/sessionSkills";
+import { entityRoute } from "../lib/entityLinks";
 import { pendingImageUploads, persistDraftImages, restoreDraftImages, settleDraftImageUpload } from "../lib/draftImages";
 import type { SkillItem } from "../lib/conversationProcessor";
 import { createReducer, reducer } from "../lib/messageReducer";
@@ -71,7 +73,7 @@ const api = _typedApi as any;
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { DeviceBadge, RunOnDeviceItems } from "./DeviceBadge";
 import { PermissionStack } from "./PermissionCard";
-import { copyToClipboard, shareOrigin, canonicalUrl } from "../lib/utils";
+import { copyToClipboard, shareOrigin, canonicalUrl, matchesProjectQuery } from "../lib/utils";
 import { MarkdownRenderer, isMarkdownFile, isPlanFile, CollapsibleImage } from "./tools/MarkdownRenderer";
 import { OptionPreview } from "./tools/AskUserQuestionToolView";
 import { useImageGallery, ImageGalleryProvider } from "./ImageGallery";
@@ -98,7 +100,7 @@ import { MessageNavButton } from "./MessageBrowserPopover";
 import type { MentionItem } from "./editor/MentionList";
 import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow } from "lucide-react";
 import { ComposeEditor, type ComposeEditorHandle } from "./editor/ComposeEditor";
-import { useMentionQuery } from "../hooks/useMentionQuery";
+import { useMentionQuery, useMentionServerSearch, SERVER_MENTION_TYPES } from "../hooks/useMentionQuery";
 
 const sacredInputs = new Map<string, { text: string; images?: any[] }>();
 const EMPTY_PENDING: any[] = [];
@@ -403,6 +405,7 @@ export type ConversationData = {
     username: string;
   } | null;
   is_favorite?: boolean;
+  profile_pinned_at?: number;
   workflow_run_id?: string | null;
   is_workflow_primary?: boolean;
   draft_message?: string;
@@ -635,7 +638,33 @@ function FolderGlyph({ className = "w-3 h-3" }: { className?: string }) {
   );
 }
 
-function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
+// ⌥-chord matching uses e.code (physical key): on mac, Option+letter rewrites
+// e.key into the composed character ("˚", "∆", …) so e.key never matches "k"/"j".
+const ALT_GLYPH = typeof navigator !== "undefined" && navigator.platform?.includes("Mac") ? "⌥" : "alt+";
+
+// Imperative surface each null-state picker hands up to NewSessionView's
+// ⌥-chord router (⌥K/⌥↑ → project picker, ⌥J/⌥↓ → agent row).
+type PickerHandle = {
+  focus: () => boolean;
+  isOpen: () => boolean;
+  // Commit the highlighted item and close WITHOUT restoring focus — the router
+  // is about to move focus to the next picker.
+  commitAndClose?: () => void;
+};
+
+// "Back to the input" after a picker exits: whatever was focused when it
+// opened, else the composer textarea (the only textarea on the null-state
+// surface) — so Enter lands you typing even if the picker was opened while
+// focus sat on body.
+function restorePickerFocus(prev: HTMLElement | null) {
+  if (prev && prev !== document.body && document.contains(prev)) {
+    prev.focus();
+    return;
+  }
+  document.querySelector<HTMLTextAreaElement>("textarea")?.focus();
+}
+
+function ProjectSwitcher({ conversation, handleRef }: { conversation: ConversationData; handleRef?: React.MutableRefObject<PickerHandle | null> }) {
   const freshProjects = useQuery(api.users.getRecentProjectPaths, { limit: 15 });
   const cachedProjects = useInboxStore((s) => s.recentProjects);
   const setRecentProjects = useInboxStore((s) => s.setRecentProjects);
@@ -666,7 +695,8 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
 
   // --- keyboard picker ---------------------------------------------------
   // The chip row doubles as a keyboard listbox. It is dormant for mouse users
-  // (renders exactly as before); pressing ↑ from the message box activates it.
+  // (renders exactly as before); ⌥K/⌥↑ anywhere in the new-session view
+  // activates it (NewSessionView's chord router).
   const [picking, setPicking] = useState(false);
   const [filter, setFilter] = useState("");
   const [hi, setHi] = useState(0);
@@ -678,8 +708,7 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
   // overflow is reachable without the mouse. Reuses the modal's match rule.
   const pickList = useMemo<{ path: string }[]>(() => {
     if (filter.trim()) {
-      const q = filter.toLowerCase();
-      return recentProjects.filter((p: { path: string }) => p.path.toLowerCase().includes(q));
+      return recentProjects.filter((p: { path: string }) => matchesProjectQuery(p.path, filter));
     }
     const base: { path: string }[] = currentPath ? [{ path: currentPath }] : [];
     return base.concat(visibleProjects);
@@ -690,7 +719,7 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
   const exitPicker = useCallback((restoreFocus = true) => {
     setPicking(false);
     setFilter("");
-    if (restoreFocus) prevFocusRef.current?.focus();
+    if (restoreFocus) restorePickerFocus(prevFocusRef.current);
   }, []);
 
   const focusPicker = useCallback(() => {
@@ -701,17 +730,6 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
     requestAnimationFrame(() => pickerRef.current?.focus());
     return true;
   }, []);
-
-  // Expose the focus hook so the message box's ↑ gesture can hand off into the
-  // picker. Mirrors window.__CODECAST_NEW_SESSION — present only while this
-  // null-state surface is mounted, so the gesture is inert in normal convos.
-  useMountEffect(() => {
-    const w = window as unknown as { __CODECAST_FOCUS_PROJECTS?: () => boolean };
-    w.__CODECAST_FOCUS_PROJECTS = focusPicker;
-    return () => {
-      if (w.__CODECAST_FOCUS_PROJECTS === focusPicker) delete w.__CODECAST_FOCUS_PROJECTS;
-    };
-  });
 
   const handleSwitch = useCallback(async (projectPath: string, forceIsolated?: boolean) => {
     const trimmed = projectPath.trim();
@@ -741,17 +759,34 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
     });
   }, [storeSession, conversation._id, convCommand, currentPath, isolated]);
 
+  // Hand the imperative surface up to NewSessionView's ⌥-chord router.
+  // Re-assigned every render so isOpen/commitAndClose read fresh state.
+  useEffect(() => {
+    if (!handleRef) return;
+    handleRef.current = {
+      focus: focusPicker,
+      isOpen: () => picking,
+      commitAndClose: () => {
+        const sel = pickList[clampedHi];
+        if (sel) handleSwitch(sel.path);
+        exitPicker(false);
+      },
+    };
+  });
+  useEffect(() => () => { if (handleRef) handleRef.current = null; }, [handleRef]);
+
   // Focus lives in a real <input> (below) so the global capture-phase shortcut
   // dispatcher treats us as "typing" and suppresses single-letter hotkeys
   // (f/t/d/…). Letters + Backspace are handled natively by the input (onChange);
-  // we only intercept the keys that drive chip selection.
+  // we only intercept the keys that drive chip selection. ⌥H/⌥L mirror ←/→ so
+  // the whole flow stays on the Option layer (⌥K in, ⌥H/⌥L move, ⌥J onward).
   const handlePickerKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "ArrowRight") {
+    if (e.key === "ArrowRight" || (e.altKey && e.code === "KeyL")) {
       e.preventDefault();
       setHi((i) => (pickList.length ? (i + 1) % pickList.length : 0));
       return;
     }
-    if (e.key === "ArrowLeft") {
+    if (e.key === "ArrowLeft" || (e.altKey && e.code === "KeyH")) {
       e.preventDefault();
       setHi((i) => (pickList.length ? (i - 1 + pickList.length) % pickList.length : 0));
       return;
@@ -763,7 +798,8 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
       exitPicker();
       return;
     }
-    // ↓/Esc/Tab drop back to the message box (↓ mirrors the ↑ that entered).
+    // ↓/Esc/Tab drop back to the message box (⌥J — handled by the chord
+    // router before we see it — commits and moves on to the agent row).
     if (e.key === "ArrowDown" || e.key === "Escape" || e.key === "Tab") {
       e.preventDefault();
       e.stopPropagation();
@@ -867,14 +903,14 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
             autoComplete="off"
             className="w-28 bg-transparent text-sol-cyan placeholder:text-sol-text-dim outline-none border-0 p-0"
           />
-          <span className="text-sol-text-dim/70">←/→ move · ↵ select · esc back</span>
+          <span className="text-sol-text-dim/70">←/→ move · ↵ select · {ALT_GLYPH}J agent · esc back</span>
         </div>
       ) : recentProjects.length > 0 ? (
         <button
           onClick={focusPicker}
           className="text-[10px] text-sol-text-dim/60 hover:text-sol-text-dim transition-colors"
         >
-          press ↑ to pick a folder
+          press {ALT_GLYPH}K to pick a folder · {ALT_GLYPH}J to pick an agent
         </button>
       ) : null}
 
@@ -899,13 +935,21 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
   );
 }
 
-function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedWorkflowId, onSelectWorkflow, workflows }: {
+const AGENT_OPTIONS = [
+  { type: "claude_code", label: "Claude" },
+  { type: "codex", label: "Codex" },
+  { type: "cursor", label: "Cursor" },
+  { type: "gemini", label: "Gemini" },
+] as const;
+
+function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedWorkflowId, onSelectWorkflow, workflows, handleRef }: {
   conversation: ConversationData;
   showWorkflow: boolean;
   onToggleWorkflow: () => void;
   selectedWorkflowId: string;
   onSelectWorkflow: (id: string) => void;
   workflows: Array<{ _id: string; name: string }> | undefined;
+  handleRef?: React.MutableRefObject<PickerHandle | null>;
 }) {
   const convCommand = useInboxStore((s) => s.convCommand);
   // Narrowed: only _id/agent_type are read here — neither churns on a heartbeat.
@@ -932,32 +976,88 @@ function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedW
     }
   }, [storeSession, conversation._id, convCommand, currentAgent]);
 
-  const agents = [
-    { type: "claude_code" as const, label: "Claude" },
-    { type: "codex" as const, label: "Codex" },
-    { type: "cursor" as const, label: "Cursor" },
-    { type: "gemini" as const, label: "Gemini" },
-  ];
+  // --- keyboard mode (mirrors the project picker's) -----------------------
+  // Entered via ⌥J/⌥↓ from NewSessionView's chord router. Focus is held in a
+  // real (1px, read-only) <input> so the capture-phase shortcut dispatcher
+  // treats this as typing and single letters can't fire global hotkeys.
+  const [picking, setPicking] = useState(false);
+  const [hi, setHi] = useState(0);
+  const holderRef = useRef<HTMLInputElement>(null);
+  const prevFocusRef = useRef<HTMLElement | null>(null);
+
+  const exitAgentPicker = useCallback((restoreFocus = true) => {
+    setPicking(false);
+    if (restoreFocus) restorePickerFocus(prevFocusRef.current);
+  }, []);
+
+  const focusAgentPicker = useCallback(() => {
+    prevFocusRef.current = document.activeElement as HTMLElement | null;
+    setHi(Math.max(0, AGENT_OPTIONS.findIndex((a) => a.type === currentAgent)));
+    setPicking(true);
+    requestAnimationFrame(() => holderRef.current?.focus());
+    return true;
+  }, [currentAgent]);
+
+  const handleAgentKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "ArrowRight" || (e.altKey && e.code === "KeyL")) {
+      e.preventDefault();
+      setHi((i) => (i + 1) % AGENT_OPTIONS.length);
+      return;
+    }
+    if (e.key === "ArrowLeft" || (e.altKey && e.code === "KeyH")) {
+      e.preventDefault();
+      setHi((i) => (i - 1 + AGENT_OPTIONS.length) % AGENT_OPTIONS.length);
+      return;
+    }
+    if (e.key === "Enter") {
+      e.preventDefault();
+      const sel = AGENT_OPTIONS[Math.min(hi, AGENT_OPTIONS.length - 1)];
+      if (sel) {
+        handleAgentSwitch(sel.type);
+        if (showWorkflow) onToggleWorkflow();
+      }
+      exitAgentPicker();
+      return;
+    }
+    // ↓/Esc/Tab drop back to the message box. ⌥K/⌥↑ (chord router) climbs to
+    // the project picker; our holder input exits via onBlur when focus moves.
+    if (e.key === "ArrowDown" || e.key === "Escape" || e.key === "Tab") {
+      e.preventDefault();
+      e.stopPropagation();
+      exitAgentPicker();
+    }
+  }, [hi, handleAgentSwitch, exitAgentPicker, showWorkflow, onToggleWorkflow]);
+
+  // Hand the imperative surface up to NewSessionView's ⌥-chord router.
+  useEffect(() => {
+    if (!handleRef) return;
+    handleRef.current = { focus: focusAgentPicker, isOpen: () => picking };
+  });
+  useEffect(() => () => { if (handleRef) handleRef.current = null; }, [handleRef]);
 
   return (
     <div className="flex flex-col items-center gap-2 px-4 pb-7">
-      <div className="flex items-center gap-1.5">
-        {agents.map((a) => {
+      <div className={`flex items-center gap-1.5 rounded-lg transition-all ${picking ? "ring-1 ring-sol-cyan/40 bg-sol-cyan/[0.03] p-1.5" : ""}`}>
+        {AGENT_OPTIONS.map((a, i) => {
           const isActive = currentAgent === a.type && !showWorkflow;
+          const isHi = picking && i === hi;
           return (
             <button
               key={a.type}
               onClick={() => { handleAgentSwitch(a.type); if (showWorkflow) onToggleWorkflow(); }}
+              onMouseEnter={() => { if (picking) setHi(i); }}
               className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border transition-all ${
-                isActive
-                  ? a.type === "claude_code"
-                    ? "bg-sol-yellow/15 text-sol-yellow border-sol-yellow/40"
-                    : a.type === "codex"
-                      ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/40"
-                      : a.type === "cursor"
-                        ? "bg-purple-500/15 text-purple-400 border-purple-500/40"
-                        : "bg-blue-500/15 text-blue-400 border-blue-500/40"
-                  : "border-sol-border/30 text-sol-text-dim hover:text-sol-text hover:border-sol-border/60"
+                isHi
+                  ? "border-sol-cyan/70 bg-sol-cyan/15 text-sol-cyan ring-1 ring-sol-cyan/50"
+                  : isActive
+                    ? a.type === "claude_code"
+                      ? "bg-sol-yellow/15 text-sol-yellow border-sol-yellow/40"
+                      : a.type === "codex"
+                        ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/40"
+                        : a.type === "cursor"
+                          ? "bg-purple-500/15 text-purple-400 border-purple-500/40"
+                          : "bg-blue-500/15 text-blue-400 border-blue-500/40"
+                    : "border-sol-border/30 text-sol-text-dim hover:text-sol-text hover:border-sol-border/60"
               }`}
             >
               <AgentTypeIcon agentType={a.type} />
@@ -980,6 +1080,21 @@ function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedW
           Workflow
         </button>
       </div>
+
+      {picking && (
+        <div className="flex items-center gap-2 text-[11px] font-mono">
+          <input
+            ref={holderRef}
+            readOnly
+            value=""
+            onKeyDown={handleAgentKeyDown}
+            onBlur={() => exitAgentPicker(false)}
+            aria-label="choose agent"
+            className="w-px bg-transparent outline-none border-0 p-0 caret-transparent"
+          />
+          <span className="text-sol-text-dim/70">←/→ move · ↵ select · esc back</span>
+        </div>
+      )}
 
       {showWorkflow && (
         <select
@@ -1025,13 +1140,41 @@ export function NewSessionView({ conversation, agentControls }: { conversation: 
     onSelectWorkflow: setLocalWorkflowId,
     workflows: undefined,
   };
+  // Spatial ⌥-chords for the whole new-session surface, capture-phase on
+  // window so they work no matter what holds focus (textarea, toggle, body):
+  // ⌥K/⌥↑ climbs to the project picker; ⌥J/⌥↓ drops to the agent row,
+  // committing the picker's highlighted project on the way through. Enter
+  // inside either picker returns focus to the input. Self-gating: the listener
+  // exists only while this null-state surface is mounted. e.code, not e.key —
+  // mac Option+letter composes special characters into e.key.
+  const projectsRef = useRef<PickerHandle | null>(null);
+  const agentsRef = useRef<PickerHandle | null>(null);
+  useEffect(() => {
+    const onChord = (e: KeyboardEvent) => {
+      if (!e.altKey || e.metaKey || e.ctrlKey || e.shiftKey) return;
+      const up = e.code === "KeyK" || e.code === "ArrowUp";
+      const down = e.code === "KeyJ" || e.code === "ArrowDown";
+      if (!up && !down) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (up) {
+        if (!projectsRef.current?.isOpen()) projectsRef.current?.focus();
+      } else {
+        if (projectsRef.current?.isOpen()) projectsRef.current.commitAndClose?.();
+        if (!agentsRef.current?.isOpen()) agentsRef.current?.focus();
+      }
+    };
+    window.addEventListener("keydown", onChord, true);
+    return () => window.removeEventListener("keydown", onChord, true);
+  }, []);
+
   // Project picker sits up top; a flex spacer pushes the agent picker down so it
   // pins to the bottom, directly above the message input (the host renders the
   // input right after this view). Needs a full-height parent.
   return (
     <div className="flex flex-col items-center w-full flex-1 min-h-0">
       <ErrorBoundary name="ProjectSwitcher" level="inline">
-        <ProjectSwitcher conversation={conversation} />
+        <ProjectSwitcher conversation={conversation} handleRef={projectsRef} />
       </ErrorBoundary>
       <div className="flex-1" />
       <AgentSwitcher
@@ -1041,6 +1184,7 @@ export function NewSessionView({ conversation, agentControls }: { conversation: 
         selectedWorkflowId={ac.selectedWorkflowId}
         onSelectWorkflow={ac.onSelectWorkflow}
         workflows={ac.workflows}
+        handleRef={agentsRef}
       />
     </div>
   );
@@ -1388,10 +1532,6 @@ function ApiErrorCard({ error, compact = false }: { error: ParsedApiError; compa
   );
 }
 
-function truncateStr(s: string, max: number): string {
-  return s.length > max ? s.slice(0, max) + "..." : s;
-}
-
 function summarizeBashCommand(cmd: string): string {
   let c = stripCdPrefix(cmd);
   c = c.replace(/\/Users\/\w+\//g, '~/');
@@ -1424,18 +1564,6 @@ function parseCastCommand(tool: ToolCall): ParsedCastCommand | null {
     const input = JSON.parse(tool.input);
     return parseCastCommandString(String(input.command || input.cmd || ""));
   } catch { return null; }
-}
-
-function shortenUrl(url: string): string {
-  try {
-    const parsed = new URL(url);
-    const host = parsed.hostname.replace(/^www\./, "");
-    const path = parsed.pathname;
-    if (path === "/" || path === "") return host;
-    return host + (path.length > 25 ? path.slice(0, 22) + "..." : path);
-  } catch {
-    return truncateStr(url, 40);
-  }
 }
 
 function hasRichMarkdown(text: string): boolean {
@@ -1636,14 +1764,6 @@ function formatFullTimestamp(ts: number): string {
   });
 }
 
-function stripLineNumbers(content: string): string {
-  // Strip Claude Code's line number format: "   42→content" or "42→content"
-  return content
-    .split("\n")
-    .map((line) => line.replace(/^\s*\d+→/, ""))
-    .join("\n");
-}
-
 function ClaudeIcon() {
   return (
     <span className="w-6 h-6 rounded bg-sol-orange flex items-center justify-center shrink-0">
@@ -1698,21 +1818,6 @@ function assistantLabel(agentType?: string): string {
   return "Claude";
 }
 
-
-function formatModel(model?: string): string {
-  if (!model) return "";
-  // Shorten long model names
-  if (model.includes("claude-sonnet")) {
-    return model.replace("claude-sonnet-", "sonnet-").replace("-20", "-'");
-  }
-  if (model.includes("claude-opus")) {
-    return model.replace("claude-opus-", "opus-").replace("-20", "-'");
-  }
-  if (model.includes("claude-haiku")) {
-    return model.replace("claude-haiku-", "haiku-").replace("-20", "-'");
-  }
-  return model;
-}
 
 function ConversationMetadata({
   agentType,
@@ -2278,83 +2383,6 @@ function getFileExtension(filePath: string): string | undefined {
     sh: "bash", bash: "bash", zsh: "bash", swift: "swift", kt: "kotlin",
   };
   return ext ? langMap[ext] : undefined;
-}
-
-function getRelativePath(fullPath: string): string {
-  // Try to extract relative path from common patterns
-  // /Users/*/src/project/path -> project/path
-  // /home/*/projects/project/path -> project/path
-  const patterns = [
-    /\/Users\/[^/]+\/src\/(.+)$/,
-    /\/Users\/[^/]+\/(.+)$/,
-    /\/home\/[^/]+\/(?:src|projects|code)\/(.+)$/,
-    /\/home\/[^/]+\/(.+)$/,
-  ];
-  for (const pattern of patterns) {
-    const match = fullPath.match(pattern);
-    if (match) return match[1];
-  }
-  // Fallback: show last 3 path components
-  const parts = fullPath.split("/").filter(Boolean);
-  return parts.slice(-3).join("/");
-}
-
-const mcpToolNames: Record<string, string> = {
-  "mcp__claude-in-chrome__computer": "Browser",
-  "mcp__claude-in-chrome__navigate": "Navigate",
-  "mcp__claude-in-chrome__read_page": "Read Page",
-  "mcp__claude-in-chrome__find": "Find",
-  "mcp__claude-in-chrome__form_input": "Form",
-  "mcp__claude-in-chrome__javascript_tool": "JS",
-  "mcp__claude-in-chrome__tabs_context_mcp": "Tabs",
-  "mcp__claude-in-chrome__tabs_create_mcp": "New Tab",
-  "mcp__claude-in-chrome__update_plan": "Plan",
-  "mcp__claude-in-chrome__gif_creator": "GIF",
-  "mcp__claude-in-chrome__read_console_messages": "Console",
-  "mcp__claude-in-chrome__read_network_requests": "Network",
-  "mcp__claude-in-chrome__get_page_text": "Page Text",
-  "mcp__claude-in-chrome__upload_image": "Upload",
-  "mcp__claude-in-chrome__resize_window": "Resize",
-  "mcp__claude-in-chrome__shortcuts_list": "Shortcuts",
-  "mcp__claude-in-chrome__shortcuts_execute": "Shortcut",
-};
-
-const codexToolNames: Record<string, string> = {
-  shell_command: "Terminal",
-  shell: "Terminal",
-  exec_command: "Terminal",
-  "container.exec": "Terminal",
-  commandExecution: "Terminal",
-  apply_patch: "Patch",
-  file_read: "Read",
-  file_write: "Write",
-  file_edit: "Edit",
-  fileChange: "Patch",
-  web_search: "Search",
-  web_fetch: "Fetch",
-  code_search: "Search",
-  code_analysis: "Analyze",
-};
-
-function formatToolName(name: string): string {
-  if (mcpToolNames[name]) return mcpToolNames[name];
-  if (codexToolNames[name]) return codexToolNames[name];
-  if (name.startsWith("mcp__")) {
-    const parts = name.split("__");
-    const method = parts[2] || parts[1] || "MCP";
-    return method.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
-  }
-  return name.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
-}
-
-function isPlanWriteToolCall(tc: ToolCall): boolean {
-  if (tc.name !== "Write") return false;
-  try {
-    const parsed = JSON.parse(tc.input);
-    return String(parsed.file_path || "").includes('.claude/plans/');
-  } catch {
-    return false;
-  }
 }
 
 function isAlwaysVisibleToolCall(tc: ToolCall): boolean {
@@ -3348,8 +3376,8 @@ function CastEntityCard({ type, shortId, convexId }: { type: "task" | "plan" | "
 
   const handleClick = (e: React.MouseEvent) => {
     e.stopPropagation();
-    const route = type === "doc" ? `/docs/${entity._id}` : type === "plan" ? `/plans/${entity._id}` : `/tasks/${entity._id}`;
-    router.push(route);
+    const route = entityRoute(type, entity._id);
+    if (route) router.push(route);
   };
 
   const status = entity.status || (type === "doc" ? null : "open");
@@ -4756,9 +4784,9 @@ function ContextBlockPill({ ctx }: { ctx: ParsedContextBlock }) {
   const config = CONTEXT_TYPE_CONFIG[ctx.type] || CONTEXT_TYPE_CONFIG.task;
   const Icon = config.icon;
 
-  const handleClick = ctx.id ? (e: React.MouseEvent) => {
+  const route = ctx.id ? entityRoute(ctx.type, ctx.id) : null;
+  const handleClick = route ? (e: React.MouseEvent) => {
     e.stopPropagation();
-    const route = ctx.type === "doc" ? `/docs/${ctx.id}` : ctx.type === "plan" ? `/plans/${ctx.id}` : `/tasks/${ctx.id}`;
     router.push(route);
   } : undefined;
 
@@ -6840,6 +6868,14 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     return (acTrigger.type === "@" ? rawQuery.match(/^[\w./\\-]*/)?.[0] ?? "" : rawQuery).toLowerCase();
   }, [acTrigger, message]);
 
+  // While an @-mention is being typed, also search the server — it reaches
+  // sessions/entities outside the local cache window. People are fully cached
+  // locally, so only the windowed types go over the wire.
+  const { items: acServerItems, loading: acServerLoading } = useMentionServerSearch(
+    acTrigger?.type === "@" ? acQuery : null,
+    { teamId: composeTeamId ? String(composeTeamId) : undefined, types: SERVER_MENTION_TYPES },
+  );
+
   const acItems: AcItem[] = useMemo(() => {
     if (!acTrigger) return [];
     if (acTrigger.type === "/") {
@@ -6852,11 +6888,11 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       const items: AcItem[] = [];
       const currentMentionItems = mentionItemsRef?.current;
 
+      // Cap per type so a flood of sessions doesn't push tasks/docs out.
+      const perTypeCap = acQuery ? 5 : 6;
+      const perType: Record<string, number> = {};
+      const entityMatches: AcItem[] = [];
       if (currentMentionItems?.length) {
-        // Cap per type so a flood of sessions doesn't push tasks/docs out.
-        const perTypeCap = acQuery ? 5 : 6;
-        const perType: Record<string, number> = {};
-        const entityMatches: AcItem[] = [];
         for (const m of currentMentionItems) {
           if (acQuery) {
             const hit =
@@ -6877,8 +6913,32 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
             image: m.image,
           });
         }
-        items.push(...entityMatches);
       }
+
+      // Server results fill in below the cache hits, deduped by id, sharing the
+      // same per-type budget so the dropdown stays scannable.
+      const localIds = new Set(entityMatches.map(m => m.id));
+      for (const m of acServerItems) {
+        if (!m.id || localIds.has(m.id)) continue;
+        const c = perType[m.type] || 0;
+        if (c >= perTypeCap + 3) continue;
+        perType[m.type] = c + 1;
+        entityMatches.push({
+          label: m.label,
+          description: m.sublabel,
+          type: m.type,
+          id: m.id,
+          shortId: m.shortId,
+          image: m.image,
+        });
+      }
+
+      // Regroup same-type items contiguously (first-appearance type order): the
+      // dropdown renders grouped-by-type and its selection index math assumes
+      // each type occupies one contiguous run of acItems.
+      const typeOrder: string[] = [];
+      for (const it of entityMatches) if (!typeOrder.includes(it.type)) typeOrder.push(it.type);
+      for (const t of typeOrder) items.push(...entityMatches.filter(it => it.type === t));
 
       const fileMatches = (filePathsRef.current || [])
         .filter(p => {
@@ -6892,7 +6952,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       return items;
     }
     return [];
-  }, [acTrigger, acQuery, skills]);
+  }, [acTrigger, acQuery, skills, acServerItems]);
 
   const clampedAcIndex = acItems.length > 0 ? Math.min(acIndex, acItems.length - 1) : 0;
 
@@ -7886,19 +7946,6 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       }
     }
 
-    // ↑ on the first line steps up into the new-session project picker (mirrors
-    // the image / queued-message gestures above). Self-gating: the global hook
-    // exists only while that picker is mounted, so ↑ is untouched in normal convos.
-    if (e.key === "ArrowUp" && pastedImages.length === 0 && queuedMessages.length === 0 && selectedImageIndex === null && selectedQueueIndex === null) {
-      const ta = textareaRef.current;
-      const onFirstLine = !!ta && ta.selectionStart === ta.selectionEnd && ta.value.slice(0, ta.selectionStart).indexOf("\n") === -1;
-      const focusProjects = (window as unknown as { __CODECAST_FOCUS_PROJECTS?: () => boolean }).__CODECAST_FOCUS_PROJECTS;
-      if (onFirstLine && focusProjects?.()) {
-        e.preventDefault();
-        return;
-      }
-    }
-
     if (e.key === "Escape") {
       e.preventDefault();
       e.stopPropagation();
@@ -8181,7 +8228,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
               </div>
             </div>
           )}
-          {acTrigger && acItems.length > 0 && (() => {
+          {acTrigger && (acItems.length > 0 || (acTrigger.type === "@" && acServerLoading)) && (() => {
             const typeConfig: Record<string, { icon: typeof User; color: string; label: string }> = {
               person: { icon: User, color: "text-sol-green", label: "People" },
               task: { icon: CheckSquare, color: "text-sol-yellow", label: "Tasks" },
@@ -8243,6 +8290,15 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                       </div>
                     );
                   })}
+                  {acTrigger.type === "@" && acServerLoading && (
+                    <div className="px-3 py-2 flex items-center gap-2 text-[11px] text-sol-text-dim border-t border-sol-border/30">
+                      <svg className="w-3 h-3 animate-spin" viewBox="0 0 24 24" fill="none">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v3a5 5 0 00-5 5H4z" />
+                      </svg>
+                      <span>Searching everything&hellip;</span>
+                    </div>
+                  )}
                 </div>
               </div>
             );
@@ -8666,6 +8722,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const convLink = useCallback((id: string) => `/conversation/${id}`, []);
 
   const generateShareLink = useMutation(api.messages.generateMessageShareLink);
+  const pinToProfile = useMutation(api.conversations.pinToProfile);
+  const unpinFromProfile = useMutation(api.conversations.unpinFromProfile);
   // Session-control commands (fork/restart/repair/rewind/sendKeys/sendEscape)
   // route through the local-first convCommand action — optimistic + dispatch
   // outbox — instead of direct useMutation. The command strings map to Convex
@@ -8800,6 +8858,12 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const messagesFromConv = conversation?.messages;
   const messages = useMemo<Message[]>(() => {
     if (!messagesFromConv) return EMPTY_MESSAGES;
+    // Context-only import truncation notices are never user-facing. Rows synced by
+    // older CLIs still carry them; drop here (some() guard keeps the common-case
+    // array identity stable).
+    const base = messagesFromConv.some(m => m.role === "user" && isImportNotice(m.content))
+      ? messagesFromConv.filter(m => !(m.role === "user" && isImportNotice(m.content)))
+      : messagesFromConv;
     // A real (JSONL) AskUserQuestion tool call carries full fidelity. During the
     // brief race before its tool_use is detected, the daemon may also emit a
     // synthetic `interactive-prompt-` scrape of the same on-screen menu — a
@@ -8808,15 +8872,15 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     // /agents, …) are *only ever* synthetic and have no JSONL counterpart, so a
     // conversation-global "drop all synthetic polls" filter wrongly erases them.
     // Suppress a synthetic poll only when a real AUQ sits near it in time.
-    const realAskTimes = messagesFromConv
+    const realAskTimes = base
       .filter(m =>
         m.tool_calls?.some(tc => tc.name === "AskUserQuestion") &&
         !m.message_uuid?.startsWith("interactive-prompt-")
       )
       .map(m => m.timestamp);
-    if (realAskTimes.length === 0) return messagesFromConv;
+    if (realAskTimes.length === 0) return base;
     const DUP_WINDOW_MS = 2 * 60_000;
-    return messagesFromConv.filter(m => {
+    return base.filter(m => {
       if (!m.message_uuid?.startsWith("interactive-prompt-")) return true;
       return !realAskTimes.some(rt => Math.abs(rt - m.timestamp) <= DUP_WINDOW_MS);
     });
@@ -11527,6 +11591,29 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                         </svg>
                         {conversation.is_favorite ? "Remove from favorites" : "Add to favorites"}
                         <MenuKeyCaps action="conv.favorite" />
+                      </DropdownMenuItem>
+                    )}
+                    {isOwner && (
+                      <DropdownMenuItem onSelect={() => {
+                        const pinned = !!conversation.profile_pinned_at;
+                        setTimeout(async () => {
+                          try {
+                            if (pinned) {
+                              await unpinFromProfile({ conversation_id: conversation._id as any });
+                              toast.success("Removed from your public profile");
+                            } else {
+                              await pinToProfile({ conversation_id: conversation._id as any });
+                              toast.success("Pinned — this session is now public on your profile");
+                            }
+                          } catch (e: any) {
+                            toast.error(e?.message?.replace(/^.*Error:\s*/, "") || "Failed to update profile pin");
+                          }
+                        });
+                      }}>
+                        <svg className={`w-3 h-3 mr-1.5 ${conversation.profile_pinned_at ? "text-sol-cyan" : ""}`} fill={conversation.profile_pinned_at ? "currentColor" : "none"} viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M16 4v6l3 3v2H5v-2l3-3V4M9 19h6m-3 0v3" />
+                        </svg>
+                        {conversation.profile_pinned_at ? "Unpin from public profile" : "Pin to public profile"}
                       </DropdownMenuItem>
                     )}
                     <DropdownMenuSeparator />
