@@ -1227,14 +1227,21 @@ export const webGetRoadmap = query({
 });
 
 export const webGetDocDetail = query({
+  // Raw string, not v.id("docs"): the docs detail route (/docs/<id>) can be reached
+  // with a non-doc id when a malformed link (e.g. a conversation id) is clicked.
+  // v.id("docs") would throw ArgumentValidationError and crash the whole dashboard
+  // shell; normalizeId returns null for any id outside the docs table so we render a
+  // graceful "not found" instead.
   args: {
-    id: v.id("docs"),
+    id: v.string(),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return null;
 
-    const doc = await ctx.db.get(args.id);
+    const docId = ctx.db.normalizeId("docs", args.id);
+    if (!docId) return null;
+    const doc = await ctx.db.get(docId);
     if (!doc) return null;
 
     const user = await ctx.db.get(userId);
@@ -1380,7 +1387,12 @@ export const webGetTaskDetail = query({
         .first();
     } else {
       try {
-        task = await ctx.db.get(args.id as Id<"tasks">);
+        // db.get is table-blind: a conversation / doc / plan id resolves to *that*
+        // document, not a task. Only accept it if it's genuinely a task (tasks always
+        // carry a `ct-` short_id), otherwise a `/tasks/<conversationId>` link would
+        // render the conversation as a fake task (no created_at -> "Invalid Date").
+        const doc = await ctx.db.get(args.id as Id<"tasks">);
+        task = doc && typeof doc.short_id === "string" && doc.short_id.startsWith("ct-") ? doc : null;
       } catch {
         task = await ctx.db
           .query("tasks")

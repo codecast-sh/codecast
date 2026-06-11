@@ -6,7 +6,8 @@ import Link from "next/link";
 import { useQuery } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, TaskItem, TaskViewPrefs, ProjectItem, resolveAssigneeInfo } from "../../store/inboxStore";
-import { useSyncTasks, useSyncTaskDetail } from "../../hooks/useSyncTasks";
+import { useSyncTasks } from "../../hooks/useSyncTasks";
+import { TaskDetailContent } from "./[id]/page";
 
 import { GenericListView, ListGroup, ItemRowState } from "../../components/GenericListView";
 import { SegmentedToggle } from "../../components/SegmentedToggle";
@@ -71,21 +72,6 @@ export const PRIORITY_CONFIG: Record<TaskPriority, { icon: typeof Minus; label: 
 };
 
 const STATUS_ORDER: TaskStatus[] = ["in_progress", "in_review", "open", "backlog", "done", "dropped"];
-
-function CreatorAvatar({ creator }: { creator?: { name: string; image?: string; github_username?: string } }) {
-  if (!creator) return null;
-  const avatar = creator.image ? (
-    <img src={creator.image} alt={creator.name} title={creator.name} className="w-5 h-5 rounded-full flex-shrink-0" />
-  ) : (
-    <div className="w-5 h-5 rounded-full flex-shrink-0 bg-sol-bg-highlight border border-sol-border/50 flex items-center justify-center text-[8px] font-medium text-sol-text-muted" title={creator.name}>
-      {creator.name.split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase()}
-    </div>
-  );
-  if (creator.github_username) {
-    return <Link href={`/team/${creator.github_username}`} onClick={e => e.stopPropagation()} className="hover:opacity-80">{avatar}</Link>;
-  }
-  return avatar;
-}
 
 export function TaskRow({ task, state, triageMode, onTriage }: { task: TaskItem; state: ItemRowState; triageMode?: boolean; onTriage?: (task: TaskItem, action: "active" | "dismissed") => void }) {
   const activeSession = useInboxStore((s) => s.taskActiveSessions[task._id]) ?? null;
@@ -251,193 +237,6 @@ export function TaskRow({ task, state, triageMode, onTriage }: { task: TaskItem;
   );
 }
 
-
-function ExecutionDetails({ data }: { data: any }) {
-  const hasExecution = data.execution_status || data.steps?.length || data.acceptance_criteria?.length ||
-    data.files_changed?.length || data.execution_concerns || data.estimated_minutes != null || data.actual_minutes != null;
-  if (!hasExecution) return null;
-
-  return (
-    <div className="border-t border-sol-border/20 pt-3 space-y-3">
-      {data.execution_status && (
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-sol-text-dim">Execution</span>
-          <TaskStatusBadge status={data.execution_status} type="execution" />
-        </div>
-      )}
-
-      {(data.estimated_minutes != null || data.actual_minutes != null) && (
-        <div className="flex items-center gap-3 text-xs">
-          <Clock className="w-3 h-3 text-sol-text-dim flex-shrink-0" />
-          {data.estimated_minutes != null && (
-            <span className="text-sol-text-dim">est. <span className="text-sol-text-muted">{data.estimated_minutes}m</span></span>
-          )}
-          {data.actual_minutes != null && (
-            <span className="text-sol-text-dim">actual <span className="text-sol-text-muted">{data.actual_minutes}m</span></span>
-          )}
-        </div>
-      )}
-
-      {data.execution_concerns && (
-        <div className="text-xs p-2 rounded bg-sol-yellow/5 border border-sol-yellow/20 text-sol-yellow">
-          {data.execution_concerns}
-        </div>
-      )}
-
-      {data.acceptance_criteria && data.acceptance_criteria.length > 0 && (
-        <div>
-          <div className="flex items-center gap-1.5 text-xs text-sol-text-dim mb-1.5">
-            <ListChecks className="w-3 h-3" />
-            Acceptance Criteria
-          </div>
-          <div className="space-y-1">
-            {data.acceptance_criteria.map((c: string, i: number) => (
-              <div key={i} className="flex items-start gap-2 text-xs text-sol-text-muted">
-                <ShieldCheck className="w-3 h-3 text-sol-text-dim flex-shrink-0 mt-0.5" />
-                <span>{c}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {data.steps && data.steps.length > 0 && (
-        <div>
-          <div className="text-xs text-sol-text-dim mb-1.5">Steps</div>
-          <div className="space-y-1">
-            {data.steps.map((s: any, i: number) => (
-              <div key={i} className="flex items-start gap-2 text-xs">
-                <span className={`flex-shrink-0 mt-0.5 ${s.done ? "text-sol-green" : "text-sol-text-dim"}`}>
-                  {s.done ? <CheckCircle2 className="w-3 h-3" /> : <Circle className="w-3 h-3" />}
-                </span>
-                <div className="min-w-0">
-                  <span className={s.done ? "text-sol-text-muted line-through" : "text-sol-text-muted"}>{s.title}</span>
-                  {s.verification && (
-                    <div className="text-[10px] text-sol-text-dim mt-0.5">{s.verification}</div>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {data.files_changed && data.files_changed.length > 0 && (
-        <div>
-          <div className="flex items-center gap-1.5 text-xs text-sol-text-dim mb-1.5">
-            <FileCode className="w-3 h-3" />
-            Files ({data.files_changed.length})
-          </div>
-          <div className="space-y-0.5">
-            {data.files_changed.map((f: string) => (
-              <div key={f} className="text-[11px] font-mono text-sol-text-dim truncate">{f}</div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {data.verification_evidence && (
-        <div>
-          <div className="text-xs text-sol-text-dim mb-1">Verification</div>
-          <div className="text-xs text-sol-text-muted whitespace-pre-wrap">{data.verification_evidence}</div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function TaskPreviewPanel({ taskId, onClose, onOpen }: { taskId: string; onClose: () => void; onOpen: () => void }) {
-  useSyncTaskDetail(taskId);
-  const data = useInboxStore((s) => s.tasks[taskId]);
-  const rosterMembers = useInboxStore((s) => s.teamMembers);
-  const rosterCurrentUser = useInboxStore((s) => s.currentUser);
-
-  if (!data) return null;
-  const assigneeInfo = resolveAssigneeInfo((data as any).assignee, (data as any).assignee_info, rosterMembers as any[], rosterCurrentUser);
-
-  const status = STATUS_CONFIG[data.status as TaskStatus] || STATUS_CONFIG.open;
-  const priority = PRIORITY_CONFIG[data.priority as TaskPriority] || PRIORITY_CONFIG.medium;
-  const StatusIcon = status.icon;
-  const PriorityIcon = priority.icon;
-
-  return (
-    <div className="w-[480px] flex-shrink-0 border-l border-sol-border/30 bg-sol-bg overflow-y-auto">
-      <div className="flex items-center justify-between px-4 py-3 border-b border-sol-border/30">
-        <span className="text-xs font-mono text-sol-text-dim">{data.short_id}</span>
-        <div className="flex items-center gap-1">
-          <button onClick={onOpen} className="text-xs px-2 py-1 rounded-md text-sol-text-dim hover:text-sol-cyan hover:bg-sol-bg-alt transition-colors">
-            Open
-          </button>
-          <button onClick={onClose} className="p-1 rounded-md text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt transition-colors">
-            <X className="w-3.5 h-3.5" />
-          </button>
-        </div>
-      </div>
-      <div className="px-4 py-3">
-        <h2 className="text-base font-semibold text-sol-text leading-tight mb-3">{data.title}</h2>
-        <div className="flex items-center gap-3 mb-3">
-          <div className="flex items-center gap-1.5">
-            <StatusIcon className={`w-3.5 h-3.5 ${status.color}`} />
-            <span className="text-xs text-sol-text-muted">{status.label}</span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <PriorityIcon className={`w-3.5 h-3.5 ${priority.color}`} />
-            <span className="text-xs text-sol-text-muted">{priority.label}</span>
-          </div>
-        </div>
-        {data.labels && data.labels.length > 0 && (
-          <div className="flex gap-1 flex-wrap mb-3">
-            {data.labels.map((l: string) => {
-              const lc = getLabelColor(l);
-              return (
-                <span key={l} className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full border ${lc.bg} ${lc.border} ${lc.text}`}>
-                  <span className={`w-1.5 h-1.5 rounded-full ${lc.dot}`} />
-                  {l}
-                </span>
-              );
-            })}
-          </div>
-        )}
-        {assigneeInfo && (
-          <div className="flex items-center gap-2 mb-3 text-xs">
-            <span className="text-sol-text-dim">Assignee</span>
-            <CreatorAvatar creator={assigneeInfo} />
-            <span className="text-sol-text-muted">{assigneeInfo.name}</span>
-          </div>
-        )}
-        {data.description && (
-          <div className="text-sm text-sol-text-muted whitespace-pre-wrap leading-relaxed border-t border-sol-border/20 pt-3 mb-3">
-            {data.description}
-          </div>
-        )}
-        <ExecutionDetails data={data} />
-        {(data as any)?.comments && (data as any).comments.length > 0 && (
-          <div className="border-t border-sol-border/20 pt-3">
-            <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide mb-2">
-              Comments ({(data as any).comments.length})
-            </div>
-            <div className="space-y-2">
-              {(data as any).comments.slice(0, 5).map((c: any) => (
-                <div key={c._id} className="text-xs p-2 rounded bg-sol-bg-alt/30 border border-sol-border/20">
-                  <div className="flex items-center gap-1.5 mb-1">
-                    <span className="font-medium text-sol-text">{c.author}</span>
-                    <span className="text-sol-text-dim">{(() => {
-                      const ago = Date.now() - c.created_at;
-                      if (ago < 3600000) return `${Math.round(ago / 60000)}m`;
-                      if (ago < 86400000) return `${Math.round(ago / 3600000)}h`;
-                      return `${Math.round(ago / 86400000)}d`;
-                    })()}</span>
-                  </div>
-                  <div className="text-sol-text-muted whitespace-pre-wrap">{c.text}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
 
 function fmtDate(ms: number): string {
   const d = new Date(ms);
@@ -1228,7 +1027,7 @@ export function TaskListContent() {
           ]}
           paletteProps={{ teamMembers: teamMembers || undefined, currentUser: currentUser || undefined }}
           renderPreview={(task, onClose, onOpen) => (
-            <TaskPreviewPanel taskId={task._id} onClose={onClose} onOpen={onOpen} />
+            <TaskDetailContent taskId={task._id} variant="inline" onClose={onClose} onOpen={onOpen} />
           )}
           onItemEdit={handleTitleEdit}
           listFooter={undefined}
