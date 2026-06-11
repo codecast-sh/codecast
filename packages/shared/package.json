@@ -8,6 +8,7 @@
   "exports": {
     ".": "./index.ts",
     "./encryption": "./encryption/index.ts",
-    "./contracts": "./contracts/index.ts"
+    "./contracts": "./contracts/index.ts",
+    "./render": "./render/index.ts"
   }
 }
