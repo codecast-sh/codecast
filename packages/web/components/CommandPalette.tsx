@@ -112,7 +112,7 @@ const AGENT_COLORS: Record<string, string> = {
 };
 
 const NAV_PAGES = [
-  { label: "Dashboard", path: "/dashboard", icon: "grid", keywords: "home sessions main" },
+  { label: "Dashboard", path: "/team/activity", icon: "grid", keywords: "home sessions main activity feed team" },
   { label: "Tasks", path: "/tasks", icon: "check", keywords: "todo work items" },
   { label: "Documents", path: "/docs", icon: "file", keywords: "notes plans specs" },
   { label: "Inbox", path: "/inbox", icon: "inbox", keywords: "idle queue waiting" },
@@ -888,6 +888,13 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
     [router, standalone, closePalette]
   );
 
+  // Hand the current query off to the full /search page — the palette shows a
+  // capped preview; the page has filters, pagination, and message context.
+  const openFullSearch = useCallback(() => {
+    const q = query.trim();
+    navigate(q ? `/search?q=${encodeURIComponent(q)}` : "/search");
+  }, [query, navigate]);
+
   const navigateToSession = useCallback(
     (
       conv: { _id: string; session_id?: string; title?: string; updated_at?: number; project_path?: string; git_root?: string; agent_type?: string; message_count?: number; is_idle?: boolean; user_id?: string; authorName?: string | null; authorAvatar?: string | null },
@@ -1144,7 +1151,12 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
           placeholder={hasTargets ? "Action or jump to..." : "Jump to..."}
           className="flex-1 bg-transparent text-[15px] text-sol-text placeholder:text-sol-text-dim/60 outline-none"
           autoFocus
-          onKeyDown={() => {}}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+              e.preventDefault();
+              openFullSearch();
+            }
+          }}
         />
         <kbd className="px-1.5 py-0.5 text-[10px] font-medium text-sol-text-dim bg-sol-bg-alt rounded border border-sol-border/80 tracking-wide">
           ESC
@@ -1368,7 +1380,7 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
               <CommandPrimitive.Item
                 key={`proj-${dir}`}
                 value={`workspace ${getShortPath(dir)} ${dir}`}
-                onSelect={() => navigate(`/dashboard?dir=${encodeURIComponent(dir)}`)}
+                onSelect={() => navigate(`/team/activity?filter=my&dir=${encodeURIComponent(dir)}`)}
                 className={itemClass}
               >
                 <span className="text-sol-text-dim flex-shrink-0">
@@ -1403,6 +1415,22 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
                 </svg>
               </span>
               <span className="truncate">New session: &ldquo;{query.trim().length > 40 ? query.trim().slice(0, 40) + "..." : query.trim()}&rdquo;</span>
+            </CommandPrimitive.Item>
+          </CommandPrimitive.Group>
+        )}
+
+        {query.trim().length >= 2 && (
+          <CommandPrimitive.Group className={groupClass}>
+            <CommandPrimitive.Item
+              value="__search__page"
+              onSelect={openFullSearch}
+              className={itemClass}
+            >
+              <Search className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
+              <span className="truncate flex-1">
+                Open full search for &ldquo;{query.trim().length > 40 ? query.trim().slice(0, 40) + "..." : query.trim()}&rdquo;
+              </span>
+              <kbd className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-sol-bg-alt border border-sol-border/40 text-sol-text-dim">&#8984;&#9166;</kbd>
             </CommandPrimitive.Item>
           </CommandPrimitive.Group>
         )}
@@ -1492,6 +1520,12 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
             <kbd className="px-1.5 py-0.5 bg-sol-bg rounded border border-sol-border/80 text-sol-text-secondary">&#9166;</kbd>
             open
           </span>
+          {query.trim().length >= 2 && (
+            <span className="flex items-center gap-1">
+              <kbd className="px-1.5 py-0.5 bg-sol-bg rounded border border-sol-border/80 text-sol-text-secondary">&#8984;&#9166;</kbd>
+              full search
+            </span>
+          )}
         </div>
         <span className="flex items-center gap-1">
           <kbd className="inline-flex items-center gap-0.5 px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80 text-sol-text-secondary">

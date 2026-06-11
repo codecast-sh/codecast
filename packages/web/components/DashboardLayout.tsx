@@ -48,10 +48,6 @@ import { useTipActions } from "../tips";
 
 interface DashboardLayoutProps {
   children: ReactNode;
-  filter?: "my" | "team";
-  onFilterChange?: (filter: "my" | "team") => void;
-  directoryFilter?: string | null;
-  onDirectoryFilterChange?: (directory: string | null) => void;
   hideSidebar?: boolean;
 }
 
@@ -124,7 +120,7 @@ export function DashboardLayout(props: DashboardLayoutProps) {
   );
 }
 
-function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilter, onDirectoryFilterChange, hideSidebar }: DashboardLayoutProps) {
+function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   const { isAuthenticated, isLoading: isAuthLoading } = useConvexAuth();
   const isGuest = !isAuthenticated && !isAuthLoading;
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
@@ -140,7 +136,18 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
     s => s.viewingDismissedId,
     s => s.newSession.isOpen,
     s => s.tabs.length,
+    s => s.activeTabId,
+    s => s.tabs.find(t => t.id === s.activeTabId)?.path,
   ]);
+  // The activity feed (/team/activity) carries the active workspace filter in its
+  // URL as `?dir=`. The sidebar lives outside the tab's search-param context, so we
+  // derive the filter here from the active tab's stored path and feed it down — this
+  // drives the "Workspaces" highlight and the new-session git-context fallback below.
+  const activeTabPath = s.tabs.find(t => t.id === s.activeTabId)?.path ?? "";
+  const directoryFilter = useMemo(() => {
+    const query = activeTabPath.split("?")[1];
+    return query ? new URLSearchParams(query).get("dir") : null;
+  }, [activeTabPath]);
   const isZenMode = s.clientState.ui?.zen_mode ?? false;
   const sidebarCollapsed = s.clientState.ui?.sidebar_collapsed ?? false;
   const rawLayout = s.clientState.layouts?.dashboard ?? DEFAULT_LAYOUT;
@@ -758,10 +765,7 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
                 <div className="h-full bg-sol-bg-alt overflow-auto border-r border-sol-border/30">
                   <ErrorBoundary name="Sidebar" level="panel">
                     <Sidebar
-                      filter={filter}
-                      onFilterChange={onFilterChange}
                       directoryFilter={directoryFilter}
-                      onDirectoryFilterChange={onDirectoryFilterChange}
                       isMobileOpen={isMobileSidebarOpen}
                       onMobileClose={() => setIsMobileSidebarOpen(false)}
                     />
@@ -786,10 +790,7 @@ function DashboardLayoutInner({ children, filter, onFilterChange, directoryFilte
           <div className="md:hidden fixed inset-y-0 left-0 z-50 w-[85vw] max-w-sm shadow-xl animate-slide-in-left">
             <ErrorBoundary name="Sidebar" level="panel">
               <Sidebar
-                filter={filter}
-                onFilterChange={onFilterChange}
                 directoryFilter={directoryFilter}
-                onDirectoryFilterChange={onDirectoryFilterChange}
                 isMobileOpen={isMobileSidebarOpen}
                 onMobileClose={() => setIsMobileSidebarOpen(false)}
               />

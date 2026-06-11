@@ -8,6 +8,7 @@ import {
   Terminal, Bot, RefreshCw, User, KeyRound, Users, Plug, Monitor, Bell, Laptop,
 } from "lucide-react";
 import { useIsDesktop } from "@/lib/desktop";
+import { useInboxStore } from "@/store/inboxStore";
 
 const baseTabs = [
   { name: "CLI", path: "/settings/cli", icon: Terminal },
@@ -28,6 +29,11 @@ export function SettingsLayout() {
   const router = useRouter();
   const isDesktop = useIsDesktop();
   const tabs = isDesktop ? [...baseTabs, desktopTab] : baseTabs;
+  // Return to the same home the left sidebar uses: the team feed when a team is
+  // active, otherwise the inbox. (The old "/dashboard" target was a degenerate,
+  // unpadded twin of /team/activity that rendered the feed edge-to-edge.)
+  const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id);
+  const homeHref = activeTeamId ? "/team/activity" : "/inbox";
 
   return (
     <AuthGuard>
@@ -37,7 +43,7 @@ export function SettingsLayout() {
             <h1 className="text-2xl font-semibold text-sol-text">Settings</h1>
             <Button
               variant="ghost"
-              onClick={() => router.push("/dashboard")}
+              onClick={() => router.push(homeHref)}
               className="text-sol-base1"
             >
               Back to Dashboard

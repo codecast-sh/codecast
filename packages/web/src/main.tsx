@@ -48,5 +48,5 @@ idle(() => {
   })();
   if (!onAppPath && !hasAuth) return;
   void import("@/app/inbox/page");
-  void import("@/app/dashboard/page");
+  void import("@/app/team/activity/page");
 });

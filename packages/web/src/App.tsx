@@ -26,7 +26,6 @@ const ResetPassword = lazy(() => import("@/app/reset-password/page"));
 const AuthCli = lazy(() => import("@/app/auth/cli/page"));
 const JoinTeam = lazy(() => import("@/app/join/[code]/page"));
 
-const Dashboard = lazy(() => import("@/app/dashboard/page"));
 const Inbox = lazy(() => import("@/app/inbox/page"));
 const Feed = lazy(() => import("@/app/feed/page"));
 const Search = lazy(() => import("@/app/search/page"));
@@ -38,6 +37,7 @@ const Conversation = lazy(() => import("@/app/conversation/[id]/page"));
 const ConversationDiff = lazy(() => import("@/app/conversation/[id]/diff/page"));
 const Share = lazy(() => import("@/app/share/[token]/page"));
 const ShareMessage = lazy(() => import("@/app/share/message/[token]/page"));
+const PublicProfile = lazy(() => import("@/app/u/[username]/page"));
 
 const CommitView = lazy(() => import("@/app/commit/[owner]/[repo]/[sha]/page"));
 const PrView = lazy(() => import("@/app/pr/[owner]/[repo]/[number]/page"));
@@ -157,10 +157,9 @@ export function App() {
               <Route path="config" element={<E name="ConfigPage"><ConfigPage /></E>} />
             </Route>
 
-            {/* Standalone dashboard pages — kept outside the shared shell because
-                they pass page-specific props to DashboardLayout (dashboard's
-                directory filter, windows' hideSidebar) or aren't tab-routable. */}
-            <Route path="dashboard" element={<E name="Dashboard"><Dashboard /></E>} />
+            {/* Standalone shell pages — kept outside the shared shell because they
+                pass page-specific props to DashboardLayout (windows' hideSidebar) or
+                aren't tab-routable. */}
             <Route path="explore" element={<E name="Explore"><Explore /></E>} />
             <Route path="timeline" element={<E name="Timeline"><Timeline /></E>} />
             <Route path="windows" element={<E name="Windows"><Windows /></E>} />
@@ -200,6 +199,15 @@ export function App() {
               <Route path="integrations/github-app" element={<E name="SettingsIntegrations"><SettingsIntegrationsGithub /></E>} />
               <Route path="desktop" element={<E name="SettingsDesktop"><SettingsDesktop /></E>} />
             </Route>
+
+            {/* Public profiles — anonymous, guest-viewable, at the ROOT (/<handle>).
+                MUST be last: React Router ranks static segments above this dynamic
+                one, so every real route still wins; only unmatched single-segment
+                paths fall through here. Claim collisions are blocked by
+                RESERVED_USERNAMES in convex/users.ts (keep it in sync with the
+                top-level routes above). NOT in the dashboard shell or TabContent;
+                the query layer enforces the opt-in 404. */}
+            <Route path=":username" element={<E name="PublicProfile"><PublicProfile /></E>} />
           </Routes>
         </Suspense>
       </ErrorBoundary>

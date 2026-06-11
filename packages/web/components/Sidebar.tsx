@@ -20,10 +20,10 @@ import { Workflow } from "lucide-react";
 const api = _api as any;
 
 interface SidebarProps {
-  filter?: "my" | "team";
-  onFilterChange?: (filter: "my" | "team") => void;
+  // The active workspace filter, derived from the activity-feed tab's `?dir=` by
+  // DashboardLayout (the feed lives at /team/activity). Drives the "Workspaces"
+  // highlight; clicking a workspace navigates there with the param toggled.
   directoryFilter?: string | null;
-  onDirectoryFilterChange?: (directory: string | null) => void;
   isMobileOpen?: boolean;
   onMobileClose?: () => void;
   isNarrow?: boolean;
@@ -248,7 +248,7 @@ function NavSection({
   );
 }
 
-export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen = false, onMobileClose, isNarrow = false }: SidebarProps) {
+export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, isNarrow = false }: SidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
   const isInbox = pathname === "/conversation" || pathname?.startsWith("/conversation/") || pathname === "/inbox" || pathname?.startsWith("/inbox/");
@@ -321,14 +321,18 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
 
   const handleDirectoryClick = (dir: string) => {
     const newDir = directoryFilter === dir ? null : dir;
-    if (!pathname?.startsWith("/dashboard")) {
-      if (newDir) {
-        router.push(`/dashboard?dir=${encodeURIComponent(newDir)}`);
-      } else {
-        router.push("/dashboard");
-      }
+    // Workspace filtering is personal-scoped: it matches your own sessions by the
+    // path's leaf, so it only makes sense on the "my" feed (the team feed would send
+    // a machine-local absolute path to the server and match nothing). Hence filter=my.
+    const params = new URLSearchParams({ filter: "my" });
+    if (newDir) params.set("dir", newDir);
+    const target = `/team/activity?${params.toString()}`;
+    // Already on the feed → replace (just retune the filter, no history entry);
+    // otherwise push so we navigate to it. The feed reads these params from the URL.
+    if (pathname?.startsWith("/team/activity")) {
+      router.replace(target);
     } else {
-      onDirectoryFilterChange?.(newDir);
+      router.push(target);
     }
     onMobileClose?.();
   };

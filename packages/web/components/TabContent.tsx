@@ -27,7 +27,6 @@ const Conversation = lazy(() => import("@/app/conversation/[id]/page"));
 const ConversationDiff = lazy(() => import("@/app/conversation/[id]/diff/page"));
 const Inbox = lazy(() => import("@/app/inbox/page"));
 const Feed = lazy(() => import("@/app/feed/page"));
-const Dashboard = lazy(() => import("@/app/dashboard/page"));
 const Workflows = lazy(() => import("@/app/workflows/dashboard"));
 const Routines = lazy(() => import("@/app/workflows/page"));
 const Schedules = lazy(() => import("@/app/schedules/page"));
@@ -64,7 +63,6 @@ const ROUTES: RouteEntry[] = [
   { pattern: /^\/projects$/, paramNames: [], component: Projects },
   { pattern: /^\/inbox$/, paramNames: [], component: Inbox },
   { pattern: /^\/feed$/, paramNames: [], component: Feed },
-  { pattern: /^\/dashboard$/, paramNames: [], component: Dashboard },
   { pattern: /^\/workflows$/, paramNames: [], component: Workflows },
   { pattern: /^\/routines$/, paramNames: [], component: Routines },
   { pattern: /^\/schedules$/, paramNames: [], component: Schedules },
@@ -152,12 +150,14 @@ export function TabContent() {
   // On full-page navigation (address bar, external link), the active tab's
   // stored path may differ from the browser URL. Override it at render time so
   // TabPanes immediately render the correct content (no effect-timing race).
-  // The store is updated in the effect below.
+  // The store is updated in the effect below. Full-path compare: an entry URL
+  // that differs only in query (e.g. /search?q=new vs a restored /search?q=old)
+  // must also win, or the restored tab silently clobbers the typed query.
   const navUrl = useRef<string | null>(window.location.pathname + window.location.search);
   let renderTabs = tabs;
   if (navUrl.current && activeTabId) {
     const active = tabs.find((t: AppTab) => t.id === activeTabId);
-    if (active && active.path.split("?")[0] !== navUrl.current.split("?")[0]) {
+    if (active && active.path !== navUrl.current) {
       const url = navUrl.current;
       renderTabs = tabs.map((t: AppTab) =>
         t.id === activeTabId ? { ...t, path: url } : t
@@ -171,7 +171,7 @@ export function TabContent() {
     const store = useInboxStore.getState();
     if (!store.activeTabId) return;
     const active = store.tabs.find((t: AppTab) => t.id === store.activeTabId);
-    if (active && active.path.split("?")[0] !== url.split("?")[0]) {
+    if (active && active.path !== url) {
       store.updateTab(store.activeTabId, { path: url });
     }
   }, []);
