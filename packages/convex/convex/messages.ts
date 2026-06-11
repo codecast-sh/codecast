@@ -80,18 +80,40 @@ export function buildExistingMessagePatch(
   return Object.keys(patch).length > 0 ? patch : null;
 }
 
-// Newest assistant model in a batch — rolled up to conversations.model so list
+// A /model switch emits a user line `<local-command-stdout>Set model to <Name>`
+// and NO assistant line until the next turn, so it must count as a model signal
+// or the rollup (and forks, which stamp conversations.model on every line) lag
+// one turn behind the switch. Maps the display name ("Fable 5") to the id shape
+// stored everywhere else ("claude-fable-5"). "Set model to Default" doesn't name
+// a concrete model — not a signal; the next assistant turn records the real one.
+const MODEL_SWITCH_RE =
+  /<local-command-stdout>Set model to (?:\u001b\[\d+m)*(opus|sonnet|haiku|fable)\s*([\d.]*)/i;
+export function modelFromSwitchLine(content: string | undefined): string | null {
+  const m = content?.match(MODEL_SWITCH_RE);
+  if (!m) return null;
+  const version = m[2] ? `-${m[2].replace(/\.$/, "").replace(/\./g, "-")}` : "";
+  return `claude-${m[1].toLowerCase()}${version}`;
+}
+
+// Newest model signal in a batch — rolled up to conversations.model so list
 // surfaces (inbox badge, session pickers) can read it without scanning messages.
-// "<synthetic>" marks system-generated assistant entries (error banners), never
-// a real model.
+// Signals: assistant lines record the model a turn ran on; user /model switch
+// lines record where the session is headed. "<synthetic>" marks system-generated
+// assistant entries (error banners), never a real model.
 export function lastKnownModelFromBatch(
-  messages: Array<{ role: string; model?: string; timestamp?: number }>,
+  messages: Array<{ role: string; model?: string; content?: string; timestamp?: number }>,
 ): string | null {
   let best: { ts: number; model: string } | null = null;
   for (const m of messages) {
-    if (m.role !== "assistant" || !m.model || m.model === "<synthetic>") continue;
+    const model =
+      m.role === "assistant" && m.model && m.model !== "<synthetic>"
+        ? m.model
+        : m.role === "user"
+          ? modelFromSwitchLine(m.content)
+          : null;
+    if (!model) continue;
     const ts = m.timestamp || 0;
-    if (!best || ts >= best.ts) best = { ts, model: m.model };
+    if (!best || ts >= best.ts) best = { ts, model };
   }
   return best?.model ?? null;
 }
@@ -594,7 +616,7 @@ export const addMessage = mutation({
       updated_at: now,
       last_message_role: args.role,
     };
-    const msgModel = lastKnownModelFromBatch([{ role: args.role, model: args.model, timestamp: msgTimestamp }]);
+    const msgModel = lastKnownModelFromBatch([{ role: args.role, model: args.model, content: contentToStore, timestamp: msgTimestamp }]);
     if (msgModel && msgModel !== conversation.model) {
       convPatch.model = msgModel;
     }
