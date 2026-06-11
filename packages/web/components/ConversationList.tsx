@@ -6,7 +6,7 @@ import { useState, useMemo, useRef, useCallback } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useConvexSync } from "../hooks/useConvexSync";
-import { cleanTitle, isSystemMessage, isCommandMessage } from "../lib/conversationProcessor";
+import { cleanTitle, isSystemMessage, isCommandMessage, isImportNotice } from "../lib/conversationProcessor";
 import { shouldShowSession, isSubagent, isTrivialSubagent, isWarmupSession } from "../lib/sessionFilters";
 import { useConversationsWithError } from "../hooks/useConversationsWithError";
 import { useStableOrder } from "../hooks/useStableOrder";
@@ -18,6 +18,7 @@ import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { toast } from "sonner";
 import { useInboxStore } from "../store/inboxStore";
 import { soundNewSession } from "../lib/sounds";
+import { matchesProjectQuery } from "../lib/utils";
 
 function VisibilityDropdown({
   conversationId,
@@ -405,7 +406,7 @@ function ConvSubtitleSection({ conv, expanded }: { conv: Conversation; expanded?
       const isCmd = m.role === "user" && isCommandMessage(m.content);
       return { ...m, cleanContent: isCmd ? (commandLabel(m.content) || clean(m.content)) : clean(m.content), isCmd };
     })
-    .filter(m => m.cleanContent.length > 0 && !isSystemMessage(m.cleanContent));
+    .filter(m => m.cleanContent.length > 0 && !isSystemMessage(m.cleanContent) && !isImportNotice(m.cleanContent));
 
   const hasBullets = processed.length > 0;
 
@@ -777,8 +778,7 @@ export function NewSessionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
   const filteredProjects = useMemo(() => {
     if (!frozenProjects || frozenProjects.length === 0) return [];
     if (!projectPath) return frozenProjects;
-    const lower = projectPath.toLowerCase();
-    return frozenProjects.filter((p: { path: string }) => p.path.toLowerCase().includes(lower));
+    return frozenProjects.filter((p: { path: string }) => matchesProjectQuery(p.path, projectPath));
   }, [frozenProjects, projectPath]);
 
   useWatchEffect(() => {

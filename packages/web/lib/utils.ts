@@ -25,6 +25,20 @@ export function canonicalUrl(): string {
   return `${shareOrigin()}${window.location.pathname}${window.location.search}${window.location.hash}`;
 }
 
+// Shared match rule for the project pickers (chip picker + new-session modal).
+// Queries match the project NAME (last path segment) anchored at the start of
+// the name or of one of its words ("mobile" → union-mobile), never mid-word.
+// Matching the full path is reserved for queries containing "/" — every recent
+// path shares the ~/src/… prefix, so substring-matching the whole path made
+// almost any letter match every project.
+export function matchesProjectQuery(path: string, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  if (q.includes("/")) return path.toLowerCase().includes(q);
+  const name = path.split("/").filter(Boolean).pop()?.toLowerCase() ?? "";
+  return name.startsWith(q) || name.split(/[-_.]/).some((seg) => seg.startsWith(q));
+}
+
 export async function copyToClipboard(text: string): Promise<void> {
   // Sync execCommand first - must run before dropdown/popup closes and shifts focus
   const textArea = document.createElement("textarea");
