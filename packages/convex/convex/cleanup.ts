@@ -52,6 +52,40 @@ export const deleteSyntheticPromptMessages = internalMutation({
     };
   },
 });
+// Purge synced "[Codecast import] …" truncation notices — synthetic context-only
+// user messages minted by the CLI's jsonlGenerator on truncated imports. New CLIs
+// mark them isMeta in the JSONL (never synced) and skip them at parse time; this
+// drains the rows older daemons already synced. Uses the content search index, so
+// it's a global sweep with no table scan — run repeatedly until matched is 0.
+//
+// Deliberately does NOT decrement conversation.message_count: reconciliation
+// repairs only when backend < local (repairDiscrepancies), so leaving the counter
+// alone keeps backend >= local for old AND new CLIs — no position-reset/re-sync
+// loop. The +1 display skew on a handful of imported conversations is harmless.
+// Run with: npx convex run cleanup:deleteImportNoticeMessages '{"dry_run":true}'
+export const deleteImportNoticeMessages = internalMutation({
+  args: { dry_run: v.optional(v.boolean()) },
+  handler: async (ctx, args) => {
+    const PREFIX = "[Codecast import]";
+    const candidates = await ctx.db
+      .query("messages")
+      .withSearchIndex("search_content_v2", (q) => q.search("content", "Codecast import session truncated"))
+      .take(64);
+    const notices = candidates.filter(
+      (m) => m.role === "user" && m.content?.trimStart().startsWith(PREFIX),
+    );
+    if (!args.dry_run) {
+      for (const m of notices) await ctx.db.delete(m._id);
+    }
+    return {
+      scanned: candidates.length,
+      matched: notices.length,
+      deleted: args.dry_run ? 0 : notices.length,
+      conversations: [...new Set(notices.map((m) => m.conversation_id.toString()))],
+    };
+  },
+});
+
 const EMPTY_GC_BAND_MS = 2 * 60 * 60 * 1000;
 // A managed session beating within this window means a real process (terminal,
 // pre-warmed agent) is still attached — never sweep those.

@@ -72,6 +72,12 @@ export function parseSessionLine(line: string): ClaudeSessionEntry | null {
   }
 }
 
+// Synthetic truncation notice injected by jsonlGenerator on cross-agent/truncated
+// imports. It exists for the model's context only — never show it to users.
+// New imports mark it isMeta (skipped by the generic meta-skip below); this prefix
+// guard also drops it from older JSONL files written before the flag existed.
+export const CODECAST_IMPORT_NOTICE_PREFIX = "[Codecast import]";
+
 export function extractMessages(entries: ClaudeSessionEntry[]): ParsedMessage[] {
   const messages: ParsedMessage[] = [];
   // A slash command's expansion (the command's .md body) is flagged isMeta by Claude Code,
@@ -168,7 +174,9 @@ export function extractMessages(entries: ClaudeSessionEntry[]): ParsedMessage[] 
       }
     }
 
-    if (textContent || thinking || toolCalls.length > 0 || toolResults.length > 0 || images.length > 0) {
+    const isImportNotice = role === "user" && textContent.trimStart().startsWith(CODECAST_IMPORT_NOTICE_PREFIX);
+
+    if (!isImportNotice && (textContent || thinking || toolCalls.length > 0 || toolResults.length > 0 || images.length > 0)) {
       const stopReason = typeof entry.message === "object" && entry.message.stop_reason
         ? entry.message.stop_reason
         : undefined;
