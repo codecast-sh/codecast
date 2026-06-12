@@ -101,6 +101,10 @@ describe("stripLineNumbers", () => {
     expect(stripLineNumbers("   42→const x = 1;")).toBe("const x = 1;");
     expect(stripLineNumbers("1→a\n  2→b")).toBe("a\nb");
   });
+  it("strips the tab-separated gutter format", () => {
+    expect(stripLineNumbers("   42\tconst x = 1;")).toBe("const x = 1;");
+    expect(stripLineNumbers("1\ta\n  2\tb")).toBe("a\nb");
+  });
   it("leaves lines without a gutter intact", () => {
     expect(stripLineNumbers("no gutter here")).toBe("no gutter here");
   });
