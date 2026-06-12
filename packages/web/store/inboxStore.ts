@@ -190,6 +190,10 @@ export type InboxSession = {
   // the Pinned group so cards don't reshuffle on agent status churn.
   inbox_pinned_at?: number | null;
   inbox_dismissed_at?: number | null;
+  // Stash = set aside WITHOUT killing. Hides the session from the active
+  // buckets into the Stashed group (above Dismissed) while the agent keeps
+  // running. Same absolute-flag semantics as dismiss; a dismiss clears it.
+  inbox_stashed_at?: number | null;
   last_user_message?: string | null;
   session_error?: string;
   // True when the session's latest turn is an unresolved Claude Code auth/API
@@ -551,6 +555,7 @@ export type AppTab = {
 export type ClientState = {
   current_conversation_id?: string;
   show_dismissed?: boolean;
+  show_stashed?: boolean;
   dismissed_ids?: string[];
 
   ui?: ClientUI;
@@ -573,6 +578,23 @@ type Draft = InboxStoreState;
 
 export function isSessionDismissed(s: Pick<InboxSession, "inbox_dismissed_at">): boolean {
   return !!s.inbox_dismissed_at;
+}
+
+export function isSessionStashed(
+  s: Pick<InboxSession, "inbox_dismissed_at" | "inbox_stashed_at">,
+): boolean {
+  // Dismiss wins: a stashed session that later gets dismissed renders in the
+  // Dismissed bucket, never both.
+  return !!s.inbox_stashed_at && !s.inbox_dismissed_at;
+}
+
+// Out of the active inbox buckets for either reason (dismissed or stashed).
+// Hidden sessions are viewed through the peek path (viewingDismissedId) so
+// navigation never silently resurrects them.
+export function isSessionHidden(
+  s: Pick<InboxSession, "inbox_dismissed_at" | "inbox_stashed_at">,
+): boolean {
+  return !!s.inbox_dismissed_at || !!s.inbox_stashed_at;
 }
 
 // Window the cross-device dismiss reconcile is authoritative over. Mirrors the
@@ -607,7 +629,7 @@ export function sortSessions(sessions: Record<string, InboxSession>): InboxSessi
   // inbox pays on every liveness sync (see Chrome trace: sortSessions hot on
   // every status flip). Output order is byte-identical to the old comparator.
   const keyed = Object.values(sessions)
-    .filter((s) => !isSessionDismissed(s))
+    .filter((s) => !isSessionHidden(s))
     .map((s) => ({ s, rank: sessionSortRank(s) }));
   keyed.sort((a, b) => {
     for (let i = 0; i < a.rank.length; i++) {
@@ -838,6 +860,7 @@ export interface CategorizedSessions {
   newSessions: InboxSession[];
   needsInput: InboxSession[];
   working: InboxSession[];
+  stashed: InboxSession[];
   dismissed: InboxSession[];
   subsByParent: Map<string, InboxSession[]>;
   forksByParent: Map<string, InboxSession[]>;
@@ -858,6 +881,9 @@ export function categorizeSessions(
   const dismissed = Object.values(sessions)
     .filter(isSessionDismissed)
     .sort((a, b) => (b.inbox_dismissed_at || 0) - (a.inbox_dismissed_at || 0));
+  const stashed = Object.values(sessions)
+    .filter(isSessionStashed)
+    .sort((a, b) => (b.inbox_stashed_at || 0) - (a.inbox_stashed_at || 0));
   const allIds = new Set(sorted.map((s) => s._id));
 
   const subsByParent = new Map<string, InboxSession[]>();
@@ -953,7 +979,7 @@ export function categorizeSessions(
     });
   const working = sorted.filter((s) => (!waitingForInput.get(s._id) && (s.message_count > 0 || hasPendingSend(s)) && !s.is_pinned) && isFlat(s));
 
-  return { sorted, pinned, newSessions, needsInput, working, dismissed, subsByParent, forksByParent, orchestrationGroups };
+  return { sorted, pinned, newSessions, needsInput, working, stashed, dismissed, subsByParent, forksByParent, orchestrationGroups };
 }
 
 export function visualOrderSessions(
@@ -1062,11 +1088,11 @@ export function findReusableBlankSession(
     // create is in flight; an orphaned stub (create failed) must not be reused.
     if (!isConvexId(s._id) && !state.pendingSessionCreates[s._id]) continue;
     if (state.pendingMessages[s._id]?.length) continue;
-    // Dismissing a blank REAPS it server-side (dispatch.applyPatches tears down
-    // the pre-warm agent on the inbox_dismissed_at transition, then the conv is
-    // deleted) — so a dismissed row here is a corpse awaiting the ghost sweep,
+    // Dismissing OR stashing a blank REAPS it server-side (dispatch.applyPatches
+    // tears down the pre-warm agent on the hide transition, then the conv is
+    // deleted) — so a hidden row here is a corpse awaiting the ghost sweep,
     // never a reuse candidate. The next summon mints a fresh pre-warm instead.
-    if (s.inbox_dismissed_at || s.is_pinned) continue;
+    if (s.inbox_dismissed_at || s.inbox_stashed_at || s.is_pinned) continue;
     if (s.is_subagent || s.parent_conversation_id || s.worktree_name || s.workflow_run_id) continue;
     if (s.active_task || s.active_plan) continue;
     if (s.agent_type !== opts.agentType) continue;
@@ -1182,10 +1208,12 @@ interface InboxStoreState {
   dispatchErrors: number;
 
   // -- Wrapped actions (middleware creates aliases from do_* -> *) --
-  stashSession: (id: string, opts?: { kill?: boolean }) => void;
+  stashSession: (id: string) => void;
+  dismissSession: (id: string) => void;
   markSessionsDismissed: (ids: string[]) => void;
   applyDismissedReconcile: (entries: { _id: string; inbox_dismissed_at: number | null }[], final: boolean) => void;
-  unstashSession: (id: string) => void;
+  applyStashedReconcile: (entries: { _id: string; inbox_stashed_at: number | null }[], final: boolean) => void;
+  restoreSession: (id: string) => void;
   deferSession: (id: string) => void;
   pinSession: (id: string) => void;
   renameSession: (id: string, title: string) => void;
@@ -1251,6 +1279,7 @@ interface InboxStoreState {
   clearSelection: () => void;
   setShowDismissed: (show: boolean) => void;
   toggleShowDismissed: () => void;
+  toggleShowStashed: () => void;
   toggleCollapsedSection: (key: string) => void;
   setViewingDismissedId: (id: string | null) => void;
   getCurrentSession: () => InboxSession | null;
@@ -1863,6 +1892,117 @@ function recordCurrentConversationPointer(
   draft.lastFocusedConversationId = id ?? null;
 }
 
+// Shared body of the dismissed/stashed reconciles. Overlays the server's
+// CURRENT hidden set (within the window) onto the never-prune cache:
+//   SET   — a cached session the server reports hidden (heals a hide made
+//           while this device was offline; the updated_at-keyed session crawl
+//           can never carry it).
+//   CLEAR — (final pass only) a session we have flagged hidden WITHIN the
+//           window that the server no longer reports = un-hidden elsewhere.
+// Both passes skip ids with a pending field override so an in-flight local
+// hide/restore on THIS device always wins (local-first). Per-page calls pass
+// final=false (SET only); the final whole-set call passes true (SET + CLEAR),
+// because CLEAR needs the complete set or a row on a later page would be
+// wrongly un-hidden.
+function applyHiddenReconcileInDraft(
+  draft: any,
+  field: "inbox_dismissed_at" | "inbox_stashed_at",
+  entries: Array<{ _id: string } & Record<string, any>>,
+  final: boolean,
+) {
+  const server = new Map<string, number | null>();
+  for (const e of entries) server.set(e._id, e[field] ?? null);
+  const lockedLocal = (id: string) =>
+    !!draft.pending[`sessions:${id}:${field}`] ||
+    !!draft.pending[`conversations:${id}:${field}`];
+
+  for (const [id, ts] of server) {
+    if (!ts || lockedLocal(id)) continue;
+    const sess = draft.sessions[id];
+    if (sess && sess[field] !== ts) sess[field] = ts;
+    const conv = draft.conversations[id];
+    if (conv && conv[field] !== ts) conv[field] = ts;
+  }
+
+  if (!final) return;
+
+  const cutoff = Date.now() - DISMISS_RECONCILE_WINDOW_MS;
+  for (const id of Object.keys(draft.sessions)) {
+    // Local-only stub ids can never be in the server's hidden set, so its
+    // silence about them carries no signal — clearing here would resurrect a
+    // hidden orphaned stub on every crawl, forever.
+    if (!isConvexId(id)) continue;
+    const sess = draft.sessions[id];
+    const at = sess[field];
+    if (!at || at < cutoff || server.has(id) || lockedLocal(id)) continue;
+    // A BLANK row leaving the server's hidden set usually means the
+    // empty-conversation GC hard-deleted it — un-hiding would resurrect
+    // a ghost "New Session" card into the active inbox. Leave it hidden;
+    // the verified ghost sweep (pruneGhostSessions) removes it, and a real
+    // remote restore re-arrives via the live channel.
+    if ((sess.message_count ?? 0) === 0 && !sess.has_pending) continue;
+    sess[field] = null;
+    const conv = draft.conversations[id];
+    if (conv) conv[field] = null;
+  }
+}
+
+// Shared body of stashSession/dismissSession: hide `id` (and its subagent
+// children) out of the active buckets, advancing the current selection past the
+// removed set. Stash writes inbox_stashed_at; dismiss writes inbox_dismissed_at
+// and clears any stash (the row MOVES to Dismissed — the buckets are exclusive).
+function hideSessionInDraft(draft: any, id: string, mode: "stash" | "dismiss") {
+  const now = Date.now();
+  const field = mode === "dismiss" ? "inbox_dismissed_at" : "inbox_stashed_at";
+  const sessionValues = Object.values(draft.sessions) as InboxSession[];
+  const childIds = sessionValues
+    .filter((s) => s.parent_conversation_id === id)
+    .map((s) => s._id);
+  const allIds = [id, ...childIds];
+  let newSessionId = draft.currentSessionId;
+  if (draft.currentSessionId && allIds.includes(draft.currentSessionId)) {
+    const removedSet = new Set(allIds);
+    const ordered = visualOrderSessions(draft.sessions as Record<string, InboxSession>, draft.sessionsWithQueuedMessages, draft.activeProjectFilter, sessionsWithPendingSend(draft.pendingMessages), { bucketFilter: draft.activeBucketFilter, bucketByConv: convBucketMap(draft.bucketAssignments as Record<string, BucketAssignmentItem>) });
+    const idx = ordered.findIndex((s) => s._id === draft.currentSessionId);
+    const next = ordered.slice(idx + 1).find((s) => !removedSet.has(s._id))
+      ?? ordered.find((s) => !removedSet.has(s._id));
+    newSessionId = next?._id ?? null;
+  }
+  for (const sid of allIds) {
+    // A local-only stub (optimistic create that never landed server-side)
+    // can't be hidden durably: the server never knew it, so the reconcile's
+    // CLEAR pass would un-hide it on every crawl once the pending lock is
+    // lost (it's clobbered wholesale by other windows sharing the IDB).
+    // Hiding it honestly means deleting it — store + IDB (the auto-generated
+    // exclude pending persists the row delete, as with kills).
+    if (!isConvexId(sid)) {
+      delete draft.sessions[sid];
+      delete draft.conversations[sid];
+      delete draft.messages[sid];
+      delete draft.pendingMessages[sid];
+      continue;
+    }
+    const sess = draft.sessions[sid];
+    const wasPinned = sess?.is_pinned;
+    if (sess) {
+      sess[field] = now;
+      if (mode === "dismiss" && sess.inbox_stashed_at) sess.inbox_stashed_at = null;
+      if (wasPinned) {
+        sess.is_pinned = false;
+        sess.inbox_pinned_at = null;
+      }
+    }
+    const conv = draft.conversations[sid];
+    if (conv) {
+      conv[field] = now;
+      if (mode === "dismiss" && conv.inbox_stashed_at) conv.inbox_stashed_at = null;
+      if (wasPinned) conv.inbox_pinned_at = null;
+    }
+  }
+  draft.currentSessionId = newSessionId;
+  recordCurrentConversationPointer(draft, newSessionId ?? undefined);
+}
+
 export const useInboxStore = create<InboxStoreState>(
   mutativeMiddleware((set: any, get: any) => ({
   // -- Initial state --
@@ -2049,53 +2189,18 @@ export const useInboxStore = create<InboxStoreState>(
   // ACTIONS (wrapped by middleware: mutative draft + server dispatch)
   // =====================
 
-  stashSession: action(function (this: Draft, id: string, opts?: { kill?: boolean }) {
-    (opts?.kill ? soundKill : soundDismiss)();
-    const now = Date.now();
-    const sessionValues = Object.values(this.sessions) as InboxSession[];
-    const childIds = sessionValues
-      .filter((s) => s.parent_conversation_id === id)
-      .map((s) => s._id);
-    const allIds = [id, ...childIds];
-    let newSessionId = this.currentSessionId;
-    if (this.currentSessionId && allIds.includes(this.currentSessionId)) {
-      const removedSet = new Set(allIds);
-      const ordered = visualOrderSessions(this.sessions as Record<string, InboxSession>, this.sessionsWithQueuedMessages, this.activeProjectFilter, sessionsWithPendingSend(this.pendingMessages), { bucketFilter: this.activeBucketFilter, bucketByConv: convBucketMap(this.bucketAssignments as Record<string, BucketAssignmentItem>) });
-      const idx = ordered.findIndex(s => s._id === this.currentSessionId);
-      const next = ordered.slice(idx + 1).find(s => !removedSet.has(s._id))
-        ?? ordered.find(s => !removedSet.has(s._id));
-      newSessionId = next?._id ?? null;
-    }
-    for (const sid of allIds) {
-      // A local-only stub (optimistic create that never landed server-side)
-      // can't be dismissed durably: the server never knew it, so the dismissed
-      // reconcile's CLEAR pass would un-dismiss it on every crawl once the
-      // pending lock is lost (it's clobbered wholesale by other windows sharing
-      // the IDB). Dismissing it honestly means deleting it — store + IDB (the
-      // auto-generated exclude pending persists the row delete, as with kills).
-      if (!isConvexId(sid)) {
-        delete this.sessions[sid];
-        delete this.conversations[sid];
-        delete this.messages[sid];
-        delete this.pendingMessages[sid];
-        continue;
-      }
-      const sess = this.sessions[sid];
-      const wasPinned = sess?.is_pinned;
-      if (sess) {
-        sess.inbox_dismissed_at = now;
-        if (wasPinned) {
-          sess.is_pinned = false;
-          sess.inbox_pinned_at = null;
-        }
-      }
-      if (this.conversations[sid]) {
-        (this.conversations[sid] as any).inbox_dismissed_at = now;
-        if (wasPinned) (this.conversations[sid] as any).inbox_pinned_at = null;
-      }
-    }
-    this.currentSessionId = newSessionId;
-    recordCurrentConversationPointer(this, newSessionId ?? undefined);
+  // Stash = set aside WITHOUT killing (Stashed bucket, agent keeps running).
+  stashSession: action(function (this: Draft, id: string) {
+    soundDismiss();
+    hideSessionInDraft(this, id, "stash");
+  }),
+
+  // Dismiss = done with it. The server kills the agent on the dismiss data
+  // transition (dispatch.applyPatches), so this action only has to move the
+  // rows; every dismiss path gets the kill without remembering to ask for it.
+  dismissSession: action(function (this: Draft, id: string) {
+    soundKill();
+    hideSessionInDraft(this, id, "dismiss");
   }),
 
   // Bulk-dismiss a precomputed set of sessions locally (instant, optimistic). A
@@ -2117,54 +2222,15 @@ export const useInboxStore = create<InboxStoreState>(
 
   // Durable cross-device dismiss reconcile (the backstop the live subscription
   // can't provide). `entries` is the server's CURRENT dismissed set within the
-  // window (conversations.listDismissedSessionsLite). Overlays it onto the
-  // never-prune cache:
-  //   SET   — a cached session the server reports dismissed (heals a dismiss made
-  //           while this device was offline; the updated_at-keyed session crawl
-  //           can never carry it).
-  //   CLEAR — (final pass only) a session we have flagged dismissed WITHIN the
-  //           window that the server no longer reports = un-dismissed elsewhere.
-  // Both passes skip ids with a pending inbox_dismissed_at override so an in-flight
-  // local dismiss/unstash on THIS device always wins (local-first). A sync() —
-  // applying server truth, never re-dispatched. Per-page calls pass final=false
-  // (SET only); the final whole-set call passes true (SET + CLEAR), because CLEAR
-  // needs the complete set or a row on a later page would be wrongly un-dismissed.
+  // window (conversations.listDismissedSessionsLite). A sync() — applying
+  // server truth, never re-dispatched. Mechanics in applyHiddenReconcileInDraft.
   applyDismissedReconcile: sync(function (this: Draft, entries: { _id: string; inbox_dismissed_at: number | null }[], final: boolean) {
-    const server = new Map<string, number | null>();
-    for (const e of entries) server.set(e._id, e.inbox_dismissed_at ?? null);
-    const lockedLocal = (id: string) =>
-      !!this.pending[`sessions:${id}:inbox_dismissed_at`] ||
-      !!this.pending[`conversations:${id}:inbox_dismissed_at`];
+    applyHiddenReconcileInDraft(this, "inbox_dismissed_at", entries, final);
+  }),
 
-    for (const [id, ts] of server) {
-      if (!ts || lockedLocal(id)) continue;
-      const sess = this.sessions[id];
-      if (sess && sess.inbox_dismissed_at !== ts) sess.inbox_dismissed_at = ts;
-      const conv = this.conversations[id] as any;
-      if (conv && conv.inbox_dismissed_at !== ts) conv.inbox_dismissed_at = ts;
-    }
-
-    if (!final) return;
-
-    const cutoff = Date.now() - DISMISS_RECONCILE_WINDOW_MS;
-    for (const id of Object.keys(this.sessions)) {
-      // Local-only stub ids can never be in the server's dismissed set, so its
-      // silence about them carries no signal — clearing here would resurrect a
-      // dismissed orphaned stub on every crawl, forever.
-      if (!isConvexId(id)) continue;
-      const sess = this.sessions[id];
-      const at = sess.inbox_dismissed_at;
-      if (!at || at < cutoff || server.has(id) || lockedLocal(id)) continue;
-      // A BLANK row leaving the server's dismissed set usually means the
-      // empty-conversation GC hard-deleted it — un-dismissing would resurrect
-      // a ghost "New Session" card into the active inbox. Leave it dismissed;
-      // the verified ghost sweep (pruneGhostSessions) removes it, and a real
-      // remote un-dismiss re-arrives via the live channel.
-      if ((sess.message_count ?? 0) === 0 && !sess.has_pending) continue;
-      sess.inbox_dismissed_at = null;
-      const conv = this.conversations[id] as any;
-      if (conv) conv.inbox_dismissed_at = null;
-    }
+  // Stashed twin of the dismiss reconcile, fed by listStashedSessionsLite.
+  applyStashedReconcile: sync(function (this: Draft, entries: { _id: string; inbox_stashed_at: number | null }[], final: boolean) {
+    applyHiddenReconcileInDraft(this, "inbox_stashed_at", entries, final);
   }),
 
   // Verified ghost removal — the sessions cache is never-prune, so a
@@ -2260,14 +2326,23 @@ export const useInboxStore = create<InboxStoreState>(
   }),
 
 
-  unstashSession: action(function (this: Draft, id: string) {
+  // Bring a stashed/dismissed session (and its hidden children) back into the
+  // active inbox. Clears BOTH hide flags — un-hiding is un-hiding.
+  restoreSession: action(function (this: Draft, id: string) {
     const childIds = Object.values(this.sessions as Record<string, InboxSession>)
-      .filter((s) => isSessionDismissed(s) && s.parent_conversation_id === id)
+      .filter((s) => isSessionHidden(s) && s.parent_conversation_id === id)
       .map((s) => s._id);
     const allIds = [id, ...childIds];
     for (const sid of allIds) {
-      if (this.sessions[sid]) this.sessions[sid].inbox_dismissed_at = null;
-      if (this.conversations[sid]) (this.conversations[sid] as any).inbox_dismissed_at = null;
+      if (this.sessions[sid]) {
+        this.sessions[sid].inbox_dismissed_at = null;
+        this.sessions[sid].inbox_stashed_at = null;
+      }
+      const conv = this.conversations[sid] as any;
+      if (conv) {
+        conv.inbox_dismissed_at = null;
+        conv.inbox_stashed_at = null;
+      }
     }
     this.currentSessionId = id;
     this.viewingDismissedId = null;
@@ -2897,6 +2972,10 @@ export const useInboxStore = create<InboxStoreState>(
     this.clientState.show_dismissed = this.clientState.show_dismissed === false;
   }),
 
+  toggleShowStashed: action(function (this: Draft) {
+    this.clientState.show_stashed = this.clientState.show_stashed === false;
+  }),
+
   toggleCollapsedSection: action(function (this: Draft, key: string) {
     this.collapsedSections = { ...this.collapsedSections, [key]: !this.collapsedSections[key] };
   }),
@@ -2912,11 +2991,11 @@ export const useInboxStore = create<InboxStoreState>(
   },
 
   injectSession: action(function (this: Draft, session: InboxSession) {
-    // Dismiss is absolute — never altered by viewing. If the injected session
-    // arrived dismissed, surface it through viewingDismissedId so the user can
-    // read it without resurrecting it into the active inbox.
+    // Dismiss/stash are absolute — never altered by viewing. If the injected
+    // session arrived hidden, surface it through viewingDismissedId so the user
+    // can read it without resurrecting it into the active inbox.
     this.sessions[session._id] = { ...session };
-    if (isSessionDismissed(session)) {
+    if (isSessionHidden(session)) {
       this.viewingDismissedId = session._id;
     } else {
       recordSessionView(this, session._id, this.currentSessionId);
@@ -2988,16 +3067,16 @@ export const useInboxStore = create<InboxStoreState>(
     // (in the sidebar, BranchSelector, or a deep link) just sets it as the
     // current conversation. No overlay-on-parent state to keep in sync.
     //
-    // Dismiss is absolute: navigation NEVER clears `inbox_dismissed_at`.
+    // Dismiss/stash are absolute: navigation NEVER clears them.
     // Deep-link / URL `?s=` / popstate / palette / desktop window-focus all
     // funnel through here, and silently resurrecting a dismissed session was
-    // the long-running "dismiss doesn't stick" bug. A dismissed target is
+    // the long-running "dismiss doesn't stick" bug. A hidden target is
     // shown through `viewingDismissedId` (the same view-only path the inbox
-    // sidebar uses when you click a session under "Dismissed"); only an
-    // explicit `unstashSession` or sending a message clears dismiss.
+    // sidebar uses when you click a session under "Stashed"/"Dismissed"); only
+    // an explicit `restoreSession` or sending a message clears the flags.
     const session = this.sessions[id];
     if (session) {
-      if (isSessionDismissed(session)) {
+      if (isSessionHidden(session)) {
         this.viewingDismissedId = id;
       } else {
         recordSessionView(this, id, this.currentSessionId);

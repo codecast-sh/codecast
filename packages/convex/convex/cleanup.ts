@@ -168,13 +168,14 @@ export async function conversationHasNoWork(
 // Reap-vs-protect decision for a GC-eligible empty conversation, given whether a
 // managed session is still heartbeating. A live heartbeat (terminal / pre-warmed
 // agent) protects the row ONLY while it's still active in the inbox; a DISMISSED
-// empty pre-warm's idle agent is cruft and gets reaped (its tmux torn down via the
-// kill_session reapEmptyConversation enqueues). Pure, so it's unit-testable.
+// (or stashed — an empty blank has nothing worth keeping alive) empty pre-warm's
+// idle agent is cruft and gets reaped (its tmux torn down via the kill_session
+// reapEmptyConversation enqueues). Pure, so it's unit-testable.
 export function shouldReapEmpty(
-  conv: { inbox_dismissed_at?: number },
+  conv: { inbox_dismissed_at?: number; inbox_stashed_at?: number },
   hasLiveHeartbeat: boolean,
 ): boolean {
-  return !(hasLiveHeartbeat && !conv.inbox_dismissed_at);
+  return !(hasLiveHeartbeat && !conv.inbox_dismissed_at && !conv.inbox_stashed_at);
 }
 
 // Reap a contentless pre-warm. Two-phase, because the live agent must die BEFORE
@@ -195,6 +196,36 @@ export function shouldReapEmpty(
 //
 // Caller must have confirmed the conversation has no work (conversationHasNoWork,
 // or the GC sweep's inline checks).
+// Enqueue a broadcast kill_session for the conversation's agent, deduped against
+// a still-pending kill so repeated sweeps/dismissals don't pile up commands.
+// Returns true if a command was inserted (false = one is already queued).
+export async function enqueueKillSessionCommand(
+  ctx: { db: any },
+  conv: { _id: any; user_id: any; session_id?: string },
+  now: number = Date.now(),
+): Promise<boolean> {
+  const pending = await ctx.db
+    .query("daemon_commands")
+    .withIndex("by_user_pending", (q: any) => q.eq("user_id", conv.user_id).eq("executed_at", undefined))
+    .collect();
+  const alreadyQueued = hasRecentPendingDaemonCommand(pending, {
+    conversationId: conv._id.toString(),
+    command: "kill_session",
+    now,
+    dedupeWindowMs: 60 * 60 * 1000,
+  });
+  if (alreadyQueued) return false;
+  await ctx.db.insert("daemon_commands", {
+    user_id: conv.user_id,
+    command: "kill_session" as const,
+    // session_id rides along (mirrors conversations.killSession) so the daemon
+    // can still tear the backend down when its conversation mapping is gone.
+    args: JSON.stringify({ conversation_id: conv._id, session_id: conv.session_id }),
+    created_at: now,
+  });
+  return true;
+}
+
 export async function reapEmptyConversation(
   ctx: { db: any },
   conv: { _id: any; user_id: any },
@@ -208,24 +239,7 @@ export async function reapEmptyConversation(
   const hasLiveAgent = sessions.some((m: any) => (m.last_heartbeat ?? 0) > now - LIVE_HEARTBEAT_MS);
 
   if (hasLiveAgent) {
-    const pending = await ctx.db
-      .query("daemon_commands")
-      .withIndex("by_user_pending", (q: any) => q.eq("user_id", conv.user_id).eq("executed_at", undefined))
-      .collect();
-    const alreadyQueued = hasRecentPendingDaemonCommand(pending, {
-      conversationId: conv._id.toString(),
-      command: "kill_session",
-      now,
-      dedupeWindowMs: 60 * 60 * 1000,
-    });
-    if (!alreadyQueued) {
-      await ctx.db.insert("daemon_commands", {
-        user_id: conv.user_id,
-        command: "kill_session" as const,
-        args: JSON.stringify({ conversation_id: conv._id }),
-        created_at: now,
-      });
-    }
+    await enqueueKillSessionCommand(ctx, conv, now);
     return "kill_enqueued";
   }
 
