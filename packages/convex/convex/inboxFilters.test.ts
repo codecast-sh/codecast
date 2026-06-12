@@ -380,7 +380,6 @@ describe("classifyWorkState", () => {
       awaitingInput: false,
       hasPending: false,
       isUnresponsive: false,
-      isPinned: false,
       messageCount: 5,
       ...partial,
     };
@@ -408,36 +407,36 @@ describe("classifyWorkState", () => {
     expect(classifyWorkState(wsi({ agentStatus: "stopped", isIdle: true }))).toBe("needs_input");
   });
 
-  test("THE RULE: an UNPINNED idle session is just idle (NOT needs_input)", () => {
-    // This is the CLI's deliberate divergence from the web inbox: a finished,
-    // unflagged session sits in idle, so `cast monitor` / `--state needs-input`
-    // stays focused on what's actually blocked.
-    expect(classifyWorkState(wsi({ isIdle: true, isPinned: false }))).toBe("idle");
+  test("THE RULE: a settled session with content → needs_input (matches the web inbox)", () => {
+    // The web inbox has no "idle with content" bucket — a finished turn waiting
+    // to be read is the user's ball, so it files under NEEDS INPUT. The CLI
+    // matches; "idle" is reserved for blank sessions.
+    expect(classifyWorkState(wsi({ isIdle: true }))).toBe("needs_input");
   });
 
-  test("THE RULE: a PINNED idle session is promoted to needs_input (ping-me-when-free)", () => {
-    expect(classifyWorkState(wsi({ isIdle: true, isPinned: true }))).toBe("needs_input");
+  test("not yet idle with no active status (mid-grace / just-sent user message) → working", () => {
+    expect(classifyWorkState(wsi({ isIdle: false }))).toBe("working");
   });
 
   test("a pinned session that is actively working stays working (pin doesn't force needs_input)", () => {
-    expect(classifyWorkState(wsi({ agentStatus: "working", isPinned: true, isIdle: false }))).toBe("working");
+    expect(classifyWorkState(wsi({ agentStatus: "working", isIdle: false }))).toBe("working");
   });
 
   test("empty sessions never demand input (no content to read / answer)", () => {
-    // permission_blocked / stopped / pinned-idle all require content to become
+    // permission_blocked / stopped / settled-idle all require content to become
     // needs_input; with zero messages they fall through to idle (startup noise).
     expect(classifyWorkState(wsi({ messageCount: 0, agentStatus: "permission_blocked" }))).toBe("idle");
-    expect(classifyWorkState(wsi({ messageCount: 0, isIdle: true, isPinned: true }))).toBe("idle");
+    expect(classifyWorkState(wsi({ messageCount: 0, isIdle: true }))).toBe("idle");
     expect(classifyWorkState(wsi({ messageCount: 0, agentStatus: "stopped", isIdle: true }))).toBe("idle");
+    expect(classifyWorkState(wsi({ messageCount: 0, isIdle: false }))).toBe("idle");
     // ...but an actively-working empty session (just spawned) is still working.
     expect(classifyWorkState(wsi({ messageCount: 0, agentStatus: "starting" }))).toBe("working");
   });
 
   test("an unresponsive (dead-daemon) session with queued work does NOT count as working", () => {
-    // canDeliver is false, so has_pending can't route it to working; with content
-    // and idle it falls to needs_input only when pinned, else idle.
-    expect(classifyWorkState(wsi({ hasPending: true, isUnresponsive: true, isIdle: true, isPinned: true }))).toBe("needs_input");
-    expect(classifyWorkState(wsi({ hasPending: true, isUnresponsive: true, isIdle: true, isPinned: false }))).toBe("idle");
+    // canDeliver is false, so has_pending can't route it to working; with
+    // content it needs a human to read/restart it.
+    expect(classifyWorkState(wsi({ hasPending: true, isUnresponsive: true, isIdle: true }))).toBe("needs_input");
   });
 });
 
@@ -517,7 +516,6 @@ describe("trustedAgentStatus (stale 'working' trust TTL)", () => {
       awaitingInput: false,
       hasPending: false,
       isUnresponsive: false,
-      isPinned: false,
       messageCount: 5,
     });
   }
@@ -526,7 +524,7 @@ describe("trustedAgentStatus (stale 'working' trust TTL)", () => {
     expect(workStateFor("working", 30_000)).toBe("working");
   });
 
-  test("a session frozen in 'working' for hours reads idle, not working", () => {
-    expect(workStateFor("working", 18 * 60 * 60 * 1000)).toBe("idle");
+  test("a session frozen in 'working' for hours reads needs_input (finished), not working", () => {
+    expect(workStateFor("working", 18 * 60 * 60 * 1000)).toBe("needs_input");
   });
 });
