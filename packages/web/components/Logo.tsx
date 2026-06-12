@@ -20,9 +20,11 @@ const ARROW_PATH =
 function LogoPaths({ monochrome }: { monochrome?: boolean }) {
   return (
     <>
-      {/* C shape - gray */}
-      <path fill={monochrome ? "currentColor" : "#444444"} d={C_PATH} />
-      {/* Play arrow - coral */}
+      {/* C shape - gray. Follows the theme via --logo-c (see globals.css: dark
+          mode lightens it — the light-mode #444 C vanishes on dark backgrounds).
+          Pages with theme-independent light chrome pin it via [--logo-c:#444444]. */}
+      <path fill={monochrome ? "currentColor" : "var(--logo-c, #444444)"} d={C_PATH} />
+      {/* Play arrow - coral, reads well on both themes */}
       <path fill={monochrome ? "currentColor" : "#e86c5d"} d={ARROW_PATH} />
     </>
   );

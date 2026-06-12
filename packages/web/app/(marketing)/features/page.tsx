@@ -266,7 +266,7 @@ export default function CLIPage() {
       <nav className="border-b border-stone-200 bg-stone-50/80 backdrop-blur-sm sticky top-0 z-50">
         <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
           <Link href="/">
-            <Logo size="md" className="text-stone-900" />
+            <Logo size="md" className="[--logo-c:#444444] text-stone-900" />
           </Link>
           <div className="flex items-center gap-3">
             <Link href="/features" className="text-amber-600 font-medium text-sm px-3 py-1.5">
@@ -561,7 +561,7 @@ cast blame src/auth.ts
         <div className="max-w-6xl mx-auto px-6 py-12">
           <div className="grid md:grid-cols-4 gap-8">
             <div>
-              <Logo size="md" className="text-stone-900 mb-4" />
+              <Logo size="md" className="[--logo-c:#444444] text-stone-900 mb-4" />
               <p className="text-sm text-stone-500">
                 The operating system for AI coding agents.
               </p>

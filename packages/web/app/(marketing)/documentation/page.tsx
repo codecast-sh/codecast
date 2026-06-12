@@ -264,7 +264,7 @@ export default function DocsPage() {
         <div className="max-w-[90rem] mx-auto px-6 py-3 flex items-center justify-between">
           <div className="flex items-center gap-6">
             <Link href="/">
-              <Logo size="md" className="text-[#002b36]" />
+              <Logo size="md" className="[--logo-c:#444444] text-[#002b36]" />
             </Link>
             <div className="hidden md:flex items-center gap-1">
               <span style={{ color: SOL.base01 }}>/</span>
@@ -784,6 +784,8 @@ $ cast schedule add "Check for broken tests" --on push`}</Code>
               ["Ctrl+I", "Jump to needs input", "First session waiting for your input"],
               ["Ctrl+P", "Jump to pinned", "Jump to first pinned session"],
               ["Ctrl+Shift+P", "Pin/unpin", "Pin or unpin the current session"],
+              ["Ctrl+L", "Label session", "File the session under a label (type to filter or create)"],
+              ["Ctrl+,", "Cycle view", "Cycle inbox grouping: status / time / label"],
               ["Ctrl+Backspace", "Stash", "Remove session from queue"],
               ["Shift+Backspace", "Defer & advance", "Defer session and move to next"],
               ["Ctrl+Shift+Bksp", "Kill agent", "Kill the session's agent process"],
@@ -803,7 +805,7 @@ $ cast schedule add "Check for broken tests" --on push`}</Code>
                 className="grid grid-cols-[120px_140px_1fr] gap-4 px-4 py-2.5 text-sm items-center"
                 style={{
                   backgroundColor: i % 2 === 0 ? "transparent" : `${SOL.base2}40`,
-                  borderBottom: i < 16 ? `1px solid ${SOL.base2}` : undefined,
+                  borderBottom: i < 18 ? `1px solid ${SOL.base2}` : undefined,
                 }}
               >
                 <kbd className="font-mono text-xs px-2 py-1 rounded inline-block w-fit" style={{ backgroundColor: SOL.base2, color: SOL.base03 }}>{key}</kbd>

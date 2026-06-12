@@ -142,7 +142,7 @@ export default function LandingPage() {
       {/* Nav */}
       <nav className="backdrop-blur-sm sticky top-0 z-50" style={{ borderBottom: '1px solid #eee8d5', backgroundColor: 'rgba(253,246,227,0.8)' }}>
         <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
-          <Logo size="md" className="text-[#002b36]" />
+          <Logo size="md" className="[--logo-c:#444444] text-[#002b36]" />
           <div className="flex items-center gap-3">
             <Link href="/documentation" className="font-medium text-sm px-3 py-1.5 hidden sm:block transition-colors" style={{ color: '#657b83' }} onMouseEnter={e => (e.currentTarget.style.color = '#002b36')} onMouseLeave={e => (e.currentTarget.style.color = '#657b83')}>
               Docs
@@ -863,7 +863,7 @@ export default function LandingPage() {
         <div className="max-w-6xl mx-auto px-6 py-12">
           <div className="grid md:grid-cols-4 gap-8">
             <div>
-              <Logo size="md" className="text-[#002b36] mb-4" />
+              <Logo size="md" className="[--logo-c:#444444] text-[#002b36] mb-4" />
               <p className="text-sm text-[#657b83]">
                 The operating system for AI coding agents.
               </p>

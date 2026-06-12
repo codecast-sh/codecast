@@ -99,6 +99,10 @@ html, body {
   --sol-text-dim: #657b83;
   --sol-text-muted0: #839496;
 
+  /* Logo "C" glyph — dark neutral on light chrome; .dark lightens it (the
+     coral arrow is theme-stable). Static-light pages pin [--logo-c:#444444]. */
+  --logo-c: #444444;
+
   /* Solarized accent colors (work on both light/dark) */
   --sol-yellow: #b58900;
   --sol-orange: #cb4b16;
@@ -135,6 +139,8 @@ html, body {
   --sol-text-muted: #93a1a1;
   --sol-text-dim: #657b83;
   --sol-text-muted0: #839496;
+
+  --logo-c: #93a1a1;
 
   /* Syntax highlighting - Dark mode (same accent colors work well) */
   --hljs-comment: #586e75;
