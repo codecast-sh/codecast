@@ -80,3 +80,30 @@ export function shouldLoadOlder(i: LoadOlderInput): boolean {
   if (!i.userScrolled) return false;
   return i.nearTop;
 }
+
+export interface LoadNewerInput {
+  /** The content-bottom is near the viewport (distance from bottom inside the preload band). */
+  nearBottom: boolean;
+  /** Only target mode (jumped into the middle) ever has content below the window. */
+  hasMoreBelow: boolean;
+  isLoadingOlder: boolean;
+  isLoadingNewer: boolean;
+  /** A pagination/jump cooldown is active; auto-load must stand down. */
+  cooldownActive: boolean;
+}
+
+/**
+ * Decide whether to auto-load the next (newer) page — the mirror of
+ * shouldLoadOlder for scrolling DOWN through a deep-linked (target-mode)
+ * window. Like the older direction, the position trigger alone is forgeable:
+ * when a newer page mounts below while the user sits at the bottom of the
+ * loaded window, the virtualizer's native end-anchor snaps the view to the NEW
+ * bottom, which re-enters the trigger band with no user input and rips through
+ * every remaining page. The caller therefore also gates on a wheel-down "arm"
+ * (consumed per load) exactly as load-older does — that intent state lives
+ * outside this pure function, same as loadOlderArmedRef.
+ */
+export function shouldLoadNewer(i: LoadNewerInput): boolean {
+  if (!i.hasMoreBelow || i.isLoadingOlder || i.isLoadingNewer || i.cooldownActive) return false;
+  return i.nearBottom;
+}

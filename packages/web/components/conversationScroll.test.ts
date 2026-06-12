@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { isJumpReadyToScroll, shouldLoadOlder } from "./conversationScroll";
+import { isJumpReadyToScroll, shouldLoadOlder, shouldLoadNewer } from "./conversationScroll";
 
 // Bottom-pinning is no longer gated here — the virtualizer owns it natively via
 // anchorTo:'end' (virtual-core 3.17+), so there is nothing pure to unit-test for
@@ -107,5 +107,44 @@ describe("shouldLoadOlder", () => {
     // Parked at the tail → suppressed; then a genuine scroll-up → allowed.
     expect(shouldLoadOlder({ ...can, userScrolled: false })).toBe(false);
     expect(shouldLoadOlder({ ...can, userScrolled: true })).toBe(true);
+  });
+});
+
+describe("shouldLoadNewer", () => {
+  const can = {
+    nearBottom: true,
+    hasMoreBelow: true,
+    isLoadingOlder: false,
+    isLoadingNewer: false,
+    cooldownActive: false,
+  };
+
+  test("loads when the user has scrolled down to near the bottom", () => {
+    expect(shouldLoadNewer(can)).toBe(true);
+  });
+
+  test("does NOT load outside target mode (no content below the window)", () => {
+    expect(shouldLoadNewer({ ...can, hasMoreBelow: false })).toBe(false);
+  });
+
+  test("does NOT load when the bottom is still far away", () => {
+    expect(shouldLoadNewer({ ...can, nearBottom: false })).toBe(false);
+  });
+
+  test("does NOT re-enter while a newer page is already loading", () => {
+    expect(shouldLoadNewer({ ...can, isLoadingNewer: true })).toBe(false);
+  });
+
+  test("does NOT fight an in-flight older load", () => {
+    expect(shouldLoadNewer({ ...can, isLoadingOlder: true })).toBe(false);
+  });
+
+  // THE REGRESSION the user reported: loading a newer page snapped the view to
+  // the new bottom (the virtualizer's end-anchor), which re-entered the trigger
+  // band and looped through every remaining page. The pin-back layout effect
+  // holds this cooldown while it restores the pre-load position; auto-load must
+  // stand down for that whole window so the snap can't chain another load.
+  test("stands down during a pagination/jump cooldown (the loop breaker)", () => {
+    expect(shouldLoadNewer({ ...can, cooldownActive: true })).toBe(false);
   });
 });

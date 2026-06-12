@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, memo } from "react";
 import Prism from "prismjs";
 import "prismjs/components/prism-typescript";
 import "prismjs/components/prism-javascript";
@@ -12,39 +12,66 @@ import "prismjs/components/prism-markdown";
 import "prismjs/components/prism-yaml";
 import type { PatchHunk } from "../lib/patchParser";
 
-function computeDiff(oldLines: string[], newLines: string[]): Array<{ type: 'added' | 'removed' | 'context'; content: string }> {
-  const m = oldLines.length;
-  const n = newLines.length;
+// The LCS matrix below is O(m*n) in time and memory; past this many cells we
+// give up on a minimal diff and render the changed region as remove-all/add-all.
+const MAX_LCS_CELLS = 500_000;
 
-  const dp: number[][] = Array(m + 1).fill(null).map(() => Array(n + 1).fill(0));
-  for (let i = 1; i <= m; i++) {
-    for (let j = 1; j <= n; j++) {
-      if (oldLines[i - 1] === newLines[j - 1]) {
-        dp[i][j] = dp[i - 1][j - 1] + 1;
-      } else {
-        dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
-      }
-    }
-  }
+export function computeDiff(oldLines: string[], newLines: string[]): Array<{ type: 'added' | 'removed' | 'context'; content: string }> {
+  const totalOld = oldLines.length;
+  const totalNew = newLines.length;
+
+  // Trim common prefix/suffix so the quadratic LCS only sees the changed
+  // middle. Identical inputs (e.g. a Read result rendered through DiffView)
+  // resolve here in linear time with no matrix at all.
+  const minLen = Math.min(totalOld, totalNew);
+  let prefix = 0;
+  while (prefix < minLen && oldLines[prefix] === newLines[prefix]) prefix++;
+  let suffix = 0;
+  while (
+    suffix < minLen - prefix &&
+    oldLines[totalOld - 1 - suffix] === newLines[totalNew - 1 - suffix]
+  ) suffix++;
 
   const result: Array<{ type: 'added' | 'removed' | 'context'; content: string }> = [];
-  let i = m, j = n;
-  const temp: typeof result = [];
+  for (let k = 0; k < prefix; k++) result.push({ type: 'context', content: oldLines[k] });
 
-  while (i > 0 || j > 0) {
-    if (i > 0 && j > 0 && oldLines[i - 1] === newLines[j - 1]) {
-      temp.push({ type: 'context', content: oldLines[i - 1] });
-      i--; j--;
-    } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
-      temp.push({ type: 'added', content: newLines[j - 1] });
-      j--;
-    } else {
-      temp.push({ type: 'removed', content: oldLines[i - 1] });
-      i--;
+  const m = totalOld - prefix - suffix;
+  const n = totalNew - prefix - suffix;
+
+  if (m > 0 && n > 0 && m * n > MAX_LCS_CELLS) {
+    for (let k = 0; k < m; k++) result.push({ type: 'removed', content: oldLines[prefix + k] });
+    for (let k = 0; k < n; k++) result.push({ type: 'added', content: newLines[prefix + k] });
+  } else if (m > 0 || n > 0) {
+    const dp: number[][] = Array(m + 1).fill(null).map(() => Array(n + 1).fill(0));
+    for (let i = 1; i <= m; i++) {
+      for (let j = 1; j <= n; j++) {
+        if (oldLines[prefix + i - 1] === newLines[prefix + j - 1]) {
+          dp[i][j] = dp[i - 1][j - 1] + 1;
+        } else {
+          dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
+        }
+      }
     }
+
+    let i = m, j = n;
+    const temp: typeof result = [];
+    while (i > 0 || j > 0) {
+      if (i > 0 && j > 0 && oldLines[prefix + i - 1] === newLines[prefix + j - 1]) {
+        temp.push({ type: 'context', content: oldLines[prefix + i - 1] });
+        i--; j--;
+      } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+        temp.push({ type: 'added', content: newLines[prefix + j - 1] });
+        j--;
+      } else {
+        temp.push({ type: 'removed', content: oldLines[prefix + i - 1] });
+        i--;
+      }
+    }
+    for (let k = temp.length - 1; k >= 0; k--) result.push(temp[k]);
   }
 
-  return temp.reverse();
+  for (let k = suffix; k > 0; k--) result.push({ type: 'context', content: oldLines[totalOld - k] });
+  return result;
 }
 
 function highlightCode(code: string, language?: string): string {
@@ -130,6 +157,7 @@ interface FlatDiffLine {
   oldNum?: number;
   newNum?: number;
   wordDiffHtml?: string;
+  html?: string;
 }
 
 interface HunkSeparator {
@@ -284,9 +312,10 @@ interface DiffViewProps {
   startLine?: number;
   maxLines?: number;
   language?: string;
+  showLineNumbers?: boolean;
 }
 
-export function DiffView({
+export const DiffView = memo(function DiffView({
   oldStr,
   newStr,
   hunks,
@@ -294,21 +323,31 @@ export function DiffView({
   startLine = 1,
   maxLines = 10,
   language,
+  showLineNumbers = false,
 }: DiffViewProps) {
   const [fullyExpanded, setFullyExpanded] = useState(false);
 
-  const { items, totalCodeLines } = useMemo(() => {
+  const { items, totalCodeLines, gutterCh } = useMemo(() => {
+    let items: DisplayItem[];
+    let maxLineNum: number;
     if (hunks && hunks.length > 0) {
-      const { items } = hunksToDisplayItems(hunks, language);
-      const totalCodeLines = items.filter(i => i.type !== 'separator').length;
-      return { items, totalCodeLines };
+      ({ items, maxLineNum } = hunksToDisplayItems(hunks, language));
+    } else {
+      const oldLines = (oldStr || "").split('\n');
+      const newLines = (newStr || "").split('\n');
+      const changes = computeDiff(oldLines, newLines);
+      ({ items, maxLineNum } = diffToDisplayItems(changes, startLine, contextLines, language));
     }
-
-    const oldLines = (oldStr || "").split('\n');
-    const newLines = (newStr || "").split('\n');
-    const changes = computeDiff(oldLines, newLines);
-    const result = diffToDisplayItems(changes, startLine, contextLines, language);
-    return { items: result.items, totalCodeLines: result.totalCodeLines };
+    // Highlight once here, not in render — this component sits inside the
+    // frequently re-rendering conversation tree, and Prism per line per render
+    // froze the page whenever a large block was open.
+    items = items.map(item =>
+      item.type === 'separator'
+        ? item
+        : { ...item, html: item.wordDiffHtml ?? highlightCode(item.content, language) },
+    );
+    const totalCodeLines = items.filter(i => i.type !== 'separator').length;
+    return { items, totalCodeLines, gutterCh: String(Math.max(maxLineNum, 1)).length };
   }, [hunks, oldStr, newStr, startLine, contextLines, language]);
 
   const needsTruncation = totalCodeLines > maxLines && !fullyExpanded;
@@ -356,19 +395,18 @@ export function DiffView({
             ? 'text-sol-red/60'
             : 'text-transparent';
 
-          let contentHtml: string;
-          if (line.wordDiffHtml) {
-            contentHtml = line.wordDiffHtml;
-          } else if (language) {
-            contentHtml = highlightCode(line.content, language);
-          } else {
-            contentHtml = escapeHtml(line.content);
-          }
-
           return (
             <div key={i} className={`${rowBg} whitespace-pre`}>
+              {showLineNumbers && (
+                <span
+                  className="select-none inline-block text-right font-medium text-sol-text-dim opacity-55 pl-1 pr-3 mr-3 border-r border-sol-border/30"
+                  style={{ minWidth: `calc(${gutterCh}ch + 1rem)` }}
+                >
+                  {line.newNum ?? line.oldNum ?? ''}
+                </span>
+              )}
               <span className={`select-none ${prefixColor}`}>{prefix} </span>
-              <span dangerouslySetInnerHTML={{ __html: contentHtml || ' ' }} />
+              <span dangerouslySetInnerHTML={{ __html: line.html || ' ' }} />
             </div>
           );
         })}
@@ -392,4 +430,4 @@ export function DiffView({
       )}
     </div>
   );
-}
+});

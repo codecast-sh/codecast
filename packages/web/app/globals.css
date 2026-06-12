@@ -87,6 +87,9 @@ html, body {
   /* Default to Light - Solarized Light */
   --sol-bg: #FBF5E2;
   --sol-bg-alt: #eee8d5;
+  /* Inset panel surface (tool output, code blocks) — sits between the page
+     background and bg-alt; resolves per-theme since the mixed vars cascade. */
+  --sol-bg-inset: color-mix(in srgb, var(--sol-bg) 40%, var(--sol-bg-alt));
   --sol-bg-highlight: #e4ddc8;
   /* Elevated card surface — pure white in light mode so pills lift off the
      cream background; a touch-lighter teal in dark mode (see .dark below). */
@@ -210,7 +213,7 @@ html, body {
   --tw-prose-bold: var(--sol-text);
   --tw-prose-links: #d97706;
   --tw-prose-code: var(--sol-text);
-  --tw-prose-pre-bg: var(--sol-bg-alt);
+  --tw-prose-pre-bg: var(--sol-bg-inset);
   --tw-prose-bullets: var(--sol-text-muted);
   --tw-prose-counters: var(--sol-text-muted);
   --tw-prose-quotes: var(--sol-text-muted);
@@ -1223,40 +1226,37 @@ pre[class*="language-"] {
   margin: 0.28rem 1px;
 }
 
-/* Review batch tray above the composer: a structured preview of what
-   "Add to message" (⌘↵) inserts, one removable row per quote. */
+/* Review batch strip embedded at the top of the composer block (alongside the
+   queued-message and pasted-image strips). Three visual tiers so it doesn't bleed
+   into the composer: a micro-label header, inset quote cards on the page surface
+   (lighter than the composer in light mode, darker in dark — inset either way),
+   and the input below a rule. */
 .cc-review-tray {
-  /* The composer renders a 64px upward fade (z-10) that reaches over this tray.
-     Sit above that fade and lift just clear of it so it stays crisp. */
-  position: relative;
-  z-index: 20;
   margin-bottom: 0.4rem;
-  border: 1px solid color-mix(in srgb, var(--sol-cyan) 35%, var(--sol-border));
-  border-radius: 0.6rem;
-  background: color-mix(in srgb, var(--sol-cyan) 6%, var(--sol-bg));
-  overflow: hidden;
+  border-bottom: 1px solid color-mix(in srgb, var(--sol-cyan) 25%, var(--sol-border));
   font-size: 0.78rem;
-  box-shadow: 0 4px 16px -10px color-mix(in srgb, var(--sol-cyan) 50%, transparent);
 }
 .cc-review-tray-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
-  padding: 0.4rem 0.5rem 0.4rem 0.7rem;
-  border-bottom: 1px solid color-mix(in srgb, var(--sol-cyan) 18%, var(--sol-border));
+  padding: 0.25rem 0 0.4rem;
 }
 .cc-review-tray-title {
   display: inline-flex;
   align-items: center;
   gap: 0.45rem;
-  color: var(--sol-text);
+  color: var(--sol-text-muted);
+  font-size: 0.68rem;
   font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
   min-width: 0;
 }
 .cc-review-tray-sub {
   color: var(--sol-text-dim);
-  font-weight: 400;
+  font-weight: 500;
 }
 .cc-review-tray-actions {
   display: inline-flex;
@@ -1276,15 +1276,23 @@ pre[class*="language-"] {
 .cc-review-tray-list {
   max-height: 9.5rem;
   overflow-y: auto;
-  padding: 0.2rem 0;
+  padding: 0 0 0.6rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
 }
+/* Each quote is its own inset card: page-surface background with a faint cyan
+   wash and a solid cyan rail, so the batch reads as discrete attached objects
+   sitting on top of the composer rather than text mixed into it. */
 .cc-review-tray-item {
   display: flex;
   align-items: flex-start;
   gap: 0.4rem;
-  margin: 0.1rem 0.55rem;
-  padding: 0.2rem 0 0.2rem 0.55rem;
-  border-left: 2px solid color-mix(in srgb, var(--sol-cyan) 40%, var(--sol-border));
+  padding: 0.35rem 0.45rem 0.35rem 0.6rem;
+  background: color-mix(in srgb, var(--sol-cyan) 5%, var(--sol-bg));
+  border: 1px solid color-mix(in srgb, var(--sol-cyan) 16%, var(--sol-border) 40%);
+  border-left: 2px solid color-mix(in srgb, var(--sol-cyan) 70%, var(--sol-border));
+  border-radius: 0.25rem 0.45rem 0.45rem 0.25rem;
 }
 .cc-review-tray-item-main {
   flex: 1 1 auto;
