@@ -240,6 +240,7 @@ export function augmentPorcelain(raw: string, resolution: BlameResolution): stri
     out.push(`codecast-session ${ref.conversation_id.slice(0, 7)}`);
     out.push(`codecast-conversation ${ref.conversation_id}`);
     out.push(`codecast-title ${ref.title.replace(/[\r\n]/g, " ")}`);
+    if (ref.author_name) out.push(`codecast-author ${ref.author_name.replace(/[\r\n]/g, " ")}`);
     out.push(`codecast-url https://codecast.sh/conversation/${ref.conversation_id}`);
     if (ref.message_id) out.push(`codecast-message ${ref.message_id}`);
   }
@@ -601,8 +602,9 @@ augroup CastBlameMaps
 augroup END
 
 " :Gslog — the session-log (:Gclog equivalent): list the sessions that shaped a
-" file, newest first, in the quickfix list. <CR> on an entry opens that
-" conversation. Defaults to the current file; pass a path to log another.
+" file, newest first, in the quickfix list. <CR> opens that conversation; O
+" opens the file as it was at that session's commit. Defaults to the current
+" file; pass a path to log another.
 function! s:CastSessionLog(file) abort
   let l:file = empty(a:file) ? expand('%:p') : fnamemodify(a:file, ':p')
   let l:out = systemlist('${castBin} blame --log --quickfix ' . shellescape(l:file))
@@ -610,19 +612,26 @@ function! s:CastSessionLog(file) abort
     echo 'cast: no codecast sessions resolved for this file'
     return
   endif
+  " Tab-separated: <absfile>\\t<line>\\t<sha>\\t<relpath>\\t<display>
   let l:items = []
+  let l:rev = []
   for l:line in l:out
-    let l:m = matchlist(l:line, '^\\(.\\{-}\\):\\(\\d\\+\\): \\(.*\\)$')
-    if !empty(l:m)
-      call add(l:items, {'filename': l:m[1], 'lnum': str2nr(l:m[2]), 'text': l:m[3]})
+    let l:f = split(l:line, '\\t', 1)
+    if len(l:f) >= 5
+      call add(l:items, {'filename': l:f[0], 'lnum': str2nr(l:f[1]), 'text': l:f[4]})
+      call add(l:rev, {'sha': l:f[2], 'relpath': l:f[3]})
     endif
   endfor
   call setqflist([], ' ', {'title': 'cast session log', 'items': l:items})
   copen
+  " Current buffer is now the quickfix window — stash the rev list on it so the
+  " O mapping (also buffer-local here) can read it by cursor index.
+  let b:cast_log_rev = l:rev
   nnoremap <buffer> <silent> <CR> :call <SID>CastSessionLogOpen()<CR>
+  nnoremap <buffer> <silent> O :call <SID>CastSessionLogRevision()<CR>
 endfunction
 
-" Open the conversation for the quickfix entry under the cursor (reusing the
+" <CR>: open the conversation for the entry under the cursor (reusing the
 " single-line resolve path); fall back to jumping to the file line.
 function! s:CastSessionLogOpen() abort
   let l:idx = line('.') - 1
@@ -638,6 +647,21 @@ function! s:CastSessionLogOpen() abort
   endif
 endfunction
 
+" O: open the file as it was at this session's newest commit (fugitive blob).
+function! s:CastSessionLogRevision() abort
+  let l:idx = line('.') - 1
+  let l:rev = get(b:, 'cast_log_rev', [])
+  if l:idx < 0 || l:idx >= len(l:rev) | return | endif
+  let l:r = l:rev[l:idx]
+  if empty(l:r.sha) || empty(l:r.relpath)
+    echo 'cast: no committed revision for this session (uncommitted work only)'
+    return
+  endif
+  " Open above the quickfix so the list stays put.
+  wincmd k
+  execute 'Gedit' l:r.sha . ':' . l:r.relpath
+endfunction
+
 command! -nargs=? -complete=file Gslog call s:CastSessionLog(<q-args>)
 `;
   fs.writeFileSync(vimPath, vimIntegration);
@@ -650,7 +674,8 @@ command! -nargs=? -complete=file Gslog call s:CastSessionLog(<q-args>)
   console.log(`    source ~/.codecast/fugitive.vim\n`);
   console.log(`Then:`);
   console.log(`  :Git blame  — author column shows the codecast session (<CR> opens it)`);
-  console.log(`  :Gslog      — session log for the file, newest first (<CR> opens the conversation)`);
+  console.log(`  :Gslog      — session log for the file; <CR> opens the conversation,`);
+  console.log(`               O opens the file at that session's commit`);
 }
 
 /**
@@ -765,6 +790,7 @@ export interface SessionLogEntry {
   firstLine: number; // smallest line number it owns — where to jump
   newestTime: number; // most recent author-time across its lines (sort key)
   oldestTime: number;
+  newestSha: string; // newest COMMITTED sha this session touched ("" if only uncommitted)
   messageId?: string;
 }
 
@@ -776,6 +802,7 @@ export function groupBlameBySession(
   resolution: BlameResolution,
 ): { entries: SessionLogEntry[]; attributed: number; total: number } {
   const byConv = new Map<string, SessionLogEntry>();
+  const shaTime = new Map<string, number>(); // conv → author-time of its newestSha
   let attributed = 0;
 
   for (const line of parsed.lines) {
@@ -784,6 +811,7 @@ export function groupBlameBySession(
     attributed++;
     const meta = parsed.commits.get(line.sha);
     const t = meta?.authorTime ? meta.authorTime * 1000 : 0;
+    const committed = line.sha !== ZERO_SHA;
     const existing = byConv.get(ref.conversation_id);
     if (!existing) {
       byConv.set(ref.conversation_id, {
@@ -796,13 +824,21 @@ export function groupBlameBySession(
         firstLine: line.finalLine,
         newestTime: t,
         oldestTime: t,
+        newestSha: committed ? line.sha : "",
         messageId: ref.message_id,
       });
+      if (committed) shaTime.set(ref.conversation_id, t);
     } else {
       existing.lineCount++;
       existing.firstLine = Math.min(existing.firstLine, line.finalLine);
       existing.newestTime = Math.max(existing.newestTime, t);
       existing.oldestTime = existing.oldestTime === 0 ? t : Math.min(existing.oldestTime, t);
+      // Track the newest COMMITTED sha so "open file at this state" lands on a
+      // real revision even when the session also has uncommitted lines.
+      if (committed && t >= (shaTime.get(ref.conversation_id) ?? -1)) {
+        existing.newestSha = line.sha;
+        shaTime.set(ref.conversation_id, t);
+      }
     }
   }
 
@@ -848,12 +884,23 @@ export async function runBlameLog(
   const resolution = await resolveFromParsed(parsed, absPath, config);
   const { entries, attributed, total } = groupBlameBySession(parsed, resolution);
 
+  // Repo-relative path (same for all entries) so the editor can open the file
+  // at a session's revision via `<sha>:<relpath>`.
+  let relPath = "";
+  try {
+    relPath = (await execGit(["ls-files", "--full-name", "--", absPath], cwd)).stdout.trim();
+  } catch {
+    // not tracked / not a repo — leave empty; revision-open just won't apply
+  }
+
   if (options.quickfix) {
-    // Parsed by vim with errorformat `%f:%l: %m`. The path is what the user
-    // passed (relative is fine — vim resolves against cwd).
+    // Tab-separated, fully controlled (vim splits on \t): the editor builds
+    // quickfix items from <file>/<line>/<display> and keeps <sha>/<relpath> to
+    // open the file at that session's revision.
     for (const e of entries) {
+      const display = `${e.label}  ·  ${e.lineCount} lines  ·  ${ymd(e.newestTime)}`;
       process.stdout.write(
-        `${file}:${e.firstLine}: ${e.label}  ·  ${e.lineCount} lines  ·  ${ymd(e.newestTime)}\n`,
+        `${absPath}\t${e.firstLine}\t${e.newestSha}\t${relPath}\t${display}\n`,
       );
     }
     return;
@@ -868,13 +915,17 @@ export async function runBlameLog(
   const wAuthor = Math.max(6, ...entries.map((e) => (e.authorName?.split(" ")[0] ?? "").length));
   for (const e of entries) {
     const author = (e.authorName?.split(" ")[0] ?? "").padEnd(wAuthor);
-    const title = e.title.length > 44 ? e.title.slice(0, 42) + ".." : e.title;
+    const title = e.title.length > 40 ? e.title.slice(0, 38) + ".." : e.title;
     const range = ymd(e.oldestTime) === ymd(e.newestTime) ? ymd(e.newestTime) : `${ymd(e.oldestTime)}→${ymd(e.newestTime)}`;
+    const sha = (e.newestSha || "").slice(0, 9).padEnd(9);
     console.log(
-      `  ${e.shortId}  ${author}  ${title.padEnd(44)}  ${String(e.lineCount).padStart(4)} lines  ${range}`,
+      `  ${e.shortId}  ${author}  ${sha}  ${title.padEnd(40)}  ${String(e.lineCount).padStart(4)} lines  ${range}`,
     );
   }
   console.log(
-    `\n  Open: https://codecast.sh/conversation/${entries[0].conversationId}  (newest; cast read <id>)`,
+    `\n  <CR> opens the conversation · O opens the file at that session's commit (vim :Gslog)`,
+  );
+  console.log(
+    `  Newest: https://codecast.sh/conversation/${entries[0].conversationId}`,
   );
 }
