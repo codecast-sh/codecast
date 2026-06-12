@@ -325,7 +325,7 @@ export function LaunchModelPill({ conversationId }: { conversationId: string }) 
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button
-          className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border transition-all border-sol-border/30 text-sol-text-dim hover:text-sol-text hover:border-sol-border/60 font-mono"
+          className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border whitespace-nowrap transition-all border-sol-border/30 text-sol-text-dim hover:text-sol-text hover:border-sol-border/60 font-mono"
           title="Model and effort for this session"
         >
           {opt?.label ?? "Model"}

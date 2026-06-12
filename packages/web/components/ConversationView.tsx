@@ -28,9 +28,10 @@ import { ErrorBoundary } from "./ErrorBoundary";
 import { KeyCap, MenuKeyCaps } from "./KeyboardShortcutsHelp";
 import { toast } from "sonner";
 import { CodeBlock } from "./CodeBlock";
+import { useFullWidthExpand } from "../hooks/useFullWidthExpand";
 import { tryRenderCanvas } from "./HtmlSnippet";
 import { useDiffViewerStore } from "../store/diffViewerStore";
-import { isJumpReadyToScroll, shouldLoadOlder } from "./conversationScroll";
+import { isJumpReadyToScroll, shouldLoadOlder, shouldLoadNewer } from "./conversationScroll";
 import { parseInsightBlocks } from "./insightBlocks";
 import { appendToDraft } from "../lib/quoteFormat";
 import { quoteToComposer, submitReview, attachReviewToMessage } from "../lib/reviewActions";
@@ -114,7 +115,8 @@ function followRestoredConversation(res: any, ghostId: string): boolean {
   const targetId = res?.conversation_id;
   if (!res?.restored || !targetId || targetId === ghostId) return false;
   toast.success("This conversation was deleted on the server — restored its live session");
-  useInboxStore.setState({ pendingNavigateId: targetId });
+  // Same logical conversation reborn under a new id — rekey-class, not a jump.
+  useInboxStore.getState().requestNavigate(targetId, { source: "rekey" });
   useInboxStore.getState().pruneGhostSessions([ghostId]);
   setTimeout(() => useInboxStore.getState().pruneGhostSessions([ghostId]), 3000);
   return true;
@@ -132,9 +134,43 @@ import { parseFileChangeSummary, parseUnifiedDiffSections } from "../lib/unified
 import { setupDesktopDrag, desktopHeaderClass } from "../lib/desktop";
 import { MessageNavButton } from "./MessageBrowserPopover";
 import type { MentionItem } from "./editor/MentionList";
-import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow } from "lucide-react";
+import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal } from "lucide-react";
 import { ComposeEditor, type ComposeEditorHandle } from "./editor/ComposeEditor";
-import { useMentionQuery, useMentionServerSearch, SERVER_MENTION_TYPES } from "../hooks/useMentionQuery";
+import { useMentionQuery, useMentionServerSearch, SERVER_MENTION_TYPES, labelMentionItems } from "../hooks/useMentionQuery";
+
+// How long a sent message may sit in the optimistic/pending state before the
+// message row surfaces its "Retry — kill & restart" affordance. Normal
+// delivery confirms in a few seconds; anything past this is stuck.
+const PENDING_RETRY_AFTER_MS = 20_000;
+
+// Live label for a kill+restart in flight, derived from the daemon command
+// rows (conversations.getRestartProgress — the daemon stamps executed_at +
+// result/error on each). Shared by the composer footer ladder and the
+// on-message retry bar so both report the same real progress.
+type RestartProgressRow = { command: string; created_at: number; executed_at: number | null; result: string | null; error: string | null };
+function deriveRestartStage(
+  restartProgress: RestartProgressRow[] | null | undefined,
+  waitingLong: boolean,
+): { label: string; tone: "active" | "warn" | "error" } | null {
+  if (!restartProgress?.length) return null;
+  const last = [...restartProgress].reverse();
+  const resume = last.find((c) => c.command === "resume_session");
+  const kill = last.find((c) => c.command === "kill_session");
+  if (resume?.executed_at) {
+    if (resume.error) return { label: `Restart failed: ${resume.error}`, tone: "error" };
+    try {
+      const r = resume.result ? JSON.parse(resume.result) : null;
+      if (r?.reconstituted) return { label: "Rebuilt session from history — reconnecting…", tone: "active" };
+      if (r?.started_fresh) return { label: "Couldn't resume the old session — started a fresh one", tone: "active" };
+      if (r?.resumed) return { label: "Session resumed — reconnecting…", tone: "active" };
+      if (r?.skipped) return { label: "Session is already starting…", tone: "active" };
+    } catch { /* plain-string results fall through to the generic label */ }
+    return { label: "Restarting session…", tone: "active" };
+  }
+  if (kill?.executed_at) return { label: "Old session stopped — starting replacement…", tone: "active" };
+  if (waitingLong) return { label: "Waiting for the daemon to pick this up — is that device online?", tone: "warn" };
+  return { label: "Restart requested — waiting for daemon…", tone: "active" };
+}
 
 const sacredInputs = new Map<string, { text: string; images?: any[] }>();
 const EMPTY_PENDING: any[] = [];
@@ -853,17 +889,9 @@ function ProjectSwitcher({ conversation, handleRef }: { conversation: Conversati
 
   return (
     <div className="flex flex-col items-center gap-3">
-        <div className="flex items-center gap-2.5">
-          {currentPath ? (
-            <div className="flex items-center gap-2 text-sol-text-muted text-xs cursor-default" title={currentPath}>
-              <FolderGlyph className="w-3.5 h-3.5" />
-              <span className="font-medium text-sol-text">{currentName}</span>
-            </div>
-          ) : recentProjects.length > 0 ? (
-            <div className="text-sol-text-dim text-xs">select a project</div>
-          ) : null}
-          <NewSessionBucketPill conversation={conversation} />
-        </div>
+      {!currentPath && recentProjects.length > 0 && (
+        <div className="text-sol-text-dim text-xs">select a project</div>
+      )}
 
       <div
         className={`flex flex-wrap justify-center gap-1.5 rounded-lg transition-all ${picking ? "ring-1 ring-sol-cyan/40 bg-sol-cyan/[0.03] p-1.5" : ""}`}
@@ -887,7 +915,7 @@ function ProjectSwitcher({ conversation, handleRef }: { conversation: Conversati
                     isHi
                       ? "border-sol-cyan/70 bg-sol-cyan/15 text-sol-cyan ring-1 ring-sol-cyan/50"
                       : isCurrent
-                        ? "border-sol-cyan/40 bg-sol-cyan/5 text-sol-cyan"
+                        ? "border-sol-cyan/60 bg-sol-cyan/15 text-sol-cyan font-medium"
                         : "border-sol-border/40 text-sol-text-dim"
                   }`}
                   title={p.path}
@@ -903,7 +931,7 @@ function ProjectSwitcher({ conversation, handleRef }: { conversation: Conversati
             {currentPath && (
               <button
                 onClick={() => handleSwitch(currentPath)}
-                className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border border-sol-cyan/40 bg-sol-cyan/5 text-sol-cyan transition-all"
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border border-sol-cyan/60 bg-sol-cyan/15 text-sol-cyan font-medium transition-all"
                 title={currentPath}
               >
                 <FolderGlyph />
@@ -936,6 +964,8 @@ function ProjectSwitcher({ conversation, handleRef }: { conversation: Conversati
           </>
         )}
       </div>
+
+      <NewSessionBucketPill conversation={conversation} />
 
       {picking ? (
         <div className="flex items-center gap-2 text-[11px] font-mono">
@@ -1094,7 +1124,7 @@ function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedW
 
   return (
     <div className="flex flex-col items-center gap-2 px-4 pb-7">
-      <div className={`flex items-center gap-1.5 rounded-lg transition-all ${picking ? "ring-1 ring-sol-cyan/40 bg-sol-cyan/[0.03] p-1.5" : ""}`}>
+      <div className={`flex flex-wrap items-center justify-center gap-1.5 rounded-lg transition-all ${picking ? "ring-1 ring-sol-cyan/40 bg-sol-cyan/[0.03] p-1.5" : ""}`}>
         {AGENT_OPTIONS.map((a, i) => {
           const isActive = currentAgent === a.type && !showWorkflow;
           const isHi = picking && i === hi;
@@ -1103,7 +1133,7 @@ function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedW
               key={a.type}
               onClick={() => { handleAgentSwitch(a.type); if (showWorkflow) onToggleWorkflow(); }}
               onMouseEnter={() => { if (picking) setHi(i); }}
-              className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border transition-all ${
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border whitespace-nowrap transition-all ${
                 isHi
                   ? "border-sol-cyan/70 bg-sol-cyan/15 text-sol-cyan ring-1 ring-sol-cyan/50"
                   : isActive
@@ -1122,20 +1152,6 @@ function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedW
             </button>
           );
         })}
-        <span className="text-sol-border/50 text-xs">|</span>
-        <button
-          onClick={onToggleWorkflow}
-          className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border transition-all ${
-            showWorkflow
-              ? "bg-sol-violet/15 text-sol-violet border-sol-violet/40"
-              : "border-sol-border/30 text-sol-text-dim hover:text-sol-text hover:border-sol-border/60"
-          }`}
-        >
-          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-          </svg>
-          Workflow
-        </button>
         <span className="text-sol-border/50 text-xs">|</span>
         <LaunchModelPill conversationId={storeSession?._id || conversation._id} />
       </div>
@@ -1450,6 +1466,22 @@ function stripSystemTags(content: string): string {
     .replace(/<\/?(?:command-(?:name|message|args)|antml:[a-z_]+)[^>]*>/g, '')
     .replace(/^\s*Caveat:.*$/gm, '')
     .replace(/\n{3,}/g, '\n\n');
+}
+
+// Assistant stub the timeline renders as nothing (see renderTimelineItem).
+// Fork-point selection and branch-chip anchoring must treat it as invisible:
+// a fork recorded against it would have no message to render its chips under.
+function isHiddenStubMessage(msg: { role?: string; content?: string }): boolean {
+  return msg.role === "assistant" && stripSystemTags(msg.content || "").trim() === "No response requested.";
+}
+
+// Can this message host branch chips? Only user/assistant blocks render a
+// BranchSelector, and hidden stubs render nothing at all. Both picking a fork
+// point and placing the chips must agree on this, or a fork lands on a message
+// with no UI to show it.
+function canAnchorForkChips(msg: { role?: string; content?: string; message_uuid?: string }): boolean {
+  if (!msg.message_uuid || isHiddenStubMessage(msg)) return false;
+  return msg.role === "assistant" || (msg.role === "user" && !!msg.content?.trim());
 }
 
 function cleanStickyContent(content: string): string {
@@ -2577,6 +2609,7 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
   const [mdExpanded, setMdExpanded] = useState(false);
   const [mdFullscreen, setMdFullscreen] = useState(false);
   const [codeFullscreen, setCodeFullscreen] = useState(false);
+  const fullWidth = useFullWidthExpand(`tool-${tool.id}`);
   const mdContainerRef = useRef<HTMLDivElement>(null);
   const [mdOverflowing, setMdOverflowing] = useState(false);
   const MD_COLLAPSED_HEIGHT = 600;
@@ -2992,7 +3025,11 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
       })()}
 
       {expanded && (
-        <div className="mt-1 rounded border border-sol-border/30 bg-sol-bg-alt">
+        <div
+          ref={fullWidth.containerRef}
+          style={fullWidth.style}
+          className="mt-1 rounded border border-sol-border/30 bg-sol-bg-inset transition-all duration-200"
+        >
           {/* Markdown toggle header */}
           {isMarkdown && (isRead || (tool.name === "Write" && Boolean(parsedInput.content))) && (
             <div className="flex items-center justify-between px-2 py-1 border-b border-sol-border/20 bg-sol-bg-highlight/30">
@@ -3168,13 +3205,33 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
                 newStr={processedContent}
                 startLine={startLine}
                 language={language}
+                showLineNumbers
               />
-              <div className="flex items-center gap-3 px-3 py-1.5 border-t border-sol-border/20">
+              <div className="flex items-center gap-1 px-2 py-1 border-t border-sol-border/20">
                 <button
                   onClick={(e) => { e.stopPropagation(); setCodeFullscreen(true); }}
-                  className="text-[11px] font-medium text-sol-cyan hover:text-sol-cyan/80 transition-colors"
+                  className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-cyan transition-colors flex items-center gap-1"
+                  title="Fullscreen"
                 >
-                  Fullscreen
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75h-4.5m4.5 0v4.5m0-4.5L15 9m5.25 11.25h-4.5m4.5 0v-4.5m0 4.5L15 15" />
+                  </svg>
+                  <span className="hidden sm:inline text-xs text-sol-text-dim">Full Screen</span>
+                </button>
+                <button
+                  onClick={(e) => { e.stopPropagation(); fullWidth.toggle(); }}
+                  className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-cyan transition-colors flex items-center gap-1"
+                  title={fullWidth.expanded ? "Normal width" : "Full width"}
+                >
+                  <MoveHorizontal className="w-4 h-4" />
+                  <span className="hidden sm:inline text-xs text-sol-text-dim">{fullWidth.expanded ? "Normal Width" : "Full Width"}</span>
+                </button>
+                <button
+                  onClick={(e) => { e.stopPropagation(); setExpanded(false); }}
+                  className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-cyan transition-colors"
+                  title="Collapse"
+                >
+                  <ChevronUp className="w-4 h-4" />
                 </button>
               </div>
               {codeFullscreen && createPortal(
@@ -3192,13 +3249,14 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
                         </svg>
                       </button>
                     </div>
-                    <div className="rounded border border-sol-border/30 bg-sol-bg-alt">
+                    <div className="rounded border border-sol-border/30 bg-sol-bg-inset">
                       <DiffView
                         oldStr={processedContent}
                         newStr={processedContent}
                         startLine={startLine}
                         maxLines={99999}
                         language={language}
+                        showLineNumbers
                       />
                     </div>
                   </div>
@@ -3654,7 +3712,7 @@ function CastSessionRefBlock({ cat, target, args, fullCmd, output, isError }: {
         {isError && <span className="text-sol-red/80 text-[10px]">(error)</span>}
       </div>
       {expanded && (
-        <div className="mt-1 rounded border border-sol-border/30 bg-sol-bg-alt max-h-80 overflow-auto">
+        <div className="mt-1 rounded border border-sol-border/30 bg-sol-bg-inset max-h-80 overflow-auto">
           <div className="px-1.5 sm:px-2 py-1 sm:py-1.5 border-b border-sol-border/20 bg-sol-bg-highlight/30">
             <pre className="text-[11px] sm:text-xs font-mono text-sol-green whitespace-pre-wrap break-all">
               $ {fullCmd}
@@ -3878,7 +3936,7 @@ function CastCommandBlock({ tool, result }: { tool: ToolCall; result?: ToolResul
       )}
 
       {expanded && (
-        <div className="mt-1 rounded border border-sol-border/30 bg-sol-bg-alt max-h-80 overflow-auto">
+        <div className="mt-1 rounded border border-sol-border/30 bg-sol-bg-inset max-h-80 overflow-auto">
           <div className="px-1.5 sm:px-2 py-1 sm:py-1.5 border-b border-sol-border/20 bg-sol-bg-highlight/30">
             <pre className="text-[11px] sm:text-xs font-mono text-sol-green whitespace-pre-wrap break-all">
               $ {cast.fullCmd}
@@ -5224,6 +5282,75 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
     return () => { document.removeEventListener('keydown', handleKey); document.body.style.overflow = ''; };
   }, [fullscreen]);
 
+  // Retry affordance for a message stuck in the optimistic/pending state: if
+  // the agent never echoes it back (born-dead session, dropped delivery), the
+  // row renders pending-striped forever with no way out. After a grace period
+  // surface "Retry" right on the message — it fires the same kill & restart as
+  // the header dropdown, and restartSession re-pends this conversation's
+  // failed/injected messages so the daemon re-delivers this exact message into
+  // the revived session. Optimistic rows only exist for the local sender, so
+  // visibility here implies the viewer owns the conversation.
+  const [retryVisible, setRetryVisible] = useState(false);
+  const [retryState, setRetryState] = useState<"idle" | "inflight" | "sent">("idle");
+  // Set on click; drives the live progress subscription below. Never cleared
+  // while the bar is mounted — delivery removes the optimistic row and the
+  // whole bar (and its subscription) with it.
+  const [retryClickedAt, setRetryClickedAt] = useState<number | null>(null);
+  useWatchEffect(() => {
+    if (!isPending || !conversationId || !isConvexId(conversationId)) { setRetryVisible(false); return; }
+    const remaining = PENDING_RETRY_AFTER_MS - (Date.now() - timestamp);
+    if (remaining <= 0) { setRetryVisible(true); return; }
+    const t = setTimeout(() => setRetryVisible(true), remaining);
+    return () => clearTimeout(t);
+  }, [isPending, conversationId, timestamp]);
+  // Live restart progress, scoped to THIS click: getRestartProgress returns the
+  // last few kill/resume commands for the conversation, which can include rows
+  // from an earlier restart — filter to ones stamped at/after the click (10s
+  // tolerance covers client/server clock skew; the rows are inserted by the
+  // very mutation the click awaits).
+  const retryProgressRaw = useQuery(
+    api.conversations.getRestartProgress,
+    retryClickedAt && conversationId && isConvexId(conversationId) ? { conversation_id: conversationId } : "skip",
+  );
+  const retryProgress = useMemo(
+    () => (retryClickedAt ? retryProgressRaw?.filter((c: RestartProgressRow) => c.created_at >= retryClickedAt - 10_000) : undefined),
+    [retryProgressRaw, retryClickedAt],
+  );
+  const [retryWaitingLong, setRetryWaitingLong] = useState(false);
+  useWatchEffect(() => {
+    if (!retryClickedAt) { setRetryWaitingLong(false); return; }
+    if (retryProgress?.some((c: RestartProgressRow) => c.executed_at)) { setRetryWaitingLong(false); return; }
+    const t = setTimeout(() => setRetryWaitingLong(true), 20_000);
+    return () => clearTimeout(t);
+  }, [retryClickedAt, retryProgress]);
+  const retryStage = useMemo(
+    () => deriveRestartStage(retryProgress, retryWaitingLong),
+    [retryProgress, retryWaitingLong],
+  );
+  // A failed restart re-arms the button so the user can try again.
+  useWatchEffect(() => {
+    if (retryStage?.tone === "error" && retryState === "sent") setRetryState("idle");
+  }, [retryStage?.tone, retryState]);
+  const handleRetryRestart = async () => {
+    if (!conversationId || retryState === "inflight") return;
+    setRetryState("inflight");
+    setRetryClickedAt(Date.now());
+    setRetryWaitingLong(false);
+    try {
+      const res = await useInboxStore.getState().convCommand(conversationId, "restartSession", ghostRestartContextFor(conversationId));
+      if (!followRestoredConversation(res, conversationId)) {
+        toast.success("Restarting session — this message will be retried");
+      }
+      setRetryState("sent");
+      // Re-arm after a while so a restart that goes nowhere can be retried;
+      // the progress label keeps reporting the actual daemon status either way.
+      setTimeout(() => setRetryState("idle"), 30_000);
+    } catch (err) {
+      setRetryState("idle");
+      toast.error(`Restart failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+
   const isRealMessageId = !!messageId && isConvexId(messageId);
   const commentCount = useQuery(api.comments.getCommentCount,
     isRealMessageId ? { message_id: messageId as Id<"messages"> } : "skip"
@@ -5436,6 +5563,32 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
           mainMessageCount={mainMessageCount}
           onFork={onForkFromMessage ? () => onForkFromMessage(messageUuid) : undefined}
         />
+      )}
+
+      {isPending && retryVisible && (
+        <div className="flex items-center flex-wrap gap-2 mt-2 pl-8" data-testid="pending-message-retry">
+          {!retryStage && (
+            <span className="text-xs text-sol-orange/90">
+              {retryState === "idle" ? "Message hasn't reached the agent" : "Restart requested…"}
+            </span>
+          )}
+          {retryStage && (
+            <span className={`flex items-center gap-1.5 text-xs ${retryStage.tone === "error" ? "text-sol-red" : retryStage.tone === "warn" ? "text-sol-yellow" : "text-sol-orange/90"}`}>
+              {retryStage.tone !== "error" && <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse flex-shrink-0" />}
+              {retryStage.label}
+            </span>
+          )}
+          <button
+            onClick={(e) => { e.stopPropagation(); handleRetryRestart(); }}
+            disabled={retryState !== "idle"}
+            className="flex items-center gap-1 px-2 py-0.5 rounded border border-sol-orange/40 text-xs text-sol-orange hover:bg-sol-orange/10 transition-colors disabled:opacity-60"
+          >
+            <svg className={`w-3 h-3 ${retryState !== "idle" ? "animate-spin" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+            {retryState === "inflight" ? "Restarting…" : retryState === "sent" ? "Restarting…" : retryClickedAt ? "Retry again" : "Retry (kill & restart)"}
+          </button>
+        </div>
       )}
 
       {fullscreen && createPortal(
@@ -6494,7 +6647,7 @@ function GitDiffPanel({
         {gitDiffStaged && gitDiffStaged.trim().length > 0 && (
           <div className="mb-2">
             <div className="text-sol-green text-[10px] font-semibold mb-1">Staged</div>
-            <div className="rounded overflow-hidden bg-sol-bg-alt border border-sol-border/30">
+            <div className="rounded overflow-hidden bg-sol-bg-inset border border-sol-border/30">
               <GitDiffView diff={gitDiffStaged} />
             </div>
           </div>
@@ -6504,7 +6657,7 @@ function GitDiffPanel({
             {gitDiffStaged && gitDiffStaged.trim().length > 0 && (
               <div className="text-sol-orange text-[10px] font-semibold mb-1">Unstaged</div>
             )}
-            <div className="rounded overflow-hidden bg-sol-bg-alt border border-sol-border/30">
+            <div className="rounded overflow-hidden bg-sol-bg-inset border border-sol-border/30">
               <GitDiffView diff={gitDiff} />
             </div>
           </div>
@@ -6982,26 +7135,10 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // owning daemon is probably offline — the one failure the command rows can't
   // report themselves.
   const [restartWaitingLong, setRestartWaitingLong] = useState(false);
-  const restartStage = useMemo(() => {
-    if (!restartProgress?.length) return null;
-    const last = [...restartProgress].reverse();
-    const resume = last.find((c) => c.command === "resume_session");
-    const kill = last.find((c) => c.command === "kill_session");
-    if (resume?.executed_at) {
-      if (resume.error) return { label: `Restart failed: ${resume.error}`, tone: "error" as const };
-      try {
-        const r = resume.result ? JSON.parse(resume.result) : null;
-        if (r?.reconstituted) return { label: "Rebuilt session from history — reconnecting…", tone: "active" as const };
-        if (r?.started_fresh) return { label: "Couldn't resume the old session — started a fresh one", tone: "active" as const };
-        if (r?.resumed) return { label: "Session resumed — reconnecting…", tone: "active" as const };
-        if (r?.skipped) return { label: "Session is already starting…", tone: "active" as const };
-      } catch { /* plain-string results fall through to the generic label */ }
-      return { label: "Restarting session…", tone: "active" as const };
-    }
-    if (kill?.executed_at) return { label: "Old session stopped — starting replacement…", tone: "active" as const };
-    if (restartWaitingLong) return { label: "Waiting for the daemon to pick this up — is that device online?", tone: "warn" as const };
-    return { label: "Restart requested — waiting for daemon…", tone: "active" as const };
-  }, [restartProgress, restartWaitingLong]);
+  const restartStage = useMemo(
+    () => deriveRestartStage(restartProgress, restartWaitingLong),
+    [restartProgress, restartWaitingLong],
+  );
   useWatchEffect(() => {
     if (!isRestarting && !isResuming) { setRestartWaitingLong(false); return; }
     if (restartProgress?.some((c) => c.executed_at)) { setRestartWaitingLong(false); return; }
@@ -7035,6 +7172,21 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   const filePathsRef = useRef(filePaths);
   filePathsRef.current = filePaths;
 
+  // Embedded composers (the new-session popup) have no ConversationView parent
+  // to build mention items, so @ would only surface the server-searched types.
+  // Fall back to the team-scoped mention query (mentionScope above) so people,
+  // tasks, docs, and plans resolve there too — people stay bounded to the team.
+  const localMentionItemsRef = useRef<MentionItem[]>([]);
+  const [localMentionTick, setLocalMentionTick] = useState(0);
+  const effectiveMentionItemsRef = mentionItemsRef ?? localMentionItemsRef;
+  const queryMentions = useCallback((q: string) => {
+    if (mentionItemsRef) { onMentionQuery?.(q); return; }
+    void composeMentionQuery(q).then((items) => {
+      localMentionItemsRef.current = items;
+      setLocalMentionTick((t) => t + 1);
+    });
+  }, [mentionItemsRef, onMentionQuery, composeMentionQuery]);
+
   const acQuery = useMemo(() => {
     if (!acTrigger) return "";
     const rawQuery = message.slice(acTrigger.startPos + 1);
@@ -7059,7 +7211,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     }
     if (acTrigger.type === "@") {
       const items: AcItem[] = [];
-      const currentMentionItems = mentionItemsRef?.current;
+      const currentMentionItems = effectiveMentionItemsRef.current;
 
       // Cap per type so a flood of sessions doesn't push tasks/docs out.
       const perTypeCap = acQuery ? 5 : 6;
@@ -7125,7 +7277,8 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       return items;
     }
     return [];
-  }, [acTrigger, acQuery, skills, acServerItems]);
+    // localMentionTick re-runs this when the fallback query resolves into the ref.
+  }, [acTrigger, acQuery, skills, acServerItems, localMentionTick]);
 
   const clampedAcIndex = acItems.length > 0 ? Math.min(acIndex, acItems.length - 1) : 0;
 
@@ -7320,7 +7473,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   const convex = useConvex();
 
   const expandMentionsInMessage = useCallback(async (text: string): Promise<string> => {
-    const mentionRegex = /@\[([^\]]*?)\s+(ct-\w+|pl-\w+|jx\w+|doc:\w+)\](?:\s*\([^)]*\))?/g;
+    const mentionRegex = /@\[([^\]]*?)\s+(ct-\w+|pl-\w+|jx\w+|doc:\w+|label:\w+)\](?:\s*\([^)]*\))?/g;
     const docMentionLegacyRegex = /@\[([^\]]*?)\](?:\s*\(cast doc read (\w+)\))/g;
     const mentions: Array<{ type: string; shortId?: string; id?: string; fullMatch: string }> = [];
     let match: RegExpExecArray | null;
@@ -7330,6 +7483,8 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       const id = match[2];
       if (id.startsWith("doc:")) {
         mentions.push({ type: "doc", id: id.slice(4), fullMatch: match[0] });
+      } else if (id.startsWith("label:")) {
+        mentions.push({ type: "label", id: id.slice(6), fullMatch: match[0] });
       } else {
         const type = id.startsWith("ct-") ? "task" : id.startsWith("pl-") ? "plan" : "session";
         mentions.push({ type, shortId: id, fullMatch: match[0] });
@@ -7595,7 +7750,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       if (atMatch) {
         setAcTrigger({ type: "@", startPos: cursorPos - atMatch[0].length });
         setAcIndex(0);
-        onMentionQuery?.(atMatch[1] || "");
+        queryMentions(atMatch[1] || "");
       } else {
         // No active @-mention: don't rebuild the mention index. buildMentionItems
         // (in the parent) sorts/maps every session/task/doc/plan, and it only
@@ -7616,7 +7771,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
         }
       }, 300);
     }
-  }, [conversationId, skills, onMentionQuery]);
+  }, [conversationId, skills, queryMentions]);
 
   const isSelectionActive = !!(selectedMessageContent && selectedMessageUuid);
   const savedDraftRef = useRef<string | null>(null);
@@ -7650,8 +7805,11 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     setSessionHasQueuedMessages(conversationId, queuedMessages.length > 0);
     return () => setSessionHasQueuedMessages(conversationId, false);
   }, [conversationId, queuedMessages.length, setSessionHasQueuedMessages]);
+  // Pending review quotes count as sendable content: handleSubmit auto-attaches
+  // them (attachReviewToMessage), so a bare Enter with an empty input is a valid send.
+  const reviewCount = useInboxStore((s) => (s.reviewComments[conversationId] ?? []).length);
   const hasContent = (composeMode ? composeHasContent : message.trim().length > 0) || pastedImages.length > 0 || queuedMessages.length > 0;
-  const isExpanded = composeMode || !!onSendAndAdvance || isFocused || message.length > 0 || pastedImages.length > 0 || queuedMessages.length > 0;
+  const isExpanded = composeMode || !!onSendAndAdvance || isFocused || message.length > 0 || pastedImages.length > 0 || queuedMessages.length > 0 || reviewCount > 0;
 
   const toggleCompose = useCallback(() => {
     if (composeMode) {
@@ -8224,7 +8382,17 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     }
   };
 
-  const canSubmit = hasContent;
+  const canSubmit = hasContent || reviewCount > 0;
+  // When the send is carried entirely by attached quotes, tint the button cyan to
+  // match the tray so it reads as "this sends the quotes".
+  const quotesOnlySend = !hasContent && reviewCount > 0;
+  const sendBtnClass = `w-8 h-8 rounded-full transition-colors flex items-center justify-center border ${
+    !canSubmit
+      ? "border-sol-border/30 text-sol-text-dim/25 cursor-not-allowed"
+      : quotesOnlySend
+        ? "border-sol-cyan/50 bg-sol-cyan/20 text-sol-cyan hover:bg-sol-cyan/30 hover:border-sol-cyan"
+        : "border-sol-blue/50 bg-sol-blue/20 text-sol-blue hover:bg-sol-blue/30 hover:border-sol-blue hover:text-sol-blue"
+  }`;
 
   return (
     <div className={`shrink-0 pointer-events-none sticky bottom-0 ${lightboxImageIndex !== null ? "z-[10002]" : "z-10"}`}>
@@ -8247,7 +8415,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
               </div>
             </div>
           )}
-          {(isFocused || shortcutTooltip || showStuckBanner || isSessionStarting || isSessionReady || isInactive || optimisticSending || isSessionDisconnected || (pendingMessageId || existingPending) || (agentStatus && agentStatus !== "idle") || (!agentStatus && (isWaitingForResponse || isThinking || isConversationLive))) && (
+          {(isFocused || reviewCount > 0 || shortcutTooltip || showStuckBanner || isSessionStarting || isSessionReady || isInactive || optimisticSending || isSessionDisconnected || (pendingMessageId || existingPending) || (agentStatus && agentStatus !== "idle") || (!agentStatus && (isWaitingForResponse || isThinking || isConversationLive))) && (
             <div className={`mx-auto px-4 mb-1 flex justify-between items-center ${isExpanded ? "conv-col" : "max-w-md"} ${lightboxImageIndex !== null ? "hidden" : ""}`}>
               <p className="text-[11px] text-sol-text-dim/70 pl-1">
                 {((isSessionStarting && !agentStatus) || isAgentStarting) && !showStuckBanner ? (
@@ -8460,6 +8628,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
               doc: { icon: FileText, color: "text-sol-cyan", label: "Docs" },
               session: { icon: MessageSquare, color: "text-sol-blue", label: "Sessions" },
               plan: { icon: MapIcon, color: "text-sol-violet", label: "Plans" },
+              label: { icon: Tag, color: "text-sol-magenta", label: "Labels" },
               file: { icon: FolderOpen, color: "text-sol-base01", label: "Files" },
               skill: { icon: Hash, color: "text-sol-orange", label: "Commands" },
             };
@@ -8537,6 +8706,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                   <span className="text-sol-text-dim">Esc to cancel</span>
                 </div>
               )}
+              <ReviewBar conversationId={conversationId} />
               {queuedMessages.length > 0 && (
                 <div className="flex flex-col gap-1 pb-2 mb-2 border-b border-sol-border/50">
                   {queuedMessages.map((qMsg, idx) => (
@@ -8650,7 +8820,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                       <button
                         type="submit"
                         disabled={!canSubmit}
-                        className={`w-8 h-8 rounded-full transition-colors flex items-center justify-center border ${!canSubmit ? "border-sol-border/30 text-sol-text-dim/25 cursor-not-allowed" : "border-sol-blue/50 bg-sol-blue/20 text-sol-blue hover:bg-sol-blue/30 hover:border-sol-blue hover:text-sol-blue"}`}
+                        className={sendBtnClass}
                       >
                         <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                           <path strokeLinecap="round" strokeLinejoin="round" d="M12 19V5M5 12l7-7 7 7" />
@@ -8671,7 +8841,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                     onPaste={handlePaste}
                     onFocus={() => setIsFocused(true)}
                     onBlur={() => { setIsFocused(false); setAcTrigger(null); }}
-                    placeholder={onGateSend ? "Send a message to continue the workflow..." : onWorkflowLaunch ? "Goal override (optional) — press send to run workflow..." : agentStatus === "permission_blocked" ? ((pendingPermissionsCount ?? 0) > 0 ? "Approve or deny permission to continue..." : hasAskUserQuestion ? "Answer the question to continue..." : "Send a message...") : "Send a message..."}
+                    placeholder={onGateSend ? "Send a message to continue the workflow..." : onWorkflowLaunch ? "Goal override (optional) — press send to run workflow..." : reviewCount > 0 ? `Send ${reviewCount} quote${reviewCount !== 1 ? "s" : ""} as-is, or add a reply first...` : agentStatus === "permission_blocked" ? ((pendingPermissionsCount ?? 0) > 0 ? "Approve or deny permission to continue..." : hasAskUserQuestion ? "Answer the question to continue..." : "Send a message...") : "Send a message..."}
                     rows={1}
                     className={`flex-1 bg-transparent text-sm placeholder:text-sol-text-dim focus:outline-none disabled:opacity-50 resize-none overflow-hidden leading-relaxed py-1 ${isSelectionActive && !isSelectionEditedRef.current ? "text-sol-text-dim italic" : "text-sol-text"}`}
                   />
@@ -8689,7 +8859,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                     <button
                       type="submit"
                       disabled={!canSubmit}
-                      className={`w-8 h-8 rounded-full transition-colors flex items-center justify-center border ${!canSubmit ? "border-sol-border/30 text-sol-text-dim/25 cursor-not-allowed" : "border-sol-blue/50 bg-sol-blue/20 text-sol-blue hover:bg-sol-blue/30 hover:border-sol-blue hover:text-sol-blue"}`}
+                      className={sendBtnClass}
                     >
                       <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                         <path strokeLinecap="round" strokeLinejoin="round" d="M12 19V5M5 12l7-7 7 7" />
@@ -8855,6 +9025,11 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   // user's hand — never by the virtualizer or a programmatic scroll — so gating
   // on it ties loading to real scrolling. Stop scrolling and loading stops.
   const loadOlderArmedRef = useRef(false);
+  // The mirror for the newer direction (target mode only): armed by a genuine
+  // wheel-down, consumed per newer-page load. Without it, the virtualizer's
+  // end-anchor snapping to the new bottom after each append re-crossed the
+  // bottom trigger band and looped through every remaining page.
+  const loadNewerArmedRef = useRef(false);
   // Suppresses scroll-triggered pagination while we programmatically move the
   // scroll position (prepend restore, jump-to-edge, initial snap). Holds a
   // deadline timestamp in ms; 0 means inactive. Self-expiring on purpose: a
@@ -8862,10 +9037,11 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   // throttled background-tab timer) never ran, permanently killing "scroll to
   // top → load older". A deadline can only ever block for a bounded window.
   const paginationCooldownRef = useRef(0);
-  // Captured at load-older trigger time: the topmost visible message element and
-  // its exact viewport offset, so we can pin it right back once the older page
-  // mounts above it. DOM-measured (not virtualizer estimates) → pixel-perfect.
-  const prependAnchorRef = useRef<{ id: string; relTop: number; scrollHeight: number } | null>(null);
+  // Captured at pagination trigger time (either direction): the topmost visible
+  // message element and its exact viewport offset, so we can pin it right back
+  // once the page mounts (above for 'older', below for 'newer'). DOM-measured
+  // (not virtualizer estimates) → pixel-perfect.
+  const pageAnchorRef = useRef<{ id: string; relTop: number; scrollHeight: number; scrollTop: number; dir: 'older' | 'newer' } | null>(null);
   const paginationPropsRef = useRef({ hasMoreAbove: false, hasMoreBelow: false, isLoadingOlder: false, isLoadingNewer: false, onLoadOlder: undefined as (() => void) | undefined, onLoadNewer: undefined as (() => void) | undefined });
   paginationPropsRef.current = { hasMoreAbove: !!hasMoreAbove, hasMoreBelow: !!hasMoreBelow, isLoadingOlder: !!isLoadingOlder, isLoadingNewer: !!isLoadingNewer, onLoadOlder, onLoadNewer };
   const scrollCtxRef = useRef({ messageCount: 0, messagesLen: 0, timelineLen: 0, loadedStartIndex: 0 });
@@ -8877,6 +9053,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const [isCreatingShareLink, setIsCreatingShareLink] = useState(false);
   const [isImageLightboxActive, setIsImageLightboxActive] = useState(false);
   const [stickyMsgVisible, setStickyMsgVisible] = useState(false);
+  const [stickyExpanded, setStickyExpanded] = useState(false);
+  const [stickyClamped, setStickyClamped] = useState(false);
+  const stickyTextRef = useRef<HTMLDivElement>(null);
   const prevStickyMsgIdRef = useRef<string | null>(null);
   const prevStickyIdxRef = useRef<number | null>(null);
   const stickyGapRef = useRef<{ prevIdx: number } | null>(null);
@@ -9130,18 +9309,33 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
   const forkPointMap = useMemo(() => {
     const map: Record<string, Array<ForkChild>> = {};
+    // Forks recorded against a message the timeline hides (a "No response
+    // requested." stub) re-anchor to the nearest earlier message that renders
+    // branch chips (user/assistant blocks) — chips render attached to their
+    // anchor, so a hidden anchor would make the branch invisible everywhere.
+    const reanchor: Record<string, string> = {};
+    let lastVisibleUuid: string | undefined;
+    for (const m of (conversation?.messages || []) as Message[]) {
+      if (!m.message_uuid) continue;
+      if (isHiddenStubMessage(m)) {
+        if (lastVisibleUuid) reanchor[m.message_uuid] = lastVisibleUuid;
+      } else if (canAnchorForkChips(m)) {
+        lastVisibleUuid = m.message_uuid;
+      }
+    }
     const allForks = [...(conversation?.fork_children || []), ...(conversation?.fork_siblings || []), ...optimisticForkChildren];
     const seen = new Set<string>();
     for (const fork of allForks) {
       if (seen.has(fork._id)) continue;
       seen.add(fork._id);
       if (fork.parent_message_uuid) {
-        if (!map[fork.parent_message_uuid]) map[fork.parent_message_uuid] = [];
-        map[fork.parent_message_uuid].push(fork);
+        const anchor = reanchor[fork.parent_message_uuid] ?? fork.parent_message_uuid;
+        if (!map[anchor]) map[anchor] = [];
+        map[anchor].push(fork);
       }
     }
     return map;
-  }, [conversation?.fork_children, conversation?.fork_siblings, optimisticForkChildren]);
+  }, [conversation?.fork_children, conversation?.fork_siblings, conversation?.messages, optimisticForkChildren]);
 
   useWatchEffect(() => {
     if (!conversation?.fork_children) return;
@@ -9358,6 +9552,17 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       forked_from: parentId,
       parent_message_uuid: messageUuid,
     } as any);
+    // Local-first label inheritance: mirror the server's inheritLabelAssignment
+    // so the fork lands in its parent's label group on the first frame instead
+    // of jumping there when the server's inherited row syncs. The dispatch
+    // no-ops server-side on the stub id; rekeyId carries the local row to the
+    // real id, where the server row supersedes it via altKey.
+    const forkStore = useInboxStore.getState();
+    const parentBucketId = convBucketMap(forkStore.bucketAssignments)[parentId];
+    const parentBucket = parentBucketId ? (forkStore.buckets as Record<string, BucketItem>)[parentBucketId] : undefined;
+    if (parentBucket && !parentBucket.archived_at) {
+      forkStore.assignSessionToBucket(forkSessionId, parentBucket._id);
+    }
     const ready = convCommand(parentId, "forkFromMessage", {
       message_uuid: messageUuid,
       session_id: forkSessionId,
@@ -9382,7 +9587,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       const msg = tl[idx].data;
       if (msg.role === "user") {
         for (let i = idx - 1; i >= 0; i--) {
-          if (tl[i].type === "message" && tl[i].data?.message_uuid) {
+          if (tl[i].type === "message" && canAnchorForkChips(tl[i].data)) {
             await doFork(tl[i].data.message_uuid);
             if (msg.content && populateInputRef.current) {
               setTimeout(() => populateInputRef.current?.(msg.content), 100);
@@ -9398,7 +9603,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const handleForkReply = useCallback(async (content: string) => {
     if (!conversation) return;
     const msgs = conversation.messages || [];
-    const lastMsg = [...msgs].reverse().find((m: any) => m.message_uuid);
+    const lastMsg = [...msgs].reverse().find((m: any) => canAnchorForkChips(m));
     if (!lastMsg?.message_uuid) {
       toast.error("No messages to fork from");
       return;
@@ -9723,7 +9928,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       .filter(s => !s.is_subagent && inScope(s))
       .sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0))
       .map(s => ({ id: s._id, type: "session", label: s.title || "Untitled Session", sublabel: s.idle_summary?.slice(0, 80) || s.session_id, shortId: s.session_id, messageCount: s.message_count, projectPath: s.project_path, agentType: s.agent_type, updatedAt: s.updated_at, idleSummary: s.idle_summary }));
-    const all = [...persons, ...tasks, ...docs, ...plans, ...sessions];
+    // Labels are personal filing, not team entities — never team-filtered.
+    const labels: MentionItem[] = labelMentionItems(state);
+    const all = [...persons, ...labels, ...tasks, ...docs, ...plans, ...sessions];
     all.sort(byRecency);
     mentionItemsRef.current = all;
   }, [convTeamId]);
@@ -9819,6 +10026,15 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       return val;
     });
   }, []);
+
+  // Collapse and re-measure clamping whenever the sticky switches to a different message.
+  useWatchEffect(() => {
+    setStickyExpanded(false);
+  }, [activeStickyMsg?.id]);
+  useWatchEffect(() => {
+    const el = stickyTextRef.current;
+    setStickyClamped(el ? el.scrollHeight > el.clientHeight + 1 : false);
+  }, [activeStickyMsg?.id, activeStickyMsg?.content, stickyMsgVisible, stickyExpanded]);
 
   useWatchEffect(() => {
     const currentIds = new Set(timeline.map(item => {
@@ -10557,10 +10773,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       setHighlightedMessageId(messageId);
       setTimeout(() => setHighlightedMessageId(null), 2000);
     } else if (conversation?._id) {
-      useInboxStore.setState({
-        pendingNavigateId: conversation._id,
-        pendingScrollToMessageId: messageId,
-      });
+      useInboxStore.getState().requestNavigate(conversation._id, { scrollToMessageId: messageId });
     }
   }, [timeline, virtualizer, conversation?._id]);
 
@@ -10621,16 +10834,12 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         scrollProgressRef.current.style.height = `${progress * 100}%`;
       }
 
-      // Load OLDER is owned entirely by the wheel handler (one page per scroll-up
-      // to the top — see maybeLoadOlderRef below). The scroll handler only drives
-      // load NEWER, which is reachable solely in target mode (jumped into the
-      // middle); normal mode stays anchored to the live tail, so hasMoreBelow is
-      // always false there and this stays dormant.
-      const pp = paginationPropsRef.current;
-      if (distanceFromBottom < 300 && pp.hasMoreBelow && !pp.isLoadingNewer && !pp.isLoadingOlder && Date.now() >= paginationCooldownRef.current && pp.onLoadNewer) {
-        isPaginatingRef.current = true;
-        pp.onLoadNewer();
-      }
+      // Pagination in BOTH directions is owned by the wheel handler (one page
+      // per scroll gesture — see maybeLoadOlderRef/maybeLoadNewerRef below).
+      // Position-based triggers here proved forgeable: the virtualizer's own
+      // anchor corrections re-cross any band with no user input and rip through
+      // every remaining page (older: ct-33523; newer: end-anchor snap-to-bottom
+      // after each append did the same on the way down).
     };
 
     scrollContainer.addEventListener("scroll", handleScroll);
@@ -10651,6 +10860,24 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   // from a single scroll. A wheel event is the one signal the virtualizer can't
   // forge, so loading now tracks the user's hand: stop scrolling and it stops.
   const TOP_LOAD_TRIGGER_PX = 600;
+  const BOTTOM_LOAD_TRIGGER_PX = 600;
+  // Pixel-perfect pagination: remember the topmost visible message and its exact
+  // viewport offset; the layout effect below pins it right back after the page
+  // mounts (above or below), so the text on screen never moves.
+  const capturePageAnchor = (sc: HTMLElement, dir: 'older' | 'newer') => {
+    const scTop = sc.getBoundingClientRect().top;
+    let anchorEl: Element | null = null;
+    for (const m of sc.querySelectorAll('[id^="msg-"]')) {
+      if (m.getBoundingClientRect().bottom > scTop + 1) { anchorEl = m; break; }
+    }
+    pageAnchorRef.current = anchorEl
+      ? { id: anchorEl.id, relTop: anchorEl.getBoundingClientRect().top - scTop, scrollHeight: sc.scrollHeight, scrollTop: sc.scrollTop, dir }
+      : null;
+    // If the page never arrives (empty result), drop the anchor so it can't be
+    // misapplied to a later streaming append.
+    const captured = pageAnchorRef.current;
+    if (captured) setTimeout(() => { if (pageAnchorRef.current === captured) pageAnchorRef.current = null; }, 3000);
+  };
   const maybeLoadOlderRef = useRef<() => void>(() => {});
   maybeLoadOlderRef.current = () => {
     const sc = containerRef.current;
@@ -10666,23 +10893,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       cooldownActive: Date.now() < paginationCooldownRef.current,
     })) return;
     loadOlderArmedRef.current = false; // consume — one page per scroll-up to the top
-    // Pixel-perfect prepend: remember the topmost visible message and its exact
-    // viewport offset; the layout effect below pins it right back after the older
-    // page mounts above, so the text on screen never moves.
-    {
-      const scTop = sc.getBoundingClientRect().top;
-      let anchorEl: Element | null = null;
-      for (const m of sc.querySelectorAll('[id^="msg-"]')) {
-        if (m.getBoundingClientRect().bottom > scTop + 1) { anchorEl = m; break; }
-      }
-      prependAnchorRef.current = anchorEl
-        ? { id: anchorEl.id, relTop: anchorEl.getBoundingClientRect().top - scTop, scrollHeight: sc.scrollHeight }
-        : null;
-      // If the older page never arrives (empty result), drop the anchor so it
-      // can't be misapplied to a later streaming append.
-      const captured = prependAnchorRef.current;
-      if (captured) setTimeout(() => { if (prependAnchorRef.current === captured) prependAnchorRef.current = null; }, 3000);
-    }
+    capturePageAnchor(sc, 'older');
     isPaginatingRef.current = true;
     // Bridge the render gap: isLoadingOlder (a prop derived from paginationStatus)
     // only flips true on the next render, so a burst of wheel events could
@@ -10690,6 +10901,30 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     // cooldown when the page settles; it also self-expires if the load stalls.
     paginationCooldownRef.current = Date.now() + 700;
     pp.onLoadOlder();
+  };
+
+  // The newer-direction mirror (reachable only in target mode — a deep-linked
+  // window with content below). Same wheel-armed, anchor-pinned shape as older:
+  // without it, the virtualizer's end-anchor snapped the view to the new bottom
+  // after each append and the position trigger looped through every page.
+  const maybeLoadNewerRef = useRef<() => void>(() => {});
+  maybeLoadNewerRef.current = () => {
+    const sc = containerRef.current;
+    const pp = paginationPropsRef.current;
+    if (!sc || !pp.onLoadNewer) return;
+    if (!loadNewerArmedRef.current) return;
+    if (!shouldLoadNewer({
+      nearBottom: sc.scrollHeight - sc.scrollTop - sc.clientHeight < BOTTOM_LOAD_TRIGGER_PX,
+      hasMoreBelow: pp.hasMoreBelow,
+      isLoadingOlder: pp.isLoadingOlder,
+      isLoadingNewer: pp.isLoadingNewer,
+      cooldownActive: Date.now() < paginationCooldownRef.current,
+    })) return;
+    loadNewerArmedRef.current = false; // consume — one page per scroll-down to the bottom
+    capturePageAnchor(sc, 'newer');
+    isPaginatingRef.current = true;
+    paginationCooldownRef.current = Date.now() + 700;
+    pp.onLoadNewer();
   };
 
   const totalSize = virtualizer.getTotalSize();
@@ -10718,20 +10953,22 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     setNavScrollProgress(progress);
   }, [conversation?.message_count, messages.length, timeline.length, conversation?.loaded_start_index, totalSize]);
 
-  // Pixel-perfect older-page prepend. The virtualizer's own anchorTo:'end' is
-  // estimate-based and doesn't reliably hold the scroll when a page mounts above
-  // (we measured the view snapping to the freshly-loaded content), so we finalize
-  // it ourselves: pin the message captured at trigger time back to the EXACT
-  // viewport offset it had before the load — visible text must not move a pixel.
+  // Pixel-perfect page mount, both directions. The virtualizer's own
+  // anchorTo:'end' is estimate-based and doesn't hold the scroll when a page
+  // mounts above (we measured the view snapping to the freshly-loaded content)
+  // — and actively snaps it to the new bottom when a page mounts below while
+  // the user sits at the tail of the window. So we finalize it ourselves: pin
+  // the message captured at trigger time back to the EXACT viewport offset it
+  // had before the load — visible text must not move a pixel.
   // It runs in a layout effect (after the virtualizer's own anchor write, before
   // paint) and targets an ABSOLUTE position, so it's idempotent: it composes with
   // the library anchor instead of fighting it (an additive scrollTop+=delta would
   // double-compensate). The rAF re-pin catches any late virtualizer/measure write.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useLayoutEffect(() => {
-    const a = prependAnchorRef.current;
+    const a = pageAnchorRef.current;
     if (!a) return;
-    prependAnchorRef.current = null;
+    pageAnchorRef.current = null;
     const sc = containerRef.current;
     if (!sc) return;
     paginationCooldownRef.current = Date.now() + 500;
@@ -10745,10 +10982,17 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     };
     if (!pinExact()) {
       // Anchor scrolled out of the render window (the estimate-based virtualizer
-      // didn't hold position): coarse-restore by how much the content grew to pull
-      // it back into view, then pin it exactly on the next frame.
-      const grew = sc.scrollHeight - a.scrollHeight;
-      if (grew > 0) { sc.scrollTop += grew; lastScrollTopRef.current = sc.scrollTop; }
+      // didn't hold position): coarse-restore to pull it back into view, then pin
+      // it exactly on the next frame. Older pages mount ABOVE, so position shifts
+      // by how much the content grew; newer pages mount BELOW, so the pre-load
+      // scrollTop is still the right offset (the end-anchor snap is what moved us).
+      if (a.dir === 'older') {
+        const grew = sc.scrollHeight - a.scrollHeight;
+        if (grew > 0) { sc.scrollTop += grew; lastScrollTopRef.current = sc.scrollTop; }
+      } else {
+        sc.scrollTop = a.scrollTop;
+        lastScrollTopRef.current = sc.scrollTop;
+      }
     }
     requestAnimationFrame(() => { pinExact(); paginationCooldownRef.current = 0; });
   }, [timeline.length]);
@@ -10802,6 +11046,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         setUserScrolled(true);
         loadOlderArmedRef.current = true;
         maybeLoadOlderRef.current(); // load older if this scroll-up reached the top
+      } else if (e.deltaY > 0) {
+        loadNewerArmedRef.current = true;
+        maybeLoadNewerRef.current(); // load newer if this scroll-down reached the bottom
       }
     };
     sc.addEventListener('wheel', onWheel, { passive: true });
@@ -11274,7 +11521,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       }
 
       // Skip empty "No response requested." messages
-      if (stripSystemTags(msg.content || "").trim() === "No response requested.") return null;
+      if (isHiddenStubMessage(msg)) return null;
 
       // Find previous VISIBLE non-commit assistant item to determine if this is first in assistant sequence
       // Skip invisible assistant messages (those whose content is only system tags with no tool calls/thinking/images)
@@ -12058,10 +12305,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   setHighlightedMessageId(messageId);
                   setTimeout(() => setHighlightedMessageId(null), 2000);
                 } else if (conversation?._id) {
-                  useInboxStore.setState({
-                    pendingNavigateId: conversation._id,
-                    pendingScrollToMessageId: messageId,
-                  });
+                  useInboxStore.getState().requestNavigate(conversation._id, { scrollToMessageId: messageId });
                 }
               }}
             />
@@ -12079,10 +12323,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
             if (activeStickyMsg.index >= 0) {
               virtualizer.scrollToIndex(activeStickyMsg.index, { align: 'start' });
             } else if (activeStickyMsg.id && activeStickyMsg.id !== '__fallback__' && conversation?._id) {
-              useInboxStore.setState({
-                pendingNavigateId: conversation._id,
-                pendingScrollToMessageId: activeStickyMsg.id,
-              });
+              useInboxStore.getState().requestNavigate(conversation._id, { scrollToMessageId: activeStickyMsg.id });
             } else if (onJumpToStart) {
               jumpDirectionRef.current = 'start';
               setJumpPending('start');
@@ -12092,24 +12333,45 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         >
           <div className="conv-col mx-auto">
             <div className="bg-sol-blue/10 px-4 py-3 rounded-b-lg border border-sol-blue/30 backdrop-blur-md shadow-lg relative group">
-              <button
-                className="absolute top-1.5 right-1.5 p-0.5 rounded hover:bg-sol-blue/20 text-sol-text-dim hover:text-sol-text opacity-0 group-hover:opacity-100 transition-opacity"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  dismissedStickyIdsRef.current.add(activeStickyMsg!.id);
-                  setStickyMsgVisible(false);
-                  setActiveStickyMsg(null);
-                }}
-              >
-                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
+              <div className="absolute top-1.5 right-1.5 flex items-center gap-0.5">
+                {(stickyClamped || stickyExpanded) && (
+                  <button
+                    className="p-0.5 rounded hover:bg-sol-blue/20 text-sol-text-dim hover:text-sol-text opacity-0 group-hover:opacity-100 transition-opacity"
+                    title={stickyExpanded ? "Collapse" : "Show full message"}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setStickyExpanded(v => !v);
+                    }}
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={stickyExpanded ? "M5 15l7-7 7 7" : "M19 9l-7 7-7-7"} />
+                    </svg>
+                  </button>
+                )}
+                <button
+                  className="p-0.5 rounded hover:bg-sol-blue/20 text-sol-text-dim hover:text-sol-text opacity-0 group-hover:opacity-100 transition-opacity"
+                  title="Dismiss"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    dismissedStickyIdsRef.current.add(activeStickyMsg!.id);
+                    setStickyMsgVisible(false);
+                    setActiveStickyMsg(null);
+                  }}
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
               <div className="flex items-center gap-2 mb-1">
                 <UserIcon avatarUrl={conversation?.user?.avatar_url} />
                 <span className="text-sol-blue text-xs font-medium">{conversation?.user?.name || conversation?.user?.email?.split("@")[0] || "You"}</span>
               </div>
-              <div className="text-sm text-sol-text whitespace-pre-wrap break-words line-clamp-3 pl-8 pr-4">{cleanStickyContent(activeStickyMsg.content)}</div>
+              <div
+                ref={stickyTextRef}
+                className={`text-sm text-sol-text whitespace-pre-wrap break-words pl-8 pr-4 ${stickyExpanded ? "max-h-[50vh] overflow-y-auto cursor-auto select-text" : "line-clamp-3"}`}
+                onClick={stickyExpanded ? (e) => e.stopPropagation() : undefined}
+              >{cleanStickyContent(activeStickyMsg.content)}</div>
             </div>
           </div>
         </div>
@@ -12124,8 +12386,14 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
       <div className={`flex-1 min-h-0 relative flex ${isImageLightboxActive ? "invisible" : ""}`}>
       {(isJumpingToTarget || (targetMessageId && timeline.length === 0)) && (
-        <div className="absolute inset-x-0 top-0 z-20 flex justify-center pt-3 sm:pt-4 pointer-events-none">
-          <div className="flex items-center gap-2 px-4 py-2 rounded-full bg-sol-bg-alt border border-sol-border text-sol-text-muted text-xs shadow-md">
+        <div
+          className="absolute inset-x-0 z-20 flex justify-center pt-3 sm:pt-4 pointer-events-none"
+          style={{
+            top: stickyMsgVisible && activeStickyMsg ? (stickyElRef.current?.offsetHeight ?? 0) + 4 : 0,
+            animation: "fadeIn 150ms ease-out",
+          }}
+        >
+          <div className="flex items-center gap-2 px-4 py-2 rounded-full bg-sol-cyan/15 text-sol-cyan border border-sol-cyan/30 backdrop-blur-md text-xs font-medium shadow-md">
             <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
               <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
               <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
@@ -12337,7 +12605,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
             />
           ) : (
             <>
-              <ReviewBar conversationId={conversation._id} />
               {workflowRun?.status === "paused" && workflowRun.gate_prompt ? (
                 <div className="absolute left-0 right-0 bottom-full flex items-center gap-2 px-4 py-1.5 bg-sol-bg border-t border-sol-magenta/20 text-xs">
                   <span className="text-sol-magenta font-semibold shrink-0">Gate</span>
