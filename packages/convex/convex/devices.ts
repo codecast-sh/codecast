@@ -93,6 +93,11 @@ export async function enqueueStartSession(
     worktreeName?: string;
     prompt?: string;
     createdAt?: number;
+    // Per-session launch overrides (shared-contract option key + effort level).
+    // The daemon maps them to agent flags (claude --model/--effort, codex -m/-c);
+    // they ride the payload so old daemons just ignore them.
+    model?: string;
+    effort?: string;
   },
 ): Promise<Id<"daemon_commands">> {
   const conv = await ctx.db.get(opts.conversationId);
@@ -121,6 +126,8 @@ export async function enqueueStartSession(
   if (opts.isolated) args.isolated = true;
   if (opts.worktreeName) args.worktree_name = opts.worktreeName;
   if (opts.prompt) args.prompt = opts.prompt;
+  if (opts.model) args.model = opts.model;
+  if (opts.effort) args.effort = opts.effort;
 
   return await ctx.db.insert("daemon_commands", {
     user_id: userId,

@@ -409,21 +409,56 @@ function readWindow(fd: number, position: number, length: number): string {
 }
 export function resumeModelFlagFromFile(jsonlPath: string, extraFlags: string): string {
   if (/(^|\s)--model(\s|=)/.test(extraFlags)) return "";
+  return lastFlagFromFileWindows(jsonlPath, (tail) => resumeModelFlag(tail, extraFlags));
+}
+
+// Shared tail-then-head window scan for resume flag extraction (see
+// resumeModelFlagFromFile's rationale above).
+function lastFlagFromFileWindows(jsonlPath: string, scan: (content: string) => string): string {
   try {
     const fd = fs.openSync(jsonlPath, "r");
     try {
       const size = fs.fstatSync(fd).size;
       const windowSize = Math.min(size, MODEL_SCAN_WINDOW_BYTES);
       const tail = readWindow(fd, size - windowSize, windowSize);
-      const flag = resumeModelFlag(tail, extraFlags);
+      const flag = scan(tail);
       if (flag || size <= windowSize) return flag;
-      return resumeModelFlag(readWindow(fd, 0, windowSize), extraFlags);
+      return scan(readWindow(fd, 0, windowSize));
     } finally {
       fs.closeSync(fd);
     }
   } catch {
     return "";
   }
+}
+
+// Effort twin of claudeModelAlias/resumeModelFlag. Effort has NO per-message
+// field in the transcript — the only signals are the switch echoes: the
+// /effort command's "Set effort level to <x>" and the /model picker's
+// session-only commit suffix "… with <x> effort". Both arrive with the same
+// JSON-escaped-or-raw ANSI wrapping as model switch lines. "auto" clears the
+// override (resume with no flag = the user's saved default).
+const EFFORT_LEVEL_RE =
+  /<local-command-stdout>[^<]*?(?:Set effort level to (?:(?:\\u001b|\x1b)\[\d+m)*(low|medium|high|xhigh|max|auto)\b|with (?:(?:\\u001b|\x1b)\[\d+m)*(low|medium|high|xhigh|max)(?:(?:\\u001b|\x1b)\[\d+m)* effort)/gi;
+export function claudeEffortLevel(jsonlContent: string): string | null {
+  let last: string | null = null;
+  EFFORT_LEVEL_RE.lastIndex = 0;
+  for (let m = EFFORT_LEVEL_RE.exec(jsonlContent); m; m = EFFORT_LEVEL_RE.exec(jsonlContent)) {
+    const level = (m[1] ?? m[2]).toLowerCase();
+    last = level === "auto" ? null : level;
+  }
+  return last;
+}
+
+export function resumeEffortFlag(jsonlContent: string, extraFlags: string): string {
+  if (/(^|\s)--effort(\s|=)/.test(extraFlags)) return "";
+  const level = claudeEffortLevel(jsonlContent);
+  return level ? ` --effort ${level}` : "";
+}
+
+export function resumeEffortFlagFromFile(jsonlPath: string, extraFlags: string): string {
+  if (/(^|\s)--effort(\s|=)/.test(extraFlags)) return "";
+  return lastFlagFromFileWindows(jsonlPath, (tail) => resumeEffortFlag(tail, extraFlags));
 }
 
 export interface GenerateClaudeCodeJsonlOptions {

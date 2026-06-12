@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { LogoIcon } from "./Logo";
+import { AppLoader } from "./AppLoader";
 import { useRouter } from "next/navigation";
 import { useEffect, useLayoutEffect, useRef, useState, useMemo, useImperativeHandle, forwardRef, useCallback, memo, createContext, useContext, Fragment, ComponentProps, type ReactElement } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
@@ -55,6 +56,7 @@ import { CommitCard } from "./CommitCard";
 import { PRCard } from "./PRCard";
 import { DiffView } from "./DiffView";
 import { AgentTypeIcon, formatAgentType } from "./AgentTypeIcon";
+import { HeaderModelControl, LaunchModelPill } from "./ModelEffortPicker";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -649,15 +651,7 @@ function MessagesUnavailableState({
   // No "couldn't be loaded" panic — the recovery loop in useConversationMessages
   // keeps trying every second. Just show the loader; if it never lands the user
   // will see this indicator rather than a misleading error.
-  return (
-    <div className="flex items-center gap-2 text-sol-text-dim text-xs">
-      <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
-        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-      </svg>
-      <span>Loading messages…</span>
-    </div>
-  );
+  return <AppLoader className="min-h-0 bg-transparent py-10" size={32} />;
 }
 
 // The folder glyph is shown on the picker header and on every project chip.
@@ -859,14 +853,17 @@ function ProjectSwitcher({ conversation, handleRef }: { conversation: Conversati
 
   return (
     <div className="flex flex-col items-center gap-3">
-        {currentPath ? (
-          <div className="flex items-center gap-2 text-sol-text-muted text-xs cursor-default" title={currentPath}>
-            <FolderGlyph className="w-3.5 h-3.5" />
-            <span className="font-medium text-sol-text">{currentName}</span>
-          </div>
-        ) : recentProjects.length > 0 ? (
-          <div className="text-sol-text-dim text-xs">select a project</div>
-        ) : null}
+        <div className="flex items-center gap-2.5">
+          {currentPath ? (
+            <div className="flex items-center gap-2 text-sol-text-muted text-xs cursor-default" title={currentPath}>
+              <FolderGlyph className="w-3.5 h-3.5" />
+              <span className="font-medium text-sol-text">{currentName}</span>
+            </div>
+          ) : recentProjects.length > 0 ? (
+            <div className="text-sol-text-dim text-xs">select a project</div>
+          ) : null}
+          <NewSessionBucketPill conversation={conversation} />
+        </div>
 
       <div
         className={`flex flex-wrap justify-center gap-1.5 rounded-lg transition-all ${picking ? "ring-1 ring-sol-cyan/40 bg-sol-cyan/[0.03] p-1.5" : ""}`}
@@ -963,10 +960,10 @@ function ProjectSwitcher({ conversation, handleRef }: { conversation: Conversati
       ) : recentProjects.length > 0 ? (
         <button
           onClick={focusPicker}
-          className="inline-flex items-center gap-2 text-[10px] text-sol-text-dim/60 hover:text-sol-text-dim transition-colors"
+          className="inline-flex items-center gap-2.5 text-[10px] opacity-40 hover:opacity-90 transition-opacity"
         >
-          <HintKeys keys={[ALT_CAP, "K"]} label="pick a folder" />
-          <HintKeys keys={[ALT_CAP, "J"]} label="pick an agent" />
+          <HintKeys keys={[ALT_CAP, "K"]} label="pick folder" />
+          <HintKeys keys={[ALT_CAP, "J"]} label="pick agent" />
         </button>
       ) : null}
 
@@ -1139,6 +1136,8 @@ function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedW
           </svg>
           Workflow
         </button>
+        <span className="text-sol-border/50 text-xs">|</span>
+        <LaunchModelPill conversationId={storeSession?._id || conversation._id} />
       </div>
 
       {picking && (
@@ -1237,7 +1236,11 @@ function NewSessionBucketPill({ conversation }: { conversation: ConversationData
   return (
     <button
       onClick={openPicker}
-      className="mt-2 flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] text-sol-text-dim/70 hover:text-sol-text-muted hover:bg-sol-bg-alt/60 transition-colors"
+      className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border text-[10px] leading-4 transition-colors ${
+        assigned && color
+          ? "border-sol-border/40 bg-sol-bg-alt/40 hover:border-sol-border/70"
+          : "border-dashed border-sol-border/50 text-sol-text-dim/60 hover:text-sol-cyan hover:border-sol-cyan/40 hover:bg-sol-cyan/5"
+      }`}
       title="Choose a label for this session"
     >
       {assigned && color ? (
@@ -1308,7 +1311,6 @@ export function NewSessionView({ conversation, agentControls }: { conversation: 
         workflows={ac.workflows}
         handleRef={agentsRef}
       />
-      <NewSessionBucketPill conversation={conversation} />
     </div>
   );
 }
@@ -1945,17 +1947,21 @@ function assistantLabel(agentType?: string): string {
 function ConversationMetadata({
   agentType,
   model,
+  effort,
   startedAt,
   messageCount,
   shortId,
   conversationId,
+  canEditModel,
 }: {
   agentType?: string;
   model?: string;
+  effort?: string;
   startedAt?: number;
   messageCount?: number;
   shortId?: string;
   conversationId?: string;
+  canEditModel?: boolean;
 }) {
   if (!agentType && !model && !startedAt && !messageCount) return null;
 
@@ -1969,12 +1975,14 @@ function ConversationMetadata({
           <AgentTypeIcon agentType={agentType} />
         </div>
       )}
-      {model && (
-        <div className="hidden sm:flex items-center gap-1.5 flex-shrink-0">
-          <span className="text-sol-text-dim">&middot;</span>
-          <span className="font-mono truncate max-w-none" title={model}>{formatModel(model)}</span>
-        </div>
-      )}
+      <HeaderModelControl
+        conversationId={conversationId}
+        agentType={agentType}
+        model={model}
+        effort={effort}
+        messageCount={messageCount}
+        canEdit={!!canEditModel}
+      />
       {startedAt && (
         <div className="flex items-center gap-1.5 flex-shrink-0">
           <span className="text-sol-text-dim">&middot;</span>
@@ -3037,38 +3045,40 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
                 >
                   <MarkdownRenderer content={String(parsedInput.content)} filePath={filePath} />
                   {!mdExpanded && mdOverflowing && (
-                    <div className="absolute bottom-0 left-0 right-0 h-20 pointer-events-none bg-gradient-to-b from-transparent to-[var(--sol-bg)]" />
+                    <div className="absolute bottom-0 left-0 right-0 h-20 pointer-events-none bg-gradient-to-b from-transparent to-[var(--sol-bg-alt)]" />
                   )}
                 </div>
-                <div className="flex items-center gap-3 px-3 pb-2">
-                  {(mdOverflowing || mdExpanded) && (
-                    <>
+                {(mdOverflowing || mdExpanded || (onStartShareSelection && messageId && !shareSelectionMode)) && (
+                  <div className="flex items-center gap-3 px-3 py-1.5 border-t border-sol-border/20">
+                    {(mdOverflowing || mdExpanded) && (
+                      <>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setMdExpanded(v => !v); }}
+                          className="text-[11px] font-medium text-sol-cyan hover:text-sol-cyan/80 transition-colors"
+                        >
+                          {mdExpanded ? "Collapse" : "Expand"}
+                        </button>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setMdFullscreen(true); }}
+                          className="text-[11px] font-medium text-sol-cyan hover:text-sol-cyan/80 transition-colors"
+                        >
+                          Fullscreen
+                        </button>
+                      </>
+                    )}
+                    {onStartShareSelection && messageId && !shareSelectionMode && (
                       <button
-                        onClick={(e) => { e.stopPropagation(); setMdExpanded(v => !v); }}
-                        className="text-sm font-medium text-sol-cyan hover:text-sol-cyan/80 transition-colors"
+                        onClick={(e) => { e.stopPropagation(); onStartShareSelection(messageId); }}
+                        className="text-[11px] font-medium text-sol-cyan hover:text-sol-cyan/80 transition-colors flex items-center gap-1"
                       >
-                        {mdExpanded ? "Collapse" : "Expand"}
+                        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
+                        </svg>
+                        Share
                       </button>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); setMdFullscreen(true); }}
-                        className="text-sm font-medium text-sol-cyan hover:text-sol-cyan/80 transition-colors"
-                      >
-                        Fullscreen
-                      </button>
-                    </>
-                  )}
-                  {onStartShareSelection && messageId && !shareSelectionMode && (
-                    <button
-                      onClick={(e) => { e.stopPropagation(); onStartShareSelection(messageId); }}
-                      className="text-xs font-medium text-sol-cyan hover:text-sol-cyan/80 transition-colors flex items-center gap-1"
-                    >
-                      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
-                      </svg>
-                      Share
-                    </button>
-                  )}
-                </div>
+                    )}
+                  </div>
+                )}
                 {mdFullscreen && createPortal(
                   <div className="fixed inset-0 z-[10001] bg-sol-bg overflow-auto" onClick={() => setMdFullscreen(false)}>
                     <div className="conv-col mx-auto px-8 py-12" onClick={e => e.stopPropagation()}>
@@ -5917,7 +5927,7 @@ function AssistantBlockImpl({
       {onForkFromMessage && messageUuid && !collapsed && !onlyToolCalls && !shareSelectionMode && !(forkChildren && forkChildren.length) && (
         <button
           onClick={() => onForkFromMessage(messageUuid)}
-          className="absolute right-2 -bottom-3 z-10 inline-flex items-center gap-1.5 text-[11px] font-medium pl-1.5 pr-2.5 py-1 rounded-md border border-sol-border/60 bg-sol-bg text-sol-text-dim shadow-sm opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto hover:text-sol-cyan hover:border-sol-cyan/50 hover:bg-sol-cyan/10 transition-all duration-150"
+          className="absolute right-2 -bottom-3 z-10 inline-flex items-center gap-1.5 text-[11px] font-medium pl-1.5 pr-2.5 py-1 rounded-md border border-dashed border-sol-border/60 bg-sol-bg text-sol-text-dim shadow-sm opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto hover:text-sol-cyan hover:border-sol-cyan/50 hover:bg-sol-cyan/10 transition-all duration-150"
           title="Fork the conversation from this message"
           aria-label="Fork from this message"
         >
@@ -6366,13 +6376,13 @@ function PlanBlockImpl({ content, timestamp, collapsed, messageId, conversationI
           <div className="flex items-center gap-3 mt-2 pt-2 border-t border-sol-border/30">
             <button
               onClick={() => setIsExpanded(e => !e)}
-              className="text-sm font-medium text-sol-cyan hover:text-sol-cyan/80 transition-colors"
+              className="text-[11px] font-medium text-sol-cyan hover:text-sol-cyan/80 transition-colors"
             >
               {isExpanded ? "Collapse" : "Expand"}
             </button>
             <button
               onClick={() => setFullscreen(true)}
-              className="text-sm font-medium text-sol-cyan hover:text-sol-cyan/80 transition-colors"
+              className="text-[11px] font-medium text-sol-cyan hover:text-sol-cyan/80 transition-colors"
             >
               Fullscreen
             </button>
@@ -11521,10 +11531,12 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
               <ConversationMetadata
                 agentType={conversation.agent_type}
                 model={conversation.model}
+                effort={(conversation as any).effort}
                 startedAt={conversation.started_at}
                 messageCount={conversation.message_count}
                 shortId={conversation.short_id}
                 conversationId={conversation._id}
+                canEditModel={effectiveIsOwner}
               />
             )}
 

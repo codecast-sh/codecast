@@ -11,6 +11,7 @@ import { internal } from "./_generated/api";
 import { resetConversationPendingMessages } from "./pendingMessages";
 import { advanceForkCopy, type ForkCopyCtx } from "./forkCopy";
 import { hasRecentPendingDaemonCommand, extractDaemonCommandConversationId } from "./daemonCommandUtils";
+import { AGENT_MODEL_CONFIG, modelAgentKey } from "@codecast/shared/contracts";
 import { shouldShowInInbox, isSessionIdle, deriveSessionActivity, classifyWorkState, normalizeWorkStateFilter, trustedAgentStatus, type WorkState } from "./inboxFilters";
 import { filterUserMessages, isImportNotice } from "./userMessagesFilter";
 import {
@@ -1067,6 +1068,10 @@ export const getProjectInfo = query({
       project_path: conv.project_path ?? null,
       git_root: conv.git_root ?? null,
       git_remote_url: conv.git_remote_url ?? null,
+      // Resume effort fallback: a session launched with --effort but never
+      // switched in-session has no transcript echo to re-pin from; the
+      // conversation row is the only durable record.
+      effort: conv.effort ?? null,
     };
   },
 });
@@ -6392,6 +6397,7 @@ async function enrichInboxSessionRow(
     git_branch: conv.git_branch,
     agent_type: conv.agent_type,
     model: conv.model ?? null,
+    effort: conv.effort ?? null,
     message_count: conv.message_count,
     idle_summary: conv.idle_summary,
     is_idle: isIdle,
@@ -7229,6 +7235,12 @@ export const reconfigureSession = mutation({
     project_path: v.optional(v.string()),
     git_root: v.optional(v.string()),
     isolated: v.optional(v.boolean()),
+    // Launch model/effort for the (blank) session — option keys from the
+    // shared contract. "default" clears the stamp and omits the flag. Launch
+    // flags leave no transcript echo, so the stamp here is the only record
+    // until the first assistant turn confirms.
+    model: v.optional(v.string()),
+    effort: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -7240,6 +7252,33 @@ export const reconfigureSession = mutation({
 
     const patch: Record<string, any> = { updated_at: Date.now() };
     if (args.agent_type) patch.agent_type = args.agent_type;
+    // An agent flip invalidates the previous agent's model/effort stamps
+    // (claude-opus on a codex session is nonsense; effort scales differ too).
+    // An explicit model/effort in the same call re-stamps below.
+    if (args.agent_type && args.agent_type !== conv.agent_type) {
+      patch.model = undefined;
+      patch.effort = undefined;
+    }
+    const reconfAgent = args.agent_type || conv.agent_type || "claude_code";
+    const launchCfg = AGENT_MODEL_CONFIG[modelAgentKey(reconfAgent)];
+    const launchModelOpt = args.model ? launchCfg?.models.find((m) => m.key === args.model) : undefined;
+    if (args.model !== undefined) {
+      if (!launchModelOpt) throw new Error(`Unknown model: ${args.model}`);
+      if (launchModelOpt.midSessionOnly) throw new Error(`${launchModelOpt.label} can't be set at launch`);
+      patch.model = launchModelOpt.cliAlias
+        ? (modelAgentKey(reconfAgent) === "claude" ? `claude-${launchModelOpt.key}` : launchModelOpt.key)
+        : undefined;
+    }
+    if (args.effort !== undefined) {
+      // "default" clears the pin: no stamp, no --effort flag — the agent's own
+      // saved default wins (mirrors model "default").
+      if (args.effort === "default") {
+        patch.effort = undefined;
+      } else {
+        if (!launchCfg?.efforts.includes(args.effort)) throw new Error(`Unknown effort: ${args.effort}`);
+        patch.effort = args.effort;
+      }
+    }
     if (args.project_path !== undefined) {
       patch.project_path = args.project_path;
       patch.git_root = args.git_root ?? args.project_path;
@@ -7261,6 +7300,15 @@ export const reconfigureSession = mutation({
     const updated = { ...conv, ...patch };
     const agentType = updated.agent_type || "claude_code";
     const daemonAgentType = agentType === "codex" ? "codex" : agentType === "gemini" ? "gemini" : "claude";
+    // Re-derive the launch payload from the (possibly just-patched) stamps so
+    // an agent flip alone re-launches with the conversation's chosen model.
+    const stampedModelKey = (() => {
+      if (args.model !== undefined) return launchModelOpt?.cliAlias ? launchModelOpt.key : undefined;
+      const m = updated.model as string | undefined;
+      if (!m) return undefined;
+      const key = modelAgentKey(daemonAgentType === "codex" ? "codex" : "claude_code") === "claude" && m.startsWith("claude-") ? m.slice("claude-".length) : m;
+      return launchCfg?.models.some((o) => o.key === key && o.cliAlias) ? key : undefined;
+    })();
     await enqueueStartSession(ctx, userId, {
       conversationId: args.conversation_id,
       agentType: daemonAgentType,
@@ -7268,6 +7316,8 @@ export const reconfigureSession = mutation({
       gitRoot: updated.git_root,
       sessionId: updated.session_id,
       isolated: args.isolated,
+      ...(stampedModelKey ? { model: stampedModelKey } : {}),
+      ...(updated.effort && launchCfg?.efforts.includes(updated.effort) ? { effort: updated.effort } : {}),
     });
   },
 });
@@ -7734,6 +7784,89 @@ export const sendKeysToSession = mutation({
       args: JSON.stringify({ conversation_id: args.conversation_id, keys: args.keys }),
       created_at: Date.now(),
     });
+  },
+});
+
+// In-place model/effort switch for a running claude session. The daemon drives
+// the /model picker session-scoped (`s` commit) — never the one-shot
+// `/model <x>` / `/effort <x>` forms, which rewrite the user's GLOBAL default.
+// conversations.model/effort are stamped optimistically here (string fields
+// reconcile cleanly when the rollup confirms from the switch echo; the
+// optimistic model is the alias shape "claude-opus" — the echo replaces it with
+// the precise versioned id). model/effort are picker option keys from
+// @codecast/shared/contracts AGENT_MODEL_CONFIG; "default" = leave model as the
+// agent's saved default (effort-only switch).
+export const setSessionModel = mutation({
+  args: {
+    conversation_id: v.id("conversations"),
+    model: v.optional(v.string()),
+    effort: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+
+    const conv = await ctx.db.get(args.conversation_id);
+    if (!conv || conv.user_id !== userId) throw new Error("Not authorized");
+    const agentKey = modelAgentKey(conv.agent_type);
+    const agentCfg = AGENT_MODEL_CONFIG[agentKey];
+    if (!agentCfg?.midSession) {
+      throw new Error(`In-place model switch not supported for ${conv.agent_type ?? "this agent"}`);
+    }
+    if (args.model !== undefined && !agentCfg.models.some((m) => m.key === args.model)) {
+      throw new Error(`Unknown model: ${args.model}`);
+    }
+    if (args.effort !== undefined && !agentCfg.efforts.includes(args.effort)) {
+      throw new Error(`Unknown effort: ${args.effort}`);
+    }
+    if (args.model === undefined && args.effort === undefined) return null;
+
+    // No server-side optimistic stamp: the web updates its local store
+    // instantly, and the durable truth arrives via the rollup parsing the
+    // picker's "Set model to … for this session only" echo. Stamping here
+    // would leave a wrong value behind whenever the daemon refuses (busy
+    // session, no tmux) — the command id lets the client watch for that.
+    //
+    // Target the owner device. Broadcast would race every daemon the user
+    // runs: an out-of-date one treats set_model as an unknown GLOBAL command
+    // and stamps "Unknown command: set_model" into the result before the
+    // owning daemon even sees it (observed live with a remote box on 1.1.58).
+    const target = await resolveOwnerDevice(ctx, userId, {
+      projectPath: conv.project_path ?? null,
+      gitRoot: conv.git_root ?? null,
+      ownerDeviceId: (conv as any).owner_device_id ?? null,
+    });
+    return await ctx.db.insert("daemon_commands", {
+      user_id: userId,
+      command: "set_model",
+      args: JSON.stringify({
+        conversation_id: args.conversation_id,
+        ...(args.model !== undefined ? { model: args.model } : {}),
+        ...(args.effort !== undefined ? { effort: args.effort } : {}),
+      }),
+      created_at: Date.now(),
+      target_device_id: target ?? undefined,
+    });
+  },
+});
+
+// Owner-scoped result watch for a single daemon command — the reactive channel
+// the model picker uses to confirm an in-place switch or surface the daemon's
+// refusal ("Session is busy…"). Old daemons never execute unknown commands, so
+// executed_at stays null forever — the client treats a long-pending command as
+// "daemon predates set_model".
+export const getDaemonCommandResult = query({
+  args: { command_id: v.id("daemon_commands") },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return null;
+    const cmd = await ctx.db.get(args.command_id);
+    if (!cmd || cmd.user_id !== userId) return null;
+    return {
+      executed_at: cmd.executed_at ?? null,
+      result: cmd.result ?? null,
+      error: cmd.error ?? null,
+    };
   },
 });
 

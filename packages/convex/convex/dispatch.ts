@@ -9,6 +9,7 @@ import { hasRecentPendingDaemonCommand } from "./daemonCommandUtils";
 import { nextShortId } from "./counters";
 import { resolveAssigneeStr, resolveAssigneeToUserId, recalcPlanProgress, notifySubscribers, subscribeUser, resolveWorkerParentConversation, resolveTaskGitContext } from "./tasks";
 import { api, internal } from "./_generated/api";
+import { AGENT_MODEL_CONFIG, findModelOption, modelAgentKey } from "@codecast/shared/contracts";
 import { conversationHasNoWork, reapEmptyConversation, enqueueKillSessionCommand } from "./cleanup";
 import { canAccessDoc } from "./docs";
 
@@ -207,7 +208,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     });
   },
 
-  createSession: async (ctx, userId, [opts]: [{ agent_type?: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string } }]) => {
+  createSession: async (ctx, userId, [opts]: [{ agent_type?: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string }]) => {
     await checkRateLimit(ctx as any, userId, "createConversation");
     const now = Date.now();
     const sessionId = opts.session_id || crypto.randomUUID();
@@ -302,12 +303,26 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     }
 
     const daemonType = agentType === "codex" ? "codex" : agentType === "gemini" ? "gemini" : "claude";
+    // Per-session model/effort (validated against the shared contract; "default"
+    // = omit). Stamped on the conversation so the badge is right from t=0 — the
+    // rollup confirms/corrects from the first turn's switch echo or model field.
+    const modelOpt = opts.model ? findModelOption(agentType, opts.model) : undefined;
+    const effortOk = opts.effort && AGENT_MODEL_CONFIG[modelAgentKey(agentType)]?.efforts.includes(opts.effort);
+    const requestedModel = modelOpt?.cliAlias ? modelOpt.key : undefined;
+    if (requestedModel || effortOk) {
+      await ctx.db.patch(conversationId, {
+        ...(requestedModel ? { model: daemonType === "claude" ? `claude-${requestedModel}` : requestedModel } : {}),
+        ...(effortOk ? { effort: opts.effort } : {}),
+      });
+    }
     await enqueueStartSession(ctx, userId, {
       conversationId,
       agentType: daemonType,
       projectPath: resolvedProjectPath || resolvedGitRoot,
       gitRoot: resolvedGitRoot,
       createdAt: now,
+      ...(requestedModel ? { model: requestedModel } : {}),
+      ...(effortOk ? { effort: opts.effort } : {}),
     });
 
     return conversationId;
@@ -779,9 +794,18 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     const name = (opts?.name || "").trim();
     if (!name) throw new Error("Bucket name required");
     const now = Date.now();
+    // New labels append to the END of the user's order (the + button is where
+    // they were born). Never-ordered labels sort at 0, so max+1024 lands after
+    // both those and any explicitly drag-ordered ones.
+    const existing = await ctx.db
+      .query("inbox_buckets")
+      .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+      .collect();
+    const maxOrder = existing.reduce((m: number, b: any) => Math.max(m, b.sort_order ?? 0), 0);
     const _id = await ctx.db.insert("inbox_buckets", {
       user_id: userId,
       name,
+      sort_order: maxOrder + 1024,
       ...(opts.color ? { color: opts.color } : {}),
       created_at: now,
       updated_at: now,
@@ -875,6 +899,7 @@ const SESSION_COMMANDS = {
   rewindSession: api.conversations.rewindSession,
   forkFromMessage: api.conversations.forkFromMessage,
   sendKeysToSession: api.conversations.sendKeysToSession,
+  setSessionModel: api.conversations.setSessionModel,
   sendEscapeToSession: api.conversations.sendEscapeToSession,
   resumeSession: api.users.resumeSession,
 };
