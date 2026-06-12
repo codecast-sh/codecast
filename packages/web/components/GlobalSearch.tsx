@@ -2,6 +2,7 @@ import { useState, useRef, useCallback } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useEventListener } from "../hooks/useEventListener";
 import { useShortcutAction } from "../shortcuts";
+import { KeyCap } from "./KeyboardShortcutsHelp";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useRouter } from "next/navigation";
@@ -372,12 +373,13 @@ export function GlobalSearch() {
                     }}
                     className="flex items-center gap-1 cursor-pointer text-sol-text-secondary hover:text-sol-text transition-colors"
                   >
-                    <kbd className="px-1.5 py-0.5 bg-sol-bg rounded border border-sol-border text-sol-text-secondary">⇧↵</kbd>
+                    <KeyCap size="xs">⇧</KeyCap>
+                    <KeyCap size="xs">↵</KeyCap>
                     see all
                   </span>
                 )}
                 <span className="flex items-center gap-1">
-                  <kbd className="px-1.5 py-0.5 bg-sol-bg rounded border border-sol-border text-sol-text-secondary">esc</kbd>
+                  <KeyCap size="xs">Esc</KeyCap>
                   close
                 </span>
               </div>

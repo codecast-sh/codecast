@@ -1,8 +1,9 @@
 "use client";
 import { ReactNode, useState, useCallback, useMemo, useEffect, useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useRouter } from "next/navigation";
+import { useRouter, usePathname } from "next/navigation";
 import { useWatchEffect } from "../hooks/useWatchEffect";
+import { formatShortcutLabel } from "../shortcuts";
 import { FilterDropdown, FilterOptionList } from "./FilterDropdown";
 import { useInboxStore } from "../store/inboxStore";
 import { toast } from "sonner";
@@ -392,6 +393,17 @@ export function GenericListView<T>({
   children,
 }: GenericListViewProps<T>) {
   const router = useRouter();
+  const currentPath = usePathname();
+
+  // Open/close a row's detail by driving the URL. Click and space both call this:
+  // navigating to the row's route opens it (instant when the route shares this
+  // page's component — e.g. /tasks), and navigating back to the list route closes
+  // it, so the detail toggles in place with no re-mount.
+  const toggleDetail = (item: T) => {
+    const route = getItemRoute(item);
+    const base = route.replace(/\/[^/]+$/, "");
+    router.push(currentPath === route ? base : route);
+  };
 
   const [focusIndex, setFocusIndex] = useState(0);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -575,12 +587,9 @@ export function GenericListView<T>({
         setSelectedIds(new Set(visibleItems.map(getItemId)));
         return;
       }
-      if (e.key === " " && !e.metaKey && !e.ctrlKey && renderPreview) {
+      if (e.key === " " && !e.metaKey && !e.ctrlKey) {
         stop();
-        if (focusedItem) {
-          const id = getItemId(focusedItem);
-          setPreviewId((prev) => prev === id ? null : id);
-        }
+        if (focusedItem) toggleDetail(focusedItem);
         return;
       }
 
@@ -617,7 +626,7 @@ export function GenericListView<T>({
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [shortcutsPanelOpen, disableKeyboard, paletteIsOpen, editingId, focusedItem, visibleItems, focusIndex, tabs,
-    previewId, selectedIds, paletteShortcuts, onTabChange, getItemRoute, getItemId,
+    previewId, selectedIds, paletteShortcuts, onTabChange, getItemRoute, getItemId, currentPath,
     onCreate, openPalette, toggleSelect, router, extraKeyHandler, onItemEdit, renderPreview, getSearchText]);
 
   const previewItem = previewId ? flatItems.find((item) => getItemId(item) === previewId) || null : null;
@@ -650,7 +659,8 @@ export function GenericListView<T>({
       isFocused,
       isSelected,
       isEditing,
-      onClick: () => { setFocusIndex(globalIdx); router.push(getItemRoute(item)); },
+      // Click toggles the detail in place (same as space) by driving the URL.
+      onClick: () => { setFocusIndex(globalIdx); toggleDetail(item); },
       onSelect: () => toggleSelect(id),
       onContextMenu: (e: React.MouseEvent) => {
         e.preventDefault();
@@ -804,7 +814,7 @@ export function GenericListView<T>({
           <button
             onClick={() => openPalette("root")}
             className="cq-header-collapse flex items-center gap-1.5 text-xs h-7 px-2.5 rounded-md border border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-border transition-colors"
-            title="Command palette (Cmd+K)"
+            title={`Command palette (${formatShortcutLabel('palette.toggle')})`}
           >
             <Command className="w-3 h-3" />K
           </button>
