@@ -3,6 +3,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { useState } from "react";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { copyToClipboard } from "../../../lib/utils";
+import { AppLoader } from "../../../components/AppLoader";
 
 type InstallOs = "unix" | "windows";
 
@@ -63,11 +64,7 @@ export default function CliSettingsPage() {
   const isTokenExpired = tokenExpiry ? now > tokenExpiry : false;
 
   if (!currentUser) {
-    return (
-      <div className="bg-sol-bg-alt/50 rounded-lg p-6 border border-sol-border">
-        <p className="text-sol-text-muted">Loading...</p>
-      </div>
-    );
+    return <AppLoader className="min-h-0 bg-transparent py-12" size={28} />;
   }
 
   return (

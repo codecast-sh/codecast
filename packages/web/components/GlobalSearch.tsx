@@ -4,6 +4,7 @@ import { useEventListener } from "../hooks/useEventListener";
 import { useShortcutAction } from "../shortcuts";
 import { KeyCap } from "./KeyboardShortcutsHelp";
 import { useQuery } from "convex/react";
+import { AppLoader } from "./AppLoader";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useRouter } from "next/navigation";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
@@ -253,9 +254,7 @@ export function GlobalSearch() {
           className="fixed left-1/2 -translate-x-1/2 w-[min(1200px,calc(100vw-2rem))] bg-sol-bg border border-sol-border rounded-xl shadow-2xl shadow-black/50 overflow-hidden z-[9999]"
         >
             {!searchResults ? (
-              <div className="px-4 py-8 text-center">
-                <div className="inline-block w-5 h-5 border-2 border-sol-base01 border-t-amber-500 rounded-full animate-spin" />
-              </div>
+              <AppLoader className="min-h-0 bg-transparent py-8" size={24} />
             ) : groupedResults.length === 0 ? (
               <div className="px-4 py-8 text-center">
                 <p className="text-sm text-sol-text-secondary mb-2">No conversations match</p>

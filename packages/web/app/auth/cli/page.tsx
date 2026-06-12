@@ -3,6 +3,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { useState, Suspense, useRef } from "react";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { useSearchParams, useRouter } from "next/navigation";
+import { AppLoader } from "../../../components/AppLoader";
 
 function CliAuthContent() {
   const { isAuthenticated, isLoading } = useConvexAuth();
@@ -132,10 +133,7 @@ function CliAuthContent() {
     return (
       <div className="min-h-screen bg-sol-bg flex items-center justify-center p-4">
         <div className="max-w-md w-full bg-sol-bg-alt/50 rounded-lg p-8 border border-sol-border">
-          <div className="text-center">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-amber-400 mx-auto mb-4"></div>
-            <p className="text-sol-text-muted">Redirecting to login...</p>
-          </div>
+          <AppLoader className="min-h-0 bg-transparent" size={32} label="Redirecting to login..." />
         </div>
       </div>
     );
@@ -146,7 +144,7 @@ function CliAuthContent() {
       <div className="min-h-screen bg-sol-bg flex items-center justify-center p-4">
         <div className="max-w-md w-full bg-sol-bg-alt/50 rounded-lg p-8 border border-sol-border">
           <div className="text-center">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-amber-400 mx-auto mb-4"></div>
+            <AppLoader className="min-h-0 bg-transparent mb-4" size={32} />
             <h1 className="text-2xl font-semibold text-sol-text mb-2">
               Authenticating CLI
             </h1>
@@ -254,14 +252,7 @@ export default function CliAuthPage() {
   return (
     <Suspense
       fallback={
-        <div className="min-h-screen bg-sol-bg flex items-center justify-center p-4">
-          <div className="max-w-md w-full bg-sol-bg-alt/50 rounded-lg p-8 border border-sol-border">
-            <div className="text-center">
-              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-amber-400 mx-auto mb-4"></div>
-              <p className="text-sol-text-muted">Loading...</p>
-            </div>
-          </div>
-        </div>
+        <AppLoader />
       }
     >
       <CliAuthContent />

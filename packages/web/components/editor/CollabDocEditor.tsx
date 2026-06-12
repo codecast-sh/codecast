@@ -22,7 +22,7 @@ import { Markdown } from "tiptap-markdown";
 import { common, createLowlight } from "lowlight";
 import { Editor as HeadlessEditor } from "@tiptap/core";
 import { getVersion, sendableSteps } from "prosemirror-collab";
-import { Loader2 } from "lucide-react";
+import { AppLoader } from "../AppLoader";
 import tippy, { type Instance as TippyInstance } from "tippy.js";
 import { useTiptapSync } from "@convex-dev/prosemirror-sync/tiptap";
 import { useQuery, useMutation } from "convex/react";
@@ -487,9 +487,7 @@ export function CollabDocEditor({
     }
     return (
       <div className={`doc-editor ${className}`}>
-        <div className="flex justify-center py-8">
-          <Loader2 className="w-4 h-4 animate-spin text-sol-text-dim/60" />
-        </div>
+        <AppLoader className="min-h-0 bg-transparent py-8" size={24} />
       </div>
     );
   }
@@ -509,9 +507,7 @@ export function CollabDocEditor({
     }
     return (
       <div className={`doc-editor ${className}`}>
-        <div className="flex justify-center py-8">
-          <Loader2 className="w-4 h-4 animate-spin text-sol-text-dim/60" />
-        </div>
+        <AppLoader className="min-h-0 bg-transparent py-8" size={24} />
       </div>
     );
   }
