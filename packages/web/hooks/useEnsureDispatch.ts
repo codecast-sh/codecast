@@ -43,9 +43,15 @@ export function useEnsureDispatch() {
 
   useMountEffect(() => {
     _setDispatch((action, args, patches, result) => dispatchRef.current({ action, args, patches, result }));
-    _setDispatchError((action, error) => {
+    _setDispatchError((action, error, args) => {
       console.error(`[sync] dispatch failed after retries: ${action}`, error);
       useInboxStore.setState(s => ({ dispatchErrors: s.dispatchErrors + 1 }));
+      // A send into a conversation whose server row was deleted (cached ghost).
+      // Flag it so the view can offer "restore" instead of failing silently.
+      if (action === "sendMessage" && /conversation_deleted/.test(String(error))) {
+        const convId = Array.isArray(args) ? args[0] : undefined;
+        if (typeof convId === "string") useInboxStore.getState().markServerDeleted(convId);
+      }
     });
   });
 }

@@ -472,25 +472,57 @@ export const deleteConversationsByType = internalMutation({
   },
 });
 
+export async function deleteConversationBySessionIdCore(
+  ctx: { db: any },
+  args: { session_id: string; conversation_id?: string },
+) {
+  const matches = await ctx.db
+    .query("conversations")
+    .withIndex("by_session_id", (q: any) => q.eq("session_id", args.session_id))
+    .collect();
+  const conv = args.conversation_id
+    ? matches.find((m: any) => m._id === args.conversation_id)
+    : matches.length === 1
+      ? matches[0]
+      : null;
+  if (!conv && matches.length > 1) {
+    return {
+      found: true,
+      ambiguous: true,
+      candidates: matches.map((m: any) => ({
+        id: m._id,
+        title: m.title,
+        message_count: m.message_count,
+        created_at: m._creationTime,
+        updated_at: m.updated_at,
+      })),
+      deleted: 0,
+      done: true,
+    };
+  }
+  if (!conv) return { found: false, deleted: 0, done: true };
+  const msgs = await ctx.db
+    .query("messages")
+    .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conv._id))
+    .take(500);
+  for (const m of msgs) await ctx.db.delete(m._id);
+  // Drop the conversation only once its messages are drained, so a caller
+  // can loop until done without orphaning rows past the per-call batch.
+  const done = msgs.length < 500;
+  if (done) await ctx.db.delete(conv._id);
+  return { found: true, deleted: msgs.length, done };
+}
+
 export const deleteConversationBySessionId = internalMutation({
-  args: { session_id: v.string() },
-  handler: async (ctx, args) => {
-    const conv = await ctx.db
-      .query("conversations")
-      .withIndex("by_session_id", (q) => q.eq("session_id", args.session_id))
-      .first();
-    if (!conv) return { found: false, deleted: 0, done: true };
-    const msgs = await ctx.db
-      .query("messages")
-      .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
-      .take(500);
-    for (const m of msgs) await ctx.db.delete(m._id);
-    // Drop the conversation only once its messages are drained, so a caller
-    // can loop until done without orphaning rows past the per-call batch.
-    const done = msgs.length < 500;
-    if (done) await ctx.db.delete(conv._id);
-    return { found: true, deleted: msgs.length, done };
+  args: {
+    session_id: v.string(),
+    // Required when more than one conversation is bound to the session_id.
+    // A session with twins is exactly the doppelgänger state — .first() there
+    // resolves by creation time and once deleted a LIVE original instead of
+    // the stray mint (ct-36973). Refuse to guess; the caller must pick.
+    conversation_id: v.optional(v.id("conversations")),
   },
+  handler: async (ctx, args) => deleteConversationBySessionIdCore(ctx, args),
 });
 
 // Delete all Cursor conversations and their messages (uses auth)
