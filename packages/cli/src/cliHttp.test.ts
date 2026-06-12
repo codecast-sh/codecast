@@ -16,7 +16,7 @@ describe("cliFetch", () => {
     globalThis.fetch = (async () => {
       calls++;
       return new Response("ok", { status: 200 });
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
 
     const res = await cliFetch("https://x/cli/read", { method: "POST" }, { retries: 2 });
     expect(res.status).toBe(200);
@@ -28,7 +28,7 @@ describe("cliFetch", () => {
     globalThis.fetch = (async () => {
       calls++;
       throw timeoutError();
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
 
     await expect(cliFetch("https://x/cli/work/create", { method: "POST" })).rejects.toThrow(/timed out/);
     expect(calls).toBe(1);
@@ -41,7 +41,7 @@ describe("cliFetch", () => {
       calls++;
       if (calls < 3) throw timeoutError();
       return new Response("ok", { status: 200 });
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
 
     const res = await cliFetch(
       "https://x/cli/feed",
@@ -58,7 +58,7 @@ describe("cliFetch", () => {
     globalThis.fetch = (async () => {
       calls++;
       return new Response("boom", { status: 503 });
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
 
     const res = await cliFetch("https://x/cli/search", { method: "POST" }, { retries: 1 });
     expect(res.status).toBe(503);
@@ -70,7 +70,7 @@ describe("cliFetch", () => {
     globalThis.fetch = (async () => {
       calls++;
       return new Response("nope", { status: 401 });
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
 
     const res = await cliFetch("https://x/cli/work/list", { method: "POST" }, { retries: 3 });
     expect(res.status).toBe(401);
@@ -83,7 +83,7 @@ describe("cliFetch", () => {
       calls++;
       if (calls === 1) throw timeoutError();
       return new Response("ok", { status: 200 });
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
 
     const res = await cliFetchRead("https://x/cli/feed", { method: "POST" });
     expect(res.status).toBe(200);
@@ -93,7 +93,7 @@ describe("cliFetch", () => {
   test("throws a legible timeout error after exhausting retries", async () => {
     globalThis.fetch = (async () => {
       throw timeoutError();
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
 
     await expect(
       cliFetch("https://x/cli/tree", { method: "POST" }, { retries: 1, timeoutMs: 1234 }),

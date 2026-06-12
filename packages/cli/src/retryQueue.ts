@@ -255,7 +255,8 @@ export class RetryQueue {
         typeof conversationId === "string"
           ? this.conversationChunkLimits.get(conversationId) ?? RETRY_BATCH_CHUNK
           : RETRY_BATCH_CHUNK;
-      const chunks = Array.isArray(msgs) ? chunkRetryMessages(msgs, maxCount) : [];
+      const msgArr: unknown[] = Array.isArray(msgs) ? msgs : [];
+      const chunks = Array.isArray(msgs) ? chunkRetryMessages(msgArr, maxCount) : [];
       if (chunks.length > 1) {
         const ids: string[] = [];
         for (let i = 0; i < chunks.length; i++) {
@@ -266,7 +267,7 @@ export class RetryQueue {
           this.compactQueuedAddMessagesConversation(conversationId);
           this.persist();
         }
-        this.log(`Split oversized addMessages (${msgs.length} msgs) into ${ids.length} retry chunks`);
+        this.log(`Split oversized addMessages (${msgArr.length} msgs) into ${ids.length} retry chunks`);
         return ids[0] ?? "";
       }
       const id = this.addSingle(type, params, error);

@@ -2771,3 +2771,64 @@ describe("closeTab — promoted tab must not be a redirect-page route", () => {
     expect(useInboxStore.getState().tabs[0].path).toBe(`/conversation/${convId}/diff`);
   });
 });
+
+describe("inboxStore fork stub lifecycle", () => {
+  const STUB = "11111111-2222-4333-8444-555555555555";
+  const REAL = "k57abc0000000000000000000000conv";
+
+  beforeEach(() => {
+    useInboxStore.setState({
+      sessions: {},
+      conversations: {},
+      messages: {},
+      pendingMessages: {},
+      pagination: {},
+      drafts: {},
+      clientState: {},
+      currentSessionId: null,
+      pending: {},
+      currentConversation: {},
+      optimisticForkChildren: [],
+    });
+  });
+
+  function seedStub() {
+    useInboxStore.setState({
+      sessions: { [STUB]: { ...baseSession, _id: STUB, session_id: STUB, forked_from: "parent1" } as InboxSession },
+      conversations: { [STUB]: { _id: STUB, session_id: STUB, fork_status: "copying", message_count: 2 } },
+      messages: { [STUB]: [{ _id: "m1", role: "user", timestamp: 1 }, { _id: "m2", role: "assistant", timestamp: 2 }] },
+      pendingMessages: { [STUB]: [{ _id: "p1", role: "user", timestamp: 3, _isOptimistic: true }] },
+      currentSessionId: STUB,
+      optimisticForkChildren: [{ _id: STUB, parent_message_uuid: "u2" }],
+    } as any);
+  }
+
+  it("resolveForkSessionId performs a full stub→real rekey, including navigation and pending messages", () => {
+    seedStub();
+    useInboxStore.getState().resolveForkSessionId(STUB, REAL);
+    const s = useInboxStore.getState();
+    expect(s.sessions[STUB]).toBeUndefined();
+    expect(s.sessions[REAL]?._id).toBe(REAL);
+    // session_id stays the stub UUID — it's the daemon-side session identity.
+    expect(s.sessions[REAL]?.session_id).toBe(STUB);
+    expect(s.conversations[STUB]).toBeUndefined();
+    expect(s.conversations[REAL]?.fork_status).toBe("copying");
+    expect(s.messages[REAL]?.length).toBe(2);
+    expect(s.messages[STUB]).toBeUndefined();
+    expect(s.pendingMessages[REAL]?.length).toBe(1);
+    expect(s.currentSessionId).toBe(REAL);
+    expect(s.optimisticForkChildren[0]?._id).toBe(REAL);
+  });
+
+  it("discardForkStub drops every stub row and returns focus to the parent", () => {
+    seedStub();
+    useInboxStore.getState().discardForkStub(STUB, "parent1");
+    const s = useInboxStore.getState();
+    expect(s.sessions[STUB]).toBeUndefined();
+    expect(s.conversations[STUB]).toBeUndefined();
+    expect(s.messages[STUB]).toBeUndefined();
+    expect(s.pendingMessages[STUB]).toBeUndefined();
+    expect(s.optimisticForkChildren.length).toBe(0);
+    expect(s.currentSessionId).toBe("parent1");
+  });
+});
