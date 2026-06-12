@@ -173,6 +173,26 @@ export function groupPatchesByTable(
   return result;
 }
 
+// A replayed dispatch is stale by definition — it survived a reload. The
+// conversation pointer means "where the user is right now", so re-pushing an
+// old value from the outbox would repoint the user's other clients at a
+// position they already left. Drop it from replays; the rest of the patch
+// (and the action itself) still re-fires.
+export function stripStalePointerFromReplay(patches: any): any {
+  const cs = patches?.client_state?.[SINGLETON_KEY];
+  if (!cs || typeof cs !== "object" || !("current_conversation_id" in cs)) return patches;
+  const { current_conversation_id: _omit, ...rest } = cs;
+  if (Object.keys(rest).length > 0) {
+    return { ...patches, client_state: { ...patches.client_state, [SINGLETON_KEY]: rest } };
+  }
+  const { [SINGLETON_KEY]: _doc, ...otherDocs } = patches.client_state;
+  const { client_state: _table, ...otherTables } = patches;
+  if (Object.keys(otherDocs).length > 0) {
+    return { ...otherTables, client_state: otherDocs };
+  }
+  return Object.keys(otherTables).length > 0 ? otherTables : undefined;
+}
+
 const RETRY_DELAYS = [1000, 2000, 4000];
 
 // Convex rejects `undefined` anywhere in the payload. Action functions are
@@ -197,7 +217,7 @@ async function dispatchWithRetry(
   args: any,
   grouped: any,
   result: any,
-  onError?: (action: string, error: unknown) => void,
+  onError?: (action: string, error: unknown, args?: unknown) => void,
 ): Promise<any> {
   const safeArgs = sanitizeForConvex(args);
   const safeGrouped = grouped !== undefined ? sanitizeForConvex(grouped) : undefined;
@@ -207,7 +227,7 @@ async function dispatchWithRetry(
       return await fn(action, safeArgs, safeGrouped, safeResult);
     } catch (e) {
       if (attempt >= RETRY_DELAYS.length) {
-        onError?.(action, e);
+        onError?.(action, e, args);
         throw e;
       }
       await new Promise(r => setTimeout(r, RETRY_DELAYS[attempt]));
@@ -219,7 +239,7 @@ export function mutativeMiddleware(config: any): any {
   return (set: any, get: any, api: any) => {
     let dispatchFn: DispatchFn | null = null;
     let idbWriteFn: IDBWriteFn | null = null;
-    let dispatchErrorFn: ((action: string, error: unknown) => void) | undefined;
+    let dispatchErrorFn: ((action: string, error: unknown, args?: unknown) => void) | undefined;
     let outboxEnqueueFn: OutboxEnqueueFn | null = null;
     let outboxRemoveFn: OutboxRemoveFn | null = null;
     let outboxLoadFn: OutboxLoadFn | null = null;
@@ -239,7 +259,7 @@ export function mutativeMiddleware(config: any): any {
       // just slow every subsequent page load.
       for (const entry of entries) {
         try {
-          await dispatchWithRetry(dispatchFn, entry.action, entry.args, entry.patches, entry.result, dispatchErrorFn);
+          await dispatchWithRetry(dispatchFn, entry.action, entry.args, stripStalePointerFromReplay(entry.patches), entry.result, dispatchErrorFn);
         } catch {
           // Reported via dispatchErrorFn; the entry is dropped below.
         }
@@ -343,7 +363,7 @@ export function mutativeMiddleware(config: any): any {
       outboxLoadFn = load;
     };
 
-    wrapped._setDispatchError = (fn: (action: string, error: unknown) => void) => {
+    wrapped._setDispatchError = (fn: (action: string, error: unknown, args?: unknown) => void) => {
       dispatchErrorFn = fn;
     };
 

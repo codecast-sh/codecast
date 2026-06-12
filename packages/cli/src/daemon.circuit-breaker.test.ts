@@ -10,7 +10,7 @@ import {
   isSessionCircuitOpen,
   recordSessionDeliveryFailure,
   resetSessionDeliveryFailures,
-} from "./daemon.ts";
+} from "./daemon.js";
 
 const SID = "circuit-breaker-test-session";
 const realNow = Date.now;
