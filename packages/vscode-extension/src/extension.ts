@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import { execFile } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, appendFileSync, mkdirSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
@@ -25,6 +25,19 @@ let decoration: vscode.TextEditorDecorationType;
 let statusItem: vscode.StatusBarItem;
 let resolvedCli: string | undefined;
 let warnedMissing = false;
+let out: vscode.OutputChannel;
+const LOG_FILE = path.join(os.homedir(), ".codecast", "vscode-ext.log");
+
+function log(msg: string): void {
+  out?.appendLine(msg);
+  // Mirror to a file so failures are diagnosable without copying the panel.
+  try {
+    mkdirSync(path.dirname(LOG_FILE), { recursive: true });
+    appendFileSync(LOG_FILE, `${new Date().toISOString()} ${msg}\n`);
+  } catch {
+    /* best effort */
+  }
+}
 
 function inlineEnabled(): boolean {
   return vscode.workspace.getConfiguration("codecast").get<boolean>("inlineBlame") !== false;
@@ -97,17 +110,41 @@ function runCast(args: string[], cwd: string): Promise<string> {
   };
   return new Promise((resolve, reject) => {
     if (bin) {
-      execFile(bin, args, { cwd, env, maxBuffer: 64 * 1024 * 1024 }, (err, stdout, stderr) =>
-        err ? reject(tag(err, stderr)) : resolve(stdout),
-      );
+      log(`run: ${bin} ${args.join(" ")}  (cwd=${cwd})`);
+      execFile(bin, args, { cwd, env, maxBuffer: 64 * 1024 * 1024 }, (err, stdout, stderr) => {
+        if (!err) return resolve(stdout);
+        // ENOEXEC = the launcher has a broken/missing shebang (e.g. a dev
+        // `cast` wrapper). A shell runs it regardless of shebang, so retry the
+        // binary through bash — direct `bash <file> <args>`, no rc, no noise.
+        if ((err as any).code === "ENOEXEC") {
+          log(`  ↻ ENOEXEC — retrying via bash ${bin}`);
+          execFile("/bin/bash", [bin, ...args], { cwd, env, maxBuffer: 64 * 1024 * 1024 }, (e2, so2, se2) => {
+            if (e2) {
+              log(`  ✗ exit=${(e2 as any).code} ${se2 ? "stderr=" + se2.slice(0, 300) : e2.message}`);
+              reject(tag(e2, se2));
+            } else {
+              resolve(so2);
+            }
+          });
+          return;
+        }
+        log(`  ✗ exit=${(err as any).code} ${stderr ? "stderr=" + stderr.slice(0, 300) : err.message}`);
+        reject(tag(err, stderr));
+      });
       return;
     }
     // Last resort: run through a login shell so the user's rc PATH applies.
     const shell = process.env.SHELL || "/bin/bash";
     const quoted = ["cast", ...args].map((a) => `'${a.replace(/'/g, "'\\''")}'`).join(" ");
-    execFile(shell, ["-lic", quoted], { cwd, env, maxBuffer: 64 * 1024 * 1024 }, (err, stdout, stderr) =>
-      err ? reject(tag(err, stderr)) : resolve(stdout),
-    );
+    log(`run (login shell ${shell}): cast ${args.join(" ")}`);
+    execFile(shell, ["-lic", quoted], { cwd, env, maxBuffer: 64 * 1024 * 1024 }, (err, stdout, stderr) => {
+      if (err) {
+        log(`  ✗ exit=${(err as any).code} ${stderr ? "stderr=" + stderr.slice(0, 300) : err.message}`);
+        reject(tag(err, stderr));
+      } else {
+        resolve(stdout);
+      }
+    });
   });
 }
 
@@ -157,15 +194,21 @@ function warnCastMissing(): void {
 }
 
 async function loadBlame(doc: vscode.TextDocument): Promise<void> {
-  if (doc.uri.scheme !== "file" || doc.isDirty) return;
+  if (doc.uri.scheme !== "file" || doc.isDirty) {
+    log(`skip loadBlame: scheme=${doc.uri.scheme} dirty=${doc.isDirty}`);
+    return;
+  }
   const fsPath = doc.uri.fsPath;
   if (inFlight.has(fsPath)) return;
   inFlight.add(fsPath);
   try {
     const out = await runCast(["blame", "--line-porcelain", "--", fsPath], path.dirname(fsPath));
-    blameCache.set(fsPath, parseLinePorcelain(out));
+    const map = parseLinePorcelain(out);
+    blameCache.set(fsPath, map);
+    log(`loadBlame ok: ${path.basename(fsPath)} → ${map.size} resolved lines`);
   } catch (err: any) {
     blameCache.set(fsPath, new Map()); // not a repo / not tracked / cast missing
+    log(`loadBlame failed: ${path.basename(fsPath)} → ${err?.message || err}`);
     if (err?.castMissing) warnCastMissing();
   } finally {
     inFlight.delete(fsPath);
@@ -272,10 +315,53 @@ async function sessionLog(): Promise<void> {
   }
 }
 
+// "Codecast: Run Diagnostics" — dumps everything needed to see why blame
+// isn't resolving (resolved cli path, the PATH in use, and a live blame run on
+// the active file with the real error). Shown in the Codecast output panel.
+async function runDiagnostics(): Promise<void> {
+  out.show(true);
+  log("──────── codecast diagnostics ────────");
+  log(`extension version: 0.1.4`);
+  log(`homedir: ${os.homedir()}`);
+  log(`process.env.PATH: ${process.env.PATH || "(empty)"}`);
+  log(`process.env.SHELL: ${process.env.SHELL || "(unset)"}`);
+  resolvedCli = undefined;
+  await learnUserPath();
+  log(`learned login PATH: ${userPath || "(login-shell probe failed)"}`);
+  log(`augmented PATH used for cast: ${augmentedEnv().PATH}`);
+  const bin = resolveCliSync();
+  log(`resolved cast binary: ${bin || "(none — will use login shell)"}`);
+  if (bin) log(`  exists: ${existsSync(bin)}`);
+
+  const editor = vscode.window.activeTextEditor;
+  if (!editor || editor.document.uri.scheme !== "file") {
+    log("no file open — open a tracked file and run diagnostics again.");
+    return;
+  }
+  const fsPath = editor.document.uri.fsPath;
+  log(`active file: ${fsPath}`);
+  try {
+    const v = await runCast(["blame", "--line-porcelain", "--", fsPath], path.dirname(fsPath));
+    const map = parseLinePorcelain(v);
+    log(`✓ blame ran: ${v.length} bytes, ${map.size} lines resolved to sessions`);
+    if (map.size === 0) log("  (0 resolved — file may have no synced sessions, or output had no codecast-* keys)");
+  } catch (e: any) {
+    log(`✗ blame failed: ${e?.message || e}`);
+    log(`  code=${e?.code} castMissing=${e?.castMissing}`);
+    if (e?.stderr) log(`  stderr: ${e.stderr}`);
+  }
+  log("──────── end ────────");
+}
+
 export function activate(context: vscode.ExtensionContext): void {
+  out = vscode.window.createOutputChannel("Codecast");
   decoration = vscode.window.createTextEditorDecorationType({});
   statusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
-  context.subscriptions.push(decoration, statusItem);
+  context.subscriptions.push(out, decoration, statusItem);
+  log("════════ codecast extension activated (v0.1.4) ════════");
+  log(`config cliPath: ${vscode.workspace.getConfiguration("codecast").get("cliPath")}`);
+  log(`process PATH: ${process.env.PATH || "(empty)"}`);
+  log(`resolved cast: ${resolveCliSync() || "(none)"}`);
 
   let cursorTimer: NodeJS.Timeout | undefined;
   const onCursor = (editor: vscode.TextEditor | undefined) => {
@@ -287,6 +373,7 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.commands.registerCommand("codecast.openSession", openSession),
     vscode.commands.registerCommand("codecast.sessionLog", sessionLog),
+    vscode.commands.registerCommand("codecast.diagnostics", runDiagnostics),
     vscode.commands.registerCommand("codecast.toggleInlineBlame", async () => {
       const cfg = vscode.workspace.getConfiguration("codecast");
       await cfg.update("inlineBlame", !inlineEnabled(), vscode.ConfigurationTarget.Global);
