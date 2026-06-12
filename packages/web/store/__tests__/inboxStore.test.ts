@@ -1,6 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { categorizeSessions, computeNewDividerIndex, dropLatchedFeedHasMore, feedPagePersistence, getSessionRenderKey, isConvexId, isSessionDismissed, isSessionStashed, orchestrationGroupLabelOf, pendingSendConsumed, resolveAssigneeInfo, resolveSessionAuthor, sessionsWithPendingSend, unionHydrate, useInboxStore, worktreeKeyOf, type InboxSession } from "../inboxStore";
 import { isPersistedStoreKey } from "../idbCache";
+import { declareViewNav } from "../viewNav";
+
+// Test seeds that place the user ON a conversation via raw setState must
+// declare a source — undeclared non-null view writes are reverted by the
+// view-motion guard (viewNav.ts), in tests exactly as in production.
+function seedCurrentSession(partial: Record<string, unknown>) {
+  declareViewNav("gesture");
+  useInboxStore.setState(partial as any);
+}
 
 const baseSession: InboxSession = {
   _id: "conv1",
@@ -116,7 +125,7 @@ describe("draft migration", () => {
   });
 
   it("preserves drafts when moving them to a new conversation id", () => {
-    useInboxStore.setState({
+    seedCurrentSession({
       sessions: {
         conv1: baseSession,
       },
@@ -1434,7 +1443,7 @@ describe("dismiss is absolute — navigation/injection must not resurrect", () =
     // A Convex-shaped id: killSession flags real server sessions but deletes
     // local-only stubs, and this test pins the flag semantics.
     const realId = "c".repeat(32);
-    useInboxStore.setState({
+    seedCurrentSession({
       sessions: {
         [realId]: { ...alive, _id: realId },
       },
@@ -1459,7 +1468,7 @@ describe("dismiss is absolute — navigation/injection must not resurrect", () =
 
   it("stash then navigate then restore — stash survives the round trip", () => {
     const realId = "d".repeat(32);
-    useInboxStore.setState({
+    seedCurrentSession({
       sessions: {
         [realId]: { ...alive, _id: realId },
       },
@@ -1488,7 +1497,7 @@ describe("dismiss is absolute — navigation/injection must not resurrect", () =
 
   it("dismissing a stashed session moves it to Dismissed (buckets exclusive)", () => {
     const realId = "e".repeat(32);
-    useInboxStore.setState({
+    seedCurrentSession({
       sessions: { [realId]: { ...alive, _id: realId } },
       conversations: { [realId]: { _id: realId } as any },
       currentSessionId: realId,
@@ -1698,7 +1707,7 @@ describe("syncTable sessions — stale optimistic pending-send reconcile", () =>
 
   it("does NOT prune the focused conversation (setMessages owns it via echo)", () => {
     const store = useInboxStore.getState();
-    useInboxStore.setState({
+    seedCurrentSession({
       pendingMessages: { "conv-open": [optimistic("typing...")] },
       currentSessionId: "conv-open",
     } as any);
@@ -2284,6 +2293,36 @@ describe("inboxStore.beginOptimisticSession", () => {
       await ready;
     });
   });
+
+  // Regression: the new-session flash/reload. The stub→real rekey deletes the
+  // stub rows in the same transaction it flips the current-session pointer,
+  // but useDeferredValue consumers (InboxConversation) render one more urgent
+  // pass with the stale stub id. useConversationMessages resolves through
+  // resolveLiveSessionId, so that pass must land on the live row — a miss here
+  // renders the full-pane loader and remounts the whole conversation tree.
+  describe("resolveLiveSessionId across the rekey", () => {
+    it("maps the dead stub id to the live real id after the create resolves", async () => {
+      const { stubId, ready } = useInboxStore.getState().beginOptimisticSession({
+        agentType: "claude_code",
+        projectPath: "/repo",
+        create: async () => REAL_ID,
+      });
+      // Before the rekey the stub row is live — resolves to itself.
+      expect(useInboxStore.getState().resolveLiveSessionId(stubId)).toBe(stubId);
+
+      await ready;
+
+      const state = useInboxStore.getState();
+      expect(state.sessions[stubId]).toBeUndefined();
+      // The stale id a deferred render still holds must follow the rekey to
+      // the live row instead of resolving to nothing.
+      expect(state.resolveLiveSessionId(stubId)).toBe(REAL_ID);
+      expect(state.conversations[state.resolveLiveSessionId(stubId)]).toBeDefined();
+      // Real ids and unknown ids keep their identity (deep links, not-found).
+      expect(state.resolveLiveSessionId(REAL_ID)).toBe(REAL_ID);
+      expect(state.resolveLiveSessionId("nonexistent-stub")).toBe("nonexistent-stub");
+    });
+  });
 });
 
 // Verified ghost removal — the never-prune sessions cache asks the server which
@@ -2300,7 +2339,7 @@ describe("pruneGhostSessions — verified removal of GC'd blanks", () => {
 
   beforeEach(() => {
     const mk = (id: string): InboxSession => ({ ...baseSession, _id: id, session_id: id });
-    useInboxStore.setState({
+    seedCurrentSession({
       sessions: { [GONE]: mk(GONE), [CURRENT]: mk(CURRENT), [SENDING]: mk(SENDING), [STUB]: mk(STUB), [CREATING]: mk(CREATING) },
       conversations: { [GONE]: { _id: GONE } as any, [CURRENT]: { _id: CURRENT } as any },
       messages: { [GONE]: [] },
@@ -2649,7 +2688,7 @@ describe("hiding a local-only stub — stash/dismiss mean delete", () => {
   const real = "b".repeat(32);
 
   beforeEach(() => {
-    useInboxStore.setState({
+    seedCurrentSession({
       sessions: {
         [stub]: { ...baseSession, _id: stub, session_id: stub },
         // message_count > 0: a blank `real` would be a hidden pre-warm,
@@ -3036,7 +3075,7 @@ describe("inboxStore fork stub lifecycle", () => {
   });
 
   function seedStub() {
-    useInboxStore.setState({
+    seedCurrentSession({
       sessions: { [STUB]: { ...baseSession, _id: STUB, session_id: STUB, forked_from: "parent1" } as InboxSession },
       conversations: { [STUB]: { _id: STUB, session_id: STUB, fork_status: "copying", message_count: 2 } },
       messages: { [STUB]: [{ _id: "m1", role: "user", timestamp: 1 }, { _id: "m2", role: "assistant", timestamp: 2 }] },

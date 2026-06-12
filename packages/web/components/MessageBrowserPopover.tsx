@@ -156,10 +156,7 @@ function NavDropdown({
     if (onScrollToMessage) {
       onScrollToMessage(m._id);
     } else {
-      useInboxStore.setState({
-        pendingNavigateId: conversationId,
-        pendingScrollToMessageId: m._id,
-      });
+      useInboxStore.getState().requestNavigate(conversationId, { scrollToMessageId: m._id });
     }
   }, [conversationId, onPin, onScrollToMessage]);
 
@@ -354,10 +351,7 @@ function NavDropdown({
                       if (onScrollToMessage) {
                         onScrollToMessage(c.message_id);
                       } else {
-                        useInboxStore.setState({
-                          pendingNavigateId: conversationId,
-                          pendingScrollToMessageId: c.message_id,
-                        });
+                        useInboxStore.getState().requestNavigate(conversationId, { scrollToMessageId: c.message_id });
                       }
                     }
                   }}

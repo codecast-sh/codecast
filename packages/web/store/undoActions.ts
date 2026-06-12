@@ -1,5 +1,6 @@
 import { useInboxStore, type InboxSession, type ConversationMeta } from "./inboxStore";
 import { pushUndo, showUndoToast } from "./undoStack";
+import { declareViewNav } from "./viewNav";
 
 /** Mark a session card to play the enter animation after it appears in the DOM. */
 export function animateSessionEnter(id: string) {
@@ -101,6 +102,8 @@ export function undoableHideSession(id: string, mode: HideSessionMode) {
         restoredPending[key] = val;
       }
 
+      // User-invoked undo putting them back where they were at snapshot time.
+      declareViewNav("undo");
       useInboxStore.setState({
         sessions: restoredSessions,
         conversations: restoredConvos,

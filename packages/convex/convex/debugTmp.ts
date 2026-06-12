@@ -101,3 +101,15 @@ export const inspectConversation = internalQuery({
     };
   },
 });
+
+// TEMPORARY: clear archived_at on a bucket stranded by the dropped-undefined
+// dispatch bug (unarchive never reached the server). Safe to delete.
+export const unarchiveBucket = internalMutation({
+  args: { bucket_id: v.id("inbox_buckets") },
+  handler: async (ctx, args) => {
+    const bucket = await ctx.db.get(args.bucket_id);
+    if (!bucket) return { error: "not found" };
+    await ctx.db.patch(args.bucket_id, { archived_at: undefined, updated_at: Date.now() });
+    return { name: bucket.name, was_archived_at: bucket.archived_at ?? null };
+  },
+});

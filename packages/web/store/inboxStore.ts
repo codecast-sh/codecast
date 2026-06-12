@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { useSyncExternalStore, useRef } from "react";
 import { mutativeMiddleware, action, asyncAction, sync } from "./mutativeMiddleware";
+import { declareViewNav, hasViewNavigated, recordNavEvent, type ViewNavSource } from "./viewNav";
 import { applySyncTable, applySyncRecord, type PendingEntry } from "./syncProtocol";
 import { soundDismiss, soundKill } from "../lib/sounds";
 import { loadCache, writePatchesToIDB, setHydrating, loadConversationMessages, writeConversationMessages, enqueueDispatch, removeDispatch, loadOutbox, PERSISTENCE_AVAILABLE } from "./idbCache";
@@ -27,6 +28,7 @@ export function isConvexId(id: string): boolean {
 // so existing call sites that import from the store keep working.
 export { resolveAssigneeInfo, resolveSessionAuthor, computePlanProgress, mergeLiveTasks } from "../lib/liveEntities";
 import { deriveDocDisplayTitle, isForeignSession } from "../lib/liveEntities";
+import { DEFAULT_SETTINGS_SECTION, type SettingsSectionId } from "../lib/settingsSections";
 import type { PendingComment } from "../lib/quoteFormat";
 
 // Critical UI prefs mirrored to localStorage so they're available
@@ -1043,6 +1045,36 @@ export function sortLabels(buckets: Record<string, BucketItem>): BucketItem[] {
     .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.name.localeCompare(b.name));
 }
 
+// Label/project view counts over the panel's "active" sessions. ONE source for
+// every surface that lists the views (the session-panel chip row, the palette
+// view switcher) so they can never disagree about what each view contains.
+export function computeChipCounts(
+  activeSessions: InboxSession[],
+  bucketByConv: Record<string, string | undefined>,
+): {
+  bucketCounts: Record<string, number>;
+  projectCounts: Array<[string, number]>;
+  projectPathByName: Record<string, string>;
+} {
+  const bucketCounts: Record<string, number> = {};
+  const projCounts: Record<string, number> = {};
+  const projectPathByName: Record<string, string> = {};
+  for (const s of activeSessions) {
+    const b = bucketByConv[s._id];
+    if (b) bucketCounts[b] = (bucketCounts[b] || 0) + 1;
+    const name = getProjectName(s.git_root, s.project_path);
+    if (name !== "unknown") {
+      projCounts[name] = (projCounts[name] || 0) + 1;
+      if (!projectPathByName[name]) projectPathByName[name] = s.git_root || s.project_path || "";
+    }
+  }
+  return {
+    bucketCounts,
+    projectCounts: Object.entries(projCounts).sort((a, b) => b[1] - a[1]),
+    projectPathByName,
+  };
+}
+
 // Drag-reorder math. Express the drop as "move ordered[fromIndex] so it ends
 // up at finalIndex", and return the minimal sort_order writes that realize it.
 // Fractional midpoints keep a typical reorder to ONE write; the first-ever
@@ -1338,7 +1370,7 @@ interface InboxStoreState {
   advanceToNext: () => void;
   navigateUp: () => void;
   navigateDown: () => void;
-  setCurrentSession: (id: string) => void;
+  setCurrentSession: (id: string, source?: ViewNavSource) => void;
   clearSelection: () => void;
   setShowDismissed: (show: boolean) => void;
   toggleShowDismissed: () => void;
@@ -1361,7 +1393,16 @@ interface InboxStoreState {
   // stamp and toasts if the daemon refuses or never answers.
   pendingModelCommand: { convId: string; commandId: string; revert: { model?: string | null; effort?: string | null }; startedAt: number } | null;
   setPendingModelCommand: (cmd: { convId: string; commandId: string; revert: { model?: string | null; effort?: string | null }; startedAt: number } | null) => void;
-  navigateToSession: (id: string) => void;
+  navigateToSession: (id: string, source?: ViewNavSource) => void;
+  requestNavigate: (
+    id: string,
+    opts?: {
+      scrollToMessageId?: string | null;
+      highlightQuery?: string | null;
+      showMySessions?: boolean;
+      source?: ViewNavSource;
+    },
+  ) => void;
   touchMru: (id: string) => void;
   markKilling: (id: string) => void;
 
@@ -1392,6 +1433,7 @@ interface InboxStoreState {
   // -- Session ID resolution --
   resolveSessionId: (sessionId: string, convexId: string) => void;
   getConvexId: (id: string) => string | undefined;
+  resolveLiveSessionId: (id: string) => string;
   // Resolve a (possibly still-being-created) session to its real Convex id,
   // awaiting the in-flight createSession dispatch / polling the rekey. Usable
   // from non-React code (background senders) since it only reads store state.
@@ -1504,6 +1546,11 @@ interface InboxStoreState {
   // -- Shortcuts panel --
   shortcutsPanelOpen: boolean;
   toggleShortcutsPanel: () => void;
+
+  // -- Settings modal --
+  settingsModalSection: SettingsSectionId | null;
+  openSettingsModal: (section?: SettingsSectionId) => void;
+  closeSettingsModal: () => void;
 
   // -- Side panel --
   sidePanelSessionId: string | null;
@@ -1710,6 +1757,31 @@ export type SyncOpts = {
   pruneAbsentScope?: (record: any) => boolean;
 };
 
+// Per-key last-writer-wins for a flat preference bag whose writes carry a
+// sibling "<key>:ts" timestamp (see updateClientDismissed). The newer side
+// wins each key, so a preference toggled on one device genuinely reaches the
+// others — blanket local_wins made the bag fork per device forever (the
+// "Open links in desktop app" toggle showing ON while the server, and every
+// other client, said OFF). Unstamped keys (legacy bags) keep exact local_wins
+// per-key semantics: a local value beats the server echo (no flicker on a
+// just-made write), a key only the server has flows in.
+export function mergeStampedBagLww(local: any, server: any, initialized: boolean): any {
+  if (!initialized || local == null) return server;
+  if (server == null) return local;
+  const out: Record<string, any> = {};
+  const keys = new Set([...Object.keys(server), ...Object.keys(local)]);
+  for (const k of keys) {
+    if (k.endsWith(":ts")) continue;
+    const lts = typeof local[`${k}:ts`] === "number" ? local[`${k}:ts`] : 0;
+    const sts = typeof server[`${k}:ts`] === "number" ? server[`${k}:ts`] : 0;
+    const src = sts > lts ? server : lts > sts ? local : k in local ? local : server;
+    if (src[k] !== undefined) out[k] = src[k];
+    const ts = src === server ? sts : lts;
+    if (ts) out[`${k}:ts`] = ts;
+  }
+  return out;
+}
+
 function applyMerge(local: any, server: any, spec: MergeSpec, initialized: boolean): any {
   if (typeof spec === "function") return spec(local, server, initialized);
   if (typeof spec === "string") {
@@ -1774,7 +1846,8 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
         );
       }
       if (!draft.currentSessionId && !draft.showMySessions &&
-          Object.keys(table).length > 0 && draft.clientStateInitialized) {
+          Object.keys(table).length > 0 && draft.clientStateInitialized &&
+          !hasViewNavigated()) {
         // Prefer this client's OWN last position. The per-user synced pointer
         // is consulted only by a client that has never had one (fresh
         // profile): any other client — another device, an agent-driven tab —
@@ -1785,6 +1858,7 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
         const persisted = draft.lastFocusedConversationId
           ?? draft.clientState.current_conversation_id;
         const sorted = sortSessions(table as Record<string, InboxSession>);
+        declareViewNav("adopt");
         draft.currentSessionId = (persisted && table[persisted])
           ? persisted : (sorted[0]?._id ?? null);
       }
@@ -1817,7 +1891,7 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
     merge: {
       ui: "local_wins",
       layouts: "local_wins",
-      dismissed: "local_wins",
+      dismissed: mergeStampedBagLww,
       show_dismissed: "local_wins",
       drafts: "local_wins",
       tabs: "deep_merge",
@@ -1915,6 +1989,8 @@ function rekeyId(draft: any, oldId: string, newId: string) {
     delete draft.conversations[oldId];
   }
   if (draft.currentSessionId === oldId) {
+    // Same logical conversation under its server-assigned id — not a jump.
+    declareViewNav("rekey");
     draft.currentSessionId = newId;
   }
   // Pure id correction (stub → real), not a position move: bypasses the
@@ -1930,6 +2006,13 @@ function rekeyId(draft: any, oldId: string, newId: string) {
   }
   if (draft.sidePanelSessionId === oldId) {
     draft.sidePanelSessionId = newId;
+  }
+  // Label filing follows the conversation across the rekey: the assignment row
+  // is what groups the session in the bucketed list, and the altKey supersede
+  // matches on conversation_id — a row left pointing at the dead stub id would
+  // ungroup the session AND orphan as an immortal stub.
+  for (const row of Object.values(draft.bucketAssignments || {}) as BucketAssignmentItem[]) {
+    if (row.conversation_id === oldId) row.conversation_id = newId;
   }
 }
 
@@ -2108,6 +2191,9 @@ function hideSessionInDraft(draft: any, id: string, mode: "stash" | "kill") {
       if (wasPinned) conv.inbox_pinned_at = null;
     }
   }
+  // Dismiss-and-advance: every caller of hideSessionInDraft is a user
+  // stash/kill/dismiss, so moving to the next session is gesture-class.
+  declareViewNav("gesture");
   draft.currentSessionId = newSessionId;
   recordCurrentConversationPointer(draft, newSessionId ?? undefined);
 }
@@ -2447,6 +2533,7 @@ export const useInboxStore = create<InboxStoreState>(
       last_user_message: null,
     } as InboxSession;
 
+    declareViewNav("gesture");
     this.currentSessionId = sessionId;
     this.viewingDismissedId = null;
     recordCurrentConversationPointer(this, sessionId);
@@ -2485,6 +2572,7 @@ export const useInboxStore = create<InboxStoreState>(
         conv.inbox_stashed_at = null;
       }
     }
+    declareViewNav("gesture");
     this.currentSessionId = id;
     this.viewingDismissedId = null;
     recordCurrentConversationPointer(this, id);
@@ -2787,16 +2875,16 @@ export const useInboxStore = create<InboxStoreState>(
     dispatch().catch(() => setTimeout(() => dispatch().catch(() => {}), 3000));
   },
 
-  _applyClientDismissed: sync(function (this: Draft, key: string, value: any) {
+  // action(): the patch rides the outbox (the old hand-rolled _dispatch had one
+  // 3s retry and no replay — a failed write left this client permanently
+  // diverged from the server). The ":ts" stamp is what lets the LWW merge sync
+  // the preference across devices (mergeStampedBagLww).
+  updateClientDismissed: action(function (this: Draft, key: string, value: any) {
     if (!this.clientState.dismissed) this.clientState.dismissed = {};
-    (this.clientState.dismissed as any)[key] = value;
+    const bag = this.clientState.dismissed as Record<string, any>;
+    bag[key] = value;
+    bag[`${key}:ts`] = Date.now();
   }),
-
-  updateClientDismissed: (key: string, value: any) => {
-    (get() as any)._applyClientDismissed(key, value);
-    const dispatch = () => get()._dispatch("patch", [], { client_state: { _: { dismissed: { [key]: value } } } });
-    dispatch().catch(() => setTimeout(() => dispatch().catch(() => {}), 3000));
-  },
 
   _applyClientTips: sync(function (this: Draft, partial: Partial<ClientTips>) {
     if (!this.clientState.tips) this.clientState.tips = {} as ClientTips;
@@ -3094,7 +3182,22 @@ export const useInboxStore = create<InboxStoreState>(
     get().navigateToSession(ordered[newIdx]._id);
   },
 
-  setCurrentSession: action(function (this: Draft, id: string) {
+  setCurrentSession: action(function (this: Draft, id: string, source: ViewNavSource = "gesture") {
+    // "adopt" is machine selection (a fallback picking a view because none
+    // exists). It is boot-only by policy: never before hydration restored the
+    // client's own position, and never once ANY view has been shown this
+    // window lifetime — a mid-session adopt is exactly the "random jump".
+    if (source === "adopt" && (!this.clientStateInitialized || hasViewNavigated())) {
+      recordNavEvent({
+        field: "currentSessionId",
+        from: this.currentSessionId ?? null,
+        to: id,
+        source,
+        blocked: this.clientStateInitialized ? "adopt after first view" : "adopt before hydration",
+      });
+      return;
+    }
+    declareViewNav(source);
     recordSessionView(this, id, this.currentSessionId);
     this.currentSessionId = id;
     this.viewingDismissedId = null;
@@ -3141,6 +3244,7 @@ export const useInboxStore = create<InboxStoreState>(
     if (isSessionHidden(session)) {
       this.viewingDismissedId = session._id;
     } else {
+      declareViewNav("gesture");
       recordSessionView(this, session._id, this.currentSessionId);
       this.currentSessionId = session._id;
       this.viewingDismissedId = null;
@@ -3216,7 +3320,7 @@ export const useInboxStore = create<InboxStoreState>(
   pendingModelCommand: null,
   setPendingModelCommand: (cmd: { convId: string; commandId: string; revert: { model?: string | null; effort?: string | null }; startedAt: number } | null) => set({ pendingModelCommand: cmd }),
 
-  navigateToSession: action(function (this: Draft, id: string) {
+  navigateToSession: action(function (this: Draft, id: string, source: ViewNavSource = "gesture") {
     // Plain navigation. Forks are first-class conversations — clicking one
     // (in the sidebar, BranchSelector, or a deep link) just sets it as the
     // current conversation. No overlay-on-parent state to keep in sync.
@@ -3228,6 +3332,7 @@ export const useInboxStore = create<InboxStoreState>(
     // shown through `viewingDismissedId` (the same view-only path the inbox
     // sidebar uses when you click a session under "Stashed"/"Dismissed"); only
     // an explicit `restoreSession` or sending a message clears the flags.
+    declareViewNav(source);
     const session = this.sessions[id];
     if (session) {
       if (isSessionHidden(session)) {
@@ -3242,6 +3347,28 @@ export const useInboxStore = create<InboxStoreState>(
       this.pendingNavigateId = id;
       this.viewingDismissedId = null;
     }
+  }),
+
+  // The pendingNavigateId channel as one tagged action: target + scroll target
+  // set atomically (setting them separately raced the inbox's cache-hit
+  // watcher onto the previous conversation). All UI "go to message X in
+  // conversation Y" affordances funnel here — raw setState writes to these
+  // fields are reverted by the middleware's view guard.
+  requestNavigate: action(function (
+    this: Draft,
+    id: string,
+    opts?: {
+      scrollToMessageId?: string | null;
+      highlightQuery?: string | null;
+      showMySessions?: boolean;
+      source?: ViewNavSource;
+    },
+  ) {
+    declareViewNav(opts?.source ?? "gesture");
+    this.pendingNavigateId = id;
+    if (opts && "scrollToMessageId" in opts) this.pendingScrollToMessageId = opts.scrollToMessageId ?? null;
+    if (opts && "highlightQuery" in opts) this.pendingHighlightQuery = opts.highlightQuery ?? null;
+    if (opts?.showMySessions === false) this.showMySessions = false;
   }),
 
   // Public "I am now viewing `id` as the current session" — delegates to the
@@ -3262,6 +3389,7 @@ export const useInboxStore = create<InboxStoreState>(
       newSessionId = next?._id ?? null;
     }
     delete this.sessions[id];
+    declareViewNav("gesture");
     this.currentSessionId = newSessionId;
     recordCurrentConversationPointer(this, newSessionId ?? undefined);
   }),
@@ -3518,6 +3646,18 @@ export const useInboxStore = create<InboxStoreState>(
     return session && isConvexId(session._id) ? session._id : undefined;
   },
 
+  // Render-safe id resolution across the stub→real rekey. resolveSessionId
+  // deletes the stub rows in the same transaction it flips the pointers, but
+  // views holding the old id (useDeferredValue, stale props, stub URLs) render
+  // at least once more with it. A live row under the id wins; otherwise follow
+  // the session_id mapping the stub leaves behind. Falls back to the input so
+  // genuinely unknown ids keep their existing not-found behavior.
+  resolveLiveSessionId: (id: string) => {
+    const s = get();
+    if (s.conversations[id] || s.sessions[id]) return id;
+    return s.getConvexId(id) ?? id;
+  },
+
   trackSessionCreate: (stubId: string, promise: Promise<string>) => {
     set((s: InboxStoreState) => ({
       pendingSessionCreates: { ...s.pendingSessionCreates, [stubId]: promise },
@@ -3606,8 +3746,15 @@ export const useInboxStore = create<InboxStoreState>(
     delete this.pendingMessages[stubId];
     delete this.pagination[stubId];
     delete this.drafts[stubId];
+    for (const [key, row] of Object.entries(this.bucketAssignments) as Array<[string, BucketAssignmentItem]>) {
+      if (row.conversation_id === stubId) delete this.bucketAssignments[key];
+    }
     this.optimisticForkChildren = this.optimisticForkChildren.filter((f: ForkChild) => f._id !== stubId);
     if (this.currentSessionId === stubId) {
+      // Follow the discarded stub to its parent; with no parent the view goes
+      // EMPTY (null), never to some other session — the inbox's adopt fallback
+      // is boot-only, so a background discard can't teleport the user.
+      declareViewNav("rekey");
       this.currentSessionId = parentId ?? null;
       recordCurrentConversationPointer(this, parentId);
     }
@@ -3766,8 +3913,9 @@ export const useInboxStore = create<InboxStoreState>(
   // Exclusive filing: upsert the one assignment row for this conversation.
   // First-time assignments add a stub row; the bucketAssignments altKey config
   // rekeys it onto the server row when it syncs. The same-named dispatch side
-  // effect performs the durable upsert. Callers must pass a REAL conversation
-  // id (the server no-ops on stubs and the local stub row would orphan).
+  // effect performs the durable upsert. A stub conversation id is allowed when
+  // the server reaches the same assignment on its own (fork label inheritance):
+  // the dispatch no-ops there, and rekeyId carries the local row to the real id.
   assignSessionToBucket: action(function (this: Draft, conversationId: string, bucketId: string | null) {
     const now = Date.now();
     const existing = (Object.values(this.bucketAssignments) as BucketAssignmentItem[])
@@ -3857,6 +4005,11 @@ export const useInboxStore = create<InboxStoreState>(
 
   shortcutsPanelOpen: false,
   toggleShortcutsPanel: () => set({ shortcutsPanelOpen: !get().shortcutsPanelOpen }),
+
+  settingsModalSection: null,
+  openSettingsModal: (section?: SettingsSectionId) =>
+    set({ settingsModalSection: section ?? DEFAULT_SETTINGS_SECTION }),
+  closeSettingsModal: () => set({ settingsModalSection: null }),
 
   sidePanelSessionId: null,
   sidePanelOpen: false,
@@ -4023,8 +4176,10 @@ export const store = new Proxy({} as StoreProxy, {
   },
 });
 
-// Dev console access (e.g. drive deep-link navigation by setting
-// pendingNavigateId/pendingScrollToMessageId by hand). NODE_ENV (not
+// Dev console access (e.g. drive deep-link navigation via
+// __inboxStore.getState().requestNavigate(id, { scrollToMessageId }) — raw
+// setState writes to the view fields are reverted by the middleware's view
+// guard; see viewNav.ts and __navLog()). NODE_ENV (not
 // import.meta.env.DEV): this module is shared with the Expo app, and Hermes
 // can't parse `import.meta`; both Vite and Metro statically replace NODE_ENV.
 // The ambient declare stands in for node types (not in the web tsconfig).
@@ -4295,6 +4450,7 @@ if (PERSISTENCE_AVAILABLE) {
         // The divider anchor (_seenUpToAt) is persisted, so reopening the app to
         // this session naturally shows what arrived while it was closed — no
         // special seeding needed here.
+        declareViewNav("boot-restore");
         useInboxStore.setState({ currentSessionId: restoreId });
       }
     }
