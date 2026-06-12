@@ -154,7 +154,7 @@ export function ComposeView({ initialQuery }: { initialQuery?: string }) {
     : null;
 
   return (
-    <div ref={rootRef} className="w-[600px] h-[460px] max-h-[88vh] rounded-xl border border-sol-border/80 bg-sol-bg shadow-2xl shadow-black/40 overflow-hidden flex flex-col animate-in fade-in-0 zoom-in-95 slide-in-from-top-2 duration-150">
+    <div ref={rootRef} className="w-[720px] max-w-[94vw] h-[520px] max-h-[88vh] rounded-xl border border-sol-border/80 bg-sol-bg shadow-2xl shadow-black/40 overflow-hidden flex flex-col animate-in fade-in-0 zoom-in-95 slide-in-from-top-2 duration-150">
       <div className="flex-1 min-h-0 flex flex-col px-4 pt-6">
         {conversation && <NewSessionView conversation={conversation} />}
       </div>

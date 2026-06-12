@@ -1,8 +1,9 @@
-// The batch tray shown above the composer while there are pending inline quotes /
+// The batch tray rendered INSIDE the composer block (above the textarea, like the
+// queued-message and pasted-image strips) while there are pending inline quotes /
 // comments. It previews what's ATTACHED to your next message — sending (Enter /
-// the send button) carries these quotes automatically, no separate step. Each row
-// is removable with an ✕; "Edit in input" optionally materializes the batch as
-// editable text in the composer; "Clear" discards it.
+// the send button) carries these quotes automatically, even with nothing typed.
+// Each row is removable with an ✕; "Edit in input" optionally materializes the
+// batch as editable text in the composer; "Clear" discards it.
 
 import React from "react";
 import { useShallow } from "zustand/react/shallow";
@@ -21,8 +22,7 @@ export function ReviewBar({ conversationId }: { conversationId: string }) {
   const items = sortPendingComments(comments);
 
   return (
-    <div className="mx-auto px-4 conv-col w-full">
-      <div className="cc-review-tray">
+    <div className="cc-review-tray">
         <div className="cc-review-tray-head">
           <span className="cc-review-tray-title">
             <span className="cc-review-dot" />
@@ -59,7 +59,6 @@ export function ReviewBar({ conversationId }: { conversationId: string }) {
               </button>
             </div>
           ))}
-        </div>
       </div>
     </div>
   );
