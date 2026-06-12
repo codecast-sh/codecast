@@ -319,6 +319,16 @@ export default defineSchema({
     .searchIndex("search_title_v2", {
       searchField: "title",
       filterFields: ["user_id"],
+    })
+    // Summaries are searched alongside titles (searchConversations): subtitle is
+    // the generated multi-line session summary, idle_summary the one-line blurb.
+    .searchIndex("search_subtitle", {
+      searchField: "subtitle",
+      filterFields: ["user_id"],
+    })
+    .searchIndex("search_idle_summary", {
+      searchField: "idle_summary",
+      filterFields: ["user_id"],
     }),
 
   // Large git-diff blobs split off the conversations hot doc. The conversations

@@ -7,6 +7,7 @@ import {
   conversationDeepLink,
   formatDefaultBlame,
   formatGitDate,
+  groupBlameBySession,
   parseBlamePorcelain,
   rewriteFugitiveBlame,
   sessionLabel,
@@ -178,6 +179,46 @@ describe("rewriteFugitiveBlame", () => {
   });
 });
 
+describe("groupBlameBySession", () => {
+  // Three commits across two sessions; line 5 uncommitted but content-matched.
+  const PORC =
+    `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 1 1 2\nauthor A\nauthor-time 1778696400\nauthor-tz +0000\nsummary s1\nfilename f\n\tone\n` +
+    `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 2 2\n\ttwo\n` +
+    `bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb 3 3 1\nauthor B\nauthor-time 1778100000\nauthor-tz +0000\nsummary s2\nfilename f\n\tthree\n` +
+    `${ZERO_SHA} 4 4 1\nauthor Not Committed Yet\nauthor-time 1779000000\nauthor-tz +0000\nsummary x\nfilename f\n\tfour-uncommitted-line\n`;
+
+  test("groups lines per session, newest-touch first, with counts and jump line", () => {
+    const parsed = parseBlamePorcelain(PORC);
+    const resolution: BlameResolution = {
+      bySha: new Map([
+        ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", { conversation_id: "jx7newAAA000", title: "New work", author_name: "Sam Smith" }],
+        ["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", { conversation_id: "jx7oldBBB000", title: "Old work", author_name: "Al" }],
+      ]),
+      byLine: new Map([
+        ["four-uncommitted-line", { conversation_id: "jx7newAAA000", title: "New work", author_name: "Sam Smith" }],
+      ]),
+    };
+    const { entries, attributed, total } = groupBlameBySession(parsed, resolution);
+    expect(total).toBe(4);
+    expect(attributed).toBe(4);
+    // jx7new owns lines 1,2,4 (3 lines), jx7old owns line 3 (1 line).
+    expect(entries.map((e) => e.shortId)).toEqual(["jx7newA", "jx7oldB"]);
+    expect(entries[0].lineCount).toBe(3);
+    expect(entries[0].firstLine).toBe(1);
+    expect(entries[0].authorName).toBe("Sam Smith");
+    expect(entries[1].lineCount).toBe(1);
+    expect(entries[1].firstLine).toBe(3);
+  });
+
+  test("unresolved lines are excluded from attribution", () => {
+    const parsed = parseBlamePorcelain(PORC);
+    const { entries, attributed, total } = groupBlameBySession(parsed, EMPTY_RESOLUTION);
+    expect(entries).toEqual([]);
+    expect(attributed).toBe(0);
+    expect(total).toBe(4);
+  });
+});
+
 describe("conversationDeepLink", () => {
   test("anchors on the originating message when present", () => {
     expect(
@@ -200,8 +241,18 @@ describe("sessionLabel", () => {
       conversation_id: "jx7bcdsm572w8abpms5vanx0ms88dvxv",
       title: "An extremely long conversation title that keeps going",
     });
-    expect(long.length).toBeLessThanOrEqual(40);
+    expect(long.length).toBeLessThanOrEqual(48);
     expect(long.endsWith("..")).toBe(true);
+  });
+
+  test("includes the author's first name when present", () => {
+    expect(
+      sessionLabel({
+        conversation_id: "jx74qbm93yrmevd4m1stg74cnh86mp7x",
+        title: "Agent prompt guardrails",
+        author_name: "Samvit Ramadurgam",
+      }),
+    ).toBe("jx74qbm Samvit Agent prompt guardrails");
   });
 });
 

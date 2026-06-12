@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import {
+  computeReorderUpdates,
   convBucketMap,
   groupSessionsForLabelView,
+  sortLabels,
   useInboxStore,
   visualOrderSessions,
   type BucketAssignmentItem,
@@ -259,5 +261,65 @@ describe("visualOrder follows the active view mode", () => {
     });
     const order = useInboxStore.getState().visualOrder().map((s) => s._id);
     expect(order).toEqual(["fresh", "mid", "old"]);
+  });
+});
+
+describe("computeReorderUpdates", () => {
+  const ordered = [
+    bucket("a", "a", { sort_order: 1024 }),
+    bucket("b", "b", { sort_order: 2048 }),
+    bucket("c", "c", { sort_order: 3072 }),
+  ];
+
+  it("moves with a single fractional write when orders exist", () => {
+    // Move c between a and b.
+    const updates = computeReorderUpdates(ordered, 2, 1);
+    expect(updates).toEqual([{ id: "c", sort_order: 1536 }]);
+  });
+
+  it("moving to the front writes below the first order", () => {
+    const updates = computeReorderUpdates(ordered, 2, 0);
+    expect(updates).toEqual([{ id: "c", sort_order: 0 }]);
+  });
+
+  it("moving to the end writes above the last order", () => {
+    const updates = computeReorderUpdates(ordered, 0, 2);
+    expect(updates).toEqual([{ id: "a", sort_order: 4096 }]);
+  });
+
+  it("no-op when the move does not change the order", () => {
+    expect(computeReorderUpdates(ordered, 1, 1)).toEqual([]);
+  });
+
+  it("renumbers everything on the first-ever reorder (no explicit orders)", () => {
+    const fresh = [bucket("x", "x"), bucket("y", "y"), bucket("z", "z")];
+    const updates = computeReorderUpdates(fresh, 2, 0);
+    expect(updates).toEqual([
+      { id: "z", sort_order: 1024 },
+      { id: "x", sort_order: 2048 },
+      { id: "y", sort_order: 3072 },
+    ]);
+  });
+
+  it("renumbers when fractional precision collapses", () => {
+    const tight = [
+      bucket("a", "a", { sort_order: 1 }),
+      bucket("b", "b", { sort_order: 1 + Number.EPSILON }),
+      bucket("c", "c", { sort_order: 10 }),
+    ];
+    // Midpoint of two adjacent floats collapses onto a neighbor → full ladder.
+    const updates = computeReorderUpdates(tight, 2, 1);
+    expect(updates.length).toBe(3);
+    expect(updates.map((u) => u.id)).toEqual(["a", "c", "b"]);
+  });
+
+  it("sortLabels orders by sort_order then name and drops archived", () => {
+    const map = {
+      n2: bucket("n2", "beta"),
+      n1: bucket("n1", "alpha"),
+      o1: bucket("o1", "omega", { sort_order: 10 }),
+      gone: bucket("gone", "aaa", { archived_at: 1 }),
+    };
+    expect(sortLabels(map).map((b) => b.name)).toEqual(["alpha", "beta", "omega"]);
   });
 });

@@ -9,7 +9,7 @@ import { ConversationData } from "./ConversationView";
 import { FormattedSummary } from "./FormattedSummary";
 import { sessionCardSummary } from "../lib/sessionSummary";
 import { useConversationMessages } from "../hooks/useConversationMessages";
-import { useInboxStore, useTrackedStore, InboxSession, getSessionRenderKey, isConvexId, categorizeSessions, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend, isSessionDismissed, resolveSessionAuthor, convBucketMap, groupSessionsForLabelView, BucketItem, BucketAssignmentItem } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, InboxSession, getSessionRenderKey, isConvexId, categorizeSessions, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend, isSessionDismissed, resolveSessionAuthor, convBucketMap, groupSessionsForLabelView, sortLabels, BucketItem, BucketAssignmentItem } from "../store/inboxStore";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "./ui/tooltip";
 import { cleanTitle, msgCountColor, formatModel } from "../lib/conversationProcessor";
 import { getLabelColor } from "../lib/labelColors";
@@ -23,7 +23,8 @@ import { toast } from "sonner";
 import { animatedStashSession } from "../store/undoActions";
 import { soundKill } from "../lib/sounds";
 import { formatShortcutLabel } from "../shortcuts";
-import { X, ChevronsLeft, ChevronsRight, List, Clock, Tag, Plus } from "lucide-react";
+import { X, ChevronsLeft, ChevronsRight, List, Clock, Tag } from "lucide-react";
+import { LabelChipsRow } from "./LabelChipsRow";
 import { TaskStatusBadge } from "./TaskStatusBadge";
 import { useTipActions, checkMilestone } from "../tips";
 
@@ -1190,11 +1191,7 @@ export function SessionListPanel({
   }, [activeSessions]);
 
   const bucketByConv = useMemo(() => convBucketMap(s.bucketAssignments), [s.bucketAssignments]);
-  const visibleBuckets = useMemo(() =>
-    (Object.values(s.buckets) as BucketItem[])
-      .filter((b) => !b.archived_at)
-      .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.name.localeCompare(b.name)),
-    [s.buckets]);
+  const visibleBuckets = useMemo(() => sortLabels(s.buckets), [s.buckets]);
   const bucketCounts = useMemo(() => {
     const counts: Record<string, number> = {};
     for (const sess of activeSessions) {
@@ -1321,31 +1318,6 @@ export function SessionListPanel({
     );
   }, [viewMode, filteredNew, filteredNeedsInput, filteredWorking, orchestrationGroupMembers, filterByChip, bucketByConv, s.buckets]);
 
-  // Inline label creation: the + chip swaps to a tiny input; Enter creates.
-  const [creatingLabel, setCreatingLabel] = useState(false);
-  const [newLabelName, setNewLabelName] = useState("");
-  const commitNewLabel = useCallback(() => {
-    const name = newLabelName.trim();
-    setCreatingLabel(false);
-    setNewLabelName("");
-    if (!name) return;
-    useInboxStore.getState().createBucket({ name })
-      .then(() => toast.success(`Created label "${name}"`))
-      .catch(() => toast.error("Couldn't create label"));
-  }, [newLabelName]);
-
-  // Chip hover ✕: deleting a label archives it (tombstone — delta sync can't
-  // propagate hard deletes), which removes it from every session that had it.
-  const deleteLabel = useCallback((bucket: BucketItem) => (e: React.MouseEvent) => {
-    e.stopPropagation();
-    const store = useInboxStore.getState();
-    if (store.activeBucketFilter === bucket._id) store.setActiveBucketFilter(null);
-    store.updateBucket(bucket._id, { archived_at: Date.now() });
-    toast.success(`Deleted label "${bucket.name}"`, {
-      action: { label: "Undo", onClick: () => useInboxStore.getState().updateBucket(bucket._id, { archived_at: null }) },
-    });
-  }, []);
-
   // Shared drop sink for every label target — chips AND the "by label" view's
   // sections. bucketId null = remove the label (dropping onto a project group
   // sends the session back to its own project tier).
@@ -1364,22 +1336,6 @@ export function SessionListPanel({
       toast.success("Label removed");
     }
   }, []);
-
-  // Chip drop targets.
-  const [dragOverBucketId, setDragOverBucketId] = useState<string | null>(null);
-  const handleChipDragOver = useCallback((bucketId: string) => (e: React.DragEvent) => {
-    if (!e.dataTransfer.types.includes("codecast/session-id")) return;
-    e.preventDefault();
-    e.dataTransfer.dropEffect = "move";
-    setDragOverBucketId(bucketId);
-  }, []);
-  const handleChipDrop = useCallback((bucketId: string) => (e: React.DragEvent) => {
-    setDragOverBucketId(null);
-    const draggedId = e.dataTransfer.getData("codecast/session-id");
-    if (!draggedId) return;
-    e.preventDefault();
-    dropSessionOnLabel(draggedId, bucketId);
-  }, [dropSessionOnLabel]);
 
   // Section drop targets ("by label" view): whole group is droppable.
   const [dragOverSectionKey, setDragOverSectionKey] = useState<string | null>(null);
@@ -1567,93 +1523,12 @@ export function SessionListPanel({
         <span className="text-xs font-medium text-sol-text-dim uppercase tracking-wide flex-shrink-0">
           {headerCount} Session{headerCount !== 1 ? "s" : ""}
         </span>
-        <div className="flex gap-1 overflow-x-auto min-w-0 pr-3 items-center" style={{ scrollbarWidth: 'none', maskImage: 'linear-gradient(to right, black calc(100% - 20px), transparent)', WebkitMaskImage: 'linear-gradient(to right, black calc(100% - 20px), transparent)' }}>
-            {/* Manual label chips first (intentional structure), then the
-                automatic project chips. Square swatch = label, round = project.
-                Chips double as drop targets for session-card drags; hover ✕
-                deletes the label from every session that has it. */}
-            {visibleBuckets.map((bucket) => {
-              const bc = getLabelColor(bucket.name);
-              const active = s.activeBucketFilter === bucket._id;
-              const count = bucketCounts[bucket._id] || 0;
-              return (
-                <button
-                  key={bucket._id}
-                  onClick={() => s.setActiveBucketFilter(active ? null : bucket._id)}
-                  onDragOver={handleChipDragOver(bucket._id)}
-                  onDragLeave={() => setDragOverBucketId((cur) => (cur === bucket._id ? null : cur))}
-                  onDrop={handleChipDrop(bucket._id)}
-                  className={`group flex-shrink-0 px-2 py-0.5 rounded-full text-[10px] transition-all flex items-center gap-1 ${
-                    dragOverBucketId === bucket._id
-                      ? `ring-1 ring-sol-cyan ${bc.bg} ${bc.text}`
-                      : active
-                        ? `${bc.bg} ${bc.text} font-medium`
-                        : count === 0
-                          ? "bg-gray-400/10 text-gray-400/60 hover:bg-gray-400/20 hover:text-gray-500"
-                          : "bg-gray-400/10 text-gray-400 hover:bg-gray-400/20 hover:text-gray-500"
-                  }`}
-                  title={`Label: ${bucket.name}`}
-                >
-                  <span className={`w-1.5 h-1.5 rounded-[2px] ${bc.dot} ${active ? "" : "opacity-50"}`} />
-                  {bucket.name}
-                  <span className="ml-0.5 opacity-50 group-hover:hidden tabular-nums">{count}</span>
-                  <span
-                    role="button"
-                    onClick={deleteLabel(bucket)}
-                    title={`Delete label "${bucket.name}"`}
-                    className="ml-0.5 hidden group-hover:inline-flex items-center text-current opacity-60 hover:opacity-100 hover:text-sol-red"
-                  >
-                    <X className="w-2.5 h-2.5" />
-                  </span>
-                </button>
-              );
-            })}
-            {creatingLabel ? (
-              <input
-                autoFocus
-                value={newLabelName}
-                onChange={(e) => setNewLabelName(e.target.value)}
-                onKeyDown={(e) => {
-                  e.stopPropagation();
-                  if (e.key === "Enter") commitNewLabel();
-                  if (e.key === "Escape") { setCreatingLabel(false); setNewLabelName(""); }
-                }}
-                onBlur={() => { setCreatingLabel(false); setNewLabelName(""); }}
-                placeholder="new label…"
-                className="flex-shrink-0 w-24 px-2 py-0.5 rounded-full text-[10px] bg-sol-bg border border-sol-cyan/50 text-sol-text placeholder:text-sol-text-dim/60 outline-none"
-              />
-            ) : (
-              <button
-                onClick={() => setCreatingLabel(true)}
-                title="New label"
-                className="flex-shrink-0 p-1 rounded-full text-sol-text-dim/50 hover:text-sol-cyan hover:bg-sol-cyan/10 transition-colors"
-              >
-                <Plus className="w-2.5 h-2.5" />
-              </button>
-            )}
-            {projectCounts.map(([name, count]) => {
-              const pc = getLabelColor(name);
-              const active = s.activeProjectFilter === name;
-              return (
-                <button
-                  key={name}
-                  onClick={() => {
-                    const next = active ? null : name;
-                    s.setActiveProjectFilter(next, next ? (projectPathByName[next] || null) : null);
-                  }}
-                  className={`flex-shrink-0 px-2 py-0.5 rounded-full text-[10px] transition-all flex items-center gap-1 ${
-                    active
-                      ? `${pc.bg} ${pc.text} font-medium`
-                      : "bg-gray-400/10 text-gray-400 hover:bg-gray-400/20 hover:text-gray-500"
-                  }`}
-                >
-                  <span className={`w-1.5 h-1.5 rounded-full ${pc.dot} ${active ? "" : "opacity-50"}`} />
-                  {name}
-                  <span className="ml-0.5 opacity-50">{count}</span>
-                </button>
-              );
-            })}
-        </div>
+        <LabelChipsRow
+          bucketCounts={bucketCounts}
+          projectCounts={projectCounts}
+          projectPathByName={projectPathByName}
+          dropSessionOnLabel={dropSessionOnLabel}
+        />
         <div className="flex items-center gap-1.5 flex-shrink-0 ml-auto">
           {/* View mode: icon segmented control — direct selection, no cycling.
               Ctrl+, still cycles for keyboard flow. Label segment appears only
