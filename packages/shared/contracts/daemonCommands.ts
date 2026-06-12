@@ -28,6 +28,11 @@ export const DAEMON_COMMANDS = [
   "run_workflow",
   "reinstall",
   "move_to_device",
+  // Fork fast path: resume a fork by copying the parent's local JSONL. A
+  // SEPARATE command (not resume_session) so daemons that predate it report
+  // "Unknown command" and do nothing — falling into their resume_session path
+  // would reconstitute from a mid-copy export and truncate the fork's history.
+  "fork_session",
 ] as const;
 
 export type DaemonCommand = (typeof DAEMON_COMMANDS)[number];

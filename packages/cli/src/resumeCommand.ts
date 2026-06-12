@@ -20,6 +20,43 @@ export interface RewriteSubagentJsonlResult {
 }
 
 /**
+ * Copy a session JSONL next to itself under a new session id, rewriting the
+ * per-line `sessionId` fields to match. Message content bytes are untouched,
+ * so the resumed session's prompt prefix — and Claude's server-side prompt
+ * cache — stay identical to the source. Trims any partially-flushed trailing
+ * line (the source may be a LIVE session mid-append). Idempotent: an existing
+ * target is returned as-is. Returns the new path, or null when the source is
+ * missing.
+ */
+export function copyJsonlAsSession(
+  sourceJsonlPath: string,
+  sourceSessionId: string,
+  targetSessionId: string,
+): string | null {
+  if (!fs.existsSync(sourceJsonlPath)) return null;
+  const newPath = path.join(path.dirname(sourceJsonlPath), `${targetSessionId}.jsonl`);
+  if (fs.existsSync(newPath)) return newPath;
+  let raw = fs.readFileSync(sourceJsonlPath, "utf-8");
+  // A live writer may have flushed a partial tail line. Drop it only if it
+  // isn't complete JSON — a final line that merely lacks its newline is kept.
+  const lastNewline = raw.lastIndexOf("\n");
+  if (lastNewline !== raw.length - 1) {
+    const tail = raw.slice(lastNewline + 1);
+    try {
+      JSON.parse(tail);
+    } catch {
+      raw = raw.slice(0, lastNewline + 1);
+    }
+  }
+  const rewritten = raw.replace(
+    new RegExp(`"sessionId"\\s*:\\s*"${sourceSessionId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`, "g"),
+    `"sessionId":"${targetSessionId}"`,
+  );
+  fs.writeFileSync(newPath, rewritten);
+  return newPath;
+}
+
+/**
  * Subagent sessions use non-UUID IDs that `claude --resume` rejects. Copy the
  * JSONL to a new UUID-named file with all `sessionId` fields rewritten so it
  * becomes resumable. Returns the original ID unchanged when it's already a UUID
@@ -30,16 +67,9 @@ export function rewriteSubagentJsonlToUuid(
   sourceJsonlPath: string,
 ): RewriteSubagentJsonlResult {
   if (CLAUDE_UUID_RE.test(sessionId)) return { resumeId: sessionId, rewrote: false };
-  if (!fs.existsSync(sourceJsonlPath)) return { resumeId: sessionId, rewrote: false };
-
   const newUuid = crypto.randomUUID();
-  const newPath = path.join(path.dirname(sourceJsonlPath), `${newUuid}.jsonl`);
-  const raw = fs.readFileSync(sourceJsonlPath, "utf-8");
-  const rewritten = raw.replace(
-    new RegExp(`"sessionId"\\s*:\\s*"${sessionId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`, "g"),
-    `"sessionId":"${newUuid}"`,
-  );
-  fs.writeFileSync(newPath, rewritten);
+  const newPath = copyJsonlAsSession(sourceJsonlPath, sessionId, newUuid);
+  if (!newPath) return { resumeId: sessionId, rewrote: false };
   return { resumeId: newUuid, newJsonlPath: newPath, rewrote: true };
 }
 
