@@ -6238,7 +6238,7 @@ async function enrichInboxSessionRow(
   maps: InboxSessionMaps,
   now: number,
   clusterCutoff: number,
-): Promise<{ row: any; subagentChildren: any[]; dismissed: boolean; hidden: boolean }> {
+): Promise<{ row: any; subagentChildren: any[]; dismissed: boolean; stashed: boolean; hidden: boolean }> {
   let hasPending = !!conv.has_pending_messages;
   let lastMsgRole = conv.last_message_role;
   let lastUserMessage = conv.last_message_preview || null;
@@ -6266,7 +6266,8 @@ async function enrichInboxSessionRow(
 
   const pinned = !!conv.inbox_pinned_at;
   const dismissed = !!conv.inbox_dismissed_at;
-  const hidden = !dismissed && clusterCutoff > 0 && conv.updated_at < clusterCutoff && !hasPending && !pinned;
+  const stashed = !!conv.inbox_stashed_at;
+  const hidden = !dismissed && !stashed && clusterCutoff > 0 && conv.updated_at < clusterCutoff && !hasPending && !pinned;
 
   // Stop trusting a frozen "active" status once the conversation has gone quiet
   // past the trust TTL — otherwise a daemon re-asserting a stale "working" over
@@ -6402,6 +6403,7 @@ async function enrichInboxSessionRow(
     is_pinned: pinned,
     inbox_pinned_at: conv.inbox_pinned_at ?? null,
     inbox_dismissed_at: conv.inbox_dismissed_at ?? null,
+    inbox_stashed_at: conv.inbox_stashed_at ?? null,
     agent_status: agentStatus,
     tmux_session: maps.tmuxSessionMap.get(conv._id.toString()) ?? null,
     permission_mode: maps.permissionModeMap.get(conv._id.toString()) ?? null,
@@ -6434,7 +6436,7 @@ async function enrichInboxSessionRow(
     user_id: conv.user_id,
   };
 
-  return { row, subagentChildren, dismissed, hidden };
+  return { row, subagentChildren, dismissed, stashed, hidden };
 }
 
 // Build a subagent child row (lighter — children carry no AUQ/plan context).
@@ -6474,6 +6476,7 @@ function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: number, 
     is_pinned: false,
     inbox_pinned_at: null,
     inbox_dismissed_at: child.inbox_dismissed_at ?? null,
+    inbox_stashed_at: child.inbox_stashed_at ?? null,
     agent_status: childAgentStatus,
     tmux_session: maps.tmuxSessionMap.get(child._id.toString()) ?? null,
     permission_mode: maps.permissionModeMap.get(child._id.toString()) ?? null,
@@ -6559,10 +6562,21 @@ async function computeInboxSessions(
     .order("desc")
     .take(200);
 
+  // Stashed (set aside, agent still alive) mirror the dismissed window so the
+  // Stashed bucket is populated even for rows older than the recent window.
+  const stashedConversations = await ctx.db
+    .query("conversations")
+    .withIndex("by_user_stashed", (q: any) =>
+      q.eq("user_id", userId).gte("inbox_stashed_at", dismissedCutoff)
+    )
+    .order("desc")
+    .take(200);
+
   const byId = new Map<string, any>();
   for (const c of recentConversations) byId.set(c._id.toString(), c);
   for (const c of pinnedConversations) byId.set(c._id.toString(), c);
   for (const c of dismissedConversations) byId.set(c._id.toString(), c);
+  for (const c of stashedConversations) byId.set(c._id.toString(), c);
   const conversations = Array.from(byId.values());
 
   const maps = includeLiveness
@@ -6570,9 +6584,10 @@ async function computeInboxSessions(
     : EMPTY_INBOX_MAPS;
 
   // Cluster cutoff hides stale active sessions when there's a clean time gap.
-  // Dismissed sessions have their own 30d window, so exclude them from the gap analysis.
+  // Dismissed/stashed sessions have their own 30d window, so exclude them from
+  // the gap analysis.
   let clusterCutoff = 0;
-  const activeConvs = conversations.filter((c) => !c.inbox_dismissed_at);
+  const activeConvs = conversations.filter((c) => !c.inbox_dismissed_at && !c.inbox_stashed_at);
   if (activeConvs.length > 0) {
     const sorted = [...activeConvs].sort((a, b) => b.updated_at - a.updated_at);
     for (let i = 1; i < sorted.length; i++) {
@@ -6588,16 +6603,16 @@ async function computeInboxSessions(
   const results: any[] = [];
   for (const conv of conversations) {
     if (!shouldShowInInbox(conv)) continue;
-    const { row, subagentChildren, dismissed, hidden } = await enrichInboxSessionRow(ctx, conv, maps, now, clusterCutoff);
+    const { row, subagentChildren, dismissed, stashed, hidden } = await enrichInboxSessionRow(ctx, conv, maps, now, clusterCutoff);
     if (hidden) {
       hiddenCount++;
       if (!opts.show_all) continue;
     }
     results.push(row);
-    // Don't surface subagents under a dismissed parent — they used to be
+    // Don't surface subagents under a dismissed/stashed parent — they used to be
     // invisible (parent was excluded from the idle query entirely) and
     // exposing them now would make active buckets pick them up as orphans.
-    if (dismissed) continue;
+    if (dismissed || stashed) continue;
     for (const child of subagentChildren) {
       results.push(buildSubagentChildRow(child, maps, now, conv._id));
     }
@@ -6714,7 +6729,7 @@ export const inboxForCLI = query({
       // them in a separate collapsed group, out of the active buckets. Mirror that
       // so cast monitor counts match the web inbox (don't inflate idle with
       // already-triaged sessions). `cast monitor -a` includes them.
-      if (s.inbox_dismissed_at && !args.show_all) { counts.dismissed++; continue; }
+      if ((s.inbox_dismissed_at || s.inbox_stashed_at) && !args.show_all) { counts.dismissed++; continue; }
       const work_state = classifyWorkState({
         agentStatus: s.agent_status,
         isIdle: s.is_idle,
@@ -6821,7 +6836,7 @@ export const listInboxSessionsPaginated = query({
 
     const rows: any[] = [];
     for (const conv of result.page) {
-      if (conv.inbox_dismissed_at) continue; // dismissed: own accumulation path
+      if (conv.inbox_dismissed_at || conv.inbox_stashed_at) continue; // dismissed/stashed: own accumulation path
       if (!shouldShowInInbox(conv)) continue;
       const { row, subagentChildren } = await enrichInboxSessionRow(ctx, conv, maps, now, 0);
       rows.push(row);
@@ -6846,38 +6861,55 @@ export const listInboxSessionsPaginated = query({
 // The client overlays the result via applyDismissedReconcile (SET on reported,
 // CLEAR on no-longer-reported = un-dismissed elsewhere). Window mirrors the live
 // query's INBOX_DISMISSED_WINDOW_MS — keep them in sync.
+// Shared handler for the dismissed/stashed lite crawls. The window lower bound
+// MUST be a STABLE value supplied by the caller — it becomes the index range
+// bound, and a wall-clock value recomputed per page (Date.now() in the handler)
+// shifts the range between pages, so each continuation cursor belongs to a
+// different query and Convex throws InvalidCursor on page 2. That capped this
+// crawl at its FIRST page (~500 rows) — a heavy account's older dismisses then
+// never reconciled, so dismissed sessions resurfaced on other tabs/devices. The
+// client seeds `since = now - 30d` once per crawl (mirrors
+// listInboxSessionsPaginated). Never fold Date.now() into the range here. The
+// fallback is only for a single un-paginated probe call.
+async function listHiddenSessionsLite(
+  ctx: any,
+  args: { paginationOpts: any; since?: number },
+  index: "by_user_dismissed" | "by_user_stashed",
+  field: "inbox_dismissed_at" | "inbox_stashed_at",
+) {
+  const userId = await getAuthUserId(ctx);
+  if (!userId) return { page: [], isDone: true, continueCursor: "" };
+  const cutoff = args.since ?? Date.now() - INBOX_DISMISSED_WINDOW_MS;
+  const result = await ctx.db
+    .query("conversations")
+    .withIndex(index, (q: any) => q.eq("user_id", userId).gte(field, cutoff))
+    .order("desc")
+    .paginate(args.paginationOpts);
+  const page = result.page.map((c: any) => ({
+    _id: c._id,
+    [field]: c[field] ?? null,
+  }));
+  return { page, isDone: result.isDone, continueCursor: result.continueCursor };
+}
+
 export const listDismissedSessionsLite = query({
   args: {
     paginationOpts: paginationOptsValidator,
-    // The window lower bound MUST be a STABLE value supplied by the caller — it
-    // becomes the `by_user_dismissed` index range bound, and a wall-clock value
-    // recomputed per page (Date.now() in the handler) shifts the range between
-    // pages, so each continuation cursor belongs to a different query and Convex
-    // throws InvalidCursor on page 2. That capped this crawl at its FIRST page
-    // (~500 rows) — a heavy account's older dismisses then never reconciled, so
-    // dismissed sessions resurfaced on other tabs/devices. The client seeds
-    // `since = now - 30d` once per crawl (mirrors listInboxSessionsPaginated).
-    // Never fold Date.now() into the range here. The fallback is only for a
-    // single un-paginated probe call.
     since: v.optional(v.number()),
   },
-  handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) return { page: [], isDone: true, continueCursor: "" };
-    const cutoff = args.since ?? Date.now() - INBOX_DISMISSED_WINDOW_MS;
-    const result = await ctx.db
-      .query("conversations")
-      .withIndex("by_user_dismissed", (q: any) =>
-        q.eq("user_id", userId).gte("inbox_dismissed_at", cutoff)
-      )
-      .order("desc")
-      .paginate(args.paginationOpts);
-    const page = result.page.map((c: any) => ({
-      _id: c._id,
-      inbox_dismissed_at: c.inbox_dismissed_at ?? null,
-    }));
-    return { page, isDone: result.isDone, continueCursor: result.continueCursor };
+  handler: (ctx, args) =>
+    listHiddenSessionsLite(ctx, args, "by_user_dismissed", "inbox_dismissed_at"),
+});
+
+// Stashed twin of the dismissed reconcile — same contract, keyed on
+// inbox_stashed_at via by_user_stashed.
+export const listStashedSessionsLite = query({
+  args: {
+    paginationOpts: paginationOptsValidator,
+    since: v.optional(v.number()),
   },
+  handler: (ctx, args) =>
+    listHiddenSessionsLite(ctx, args, "by_user_stashed", "inbox_stashed_at"),
 });
 
 // Which of these conversation ids still exist as the caller's own? Powers the

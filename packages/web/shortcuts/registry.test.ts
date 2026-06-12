@@ -10,7 +10,7 @@ import { SHORTCUTS, inputGuardBypass, type ShortcutAction, type ShortcutDef } fr
 // muscle memory only collides when there is something to delete. These bindings
 // must never carry skipInputCheck: true (unconditional bypass).
 const DESTRUCTIVE_ACTIONS: ShortcutAction[] = [
-  "session.kill",
+  "session.dismiss",
   "session.stash",
   "session.deferAdvance",
 ];

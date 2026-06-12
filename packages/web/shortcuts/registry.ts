@@ -6,7 +6,7 @@ export type ShortcutAction =
   | 'session.pin'
   | 'session.moveToBucket'
   | 'session.stash'
-  | 'session.kill'
+  | 'session.dismiss'
   | 'session.deferAdvance'
   | 'session.create'
   | 'session.createIsolated'
@@ -109,11 +109,12 @@ export const SHORTCUTS: ShortcutDef[] = [
   // Destructive backspace chords use 'whenEmpty', never true: ctrl+backspace is
   // the OS "delete previous word" key, so an unconditional bypass fired these
   // mid-compose — preventDefault swallowed the keystroke (no visible change)
-  // while the selected session got stashed/killed/deferred. With 'whenEmpty'
+  // while the selected session got stashed/dismissed/deferred. With 'whenEmpty'
   // they fire from an empty composer (the keyboard triage flow) but defer to
-  // the editor whenever there is text to delete. Kill is an irreversible SIGKILL.
-  { key: 'ctrl+backspace', action: 'session.stash', skipInputCheck: 'whenEmpty', description: 'Stash session' },
-  { key: 'ctrl+shift+backspace', action: 'session.kill', skipInputCheck: 'whenEmpty', description: 'Kill session agent' },
+  // the editor whenever there is text to delete. Stash sets the session aside
+  // with the agent still running; dismiss retires it AND kills the agent.
+  { key: 'ctrl+backspace', action: 'session.stash', skipInputCheck: 'whenEmpty', description: 'Stash session (keep agent running)' },
+  { key: 'ctrl+shift+backspace', action: 'session.dismiss', skipInputCheck: 'whenEmpty', description: 'Dismiss session (kill agent)' },
   { key: 'shift+backspace', action: 'session.deferAdvance', skipInputCheck: 'whenEmpty', description: 'Defer and advance' },
   { key: 'ctrl+n', action: 'session.create', skipInputCheck: true, description: 'New session' },
   { key: 'ctrl+shift+n', action: 'session.createIsolated', skipInputCheck: true, description: 'New isolated session' },
@@ -161,7 +162,7 @@ export const SHORTCUTS: ShortcutDef[] = [
   { key: 'alt+f', action: 'msg.fork', when: 'conversation', description: 'Fork from message' },
   { key: 'ctrl+enter', action: 'msg.queue', when: 'conversation', skipInputCheck: true, description: 'Queue message' },
   { key: 'alt+enter', action: 'msg.sendAdvance', when: 'conversation', skipInputCheck: true, description: 'Send and advance' },
-  { key: 'alt+shift+enter', action: 'msg.sendDismiss', when: 'conversation', skipInputCheck: true, description: 'Send and dismiss' },
+  { key: 'alt+shift+enter', action: 'msg.sendDismiss', when: 'conversation', skipInputCheck: true, description: 'Send and stash' },
   { key: 'y', action: 'permission.approve', when: 'conversation', description: 'Approve permission' },
   { key: 'n', action: 'permission.deny', when: 'conversation', description: 'Deny permission' },
 

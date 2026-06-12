@@ -31,7 +31,7 @@ export const TIPS: TipDef[] = [
   { id: 'i-jump-idle', type: 'inline', shortcutAction: 'session.jumpIdle', phase: 1,
     content: 'Jump to the next session waiting for input' },
   { id: 'i-dismiss-sessions', type: 'inline', shortcutAction: 'session.stash', phase: 1,
-    content: 'Dismiss sessions you\'re done with' },
+    content: 'Stash sessions to revisit later' },
   { id: 'i-command-palette', type: 'inline', shortcutAction: 'palette.toggle', phase: 2,
     content: 'Open the command palette for quick actions' },
   { id: 'i-search', type: 'inline', shortcutAction: 'search.open', phase: 2,

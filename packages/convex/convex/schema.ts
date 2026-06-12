@@ -229,9 +229,16 @@ export default defineSchema({
     // field and a relative check re-opens the session. Set by:
     // dismissFromInbox, linkSessions*, linkPlanHandoff (auto-dismiss parent),
     // killSession-adjacent paths. Cleared only by: dispatch.sendMessage,
-    // pendingMessages.create, inboxStore.unstashSession, adminUnlinkSession.
-    // The list predicates live in inboxFilters.ts.
+    // pendingMessages.create, inboxStore.restoreSession, adminUnlinkSession.
+    // The list predicates live in inboxFilters.ts. Dismiss also KILLS the
+    // agent (dispatch.applyPatches enqueues kill_session on the transition).
     inbox_dismissed_at: v.optional(v.number()),
+    // Stash = set aside WITHOUT killing: hides the session from the active inbox
+    // buckets into the "Stashed" group (above Dismissed) while the agent keeps
+    // running. Same absolute-flag semantics as inbox_dismissed_at (cleared by
+    // sending a message or an explicit restore); unlike dismiss it never
+    // triggers a kill. A dismiss clears it (the row moves to Dismissed).
+    inbox_stashed_at: v.optional(v.number()),
     inbox_killed_at: v.optional(v.number()),
     inbox_deferred_at: v.optional(v.number()),
     inbox_pinned_at: v.optional(v.number()),
@@ -312,6 +319,7 @@ export default defineSchema({
     .index("by_git_branch", ["git_branch"])
     .index("by_parent_conversation_id", ["parent_conversation_id"])
     .index("by_user_pinned", ["user_id", "inbox_pinned_at"])
+    .index("by_user_stashed", ["user_id", "inbox_stashed_at"])
     .index("by_user_profile_pinned", ["user_id", "profile_pinned_at"])
     .index("by_user_dismissed", ["user_id", "inbox_dismissed_at"])
     .index("by_owner_device", ["user_id", "owner_device_id"])

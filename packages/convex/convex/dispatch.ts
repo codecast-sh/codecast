@@ -9,7 +9,7 @@ import { hasRecentPendingDaemonCommand } from "./daemonCommandUtils";
 import { nextShortId } from "./counters";
 import { resolveAssigneeStr, resolveAssigneeToUserId, recalcPlanProgress, notifySubscribers, subscribeUser, resolveWorkerParentConversation, resolveTaskGitContext } from "./tasks";
 import { api, internal } from "./_generated/api";
-import { conversationHasNoWork, reapEmptyConversation } from "./cleanup";
+import { conversationHasNoWork, reapEmptyConversation, enqueueKillSessionCommand } from "./cleanup";
 import { canAccessDoc } from "./docs";
 
 type TableConfig =
@@ -96,6 +96,32 @@ function deepMergeField(existing: any, incoming: any): any {
   return incoming;
 }
 
+// Pure decision for the conversation hide-transition hook (exported for tests).
+//
+//  "reap" — a never-prompted EMPTY pre-warm got hidden (dismissed OR stashed).
+//           Quick-create eagerly boots a real agent per summon; a 0-message
+//           pre-warm has nothing to preserve — leaving it running leaks a
+//           zombie tmux that keeps the conversation is_connected and
+//           re-surfaces it as a phantom "New session" card.
+//           reapEmptyConversation kills the agent and then deletes the row.
+//  "kill" — dismiss = kill. Stash is the keep-alive set-aside; dismiss retires
+//           the session: tear the agent down and mark it completed (mirrors the
+//           explicit killSession mutation). Gated on the TRANSITION (`doc` is
+//           the pre-patch row) so a re-asserted dismiss can't re-kill, and an
+//           undo (dismissed → null) never reaches here. Stays resumable.
+//  "none" — a stash of a session with real work (the whole point of stash), or
+//           a re-asserted dismiss.
+export function classifyHideTransition(
+  patch: { inbox_dismissed_at?: any; inbox_stashed_at?: any },
+  doc: { inbox_dismissed_at?: number | null },
+  hasNoWork: boolean,
+): "reap" | "kill" | "none" {
+  if (!patch.inbox_dismissed_at && !patch.inbox_stashed_at) return "none";
+  if (hasNoWork) return "reap";
+  if (patch.inbox_dismissed_at && !doc.inbox_dismissed_at) return "kill";
+  return "none";
+}
+
 async function applyPatches(
   ctx: HandlerCtx,
   userId: Id<"users">,
@@ -117,18 +143,18 @@ async function applyPatches(
         if (!doc || (doc as any)[config.ownerField] !== userId) continue;
         const finalSafe = config.beforePatch ? config.beforePatch(doc, { ...safe }) : safe;
         await ctx.db.patch(docKey as Id<any>, finalSafe);
-        // Reap a never-prompted EMPTY pre-warm the moment it's dismissed. Hooked on
-        // the DATA transition (a conversation patch setting inbox_dismissed_at), not
-        // any one action, so every dismiss path funnels through here — the inbox X
-        // (stashSession), the /sessions toggle (patchConversation), and any future
-        // one. Quick-create eagerly boots a real agent per summon; the daemon keeps a
-        // dismissed WORKER alive on purpose (you may resume it), but a 0-message
-        // pre-warm has nothing to preserve — leaving it running leaks a zombie tmux
-        // that keeps the conversation is_connected and re-surfaces it as a phantom
-        // "New session" card. reapEmptyConversation kills the agent (kill_session) and,
-        // once it's gone, deletes the row. Only fires when authoritatively empty.
-        if (table === "conversations" && (finalSafe as any).inbox_dismissed_at && await conversationHasNoWork(ctx, doc)) {
-          await reapEmptyConversation(ctx, doc as any);
+        // Lifecycle hooks on the DATA transition (a conversation patch setting
+        // inbox_dismissed_at / inbox_stashed_at), not any one action, so every
+        // dismiss/stash path funnels through here — the inbox shortcuts, the
+        // palette, the /sessions toggle (patchConversation), and any future one.
+        if (table === "conversations" && ((finalSafe as any).inbox_dismissed_at || (finalSafe as any).inbox_stashed_at)) {
+          const action = classifyHideTransition(finalSafe, doc as any, await conversationHasNoWork(ctx, doc));
+          if (action === "reap") {
+            await reapEmptyConversation(ctx, doc as any);
+          } else if (action === "kill") {
+            await enqueueKillSessionCommand(ctx, doc as any);
+            await ctx.db.patch(docKey as Id<any>, { inbox_killed_at: Date.now(), status: "completed" });
+          }
         }
       } else {
         const existing = await ctx.db
@@ -322,6 +348,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       has_pending_messages: true,
       ...(conversation.status === "completed" ? { status: "active" as const } : {}),
       ...(conversation.inbox_dismissed_at ? { inbox_dismissed_at: undefined } : {}),
+      ...(conversation.inbox_stashed_at ? { inbox_stashed_at: undefined } : {}),
       ...(conversation.inbox_killed_at ? { inbox_killed_at: undefined } : {}),
     });
     return messageId;
