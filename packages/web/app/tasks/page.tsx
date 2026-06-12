@@ -8,6 +8,8 @@ import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, TaskItem, TaskViewPrefs, ProjectItem, resolveAssigneeInfo } from "../../store/inboxStore";
 import { useSyncTasks } from "../../hooks/useSyncTasks";
 import { TaskDetailContent } from "./[id]/page";
+import { DetailSplitLayout } from "../../components/DetailSplitLayout";
+import { ErrorBoundary } from "../../components/ErrorBoundary";
 
 import { GenericListView, ListGroup, ItemRowState } from "../../components/GenericListView";
 import { SegmentedToggle } from "../../components/SegmentedToggle";
@@ -1026,9 +1028,6 @@ export function TaskListContent() {
             { key: "a", mode: "assign", label: "assign" },
           ]}
           paletteProps={{ teamMembers: teamMembers || undefined, currentUser: currentUser || undefined }}
-          renderPreview={(task, onClose, onOpen) => (
-            <TaskDetailContent taskId={task._id} variant="inline" onClose={onClose} onOpen={onOpen} />
-          )}
           onItemEdit={handleTitleEdit}
           listFooter={undefined}
           syncScope="tasks"
@@ -1094,10 +1093,22 @@ export function TaskListContent() {
 }
 
 export default function TasksPage() {
+  // Selection lives in the URL: /tasks shows the list, /tasks/<id> shows the
+  // list + the task detail. Both URLs render this same component (see TabContent),
+  // so opening/closing a task reconciles in place — instant, no re-mount, no
+  // refresh — and the URL stays the source of truth (deep-linkable).
+  const params = useParams();
+  const id = (params?.id as string | undefined) || undefined;
   return (
     <AuthGuard>
       <DashboardLayout>
-        <TaskListContent />
+        <DetailSplitLayout list={<TaskListContent />}>
+          {id ? (
+            <ErrorBoundary name="TaskDetail" level="panel">
+              <TaskDetailContent taskId={id} variant="page" />
+            </ErrorBoundary>
+          ) : null}
+        </DetailSplitLayout>
       </DashboardLayout>
     </AuthGuard>
   );
