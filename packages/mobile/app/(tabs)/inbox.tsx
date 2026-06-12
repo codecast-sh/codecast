@@ -316,15 +316,21 @@ export default function InboxScreen() {
 
   const sessions = useInboxStore((s) => s.sessions);
   const stashSession = useInboxStore((s) => s.stashSession);
-  const unstashSession = useInboxStore((s) => s.unstashSession);
+  const restoreSession = useInboxStore((s) => s.restoreSession);
   const pinSession = useInboxStore((s) => s.pinSession);
   const deferSession = useInboxStore((s) => s.deferSession);
   const killSession = useMutation(api.conversations.killSession);
 
   const sessionsWithQueuedMessages = useInboxStore((s) => s.sessionsWithQueuedMessages);
-  const { sorted: sortedAll, pinned, newSessions, needsInput, working, dismissed: dismissedSessions } = useMemo(
+  const { sorted: sortedAll, pinned, newSessions, needsInput, working, stashed: stashedSessions, dismissed: dismissedOnly } = useMemo(
     () => categorizeSessions(sessions, sessionsWithQueuedMessages),
     [sessions, sessionsWithQueuedMessages],
+  );
+  // Mobile renders one hidden drawer: stashed (set aside, agent alive) first,
+  // then dismissed — mirrors the web panel's Stashed-above-Dismissed order.
+  const dismissedSessions = useMemo(
+    () => [...stashedSessions, ...dismissedOnly],
+    [stashedSessions, dismissedOnly],
   );
   const activeSessions = useMemo(() => sortedAll.filter((s) => !s.is_deferred), [sortedAll]);
 
@@ -356,8 +362,8 @@ export default function InboxScreen() {
 
 
   const handleUndismiss = useCallback((conversationId: string) => {
-    unstashSession(conversationId);
-  }, [unstashSession]);
+    restoreSession(conversationId);
+  }, [restoreSession]);
 
   const handlePin = useCallback((conversationId: string) => {
     pinSession(conversationId);

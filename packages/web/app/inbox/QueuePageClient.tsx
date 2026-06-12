@@ -20,7 +20,7 @@ import { ActivityFeed } from "../../components/ActivityFeed";
 import { PlanContextPanel } from "../../components/PlanContextPanel";
 import { WorkflowContextPanel } from "../../components/WorkflowContextPanel";
 import { toast } from "sonner";
-import { animatedStashSession } from "../../store/undoActions";
+import { animatedHideSession } from "../../store/undoActions";
 import { cleanUserMessage } from "../../components/GlobalSessionPanel";
 
 const InboxConversation = memo(function InboxConversation({ sessionId: liveSessionId, isIdle, onSendAndAdvance, onSendAndDismiss, lastUserMessage, sessionError, onBack, targetMessageId, highlightQuery, onClearHighlight }: { sessionId: string; isIdle: boolean; onSendAndAdvance: () => void; onSendAndDismiss?: () => void; lastUserMessage?: string | null; sessionError?: string; onBack?: () => void; targetMessageId?: string; highlightQuery?: string; onClearHighlight?: () => void }) {
@@ -404,8 +404,10 @@ export function QueuePageClient() {
     advanceToNext();
   }, [advanceToNext]);
 
+  // "Send and stash": the message needs a live agent to process it, so this
+  // hides without killing — never the killing dismiss.
   const handleSendAndDismiss = useCallback(() => {
-    if (currentSessionId) animatedStashSession(currentSessionId);
+    if (currentSessionId) animatedHideSession(currentSessionId, "stash");
   }, [currentSessionId]);
 
   const viewingDismissedSession = viewingDismissedId

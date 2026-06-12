@@ -196,6 +196,7 @@ async function enqueuePendingMessage(
     has_pending_messages: true,
     ...(conversation.status === "completed" ? { status: "active" } : {}),
     ...(conversation.inbox_dismissed_at ? { inbox_dismissed_at: undefined } : {}),
+    ...(conversation.inbox_stashed_at ? { inbox_stashed_at: undefined } : {}),
     ...(conversation.inbox_killed_at ? { inbox_killed_at: undefined } : {}),
   });
 

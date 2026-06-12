@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { categorizeSessions, computeNewDividerIndex, dropLatchedFeedHasMore, feedPagePersistence, getSessionRenderKey, isConvexId, isSessionDismissed, orchestrationGroupLabelOf, pendingSendConsumed, resolveAssigneeInfo, resolveSessionAuthor, sessionsWithPendingSend, unionHydrate, useInboxStore, worktreeKeyOf, type InboxSession } from "../inboxStore";
+import { categorizeSessions, computeNewDividerIndex, dropLatchedFeedHasMore, feedPagePersistence, getSessionRenderKey, isConvexId, isSessionDismissed, isSessionStashed, orchestrationGroupLabelOf, pendingSendConsumed, resolveAssigneeInfo, resolveSessionAuthor, sessionsWithPendingSend, unionHydrate, useInboxStore, worktreeKeyOf, type InboxSession } from "../inboxStore";
 import { isPersistedStoreKey } from "../idbCache";
 
 const baseSession: InboxSession = {
@@ -1249,7 +1249,7 @@ describe("dismiss is absolute — navigation/injection must not resurrect", () =
   // palette jump, sidebar bookmark, /conversation/[id] redirect, desktop
   // window-focus). Each of those dispatched a server patch that wiped
   // dismiss everywhere. These tests pin the invariant: only an explicit
-  // user action (unstashSession, or sending a message) clears dismiss.
+  // user action (restoreSession, or sending a message) clears dismiss.
 
   const dismissed: InboxSession = {
     ...baseSession,
@@ -1342,8 +1342,8 @@ describe("dismiss is absolute — navigation/injection must not resurrect", () =
     expect(isSessionDismissed(s.sessions["conv-fresh"])).toBe(false);
   });
 
-  it("stash then navigate then unstash — dismiss survives the round trip", () => {
-    // A Convex-shaped id: stashSession flags real server sessions but deletes
+  it("dismiss then navigate then restore — dismiss survives the round trip", () => {
+    // A Convex-shaped id: dismissSession flags real server sessions but deletes
     // local-only stubs, and this test pins the flag semantics.
     const realId = "c".repeat(32);
     useInboxStore.setState({
@@ -1359,14 +1359,75 @@ describe("dismiss is absolute — navigation/injection must not resurrect", () =
       pending: {},
     });
 
-    useInboxStore.getState().stashSession(realId);
+    useInboxStore.getState().dismissSession(realId);
     expect(isSessionDismissed(useInboxStore.getState().sessions[realId])).toBe(true);
 
     useInboxStore.getState().navigateToSession(realId);
     expect(isSessionDismissed(useInboxStore.getState().sessions[realId])).toBe(true);
 
-    useInboxStore.getState().unstashSession(realId);
+    useInboxStore.getState().restoreSession(realId);
     expect(isSessionDismissed(useInboxStore.getState().sessions[realId])).toBe(false);
+  });
+
+  it("stash then navigate then restore — stash survives the round trip", () => {
+    const realId = "d".repeat(32);
+    useInboxStore.setState({
+      sessions: {
+        [realId]: { ...alive, _id: realId },
+      },
+      conversations: {
+        [realId]: { _id: realId } as any,
+      },
+      currentSessionId: realId,
+      viewingDismissedId: null,
+      clientState: {},
+      pending: {},
+    });
+
+    useInboxStore.getState().stashSession(realId);
+    const afterStash = useInboxStore.getState().sessions[realId];
+    expect(isSessionStashed(afterStash)).toBe(true);
+    expect(isSessionDismissed(afterStash)).toBe(false);
+
+    // Navigation peeks (viewingDismissedId), never clears the flag.
+    useInboxStore.getState().navigateToSession(realId);
+    expect(isSessionStashed(useInboxStore.getState().sessions[realId])).toBe(true);
+    expect(useInboxStore.getState().viewingDismissedId).toBe(realId);
+
+    useInboxStore.getState().restoreSession(realId);
+    expect(isSessionStashed(useInboxStore.getState().sessions[realId])).toBe(false);
+  });
+
+  it("dismissing a stashed session moves it to Dismissed (buckets exclusive)", () => {
+    const realId = "e".repeat(32);
+    useInboxStore.setState({
+      sessions: { [realId]: { ...alive, _id: realId } },
+      conversations: { [realId]: { _id: realId } as any },
+      currentSessionId: realId,
+      viewingDismissedId: null,
+      clientState: {},
+      pending: {},
+    });
+
+    useInboxStore.getState().stashSession(realId);
+    useInboxStore.getState().dismissSession(realId);
+    const s = useInboxStore.getState().sessions[realId];
+    expect(isSessionDismissed(s)).toBe(true);
+    expect(isSessionStashed(s)).toBe(false);
+    expect(s.inbox_stashed_at ?? null).toBeNull();
+
+    const buckets = categorizeSessions({ [realId]: s }, new Set());
+    expect(buckets.dismissed.map((x) => x._id)).toEqual([realId]);
+    expect(buckets.stashed).toHaveLength(0);
+  });
+
+  it("stashed sessions leave the active buckets into `stashed`", () => {
+    const realId = "f".repeat(32);
+    const sess = { ...alive, _id: realId, inbox_stashed_at: Date.now() } as InboxSession;
+    const buckets = categorizeSessions({ [realId]: sess }, new Set());
+    expect(buckets.sorted).toHaveLength(0);
+    expect(buckets.stashed.map((x) => x._id)).toEqual([realId]);
+    expect(buckets.dismissed).toHaveLength(0);
   });
 });
 
@@ -2490,10 +2551,10 @@ describe("applyDismissedReconcile — durable cross-device dismiss", () => {
   });
 });
 
-describe("stashSession on a local-only stub — dismiss means delete", () => {
+describe("hiding a local-only stub — stash/dismiss mean delete", () => {
   // A stub from beginOptimisticSession whose server create failed can never be
-  // dismissed server-side (the dispatch layer skips non-Convex ids), so flagging
-  // it locally just feeds the resurrection loop above. Dismissing it must remove
+  // hidden server-side (the dispatch layer skips non-Convex ids), so flagging
+  // it locally just feeds the resurrection loop above. Hiding it must remove
   // it outright — store rows gone, exclude pending planted so the IDB row delete
   // persists (same mechanics as a kill).
   const stub = "k2hf8s0dq1xand83hr0e6";
@@ -2541,7 +2602,52 @@ describe("stashSession on a local-only stub — dismiss means delete", () => {
     useInboxStore.getState().stashSession(real);
     const s = useInboxStore.getState();
     expect(s.sessions[real]).toBeDefined();
-    expect(isSessionDismissed(s.sessions[real])).toBe(true);
+    expect(isSessionStashed(s.sessions[real])).toBe(true);
+  });
+
+  it("dismissSession deletes a stub the same way", () => {
+    useInboxStore.getState().dismissSession(stub);
+    const s = useInboxStore.getState();
+    expect(s.sessions[stub]).toBeUndefined();
+    expect(s.pending[`sessions:${stub}`]?.type).toBe("exclude");
+  });
+});
+
+describe("applyStashedReconcile — cross-device stash propagation", () => {
+  const realId = "a1".repeat(16);
+
+  beforeEach(() => {
+    useInboxStore.setState({
+      sessions: {
+        [realId]: { ...baseSession, _id: realId, session_id: realId, message_count: 4 },
+      },
+      conversations: { [realId]: { _id: realId } as any },
+      pending: {},
+    } as any);
+  });
+
+  it("SET overlays a remote stash onto the cached row", () => {
+    const ts = Date.now() - 5_000;
+    useInboxStore.getState().applyStashedReconcile([{ _id: realId, inbox_stashed_at: ts }], false);
+    expect(useInboxStore.getState().sessions[realId].inbox_stashed_at).toBe(ts);
+  });
+
+  it("CLEAR (final pass) un-stashes a row the server no longer reports", () => {
+    useInboxStore.setState({
+      sessions: {
+        [realId]: { ...baseSession, _id: realId, session_id: realId, message_count: 4, inbox_stashed_at: Date.now() - 5_000 },
+      },
+    } as any);
+    useInboxStore.getState().applyStashedReconcile([], true);
+    expect(useInboxStore.getState().sessions[realId].inbox_stashed_at ?? null).toBeNull();
+  });
+
+  it("a pending local override blocks the SET (local-first)", () => {
+    useInboxStore.setState({
+      pending: { [`sessions:${realId}:inbox_stashed_at`]: { type: "field", ts: Date.now() } },
+    } as any);
+    useInboxStore.getState().applyStashedReconcile([{ _id: realId, inbox_stashed_at: Date.now() }], false);
+    expect(useInboxStore.getState().sessions[realId].inbox_stashed_at ?? null).toBeNull();
   });
 });
 

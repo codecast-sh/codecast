@@ -18,8 +18,10 @@ export function animateSessionEnter(id: string) {
   setTimeout(() => tryApply(0), delays[0]);
 }
 
-/** Animate a session card sliding out, then call undoableStashSession. */
-export function animatedStashSession(id: string, opts?: { verb?: string }) {
+export type HideSessionMode = "stash" | "dismiss";
+
+/** Animate a session card sliding out, then call undoableHideSession. */
+export function animatedHideSession(id: string, mode: HideSessionMode) {
   const card = document.querySelector(`[data-session-id="${id}"]`);
   const wrapper = card?.parentElement;
   if (wrapper) {
@@ -28,12 +30,12 @@ export function animatedStashSession(id: string, opts?: { verb?: string }) {
     const finish = () => {
       if (done) return;
       done = true;
-      undoableStashSession(id, opts);
+      undoableHideSession(id, mode);
     };
     wrapper.addEventListener('animationend', finish, { once: true });
     setTimeout(finish, 250);
   } else {
-    undoableStashSession(id, opts);
+    undoableHideSession(id, mode);
   }
 }
 
@@ -68,15 +70,19 @@ function snapshotSession(state: StoreState, id: string) {
   };
 }
 
-export function undoableStashSession(id: string, options?: { verb?: string }) {
+// Hide a session with undo. "stash" sets the session aside (agent keeps
+// running); "dismiss" retires it (the server kills the agent on the dismiss
+// transition). Undo restores the snapshot and clears BOTH hide flags — the
+// kill itself isn't undoable (the session stays resumable), same as before.
+export function undoableHideSession(id: string, mode: HideSessionMode) {
   const state = useInboxStore.getState();
   const session = state.sessions[id];
   const label = session?.title || "session";
-  const verb = options?.verb || "Dismissed";
+  const verb = mode === "dismiss" ? "Dismissed" : "Stashed";
   const snap = snapshotSession(state, id);
 
-  const isKill = verb === "Killed";
-  useInboxStore.getState().stashSession(id, isKill ? { kill: true } : undefined);
+  if (mode === "dismiss") useInboxStore.getState().dismissSession(id);
+  else useInboxStore.getState().stashSession(id);
 
   pushUndo({
     label: `${verb} ${label}`,
@@ -103,15 +109,24 @@ export function undoableStashSession(id: string, options?: { verb?: string }) {
         clientState: snap.clientState,
       });
       animateSessionEnter(id);
+      // Push the SNAPSHOT flags, not blanket nulls: undoing a dismiss of a
+      // session that was stashed at the time must land it back in Stashed.
       store._dispatch("patch", [], {
         conversations: Object.fromEntries(
-          snap.allIds.map((sid) => [sid, { inbox_dismissed_at: null }])
+          snap.allIds.map((sid) => {
+            const prev = snap.sessions[sid] ?? (snap.conversations[sid] as any);
+            return [sid, {
+              inbox_dismissed_at: prev?.inbox_dismissed_at ?? null,
+              inbox_stashed_at: prev?.inbox_stashed_at ?? null,
+            }];
+          })
         ),
         client_state: { _: { current_conversation_id: snap.currentSessionId } },
       }).catch(() => {});
     },
     redo: () => {
-      useInboxStore.getState().stashSession(id);
+      if (mode === "dismiss") useInboxStore.getState().dismissSession(id);
+      else useInboxStore.getState().stashSession(id);
     },
   });
 

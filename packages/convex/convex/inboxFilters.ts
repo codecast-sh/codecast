@@ -51,7 +51,7 @@ export function isViableInboxParent(
 ): boolean {
   if (!parent) return false;
   if (parent.user_id.toString() !== userId) return false;
-  if (parent.inbox_dismissed_at) return false;
+  if (parent.inbox_dismissed_at || parent.inbox_stashed_at) return false;
   return shouldShowInInbox(parent);
 }
 
