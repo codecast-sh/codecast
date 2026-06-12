@@ -206,8 +206,12 @@ describe("groupBlameBySession", () => {
     expect(entries[0].lineCount).toBe(3);
     expect(entries[0].firstLine).toBe(1);
     expect(entries[0].authorName).toBe("Sam Smith");
+    // newestSha = the session's newest COMMITTED sha (line 4 is uncommitted, so
+    // it falls back to the 'aaa…' commit, not the zero sha).
+    expect(entries[0].newestSha).toBe("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
     expect(entries[1].lineCount).toBe(1);
     expect(entries[1].firstLine).toBe(3);
+    expect(entries[1].newestSha).toBe("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
   });
 
   test("unresolved lines are excluded from attribution", () => {
@@ -336,5 +340,22 @@ describe("augmentPorcelain", () => {
 
   test("no-op without resolutions", () => {
     expect(augmentPorcelain(PORCELAIN, EMPTY_RESOLUTION)).toBe(PORCELAIN);
+  });
+
+  test("injects codecast-author after the title when present (consumed by the VS Code extension)", () => {
+    const withAuthor: BlameResolution = {
+      bySha: new Map([
+        [
+          "0734898927ee6bfd79c0619b2b6cea59d2ba235f",
+          { conversation_id: "jx7bcdsm572w8abpms5vanx0ms88dvxv", title: "Organize commits", author_name: "Samvit Ramadurgam" },
+        ],
+      ]),
+      byLine: new Map(),
+    };
+    const lines = augmentPorcelain(PORCELAIN, withAuthor).split("\n");
+    const i = lines.indexOf("summary two");
+    expect(lines[i + 3]).toBe("codecast-title Organize commits");
+    expect(lines[i + 4]).toBe("codecast-author Samvit Ramadurgam");
+    expect(lines[i + 5]).toBe("codecast-url https://codecast.sh/conversation/jx7bcdsm572w8abpms5vanx0ms88dvxv");
   });
 });

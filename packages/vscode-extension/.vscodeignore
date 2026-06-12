@@ -1,0 +1,10 @@
+src/**
+scripts/**
+tsconfig.json
+.vscodeignore
+.gitignore
+node_modules/**
+**/*.map
+**/*.ts
+*.vsix
+build.mjs
