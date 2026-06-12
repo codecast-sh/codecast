@@ -217,14 +217,20 @@ export function mergeFileChanges(
 }
 
 function extractCommitMessage(command: string): string | undefined {
-  const messageFlagMatch = command.match(/-m\s+["']([\s\S]+?)["']/);
-  if (messageFlagMatch) {
-    return messageFlagMatch[1];
-  }
-
-  const heredocMatch = command.match(/\$\(cat\s+<<'?EOF'?\s+([\s\S]+?)\s+EOF\s*\)/);
+  // Heredoc form first: `git commit -m "$(cat <<'EOF' … EOF)"` (what /commit and
+  // most agents emit). It must win over the -m regex below — the heredoc body
+  // contains quotes (e.g. `<<'EOF'`), so a naive `-m "…"` match stops at the
+  // first inner quote and captures the literal `$(cat <<` instead of the message.
+  const heredocMatch = command.match(/<<-?\s*'?(?:EOF|MSG|COMMIT_MSG)'?\s*\n([\s\S]+?)\n\s*(?:EOF|MSG|COMMIT_MSG)\b/);
   if (heredocMatch) {
     return heredocMatch[1].trim();
+  }
+
+  // Plain `-m "msg"` / `-m 'msg'`. Anchor the close to the same quote that
+  // opened it so an apostrophe inside a double-quoted message doesn't truncate.
+  const messageFlagMatch = command.match(/-m\s+"([^"]+)"|-m\s+'([^']+)'/);
+  if (messageFlagMatch) {
+    return messageFlagMatch[1] ?? messageFlagMatch[2];
   }
 
   return undefined;

@@ -1,10 +1,19 @@
-import { query, internalAction, internalMutation, internalQuery } from "./_generated/server";
+import {
+  query,
+  internalMutation,
+  internalQuery,
+  type MutationCtx,
+} from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
 import { verifyApiToken } from "./apiTokens";
 import { checkConversationAccess } from "./privacy";
-import { extractCommitHashFromContent } from "./fileChanges/extractor";
+import {
+  extractCommitHashFromContent,
+  extractFileChanges,
+  hasFileChangeToolCall,
+} from "./fileChanges/extractor";
 import {
   CommitRowLite,
   EditRowLite,
@@ -224,96 +233,218 @@ export const commitRowStats = internalQuery({
       .query("file_changes")
       .withIndex("by_commit_hash", (q: any) => q.gt("commit_hash", ""))
       .order("desc")
-      .take(1000);
-    const sample = withHash.slice(0, 5).map((r) => ({
-      hash: r.commit_hash,
-      conversation_id: r.conversation_id,
-      timestamp: r.timestamp,
-    }));
-
-    // Recent commit-type rows regardless of hash, plus what their source
-    // message's tool result actually contains — shows why extraction hits or
-    // misses.
-    const recent = await ctx.db.query("file_changes").order("desc").take(3000);
-    const commitRows = recent.filter((r) => r.change_type === "commit");
-    const probes: Array<Record<string, unknown>> = [];
-    for (const row of commitRows.slice(0, 3)) {
-      const message = await ctx.db.get(row.message_id);
-      const result = message?.tool_results?.find(
-        (tr: any) => tr.tool_use_id === row.tool_call_id,
-      );
-      probes.push({
-        hash: row.commit_hash ?? null,
-        commit_message: row.commit_message?.slice(0, 60),
-        tool_result_snippet: result?.content?.slice(0, 200) ?? null,
-      });
-    }
+      .take(5000);
     return {
       rows_with_hash: withHash.length,
-      capped: withHash.length === 1000,
-      sample,
-      commit_rows_in_recent_3000: commitRows.length,
-      probes,
+      capped: withHash.length === 5000,
     };
   },
 });
 
-// One-case debug: for a recent hash-less commit row, show the forward message
-// window the backfill scans — who has tool_results, and what they contain.
-// Run: npx convex run blame:debugCommitRow '{"contains":"wire the git-blame"}'
-export const debugCommitRow = internalQuery({
-  args: { contains: v.string() },
-  handler: async (ctx, args) => {
-    const recent = await ctx.db.query("file_changes").order("desc").take(3000);
-    const row = recent.find(
-      (r) => r.change_type === "commit" && r.commit_message?.includes(args.contains),
-    );
-    if (!row) return { found: false };
-    const windowMessages = await ctx.db
-      .query("messages")
-      .withIndex("by_conversation_timestamp", (q: any) =>
-        q.eq("conversation_id", row.conversation_id).gte("timestamp", row.timestamp),
-      )
-      .take(12);
-    return {
-      found: true,
-      row: {
-        change_key: row.change_key,
-        tool_call_id: row.tool_call_id,
-        commit_hash: row.commit_hash ?? null,
-        timestamp: row.timestamp,
-        message_id: row.message_id,
-      },
-      window: windowMessages.map((m: any) => ({
-        id: m._id,
-        role: m.role,
+// Process one page of messages for the historical materialization backfill:
+// for each message that carries edit/write/commit tool calls, insert the
+// file_changes rows it should have produced at ingest (and repair commit rows
+// whose subject the old heredoc-blind extractor mis-parsed). Idempotent —
+// skips change_keys that already exist. Commit rows land hash-less here (the
+// hash is in the NEXT message's result); backfillCommitHashes fills them after.
+async function materializeMessagePage(
+  ctx: MutationCtx,
+  cursor: string | null,
+  numItems: number,
+): Promise<{ inserted: number; repaired: number; scanned: number; cursor: string | null; done: boolean }> {
+  // Exactly one paginate() per invocation — Convex forbids more. Throughput is
+  // tuned via numItems + the scheduler hop, not by looping pages here.
+  const page = await ctx.db.query("messages").paginate({ numItems, cursor });
+
+  let inserted = 0;
+  let repaired = 0;
+  for (const m of page.page) {
+    try {
+      const msg = {
+        _id: m._id,
         timestamp: m.timestamp,
-        tool_result_ids: (m.tool_results ?? []).map((tr: any) => tr.tool_use_id),
-        tool_result_snippets: (m.tool_results ?? []).map((tr: any) =>
-          (tr.content ?? "").slice(0, 120),
-        ),
-      })),
-    };
+        tool_calls: m.tool_calls,
+        tool_results: m.tool_results,
+      };
+      if (!hasFileChangeToolCall(msg)) continue;
+      for (const fc of extractFileChanges([msg])) {
+        const existing = await ctx.db
+          .query("file_changes")
+          .withIndex("by_conversation_change_key", (q) =>
+            q.eq("conversation_id", m.conversation_id).eq("change_key", fc.id),
+          )
+          .first();
+        if (existing) {
+          if (
+            existing.change_type === "commit" &&
+            fc.commitMessage &&
+            existing.commit_message !== fc.commitMessage
+          ) {
+            await ctx.db.patch(existing._id, { commit_message: fc.commitMessage });
+            repaired++;
+          }
+          continue;
+        }
+        await ctx.db.insert("file_changes", {
+          conversation_id: m.conversation_id,
+          change_key: fc.id,
+          message_id: m._id,
+          tool_call_id: fc.toolCallId,
+          seq: fc.sequenceIndex,
+          file_path: fc.filePath,
+          change_type: fc.changeType,
+          old_content: fc.oldContent,
+          new_content: fc.newContent,
+          commit_message: fc.commitMessage,
+          commit_hash: fc.commitHash,
+          timestamp: fc.timestamp,
+        });
+        inserted++;
+      }
+    } catch {
+      // One unparseable message must not sink the crawl.
+    }
+  }
+
+  return {
+    inserted,
+    repaired,
+    scanned: page.page.length,
+    cursor: page.continueCursor,
+    done: page.isDone,
+  };
+}
+
+// Materialize one conversation by short id (verification before the global
+// run). Returns what it inserted. Run:
+//   npx convex run blame:materializeOneConversation '{"short_id":"jx74qbm"}'
+export const materializeOneConversation = internalMutation({
+  args: { short_id: v.string() },
+  handler: async (ctx, args) => {
+    const conv = await ctx.db
+      .query("conversations")
+      .withIndex("by_short_id", (q: any) => q.eq("short_id", args.short_id))
+      .first();
+    if (!conv) return { found: false };
+
+    const messages = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conv._id))
+      .collect();
+    messages.sort((a, b) => a.timestamp - b.timestamp);
+
+    // tool_use_id -> commit hash, from every result (the hash lands on the
+    // message AFTER the git commit call).
+    const hashByToolId = new Map<string, string>();
+    for (const m of messages) {
+      for (const tr of m.tool_results ?? []) {
+        if (tr.is_error || !tr.tool_use_id) continue;
+        const h = extractCommitHashFromContent(tr.content ?? "");
+        if (h) hashByToolId.set(tr.tool_use_id, h);
+      }
+    }
+
+    let inserted = 0;
+    let repaired = 0;
+    const samples: Array<{ type: string; path: string; hash: string | null }> = [];
+    for (const m of messages) {
+      const msg = {
+        _id: m._id,
+        timestamp: m.timestamp,
+        tool_calls: m.tool_calls,
+        tool_results: m.tool_results,
+      };
+      if (!hasFileChangeToolCall(msg)) continue;
+      for (const fc of extractFileChanges([msg])) {
+        const existing = await ctx.db
+          .query("file_changes")
+          .withIndex("by_conversation_change_key", (q) =>
+            q.eq("conversation_id", conv._id).eq("change_key", fc.id),
+          )
+          .first();
+        const hash = fc.commitHash ?? (fc.toolCallId ? hashByToolId.get(fc.toolCallId) : undefined);
+        if (existing) {
+          const patch: Record<string, unknown> = {};
+          if (
+            existing.change_type === "commit" &&
+            fc.commitMessage &&
+            existing.commit_message !== fc.commitMessage
+          )
+            patch.commit_message = fc.commitMessage;
+          if (existing.change_type === "commit" && !existing.commit_hash && hash)
+            patch.commit_hash = hash;
+          if (Object.keys(patch).length) {
+            await ctx.db.patch(existing._id, patch);
+            repaired++;
+          }
+          continue;
+        }
+        await ctx.db.insert("file_changes", {
+          conversation_id: conv._id,
+          change_key: fc.id,
+          message_id: m._id,
+          tool_call_id: fc.toolCallId,
+          seq: fc.sequenceIndex,
+          file_path: fc.filePath,
+          change_type: fc.changeType,
+          old_content: fc.oldContent,
+          new_content: fc.newContent,
+          commit_message: fc.commitMessage,
+          commit_hash: hash,
+          timestamp: fc.timestamp,
+        });
+        inserted++;
+        if (samples.length < 6)
+          samples.push({ type: fc.changeType, path: fc.filePath.slice(-40), hash: hash ?? null });
+      }
+    }
+    return { found: true, messages: messages.length, inserted, repaired, samples };
   },
 });
 
-// Debug: what edit rows exist for a file path (the uncommitted-match input).
-// Run: npx convex run blame:debugFileEdits '{"file_path":"/abs/path"}'
-export const debugFileEdits = internalQuery({
-  args: { file_path: v.string() },
+/**
+ * Historical materialization: create the file_changes rows for messages that
+ * were synced before materializeFileChanges ran on ingest (or through a path
+ * that skipped it). Without this, blame can't attribute lines from those
+ * sessions — the union-mobile case.
+ *
+ * Self-scheduling so it survives a full-table sweep without hitting any single
+ * function's time limit (a one-shot action driver times out / drops the
+ * connection mid-run). Each invocation does one page then schedules the next;
+ * when the messages table is exhausted it kicks off the commit-hash fill.
+ * Idempotent — safe to re-run; it skips already-materialized change_keys. Run:
+ *   npx convex run blame:backfillMaterialize
+ */
+export const backfillMaterialize = internalMutation({
+  args: {
+    cursor: v.optional(v.union(v.string(), v.null())),
+    inserted: v.optional(v.number()),
+    repaired: v.optional(v.number()),
+    scanned: v.optional(v.number()),
+  },
   handler: async (ctx, args) => {
-    const rows = await ctx.db
-      .query("file_changes")
-      .withIndex("by_file_path", (q: any) => q.eq("file_path", args.file_path))
-      .order("desc")
-      .take(5);
-    return rows.map((r) => ({
-      change_type: r.change_type,
-      conversation_id: r.conversation_id,
-      timestamp: r.timestamp,
-      content_len: r.new_content?.length ?? 0,
-      head: (r.new_content ?? "").slice(0, 60),
-    }));
+    // One paginate per invocation (Convex limit). 400 messages amortizes the
+    // scheduler hop without risking the mutation read-size budget — most
+    // messages have no edit/commit tool calls, so the per-row work is cheap.
+    const r = await materializeMessagePage(ctx, args.cursor ?? null, 400);
+    const inserted = (args.inserted ?? 0) + r.inserted;
+    const repaired = (args.repaired ?? 0) + r.repaired;
+    const scanned = (args.scanned ?? 0) + r.scanned;
+
+    if (!r.done) {
+      await ctx.scheduler.runAfter(0, internal.blame.backfillMaterialize, {
+        cursor: r.cursor,
+        inserted,
+        repaired,
+        scanned,
+      });
+    } else {
+      console.log(
+        `backfillMaterialize done: ${scanned} messages, ${inserted} inserted, ${repaired} repaired. Filling hashes…`,
+      );
+      await ctx.scheduler.runAfter(0, internal.blame.backfillCommitHashes, {});
+    }
+    return { scanned, inserted, repaired, done: r.done };
   },
 });
 
@@ -327,73 +458,72 @@ export const debugFileEdits = internalQuery({
  * Self-schedules until the table is exhausted; kick off with:
  *   npx convex run blame:backfillCommitHashes
  */
-export const backfillCommitHashesPage = internalMutation({
+// One page of the commit-hash fill: for each hash-less commit row, scan a few
+// messages forward from its timestamp for the `git commit` result and patch in
+// the parsed `[branch hash]`. One paginate() per call (Convex limit).
+async function commitHashPage(
+  ctx: MutationCtx,
+  cursor: string | null,
+): Promise<{ patched: number; scanned: number; cursor: string | null; done: boolean }> {
+  const page = await ctx.db.query("file_changes").paginate({ numItems: 300, cursor });
+
+  let patched = 0;
+  for (const row of page.page) {
+    try {
+      if (row.change_type !== "commit" || row.commit_hash) continue;
+      const toolCallId = row.tool_call_id ?? row.change_key;
+      const windowMessages = await ctx.db
+        .query("messages")
+        .withIndex("by_conversation_timestamp", (q: any) =>
+          q.eq("conversation_id", row.conversation_id).gte("timestamp", row.timestamp),
+        )
+        .take(12);
+      for (const message of windowMessages) {
+        const result = message.tool_results?.find(
+          (tr: any) => tr.tool_use_id === toolCallId && !tr.is_error,
+        );
+        if (!result) continue;
+        const hash = extractCommitHashFromContent(result.content ?? "");
+        if (hash) {
+          await ctx.db.patch(row._id, { commit_hash: hash });
+          patched++;
+        }
+        break;
+      }
+    } catch {
+      // One unreadable row must not sink the crawl.
+    }
+  }
+
+  return { patched, scanned: page.page.length, cursor: page.continueCursor, done: page.isDone };
+}
+
+/**
+ * Fill commit_hash on hash-less commit rows. Self-scheduling (one page per hop)
+ * so it survives the full file_changes table without hitting a function time
+ * limit — a one-shot action driver dies with "upstream error" partway. Chained
+ * automatically at the end of backfillMaterialize; also runnable directly:
+ *   npx convex run blame:backfillCommitHashes
+ */
+export const backfillCommitHashes = internalMutation({
   args: {
     cursor: v.optional(v.union(v.string(), v.null())),
+    patched: v.optional(v.number()),
+    scanned: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const page = await ctx.db
-      .query("file_changes")
-      .paginate({ numItems: 200, cursor: args.cursor ?? null });
-
-    let patched = 0;
-    for (const row of page.page) {
-      try {
-        if (row.change_type !== "commit" || row.commit_hash) continue;
-        const toolCallId = row.tool_call_id ?? row.change_key;
-        // The result usually arrives on the next user message — a handful of
-        // messages from the row's own timestamp forward covers it.
-        const windowMessages = await ctx.db
-          .query("messages")
-          .withIndex("by_conversation_timestamp", (q: any) =>
-            q.eq("conversation_id", row.conversation_id).gte("timestamp", row.timestamp),
-          )
-          .take(12);
-        for (const message of windowMessages) {
-          const result = message.tool_results?.find(
-            (tr: any) => tr.tool_use_id === toolCallId && !tr.is_error,
-          );
-          if (!result) continue;
-          const hash = extractCommitHashFromContent(result.content ?? "");
-          if (hash) {
-            await ctx.db.patch(row._id, { commit_hash: hash });
-            patched++;
-          }
-          break;
-        }
-      } catch {
-        // One unreadable row must not sink the crawl.
-      }
+    const r = await commitHashPage(ctx, args.cursor ?? null);
+    const patched = (args.patched ?? 0) + r.patched;
+    const scanned = (args.scanned ?? 0) + r.scanned;
+    if (!r.done) {
+      await ctx.scheduler.runAfter(0, internal.blame.backfillCommitHashes, {
+        cursor: r.cursor,
+        patched,
+        scanned,
+      });
+    } else {
+      console.log(`backfillCommitHashes done: scanned ${scanned}, patched ${patched}`);
     }
-
-    return { patched, scanned: page.page.length, cursor: page.continueCursor, done: page.isDone };
-  },
-});
-
-// Drives the page mutation across the whole table in one observable run:
-//   npx convex run blame:backfillCommitHashes
-// (An earlier runAfter(0)-chained version died silently mid-table — one
-// failed run breaks a self-scheduling chain with nothing left to watch.)
-export const backfillCommitHashes = internalAction({
-  args: {},
-  handler: async (ctx) => {
-    let cursor: string | null = null;
-    let scanned = 0;
-    let patched = 0;
-    let pages = 0;
-    for (;;) {
-      const result: { patched: number; scanned: number; cursor: string | null; done: boolean } =
-        await ctx.runMutation(internal.blame.backfillCommitHashesPage, { cursor });
-      scanned += result.scanned;
-      patched += result.patched;
-      cursor = result.cursor;
-      pages++;
-      if (pages % 25 === 0) {
-        console.log(`backfillCommitHashes: ${scanned} scanned, ${patched} patched`);
-      }
-      if (result.done) break;
-    }
-    console.log(`backfillCommitHashes done: scanned ${scanned}, patched ${patched}`);
-    return { scanned, patched };
+    return { scanned, patched, done: r.done };
   },
 });

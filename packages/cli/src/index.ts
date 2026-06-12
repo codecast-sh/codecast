@@ -13315,6 +13315,17 @@ if (process.argv[2] === "__fugitive_blame@@") {
       console.error(err instanceof Error ? err.message : String(err));
       process.exitCode = 1;
     });
+} else if (process.argv[2] === "__blame_conversation") {
+  // Invoked by the fugitive <CR> mapping: resolve <file> <line> to its session
+  // and open the conversation. Exits non-zero when nothing resolves so vim can
+  // fall back to fugitive's own commit view.
+  import("./blame.js")
+    .then(({ runBlameConversation }) =>
+      runBlameConversation(process.argv[3], parseInt(process.argv[4] ?? "", 10), readConfig() ?? {}),
+    )
+    .catch(() => {
+      process.exitCode = 1;
+    });
 } else {
   ensureCastAlias();
   autoBindFromEnv();

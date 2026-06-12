@@ -214,3 +214,38 @@ describe("extractFileChanges commit hash", () => {
     expect(fc.commitHash).toBeUndefined();
   });
 });
+
+// The commit SUBJECT feeds the path-independent subject+timestamp blame match.
+// Regression for the heredoc bug: `-m "$(cat <<'EOF' … )"` (what /commit emits)
+// has quotes inside, so a naive `-m "…"` parse captured the literal `$(cat <<`
+// and the subject never matched git's %s.
+describe("extractFileChanges commit message", () => {
+  const subjectOf = (command: string) =>
+    extractFileChanges([
+      {
+        _id: "m1",
+        timestamp: 1,
+        tool_calls: [{ id: "t1", name: "Bash", input: JSON.stringify({ command }) }],
+        tool_results: [{ tool_use_id: "t1", content: "[main abc1234] x" }],
+      },
+    ])[0]?.commitMessage?.split("\n")[0];
+
+  test("heredoc `$(cat <<EOF)` form yields the real subject, not `$(cat <<`", () => {
+    const cmd =
+      `cd /x && git add a b && git commit -m "$(cat <<'EOF'\n` +
+      `feat(prompts): self-respect + live-meeting guardrails for reply agent\n\n` +
+      `Centralizes shared voice rules.\nEOF\n)"`;
+    expect(subjectOf(cmd)).toBe("feat(prompts): self-respect + live-meeting guardrails for reply agent");
+  });
+
+  test("plain -m forms (double, single, apostrophe-inside)", () => {
+    expect(subjectOf('git commit -m "fix: simple"')).toBe("fix: simple");
+    expect(subjectOf("git commit -m 'chore: single'")).toBe("chore: single");
+    // The old `["']…["']` regex truncated at the inner apostrophe.
+    expect(subjectOf('git commit -m "fix: it\'s fine"')).toBe("fix: it's fine");
+  });
+
+  test("`git commit -F- <<EOF` heredoc without cat", () => {
+    expect(subjectOf("git commit -F- <<EOF\nchore: heredoc\n\nbody\nEOF")).toBe("chore: heredoc");
+  });
+});
