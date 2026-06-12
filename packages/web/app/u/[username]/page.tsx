@@ -1,12 +1,15 @@
 "use client";
+import { useMemo } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { MessageSquare, MapPin, Github, ArrowUpRight, Pin } from "lucide-react";
+import { MessageSquare, MapPin, Github, ArrowUpRight, Pin, Activity } from "lucide-react";
 import { AgentTypeIcon, formatAgentType } from "../../../components/AgentTypeIcon";
 import { ActivityHeatmap } from "../../../components/ActivityHeatmap";
+import { TimelineCharts, fmtDayLabel, fmtK, type PunchRow } from "../../../components/ActivityCharts";
 import { LogoMark } from "../../../components/Logo";
+import { ThemeToggle } from "../../../components/ThemeToggle";
 
 // Local relative-time formatter, matching the convention used ad-hoc across the
 // app's pages (notifications, schedules) — no shared util exists to import.
@@ -25,6 +28,9 @@ function timeAgo(ts?: number): string {
   return `${Math.floor(mo / 12)}y ago`;
 }
 
+// One anonymized day of activity from the public heatmap rows.
+type FeedDay = { date: string; sessions: number; hours: number; msgs?: number; projects?: number };
+
 export default function PublicProfilePage() {
   const params = useParams();
   const username = (params.username as string) || "";
@@ -32,12 +38,42 @@ export default function PublicProfilePage() {
   const profile = useQuery(api.users.getPublicProfile, { username });
   const pins = useQuery(api.users.getPublicPinnedSessions, { username });
   const heatmap = useQuery(api.users.getPublicActivityHeatmap, { username });
+  // Hour-of-day cells only mean something in the viewer's local clock.
+  const tzOffset = useMemo(() => new Date().getTimezoneOffset(), []);
+  const punchcard = useQuery(api.users.getPublicActivityPunchcard, {
+    username,
+    days: 371,
+    tz_offset_minutes: tzOffset,
+  }) as PunchRow[] | undefined;
+
+  // Anonymized feed: most recent active days, newest first. Day buckets come
+  // straight from the public heatmap rows (counts only — nothing identifying).
+  const feedDays: FeedDay[] = useMemo(() => {
+    if (!heatmap) return [];
+    return [...(heatmap as FeedDay[])]
+      .filter((d) => d.sessions > 0)
+      .sort((a, b) => b.date.localeCompare(a.date))
+      .slice(0, 21);
+  }, [heatmap]);
+
+  // Pinned sessions are the one identified tier (explicit public opt-in), so
+  // they surface inside the feed on the day they last ran. Same UTC day
+  // bucketing as the heatmap rows.
+  const pinsByDay = useMemo(() => {
+    const m: Record<string, any[]> = {};
+    for (const p of pins ?? []) {
+      const day = new Date(p.updated_at).toISOString().split("T")[0];
+      (m[day] ||= []).push(p);
+    }
+    return m;
+  }, [pins]);
 
   // undefined = still loading; null = no such (enabled) profile → 404.
   if (profile === undefined) return <ProfileShell><ProfileSkeleton /></ProfileShell>;
   if (profile === null) return <ProfileShell><NotFound username={username} /></ProfileShell>;
 
   const initial = (profile.name || profile.username || "?").charAt(0).toUpperCase();
+  const showActivity = profile.show_activity_graph;
 
   return (
     <ProfileShell>
@@ -49,28 +85,28 @@ export default function PublicProfilePage() {
               <img
                 src={profile.avatar_url}
                 alt={profile.name ?? profile.username ?? "avatar"}
-                className="w-24 h-24 sm:w-28 sm:h-28 rounded-2xl object-cover ring-1 ring-sol-base01/30 shadow-xl shadow-black/20"
+                className="w-24 h-24 sm:w-28 sm:h-28 rounded-2xl object-cover ring-1 ring-sol-border/30 shadow-xl shadow-black/10"
               />
             ) : (
-              <div className="w-24 h-24 sm:w-28 sm:h-28 rounded-2xl bg-sol-base02 ring-1 ring-sol-base01/30 grid place-items-center text-4xl font-semibold text-sol-base0">
+              <div className="w-24 h-24 sm:w-28 sm:h-28 rounded-2xl bg-sol-bg-alt ring-1 ring-sol-border/30 grid place-items-center text-4xl font-semibold text-sol-text-secondary">
                 {initial}
               </div>
             )}
           </div>
           <div className="min-w-0 flex-1">
-            <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-sol-base1 leading-tight">
+            <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-sol-text leading-tight">
               {profile.name || profile.username}
             </h1>
             <div className="mt-0.5 text-sol-cyan font-mono text-sm">@{profile.username}</div>
             {profile.title && (
-              <div className="mt-2 text-sol-base0 text-sm">{profile.title}</div>
+              <div className="mt-2 text-sol-text-secondary text-sm">{profile.title}</div>
             )}
-            <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-sol-base00">
+            <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-sol-text-muted">
               {profile.github_username && (
                 <a
                   href={`https://github.com/${profile.github_username}`}
                   target="_blank" rel="noreferrer"
-                  className="inline-flex items-center gap-1 hover:text-sol-base1 transition-colors"
+                  className="inline-flex items-center gap-1 hover:text-sol-text transition-colors"
                 >
                   <Github className="w-3.5 h-3.5" /> {profile.github_username}
                 </a>
@@ -85,7 +121,7 @@ export default function PublicProfilePage() {
         </header>
 
         {profile.bio && (
-          <p className="reveal reveal-1 mt-5 text-sol-base0 text-sm leading-relaxed max-w-2xl whitespace-pre-wrap">
+          <p className="reveal reveal-1 mt-5 text-sol-text-secondary text-sm leading-relaxed max-w-2xl whitespace-pre-wrap">
             {profile.bio}
           </p>
         )}
@@ -97,17 +133,24 @@ export default function PublicProfilePage() {
         </div>
 
         {/* Contribution graph */}
-        {profile.show_activity_graph && heatmap && heatmap.length > 0 && (
-          <section className="reveal reveal-2 mt-9 rounded-2xl border border-sol-base02/70 bg-sol-base02/30 px-4 py-3">
+        {showActivity && heatmap && heatmap.length > 0 && (
+          <section className="reveal reveal-2 mt-9 rounded-2xl border border-sol-border/25 bg-sol-card/60 px-4 py-3">
             <ActivityHeatmap data={heatmap} label="Contribution activity" />
+          </section>
+        )}
+
+        {/* Detailed charts — hour-of-day punchcard + per-day/hourly series */}
+        {showActivity && punchcard !== undefined && punchcard.length > 0 && (
+          <section className="reveal reveal-2 mt-4 rounded-2xl border border-sol-border/25 bg-sol-card/60 px-4 py-3">
+            <TimelineCharts punchcard={punchcard} />
           </section>
         )}
 
         {/* Pinned sessions */}
         <section className="reveal reveal-2 mt-10">
           <div className="flex items-center gap-2 mb-3">
-            <Pin className="w-3.5 h-3.5 text-sol-base01" />
-            <h2 className="text-[11px] uppercase tracking-widest font-bold text-sol-base01">
+            <Pin className="w-3.5 h-3.5 text-sol-text-muted/70" />
+            <h2 className="text-[11px] uppercase tracking-widest font-bold text-sol-text-muted/70">
               Pinned sessions
             </h2>
           </div>
@@ -116,7 +159,7 @@ export default function PublicProfilePage() {
               <CardSkeleton /><CardSkeleton />
             </div>
           ) : pins.length === 0 ? (
-            <div className="rounded-2xl border border-dashed border-sol-base02 px-5 py-10 text-center text-sm text-sol-base00">
+            <div className="rounded-2xl border border-dashed border-sol-border/30 px-5 py-10 text-center text-sm text-sol-text-muted">
               No pinned sessions yet.
             </div>
           ) : (
@@ -125,8 +168,82 @@ export default function PublicProfilePage() {
             </div>
           )}
         </section>
+
+        {/* Anonymized activity feed — day rollups, with pinned (public) sessions
+            inline on the day they last ran. Two privacy tiers, one timeline. */}
+        {showActivity && feedDays.length > 0 && (
+          <section className="reveal reveal-3 mt-10">
+            <div className="flex items-center gap-2 mb-3">
+              <Activity className="w-3.5 h-3.5 text-sol-text-muted/70" />
+              <h2 className="text-[11px] uppercase tracking-widest font-bold text-sol-text-muted/70">
+                Recent activity
+              </h2>
+            </div>
+            <div className="relative border-l border-sol-border/25 ml-1.5 pl-5 space-y-5">
+              {feedDays.map((day) => (
+                <FeedDayRow key={day.date} day={day} pins={pinsByDay[day.date]} />
+              ))}
+            </div>
+          </section>
+        )}
       </div>
     </ProfileShell>
+  );
+}
+
+function plural(n: number, word: string): string {
+  return `${word}${n === 1 ? "" : "s"}`;
+}
+
+// One day in the anonymized feed: "ran 14 sessions with 11.2 agent hours on
+// 3 projects". Counts only — pinned sessions below it are the identified tier.
+function FeedDayRow({ day, pins }: { day: FeedDay; pins?: any[] }) {
+  const hours = Math.round(day.hours * 10) / 10;
+  return (
+    <div className="relative">
+      <div className="absolute -left-[26px] top-1.5 w-2 h-2 rounded-full bg-sol-cyan/50 ring-2 ring-sol-bg" />
+      <div className="text-[11px] font-bold uppercase tracking-wider text-sol-text-muted/80 select-none">
+        {fmtDayLabel(day.date)}
+      </div>
+      <div className="mt-0.5 text-[13px] text-sol-text-secondary leading-relaxed">
+        ran <span className="font-semibold text-sol-text tabular-nums">{day.sessions}</span> {plural(day.sessions, "session")}
+        {hours > 0 && (
+          <> with <span className="font-semibold text-sol-text tabular-nums">{hours}</span> agent {plural(hours, "hour")}</>
+        )}
+        {(day.projects ?? 0) > 0 && (
+          <> on <span className="font-semibold text-sol-text tabular-nums">{day.projects}</span> {plural(day.projects!, "project")}</>
+        )}
+        {(day.msgs ?? 0) > 0 && (
+          <span className="text-sol-text-muted"> · {fmtK(day.msgs!)} {plural(day.msgs!, "message")}</span>
+        )}
+      </div>
+      {pins && pins.length > 0 && (
+        <div className="mt-2 space-y-2">
+          {pins.map((p: any) => <FeedPinRow key={p._id} pin={p} />)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// A pinned session surfacing in the feed — the explicitly-public tier, so it
+// carries a real title and links to the guest /share viewer.
+function FeedPinRow({ pin }: { pin: any }) {
+  return (
+    <Link
+      href={`/share/${pin.share_token}`}
+      className="group flex items-center gap-2.5 rounded-xl border border-sol-border/25 bg-sol-card/50 px-3 py-2 transition-colors hover:border-sol-cyan/40 hover:bg-sol-card"
+    >
+      <Pin className="w-3 h-3 shrink-0 text-sol-cyan/70" />
+      <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium text-sol-text">
+        {pin.title || "Untitled session"}
+      </span>
+      {pin.repo && <span className="hidden sm:inline font-mono text-[10px] text-sol-green/80 shrink-0">{pin.repo}</span>}
+      <span className="inline-flex items-center gap-1 text-[10px] text-sol-text-muted shrink-0">
+        <MessageSquare className="w-3 h-3" /> {pin.message_count}
+      </span>
+      <ArrowUpRight className="w-3.5 h-3.5 shrink-0 text-sol-text-muted/40 transition-colors group-hover:text-sol-cyan" />
+    </Link>
   );
 }
 
@@ -134,16 +251,16 @@ function SessionCard({ pin }: { pin: any }) {
   return (
     <Link
       href={`/share/${pin.share_token}`}
-      className="group relative block rounded-2xl border border-sol-base02/80 bg-sol-base02/20 p-4 transition-all hover:-translate-y-0.5 hover:border-sol-cyan/40 hover:bg-sol-base02/40"
+      className="group relative block rounded-2xl border border-sol-border/25 bg-sol-card/50 p-4 transition-all hover:-translate-y-0.5 hover:border-sol-cyan/40 hover:bg-sol-card"
     >
-      <ArrowUpRight className="absolute top-3.5 right-3.5 w-4 h-4 text-sol-base01/40 transition-colors group-hover:text-sol-cyan" />
-      <h3 className="pr-6 text-sm font-semibold text-sol-base1 leading-snug line-clamp-2">
+      <ArrowUpRight className="absolute top-3.5 right-3.5 w-4 h-4 text-sol-text-muted/40 transition-colors group-hover:text-sol-cyan" />
+      <h3 className="pr-6 text-sm font-semibold text-sol-text leading-snug line-clamp-2">
         {pin.title || "Untitled session"}
       </h3>
       {pin.subtitle && (
-        <p className="mt-1 text-xs text-sol-base00 line-clamp-2 leading-relaxed">{pin.subtitle}</p>
+        <p className="mt-1 text-xs text-sol-text-muted line-clamp-2 leading-relaxed">{pin.subtitle}</p>
       )}
-      <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-sol-base01">
+      <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-sol-text-muted">
         {pin.repo && (
           <span className="inline-flex items-center gap-1 font-mono text-sol-green/90">{pin.repo}</span>
         )}
@@ -156,7 +273,7 @@ function SessionCard({ pin }: { pin: any }) {
         <span className="inline-flex items-center gap-1">
           <MessageSquare className="w-3 h-3" /> {pin.message_count}
         </span>
-        <span className="ml-auto text-sol-base01/70">{timeAgo(pin.updated_at)}</span>
+        <span className="ml-auto text-sol-text-muted/70">{timeAgo(pin.updated_at)}</span>
       </div>
     </Link>
   );
@@ -164,18 +281,20 @@ function SessionCard({ pin }: { pin: any }) {
 
 function StatChip({ label, value }: { label: string; value: number }) {
   return (
-    <div className="rounded-xl border border-sol-base02/70 bg-sol-base02/30 px-3.5 py-2">
-      <span className="text-base font-bold text-sol-base1 tabular-nums">{value}</span>
-      <span className="ml-1.5 text-[11px] text-sol-base01">{label}</span>
+    <div className="rounded-xl border border-sol-border/25 bg-sol-card/60 px-3.5 py-2">
+      <span className="text-base font-bold text-sol-text tabular-nums">{value}</span>
+      <span className="ml-1.5 text-[11px] text-sol-text-muted">{label}</span>
     </div>
   );
 }
 
 // Standalone chrome — this page lives OUTSIDE the dashboard shell (it's an
 // anonymous, guest-viewable route), so it brings its own nav + atmosphere.
+// Built on the adaptive --sol-* tokens so it follows the viewer's theme; the
+// charts read the same theme, keeping chrome and graphs in one palette.
 function ProfileShell({ children }: { children: React.ReactNode }) {
   return (
-    <main className="relative min-h-screen bg-sol-base03 text-sol-base0 overflow-x-hidden">
+    <main className="relative min-h-screen bg-sol-bg text-sol-text-secondary overflow-x-hidden">
       {/* atmospheric glow */}
       <div
         aria-hidden
@@ -185,13 +304,14 @@ function ProfileShell({ children }: { children: React.ReactNode }) {
             "radial-gradient(60% 100% at 50% 0%, rgba(38,139,210,0.14), rgba(42,161,152,0.06) 40%, transparent 75%)",
         }}
       />
-      <nav className="relative z-10 flex items-center justify-between px-5 sm:px-8 h-14 border-b border-sol-base02/50">
-        <Link href="/" className="flex items-center gap-2 group">
-          <LogoMark className="w-6 h-6" />
-          <span className="font-semibold text-sol-base1 tracking-tight group-hover:text-sol-cyan transition-colors">codecast</span>
+      <nav className="relative z-10 flex items-center justify-between px-5 sm:px-8 h-14 border-b border-sol-border/20">
+        <Link href="/" className="flex items-center gap-2 group text-sol-text">
+          <LogoMark monochrome className="w-6 h-6" />
+          <span className="font-semibold tracking-tight group-hover:text-sol-cyan transition-colors">codecast</span>
         </Link>
         <div className="flex items-center gap-3 text-sm">
-          <Link href="/login" className="text-sol-base00 hover:text-sol-base1 transition-colors">Sign in</Link>
+          <ThemeToggle />
+          <Link href="/login" className="text-sol-text-muted hover:text-sol-text transition-colors">Sign in</Link>
           <Link
             href="/signup"
             className="rounded-lg bg-sol-cyan/15 text-sol-cyan border border-sol-cyan/30 px-3 py-1.5 font-medium hover:bg-sol-cyan/25 transition-colors"
@@ -209,9 +329,9 @@ function NotFound({ username }: { username: string }) {
   return (
     <div className="mx-auto max-w-md px-5 pt-28 text-center">
       <div className="text-5xl mb-4">🛰️</div>
-      <h1 className="text-xl font-semibold text-sol-base1">No public profile here</h1>
-      <p className="mt-2 text-sm text-sol-base00">
-        <span className="font-mono text-sol-base0">@{username}</span> hasn’t set up a public
+      <h1 className="text-xl font-semibold text-sol-text">No public profile here</h1>
+      <p className="mt-2 text-sm text-sol-text-muted">
+        <span className="font-mono text-sol-text-secondary">@{username}</span> hasn’t set up a public
         codecast profile, or the handle doesn’t exist.
       </p>
       <Link href="/" className="mt-6 inline-block text-sm text-sol-cyan hover:underline">
@@ -225,13 +345,13 @@ function ProfileSkeleton() {
   return (
     <div className="mx-auto w-full max-w-3xl px-5 pt-14 animate-pulse">
       <div className="flex gap-5 items-end">
-        <div className="w-28 h-28 rounded-2xl bg-sol-base02/60" />
+        <div className="w-28 h-28 rounded-2xl bg-sol-bg-alt/70" />
         <div className="flex-1 space-y-3 pb-2">
-          <div className="h-7 w-48 rounded bg-sol-base02/60" />
-          <div className="h-4 w-32 rounded bg-sol-base02/40" />
+          <div className="h-7 w-48 rounded bg-sol-bg-alt/70" />
+          <div className="h-4 w-32 rounded bg-sol-bg-alt/50" />
         </div>
       </div>
-      <div className="mt-8 h-20 rounded-2xl bg-sol-base02/40" />
+      <div className="mt-8 h-20 rounded-2xl bg-sol-bg-alt/50" />
       <div className="mt-8 grid sm:grid-cols-2 gap-3">
         <CardSkeleton /><CardSkeleton />
       </div>
@@ -240,5 +360,5 @@ function ProfileSkeleton() {
 }
 
 function CardSkeleton() {
-  return <div className="h-28 rounded-2xl bg-sol-base02/40 animate-pulse" />;
+  return <div className="h-28 rounded-2xl bg-sol-bg-alt/50 animate-pulse" />;
 }
