@@ -1,12 +1,8 @@
-import { useRouter } from "next/navigation";
-import { useWatchEffect } from "../../hooks/useWatchEffect";
+import { SettingsRedirect } from "../../components/settings/SettingsRedirect";
+import { DEFAULT_SETTINGS_SECTION } from "../../lib/settingsSections";
 
+// Normally unreachable — SettingsLayout intercepts /settings before the
+// Outlet renders. Kept as a safety net for direct mounts.
 export default function SettingsPage() {
-  const router = useRouter();
-
-  useWatchEffect(() => {
-    router.replace("/settings/cli");
-  }, [router]);
-
-  return null;
+  return <SettingsRedirect hit={{ section: DEFAULT_SETTINGS_SECTION, search: "" }} />;
 }

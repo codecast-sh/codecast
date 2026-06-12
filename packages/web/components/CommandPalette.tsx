@@ -9,7 +9,7 @@ import { Command as CommandPrimitive } from "cmdk";
 import { cleanTitle } from "../lib/conversationProcessor";
 import { commitModelChange, canControlModel, modelOptionKey } from "./ModelEffortPicker";
 import { AGENT_MODEL_CONFIG, modelAgentKey } from "@codecast/shared/contracts";
-import { useInboxStore, isConvexId, InboxSession, TaskItem, DocItem, BucketItem, BucketAssignmentItem } from "../store/inboxStore";
+import { useInboxStore, isConvexId, InboxSession, TaskItem, DocItem, BucketItem, BucketAssignmentItem, categorizeSessions, sessionsWithPendingSend, convBucketMap, sortLabels, computeChipCounts } from "../store/inboxStore";
 import { score } from "../hooks/useMentionQuery";
 import { isElectron } from "../lib/desktop";
 import { isInboxRoute } from "../lib/inboxRouting";
@@ -48,11 +48,12 @@ import {
   ExternalLink,
   Pencil,
   Cpu,
+  Filter,
 } from "lucide-react";
 
 const api = _api as any;
 
-type ActionMode = "status" | "priority" | "labels" | "assign" | "type" | "plan_status" | "agent_run" | "bucket" | "model";
+type ActionMode = "status" | "priority" | "labels" | "assign" | "type" | "plan_status" | "agent_run" | "bucket" | "model" | "view";
 
 const DEFAULT_AGENT_RUN_MESSAGE = "lets do this task";
 
@@ -120,7 +121,10 @@ const NAV_PAGES = [
   { label: "Documents", path: "/docs", icon: "file", keywords: "notes plans specs" },
   { label: "Inbox", path: "/inbox", icon: "inbox", keywords: "idle queue waiting" },
   { label: "Search", path: "/search", icon: "search", keywords: "find query" },
-  { label: "Settings", path: "/settings", icon: "settings", keywords: "preferences config profile" },
+  { label: "Settings", path: "/settings", icon: "settings", keywords: "preferences config profile general" },
+  { label: "Team Settings", path: "/settings/team", icon: "settings", keywords: "members invite workspace" },
+  { label: "Claude Accounts", path: "/settings/claude-accounts", icon: "settings", keywords: "account switch login oauth" },
+  { label: "Sync & Privacy", path: "/settings/sync", icon: "settings", keywords: "projects sharing private" },
   { label: "Notifications", path: "/notifications", icon: "bell", keywords: "alerts updates" },
 ] as const;
 
@@ -216,6 +220,8 @@ function ActionSubmenu({
   const updateDoc = useInboxStore((s) => s.updateDoc);
   const buckets = useInboxStore((s) => s.buckets);
   const bucketAssignments = useInboxStore((s) => s.bucketAssignments);
+  const activeBucketFilter = useInboxStore((s) => s.activeBucketFilter);
+  const activeProjectFilter = useInboxStore((s) => s.activeProjectFilter);
   const pinDoc = useInboxStore((s) => s.pinDoc);
   const archiveDoc = useInboxStore((s) => s.archiveDoc);
   const router = useRouter();
@@ -238,8 +244,48 @@ function ActionSubmenu({
     }
   }, [mode, agentStep]);
 
+  // View-switcher counts: snapshot at entry. The picker is transient (open,
+  // pick, gone), so live count churn while it's up isn't worth subscribing the
+  // submenu to all session sync; the label LIST itself stays live via the
+  // buckets subscription above.
+  const viewChipData = useMemo(() => {
+    if (mode !== "view") return null;
+    const st = useInboxStore.getState();
+    const { pinned, newSessions, needsInput, working, orchestrationGroups } = categorizeSessions(
+      st.sessions,
+      st.sessionsWithQueuedMessages,
+      sessionsWithPendingSend(st.pendingMessages),
+      { currentSessionId: st.currentSessionId, pendingCreateIds: new Set(Object.keys(st.pendingSessionCreates)) },
+    );
+    const active = [...pinned, ...newSessions, ...needsInput, ...working, ...Array.from(orchestrationGroups.values()).flat()];
+    return computeChipCounts(active, convBucketMap(st.bucketAssignments as Record<string, BucketAssignmentItem>));
+  }, [mode]);
+
   const items = useMemo(() => {
     const q = search.toLowerCase();
+
+    if (mode === "view") {
+      if (!viewChipData) return [];
+      const { bucketCounts, projectCounts, projectPathByName } = viewChipData;
+      // ONE list, because the underlying state is ONE filter slot — picking a
+      // project clears any label focus and vice versa (the store setters
+      // enforce it). Labels first in the user's chip order, then projects by
+      // count, same as the chip row's +N popover.
+      const rows: any[] = [];
+      for (const b of sortLabels(buckets as Record<string, BucketItem>)) {
+        rows.push({ key: `label:${b._id}`, id: b._id, kind: "label", label: b.name, count: bucketCounts[b._id] || 0, active: activeBucketFilter === b._id, dot: getLabelColor(b.name).dot });
+      }
+      for (const [name, count] of projectCounts) {
+        rows.push({ key: `project:${name}`, kind: "project", label: name, count, active: activeProjectFilter === name, path: projectPathByName[name] || null, dot: getLabelColor(name).dot });
+      }
+      const matched = rows.filter((r) => r.label.toLowerCase().includes(q));
+      // "All sessions" mirrors bucket-mode's remove row: empty-search only, on
+      // the 0 key so the views keep 1-9.
+      if (!q.trim()) {
+        matched.unshift({ key: "__all__", kind: "all", label: "All sessions", active: !activeBucketFilter && !activeProjectFilter, icon: Circle, quickKey: "0" });
+      }
+      return matched;
+    }
 
     if (mode === "status") {
       return STATUS_OPTIONS
@@ -361,13 +407,31 @@ function ActionSubmenu({
       return rows.filter((r) => r.label.toLowerCase().includes(q));
     }
     return [];
-  }, [mode, search, target, currentLabels, teamMembers, currentUser, buckets, bucketAssignments]);
+  }, [mode, search, target, currentLabels, teamMembers, currentUser, buckets, bucketAssignments, viewChipData, activeBucketFilter, activeProjectFilter]);
 
   useWatchEffect(() => { setHighlightIndex(0); }, [search]);
 
   const selectItem = useCallback((index: number) => {
     const item = items[index] as any;
-    if (!item || !target) return;
+    if (!item) return;
+
+    // View switching is global — no target entity involved. Picking the
+    // already-active view toggles back to All, mirroring the chips.
+    if (mode === "view") {
+      const store = useInboxStore.getState();
+      if (item.key === "__all__" || item.active) {
+        store.setActiveBucketFilter(null);
+        store.setActiveProjectFilter(null, null);
+      } else if (item.kind === "project") {
+        store.setActiveProjectFilter(item.label, item.path ?? null);
+      } else {
+        store.setActiveBucketFilter(item.id);
+      }
+      onClose();
+      return;
+    }
+
+    if (!target) return;
     const count = targets.length;
 
     // Agent-run picks an agent, then advances to the message step (not a fire).
@@ -585,6 +649,7 @@ function ActionSubmenu({
     mode === "agent_run" ? "Start agent run — pick an agent..." :
     mode === "bucket" ? "Label session — type to filter or create..." :
     mode === "model" ? "Change model & effort..." :
+    mode === "view" ? "Switch view — filter by label or project..." :
     "Select...";
 
   const itemClass = (i: number) =>
@@ -719,10 +784,20 @@ function ActionSubmenu({
                 // Square swatch: manual buckets read differently from the round
                 // auto-derived label/project dots.
                 <span className={`w-3 h-3 rounded-[3px] flex-shrink-0 ${item.dot}`} />
+              ) : mode === "view" && item.dot ? (
+                // Same shape convention as the chip row: square = manual label,
+                // round = auto-derived project.
+                <span className={`w-3 h-3 flex-shrink-0 ${item.kind === "project" ? "rounded-full" : "rounded-[3px]"} ${item.dot}`} />
               ) : Icon ? (
                 <Icon className={`w-4 h-4 flex-shrink-0 ${item.color || ""}`} />
               ) : null}
               <span className="flex-1 text-left">{item.label}</span>
+              {mode === "view" && item.kind === "project" && (
+                <span className="text-[10px] text-sol-text-dim/60 flex-shrink-0">project</span>
+              )}
+              {typeof item.count === "number" && (
+                <span className="text-[10px] tabular-nums text-sol-text-dim/70 flex-shrink-0">{item.count}</span>
+              )}
               {item.active && <Check className="w-4 h-4 text-sol-cyan flex-shrink-0" />}
               {rowBadges[i] && <KeyCap size="xs">{rowBadges[i]}</KeyCap>}
               {item.type === "agent" && (
@@ -1292,11 +1367,14 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
   const groupClass = "px-1.5 [&_[cmdk-group-heading]]:px-2.5 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-widest [&_[cmdk-group-heading]]:text-sol-text-dim/70";
   const itemClass = "flex items-center gap-3 px-2.5 py-2 mx-1 rounded-lg text-sm text-sol-text-muted cursor-pointer transition-colors data-[selected=true]:bg-sol-cyan/10 data-[selected=true]:text-sol-text";
 
-  // Action submenu mode
-  if (actionMode && hasTargets) {
+  // Action submenu mode. "view" is global (switches the session-panel filter),
+  // so it needs no target entity — and shows no entity header. The `open` check
+  // matters for target-less view mode: actionMode survives closePalette (it
+  // only resets on the next open), so without it the overlay would stick.
+  if (open && actionMode && (hasTargets || actionMode === "view")) {
     const paletteContent = (
       <div className="w-[580px] rounded-xl border border-sol-border/80 bg-sol-bg shadow-2xl shadow-black/40 overflow-hidden flex flex-col animate-in fade-in-0 zoom-in-95 slide-in-from-top-2 duration-150">
-        {contextLabel && (
+        {contextLabel && actionMode !== "view" && (
           <div className="px-4 pt-3 pb-0">
             <div className="text-xs font-mono text-sol-text-dim truncate">{contextLabel}</div>
           </div>
@@ -1304,7 +1382,7 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
         <ActionSubmenu
           mode={actionMode}
           targets={targets}
-          targetType={targetType!}
+          targetType={targetType ?? "session"}
           onClose={closePalette}
           onBack={() => setActionMode(null)}
           enteredViaRoot={enteredViaRoot}
@@ -1386,6 +1464,24 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
                 </CommandPrimitive.Item>
               );
             })}
+          </CommandPrimitive.Group>
+        )}
+
+        {/* Global view switcher — drills into the label/project submenu. Not
+            target-bound, so it's always offered (main app only: the standalone
+            Electron palette window has no session panel to filter). */}
+        {!standalone && (
+          <CommandPrimitive.Group heading="View" className={groupClass}>
+            <CommandPrimitive.Item
+              key="view-switch"
+              value="switch view filter label project sessions"
+              onSelect={() => { setEnteredViaRoot(true); setActionMode("view"); }}
+              className={itemClass}
+            >
+              <Filter className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
+              <span className="truncate flex-1">Switch view (label / project)...</span>
+              <MenuKeyCaps action="view.switch" />
+            </CommandPrimitive.Item>
           </CommandPrimitive.Group>
         )}
 

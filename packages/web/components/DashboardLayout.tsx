@@ -29,6 +29,7 @@ import { SyncStatusChip } from "./SyncStatusChip";
 import { TmuxMissingBanner } from "./TmuxMissingBanner";
 import { FindBar } from "./FindBar";
 import { KeyboardShortcutsPanel } from "./KeyboardShortcutsHelp";
+import { SettingsModal } from "./settings/SettingsModal";
 import { NewSessionModal } from "./ConversationList";
 import { useInboxStore, useTrackedStore, categorizeSessions, sessionsWithPendingSend, isSessionHidden } from "../store/inboxStore";
 import { useShortcutAction, useShortcutContext, useGlobalShortcutActions, formatShortcutLabel } from "../shortcuts";
@@ -254,7 +255,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
       }
       if (store.showMySessions) store.setShowMySessions(false);
     } else {
-      useInboxStore.setState({ pendingNavigateId: id, showMySessions: false });
+      useInboxStore.getState().requestNavigate(id, { showMySessions: false });
     }
   }, []);
 
@@ -781,6 +782,10 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
         </div>
         <KeyboardShortcutsPanel />
       </div>
+
+      <ErrorBoundary name="SettingsModal" level="panel">
+        <SettingsModal />
+      </ErrorBoundary>
 
       {/* Mobile sidebar overlay */}
       {isMobileSidebarOpen && (
