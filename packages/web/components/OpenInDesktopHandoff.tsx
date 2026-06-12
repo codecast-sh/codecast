@@ -42,9 +42,13 @@ export function OpenInDesktopHandoff() {
   const [visible, setVisible] = useState(false);
   const attemptedRef = useRef(false);
 
-  const openInDesktop = () => {
+  // `auto` distinguishes the page redirecting itself on load from the user
+  // clicking the "Reopen desktop app" button — the desktop only trusts the
+  // latter unconditionally (see shouldApplyAutoDeepLink).
+  const openInDesktop = (opts?: { auto?: boolean }) => {
     window.location.href = buildDesktopDeepLink(
       window.location.pathname + window.location.search,
+      opts,
     );
   };
 
@@ -79,7 +83,7 @@ export function OpenInDesktopHandoff() {
       if (attemptedRef.current) return true;
       if (!shouldAttemptHandoff(buildCtx())) return false;
       attemptedRef.current = true;
-      openInDesktop();
+      openInDesktop({ auto: true });
       setVisible(true);
       return true;
     };
@@ -149,7 +153,7 @@ export function OpenInDesktopHandoff() {
             Open in browser
           </button>
           <button
-            onClick={openInDesktop}
+            onClick={() => openInDesktop()}
             className="w-full rounded-md border border-sol-border px-3 py-2 text-xs text-sol-text-dim transition-colors hover:border-sol-cyan/40 hover:text-sol-text"
           >
             Didn’t open? Reopen desktop app

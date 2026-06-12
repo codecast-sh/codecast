@@ -62,6 +62,9 @@ const DEFAULT_SHORTCUTS = {
 
 let mainWindow = null;
 let paletteWindow = null;
+// Whether Codecast's own window was frontmost when the palette was summoned.
+// Decides where Enter's fire-and-forget hand-back lands (see compose-submit).
+let paletteSummonedOverSelf = false;
 let tray = null;
 let deepLinkUrl = null;
 let currentBaseUrl = BASE_URL;
@@ -254,8 +257,8 @@ function createWindow() {
 
 function createPaletteWindow() {
   const { width: screenWidth, height: screenHeight } = screen.getPrimaryDisplay().workAreaSize;
-  const winWidth = 620;
-  const winHeight = 520;
+  const winWidth = 740;
+  const winHeight = 580;
 
   paletteWindow = new BrowserWindow({
     width: winWidth,
@@ -319,6 +322,11 @@ function togglePalette() {
 
 function positionPaletteWindow() {
   if (!paletteWindow) return;
+  // Capture BEFORE the palette takes focus: was Codecast's own window the one
+  // being summoned over? Enter's fire-and-forget hand-back (compose-submit)
+  // must step back into the main window in that case, not app.hide() past it
+  // to whatever app sits behind.
+  paletteSummonedOverSelf = !!(mainWindow && !mainWindow.isDestroyed() && mainWindow.isFocused());
   // Reposition to center of current display
   const cursor = screen.getCursorScreenPoint();
   const display = screen.getDisplayNearestPoint(cursor);
@@ -615,8 +623,15 @@ ipcMain.on("compose-submit", (_e, data) => {
     mainWindow.webContents.executeJavaScript(
       `window.dispatchEvent(new CustomEvent('codecast-navigate', { detail: ${JSON.stringify("/conversation/" + data.conversationId)} }))`
     );
-  } else if (!data?.navigate && process.platform === "darwin") {
-    app.hide();
+  } else if (!data?.navigate) {
+    if (paletteSummonedOverSelf && mainWindow && !mainWindow.isDestroyed()) {
+      // Summoned while Codecast was frontmost — "stepping back out" means
+      // returning to the main window, not hiding the whole app.
+      mainWindow.show();
+      mainWindow.focus();
+    } else if (process.platform === "darwin") {
+      app.hide();
+    }
   }
 });
 

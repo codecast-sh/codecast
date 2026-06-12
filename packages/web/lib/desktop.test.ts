@@ -4,6 +4,8 @@ import {
   parseDesktopDeepLinkPath,
   isHandoffEligiblePath,
   shouldAttemptHandoff,
+  extractDeepLinkIntent,
+  shouldApplyAutoDeepLink,
   type HandoffContext,
 } from "./desktop";
 
@@ -134,5 +136,35 @@ describe("shouldAttemptHandoff", () => {
 
   test("skips oauth callbacks carrying code + state", () => {
     expect(shouldAttemptHandoff({ ...PASSING, path: "/", search: "?code=abc&state=xyz" })).toBe(false);
+  });
+});
+
+// Auto-handoff deep links carry a marker so the DESKTOP can apply policy: a
+// machine-initiated handoff may not move the view while the user is actively
+// working in the app (agent-driven Chrome tabs satisfy every browser-side
+// gate — the "desktop randomly jumps to whatever the agent opened" bug).
+describe("auto-handoff deep-link intent", () => {
+  test("manual links carry no marker and parse as not-auto", () => {
+    const url = buildDesktopDeepLink("/conversation/x");
+    expect(url).toBe("codecast://open/conversation/x");
+    expect(extractDeepLinkIntent("/conversation/x")).toEqual({ path: "/conversation/x", auto: false });
+  });
+
+  test("auto links round-trip the marker and strip it from the path", () => {
+    const url = buildDesktopDeepLink("/conversation/x", { auto: true });
+    const parsed = parseDesktopDeepLinkPath(url)!;
+    expect(extractDeepLinkIntent(parsed)).toEqual({ path: "/conversation/x", auto: true });
+  });
+
+  test("the marker composes with existing query params and preserves them", () => {
+    const url = buildDesktopDeepLink("/conversation/x?m=5", { auto: true });
+    const parsed = parseDesktopDeepLinkPath(url)!;
+    expect(extractDeepLinkIntent(parsed)).toEqual({ path: "/conversation/x?m=5", auto: true });
+  });
+
+  test("auto navigation applies only after the desktop has been quiet", () => {
+    const now = 1_000_000;
+    expect(shouldApplyAutoDeepLink(now, now - 5_000)).toBe(false);  // user mid-work
+    expect(shouldApplyAutoDeepLink(now, now - 60_000)).toBe(true);  // idle desktop
   });
 });

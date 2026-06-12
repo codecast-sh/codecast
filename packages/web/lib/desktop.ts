@@ -60,9 +60,53 @@ const DEEP_LINK_HOST = "open";
 // The real route is nested under a fixed `open` host so the path survives a
 // round trip: a bare `codecast://conversation/x` parses "conversation" as the
 // URL host and drops it, landing the app on the wrong page.
-export function buildDesktopDeepLink(pathWithSearch: string): string {
+//
+// `auto: true` marks a machine-initiated handoff (the browser page redirecting
+// itself on load) as opposed to the user clicking an "Open in desktop"
+// affordance. The desktop treats auto arrivals with suspicion — see
+// shouldApplyAutoDeepLink — because nothing distinguishes a user-clicked link
+// from an automation-driven tab on the sending side.
+export const AUTO_HANDOFF_PARAM = "cc_handoff";
+
+export function buildDesktopDeepLink(pathWithSearch: string, opts?: { auto?: boolean }): string {
   const p = pathWithSearch.startsWith("/") ? pathWithSearch : `/${pathWithSearch}`;
-  return `codecast://${DEEP_LINK_HOST}${p}`;
+  if (!opts?.auto) return `codecast://${DEEP_LINK_HOST}${p}`;
+  const sep = p.includes("?") ? "&" : "?";
+  return `codecast://${DEEP_LINK_HOST}${p}${sep}${AUTO_HANDOFF_PARAM}=auto`;
+}
+
+// Split an incoming deep-link path into the navigable path and whether it was
+// an auto handoff (stripping the marker so it never reaches the router).
+export function extractDeepLinkIntent(pathWithSearch: string): { path: string; auto: boolean } {
+  const qIdx = pathWithSearch.indexOf("?");
+  if (qIdx === -1) return { path: pathWithSearch, auto: false };
+  const sp = new URLSearchParams(pathWithSearch.slice(qIdx + 1));
+  const auto = sp.get(AUTO_HANDOFF_PARAM) === "auto";
+  sp.delete(AUTO_HANDOFF_PARAM);
+  const rest = sp.toString();
+  return { path: pathWithSearch.slice(0, qIdx) + (rest ? `?${rest}` : ""), auto };
+}
+
+// --- Desktop user-activity tracker -----------------------------------------
+// An auto handoff may move the desktop's view only when the user is NOT in the
+// middle of using it: a background tab (often automation — agents drive Chrome
+// with the user's own profile) firing a handoff while the user types here must
+// not yank the view. Installed once by DesktopProvider.
+let lastDesktopInputAt = 0;
+export function installDesktopInputTracker(): void {
+  if (typeof window === "undefined") return;
+  const note = () => { lastDesktopInputAt = Date.now(); };
+  window.addEventListener("pointerdown", note, { capture: true, passive: true });
+  window.addEventListener("keydown", note, { capture: true, passive: true });
+}
+
+const AUTO_DEEPLINK_QUIET_MS = 30_000;
+
+// Pure policy, unit-testable: a manual link always applies; an auto handoff
+// applies only when the desktop has been quiet (no local input) long enough
+// that moving the view cannot interrupt anything.
+export function shouldApplyAutoDeepLink(now: number = Date.now(), lastInputAt: number = lastDesktopInputAt): boolean {
+  return now - lastInputAt > AUTO_DEEPLINK_QUIET_MS;
 }
 
 // Inverse of buildDesktopDeepLink: turn an incoming codecast:// URL into a
