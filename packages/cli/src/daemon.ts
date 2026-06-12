@@ -7269,6 +7269,115 @@ export async function driveModelPicker(
   }
 }
 
+// Post-submit verification: closed loop until the pasted message provably
+// submitted. Extracted from injectViaTmuxInner with injected IO so the
+// boot-race state machine is unit-testable (daemon.inject-submit-verify.test.ts).
+//
+// The key case is a freshly spawned agent: Claude Code renders its shell
+// (banner + input box) within ~1s of spawn but doesn't consume stdin until
+// several seconds later, so the paste sits pty-buffered with the pane FROZEN
+// — and when the buffer finally drains, any Enter queued alongside the text
+// is coalesced into the paste burst (rendered as a newline, never a submit).
+// Only a discrete Enter sent AFTER the drain submits. The old fixed 5×400ms
+// loop misread the frozen pane ("no prompt, no stuck text → processing") and
+// exited on its first iteration; the text then surfaced after boot with no
+// Enter left to submit it, and the message sat in the composer forever
+// (jx7ev2w: three kill+restarts in a row died this way).
+export type TmuxSubmitVerifyIO = {
+  capture: () => Promise<string>;
+  sendEnter: () => Promise<void>;
+  rePaste: () => Promise<void>;
+  sleep: (ms: number) => Promise<void>;
+  log: (msg: string) => void;
+};
+
+export async function verifyTmuxSubmitAfterPaste(
+  io: TmuxSubmitVerifyIO,
+  opts: { prePaste: string; pasteConfirmed: boolean; contentPrefix: string; deadlineMs?: number },
+): Promise<{ outcome: "submitted" | "timeout" | "exited"; rePasted: boolean }> {
+  const TICK = 400;
+  const deadlineMs = opts.deadlineMs ?? 15_000;
+  const normalizedPrefix = opts.contentPrefix.replace(/\s+/g, " ").trim();
+  const prefixWasVisibleBefore =
+    !!normalizedPrefix && opts.prePaste.replace(/\s+/g, " ").includes(normalizedPrefix);
+  let rePasted = false;
+  let pasteSeen = false; // we watched our text sit in the input box
+  let idleEnters = 0;
+  let liveNoTextTicks = 0;
+  for (let elapsed = 0; elapsed < deadlineMs; elapsed += TICK) {
+    await io.sleep(TICK);
+    let pane: string;
+    try {
+      pane = await io.capture();
+    } catch {
+      return { outcome: "timeout", rePasted };
+    }
+    const lastLines = pane.split("\n").slice(-15).join("\n");
+    const hasPrompt = /[❯›]/.test(lastLines);
+    const hasActivity = /⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏|●|thinking|Bash|Read|Edit|Write|Glob|Grep/.test(lastLines);
+
+    if (/-(?:ba)?sh:.*(?:No such file|command not found)/.test(lastLines) ||
+        /Resume this session with:/i.test(pane)) {
+      return { outcome: "exited", rePasted };
+    }
+
+    if (hasActivity) return { outcome: "submitted", rePasted };
+
+    // Frozen pane = the agent hasn't consumed the pty buffer yet (cold boot).
+    // No evidence either way — keep waiting. Critically, do NOT re-paste or
+    // conclude "processing": both misread a TUI that simply hasn't woken up.
+    if (pane === opts.prePaste) continue;
+
+    const inputStuck = tmuxPromptStillHasInput(pane, opts.contentPrefix);
+    if (inputStuck) {
+      // The TUI rendered our text but it's still in the box — earlier Enters
+      // were coalesced into the paste burst or dropped during boot. The TUI
+      // is provably consuming input now, so a discrete Enter registers.
+      pasteSeen = true;
+      io.log("message still in input box, pressing Enter");
+      await io.sendEnter();
+      continue;
+    }
+
+    if (!hasPrompt) return { outcome: "submitted", rePasted }; // no prompt + text not in input = processing
+
+    if (pasteSeen || (!prefixWasVisibleBefore && !!normalizedPrefix &&
+        pane.replace(/\s+/g, " ").includes(normalizedPrefix))) {
+      // Our text left the input box (we watched it go after an Enter, or it
+      // now shows above the box as transcript) — submitted.
+      return { outcome: "submitted", rePasted };
+    }
+
+    if (opts.pasteConfirmed) {
+      // Pane changed right after the paste but the prefix never matched
+      // (unrecognized prompt glyph, or TUI wrapping broke the 40-char match).
+      // Enter is safe — the box holds nothing but our message — but bounded
+      // so an idle false-positive can't spin until the deadline.
+      if (++idleEnters > 5) return { outcome: "timeout", rePasted };
+      io.log("paste confirmed but not visible at prompt, pressing Enter");
+      await io.sendEnter();
+      continue;
+    }
+
+    // Live pane, empty prompt, our text nowhere: the paste was likely dropped.
+    // Require a few consecutive live observations first — the box can render a
+    // beat before the pty buffer drains, and a premature re-paste doubles the
+    // message once it does.
+    liveNoTextTicks++;
+    if (!rePasted && liveNoTextTicks >= 3) {
+      const promptLine = lastLines.split("\n").find((l) => /[❯›]/.test(l));
+      const m = promptLine?.match(/[❯›]/);
+      const afterPrompt = promptLine && m ? promptLine.slice(m.index! + 1).trim() : "";
+      if (afterPrompt) return { outcome: "timeout", rePasted }; // someone else's text at the prompt — don't stomp it
+      io.log("paste likely dropped (live empty prompt), re-pasting once");
+      await io.rePaste();
+      rePasted = true;
+      liveNoTextTicks = 0;
+    }
+  }
+  return { outcome: "timeout", rePasted };
+}
+
 export async function injectViaTmux(target: string, content: string): Promise<void> {
   return withTmuxLock(target, () => injectViaTmuxInner(target, content));
 }
@@ -7387,71 +7496,38 @@ async function injectViaTmuxInner(target: string, content: string): Promise<void
   await new Promise(resolve => setTimeout(resolve, enterDelay));
   await tmuxExec(["send-keys", "-t", target, "Enter"]);
 
-  // Post-submit: verify the agent started processing, and re-press Enter if it didn't. The
-  // ultimate backstop for a lost message is the Convex healer (it revives any never-acked row,
-  // including a stranded "pending", once the session is idle), but that takes minutes — this loop
-  // recovers a dropped Enter in seconds, which is the common case ("text landed, Enter never
-  // came through"). 5×400ms (2s) gives a lost Enter several corrective presses.
-  let rePasted = false;
-  for (let retry = 0; retry < 5; retry++) {
-    await new Promise(resolve => setTimeout(resolve, 400));
-    try {
-      const { stdout: postCheck } = await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${captureLines}`]);
-      const lastLines = postCheck.split("\n").slice(-15).join("\n");
-      const hasPrompt = /[❯›]/.test(lastLines);
-      const hasActivity = /⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏|●|thinking|Bash|Read|Edit|Write|Glob|Grep/.test(lastLines);
-
-      if (/-(?:ba)?sh:.*(?:No such file|command not found)/.test(lastLines) ||
-          /Resume this session with:/i.test(postCheck)) {
-        throw new Error("SESSION_EXITED: message was pasted into a bare shell");
-      }
-
-      if (hasActivity) {
-        break;
-      }
-
-      // Check if text is still sitting in the input (look at full capture, not just last lines)
-      const inputStuck = tmuxPromptStillHasInput(postCheck, contentPrefix);
-
-      if (!hasPrompt && !inputStuck) {
-        // No prompt visible AND text not in input = agent is processing
-        break;
-      }
-
-      // Re-press Enter if either the input-detection heuristic still sees our text in the box,
-      // OR we positively confirmed the paste landed yet see no sign the agent picked it up. The
-      // second clause is the safety net for when tmuxPromptStillHasInput misses (a prompt glyph it
-      // doesn't recognize, or TUI line-wrapping breaking the 40-char prefix match) while our text
-      // is provably still sitting there unsubmitted — the exact "text landed but Enter never came
-      // through" failure. Re-pressing Enter is safe: the only text in the box is the message we
-      // want to submit, so it either submits that text or no-ops on an already-cleared prompt.
-      if (inputStuck || (pasteConfirmed && hasPrompt)) {
-        log(`Enter may not have submitted (retry ${retry + 1}, stuck=${inputStuck}), sending Enter again to ${target}`);
+  // Post-submit: verify the agent started processing — see
+  // verifyTmuxSubmitAfterPaste for the full state machine. The ultimate
+  // backstop for a lost message is the Convex healer (it revives any
+  // never-acked row once the session is idle), but that takes minutes — this
+  // loop recovers the common cases (dropped Enter, cold-boot pty buffering)
+  // in seconds.
+  const verify = await verifyTmuxSubmitAfterPaste(
+    {
+      capture: async () =>
+        (await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${captureLines}`])).stdout,
+      sendEnter: async () => {
         await tmuxExec(["send-keys", "-t", target, "Enter"]);
-        continue;
-      }
-
-      // Empty prompt, no activity -- paste may have been silently dropped
-      if (hasPrompt && !pasteConfirmed && !rePasted && retry >= 2) {
-        const promptLine = lastLines.split("\n").find(l => /[❯›]/.test(l));
-        const afterPrompt = promptLine ? (promptLine.match(/[❯›]/) ? promptLine.slice(promptLine.match(/[❯›]/)!.index! + 1).trim() : "") : "";
-        if (!afterPrompt) {
-          log(`Paste likely dropped (empty prompt, no activity), re-pasting once to ${target}`);
-          await tmuxExec(["send-keys", "-t", target, "C-u"]);
-          await new Promise(resolve => setTimeout(resolve, 200));
-          await doPaste();
-          await new Promise(resolve => setTimeout(resolve, enterDelay));
-          await tmuxExec(["send-keys", "-t", target, "Enter"]);
-          rePasted = true;
-          continue;
-        }
-      }
-
-      break;
-    } catch { break; }
+      },
+      rePaste: async () => {
+        await tmuxExec(["send-keys", "-t", target, "C-u"]);
+        await new Promise(resolve => setTimeout(resolve, 200));
+        await doPaste();
+        await new Promise(resolve => setTimeout(resolve, enterDelay));
+        await tmuxExec(["send-keys", "-t", target, "Enter"]);
+      },
+      sleep: (ms) => new Promise(resolve => setTimeout(resolve, ms)),
+      log: (msg) => log(`${msg} (${target})`),
+    },
+    { prePaste, pasteConfirmed, contentPrefix },
+  );
+  if (verify.outcome === "exited") {
+    // Propagates to deliverMessage's transient-failure backoff (the old
+    // in-loop throw was swallowed by its own catch and never reached anyone).
+    throw new Error("SESSION_EXITED: message was pasted into a bare shell");
   }
 
-  log(`Injected via tmux to ${target}${pasteConfirmed ? "" : " (unconfirmed)"}${rePasted ? " (re-pasted)" : ""}`)
+  log(`Injected via tmux to ${target}${pasteConfirmed ? "" : " (unconfirmed)"}${verify.rePasted ? " (re-pasted)" : ""}${verify.outcome === "timeout" ? " (submit unverified)" : ""}`)
 }
 
 function buildAppleScript(
