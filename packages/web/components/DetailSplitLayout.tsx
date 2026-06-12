@@ -10,18 +10,22 @@ export function DetailSplitLayout({
   children,
 }: {
   list: ReactNode;
-  children: ReactNode;
+  children?: ReactNode;
 }) {
   const listPanelRef = usePanelRef();
   const [isCollapsed, setIsCollapsed] = useState(false);
+  // No detail (e.g. /tasks with nothing selected) → the list fills the width.
+  // The list Panel is ALWAYS rendered in the same position, so toggling the
+  // detail on/off never re-mounts the list — selection feels instant.
+  const hasDetail = children != null && children !== false;
 
   return (
     <Group orientation="horizontal" className="h-full" defaultLayout={{ "detail-list": 30, "detail-content": 70 }}>
       <Panel
         id="detail-list"
         panelRef={listPanelRef}
-        minSize={200}
-        maxSize="80%"
+        minSize={hasDetail ? 200 : 0}
+        maxSize={hasDetail ? "80%" : "100%"}
         collapsible
         collapsedSize={0}
         onResize={(size) => setIsCollapsed(size.asPercentage === 0)}
@@ -29,20 +33,24 @@ export function DetailSplitLayout({
       >
         <div className="h-full cq-container">{list}</div>
       </Panel>
-      <Separator className={separatorClass}>
-        {isCollapsed && (
-          <button
-            onClick={(e) => { e.stopPropagation(); listPanelRef.current?.expand(); }}
-            className="absolute top-3 -right-px z-20 p-1.5 bg-sol-bg-alt border border-sol-border/40 border-l-0 rounded-r-md text-sol-text-dim hover:text-sol-cyan transition-colors shadow-sm"
-            title="Show list"
-          >
-            <PanelLeftOpen className="w-3.5 h-3.5" />
-          </button>
-        )}
-      </Separator>
-      <Panel id="detail-content" minSize={100} className="overflow-hidden">
-        {children}
-      </Panel>
+      {hasDetail && (
+        <Separator className={separatorClass}>
+          {isCollapsed && (
+            <button
+              onClick={(e) => { e.stopPropagation(); listPanelRef.current?.expand(); }}
+              className="absolute top-3 -right-px z-20 p-1.5 bg-sol-bg-alt border border-sol-border/40 border-l-0 rounded-r-md text-sol-text-dim hover:text-sol-cyan transition-colors shadow-sm"
+              title="Show list"
+            >
+              <PanelLeftOpen className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </Separator>
+      )}
+      {hasDetail && (
+        <Panel id="detail-content" minSize={100} className="overflow-hidden">
+          {children}
+        </Panel>
+      )}
     </Group>
   );
 }

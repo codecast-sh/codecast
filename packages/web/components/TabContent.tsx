@@ -16,7 +16,6 @@ export function useTabContext() {
 // -- Route map: path pattern → lazy component --
 
 const Tasks = lazy(() => import("@/app/tasks/page"));
-const TaskDetail = lazy(() => import("@/app/tasks/[id]/page"));
 const Docs = lazy(() => import("@/app/docs/page"));
 const DocDetail = lazy(() => import("@/app/docs/[id]/page"));
 const Plans = lazy(() => import("@/app/plans/page"));
@@ -50,7 +49,9 @@ const ROUTES: RouteEntry[] = [
   // Parameterized routes first (more specific)
   { pattern: /^\/conversation\/([^/]+)\/diff$/, paramNames: ["id"], component: ConversationDiff },
   { pattern: /^\/conversation\/([^/]+)$/, paramNames: ["id"], component: Conversation },
-  { pattern: /^\/tasks\/([^/]+)$/, paramNames: ["id"], component: TaskDetail },
+  // Same component as the list: /tasks and /tasks/<id> share one <Tasks> so
+  // selecting a task reconciles (instant) instead of swapping components (re-mount).
+  { pattern: /^\/tasks\/([^/]+)$/, paramNames: ["id"], component: Tasks },
   { pattern: /^\/docs\/([^/]+)$/, paramNames: ["id"], component: DocDetail },
   { pattern: /^\/plans\/([^/]+)$/, paramNames: ["id"], component: PlanDetail },
   { pattern: /^\/projects\/([^/]+)$/, paramNames: ["id"], component: ProjectDetail },
