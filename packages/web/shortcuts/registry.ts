@@ -6,7 +6,7 @@ export type ShortcutAction =
   | 'session.pin'
   | 'session.moveToBucket'
   | 'session.stash'
-  | 'session.dismiss'
+  | 'session.kill'
   | 'session.deferAdvance'
   | 'session.create'
   | 'session.createIsolated'
@@ -114,7 +114,7 @@ export const SHORTCUTS: ShortcutDef[] = [
   // the editor whenever there is text to delete. Stash sets the session aside
   // with the agent still running; dismiss retires it AND kills the agent.
   { key: 'ctrl+backspace', action: 'session.stash', skipInputCheck: 'whenEmpty', description: 'Stash session (keep agent running)' },
-  { key: 'ctrl+shift+backspace', action: 'session.dismiss', skipInputCheck: 'whenEmpty', description: 'Dismiss session (kill agent)' },
+  { key: 'ctrl+shift+backspace', action: 'session.kill', skipInputCheck: 'whenEmpty', description: 'Kill session' },
   { key: 'shift+backspace', action: 'session.deferAdvance', skipInputCheck: 'whenEmpty', description: 'Defer and advance' },
   { key: 'ctrl+n', action: 'session.create', skipInputCheck: true, description: 'New session' },
   { key: 'ctrl+shift+n', action: 'session.createIsolated', skipInputCheck: true, description: 'New isolated session' },

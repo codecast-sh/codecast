@@ -18,7 +18,7 @@ export function animateSessionEnter(id: string) {
   setTimeout(() => tryApply(0), delays[0]);
 }
 
-export type HideSessionMode = "stash" | "dismiss";
+export type HideSessionMode = "stash" | "kill";
 
 /** Animate a session card sliding out, then call undoableHideSession. */
 export function animatedHideSession(id: string, mode: HideSessionMode) {
@@ -71,17 +71,17 @@ function snapshotSession(state: StoreState, id: string) {
 }
 
 // Hide a session with undo. "stash" sets the session aside (agent keeps
-// running); "dismiss" retires it (the server kills the agent on the dismiss
+// running); "kill" retires it (the server kills the agent on the hide
 // transition). Undo restores the snapshot and clears BOTH hide flags — the
 // kill itself isn't undoable (the session stays resumable), same as before.
 export function undoableHideSession(id: string, mode: HideSessionMode) {
   const state = useInboxStore.getState();
   const session = state.sessions[id];
   const label = session?.title || "session";
-  const verb = mode === "dismiss" ? "Dismissed" : "Stashed";
+  const verb = mode === "kill" ? "Killed" : "Stashed";
   const snap = snapshotSession(state, id);
 
-  if (mode === "dismiss") useInboxStore.getState().dismissSession(id);
+  if (mode === "kill") useInboxStore.getState().killSession(id);
   else useInboxStore.getState().stashSession(id);
 
   pushUndo({
@@ -125,7 +125,7 @@ export function undoableHideSession(id: string, mode: HideSessionMode) {
       }).catch(() => {});
     },
     redo: () => {
-      if (mode === "dismiss") useInboxStore.getState().dismissSession(id);
+      if (mode === "kill") useInboxStore.getState().killSession(id);
       else useInboxStore.getState().stashSession(id);
     },
   });

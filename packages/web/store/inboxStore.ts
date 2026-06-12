@@ -4,6 +4,7 @@ import { mutativeMiddleware, action, asyncAction, sync } from "./mutativeMiddlew
 import { applySyncTable, applySyncRecord, type PendingEntry } from "./syncProtocol";
 import { soundDismiss, soundKill } from "../lib/sounds";
 import { loadCache, writePatchesToIDB, setHydrating, loadConversationMessages, writeConversationMessages, enqueueDispatch, removeDispatch, loadOutbox, PERSISTENCE_AVAILABLE } from "./idbCache";
+import { HYDRATION_CRITICAL_KEYS, HYDRATION_DEFERRED_KEYS, hydrationMergeStrategy } from "./clientSyncRegistry";
 // Single source of truth for the agent-status contract, shared with the Convex
 // backend and the CLI daemon. See packages/shared/contracts/agentStatus.ts.
 import { type AgentStatus, ACTIVE_AGENT_STATUSES } from "@codecast/shared/contracts";
@@ -25,7 +26,7 @@ export function isConvexId(id: string): boolean {
 // Canonical entity-derivation helpers live in lib/liveEntities. Re-exported here
 // so existing call sites that import from the store keep working.
 export { resolveAssigneeInfo, resolveSessionAuthor, computePlanProgress, mergeLiveTasks } from "../lib/liveEntities";
-import { deriveDocDisplayTitle } from "../lib/liveEntities";
+import { deriveDocDisplayTitle, isForeignSession } from "../lib/liveEntities";
 import type { PendingComment } from "../lib/quoteFormat";
 
 // Critical UI prefs mirrored to localStorage so they're available
@@ -171,6 +172,7 @@ export type InboxSession = {
   // Last-known model id (e.g. "claude-opus-4-8"); conversations can switch
   // models mid-stream. Shown as an inbox badge when ui.show_model_badge is on.
   model?: string | null;
+  effort?: string | null;
   message_count: number;
   idle_summary?: string;
   is_idle: boolean;
@@ -409,8 +411,22 @@ export type BucketAssignmentItem = {
 // conversation_id → bucket_id lookup, derived at read time from the assignment
 // rows (never stored — see the liveEntities rule on derived snapshots).
 export function convBucketMap(assignments: Record<string, BucketAssignmentItem>): Record<string, string | undefined> {
+  // A conversation can transiently carry two rows: the optimistic
+  // `bucketassign-` stub (immortal on disk — the cache never deletes without an
+  // exclude — so hydration unions it back each boot until live sync rekeys it)
+  // and the real server row. Real rows beat stubs, then newer beats older, so
+  // a stale stub can never shadow a later re-bucketing.
+  const winner: Record<string, BucketAssignmentItem> = {};
+  for (const a of Object.values(assignments)) {
+    const prev = winner[a.conversation_id];
+    if (prev) {
+      const realness = Number(isConvexId(a._id)) - Number(isConvexId(prev._id));
+      if (realness < 0 || (realness === 0 && (a.updated_at ?? 0) <= (prev.updated_at ?? 0))) continue;
+    }
+    winner[a.conversation_id] = a;
+  }
   const map: Record<string, string | undefined> = {};
-  for (const a of Object.values(assignments)) map[a.conversation_id] = a.bucket_id ?? undefined;
+  for (const a of Object.values(winner)) map[a.conversation_id] = a.bucket_id ?? undefined;
   return map;
 }
 
@@ -531,6 +547,10 @@ export type ClientDismissed = {
   cli_offline?: number;
   tmux_missing?: number;
   team_sharing_prompt?: number;
+  // Blocked-sessions banner X (timestamp snooze, cross-device).
+  blocked_sessions_banner?: number;
+  // "Set up account switching" promo inside that banner — permanent opt-out.
+  cc_accounts_promo?: boolean;
 };
 
 export type ClientTips = {
@@ -1250,8 +1270,10 @@ interface InboxStoreState {
 
   // -- Wrapped actions (middleware creates aliases from do_* -> *) --
   stashSession: (id: string) => void;
-  dismissSession: (id: string) => void;
+  killSession: (id: string) => void;
+  killSessions: (ids: string[]) => void;
   markSessionsDismissed: (ids: string[]) => void;
+  markBlockedAcknowledged: (ids: string[]) => void;
   applyDismissedReconcile: (entries: { _id: string; inbox_dismissed_at: number | null }[], final: boolean) => void;
   applyStashedReconcile: (entries: { _id: string; inbox_stashed_at: number | null }[], final: boolean) => void;
   restoreSession: (id: string) => void;
@@ -1329,6 +1351,16 @@ interface InboxStoreState {
   updateSessionProject: (id: string, projectPath: string) => void;
   patchSession: (id: string, fields: Partial<InboxSession>) => void;
   setConversationAgent: (id: string, agentType: string) => void;
+  // Local-only optimistic model/effort stamp (header picker / new-session
+  // picker). The durable value arrives via the server: rollup echo for
+  // in-place switches, reconfigure/create stamps for launches.
+  setConversationModel: (id: string, opts: { model?: string | null; effort?: string | null }) => void;
+  // In-flight set_model daemon command (ephemeral; not persisted). Set by
+  // whichever surface fired the switch (header badge, launch pill, palette);
+  // watched by the mounted conversation header, which reverts the optimistic
+  // stamp and toasts if the daemon refuses or never answers.
+  pendingModelCommand: { convId: string; commandId: string; revert: { model?: string | null; effort?: string | null }; startedAt: number } | null;
+  setPendingModelCommand: (cmd: { convId: string; commandId: string; revert: { model?: string | null; effort?: string | null }; startedAt: number } | null) => void;
   navigateToSession: (id: string) => void;
   touchMru: (id: string) => void;
   markKilling: (id: string) => void;
@@ -1771,7 +1803,11 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
   // opts, so without this projects synced as an authoritative snapshot — the one
   // remaining collection that still pruned the cache by absence.
   projects: { isDelta: true },
-  buckets: { isDelta: true },
+  // altKey supersede for optimistic create-stubs: the incoming server row with
+  // the same name rekeys the stub away (names are per-user and practically
+  // unique; a rare duplicate-name create just retires the stub onto the older
+  // row while the new server row arrives alongside).
+  buckets: { isDelta: true, altKey: "name" },
   // Optimistic first-assignments add a local stub row keyed `bucketassign-<convId>`;
   // altKey rekeys that stub onto the server's real (user, conversation) row when
   // it syncs — the same supersede machinery session create-stubs ride.
@@ -1945,6 +1981,15 @@ function recordCurrentConversationPointer(
 // final=false (SET only); the final whole-set call passes true (SET + CLEAR),
 // because CLEAR needs the complete set or a row on a later page would be
 // wrongly un-hidden.
+// How long a hide/un-hide field override keeps outranking the server's
+// authoritative hidden set. The override exists to protect an IN-FLIGHT local
+// change; its dispatch settles within seconds. Past this, a disagreement with
+// the reconcile crawl means the value was overturned elsewhere (another
+// device, or a server-side restore) — and since hidden rows leave the live
+// channel, no echo will ever arrive to clear the override. Without this
+// release the originating device pins the row hidden FOREVER (ct-36973).
+export const HIDDEN_OVERRIDE_SETTLE_MS = 5 * 60 * 1000;
+
 function applyHiddenReconcileInDraft(
   draft: any,
   field: "inbox_dismissed_at" | "inbox_stashed_at",
@@ -1953,9 +1998,18 @@ function applyHiddenReconcileInDraft(
 ) {
   const server = new Map<string, number | null>();
   for (const e of entries) server.set(e._id, e[field] ?? null);
-  const lockedLocal = (id: string) =>
-    !!draft.pending[`sessions:${id}:${field}`] ||
-    !!draft.pending[`conversations:${id}:${field}`];
+  // Locked = a pending field override is still inside its settle window.
+  // Stale overrides are released (deleted) so the authoritative set can land.
+  const lockedLocal = (id: string) => {
+    const keys = [`sessions:${id}:${field}`, `conversations:${id}:${field}`];
+    const entries = keys.map((k) => draft.pending[k]).filter(Boolean);
+    if (entries.length === 0) return false;
+    // An entry without a timestamp can't be dated — keep protecting it.
+    const newest = Math.max(...entries.map((e: any) => e.ts ?? Infinity));
+    if (Date.now() - newest < HIDDEN_OVERRIDE_SETTLE_MS) return true;
+    for (const k of keys) delete draft.pending[k];
+    return false;
+  };
 
   for (const [id, ts] of server) {
     if (!ts || lockedLocal(id)) continue;
@@ -1988,18 +2042,21 @@ function applyHiddenReconcileInDraft(
   }
 }
 
-// Shared body of stashSession/dismissSession: hide `id` (and its subagent
+// Shared body of stashSession/killSession: hide `id` (and its subagent
 // children) out of the active buckets, advancing the current selection past the
 // removed set. Stash writes inbox_stashed_at; dismiss writes inbox_dismissed_at
 // and clears any stash (the row MOVES to Dismissed — the buckets are exclusive).
-function hideSessionInDraft(draft: any, id: string, mode: "stash" | "dismiss") {
+function hideSessionInDraft(draft: any, id: string, mode: "stash" | "kill") {
   const now = Date.now();
-  const field = mode === "dismiss" ? "inbox_dismissed_at" : "inbox_stashed_at";
+  const field = mode === "kill" ? "inbox_dismissed_at" : "inbox_stashed_at";
   const sessionValues = Object.values(draft.sessions) as InboxSession[];
   const childIds = sessionValues
     .filter((s) => s.parent_conversation_id === id)
     .map((s) => s._id);
   const allIds = [id, ...childIds];
+  // The viewer. A session whose user_id isn't ours was injected into this cache
+  // by viewing/searching a TEAMMATE's session — we can't durably hide it.
+  const me = draft.currentUser?._id?.toString?.();
   let newSessionId = draft.currentSessionId;
   if (draft.currentSessionId && allIds.includes(draft.currentSessionId)) {
     const removedSet = new Set(allIds);
@@ -2016,7 +2073,18 @@ function hideSessionInDraft(draft: any, id: string, mode: "stash" | "dismiss") {
     // lost (it's clobbered wholesale by other windows sharing the IDB).
     // Hiding it honestly means deleting it — store + IDB (the auto-generated
     // exclude pending persists the row delete, as with kills).
-    if (!isConvexId(sid)) {
+    //
+    // A TEAMMATE'S session is the same situation: the server's applyPatches
+    // owner-gate (dispatch.ts) silently DROPS a hide patch on a conversation we
+    // don't own, so inbox_stashed_at/inbox_dismissed_at never persists, the
+    // 5-min optimistic lock lapses, and the reconcile clear pass resurrects it
+    // into the active inbox. Stash/kill on a foreign session can only mean
+    // "forget my injected copy" — it returns iff we reopen it. Ownership MUST
+    // resolve through isForeignSession: a thin injected row often carries no
+    // user_id at all, and only conversations[sid].is_own knows whose it is.
+    const ownerSess = draft.sessions[sid];
+    const isForeign = !!ownerSess && isForeignSession(ownerSess, draft.conversations[sid], me);
+    if (!isConvexId(sid) || isForeign) {
       delete draft.sessions[sid];
       delete draft.conversations[sid];
       delete draft.messages[sid];
@@ -2027,7 +2095,7 @@ function hideSessionInDraft(draft: any, id: string, mode: "stash" | "dismiss") {
     const wasPinned = sess?.is_pinned;
     if (sess) {
       sess[field] = now;
-      if (mode === "dismiss" && sess.inbox_stashed_at) sess.inbox_stashed_at = null;
+      if (mode === "kill" && sess.inbox_stashed_at) sess.inbox_stashed_at = null;
       if (wasPinned) {
         sess.is_pinned = false;
         sess.inbox_pinned_at = null;
@@ -2036,7 +2104,7 @@ function hideSessionInDraft(draft: any, id: string, mode: "stash" | "dismiss") {
     const conv = draft.conversations[sid];
     if (conv) {
       conv[field] = now;
-      if (mode === "dismiss" && conv.inbox_stashed_at) conv.inbox_stashed_at = null;
+      if (mode === "kill" && conv.inbox_stashed_at) conv.inbox_stashed_at = null;
       if (wasPinned) conv.inbox_pinned_at = null;
     }
   }
@@ -2236,12 +2304,25 @@ export const useInboxStore = create<InboxStoreState>(
     hideSessionInDraft(this, id, "stash");
   }),
 
-  // Dismiss = done with it. The server kills the agent on the dismiss data
-  // transition (dispatch.applyPatches), so this action only has to move the
-  // rows; every dismiss path gets the kill without remembering to ask for it.
-  dismissSession: action(function (this: Draft, id: string) {
+  // Kill = done with it. The server tears the agent down on the hide data
+  // transition (dispatch.applyPatches sees inbox_dismissed_at flip), so this
+  // action only has to move the rows; every kill path gets the teardown
+  // without remembering to ask for it. (The persisted field keeps its
+  // historical name inbox_dismissed_at; the UI calls the bucket "Killed".)
+  killSession: action(function (this: Draft, id: string) {
     soundKill();
-    hideSessionInDraft(this, id, "dismiss");
+    hideSessionInDraft(this, id, "kill");
+  }),
+
+  // Bulk kill ("Kill all" on the Stashed bucket): one action so the patches
+  // ride a single dispatch and the kill sound plays once, not N times. Scale
+  // is the user-curated stash list (tens) — each row NEEDS its own server
+  // patch anyway (the per-conversation hide transition is what enqueues the
+  // agent teardown), so the markSessionsDismissed storm concern doesn't apply.
+  killSessions: action(function (this: Draft, ids: string[]) {
+    if (ids.length === 0) return;
+    soundKill();
+    for (const id of ids) hideSessionInDraft(this, id, "kill");
   }),
 
   // Bulk-dismiss a precomputed set of sessions locally (instant, optimistic). A
@@ -2257,6 +2338,25 @@ export const useInboxStore = create<InboxStoreState>(
       if (sess && !sess.inbox_dismissed_at) sess.inbox_dismissed_at = now;
       if (this.conversations[id] && !(this.conversations[id] as any).inbox_dismissed_at) {
         (this.conversations[id] as any).inbox_dismissed_at = now;
+      }
+    }
+  }),
+
+  // Optimistic clear of the API-error banner flag — the blocked-sessions
+  // banner's per-row "never restart this" decision. Same shape as
+  // markSessionsDismissed: local sync() for the instant UI, the caller
+  // persists with ONE server mutation (accountSwitch.acknowledgeBlocked).
+  markBlockedAcknowledged: sync(function (this: Draft, ids: string[]) {
+    for (const id of ids) {
+      const sess = this.sessions[id];
+      if (sess) {
+        sess.pending_api_error = false;
+        sess.pending_api_error_kind = null;
+      }
+      const conv = this.conversations[id] as any;
+      if (conv) {
+        conv.pending_api_error = false;
+        conv.pending_api_error_kind = null;
       }
     }
   }),
@@ -3009,12 +3109,14 @@ export const useInboxStore = create<InboxStoreState>(
     this.clientState.show_dismissed = show;
   }),
 
+  // Both hidden buckets are CLOSED by default (unset/undefined = closed):
+  // open only while the flag is explicitly true.
   toggleShowDismissed: action(function (this: Draft) {
-    this.clientState.show_dismissed = this.clientState.show_dismissed === false;
+    this.clientState.show_dismissed = this.clientState.show_dismissed !== true;
   }),
 
   toggleShowStashed: action(function (this: Draft) {
-    this.clientState.show_stashed = this.clientState.show_stashed === false;
+    this.clientState.show_stashed = this.clientState.show_stashed !== true;
   }),
 
   toggleCollapsedSection: action(function (this: Draft, key: string) {
@@ -3102,6 +3204,17 @@ export const useInboxStore = create<InboxStoreState>(
       this.currentConversation.agentType = agentType;
     }
   }),
+
+  setConversationModel: sync(function (this: Draft, id: string, opts: { model?: string | null; effort?: string | null }) {
+    for (const row of [this.sessions[id], this.conversations[id]] as any[]) {
+      if (!row) continue;
+      if (opts.model !== undefined) row.model = opts.model ?? undefined;
+      if (opts.effort !== undefined) row.effort = opts.effort ?? undefined;
+    }
+  }),
+
+  pendingModelCommand: null,
+  setPendingModelCommand: (cmd: { convId: string; commandId: string; revert: { model?: string | null; effort?: string | null }; startedAt: number } | null) => set({ pendingModelCommand: cmd }),
 
   navigateToSession: action(function (this: Draft, id: string) {
     // Plain navigation. Forks are first-class conversations — clicking one
@@ -3614,9 +3727,29 @@ export const useInboxStore = create<InboxStoreState>(
   publishToDirectory: asyncAction(function (this: Draft, _opts: Record<string, any>) {}),
 
   // -- Manual session buckets --
-  // Create has no optimistic row (rare gesture; the synced row lands fast and
-  // callers await the returned _id to assign immediately after).
-  createBucket: asyncAction(function (this: Draft, _opts: { name: string; color?: string }) {}),
+  // Local-first create: a stub chip appears instantly (keyed by a non-Convex
+  // id, so the patch path skips it and the dispatch args carry the create);
+  // when the server row syncs back, the buckets altKey ("name") supersedes the
+  // stub — same machinery as bucketAssignments' stubs. Callers still await the
+  // returned REAL _id for follow-up assignment.
+  createBucket: asyncAction(function (this: Draft, opts: { name: string; color?: string }) {
+    const name = (opts?.name || "").trim();
+    if (!name) return;
+    const stubId = `bucketstub-${Math.random().toString(36).slice(2)}`;
+    const now = Date.now();
+    // Mirror the server's append-to-end stamp so the stub lands where the real
+    // row will (the server's own max+1024 wins after supersede).
+    const maxOrder = (Object.values(this.buckets) as BucketItem[])
+      .reduce((m, b) => Math.max(m, b.sort_order ?? 0), 0);
+    this.buckets[stubId] = {
+      _id: stubId,
+      name,
+      sort_order: maxOrder + 1024,
+      ...(opts.color ? { color: opts.color } : {}),
+      created_at: now,
+      updated_at: now,
+    };
+  }),
 
   // Rename / color / sort / archive ride the generic patch path (inbox_buckets
   // is in dispatch TABLE_CONFIG); fields are auto-protected until server echo.
@@ -3959,6 +4092,33 @@ export function unionHydrate<T extends Record<string, unknown>>(
   return { ...(idbVal ?? {}), ...(liveVal ?? {}) } as T;
 }
 
+// How one cached value re-enters the store over whatever live sync already
+// wrote, per the registry's merge strategy. "fill" keys (live-synced
+// singletons) only land while the slot is still null; everything else merges
+// by shape — objects union (cache as floor, live wins per key), arrays fill
+// only an empty slot, scalars replace.
+export function hydrateMergeValue(
+  key: string,
+  val: unknown,
+  cur: unknown,
+): { apply: boolean; value?: unknown } {
+  if (hydrationMergeStrategy(key) === "fill") {
+    return cur == null ? { apply: true, value: val } : { apply: false };
+  }
+  if (Array.isArray(val)) {
+    return (cur as unknown[] | undefined)?.length === 0
+      ? { apply: true, value: val }
+      : { apply: false };
+  }
+  if (typeof val === "object") {
+    return {
+      apply: true,
+      value: unionHydrate(val as Record<string, unknown>, cur as Record<string, unknown> | undefined),
+    };
+  }
+  return { apply: true, value: val };
+}
+
 // Drop persisted feedHasMore=false entries (in place) so they hydrate as
 // "unknown" instead of as a dead latch. False used to stick durably off one
 // bad page — the server could return an empty page mid-history (a window of
@@ -4056,26 +4216,10 @@ if (PERSISTENCE_AVAILABLE) {
             }
           }
           updates[key] = merged;
-        } else if (key === "collapsedSections" || key === "sidebarNavExpanded" || key === "_lastViewedAt" || key === "_seenUpToAt" || key === "_seenMessageCount") {
-          updates[key] = { ...val, ...cur };
-        } else if (key === "teamUnreadCount") {
-          if (state.teamUnreadCount == null) updates[key] = val;
-        } else if (key === "currentUser") {
-          // Singleton user record, not a collection — assign wholesale instead of
-          // running it through the per-id union below. Only fill from cache when
-          // live sync hasn't already set it (the palette window / cold start);
-          // never clobber a freshly-synced user with the stale cached copy.
-          if (state.currentUser == null) updates[key] = val;
-        } else if (Array.isArray(val)) {
-          if (cur?.length === 0) updates[key] = val;
-        } else if (typeof val === "object") {
-          // Cache as the floor: backfill cached rows the live window omitted,
-          // live wins per-id. (Was an empty-gate that skipped IDB entirely once
-          // any live row had landed — see unionHydrate.)
-          updates[key] = unionHydrate(val, cur);
-        } else {
-          updates[key] = val;
+          continue;
         }
+        const merge = hydrateMergeValue(key, val, cur);
+        if (merge.apply) updates[key] = merge.value;
       }
       if (Object.keys(updates).length > 0) {
         if (updates.clientState) updates.clientStateInitialized = true;
@@ -4090,10 +4234,9 @@ if (PERSISTENCE_AVAILABLE) {
       }
     }
 
-    // Don't load messages from monolithic meta blob — they're now loaded
-    // per-conversation from the dedicated IDB table on demand.
-    delete cached.messages;
-    delete cached.pagination;
+    // Legacy disk rows under unregistered keys (the old monolithic messages /
+    // pagination meta blobs) can't leak in: apply() walks registry-derived key
+    // lists only. Messages load per-conversation from their own IDB table.
 
     // A persisted optimistic message whose image is still `uploading` was
     // orphaned by a reload mid-upload: the in-memory upload+send task didn't
@@ -4120,13 +4263,12 @@ if (PERSISTENCE_AVAILABLE) {
     // before any network.
     dropLatchedFeedHasMore(cached.feedHasMore);
 
-    // Critical path: sidebar + current conversation + tabs render immediately.
-    // feedConversations is here (not deferred) so the team activity feed paints
-    // from cache on first frame — no loading screen on open.
-    apply(["sessions", "clientState", "_lastViewedAt", "_seenUpToAt", "_seenMessageCount",
-           "conversations", "pending", "pendingMessages", "teams", "teamMembers", "teamUnreadCount", "drafts",
-           "tabs", "activeTabId", "feedConversations", "feedHasMore", "feedCursors", "syncMeta",
-           "sidePanelOpen", "sidePanelSessionId", "sidePanelUserClosed", "currentUser"]);
+    // Critical path: everything needed for first paint (sidebar, current
+    // conversation, tabs, label groups, team feed). Derived from the registry —
+    // a persisted key hydrates here unless it opted into the deferred phase or
+    // "manual" handling, so a new key can never silently skip hydration (the
+    // ct-34920 / buckets-pop-in bug class).
+    apply(HYDRATION_CRITICAL_KEYS);
 
     // Always mark initialized after IDB hydration completes — even if cached
     // clientState was missing — so app gates don't hang on fresh users.
@@ -4169,8 +4311,7 @@ if (PERSISTENCE_AVAILABLE) {
     // the user running many session tabs, most are backgrounded — they must still
     // hydrate and persist. setTimeout fires (throttled) even when hidden.
     setTimeout(() => {
-      apply(["tasks", "docs", "plans", "projects", "favorites", "bookmarks",
-             "recentProjects", "docProjectPaths", "collapsedSections", "sidebarNavExpanded"]);
+      apply(HYDRATION_DEFERRED_KEYS);
       // Re-enable IDB write-through only AFTER the deferred collections land.
       // If a live delta arrives while write-through is open but the store still
       // holds just the windowed payload (tasks' 300, sessions' ~30d), then
