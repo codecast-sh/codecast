@@ -16,6 +16,7 @@ import {
   ArrowDown,
   Minus,
   AlertTriangle,
+  Tag,
 } from "lucide-react";
 
 export type MentionItem = {
@@ -43,6 +44,7 @@ const TYPE_CONFIG: Record<string, { icon: typeof User; color: string; label: str
   doc: { icon: FileText, color: "text-sol-cyan", label: "Docs" },
   session: { icon: MessageSquare, color: "text-sol-blue", label: "Sessions" },
   plan: { icon: Target, color: "text-sol-violet", label: "Plans" },
+  label: { icon: Tag, color: "text-sol-magenta", label: "Labels" },
   date: { icon: Calendar, color: "text-sol-orange", label: "Dates" },
 };
 

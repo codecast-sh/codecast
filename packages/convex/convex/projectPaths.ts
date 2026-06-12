@@ -35,6 +35,19 @@ export function normalizeProjectPath(raw: string): string | null {
   return p;
 }
 
+/**
+ * Directory-overlap project bound: true when one path contains the other
+ * (e.g. ~/src/union-mobile vs ~/src/union-mobile/outreach), so a cwd deeper
+ * inside a repo still claims the repo's sessions and vice versa. Used by the
+ * CLI label views to scope "the current project" from the caller's cwd.
+ */
+export function projectOverlaps(boundRaw: string, raw: string | null | undefined): boolean {
+  if (!raw) return false;
+  const bound = boundRaw.replace(/\/+$/, "");
+  const p = raw.replace(/\/+$/, "");
+  return p === bound || p.startsWith(bound + "/") || bound.startsWith(p + "/");
+}
+
 export interface GitMetaSource {
   git_remote_url?: string | null;
   git_root?: string | null;

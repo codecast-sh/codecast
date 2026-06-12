@@ -2,7 +2,8 @@ import { useCallback } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import type { MentionItem } from "../components/editor/MentionList";
-import { useInboxStore } from "../store/inboxStore";
+import { useInboxStore, convBucketMap } from "../store/inboxStore";
+import type { BucketItem, BucketAssignmentItem } from "../store/inboxStore";
 import { useDebounce } from "./useDebounce";
 
 export type MentionScope =
@@ -55,6 +56,34 @@ export function useMentionServerSearch(
     items: wantNow && settled && results ? results : EMPTY_SERVER_ITEMS,
     loading: wantNow && (!settled || results === undefined),
   };
+}
+
+// Labels (inbox buckets) as mention items. They're the user's personal filing —
+// always theirs, so team scope doesn't narrow them (like people, they come from
+// a local roster). Shared by every mention source: the hook below and
+// ConversationView's buildMentionItems (which feeds the conversation and
+// new-session composers).
+export function labelMentionItems(s: {
+  buckets?: Record<string, BucketItem>;
+  bucketAssignments?: Record<string, BucketAssignmentItem>;
+}): MentionItem[] {
+  const counts = new Map<string, number>();
+  for (const bucketId of Object.values(convBucketMap(s.bucketAssignments || {}))) {
+    if (bucketId) counts.set(bucketId, (counts.get(bucketId) ?? 0) + 1);
+  }
+  return Object.values(s.buckets || {})
+    .filter((b) => !b.archived_at)
+    .map((b) => {
+      const n = counts.get(String(b._id)) ?? 0;
+      return {
+        id: String(b._id),
+        type: "label",
+        label: b.name,
+        sublabel: `${n} session${n === 1 ? "" : "s"}`,
+        shortId: `label:${b._id}`,
+        updatedAt: b.updated_at || 0,
+      };
+    });
 }
 
 export function score(label: string, q: string): number {
@@ -174,6 +203,13 @@ export function useMentionQuery(scope: MentionScope = { kind: "any" }) {
       });
     }
 
+    const labelItems: Array<{ item: MentionItem; rank: number; updated: number }> = [];
+    for (const item of labelMentionItems(s)) {
+      const r = q ? score(item.label, q) : 0;
+      if (q && r === Infinity) continue;
+      labelItems.push({ item, rank: r, updated: item.updatedAt || 0 });
+    }
+
     const personItems: Array<{ item: MentionItem; rank: number; updated: number }> = [];
     for (const m of s.teamMembers || []) {
       const name = (m.name || "").toLowerCase();
@@ -202,6 +238,7 @@ export function useMentionQuery(scope: MentionScope = { kind: "any" }) {
 
     return [
       ...sortAndTake(personItems),
+      ...sortAndTake(labelItems),
       ...sortAndTake(sessionItems),
       ...sortAndTake(taskItems),
       ...sortAndTake(docItems),

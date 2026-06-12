@@ -345,11 +345,18 @@ function SessionHoverContent({ session }: { session: any }) {
   );
 }
 
-const MENTION_RE = /@\[([^\]]*?)(?:\s+(ct-\w+|pl-\w+|jx\w+|doc:\w+))?\](?:\s*\([^)]*\))?/g;
+const MENTION_RE = /@\[([^\]]*?)(?:\s+(ct-\w+|pl-\w+|jx\w+|doc:\w+|label:\w+))?\](?:\s*\([^)]*\))?/g;
 
 function MentionPill({ name, entityId }: { name: string; entityId?: string }) {
   if (entityId?.startsWith("doc:") && entityId.length > 4) {
     return <EntityIdPill type="doc" id={entityId.slice(4)} />;
+  }
+  if (entityId?.startsWith("label:")) {
+    return (
+      <span className="inline-flex items-center gap-0.5 px-1.5 py-0 rounded text-[11px] font-medium leading-[1.4] bg-sol-magenta/10 text-sol-magenta border border-sol-magenta/20 align-baseline">
+        @{name}
+      </span>
+    );
   }
   if (entityId && isEntityId(entityId)) {
     return <EntityIdPill shortId={entityId} />;

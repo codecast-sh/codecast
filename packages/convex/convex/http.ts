@@ -486,7 +486,7 @@ http.route({
 
     try {
       const body = await request.json();
-      const { api_token, query, limit, offset, start_time, end_time, context_before, context_after, project_path, user_only, member_name, mine_only } = body;
+      const { api_token, query, limit, offset, start_time, end_time, context_before, context_after, project_path, user_only, member_name, mine_only, label } = body;
 
       if (!api_token || !query) {
         return new Response(JSON.stringify({ error: "Missing api_token or query" }), {
@@ -517,6 +517,7 @@ http.route({
         team_id,
         member_name,
         mine_only,
+        label,
       });
 
       if (result.error) {
@@ -743,7 +744,7 @@ http.route({
 
     try {
       const body = await request.json();
-      const { api_token, limit, offset, start_time, end_time, query, project_path, member_name, mine_only, live_only, state } = body;
+      const { api_token, limit, offset, start_time, end_time, query, project_path, member_name, mine_only, live_only, state, label } = body;
 
       if (!api_token) {
         return new Response(JSON.stringify({ error: "Missing api_token" }), {
@@ -773,6 +774,7 @@ http.route({
         mine_only,
         live_only,
         state,
+        label,
       });
 
       if (result.error) {
@@ -823,7 +825,7 @@ http.route({
 
     try {
       const body = await request.json();
-      const { api_token, show_all, state, limit } = body;
+      const { api_token, show_all, state, limit, label, project_path } = body;
 
       if (!api_token) {
         return new Response(JSON.stringify({ error: "Missing api_token" }), {
@@ -837,6 +839,8 @@ http.route({
         show_all,
         state,
         limit,
+        label,
+        project_path,
       });
 
       if (result.error) {

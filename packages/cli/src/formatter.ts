@@ -808,6 +808,7 @@ interface MonitorSession {
   awaiting_input: boolean;
   idle_summary: string | null;
   last_user_message: string | null;
+  label?: string | null;
   active_plan: { short_id: string; title: string } | null;
   active_task: { short_id: string; title: string } | null;
 }
@@ -815,6 +816,7 @@ interface MonitorSession {
 interface MonitorResult {
   sessions: MonitorSession[];
   counts: { working: number; needs_input: number; idle: number; pinned: number; live: number; dismissed?: number; total: number };
+  labels?: Array<{ name: string; count: number }>;
   scope: string;
 }
 
@@ -823,6 +825,8 @@ interface MonitorOptions {
   watch?: boolean;
   interval?: number;
   all?: boolean;
+  /** Group the snapshot by the user's labels instead of by work state. */
+  groupByLabel?: boolean;
   /** "you" (solo) or "team" / "team: <member>" — shown in the header. */
   scopeLabel?: string;
   /** Command name for the header + hints (default "cast sessions"). */
@@ -913,7 +917,9 @@ export function formatMonitor(result: MonitorResult, options: MonitorOptions = {
       truncatePath(s.project_path),
       s.agent_type,
     ].filter(Boolean).join(`  ${c.dim}·${c.reset}  `);
-    lines.push(`   ${c.dim}${metaBits}${c.reset}`);
+    // Label chip is redundant inside a --by-label group header.
+    const labelChip = s.label && !options.groupByLabel ? `  ${c.cyan}#${s.label}${c.reset}` : "";
+    lines.push(`   ${c.dim}${metaBits}${c.reset}${labelChip}`);
 
     const ctx = s.active_plan
       ? `${c.cyan}${s.active_plan.short_id}${c.reset} ${s.active_plan.title}`
@@ -927,7 +933,22 @@ export function formatMonitor(result: MonitorResult, options: MonitorOptions = {
     lines.push("");
   };
 
-  if (options.state) {
+  if (options.groupByLabel) {
+    // Filing view: every row (idle included — labels mostly hold parked
+    // sessions), grouped in the user's label order, unlabeled last.
+    const groups: Array<{ title: string; items: MonitorSession[] }> = [];
+    for (const { name } of result.labels ?? []) {
+      const items = result.sessions.filter((s) => s.label === name);
+      if (items.length) groups.push({ title: `${c.cyan}${name}${c.reset}`, items });
+    }
+    const unlabeled = result.sessions.filter((s) => !s.label);
+    if (unlabeled.length) groups.push({ title: `${c.gray}unlabeled${c.reset}`, items: unlabeled });
+    for (const g of groups) {
+      lines.push(`${c.bold}${g.title}${c.reset} ${c.dim}(${g.items.length})${c.reset}`);
+      lines.push("");
+      g.items.forEach(renderRow);
+    }
+  } else if (options.state) {
     result.sessions.forEach(renderRow);
   } else {
     // Default view stays focused on what's actionable: NEEDS INPUT + WORKING.
@@ -954,6 +975,29 @@ export function formatMonitor(result: MonitorResult, options: MonitorOptions = {
   }
 
   lines.push(`${c.dim}cast read <id> <range>  ·  cast send <id> "msg"  ·  ${command} -w to watch${c.reset}`);
+  return lines.join("\n");
+}
+
+// `cast sessions --labels`: the user's labels with view-scoped session counts.
+export function formatLabelsList(result: MonitorResult, opts?: { project?: string | null }): string {
+  const labels = result.labels ?? [];
+  if (labels.length === 0) {
+    return opts?.project
+      ? `No labels with sessions in ${opts.project} — \`cast sessions --labels -g\` for all projects.`
+      : "No labels yet — create them in the web sessions panel (sessions sidebar → By label).";
+  }
+  const lines: string[] = [];
+  const labeled = labels.reduce((n, l) => n + l.count, 0);
+  const unlabeled = Math.max(0, (result.counts?.total ?? 0) - labeled);
+  const width = Math.max(...labels.map((l) => l.name.length));
+  const scope = opts?.project ? ` in ${opts.project} ${c.reset}${c.dim}(-g for all projects)` : "";
+  lines.push(`${c.bold}labels${c.reset} ${c.dim}· ${labels.length} labels, ${labeled} sessions filed${scope}${c.reset}\n`);
+  for (const l of labels) {
+    const count = l.count > 0 ? `${l.count}` : `${c.dim}0${c.reset}`;
+    lines.push(`  ${c.cyan}${l.name.padEnd(width)}${c.reset}  ${count}`);
+  }
+  if (unlabeled > 0) lines.push(`  ${c.dim}${"unlabeled".padEnd(width)}  ${unlabeled}${c.reset}`);
+  lines.push(`\n${c.dim}cast sessions --label <name>  ·  cast sessions --by-label${c.reset}`);
   return lines.join("\n");
 }
 
