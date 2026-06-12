@@ -116,8 +116,20 @@ export function useGlobalShortcutActions() {
     if (session) store.openPalette({ targets: [session], targetType: 'session', mode: 'bucket' });
   }, [isOnInboxPage]));
 
+  useShortcutAction('view.switch', useCallback(() => {
+    // Straight into the palette's label/project view submenu (no targets —
+    // the filter is global panel state, not a per-session action).
+    useInboxStore.getState().openPalette({ mode: 'view' });
+  }, []));
+
   useShortcutAction('ui.toggleShortcutsHelp', useCallback(() => {
     useInboxStore.getState().toggleShortcutsPanel();
+  }, []));
+
+  useShortcutAction('ui.openSettings', useCallback(() => {
+    const s = useInboxStore.getState();
+    if (s.settingsModalSection) s.closeSettingsModal();
+    else s.openSettingsModal();
   }, []));
 
   useShortcutAction('ui.zenToggle', useCallback(() => {

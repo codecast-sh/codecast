@@ -25,7 +25,12 @@ function AccountsContent() {
     const urlError = searchParams.get("error");
     if (urlError) {
       setError(urlError);
-      router.replace("/settings/accounts", { scroll: false });
+      // Consume the param off the CURRENT URL — this panel renders inside the
+      // settings modal over whatever page carried the OAuth return.
+      const next = new URLSearchParams(searchParams.toString());
+      next.delete("error");
+      const q = next.toString();
+      router.replace(`${window.location.pathname}${q ? `?${q}` : ""}`, { scroll: false });
     }
   }, [searchParams, router]);
 

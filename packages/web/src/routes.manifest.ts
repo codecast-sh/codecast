@@ -154,6 +154,7 @@ const SettingsSync = lazy(() => import("@/app/settings/sync/page"));
 const SettingsProfile = lazy(() => import("@/app/settings/profile/page"));
 const SettingsAccounts = lazy(() => import("@/app/settings/accounts/page"));
 const SettingsAccountsLinkGithub = lazy(() => import("@/app/settings/accounts/link-github/page"));
+const SettingsClaudeAccounts = lazy(() => import("@/app/settings/claude-accounts/page"));
 const SettingsTeam = lazy(() => import("@/app/settings/team/page"));
 const SettingsTeamCreate = lazy(() => import("@/app/settings/team/create/page"));
 const SettingsTeamJoin = lazy(() => import("@/app/settings/team/join/page"));
@@ -241,6 +242,7 @@ export const ROUTES: RouteEntry[] = [
   { path: "settings/profile", component: cast(SettingsProfile), layout: "settings" },
   { path: "settings/accounts", component: cast(SettingsAccounts), layout: "settings" },
   { path: "settings/accounts/link-github", component: cast(SettingsAccountsLinkGithub), layout: "settings" },
+  { path: "settings/claude-accounts", component: cast(SettingsClaudeAccounts), layout: "settings" },
   { path: "settings/team", component: cast(SettingsTeam), layout: "settings" },
   { path: "settings/team/create", component: cast(SettingsTeamCreate), layout: "settings" },
   { path: "settings/team/join", component: cast(SettingsTeamJoin), layout: "settings" },

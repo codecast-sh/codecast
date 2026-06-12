@@ -5,6 +5,7 @@ export type ShortcutAction =
   | 'session.jumpPinned'
   | 'session.pin'
   | 'session.moveToBucket'
+  | 'view.switch'
   | 'session.stash'
   | 'session.kill'
   | 'session.deferAdvance'
@@ -18,6 +19,7 @@ export type ShortcutAction =
   | 'tab.prev'
   | 'ui.zenToggle'
   | 'ui.toggleShortcutsHelp'
+  | 'ui.openSettings'
   | 'ui.undo'
   | 'ui.redo'
   | 'inbox.toggleFlatView'
@@ -106,6 +108,9 @@ export const SHORTCUTS: ShortcutDef[] = [
   // picker), so a plain `true` bypass is safe from a full composer — unlike
   // the backspace triage chords below.
   { key: 'ctrl+l', action: 'session.moveToBucket', skipInputCheck: true, description: 'Label session' },
+  // Ctrl+Shift+L sits next to Ctrl+L: label THIS session vs switch which
+  // label/project view the panel shows. Opens the palette's view submenu.
+  { key: 'ctrl+shift+l', action: 'view.switch', skipInputCheck: true, description: 'Switch label/project view' },
   // Destructive backspace chords use 'whenEmpty', never true: ctrl+backspace is
   // the OS "delete previous word" key, so an unconditional bypass fired these
   // mid-compose — preventDefault swallowed the keystroke (no visible change)
@@ -133,6 +138,11 @@ export const SHORTCUTS: ShortcutDef[] = [
   { key: 'ctrl+.', action: 'ui.zenToggle', skipInputCheck: true, description: 'Toggle zen mode' },
   { key: 'ctrl+,', action: 'inbox.toggleFlatView', skipInputCheck: true, description: 'Cycle inbox view (grouped / time / label)' },
   { key: '?', action: 'ui.toggleShortcutsHelp', description: 'Toggle shortcuts help' },
+  // meta+, is the OS settings convention on mac; ctrl+, is taken by the inbox
+  // view cycle above, so non-mac gets the shifted variant. shift+comma arrives
+  // as ',' or '<' depending on browser/layout — register both spellings.
+  { key: 'ctrl+shift+,', mac: 'meta+,', action: 'ui.openSettings', skipInputCheck: true, description: 'Open settings' },
+  { key: 'ctrl+shift+<', mac: 'meta+,', action: 'ui.openSettings', skipInputCheck: true, description: 'Open settings' },
   { key: 'ctrl+z', action: 'ui.undo', skipInputCheck: true, description: 'Undo' },
   { key: 'ctrl+shift+z', action: 'ui.redo', skipInputCheck: true, description: 'Redo' },
 

@@ -1,5 +1,6 @@
 import { useInboxStore } from "@/store/inboxStore";
 import { pathLabel } from "@/components/TabBar";
+import { settingsSectionForPath } from "@/lib/settingsSections";
 
 // Routes that live OUTSIDE the dashboard tab shell. The tab system (DashboardLayout
 // / TabBar / TabContent) is only mounted for dashboard routes, but `tabs`/`activeTabId`
@@ -51,6 +52,23 @@ export function isNonTabRoute(path: string): boolean {
   const single = clean.match(/^\/([^/]+)$/);
   if (single && !IN_SHELL_ROOT_SEGMENTS.has(single[1])) return true;
   return false;
+}
+
+/**
+ * In-app navigations to a settings SECTION open the settings modal in place
+ * instead of routing to the legacy full-page /settings/* routes (those routes
+ * remain for hard loads — SettingsLayout bounces them back into the modal).
+ * Returns null when the path isn't a modal section, so flow pages like
+ * /settings/team/create keep real navigation. When the settings URL carried a
+ * query string (OAuth error returns, the team-setup handoff), `carryUrl` is
+ * the current location with that query attached — the caller should
+ * replace()-navigate to it so URL-param readers inside the modal panels see it.
+ */
+export function interceptSettingsNav(path: string): { carryUrl: string | null } | null {
+  const hit = settingsSectionForPath(path);
+  if (!hit) return null;
+  useInboxStore.getState().openSettingsModal(hit.section);
+  return { carryUrl: hit.search ? `${window.location.pathname}?${hit.search}` : null };
 }
 
 function isExternal(path: string): boolean {

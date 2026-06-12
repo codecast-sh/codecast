@@ -1,87 +1,33 @@
-import { Outlet } from "react-router";
-import { usePathname, useRouter } from "next/navigation";
+import { Outlet, useLocation } from "react-router";
 import { AuthGuard } from "@/components/AuthGuard";
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
-import { Button } from "@/components/ui/button";
-import {
-  Terminal, Bot, RefreshCw, User, KeyRound, Users, Plug, Monitor, Bell, Laptop, UserCog,
-} from "lucide-react";
-import { useIsDesktop } from "@/lib/desktop";
-import { useInboxStore } from "@/store/inboxStore";
+import { SettingsRedirect } from "@/components/settings/SettingsRedirect";
+import { settingsSectionForPath } from "@/lib/settingsSections";
 
-const baseTabs = [
-  { name: "CLI", path: "/settings/cli", icon: Terminal },
-  { name: "Agents", path: "/settings/agents", icon: Bot },
-  { name: "Claude Accounts", path: "/settings/claude-accounts", icon: UserCog },
-  { name: "Devices", path: "/settings/devices", icon: Laptop },
-  { name: "Sync & Privacy", path: "/settings/sync", icon: RefreshCw },
-  { name: "General", path: "/settings/profile", icon: User },
-  { name: "Accounts", path: "/settings/accounts", icon: KeyRound },
-  { name: "Notifications", path: "/settings/notifications", icon: Bell },
-  { name: "Team", path: "/settings/team", icon: Users },
-  { name: "Integrations", path: "/settings/integrations/github-app", icon: Plug },
-];
-
-const desktopTab = { name: "Desktop", path: "/settings/desktop", icon: Monitor };
-
+/**
+ * Settings render in a modal (components/settings/SettingsModal.tsx), not as
+ * pages. This layout keeps the legacy /settings/* URLs working for hard loads
+ * (bookmarks, OAuth returns, plain <a href> links): section URLs bounce home
+ * with the modal open; only the focused flow pages (team/create, team/join,
+ * accounts/link-github) still render as full pages. In-app navigations never
+ * get here — the router compat shim opens the modal in place.
+ */
 export function SettingsLayout() {
-  const pathname = usePathname();
-  const router = useRouter();
-  const isDesktop = useIsDesktop();
-  const tabs = isDesktop ? [...baseTabs, desktopTab] : baseTabs;
-  // Return to the same home the left sidebar uses: the team feed when a team is
-  // active, otherwise the inbox. (The old "/dashboard" target was a degenerate,
-  // unpadded twin of /team/activity that rendered the feed edge-to-edge.)
-  const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id);
-  const homeHref = activeTeamId ? "/team/activity" : "/inbox";
+  // Real URL, not usePathname() — when tabs are active that compat hook
+  // returns the active TAB's path, and /settings is outside the tab shell.
+  const location = useLocation();
+  const hit = settingsSectionForPath(location.pathname + location.search);
+
+  if (hit) return <SettingsRedirect hit={hit} />;
 
   return (
     <AuthGuard>
       <DashboardLayout>
-        <div className="max-w-4xl mx-auto px-2 sm:px-4 pt-4 sm:pt-6 pb-8">
-          <div className="flex items-center justify-between mb-6">
-            <h1 className="text-2xl font-semibold text-sol-text">Settings</h1>
-            <Button
-              variant="ghost"
-              onClick={() => router.push(homeHref)}
-              className="text-sol-base1"
-            >
-              Back to Dashboard
-            </Button>
-          </div>
-
-          <div className="flex gap-8">
-            <div className="flex-1 min-w-0">
-              <ErrorBoundary name="SettingsPage" level="panel">
-                <Outlet />
-              </ErrorBoundary>
-            </div>
-
-            <nav className="w-44 flex-shrink-0">
-              <div className="sticky top-6 space-y-1">
-                {tabs.map((tab) => {
-                  const Icon = tab.icon;
-                  const isActive = pathname === tab.path || pathname?.startsWith(tab.path + "/") ||
-                    (tab.path.includes("/integrations") && pathname?.startsWith("/settings/integrations"));
-                  return (
-                    <button
-                      key={tab.path}
-                      onClick={() => router.push(tab.path)}
-                      className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-sm font-medium transition-colors text-left ${
-                        isActive
-                          ? "bg-sol-cyan/15 text-sol-cyan"
-                          : "text-sol-base1 hover:text-sol-text hover:bg-sol-base02/40"
-                      }`}
-                    >
-                      <Icon className="w-4 h-4 flex-shrink-0" />
-                      {tab.name}
-                    </button>
-                  );
-                })}
-              </div>
-            </nav>
-          </div>
+        <div className="max-w-2xl mx-auto px-4 pt-6 pb-8">
+          <ErrorBoundary name="SettingsPage" level="panel">
+            <Outlet />
+          </ErrorBoundary>
         </div>
       </DashboardLayout>
     </AuthGuard>
