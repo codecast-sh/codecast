@@ -15,6 +15,9 @@ export type OutboxEntry = {
   patches: any;
   result: any;
   ts: number;
+  // Failed boot replays so far; entries are given up on at
+  // MAX_OUTBOX_BOOT_ATTEMPTS (see mutativeMiddleware).
+  attempts?: number;
 };
 
 export const PERSISTENCE_AVAILABLE = typeof window !== "undefined";
@@ -102,8 +105,21 @@ class CacheDB extends Dexie {
 const db = new CacheDB();
 
 const COLLECTION_TABLES: Record<string, Dexie.Table<any, string>> = Object.fromEntries(
-  COLLECTION_STORE_KEYS.map((key) => [key, db[key]])
+  COLLECTION_STORE_KEYS.filter((key) => (db as any)[key]).map((key) => [key, db[key]])
 );
+
+// A registered collection with no Dexie table (schema version not bumped) would
+// reject loadCache's Promise.all and silently disable the ENTIRE cache. Degrade
+// to skipping just that key, and surface the gap loudly — the registry coverage
+// test asserts this list is empty.
+export const MISSING_COLLECTION_TABLES: string[] = COLLECTION_STORE_KEYS.filter(
+  (key) => !(db as any)[key]
+);
+if (MISSING_COLLECTION_TABLES.length > 0) {
+  console.error(
+    `[idbCache] registry collections missing Dexie tables: ${MISSING_COLLECTION_TABLES.join(", ")} — add a CacheDB schema version`
+  );
+}
 
 const META_KEYS = new Set<string>(META_STORE_KEYS);
 

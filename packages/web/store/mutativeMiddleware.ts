@@ -7,7 +7,7 @@ import {
 
 type DispatchFn = (action: string, args: any, patches?: any, result?: any) => Promise<any>;
 type IDBWriteFn = (patches: Patch[], state: any) => void;
-type OutboxEntry = { id: string; action: string; args: any; patches: any; result: any; ts: number };
+type OutboxEntry = { id: string; action: string; args: any; patches: any; result: any; ts: number; attempts?: number };
 type OutboxEnqueueFn = (entry: OutboxEntry) => void;
 type OutboxRemoveFn = (id: string) => void;
 type OutboxLoadFn = () => Promise<OutboxEntry[]>;
@@ -195,6 +195,20 @@ export function stripStalePointerFromReplay(patches: any): any {
 
 const RETRY_DELAYS = [1000, 2000, 4000];
 
+// How many boots a failed outbox entry survives before it's given up on.
+// Each boot attempt already runs the full in-session retry ladder, so this
+// bounds permanently-broken dispatches (they'd otherwise slow every page
+// load forever) while letting writes stranded by an outage outlive reloads
+// that happen during that same outage.
+export const MAX_OUTBOX_BOOT_ATTEMPTS = 5;
+
+// What to do with an outbox entry whose boot-time replay failed: keep it for
+// the next boot with the attempt counted, or give up at the cap.
+export function outboxFailureDisposition(entry: OutboxEntry): { keep: boolean; entry: OutboxEntry } {
+  const attempts = (entry.attempts ?? 0) + 1;
+  return { keep: attempts < MAX_OUTBOX_BOOT_ATTEMPTS, entry: { ...entry, attempts } };
+}
+
 // Convex rejects `undefined` anywhere in the payload. Action functions are
 // free to leave optional args/return values as `undefined`, so normalize at
 // the dispatch boundary instead of forcing every call site to do it.
@@ -218,6 +232,7 @@ async function dispatchWithRetry(
   grouped: any,
   result: any,
   onError?: (action: string, error: unknown, args?: unknown) => void,
+  retryDelays: number[] = RETRY_DELAYS,
 ): Promise<any> {
   const safeArgs = sanitizeForConvex(args);
   const safeGrouped = grouped !== undefined ? sanitizeForConvex(grouped) : undefined;
@@ -226,16 +241,17 @@ async function dispatchWithRetry(
     try {
       return await fn(action, safeArgs, safeGrouped, safeResult);
     } catch (e) {
-      if (attempt >= RETRY_DELAYS.length) {
+      if (attempt >= retryDelays.length) {
         onError?.(action, e, args);
         throw e;
       }
-      await new Promise(r => setTimeout(r, RETRY_DELAYS[attempt]));
+      await new Promise(r => setTimeout(r, retryDelays[attempt]));
     }
   }
 }
 
-export function mutativeMiddleware(config: any): any {
+export function mutativeMiddleware(config: any, opts?: { retryDelays?: number[] }): any {
+  const retryDelays = opts?.retryDelays ?? RETRY_DELAYS;
   return (set: any, get: any, api: any) => {
     let dispatchFn: DispatchFn | null = null;
     let idbWriteFn: IDBWriteFn | null = null;
@@ -253,17 +269,20 @@ export function mutativeMiddleware(config: any): any {
       if (!dispatchFn || !outboxLoadFn) return;
       const entries = await outboxLoadFn();
       // The outbox exists to survive a reload that lands in the middle of an
-      // in-flight dispatch. Each entry gets exactly one boot-time attempt
-      // (with the standard retry ladder), then is removed regardless of
-      // outcome — keeping permanently-broken dispatches around forever would
-      // just slow every subsequent page load.
+      // in-flight dispatch. A failed replay keeps its entry for the NEXT boot
+      // (attempt counted, capped at MAX_OUTBOX_BOOT_ATTEMPTS) — a reload
+      // during the same outage that stranded the write must not destroy its
+      // only copy.
       for (const entry of entries) {
         try {
-          await dispatchWithRetry(dispatchFn, entry.action, entry.args, stripStalePointerFromReplay(entry.patches), entry.result, dispatchErrorFn);
+          await dispatchWithRetry(dispatchFn, entry.action, entry.args, stripStalePointerFromReplay(entry.patches), entry.result, dispatchErrorFn, retryDelays);
+          outboxRemoveFn?.(entry.id);
         } catch {
-          // Reported via dispatchErrorFn; the entry is dropped below.
+          // Reported via dispatchErrorFn.
+          const disposition = outboxFailureDisposition(entry);
+          if (disposition.keep) outboxEnqueueFn?.(disposition.entry);
+          else outboxRemoveFn?.(entry.id);
         }
-        outboxRemoveFn?.(entry.id);
       }
     }
 
@@ -333,7 +352,7 @@ export function mutativeMiddleware(config: any): any {
           });
           if (dispatchFn) {
             const promise = dispatchWithRetry(
-              dispatchFn, key, args, grouped, returnValue, dispatchErrorFn,
+              dispatchFn, key, args, grouped, returnValue, dispatchErrorFn, retryDelays,
             ).then((r) => {
               outboxRemoveFn?.(outboxId);
               return r;
@@ -369,7 +388,7 @@ export function mutativeMiddleware(config: any): any {
 
     wrapped._dispatch = (action: string, args: any, patches?: any, result?: any) => {
       if (!dispatchFn) return Promise.reject(new Error("Dispatch not wired"));
-      return dispatchWithRetry(dispatchFn, action, args, patches, result, dispatchErrorFn);
+      return dispatchWithRetry(dispatchFn, action, args, patches, result, dispatchErrorFn, retryDelays);
     };
 
     return wrapped;

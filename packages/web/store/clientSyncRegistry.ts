@@ -1,11 +1,25 @@
 export type PersistenceKind = "collection" | "meta";
 export type DispatchTableKind = "collection" | "singleton";
+export type HydrationPhase = "critical" | "deferred";
+export type HydrationMerge = "shape" | "fill";
 
 export type ClientSyncRegistryEntry = {
   persistence?: {
     kind: PersistenceKind;
     key: string;
   };
+  // Boot hydration is automatic for every persisted key — registering a
+  // persistence entry IS the permission to load AND save. This field only
+  // tunes it, never gates it:
+  //   phase "critical" (default) — applied in the first hydrate pass, before
+  //     first paint; "deferred" — applied a tick later (heavy list-view data).
+  //   merge "shape" (default) — objects union (cache as floor, live wins
+  //     per key), arrays fill only an empty slot, scalars replace; "fill" —
+  //     only lands while the store slot is still null (live-synced singletons
+  //     a stale cache must never clobber).
+  //   "manual" — the hydration block consumes the cached value with bespoke
+  //     logic (excluded from the derived apply lists).
+  hydration?: { phase?: HydrationPhase; merge?: HydrationMerge } | "manual";
   localFirst?: boolean;
   dispatchTable?: {
     table: string;
@@ -33,6 +47,7 @@ export const CLIENT_SYNC_REGISTRY = {
   },
   tasks: {
     persistence: { kind: "collection", key: "tasks" },
+    hydration: { phase: "deferred" },
     localFirst: true,
     // Real tasks always carry a ct- short_id (required by schema, asserted by
     // webGetTaskDetail's lookup guard). Conversations masquerading as tasks
@@ -41,14 +56,17 @@ export const CLIENT_SYNC_REGISTRY = {
   },
   docs: {
     persistence: { kind: "collection", key: "docs" },
+    hydration: { phase: "deferred" },
     localFirst: true,
   },
   plans: {
     persistence: { kind: "collection", key: "plans" },
+    hydration: { phase: "deferred" },
     localFirst: true,
   },
   projects: {
     persistence: { kind: "collection", key: "projects" },
+    hydration: { phase: "deferred" },
     localFirst: true,
   },
   buckets: {
@@ -75,8 +93,10 @@ export const CLIENT_SYNC_REGISTRY = {
   // Local-only on purpose (no dispatchTable): the per-user synced pointer
   // (clientState.current_conversation_id) is writable by every client and kept
   // poisoning the desktop's restore; this key never leaves the device.
+  // Hydrated manually: the restore block also reseeds currentSessionId from it.
   lastFocusedConversationId: {
     persistence: { kind: "meta", key: "lastFocusedConversationId" },
+    hydration: "manual",
   },
   _lastViewedAt: {
     persistence: { kind: "meta", key: "_lastViewedAt" },
@@ -98,12 +118,15 @@ export const CLIENT_SYNC_REGISTRY = {
   },
   recentProjects: {
     persistence: { kind: "meta", key: "recentProjects" },
+    hydration: { phase: "deferred" },
   },
   collapsedSections: {
     persistence: { kind: "meta", key: "collapsedSections" },
+    hydration: { phase: "deferred" },
   },
   sidebarNavExpanded: {
     persistence: { kind: "meta", key: "sidebarNavExpanded" },
+    hydration: { phase: "deferred" },
   },
   teams: {
     persistence: { kind: "meta", key: "teams" },
@@ -113,6 +136,8 @@ export const CLIENT_SYNC_REGISTRY = {
   },
   teamUnreadCount: {
     persistence: { kind: "meta", key: "teamUnreadCount" },
+    // Live-synced; a stale cached count must not clobber a fresh one.
+    hydration: { merge: "fill" },
   },
   feedConversations: {
     persistence: { kind: "meta", key: "feedConversations" },
@@ -128,12 +153,15 @@ export const CLIENT_SYNC_REGISTRY = {
   },
   docProjectPaths: {
     persistence: { kind: "meta", key: "docProjectPaths" },
+    hydration: { phase: "deferred" },
   },
   favorites: {
     persistence: { kind: "meta", key: "favorites" },
+    hydration: { phase: "deferred" },
   },
   bookmarks: {
     persistence: { kind: "meta", key: "bookmarks" },
+    hydration: { phase: "deferred" },
   },
   tabs: {
     persistence: { kind: "meta", key: "tabs" },
@@ -158,6 +186,9 @@ export const CLIENT_SYNC_REGISTRY = {
   // popup's slash menu (otherwise it would have only built-in commands).
   currentUser: {
     persistence: { kind: "meta", key: "currentUser" },
+    // Singleton record, not a collection: never union stale cached fields into
+    // a freshly-synced user — only fill a still-empty slot (palette/cold start).
+    hydration: { merge: "fill" },
   },
 } as const satisfies Record<string, ClientSyncRegistryEntry>;
 
@@ -184,6 +215,28 @@ export const META_STORE_KEYS = registryEntries
 export const PROTECTED_COLLECTION_KEYS = registryEntries
   .filter(([, entry]) => entry.localFirst)
   .map(([key]) => key);
+
+// Boot-hydration apply lists, derived so a persisted key can never silently
+// skip hydration (the bug class of ct-34920 and the buckets label pop-in):
+// every persisted key lands in exactly one of critical / deferred / manual.
+const hydratedEntries = registryEntries.filter(
+  ([, entry]) => entry.persistence && entry.hydration !== "manual"
+);
+
+export const HYDRATION_CRITICAL_KEYS = hydratedEntries
+  .filter(([, entry]) => (entry.hydration as { phase?: HydrationPhase } | undefined)?.phase !== "deferred")
+  .map(([key]) => key);
+
+export const HYDRATION_DEFERRED_KEYS = hydratedEntries
+  .filter(([, entry]) => (entry.hydration as { phase?: HydrationPhase } | undefined)?.phase === "deferred")
+  .map(([key]) => key);
+
+export function hydrationMergeStrategy(key: string): HydrationMerge {
+  const entry = CLIENT_SYNC_REGISTRY[key as ClientSyncStoreKey] as ClientSyncRegistryEntry | undefined;
+  const hydration = entry?.hydration;
+  if (hydration && hydration !== "manual" && hydration.merge) return hydration.merge;
+  return "shape";
+}
 
 export const DISPATCH_TABLE_MAP: Record<string, { table: string; kind: DispatchTableKind }> = Object.fromEntries(
   registryEntries.flatMap(([key, entry]) =>

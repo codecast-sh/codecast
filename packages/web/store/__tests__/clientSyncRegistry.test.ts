@@ -4,11 +4,15 @@ import {
   COLLECTION_STORE_KEYS,
   DISPATCH_FIELD_TABLE_MAP,
   DISPATCH_TABLE_MAP,
+  HYDRATION_CRITICAL_KEYS,
+  HYDRATION_DEFERRED_KEYS,
   META_STORE_KEYS,
   collectionRowValidator,
+  hydrationMergeStrategy,
   isPersistedClientStoreKey,
   isProtectedSyncCollection,
 } from "../clientSyncRegistry";
+import { MISSING_COLLECTION_TABLES } from "../idbCache";
 
 describe("client sync registry", () => {
   it("covers the core synced and persisted store slices", () => {
@@ -50,6 +54,55 @@ describe("client sync registry", () => {
     expect(DISPATCH_TABLE_MAP.clientState).toEqual({ table: "client_state", kind: "singleton" });
     expect(DISPATCH_FIELD_TABLE_MAP.tabs).toEqual({ table: "client_state" });
     expect(DISPATCH_FIELD_TABLE_MAP.activeTabId).toEqual({ table: "client_state" });
+  });
+
+  // Persistence has three legs: write to IDB, read from disk, APPLY to the
+  // store. The first two were always registry-generic; the apply leg used to be
+  // hand-enumerated pick lists in inboxStore, and a key in neither list was a
+  // silent cache no-op (ct-34920; the buckets label pop-in). These tests lock
+  // the registry-derived contract: registering persistence IS hydration.
+  describe("hydration is derived, never opt-in", () => {
+    const hydrated = new Set([...HYDRATION_CRITICAL_KEYS, ...HYDRATION_DEFERRED_KEYS]);
+
+    it("every persisted key hydrates or is explicitly manual", () => {
+      for (const [key, entry] of Object.entries(CLIENT_SYNC_REGISTRY)) {
+        if (!("persistence" in entry) || !entry.persistence) continue;
+        const manual = "hydration" in entry && entry.hydration === "manual";
+        expect(manual ? !hydrated.has(key) : hydrated.has(key)).toBe(true);
+      }
+    });
+
+    it("no phase double-lists a key", () => {
+      const overlap = HYDRATION_CRITICAL_KEYS.filter((k) =>
+        (HYDRATION_DEFERRED_KEYS as readonly string[]).includes(k)
+      );
+      expect(overlap).toEqual([]);
+    });
+
+    it("buckets + assignments hydrate in the critical pass (label-bar pop-in regression)", () => {
+      expect(HYDRATION_CRITICAL_KEYS).toContain("buckets");
+      expect(HYDRATION_CRITICAL_KEYS).toContain("bucketAssignments");
+    });
+
+    it("heavy list-view collections stay deferred; restore-special keys stay manual", () => {
+      for (const key of ["tasks", "docs", "plans", "projects"]) {
+        expect(HYDRATION_DEFERRED_KEYS).toContain(key);
+      }
+      expect(hydrated.has("lastFocusedConversationId")).toBe(false);
+    });
+
+    it("live-synced singletons fill only an empty slot; everything else merges by shape", () => {
+      expect(hydrationMergeStrategy("teamUnreadCount")).toBe("fill");
+      expect(hydrationMergeStrategy("currentUser")).toBe("fill");
+      expect(hydrationMergeStrategy("sessions")).toBe("shape");
+      expect(hydrationMergeStrategy("buckets")).toBe("shape");
+    });
+  });
+
+  it("every registered collection has a Dexie table (schema version bumped)", () => {
+    // A missing table used to reject loadCache's whole Promise.all — one
+    // forgotten migration silently disabled the entire cache.
+    expect(MISSING_COLLECTION_TABLES).toEqual([]);
   });
 
   it("rejects foreign documents persisted under tasks (conversation-as-task poisoning)", () => {
