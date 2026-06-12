@@ -2,7 +2,7 @@
   "name": "codecast-blame",
   "displayName": "Codecast — session blame",
   "description": "git blame, but the author column is the codecast session (and the person) that wrote each line. Open the conversation behind any line.",
-  "version": "0.1.1",
+  "version": "0.1.4",
   "publisher": "codecast",
   "license": "MIT",
   "icon": "icon.png",
@@ -28,6 +28,11 @@
       {
         "command": "codecast.toggleInlineBlame",
         "title": "Codecast: Toggle Inline Session Blame",
+        "category": "Codecast"
+      },
+      {
+        "command": "codecast.diagnostics",
+        "title": "Codecast: Run Diagnostics",
         "category": "Codecast"
       }
     ],
