@@ -272,14 +272,15 @@ export function deriveSessionActivity(input: SessionActivityInput): SessionActiv
 
 // A single, coarse "what is this session doing" label for CLI discovery and the
 // `cast monitor` dashboard. Collapses the inbox's many derived flags into three
-// buckets:
-//   - "working":     the agent is actively producing, or has deliverable queued work.
-//   - "needs_input": the agent is blocked on the user (open question / permission
-//                    prompt), dead with output to read, OR a session the user
-//                    pinned that has gone idle (a deliberate inversion of the web
-//                    inbox, which hides pinned sessions from needs-input — here a
-//                    pin means "ping me when this is free").
-//   - "idle":        finished, ball in the user's court, not flagged.
+// buckets, matching the web inbox's categorization (isSessionWaitingForInput):
+//   - "working":     the agent is actively producing, has deliverable queued
+//                    work, or the user just sent a message it hasn't picked up.
+//   - "needs_input": the ball is in the user's court — a finished turn waiting
+//                    to be read, an open question / permission prompt, or a dead
+//                    session with output. This is the web's NEEDS INPUT bucket:
+//                    a settled session with content always lands here (pinned
+//                    included — a pin means "ping me when this is free").
+//   - "idle":        nothing to act on: blank sessions (no messages yet).
 // This is the server-side mirror of the web store's isSessionWaitingForInput,
 // minus the client-only queued-message signal, and is the ONE place the rule
 // lives — the CLI only ever string-matches the resulting work_state.
@@ -292,7 +293,6 @@ export interface WorkStateInput {
   awaitingInput: boolean;
   hasPending: boolean;
   isUnresponsive: boolean;
-  isPinned: boolean;
   messageCount: number;
 }
 
@@ -332,7 +332,7 @@ export function normalizeWorkStateFilter(raw: string | undefined | null): WorkSt
 }
 
 export function classifyWorkState(input: WorkStateInput): WorkState {
-  const { agentStatus, isIdle, awaitingInput, hasPending, isUnresponsive, isPinned, messageCount } = input;
+  const { agentStatus, isIdle, awaitingInput, hasPending, isUnresponsive, messageCount } = input;
   const dead = !!agentStatus && DEAD_AGENT_STATUSES.has(agentStatus);
   const canDeliver = !isUnresponsive && !dead;
   const hasMsgs = messageCount > 0;
@@ -350,9 +350,13 @@ export function classifyWorkState(input: WorkStateInput): WorkState {
   // Dead with output → a human needs to read/restart it.
   if (dead) return hasMsgs ? "needs_input" : "idle";
 
-  // Settled idle: a pinned session the user flagged for follow-up surfaces in
-  // needs-input; an unpinned one is just quietly idle.
-  if (isIdle && hasMsgs) return isPinned ? "needs_input" : "idle";
+  // Settled with content: the ball is in the user's court — the web inbox files
+  // this under NEEDS INPUT (it has no "idle with content" bucket), so the CLI
+  // matches. This also covers unresponsive sessions (a hanging user message on
+  // a dead daemon needs a human to restart it).
+  if (isIdle) return hasMsgs ? "needs_input" : "idle";
 
-  return "idle";
+  // Not idle but no active status either: mid-grace right after a turn, or the
+  // user just sent a message the agent hasn't picked up — work in flight.
+  return hasMsgs ? "working" : "idle";
 }
