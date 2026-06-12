@@ -15,7 +15,11 @@ import {
   requestNotificationPermission,
   hasBrowserNotificationPermission,
   parseDesktopDeepLinkPath,
+  extractDeepLinkIntent,
+  installDesktopInputTracker,
+  shouldApplyAutoDeepLink,
 } from "../lib/desktop";
+import { toast } from "sonner";
 import { cleanNotificationBody } from "../lib/notificationText";
 import { useInboxStore } from "../store/inboxStore";
 
@@ -80,6 +84,8 @@ export function DesktopProvider() {
 
     updateDismissed("has_used_desktop", true);
 
+    installDesktopInputTracker();
+
     // Single in-app navigation path, shared by codecast:// deep links (from the
     // native layer) and the codecast-navigate event (tray/menus/notifications).
     const goTo = (path: string | undefined) => {
@@ -88,7 +94,7 @@ export function DesktopProvider() {
       const convMatch = path.match(/^\/conversation\/([^/?#]+)/);
       if (convMatch) {
         const convId = convMatch[1];
-        useInboxStore.getState().navigateToSession(convId);
+        useInboxStore.getState().navigateToSession(convId, "deeplink");
 
         const cur = window.location.pathname;
         if (cur.startsWith("/inbox") || cur.startsWith("/conversation/")) {
@@ -102,7 +108,24 @@ export function DesktopProvider() {
 
     onDeepLink((urls) => {
       for (const url of urls) {
-        goTo(parseDesktopDeepLinkPath(url) ?? undefined);
+        const raw = parseDesktopDeepLinkPath(url);
+        if (!raw) continue;
+        const { path, auto } = extractDeepLinkIntent(raw);
+        // An auto handoff (the browser page redirecting itself, not a user
+        // clicking an "Open in desktop" button) may not move the view while
+        // the user is actively working in the desktop — agent-driven Chrome
+        // tabs satisfy every browser-side gate and used to yank the app to
+        // whatever the agent had open. Offer it instead.
+        if (auto && !shouldApplyAutoDeepLink()) {
+          const convMatch = path.match(/^\/conversation\/([^/?#]+)/);
+          const title = convMatch ? useInboxStore.getState().sessions[convMatch[1]]?.title : null;
+          toast.info(`Browser handed off ${title ? `“${title}”` : "a page"}`, {
+            action: { label: "Open", onClick: () => goTo(path) },
+            duration: 10_000,
+          });
+          continue;
+        }
+        goTo(path);
       }
     });
 
